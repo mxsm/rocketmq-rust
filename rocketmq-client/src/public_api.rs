@@ -18,6 +18,6 @@ pub use crate::base::client_config::ClientConfig;
 pub use crate::consumer::DefaultLitePullConsumer;
 pub use crate::consumer::DefaultMQPushConsumer;
 pub use crate::producer::DefaultMQProducer;
-pub use crate::producer::MQProducer;
-pub use crate::producer::MessageProducer;
+pub use crate::producer::MessageRecall;
+pub use crate::producer::MessageSend;
 pub use crate::producer::ProducerConfig;

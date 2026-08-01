@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 
 use cheetah_string::CheetahString;
-use rocketmq_client_rust::MQAdminExt;
+use rocketmq_client_rust::{RouteAdmin as _, TopicAdmin as _};
 use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_protocol::protocol::static_topic::logic_queue_mapping_item::LogicQueueMappingItem;

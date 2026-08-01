@@ -25,6 +25,7 @@ const CLIENT_TRANSACTION: &str = include_str!("../src/implementation/mq_client_a
 const CLIENT_TRANSPORT: &str = include_str!("../src/implementation/mq_client_api_impl/transport.rs");
 
 const ADMIN_FACADE: &str = include_str!("../src/admin/default_mq_admin_ext_impl.rs");
+const ADMIN_CAPABILITIES: &str = include_str!("../src/admin/capability.rs");
 const ADMIN_API: &str = include_str!("../src/admin/default_mq_admin_ext_impl/admin_api.rs");
 const ADMIN_BROKER: &str = include_str!("../src/admin/default_mq_admin_ext_impl/broker.rs");
 const ADMIN_GROUP: &str = include_str!("../src/admin/default_mq_admin_ext_impl/group.rs");
@@ -33,11 +34,14 @@ const ADMIN_SECURITY: &str = include_str!("../src/admin/default_mq_admin_ext_imp
 const ADMIN_TOPIC: &str = include_str!("../src/admin/default_mq_admin_ext_impl/topic.rs");
 
 const PRODUCER_FACADE: &str = include_str!("../src/producer/producer_impl/default_mq_producer_impl.rs");
+const PRODUCER_CAPABILITIES: &str = include_str!("../src/producer/capability.rs");
+const PRODUCER_BACKEND: &str = include_str!("../src/producer/producer_backend.rs");
 const PRODUCER_LIFECYCLE: &str = include_str!("../src/producer/producer_impl/default_mq_producer_impl/lifecycle.rs");
 const PRODUCER_RETRY: &str = include_str!("../src/producer/producer_impl/default_mq_producer_impl/retry.rs");
 const PRODUCER_SEND: &str = include_str!("../src/producer/producer_impl/default_mq_producer_impl/send.rs");
 const PRODUCER_TRANSACTION: &str =
     include_str!("../src/producer/producer_impl/default_mq_producer_impl/transaction.rs");
+const LITE_PULL_CAPABILITIES: &str = include_str!("../src/consumer/lite_pull_consumer.rs");
 
 #[test]
 fn client_facades_declare_explicit_capability_modules() {
@@ -65,8 +69,54 @@ fn client_facades_declare_explicit_capability_modules() {
     assert!(PRODUCER_FACADE.lines().count() <= 450);
     assert!(CLIENT_ADMIN.contains("mod versioned_config;"));
     assert!(!CLIENT_FACADE.contains("pub async fn send_message"));
-    assert!(!ADMIN_FACADE.contains("impl MQAdminExt for DefaultMQAdminExtImpl"));
     assert!(!PRODUCER_FACADE.contains("pub async fn send_with_timeout"));
+}
+
+#[test]
+fn client_god_traits_cannot_reappear() {
+    for capability in [
+        "RouteAdmin",
+        "TopicAdmin",
+        "ConsumerAdmin",
+        "BrokerAdmin",
+        "AuthAdmin",
+        "OffsetAdmin",
+    ] {
+        assert!(ADMIN_CAPABILITIES.contains(&format!("pub trait {capability}")));
+    }
+    for capability in [
+        "SubscriptionControl",
+        "AssignmentControl",
+        "MessagePoll",
+        "ConsumerOffsetControl",
+        "ConsumerLifecycle",
+    ] {
+        assert!(LITE_PULL_CAPABILITIES.contains(&format!("pub trait {capability}Local")));
+    }
+    for capability in [
+        "MessageSend",
+        "TransactionSend",
+        "RequestReply",
+        "MessageRecall",
+        "MessageQuery",
+        "ProducerLifecycle",
+    ] {
+        assert!(PRODUCER_CAPABILITIES.contains(&format!("pub trait {capability}")));
+    }
+
+    for retired in ["MQAdminExt", "LitePullConsumerLocal", "MQProducer"] {
+        for source in [
+            ADMIN_CAPABILITIES,
+            LITE_PULL_CAPABILITIES,
+            PRODUCER_CAPABILITIES,
+            PRODUCER_BACKEND,
+        ] {
+            let contains_identifier = source
+                .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
+                .any(|identifier| identifier == retired);
+            assert!(!contains_identifier, "retired client trait {retired} reappeared");
+        }
+    }
 }
 
 #[test]

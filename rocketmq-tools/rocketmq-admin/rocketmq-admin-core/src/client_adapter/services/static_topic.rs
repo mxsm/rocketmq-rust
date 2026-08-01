@@ -1,7 +1,7 @@
 //! Static topic admin service models and operations.
 
 use cheetah_string::CheetahString;
-use rocketmq_client_rust::MQAdminExt;
+use rocketmq_client_rust::RouteAdmin as _;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_utils::TopicQueueMappingUtils;
 use rocketmq_protocol::protocol::static_topic::topic_remapping_detail_wrapper;
 use rocketmq_protocol::protocol::static_topic::topic_remapping_detail_wrapper::TopicRemappingDetailWrapper;

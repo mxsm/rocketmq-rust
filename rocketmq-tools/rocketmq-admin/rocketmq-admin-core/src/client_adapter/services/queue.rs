@@ -15,7 +15,7 @@
 //! Queue-related admin service models and operations.
 
 use cheetah_string::CheetahString;
-use rocketmq_client_rust::MQAdminExt;
+use rocketmq_client_rust::{BrokerAdmin as _, ConsumerAdmin as _, RouteAdmin as _, TopicAdmin as _};
 use rocketmq_protocol::protocol::body::check_rocksdb_cqwrite_progress_response_body::CheckRocksdbCqWriteResult;
 use rocketmq_protocol::protocol::body::query_consume_queue_response_body::QueryConsumeQueueResponseBody;
 use rocketmq_runtime::common::time_utils::current_millis;

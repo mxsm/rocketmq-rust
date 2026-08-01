@@ -42,7 +42,9 @@ use crate::consumer::consumer_impl::default_lite_pull_consumer_impl::DefaultLite
 use crate::consumer::consumer_impl::default_lite_pull_consumer_impl::LitePullConsumerConfig;
 use crate::consumer::default_lite_pull_consumer_builder::DefaultLitePullConsumerBuilder;
 use crate::consumer::default_lite_pull_consumer_builder::MIN_AUTOCOMMIT_INTERVAL_MILLIS;
-use crate::consumer::lite_pull_consumer::LitePullConsumer;
+use crate::consumer::lite_pull_consumer::{
+    AssignmentControl, ConsumerLifecycle, ConsumerOffsetControl, MessagePoll, SubscriptionControl,
+};
 use crate::consumer::message_queue_listener::ArcMessageQueueListener;
 use crate::consumer::message_queue_listener::MessageQueueListener;
 use crate::consumer::message_selector::MessageSelector;
@@ -51,6 +53,8 @@ use crate::consumer::mq_consumer_inner::MQConsumerInner;
 use crate::consumer::store::offset_store::OffsetStore;
 use crate::consumer::topic_message_queue_change_listener::TopicMessageQueueChangeListener;
 use crate::runtime::ClientRuntime;
+use crate::session::ClientSession;
+use crate::session::ClientSessionProvider;
 use crate::trace::async_trace_dispatcher::AsyncTraceDispatcher;
 use crate::trace::hook::consume_message_trace_hook_impl::ConsumeMessageTraceHookImpl;
 use crate::trace::trace_dispatcher::TraceDispatcher;
@@ -144,7 +148,7 @@ use crate::trace::trace_dispatcher::Type;
 /// ```
 #[derive(Clone)]
 pub struct DefaultLitePullConsumer {
-    client_runtime: Arc<ClientRuntime>,
+    session: ClientSession,
     /// Client configuration (network, instance name, etc.)
     client_config: Arc<ArcSwap<ClientConfig>>,
 
@@ -187,7 +191,7 @@ impl DefaultLitePullConsumer {
         custom_trace_topic: Option<CheetahString>,
     ) -> Self {
         Self {
-            client_runtime,
+            session: ClientSession::new(client_runtime),
             client_config: Arc::new(ArcSwap::from_pointee(client_config)),
             consumer_config: Arc::new(ArcSwap::from_pointee(consumer_config)),
             default_lite_pull_consumer_impl: Arc::new(OnceCell::new()),
@@ -241,17 +245,17 @@ impl DefaultLitePullConsumer {
 
     /// Starts the consumer.
     pub async fn start(&self) -> RocketMQResult<()> {
-        <Self as LitePullConsumer>::start(self).await
+        <Self as ConsumerLifecycle>::start(self).await
     }
 
     /// Shuts down the consumer.
     pub async fn shutdown(&self) {
-        <Self as LitePullConsumer>::shutdown(self).await;
+        <Self as ConsumerLifecycle>::shutdown(self).await;
     }
 
     /// Returns whether the consumer is currently running.
     pub async fn is_running(&self) -> bool {
-        <Self as LitePullConsumer>::is_running(self).await
+        <Self as ConsumerLifecycle>::is_running(self).await
     }
 
     /// Returns a Java-compatible running snapshot for broker admin diagnostics.
@@ -262,12 +266,12 @@ impl DefaultLitePullConsumer {
 
     /// Subscribes to a topic using the default subscription expression.
     pub async fn subscribe(&self, topic: &str) -> RocketMQResult<()> {
-        <Self as LitePullConsumer>::subscribe(self, topic).await
+        <Self as SubscriptionControl>::subscribe(self, topic).await
     }
 
     /// Subscribes to a topic using a tag or SQL expression.
     pub async fn subscribe_with_expression(&self, topic: &str, sub_expression: &str) -> RocketMQResult<()> {
-        <Self as LitePullConsumer>::subscribe_with_expression(self, topic, sub_expression).await
+        <Self as SubscriptionControl>::subscribe_with_expression(self, topic, sub_expression).await
     }
 
     /// Subscribes with a queue-change listener.
@@ -280,32 +284,32 @@ impl DefaultLitePullConsumer {
     where
         MQL: MessageQueueListener + 'static,
     {
-        <Self as LitePullConsumer>::subscribe_with_listener(self, topic, sub_expression, listener).await
+        <Self as SubscriptionControl>::subscribe_with_listener(self, topic, sub_expression, listener).await
     }
 
     /// Subscribes using a server-side selector.
     pub async fn subscribe_with_selector(&self, topic: &str, selector: Option<MessageSelector>) -> RocketMQResult<()> {
-        <Self as LitePullConsumer>::subscribe_with_selector(self, topic, selector).await
+        <Self as SubscriptionControl>::subscribe_with_selector(self, topic, selector).await
     }
 
     /// Removes the subscription for a topic.
     pub async fn unsubscribe(&self, topic: &str) {
-        <Self as LitePullConsumer>::unsubscribe(self, topic).await;
+        <Self as SubscriptionControl>::unsubscribe(self, topic).await;
     }
 
     /// Returns the currently assigned queues.
     pub async fn assignment(&self) -> RocketMQResult<HashSet<MessageQueue>> {
-        <Self as LitePullConsumer>::assignment(self).await
+        <Self as AssignmentControl>::assignment(self).await
     }
 
     /// Assigns queues manually, bypassing broker rebalance.
     pub async fn assign(&self, message_queues: Vec<MessageQueue>) -> RocketMQResult<()> {
-        <Self as LitePullConsumer>::assign(self, message_queues).await
+        <Self as AssignmentControl>::assign(self, message_queues).await
     }
 
     /// Sets the subscription expression used for manually assigned queues.
     pub async fn set_sub_expression_for_assign(&self, topic: &str, sub_expression: &str) -> RocketMQResult<()> {
-        <Self as LitePullConsumer>::set_sub_expression_for_assign(self, topic, sub_expression).await
+        <Self as AssignmentControl>::set_sub_expression_for_assign(self, topic, sub_expression).await
     }
 
     /// Builds subscription metadata for heartbeat payloads.
@@ -313,12 +317,12 @@ impl DefaultLitePullConsumer {
         &self,
         sub_expression_map: &mut HashMap<String, MessageSelector>,
     ) -> RocketMQResult<()> {
-        <Self as LitePullConsumer>::build_subscriptions_for_heartbeat(self, sub_expression_map).await
+        <Self as SubscriptionControl>::build_subscriptions_for_heartbeat(self, sub_expression_map).await
     }
 
     /// Returns heartbeat subscriptions.
     pub async fn subscriptions_for_heartbeat(&self) -> HashSet<SubscriptionData> {
-        <Self as LitePullConsumer>::subscriptions_for_heartbeat(self).await
+        <Self as SubscriptionControl>::subscriptions_for_heartbeat(self).await
     }
 
     /// Java-compatible getter alias for heartbeat subscriptions.
@@ -328,27 +332,27 @@ impl DefaultLitePullConsumer {
 
     /// Polls messages without cloning message payloads.
     pub async fn poll_zero_copy(&self) -> Vec<Arc<MessageExt>> {
-        <Self as LitePullConsumer>::poll_zero_copy(self).await
+        <Self as MessagePoll>::poll_zero_copy(self).await
     }
 
     /// Polls messages without cloning message payloads with a custom timeout.
     pub async fn poll_with_timeout_zero_copy(&self, timeout: u64) -> Vec<Arc<MessageExt>> {
-        <Self as LitePullConsumer>::poll_with_timeout_zero_copy(self, timeout).await
+        <Self as MessagePoll>::poll_with_timeout_zero_copy(self, timeout).await
     }
 
     /// Polls messages and returns owned copies.
     pub async fn poll(&self) -> Vec<MessageExt> {
-        <Self as LitePullConsumer>::poll(self).await
+        <Self as MessagePoll>::poll(self).await
     }
 
     /// Polls messages with a custom timeout and returns owned copies.
     pub async fn poll_with_timeout(&self, timeout: u64) -> Vec<MessageExt> {
-        <Self as LitePullConsumer>::poll_with_timeout(self, timeout).await
+        <Self as MessagePoll>::poll_with_timeout(self, timeout).await
     }
 
     /// Returns the configured message model.
     pub async fn message_model(&self) -> MessageModel {
-        <Self as LitePullConsumer>::message_model(self).await
+        <Self as SubscriptionControl>::message_model(self).await
     }
 
     /// Java-compatible getter alias for the configured message model.
@@ -358,12 +362,12 @@ impl DefaultLitePullConsumer {
 
     /// Sets the configured message model.
     pub async fn set_message_model(&self, message_model: MessageModel) {
-        <Self as LitePullConsumer>::set_message_model(self, message_model).await;
+        <Self as SubscriptionControl>::set_message_model(self, message_model).await;
     }
 
     /// Returns where consumption starts when no offset exists.
     pub async fn consume_from_where(&self) -> ConsumeFromWhere {
-        <Self as LitePullConsumer>::consume_from_where(self).await
+        <Self as SubscriptionControl>::consume_from_where(self).await
     }
 
     /// Java-compatible getter alias for where consumption starts when no offset exists.
@@ -373,12 +377,12 @@ impl DefaultLitePullConsumer {
 
     /// Sets where consumption starts when no offset exists.
     pub async fn set_consume_from_where(&self, consume_from_where: ConsumeFromWhere) -> RocketMQResult<()> {
-        <Self as LitePullConsumer>::set_consume_from_where(self, consume_from_where).await
+        <Self as SubscriptionControl>::set_consume_from_where(self, consume_from_where).await
     }
 
     /// Returns the consume timestamp.
     pub async fn consume_timestamp(&self) -> Option<CheetahString> {
-        <Self as LitePullConsumer>::consume_timestamp(self).await
+        <Self as SubscriptionControl>::consume_timestamp(self).await
     }
 
     /// Java-compatible getter alias for the consume timestamp.
@@ -388,12 +392,12 @@ impl DefaultLitePullConsumer {
 
     /// Sets the consume timestamp.
     pub async fn set_consume_timestamp(&self, consume_timestamp: Option<CheetahString>) {
-        <Self as LitePullConsumer>::set_consume_timestamp(self, consume_timestamp).await;
+        <Self as SubscriptionControl>::set_consume_timestamp(self, consume_timestamp).await;
     }
 
     /// Returns the queue allocation strategy.
     pub async fn allocate_message_queue_strategy(&self) -> Arc<dyn AllocateMessageQueueStrategy + Send + Sync> {
-        <Self as LitePullConsumer>::allocate_message_queue_strategy(self).await
+        <Self as SubscriptionControl>::allocate_message_queue_strategy(self).await
     }
 
     /// Java-compatible getter alias for the queue allocation strategy.
@@ -406,12 +410,12 @@ impl DefaultLitePullConsumer {
         &self,
         allocate_message_queue_strategy: Arc<dyn AllocateMessageQueueStrategy + Send + Sync>,
     ) {
-        <Self as LitePullConsumer>::set_allocate_message_queue_strategy(self, allocate_message_queue_strategy).await;
+        <Self as SubscriptionControl>::set_allocate_message_queue_strategy(self, allocate_message_queue_strategy).await;
     }
 
     /// Returns the message queue listener.
     pub async fn message_queue_listener(&self) -> Option<ArcMessageQueueListener> {
-        <Self as LitePullConsumer>::message_queue_listener(self).await
+        <Self as SubscriptionControl>::message_queue_listener(self).await
     }
 
     /// Java-compatible getter alias for the message queue listener.
@@ -421,12 +425,12 @@ impl DefaultLitePullConsumer {
 
     /// Sets the message queue listener.
     pub async fn set_message_queue_listener(&self, message_queue_listener: Option<ArcMessageQueueListener>) {
-        <Self as LitePullConsumer>::set_message_queue_listener(self, message_queue_listener).await;
+        <Self as SubscriptionControl>::set_message_queue_listener(self, message_queue_listener).await;
     }
 
     /// Returns the configured offset store.
     pub async fn offset_store(&self) -> Option<Arc<OffsetStore>> {
-        <Self as LitePullConsumer>::offset_store(self).await
+        <Self as ConsumerOffsetControl>::offset_store(self).await
     }
 
     /// Java-compatible getter alias for the configured offset store.
@@ -436,12 +440,12 @@ impl DefaultLitePullConsumer {
 
     /// Sets the configured offset store.
     pub async fn set_offset_store(&self, offset_store: Option<Arc<OffsetStore>>) -> RocketMQResult<()> {
-        <Self as LitePullConsumer>::set_offset_store(self, offset_store).await
+        <Self as ConsumerOffsetControl>::set_offset_store(self, offset_store).await
     }
 
     /// Returns the topic metadata check interval in milliseconds.
     pub async fn topic_metadata_check_interval_millis(&self) -> u64 {
-        <Self as LitePullConsumer>::topic_metadata_check_interval_millis(self).await
+        <Self as SubscriptionControl>::topic_metadata_check_interval_millis(self).await
     }
 
     /// Java-compatible getter alias for the topic metadata check interval.
@@ -451,12 +455,12 @@ impl DefaultLitePullConsumer {
 
     /// Sets the topic metadata check interval in milliseconds.
     pub async fn set_topic_metadata_check_interval_millis(&self, interval_millis: u64) {
-        <Self as LitePullConsumer>::set_topic_metadata_check_interval_millis(self, interval_millis).await;
+        <Self as SubscriptionControl>::set_topic_metadata_check_interval_millis(self, interval_millis).await;
     }
 
     /// Returns the default poll timeout in milliseconds.
     pub async fn poll_timeout_millis(&self) -> u64 {
-        <Self as LitePullConsumer>::poll_timeout_millis(self).await
+        <Self as MessagePoll>::poll_timeout_millis(self).await
     }
 
     /// Java-compatible getter alias for the default poll timeout.
@@ -466,12 +470,12 @@ impl DefaultLitePullConsumer {
 
     /// Sets the default poll timeout in milliseconds.
     pub async fn set_poll_timeout_millis(&self, timeout_millis: u64) {
-        <Self as LitePullConsumer>::set_poll_timeout_millis(self, timeout_millis).await;
+        <Self as MessagePoll>::set_poll_timeout_millis(self, timeout_millis).await;
     }
 
     /// Returns the broker suspend max time in milliseconds.
     pub async fn broker_suspend_max_time_millis(&self) -> u64 {
-        <Self as LitePullConsumer>::broker_suspend_max_time_millis(self).await
+        <Self as MessagePoll>::broker_suspend_max_time_millis(self).await
     }
 
     /// Java-compatible getter alias for the broker suspend max time.
@@ -481,12 +485,12 @@ impl DefaultLitePullConsumer {
 
     /// Sets the broker suspend max time in milliseconds.
     pub async fn set_broker_suspend_max_time_millis(&self, timeout_millis: u64) {
-        <Self as LitePullConsumer>::set_broker_suspend_max_time_millis(self, timeout_millis).await;
+        <Self as MessagePoll>::set_broker_suspend_max_time_millis(self, timeout_millis).await;
     }
 
     /// Returns the consumer timeout while suspended.
     pub async fn consumer_timeout_millis_when_suspend(&self) -> u64 {
-        <Self as LitePullConsumer>::consumer_timeout_millis_when_suspend(self).await
+        <Self as MessagePoll>::consumer_timeout_millis_when_suspend(self).await
     }
 
     /// Java-compatible getter alias for the consumer timeout while suspended.
@@ -496,12 +500,12 @@ impl DefaultLitePullConsumer {
 
     /// Sets the consumer timeout while suspended.
     pub async fn set_consumer_timeout_millis_when_suspend(&self, timeout_millis: u64) {
-        <Self as LitePullConsumer>::set_consumer_timeout_millis_when_suspend(self, timeout_millis).await;
+        <Self as MessagePoll>::set_consumer_timeout_millis_when_suspend(self, timeout_millis).await;
     }
 
     /// Returns the pull RPC timeout in milliseconds.
     pub async fn consumer_pull_timeout_millis(&self) -> u64 {
-        <Self as LitePullConsumer>::consumer_pull_timeout_millis(self).await
+        <Self as MessagePoll>::consumer_pull_timeout_millis(self).await
     }
 
     /// Java-compatible getter alias for the pull RPC timeout.
@@ -511,12 +515,12 @@ impl DefaultLitePullConsumer {
 
     /// Sets the pull RPC timeout in milliseconds.
     pub async fn set_consumer_pull_timeout_millis(&self, timeout_millis: u64) {
-        <Self as LitePullConsumer>::set_consumer_pull_timeout_millis(self, timeout_millis).await;
+        <Self as MessagePoll>::set_consumer_pull_timeout_millis(self, timeout_millis).await;
     }
 
     /// Returns the pull batch size.
     pub async fn pull_batch_size(&self) -> i32 {
-        <Self as LitePullConsumer>::pull_batch_size(self).await
+        <Self as MessagePoll>::pull_batch_size(self).await
     }
 
     /// Java-compatible getter alias for the pull batch size.
@@ -526,12 +530,12 @@ impl DefaultLitePullConsumer {
 
     /// Sets the pull batch size.
     pub async fn set_pull_batch_size(&self, pull_batch_size: i32) {
-        <Self as LitePullConsumer>::set_pull_batch_size(self, pull_batch_size).await;
+        <Self as MessagePoll>::set_pull_batch_size(self, pull_batch_size).await;
     }
 
     /// Returns the configured pull thread count.
     pub async fn pull_thread_nums(&self) -> usize {
-        <Self as LitePullConsumer>::pull_thread_nums(self).await
+        <Self as MessagePoll>::pull_thread_nums(self).await
     }
 
     /// Java-compatible getter alias for the configured pull thread count.
@@ -541,12 +545,12 @@ impl DefaultLitePullConsumer {
 
     /// Sets the configured pull thread count.
     pub async fn set_pull_thread_nums(&self, pull_thread_nums: usize) {
-        <Self as LitePullConsumer>::set_pull_thread_nums(self, pull_thread_nums).await;
+        <Self as MessagePoll>::set_pull_thread_nums(self, pull_thread_nums).await;
     }
 
     /// Returns the all-queue pull threshold.
     pub async fn pull_threshold_for_all(&self) -> i64 {
-        <Self as LitePullConsumer>::pull_threshold_for_all(self).await
+        <Self as MessagePoll>::pull_threshold_for_all(self).await
     }
 
     /// Java-compatible getter alias for the all-queue pull threshold.
@@ -556,12 +560,12 @@ impl DefaultLitePullConsumer {
 
     /// Sets the all-queue pull threshold.
     pub async fn set_pull_threshold_for_all(&self, pull_threshold_for_all: i64) {
-        <Self as LitePullConsumer>::set_pull_threshold_for_all(self, pull_threshold_for_all).await;
+        <Self as MessagePoll>::set_pull_threshold_for_all(self, pull_threshold_for_all).await;
     }
 
     /// Returns the per-queue pull threshold.
     pub async fn pull_threshold_for_queue(&self) -> i64 {
-        <Self as LitePullConsumer>::pull_threshold_for_queue(self).await
+        <Self as MessagePoll>::pull_threshold_for_queue(self).await
     }
 
     /// Java-compatible getter alias for the per-queue pull threshold.
@@ -571,12 +575,12 @@ impl DefaultLitePullConsumer {
 
     /// Sets the per-queue pull threshold.
     pub async fn set_pull_threshold_for_queue(&self, pull_threshold_for_queue: i64) {
-        <Self as LitePullConsumer>::set_pull_threshold_for_queue(self, pull_threshold_for_queue).await;
+        <Self as MessagePoll>::set_pull_threshold_for_queue(self, pull_threshold_for_queue).await;
     }
 
     /// Returns the per-queue pull size threshold.
     pub async fn pull_threshold_size_for_queue(&self) -> i32 {
-        <Self as LitePullConsumer>::pull_threshold_size_for_queue(self).await
+        <Self as MessagePoll>::pull_threshold_size_for_queue(self).await
     }
 
     /// Java-compatible getter alias for the per-queue pull size threshold.
@@ -586,12 +590,12 @@ impl DefaultLitePullConsumer {
 
     /// Sets the per-queue pull size threshold.
     pub async fn set_pull_threshold_size_for_queue(&self, pull_threshold_size_for_queue: i32) {
-        <Self as LitePullConsumer>::set_pull_threshold_size_for_queue(self, pull_threshold_size_for_queue).await;
+        <Self as MessagePoll>::set_pull_threshold_size_for_queue(self, pull_threshold_size_for_queue).await;
     }
 
     /// Returns the max consume span.
     pub async fn consume_max_span(&self) -> i64 {
-        <Self as LitePullConsumer>::consume_max_span(self).await
+        <Self as MessagePoll>::consume_max_span(self).await
     }
 
     /// Java-compatible getter alias for the max consume span.
@@ -601,22 +605,22 @@ impl DefaultLitePullConsumer {
 
     /// Sets the max consume span.
     pub async fn set_consume_max_span(&self, consume_max_span: i64) {
-        <Self as LitePullConsumer>::set_consume_max_span(self, consume_max_span).await;
+        <Self as MessagePoll>::set_consume_max_span(self, consume_max_span).await;
     }
 
     /// Returns whether pulls use the configured broker id.
     pub async fn is_connect_broker_by_user(&self) -> bool {
-        <Self as LitePullConsumer>::is_connect_broker_by_user(self).await
+        <Self as SubscriptionControl>::is_connect_broker_by_user(self).await
     }
 
     /// Sets whether pulls use the configured broker id.
     pub async fn set_connect_broker_by_user(&self, connect_broker_by_user: bool) {
-        <Self as LitePullConsumer>::set_connect_broker_by_user(self, connect_broker_by_user).await;
+        <Self as SubscriptionControl>::set_connect_broker_by_user(self, connect_broker_by_user).await;
     }
 
     /// Returns the configured default broker id.
     pub async fn default_broker_id(&self) -> u64 {
-        <Self as LitePullConsumer>::default_broker_id(self).await
+        <Self as SubscriptionControl>::default_broker_id(self).await
     }
 
     /// Java-compatible getter alias for the configured default broker id.
@@ -626,72 +630,72 @@ impl DefaultLitePullConsumer {
 
     /// Sets the configured default broker id.
     pub async fn set_default_broker_id(&self, broker_id: u64) {
-        <Self as LitePullConsumer>::set_default_broker_id(self, broker_id).await;
+        <Self as SubscriptionControl>::set_default_broker_id(self, broker_id).await;
     }
 
     /// Fetches message queues for a topic.
     pub async fn fetch_message_queues(&self, topic: &str) -> RocketMQResult<Vec<MessageQueue>> {
-        <Self as LitePullConsumer>::fetch_message_queues(self, topic).await
+        <Self as ConsumerOffsetControl>::fetch_message_queues(self, topic).await
     }
 
     /// Returns the committed offset for a queue.
     pub async fn committed(&self, message_queue: &MessageQueue) -> RocketMQResult<i64> {
-        <Self as LitePullConsumer>::committed(self, message_queue).await
+        <Self as ConsumerOffsetControl>::committed(self, message_queue).await
     }
 
     /// Commits all offsets to the configured offset store.
     pub async fn commit_all(&self) -> RocketMQResult<()> {
-        <Self as LitePullConsumer>::commit_all(self).await
+        <Self as ConsumerOffsetControl>::commit_all(self).await
     }
 
     /// Commits explicit offsets.
     pub async fn commit_with_map(&self, offset_map: HashMap<MessageQueue, i64>, persist: bool) {
-        <Self as LitePullConsumer>::commit_with_map(self, offset_map, persist).await;
+        <Self as ConsumerOffsetControl>::commit_with_map(self, offset_map, persist).await;
     }
 
     /// Commits all offsets.
     pub async fn commit(&self) {
-        <Self as LitePullConsumer>::commit(self).await;
+        <Self as ConsumerOffsetControl>::commit(self).await;
     }
 
     /// Commits offsets for selected queues.
     pub async fn commit_with_set(&self, message_queues: HashSet<MessageQueue>, persist: bool) {
-        <Self as LitePullConsumer>::commit_with_set(self, message_queues, persist).await;
+        <Self as ConsumerOffsetControl>::commit_with_set(self, message_queues, persist).await;
     }
 
     /// Java-compatible alias for committing all offsets.
     pub async fn commit_sync(&self) {
-        <Self as LitePullConsumer>::commit_sync(self).await;
+        <Self as ConsumerOffsetControl>::commit_sync(self).await;
     }
 
     /// Java-compatible alias for committing explicit offsets.
     pub async fn commit_sync_with_map(&self, offset_map: HashMap<MessageQueue, i64>, persist: bool) {
-        <Self as LitePullConsumer>::commit_sync_with_map(self, offset_map, persist).await;
+        <Self as ConsumerOffsetControl>::commit_sync_with_map(self, offset_map, persist).await;
     }
 
     /// Returns whether auto commit is enabled.
     pub async fn is_auto_commit(&self) -> bool {
-        <Self as LitePullConsumer>::is_auto_commit(self).await
+        <Self as ConsumerOffsetControl>::is_auto_commit(self).await
     }
 
     /// Sets whether auto commit is enabled.
     pub async fn set_auto_commit(&self, auto_commit: bool) {
-        <Self as LitePullConsumer>::set_auto_commit(self, auto_commit).await;
+        <Self as ConsumerOffsetControl>::set_auto_commit(self, auto_commit).await;
     }
 
     /// Returns whether unit mode is enabled.
     pub async fn is_unit_mode(&self) -> bool {
-        <Self as LitePullConsumer>::is_unit_mode(self).await
+        <Self as SubscriptionControl>::is_unit_mode(self).await
     }
 
     /// Sets whether unit mode is enabled.
     pub async fn set_unit_mode(&self, unit_mode: bool) {
-        <Self as LitePullConsumer>::set_unit_mode(self, unit_mode).await;
+        <Self as SubscriptionControl>::set_unit_mode(self, unit_mode).await;
     }
 
     /// Returns the auto commit interval in milliseconds.
     pub async fn auto_commit_interval_millis(&self) -> u64 {
-        <Self as LitePullConsumer>::auto_commit_interval_millis(self).await
+        <Self as ConsumerOffsetControl>::auto_commit_interval_millis(self).await
     }
 
     /// Java-compatible getter alias for the auto commit interval.
@@ -701,27 +705,27 @@ impl DefaultLitePullConsumer {
 
     /// Sets the auto commit interval in milliseconds.
     pub async fn set_auto_commit_interval_millis(&self, interval_millis: u64) {
-        <Self as LitePullConsumer>::set_auto_commit_interval_millis(self, interval_millis).await;
+        <Self as ConsumerOffsetControl>::set_auto_commit_interval_millis(self, interval_millis).await;
     }
 
     /// Queries the offset for a timestamp.
     pub async fn offset_for_timestamp(&self, message_queue: &MessageQueue, timestamp: u64) -> RocketMQResult<i64> {
-        <Self as LitePullConsumer>::offset_for_timestamp(self, message_queue, timestamp).await
+        <Self as ConsumerOffsetControl>::offset_for_timestamp(self, message_queue, timestamp).await
     }
 
     /// Queries the earliest store time for a queue.
     pub async fn earliest_msg_store_time(&self, message_queue: &MessageQueue) -> RocketMQResult<i64> {
-        <Self as LitePullConsumer>::earliest_msg_store_time(self, message_queue).await
+        <Self as ConsumerOffsetControl>::earliest_msg_store_time(self, message_queue).await
     }
 
     /// Queries the broker max offset for a queue.
     pub async fn max_offset(&self, message_queue: &MessageQueue) -> RocketMQResult<i64> {
-        <Self as LitePullConsumer>::max_offset(self, message_queue).await
+        <Self as ConsumerOffsetControl>::max_offset(self, message_queue).await
     }
 
     /// Queries the broker min offset for a queue.
     pub async fn min_offset(&self, message_queue: &MessageQueue) -> RocketMQResult<i64> {
-        <Self as LitePullConsumer>::min_offset(self, message_queue).await
+        <Self as ConsumerOffsetControl>::min_offset(self, message_queue).await
     }
 
     /// Creates a topic through the Java-compatible MQAdmin facade.
@@ -779,37 +783,37 @@ impl DefaultLitePullConsumer {
 
     /// Pauses fetching from selected queues.
     pub async fn pause(&self, message_queues: Vec<MessageQueue>) {
-        <Self as LitePullConsumer>::pause(self, message_queues).await;
+        <Self as AssignmentControl>::pause(self, message_queues).await;
     }
 
     /// Resumes fetching from selected queues.
     pub async fn resume(&self, message_queues: Vec<MessageQueue>) {
-        <Self as LitePullConsumer>::resume(self, message_queues).await;
+        <Self as AssignmentControl>::resume(self, message_queues).await;
     }
 
     /// Returns whether a queue is paused.
     pub async fn is_paused(&self, message_queue: &MessageQueue) -> bool {
-        <Self as LitePullConsumer>::is_paused(self, message_queue).await
+        <Self as AssignmentControl>::is_paused(self, message_queue).await
     }
 
     /// Seeks a queue to an offset.
     pub async fn seek(&self, message_queue: &MessageQueue, offset: i64) -> RocketMQResult<()> {
-        <Self as LitePullConsumer>::seek(self, message_queue, offset).await
+        <Self as AssignmentControl>::seek(self, message_queue, offset).await
     }
 
     /// Seeks a queue to the beginning.
     pub async fn seek_to_begin(&self, message_queue: &MessageQueue) -> RocketMQResult<()> {
-        <Self as LitePullConsumer>::seek_to_begin(self, message_queue).await
+        <Self as AssignmentControl>::seek_to_begin(self, message_queue).await
     }
 
     /// Seeks a queue to the end.
     pub async fn seek_to_end(&self, message_queue: &MessageQueue) -> RocketMQResult<()> {
-        <Self as LitePullConsumer>::seek_to_end(self, message_queue).await
+        <Self as AssignmentControl>::seek_to_end(self, message_queue).await
     }
 
     /// Updates the name server address.
     pub async fn update_name_server_address(&self, name_server_address: &str) {
-        <Self as LitePullConsumer>::update_name_server_address(self, name_server_address).await;
+        <Self as SubscriptionControl>::update_name_server_address(self, name_server_address).await;
     }
 
     /// Registers a topic queue-change listener.
@@ -821,7 +825,7 @@ impl DefaultLitePullConsumer {
     where
         TL: TopicMessageQueueChangeListener + 'static,
     {
-        <Self as LitePullConsumer>::register_topic_message_queue_change_listener(self, topic, listener).await
+        <Self as SubscriptionControl>::register_topic_message_queue_change_listener(self, topic, listener).await
     }
 
     /// Returns the consumer group name from the current immutable configuration snapshot.
@@ -991,7 +995,7 @@ impl DefaultLitePullConsumer {
                     .unwrap_or(TopicValidator::RMQ_SYS_TRACE_TOPIC);
 
                 let dispatcher = AsyncTraceDispatcher::new(
-                    Arc::clone(&self.client_runtime),
+                    self.session.runtime(),
                     consumer_config.consumer_group.as_str(),
                     Type::Consume,
                     client_config.trace_msg_batch_num,
@@ -1052,7 +1056,7 @@ impl DefaultLitePullConsumer {
         self.default_lite_pull_consumer_impl
             .get_or_try_init(|| async {
                 let impl_ = Arc::new(DefaultLitePullConsumerImpl::try_new(
-                    Arc::clone(&self.client_runtime),
+                    self.session.runtime(),
                     self.client_config_snapshot(),
                     self.consumer_config_snapshot(),
                 )?);
@@ -1101,39 +1105,13 @@ impl DefaultLitePullConsumer {
 }
 
 #[allow(unused)]
-impl LitePullConsumer for DefaultLitePullConsumer {
-    async fn start(&self) -> RocketMQResult<()> {
-        let impl_ = self.get_or_init_impl().await?;
-
-        impl_.start().await?;
-        self.set_offset_store_local(impl_.offset_store());
-        self.start_trace_dispatcher().await;
-        Ok(())
+impl ClientSessionProvider for DefaultLitePullConsumer {
+    fn client_session(&self) -> Option<&ClientSession> {
+        Some(&self.session)
     }
+}
 
-    async fn shutdown(&self) {
-        if let Some(impl_) = self.default_lite_pull_consumer_impl.get() {
-            let _ = impl_.shutdown().await;
-        }
-
-        // Shutdown trace dispatcher
-        let dispatcher = { self.trace_dispatcher.write().await.take() };
-        if let Some(dispatcher) = dispatcher {
-            if let Some(async_dispatcher) = dispatcher.as_any().downcast_ref::<AsyncTraceDispatcher>() {
-                async_dispatcher.shutdown_async().await;
-            } else {
-                dispatcher.shutdown();
-            }
-        }
-    }
-
-    async fn is_running(&self) -> bool {
-        match self.default_lite_pull_consumer_impl.get() {
-            Some(impl_) => impl_.is_running().await,
-            None => false,
-        }
-    }
-
+impl SubscriptionControl for DefaultLitePullConsumer {
     async fn subscribe(&self, topic: &str) -> RocketMQResult<()> {
         self.subscribe_with_expression(topic, "*").await
     }
@@ -1180,33 +1158,6 @@ impl LitePullConsumer for DefaultLitePullConsumer {
         }
     }
 
-    async fn assignment(&self) -> RocketMQResult<HashSet<MessageQueue>> {
-        let assignment = self.try_impl_()?.assignment().await;
-
-        // Remove namespace from all queues
-        let mut result = HashSet::with_capacity(assignment.len());
-        for mq in assignment {
-            result.insert(self.queue_without_namespace(&mq));
-        }
-
-        Ok(result)
-    }
-
-    async fn assign(&self, message_queues: Vec<MessageQueue>) -> RocketMQResult<()> {
-        // Wrap namespace for all queues
-        let wrapped_queues: Vec<_> = message_queues.iter().map(|mq| self.queue_with_namespace(mq)).collect();
-
-        self.get_or_init_impl().await?.assign(wrapped_queues).await
-    }
-
-    async fn set_sub_expression_for_assign(&self, topic: &str, sub_expression: &str) -> RocketMQResult<()> {
-        let wrapped_topic = self.with_namespace(topic);
-        self.get_or_init_impl()
-            .await?
-            .set_sub_expression_for_assign(wrapped_topic, sub_expression)
-            .await
-    }
-
     async fn build_subscriptions_for_heartbeat(
         &self,
         sub_expression_map: &mut HashMap<String, MessageSelector>,
@@ -1220,59 +1171,6 @@ impl LitePullConsumer for DefaultLitePullConsumer {
         self.default_lite_pull_consumer_impl
             .get()
             .map_or_else(HashSet::new, |impl_| impl_.subscriptions_for_heartbeat())
-    }
-
-    /// Zero-copy implementation.
-    async fn poll_zero_copy(&self) -> Vec<Arc<MessageExt>> {
-        let poll_timeout_millis = self.consumer_config.load().poll_timeout_millis;
-        match self.try_impl_() {
-            Ok(impl_) => match impl_.poll(poll_timeout_millis).await {
-                Ok(messages) => messages,
-                Err(e) => {
-                    tracing::error!(error = %e, "poll failed");
-                    Vec::new()
-                }
-            },
-            Err(e) => {
-                tracing::error!(error = %e, "poll failed");
-                Vec::new()
-            }
-        }
-    }
-
-    /// Zero-copy implementation with custom timeout.
-    async fn poll_with_timeout_zero_copy(&self, timeout: u64) -> Vec<Arc<MessageExt>> {
-        match self.try_impl_() {
-            Ok(impl_) => match impl_.poll_with_timeout(timeout).await {
-                Ok(messages) => messages,
-                Err(e) => {
-                    tracing::error!(timeout_ms = timeout, error = %e, "poll failed");
-                    Vec::new()
-                }
-            },
-            Err(e) => {
-                tracing::error!(timeout_ms = timeout, error = %e, "poll failed");
-                Vec::new()
-            }
-        }
-    }
-
-    /// Delegates to zero-copy implementation and creates owned message copies.
-    async fn poll(&self) -> Vec<MessageExt> {
-        self.poll_zero_copy()
-            .await
-            .into_iter()
-            .map(|arc_mut| (*arc_mut).clone())
-            .collect()
-    }
-
-    /// Delegates to zero-copy implementation with timeout and creates owned message copies.
-    async fn poll_with_timeout(&self, timeout: u64) -> Vec<MessageExt> {
-        self.poll_with_timeout_zero_copy(timeout)
-            .await
-            .into_iter()
-            .map(|arc_mut| (*arc_mut).clone())
-            .collect()
     }
 
     async fn message_model(&self) -> MessageModel {
@@ -1343,21 +1241,6 @@ impl LitePullConsumer for DefaultLitePullConsumer {
         }
     }
 
-    async fn offset_store(&self) -> Option<Arc<OffsetStore>> {
-        self.default_lite_pull_consumer_impl
-            .get()
-            .and_then(|impl_| impl_.offset_store())
-            .or_else(|| self.current_offset_store())
-    }
-
-    async fn set_offset_store(&self, offset_store: Option<Arc<OffsetStore>>) -> RocketMQResult<()> {
-        if let Some(impl_) = self.default_lite_pull_consumer_impl.get() {
-            impl_.set_offset_store(offset_store.clone())?;
-        }
-        self.set_offset_store_local(offset_store);
-        Ok(())
-    }
-
     async fn topic_metadata_check_interval_millis(&self) -> u64 {
         self.consumer_config.load().topic_metadata_check_interval_millis
     }
@@ -1367,6 +1250,199 @@ impl LitePullConsumer for DefaultLitePullConsumer {
         if let Some(impl_) = self.default_lite_pull_consumer_impl.get() {
             impl_.set_topic_metadata_check_interval_millis(interval_millis);
         }
+    }
+
+    async fn is_connect_broker_by_user(&self) -> bool {
+        let configured = self.consumer_config.load().connect_broker_by_user;
+        self.default_lite_pull_consumer_impl
+            .get()
+            .map_or(configured, |impl_| impl_.is_connect_broker_by_user())
+    }
+
+    async fn set_connect_broker_by_user(&self, connect_broker_by_user: bool) {
+        self.update_consumer_config(|config| config.connect_broker_by_user = connect_broker_by_user);
+        if let Some(impl_) = self.default_lite_pull_consumer_impl.get() {
+            impl_.set_connect_broker_by_user(connect_broker_by_user);
+        }
+    }
+
+    async fn default_broker_id(&self) -> u64 {
+        let configured = self.consumer_config.load().default_broker_id;
+        self.default_lite_pull_consumer_impl
+            .get()
+            .map_or(configured, |impl_| impl_.default_broker_id())
+    }
+
+    async fn set_default_broker_id(&self, broker_id: u64) {
+        self.update_consumer_config(|config| config.default_broker_id = broker_id);
+        if let Some(impl_) = self.default_lite_pull_consumer_impl.get() {
+            impl_.set_default_broker_id(broker_id);
+        }
+    }
+
+    async fn is_unit_mode(&self) -> bool {
+        self.consumer_config.load().unit_mode
+    }
+
+    async fn set_unit_mode(&self, unit_mode: bool) {
+        self.update_consumer_config(|config| config.unit_mode = unit_mode);
+        if let Some(impl_) = self.default_lite_pull_consumer_impl.get() {
+            impl_.set_unit_mode(unit_mode);
+        }
+    }
+
+    async fn update_name_server_address(&self, name_server_address: &str) {
+        self.update_client_config(|config| {
+            config.set_namesrv_addr(CheetahString::from_slice(name_server_address));
+        });
+
+        if let Some(impl_) = self.default_lite_pull_consumer_impl.get() {
+            let addresses: Vec<String> = name_server_address
+                .split(';')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            impl_.update_name_server_address(addresses).await;
+        }
+    }
+
+    async fn register_topic_message_queue_change_listener<TL>(&self, topic: &str, listener: TL) -> RocketMQResult<()>
+    where
+        TL: TopicMessageQueueChangeListener + 'static,
+    {
+        let wrapped_topic = self.with_namespace(topic);
+        let listener_arc: Arc<dyn TopicMessageQueueChangeListener + Send + Sync> = Arc::new(listener);
+        self.try_impl_()?
+            .register_topic_message_queue_change_listener(wrapped_topic, listener_arc)
+            .await
+    }
+}
+
+impl AssignmentControl for DefaultLitePullConsumer {
+    async fn assignment(&self) -> RocketMQResult<HashSet<MessageQueue>> {
+        let assignment = self.try_impl_()?.assignment().await;
+
+        // Remove namespace from all queues
+        let mut result = HashSet::with_capacity(assignment.len());
+        for mq in assignment {
+            result.insert(self.queue_without_namespace(&mq));
+        }
+
+        Ok(result)
+    }
+
+    async fn assign(&self, message_queues: Vec<MessageQueue>) -> RocketMQResult<()> {
+        // Wrap namespace for all queues
+        let wrapped_queues: Vec<_> = message_queues.iter().map(|mq| self.queue_with_namespace(mq)).collect();
+
+        self.get_or_init_impl().await?.assign(wrapped_queues).await
+    }
+
+    async fn set_sub_expression_for_assign(&self, topic: &str, sub_expression: &str) -> RocketMQResult<()> {
+        let wrapped_topic = self.with_namespace(topic);
+        self.get_or_init_impl()
+            .await?
+            .set_sub_expression_for_assign(wrapped_topic, sub_expression)
+            .await
+    }
+
+    async fn pause(&self, message_queues: Vec<MessageQueue>) {
+        let wrapped_queues: Vec<_> = message_queues.iter().map(|mq| self.queue_with_namespace(mq)).collect();
+
+        match self.try_impl_() {
+            Ok(impl_) => impl_.pause(&wrapped_queues).await,
+            Err(e) => tracing::warn!("pause failed: {}", e),
+        }
+    }
+
+    async fn resume(&self, message_queues: Vec<MessageQueue>) {
+        let wrapped_queues: Vec<_> = message_queues.iter().map(|mq| self.queue_with_namespace(mq)).collect();
+
+        match self.try_impl_() {
+            Ok(impl_) => impl_.resume(&wrapped_queues).await,
+            Err(e) => tracing::warn!("resume failed: {}", e),
+        }
+    }
+
+    async fn is_paused(&self, message_queue: &MessageQueue) -> bool {
+        let wrapped_mq = self.queue_with_namespace(message_queue);
+        match self.try_impl_() {
+            Ok(impl_) => impl_.is_paused(&wrapped_mq).await,
+            Err(e) => {
+                tracing::warn!("is_paused failed: {}", e);
+                false
+            }
+        }
+    }
+
+    async fn seek(&self, message_queue: &MessageQueue, offset: i64) -> RocketMQResult<()> {
+        let wrapped_mq = self.queue_with_namespace(message_queue);
+        self.try_impl_()?.seek(&wrapped_mq, offset).await
+    }
+
+    async fn seek_to_begin(&self, message_queue: &MessageQueue) -> RocketMQResult<()> {
+        let wrapped_mq = self.queue_with_namespace(message_queue);
+        self.try_impl_()?.seek_to_begin(&wrapped_mq).await
+    }
+
+    async fn seek_to_end(&self, message_queue: &MessageQueue) -> RocketMQResult<()> {
+        let wrapped_mq = self.queue_with_namespace(message_queue);
+        self.try_impl_()?.seek_to_end(&wrapped_mq).await
+    }
+}
+
+impl MessagePoll for DefaultLitePullConsumer {
+    /// Zero-copy implementation.
+    async fn poll_zero_copy(&self) -> Vec<Arc<MessageExt>> {
+        let poll_timeout_millis = self.consumer_config.load().poll_timeout_millis;
+        match self.try_impl_() {
+            Ok(impl_) => match impl_.poll(poll_timeout_millis).await {
+                Ok(messages) => messages,
+                Err(e) => {
+                    tracing::error!(error = %e, "poll failed");
+                    Vec::new()
+                }
+            },
+            Err(e) => {
+                tracing::error!(error = %e, "poll failed");
+                Vec::new()
+            }
+        }
+    }
+
+    /// Zero-copy implementation with custom timeout.
+    async fn poll_with_timeout_zero_copy(&self, timeout: u64) -> Vec<Arc<MessageExt>> {
+        match self.try_impl_() {
+            Ok(impl_) => match impl_.poll_with_timeout(timeout).await {
+                Ok(messages) => messages,
+                Err(e) => {
+                    tracing::error!(timeout_ms = timeout, error = %e, "poll failed");
+                    Vec::new()
+                }
+            },
+            Err(e) => {
+                tracing::error!(timeout_ms = timeout, error = %e, "poll failed");
+                Vec::new()
+            }
+        }
+    }
+
+    /// Delegates to zero-copy implementation and creates owned message copies.
+    async fn poll(&self) -> Vec<MessageExt> {
+        self.poll_zero_copy()
+            .await
+            .into_iter()
+            .map(|arc_mut| (*arc_mut).clone())
+            .collect()
+    }
+
+    /// Delegates to zero-copy implementation with timeout and creates owned message copies.
+    async fn poll_with_timeout(&self, timeout: u64) -> Vec<MessageExt> {
+        self.poll_with_timeout_zero_copy(timeout)
+            .await
+            .into_iter()
+            .map(|arc_mut| (*arc_mut).clone())
+            .collect()
     }
 
     async fn poll_timeout_millis(&self) -> u64 {
@@ -1478,33 +1554,22 @@ impl LitePullConsumer for DefaultLitePullConsumer {
             impl_.set_consume_max_span(consume_max_span);
         }
     }
+}
 
-    async fn is_connect_broker_by_user(&self) -> bool {
-        let configured = self.consumer_config.load().connect_broker_by_user;
+impl ConsumerOffsetControl for DefaultLitePullConsumer {
+    async fn offset_store(&self) -> Option<Arc<OffsetStore>> {
         self.default_lite_pull_consumer_impl
             .get()
-            .map_or(configured, |impl_| impl_.is_connect_broker_by_user())
+            .and_then(|impl_| impl_.offset_store())
+            .or_else(|| self.current_offset_store())
     }
 
-    async fn set_connect_broker_by_user(&self, connect_broker_by_user: bool) {
-        self.update_consumer_config(|config| config.connect_broker_by_user = connect_broker_by_user);
+    async fn set_offset_store(&self, offset_store: Option<Arc<OffsetStore>>) -> RocketMQResult<()> {
         if let Some(impl_) = self.default_lite_pull_consumer_impl.get() {
-            impl_.set_connect_broker_by_user(connect_broker_by_user);
+            impl_.set_offset_store(offset_store.clone())?;
         }
-    }
-
-    async fn default_broker_id(&self) -> u64 {
-        let configured = self.consumer_config.load().default_broker_id;
-        self.default_lite_pull_consumer_impl
-            .get()
-            .map_or(configured, |impl_| impl_.default_broker_id())
-    }
-
-    async fn set_default_broker_id(&self, broker_id: u64) {
-        self.update_consumer_config(|config| config.default_broker_id = broker_id);
-        if let Some(impl_) = self.default_lite_pull_consumer_impl.get() {
-            impl_.set_default_broker_id(broker_id);
-        }
+        self.set_offset_store_local(offset_store);
+        Ok(())
     }
 
     async fn fetch_message_queues(&self, topic: &str) -> RocketMQResult<Vec<MessageQueue>> {
@@ -1588,17 +1653,6 @@ impl LitePullConsumer for DefaultLitePullConsumer {
         }
     }
 
-    async fn is_unit_mode(&self) -> bool {
-        self.consumer_config.load().unit_mode
-    }
-
-    async fn set_unit_mode(&self, unit_mode: bool) {
-        self.update_consumer_config(|config| config.unit_mode = unit_mode);
-        if let Some(impl_) = self.default_lite_pull_consumer_impl.get() {
-            impl_.set_unit_mode(unit_mode);
-        }
-    }
-
     async fn auto_commit_interval_millis(&self) -> u64 {
         self.consumer_config.load().auto_commit_interval_millis
     }
@@ -1632,75 +1686,39 @@ impl LitePullConsumer for DefaultLitePullConsumer {
         let wrapped_mq = self.queue_with_namespace(message_queue);
         self.try_impl_()?.min_offset_public(&wrapped_mq).await
     }
+}
 
-    async fn pause(&self, message_queues: Vec<MessageQueue>) {
-        let wrapped_queues: Vec<_> = message_queues.iter().map(|mq| self.queue_with_namespace(mq)).collect();
+impl ConsumerLifecycle for DefaultLitePullConsumer {
+    async fn start(&self) -> RocketMQResult<()> {
+        let impl_ = self.get_or_init_impl().await?;
 
-        match self.try_impl_() {
-            Ok(impl_) => impl_.pause(&wrapped_queues).await,
-            Err(e) => tracing::warn!("pause failed: {}", e),
-        }
+        impl_.start().await?;
+        self.set_offset_store_local(impl_.offset_store());
+        self.start_trace_dispatcher().await;
+        Ok(())
     }
 
-    async fn resume(&self, message_queues: Vec<MessageQueue>) {
-        let wrapped_queues: Vec<_> = message_queues.iter().map(|mq| self.queue_with_namespace(mq)).collect();
-
-        match self.try_impl_() {
-            Ok(impl_) => impl_.resume(&wrapped_queues).await,
-            Err(e) => tracing::warn!("resume failed: {}", e),
+    async fn shutdown(&self) {
+        if let Some(impl_) = self.default_lite_pull_consumer_impl.get() {
+            let _ = impl_.shutdown().await;
         }
-    }
 
-    async fn is_paused(&self, message_queue: &MessageQueue) -> bool {
-        let wrapped_mq = self.queue_with_namespace(message_queue);
-        match self.try_impl_() {
-            Ok(impl_) => impl_.is_paused(&wrapped_mq).await,
-            Err(e) => {
-                tracing::warn!("is_paused failed: {}", e);
-                false
+        // Shutdown trace dispatcher
+        let dispatcher = { self.trace_dispatcher.write().await.take() };
+        if let Some(dispatcher) = dispatcher {
+            if let Some(async_dispatcher) = dispatcher.as_any().downcast_ref::<AsyncTraceDispatcher>() {
+                async_dispatcher.shutdown_async().await;
+            } else {
+                dispatcher.shutdown();
             }
         }
     }
 
-    async fn seek(&self, message_queue: &MessageQueue, offset: i64) -> RocketMQResult<()> {
-        let wrapped_mq = self.queue_with_namespace(message_queue);
-        self.try_impl_()?.seek(&wrapped_mq, offset).await
-    }
-
-    async fn seek_to_begin(&self, message_queue: &MessageQueue) -> RocketMQResult<()> {
-        let wrapped_mq = self.queue_with_namespace(message_queue);
-        self.try_impl_()?.seek_to_begin(&wrapped_mq).await
-    }
-
-    async fn seek_to_end(&self, message_queue: &MessageQueue) -> RocketMQResult<()> {
-        let wrapped_mq = self.queue_with_namespace(message_queue);
-        self.try_impl_()?.seek_to_end(&wrapped_mq).await
-    }
-
-    async fn update_name_server_address(&self, name_server_address: &str) {
-        self.update_client_config(|config| {
-            config.set_namesrv_addr(CheetahString::from_slice(name_server_address));
-        });
-
-        if let Some(impl_) = self.default_lite_pull_consumer_impl.get() {
-            let addresses: Vec<String> = name_server_address
-                .split(';')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect();
-            impl_.update_name_server_address(addresses).await;
+    async fn is_running(&self) -> bool {
+        match self.default_lite_pull_consumer_impl.get() {
+            Some(impl_) => impl_.is_running().await,
+            None => false,
         }
-    }
-
-    async fn register_topic_message_queue_change_listener<TL>(&self, topic: &str, listener: TL) -> RocketMQResult<()>
-    where
-        TL: TopicMessageQueueChangeListener + 'static,
-    {
-        let wrapped_topic = self.with_namespace(topic);
-        let listener_arc: Arc<dyn TopicMessageQueueChangeListener + Send + Sync> = Arc::new(listener);
-        self.try_impl_()?
-            .register_topic_message_queue_change_listener(wrapped_topic, listener_arc)
-            .await
     }
 }
 
@@ -1762,19 +1780,19 @@ impl MQConsumer for DefaultLitePullConsumer {
     }
 
     async fn search_offset(&mut self, mq: &MessageQueue, timestamp: u64) -> RocketMQResult<i64> {
-        <Self as LitePullConsumer>::offset_for_timestamp(self, mq, timestamp).await
+        <Self as ConsumerOffsetControl>::offset_for_timestamp(self, mq, timestamp).await
     }
 
     async fn max_offset(&mut self, mq: &MessageQueue) -> RocketMQResult<i64> {
-        <Self as LitePullConsumer>::max_offset(self, mq).await
+        <Self as ConsumerOffsetControl>::max_offset(self, mq).await
     }
 
     async fn min_offset(&mut self, mq: &MessageQueue) -> RocketMQResult<i64> {
-        <Self as LitePullConsumer>::min_offset(self, mq).await
+        <Self as ConsumerOffsetControl>::min_offset(self, mq).await
     }
 
     async fn earliest_msg_store_time(&mut self, mq: &MessageQueue) -> RocketMQResult<i64> {
-        <Self as LitePullConsumer>::earliest_msg_store_time(self, mq).await
+        <Self as ConsumerOffsetControl>::earliest_msg_store_time(self, mq).await
     }
 }
 

@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 
 use cheetah_string::CheetahString;
-use rocketmq_client_rust::MQAdminExt;
+use rocketmq_client_rust::{RouteAdmin as _, TopicAdmin as _};
 use rocketmq_model::common::config::TopicConfig as RocketMQTopicConfig;
 use rocketmq_model::common::mix_all::DLQ_GROUP_TOPIC_PREFIX;
 use rocketmq_model::common::mix_all::RETRY_GROUP_TOPIC_PREFIX;

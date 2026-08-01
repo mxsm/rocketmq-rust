@@ -23,7 +23,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 #[cfg(feature = "admin-full")]
-use crate::admin::mq_admin_ext_async::MQAdminExt;
+use crate::admin::capability::{AuthAdmin, BrokerAdmin, ConsumerAdmin, OffsetAdmin, RouteAdmin, TopicAdmin};
 use crate::base::client_config::ClientConfig;
 #[cfg(feature = "admin-full")]
 use crate::base::validators::Validators;

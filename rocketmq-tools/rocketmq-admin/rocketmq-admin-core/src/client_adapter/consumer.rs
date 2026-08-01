@@ -17,7 +17,7 @@ use std::collections::HashSet;
 use std::time::SystemTime;
 
 use cheetah_string::CheetahString;
-use rocketmq_client_rust::MQAdminExt;
+use rocketmq_client_rust::{ConsumerAdmin as _, RouteAdmin as _, TopicAdmin as _};
 use rocketmq_error::RocketMQError;
 use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_model::common::key_builder::KeyBuilder;

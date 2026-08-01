@@ -88,29 +88,40 @@ pub mod prelude;
 mod producer;
 mod public_api;
 mod runtime;
+mod session;
 mod stat;
 mod trace;
 mod types;
 mod utils;
 
+#[cfg(feature = "admin-full")]
+pub use crate::admin::AuthAdmin;
+#[cfg(feature = "admin-full")]
+pub use crate::admin::BrokerAdmin;
 #[cfg(feature = "admin-read")]
 pub use crate::admin::BrokerConfigAllowlisted;
 #[cfg(feature = "admin-mutation")]
 pub use crate::admin::BrokerConfigPatchOutcome;
+#[cfg(feature = "admin-full")]
+pub use crate::admin::ConsumerAdmin;
 pub use crate::admin::DefaultMQAdminExt;
 pub use crate::admin::DefaultMQAdminExtImpl;
-#[cfg(feature = "admin-full")]
-pub use crate::admin::MQAdminExt;
 #[cfg(feature = "admin-mutation")]
 pub use crate::admin::MQAdminMutationExt;
 #[cfg(feature = "admin-read")]
 pub use crate::admin::MQAdminReadExt;
+#[cfg(feature = "admin-full")]
+pub use crate::admin::OffsetAdmin;
+#[cfg(feature = "admin-full")]
+pub use crate::admin::RouteAdmin;
 #[cfg(feature = "admin-mutation")]
 pub use crate::admin::SubscriptionGroupConfigPatch;
 #[cfg(feature = "admin-mutation")]
 pub use crate::admin::SubscriptionGroupConfigPatchOutcome;
 #[cfg(feature = "admin-read")]
 pub use crate::admin::SubscriptionGroupConfigVersioned;
+#[cfg(feature = "admin-full")]
+pub use crate::admin::TopicAdmin;
 #[cfg(feature = "admin-mutation")]
 pub use crate::admin::TopicConfigPatch;
 #[cfg(feature = "admin-mutation")]
@@ -912,16 +923,18 @@ pub use crate::consumer::AllocateMessageQueueByMachineRoomNearby;
 pub use crate::consumer::AllocateMessageQueueConsistentHash;
 pub use crate::consumer::AllocateMessageQueueStrategy;
 pub use crate::consumer::ArcMessageQueueListener;
+pub use crate::consumer::AssignmentControl;
 pub use crate::consumer::ConsumeConcurrentlyContext;
 pub use crate::consumer::ConsumeConcurrentlyStatus;
 pub use crate::consumer::ConsumeOrderlyContext;
 pub use crate::consumer::ConsumeOrderlyStatus;
+pub use crate::consumer::ConsumerLifecycle;
+pub use crate::consumer::ConsumerOffsetControl;
 pub use crate::consumer::ConsumerTuningProfile;
 pub use crate::consumer::ControllableOffset;
 pub use crate::consumer::DefaultLitePullConsumerBuilder;
 pub use crate::consumer::DefaultMQPushConsumerBuilder;
 pub use crate::consumer::HashFunction;
-pub use crate::consumer::LitePullConsumer;
 pub use crate::consumer::LocalFileOffsetStore;
 pub use crate::consumer::MQConsumer;
 pub use crate::consumer::MQConsumerInner;
@@ -930,6 +943,7 @@ pub use crate::consumer::MachineRoomResolver;
 pub use crate::consumer::MessageListener;
 pub use crate::consumer::MessageListenerConcurrently;
 pub use crate::consumer::MessageListenerOrderly;
+pub use crate::consumer::MessagePoll;
 pub use crate::consumer::MessageQueueListener;
 pub use crate::consumer::MessageSelector;
 pub use crate::consumer::OffsetSerialize;
@@ -945,6 +959,7 @@ pub use crate::consumer::PullResult;
 pub use crate::consumer::PullStatus;
 pub use crate::consumer::ReadOffsetType;
 pub use crate::consumer::RemoteBrokerOffsetStore;
+pub use crate::consumer::SubscriptionControl;
 pub use crate::consumer::TopicMessageQueueChangeListener;
 pub use crate::exception::MQBrokerException;
 pub use crate::exception::MQClientException;
@@ -984,6 +999,8 @@ pub use crate::runtime::ClientMetrics;
 pub use crate::runtime::ClientRuntime;
 pub use crate::runtime::ClientRuntimeConfig;
 pub use crate::runtime::TelemetryHandle;
+pub use crate::session::ClientSession;
+pub use crate::session::ClientSessionProvider;
 #[doc(hidden)]
 pub use crate::stat::consumer_stats_manager::run_consumer_stats_manager_lifecycle_probe;
 #[doc(hidden)]
@@ -1057,16 +1074,17 @@ pub use crate::producer::BatchSendCallbackRequest;
 pub use crate::producer::BatchSendRequest;
 pub use crate::producer::JavaHashCode;
 pub use crate::producer::LocalTransactionState;
+pub use crate::producer::MessageQuery;
 pub use crate::producer::MessageQueueSelector;
 pub use crate::producer::MessageQueueSelectorFn;
 pub use crate::producer::ProducerLifecycle;
-pub use crate::producer::ProducerQuery;
 pub use crate::producer::ProducerQueryRequest;
 pub use crate::producer::ProducerQueryResponse;
+pub use crate::producer::ProducerTopicAdmin;
 pub use crate::producer::RecallRequest;
 pub use crate::producer::RequestCallback;
+pub use crate::producer::RequestReply;
 pub use crate::producer::RequestReplyCallbackRequest;
-pub use crate::producer::RequestReplyProducer;
 pub use crate::producer::RequestReplyRequest;
 pub use crate::producer::SelectMessageQueueByHash;
 pub use crate::producer::SelectMessageQueueByMachineRoom;
@@ -1082,14 +1100,13 @@ pub use crate::producer::SendMode;
 pub use crate::producer::SendRequest;
 pub use crate::producer::SendResult;
 pub use crate::producer::SendStatus;
-pub use crate::producer::TopicAdmin;
 pub use crate::producer::TopicCreateRequest;
 pub use crate::producer::TransactionListener;
 pub use crate::producer::TransactionMQProducer;
 pub use crate::producer::TransactionMQProducerBuilder;
+pub use crate::producer::TransactionSend;
 pub use crate::producer::TransactionSendRequest;
 pub use crate::producer::TransactionSendResult;
-pub use crate::producer::TransactionalProducer;
 pub use crate::public_api::*;
 #[doc(hidden)]
 pub use crate::trace::async_trace_dispatcher::run_trace_queue_depth_accounting_probe;

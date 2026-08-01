@@ -160,7 +160,7 @@ impl AdminSession {
     #[cfg(feature = "client-adapter")]
     pub async fn probe_name_server(&self, name_server: &str) -> AdminResult<()> {
         self.ensure_open()?;
-        use rocketmq_client_rust::MQAdminExt;
+        use rocketmq_client_rust::RouteAdmin as _;
         self.inner
             .probe_name_server(name_server.into())
             .await

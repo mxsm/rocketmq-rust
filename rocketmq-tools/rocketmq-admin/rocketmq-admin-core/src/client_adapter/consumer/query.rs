@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 
 use cheetah_string::CheetahString;
-use rocketmq_client_rust::MQAdminExt;
+use rocketmq_client_rust::ConsumerAdmin as _;
 use rocketmq_model::message::MessageQueue;
 use rocketmq_model::version::RocketMqVersion;
 use rocketmq_protocol::protocol::admin::consume_stats::ConsumeStats;

@@ -14,7 +14,7 @@
 
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::AclClientRPCHook;
-use rocketmq_client_rust::MQAdminExt;
+use rocketmq_client_rust::AuthAdmin as _;
 use rocketmq_client_rust::SessionCredentials;
 use rocketmq_client_rust::SigningAlgorithm;
 

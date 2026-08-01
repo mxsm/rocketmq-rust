@@ -15,7 +15,7 @@
 //! HA admin service models and operations.
 
 use cheetah_string::CheetahString;
-use rocketmq_client_rust::MQAdminExt;
+use rocketmq_client_rust::{BrokerAdmin as _, RouteAdmin as _};
 use rocketmq_protocol::protocol::body::broker_replicas_info::BrokerReplicasInfo;
 use rocketmq_protocol::protocol::body::ha_runtime_info::HARuntimeInfo;
 use serde::Deserialize;

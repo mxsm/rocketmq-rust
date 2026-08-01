@@ -19,8 +19,8 @@ use std::sync::Mutex;
 
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::ClientConfig;
+use rocketmq_client_rust::ConsumerAdmin as _;
 use rocketmq_client_rust::DefaultMQProducer;
-use rocketmq_client_rust::MQAdminExt;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_model::common::message::message_single::Message;
 use rocketmq_protocol::protocol::body::producer_table_info::ProducerTableInfo;
