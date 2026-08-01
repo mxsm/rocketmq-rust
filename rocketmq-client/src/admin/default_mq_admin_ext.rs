@@ -25,18 +25,20 @@ use crate::admin::default_mq_admin_ext_impl::DefaultMQAdminExtImpl;
 use crate::admin::mq_admin_read_ext::MQAdminReadExt;
 use crate::base::client_config::ClientConfig;
 use crate::runtime::ClientRuntime;
+use crate::session::ClientSession;
+use crate::session::ClientSessionProvider;
 
 const ADMIN_EXT_GROUP: &str = "admin_ext_group";
 const DEFAULT_TIMEOUT_MILLIS: u64 = 5000;
 
 /// Java-style Admin facade that owns a self-wired `DefaultMQAdminExtImpl`.
 ///
-/// `DefaultMQAdminExtImpl` remains the concrete implementation of the
-/// `MQAdminExt` trait. This facade requires an application-owned
-/// [`ClientRuntime`] and dereferences to the implementation for advanced admin
-/// operations.
+/// `DefaultMQAdminExtImpl` remains the concrete implementation behind the
+/// scoped administration capabilities. This facade requires an
+/// application-owned [`ClientRuntime`] and dereferences to the implementation
+/// for advanced admin operations.
 pub struct DefaultMQAdminExt {
-    client_runtime: Arc<ClientRuntime>,
+    session: ClientSession,
     default_mqadmin_ext_impl: DefaultMQAdminExtImpl,
 }
 
@@ -57,7 +59,7 @@ impl DefaultMQAdminExt {
         );
 
         Self {
-            client_runtime,
+            session: ClientSession::new(client_runtime),
             default_mqadmin_ext_impl,
         }
     }
@@ -68,7 +70,7 @@ impl DefaultMQAdminExt {
 
     /// Returns the application-owned runtime borrowed by this Admin facade.
     pub fn client_runtime(&self) -> Arc<ClientRuntime> {
-        Arc::clone(&self.client_runtime)
+        self.session.runtime()
     }
 
     pub fn with_timeout(client_runtime: Arc<ClientRuntime>, timeout_millis: Duration) -> Self {
@@ -224,6 +226,12 @@ impl DefaultMQAdminExt {
     }
 }
 
+impl ClientSessionProvider for DefaultMQAdminExt {
+    fn client_session(&self) -> Option<&ClientSession> {
+        Some(&self.session)
+    }
+}
+
 impl AsRef<DefaultMQAdminExtImpl> for DefaultMQAdminExt {
     fn as_ref(&self) -> &DefaultMQAdminExtImpl {
         &self.default_mqadmin_ext_impl
@@ -257,7 +265,7 @@ mod tests {
     use cheetah_string::CheetahString;
     use rocketmq_error::RocketMQError;
 
-    use crate::admin::mq_admin_ext_async::MQAdminExt;
+    use crate::admin::capability::RouteAdmin;
 
     use super::DefaultMQAdminExt;
 

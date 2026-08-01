@@ -15,7 +15,7 @@
 //! Controller admin service models and operations.
 
 use cheetah_string::CheetahString;
-use rocketmq_client_rust::MQAdminExt;
+use rocketmq_client_rust::BrokerAdmin as _;
 use rocketmq_protocol::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
 use rocketmq_protocol::protocol::header::elect_master_response_header::ElectMasterResponseHeader;
 use rocketmq_protocol::protocol::header::get_meta_data_response_header::GetMetaDataResponseHeader;

@@ -15,7 +15,7 @@
 //! Direct implementation of the explicit mutation capability.
 //!
 //! This module deliberately talks to the concrete client APIs instead of
-//! routing mutation-only builds through the legacy mixed `MQAdminExt` trait.
+//! routing mutation-only builds through the scoped administration traits.
 
 mod log_filter;
 

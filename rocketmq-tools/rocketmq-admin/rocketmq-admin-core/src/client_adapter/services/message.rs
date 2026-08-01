@@ -24,9 +24,9 @@ use std::time::Instant;
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
-use rocketmq_client_rust::MQAdminExt;
 use rocketmq_client_rust::PullStatus;
 use rocketmq_client_rust::TraceDataEncoder;
+use rocketmq_client_rust::{ConsumerAdmin as _, OffsetAdmin as _, TopicAdmin as _};
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_model::common::message::MessageConst;

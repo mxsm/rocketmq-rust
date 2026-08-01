@@ -24,6 +24,7 @@ use crate::base::client_config::ClientConfig;
 use crate::producer::default_mq_producer::DefaultMQProducer;
 use crate::producer::produce_accumulator::ProduceAccumulator;
 use crate::runtime::ClientRuntime;
+use crate::session::ClientSession;
 use crate::trace::trace_dispatcher::ArcTraceDispatcher;
 
 pub struct DefaultMQProducerBuilder {
@@ -270,7 +271,9 @@ impl DefaultMQProducerBuilder {
     }
 
     pub fn build(self) -> DefaultMQProducer {
+        let client_session = ClientSession::new(Arc::clone(&self.client_runtime));
         let mut mq_producer = DefaultMQProducer::unbound();
+        mq_producer.set_client_session(client_session);
         mq_producer.set_client_config(self.client_config);
 
         // Set optional fields

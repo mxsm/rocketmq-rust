@@ -85,7 +85,10 @@ impl DefaultMQPullConsumer {
     }
 }
 
-#[deprecated(since = "0.9.0", note = "Java MQPullConsumer is deprecated; use LitePullConsumer")]
+#[deprecated(
+    since = "0.9.0",
+    note = "Java MQPullConsumer is deprecated; use the scoped LitePull capabilities"
+)]
 pub trait MQPullConsumer {
     fn start(&self) -> RocketMQResult<()> {
         Err(unsupported_legacy_api("MQPullConsumer", MODERN_LITE_PULL_CONSUMER))

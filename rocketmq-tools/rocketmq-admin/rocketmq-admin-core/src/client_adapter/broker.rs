@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_client_rust::MQAdminExt;
+use rocketmq_client_rust::{BrokerAdmin as _, RouteAdmin as _};
 use rocketmq_protocol::protocol::body::kv_table::KVTable;
 
 use crate::client_adapter::lifecycle::AdminSession;

@@ -28,12 +28,12 @@ use crate::producer::transaction_send_result::TransactionSendResult;
 
 fn unsupported_mq_admin_operation(operation: &'static str) -> rocketmq_error::RocketMQError {
     rocketmq_error::RocketMQError::illegal_argument(format!(
-        "{operation} is not supported by this MQProducer implementation"
+        "{operation} is not supported by this ProducerBackend implementation"
     ))
 }
 
 #[allow(async_fn_in_trait)]
-pub trait MQProducer {
+pub(crate) trait ProducerBackend {
     /// Starts the producer.
     ///
     /// # Returns
@@ -58,7 +58,7 @@ pub trait MQProducer {
 
     /// Creates a topic through the producer's admin facade.
     ///
-    /// Java's `MQProducer` extends `MQAdmin`; Rust keeps these admin operations async because all
+    /// Java's `ProducerBackend` extends `MQAdmin`; Rust keeps these admin operations async because all
     /// broker I/O in this client is async.
     async fn create_topic(
         &mut self,

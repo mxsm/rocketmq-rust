@@ -17,7 +17,7 @@
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::ClientConfig;
 use rocketmq_client_rust::DefaultMQProducer;
-use rocketmq_client_rust::MQAdminExt;
+use rocketmq_client_rust::{BrokerAdmin as _, RouteAdmin as _};
 use rocketmq_model::common::message::message_single::Message;
 use rocketmq_protocol::protocol::body::broker_body::cluster_info::ClusterInfo;
 use rocketmq_protocol::protocol::body::kv_table::KVTable;

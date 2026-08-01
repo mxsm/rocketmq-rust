@@ -17,7 +17,7 @@
 use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
-use rocketmq_client_rust::MQAdminExt;
+use rocketmq_client_rust::{BrokerAdmin as _, RouteAdmin as _};
 
 use crate::client_adapter::services::RocketMQError;
 use crate::client_adapter::services::RocketMQResult;

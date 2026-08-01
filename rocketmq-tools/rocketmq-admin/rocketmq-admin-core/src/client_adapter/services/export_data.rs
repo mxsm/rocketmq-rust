@@ -1,7 +1,7 @@
 //! Export admin service models and operations.
 
 use cheetah_string::CheetahString;
-use rocketmq_client_rust::MQAdminExt;
+use rocketmq_client_rust::{AuthAdmin as _, BrokerAdmin as _, ConsumerAdmin as _, RouteAdmin as _};
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::mix_all;
 use rocketmq_model::common::mq_version::RocketMqVersion;

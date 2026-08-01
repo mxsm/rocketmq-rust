@@ -23,7 +23,7 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
 use cheetah_string::CheetahString;
-use rocketmq_client_rust::MQAdminExt;
+use rocketmq_client_rust::{ConsumerAdmin as _, RouteAdmin as _, TopicAdmin as _};
 use rocketmq_model::common::key_builder::KeyBuilder;
 use rocketmq_model::common::message::message_enum::MessageRequestMode;
 use rocketmq_model::common::message::message_queue::MessageQueue;

@@ -15,8 +15,8 @@
 use std::collections::BTreeMap;
 
 use cheetah_string::CheetahString;
-use rocketmq_client_rust::MQAdminExt;
 use rocketmq_client_rust::TraceDataEncoder;
+use rocketmq_client_rust::{ConsumerAdmin as _, OffsetAdmin as _, TopicAdmin as _};
 use rocketmq_error::RocketMQError;
 use rocketmq_model::message::MessageQueue;
 use rocketmq_model::result::PullStatus;

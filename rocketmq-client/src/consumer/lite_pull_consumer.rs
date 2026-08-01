@@ -40,32 +40,12 @@ use crate::consumer::topic_message_queue_change_listener::TopicMessageQueueChang
 ///
 /// All methods are asynchronous and do not block the calling thread.
 ///
-/// [`poll`]: LitePullConsumerLocal::poll
-/// [`poll_with_timeout`]: LitePullConsumerLocal::poll_with_timeout
-/// [`assign`]: LitePullConsumerLocal::assign
-#[trait_variant::make(LitePullConsumer: Send)]
-pub trait LitePullConsumerLocal: Sync {
-    /// Starts the consumer and establishes connections to the broker and name server.
-    ///
-    /// This function does not block the calling thread.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the consumer is already running, if required configuration is
-    /// invalid, or if the connection to the name server cannot be established.
-    async fn start(&self) -> rocketmq_error::RocketMQResult<()>;
-
-    /// Shuts down the consumer and releases all associated resources.
-    ///
-    /// This function does not block the calling thread. After shutdown, the consumer
-    /// cannot be restarted.
-    async fn shutdown(&self);
-
-    /// Returns whether the consumer is currently in the running state.
-    ///
-    /// This function does not block the calling thread.
-    async fn is_running(&self) -> bool;
-
+/// [`poll`]: MessagePollLocal::poll
+/// [`poll_with_timeout`]: MessagePollLocal::poll_with_timeout
+/// [`assign`]: AssignmentControlLocal::assign
+#[allow(async_fn_in_trait)]
+#[trait_variant::make(SubscriptionControl: Send)]
+pub trait SubscriptionControlLocal: Sync {
     /// Subscribes to the specified topic using the default subscription expression.
     ///
     /// This function does not block the calling thread.
@@ -151,6 +131,138 @@ pub trait LitePullConsumerLocal: Sync {
     /// * `topic` - The name of the topic to unsubscribe from.
     async fn unsubscribe(&self, topic: &str);
 
+    /// Populates `sub_expression_map` with the filter selector for each subscribed topic,
+    /// providing the subscription metadata required for heartbeat payloads.
+    ///
+    /// This function does not block the calling thread.
+    ///
+    /// # Arguments
+    ///
+    /// * `sub_expression_map` - Output map from topic name to its [`MessageSelector`]. Entries are
+    ///   inserted for every topic that has an active subscription with a selector.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the subscription metadata cannot be retrieved.
+    async fn build_subscriptions_for_heartbeat(
+        &self,
+        sub_expression_map: &mut HashMap<String, MessageSelector>,
+    ) -> rocketmq_error::RocketMQResult<()>;
+
+    /// Returns the subscriptions currently advertised in heartbeat payloads.
+    async fn subscriptions_for_heartbeat(&self) -> HashSet<SubscriptionData>;
+
+    /// Returns the configured message model.
+    async fn message_model(&self) -> MessageModel;
+
+    /// Sets the message model.
+    ///
+    /// This mirrors Java `DefaultLitePullConsumer.setMessageModel`.
+    async fn set_message_model(&self, message_model: MessageModel);
+
+    /// Returns where consumption starts when no offset exists.
+    async fn consume_from_where(&self) -> ConsumeFromWhere;
+
+    /// Sets where consumption starts when no offset exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for legacy `ConsumeFromWhere` values that Java LitePull rejects.
+    async fn set_consume_from_where(&self, consume_from_where: ConsumeFromWhere) -> rocketmq_error::RocketMQResult<()>;
+
+    /// Returns the timestamp used by `ConsumeFromWhere::ConsumeFromTimestamp`.
+    async fn consume_timestamp(&self) -> Option<CheetahString>;
+
+    /// Sets the timestamp used by `ConsumeFromWhere::ConsumeFromTimestamp`.
+    async fn set_consume_timestamp(&self, consume_timestamp: Option<CheetahString>);
+
+    /// Returns the message queue allocation strategy used during rebalance.
+    async fn allocate_message_queue_strategy(&self) -> Arc<dyn AllocateMessageQueueStrategy + Send + Sync>;
+
+    /// Sets the message queue allocation strategy used during rebalance.
+    ///
+    /// This mirrors Java `DefaultLitePullConsumer.setAllocateMessageQueueStrategy`.
+    async fn set_allocate_message_queue_strategy(
+        &self,
+        allocate_message_queue_strategy: Arc<dyn AllocateMessageQueueStrategy + Send + Sync>,
+    );
+
+    /// Returns the listener notified when rebalance changes assigned message queues.
+    async fn message_queue_listener(&self) -> Option<ArcMessageQueueListener>;
+
+    /// Sets the listener notified when rebalance changes assigned message queues.
+    ///
+    /// Passing `None` clears the listener, matching Java's nullable
+    /// `DefaultLitePullConsumer.setMessageQueueListener`.
+    async fn set_message_queue_listener(&self, message_queue_listener: Option<ArcMessageQueueListener>);
+
+    /// Returns the topic metadata check interval in milliseconds.
+    async fn topic_metadata_check_interval_millis(&self) -> u64;
+
+    /// Sets the topic metadata check interval in milliseconds.
+    ///
+    /// Like Java, this applies directly to the stored configuration. If the
+    /// metadata task is already scheduled, the existing task keeps its start-time interval.
+    async fn set_topic_metadata_check_interval_millis(&self, interval_millis: u64);
+
+    /// Returns whether pulls always use the configured default broker ID.
+    async fn is_connect_broker_by_user(&self) -> bool;
+
+    /// Sets whether pulls always use the configured default broker ID.
+    ///
+    /// This mirrors Java `DefaultLitePullConsumer.setConnectBrokerByUser`.
+    async fn set_connect_broker_by_user(&self, connect_broker_by_user: bool);
+
+    /// Returns the broker ID used when user-controlled broker selection is enabled.
+    async fn default_broker_id(&self) -> u64;
+
+    /// Sets the broker ID used when user-controlled broker selection is enabled.
+    ///
+    /// This mirrors Java `DefaultLitePullConsumer.setDefaultBrokerId`.
+    async fn set_default_broker_id(&self, broker_id: u64);
+
+    /// Returns whether the subscription group runs in unit mode.
+    async fn is_unit_mode(&self) -> bool;
+
+    /// Sets whether the subscription group runs in unit mode.
+    ///
+    /// This mirrors Java `DefaultLitePullConsumer.setUnitMode`.
+    async fn set_unit_mode(&self, unit_mode: bool);
+
+    /// Registers a listener that is notified when the set of [`MessageQueue`]s for a topic changes.
+    ///
+    /// This function does not block the calling thread.
+    ///
+    /// # Arguments
+    ///
+    /// * `topic` - The topic to monitor for queue changes.
+    /// * `listener` - A [`TopicMessageQueueChangeListener`] invoked when the queue set changes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a listener is already registered for the given topic, or if the
+    /// registration fails due to an internal error.
+    async fn register_topic_message_queue_change_listener<TL>(
+        &self,
+        topic: &str,
+        listener: TL,
+    ) -> rocketmq_error::RocketMQResult<()>
+    where
+        TL: TopicMessageQueueChangeListener + 'static;
+
+    /// Updates the name server address used for topic route discovery.
+    ///
+    /// This function does not block the calling thread.
+    ///
+    /// # Arguments
+    ///
+    /// * `name_server_address` - The new semicolon-separated name server address list.
+    async fn update_name_server_address(&self, name_server_address: &str);
+}
+
+#[allow(async_fn_in_trait)]
+#[trait_variant::make(AssignmentControl: Send)]
+pub trait AssignmentControlLocal: Sync {
     /// Returns the set of [`MessageQueue`]s currently assigned to this consumer.
     ///
     /// This function does not block the calling thread.
@@ -193,27 +305,98 @@ pub trait LitePullConsumerLocal: Sync {
         sub_expression: &str,
     ) -> rocketmq_error::RocketMQResult<()>;
 
-    /// Populates `sub_expression_map` with the filter selector for each subscribed topic,
-    /// providing the subscription metadata required for heartbeat payloads.
+    /// Seeks the fetch position of the specified [`MessageQueue`] to the given offset.
+    ///
+    /// The next [`poll`] invocation will return messages starting from `offset`.
+    /// This function does not block the calling thread.
+    ///
+    /// # Arguments
+    ///
+    /// * `message_queue` - The queue whose fetch position is to be updated.
+    /// * `offset` - The target offset. Must be within the queue's valid range.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the queue is not currently assigned to this consumer,
+    /// or if the specified offset is out of the valid range.
+    ///
+    /// [`poll`]: MessagePollLocal::poll
+    async fn seek(&self, message_queue: &MessageQueue, offset: i64) -> rocketmq_error::RocketMQResult<()>;
+
+    /// Suspends message fetching for the specified [`MessageQueue`]s.
+    ///
+    /// Paused queues are excluded from subsequent [`poll`] results until [`resume`] is called.
+    /// This function does not block the calling thread.
+    ///
+    /// # Arguments
+    ///
+    /// * `message_queues` - The queues to pause.
+    ///
+    /// [`poll`]: MessagePollLocal::poll
+    /// [`resume`]: AssignmentControlLocal::resume
+    async fn pause(&self, message_queues: Vec<MessageQueue>);
+
+    /// Resumes message fetching for the specified [`MessageQueue`]s.
     ///
     /// This function does not block the calling thread.
     ///
     /// # Arguments
     ///
-    /// * `sub_expression_map` - Output map from topic name to its [`MessageSelector`]. Entries are
-    ///   inserted for every topic that has an active subscription with a selector.
+    /// * `message_queues` - The queues to resume.
+    async fn resume(&self, message_queues: Vec<MessageQueue>);
+
+    /// Seeks the fetch position of the specified [`MessageQueue`] to its earliest available offset.
+    ///
+    /// This function does not block the calling thread.
+    ///
+    /// # Arguments
+    ///
+    /// * `message_queue` - The queue to seek to the beginning.
     ///
     /// # Errors
     ///
-    /// Returns an error if the subscription metadata cannot be retrieved.
-    async fn build_subscriptions_for_heartbeat(
-        &self,
-        sub_expression_map: &mut HashMap<String, MessageSelector>,
-    ) -> rocketmq_error::RocketMQResult<()>;
+    /// Returns an error if the queue is not assigned to this consumer or if the earliest
+    /// offset cannot be retrieved from the broker.
+    async fn seek_to_begin(&self, message_queue: &MessageQueue) -> rocketmq_error::RocketMQResult<()>;
 
-    /// Returns the subscriptions currently advertised in heartbeat payloads.
-    async fn subscriptions_for_heartbeat(&self) -> HashSet<SubscriptionData>;
+    /// Seeks the fetch position of the specified [`MessageQueue`] to its latest available offset.
+    ///
+    /// The next [`poll`] call will return only messages published after this point.
+    /// This function does not block the calling thread.
+    ///
+    /// # Arguments
+    ///
+    /// * `message_queue` - The queue to seek to the end.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the queue is not assigned to this consumer or if the latest
+    /// offset cannot be retrieved from the broker.
+    ///
+    /// [`poll`]: MessagePollLocal::poll
+    async fn seek_to_end(&self, message_queue: &MessageQueue) -> rocketmq_error::RocketMQResult<()>;
 
+    /// Checks whether a specific [`MessageQueue`] is currently paused.
+    ///
+    /// A paused queue will not be fetched from during [`poll`] operations until it is resumed.
+    ///
+    /// This function does not block the calling thread.
+    ///
+    /// # Arguments
+    ///
+    /// * `message_queue` - The queue to check.
+    ///
+    /// # Returns
+    ///
+    /// `true` if the queue is paused, `false` otherwise.
+    ///
+    /// [`poll`]: MessagePollLocal::poll
+    async fn is_paused(&self, message_queue: &MessageQueue) -> bool;
+}
+
+#[allow(async_fn_in_trait)]
+#[trait_variant::make(MessagePoll: Send)]
+pub trait MessagePollLocal: Sync {
     /// Fetches the next batch of messages without allocating owned copies.
     ///
     /// Returns immutable `Arc<MessageExt>` handles without heap allocation or deep cloning.
@@ -307,74 +490,11 @@ pub trait LitePullConsumerLocal: Sync {
     /// This function does not block the calling thread.
     async fn poll_with_timeout(&self, timeout: u64) -> Vec<MessageExt>;
 
-    /// Returns the configured message model.
-    async fn message_model(&self) -> MessageModel;
-
-    /// Sets the message model.
-    ///
-    /// This mirrors Java `DefaultLitePullConsumer.setMessageModel`.
-    async fn set_message_model(&self, message_model: MessageModel);
-
-    /// Returns where consumption starts when no offset exists.
-    async fn consume_from_where(&self) -> ConsumeFromWhere;
-
-    /// Sets where consumption starts when no offset exists.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for legacy `ConsumeFromWhere` values that Java LitePull rejects.
-    async fn set_consume_from_where(&self, consume_from_where: ConsumeFromWhere) -> rocketmq_error::RocketMQResult<()>;
-
-    /// Returns the timestamp used by `ConsumeFromWhere::ConsumeFromTimestamp`.
-    async fn consume_timestamp(&self) -> Option<CheetahString>;
-
-    /// Sets the timestamp used by `ConsumeFromWhere::ConsumeFromTimestamp`.
-    async fn set_consume_timestamp(&self, consume_timestamp: Option<CheetahString>);
-
-    /// Returns the message queue allocation strategy used during rebalance.
-    async fn allocate_message_queue_strategy(&self) -> Arc<dyn AllocateMessageQueueStrategy + Send + Sync>;
-
-    /// Sets the message queue allocation strategy used during rebalance.
-    ///
-    /// This mirrors Java `DefaultLitePullConsumer.setAllocateMessageQueueStrategy`.
-    async fn set_allocate_message_queue_strategy(
-        &self,
-        allocate_message_queue_strategy: Arc<dyn AllocateMessageQueueStrategy + Send + Sync>,
-    );
-
-    /// Returns the listener notified when rebalance changes assigned message queues.
-    async fn message_queue_listener(&self) -> Option<ArcMessageQueueListener>;
-
-    /// Sets the listener notified when rebalance changes assigned message queues.
-    ///
-    /// Passing `None` clears the listener, matching Java's nullable
-    /// `DefaultLitePullConsumer.setMessageQueueListener`.
-    async fn set_message_queue_listener(&self, message_queue_listener: Option<ArcMessageQueueListener>);
-
-    /// Returns the configured offset store, if one has been set or initialized.
-    async fn offset_store(&self) -> Option<Arc<OffsetStore>>;
-
-    /// Sets the offset store used by the consumer.
-    ///
-    /// This mirrors Java `DefaultLitePullConsumer.setOffsetStore`. The store
-    /// should be set before startup so load, rebalance, and commit paths share
-    /// the same backend.
-    async fn set_offset_store(&self, offset_store: Option<Arc<OffsetStore>>) -> rocketmq_error::RocketMQResult<()>;
-
-    /// Returns the topic metadata check interval in milliseconds.
-    async fn topic_metadata_check_interval_millis(&self) -> u64;
-
-    /// Sets the topic metadata check interval in milliseconds.
-    ///
-    /// Like Java, this applies directly to the stored configuration. If the
-    /// metadata task is already scheduled, the existing task keeps its start-time interval.
-    async fn set_topic_metadata_check_interval_millis(&self, interval_millis: u64);
-
     /// Returns the default timeout used by [`poll`] in milliseconds.
     ///
     /// This function does not block the calling thread.
     ///
-    /// [`poll`]: LitePullConsumerLocal::poll
+    /// [`poll`]: MessagePollLocal::poll
     async fn poll_timeout_millis(&self) -> u64;
 
     /// Sets the default timeout used by [`poll`] in milliseconds.
@@ -384,8 +504,8 @@ pub trait LitePullConsumerLocal: Sync {
     ///
     /// This function does not block the calling thread.
     ///
-    /// [`poll`]: LitePullConsumerLocal::poll
-    /// [`poll_with_timeout`]: LitePullConsumerLocal::poll_with_timeout
+    /// [`poll`]: MessagePollLocal::poll
+    /// [`poll_with_timeout`]: MessagePollLocal::poll_with_timeout
     async fn set_poll_timeout_millis(&self, timeout_millis: u64);
 
     /// Returns the maximum time that the broker may suspend a long-poll pull request.
@@ -462,62 +582,20 @@ pub trait LitePullConsumerLocal: Sync {
     ///
     /// This follows the Java client setter and applies the value directly.
     async fn set_consume_max_span(&self, consume_max_span: i64);
+}
 
-    /// Returns whether pulls always use the configured default broker ID.
-    async fn is_connect_broker_by_user(&self) -> bool;
+#[allow(async_fn_in_trait)]
+#[trait_variant::make(ConsumerOffsetControl: Send)]
+pub trait ConsumerOffsetControlLocal: Sync {
+    /// Returns the configured offset store, if one has been set or initialized.
+    async fn offset_store(&self) -> Option<Arc<OffsetStore>>;
 
-    /// Sets whether pulls always use the configured default broker ID.
+    /// Sets the offset store used by the consumer.
     ///
-    /// This mirrors Java `DefaultLitePullConsumer.setConnectBrokerByUser`.
-    async fn set_connect_broker_by_user(&self, connect_broker_by_user: bool);
-
-    /// Returns the broker ID used when user-controlled broker selection is enabled.
-    async fn default_broker_id(&self) -> u64;
-
-    /// Sets the broker ID used when user-controlled broker selection is enabled.
-    ///
-    /// This mirrors Java `DefaultLitePullConsumer.setDefaultBrokerId`.
-    async fn set_default_broker_id(&self, broker_id: u64);
-
-    /// Seeks the fetch position of the specified [`MessageQueue`] to the given offset.
-    ///
-    /// The next [`poll`] invocation will return messages starting from `offset`.
-    /// This function does not block the calling thread.
-    ///
-    /// # Arguments
-    ///
-    /// * `message_queue` - The queue whose fetch position is to be updated.
-    /// * `offset` - The target offset. Must be within the queue's valid range.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the queue is not currently assigned to this consumer,
-    /// or if the specified offset is out of the valid range.
-    ///
-    /// [`poll`]: LitePullConsumerLocal::poll
-    async fn seek(&self, message_queue: &MessageQueue, offset: i64) -> rocketmq_error::RocketMQResult<()>;
-
-    /// Suspends message fetching for the specified [`MessageQueue`]s.
-    ///
-    /// Paused queues are excluded from subsequent [`poll`] results until [`resume`] is called.
-    /// This function does not block the calling thread.
-    ///
-    /// # Arguments
-    ///
-    /// * `message_queues` - The queues to pause.
-    ///
-    /// [`poll`]: LitePullConsumerLocal::poll
-    /// [`resume`]: LitePullConsumerLocal::resume
-    async fn pause(&self, message_queues: Vec<MessageQueue>);
-
-    /// Resumes message fetching for the specified [`MessageQueue`]s.
-    ///
-    /// This function does not block the calling thread.
-    ///
-    /// # Arguments
-    ///
-    /// * `message_queues` - The queues to resume.
-    async fn resume(&self, message_queues: Vec<MessageQueue>);
+    /// This mirrors Java `DefaultLitePullConsumer.setOffsetStore`. The store
+    /// should be set before startup so load, rebalance, and commit paths share
+    /// the same backend.
+    async fn set_offset_store(&self, offset_store: Option<Arc<OffsetStore>>) -> rocketmq_error::RocketMQResult<()>;
 
     /// Returns whether automatic offset commit is enabled.
     ///
@@ -536,17 +614,9 @@ pub trait LitePullConsumerLocal: Sync {
     ///
     /// * `auto_commit` - `true` to enable automatic offset commit; `false` to disable it.
     ///
-    /// [`commit`]: LitePullConsumerLocal::commit
-    /// [`commit_sync`]: LitePullConsumerLocal::commit_sync
+    /// [`commit`]: ConsumerOffsetControlLocal::commit
+    /// [`commit_sync`]: ConsumerOffsetControlLocal::commit_sync
     async fn set_auto_commit(&self, auto_commit: bool);
-
-    /// Returns whether the subscription group runs in unit mode.
-    async fn is_unit_mode(&self) -> bool;
-
-    /// Sets whether the subscription group runs in unit mode.
-    ///
-    /// This mirrors Java `DefaultLitePullConsumer.setUnitMode`.
-    async fn set_unit_mode(&self, unit_mode: bool);
 
     /// Returns the interval between automatic offset commits in milliseconds.
     ///
@@ -650,7 +720,7 @@ pub trait LitePullConsumerLocal: Sync {
     /// `DefaultLitePullConsumer.commitSync()` delegates to `commitAll()` and only updates the
     /// consumer offset store. Use [`commit`] for the modern equivalent.
     ///
-    /// [`commit`]: LitePullConsumerLocal::commit
+    /// [`commit`]: ConsumerOffsetControlLocal::commit
     async fn commit_sync(&self);
 
     /// Commits the provided offsets and optionally persists them to the broker.
@@ -668,7 +738,7 @@ pub trait LitePullConsumerLocal: Sync {
     /// * `offset_map` - A map from [`MessageQueue`] to the offset to commit.
     /// * `persist` - When `true`, the committed offsets are persisted to the broker immediately.
     ///
-    /// [`commit_with_map`]: LitePullConsumerLocal::commit_with_map
+    /// [`commit_with_map`]: ConsumerOffsetControlLocal::commit_with_map
     async fn commit_sync_with_map(&self, offset_map: HashMap<MessageQueue, i64>, persist: bool);
 
     /// Commits all consumed offsets to the consumer offset store.
@@ -677,7 +747,7 @@ pub trait LitePullConsumerLocal: Sync {
     /// performed by the normal periodic persistence task, shutdown, or explicit
     /// `commit_with_map` / `commit_with_set` calls with `persist = true`.
     ///
-    /// [`commit_sync`]: LitePullConsumerLocal::commit_sync
+    /// [`commit_sync`]: ConsumerOffsetControlLocal::commit_sync
     async fn commit(&self);
 
     /// Commits the provided offsets asynchronously, optionally persisting them to the broker.
@@ -714,67 +784,6 @@ pub trait LitePullConsumerLocal: Sync {
     /// cannot be retrieved from the offset store.
     async fn committed(&self, message_queue: &MessageQueue) -> rocketmq_error::RocketMQResult<i64>;
 
-    /// Registers a listener that is notified when the set of [`MessageQueue`]s for a topic changes.
-    ///
-    /// This function does not block the calling thread.
-    ///
-    /// # Arguments
-    ///
-    /// * `topic` - The topic to monitor for queue changes.
-    /// * `listener` - A [`TopicMessageQueueChangeListener`] invoked when the queue set changes.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if a listener is already registered for the given topic, or if the
-    /// registration fails due to an internal error.
-    async fn register_topic_message_queue_change_listener<TL>(
-        &self,
-        topic: &str,
-        listener: TL,
-    ) -> rocketmq_error::RocketMQResult<()>
-    where
-        TL: TopicMessageQueueChangeListener + 'static;
-
-    /// Updates the name server address used for topic route discovery.
-    ///
-    /// This function does not block the calling thread.
-    ///
-    /// # Arguments
-    ///
-    /// * `name_server_address` - The new semicolon-separated name server address list.
-    async fn update_name_server_address(&self, name_server_address: &str);
-
-    /// Seeks the fetch position of the specified [`MessageQueue`] to its earliest available offset.
-    ///
-    /// This function does not block the calling thread.
-    ///
-    /// # Arguments
-    ///
-    /// * `message_queue` - The queue to seek to the beginning.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the queue is not assigned to this consumer or if the earliest
-    /// offset cannot be retrieved from the broker.
-    async fn seek_to_begin(&self, message_queue: &MessageQueue) -> rocketmq_error::RocketMQResult<()>;
-
-    /// Seeks the fetch position of the specified [`MessageQueue`] to its latest available offset.
-    ///
-    /// The next [`poll`] call will return only messages published after this point.
-    /// This function does not block the calling thread.
-    ///
-    /// # Arguments
-    ///
-    /// * `message_queue` - The queue to seek to the end.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the queue is not assigned to this consumer or if the latest
-    /// offset cannot be retrieved from the broker.
-    ///
-    /// [`poll`]: LitePullConsumerLocal::poll
-    async fn seek_to_end(&self, message_queue: &MessageQueue) -> rocketmq_error::RocketMQResult<()>;
-
     /// Commits all consumed offsets for all assigned queues to the local offset store.
     ///
     /// This method commits the current consumption offset for every assigned [`MessageQueue`].
@@ -789,23 +798,31 @@ pub trait LitePullConsumerLocal: Sync {
     ///
     /// Returns an error if the consumer is not in the running state.
     ///
-    /// [`commit`]: LitePullConsumerLocal::commit
+    /// [`commit`]: ConsumerOffsetControlLocal::commit
     async fn commit_all(&self) -> rocketmq_error::RocketMQResult<()>;
+}
 
-    /// Checks whether a specific [`MessageQueue`] is currently paused.
-    ///
-    /// A paused queue will not be fetched from during [`poll`] operations until it is resumed.
+#[allow(async_fn_in_trait)]
+#[trait_variant::make(ConsumerLifecycle: Send)]
+pub trait ConsumerLifecycleLocal: Sync {
+    /// Starts the consumer and establishes connections to the broker and name server.
     ///
     /// This function does not block the calling thread.
     ///
-    /// # Arguments
+    /// # Errors
     ///
-    /// * `message_queue` - The queue to check.
+    /// Returns an error if the consumer is already running, if required configuration is
+    /// invalid, or if the connection to the name server cannot be established.
+    async fn start(&self) -> rocketmq_error::RocketMQResult<()>;
+
+    /// Shuts down the consumer and releases all associated resources.
     ///
-    /// # Returns
+    /// This function does not block the calling thread. After shutdown, the consumer
+    /// cannot be restarted.
+    async fn shutdown(&self);
+
+    /// Returns whether the consumer is currently in the running state.
     ///
-    /// `true` if the queue is paused, `false` otherwise.
-    ///
-    /// [`poll`]: LitePullConsumerLocal::poll
-    async fn is_paused(&self, message_queue: &MessageQueue) -> bool;
+    /// This function does not block the calling thread.
+    async fn is_running(&self) -> bool;
 }

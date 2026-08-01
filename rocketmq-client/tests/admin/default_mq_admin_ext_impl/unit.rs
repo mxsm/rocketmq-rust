@@ -28,7 +28,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::time::Duration;
 
-use crate::admin::mq_admin_ext_async::MQAdminExt;
+use crate::admin::capability::{AuthAdmin, BrokerAdmin, ConsumerAdmin, OffsetAdmin, RouteAdmin, TopicAdmin};
 use crate::base::client_config::ClientConfig;
 use crate::common::admin_tools_result_code_enum::AdminToolsResultCodeEnum;
 use cheetah_string::CheetahString;
@@ -453,7 +453,7 @@ async fn acl_info_facades_without_started_client_return_typed_errors() {
 async fn acl_subject_facades_without_started_client_return_typed_errors() {
     let admin = new_unstarted_admin();
 
-    let error = MQAdminExt::create_acl_with_info(
+    let error = AuthAdmin::create_acl_with_info(
         &admin,
         CheetahString::from("127.0.0.1:10911"),
         CheetahString::from("User:alice"),
@@ -462,7 +462,7 @@ async fn acl_subject_facades_without_started_client_return_typed_errors() {
     .expect_err("create_acl_with_info should require a started client");
     assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
 
-    let error = MQAdminExt::update_acl_with_info(
+    let error = AuthAdmin::update_acl_with_info(
         &admin,
         CheetahString::from("127.0.0.1:10911"),
         CheetahString::from("User:alice"),
@@ -476,7 +476,7 @@ async fn acl_subject_facades_without_started_client_return_typed_errors() {
 async fn examine_broker_cluster_acl_version_info_without_started_client_returns_typed_error() {
     let admin = new_unstarted_admin();
 
-    let error = MQAdminExt::examine_broker_cluster_acl_version_info(&admin, CheetahString::from("127.0.0.1:10911"))
+    let error = AuthAdmin::examine_broker_cluster_acl_version_info(&admin, CheetahString::from("127.0.0.1:10911"))
         .await
         .expect_err("examine_broker_cluster_acl_version_info should require a started client");
 
@@ -509,13 +509,13 @@ async fn acl_subject_facades_reject_blank_subject_before_remoting() {
     let admin = new_unstarted_admin();
 
     let error =
-        MQAdminExt::create_acl_with_info(&admin, CheetahString::from("127.0.0.1:10911"), CheetahString::default())
+        AuthAdmin::create_acl_with_info(&admin, CheetahString::from("127.0.0.1:10911"), CheetahString::default())
             .await
             .expect_err("create_acl_with_info should reject blank subject locally");
     assert!(matches!(error, rocketmq_error::RocketMQError::IllegalArgument(_)));
 
     let error =
-        MQAdminExt::update_acl_with_info(&admin, CheetahString::from("127.0.0.1:10911"), CheetahString::default())
+        AuthAdmin::update_acl_with_info(&admin, CheetahString::from("127.0.0.1:10911"), CheetahString::default())
             .await
             .expect_err("update_acl_with_info should reject blank subject locally");
     assert!(matches!(error, rocketmq_error::RocketMQError::IllegalArgument(_)));

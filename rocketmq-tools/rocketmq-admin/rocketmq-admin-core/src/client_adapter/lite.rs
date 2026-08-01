@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_client_rust::MQAdminExt;
+use rocketmq_client_rust::BrokerAdmin as _;
 
 use crate::client_adapter::lifecycle::AdminSession;
 use crate::core::lite::GetLiteBrokerInfoRequest;

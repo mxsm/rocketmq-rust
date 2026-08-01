@@ -23,11 +23,20 @@ use rocketmq_client_rust::AllocateMessageQueueConsistentHash;
 use rocketmq_client_rust::AllocateMessageQueueStrategy;
 use rocketmq_client_rust::ArcMessageQueueListener;
 use rocketmq_client_rust::ArcTraceDispatcher;
+use rocketmq_client_rust::AssignmentControl;
 use rocketmq_client_rust::AsyncTraceDispatcher;
+#[cfg(feature = "admin-full")]
+use rocketmq_client_rust::AuthAdmin;
+#[cfg(feature = "admin-full")]
+use rocketmq_client_rust::BrokerAdmin;
 use rocketmq_client_rust::ConsumeMessageContext;
 use rocketmq_client_rust::ConsumeMessageHook;
 use rocketmq_client_rust::ConsumeMessageHookArc;
+#[cfg(feature = "admin-full")]
+use rocketmq_client_rust::ConsumerAdmin;
 use rocketmq_client_rust::ConsumerClient;
+use rocketmq_client_rust::ConsumerLifecycle;
+use rocketmq_client_rust::ConsumerOffsetControl;
 use rocketmq_client_rust::ControllableOffset;
 use rocketmq_client_rust::DefaultLitePullConsumer;
 #[cfg(feature = "admin-full")]
@@ -38,17 +47,19 @@ use rocketmq_client_rust::DefaultMQProducer;
 use rocketmq_client_rust::DefaultMQPushConsumer;
 use rocketmq_client_rust::HashFunction;
 use rocketmq_client_rust::JavaHashCode;
-use rocketmq_client_rust::LitePullConsumer;
-#[cfg(feature = "admin-full")]
-use rocketmq_client_rust::MQAdminExt;
 use rocketmq_client_rust::MQConsumer;
-use rocketmq_client_rust::MQProducer;
 use rocketmq_client_rust::MQPushConsumer;
+use rocketmq_client_rust::MessagePoll;
+use rocketmq_client_rust::MessageQuery;
 use rocketmq_client_rust::MessageQueueListener;
 use rocketmq_client_rust::MessageQueueSelector;
+use rocketmq_client_rust::MessageRecall;
 use rocketmq_client_rust::MessageSelector;
+use rocketmq_client_rust::MessageSend;
 use rocketmq_client_rust::NameserverAccessConfig;
 use rocketmq_client_rust::NotifyResult;
+#[cfg(feature = "admin-full")]
+use rocketmq_client_rust::OffsetAdmin;
 use rocketmq_client_rust::OffsetSerialize;
 use rocketmq_client_rust::OffsetSerializeWrapper;
 use rocketmq_client_rust::OffsetStore;
@@ -56,15 +67,23 @@ use rocketmq_client_rust::PopCallbackFn;
 use rocketmq_client_rust::PopResult;
 use rocketmq_client_rust::PopStatus;
 use rocketmq_client_rust::ProducerClient;
+use rocketmq_client_rust::ProducerLifecycle;
+use rocketmq_client_rust::ProducerTopicAdmin;
 use rocketmq_client_rust::PullCallbackFn;
 use rocketmq_client_rust::PullResult;
 use rocketmq_client_rust::PullStatus;
 use rocketmq_client_rust::ReadOffsetType;
+use rocketmq_client_rust::RequestReply;
+#[cfg(feature = "admin-full")]
+use rocketmq_client_rust::RouteAdmin;
 use rocketmq_client_rust::RouteClient;
 use rocketmq_client_rust::SelectMessageQueueByHash;
 use rocketmq_client_rust::SelectMessageQueueByMachineRoom;
 use rocketmq_client_rust::SelectMessageQueueByRandom;
 use rocketmq_client_rust::SessionCredentials;
+use rocketmq_client_rust::SubscriptionControl;
+#[cfg(feature = "admin-full")]
+use rocketmq_client_rust::TopicAdmin;
 use rocketmq_client_rust::TopicMessageQueueChangeListener;
 use rocketmq_client_rust::TraceDispatcher;
 use rocketmq_client_rust::TraceDispatcherOperation;
@@ -329,16 +348,22 @@ fn crate_root_legacy_java_apis_return_typed_unsupported_errors() {
 #[test]
 fn crate_root_exports_modern_client_facades_and_traits() {
     let client_runtime = support::client_runtime("public-api-client-facades");
-    fn assert_mq_producer<T: MQProducer>() {}
+    fn assert_producer_capabilities<
+        T: ProducerLifecycle + MessageSend + MessageRecall + RequestReply + MessageQuery + ProducerTopicAdmin,
+    >() {
+    }
     fn assert_mq_consumer<T: MQConsumer>() {}
     fn assert_mq_push_consumer<T: MQPushConsumer>() {}
-    fn assert_lite_pull_consumer<T: LitePullConsumer>() {}
+    fn assert_lite_pull_capabilities<
+        T: SubscriptionControl + AssignmentControl + MessagePoll + ConsumerOffsetControl + ConsumerLifecycle,
+    >() {
+    }
 
-    assert_mq_producer::<DefaultMQProducer>();
-    assert_mq_producer::<TransactionMQProducer>();
+    assert_producer_capabilities::<DefaultMQProducer>();
+    assert_producer_capabilities::<TransactionMQProducer>();
     assert_mq_consumer::<DefaultMQPushConsumer>();
     assert_mq_push_consumer::<DefaultMQPushConsumer>();
-    assert_lite_pull_consumer::<DefaultLitePullConsumer>();
+    assert_lite_pull_capabilities::<DefaultLitePullConsumer>();
 
     let producer = DefaultMQProducer::builder(Arc::clone(&client_runtime))
         .producer_group("public-api-producer")
@@ -414,11 +439,12 @@ async fn crate_root_exports_trace_dispatcher_api_for_custom_trace_wiring() {
 #[test]
 fn crate_root_exports_modern_admin_facades_and_results() {
     let client_runtime = support::client_runtime("public-api-admin");
-    fn assert_mq_admin_ext<T: MQAdminExt>() {}
+    fn assert_admin_capabilities<T: RouteAdmin + TopicAdmin + ConsumerAdmin + BrokerAdmin + AuthAdmin + OffsetAdmin>() {
+    }
     fn assert_as_ref_admin_impl<T: AsRef<DefaultMQAdminExtImpl>>() {}
 
-    assert_mq_admin_ext::<DefaultMQAdminExt>();
-    assert_mq_admin_ext::<DefaultMQAdminExtImpl>();
+    assert_admin_capabilities::<DefaultMQAdminExt>();
+    assert_admin_capabilities::<DefaultMQAdminExtImpl>();
     assert_as_ref_admin_impl::<DefaultMQAdminExt>();
 
     let admin = DefaultMQAdminExt::new(client_runtime);

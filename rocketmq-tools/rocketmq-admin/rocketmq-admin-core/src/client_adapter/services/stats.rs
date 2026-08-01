@@ -1,7 +1,7 @@
 //! Stats admin service models and operations.
 
 use cheetah_string::CheetahString;
-use rocketmq_client_rust::MQAdminExt;
+use rocketmq_client_rust::{BrokerAdmin as _, ConsumerAdmin as _, TopicAdmin as _};
 use rocketmq_model::common::mix_all;
 use rocketmq_model::common::mix_all::DLQ_GROUP_TOPIC_PREFIX;
 use rocketmq_model::common::mix_all::RETRY_GROUP_TOPIC_PREFIX;

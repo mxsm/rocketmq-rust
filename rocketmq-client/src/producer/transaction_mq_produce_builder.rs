@@ -29,6 +29,7 @@ use crate::producer::transaction_listener::TransactionListener;
 use crate::producer::transaction_mq_producer::TransactionMQProducer;
 use crate::producer::transaction_mq_producer::TransactionProducerConfig;
 use crate::runtime::ClientRuntime;
+use crate::session::ClientSession;
 use crate::trace::trace_dispatcher::ArcTraceDispatcher;
 
 pub struct TransactionMQProducerBuilder {
@@ -260,7 +261,9 @@ impl TransactionMQProducerBuilder {
     }
 
     pub fn build(self) -> TransactionMQProducer {
+        let client_session = ClientSession::new(Arc::clone(&self.client_runtime));
         let mut mq_producer = DefaultMQProducer::unbound();
+        mq_producer.set_client_session(client_session);
         if let Some(client_config) = self.client_config {
             mq_producer.set_client_config(client_config);
         }

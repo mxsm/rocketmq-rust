@@ -13,10 +13,9 @@
 
 //! Narrow administration mutation surface.
 //!
-//! Method names are intentionally distinct from the legacy mixed
-//! [`super::mq_admin_ext_async::MQAdminExt`] surface. This keeps wildcard
-//! imports source-compatible when `admin-full` is enabled while allowing
-//! mutation-only consumers to depend on an explicit capability trait.
+//! Method names are intentionally distinct from the full administration
+//! capability set, allowing mutation-only consumers to depend on an explicit
+//! supervised capability.
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -99,9 +98,8 @@ pub enum SubscriptionGroupConfigPatchOutcome {
 
 /// Explicit RocketMQ mutation capability.
 ///
-/// The legacy mixed administration API remains available only through
-/// `admin-full`. New integrations should request this trait deliberately and
-/// keep it out of read-only process dependency graphs.
+/// New integrations should request this trait deliberately and keep it out of
+/// read-only process dependency graphs.
 #[allow(async_fn_in_trait)]
 pub trait MQAdminMutationExt: Send {
     /// Begins one authenticated, reversible drain operation for a Proxy.

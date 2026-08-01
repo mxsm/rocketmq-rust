@@ -21,6 +21,12 @@ FORBIDDEN_IMPORTS = (
     "MessageMutationAdmin",
     "DashboardMutationAdmin",
     "MQAdminMutationExt",
+    "AuthAdmin",
+    "BrokerAdmin",
+    "ConsumerAdmin",
+    "OffsetAdmin",
+    "RouteAdmin",
+    "TopicAdmin",
 )
 
 

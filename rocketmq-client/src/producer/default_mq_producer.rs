@@ -45,13 +45,15 @@ use crate::base::query_result::QueryResult;
 use crate::base::validators::Validators;
 use crate::latency::mq_fault_strategy::MQFaultStrategy;
 use crate::producer::default_mq_produce_builder::DefaultMQProducerBuilder;
-use crate::producer::mq_producer::MQProducer;
 use crate::producer::produce_accumulator::ProduceAccumulator;
+use crate::producer::producer_backend::ProducerBackend;
 use crate::producer::producer_impl::default_mq_producer_impl::DefaultMQProducerImpl;
 use crate::producer::send_callback::ArcSendCallback;
 use crate::producer::send_result::SendResult;
 use crate::producer::transaction_send_result::TransactionSendResult;
 use crate::runtime::ClientRuntime;
+use crate::session::ClientSession;
+use crate::session::ClientSessionProvider;
 use crate::trace::async_trace_dispatcher::AsyncTraceDispatcher;
 use crate::trace::hook::default_recall_message_trace_hook::DefaultRecallMessageTraceHook;
 use crate::trace::hook::end_transaction_trace_hook_impl::EndTransactionTraceHookImpl;
@@ -412,6 +414,7 @@ impl Default for ProducerConfig {
 
 #[derive(Clone)]
 pub struct DefaultMQProducer {
+    session: Option<ClientSession>,
     client_config: StableConfig<ClientConfig>,
     producer_config: StableConfig<ProducerConfig>,
     pub(crate) default_mqproducer_impl: Option<Arc<DefaultMQProducerImpl>>,
@@ -420,10 +423,17 @@ pub struct DefaultMQProducer {
 impl DefaultMQProducer {
     pub(crate) fn unbound() -> Self {
         Self {
+            session: None,
             client_config: StableConfig::default(),
             producer_config: StableConfig::default(),
             default_mqproducer_impl: None,
         }
+    }
+}
+
+impl ClientSessionProvider for DefaultMQProducer {
+    fn client_session(&self) -> Option<&ClientSession> {
+        self.session.as_ref()
     }
 }
 
@@ -436,12 +446,24 @@ impl DefaultMQProducer {
         Self::builder(client_runtime).build()
     }
 
+    /// Returns the shared session for a producer created through the public
+    /// builder. Internal bootstrap producers intentionally have no public
+    /// session.
+    #[must_use]
+    pub fn client_session(&self) -> Option<&ClientSession> {
+        self.session.as_ref()
+    }
+
+    pub(crate) fn set_client_session(&mut self, session: ClientSession) {
+        self.session = Some(session);
+    }
+
     pub async fn start(&mut self) -> rocketmq_error::RocketMQResult<()> {
-        <Self as MQProducer>::start(self).await
+        <Self as ProducerBackend>::start(self).await
     }
 
     pub async fn shutdown(&mut self) {
-        <Self as MQProducer>::shutdown(self).await;
+        <Self as ProducerBackend>::shutdown(self).await;
     }
 
     /// Stops producer-owned work without shutting down the shared Client factory.
@@ -458,7 +480,7 @@ impl DefaultMQProducer {
         &mut self,
         topic: &str,
     ) -> rocketmq_error::RocketMQResult<Vec<MessageQueue>> {
-        <Self as MQProducer>::fetch_publish_message_queues(self, topic).await
+        <Self as ProducerBackend>::fetch_publish_message_queues(self, topic).await
     }
 
     pub async fn create_topic(
@@ -468,7 +490,7 @@ impl DefaultMQProducer {
         queue_num: i32,
         attributes: HashMap<String, String>,
     ) -> rocketmq_error::RocketMQResult<()> {
-        <Self as MQProducer>::create_topic(self, key, new_topic, queue_num, attributes).await
+        <Self as ProducerBackend>::create_topic(self, key, new_topic, queue_num, attributes).await
     }
 
     pub async fn create_topic_with_flag(
@@ -479,23 +501,24 @@ impl DefaultMQProducer {
         topic_sys_flag: i32,
         attributes: HashMap<String, String>,
     ) -> rocketmq_error::RocketMQResult<()> {
-        <Self as MQProducer>::create_topic_with_flag(self, key, new_topic, queue_num, topic_sys_flag, attributes).await
+        <Self as ProducerBackend>::create_topic_with_flag(self, key, new_topic, queue_num, topic_sys_flag, attributes)
+            .await
     }
 
     pub async fn search_offset(&mut self, mq: &MessageQueue, timestamp: u64) -> rocketmq_error::RocketMQResult<i64> {
-        <Self as MQProducer>::search_offset(self, mq, timestamp).await
+        <Self as ProducerBackend>::search_offset(self, mq, timestamp).await
     }
 
     pub async fn max_offset(&mut self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
-        <Self as MQProducer>::max_offset(self, mq).await
+        <Self as ProducerBackend>::max_offset(self, mq).await
     }
 
     pub async fn min_offset(&mut self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
-        <Self as MQProducer>::min_offset(self, mq).await
+        <Self as ProducerBackend>::min_offset(self, mq).await
     }
 
     pub async fn earliest_msg_store_time(&mut self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
-        <Self as MQProducer>::earliest_msg_store_time(self, mq).await
+        <Self as ProducerBackend>::earliest_msg_store_time(self, mq).await
     }
 
     pub async fn query_message(
@@ -506,18 +529,18 @@ impl DefaultMQProducer {
         begin: u64,
         end: u64,
     ) -> rocketmq_error::RocketMQResult<QueryResult> {
-        <Self as MQProducer>::query_message(self, topic, key, max_num, begin, end).await
+        <Self as ProducerBackend>::query_message(self, topic, key, max_num, begin, end).await
     }
 
     pub async fn view_message(&mut self, topic: &str, msg_id: &str) -> rocketmq_error::RocketMQResult<MessageExt> {
-        <Self as MQProducer>::view_message(self, topic, msg_id).await
+        <Self as ProducerBackend>::view_message(self, topic, msg_id).await
     }
 
     pub async fn send<M>(&mut self, msg: M) -> rocketmq_error::RocketMQResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
     {
-        <Self as MQProducer>::send(self, msg).await
+        <Self as ProducerBackend>::send(self, msg).await
     }
 
     pub async fn send_with_timeout<M>(
@@ -528,7 +551,7 @@ impl DefaultMQProducer {
     where
         M: MessageTrait + Send + Sync,
     {
-        <Self as MQProducer>::send_with_timeout(self, msg, timeout).await
+        <Self as ProducerBackend>::send_with_timeout(self, msg, timeout).await
     }
 
     pub async fn send_with_callback<M, F>(&mut self, msg: M, send_callback: F) -> rocketmq_error::RocketMQResult<()>
@@ -536,7 +559,7 @@ impl DefaultMQProducer {
         M: MessageTrait + Send + Sync,
         F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static,
     {
-        <Self as MQProducer>::send_with_callback(self, msg, send_callback).await
+        <Self as ProducerBackend>::send_with_callback(self, msg, send_callback).await
     }
 
     pub async fn send_with_callback_timeout<F, M>(
@@ -549,14 +572,14 @@ impl DefaultMQProducer {
         F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static,
         M: MessageTrait + Send + Sync,
     {
-        <Self as MQProducer>::send_with_callback_timeout(self, msg, send_callback, timeout).await
+        <Self as ProducerBackend>::send_with_callback_timeout(self, msg, send_callback, timeout).await
     }
 
     pub async fn send_oneway<M>(&mut self, msg: M) -> rocketmq_error::RocketMQResult<()>
     where
         M: MessageTrait + Send + Sync,
     {
-        <Self as MQProducer>::send_oneway(self, msg).await
+        <Self as ProducerBackend>::send_oneway(self, msg).await
     }
 
     pub async fn send_to_queue<M>(
@@ -567,7 +590,7 @@ impl DefaultMQProducer {
     where
         M: MessageTrait + Send + Sync,
     {
-        <Self as MQProducer>::send_to_queue(self, msg, mq).await
+        <Self as ProducerBackend>::send_to_queue(self, msg, mq).await
     }
 
     pub async fn send_to_queue_with_timeout<M>(
@@ -579,7 +602,7 @@ impl DefaultMQProducer {
     where
         M: MessageTrait + Send + Sync,
     {
-        <Self as MQProducer>::send_to_queue_with_timeout(self, msg, mq, timeout).await
+        <Self as ProducerBackend>::send_to_queue_with_timeout(self, msg, mq, timeout).await
     }
 
     pub async fn send_to_queue_with_callback<M, F>(
@@ -592,7 +615,7 @@ impl DefaultMQProducer {
         M: MessageTrait + Send + Sync,
         F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static,
     {
-        <Self as MQProducer>::send_to_queue_with_callback(self, msg, mq, send_callback).await
+        <Self as ProducerBackend>::send_to_queue_with_callback(self, msg, mq, send_callback).await
     }
 
     pub async fn send_to_queue_with_callback_timeout<M, F>(
@@ -606,14 +629,14 @@ impl DefaultMQProducer {
         M: MessageTrait + Send + Sync,
         F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static,
     {
-        <Self as MQProducer>::send_to_queue_with_callback_timeout(self, msg, mq, send_callback, timeout).await
+        <Self as ProducerBackend>::send_to_queue_with_callback_timeout(self, msg, mq, send_callback, timeout).await
     }
 
     pub async fn send_oneway_to_queue<M>(&mut self, msg: M, mq: MessageQueue) -> rocketmq_error::RocketMQResult<()>
     where
         M: MessageTrait + Send + Sync,
     {
-        <Self as MQProducer>::send_oneway_to_queue(self, msg, mq).await
+        <Self as ProducerBackend>::send_oneway_to_queue(self, msg, mq).await
     }
 
     pub async fn send_with_selector<M, S, T>(
@@ -627,7 +650,7 @@ impl DefaultMQProducer {
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync,
         T: Send + Sync,
     {
-        <Self as MQProducer>::send_with_selector(self, msg, selector, arg).await
+        <Self as ProducerBackend>::send_with_selector(self, msg, selector, arg).await
     }
 
     pub async fn send_with_selector_timeout<M, S, T>(
@@ -642,7 +665,7 @@ impl DefaultMQProducer {
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync,
         T: Send + Sync,
     {
-        <Self as MQProducer>::send_with_selector_timeout(self, msg, selector, arg, timeout).await
+        <Self as ProducerBackend>::send_with_selector_timeout(self, msg, selector, arg, timeout).await
     }
 
     pub async fn send_with_selector_callback<M, S, T>(
@@ -657,7 +680,7 @@ impl DefaultMQProducer {
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync,
         T: Send + Sync,
     {
-        <Self as MQProducer>::send_with_selector_callback(self, msg, selector, arg, send_callback).await
+        <Self as ProducerBackend>::send_with_selector_callback(self, msg, selector, arg, send_callback).await
     }
 
     pub async fn send_with_selector_callback_timeout<M, S, T>(
@@ -673,7 +696,7 @@ impl DefaultMQProducer {
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync + 'static,
         T: Send + Sync + 'static,
     {
-        <Self as MQProducer>::send_with_selector_callback_timeout(self, msg, selector, arg, send_callback, timeout)
+        <Self as ProducerBackend>::send_with_selector_callback_timeout(self, msg, selector, arg, send_callback, timeout)
             .await
     }
 
@@ -688,7 +711,7 @@ impl DefaultMQProducer {
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync + 'static,
         T: Send + Sync + 'static,
     {
-        <Self as MQProducer>::send_oneway_with_selector(self, msg, selector, arg).await
+        <Self as ProducerBackend>::send_oneway_with_selector(self, msg, selector, arg).await
     }
 
     pub async fn send_message_in_transaction<T, M>(
@@ -700,14 +723,14 @@ impl DefaultMQProducer {
         T: std::any::Any + Sync + Send,
         M: MessageTrait + Send + Sync,
     {
-        <Self as MQProducer>::send_message_in_transaction(self, msg, arg).await
+        <Self as ProducerBackend>::send_message_in_transaction(self, msg, arg).await
     }
 
     pub async fn send_batch<M>(&mut self, msgs: Vec<M>) -> rocketmq_error::RocketMQResult<SendResult>
     where
         M: MessageTrait + Send + Sync,
     {
-        <Self as MQProducer>::send_batch(self, msgs).await
+        <Self as ProducerBackend>::send_batch(self, msgs).await
     }
 
     pub async fn send_batch_with_timeout<M>(
@@ -718,7 +741,7 @@ impl DefaultMQProducer {
     where
         M: MessageTrait + Send + Sync,
     {
-        <Self as MQProducer>::send_batch_with_timeout(self, msgs, timeout).await
+        <Self as ProducerBackend>::send_batch_with_timeout(self, msgs, timeout).await
     }
 
     pub async fn send_batch_to_queue<M>(
@@ -729,7 +752,7 @@ impl DefaultMQProducer {
     where
         M: MessageTrait + Send + Sync,
     {
-        <Self as MQProducer>::send_batch_to_queue(self, msgs, mq).await
+        <Self as ProducerBackend>::send_batch_to_queue(self, msgs, mq).await
     }
 
     pub async fn send_batch_to_queue_with_timeout<M>(
@@ -741,7 +764,7 @@ impl DefaultMQProducer {
     where
         M: MessageTrait + Send + Sync,
     {
-        <Self as MQProducer>::send_batch_to_queue_with_timeout(self, msgs, mq, timeout).await
+        <Self as ProducerBackend>::send_batch_to_queue_with_timeout(self, msgs, mq, timeout).await
     }
 
     pub async fn send_batch_with_callback<M, F>(&mut self, msgs: Vec<M>, f: F) -> rocketmq_error::RocketMQResult<()>
@@ -749,7 +772,7 @@ impl DefaultMQProducer {
         M: MessageTrait + Send + Sync,
         F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static,
     {
-        <Self as MQProducer>::send_batch_with_callback(self, msgs, f).await
+        <Self as ProducerBackend>::send_batch_with_callback(self, msgs, f).await
     }
 
     pub async fn send_batch_with_callback_timeout<M, F>(
@@ -762,7 +785,7 @@ impl DefaultMQProducer {
         M: MessageTrait + Send + Sync,
         F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static,
     {
-        <Self as MQProducer>::send_batch_with_callback_timeout(self, msgs, f, timeout).await
+        <Self as ProducerBackend>::send_batch_with_callback_timeout(self, msgs, f, timeout).await
     }
 
     pub async fn send_batch_to_queue_with_callback<M, F>(
@@ -775,7 +798,7 @@ impl DefaultMQProducer {
         M: MessageTrait + Send + Sync,
         F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static,
     {
-        <Self as MQProducer>::send_batch_to_queue_with_callback(self, msgs, mq, f).await
+        <Self as ProducerBackend>::send_batch_to_queue_with_callback(self, msgs, mq, f).await
     }
 
     pub async fn send_batch_to_queue_with_callback_timeout<M, F>(
@@ -789,7 +812,7 @@ impl DefaultMQProducer {
         M: MessageTrait + Send + Sync,
         F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static,
     {
-        <Self as MQProducer>::send_batch_to_queue_with_callback_timeout(self, msgs, mq, f, timeout).await
+        <Self as ProducerBackend>::send_batch_to_queue_with_callback_timeout(self, msgs, mq, f, timeout).await
     }
 
     pub async fn request<M>(
@@ -800,7 +823,7 @@ impl DefaultMQProducer {
     where
         M: MessageTrait + Send + Sync,
     {
-        <Self as MQProducer>::request(self, msg, timeout).await
+        <Self as ProducerBackend>::request(self, msg, timeout).await
     }
 
     pub async fn request_with_callback<F, M>(
@@ -813,7 +836,7 @@ impl DefaultMQProducer {
         F: Fn(Option<&dyn MessageTrait>, Option<&rocketmq_error::RocketMQError>) + Send + Sync + 'static,
         M: MessageTrait + Send + Sync,
     {
-        <Self as MQProducer>::request_with_callback(self, msg, request_callback, timeout).await
+        <Self as ProducerBackend>::request_with_callback(self, msg, request_callback, timeout).await
     }
 
     pub async fn request_with_selector<M, S, T>(
@@ -828,7 +851,7 @@ impl DefaultMQProducer {
         T: Send + Sync + 'static,
         M: MessageTrait + Send + Sync,
     {
-        <Self as MQProducer>::request_with_selector(self, msg, selector, arg, timeout).await
+        <Self as ProducerBackend>::request_with_selector(self, msg, selector, arg, timeout).await
     }
 
     pub async fn request_with_selector_callback<M, S, T, F>(
@@ -845,7 +868,8 @@ impl DefaultMQProducer {
         T: Send + Sync + 'static,
         M: MessageTrait + Send + Sync,
     {
-        <Self as MQProducer>::request_with_selector_callback(self, msg, selector, arg, request_callback, timeout).await
+        <Self as ProducerBackend>::request_with_selector_callback(self, msg, selector, arg, request_callback, timeout)
+            .await
     }
 
     pub async fn request_to_queue<M>(
@@ -857,7 +881,7 @@ impl DefaultMQProducer {
     where
         M: MessageTrait + Send + Sync,
     {
-        <Self as MQProducer>::request_to_queue(self, msg, mq, timeout).await
+        <Self as ProducerBackend>::request_to_queue(self, msg, mq, timeout).await
     }
 
     pub async fn request_to_queue_with_callback<M, F>(
@@ -871,7 +895,7 @@ impl DefaultMQProducer {
         F: Fn(Option<&dyn MessageTrait>, Option<&rocketmq_error::RocketMQError>) + Send + Sync + 'static,
         M: MessageTrait + Send + Sync,
     {
-        <Self as MQProducer>::request_to_queue_with_callback(self, msg, mq, request_callback, timeout).await
+        <Self as ProducerBackend>::request_to_queue_with_callback(self, msg, mq, request_callback, timeout).await
     }
 
     pub async fn recall_message(
@@ -879,7 +903,7 @@ impl DefaultMQProducer {
         topic: impl Into<CheetahString>,
         recall_handle: impl Into<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<String> {
-        <Self as MQProducer>::recall_message(self, topic, recall_handle).await
+        <Self as ProducerBackend>::recall_message(self, topic, recall_handle).await
     }
 
     #[inline]
@@ -1694,7 +1718,7 @@ impl DefaultMQProducer {
     }
 }
 
-impl MQProducer for DefaultMQProducer {
+impl ProducerBackend for DefaultMQProducer {
     async fn start(&mut self) -> rocketmq_error::RocketMQResult<()> {
         let producer_group_clone = self.producer_config.snapshot().producer_group.clone();
         let producer_group = self.with_namespace(&producer_group_clone);
@@ -2468,6 +2492,7 @@ mod facade_tests {
 
     fn unstarted_producer() -> DefaultMQProducer {
         DefaultMQProducer {
+            session: None,
             client_config: StableConfig::new(ClientConfig::default()),
             producer_config: StableConfig::new(ProducerConfig::default()),
             default_mqproducer_impl: None,
@@ -2655,6 +2680,7 @@ mod tests {
     async fn request_with_callback_not_initialized() {
         // Arrange
         let mut producer = DefaultMQProducer {
+            session: None,
             client_config: Default::default(),
             producer_config: Default::default(),
             default_mqproducer_impl: None,
@@ -2678,6 +2704,7 @@ mod tests {
     async fn request_with_selector_not_initialized() {
         // Arrange
         let mut producer = DefaultMQProducer {
+            session: None,
             client_config: Default::default(),
             producer_config: Default::default(),
             default_mqproducer_impl: None,
@@ -2699,6 +2726,7 @@ mod tests {
     async fn request_with_selector_callback_not_initialized() {
         // Arrange
         let mut producer = DefaultMQProducer {
+            session: None,
             client_config: Default::default(),
             producer_config: Default::default(),
             default_mqproducer_impl: None,
@@ -2725,6 +2753,7 @@ mod tests {
     async fn send_batch_with_callback_not_initialized() {
         // Arrange
         let mut producer = DefaultMQProducer {
+            session: None,
             client_config: Default::default(),
             producer_config: Default::default(),
             default_mqproducer_impl: None,
@@ -2750,6 +2779,7 @@ mod tests {
     #[tokio::test]
     async fn send_batch_delay_millis_returns_java_compatible_batch_error_before_start_check() {
         let mut producer = DefaultMQProducer {
+            session: None,
             client_config: Default::default(),
             producer_config: Default::default(),
             default_mqproducer_impl: None,
@@ -2777,6 +2807,7 @@ mod tests {
     #[tokio::test]
     async fn default_producer_transaction_send_returns_java_compatible_error() {
         let mut producer = DefaultMQProducer {
+            session: None,
             client_config: Default::default(),
             producer_config: Default::default(),
             default_mqproducer_impl: None,
@@ -2800,6 +2831,7 @@ mod tests {
     async fn send_batch_with_callback_timeout_not_initialized() {
         // Arrange
         let mut producer = DefaultMQProducer {
+            session: None,
             client_config: Default::default(),
             producer_config: Default::default(),
             default_mqproducer_impl: None,
@@ -2828,6 +2860,7 @@ mod tests {
     async fn send_batch_to_queue_with_callback_not_initialized() {
         // Arrange
         let mut producer = DefaultMQProducer {
+            session: None,
             client_config: Default::default(),
             producer_config: Default::default(),
             default_mqproducer_impl: None,
@@ -2857,6 +2890,7 @@ mod tests {
     async fn recall_message_not_initialized() {
         // Arrange
         let mut producer = DefaultMQProducer {
+            session: None,
             client_config: Default::default(),
             producer_config: Default::default(),
             default_mqproducer_impl: None,

@@ -109,15 +109,15 @@ fn client_adapter_feature_owns_all_sdk_dependencies() {
         );
     }
 
-    let compatibility_feature = feature_block(&manifest, "client-adapter");
+    let composition_feature = feature_block(&manifest, "client-adapter");
     for dependency in [
         "read-client-adapter",
         "mutation-client-adapter",
         "rocketmq-client-rust/admin-full",
     ] {
         assert!(
-            compatibility_feature.contains(dependency),
-            "compatibility adapter is missing feature {dependency}"
+            composition_feature.contains(dependency),
+            "composed adapter is missing feature {dependency}"
         );
     }
     assert!(!manifest.contains("dep:rocketmq-common"));
