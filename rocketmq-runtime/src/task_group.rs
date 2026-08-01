@@ -418,9 +418,14 @@ impl TaskGroup {
         let registration = context.prepare_spawn(self.id())?;
         let guard = registration.guard();
         let operation = context.clone();
+        let owner_cancellation = self.cancellation_token();
         let task_id = self.spawn(name, context.task_kind(), async move {
             let _guard = guard;
-            operation.run(future).await;
+            tokio::select! {
+                biased;
+                _ = owner_cancellation.cancelled() => {}
+                _ = operation.run(future) => {}
+            }
         })?;
         registration.register(task_id);
         Ok(task_id)

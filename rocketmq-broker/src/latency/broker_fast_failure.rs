@@ -497,17 +497,11 @@ impl BrokerFastFailure {
 
     pub(crate) fn task_count(&self) -> usize {
         let lifecycle = self.inner.lifecycle.lock();
-        let root_count = lifecycle
+        lifecycle
             .task_group
             .as_ref()
             .map(TaskGroup::task_count)
-            .unwrap_or_default();
-        let scheduled_count = lifecycle
-            .scheduled_tasks
-            .as_ref()
-            .map(|scheduled_tasks| scheduled_tasks.group().task_count())
-            .unwrap_or_default();
-        root_count + scheduled_count
+            .unwrap_or_default()
     }
 
     pub(crate) fn schedule_snapshot(&self) -> Vec<ScheduledTaskSnapshot> {
