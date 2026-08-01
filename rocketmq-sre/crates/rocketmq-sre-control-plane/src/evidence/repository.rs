@@ -54,15 +54,15 @@ impl PostgresRepository {
                 "message journey cluster is outside the authenticated scope",
             ));
         }
-        let rows = sqlx::query(&format!(
-            "{EVIDENCE_COLUMNS}
+        let rows = sqlx::query(evidence_query(
+            "
              WHERE e.tenant_id = $1
                AND e.cluster_id = $2
                AND (e.expires_at IS NULL OR e.expires_at > NOW())
                AND e.resource LIKE ('%' || $3 || '%')
                AND e.source IN ('admin-query', 'tempo', 'mcp', 'rocketmq-mcp')
              ORDER BY e.observed_at ASC, e.id ASC
-             LIMIT 64"
+             LIMIT 64",
         ))
         .bind(auth.tenant_id.as_uuid())
         .bind(cluster_id.as_uuid())
@@ -83,12 +83,12 @@ impl PostgresRepository {
         enforce_evidence_scope(auth, snapshot)?;
         let query_hash = query_hash(snapshot);
         let mut transaction = self.pool.begin().await?;
-        let existing = sqlx::query(&format!(
-            "{EVIDENCE_COLUMNS}
+        let existing = sqlx::query(evidence_query(
+            "
              WHERE e.tenant_id = $1 AND e.cluster_id = $2 AND e.query_hash = $3
                AND e.time_range_start = $4 AND e.time_range_end = $5 AND e.content_hash = $6
                AND (e.expires_at IS NULL OR e.expires_at > NOW())
-             ORDER BY e.collected_at DESC LIMIT 1"
+             ORDER BY e.collected_at DESC LIMIT 1",
         ))
         .bind(auth.tenant_id.as_uuid())
         .bind(snapshot.cluster_id.as_uuid())
@@ -200,13 +200,13 @@ impl PostgresRepository {
                 "evidence cluster is outside the authenticated scope",
             ));
         }
-        let row = sqlx::query(&format!(
-            "{EVIDENCE_COLUMNS}
+        let row = sqlx::query(evidence_query(
+            "
              WHERE e.tenant_id = $1 AND e.cluster_id = $2
                AND e.source = $3 AND e.resource = $4
                AND (e.expires_at IS NULL OR e.expires_at > NOW())
              ORDER BY e.observed_at DESC, e.collected_at DESC, e.id DESC
-             LIMIT 1"
+             LIMIT 1",
         ))
         .bind(auth.tenant_id.as_uuid())
         .bind(cluster_id.as_uuid())
@@ -222,10 +222,10 @@ impl PostgresRepository {
         auth: &AuthContext,
         id: EvidenceId,
     ) -> Result<EvidenceSnapshot, ControlPlaneError> {
-        let row = sqlx::query(&format!(
-            "{EVIDENCE_COLUMNS}
+        let row = sqlx::query(evidence_query(
+            "
              WHERE e.id = $1 AND e.tenant_id = $2
-               AND (e.expires_at IS NULL OR e.expires_at > NOW())"
+               AND (e.expires_at IS NULL OR e.expires_at > NOW())",
         ))
         .bind(id.as_uuid())
         .bind(auth.tenant_id.as_uuid())
@@ -284,8 +284,8 @@ impl PostgresRepository {
                     .map_err(|_| ControlPlaneError::validation("invalid_request", "evidence cursor must be a UUID"))
             })
             .transpose()?;
-        let rows = sqlx::query(&format!(
-            "{EVIDENCE_COLUMNS}
+        let rows = sqlx::query(evidence_query(
+            "
              WHERE e.tenant_id = $1 AND e.cluster_id = $2
                AND (e.expires_at IS NULL OR e.expires_at > NOW())
                AND ($3::UUID IS NULL OR EXISTS (
@@ -294,7 +294,7 @@ impl PostgresRepository {
                ))
                AND ($4::TEXT IS NULL OR e.source = $4)
                AND ($5::UUID IS NULL OR e.id < $5)
-             ORDER BY e.id DESC LIMIT $6"
+             ORDER BY e.id DESC LIMIT $6",
         ))
         .bind(auth.tenant_id.as_uuid())
         .bind(query.cluster_id.as_uuid())
@@ -493,7 +493,12 @@ const EVIDENCE_COLUMNS: &str = "SELECT e.id, e.query_id, e.correlation_id, e.ten
     e.time_range_start, e.time_range_end, e.observed_at, e.freshness_seconds,
     e.coverage, e.sensitivity, e.exposure, e.partial, e.warnings, e.inline_content,
     e.content_uri, e.content_size_bytes, e.content_hash, e.content_digest
-    FROM evidence_snapshots e";
+                               FROM evidence_snapshots e";
+
+fn evidence_query(suffix: &'static str) -> sqlx::AssertSqlSafe<String> {
+    // Both fragments are compile-time constants; request data is supplied only through binds.
+    sqlx::AssertSqlSafe(format!("{EVIDENCE_COLUMNS}{suffix}"))
+}
 
 #[cfg(test)]
 mod tests {

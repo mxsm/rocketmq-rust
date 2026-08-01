@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use object_store::ObjectStore;
+use object_store::ObjectStoreExt;
 use object_store::PutPayload;
 use object_store::aws::AmazonS3Builder;
 use object_store::local::LocalFileSystem;

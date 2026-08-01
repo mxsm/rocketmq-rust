@@ -768,12 +768,15 @@ mod tests {
             "asset_snapshots",
             "asset_inventory_snapshots",
         ] {
-            sqlx::query(&format!("DELETE FROM {table} WHERE tenant_id = $1 AND cluster_id = $2"))
-                .bind(tenant.as_uuid())
-                .bind(cluster.as_uuid())
-                .execute(&repository.pool)
-                .await
-                .expect("test data cleanup");
+            // The table name comes from the closed test-only allowlist above; row values remain binds.
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "DELETE FROM {table} WHERE tenant_id = $1 AND cluster_id = $2"
+            )))
+            .bind(tenant.as_uuid())
+            .bind(cluster.as_uuid())
+            .execute(&repository.pool)
+            .await
+            .expect("test data cleanup");
         }
         sqlx::query("DELETE FROM clusters WHERE id = $1")
             .bind(cluster.as_uuid())

@@ -242,6 +242,7 @@ fn test_credentials(identity: &str) -> Option<AdminCredentials> {
 }
 
 async fn isolated_pool(database_url: &str, schema: &str) -> PgPool {
+    assert_test_schema(schema);
     let search_path: Arc<str> = Arc::from(format!("SET search_path TO \"{schema}\""));
     let pool = PgPoolOptions::new()
         .max_connections(4)
@@ -249,14 +250,16 @@ async fn isolated_pool(database_url: &str, schema: &str) -> PgPool {
         .after_connect(move |connection, _metadata| {
             let search_path = Arc::clone(&search_path);
             Box::pin(async move {
-                sqlx::query(search_path.as_ref()).execute(connection).await?;
+                sqlx::query(sqlx::AssertSqlSafe(search_path))
+                    .execute(connection)
+                    .await?;
                 Ok(())
             })
         })
         .connect(database_url)
         .await
         .expect("Docker PostgreSQL");
-    sqlx::query(&format!("CREATE SCHEMA \"{schema}\""))
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA \"{schema}\"")))
         .execute(&pool)
         .await
         .expect("isolated schema");
@@ -264,9 +267,20 @@ async fn isolated_pool(database_url: &str, schema: &str) -> PgPool {
 }
 
 async fn cleanup_schema(pool: &PgPool, schema: &str) {
-    sqlx::query(&format!("DROP SCHEMA \"{schema}\" CASCADE"))
+    assert_test_schema(schema);
+    sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA \"{schema}\" CASCADE")))
         .execute(pool)
         .await
         .expect("drop isolated schema");
     pool.close().await;
+}
+
+fn assert_test_schema(schema: &str) {
+    assert!(
+        !schema.is_empty()
+            && schema
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_'),
+        "test schema must be a generated lowercase ASCII identifier"
+    );
 }

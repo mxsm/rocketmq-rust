@@ -228,7 +228,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         cluster_id: ClusterId,
-        statement: &str,
+        statement: &'static str,
     ) -> Result<Vec<T>, ControlPlaneError>
     where
         T: DeserializeOwned,

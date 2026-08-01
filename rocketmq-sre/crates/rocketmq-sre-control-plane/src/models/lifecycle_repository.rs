@@ -87,7 +87,7 @@ impl PostgresRepository {
         tenant_id: TenantId,
     ) -> Result<Vec<ModelProfileLifecycleView>, ControlPlaneError> {
         self.ensure_model_profile_lifecycles(tenant_id).await?;
-        let rows = sqlx::query(&lifecycle_projection_query(None))
+        let rows = sqlx::query(lifecycle_projection_query(false))
             .bind(tenant_id.as_uuid())
             .fetch_all(&self.pool)
             .await?;
@@ -100,7 +100,7 @@ impl PostgresRepository {
         profile_id: ModelProfileId,
     ) -> Result<ModelProfileLifecycleView, ControlPlaneError> {
         self.ensure_model_profile_lifecycles(tenant_id).await?;
-        let row = sqlx::query(&lifecycle_projection_query(Some(2)))
+        let row = sqlx::query(lifecycle_projection_query(true))
             .bind(tenant_id.as_uuid())
             .bind(profile_id.as_uuid())
             .fetch_optional(&self.pool)
@@ -521,10 +521,10 @@ async fn append_lifecycle_event(
     Ok(())
 }
 
-fn lifecycle_projection_query(profile_parameter: Option<u8>) -> String {
-    let profile_filter =
-        profile_parameter.map_or_else(String::new, |parameter| format!(" AND profile.id = ${parameter}"));
-    format!(
+fn lifecycle_projection_query(filter_by_profile: bool) -> sqlx::AssertSqlSafe<String> {
+    let profile_filter = if filter_by_profile { " AND profile.id = $2" } else { "" };
+    // The optional clause is selected from static SQL; request values remain bind parameters.
+    sqlx::AssertSqlSafe(format!(
         "SELECT profile.id, profile.profile_name, profile.provider_family,
                 profile.model_family, profile.model_revision, profile.health,
                 lifecycle.state, lifecycle.revision, lifecycle.rollback_profile_id,
@@ -550,7 +550,7 @@ fn lifecycle_projection_query(profile_parameter: Option<u8>) -> String {
          ) smoke ON TRUE
          WHERE profile.tenant_id = $1{profile_filter}
          ORDER BY profile.priority, profile.profile_name"
-    )
+    ))
 }
 
 fn lifecycle_from_row(row: &PgRow) -> Result<ModelProfileLifecycleView, ControlPlaneError> {
