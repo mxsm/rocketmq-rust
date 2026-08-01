@@ -27,6 +27,9 @@ def metric(
     *,
     public_items: int = 0,
     reexports: int = 0,
+    lock_sites: int = 1,
+    state_owners: int = 1,
+    fan_out: int = 2,
     score: float | None = None,
 ) -> guard.FileMetrics:
     return guard.FileMetrics(
@@ -35,9 +38,9 @@ def metric(
         production_lines=lines,
         public_items=public_items,
         reexports=reexports,
-        lock_sites=1,
-        state_owners=1,
-        fan_out=2,
+        lock_sites=lock_sites,
+        state_owners=state_owners,
+        fan_out=fan_out,
         test_functions=2,
         churn_commits=3,
         contributors=2,
@@ -48,6 +51,18 @@ def metric(
 
 def baseline_metrics() -> list[guard.FileMetrics]:
     return [metric(f"crate-{index}/src/hotspot_{index}.rs", 900 - index, score=1000 - index) for index in range(20)]
+
+
+def decision_section(path: str, *, outcome: str = "retained") -> str:
+    return f"""
+### `{path}`
+
+- Decision: `{outcome}`.
+- Owner: crate maintainers.
+- State owner: the parent module remains the only mutable state owner.
+- Evidence: focused behavior tests cover the retained boundary.
+- Revisit when: public surface, fan-out, locks, or production lines grow.
+"""
 
 
 class ModuleMaintainabilityGuardTests(unittest.TestCase):
@@ -124,6 +139,55 @@ pub struct RuntimeState;
 
         self.assertEqual([], guard.compare(reduced, baseline))
 
+    def test_state_owner_and_fan_out_growth_fail(self) -> None:
+        metrics = baseline_metrics()
+        baseline = guard.baseline_payload(metrics)
+        changed = list(metrics)
+        changed[0] = metric(
+            metrics[0].path,
+            metrics[0].production_lines,
+            state_owners=metrics[0].state_owners + 1,
+            fan_out=metrics[0].fan_out + 1,
+        )
+
+        findings = guard.compare(changed, baseline)
+        codes = {finding.code for finding in findings}
+
+        self.assertIn("state-owner-growth", codes)
+        self.assertIn("fan-out-growth", codes)
+
+    def test_mechanical_fragment_names_fail(self) -> None:
+        metrics = baseline_metrics()
+        baseline = guard.baseline_payload(metrics)
+        current = list(metrics) + [metric("crate/src/impl_2.rs", 20)]
+
+        findings = guard.compare(current, baseline)
+
+        self.assertIn("mechanical-module-fragment", {finding.code for finding in findings})
+
+    def test_decision_ledger_requires_every_ranked_hotspot(self) -> None:
+        metrics = baseline_metrics()
+        document = "\n".join(decision_section(item.path) for item in metrics[:-1])
+
+        findings = guard.validate_decision_ledger(metrics, document)
+
+        self.assertEqual(1, len(findings))
+        self.assertEqual("missing-hotspot-decision", findings[0].code)
+        self.assertEqual(metrics[-1].path, findings[0].path)
+
+    def test_decision_ledger_requires_complete_evidence(self) -> None:
+        hotspot = metric("crate/src/hotspot.rs", 900)
+        document = """
+### `crate/src/hotspot.rs`
+
+- Decision: `retained`.
+- Owner: crate maintainers.
+"""
+
+        findings = guard.validate_decision_ledger([hotspot], document)
+
+        self.assertEqual({"incomplete-hotspot-decision"}, {finding.code for finding in findings})
+
 
 class RepositoryModuleMaintainabilityContracts(unittest.TestCase):
     def test_repository_baseline_and_report_are_current(self) -> None:
@@ -135,6 +199,12 @@ class RepositoryModuleMaintainabilityContracts(unittest.TestCase):
         self.assertEqual(
             guard.render_report(baseline),
             (root / "rocketmq-doc/en/module-maintainability-board.md").read_text(encoding="utf-8"),
+        )
+        decision_path = root / "rocketmq-doc/en/hotspot-module-decisions.md"
+        decision_document = decision_path.read_text(encoding="utf-8") if decision_path.is_file() else ""
+        self.assertEqual(
+            [],
+            guard.validate_decision_ledger(metrics[: guard.RANKED_HOTSPOTS], decision_document),
         )
 
 

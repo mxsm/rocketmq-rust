@@ -37,9 +37,11 @@ import environment_write_guard as rust_source  # noqa: E402
 ROOT = Path(__file__).resolve().parents[1]
 BASELINE = ROOT / "scripts" / "module-maintainability-baseline.json"
 REPORT = ROOT / "rocketmq-doc" / "en" / "module-maintainability-board.md"
+DECISIONS = ROOT / "rocketmq-doc" / "en" / "hotspot-module-decisions.md"
 REVIEW_LINES = 500
 HARD_LINES = 800
 RANKED_HOTSPOTS = 20
+FORBIDDEN_FRAGMENT_NAMES = {"impl_2.rs", "misc.rs", "utils2.rs"}
 
 PUBLIC_ITEM = re.compile(
     r"(?m)^\s*pub\s+(?:(?:async|unsafe)\s+)?(?:fn|struct|enum|trait|type|const|static|mod)\b"
@@ -51,6 +53,8 @@ STATE_OWNER = re.compile(
 )
 TEST_FUNCTION = re.compile(r"(?m)^\s*#\[(?:tokio::)?test[^\]]*\]\s*(?:\r?\n\s*#\[[^\]]+\]\s*)*")
 USE_TARGET = re.compile(r"(?m)^\s*use\s+(?:crate::([A-Za-z0-9_]+)|(rocketmq_[A-Za-z0-9_]+))")
+DECISION_HEADING = re.compile(r"(?m)^### `([^`\r\n]+)`\s*$")
+DECISION_FIELD = re.compile(r"(?m)^- (Decision|Owner|State owner|Evidence|Revisit when):\s*(.+?)\s*$")
 
 
 @dataclass(frozen=True)
@@ -259,6 +263,45 @@ def scan_tree(root: Path) -> list[FileMetrics]:
     return sorted(metrics, key=lambda item: (-item.score, -item.production_lines, item.path))
 
 
+def validate_decision_ledger(hotspots: list[FileMetrics], document: str) -> list[Finding]:
+    """Require an explicit, reviewable decision for every ranked hotspot."""
+    headings = list(DECISION_HEADING.finditer(document))
+    sections: dict[str, list[dict[str, str]]] = defaultdict(list)
+    for index, heading in enumerate(headings):
+        end = headings[index + 1].start() if index + 1 < len(headings) else len(document)
+        fields = {key.lower(): value.strip() for key, value in DECISION_FIELD.findall(document[heading.end() : end])}
+        sections[heading.group(1)].append(fields)
+
+    findings = []
+    required = {"decision", "owner", "state owner", "evidence", "revisit when"}
+    for hotspot in hotspots:
+        entries = sections.get(hotspot.path, [])
+        if not entries:
+            findings.append(Finding("missing-hotspot-decision", hotspot.path, "ranked hotspot lacks an ADR decision"))
+            continue
+        if len(entries) != 1:
+            findings.append(
+                Finding("duplicate-hotspot-decision", hotspot.path, f"expected one ADR section, found {len(entries)}")
+            )
+            continue
+        fields = entries[0]
+        decision = fields.get("decision", "").rstrip(".").strip("`")
+        incomplete = required - fields.keys()
+        if decision not in {"decomposed", "retained"}:
+            incomplete.add("decision=decomposed|retained")
+        if any(len(fields.get(field, "").strip()) < 12 for field in required - {"decision"}):
+            incomplete.add("substantive field content")
+        if incomplete:
+            findings.append(
+                Finding(
+                    "incomplete-hotspot-decision",
+                    hotspot.path,
+                    f"missing or invalid: {', '.join(sorted(incomplete))}",
+                )
+            )
+    return findings
+
+
 def inferred_use_cases(path: str) -> list[str]:
     stem = Path(path).stem.replace("_", " ")
     if "consumer" in path:
@@ -313,7 +356,7 @@ def baseline_payload(metrics: list[FileMetrics]) -> dict[str, Any]:
         crate_totals[item.crate]["public_items"] += item.public_items
         crate_totals[item.crate]["reexports"] += item.reexports
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "thresholds": {
             "review_lines": REVIEW_LINES,
             "hard_lines": HARD_LINES,
@@ -322,6 +365,7 @@ def baseline_payload(metrics: list[FileMetrics]) -> dict[str, Any]:
         "policy": {
             "line_growth": "Existing hotspots may shrink but not grow; new production modules must stay at or below 800 lines.",
             "public_surface": "Per-file and per-crate public item and re-export counts may shrink but not grow without review.",
+            "ownership": "State owners, lock sites, and dependency fan-out may shrink but not grow without review.",
             "ranking": "Ranking combines production LOC, history, contributors, defects, public surface, state/lock ownership, fan-out, and test cost.",
         },
         "files": files,
@@ -332,8 +376,8 @@ def baseline_payload(metrics: list[FileMetrics]) -> dict[str, Any]:
 
 def validate_schema(payload: dict[str, Any]) -> list[Finding]:
     findings = []
-    if payload.get("schema_version") != 1:
-        return [Finding("baseline-schema", "scripts/module-maintainability-baseline.json", "expected schema 1")]
+    if payload.get("schema_version") != 2:
+        return [Finding("baseline-schema", "scripts/module-maintainability-baseline.json", "expected schema 2")]
     thresholds = payload.get("thresholds", {})
     if thresholds != {
         "review_lines": REVIEW_LINES,
@@ -356,14 +400,31 @@ def validate_schema(payload: dict[str, Any]) -> list[Finding]:
             findings.append(Finding("hotspot-governance", path, "owner and contracts must be explicit"))
         if not isinstance(entry["use_cases"], list) or len(entry["use_cases"]) < 2:
             findings.append(Finding("hotspot-use-cases", path, "at least two use-case boundaries are required"))
+        metrics = entry.get("metrics")
+        required_metrics = {"lock_sites", "state_owners", "fan_out"}
+        if not isinstance(metrics, dict) or not required_metrics.issubset(metrics):
+            findings.append(Finding("hotspot-metrics-schema", path, "ownership and fan-out metrics are required"))
     return findings
 
 
 def compare(metrics: list[FileMetrics], baseline: dict[str, Any]) -> list[Finding]:
     findings = validate_schema(baseline)
     files = baseline.get("files", {})
-    governed = {entry.get("path") for entry in baseline.get("hotspots", []) if isinstance(entry, dict)}
+    governed_metrics = {
+        entry.get("path"): entry.get("metrics", {})
+        for entry in baseline.get("hotspots", [])
+        if isinstance(entry, dict)
+    }
+    governed = set(governed_metrics)
     for item in metrics:
+        if Path(item.path).name in FORBIDDEN_FRAGMENT_NAMES:
+            findings.append(
+                Finding(
+                    "mechanical-module-fragment",
+                    item.path,
+                    "use a domain use-case name instead of a numbered or miscellaneous fragment",
+                )
+            )
         previous = files.get(item.path)
         if previous is None:
             if item.production_lines > HARD_LINES:
@@ -393,6 +454,21 @@ def compare(metrics: list[FileMetrics], baseline: dict[str, Any]) -> list[Findin
                         "public-surface-growth",
                         item.path,
                         f"{field} baseline={previous[field]} current={getattr(item, field)}",
+                    )
+                )
+        for field, code in (
+            ("lock_sites", "lock-site-growth"),
+            ("state_owners", "state-owner-growth"),
+            ("fan_out", "fan-out-growth"),
+        ):
+            governed_previous = governed_metrics.get(item.path)
+            baseline_value = governed_previous.get(field) if governed_previous is not None else None
+            if baseline_value is not None and int(getattr(item, field)) > int(baseline_value):
+                findings.append(
+                    Finding(
+                        code,
+                        item.path,
+                        f"{field} baseline={baseline_value} current={getattr(item, field)}",
                     )
                 )
     for item in metrics[:RANKED_HOTSPOTS]:
@@ -470,13 +546,24 @@ def main() -> int:
     parser.add_argument("--root", type=Path, default=ROOT)
     parser.add_argument("--baseline", type=Path, default=BASELINE)
     parser.add_argument("--report", type=Path, default=REPORT)
+    parser.add_argument("--decisions", type=Path, default=DECISIONS)
     parser.add_argument("--write-baseline", action="store_true")
     parser.add_argument("--write-report", action="store_true")
     args = parser.parse_args()
 
     root = args.root.resolve()
     metrics = scan_tree(root)
+    try:
+        decision_document = args.decisions.read_text(encoding="utf-8")
+    except OSError:
+        decision_document = ""
+    decision_findings = validate_decision_ledger(metrics[:RANKED_HOTSPOTS], decision_document)
     if args.write_baseline:
+        if decision_findings:
+            for finding in decision_findings:
+                print(f"MODULE_FINDING code={finding.code} path={finding.path} detail={finding.detail}", file=sys.stderr)
+            print(f"MODULE_MAINTAINABILITY_FAILED findings={len(decision_findings)}", file=sys.stderr)
+            return 1
         payload = baseline_payload(metrics)
         write_json(args.baseline, payload)
         args.report.parent.mkdir(parents=True, exist_ok=True)
@@ -493,6 +580,7 @@ def main() -> int:
         print(f"MODULE_MAINTAINABILITY_FAILED baseline={error}", file=sys.stderr)
         return 1
     findings = compare(metrics, baseline)
+    findings.extend(decision_findings)
     expected_report = render_report(baseline)
     if args.write_report:
         args.report.parent.mkdir(parents=True, exist_ok=True)
