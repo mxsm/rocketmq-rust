@@ -25,7 +25,7 @@ use rocketmq_protocol::protocol::header::query_message_request_header::QueryMess
 use rocketmq_protocol::protocol::header::query_message_response_header::QueryMessageResponseHeader;
 use rocketmq_protocol::protocol::header::view_message_request_header::ViewMessageRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_store::MessageStore;
+use rocketmq_store::BrokerReadStore;
 use rocketmq_store::QueryMessageResult;
 use rocketmq_store::SelectMappedBufferResult;
 use rocketmq_store_api::StoreError;
@@ -41,11 +41,11 @@ use tracing::warn;
 use crate::failover::escape_bridge::EscapeBridge;
 use crate::failover::escape_bridge::MessageStoreUnavailable;
 
-pub(crate) struct QueryMessageStoreCapability<MS: MessageStore> {
+pub(crate) struct QueryMessageStoreCapability<MS: BrokerReadStore> {
     escape_bridge: Weak<EscapeBridge<MS>>,
 }
 
-impl<MS: MessageStore> QueryMessageStoreCapability<MS> {
+impl<MS: BrokerReadStore> QueryMessageStoreCapability<MS> {
     pub(crate) fn new(escape_bridge: &Arc<EscapeBridge<MS>>) -> Self {
         Self {
             escape_bridge: Arc::downgrade(escape_bridge),
@@ -75,7 +75,7 @@ pub trait QueryMessageStore: Send + Sync {
     fn select_message_by_offset(&self, offset: i64) -> Result<Option<SelectMappedBufferResult>, StoreError>;
 }
 
-impl<MS: MessageStore> QueryMessageStore for QueryMessageStoreCapability<MS> {
+impl<MS: BrokerReadStore> QueryMessageStore for QueryMessageStoreCapability<MS> {
     async fn query_message(
         &self,
         topic: &CheetahString,
@@ -97,7 +97,7 @@ impl<MS: MessageStore> QueryMessageStore for QueryMessageStoreCapability<MS> {
     }
 }
 
-impl<MS: MessageStore> Clone for QueryMessageStoreCapability<MS> {
+impl<MS: BrokerReadStore> Clone for QueryMessageStoreCapability<MS> {
     fn clone(&self) -> Self {
         Self {
             escape_bridge: Weak::clone(&self.escape_bridge),
@@ -327,8 +327,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rocketmq_store::OwnedMessageStore;
     use rocketmq_store::QueryMessageResult;
+    use rocketmq_store::StorePorts;
 
     fn header(index_type: Option<&'static str>) -> QueryMessageRequestHeader {
         QueryMessageRequestHeader {
@@ -402,7 +402,7 @@ mod tests {
 
     #[tokio::test]
     async fn query_store_capability_fails_closed_after_provider_shutdown() {
-        let capability = QueryMessageStoreCapability::<OwnedMessageStore> {
+        let capability = QueryMessageStoreCapability::<StorePorts> {
             escape_bridge: Weak::new(),
         };
         let topic = CheetahString::from_static_str("TopicA");

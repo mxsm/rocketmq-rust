@@ -182,10 +182,12 @@ mod tests {
     use rocketmq_model::common::message::MessageTrait;
     use rocketmq_protocol::common::message::message_decoder::message_properties_to_string;
     use rocketmq_protocol::protocol::filter::filter_api::FilterAPI;
+    use rocketmq_store::BrokerReadStore;
+    use rocketmq_store::BrokerStorePort;
+    use rocketmq_store::BrokerWriteStore;
     use rocketmq_store::GetMessageStatus;
     use rocketmq_store::LocalFileMessageStore;
     use rocketmq_store::MessageFilter;
-    use rocketmq_store::MessageStore;
     use rocketmq_store::MessageStoreConfig;
     use rocketmq_store::PutMessageStatus;
 

@@ -24,7 +24,7 @@ use rocketmq_protocol::protocol::body::unlock_batch_request_body::UnlockBatchReq
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_protocol::protocol::RemotingSerializable;
-use rocketmq_store::MessageStore;
+use rocketmq_store::BrokerAdminStore;
 use rocketmq_transport::Channel;
 use rocketmq_transport::ConnectionHandlerContext;
 use tokio::time::timeout;
@@ -39,7 +39,7 @@ impl BatchMqHandler {
         Self
     }
 
-    pub async fn lock_natch_mq<MS: MessageStore>(
+    pub async fn lock_natch_mq<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
@@ -117,7 +117,7 @@ impl BatchMqHandler {
         ))
     }
 
-    pub async fn unlock_batch_mq<MS: MessageStore>(
+    pub async fn unlock_batch_mq<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,

@@ -61,9 +61,9 @@ use rocketmq_runtime::TaskGroup;
 use rocketmq_store::AckMessage;
 use rocketmq_store::ArcMessageFilter;
 use rocketmq_store::BatchAckMsg;
+use rocketmq_store::BrokerReadWriteStore;
 use rocketmq_store::GetMessageResult;
 use rocketmq_store::GetMessageStatus;
-use rocketmq_store::MessageStore;
 use rocketmq_store::PopCheckPoint;
 use rocketmq_store::SelectMappedBufferCacheState;
 use rocketmq_store::SelectMappedBufferResult;
@@ -96,7 +96,7 @@ use crate::processor::processor_service::pop_buffer_merge_service::PopBufferMerg
 const BORN_TIME: &str = "bornTime";
 const QUEUE_LOCK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
-pub struct PopMessageProcessor<MS: MessageStore> {
+pub struct PopMessageProcessor<MS: BrokerReadWriteStore> {
     ck_message_number: AtomicI64,
     pop_long_polling_service: Arc<PopLongPollingService<PopMessageProcessor<MS>>>,
     pop_buffer_merge_service: Arc<PopBufferMergeService<MS>>,
@@ -106,7 +106,7 @@ pub struct PopMessageProcessor<MS: MessageStore> {
     lifecycle: AsyncMutex<()>,
 }
 
-impl<MS: MessageStore> PopMessageProcessor<MS> {
+impl<MS: BrokerReadWriteStore> PopMessageProcessor<MS> {
     pub(crate) fn new(
         context: Arc<PopMessageProcessorContext<MS>>,
         buffer_context: Arc<PopBufferMergeContext<MS>>,
@@ -198,7 +198,7 @@ impl<MS: MessageStore> PopMessageProcessor<MS> {
 
 impl<MS> RequestProcessor for PopMessageProcessor<MS>
 where
-    MS: MessageStore,
+    MS: BrokerReadWriteStore,
 {
     async fn process_request(
         &mut self,
@@ -212,7 +212,7 @@ where
 
 impl<MS> PopLongPollingRequestProcessor for PopMessageProcessor<MS>
 where
-    MS: MessageStore,
+    MS: BrokerReadWriteStore,
 {
     async fn process_request_when_wakeup(
         &self,
@@ -226,7 +226,7 @@ where
 
 impl<MS> PopMessageProcessor<MS>
 where
-    MS: MessageStore,
+    MS: BrokerReadWriteStore,
 {
     pub(crate) async fn process_request_shared(
         &self,
@@ -1409,7 +1409,7 @@ where
     }
 }
 
-impl<MS: MessageStore> PopMessageProcessor<MS> {
+impl<MS: BrokerReadWriteStore> PopMessageProcessor<MS> {
     pub fn gen_ack_unique_id(ack_msg: &dyn AckMessage) -> String {
         format!(
             "{}{}{}{}{}{}{}{}{}{}{}{}{}",

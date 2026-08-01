@@ -43,7 +43,8 @@ use rocketmq_runtime::ProcessMemoryLimit;
 use rocketmq_runtime::RateLimit;
 use rocketmq_runtime::ResourceBudget;
 use rocketmq_runtime::ResourceBudgetTree;
-use rocketmq_store::MessageStore;
+use rocketmq_store::BrokerMasterAddressStore;
+use rocketmq_store::BrokerWriteStore;
 use rocketmq_store::PutMessageResult;
 use rocketmq_store::PutMessageStatus;
 use rocketmq_store_api::GetStatus;
@@ -93,7 +94,7 @@ fn is_illegal_or_unmatched_offset(status: GetStatus) -> bool {
     )
 }
 
-pub struct DefaultTransactionalMessageService<MS: MessageStore> {
+pub struct DefaultTransactionalMessageService<MS: BrokerWriteStore + BrokerMasterAddressStore> {
     transactional_message_bridge: TransactionalMessageBridge<MS>,
     broker_config: Arc<BrokerConfig>,
     file_reserved_time_hours: i64,
@@ -134,7 +135,7 @@ fn standalone_transaction_resource_budget(broker_config: &BrokerConfig) -> Rocke
 
 impl<MS> DefaultTransactionalMessageService<MS>
 where
-    MS: MessageStore,
+    MS: BrokerWriteStore + BrokerMasterAddressStore,
 {
     /// Creates the transactional service with a process-derived operation budget.
     ///
@@ -1110,7 +1111,7 @@ fn is_within_transaction_immunity(value_of_current_minus_born: i64, check_immuni
 
 impl<MS> TransactionalMessageService for DefaultTransactionalMessageService<MS>
 where
-    MS: MessageStore + Send + Sync + 'static,
+    MS: BrokerWriteStore + BrokerMasterAddressStore + Send + Sync + 'static,
 {
     async fn prepare_message(&self, message_inner: MessageExtBrokerInner) -> PutMessageResult {
         self.transactional_message_bridge.put_half_message(message_inner).await
@@ -1375,7 +1376,7 @@ mod tests {
         assert!(!check_source.contains(concat!("Arc", "Mut")));
         assert!(!listener_source.contains(concat!("Arc", "Mut")));
         assert!(!listener_source.contains(concat!("BrokerRuntime", "Inner")));
-        assert!(!listener_source.contains("MessageStore"));
+        assert!(!listener_source.contains("BrokerWriteStore"));
         assert!(!listener_source.contains("broker_task_group_or_current"));
         assert!(!listener_source.contains("TaskGroup::root"));
         assert!(!bridge_source.contains(concat!("mut_from", "_ref")));

@@ -19,18 +19,18 @@ use rocketmq_store::put_status_to_append_status;
 use rocketmq_store::store_append_receipt;
 use rocketmq_store::AppendMessageResult;
 use rocketmq_store::AppendMessageStatus;
+use rocketmq_store::BrokerStorePort;
 use rocketmq_store::MessageReadRequest;
 use rocketmq_store::MessageReadResult;
-use rocketmq_store::MessageStore;
 use rocketmq_store::MessageStoreHealthCapability;
 use rocketmq_store::MessageStoreReadCapability;
-use rocketmq_store::OwnedMessageStore;
 use rocketmq_store::PutMessageResult;
 use rocketmq_store::PutMessageStatus;
 use rocketmq_store::StoreComponent;
 use rocketmq_store::StoreErrorKind;
 use rocketmq_store::StoreHealthError;
 use rocketmq_store::StoreHealthSnapshot;
+use rocketmq_store::StorePorts;
 use rocketmq_store_api::AppendReceiptError;
 use rocketmq_store_api::AppendStatus;
 use rocketmq_store_api::Durability;
@@ -261,7 +261,7 @@ fn store_health_exposes_a_backend_neutral_canonical_projection() {
 
 fn assert_capability_contract<MS>()
 where
-    MS: MessageStore,
+    MS: BrokerStorePort,
     for<'a> MessageStoreHealthCapability<'a, MS>: StoreHealth<Snapshot = StoreHealthSnapshot>,
     for<'a> MessageStoreReadCapability<'a, MS>:
         MessageReader<Request = MessageReadRequest, Output = Option<MessageReadResult>, Error = StoreError>,
@@ -271,7 +271,7 @@ where
 
 #[test]
 fn canonical_capability_compile_fixture_is_monomorphized() {
-    assert_capability_contract::<OwnedMessageStore>();
+    assert_capability_contract::<StorePorts>();
 }
 
 #[tokio::test]

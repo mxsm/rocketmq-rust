@@ -69,7 +69,7 @@ fn query_processor_source_depends_on_the_narrow_query_capability() {
     let source = include_str!("../src/processor/query_message_processor.rs");
 
     assert!(source.contains("S: QueryMessageStore"));
-    assert!(!source.contains("QueryMessageProcessor<MS: MessageStore>"));
+    assert!(!source.contains("QueryMessageProcessor<MS: BrokerStorePort>"));
     assert!(!source.contains("LocalFileMessageStore"));
     assert!(!source.contains("RocksDBMessageStore"));
 }

@@ -799,7 +799,7 @@ mod tests {
     use tokio::net::TcpListener;
 
     use super::*;
-    use crate::base::message_store::MessageStore;
+    use crate::base::backend_ops::BackendOps;
     use crate::config::message_store_config::MessageStoreConfig;
     use crate::ha::default_ha_connection::decode_transfer_header;
     use crate::ha::default_ha_connection::encode_transfer_header;

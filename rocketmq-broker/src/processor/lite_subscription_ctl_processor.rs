@@ -26,7 +26,7 @@ use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::body::lite_subscription_ctl_request_body::LiteSubscriptionCtlRequestBody;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
-use rocketmq_store::MessageStore;
+use rocketmq_store::BrokerStorePort;
 use rocketmq_transport::Channel;
 use rocketmq_transport::ConnectionHandlerContext;
 use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
@@ -52,7 +52,7 @@ impl LiteSubscriptionCtlPolicy {
     }
 }
 
-pub(crate) struct LiteSubscriptionCtlContext<MS: MessageStore> {
+pub(crate) struct LiteSubscriptionCtlContext<MS: BrokerStorePort> {
     policy: LiteSubscriptionCtlPolicy,
     registry: LiteSubscriptionRegistry,
     event_dispatcher: LiteEventDispatcher,
@@ -62,7 +62,7 @@ pub(crate) struct LiteSubscriptionCtlContext<MS: MessageStore> {
     pop_lite_message_processor: Weak<PopLiteMessageProcessor<MS>>,
 }
 
-impl<MS: MessageStore> LiteSubscriptionCtlContext<MS> {
+impl<MS: BrokerStorePort> LiteSubscriptionCtlContext<MS> {
     #[allow(
         clippy::too_many_arguments,
         reason = "composition root lists each Lite subscription capability explicitly"
@@ -88,17 +88,17 @@ impl<MS: MessageStore> LiteSubscriptionCtlContext<MS> {
     }
 }
 
-pub(crate) struct LiteSubscriptionCtlProcessor<MS: MessageStore> {
+pub(crate) struct LiteSubscriptionCtlProcessor<MS: BrokerStorePort> {
     context: LiteSubscriptionCtlContext<MS>,
 }
 
-impl<MS: MessageStore> LiteSubscriptionCtlProcessor<MS> {
+impl<MS: BrokerStorePort> LiteSubscriptionCtlProcessor<MS> {
     pub(crate) fn new(context: LiteSubscriptionCtlContext<MS>) -> Self {
         Self { context }
     }
 }
 
-impl<MS: MessageStore> LiteSubscriptionCtlProcessor<MS> {
+impl<MS: BrokerStorePort> LiteSubscriptionCtlProcessor<MS> {
     pub(crate) async fn process_request_shared(
         &self,
         channel: Channel,
@@ -244,7 +244,7 @@ impl<MS: MessageStore> LiteSubscriptionCtlProcessor<MS> {
     }
 }
 
-impl<MS: MessageStore> RequestProcessor for LiteSubscriptionCtlProcessor<MS> {
+impl<MS: BrokerStorePort> RequestProcessor for LiteSubscriptionCtlProcessor<MS> {
     async fn process_request(
         &mut self,
         channel: Channel,
@@ -255,7 +255,7 @@ impl<MS: MessageStore> RequestProcessor for LiteSubscriptionCtlProcessor<MS> {
     }
 }
 
-impl<MS: MessageStore> LiteSubscriptionCtlProcessor<MS> {
+impl<MS: BrokerStorePort> LiteSubscriptionCtlProcessor<MS> {
     fn ensure_quota(
         &self,
         client_id: &CheetahString,

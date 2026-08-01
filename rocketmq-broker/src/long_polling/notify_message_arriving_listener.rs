@@ -17,14 +17,14 @@ use std::sync::Arc;
 use std::sync::Weak;
 
 use cheetah_string::CheetahString;
+use rocketmq_store::BrokerReadWriteStore;
 use rocketmq_store::MessageArrivingListener;
-use rocketmq_store::MessageStore;
 
 use crate::long_polling::long_polling_service::pull_request_hold_service::PullRequestHoldService;
 use crate::processor::notification_processor::NotificationProcessor;
 use crate::processor::pop_message_processor::PopMessageProcessor;
 
-pub struct NotifyMessageArrivingListener<MS: MessageStore> {
+pub struct NotifyMessageArrivingListener<MS: BrokerReadWriteStore> {
     pull_request_hold_service: Weak<PullRequestHoldService<MS>>,
     pop_message_processor: Weak<PopMessageProcessor<MS>>,
     notification_processor: Weak<NotificationProcessor<MS>>,
@@ -32,7 +32,7 @@ pub struct NotifyMessageArrivingListener<MS: MessageStore> {
 
 impl<MS> NotifyMessageArrivingListener<MS>
 where
-    MS: MessageStore + Send + Sync,
+    MS: BrokerReadWriteStore + Send + Sync,
 {
     pub fn new(
         pull_request_hold_service: &Arc<PullRequestHoldService<MS>>,
@@ -50,7 +50,7 @@ where
 #[allow(unused_variables)]
 impl<MS> MessageArrivingListener for NotifyMessageArrivingListener<MS>
 where
-    MS: MessageStore + Send + Sync,
+    MS: BrokerReadWriteStore + Send + Sync,
 {
     fn arriving(
         &self,

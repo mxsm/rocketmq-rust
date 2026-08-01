@@ -26,8 +26,8 @@ use parking_lot::Mutex;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::TaskGroup;
+use rocketmq_store::BrokerReadStore;
 use rocketmq_store::CqExtUnit;
-use rocketmq_store::MessageStore;
 use rocketmq_transport::Channel;
 use rocketmq_transport::ConnectionHandlerContext;
 use tokio::sync::Mutex as AsyncMutex;
@@ -57,7 +57,7 @@ pub(crate) trait PullRequestProcessor: Send + Sync {
     );
 }
 
-pub struct PullRequestHoldService<MS: MessageStore, RP = PullMessageProcessor<MS>> {
+pub struct PullRequestHoldService<MS: BrokerReadStore, RP = PullMessageProcessor<MS>> {
     pull_request_table: Arc<parking_lot::RwLock<HashMap<String, ManyPullRequest>>>,
     pull_message_processor: Weak<RP>,
     schedule_signal: Arc<Notify>,
@@ -71,7 +71,7 @@ pub struct PullRequestHoldService<MS: MessageStore, RP = PullMessageProcessor<MS
 
 impl<MS, RP> PullRequestHoldService<MS, RP>
 where
-    MS: MessageStore + Send + Sync,
+    MS: BrokerReadStore + Send + Sync,
     RP: PullRequestProcessor + 'static,
 {
     pub fn new(pull_message_processor: Weak<RP>) -> Self {
@@ -92,7 +92,7 @@ where
 #[allow(unused_variables)]
 impl<MS, RP> PullRequestHoldService<MS, RP>
 where
-    MS: MessageStore + Send + Sync,
+    MS: BrokerReadStore + Send + Sync,
     RP: PullRequestProcessor + 'static,
 {
     pub async fn start(this: &Arc<Self>, task_group: TaskGroup) {
@@ -403,7 +403,7 @@ mod tests {
     use std::time::Duration;
 
     use rocketmq_runtime::RuntimeContext;
-    use rocketmq_store::OwnedMessageStore;
+    use rocketmq_store::StorePorts;
 
     use super::*;
 
@@ -434,9 +434,7 @@ mod tests {
     #[tokio::test]
     async fn start_shutdown_and_restart_are_serialized() {
         let processor = Arc::new(TestPullProcessor);
-        let service = Arc::new(PullRequestHoldService::<OwnedMessageStore, _>::new(Arc::downgrade(
-            &processor,
-        )));
+        let service = Arc::new(PullRequestHoldService::<StorePorts, _>::new(Arc::downgrade(&processor)));
 
         let first_group = task_group("pull-request-hold-first");
         PullRequestHoldService::start(&service, first_group.clone()).await;
@@ -459,9 +457,7 @@ mod tests {
     fn service_uses_weak_processor_back_reference() {
         let processor = Arc::new(TestPullProcessor);
         let processor_weak = Arc::downgrade(&processor);
-        let service = Arc::new(PullRequestHoldService::<OwnedMessageStore, _>::new(
-            processor_weak.clone(),
-        ));
+        let service = Arc::new(PullRequestHoldService::<StorePorts, _>::new(processor_weak.clone()));
 
         drop(processor);
 
@@ -472,9 +468,7 @@ mod tests {
     #[tokio::test]
     async fn active_scan_does_not_keep_service_owner_alive() {
         let processor = Arc::new(TestPullProcessor);
-        let service = Arc::new(PullRequestHoldService::<OwnedMessageStore, _>::new(Arc::downgrade(
-            &processor,
-        )));
+        let service = Arc::new(PullRequestHoldService::<StorePorts, _>::new(Arc::downgrade(&processor)));
         let service_weak = Arc::downgrade(&service);
         let group = task_group("pull-request-hold-drop");
 
@@ -496,9 +490,7 @@ mod tests {
     #[tokio::test]
     async fn start_rolls_back_when_task_group_is_closed() {
         let processor = Arc::new(TestPullProcessor);
-        let service = Arc::new(PullRequestHoldService::<OwnedMessageStore, _>::new(Arc::downgrade(
-            &processor,
-        )));
+        let service = Arc::new(PullRequestHoldService::<StorePorts, _>::new(Arc::downgrade(&processor)));
         let group = task_group("pull-request-hold-closed");
         let report = group.clone().shutdown(Duration::from_secs(1)).await;
         assert!(report.is_healthy(), "{}", report.to_json());

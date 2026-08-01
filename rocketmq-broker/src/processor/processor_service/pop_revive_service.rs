@@ -44,7 +44,7 @@ use rocketmq_store::AckMessage;
 use rocketmq_store::AckMsg;
 use rocketmq_store::AppendMessageStatus;
 use rocketmq_store::BatchAckMsg;
-use rocketmq_store::MessageStore;
+use rocketmq_store::BrokerReadWriteStore;
 use rocketmq_store::PopCheckPoint;
 use rocketmq_store_api::GetStatus;
 use rocketmq_store_api::ReadOutcome;
@@ -65,7 +65,7 @@ const INFLIGHT_REVIVE_TIMEOUT_MS: u64 = 30_000;
 /// Sleep interval when waiting for in-flight requests (100ms)
 const INFLIGHT_WAIT_INTERVAL_MS: u64 = 100;
 
-pub struct PopReviveService<MS: MessageStore> {
+pub struct PopReviveService<MS: BrokerReadWriteStore> {
     ck_rewrite_intervals_in_seconds: [i32; 17],
     queue_id: i32,
     context: Arc<PopReviveContext<MS>>,
@@ -78,7 +78,7 @@ pub struct PopReviveService<MS: MessageStore> {
     running: AtomicBool,
     task_group: Mutex<Option<TaskGroup>>,
 }
-impl<MS: MessageStore> PopReviveService<MS> {
+impl<MS: BrokerReadWriteStore> PopReviveService<MS> {
     pub fn new(revive_topic: CheetahString, queue_id: i32, context: Arc<PopReviveContext<MS>>) -> Self {
         let revive_offset = context.offsets.query_offset(
             &CheetahString::from_static_str(PopAckConstants::REVIVE_GROUP),

@@ -36,8 +36,9 @@ use rocketmq_protocol::protocol::body::topic_info_wrapper::topic_config_wrapper:
 use rocketmq_protocol::protocol::header::message_operation_header::TopicRequestHeaderTrait;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
+use rocketmq_store::BrokerMasterAddressStore;
 use rocketmq_store::BrokerStatsManager;
-use rocketmq_store::MessageStore;
+use rocketmq_store::BrokerWriteStore;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::PutMessageResult;
 use rocketmq_store::StoreAppendReceipt;
@@ -254,7 +255,7 @@ trait SendMessageStorePort: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = Result<StoreAppendReceipt, StoreError>> + Send + '_>>;
 }
 
-impl<MS: MessageStore> SendMessageStorePort for EscapeBridge<MS> {
+impl<MS: BrokerWriteStore> SendMessageStorePort for EscapeBridge<MS> {
     fn health_snapshot(&self) -> Result<StoreHealthSnapshot, MessageStoreUnavailable> {
         self.send_message_store_health_snapshot()
     }
@@ -307,7 +308,7 @@ impl Clone for SendMessageStoreCapability {
 }
 
 impl SendMessageStoreCapability {
-    pub(crate) fn new<MS: MessageStore>(provider: &Arc<EscapeBridge<MS>>) -> Self {
+    pub(crate) fn new<MS: BrokerWriteStore>(provider: &Arc<EscapeBridge<MS>>) -> Self {
         let provider: Arc<dyn SendMessageStorePort> = provider.clone();
         Self {
             provider: Arc::downgrade(&provider),
@@ -371,7 +372,7 @@ impl MessageAppender<MessageExtBatch> for SendMessageStoreCapability {
 }
 
 /// Topic lookup, creation, persistence, and registration boundary for send paths.
-pub(crate) struct SendMessageTopicCapability<MS: MessageStore> {
+pub(crate) struct SendMessageTopicCapability<MS: BrokerWriteStore> {
     policy: SendMessagePolicyState,
     topic_config_manager: Arc<TopicConfigManager>,
     topic_config_coordinator: Arc<TopicConfigCoordinator>,
@@ -383,7 +384,7 @@ pub(crate) struct SendMessageTopicCapability<MS: MessageStore> {
     shutdown: Arc<AtomicBool>,
 }
 
-impl<MS: MessageStore> Clone for SendMessageTopicCapability<MS> {
+impl<MS: BrokerWriteStore> Clone for SendMessageTopicCapability<MS> {
     fn clone(&self) -> Self {
         Self {
             policy: self.policy.clone(),
@@ -401,7 +402,7 @@ impl<MS: MessageStore> Clone for SendMessageTopicCapability<MS> {
 
 impl<MS> SendMessageTopicCapability<MS>
 where
-    MS: MessageStore + Send + Sync + 'static,
+    MS: BrokerWriteStore + Send + Sync + 'static,
 {
     #[allow(
         clippy::too_many_arguments,
@@ -455,7 +456,10 @@ where
         remote_address: SocketAddr,
         queue_nums: i32,
         topic_sys_flag: u32,
-    ) -> Option<Arc<TopicConfig>> {
+    ) -> Option<Arc<TopicConfig>>
+    where
+        MS: BrokerMasterAddressStore,
+    {
         let start_time = Instant::now();
         let policy = self.policy.snapshot();
         let state_machine_version = self.message_store.state_machine_version()?;
@@ -478,7 +482,10 @@ where
         perm: u32,
         is_order: bool,
         topic_sys_flag: u32,
-    ) -> Option<Arc<TopicConfig>> {
+    ) -> Option<Arc<TopicConfig>>
+    where
+        MS: BrokerMasterAddressStore,
+    {
         let start_time = Instant::now();
         let policy = self.policy.snapshot();
         let state_machine_version = self.message_store.state_machine_version()?;
@@ -498,7 +505,10 @@ where
         creation: TopicConfigCreation,
         start_time: Instant,
         policy: Arc<SendMessagePolicy>,
-    ) -> Arc<TopicConfig> {
+    ) -> Arc<TopicConfig>
+    where
+        MS: BrokerMasterAddressStore,
+    {
         let registration = self.clone();
         complete_topic_config_creation(
             Arc::clone(&self.topic_config_coordinator),
@@ -513,7 +523,10 @@ where
         .await
     }
 
-    async fn register_update(&self, update: TopicConfigUpdate) {
+    async fn register_update(&self, update: TopicConfigUpdate)
+    where
+        MS: BrokerMasterAddressStore,
+    {
         let policy = self.policy.snapshot();
         if policy.enable_single_topic_register {
             self.register_single_topic(update.topic_config, &policy).await;
@@ -550,7 +563,10 @@ where
             .await;
     }
 
-    async fn register_incremental_topic(&self, update: TopicConfigUpdate, policy: &SendMessagePolicy) {
+    async fn register_incremental_topic(&self, update: TopicConfigUpdate, policy: &SendMessagePolicy)
+    where
+        MS: BrokerMasterAddressStore,
+    {
         if self.shutdown.load(Ordering::Acquire) {
             info!("Skip send topic registration after broker shutdown");
             return;
@@ -620,7 +636,9 @@ where
     async fn handle_register_result(
         &self,
         register_broker_result: Vec<rocketmq_protocol::protocol::namesrv::RegisterBrokerResult>,
-    ) {
+    ) where
+        MS: BrokerMasterAddressStore,
+    {
         let Some(result) = register_broker_result.into_iter().next() else {
             return;
         };
@@ -638,7 +656,7 @@ where
 }
 
 /// Complete dependency set shared by send and reply request processors.
-pub(crate) struct SendMessageProcessorContext<MS: MessageStore> {
+pub(crate) struct SendMessageProcessorContext<MS: BrokerWriteStore> {
     pub(crate) policy: SendMessagePolicyState,
     pub(crate) telemetry: TelemetryHandle,
     pub(crate) store: SendMessageStoreCapability,
@@ -650,7 +668,7 @@ pub(crate) struct SendMessageProcessorContext<MS: MessageStore> {
     pub(crate) producer_reply_channels: ProducerReplyChannelRegistry,
 }
 
-impl<MS: MessageStore> Clone for SendMessageProcessorContext<MS> {
+impl<MS: BrokerWriteStore> Clone for SendMessageProcessorContext<MS> {
     fn clone(&self) -> Self {
         Self {
             policy: self.policy.clone(),
@@ -666,7 +684,7 @@ impl<MS: MessageStore> Clone for SendMessageProcessorContext<MS> {
     }
 }
 
-impl<MS: MessageStore> SendMessageProcessorContext<MS> {
+impl<MS: BrokerWriteStore> SendMessageProcessorContext<MS> {
     #[allow(
         clippy::too_many_arguments,
         reason = "constructor enumerates the complete send/reply processor capability boundary"

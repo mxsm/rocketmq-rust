@@ -31,8 +31,8 @@ use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_detail::Topic
 use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::MetadataDeadline;
 use rocketmq_runtime::MetadataIoActor;
+use rocketmq_store::BrokerReplicationStore;
 use rocketmq_store::HAConnectionStateNotificationRequest;
-use rocketmq_store::MessageStore;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::TimerMessageStore;
 use rocketmq_transport::RemotingHelper;
@@ -154,11 +154,11 @@ impl BrokerPreOnlinePolicy {
     }
 }
 
-pub(crate) struct BrokerPreOnlineStoreCapability<MS: MessageStore> {
+pub(crate) struct BrokerPreOnlineStoreCapability<MS: BrokerReplicationStore> {
     escape_bridge: Weak<EscapeBridge<MS>>,
 }
 
-impl<MS: MessageStore> BrokerPreOnlineStoreCapability<MS> {
+impl<MS: BrokerReplicationStore> BrokerPreOnlineStoreCapability<MS> {
     pub(crate) fn new(escape_bridge: &Arc<EscapeBridge<MS>>) -> Self {
         Self {
             escape_bridge: Arc::downgrade(escape_bridge),
@@ -218,7 +218,7 @@ impl<MS: MessageStore> BrokerPreOnlineStoreCapability<MS> {
     }
 }
 
-impl<MS: MessageStore> Clone for BrokerPreOnlineStoreCapability<MS> {
+impl<MS: BrokerReplicationStore> Clone for BrokerPreOnlineStoreCapability<MS> {
     fn clone(&self) -> Self {
         Self {
             escape_bridge: Weak::clone(&self.escape_bridge),
@@ -226,7 +226,7 @@ impl<MS: MessageStore> Clone for BrokerPreOnlineStoreCapability<MS> {
     }
 }
 
-pub(crate) struct BrokerSpecialServiceCapability<MS: MessageStore> {
+pub(crate) struct BrokerSpecialServiceCapability<MS: BrokerReplicationStore> {
     schedule: Weak<ScheduleMessageService<MS>>,
     timer: Option<Weak<TimerMessageStore>>,
     transaction_check: Option<Weak<TransactionalMessageCheckService<MS>>>,
@@ -237,7 +237,7 @@ pub(crate) struct BrokerSpecialServiceCapability<MS: MessageStore> {
     shutdown: Arc<AtomicBool>,
 }
 
-impl<MS: MessageStore> BrokerSpecialServiceCapability<MS> {
+impl<MS: BrokerReplicationStore> BrokerSpecialServiceCapability<MS> {
     #[allow(
         clippy::too_many_arguments,
         reason = "the composition root lists each role-sensitive service capability explicitly"
@@ -316,7 +316,7 @@ impl<MS: MessageStore> BrokerSpecialServiceCapability<MS> {
     }
 }
 
-impl<MS: MessageStore> Clone for BrokerSpecialServiceCapability<MS> {
+impl<MS: BrokerReplicationStore> Clone for BrokerSpecialServiceCapability<MS> {
     fn clone(&self) -> Self {
         Self {
             schedule: Weak::clone(&self.schedule),
@@ -502,7 +502,7 @@ impl Clone for BrokerRegistrationCapability {
     }
 }
 
-pub(crate) struct BrokerOnlineTransitionCapability<MS: MessageStore> {
+pub(crate) struct BrokerOnlineTransitionCapability<MS: BrokerReplicationStore> {
     policy: BrokerPreOnlinePolicy,
     role_state: Arc<BrokerOnlineRoleState>,
     special_services: BrokerSpecialServiceCapability<MS>,
@@ -510,7 +510,7 @@ pub(crate) struct BrokerOnlineTransitionCapability<MS: MessageStore> {
     shutdown: Arc<AtomicBool>,
 }
 
-impl<MS: MessageStore> BrokerOnlineTransitionCapability<MS> {
+impl<MS: BrokerReplicationStore> BrokerOnlineTransitionCapability<MS> {
     pub(crate) fn new(
         policy: BrokerPreOnlinePolicy,
         role_state: Arc<BrokerOnlineRoleState>,
@@ -559,7 +559,7 @@ impl<MS: MessageStore> BrokerOnlineTransitionCapability<MS> {
     }
 }
 
-pub(crate) struct BrokerPreOnlineContext<MS: MessageStore> {
+pub(crate) struct BrokerPreOnlineContext<MS: BrokerReplicationStore> {
     policy: BrokerPreOnlinePolicy,
     role_state: Arc<BrokerOnlineRoleState>,
     broker_outer_api: BrokerOuterAPI,
@@ -573,7 +573,7 @@ pub(crate) struct BrokerPreOnlineContext<MS: MessageStore> {
     blocking: Option<BlockingExecutor>,
 }
 
-impl<MS: MessageStore> BrokerPreOnlineContext<MS> {
+impl<MS: BrokerReplicationStore> BrokerPreOnlineContext<MS> {
     #[allow(
         clippy::too_many_arguments,
         reason = "the composition root lists the complete broker pre-online capability boundary"

@@ -21,7 +21,7 @@ use std::sync::Arc;
 use tracing::error;
 use tracing::info;
 
-use crate::base::message_store::MessageStore;
+use crate::capability::BrokerReadStore;
 use crate::stats::broker_stats_manager::BrokerStatsManager;
 
 pub struct BrokerStats<MS> {
@@ -116,7 +116,7 @@ impl<MS> BrokerStats<MS> {
     }
 }
 
-impl<MS: MessageStore> BrokerStats<MS> {
+impl<MS: BrokerReadStore> BrokerStats<MS> {
     /// Creates broker statistics from a message store without retaining the store handle.
     ///
     /// New composition roots should prefer [`Self::from_manager`] and inject the observer

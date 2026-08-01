@@ -20,7 +20,8 @@ use crate::config::broker_config::BrokerConfig;
 use rocketmq_runtime::task::service_task::ServiceTask;
 use rocketmq_runtime::task::service_task::ServiceTaskContext;
 use rocketmq_runtime::task::ServiceManager;
-use rocketmq_store::MessageStore;
+use rocketmq_store::BrokerMasterAddressStore;
+use rocketmq_store::BrokerWriteStore;
 use tracing::info;
 use tracing::warn;
 
@@ -28,17 +29,17 @@ use crate::transaction::queue::default_transactional_message_check_listener::Def
 use crate::transaction::queue::default_transactional_message_service::DefaultTransactionalMessageService;
 use crate::transaction::transactional_message_service::TransactionalMessageService;
 
-pub struct TransactionalMessageCheckService<MS: MessageStore> {
+pub struct TransactionalMessageCheckService<MS: BrokerWriteStore + BrokerMasterAddressStore> {
     task_impl: ServiceManager<TransactionalMessageCheckServiceInner<MS>>,
 }
 
-struct TransactionalMessageCheckServiceInner<MS: MessageStore> {
+struct TransactionalMessageCheckServiceInner<MS: BrokerWriteStore + BrokerMasterAddressStore> {
     broker_config: Arc<BrokerConfig>,
     transactional_message_service: Arc<DefaultTransactionalMessageService<MS>>,
     transactional_message_check_listener: DefaultTransactionalMessageCheckListener,
 }
 
-impl<MS: MessageStore> ServiceTask for TransactionalMessageCheckServiceInner<MS> {
+impl<MS: BrokerWriteStore + BrokerMasterAddressStore> ServiceTask for TransactionalMessageCheckServiceInner<MS> {
     fn get_service_name(&self) -> String {
         "TransactionalMessageCheckService".into()
     }
@@ -82,7 +83,7 @@ impl<MS: MessageStore> ServiceTask for TransactionalMessageCheckServiceInner<MS>
     }
 }
 
-impl<MS: MessageStore> TransactionalMessageCheckService<MS> {
+impl<MS: BrokerWriteStore + BrokerMasterAddressStore> TransactionalMessageCheckService<MS> {
     pub fn new(
         broker_config: Arc<BrokerConfig>,
         transactional_message_service: Arc<DefaultTransactionalMessageService<MS>>,
@@ -97,7 +98,7 @@ impl<MS: MessageStore> TransactionalMessageCheckService<MS> {
     }
 }
 
-impl<MS: MessageStore> TransactionalMessageCheckService<MS> {
+impl<MS: BrokerWriteStore + BrokerMasterAddressStore> TransactionalMessageCheckService<MS> {
     pub async fn start(&self) -> rocketmq_error::RocketMQResult<()> {
         self.task_impl
             .start()

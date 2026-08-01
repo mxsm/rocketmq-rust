@@ -35,11 +35,12 @@ use rocketmq_store_api::checkpoint::CheckpointRestoreVerification as ReleaseChec
 use rocketmq_store_api::checkpoint::CheckpointStorageIdentity as ReleaseCheckpointStorageIdentity;
 use rocketmq_store_api::checkpoint::CheckpointValidationError as ReleaseCheckpointValidationError;
 use rocketmq_store_api::checkpoint::CHECKPOINT_SCHEMA_VERSION as RELEASE_CHECKPOINT_SCHEMA_VERSION;
+use rocketmq_store_api::file_uri_to_path;
+use rocketmq_store_api::hash_checkpoint_directory;
+use rocketmq_store_api::path_to_file_uri;
+use rocketmq_store_api::CheckpointArtifactError;
 use rocketmq_store_api::ReleaseCheckpointStore;
-use rocketmq_store_local::release_checkpoint::hash_checkpoint_directory;
-use rocketmq_store_local::release_checkpoint::path_to_file_uri;
-use rocketmq_store_local::release_checkpoint::LocalReleaseCheckpointError;
-use rocketmq_store_local::release_checkpoint::RELEASE_CHECKPOINT_MANIFEST_FILE;
+use rocketmq_store_api::RELEASE_CHECKPOINT_MANIFEST_FILE;
 use thiserror::Error;
 
 use crate::runtime::RocksDbRuntimeScope;
@@ -202,8 +203,8 @@ impl ReleaseCheckpointStore for RocksDbReleaseCheckpointService {
             return Err(RocksDbReleaseCheckpointError::StorageIdentityMismatch);
         }
         let deadline = authorization_deadline(authorization)?;
-        let checkpoint_path = rocketmq_store_local::release_checkpoint::file_uri_to_path(&manifest.artifact.uri)
-            .map_err(RocksDbReleaseCheckpointError::Artifact)?;
+        let checkpoint_path =
+            file_uri_to_path(&manifest.artifact.uri).map_err(RocksDbReleaseCheckpointError::Artifact)?;
         let checkpoint_for_verify = checkpoint_path.clone();
         let expected_sha256 = manifest.artifact.sha256.clone();
         let expected_length = manifest.artifact.length_bytes;
@@ -315,7 +316,7 @@ pub enum RocksDbReleaseCheckpointError {
     #[error("RocksDB operation failed: {0}")]
     Store(String),
     #[error("checkpoint artifact failed: {0}")]
-    Artifact(#[source] LocalReleaseCheckpointError),
+    Artifact(#[source] CheckpointArtifactError),
     #[error("failed to serialize RocksDB checkpoint manifest: {0}")]
     Serialize(String),
     #[error("system clock error: {0}")]

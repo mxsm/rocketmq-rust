@@ -27,7 +27,7 @@ use rocketmq_runtime::common::file_utils;
 use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::MetadataDeadline;
 use rocketmq_runtime::MetadataIoActor;
-use rocketmq_store::MessageStore;
+use rocketmq_store::BrokerReplicationStore;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::TimerMessageStore;
 use tracing::error;
@@ -45,7 +45,7 @@ use crate::topic::manager::topic_config_coordinator::TopicConfigCoordinator;
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
 use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager;
 
-pub(crate) struct SlaveSynchronize<MS: MessageStore> {
+pub(crate) struct SlaveSynchronize<MS: BrokerReplicationStore> {
     context: SlaveSynchronizeContext<MS>,
     master_addr: Arc<SlaveMasterAddress>,
 }
@@ -83,11 +83,11 @@ impl SlaveMessageRequestModeCapability {
     }
 }
 
-struct SlaveConsumerOffsetCapability<MS: MessageStore> {
+struct SlaveConsumerOffsetCapability<MS: BrokerReplicationStore> {
     manager: Arc<OnceLock<Weak<ConsumerOffsetManager<MS>>>>,
 }
 
-impl<MS: MessageStore> Default for SlaveConsumerOffsetCapability<MS> {
+impl<MS: BrokerReplicationStore> Default for SlaveConsumerOffsetCapability<MS> {
     fn default() -> Self {
         Self {
             manager: Arc::new(OnceLock::new()),
@@ -95,7 +95,7 @@ impl<MS: MessageStore> Default for SlaveConsumerOffsetCapability<MS> {
     }
 }
 
-impl<MS: MessageStore> SlaveConsumerOffsetCapability<MS> {
+impl<MS: BrokerReplicationStore> SlaveConsumerOffsetCapability<MS> {
     fn bind(&self, manager: &Arc<ConsumerOffsetManager<MS>>) {
         self.manager.get_or_init(|| Arc::downgrade(manager));
     }
@@ -126,11 +126,11 @@ impl SlaveSubscriptionGroupCapability {
     }
 }
 
-pub(crate) struct SlaveTimerStoreCapability<MS: MessageStore> {
+pub(crate) struct SlaveTimerStoreCapability<MS: BrokerReplicationStore> {
     escape_bridge: Weak<EscapeBridge<MS>>,
 }
 
-impl<MS: MessageStore> SlaveTimerStoreCapability<MS> {
+impl<MS: BrokerReplicationStore> SlaveTimerStoreCapability<MS> {
     pub(crate) fn new(escape_bridge: &Arc<EscapeBridge<MS>>) -> Self {
         Self {
             escape_bridge: Arc::downgrade(escape_bridge),
@@ -150,7 +150,7 @@ impl<MS: MessageStore> SlaveTimerStoreCapability<MS> {
     }
 }
 
-pub(crate) struct SlaveSynchronizeContext<MS: MessageStore> {
+pub(crate) struct SlaveSynchronizeContext<MS: BrokerReplicationStore> {
     policy: SlaveSynchronizePolicy,
     broker_outer_api: BrokerOuterAPI,
     topic_config_manager: Weak<TopicConfigManager>,
@@ -165,7 +165,7 @@ pub(crate) struct SlaveSynchronizeContext<MS: MessageStore> {
     blocking: Option<BlockingExecutor>,
 }
 
-impl<MS: MessageStore> SlaveSynchronizeContext<MS> {
+impl<MS: BrokerReplicationStore> SlaveSynchronizeContext<MS> {
     #[allow(
         clippy::too_many_arguments,
         reason = "the composition root wires explicit slave synchronization capabilities"
@@ -271,7 +271,7 @@ impl SlaveMasterAddress {
 
 impl<MS> SlaveSynchronize<MS>
 where
-    MS: MessageStore,
+    MS: BrokerReplicationStore,
 {
     pub(crate) fn new(context: SlaveSynchronizeContext<MS>) -> Self {
         Self::new_with_master_addr(context, Arc::new(SlaveMasterAddress::default()))
@@ -681,7 +681,7 @@ mod tests {
     use crate::config::broker_config::BrokerConfig;
     use cheetah_string::CheetahString;
     use rocketmq_store::MessageStoreConfig;
-    use rocketmq_store::OwnedMessageStore;
+    use rocketmq_store::StorePorts;
 
     use super::SlaveMasterAddress;
     use super::SlaveMessageRequestModeCapability;
@@ -752,7 +752,7 @@ mod tests {
     fn slave_synchronize_weak_providers_do_not_keep_owners_alive() {
         let broker_config = Arc::new(BrokerConfig::default());
         let message_store_config = Arc::new(MessageStoreConfig::default());
-        let offset_manager = Arc::new(ConsumerOffsetManager::<OwnedMessageStore>::new(
+        let offset_manager = Arc::new(ConsumerOffsetManager::<StorePorts>::new(
             Arc::clone(&broker_config),
             Arc::clone(&message_store_config),
         ));

@@ -43,13 +43,16 @@ use rocketmq_store_api::checkpoint::CheckpointRestoreVerification as ReleaseChec
 use rocketmq_store_api::checkpoint::CheckpointStorageIdentity as ReleaseCheckpointStorageIdentity;
 use rocketmq_store_api::checkpoint::CheckpointValidationError as ReleaseCheckpointValidationError;
 use rocketmq_store_api::checkpoint::CHECKPOINT_SCHEMA_VERSION as RELEASE_CHECKPOINT_SCHEMA_VERSION;
+use rocketmq_store_api::file_uri_to_path;
+use rocketmq_store_api::hash_checkpoint_directory;
+use rocketmq_store_api::path_to_file_uri;
+use rocketmq_store_api::CheckpointArtifactError;
+use rocketmq_store_api::CheckpointDirectoryDigest;
 use rocketmq_store_api::ReleaseCheckpointStore;
+use rocketmq_store_api::RELEASE_CHECKPOINT_MANIFEST_FILE;
 use sha2::Digest;
 use sha2::Sha256;
 use thiserror::Error;
-
-/// Manifest stored beside every local checkpoint payload.
-pub const RELEASE_CHECKPOINT_MANIFEST_FILE: &str = ".rocketmq-release-checkpoint.json";
 
 /// Store-specific barrier and restore verifier injected by the composition root.
 ///
@@ -271,72 +274,6 @@ where
     }
 }
 
-/// Deterministic SHA-256 and byte length for a checkpoint directory.
-#[doc(hidden)]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CheckpointDirectoryDigest {
-    pub length_bytes: u64,
-    pub sha256: String,
-}
-
-/// Hashes all regular files in stable relative-path order.
-///
-/// Symlinks and the embedded manifest are rejected/skipped respectively. The
-/// byte budget is enforced while reading so an artifact cannot bypass the
-/// configured maintenance resource limit.
-#[doc(hidden)]
-pub fn hash_checkpoint_directory(
-    checkpoint_root: &Path,
-    max_checkpoint_bytes: u64,
-) -> Result<CheckpointDirectoryDigest, LocalReleaseCheckpointError> {
-    let checkpoint_root = checkpoint_root
-        .canonicalize()
-        .map_err(|source| io_error("canonicalize checkpoint", checkpoint_root, source))?;
-    let files = collect_regular_files(&checkpoint_root)?;
-    let mut hasher = Sha256::new();
-    let mut length_bytes = 0_u64;
-    let mut buffer = vec![0_u8; 64 * 1024];
-
-    for (relative, path) in files {
-        if relative == Path::new(RELEASE_CHECKPOINT_MANIFEST_FILE) {
-            continue;
-        }
-        hash_relative_path(&mut hasher, &relative);
-        let mut input =
-            BufReader::new(File::open(&path).map_err(|source| io_error("open checkpoint file", &path, source))?);
-        loop {
-            let read = input
-                .read(&mut buffer)
-                .map_err(|source| io_error("read checkpoint file", &path, source))?;
-            if read == 0 {
-                break;
-            }
-            length_bytes =
-                length_bytes
-                    .checked_add(read as u64)
-                    .ok_or(LocalReleaseCheckpointError::CheckpointTooLarge {
-                        actual: u64::MAX,
-                        maximum: max_checkpoint_bytes,
-                    })?;
-            if length_bytes > max_checkpoint_bytes {
-                return Err(LocalReleaseCheckpointError::CheckpointTooLarge {
-                    actual: length_bytes,
-                    maximum: max_checkpoint_bytes,
-                });
-            }
-            hasher.update(&buffer[..read]);
-        }
-    }
-
-    if length_bytes == 0 {
-        return Err(LocalReleaseCheckpointError::EmptyCheckpoint);
-    }
-    Ok(CheckpointDirectoryDigest {
-        length_bytes,
-        sha256: hex::encode(hasher.finalize()),
-    })
-}
-
 fn create_atomic_checkpoint(
     source_root: &Path,
     checkpoint_root: &Path,
@@ -539,35 +476,6 @@ fn sync_directory(_path: &Path) -> Result<(), LocalReleaseCheckpointError> {
     Ok(())
 }
 
-/// Converts a local path to the file URI emitted in checkpoint manifests.
-#[doc(hidden)]
-pub fn path_to_file_uri(path: &Path) -> String {
-    let raw = path.to_string_lossy();
-    #[cfg(windows)]
-    let raw = raw.strip_prefix(r"\\?\").map_or_else(|| raw.to_string(), str::to_owned);
-    #[cfg(not(windows))]
-    let raw = raw.into_owned();
-    let portable = raw.replace('\\', "/");
-    if portable.starts_with('/') {
-        format!("file://{portable}")
-    } else {
-        format!("file:///{portable}")
-    }
-}
-
-/// Resolves a checkpoint URI created by [`path_to_file_uri`].
-#[doc(hidden)]
-pub fn file_uri_to_path(uri: &str) -> Result<PathBuf, LocalReleaseCheckpointError> {
-    let raw = uri
-        .strip_prefix("file:///")
-        .ok_or_else(|| LocalReleaseCheckpointError::UnsupportedUri(uri.to_string()))?;
-    #[cfg(windows)]
-    let path = PathBuf::from(raw.replace('/', "\\"));
-    #[cfg(not(windows))]
-    let path = PathBuf::from(format!("/{raw}"));
-    Ok(path)
-}
-
 fn validate_authorization(authorization: &MaintenanceAuthorizationGrant) -> Result<(), LocalReleaseCheckpointError> {
     if authorization.capability() != MaintenanceCapability::ReleaseCheckpoint {
         return Err(LocalReleaseCheckpointError::UnauthorizedCapability);
@@ -655,8 +563,8 @@ pub enum LocalReleaseCheckpointError {
     UnsupportedFileType(PathBuf),
     #[error("checkpoint path escaped its root: {0}")]
     PathEscaped(PathBuf),
-    #[error("unsupported checkpoint URI: {0}")]
-    UnsupportedUri(String),
+    #[error("checkpoint artifact failed: {0}")]
+    Artifact(#[from] CheckpointArtifactError),
     #[error("failed to serialize checkpoint manifest")]
     Serialize(#[source] serde_json::Error),
     #[error("system clock error")]

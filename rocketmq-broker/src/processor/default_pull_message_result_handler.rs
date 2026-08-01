@@ -38,10 +38,10 @@ use rocketmq_protocol::protocol::subscription::subscription_group_config::Subscr
 use rocketmq_protocol::protocol::topic::OffsetMovedEvent;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::ArcMessageFilter;
+use rocketmq_store::BrokerReadStore;
 use rocketmq_store::BrokerStatsManager;
 use rocketmq_store::GetMessageResult;
 use rocketmq_store::GetMessageStatus;
-use rocketmq_store::MessageStore;
 use rocketmq_store::StatsType;
 use rocketmq_transport::Channel;
 use rocketmq_transport::ConnectionHandlerContext;
@@ -58,13 +58,13 @@ use crate::processor::pull_message_processor::is_broadcast;
 use crate::processor::pull_message_processor::rewrite_response_for_static_topic;
 use crate::processor::pull_message_result_handler::PullMessageResultHandler;
 
-pub struct DefaultPullMessageResultHandler<MS: MessageStore> {
+pub struct DefaultPullMessageResultHandler<MS: BrokerReadStore> {
     context: Arc<PullMessageProcessorContext<MS>>,
     consume_message_hook_list: Arc<Vec<Box<dyn ConsumeMessageHook>>>,
     broker_metrics_manager: Option<Arc<BrokerMetricsManager>>,
 }
 
-impl<MS: MessageStore> DefaultPullMessageResultHandler<MS> {
+impl<MS: BrokerReadStore> DefaultPullMessageResultHandler<MS> {
     pub fn new(
         consume_message_hook_list: Arc<Vec<Box<dyn ConsumeMessageHook>>>,
         context: Arc<PullMessageProcessorContext<MS>>,
@@ -78,7 +78,7 @@ impl<MS: MessageStore> DefaultPullMessageResultHandler<MS> {
     }
 }
 
-impl<MS: MessageStore> PullMessageResultHandler for DefaultPullMessageResultHandler<MS> {
+impl<MS: BrokerReadStore> PullMessageResultHandler for DefaultPullMessageResultHandler<MS> {
     async fn handle(
         &self,
         mut get_message_result: GetMessageResult,
@@ -298,7 +298,7 @@ impl<MS: MessageStore> PullMessageResultHandler for DefaultPullMessageResultHand
     }
 }
 
-impl<MS: MessageStore> DefaultPullMessageResultHandler<MS> {
+impl<MS: BrokerReadStore> DefaultPullMessageResultHandler<MS> {
     /// Read message result and return (body bytes, last store timestamp)
     fn read_get_message_result(
         &self,
@@ -455,7 +455,7 @@ impl<MS: MessageStore> DefaultPullMessageResultHandler<MS> {
     }
 }
 
-impl<MS: MessageStore> DefaultPullMessageResultHandler<MS> {
+impl<MS: BrokerReadStore> DefaultPullMessageResultHandler<MS> {
     fn compose_response_header(
         context: &PullMessageProcessorContext<MS>,
         request_header: &PullMessageRequestHeader,

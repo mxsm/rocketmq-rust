@@ -42,7 +42,7 @@ use rocketmq_protocol::protocol::static_topic::topic_config_and_queue_mapping::T
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
 use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_protocol::protocol::RemotingSerializable;
-use rocketmq_store::MessageStore;
+use rocketmq_store::BrokerAdminStore;
 use rocketmq_transport::Channel;
 use rocketmq_transport::ConnectionHandlerContext;
 use std::collections::HashMap;
@@ -125,7 +125,7 @@ impl TopicRequestHandler {
         Self
     }
 
-    pub async fn update_and_create_topic<MS: MessageStore>(
+    pub async fn update_and_create_topic<MS: BrokerAdminStore>(
         &self,
         broker_config_request_handler: &BrokerConfigRequestHandler<MS>,
         channel: Channel,
@@ -222,7 +222,7 @@ impl TopicRequestHandler {
         Ok(Some(response.set_code(ResponseCode::Success)))
     }
 
-    pub async fn update_topic_config_cas<MS: MessageStore>(
+    pub async fn update_topic_config_cas<MS: BrokerAdminStore>(
         &self,
         broker_config_request_handler: &BrokerConfigRequestHandler<MS>,
         channel: Channel,
@@ -386,7 +386,7 @@ impl TopicRequestHandler {
         ))
     }
 
-    pub async fn update_and_create_static_topic<MS: MessageStore>(
+    pub async fn update_and_create_static_topic<MS: BrokerAdminStore>(
         &self,
         broker_config_request_handler: &BrokerConfigRequestHandler<MS>,
         channel: Channel,
@@ -486,7 +486,7 @@ impl TopicRequestHandler {
         Ok(Some(response.set_code(ResponseCode::Success)))
     }
 
-    pub async fn update_and_create_topic_list<MS: MessageStore>(
+    pub async fn update_and_create_topic_list<MS: BrokerAdminStore>(
         &self,
         broker_config_request_handler: &BrokerConfigRequestHandler<MS>,
         channel: Channel,
@@ -560,7 +560,7 @@ impl TopicRequestHandler {
         Ok(Some(response.set_code(ResponseCode::Success)))
     }
 
-    pub async fn delete_topic<MS: MessageStore>(
+    pub async fn delete_topic<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         channel: Channel,
@@ -646,7 +646,7 @@ impl TopicRequestHandler {
         Ok(Some(response.set_code(ResponseCode::Success)))
     }
 
-    pub async fn get_all_topic_config<MS: MessageStore>(
+    pub async fn get_all_topic_config<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
@@ -701,7 +701,7 @@ impl TopicRequestHandler {
         Ok(Some(response))
     }
 
-    pub async fn get_topic_stats_info<MS: MessageStore>(
+    pub async fn get_topic_stats_info<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
@@ -762,7 +762,7 @@ impl TopicRequestHandler {
         Ok(Some(response))
     }
 
-    pub async fn get_topic_config<MS: MessageStore>(
+    pub async fn get_topic_config<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
@@ -819,7 +819,7 @@ impl TopicRequestHandler {
         Ok(Some(response))
     }
 
-    pub async fn query_topic_consume_by_who<MS: MessageStore>(
+    pub async fn query_topic_consume_by_who<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
@@ -842,7 +842,7 @@ impl TopicRequestHandler {
         Ok(Some(response))
     }
 
-    pub async fn query_topics_by_consumer<MS: MessageStore>(
+    pub async fn query_topics_by_consumer<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
@@ -870,7 +870,7 @@ impl TopicRequestHandler {
         Ok(Some(response))
     }
 
-    pub async fn clean_unused_topic<MS: MessageStore>(
+    pub async fn clean_unused_topic<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
@@ -893,7 +893,7 @@ impl TopicRequestHandler {
         ))
     }
 
-    fn delete_topic_in_broker<MS: MessageStore>(
+    fn delete_topic_in_broker<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         topic: &CheetahString,

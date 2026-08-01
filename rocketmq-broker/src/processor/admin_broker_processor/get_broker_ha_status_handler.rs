@@ -15,7 +15,7 @@
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_store::MessageStore;
+use rocketmq_store::BrokerAdminStore;
 use rocketmq_transport::Channel;
 use rocketmq_transport::ConnectionHandlerContext;
 
@@ -28,7 +28,7 @@ impl GetBrokerHaStatusHandler {
         Self
     }
 
-    pub async fn get_broker_ha_status<MS: MessageStore>(
+    pub async fn get_broker_ha_status<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,

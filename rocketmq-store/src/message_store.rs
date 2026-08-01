@@ -13,7 +13,6 @@
 // limitations under the License.
 
 pub mod local_file_message_store;
-mod owned_message_store;
 pub mod recovery;
 mod release_checkpoint;
 pub(crate) mod runtime_state;
@@ -21,7 +20,6 @@ pub(crate) mod runtime_state;
 #[cfg(feature = "rocksdb_store")]
 pub mod rocksdb_message_store;
 
-pub use owned_message_store::OwnedMessageStore;
 pub use release_checkpoint::StoreReleaseCheckpointError;
 pub use release_checkpoint::StoreReleaseCheckpointService;
 
@@ -42,17 +40,17 @@ use rocketmq_protocol::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_runtime::common::system_clock::SystemClock;
 
 use crate::base::allocate_mapped_file_service::AllocateMappedFileService;
+use crate::base::backend_ops::BackendOps;
+use crate::base::backend_ops::MessageStoreShutdownReport;
+use crate::base::backend_ops::PutMessagePreflight;
+use crate::base::backend_ops::StateMachineVersionView;
+use crate::base::backend_ops::StoreHealthSnapshot;
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
 use crate::base::dispatch_request::DispatchRequest;
 use crate::base::get_message_result::GetMessageResult;
 use crate::base::message_arriving_listener::MessageArrivingListener;
 use crate::base::message_result::AppendMessageResult;
 use crate::base::message_result::PutMessageResult;
-use crate::base::message_store::MessageStore;
-use crate::base::message_store::MessageStoreShutdownReport;
-use crate::base::message_store::PutMessagePreflight;
-use crate::base::message_store::StateMachineVersionView;
-use crate::base::message_store::StoreHealthSnapshot;
 use crate::base::query_message_result::QueryMessageResult;
 use crate::base::select_result::SelectMappedBufferResult;
 use crate::base::store_checkpoint::StoreCheckpoint;
@@ -72,6 +70,7 @@ use crate::queue::ArcConsumeQueue;
 use crate::stats::broker_stats_manager::BrokerStatsManager;
 use crate::store::running_flags::RunningFlags;
 use crate::store_error::StoreError;
+use crate::store_ports::StorePorts;
 use crate::timer::timer_message_store::TimerMessageStore;
 
 macro_rules! store_composition_methods {
@@ -126,7 +125,7 @@ macro_rules! store_composition_methods {
     };
 }
 
-impl OwnedMessageStore {
+impl StorePorts {
     store_composition_methods!();
 }
 
@@ -627,7 +626,7 @@ macro_rules! message_store_methods {
         delegate_store!(self, increase_offset(msg, message_num));
     }
 
-    fn get_master_store_in_process<M: MessageStore + Send + Sync + 'static>(&self) -> Option<Arc<M>> {
+    fn get_master_store_in_process<M: BackendOps + Send + Sync + 'static>(&self) -> Option<Arc<M>> {
         match self {
             Self::LocalFileStore(store) => store.get_master_store_in_process::<M>(),
             #[cfg(feature = "rocksdb_store")]
@@ -635,7 +634,7 @@ macro_rules! message_store_methods {
         }
     }
 
-    fn set_master_store_in_process<M: MessageStore + Send + Sync + 'static>(&self, master_store_in_process: Arc<M>) {
+    fn set_master_store_in_process<M: BackendOps + Send + Sync + 'static>(&self, master_store_in_process: Arc<M>) {
         match self {
             Self::LocalFileStore(store) => store.set_master_store_in_process(master_store_in_process),
             #[cfg(feature = "rocksdb_store")]
@@ -793,6 +792,6 @@ macro_rules! message_store_methods {
     };
 }
 
-impl MessageStore for OwnedMessageStore {
+impl BackendOps for StorePorts {
     message_store_methods!();
 }

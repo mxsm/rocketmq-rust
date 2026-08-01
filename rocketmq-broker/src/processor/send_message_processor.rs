@@ -65,8 +65,9 @@ use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_context::Topi
 use rocketmq_runtime::common::time_utils;
 use rocketmq_runtime::common::util_all;
 use rocketmq_store::store_append_receipt;
+use rocketmq_store::BrokerMasterAddressStore;
 use rocketmq_store::BrokerStatsManager;
-use rocketmq_store::MessageStore;
+use rocketmq_store::BrokerWriteStore;
 use rocketmq_store::PutMessageResult;
 use rocketmq_store::PutMessageStatus;
 use rocketmq_store::StatsType;
@@ -107,11 +108,11 @@ use message_builder::enrich_send_message_request_properties;
 use message_builder::recall_handle_topic_and_timestamp;
 use message_builder::should_create_uniq_key;
 
-pub struct SendMessageProcessor<MS: MessageStore, TS> {
+pub struct SendMessageProcessor<MS: BrokerWriteStore, TS> {
     inner: Arc<Inner<MS, TS>>,
 }
 
-impl<MS: MessageStore, TS> Clone for SendMessageProcessor<MS, TS> {
+impl<MS: BrokerWriteStore, TS> Clone for SendMessageProcessor<MS, TS> {
     fn clone(&self) -> Self {
         Self {
             inner: Arc::clone(&self.inner),
@@ -121,7 +122,7 @@ impl<MS: MessageStore, TS> Clone for SendMessageProcessor<MS, TS> {
 
 impl<MS, TS> RequestProcessor for SendMessageProcessor<MS, TS>
 where
-    MS: MessageStore,
+    MS: BrokerWriteStore + BrokerMasterAddressStore,
     TS: TransactionalMessageService,
 {
     async fn process_request(
@@ -177,7 +178,7 @@ where
 
 impl<MS, TS> SendMessageProcessor<MS, TS>
 where
-    MS: MessageStore,
+    MS: BrokerWriteStore + BrokerMasterAddressStore,
     TS: TransactionalMessageService,
 {
     pub async fn process_request_shared(
@@ -261,7 +262,7 @@ where
 // RequestProcessor implementation
 impl<MS, TS> SendMessageProcessor<MS, TS>
 where
-    MS: MessageStore,
+    MS: BrokerWriteStore + BrokerMasterAddressStore,
     TS: TransactionalMessageService,
 {
     pub fn has_send_message_hook(&self) -> bool {
@@ -337,7 +338,7 @@ where
 
 impl<MS, TS> SendMessageProcessor<MS, TS>
 where
-    MS: MessageStore,
+    MS: BrokerWriteStore + BrokerMasterAddressStore,
     TS: TransactionalMessageService,
 {
     pub fn new(transactional_message_service: Arc<TS>, context: Arc<SendMessageProcessorContext<MS>>) -> Self {
@@ -769,7 +770,7 @@ fn map_put_status_to_response(status: PutMessageStatus, response: &mut RemotingC
 
 impl<MS, TS> SendMessageProcessor<MS, TS>
 where
-    MS: MessageStore,
+    MS: BrokerWriteStore + BrokerMasterAddressStore,
     TS: TransactionalMessageService,
 {
     /// Update broker statistics for successful message send
@@ -1352,7 +1353,7 @@ fn store_health_reject_remark(policy: &impl SendBackpressurePolicy, snapshot: St
 
 pub(crate) struct Inner<MS, TS>
 where
-    MS: MessageStore,
+    MS: BrokerWriteStore,
 {
     pub(crate) send_message_hook_vec: Arc<Vec<Box<dyn SendMessageHook>>>,
     pub(crate) consume_message_hook_vec: Arc<Vec<Box<dyn ConsumeMessageHook>>>,
@@ -1363,7 +1364,7 @@ where
 
 impl<MS, TS> Inner<MS, TS>
 where
-    MS: MessageStore,
+    MS: BrokerWriteStore,
     TS: TransactionalMessageService,
 {
     #[inline]
@@ -1413,7 +1414,10 @@ where
         _channel: &Channel,
         _ctx: &ConnectionHandlerContext,
         request: &RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>>
+    where
+        MS: BrokerMasterAddressStore,
+    {
         let request_header = request.decode_command_custom_header::<ConsumerSendMsgBackRequestHeader>()?;
         let policy = self.context.policy.snapshot();
         if policy.broker_id != mix_all::MASTER_ID {
@@ -1725,7 +1729,9 @@ where
         _request: &RemotingCommand,
         request_header: &SendMessageRequestHeader,
         response: &mut RemotingCommand,
-    ) {
+    ) where
+        MS: BrokerMasterAddressStore,
+    {
         //check broker permission
         let policy = self.context.policy.snapshot();
         if !PermName::is_writeable(policy.broker_permission)

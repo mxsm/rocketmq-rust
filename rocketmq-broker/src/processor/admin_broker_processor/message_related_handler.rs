@@ -32,8 +32,8 @@ use rocketmq_protocol::protocol::header::search_offset_response_header::SearchOf
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
 use rocketmq_protocol::protocol::RemotingSerializable;
+use rocketmq_store::BrokerAdminStore;
 use rocketmq_store::MessageFilter;
-use rocketmq_store::MessageStore;
 use rocketmq_store::PutMessageStatus;
 use rocketmq_transport::Channel;
 use rocketmq_transport::ConnectionHandlerContext;
@@ -53,7 +53,7 @@ impl MessageRelatedHandler {
         Self
     }
 
-    pub async fn search_offset_by_timestamp<MS: MessageStore>(
+    pub async fn search_offset_by_timestamp<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
@@ -105,7 +105,7 @@ impl MessageRelatedHandler {
         Ok(Some(response.set_command_custom_header(response_header)))
     }
 
-    pub async fn resume_check_half_message<MS: MessageStore>(
+    pub async fn resume_check_half_message<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
@@ -178,7 +178,7 @@ impl MessageRelatedHandler {
         }
     }
 
-    pub async fn query_consume_queue<MS: MessageStore>(
+    pub async fn query_consume_queue<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
@@ -293,7 +293,7 @@ impl MessageRelatedHandler {
         Ok(Some(response.set_body(body.encode()?)))
     }
 
-    pub async fn pop_rollback<MS: MessageStore>(
+    pub async fn pop_rollback<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
@@ -323,7 +323,7 @@ impl MessageRelatedHandler {
         }
     }
 
-    async fn rewrite_request_for_static_topic<MS: MessageStore>(
+    async fn rewrite_request_for_static_topic<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         request_header: &SearchOffsetRequestHeader,
@@ -519,8 +519,8 @@ mod tests {
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     use rocketmq_protocol::protocol::LanguageCode;
     use rocketmq_protocol::protocol::RemotingDeserializable;
+    use rocketmq_store::BrokerReadStore;
     use rocketmq_store::DispatchRequest;
-    use rocketmq_store::MessageStore;
     use rocketmq_store::MessageStoreConfig;
     use rocketmq_transport::Channel;
     use rocketmq_transport::ChannelInner;

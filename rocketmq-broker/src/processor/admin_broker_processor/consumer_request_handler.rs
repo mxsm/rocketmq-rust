@@ -47,7 +47,7 @@ use rocketmq_protocol::protocol::header::reset_offset_request_header::ResetOffse
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::LanguageCode;
 use rocketmq_protocol::protocol::RemotingSerializable;
-use rocketmq_store::MessageStore;
+use rocketmq_store::BrokerAdminStore;
 use rocketmq_transport::Channel;
 use rocketmq_transport::ConnectionHandlerContext;
 use tracing::warn;
@@ -65,7 +65,7 @@ impl ConsumerRequestHandler {
 }
 
 impl ConsumerRequestHandler {
-    pub async fn get_consumer_connection_list<MS: MessageStore>(
+    pub async fn get_consumer_connection_list<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
@@ -108,7 +108,7 @@ impl ConsumerRequestHandler {
         }
     }
 
-    pub async fn get_consume_stats<MS: MessageStore>(
+    pub async fn get_consume_stats<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
@@ -223,7 +223,7 @@ impl ConsumerRequestHandler {
         Ok(Some(response))
     }
 
-    pub async fn get_broker_consume_stats<MS: MessageStore>(
+    pub async fn get_broker_consume_stats<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
@@ -281,7 +281,7 @@ impl ConsumerRequestHandler {
         ))
     }
 
-    pub async fn query_correction_offset<MS: MessageStore>(
+    pub async fn query_correction_offset<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
@@ -318,7 +318,7 @@ impl ConsumerRequestHandler {
         ))
     }
 
-    pub async fn consume_message_directly<MS: MessageStore>(
+    pub async fn consume_message_directly<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
@@ -405,7 +405,7 @@ impl ConsumerRequestHandler {
         .await
     }
 
-    fn build_broker_topic_consume_stats<MS: MessageStore>(
+    fn build_broker_topic_consume_stats<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         group: &cheetah_string::CheetahString,
@@ -487,7 +487,7 @@ impl ConsumerRequestHandler {
         Some(consume_stats)
     }
 
-    pub async fn get_all_consumer_offset<MS: MessageStore>(
+    pub async fn get_all_consumer_offset<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
@@ -509,7 +509,7 @@ impl ConsumerRequestHandler {
         }
     }
 
-    pub async fn get_all_message_request_mode<MS: MessageStore>(
+    pub async fn get_all_message_request_mode<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
@@ -544,7 +544,7 @@ impl ConsumerRequestHandler {
         Ok(Some(response.set_code(ResponseCode::Success)))
     }
 
-    pub async fn invoke_broker_to_reset_offset<MS: MessageStore>(
+    pub async fn invoke_broker_to_reset_offset<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
@@ -592,7 +592,7 @@ impl ConsumerRequestHandler {
         Ok(Some(response))
     }
 
-    pub async fn invoke_broker_to_get_consumer_status<MS: MessageStore>(
+    pub async fn invoke_broker_to_get_consumer_status<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
@@ -614,7 +614,7 @@ impl ConsumerRequestHandler {
         ))
     }
 
-    pub async fn query_subscription_by_consumer<MS: MessageStore>(
+    pub async fn query_subscription_by_consumer<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
@@ -638,7 +638,7 @@ impl ConsumerRequestHandler {
         ))
     }
 
-    pub async fn query_consume_time_span<MS: MessageStore>(
+    pub async fn query_consume_time_span<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
@@ -714,7 +714,7 @@ impl ConsumerRequestHandler {
         Ok(Some(response.set_code(ResponseCode::Success)))
     }
 
-    pub async fn clone_group_offset<MS: MessageStore>(
+    pub async fn clone_group_offset<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
@@ -772,7 +772,7 @@ impl ConsumerRequestHandler {
         ))
     }
 
-    pub async fn get_consumer_running_info<MS: MessageStore>(
+    pub async fn get_consumer_running_info<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
@@ -799,7 +799,7 @@ impl ConsumerRequestHandler {
         .await
     }
 
-    async fn call_consumer<MS: MessageStore>(
+    async fn call_consumer<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         request: RemotingCommand,
@@ -855,7 +855,7 @@ impl ConsumerRequestHandler {
         }
     }
 
-    async fn reset_offset_inner<MS: MessageStore>(
+    async fn reset_offset_inner<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         topic: &cheetah_string::CheetahString,
@@ -943,7 +943,7 @@ impl ConsumerRequestHandler {
         response
     }
 
-    async fn resolve_reset_offset<MS: MessageStore>(
+    async fn resolve_reset_offset<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         topic: &cheetah_string::CheetahString,
@@ -1028,7 +1028,7 @@ mod tests {
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     use rocketmq_protocol::protocol::LanguageCode;
     use rocketmq_protocol::protocol::RemotingDeserializable;
-    use rocketmq_store::MessageStore;
+    use rocketmq_store::BrokerAdminStore;
     use rocketmq_store::MessageStoreConfig;
     use rocketmq_transport::Channel;
     use rocketmq_transport::ChannelInner;
@@ -1081,7 +1081,7 @@ mod tests {
         Channel::new(inner, local_addr, local_addr)
     }
 
-    async fn put_test_message<MS: MessageStore>(
+    async fn put_test_message<MS: BrokerAdminStore>(
         admin: &mut crate::broker::broker_admin_runtime::BrokerAdminRuntime<MS>,
         topic: &str,
     ) -> String {

@@ -41,9 +41,9 @@ use rocketmq_protocol::protocol::header::get_parent_topic_info_request_header::G
 use rocketmq_protocol::protocol::header::trigger_lite_dispatch_request_header::TriggerLiteDispatchRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingSerializable;
+use rocketmq_store::BrokerReadWriteStore;
 use rocketmq_store::ConsumeQueueStore;
 use rocketmq_store::ConsumeQueueStoreTrait;
-use rocketmq_store::MessageStore;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_transport::request_code_not_supported_with_remark_and_opaque;
 use rocketmq_transport::Channel;
@@ -85,11 +85,11 @@ impl LiteManagerPolicy {
     }
 }
 
-pub(crate) struct LiteManagerOffsetCapability<MS: MessageStore> {
+pub(crate) struct LiteManagerOffsetCapability<MS: BrokerReadWriteStore> {
     manager: Weak<ConsumerOffsetManager<MS>>,
 }
 
-impl<MS: MessageStore> LiteManagerOffsetCapability<MS> {
+impl<MS: BrokerReadWriteStore> LiteManagerOffsetCapability<MS> {
     pub(crate) fn new(manager: &Arc<ConsumerOffsetManager<MS>>) -> Self {
         Self {
             manager: Arc::downgrade(manager),
@@ -118,11 +118,11 @@ impl<MS: MessageStore> LiteManagerOffsetCapability<MS> {
     }
 }
 
-pub(crate) struct LiteManagerStoreCapability<MS: MessageStore> {
+pub(crate) struct LiteManagerStoreCapability<MS: BrokerReadWriteStore> {
     escape_bridge: Weak<EscapeBridge<MS>>,
 }
 
-impl<MS: MessageStore> LiteManagerStoreCapability<MS> {
+impl<MS: BrokerReadWriteStore> LiteManagerStoreCapability<MS> {
     pub(crate) fn new(escape_bridge: &Arc<EscapeBridge<MS>>) -> Self {
         Self {
             escape_bridge: Arc::downgrade(escape_bridge),
@@ -188,7 +188,7 @@ impl<MS: MessageStore> LiteManagerStoreCapability<MS> {
     }
 }
 
-pub(crate) struct LiteManagerContext<MS: MessageStore> {
+pub(crate) struct LiteManagerContext<MS: BrokerReadWriteStore> {
     policy: LiteManagerPolicy,
     topic_config_manager: Arc<TopicConfigManager>,
     subscription_group_manager: SubscriptionGroupManager,
@@ -201,7 +201,7 @@ pub(crate) struct LiteManagerContext<MS: MessageStore> {
     pop_lite_message_processor: Weak<PopLiteMessageProcessor<MS>>,
 }
 
-impl<MS: MessageStore> LiteManagerContext<MS> {
+impl<MS: BrokerReadWriteStore> LiteManagerContext<MS> {
     #[allow(
         clippy::too_many_arguments,
         reason = "composition root wires explicit Lite manager capabilities"
@@ -239,7 +239,7 @@ impl<MS: MessageStore> LiteManagerContext<MS> {
     }
 }
 
-impl<MS: MessageStore> LiteConsumerLagDataSource for LiteManagerContext<MS> {
+impl<MS: BrokerReadWriteStore> LiteConsumerLagDataSource for LiteManagerContext<MS> {
     fn offset_table_snapshot(&self) -> LiteOffsetTable {
         self.consumer_offset.offset_table_snapshot()
     }
@@ -253,17 +253,17 @@ impl<MS: MessageStore> LiteConsumerLagDataSource for LiteManagerContext<MS> {
     }
 }
 
-pub(crate) struct LiteManagerProcessor<MS: MessageStore> {
+pub(crate) struct LiteManagerProcessor<MS: BrokerReadWriteStore> {
     context: LiteManagerContext<MS>,
 }
 
-impl<MS: MessageStore> LiteManagerProcessor<MS> {
+impl<MS: BrokerReadWriteStore> LiteManagerProcessor<MS> {
     pub(crate) fn new(context: LiteManagerContext<MS>) -> Self {
         Self { context }
     }
 }
 
-impl<MS: MessageStore> LiteManagerProcessor<MS> {
+impl<MS: BrokerReadWriteStore> LiteManagerProcessor<MS> {
     pub(crate) async fn process_request_shared(
         &self,
         _channel: Channel,
@@ -289,7 +289,7 @@ impl<MS: MessageStore> LiteManagerProcessor<MS> {
     }
 }
 
-impl<MS: MessageStore> RequestProcessor for LiteManagerProcessor<MS> {
+impl<MS: BrokerReadWriteStore> RequestProcessor for LiteManagerProcessor<MS> {
     async fn process_request(
         &mut self,
         channel: Channel,
@@ -300,7 +300,7 @@ impl<MS: MessageStore> RequestProcessor for LiteManagerProcessor<MS> {
     }
 }
 
-impl<MS: MessageStore> LiteManagerProcessor<MS> {
+impl<MS: BrokerReadWriteStore> LiteManagerProcessor<MS> {
     fn get_broker_lite_info(
         &self,
         request: &RemotingCommand,

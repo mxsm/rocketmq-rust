@@ -29,7 +29,7 @@ use rocketmq_runtime::task::service_task::ServiceTask;
 use rocketmq_runtime::task::service_task::ServiceTaskContext;
 use rocketmq_runtime::task::ServiceManager;
 use rocketmq_runtime::TaskGroup;
-use rocketmq_store::MessageStore;
+use rocketmq_store::BrokerReplicationStore;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -37,11 +37,11 @@ use tracing::warn;
 use super::BrokerPreOnlineContext;
 use crate::schedule::delay_offset_serialize_wrapper::DelayOffsetSerializeWrapper;
 
-pub struct BrokerPreOnlineService<MS: MessageStore> {
+pub struct BrokerPreOnlineService<MS: BrokerReplicationStore> {
     service_manager: ServiceManager<BrokerPreOnlineServiceInner<MS>>,
 }
 
-impl<MS: MessageStore> BrokerPreOnlineService<MS> {
+impl<MS: BrokerReplicationStore> BrokerPreOnlineService<MS> {
     pub(crate) fn new(context: BrokerPreOnlineContext<MS>, parent_task_group: Option<TaskGroup>) -> Self {
         let inner = BrokerPreOnlineServiceInner {
             context,
@@ -55,14 +55,14 @@ impl<MS: MessageStore> BrokerPreOnlineService<MS> {
     }
 }
 
-struct BrokerPreOnlineServiceInner<MS: MessageStore> {
+struct BrokerPreOnlineServiceInner<MS: BrokerReplicationStore> {
     context: BrokerPreOnlineContext<MS>,
     wait_broker_index: AtomicU32,
 }
 
 impl<MS> ServiceTask for BrokerPreOnlineServiceInner<MS>
 where
-    MS: MessageStore,
+    MS: BrokerReplicationStore,
 {
     fn get_service_name(&self) -> String {
         "BrokerPreOnlineService".to_string()
@@ -96,7 +96,7 @@ where
 
 impl<MS> BrokerPreOnlineServiceInner<MS>
 where
-    MS: MessageStore,
+    MS: BrokerReplicationStore,
 {
     async fn prepare_for_broker_online(&self) -> RocketMQResult<bool> {
         let broker_member_group = match self
@@ -455,7 +455,7 @@ fn should_sync_from_peer(local_version: &DataVersion, remote_version: Option<&Da
 
 impl<MS> BrokerPreOnlineService<MS>
 where
-    MS: MessageStore,
+    MS: BrokerReplicationStore,
 {
     pub async fn start(&self) -> rocketmq_error::RocketMQResult<()> {
         self.service_manager
@@ -484,7 +484,7 @@ where
 mod tests {
     use std::sync::Weak;
 
-    use rocketmq_store::OwnedMessageStore;
+    use rocketmq_store::StorePorts;
 
     use super::super::BrokerOnlineRoleState;
     use super::super::BrokerPreOnlineStoreCapability;
@@ -545,7 +545,7 @@ mod tests {
 
     #[tokio::test]
     async fn pre_online_store_capability_fails_closed_without_provider() {
-        let capability = BrokerPreOnlineStoreCapability::<OwnedMessageStore> {
+        let capability = BrokerPreOnlineStoreCapability::<StorePorts> {
             escape_bridge: Weak::new(),
         };
 

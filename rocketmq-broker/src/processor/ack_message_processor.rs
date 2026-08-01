@@ -41,7 +41,7 @@ use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::AckMessage;
 use rocketmq_store::AckMsg;
 use rocketmq_store::BatchAckMsg;
-use rocketmq_store::MessageStore;
+use rocketmq_store::BrokerReadWriteStore;
 use rocketmq_store::PutMessageResult;
 use rocketmq_store::PutMessageStatus;
 use rocketmq_transport::request_code_not_supported_with_remark_and_opaque;
@@ -85,11 +85,11 @@ impl AckMessagePolicy {
     }
 }
 
-pub(crate) struct AckMessageStoreCapability<MS: MessageStore> {
+pub(crate) struct AckMessageStoreCapability<MS: BrokerReadWriteStore> {
     escape_bridge: Weak<EscapeBridge<MS>>,
 }
 
-impl<MS: MessageStore> AckMessageStoreCapability<MS> {
+impl<MS: BrokerReadWriteStore> AckMessageStoreCapability<MS> {
     pub(crate) fn new(escape_bridge: &Arc<EscapeBridge<MS>>) -> Self {
         Self {
             escape_bridge: Arc::downgrade(escape_bridge),
@@ -152,11 +152,11 @@ impl AckMessageOrderCapability {
     }
 }
 
-pub(crate) struct AckMessageOffsetCapability<MS: MessageStore> {
+pub(crate) struct AckMessageOffsetCapability<MS: BrokerReadWriteStore> {
     manager: Weak<ConsumerOffsetManager<MS>>,
 }
 
-impl<MS: MessageStore> AckMessageOffsetCapability<MS> {
+impl<MS: BrokerReadWriteStore> AckMessageOffsetCapability<MS> {
     pub(crate) fn new(manager: &Arc<ConsumerOffsetManager<MS>>) -> Self {
         Self {
             manager: Arc::downgrade(manager),
@@ -191,13 +191,13 @@ impl<MS: MessageStore> AckMessageOffsetCapability<MS> {
     }
 }
 
-pub(crate) struct AckMessagePopCapability<MS: MessageStore> {
+pub(crate) struct AckMessagePopCapability<MS: BrokerReadWriteStore> {
     merge_service: Weak<PopBufferMergeService<MS>>,
     notification_service: Weak<PopLongPollingService<PopMessageProcessor<MS>>>,
     queue_lock_manager: QueueLockManager,
 }
 
-impl<MS: MessageStore> AckMessagePopCapability<MS> {
+impl<MS: BrokerReadWriteStore> AckMessagePopCapability<MS> {
     pub(crate) fn new(processor: &Arc<PopMessageProcessor<MS>>) -> Self {
         Self {
             merge_service: Arc::downgrade(processor.pop_buffer_merge_service()),
@@ -224,7 +224,7 @@ impl<MS: MessageStore> AckMessagePopCapability<MS> {
     }
 }
 
-pub(crate) struct AckMessageProcessorContext<MS: MessageStore> {
+pub(crate) struct AckMessageProcessorContext<MS: BrokerReadWriteStore> {
     policy: AckMessagePolicy,
     topic_config_manager: Arc<TopicConfigManager>,
     consumer_offset: AckMessageOffsetCapability<MS>,
@@ -235,7 +235,7 @@ pub(crate) struct AckMessageProcessorContext<MS: MessageStore> {
     pop_revive_services: Vec<Arc<PopReviveService<MS>>>,
 }
 
-impl<MS: MessageStore> AckMessageProcessorContext<MS> {
+impl<MS: BrokerReadWriteStore> AckMessageProcessorContext<MS> {
     #[allow(
         clippy::too_many_arguments,
         reason = "constructor lists the complete narrow acknowledgment capability boundary"
@@ -263,13 +263,13 @@ impl<MS: MessageStore> AckMessageProcessorContext<MS> {
     }
 }
 
-pub struct AckMessageProcessor<MS: MessageStore> {
+pub struct AckMessageProcessor<MS: BrokerReadWriteStore> {
     context: AckMessageProcessorContext<MS>,
 }
 
 impl<MS> RequestProcessor for AckMessageProcessor<MS>
 where
-    MS: MessageStore,
+    MS: BrokerReadWriteStore,
 {
     async fn process_request(
         &mut self,
@@ -283,7 +283,7 @@ where
 
 impl<MS> AckMessageProcessor<MS>
 where
-    MS: MessageStore,
+    MS: BrokerReadWriteStore,
 {
     pub async fn process_request_shared(
         &self,
@@ -311,7 +311,7 @@ where
 
 impl<MS> AckMessageProcessor<MS>
 where
-    MS: MessageStore,
+    MS: BrokerReadWriteStore,
 {
     pub(crate) fn new(context: AckMessageProcessorContext<MS>) -> AckMessageProcessor<MS> {
         AckMessageProcessor { context }
@@ -370,7 +370,7 @@ where
 
 impl<MS> AckMessageProcessor<MS>
 where
-    MS: MessageStore,
+    MS: BrokerReadWriteStore,
 {
     async fn process_ack(
         &self,
@@ -810,7 +810,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rocketmq_store::OwnedMessageStore;
+    use rocketmq_store::StorePorts;
 
     #[test]
     fn ack_message_policy_captures_only_required_startup_values() {
@@ -829,12 +829,12 @@ mod tests {
 
     #[tokio::test]
     async fn ack_message_weak_capabilities_fail_closed_after_provider_shutdown() {
-        let store = AckMessageStoreCapability::<OwnedMessageStore> {
+        let store = AckMessageStoreCapability::<StorePorts> {
             escape_bridge: Weak::new(),
         };
         let order = AckMessageOrderCapability { manager: Weak::new() };
-        let offset = AckMessageOffsetCapability::<OwnedMessageStore> { manager: Weak::new() };
-        let pop = AckMessagePopCapability::<OwnedMessageStore> {
+        let offset = AckMessageOffsetCapability::<StorePorts> { manager: Weak::new() };
+        let pop = AckMessagePopCapability::<StorePorts> {
             merge_service: Weak::new(),
             notification_service: Weak::new(),
             queue_lock_manager: QueueLockManager::new(),

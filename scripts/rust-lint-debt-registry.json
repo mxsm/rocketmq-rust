@@ -1261,8 +1261,8 @@
       "scope": "crate"
     },
     {
-      "identity": "rocketmq-store/src/message_store/local_file_message_store.rs:item:impl MessageStore:unused_variables:0",
-      "item": "impl MessageStore",
+      "identity": "rocketmq-store/src/message_store/local_file_message_store.rs:item:impl BackendOps:unused_variables:0",
+      "item": "impl BackendOps",
       "lints": [
         "unused_variables"
       ],

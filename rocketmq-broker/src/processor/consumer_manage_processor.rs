@@ -26,7 +26,7 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_utils::TopicQueueMappingUtils;
 use rocketmq_protocol::protocol::RemotingSerializable;
-use rocketmq_store::MessageStore;
+use rocketmq_store::BrokerStorePort;
 use rocketmq_transport::request_code_not_supported_with_remark_and_opaque;
 use rocketmq_transport::Channel;
 use rocketmq_transport::ConnectionHandlerContext;
@@ -43,7 +43,7 @@ use crate::subscription::manager::subscription_group_manager::SubscriptionGroupC
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
 use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager;
 
-pub struct ConsumerManageProcessor<MS: MessageStore> {
+pub struct ConsumerManageProcessor<MS: BrokerStorePort> {
     consumer_view: ConsumerAssignmentView,
     consumer_offset: ConsumerOffsetRequestCapability<MS>,
     topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
@@ -54,7 +54,7 @@ pub struct ConsumerManageProcessor<MS: MessageStore> {
     forward_timeout: u64,
 }
 
-pub(crate) struct ConsumerManageProcessorContext<MS: MessageStore> {
+pub(crate) struct ConsumerManageProcessorContext<MS: BrokerStorePort> {
     pub(crate) consumer_view: ConsumerAssignmentView,
     pub(crate) consumer_offset: ConsumerOffsetRequestCapability<MS>,
     pub(crate) topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
@@ -67,7 +67,7 @@ pub(crate) struct ConsumerManageProcessorContext<MS: MessageStore> {
 
 impl<MS> RequestProcessor for ConsumerManageProcessor<MS>
 where
-    MS: MessageStore,
+    MS: BrokerStorePort,
 {
     async fn process_request(
         &mut self,
@@ -99,7 +99,7 @@ where
 
 impl<MS> ConsumerManageProcessor<MS>
 where
-    MS: MessageStore,
+    MS: BrokerStorePort,
 {
     pub(crate) fn new(context: ConsumerManageProcessorContext<MS>) -> Self {
         Self {
@@ -125,7 +125,7 @@ where
     }
 }
 
-impl<MS: MessageStore> Clone for ConsumerManageProcessor<MS> {
+impl<MS: BrokerStorePort> Clone for ConsumerManageProcessor<MS> {
     fn clone(&self) -> Self {
         Self {
             consumer_view: self.consumer_view.clone(),
@@ -143,7 +143,7 @@ impl<MS: MessageStore> Clone for ConsumerManageProcessor<MS> {
 #[allow(unused_variables)]
 impl<MS> ConsumerManageProcessor<MS>
 where
-    MS: MessageStore,
+    MS: BrokerStorePort,
 {
     async fn process_request_inner(
         &mut self,

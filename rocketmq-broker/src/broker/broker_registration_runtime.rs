@@ -26,7 +26,7 @@ use rocketmq_protocol::protocol::body::topic_info_wrapper::topic_config_wrapper:
 use rocketmq_protocol::protocol::namesrv::RegisterBrokerResult;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
 use rocketmq_protocol::protocol::DataVersion;
-use rocketmq_store::MessageStore;
+use rocketmq_store::BrokerAdminStore;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
@@ -67,7 +67,7 @@ pub(crate) enum BrokerRegistrationError {
 /// Registration observes live configuration and topic metadata, but it does not retain the
 /// complete broker composition root. Store and slave updates are routed through independently
 /// synchronized capabilities after a registration result is received.
-pub(crate) struct BrokerRegistrationRuntime<MS: MessageStore> {
+pub(crate) struct BrokerRegistrationRuntime<MS: BrokerAdminStore> {
     config: BrokerRuntimeConfigState,
     store: EscapeBridgeStoreCapability<MS>,
     topic_config_manager: Arc<TopicConfigManager>,
@@ -79,7 +79,7 @@ pub(crate) struct BrokerRegistrationRuntime<MS: MessageStore> {
     shutdown: Arc<AtomicBool>,
 }
 
-impl<MS: MessageStore> Clone for BrokerRegistrationRuntime<MS> {
+impl<MS: BrokerAdminStore> Clone for BrokerRegistrationRuntime<MS> {
     fn clone(&self) -> Self {
         Self {
             config: self.config.clone(),
@@ -95,7 +95,7 @@ impl<MS: MessageStore> Clone for BrokerRegistrationRuntime<MS> {
     }
 }
 
-impl<MS: MessageStore> BrokerRegistrationRuntime<MS> {
+impl<MS: BrokerAdminStore> BrokerRegistrationRuntime<MS> {
     #[allow(
         clippy::too_many_arguments,
         reason = "the broker composition root enumerates the complete registration boundary"

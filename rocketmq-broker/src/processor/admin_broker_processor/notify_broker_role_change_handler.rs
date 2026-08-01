@@ -18,7 +18,7 @@ use rocketmq_protocol::protocol::body::sync_state_set_body::SyncStateSet;
 use rocketmq_protocol::protocol::header::notify_broker_role_change_request_header::NotifyBrokerRoleChangedRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingDeserializable;
-use rocketmq_store::MessageStore;
+use rocketmq_store::BrokerAdminStore;
 use rocketmq_transport::Channel;
 use rocketmq_transport::ConnectionHandlerContext;
 use tracing::info;
@@ -34,7 +34,7 @@ impl NotifyBrokerRoleChangeHandler {
         Self
     }
 
-    pub async fn notify_broker_role_changed<MS: MessageStore>(
+    pub async fn notify_broker_role_changed<MS: BrokerAdminStore>(
         &self,
         broker_config_request_handler: &BrokerConfigRequestHandler<MS>,
         channel: Channel,

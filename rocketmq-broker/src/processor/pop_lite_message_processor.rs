@@ -29,9 +29,9 @@ use rocketmq_protocol::protocol::header::pop_lite_message_request_header::PopLit
 use rocketmq_protocol::protocol::header::pop_lite_message_response_header::PopLiteMessageResponseHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::common::time_utils::current_millis;
+use rocketmq_store::BrokerReadWriteStore;
 use rocketmq_store::GetMessageResult;
 use rocketmq_store::GetMessageStatus;
-use rocketmq_store::MessageStore;
 use rocketmq_transport::Channel;
 use rocketmq_transport::ConnectionHandlerContext;
 use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
@@ -69,11 +69,11 @@ impl PopLiteMessagePolicy {
     }
 }
 
-pub(crate) struct PopLiteOffsetCapability<MS: MessageStore> {
+pub(crate) struct PopLiteOffsetCapability<MS: BrokerReadWriteStore> {
     manager: Weak<ConsumerOffsetManager<MS>>,
 }
 
-impl<MS: MessageStore> PopLiteOffsetCapability<MS> {
+impl<MS: BrokerReadWriteStore> PopLiteOffsetCapability<MS> {
     pub(crate) fn new(manager: &Arc<ConsumerOffsetManager<MS>>) -> Self {
         Self {
             manager: Arc::downgrade(manager),
@@ -108,11 +108,11 @@ impl<MS: MessageStore> PopLiteOffsetCapability<MS> {
     }
 }
 
-pub(crate) struct PopLiteMessageStoreCapability<MS: MessageStore> {
+pub(crate) struct PopLiteMessageStoreCapability<MS: BrokerReadWriteStore> {
     escape_bridge: Weak<EscapeBridge<MS>>,
 }
 
-impl<MS: MessageStore> PopLiteMessageStoreCapability<MS> {
+impl<MS: BrokerReadWriteStore> PopLiteMessageStoreCapability<MS> {
     pub(crate) fn new(escape_bridge: &Arc<EscapeBridge<MS>>) -> Self {
         Self {
             escape_bridge: Arc::downgrade(escape_bridge),
@@ -150,7 +150,7 @@ impl<MS: MessageStore> PopLiteMessageStoreCapability<MS> {
     }
 }
 
-pub(crate) struct PopLiteMessageProcessorContext<MS: MessageStore> {
+pub(crate) struct PopLiteMessageProcessorContext<MS: BrokerReadWriteStore> {
     policy: PopLiteMessagePolicy,
     topic_config_manager: Arc<TopicConfigManager>,
     subscription_group_lookup: SubscriptionGroupConfigLookup,
@@ -161,7 +161,7 @@ pub(crate) struct PopLiteMessageProcessorContext<MS: MessageStore> {
     long_polling: PopLiteLongPollingServiceContext,
 }
 
-impl<MS: MessageStore> PopLiteMessageProcessorContext<MS> {
+impl<MS: BrokerReadWriteStore> PopLiteMessageProcessorContext<MS> {
     #[allow(
         clippy::too_many_arguments,
         reason = "composition root lists each POP Lite capability explicitly"
@@ -189,7 +189,7 @@ impl<MS: MessageStore> PopLiteMessageProcessorContext<MS> {
     }
 }
 
-pub(crate) struct PopLiteMessageProcessor<MS: MessageStore> {
+pub(crate) struct PopLiteMessageProcessor<MS: BrokerReadWriteStore> {
     context: PopLiteMessageProcessorContext<MS>,
     pop_lite_long_polling_service: Arc<PopLiteLongPollingService<PopLiteMessageProcessor<MS>>>,
     consumer_order_info_manager: MemoryConsumerOrderInfoManager,
@@ -207,7 +207,7 @@ enum PopLmqResult {
     Skip,
 }
 
-impl<MS: MessageStore> PopLiteMessageProcessor<MS> {
+impl<MS: BrokerReadWriteStore> PopLiteMessageProcessor<MS> {
     pub(crate) fn new(context: PopLiteMessageProcessorContext<MS>) -> Arc<Self> {
         let long_polling_context = context.long_polling.clone();
         Arc::new_cyclic(move |processor| Self {
@@ -590,7 +590,7 @@ impl<MS: MessageStore> PopLiteMessageProcessor<MS> {
     }
 }
 
-impl<MS: MessageStore> PopLiteMessageProcessor<MS> {
+impl<MS: BrokerReadWriteStore> PopLiteMessageProcessor<MS> {
     pub(crate) async fn process_request_shared(
         &self,
         _channel: Channel,
@@ -664,7 +664,7 @@ impl<MS: MessageStore> PopLiteMessageProcessor<MS> {
     }
 }
 
-impl<MS: MessageStore> RequestProcessor for PopLiteMessageProcessor<MS> {
+impl<MS: BrokerReadWriteStore> RequestProcessor for PopLiteMessageProcessor<MS> {
     async fn process_request(
         &mut self,
         channel: Channel,
@@ -675,7 +675,7 @@ impl<MS: MessageStore> RequestProcessor for PopLiteMessageProcessor<MS> {
     }
 }
 
-impl<MS: MessageStore> PopLiteLongPollingRequestProcessor for PopLiteMessageProcessor<MS> {
+impl<MS: BrokerReadWriteStore> PopLiteLongPollingRequestProcessor for PopLiteMessageProcessor<MS> {
     async fn process_request_when_wakeup(
         &self,
         channel: Channel,
@@ -696,7 +696,7 @@ mod tests {
     use cheetah_string::CheetahString;
     use rocketmq_runtime::RuntimeContext;
     use rocketmq_store::MessageStoreConfig;
-    use rocketmq_store::OwnedMessageStore;
+    use rocketmq_store::StorePorts;
 
     use super::PopLiteMessagePolicy;
     use super::PopLiteMessageProcessor;
@@ -745,7 +745,7 @@ mod tests {
 
     #[test]
     fn transform_order_count_info_drops_queue_level_suffix_when_offset_entries_exist() {
-        let result = PopLiteMessageProcessor::<OwnedMessageStore>::transform_order_count_info("0 qo0%100 1;0 0 1", 1);
+        let result = PopLiteMessageProcessor::<StorePorts>::transform_order_count_info("0 qo0%100 1;0 0 1", 1);
 
         assert_eq!(result, "0 qo0%100 1");
     }

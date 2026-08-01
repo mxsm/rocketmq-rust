@@ -27,21 +27,25 @@ use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_store::store_append_receipt;
 use rocketmq_store::ArcMessageFilter;
+use rocketmq_store::BrokerAdminStore;
+use rocketmq_store::BrokerMasterAddressStore;
+use rocketmq_store::BrokerReadStore;
+use rocketmq_store::BrokerReplicationStore;
+use rocketmq_store::BrokerWriteStore;
 use rocketmq_store::GetMessageResult;
 use rocketmq_store::HAConnectionStateNotificationRequest;
 use rocketmq_store::HAError;
 use rocketmq_store::HAResult;
 use rocketmq_store::HAService;
-use rocketmq_store::MessageStore;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::MessageStoreHealthCapability;
-use rocketmq_store::OwnedMessageStore;
 use rocketmq_store::PutMessageResult;
 use rocketmq_store::QueryMessageResult;
 use rocketmq_store::SelectMappedBufferResult;
 use rocketmq_store::StoreAppendReceipt;
 use rocketmq_store::StoreError as BackendStoreError;
 use rocketmq_store::StoreHealthSnapshot;
+use rocketmq_store::StorePorts;
 use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreErrorKind;
 use rocketmq_store_api::StoreHealth;
@@ -128,17 +132,17 @@ struct SharedAppendOutcome {
 
 #[derive(Clone)]
 struct SharedStoreAppendPort {
-    store: Weak<OwnedMessageStore>,
+    store: Weak<StorePorts>,
 }
 
 impl SharedStoreAppendPort {
-    fn new(store: &Arc<OwnedMessageStore>) -> Self {
+    fn new(store: &Arc<StorePorts>) -> Self {
         Self {
             store: Arc::downgrade(store),
         }
     }
 
-    fn store(&self) -> Result<Arc<OwnedMessageStore>, MessageStoreUnavailable> {
+    fn store(&self) -> Result<Arc<StorePorts>, MessageStoreUnavailable> {
         self.store.upgrade().ok_or(MessageStoreUnavailable)
     }
 
@@ -170,11 +174,11 @@ impl SharedStoreAppendPort {
 ///
 /// The lease upgrades the weak provider for one operation. Long-lived Broker
 /// capabilities must retain only the weak provider, not this lease.
-pub(crate) struct EscapeStoreReadLease<MS: MessageStore> {
+pub(crate) struct EscapeStoreReadLease<MS> {
     store: Arc<MS>,
 }
 
-impl<MS: MessageStore> Deref for EscapeStoreReadLease<MS> {
+impl<MS> Deref for EscapeStoreReadLease<MS> {
     type Target = MS;
 
     fn deref(&self) -> &Self::Target {
@@ -183,12 +187,12 @@ impl<MS: MessageStore> Deref for EscapeStoreReadLease<MS> {
 }
 
 /// Late-bound Store operations required by failover and offset processing.
-pub(crate) struct EscapeBridgeStoreCapability<MS: MessageStore> {
+pub(crate) struct EscapeBridgeStoreCapability<MS> {
     current: Arc<RwLock<Option<Weak<MS>>>>,
     shared_append: Arc<RwLock<Option<SharedStoreAppendPort>>>,
 }
 
-impl<MS: MessageStore> Clone for EscapeBridgeStoreCapability<MS> {
+impl<MS> Clone for EscapeBridgeStoreCapability<MS> {
     fn clone(&self) -> Self {
         Self {
             current: Arc::clone(&self.current),
@@ -197,7 +201,7 @@ impl<MS: MessageStore> Clone for EscapeBridgeStoreCapability<MS> {
     }
 }
 
-impl<MS: MessageStore> Default for EscapeBridgeStoreCapability<MS> {
+impl<MS> Default for EscapeBridgeStoreCapability<MS> {
     fn default() -> Self {
         Self {
             current: Arc::new(RwLock::new(None)),
@@ -206,7 +210,7 @@ impl<MS: MessageStore> Default for EscapeBridgeStoreCapability<MS> {
     }
 }
 
-impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
+impl<MS: BrokerReadStore> EscapeBridgeStoreCapability<MS> {
     fn bind(&self, store: &Arc<MS>) {
         *self.current.write() = Some(Arc::downgrade(store));
     }
@@ -241,10 +245,10 @@ impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
         self.with_store(|store| MessageStoreHealthCapability::new(store).health_snapshot())
     }
 
-    pub(crate) async fn append_message(
-        &self,
-        message: MessageExtBrokerInner,
-    ) -> Result<StoreAppendReceipt, StoreError> {
+    pub(crate) async fn append_message(&self, message: MessageExtBrokerInner) -> Result<StoreAppendReceipt, StoreError>
+    where
+        MS: BrokerWriteStore,
+    {
         let append = self
             .shared_append()
             .map_err(|_| StoreError::new(StoreErrorKind::NotStarted, StoreOperation::Append))?;
@@ -259,7 +263,10 @@ impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
         ))
     }
 
-    pub(crate) async fn append_batch(&self, batch: MessageExtBatch) -> Result<StoreAppendReceipt, StoreError> {
+    pub(crate) async fn append_batch(&self, batch: MessageExtBatch) -> Result<StoreAppendReceipt, StoreError>
+    where
+        MS: BrokerWriteStore,
+    {
         let append = self
             .shared_append()
             .map_err(|_| StoreError::new(StoreErrorKind::NotStarted, StoreOperation::Append))?;
@@ -284,18 +291,27 @@ impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
             .unwrap_or((None, None))
     }
 
-    pub(crate) fn set_alive_replica_num_in_group(&self, alive_replica_num: i32) -> Result<(), MessageStoreUnavailable> {
+    pub(crate) fn set_alive_replica_num_in_group(&self, alive_replica_num: i32) -> Result<(), MessageStoreUnavailable>
+    where
+        MS: BrokerReplicationStore,
+    {
         self.with_store(|store| store.set_alive_replica_num_in_group(alive_replica_num))
     }
 
-    pub(crate) fn set_master_flushed_offset(&self, offset: i64) -> Result<(), MessageStoreUnavailable> {
+    pub(crate) fn set_master_flushed_offset(&self, offset: i64) -> Result<(), MessageStoreUnavailable>
+    where
+        MS: BrokerReplicationStore,
+    {
         self.with_store(|store| store.set_master_flushed_offset(offset))
     }
 
     pub(crate) async fn submit_ha_transfer(
         &self,
         request: HAConnectionStateNotificationRequest,
-    ) -> Result<bool, MessageStoreUnavailable> {
+    ) -> Result<bool, MessageStoreUnavailable>
+    where
+        MS: BrokerReplicationStore,
+    {
         let store = self.store()?;
         let Some(ha_service) = store.get_ha_service() else {
             return Ok(false);
@@ -308,10 +324,14 @@ impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
         &self,
         master_ha_address: &CheetahString,
         master_address: &CheetahString,
-    ) -> Result<(), MessageStoreUnavailable> {
+    ) -> Result<(), MessageStoreUnavailable>
+    where
+        MS: BrokerReplicationStore,
+    {
         let store = self.store()?;
-        store.update_ha_master_address(master_ha_address.as_str()).await;
-        store.update_master_address(master_address);
+        store
+            .update_master_addresses(master_ha_address.as_str(), master_address)
+            .await;
         Ok(())
     }
 
@@ -319,7 +339,10 @@ impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
         &self,
         local_broker_id: i64,
         sync_state_set: &HashSet<i64>,
-    ) -> Result<(), MessageStoreUnavailable> {
+    ) -> Result<(), MessageStoreUnavailable>
+    where
+        MS: BrokerReplicationStore,
+    {
         self.with_store(|store| store.sync_controller_sync_state_set(local_broker_id, sync_state_set))
     }
 
@@ -330,7 +353,10 @@ impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
         controller_broker_id: u64,
         master_address: Option<&CheetahString>,
         master_epoch: i32,
-    ) -> HAResult<()> {
+    ) -> HAResult<()>
+    where
+        MS: BrokerReplicationStore,
+    {
         let store = match self.store() {
             Ok(store) => store,
             Err(_) => return Ok(()),
@@ -371,17 +397,23 @@ impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
     }
 
     pub(crate) fn master_flushed_offset(&self) -> Result<i64, MessageStoreUnavailable> {
-        self.with_store(MessageStore::get_master_flushed_offset)
+        self.with_store(BrokerReadStore::get_master_flushed_offset)
     }
 
-    pub(crate) async fn update_ha_master_address(&self, address: &str) -> Result<(), MessageStoreUnavailable> {
+    pub(crate) async fn update_ha_master_address(&self, address: &str) -> Result<(), MessageStoreUnavailable>
+    where
+        MS: BrokerReplicationStore,
+    {
         let store = self.store()?;
         store.update_ha_master_address(address).await;
         Ok(())
     }
 
-    pub(crate) fn wakeup_ha_client(&self) -> Result<(), MessageStoreUnavailable> {
-        self.with_store(MessageStore::wakeup_ha_client)
+    pub(crate) fn wakeup_ha_client(&self) -> Result<(), MessageStoreUnavailable>
+    where
+        MS: BrokerReplicationStore,
+    {
+        self.with_store(BrokerReplicationStore::wakeup_ha_client)
     }
 
     pub(crate) async fn query_message(
@@ -408,18 +440,27 @@ impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
     pub(crate) async fn put_message(
         &self,
         message: MessageExtBrokerInner,
-    ) -> Result<PutMessageResult, MessageStoreUnavailable> {
+    ) -> Result<PutMessageResult, MessageStoreUnavailable>
+    where
+        MS: BrokerWriteStore,
+    {
         Ok(self.shared_append()?.put_message(message).await?.result)
     }
 
-    pub(crate) fn set_commitlog_read_mode(&self, read_ahead_mode: i32) -> Result<(), BackendStoreError> {
+    pub(crate) fn set_commitlog_read_mode(&self, read_ahead_mode: i32) -> Result<(), BackendStoreError>
+    where
+        MS: BrokerAdminStore,
+    {
         let store = self
             .store()
             .map_err(|_| BackendStoreError::new(StoreErrorKind::NotStarted, StoreOperation::Admin))?;
         store.set_commitlog_read_mode(read_ahead_mode)
     }
 
-    pub(crate) fn delete_topics(&self, delete_topics: Vec<&CheetahString>) -> Result<i32, MessageStoreUnavailable> {
+    pub(crate) fn delete_topics(&self, delete_topics: Vec<&CheetahString>) -> Result<i32, MessageStoreUnavailable>
+    where
+        MS: BrokerAdminStore,
+    {
         let store = self.store()?;
         Ok(store.delete_topics(delete_topics))
     }
@@ -433,7 +474,7 @@ impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
     }
 
     pub(crate) fn now(&self) -> Result<u64, MessageStoreUnavailable> {
-        self.with_store(MessageStore::now)
+        self.with_store(BrokerReadStore::now)
     }
 
     pub(crate) async fn get_message(
@@ -493,16 +534,15 @@ impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
     }
 
     pub(crate) fn state_machine_version(&self) -> Result<i64, MessageStoreUnavailable> {
-        self.with_store(MessageStore::get_state_machine_version)
+        self.with_store(BrokerReadStore::get_state_machine_version)
     }
 
-    pub(crate) async fn update_master_address(
-        &self,
-        master_addr: &CheetahString,
-    ) -> Result<(), MessageStoreUnavailable> {
+    pub(crate) async fn update_master_address(&self, master_addr: &CheetahString) -> Result<(), MessageStoreUnavailable>
+    where
+        MS: BrokerMasterAddressStore,
+    {
         let store = self.store()?;
-        store.update_ha_master_address(master_addr.as_str()).await;
-        store.update_master_address(master_addr);
+        store.update_master_address(master_addr).await;
         Ok(())
     }
 
@@ -532,8 +572,8 @@ impl<MS: MessageStore> EscapeBridgeStoreCapability<MS> {
     }
 }
 
-impl EscapeBridgeStoreCapability<OwnedMessageStore> {
-    pub(crate) fn bind_owned(&self, store: &Arc<OwnedMessageStore>) {
+impl EscapeBridgeStoreCapability<StorePorts> {
+    pub(crate) fn bind_owned(&self, store: &Arc<StorePorts>) {
         self.bind(store);
         *self.shared_append.write() = Some(SharedStoreAppendPort::new(store));
     }
@@ -545,7 +585,7 @@ mod tests {
     use cheetah_string::CheetahString;
     use rocketmq_model::common::broker::broker_role::BrokerRole;
     use rocketmq_store::MessageStoreConfig;
-    use rocketmq_store::OwnedMessageStore;
+    use rocketmq_store::StorePorts;
 
     use super::EscapeBridgePolicyState;
     use super::EscapeBridgeStoreCapability;
@@ -577,7 +617,7 @@ mod tests {
 
     #[tokio::test]
     async fn controller_role_change_is_a_noop_before_store_binding() {
-        let store = EscapeBridgeStoreCapability::<OwnedMessageStore>::default();
+        let store = EscapeBridgeStoreCapability::<StorePorts>::default();
 
         assert!(store
             .apply_controller_role(BrokerRole::Slave, BrokerReplicaRole::Master, 0, None, 1)
@@ -587,7 +627,7 @@ mod tests {
 
     #[test]
     fn controller_observations_fail_closed_before_store_binding() {
-        let store = EscapeBridgeStoreCapability::<OwnedMessageStore>::default();
+        let store = EscapeBridgeStoreCapability::<StorePorts>::default();
 
         assert_eq!(store.controller_heartbeat_offsets(), (None, None));
         assert!(store.set_alive_replica_num_in_group(1).is_err());

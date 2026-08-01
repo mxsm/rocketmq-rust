@@ -34,7 +34,7 @@ use rocketmq_protocol::protocol::data_version_facade::DataVersionExt;
 use rocketmq_protocol::protocol::DataVersion;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::common::file_utils;
-use rocketmq_store::MessageStore;
+use rocketmq_store::BrokerReadStore;
 use rocketmq_store::MessageStoreConfig;
 use serde::de;
 use serde::de::MapAccess;
@@ -86,7 +86,7 @@ pub(crate) struct ConsumerLagObservation {
     pub(crate) lag_messages: i64,
 }
 
-pub(crate) struct ConsumerOffsetManager<MS: MessageStore> {
+pub(crate) struct ConsumerOffsetManager<MS: BrokerReadStore> {
     broker_config: Arc<BrokerConfig>,
     message_store_config: Arc<MessageStoreConfig>,
     consumer_offset_wrapper: ConsumerOffsetWrapper,
@@ -96,11 +96,11 @@ pub(crate) struct ConsumerOffsetManager<MS: MessageStore> {
 }
 
 /// Late-bound, non-owning Store query provider for offset processing.
-struct ConsumerOffsetStoreCapability<MS: MessageStore> {
+struct ConsumerOffsetStoreCapability<MS: BrokerReadStore> {
     provider: Arc<OnceLock<Weak<EscapeBridge<MS>>>>,
 }
 
-impl<MS: MessageStore> Default for ConsumerOffsetStoreCapability<MS> {
+impl<MS: BrokerReadStore> Default for ConsumerOffsetStoreCapability<MS> {
     fn default() -> Self {
         Self {
             provider: Arc::new(OnceLock::new()),
@@ -108,7 +108,7 @@ impl<MS: MessageStore> Default for ConsumerOffsetStoreCapability<MS> {
     }
 }
 
-impl<MS: MessageStore> ConsumerOffsetStoreCapability<MS> {
+impl<MS: BrokerReadStore> ConsumerOffsetStoreCapability<MS> {
     fn bind(&self, provider: &Arc<EscapeBridge<MS>>) {
         let _ = self.provider.set(Arc::downgrade(provider));
     }
@@ -122,16 +122,16 @@ impl<MS: MessageStore> ConsumerOffsetStoreCapability<MS> {
 ///
 /// The capability shares the existing manager owner and exposes only request-time offset
 /// operations plus the two Store reads required by the legacy query fallback.
-pub(crate) struct ConsumerOffsetRequestCapability<MS: MessageStore> {
+pub(crate) struct ConsumerOffsetRequestCapability<MS: BrokerReadStore> {
     manager: Arc<ConsumerOffsetManager<MS>>,
 }
 
 /// Read-only consumer offset view that does not keep the manager or Store alive.
-pub(crate) struct ConsumerOffsetQueryCapability<MS: MessageStore> {
+pub(crate) struct ConsumerOffsetQueryCapability<MS: BrokerReadStore> {
     manager: Weak<ConsumerOffsetManager<MS>>,
 }
 
-impl<MS: MessageStore> Clone for ConsumerOffsetQueryCapability<MS> {
+impl<MS: BrokerReadStore> Clone for ConsumerOffsetQueryCapability<MS> {
     fn clone(&self) -> Self {
         Self {
             manager: Weak::clone(&self.manager),
@@ -141,7 +141,7 @@ impl<MS: MessageStore> Clone for ConsumerOffsetQueryCapability<MS> {
 
 impl<MS> ConsumerOffsetQueryCapability<MS>
 where
-    MS: MessageStore,
+    MS: BrokerReadStore,
 {
     pub(crate) fn query_offset(&self, group: &CheetahString, topic: &CheetahString, queue_id: i32) -> i64 {
         self.manager
@@ -151,7 +151,7 @@ where
     }
 }
 
-impl<MS: MessageStore> Clone for ConsumerOffsetRequestCapability<MS> {
+impl<MS: BrokerReadStore> Clone for ConsumerOffsetRequestCapability<MS> {
     fn clone(&self) -> Self {
         Self {
             manager: Arc::clone(&self.manager),
@@ -161,7 +161,7 @@ impl<MS: MessageStore> Clone for ConsumerOffsetRequestCapability<MS> {
 
 impl<MS> ConsumerOffsetRequestCapability<MS>
 where
-    MS: MessageStore,
+    MS: BrokerReadStore,
 {
     pub(crate) fn commit_offset(
         &self,
@@ -210,7 +210,7 @@ where
 
 impl<MS> ConsumerOffsetManager<MS>
 where
-    MS: MessageStore,
+    MS: BrokerReadStore,
 {
     pub(crate) fn request_capability(self: &Arc<Self>) -> ConsumerOffsetRequestCapability<MS> {
         ConsumerOffsetRequestCapability {
@@ -814,7 +814,7 @@ where
 
 impl<MS> ConfigManager for ConsumerOffsetManager<MS>
 where
-    MS: MessageStore,
+    MS: BrokerReadStore,
 {
     fn supports_metadata_io_actor(&self) -> bool {
         #[cfg(feature = "rocksdb_store")]

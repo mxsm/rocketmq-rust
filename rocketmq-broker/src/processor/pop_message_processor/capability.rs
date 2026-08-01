@@ -28,9 +28,9 @@ use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_store::ArcMessageFilter;
+use rocketmq_store::BrokerReadWriteStore;
 use rocketmq_store::BrokerStatsManager;
 use rocketmq_store::GetMessageResult;
-use rocketmq_store::MessageStore;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::PutMessageResult;
 
@@ -300,11 +300,11 @@ impl PopOrderCapability {
     }
 }
 
-pub(crate) struct PopStoreCapability<MS: MessageStore> {
+pub(crate) struct PopStoreCapability<MS: BrokerReadWriteStore> {
     provider: Weak<EscapeBridge<MS>>,
 }
 
-impl<MS: MessageStore> Clone for PopStoreCapability<MS> {
+impl<MS: BrokerReadWriteStore> Clone for PopStoreCapability<MS> {
     fn clone(&self) -> Self {
         Self {
             provider: Weak::clone(&self.provider),
@@ -312,7 +312,7 @@ impl<MS: MessageStore> Clone for PopStoreCapability<MS> {
     }
 }
 
-impl<MS: MessageStore> PopStoreCapability<MS> {
+impl<MS: BrokerReadWriteStore> PopStoreCapability<MS> {
     pub(crate) fn new(provider: &Arc<EscapeBridge<MS>>) -> Self {
         Self {
             provider: Arc::downgrade(provider),
@@ -392,7 +392,7 @@ impl<MS: MessageStore> PopStoreCapability<MS> {
     }
 }
 
-pub(crate) struct PopMessageProcessorContext<MS: MessageStore> {
+pub(crate) struct PopMessageProcessorContext<MS: BrokerReadWriteStore> {
     pub(crate) policy: PopPolicyState,
     pub(crate) topics: Arc<TopicConfigManager>,
     pub(crate) subscriptions: SubscriptionGroupConfigLookup,
@@ -409,7 +409,7 @@ pub(crate) struct PopMessageProcessorContext<MS: MessageStore> {
     clippy::too_many_arguments,
     reason = "composition root enumerates the POP request capability boundary"
 )]
-impl<MS: MessageStore> PopMessageProcessorContext<MS> {
+impl<MS: BrokerReadWriteStore> PopMessageProcessorContext<MS> {
     pub(crate) fn new(
         policy: PopPolicyState,
         topics: Arc<TopicConfigManager>,
@@ -437,7 +437,7 @@ impl<MS: MessageStore> PopMessageProcessorContext<MS> {
     }
 }
 
-pub(crate) struct PopBufferMergeContext<MS: MessageStore> {
+pub(crate) struct PopBufferMergeContext<MS: BrokerReadWriteStore> {
     pub(crate) policy: PopPolicyState,
     pub(crate) topics: Arc<TopicConfigManager>,
     pub(crate) subscriptions: SubscriptionGroupConfigLookup,
@@ -446,7 +446,7 @@ pub(crate) struct PopBufferMergeContext<MS: MessageStore> {
     service_context: Option<ChildServiceContext>,
 }
 
-impl<MS: MessageStore> PopBufferMergeContext<MS> {
+impl<MS: BrokerReadWriteStore> PopBufferMergeContext<MS> {
     pub(crate) fn new(
         policy: PopPolicyState,
         topics: Arc<TopicConfigManager>,
@@ -474,7 +474,7 @@ impl<MS: MessageStore> PopBufferMergeContext<MS> {
     }
 }
 
-pub(crate) struct PopReviveContext<MS: MessageStore> {
+pub(crate) struct PopReviveContext<MS: BrokerReadWriteStore> {
     pub(crate) policy: PopPolicyState,
     pub(crate) topics: Arc<TopicConfigManager>,
     pub(crate) topic_coordinator: Arc<TopicConfigCoordinator>,
@@ -492,7 +492,7 @@ pub(crate) struct PopReviveContext<MS: MessageStore> {
     clippy::too_many_arguments,
     reason = "composition root enumerates the POP revive capability boundary"
 )]
-impl<MS: MessageStore> PopReviveContext<MS> {
+impl<MS: BrokerReadWriteStore> PopReviveContext<MS> {
     pub(crate) fn new(
         policy: PopPolicyState,
         topics: Arc<TopicConfigManager>,
@@ -544,7 +544,7 @@ mod tests {
     use crate::config::broker_config::BrokerConfig;
     use rocketmq_model::common::broker::broker_role::BrokerRole;
     use rocketmq_store::MessageStoreConfig;
-    use rocketmq_store::OwnedMessageStore;
+    use rocketmq_store::StorePorts;
 
     use super::PopPolicyState;
     use super::PopStoreCapability;
@@ -596,7 +596,7 @@ mod tests {
 
     #[test]
     fn pop_store_capability_fails_closed_without_provider() {
-        let capability = PopStoreCapability::<OwnedMessageStore> { provider: Weak::new() };
+        let capability = PopStoreCapability::<StorePorts> { provider: Weak::new() };
 
         assert!(capability.max_offset(&"topic".into(), 0).is_err());
         assert!(capability.timer_lag().is_err());

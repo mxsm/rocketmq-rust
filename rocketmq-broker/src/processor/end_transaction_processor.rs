@@ -31,7 +31,7 @@ use rocketmq_protocol::protocol::header::end_transaction_request_header::EndTran
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::BrokerStatsManager;
-use rocketmq_store::MessageStore;
+use rocketmq_store::BrokerWriteStore;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::PutMessageResult;
 use rocketmq_store::PutMessageStatus;
@@ -71,11 +71,11 @@ impl EndTransactionPolicy {
     }
 }
 
-pub(crate) struct EndTransactionStoreCapability<MS: MessageStore> {
+pub(crate) struct EndTransactionStoreCapability<MS: BrokerWriteStore> {
     escape_bridge: Weak<EscapeBridge<MS>>,
 }
 
-impl<MS: MessageStore> EndTransactionStoreCapability<MS> {
+impl<MS: BrokerWriteStore> EndTransactionStoreCapability<MS> {
     pub(crate) fn new(escape_bridge: &Arc<EscapeBridge<MS>>) -> Self {
         Self {
             escape_bridge: Arc::downgrade(escape_bridge),
@@ -99,7 +99,7 @@ impl<MS: MessageStore> EndTransactionStoreCapability<MS> {
     }
 }
 
-impl<MS: MessageStore> Clone for EndTransactionStoreCapability<MS> {
+impl<MS: BrokerWriteStore> Clone for EndTransactionStoreCapability<MS> {
     fn clone(&self) -> Self {
         Self {
             escape_bridge: Weak::clone(&self.escape_bridge),
@@ -107,14 +107,14 @@ impl<MS: MessageStore> Clone for EndTransactionStoreCapability<MS> {
     }
 }
 
-pub(crate) struct EndTransactionProcessorContext<MS: MessageStore> {
+pub(crate) struct EndTransactionProcessorContext<MS: BrokerWriteStore> {
     policy: EndTransactionPolicy,
     message_store: EndTransactionStoreCapability<MS>,
     broker_stats_manager: Arc<BrokerStatsManager>,
     broker_metrics_manager: Option<Arc<BrokerMetricsManager>>,
 }
 
-impl<MS: MessageStore> EndTransactionProcessorContext<MS> {
+impl<MS: BrokerWriteStore> EndTransactionProcessorContext<MS> {
     pub(crate) fn new(
         policy: EndTransactionPolicy,
         message_store: EndTransactionStoreCapability<MS>,
@@ -130,7 +130,7 @@ impl<MS: MessageStore> EndTransactionProcessorContext<MS> {
     }
 }
 
-impl<MS: MessageStore> Clone for EndTransactionProcessorContext<MS> {
+impl<MS: BrokerWriteStore> Clone for EndTransactionProcessorContext<MS> {
     fn clone(&self) -> Self {
         Self {
             policy: self.policy,
@@ -141,12 +141,12 @@ impl<MS: MessageStore> Clone for EndTransactionProcessorContext<MS> {
     }
 }
 
-pub struct EndTransactionProcessor<TM, MS: MessageStore> {
+pub struct EndTransactionProcessor<TM, MS: BrokerWriteStore> {
     transactional_message_service: Arc<TM>,
     context: EndTransactionProcessorContext<MS>,
 }
 
-impl<TM, MS: MessageStore> Clone for EndTransactionProcessor<TM, MS> {
+impl<TM, MS: BrokerWriteStore> Clone for EndTransactionProcessor<TM, MS> {
     fn clone(&self) -> Self {
         Self {
             transactional_message_service: self.transactional_message_service.clone(),
@@ -158,7 +158,7 @@ impl<TM, MS: MessageStore> Clone for EndTransactionProcessor<TM, MS> {
 impl<TM, MS> RequestProcessor for EndTransactionProcessor<TM, MS>
 where
     TM: TransactionalMessageService,
-    MS: MessageStore,
+    MS: BrokerWriteStore,
 {
     async fn process_request(
         &mut self,
@@ -173,7 +173,7 @@ where
 impl<TM, MS> EndTransactionProcessor<TM, MS>
 where
     TM: TransactionalMessageService,
-    MS: MessageStore,
+    MS: BrokerWriteStore,
 {
     pub async fn process_request_shared(
         &self,
@@ -211,7 +211,7 @@ where
     }
 }
 
-impl<TM, MS: MessageStore> EndTransactionProcessor<TM, MS> {
+impl<TM, MS: BrokerWriteStore> EndTransactionProcessor<TM, MS> {
     pub(crate) fn new(transactional_message_service: Arc<TM>, context: EndTransactionProcessorContext<MS>) -> Self {
         Self {
             transactional_message_service,
@@ -223,7 +223,7 @@ impl<TM, MS: MessageStore> EndTransactionProcessor<TM, MS> {
 impl<TM, MS> EndTransactionProcessor<TM, MS>
 where
     TM: TransactionalMessageService,
-    MS: MessageStore,
+    MS: BrokerWriteStore,
 {
     async fn process_request_inner(
         &mut self,
@@ -651,7 +651,7 @@ fn end_message_transaction(msg_ext: &mut MessageExt) -> MessageExtBrokerInner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rocketmq_store::OwnedMessageStore;
+    use rocketmq_store::StorePorts;
 
     #[test]
     fn end_message_transaction_with_valid_message() {
@@ -742,7 +742,7 @@ mod tests {
 
     #[tokio::test]
     async fn end_transaction_store_capability_fails_closed_after_provider_shutdown() {
-        let capability = EndTransactionStoreCapability::<OwnedMessageStore> {
+        let capability = EndTransactionStoreCapability::<StorePorts> {
             escape_bridge: Weak::new(),
         };
 

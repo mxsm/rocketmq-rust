@@ -61,9 +61,10 @@ use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
 use rocketmq_store::get_delay_offset_store_path;
+use rocketmq_store::BrokerReadStore;
+use rocketmq_store::BrokerWriteStore;
 use rocketmq_store::ConsumeQueueStore;
 use rocketmq_store::ConsumeQueueStoreTrait;
-use rocketmq_store::MessageStore;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::PutMessageResult;
 use rocketmq_store::PutMessageStatus;
@@ -298,7 +299,7 @@ fn schedule_message_service_startup_failed(error: impl Display) -> RocketMQError
 /// **Duplicate Delivery Prevention**:
 /// Duplicate delivery is prevented through the unique message key (`uniqKey`) and the storage
 /// offset (`commitLogOffset`).
-pub struct ScheduleMessageService<MS: MessageStore> {
+pub struct ScheduleMessageService<MS: BrokerWriteStore> {
     delay_level_config: ArcSwap<DelayLevelConfig>,
     offset_state: ScheduleOffsetState,
     started: AtomicBool,
@@ -350,7 +351,7 @@ async fn schedule_sleep(cancellation: &CancellationToken, duration: Duration) ->
     }
 }
 
-impl<MS: MessageStore> ScheduleMessageService<MS> {
+impl<MS: BrokerWriteStore> ScheduleMessageService<MS> {
     pub(crate) fn new(
         broker_config: Arc<BrokerConfig>,
         message_store_config: Arc<MessageStoreConfig>,
@@ -423,7 +424,7 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
     fn update_offset(&self, delay_level: i32, offset: i64) {
         let state_machine_version = self
             .delivery_runtime()
-            .with_message_store(MessageStore::get_state_machine_version);
+            .with_message_store(BrokerReadStore::get_state_machine_version);
         let (old_offset, version_counter, version_updated) = self.offset_state.update_offset(
             delay_level,
             offset,
@@ -1003,7 +1004,7 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
     }
 }
 
-impl<MS: MessageStore> ConfigManager for ScheduleMessageService<MS> {
+impl<MS: BrokerWriteStore> ConfigManager for ScheduleMessageService<MS> {
     fn load(&self) -> bool {
         let result = {
             let file_name = self.config_file_path();
@@ -1089,7 +1090,7 @@ impl<MS: MessageStore> ConfigManager for ScheduleMessageService<MS> {
 }
 
 /// Task for delivering delayed messages when their time is up
-pub struct DeliverDelayedMessageTimerTask<MS: MessageStore> {
+pub struct DeliverDelayedMessageTimerTask<MS: BrokerWriteStore> {
     /// The delay level for this task
     delay_level: i32,
 
@@ -1101,7 +1102,7 @@ pub struct DeliverDelayedMessageTimerTask<MS: MessageStore> {
     run_context: ScheduleRunContext,
 }
 
-impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
+impl<MS: BrokerWriteStore> DeliverDelayedMessageTimerTask<MS> {
     /// Create a new timer task for delivering delayed messages
     fn new(
         delay_level: i32,
@@ -1555,7 +1556,7 @@ impl ProcessStatusCell {
 }
 
 /// Process for handling the result of putting a message
-pub struct PutResultProcess<MS: MessageStore> {
+pub struct PutResultProcess<MS: BrokerWriteStore> {
     topic: CheetahString,
     offset: i64,
     physic_offset: i64,
@@ -1570,7 +1571,7 @@ pub struct PutResultProcess<MS: MessageStore> {
     max_resend_num2_blocked: usize,
 }
 
-impl<MS: MessageStore> PutResultProcess<MS> {
+impl<MS: BrokerWriteStore> PutResultProcess<MS> {
     /// Create a new PutResultProcess instance
     pub(crate) fn new(escape_bridge: Weak<EscapeBridge<MS>>, max_resend_num2_blocked: usize) -> Self {
         Self {
@@ -1784,7 +1785,7 @@ impl<MS: MessageStore> PutResultProcess<MS> {
     }
 }
 
-impl<MS: MessageStore> Display for PutResultProcess<MS> {
+impl<MS: BrokerWriteStore> Display for PutResultProcess<MS> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -1820,7 +1821,7 @@ pub enum ProcessStatus {
     Skip,
 }
 
-enum PendingQueueAction<MS: MessageStore> {
+enum PendingQueueAction<MS: BrokerWriteStore> {
     Advance(i64),
     Wait,
     Resend(PutResultProcess<MS>),
@@ -1840,7 +1841,7 @@ impl Display for ProcessStatus {
 }
 
 /// Task for handling results of asynchronous message puts
-pub struct HandlePutResultTask<MS: MessageStore> {
+pub struct HandlePutResultTask<MS: BrokerWriteStore> {
     /// Delay level this task is handling
     delay_level: i32,
 
@@ -1849,7 +1850,7 @@ pub struct HandlePutResultTask<MS: MessageStore> {
     run_context: ScheduleRunContext,
 }
 
-impl<MS: MessageStore> HandlePutResultTask<MS> {
+impl<MS: BrokerWriteStore> HandlePutResultTask<MS> {
     /// Create a new task for handling put results at the specified delay level
     fn new(
         delay_level: i32,

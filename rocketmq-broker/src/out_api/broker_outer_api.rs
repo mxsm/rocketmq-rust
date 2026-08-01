@@ -1711,7 +1711,7 @@ mod tests {
 
         assert!(!signature.contains("BrokerRuntimeState"));
         assert!(!signature.contains("ArcMut"));
-        assert!(!signature.contains("MessageStore"));
+        assert!(!signature.contains("BrokerReplicationStore"));
     }
 
     #[test]

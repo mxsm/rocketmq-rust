@@ -30,16 +30,19 @@ use rocketmq_model::common::boundary_type::BoundaryType;
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_model::common::message::MessageTrait;
+use rocketmq_store::BrokerAdminStore;
+use rocketmq_store::BrokerReadStore;
+use rocketmq_store::BrokerStorePort;
+use rocketmq_store::BrokerWriteStore;
 use rocketmq_store::DispatchRequest;
 use rocketmq_store::FlushDiskType;
 use rocketmq_store::GetMessageStatus;
-use rocketmq_store::MessageStore;
 use rocketmq_store::MessageStoreConfig;
-use rocketmq_store::OwnedMessageStore;
 use rocketmq_store::PutMessageStatus;
 use rocketmq_store::RocksDBMessageStore;
 use rocketmq_store::StoreComponent;
 use rocketmq_store::StoreErrorKind;
+use rocketmq_store::StorePorts;
 use rocketmq_store::StoreRuntimeConfig;
 use rocketmq_store::StoreType;
 use tempfile::TempDir;
@@ -104,8 +107,8 @@ fn new_owned_test_store_with_config(config: MessageStoreConfig) -> RocksDBMessag
     .expect("create RocksDB message store")
 }
 
-fn new_test_store(store: RocksDBMessageStore) -> OwnedMessageStore {
-    OwnedMessageStore::rocksdb(store)
+fn new_test_store(store: RocksDBMessageStore) -> StorePorts {
+    StorePorts::rocksdb(store)
 }
 
 fn build_test_message(topic: &CheetahString, queue_id: i32, body: &'static [u8]) -> MessageExtBrokerInner {
@@ -116,7 +119,7 @@ fn build_test_message(topic: &CheetahString, queue_id: i32, body: &'static [u8])
     msg
 }
 
-async fn assert_trait_reads_rocksdb_cq<MS: MessageStore>(
+async fn assert_trait_reads_rocksdb_cq<MS: BrokerReadStore>(
     store: &MS,
     group: &CheetahString,
     topic: &CheetahString,

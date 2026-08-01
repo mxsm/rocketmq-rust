@@ -25,7 +25,7 @@ use rocketmq_model::common::mix_all::MASTER_ID;
 use rocketmq_protocol::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
 use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::MetadataIoActor;
-use rocketmq_store::MessageStore;
+use rocketmq_store::BrokerReplicationStore;
 use tokio::sync::Mutex as TokioMutex;
 
 use crate::broker::broker_pre_online_capability::BrokerOnlineRoleState;
@@ -116,7 +116,7 @@ impl BrokerMembershipState {
 ///
 /// This owner contains only the state and services needed for role transitions;
 /// it never retains `BrokerRuntimeState`.
-pub(crate) struct BrokerControllerRuntime<MS: MessageStore> {
+pub(crate) struct BrokerControllerRuntime<MS: BrokerReplicationStore> {
     controller: BrokerControllerState,
     membership: BrokerMembershipState,
     config: BrokerRuntimeConfigState,
@@ -138,7 +138,7 @@ pub(crate) struct BrokerControllerRuntime<MS: MessageStore> {
     blocking: Option<BlockingExecutor>,
 }
 
-impl<MS: MessageStore> BrokerControllerRuntime<MS> {
+impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
     #[allow(
         clippy::too_many_arguments,
         reason = "the composition root lists the complete controller boundary"

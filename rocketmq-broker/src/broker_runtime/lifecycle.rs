@@ -14,6 +14,8 @@
 
 use super::shutdown_report::record_message_store_shutdown_outcome;
 use super::*;
+use rocketmq_store::BrokerReadStore;
+use rocketmq_store::BrokerStorePort;
 pub(super) struct BrokerLifecycle {
     pub(super) shutdown_hook: Option<BrokerShutdownHook>,
     pub(super) scheduled_task_manager: BrokerScheduledTasks,
@@ -289,7 +291,7 @@ impl BrokerRuntime {
         } else if store_owner_is_shared {
             MessageStoreShutdownOutcome::TimedOut
         } else if let Some(message_store) = self.composition.state.message_store_mut() {
-            match await_shutdown_deadline(deadline, message_store.shutdown_gracefully()).await {
+            match await_shutdown_deadline(deadline, BrokerStorePort::shutdown_gracefully(message_store)).await {
                 Ok(Ok(report)) => MessageStoreShutdownOutcome::Completed(report),
                 Ok(Err(error)) => MessageStoreShutdownOutcome::Failed(error),
                 Err(_elapsed) => MessageStoreShutdownOutcome::TimedOut,
@@ -874,7 +876,9 @@ impl BrokerRuntime {
                 detail: "message store initialization returned an unsuccessful status".to_owned(),
             });
         }
-        self.lifecycle.startup_journal.complete(BrokerComponent::MessageStore);
+        self.lifecycle
+            .startup_journal
+            .complete(BrokerComponent::BrokerStorePort);
         if !self.recover_initialize_service().await {
             return Err(BrokerStartupError::Initialization {
                 component: "broker_services",
@@ -1050,7 +1054,7 @@ impl BrokerRuntime {
             .composition
             .state
             .message_store()
-            .is_some_and(|store| store.put_message_preflight().is_writeable());
+            .is_some_and(|store| BrokerReadStore::put_message_preflight(store).is_writeable());
         let processors_started = self.composition.state.pop_message_processor.is_some()
             && self.composition.state.pop_lite_message_processor.is_some()
             && self.composition.state.ack_message_processor.is_some()

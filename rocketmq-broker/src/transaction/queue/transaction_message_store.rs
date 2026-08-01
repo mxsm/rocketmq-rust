@@ -18,19 +18,21 @@ use std::sync::Weak;
 use cheetah_string::CheetahString;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_store::BrokerMasterAddressStore;
+use rocketmq_store::BrokerReadStore;
+use rocketmq_store::BrokerWriteStore;
 use rocketmq_store::GetMessageResult;
-use rocketmq_store::MessageStore;
 use rocketmq_store::PutMessageResult;
 use rocketmq_store::PutMessageStatus;
 
 use crate::failover::escape_bridge::EscapeBridge;
 
 /// Narrow, non-owning Store capability for the transaction subsystem.
-pub(crate) struct TransactionMessageStore<MS: MessageStore> {
+pub(crate) struct TransactionMessageStore<MS> {
     escape_bridge: Weak<EscapeBridge<MS>>,
 }
 
-impl<MS: MessageStore> Clone for TransactionMessageStore<MS> {
+impl<MS> Clone for TransactionMessageStore<MS> {
     fn clone(&self) -> Self {
         Self {
             escape_bridge: Weak::clone(&self.escape_bridge),
@@ -38,7 +40,7 @@ impl<MS: MessageStore> Clone for TransactionMessageStore<MS> {
     }
 }
 
-impl<MS: MessageStore> TransactionMessageStore<MS> {
+impl<MS: BrokerReadStore> TransactionMessageStore<MS> {
     pub(crate) fn new(escape_bridge: &Arc<EscapeBridge<MS>>) -> Self {
         Self {
             escape_bridge: Arc::downgrade(escape_bridge),
@@ -75,7 +77,10 @@ impl<MS: MessageStore> TransactionMessageStore<MS> {
             .flatten()
     }
 
-    pub(crate) async fn put_message(&self, message: MessageExtBrokerInner) -> PutMessageResult {
+    pub(crate) async fn put_message(&self, message: MessageExtBrokerInner) -> PutMessageResult
+    where
+        MS: BrokerWriteStore,
+    {
         let Some(provider) = self.escape_bridge.upgrade() else {
             return PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable);
         };
@@ -91,7 +96,10 @@ impl<MS: MessageStore> TransactionMessageStore<MS> {
             .and_then(|provider| provider.local_store_state_machine_version().ok())
     }
 
-    pub(crate) async fn update_master_address(&self, master_addr: &CheetahString) {
+    pub(crate) async fn update_master_address(&self, master_addr: &CheetahString)
+    where
+        MS: BrokerMasterAddressStore,
+    {
         let Some(provider) = self.escape_bridge.upgrade() else {
             return;
         };
@@ -102,11 +110,11 @@ impl<MS: MessageStore> TransactionMessageStore<MS> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rocketmq_store::OwnedMessageStore;
+    use rocketmq_store::StorePorts;
 
     #[tokio::test]
     async fn transaction_store_fails_closed_after_provider_shutdown() {
-        let store = TransactionMessageStore::<OwnedMessageStore> {
+        let store = TransactionMessageStore::<StorePorts> {
             escape_bridge: Weak::new(),
         };
         let topic = CheetahString::from_static_str("transaction-topic");

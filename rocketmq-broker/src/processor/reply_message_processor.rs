@@ -30,8 +30,9 @@ use rocketmq_protocol::protocol::header::message_operation_header::TopicRequestH
 use rocketmq_protocol::protocol::header::reply_message_request_header::ReplyMessageRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::common::time_utils::current_millis;
+use rocketmq_store::BrokerMasterAddressStore;
 use rocketmq_store::BrokerStatsManager;
-use rocketmq_store::MessageStore;
+use rocketmq_store::BrokerWriteStore;
 use rocketmq_store::PutMessageResult;
 use rocketmq_store::PutMessageStatus;
 use rocketmq_store::StatsType;
@@ -86,11 +87,11 @@ fn push_reply_call_failed_remark(sender_id: &str) -> String {
 ///                                                      
 ///                                              
 /// ```
-pub struct ReplyMessageProcessor<MS: MessageStore, TS> {
+pub struct ReplyMessageProcessor<MS: BrokerWriteStore, TS> {
     inner: Arc<Inner<MS, TS>>,
 }
 
-impl<MS: MessageStore, TS> Clone for ReplyMessageProcessor<MS, TS> {
+impl<MS: BrokerWriteStore, TS> Clone for ReplyMessageProcessor<MS, TS> {
     fn clone(&self) -> Self {
         Self {
             inner: Arc::clone(&self.inner),
@@ -100,7 +101,7 @@ impl<MS: MessageStore, TS> Clone for ReplyMessageProcessor<MS, TS> {
 
 impl<MS, TS> RequestProcessor for ReplyMessageProcessor<MS, TS>
 where
-    MS: MessageStore,
+    MS: BrokerWriteStore + BrokerMasterAddressStore,
     TS: TransactionalMessageService,
 {
     async fn process_request(
@@ -115,7 +116,7 @@ where
 
 impl<MS, TS> ReplyMessageProcessor<MS, TS>
 where
-    MS: MessageStore,
+    MS: BrokerWriteStore + BrokerMasterAddressStore,
     TS: TransactionalMessageService,
 {
     pub async fn process_request_shared(
@@ -158,7 +159,7 @@ where
 
 impl<MS, TS> ReplyMessageProcessor<MS, TS>
 where
-    MS: MessageStore,
+    MS: BrokerWriteStore + BrokerMasterAddressStore,
     TS: TransactionalMessageService,
 {
     pub fn new(transactional_message_service: Arc<TS>, context: Arc<SendMessageProcessorContext<MS>>) -> Self {
@@ -175,7 +176,7 @@ where
 }
 impl<MS, TS> ReplyMessageProcessor<MS, TS>
 where
-    MS: MessageStore,
+    MS: BrokerWriteStore + BrokerMasterAddressStore,
     TS: TransactionalMessageService,
 {
     async fn process_request_inner(

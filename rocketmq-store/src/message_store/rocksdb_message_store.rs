@@ -35,7 +35,7 @@ use rocketmq_protocol::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_runtime::common::system_clock::SystemClock;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_store_api::GetStatus as ApiGetStatus;
-use rocketmq_store_local::commit_log::read::LocalWalPort;
+use rocketmq_store_api::WalPort;
 use rocketmq_store_rocksdb::message_store::RocksDbDerivedStore;
 use rocketmq_store_rocksdb::message_store::RocksDbMessageStoreError;
 use rocketmq_store_rocksdb::message_store::RocksDbMessageStoreOptions;
@@ -45,17 +45,17 @@ use rocketmq_store_rocksdb::message_store::RocksDbTimeBoundary;
 use tracing::warn;
 
 use crate::base::allocate_mapped_file_service::AllocateMappedFileService;
+use crate::base::backend_ops::BackendOps;
+use crate::base::backend_ops::MessageStoreShutdownReport;
+use crate::base::backend_ops::PutMessagePreflight;
+use crate::base::backend_ops::StateMachineVersionView;
+use crate::base::backend_ops::StoreHealthSnapshot;
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
 use crate::base::dispatch_request::DispatchRequest;
 use crate::base::get_message_result::GetMessageResult;
 use crate::base::message_result::AppendMessageResult;
 use crate::base::message_result::PutMessageResult;
 use crate::base::message_status_enum::GetMessageStatus;
-use crate::base::message_store::MessageStore;
-use crate::base::message_store::MessageStoreShutdownReport;
-use crate::base::message_store::PutMessagePreflight;
-use crate::base::message_store::StateMachineVersionView;
-use crate::base::message_store::StoreHealthSnapshot;
 use crate::base::query_message_result::QueryMessageResult;
 use crate::base::select_result::SelectMappedBufferResult;
 use crate::base::store_checkpoint::StoreCheckpoint;
@@ -110,7 +110,7 @@ struct StoreLocalWalAdapter<'a> {
     correct_to_new_offset: bool,
 }
 
-impl LocalWalPort for StoreLocalWalAdapter<'_> {
+impl WalPort for StoreLocalWalAdapter<'_> {
     type Selection = SelectMappedBufferResult;
 
     fn read_message(&self, offset: i64, size: i32) -> Result<Option<Self::Selection>, rocketmq_store_api::StoreError> {
@@ -539,7 +539,7 @@ fn message_store_adapter_error(error: RocksDbMessageStoreError) -> StoreError {
     }
 }
 
-impl MessageStore for RocksDBMessageStore {
+impl BackendOps for RocksDBMessageStore {
     async fn load(&mut self) -> bool {
         if !self.local_file_store.load().await {
             return false;
@@ -1112,11 +1112,11 @@ impl MessageStore for RocksDBMessageStore {
         self.local_file_store.increase_offset(msg, message_num);
     }
 
-    fn get_master_store_in_process<M: MessageStore + Send + Sync + 'static>(&self) -> Option<Arc<M>> {
+    fn get_master_store_in_process<M: BackendOps + Send + Sync + 'static>(&self) -> Option<Arc<M>> {
         self.local_file_store.get_master_store_in_process::<M>()
     }
 
-    fn set_master_store_in_process<M: MessageStore + Send + Sync + 'static>(&self, master_store_in_process: Arc<M>) {
+    fn set_master_store_in_process<M: BackendOps + Send + Sync + 'static>(&self, master_store_in_process: Arc<M>) {
         self.local_file_store
             .set_master_store_in_process(master_store_in_process);
     }
