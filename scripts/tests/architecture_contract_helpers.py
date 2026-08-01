@@ -45,6 +45,18 @@ def workspace_packages() -> dict[str, str]:
     return packages
 
 
+def governed_packages() -> dict[str, str]:
+    packages = workspace_packages()
+    policy = load_json("scripts/architecture-dependency-policy.json")
+    governed = set(policy["target_dag"])
+    for manifest_path in policy["roots"]["standalone_manifests"]:
+        manifest = load_toml(manifest_path)
+        name = manifest["package"]["name"]
+        if name in governed:
+            packages[name] = str(Path(manifest_path).parent).replace("\\", "/")
+    return packages
+
+
 def normal_dependencies(relative: str) -> set[str]:
     return set(load_toml(relative).get("dependencies", {}))
 

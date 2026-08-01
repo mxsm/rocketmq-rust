@@ -3,14 +3,14 @@
 
 import unittest
 
+from scripts.tests.architecture_contract_helpers import governed_packages
 from scripts.tests.architecture_contract_helpers import load_json
 from scripts.tests.architecture_contract_helpers import run_dependency_guard
-from scripts.tests.architecture_contract_helpers import workspace_packages
 
 
 class TargetDagCloseoutTests(unittest.TestCase):
     def test_workspace_and_target_dag_have_the_same_current_packages(self) -> None:
-        packages = set(workspace_packages())
+        packages = set(governed_packages())
         policy = load_json("scripts/architecture-dependency-policy.json")
 
         self.assertEqual(packages, set(policy["target_dag"]))

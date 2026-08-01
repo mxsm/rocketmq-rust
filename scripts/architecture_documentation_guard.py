@@ -115,6 +115,38 @@ def package_name(manifest: dict[str, Any], path: Path) -> str:
     return name
 
 
+def package_manifest_paths(manifest_path: Path, manifest: dict[str, Any]) -> tuple[Path, ...]:
+    if isinstance(manifest.get("package"), dict):
+        return (manifest_path,)
+    workspace = manifest.get("workspace", {})
+    members = workspace.get("members", []) if isinstance(workspace, dict) else []
+    if not isinstance(members, list) or not members:
+        raise ValueError(f"{manifest_path} has neither package.name nor workspace.members")
+    paths = []
+    for member in members:
+        if not isinstance(member, str) or "*" in member:
+            raise ValueError(f"{manifest_path} requires explicit workspace member paths")
+        paths.append(manifest_path.parent / member / "Cargo.toml")
+    return tuple(paths)
+
+
+def nearest_workspace_dependencies(path: Path, root: Path) -> tuple[Path, dict[str, Any]]:
+    for directory in (path.parent, *path.parents):
+        if directory == root.parent:
+            break
+        candidate = directory / "Cargo.toml"
+        if not candidate.is_file():
+            continue
+        manifest = load_toml(candidate)
+        workspace = manifest.get("workspace", {})
+        dependencies = workspace.get("dependencies", {}) if isinstance(workspace, dict) else {}
+        if isinstance(dependencies, dict) and dependencies:
+            return candidate, dependencies
+        if directory == root:
+            break
+    return path, {}
+
+
 def collect_root_packages(root: Path, root_manifest: dict[str, Any]) -> tuple[Package, ...]:
     workspace = root_manifest.get("workspace", {})
     members = workspace.get("members", []) if isinstance(workspace, dict) else []
@@ -134,8 +166,12 @@ def manifest_paths(root: Path, root_manifest: dict[str, Any], policy: dict[str, 
     workspace = root_manifest["workspace"]
     paths = [root / "Cargo.toml"]
     paths.extend(root / member / "Cargo.toml" for member in workspace["members"])
-    paths.extend(root / entry["manifest"] for entry in policy["standalone"])
-    return paths
+    for entry in policy["standalone"]:
+        manifest_path = root / entry["manifest"]
+        manifest = load_toml(manifest_path)
+        paths.append(manifest_path)
+        paths.extend(path for path in package_manifest_paths(manifest_path, manifest) if path != manifest_path)
+    return list(dict.fromkeys(paths))
 
 
 def dependency_features(value: object) -> tuple[tuple[str, ...], bool]:
@@ -147,13 +183,19 @@ def dependency_features(value: object) -> tuple[tuple[str, ...], bool]:
 
 
 def collect_tokio(root: Path, manifests: Iterable[Path], root_manifest: dict[str, Any]) -> tuple[TokioDeclaration, ...]:
-    workspace_dependencies = root_manifest.get("workspace", {}).get("dependencies", {})
     declarations: list[TokioDeclaration] = []
     for path in manifests:
         manifest = load_toml(path)
         relative = normalized(path.relative_to(root))
         tables = list(dependency_tables(manifest))
-        if path == root / "Cargo.toml" and isinstance(workspace_dependencies, dict):
+        workspace = manifest.get("workspace", {})
+        own_workspace_dependencies = workspace.get("dependencies", {}) if isinstance(workspace, dict) else {}
+        if isinstance(own_workspace_dependencies, dict) and own_workspace_dependencies:
+            tables.append(own_workspace_dependencies)
+        _, workspace_dependencies = nearest_workspace_dependencies(path, root)
+        if path == root / "Cargo.toml" and not workspace_dependencies:
+            workspace_dependencies = root_manifest.get("workspace", {}).get("dependencies", {})
+        if path == root / "Cargo.toml" and isinstance(workspace_dependencies, dict) and not own_workspace_dependencies:
             tables.append(workspace_dependencies)
         seen: set[str] = set()
         for table in tables:
@@ -172,23 +214,36 @@ def collect_tokio(root: Path, manifests: Iterable[Path], root_manifest: dict[str
 def collect_local_edges(root: Path, policy: dict[str, Any]) -> tuple[LocalEdge, ...]:
     edges: list[LocalEdge] = []
     for entry in policy["standalone"]:
-        manifest_path = root / entry["manifest"]
-        manifest = load_toml(manifest_path)
-        consumer = package_name(manifest, manifest_path)
-        for table in dependency_tables(manifest):
-            for dependency, value in table.items():
-                if not isinstance(value, dict) or not isinstance(value.get("path"), str):
-                    continue
-                target_path = (manifest_path.parent / value["path"]).resolve()
-                try:
-                    relative_target = target_path.relative_to(root.resolve())
-                except ValueError:
-                    continue
-                target_manifest = target_path / "Cargo.toml"
-                if not target_manifest.is_file():
-                    continue
-                target = package_name(load_toml(target_manifest), target_manifest)
-                edges.append(LocalEdge(consumer, str(dependency), normalized(relative_target)))
+        standalone_path = root / entry["manifest"]
+        standalone_manifest = load_toml(standalone_path)
+        for manifest_path in package_manifest_paths(standalone_path, standalone_manifest):
+            manifest = load_toml(manifest_path)
+            consumer = package_name(manifest, manifest_path)
+            workspace_path, workspace_dependencies = nearest_workspace_dependencies(manifest_path, root)
+            for table in dependency_tables(manifest):
+                for dependency, value in table.items():
+                    if not isinstance(value, dict):
+                        continue
+                    dependency_value = value
+                    dependency_base = manifest_path.parent
+                    if value.get("workspace") is True:
+                        inherited = workspace_dependencies.get(dependency)
+                        if not isinstance(inherited, dict):
+                            continue
+                        dependency_value = inherited
+                        dependency_base = workspace_path.parent
+                    if not isinstance(dependency_value.get("path"), str):
+                        continue
+                    target_path = (dependency_base / dependency_value["path"]).resolve()
+                    try:
+                        relative_target = target_path.relative_to(root.resolve())
+                    except ValueError:
+                        continue
+                    target_manifest = target_path / "Cargo.toml"
+                    if not target_manifest.is_file():
+                        continue
+                    target = package_name(load_toml(target_manifest), target_manifest)
+                    edges.append(LocalEdge(consumer, str(dependency), normalized(relative_target)))
     return tuple(sorted(set(edges), key=lambda item: (item.consumer, item.dependency, item.target)))
 
 
@@ -227,8 +282,8 @@ def validate_schema(policy: dict[str, Any]) -> list[Finding]:
     if set(policy) != required or policy.get("schema_version") != 1:
         findings.append(Finding("policy-schema", normalized(POLICY_RELATIVE), "unexpected top-level schema"))
     standalone = policy.get("standalone", [])
-    if not isinstance(standalone, list) or len(standalone) != 5:
-        findings.append(Finding("standalone-count", normalized(POLICY_RELATIVE), "exactly five Cargo roots required"))
+    if not isinstance(standalone, list) or len(standalone) != 7:
+        findings.append(Finding("standalone-count", normalized(POLICY_RELATIVE), "exactly seven Cargo roots required"))
     return findings
 
 
@@ -397,7 +452,11 @@ def validate_toolchains(root: Path, policy: dict[str, Any], facts: Facts) -> lis
         findings.append(Finding("formal-toolchain", "rust-toolchain.toml", f"expected {formal} everywhere"))
     for entry in facts.standalone:
         manifest = load_toml(root / entry["manifest"])
-        version = manifest.get("package", {}).get("rust-version")
+        package = manifest.get("package", {})
+        workspace_package = manifest.get("workspace", {}).get("package", {})
+        version = package.get("rust-version") if isinstance(package, dict) else None
+        if version is None and isinstance(workspace_package, dict):
+            version = workspace_package.get("rust-version")
         if version != formal:
             findings.append(Finding("standalone-msrv", entry["manifest"], f"expected rust-version {formal}"))
     formal_workflows = {
@@ -409,7 +468,9 @@ def validate_toolchains(root: Path, policy: dict[str, Any], facts: Facts) -> lis
         if not path.is_file():
             continue
         source = path.read_text(encoding="utf-8")
-        if "rust-toolchain@nightly" in source or "toolchain: nightly" in source:
+        uses_nightly = "rust-toolchain@nightly" in source or "toolchain: nightly" in source
+        has_formal_route = f"rust-toolchain@{formal}" in source or "rustup show active-toolchain" in source
+        if uses_nightly and not has_formal_route:
             findings.append(Finding("nightly-formal-gate", workflow, "formal validation must use rust-toolchain.toml"))
     return findings
 
@@ -432,6 +493,11 @@ def validate_routes(root: Path, policy: dict[str, Any], facts: Facts) -> list[Fi
             workflow = workflow_path.read_text(encoding="utf-8")
             workflow_flat = re.sub(r"\s+", " ", workflow)
             project = normalized(Path(entry["manifest"]).parent)
+            routed_workflow = re.sub(r"\\\s*", " ", workflow_flat)
+            routed_workflow = routed_workflow.replace(f"--manifest-path {entry['manifest']}", "")
+            if project:
+                routed_workflow = routed_workflow.replace(f"python {project}/", "python ")
+            routed_workflow = re.sub(r"\s+", " ", routed_workflow)
             if project not in workflow:
                 findings.append(Finding("path-filter-missing", entry["workflow"], f"does not route {project}"))
             for command in entry["commands"]:
@@ -441,6 +507,8 @@ def validate_routes(root: Path, policy: dict[str, Any], facts: Facts) -> list[Fi
                     and tail not in workflow
                     and command not in workflow_flat
                     and tail not in workflow_flat
+                    and command not in routed_workflow
+                    and tail not in routed_workflow
                 ):
                     findings.append(Finding("validation-command-missing", entry["workflow"], command))
     for entry in facts.node_projects:

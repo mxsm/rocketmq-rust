@@ -102,11 +102,11 @@ class M06LocalStoreCompositionContractTests(unittest.TestCase):
     def test_public_path_compile_fixture_is_present(self) -> None:
         fixture = source("rocketmq-store/src/lib.rs")
         self.assertIn(
-            "message_store::local_file_message_store::LocalFileMessageStore",
+            "use rocketmq_store::LocalFileMessageStore;",
             fixture,
         )
         self.assertIn(
-            "message_store::local_file_message_store::LocalStoreComposition",
+            "use rocketmq_store_local::message_store::local_file_message_store::LocalStoreComposition;",
             fixture,
         )
 

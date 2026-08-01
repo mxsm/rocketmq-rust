@@ -149,6 +149,10 @@ jobs:
         include:
           - id: example
             manifest: rocketmq-example/Cargo.toml
+          - id: rocketmq-mcp
+            manifest: rocketmq-tools/rocketmq-mcp/Cargo.toml
+          - id: rocketmq-sre
+            manifest: rocketmq-sre/Cargo.toml
           - id: dashboard-gpui
             manifest: rocketmq-dashboard/rocketmq-dashboard-gpui/Cargo.toml
           - id: dashboard-tauri-backend

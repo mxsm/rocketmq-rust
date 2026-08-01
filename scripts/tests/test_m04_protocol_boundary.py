@@ -4,14 +4,14 @@
 import unittest
 
 from scripts.tests.architecture_contract_helpers import ROOT
+from scripts.tests.architecture_contract_helpers import governed_packages
 from scripts.tests.architecture_contract_helpers import load_json
 from scripts.tests.architecture_contract_helpers import normal_dependencies
-from scripts.tests.architecture_contract_helpers import workspace_packages
 
 
 class ProtocolBoundaryTests(unittest.TestCase):
     def test_workspace_exposes_the_current_protocol_crate(self) -> None:
-        packages = workspace_packages()
+        packages = governed_packages()
         policy = load_json("scripts/architecture-dependency-policy.json")
 
         self.assertIn("rocketmq-protocol", packages)
