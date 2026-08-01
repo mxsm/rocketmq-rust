@@ -5,7 +5,7 @@
       "reexports": 3
     },
     "rocketmq-admin-core": {
-      "public_items": 1410,
+      "public_items": 1409,
       "reexports": 114
     },
     "rocketmq-admin-tui": {
@@ -17,7 +17,7 @@
       "reexports": 172
     },
     "rocketmq-broker": {
-      "public_items": 1383,
+      "public_items": 1384,
       "reexports": 76
     },
     "rocketmq-client": {
@@ -105,23 +105,23 @@
       "reexports": 55
     },
     "rocketmq-sre": {
-      "public_items": 1400,
-      "reexports": 919
+      "public_items": 1398,
+      "reexports": 914
     },
     "rocketmq-store": {
-      "public_items": 1253,
+      "public_items": 1255,
       "reexports": 479
     },
     "rocketmq-store-api": {
-      "public_items": 145,
-      "reexports": 50
+      "public_items": 176,
+      "reexports": 63
     },
     "rocketmq-store-inspect": {
       "public_items": 5,
       "reexports": 0
     },
     "rocketmq-store-local": {
-      "public_items": 1354,
+      "public_items": 1352,
       "reexports": 49
     },
     "rocketmq-store-rocksdb": {
@@ -764,7 +764,7 @@
       "reexports": 0
     },
     "rocketmq-broker/src/client/client_housekeeping_service.rs": {
-      "production_lines": 178,
+      "production_lines": 170,
       "public_items": 5,
       "reexports": 0
     },
@@ -899,8 +899,8 @@
       "reexports": 0
     },
     "rocketmq-broker/src/controller/replicas_manager.rs": {
-      "production_lines": 698,
-      "public_items": 44,
+      "production_lines": 756,
+      "public_items": 45,
       "reexports": 0
     },
     "rocketmq-broker/src/failover.rs": {
@@ -989,7 +989,7 @@
       "reexports": 0
     },
     "rocketmq-broker/src/latency/broker_fast_failure.rs": {
-      "production_lines": 583,
+      "production_lines": 577,
       "public_items": 0,
       "reexports": 0
     },
@@ -1259,7 +1259,7 @@
       "reexports": 0
     },
     "rocketmq-broker/src/processor/admin_broker_processor/broker_config_request_handler.rs": {
-      "production_lines": 903,
+      "production_lines": 958,
       "public_items": 10,
       "reexports": 0
     },
@@ -1329,7 +1329,7 @@
       "reexports": 0
     },
     "rocketmq-broker/src/processor/admin_broker_processor/notify_broker_role_change_handler.rs": {
-      "production_lines": 64,
+      "production_lines": 84,
       "public_items": 3,
       "reexports": 0
     },
@@ -1629,7 +1629,7 @@
       "reexports": 0
     },
     "rocketmq-broker/src/topic/topic_queue_mapping_clean_service.rs": {
-      "production_lines": 487,
+      "production_lines": 481,
       "public_items": 3,
       "reexports": 0
     },
@@ -2134,7 +2134,7 @@
       "reexports": 0
     },
     "rocketmq-client/src/consumer/lite_pull_consumer.rs": {
-      "production_lines": 147,
+      "production_lines": 142,
       "public_items": 5,
       "reexports": 0
     },
@@ -2839,7 +2839,7 @@
       "reexports": 0
     },
     "rocketmq-controller/src/controller/broker_role_notifier.rs": {
-      "production_lines": 86,
+      "production_lines": 101,
       "public_items": 0,
       "reexports": 0
     },
@@ -2849,7 +2849,7 @@
       "reexports": 0
     },
     "rocketmq-controller/src/controller/controller_manager.rs": {
-      "production_lines": 827,
+      "production_lines": 847,
       "public_items": 22,
       "reexports": 0
     },
@@ -2999,7 +2999,7 @@
       "reexports": 0
     },
     "rocketmq-controller/src/manager/replicas_info_manager.rs": {
-      "production_lines": 993,
+      "production_lines": 1043,
       "public_items": 24,
       "reexports": 0
     },
@@ -7284,7 +7284,7 @@
       "reexports": 0
     },
     "rocketmq-runtime/src/task_group.rs": {
-      "production_lines": 789,
+      "production_lines": 794,
       "public_items": 31,
       "reexports": 0
     },
@@ -7369,7 +7369,7 @@
       "reexports": 0
     },
     "rocketmq-sre/crates/rocketmq-sre-connector/src/channel.rs": {
-      "production_lines": 563,
+      "production_lines": 571,
       "public_items": 0,
       "reexports": 0
     },
@@ -7379,7 +7379,7 @@
       "reexports": 0
     },
     "rocketmq-sre/crates/rocketmq-sre-connector/src/engine.rs": {
-      "production_lines": 361,
+      "production_lines": 376,
       "public_items": 2,
       "reexports": 0
     },
@@ -7389,12 +7389,12 @@
       "reexports": 0
     },
     "rocketmq-sre/crates/rocketmq-sre-connector/src/lib.rs": {
-      "production_lines": 30,
+      "production_lines": 31,
       "public_items": 1,
       "reexports": 15
     },
     "rocketmq-sre/crates/rocketmq-sre-connector/src/main.rs": {
-      "production_lines": 22,
+      "production_lines": 23,
       "public_items": 0,
       "reexports": 0
     },
@@ -7403,8 +7403,33 @@
       "public_items": 0,
       "reexports": 0
     },
+    "rocketmq-sre/crates/rocketmq-sre-connector/src/read_gateway.rs": {
+      "production_lines": 297,
+      "public_items": 0,
+      "reexports": 0
+    },
+    "rocketmq-sre/crates/rocketmq-sre-connector/src/read_gateway/admin.rs": {
+      "production_lines": 72,
+      "public_items": 0,
+      "reexports": 0
+    },
+    "rocketmq-sre/crates/rocketmq-sre-connector/src/read_gateway/audit.rs": {
+      "production_lines": 94,
+      "public_items": 0,
+      "reexports": 0
+    },
+    "rocketmq-sre/crates/rocketmq-sre-connector/src/read_gateway/mcp.rs": {
+      "production_lines": 55,
+      "public_items": 0,
+      "reexports": 0
+    },
+    "rocketmq-sre/crates/rocketmq-sre-connector/src/read_gateway/policy.rs": {
+      "production_lines": 194,
+      "public_items": 0,
+      "reexports": 0
+    },
     "rocketmq-sre/crates/rocketmq-sre-connector/src/sources.rs": {
-      "production_lines": 954,
+      "production_lines": 939,
       "public_items": 0,
       "reexports": 0
     },
@@ -7424,7 +7449,7 @@
       "reexports": 0
     },
     "rocketmq-sre/crates/rocketmq-sre-connector/src/sources/broker_store_diagnostics.rs": {
-      "production_lines": 97,
+      "production_lines": 110,
       "public_items": 0,
       "reexports": 0
     },
@@ -7439,7 +7464,7 @@
       "reexports": 0
     },
     "rocketmq-sre/crates/rocketmq-sre-connector/src/sources/common.rs": {
-      "production_lines": 376,
+      "production_lines": 388,
       "public_items": 0,
       "reexports": 0
     },
@@ -7449,12 +7474,12 @@
       "reexports": 0
     },
     "rocketmq-sre/crates/rocketmq-sre-connector/src/sources/inventory.rs": {
-      "production_lines": 388,
+      "production_lines": 383,
       "public_items": 0,
       "reexports": 0
     },
     "rocketmq-sre/crates/rocketmq-sre-connector/src/sources/inventory/client_connections.rs": {
-      "production_lines": 396,
+      "production_lines": 395,
       "public_items": 0,
       "reexports": 0
     },
@@ -7469,7 +7494,7 @@
       "reexports": 0
     },
     "rocketmq-sre/crates/rocketmq-sre-connector/src/sources/inventory/rocketmq.rs": {
-      "production_lines": 1144,
+      "production_lines": 1114,
       "public_items": 0,
       "reexports": 0
     },
@@ -7514,12 +7539,12 @@
       "reexports": 0
     },
     "rocketmq-sre/crates/rocketmq-sre-connector/src/sources/required_signals.rs": {
-      "production_lines": 481,
+      "production_lines": 480,
       "public_items": 0,
       "reexports": 0
     },
     "rocketmq-sre/crates/rocketmq-sre-connector/src/sources/runtime_diagnostics.rs": {
-      "production_lines": 330,
+      "production_lines": 333,
       "public_items": 0,
       "reexports": 0
     },
@@ -7529,7 +7554,7 @@
       "reexports": 0
     },
     "rocketmq-sre/crates/rocketmq-sre-connector/src/sources/topology.rs": {
-      "production_lines": 57,
+      "production_lines": 53,
       "public_items": 0,
       "reexports": 0
     },
@@ -7584,8 +7609,8 @@
       "reexports": 0
     },
     "rocketmq-sre/crates/rocketmq-sre-contracts/src/connector.rs": {
-      "production_lines": 176,
-      "public_items": 14,
+      "production_lines": 188,
+      "public_items": 15,
       "reexports": 0
     },
     "rocketmq-sre/crates/rocketmq-sre-contracts/src/correlation.rs": {
@@ -7659,9 +7684,9 @@
       "reexports": 0
     },
     "rocketmq-sre/crates/rocketmq-sre-contracts/src/lib.rs": {
-      "production_lines": 489,
+      "production_lines": 490,
       "public_items": 6,
-      "reexports": 440
+      "reexports": 441
     },
     "rocketmq-sre/crates/rocketmq-sre-contracts/src/notification.rs": {
       "production_lines": 69,
@@ -9159,37 +9184,37 @@
       "reexports": 0
     },
     "rocketmq-sre/crates/rocketmq-sre-execution-agent/src/drivers.rs": {
-      "production_lines": 126,
+      "production_lines": 123,
       "public_items": 3,
-      "reexports": 64
+      "reexports": 61
     },
     "rocketmq-sre/crates/rocketmq-sre-execution-agent/src/drivers/admin_core.rs": {
-      "production_lines": 191,
-      "public_items": 23,
+      "production_lines": 189,
+      "public_items": 22,
       "reexports": 0
     },
     "rocketmq-sre/crates/rocketmq-sre-execution-agent/src/drivers/broker_config_patch.rs": {
-      "production_lines": 284,
+      "production_lines": 282,
       "public_items": 3,
       "reexports": 0
     },
     "rocketmq-sre/crates/rocketmq-sre-execution-agent/src/drivers/config.rs": {
-      "production_lines": 87,
-      "public_items": 10,
+      "production_lines": 85,
+      "public_items": 9,
       "reexports": 0
     },
     "rocketmq-sre/crates/rocketmq-sre-execution-agent/src/drivers/credential_rotation.rs": {
-      "production_lines": 273,
+      "production_lines": 271,
       "public_items": 3,
       "reexports": 0
     },
     "rocketmq-sre/crates/rocketmq-sre-execution-agent/src/drivers/kubernetes.rs": {
-      "production_lines": 164,
-      "public_items": 17,
+      "production_lines": 162,
+      "public_items": 16,
       "reexports": 0
     },
     "rocketmq-sre/crates/rocketmq-sre-execution-agent/src/drivers/logger_level_ttl.rs": {
-      "production_lines": 266,
+      "production_lines": 264,
       "public_items": 3,
       "reexports": 0
     },
@@ -9254,32 +9279,32 @@
       "reexports": 0
     },
     "rocketmq-sre/crates/rocketmq-sre-execution-agent/src/drivers/proxy_image_canary.rs": {
-      "production_lines": 269,
+      "production_lines": 267,
       "public_items": 3,
       "reexports": 0
     },
     "rocketmq-sre/crates/rocketmq-sre-execution-agent/src/drivers/proxy_restart_one.rs": {
-      "production_lines": 288,
+      "production_lines": 286,
       "public_items": 3,
       "reexports": 0
     },
     "rocketmq-sre/crates/rocketmq-sre-execution-agent/src/drivers/proxy_scale_out_one.rs": {
-      "production_lines": 247,
+      "production_lines": 245,
       "public_items": 3,
       "reexports": 0
     },
     "rocketmq-sre/crates/rocketmq-sre-execution-agent/src/drivers/subscription_group_patch.rs": {
-      "production_lines": 276,
+      "production_lines": 274,
       "public_items": 3,
       "reexports": 0
     },
     "rocketmq-sre/crates/rocketmq-sre-execution-agent/src/drivers/telemetry_collector_restart_one.rs": {
-      "production_lines": 239,
+      "production_lines": 237,
       "public_items": 3,
       "reexports": 0
     },
     "rocketmq-sre/crates/rocketmq-sre-execution-agent/src/drivers/topic_config_patch.rs": {
-      "production_lines": 266,
+      "production_lines": 264,
       "public_items": 3,
       "reexports": 0
     },
@@ -9299,9 +9324,9 @@
       "reexports": 0
     },
     "rocketmq-sre/crates/rocketmq-sre-execution-agent/src/lib.rs": {
-      "production_lines": 117,
+      "production_lines": 114,
       "public_items": 2,
-      "reexports": 97
+      "reexports": 94
     },
     "rocketmq-sre/crates/rocketmq-sre-execution-agent/src/main.rs": {
       "production_lines": 24,
@@ -9309,7 +9334,7 @@
       "reexports": 0
     },
     "rocketmq-sre/crates/rocketmq-sre-execution-agent/src/registry.rs": {
-      "production_lines": 145,
+      "production_lines": 142,
       "public_items": 7,
       "reexports": 0
     },
@@ -9603,10 +9628,15 @@
       "public_items": 28,
       "reexports": 0
     },
+    "rocketmq-store-api/src/ha_contract.rs": {
+      "production_lines": 320,
+      "public_items": 30,
+      "reexports": 0
+    },
     "rocketmq-store-api/src/lib.rs": {
-      "production_lines": 460,
-      "public_items": 52,
-      "reexports": 41
+      "production_lines": 502,
+      "public_items": 53,
+      "reexports": 54
     },
     "rocketmq-store-api/src/progress.rs": {
       "production_lines": 355,
@@ -9874,8 +9904,8 @@
       "reexports": 0
     },
     "rocketmq-store-local/src/ha/replication.rs": {
-      "production_lines": 301,
-      "public_items": 29,
+      "production_lines": 265,
+      "public_items": 27,
       "reexports": 0
     },
     "rocketmq-store-local/src/ha/transfer_engine.rs": {
@@ -10524,8 +10554,8 @@
       "reexports": 0
     },
     "rocketmq-store/src/ha/auto_switch/auto_switch_ha_service.rs": {
-      "production_lines": 310,
-      "public_items": 15,
+      "production_lines": 324,
+      "public_items": 17,
       "reexports": 0
     },
     "rocketmq-store/src/ha/default_ha_client.rs": {
@@ -10559,12 +10589,12 @@
       "reexports": 0
     },
     "rocketmq-store/src/ha/general_ha_service.rs": {
-      "production_lines": 265,
+      "production_lines": 284,
       "public_items": 8,
       "reexports": 0
     },
     "rocketmq-store/src/ha/group_transfer_service.rs": {
-      "production_lines": 242,
+      "production_lines": 289,
       "public_items": 7,
       "reexports": 0
     },
@@ -10719,7 +10749,7 @@
       "reexports": 0
     },
     "rocketmq-store/src/log_file/commit_log/handles.rs": {
-      "production_lines": 309,
+      "production_lines": 316,
       "public_items": 0,
       "reexports": 0
     },
@@ -10794,7 +10824,7 @@
       "reexports": 2
     },
     "rocketmq-store/src/message_store/local_file_message_store.rs": {
-      "production_lines": 1981,
+      "production_lines": 1985,
       "public_items": 1,
       "reexports": 4
     },
@@ -12074,7 +12104,7 @@
       "reexports": 0
     },
     "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/client_adapter/mutation.rs": {
-      "production_lines": 1051,
+      "production_lines": 1049,
       "public_items": 21,
       "reexports": 2
     },
@@ -12274,8 +12304,8 @@
       "reexports": 0
     },
     "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/core/broker.rs": {
-      "production_lines": 697,
-      "public_items": 43,
+      "production_lines": 738,
+      "public_items": 44,
       "reexports": 0
     },
     "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/core/client_connection.rs": {
@@ -12294,8 +12324,8 @@
       "reexports": 0
     },
     "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/core/dashboard.rs": {
-      "production_lines": 385,
-      "public_items": 41,
+      "production_lines": 381,
+      "public_items": 39,
       "reexports": 1
     },
     "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/core/error.rs": {
@@ -13118,17 +13148,17 @@
     },
     {
       "metrics": {
-        "churn_commits": 163,
+        "churn_commits": 164,
         "contributors": 5,
         "crate": "rocketmq-store",
         "defect_commits": 4,
         "fan_out": 25,
         "lock_sites": 21,
         "path": "rocketmq-store/src/message_store/local_file_message_store.rs",
-        "production_lines": 1981,
+        "production_lines": 1985,
         "public_items": 1,
         "reexports": 4,
-        "score": 574.775,
+        "score": 577.375,
         "state_owners": 0,
         "test_functions": 0
       },
