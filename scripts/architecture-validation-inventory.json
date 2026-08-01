@@ -30,6 +30,13 @@
       "target/architecture-storage-matrix.json"
     ]
   },
+  "candidate_record": {
+    "commit": "d88a973131ce4f57d01a65def8ecb7944a45ba21",
+    "markdown": "rocketmq-doc/en/architecture-candidates/2026-08-01-d88a97313.md",
+    "json": "rocketmq-doc/en/architecture-candidates/2026-08-01-d88a97313.json",
+    "code_system_score": "93.5 / 100",
+    "production_certified": false
+  },
   "root": {
     "owner": "RocketMQ Rust maintainers",
     "manifest": "Cargo.toml",

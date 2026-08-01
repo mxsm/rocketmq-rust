@@ -1,0 +1,141 @@
+{
+  "schema_version": 1,
+  "commit": "d88a973131ce4f57d01a65def8ecb7944a45ba21",
+  "environment": {
+    "os": "Microsoft Windows 11 Professional 10.0.26200 build 26200",
+    "rustc": "rustc 1.95.0 (59807616e 2026-04-14)"
+  },
+  "checks": [
+    {
+      "name": "pr_static",
+      "command": "python scripts/run_architecture_tests.py --tier pr_static",
+      "status": "passed"
+    },
+    {
+      "name": "root_format_package_loop",
+      "command": "cargo fmt -p <each of 28 root workspace packages> -- --check",
+      "status": "passed"
+    },
+    {
+      "name": "root_clippy",
+      "command": "cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings",
+      "status": "passed"
+    },
+    {
+      "name": "runtime_ownership",
+      "command": ".\\scripts\\runtime-audit.ps1 -SkipBaseline -EnforceBoundaryBaseline",
+      "status": "passed"
+    },
+    {
+      "name": "error_hygiene",
+      "command": ".\\scripts\\check-error-hygiene.ps1",
+      "status": "passed"
+    },
+    {
+      "name": "architecture_contracts",
+      "command": "python scripts/run_architecture_tests.py --tier milestone_contract --tier phase_contract --tier dynamic_fixture",
+      "status": "passed"
+    },
+    {
+      "name": "protocol_all_features",
+      "command": "cargo test -p rocketmq-protocol --all-features",
+      "status": "passed"
+    },
+    {
+      "name": "broker_all_features",
+      "command": "cargo test -p rocketmq-broker --all-features",
+      "status": "passed"
+    },
+    {
+      "name": "broker_component_contract",
+      "command": "cargo test -p rocketmq-broker --all-features --test broker_runtime_component_contract",
+      "status": "passed"
+    },
+    {
+      "name": "tieredstore_full",
+      "command": "cargo test -p rocketmq-tieredstore --all-features",
+      "status": "passed"
+    },
+    {
+      "name": "broker_epoch_fault_smoke",
+      "command": "cargo test -p rocketmq-broker --test controller_epoch_fault_smoke",
+      "status": "passed"
+    },
+    {
+      "name": "store_ha_fault_smoke",
+      "command": "cargo test -p rocketmq-store --test ha_fault_smoke",
+      "status": "passed"
+    },
+    {
+      "name": "controller_snapshot_restore",
+      "command": "cargo test -p rocketmq-controller --test controller_snapshot_restore",
+      "status": "passed"
+    },
+    {
+      "name": "controller_storage_faults",
+      "command": "cargo test -p rocketmq-controller --test controller_storage_faults",
+      "status": "passed"
+    },
+    {
+      "name": "sre_format",
+      "command": "cd rocketmq-sre; cargo fmt -p rocketmq-sre-contracts -p rocketmq-sre-core -p rocketmq-sre-model-gateway -p rocketmq-sre-control-plane -p rocketmq-sre-connector -p rocketmq-sre-executor -p rocketmq-sre-execution-agent -p rocketmq-sre-probe -p rocketmq-sre-eval -p rocketmq-sre-client -p rocketmq-sre-cli -- --check",
+      "status": "passed"
+    },
+    {
+      "name": "sre_check",
+      "command": "cd rocketmq-sre; cargo check --locked --workspace",
+      "status": "passed"
+    },
+    {
+      "name": "sre_test_all_features",
+      "command": "cd rocketmq-sre; cargo test --locked --workspace --all-features",
+      "status": "passed"
+    },
+    {
+      "name": "sre_clippy_all_features",
+      "command": "cd rocketmq-sre; cargo clippy --locked --workspace --all-targets --all-features -- -D warnings",
+      "status": "passed"
+    },
+    {
+      "name": "sre_doc",
+      "command": "cd rocketmq-sre; cargo doc --locked --workspace --no-deps",
+      "status": "passed"
+    },
+    {
+      "name": "sre_source_layout",
+      "command": "cd rocketmq-sre; python scripts/check_source_layout.py",
+      "status": "passed"
+    },
+    {
+      "name": "sre_execution_boundary",
+      "command": "cd rocketmq-sre; python scripts/check_execution_dependency_boundary.py",
+      "status": "passed"
+    },
+    {
+      "name": "sre_read_gateway_boundary",
+      "command": "cd rocketmq-sre; python scripts/check_read_gateway_boundary.py",
+      "status": "passed"
+    },
+    {
+      "name": "sre_postgresql_repositories",
+      "command": "cargo test --manifest-path rocketmq-sre/Cargo.toml --locked -p rocketmq-sre-control-plane -- --include-ignored",
+      "status": "passed"
+    },
+    {
+      "name": "root_dependency_audit",
+      "command": "cargo audit --file Cargo.lock",
+      "status": "passed"
+    },
+    {
+      "name": "sre_dependency_audit",
+      "command": "cd rocketmq-sre; cargo audit --file Cargo.lock",
+      "status": "passed"
+    },
+    {
+      "name": "transport_short_stability",
+      "command": "target/release/examples/architecture_network_performance_collector.exe --sample connection-soak mixed-tls-churn (two back-to-back cycles)",
+      "status": "passed"
+    }
+  ],
+  "known_failures": []
+}

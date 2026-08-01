@@ -210,6 +210,13 @@ known-failure list. It deliberately rejects SHA-256 inventories, image digests,
 signatures, and promotion state because those fields are meaningful only after
 real artifacts and a production-like environment exist.
 
+The latest accepted code/system record is
+[d88a973131ce4f57d01a65def8ecb7944a45ba21](architecture-candidates/2026-08-01-d88a97313.md),
+with its [machine-readable companion](architecture-candidates/2026-08-01-d88a97313.json).
+It records a `93.5 / 100` code/system assessment and is not production certification;
+the six-hour soak, target-hardware comparison, complete disaster recovery, Docker
+images, and real external adapters remain deferred V1 evidence.
+
 ```powershell
 python scripts/architecture_candidate_guard.py `
   --record scripts/tests/fixtures/architecture-candidate/pass.json
