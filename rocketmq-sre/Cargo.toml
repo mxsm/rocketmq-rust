@@ -58,7 +58,7 @@ serde = { version = "1.0.219", features = ["derive"] }
 serde_jcs = "0.2.0"
 serde_json = "1.0.140"
 serde_yaml = "0.9.34"
-sha2 = "0.10.9"
+sha2 = "0.11.0"
 sqlx = { version = "0.9.0", default-features = false, features = ["chrono", "json", "macros", "migrate", "postgres", "runtime-tokio", "tls-rustls", "uuid"] }
 subtle = "2.6.1"
 thiserror = "2.0.12"
