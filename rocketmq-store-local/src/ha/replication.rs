@@ -21,6 +21,8 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Mutex;
 
+use rocketmq_store_api::MasterEpoch;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HAAckedReplicaSnapshot {
     pub slave_broker_id: Option<i64>,
@@ -44,7 +46,7 @@ pub struct GroupTransferRuntimeInfo {
 pub enum EpochTransition {
     Rejected,
     Unchanged,
-    Advanced { epoch: i32 },
+    Advanced { epoch: MasterEpoch },
 }
 
 #[derive(Default)]
@@ -255,18 +257,19 @@ impl ReplicationStateRoot {
         }
     }
 
-    pub fn apply_epoch_transition(&self, next_epoch: i32) -> EpochTransition {
+    pub fn apply_epoch_transition(&self, next_epoch: MasterEpoch) -> EpochTransition {
+        let next_epoch_value = next_epoch.get();
         loop {
             let current_epoch = self.current_master_epoch.load(Ordering::SeqCst);
-            if next_epoch < current_epoch {
+            if next_epoch_value < current_epoch {
                 return EpochTransition::Rejected;
             }
-            if next_epoch == current_epoch {
+            if next_epoch_value == current_epoch {
                 return EpochTransition::Unchanged;
             }
             if self
                 .current_master_epoch
-                .compare_exchange(current_epoch, next_epoch, Ordering::SeqCst, Ordering::SeqCst)
+                .compare_exchange(current_epoch, next_epoch_value, Ordering::SeqCst, Ordering::SeqCst)
                 .is_ok()
             {
                 return EpochTransition::Advanced { epoch: next_epoch };
@@ -274,49 +277,9 @@ impl ReplicationStateRoot {
         }
     }
 
-    pub fn current_master_epoch(&self) -> i32 {
-        self.current_master_epoch.load(Ordering::SeqCst)
+    pub fn current_master_epoch(&self) -> Option<MasterEpoch> {
+        MasterEpoch::try_from(self.current_master_epoch.load(Ordering::SeqCst)).ok()
     }
-}
-
-pub fn has_required_sync_state_set_acks(
-    sync_state_set: &HashSet<i64>,
-    acked_replicas: &[HAAckedReplicaSnapshot],
-    next_offset: i64,
-) -> bool {
-    if sync_state_set.len() <= 1 {
-        return true;
-    }
-    let mut ack_count = 1;
-    for replica in acked_replicas {
-        if replica
-            .slave_broker_id
-            .is_some_and(|broker_id| sync_state_set.contains(&broker_id))
-            && replica.slave_ack_offset >= next_offset
-        {
-            ack_count += 1;
-        }
-        if ack_count >= sync_state_set.len() {
-            return true;
-        }
-    }
-    false
-}
-
-pub fn has_required_acks(required_acks: i32, acked_replicas: &[HAAckedReplicaSnapshot], next_offset: i64) -> bool {
-    if required_acks <= 1 {
-        return true;
-    }
-    let mut ack_count = 1;
-    for replica in acked_replicas {
-        if replica.slave_ack_offset >= next_offset {
-            ack_count += 1;
-        }
-        if ack_count >= required_acks {
-            return true;
-        }
-    }
-    false
 }
 
 pub fn compute_confirm_offset(
@@ -351,27 +314,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ack_policy_counts_master_and_filters_sync_state_members() {
-        let replicas = [
-            HAAckedReplicaSnapshot {
-                slave_broker_id: Some(2),
-                slave_ack_offset: 100,
-            },
-            HAAckedReplicaSnapshot {
-                slave_broker_id: Some(3),
-                slave_ack_offset: 50,
-            },
-        ];
-        assert!(has_required_acks(2, &replicas, 100));
-        assert!(has_required_sync_state_set_acks(&HashSet::from([1, 2]), &replicas, 100));
-        assert!(!has_required_sync_state_set_acks(
-            &HashSet::from([1, 2, 3]),
-            &replicas,
-            100
-        ));
-    }
-
-    #[test]
     fn replication_root_tracks_pending_membership_and_epoch_monotonically() {
         let root = ReplicationStateRoot::new(true);
         root.set_local_broker_id(1);
@@ -379,8 +321,15 @@ mod tests {
         assert_eq!(root.maybe_expand_sync_state_set(2, 64, 64), Some(HashSet::from([1, 2])));
         assert!(root.is_synchronizing_sync_state_set());
         assert_eq!(root.sync_state_set(), HashSet::from([1, 2]));
-        assert_eq!(root.apply_epoch_transition(3), EpochTransition::Advanced { epoch: 3 });
-        assert_eq!(root.apply_epoch_transition(2), EpochTransition::Rejected);
+        let epoch_three = MasterEpoch::try_from(3).expect("positive epoch");
+        assert_eq!(
+            root.apply_epoch_transition(epoch_three),
+            EpochTransition::Advanced { epoch: epoch_three }
+        );
+        assert_eq!(
+            root.apply_epoch_transition(MasterEpoch::try_from(2).expect("positive epoch")),
+            EpochTransition::Rejected
+        );
     }
 
     #[test]

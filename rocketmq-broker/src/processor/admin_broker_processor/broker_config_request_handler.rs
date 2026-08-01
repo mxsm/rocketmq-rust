@@ -719,6 +719,63 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
             "storeSyncFlushOldestWaitMillis".to_string(),
             store_health.sync_flush.oldest_wait_millis.to_string(),
         );
+        if let Some(ha) = message_store.get_ha_runtime_info() {
+            runtime_info.insert("haDiagnosticsSupported".to_string(), "true".to_string());
+            runtime_info.insert(
+                "haRole".to_string(),
+                if ha.master { "master" } else { "replica" }.to_string(),
+            );
+            runtime_info.insert(
+                "haMaxReplicaLagBytes".to_string(),
+                ha.ha_connection_info
+                    .iter()
+                    .map(|connection| connection.diff.max(0) as u64)
+                    .max()
+                    .unwrap_or_default()
+                    .to_string(),
+            );
+            runtime_info.insert(
+                "haDecisionCode".to_string(),
+                if ha.pending_group_transfer_request_count > 0 {
+                    "waiting_for_replica_progress"
+                } else {
+                    "not_observed"
+                }
+                .to_string(),
+            );
+            let store_config = generation.store();
+            let (ack_policy, required_ack_count) = if store_config.all_ack_in_sync_state_set {
+                ("all_in_sync_set", None)
+            } else if store_config.in_sync_replicas <= 1 {
+                ("local_durable", Some(1_u64))
+            } else {
+                ("replica_count", u64::try_from(store_config.in_sync_replicas).ok())
+            };
+            runtime_info.insert("haAckPolicy".to_string(), ack_policy.to_string());
+            if let Some(required_ack_count) = required_ack_count {
+                runtime_info.insert("haRequiredAckCount".to_string(), required_ack_count.to_string());
+            }
+            if let Some(replicas_manager) = self.broker_runtime_inner.replicas_manager() {
+                if let Some(authority) = replicas_manager.write_authority() {
+                    runtime_info.insert("haMasterEpoch".to_string(), authority.master_epoch().get().to_string());
+                }
+                let sync_state_set_epoch = replicas_manager.sync_state_set_epoch();
+                if sync_state_set_epoch > 0 {
+                    runtime_info.insert("haSyncStateSetEpoch".to_string(), sync_state_set_epoch.to_string());
+                }
+                runtime_info.insert(
+                    "haSyncStateSetSize".to_string(),
+                    replicas_manager.sync_state_set().len().to_string(),
+                );
+            } else {
+                runtime_info.insert(
+                    "haSyncStateSetSize".to_string(),
+                    (ha.in_sync_slave_nums.max(0) as u64 + u64::from(ha.master)).to_string(),
+                );
+            }
+        } else {
+            runtime_info.insert("haDiagnosticsSupported".to_string(), "false".to_string());
+        }
         if let Some(auth) = self.auth_admin_service.as_ref() {
             let auth = auth.diagnostics_snapshot();
             runtime_info.insert("authDiagnosticsSupported".to_string(), "true".to_string());

@@ -19,6 +19,8 @@ use std::sync::OnceLock;
 use std::sync::Weak;
 
 use rocketmq_protocol::protocol::body::ha_runtime_info::HARuntimeInfo;
+use rocketmq_store_api::MasterEpoch;
+use rocketmq_store_api::WriteAuthority;
 use tokio::sync::Notify;
 
 use crate::ha::auto_switch::auto_switch_ha_service::AutoSwitchHAService;
@@ -141,6 +143,25 @@ impl GeneralHAService {
         match self {
             GeneralHAService::DefaultHAService(_) => None,
             GeneralHAService::AutoSwitchHAService(service) => Some(service.get_sync_state_set()),
+        }
+    }
+
+    pub(crate) fn local_durable_watermark(&self) -> i64 {
+        match self {
+            GeneralHAService::DefaultHAService(service) => service.replica_store().get_flushed_where(),
+            GeneralHAService::AutoSwitchHAService(service) => {
+                service.default_delegate().replica_store().get_flushed_where()
+            }
+        }
+    }
+
+    pub(crate) fn write_authority(&self) -> Option<WriteAuthority> {
+        match self {
+            GeneralHAService::DefaultHAService(_) => {
+                let epoch = MasterEpoch::try_from(1).ok()?;
+                WriteAuthority::try_new(0, epoch).ok()
+            }
+            GeneralHAService::AutoSwitchHAService(service) => service.write_authority(),
         }
     }
 

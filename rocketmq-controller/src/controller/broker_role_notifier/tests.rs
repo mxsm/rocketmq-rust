@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use rocketmq_store_api::MasterEpoch;
+use rocketmq_store_api::SyncStateSetEpoch;
 use tokio::sync::mpsc;
 
 use super::actor::Mailbox;
@@ -29,12 +31,13 @@ fn key(broker_id: u64) -> NotifyKey {
 }
 
 fn state(master_epoch: i32, sync_state_set_epoch: i32) -> NotifyState {
-    NotifyState {
-        master_broker_id: 1,
-        master_epoch,
-        sync_state_set_epoch,
-        master_address: Some("127.0.0.1:10911".to_string()),
-    }
+    NotifyState::try_new(
+        1,
+        MasterEpoch::try_from(master_epoch).expect("positive master epoch"),
+        SyncStateSetEpoch::try_from(sync_state_set_epoch).expect("positive sync-state-set epoch"),
+        Some("127.0.0.1:10911".to_string()),
+    )
+    .expect("valid notify state")
 }
 
 #[test]
@@ -165,4 +168,40 @@ fn broker_role_notifier_reset_invalidates_queued_generation() {
     assert!(mailbox.take(&notify_key).is_none());
     assert_eq!(mailbox.snapshot().retained_keys, 0);
     assert!(!mailbox.notified_contains(&notify_key));
+}
+
+#[test]
+fn broker_role_notifier_rejects_conflicting_master_at_same_epoch() {
+    let (sender, mut receiver) = mpsc::channel(1);
+    let mut mailbox = Mailbox::new(1);
+    mailbox.mark_started();
+    let notify_key = key(1);
+    let installed = state(7, 4);
+    let conflicting = NotifyState::try_new(
+        2,
+        MasterEpoch::try_from(7).expect("positive master epoch"),
+        SyncStateSetEpoch::try_from(5).expect("positive sync-state-set epoch"),
+        Some("127.0.0.2:10911".to_string()),
+    )
+    .expect("valid but conflicting authority");
+
+    assert_eq!(
+        mailbox.submit(
+            NotifyTask::new_for_test(notify_key.clone(), installed.clone()),
+            false,
+            &sender,
+        ),
+        SubmitOutcome::Accepted
+    );
+    assert_eq!(
+        mailbox.submit(
+            NotifyTask::new_for_test(notify_key.clone(), conflicting),
+            false,
+            &sender
+        ),
+        SubmitOutcome::Stale
+    );
+
+    assert_eq!(receiver.try_recv(), Ok(notify_key.clone()));
+    assert_eq!(mailbox.take(&notify_key).map(|task| task.state), Some(installed));
 }

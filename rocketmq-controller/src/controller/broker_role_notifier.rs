@@ -20,6 +20,10 @@ use cheetah_string::CheetahString;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::protocol::header::notify_broker_role_change_request_header::NotifyBrokerRoleChangedRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_store_api::HaContractError;
+use rocketmq_store_api::MasterEpoch;
+use rocketmq_store_api::SyncStateSetEpoch;
+use rocketmq_store_api::WriteAuthority;
 
 pub(crate) use actor::BrokerRoleNotifier;
 pub(crate) use actor::NotifySnapshot;
@@ -34,19 +38,31 @@ pub(crate) struct NotifyKey {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct NotifyState {
-    pub master_broker_id: u64,
-    pub master_epoch: i32,
-    pub sync_state_set_epoch: i32,
+    pub authority: WriteAuthority,
+    pub sync_state_set_epoch: SyncStateSetEpoch,
     pub master_address: Option<String>,
 }
 
 impl NotifyState {
+    pub(crate) fn try_new(
+        master_broker_id: u64,
+        master_epoch: MasterEpoch,
+        sync_state_set_epoch: SyncStateSetEpoch,
+        master_address: Option<String>,
+    ) -> Result<Self, HaContractError> {
+        Ok(Self {
+            authority: WriteAuthority::try_from_u64(master_broker_id, master_epoch)?,
+            sync_state_set_epoch,
+            master_address,
+        })
+    }
+
     fn is_same_or_newer_than(&self, current: &Self) -> bool {
-        self.master_epoch > current.master_epoch
-            || (self.master_epoch == current.master_epoch
-                && self.sync_state_set_epoch >= current.sync_state_set_epoch
-                && self.master_broker_id == current.master_broker_id
-                && self.master_address == current.master_address)
+        self.authority.master_epoch() > current.authority.master_epoch()
+            || (self.authority.master_epoch() == current.authority.master_epoch()
+                && (self.authority != current.authority
+                    || (self.sync_state_set_epoch >= current.sync_state_set_epoch
+                        && self.master_address == current.master_address)))
     }
 }
 
@@ -83,9 +99,9 @@ impl NotifyTask {
     fn build_request(&self) -> RemotingCommand {
         let request_header = NotifyBrokerRoleChangedRequestHeader {
             master_address: self.master_address.clone(),
-            master_epoch: Some(self.state.master_epoch),
-            sync_state_set_epoch: Some(self.state.sync_state_set_epoch),
-            master_broker_id: Some(self.state.master_broker_id),
+            master_epoch: Some(self.state.authority.master_epoch().get()),
+            sync_state_set_epoch: Some(self.state.sync_state_set_epoch.get()),
+            master_broker_id: Some(self.state.authority.broker_id() as u64),
         };
         RemotingCommand::create_request_command(RequestCode::NotifyBrokerRoleChanged, request_header)
             .set_body(self.sync_state_set.clone())

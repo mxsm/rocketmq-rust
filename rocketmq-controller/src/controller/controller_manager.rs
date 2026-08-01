@@ -1154,10 +1154,24 @@ impl ControllerManager {
             return Ok(());
         };
 
-        let sync_state_set_epoch = response_header.sync_state_set_epoch.unwrap_or_default();
-        let master_epoch = response_header.master_epoch.unwrap_or_default();
+        let Some(master_epoch) = response_header.master_epoch else {
+            warn!(broker = %member_group.broker_name, "Skip broker role notify because master epoch is absent");
+            return Ok(());
+        };
+        let Ok(master_epoch) = rocketmq_store_api::MasterEpoch::try_from(master_epoch) else {
+            warn!(broker = %member_group.broker_name, master_epoch, "Skip broker role notify because master epoch is invalid");
+            return Ok(());
+        };
+        let Some(sync_state_set_epoch) = response_header.sync_state_set_epoch else {
+            warn!(broker = %member_group.broker_name, "Skip broker role notify because sync-state-set epoch is absent");
+            return Ok(());
+        };
+        let Ok(sync_state_set_epoch) = rocketmq_store_api::SyncStateSetEpoch::try_from(sync_state_set_epoch) else {
+            warn!(broker = %member_group.broker_name, sync_state_set_epoch, "Skip broker role notify because sync-state-set epoch is invalid");
+            return Ok(());
+        };
         let master_address = response_header.master_address.clone().map(|value| value.to_string());
-        let sync_state_set = SyncStateSet::with_values(response_body.sync_state_set, sync_state_set_epoch)
+        let sync_state_set = SyncStateSet::with_values(response_body.sync_state_set, sync_state_set_epoch.get())
             .encode()
             .map_err(|error| {
                 ControllerError::serialization_source("encode sync state set for broker role notify", error)
@@ -1177,11 +1191,17 @@ impl ControllerManager {
                 broker_name: member_group.broker_name.to_string(),
                 broker_id,
             };
-            let state = NotifyState {
+            let state = match NotifyState::try_new(
                 master_broker_id,
                 master_epoch,
                 sync_state_set_epoch,
-                master_address: master_address.clone(),
+                master_address.clone(),
+            ) {
+                Ok(state) => state,
+                Err(error) => {
+                    warn!(%error, broker = %member_group.broker_name, "Skip broker role notify because authority is invalid");
+                    return Ok(());
+                }
             };
             let task = NotifyTask::new(
                 key,

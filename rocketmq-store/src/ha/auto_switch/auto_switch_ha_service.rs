@@ -19,6 +19,8 @@ use std::sync::Arc;
 use rocketmq_protocol::protocol::body::ha_connection_runtime_info::HAConnectionRuntimeInfo;
 use rocketmq_protocol::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_runtime::common::time_utils::current_millis;
+use rocketmq_store_api::MasterEpoch;
+use rocketmq_store_api::WriteAuthority;
 use tokio::sync::Notify;
 
 use crate::ha::auto_switch::auto_switch_ha_client::AutoSwitchHAClient;
@@ -100,6 +102,10 @@ impl AutoSwitchHAService {
         self.replication.set_local_broker_id(local_broker_id);
         self.delegate
             .set_ha_client_reported_broker_id((local_broker_id >= 0).then_some(local_broker_id));
+    }
+
+    pub fn local_broker_id(&self) -> i64 {
+        self.replication.local_broker_id()
     }
 
     pub fn get_local_sync_state_set(&self) -> HashSet<i64> {
@@ -210,6 +216,9 @@ impl AutoSwitchHAService {
     }
 
     fn apply_epoch_transition(&self, next_epoch: i32) -> bool {
+        let Ok(next_epoch) = MasterEpoch::try_from(next_epoch) else {
+            return false;
+        };
         match self.replication.apply_epoch_transition(next_epoch) {
             EpochTransition::Rejected => return false,
             EpochTransition::Unchanged => {}
@@ -218,7 +227,7 @@ impl AutoSwitchHAService {
                 let epoch_start_offset = replica_store
                     .get_max_phy_offset()
                     .max(replica_store.get_min_phy_offset());
-                replica_store.publish_state_machine_version(epoch as i64);
+                replica_store.publish_state_machine_version(i64::from(epoch.get()));
                 replica_store.publish_controller_epoch_start_offset(epoch_start_offset);
             }
         }
@@ -237,8 +246,15 @@ impl AutoSwitchHAService {
         replica_store.publish_confirm_offset(next_confirm_offset.clamp(min_phy_offset, max_phy_offset));
     }
 
-    pub fn current_master_epoch(&self) -> i32 {
+    pub fn current_master_epoch(&self) -> Option<MasterEpoch> {
         self.replication.current_master_epoch()
+    }
+
+    pub fn write_authority(&self) -> Option<WriteAuthority> {
+        if !self.replication.is_master() {
+            return None;
+        }
+        WriteAuthority::try_new(self.local_broker_id(), self.current_master_epoch()?).ok()
     }
 }
 
@@ -670,7 +686,7 @@ mod tests {
         assert_eq!(service.get_local_sync_state_set(), HashSet::from([7_i64]));
         assert_eq!(service.get_sync_state_set(), HashSet::from([7_i64]));
         assert!(!service.is_synchronizing_sync_state_set());
-        assert_eq!(service.current_master_epoch(), 3);
+        assert_eq!(service.current_master_epoch().map(MasterEpoch::get), Some(3));
         assert_eq!(store.get_state_machine_version(), 3);
         assert_eq!(store.get_controller_epoch_start_offset(), 4);
         assert_eq!(
@@ -700,7 +716,7 @@ mod tests {
         let switched = service.change_to_master(5).await.expect("change to master");
 
         assert!(switched);
-        assert_eq!(service.current_master_epoch(), 5);
+        assert_eq!(service.current_master_epoch().map(MasterEpoch::get), Some(5));
         assert_eq!(store.get_state_machine_version(), 5);
         assert_eq!(store.get_controller_epoch_start_offset(), 4);
         assert_eq!(store.get_confirm_offset(), 4);
@@ -726,7 +742,7 @@ mod tests {
 
         assert!(!stale);
         assert!(service.get_runtime_info(0).master);
-        assert_eq!(service.current_master_epoch(), 6);
+        assert_eq!(service.current_master_epoch().map(MasterEpoch::get), Some(6));
         assert_eq!(store.get_state_machine_version(), 6);
         assert_eq!(service.get_ha_client().expect("ha client").get_master_address(), "");
 

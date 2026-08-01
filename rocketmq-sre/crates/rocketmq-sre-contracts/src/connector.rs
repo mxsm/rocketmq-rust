@@ -62,6 +62,20 @@ pub struct ConnectorCapabilityState {
     pub sources: Vec<ConnectorSourceCapability>,
 }
 
+/// Non-sensitive, read-only Broker HA status exposed by the Connector.
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+pub struct HaStatusProjection {
+    pub supported: bool,
+    pub role: Option<String>,
+    pub master_epoch: Option<i32>,
+    pub sync_state_set_epoch: Option<i32>,
+    pub sync_state_set_size: Option<u64>,
+    pub max_replica_lag_bytes: Option<u64>,
+    pub ack_policy: Option<String>,
+    pub required_ack_count: Option<u64>,
+    pub decision_code: Option<String>,
+}
+
 /// Signal kind declared by a Required Signals manifest.
 #[derive(Clone, Copy, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
