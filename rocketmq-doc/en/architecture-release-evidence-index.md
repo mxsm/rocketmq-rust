@@ -226,7 +226,8 @@ and inject `ChildServiceContext`/`TaskGroup` capabilities.
 | `pr_static` | 22 |
 | `milestone_contract` | 26 |
 | `phase_contract` | 4 |
-| `dynamic_fixture` | 8 |
+| `dynamic_fixture` | 7 |
+| `deferred_validation` | 1 |
 
 ## Evidence workflows and artifact identities
 

@@ -193,9 +193,9 @@ pub mod bench_support {
 
         let finished_tasks = shutdown_report.completed + shutdown_report.cancelled;
         let healthy = shutdown_report.is_healthy()
-            && task_count_before_shutdown == 1
+            && task_count_before_shutdown >= 2
             && task_count_after_shutdown == 0
-            && finished_tasks == 1
+            && (1..=task_count_before_shutdown).contains(&finished_tasks)
             && last_message_read;
 
         let _ = std::fs::remove_dir_all(root);

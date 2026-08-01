@@ -2423,11 +2423,12 @@ async fn shutdown_controller_cluster(controllers: &[Arc<TestControllerManager>])
     // The full llvm-cov workspace job runs hundreds of instrumented Broker tests
     // concurrently. Keep the production 30-second Controller default unchanged,
     // but give this synthetic three-node cluster enough time to drain under that
-    // test-only scheduler pressure.
+    // test-only scheduler pressure. LLVM instrumentation can make the concurrent
+    // three-node drain exceed one minute even when every shutdown phase progresses.
     let results = futures::future::join_all(
         controllers
             .iter()
-            .map(|controller| controller.shutdown_until(ShutdownDeadline::after(Duration::from_secs(60)))),
+            .map(|controller| controller.shutdown_until(ShutdownDeadline::after(Duration::from_secs(120)))),
     )
     .await;
     for result in results {

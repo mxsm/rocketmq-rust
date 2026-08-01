@@ -91,7 +91,7 @@ fn client_god_traits_cannot_reappear() {
         "ConsumerOffsetControl",
         "ConsumerLifecycle",
     ] {
-        assert!(LITE_PULL_CAPABILITIES.contains(&format!("pub trait {capability}Local")));
+        assert!(LITE_PULL_CAPABILITIES.contains(&format!("pub trait {capability}")));
     }
     for capability in [
         "MessageSend",

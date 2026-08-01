@@ -375,7 +375,7 @@ def validate_python_tests(root: Path, policy: dict[str, Any]) -> list[Finding]:
         "platform",
         "fixture_policy",
     }
-    tiers = {"pr_static", "milestone_contract", "phase_contract", "dynamic_fixture"}
+    tiers = {"pr_static", "milestone_contract", "phase_contract", "dynamic_fixture", "deferred_validation"}
     platforms = {"any", "powershell"}
     fixtures = {"none", "repository-fixtures", "temporary-only"}
     inventory_paths: set[str] = set()
@@ -854,7 +854,7 @@ def render_document(policy: dict[str, Any], facts: Facts) -> str:
             "|---|---:|",
         ]
     )
-    for tier in ("pr_static", "milestone_contract", "phase_contract", "dynamic_fixture"):
+    for tier in ("pr_static", "milestone_contract", "phase_contract", "dynamic_fixture", "deferred_validation"):
         count = sum(entry["tier"] == tier for entry in policy["python_tests"]["entries"])
         lines.append(f"| `{tier}` | {count} |")
     lines.extend(

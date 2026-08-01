@@ -79,7 +79,9 @@ def evaluate(root: Path, policy: dict[str, Any]) -> list[Finding]:
                 count = len(tuple(pattern.finditer(text)))
                 if count:
                     total += count
-                    matched_paths.add(source.relative_to(root).as_posix())
+                    matcher_path = Path(matcher["path"])
+                    relative_source = matcher_path if path.is_file() else matcher_path / source.relative_to(path)
+                    matched_paths.add(relative_source.as_posix())
 
         if total > maximum:
             findings.append(

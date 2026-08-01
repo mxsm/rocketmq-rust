@@ -20,6 +20,21 @@ from scripts import architecture_documentation_guard as guard
 
 
 class ArchitectureDocumentationGuardTest(unittest.TestCase):
+    def test_documentation_workflow_provisions_property_suite_native_dependencies(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        workflow = (root / ".github/workflows/architecture-documentation.yml").read_text(encoding="utf-8")
+
+        self.assertIn("Install native build dependencies", workflow)
+        self.assertIn("clang llvm libclang-dev", workflow)
+
+    def test_observability_cache_key_is_normalized_for_feature_lists(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        workflow = (root / ".github/workflows/rocketmq-rust-ci.yaml").read_text(encoding="utf-8")
+
+        self.assertIn("id: observability-cache-key", workflow)
+        self.assertIn('echo "value=${FEATURES//,/-}"', workflow)
+        self.assertIn("steps.observability-cache-key.outputs.value", workflow)
+
     def test_standalone_workspace_expands_members_and_inherited_local_edges(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

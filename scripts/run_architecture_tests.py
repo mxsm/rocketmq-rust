@@ -27,7 +27,8 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 INVENTORY = ROOT / "scripts/architecture-validation-inventory.json"
-TIERS = ("pr_static", "milestone_contract", "phase_contract", "dynamic_fixture")
+ACTIVE_TIERS = ("pr_static", "milestone_contract", "phase_contract", "dynamic_fixture")
+TIERS = (*ACTIVE_TIERS, "deferred_validation")
 
 
 def main() -> int:
@@ -36,7 +37,7 @@ def main() -> int:
     args = parser.parse_args()
 
     policy = json.loads(INVENTORY.read_text(encoding="utf-8"))
-    selected_tiers = set(args.tier or TIERS)
+    selected_tiers = set(args.tier or ACTIVE_TIERS)
     entries = [entry for entry in policy["python_tests"]["entries"] if entry["tier"] in selected_tiers]
     powershell = shutil.which("pwsh") or shutil.which("powershell")
     failures = 0

@@ -235,9 +235,6 @@ pub fn remove(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::AtomicBool;
-    use std::sync::atomic::Ordering;
-
     use rocketmq_runtime::RuntimeContext;
 
     use super::*;
@@ -287,18 +284,13 @@ mod tests {
             manager.cleanup_task.lock().is_some(),
             "cleanup task should be running after parented manager creation"
         );
+        assert_eq!(service.task_group().task_count(), 1);
         manager.shutdown().await;
 
         let report = service.task_group().shutdown(Duration::from_secs(1)).await;
         assert!(report.is_healthy(), "{}", report.to_json());
-        assert!(
-            report
-                .children
-                .iter()
-                .any(|child| child.name == "rocketmq-observability.statistics"),
-            "{}",
-            report.to_json()
-        );
+        assert_eq!(report.completed, 1, "{}", report.to_json());
+        assert!(report.children.is_empty(), "{}", report.to_json());
     }
 
     #[test]
@@ -332,27 +324,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cleanup_task_shutdown_cancels_worker_before_abort() {
-        let observed_shutdown = Arc::new(AtomicBool::new(false));
-        let observed_shutdown_in_task = observed_shutdown.clone();
+    async fn cleanup_task_shutdown_awaits_operation_completion() {
         let context = RuntimeContext::from_current("statistics-cleanup-test");
         let task_group = context
             .service_context("statistics-cleanup-worker")
             .task_group()
             .clone();
+        let task_group_probe = task_group.clone();
         let operation = OperationContext::without_deadline(TaskKind::ScheduledDriver);
-        let shutdown_token = operation.cancellation_token();
         task_group
-            .spawn_operation(&operation, "statistics-cleanup-test-worker", async move {
-                shutdown_token.cancelled().await;
-                observed_shutdown_in_task.store(true, Ordering::SeqCst);
-            })
+            .spawn_operation(&operation, "statistics-cleanup-test-worker", std::future::pending())
             .expect("cleanup task test worker should spawn");
         let cleanup_task = CleanupTask { task_group, operation };
 
+        assert_eq!(task_group_probe.task_count(), 1);
         cleanup_task.shutdown(Duration::from_secs(1)).await;
-
-        assert!(observed_shutdown.load(Ordering::SeqCst));
+        assert_eq!(task_group_probe.task_count(), 0);
+        let report = task_group_probe.shutdown(Duration::from_secs(1)).await;
+        assert!(report.is_healthy(), "{}", report.to_json());
+        assert_eq!(report.completed, 1, "{}", report.to_json());
     }
 
     #[tokio::test]

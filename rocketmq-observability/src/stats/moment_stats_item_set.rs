@@ -214,17 +214,12 @@ mod tests {
         let stats_set =
             MomentStatsItemSet::new_with_task_group("ParentedName".to_string(), service.task_group().clone());
 
+        assert_eq!(service.task_group().task_count(), 1);
         stats_set.shutdown().await;
         let report = service.task_group().shutdown(Duration::from_secs(1)).await;
         assert!(report.is_healthy(), "{}", report.to_json());
-        assert!(
-            report
-                .children
-                .iter()
-                .any(|child| child.name == "rocketmq-observability.moment-stats-set.ParentedName"),
-            "{}",
-            report.to_json()
-        );
+        assert_eq!(report.completed, 1, "{}", report.to_json());
+        assert!(report.children.is_empty(), "{}", report.to_json());
     }
 
     #[tokio::test]
