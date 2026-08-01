@@ -595,6 +595,17 @@ pub(super) async fn seed_fixture(repository: &PostgresRepository) -> Fixture {
     let rules_only_diagnosis_id = DiagnosisRevisionId::new();
     let model_profile_id = Uuid::new_v4();
     let model_invocation_id = Uuid::new_v4();
+    let default_fleet_id = Uuid::parse_str("00000000-0000-4000-8000-000000000005").expect("default fleet id");
+    sqlx::query(
+        "INSERT INTO fleet_tenants (id, fleet_id, name, owner_name)
+         VALUES ($1, $2, $3, 'phase3-test')",
+    )
+    .bind(tenant_id.as_uuid())
+    .bind(default_fleet_id)
+    .bind(format!("phase3-test-{tenant_id}"))
+    .execute(&repository.pool)
+    .await
+    .expect("fleet tenant");
     sqlx::query(
         "INSERT INTO clusters (
             id, tenant_id, external_cluster_key, environment, region,
