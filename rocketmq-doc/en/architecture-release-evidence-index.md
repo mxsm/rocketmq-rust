@@ -44,6 +44,17 @@ commit SHA; this document does not claim that a scheduled or release run succeed
 | `rocketmq-tieredstore` | `rocketmq-tieredstore` |
 | `rocketmq-transport` | `rocketmq-transport` |
 
+## Accepted code/system candidate
+
+- Commit: `d88a973131ce4f57d01a65def8ecb7944a45ba21`.
+- Human-readable verification: [2026-08-01-d88a97313.md](architecture-candidates/2026-08-01-d88a97313.md).
+- Machine-readable verification: [2026-08-01-d88a97313.json](architecture-candidates/2026-08-01-d88a97313.json).
+- Code/system score: `93.5 / 100`.
+- Production certified: no.
+
+This acceptance covers the code/system phase. Target-hardware performance comparison, the six-hour
+soak, complete disaster recovery, Docker images, and real external adapters remain later V1 evidence.
+
 ## Current implementation baseline
 
 - Baseline ID: `architecture-implementation-2026-07-29-v1`.

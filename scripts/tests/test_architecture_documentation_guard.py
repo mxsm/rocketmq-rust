@@ -146,6 +146,13 @@ tokio = { workspace = true, features = ["sync"] }
                 "commands": ["cargo metadata --format-version 1 --no-deps"],
                 "required_evidence": ["target/baseline.json"],
             },
+            "candidate_record": {
+                "commit": "d88a973131ce4f57d01a65def8ecb7944a45ba21",
+                "markdown": "rocketmq-doc/en/architecture-candidates/2026-08-01-d88a97313.md",
+                "json": "rocketmq-doc/en/architecture-candidates/2026-08-01-d88a97313.json",
+                "code_system_score": "93.5 / 100",
+                "production_certified": False,
+            },
             "python_tests": {
                 "ci": {"guards": "guards", "contracts": "contracts"},
                 "entries": [],
@@ -181,6 +188,8 @@ tokio = { workspace = true, features = ["sync"] }
         self.assertEqual(first, second)
         self.assertIn("rocketmq-runtime", first)
         self.assertIn("architecture-implementation-2026-07-29-v1", first)
+        self.assertIn("d88a973131ce4f57d01a65def8ecb7944a45ba21", first)
+        self.assertIn("Production certified: no", first)
 
     def test_implementation_baseline_rejects_unversioned_id_and_unsafe_paths(self) -> None:
         policy = {

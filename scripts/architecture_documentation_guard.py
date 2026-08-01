@@ -266,6 +266,7 @@ def validate_schema(policy: dict[str, Any]) -> list[Finding]:
         "schema_version",
         "toolchains",
         "implementation_baseline",
+        "candidate_record",
         "root",
         "standalone",
         "node_projects",
@@ -284,6 +285,59 @@ def validate_schema(policy: dict[str, Any]) -> list[Finding]:
     standalone = policy.get("standalone", [])
     if not isinstance(standalone, list) or len(standalone) != 7:
         findings.append(Finding("standalone-count", normalized(POLICY_RELATIVE), "exactly seven Cargo roots required"))
+    return findings
+
+
+def validate_candidate_record(root: Path, policy: dict[str, Any]) -> list[Finding]:
+    record = policy.get("candidate_record")
+    expected_fields = {
+        "commit",
+        "markdown",
+        "json",
+        "code_system_score",
+        "production_certified",
+    }
+    if not isinstance(record, dict) or set(record) != expected_fields:
+        return [
+            Finding(
+                "candidate-record-schema",
+                normalized(POLICY_RELATIVE),
+                "unexpected candidate_record schema",
+            )
+        ]
+
+    findings: list[Finding] = []
+    if (
+        not isinstance(record["commit"], str)
+        or re.fullmatch(r"[0-9a-f]{40}", record["commit"]) is None
+    ):
+        findings.append(
+            Finding("candidate-record-commit", normalized(POLICY_RELATIVE), str(record["commit"]))
+        )
+    score = record["code_system_score"]
+    if (
+        not isinstance(score, str)
+        or re.fullmatch(r"(?:100(?:\.0)?|[0-9]{1,2}(?:\.[0-9])?) / 100", score) is None
+    ):
+        findings.append(
+            Finding("candidate-record-score", normalized(POLICY_RELATIVE), str(score))
+        )
+    if not isinstance(record["production_certified"], bool):
+        findings.append(
+            Finding(
+                "candidate-record-production",
+                normalized(POLICY_RELATIVE),
+                "production_certified must be a boolean",
+            )
+        )
+
+    for field in ("markdown", "json"):
+        if not isinstance(record[field], str) or not record[field]:
+            findings.append(Finding("candidate-record-path", normalized(POLICY_RELATIVE), field))
+            continue
+        path = Path(record[field])
+        if path.is_absolute() or ".." in path.parts or not (root / path).is_file():
+            findings.append(Finding("candidate-record-path", normalized(POLICY_RELATIVE), field))
     return findings
 
 
@@ -760,6 +814,23 @@ def render_document(policy: dict[str, Any], facts: Facts) -> str:
         "|---|---|",
     ]
     lines.extend(f"| `{package.name}` | `{package.path}` |" for package in facts.root_packages)
+    candidate = policy["candidate_record"]
+    production_status = "yes" if candidate["production_certified"] else "no"
+    lines.extend(
+        [
+            "",
+            "## Accepted code/system candidate",
+            "",
+            f"- Commit: `{candidate['commit']}`.",
+            f"- Human-readable verification: [{Path(candidate['markdown']).name}]({candidate['markdown'].removeprefix('rocketmq-doc/en/')}).",
+            f"- Machine-readable verification: [{Path(candidate['json']).name}]({candidate['json'].removeprefix('rocketmq-doc/en/')}).",
+            f"- Code/system score: `{candidate['code_system_score']}`.",
+            f"- Production certified: {production_status}.",
+            "",
+            "This acceptance covers the code/system phase. Target-hardware performance comparison, the six-hour",
+            "soak, complete disaster recovery, Docker images, and real external adapters remain later V1 evidence.",
+        ]
+    )
     baseline = policy["implementation_baseline"]
     lines.extend(
         [
@@ -906,6 +977,7 @@ def render_document(policy: dict[str, Any], facts: Facts) -> str:
 
 def validate(root: Path, policy: dict[str, Any], facts: Facts) -> list[Finding]:
     findings = validate_schema(policy)
+    findings.extend(validate_candidate_record(root, policy))
     findings.extend(validate_implementation_baseline(root, policy))
     findings.extend(validate_python_tests(root, policy))
     findings.extend(validate_toolchains(root, policy, facts))

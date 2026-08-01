@@ -25,6 +25,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = ROOT / "scripts"
 FIXTURE = SCRIPTS / "tests" / "fixtures" / "architecture-candidate" / "pass.json"
+ACCEPTED_RECORD = (
+    ROOT / "rocketmq-doc" / "en" / "architecture-candidates" / "2026-08-01-d88a97313.json"
+)
 sys.path.insert(0, str(SCRIPTS))
 
 import architecture_candidate_guard as guard  # noqa: E402
@@ -36,6 +39,12 @@ class ArchitectureCandidateGuardTests(unittest.TestCase):
 
     def test_lightweight_candidate_record_passes(self) -> None:
         self.assertEqual([], guard.validate(self.record))
+
+    def test_accepted_code_system_candidate_passes(self) -> None:
+        record = json.loads(ACCEPTED_RECORD.read_text(encoding="utf-8"))
+
+        self.assertEqual([], guard.validate(record))
+        self.assertEqual("d88a973131ce4f57d01a65def8ecb7944a45ba21", record["commit"])
 
     def test_required_candidate_fields_fail_closed(self) -> None:
         for field in ("commit", "environment", "checks", "known_failures"):
