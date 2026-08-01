@@ -20,6 +20,59 @@ from scripts import architecture_documentation_guard as guard
 
 
 class ArchitectureDocumentationGuardTest(unittest.TestCase):
+    def test_standalone_workspace_expands_members_and_inherited_local_edges(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            files = {
+                "Cargo.toml": """
+[workspace]
+members = ["shared"]
+[workspace.package]
+rust-version = "1.95.0"
+""",
+                "shared/Cargo.toml": """
+[package]
+name = "shared"
+version = "0.1.0"
+""",
+                "standalone/Cargo.toml": """
+[workspace]
+members = ["crates/app"]
+[workspace.package]
+rust-version = "1.95.0"
+[workspace.dependencies]
+shared = { path = "../shared" }
+tokio = { version = "1", features = ["macros"] }
+""",
+                "standalone/crates/app/Cargo.toml": """
+[package]
+name = "standalone-app"
+version = "0.1.0"
+[dependencies]
+shared = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
+""",
+            }
+            for relative, source in files.items():
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(source, encoding="utf-8")
+            policy = {"standalone": [{"manifest": "standalone/Cargo.toml"}]}
+            root_manifest = guard.load_toml(root / "Cargo.toml")
+
+            paths = guard.manifest_paths(root, root_manifest, policy)
+            edges = guard.collect_local_edges(root, policy)
+            tokio = guard.collect_tokio(root, paths, root_manifest)
+
+        self.assertIn(root / "standalone/crates/app/Cargo.toml", paths)
+        self.assertEqual(
+            (guard.LocalEdge("standalone-app", "shared", "shared"),),
+            edges,
+        )
+        member_tokio = next(item for item in tokio if item.manifest == "standalone/crates/app/Cargo.toml")
+        self.assertEqual(("macros", "sync"), member_tokio.features)
+        self.assertTrue(member_tokio.inherited)
+
     def test_tokio_full_is_rejected_outside_application_allowlist(self) -> None:
         facts = guard.Facts(
             formal_toolchain="1.95.0",

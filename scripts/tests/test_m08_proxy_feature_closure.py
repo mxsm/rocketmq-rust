@@ -15,10 +15,21 @@ class ProxyFeatureClosureContractTests(unittest.TestCase):
         self.assertEqual(["dep:rocketmq-proxy-cluster"], features["cluster-mode"])
         self.assertEqual(["dep:rocketmq-proxy-local"], features["local-mode"])
 
-    def test_production_and_tiered_features_are_additive(self) -> None:
+    def test_observability_and_tiered_features_are_additive(self) -> None:
         features = load_toml("rocketmq-proxy/Cargo.toml")["features"]
 
-        self.assertEqual(["cluster-mode", "production-observability"], features["production"])
+        self.assertEqual(
+            ["observability", "rocketmq-observability/otlp-metrics"],
+            features["otlp-metrics"],
+        )
+        self.assertEqual(
+            ["otel-traces", "rocketmq-observability/otlp-traces"],
+            features["otlp-traces"],
+        )
+        self.assertEqual(
+            ["otel-logs", "rocketmq-observability/otlp-logs"],
+            features["otlp-logs"],
+        )
         self.assertIn("local-mode", features["tieredstore"])
         self.assertIn("rocketmq-proxy-local/tieredstore", features["tieredstore"])
 

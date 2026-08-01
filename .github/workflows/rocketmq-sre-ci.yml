@@ -93,8 +93,8 @@ jobs:
         shell: pwsh
         run: ./rocketmq-sre/scripts/phase01-kind-smoke.ps1 -ValidateOnly
 
-      - name: Set up Rust nightly
-        uses: dtolnay/rust-toolchain@nightly
+      - name: Set up Rust 1.95
+        uses: dtolnay/rust-toolchain@1.95.0
         with:
           components: rustfmt, clippy
 
@@ -105,6 +105,9 @@ jobs:
 
       - name: Check metadata
         run: cargo metadata --manifest-path rocketmq-sre/Cargo.toml --locked --no-deps
+
+      - name: Check workspace
+        run: cargo check --manifest-path rocketmq-sre/Cargo.toml --locked --workspace
 
       - name: Check Rust 2024 source layout
         run: python rocketmq-sre/scripts/check_source_layout.py
@@ -124,6 +127,8 @@ jobs:
             -p rocketmq-sre-execution-agent \
             -p rocketmq-sre-probe \
             -p rocketmq-sre-eval \
+            -p rocketmq-sre-client \
+            -p rocketmq-sre-cli \
             -- --check
 
       - name: Test

@@ -377,6 +377,7 @@
       "rocketmq-protocol",
       "rocketmq-transport",
       "rocketmq-security-api",
+      "rocketmq-store-api",
       "rocketmq-runtime",
       "rocketmq-error",
       "rocketmq-observability"
