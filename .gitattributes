@@ -2,5 +2,7 @@ distribution/kubernetes/fault-matrix-policy.json text eol=lf
 distribution/config/maintenance-policy.json text eol=lf
 distribution/kubernetes/rollback-policy.json text eol=lf
 scripts/tests/fixtures/m11-fault-matrix/pass/** text eol=lf
+scripts/tests/fixtures/m11-slo/pass/** text eol=lf
+scripts/tests/fixtures/architecture-evidence-bundle/** text eol=lf
 docker/Dockerfile* text eol=lf
 distribution/helm/rocketmq-rust/files/maintenance-policy.json text eol=lf

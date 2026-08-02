@@ -4,9 +4,8 @@ on:
   workflow_dispatch:
     inputs:
       source_ref:
-        description: Repository commit, tag, or branch to publish
+        description: Full 40-character commit SHA reachable from the protected main branch
         required: true
-        default: main
         type: string
   release:
     types: [published]
@@ -17,7 +16,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: service-image-publish-${{ github.event_name }}-${{ inputs.source_ref || github.event.release.tag_name }}
+  group: service-image-publish
   cancel-in-progress: false
 
 jobs:
@@ -30,26 +29,62 @@ jobs:
       REPOSITORY_PREFIX: ghcr.io/mxsm/rocketmq-rust
       CERTIFICATE_IDENTITY_REGEXP: ^https://github\.com/mxsm/rocketmq-rust/\.github/workflows/service-image-publish\.yml@refs/(heads/main|tags/[A-Za-z0-9._-]+)$
       CERTIFICATE_OIDC_ISSUER: https://token.actions.githubusercontent.com
+      EVIDENCE_PREDICATE_TYPE: https://github.com/mxsm/rocketmq-rust/attestations/service-image-evidence/v1
+      SYFT_VERSION: v1.48.0
+      TRIVY_VERSION: v0.72.0
+      COSIGN_VERSION: v3.1.2
     steps:
-      - name: Check out the explicit source ref
+      - name: Check out the trusted release root
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
-          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.source_ref }}
+          ref: refs/heads/main
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
-
-      - name: Install Cosign
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-        with:
-          cosign-release: v3.1.2
-
-      - name: Resolve immutable source identity
+      - name: Resolve and check out immutable source identity
         id: source
         shell: bash
+        env:
+          REQUESTED_SOURCE_REF: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.source_ref }}
         run: |
           set -euo pipefail
-          source_commit="$(git rev-parse HEAD)"
+          trusted_main=refs/remotes/origin/main
+
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+              echo "manual publication must run from the protected main workflow" >&2
+              exit 1
+            fi
+            if [[ ! "$REQUESTED_SOURCE_REF" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "manual source_ref must be a full lowercase commit SHA" >&2
+              exit 1
+            fi
+            git cat-file -e "${REQUESTED_SOURCE_REF}^{commit}"
+            source_commit="$(git rev-parse "${REQUESTED_SOURCE_REF}^{commit}")"
+            if [[ "$source_commit" != "$REQUESTED_SOURCE_REF" ]]; then
+              echo "manual source_ref did not resolve to the requested commit" >&2
+              exit 1
+            fi
+            source_kind=protected-main-commit
+          else
+            if [[ ! "$REQUESTED_SOURCE_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "release source must be a semantic-version tag" >&2
+              exit 1
+            fi
+            tag_ref="refs/tags/${REQUESTED_SOURCE_REF}"
+            git show-ref --verify --quiet "$tag_ref"
+            source_commit="$(git rev-parse "${tag_ref}^{commit}")"
+            source_kind=published-release-tag
+          fi
+
+          if ! git merge-base --is-ancestor "$source_commit" "$trusted_main"; then
+            echo "source commit must be reachable from the protected main branch" >&2
+            exit 1
+          fi
+          git checkout --detach "$source_commit"
+          [[ "$(git rev-parse HEAD)" == "$source_commit" ]]
+
           source_version="$(python - <<'PY'
           import tomllib
           from pathlib import Path
@@ -61,15 +96,35 @@ jobs:
           immutable_tag="${source_version}-${source_commit:0:12}"
           [[ "$source_commit" =~ ^[0-9a-f]{40}$ ]]
           [[ "$immutable_tag" =~ ^[0-9]+\.[0-9]+\.[0-9]+-[0-9a-f]{12}$ ]]
-          if [[ "$GITHUB_EVENT_NAME" == "release" && "$GITHUB_REF_NAME" != "v${source_version}" ]]; then
-            echo "release tag must equal workspace version: expected v${source_version}, got ${GITHUB_REF_NAME}" >&2
+          if [[ "$GITHUB_EVENT_NAME" == "release" && "$REQUESTED_SOURCE_REF" != "v${source_version}" ]]; then
+            echo "release tag must equal workspace version: expected v${source_version}, got ${REQUESTED_SOURCE_REF}" >&2
             exit 1
           fi
           {
             echo "commit=$source_commit"
             echo "version=$source_version"
             echo "tag=$immutable_tag"
+            echo "kind=$source_kind"
           } >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Install Syft
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          syft-version: v1.48.0
+
+      - name: Install Trivy
+        uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
+        with:
+          version: v0.72.0
+          cache: true
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.2
 
       - name: Authenticate to GHCR
         shell: bash
@@ -79,74 +134,579 @@ jobs:
           set -euo pipefail
           printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "${{ github.actor }}" --password-stdin
 
-      - name: Build, publish, sign, and verify five service images
+      - name: Qualify and promote five immutable service images
         shell: bash
         env:
           SOURCE_COMMIT: ${{ steps.source.outputs.commit }}
           SOURCE_VERSION: ${{ steps.source.outputs.version }}
+          SOURCE_KIND: ${{ steps.source.outputs.kind }}
           IMMUTABLE_TAG: ${{ steps.source.outputs.tag }}
         run: |
-          set -euo pipefail
-          output="target/service-image-publication"
-          mkdir -p "$output/signatures" "$output/manifests"
+          set -Eeuo pipefail
+          output="$GITHUB_WORKSPACE/target/service-image-publication"
+          pass_manifest="$output/evidence-manifest.json"
+          publication_manifest="$output/publication.json"
+          manifest_tmp="$output/.evidence-manifest.json.tmp"
+          publication_tmp="$output/.publication.json.tmp"
+          checksum_manifest="$output/SHA256SUMS"
+          checksum_tmp="$output/.SHA256SUMS.tmp"
+          publication_complete=false
+
+          cleanup_pass_manifests() {
+            rm -f -- \
+              "$pass_manifest" \
+              "$publication_manifest" \
+              "$manifest_tmp" \
+              "$publication_tmp" \
+              "$checksum_manifest" \
+              "$checksum_tmp"
+          }
+          cleanup_unless_complete() {
+            if [[ "$publication_complete" != "true" ]]; then
+              cleanup_pass_manifests
+            fi
+          }
+          terminate_publication() {
+            cleanup_pass_manifests
+            exit 143
+          }
+          trap cleanup_pass_manifests ERR
+          trap terminate_publication TERM
+          trap cleanup_unless_complete EXIT
+          cleanup_pass_manifests
+
+          mkdir -p \
+            "$output/attestations" \
+            "$output/build-metadata" \
+            "$output/diagnostics" \
+            "$output/promotion" \
+            "$output/sbom" \
+            "$output/services" \
+            "$output/signatures" \
+            "$output/vulnerabilities"
+          [[ -n "${RUNNER_TEMP:-}" ]]
+          staging_tag="staging-${SOURCE_COMMIT:0:12}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          [[ "$staging_tag" =~ ^staging-[0-9a-f]{12}-[0-9]+-[0-9]+$ ]]
           image_map="$output/image-map.json"
           printf '{}\n' > "$image_map"
+          jq -S -n \
+            --arg candidate_commit "$SOURCE_COMMIT" \
+            --arg staging_tag "$staging_tag" \
+            --arg workflow_run "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            '{
+              schema_version: 1,
+              candidate_commit: $candidate_commit,
+              source: "workflow://mxsm/rocketmq-rust/service-image-publish",
+              staging_tag: $staging_tag,
+              workflow_run: $workflow_run
+            }' > "$output/diagnostics/run-context.json"
 
           for service in broker namesrv controller proxy mcp; do
             repository="${REPOSITORY_PREFIX}/${service}"
-            tagged_ref="${repository}:${IMMUTABLE_TAG}"
-            metadata="$output/manifests/${service}.json"
+            staging_ref="${repository}:${staging_tag}"
+            build_metadata="$output/build-metadata/${service}.json"
             docker buildx build \
               --file docker/Dockerfile.base \
               --platform linux/amd64 \
               --target "$service" \
-              --tag "$tagged_ref" \
+              --tag "$staging_ref" \
               --build-arg "SOURCE_REVISION=$SOURCE_COMMIT" \
               --build-arg "SOURCE_VERSION=$SOURCE_VERSION" \
-              --metadata-file "$metadata" \
+              --metadata-file "$build_metadata" \
               --push \
               .
 
-            digest="$(jq -r '."containerimage.digest"' "$metadata")"
+            digest="$(jq -r '."containerimage.digest"' "$build_metadata")"
             [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
             digest_ref="${repository}@${digest}"
-            cosign sign --yes "$digest_ref"
+
+            sbom="$output/sbom/${service}.cdx.json"
+            vulnerability_report="$output/vulnerabilities/${service}.trivy.json"
+            scan_workdir="$(mktemp -d "${RUNNER_TEMP%/}/rocketmq-service-scan-${service}.XXXXXX")"
+            (
+              cd "$scan_workdir"
+              syft scan \
+                --config /dev/null \
+                --scope all-layers \
+                --output "cyclonedx-json=$sbom" \
+                "registry:$digest_ref"
+              trivy image \
+                --config /dev/null \
+                --ignorefile /dev/null \
+                --scanners vuln \
+                --severity CRITICAL \
+                --exit-code 0 \
+                --format json \
+                --output "$vulnerability_report" \
+                "$digest_ref"
+            )
+            jq -e '.bomFormat == "CycloneDX"' "$sbom" > /dev/null
+            critical_findings="$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length' "$vulnerability_report")"
+            if [[ "$critical_findings" != "0" ]]; then
+              echo "$service image failed the zero-CRITICAL vulnerability policy: $critical_findings findings" >&2
+              exit 1
+            fi
+
+            sbom_sha256="$(sha256sum "$sbom" | cut -d' ' -f1)"
+            vulnerability_sha256="$(sha256sum "$vulnerability_report" | cut -d' ' -f1)"
+            predicate="$output/attestations/${service}.predicate.json"
+            jq -S -n \
+              --arg source_commit "$SOURCE_COMMIT" \
+              --arg source_version "$SOURCE_VERSION" \
+              --arg service "$service" \
+              --arg image_reference "$digest_ref" \
+              --arg image_digest "$digest" \
+              --arg sbom_sha256 "$sbom_sha256" \
+              --arg vulnerability_report_sha256 "$vulnerability_sha256" \
+              '{
+                schema_version: 1,
+                source_commit: $source_commit,
+                source_version: $source_version,
+                service: $service,
+                image: {
+                  reference: $image_reference,
+                  digest: $image_digest
+                },
+                sbom: {
+                  format: "cyclonedx-json",
+                  sha256: $sbom_sha256
+                },
+                vulnerability_scan: {
+                  scanner: "trivy",
+                  severity: "CRITICAL",
+                  ignore_unfixed: false,
+                  critical_findings: 0,
+                  sha256: $vulnerability_report_sha256
+                }
+              }' > "$predicate"
+
+            signature_bundle="$output/signatures/${service}.bundle.json"
+            signature_verification="$output/signatures/${service}.verification.json"
+            attestation_bundle="$output/attestations/${service}.bundle.json"
+            attestation_verification="$output/attestations/${service}.verification.jsonl"
+            matched_statement="$output/attestations/${service}.matched-statement.json"
+            cosign sign --yes \
+              --bundle "$signature_bundle" \
+              -a "org.opencontainers.image.revision=$SOURCE_COMMIT" \
+              -a "io.rocketmq.service=$service" \
+              "$digest_ref"
             cosign verify \
+              -a "org.opencontainers.image.revision=$SOURCE_COMMIT" \
+              -a "io.rocketmq.service=$service" \
               --certificate-identity-regexp "$CERTIFICATE_IDENTITY_REGEXP" \
               --certificate-oidc-issuer "$CERTIFICATE_OIDC_ISSUER" \
               --output json \
-              "$digest_ref" > "$output/signatures/${service}.json"
+              "$digest_ref" > "$signature_verification"
+            cosign attest --yes \
+              --predicate "$predicate" \
+              --type "$EVIDENCE_PREDICATE_TYPE" \
+              --bundle "$attestation_bundle" \
+              "$digest_ref"
+            cosign verify-attestation \
+              --certificate-identity-regexp "$CERTIFICATE_IDENTITY_REGEXP" \
+              --certificate-oidc-issuer "$CERTIFICATE_OIDC_ISSUER" \
+              --type "$EVIDENCE_PREDICATE_TYPE" \
+              --output json \
+              "$digest_ref" > "$attestation_verification"
+            python - \
+              "$attestation_verification" \
+              "$predicate" \
+              "$digest" \
+              "$EVIDENCE_PREDICATE_TYPE" \
+              "$repository" \
+              "$matched_statement" <<'PY'
+          import base64
+          import json
+          import sys
+          from pathlib import Path
+
+          verification_path = Path(sys.argv[1])
+          predicate_path = Path(sys.argv[2])
+          digest = sys.argv[3]
+          predicate_type = sys.argv[4]
+          repository = sys.argv[5]
+          output_path = Path(sys.argv[6])
+
+          def json_exact_equal(actual: object, expected: object) -> bool:
+              if type(actual) is not type(expected):
+                  return False
+              if type(expected) is dict:
+                  return set(actual) == set(expected) and all(
+                      json_exact_equal(actual[key], expected[key]) for key in expected
+                  )
+              if type(expected) is list:
+                  return len(actual) == len(expected) and all(
+                      json_exact_equal(actual_item, expected_item)
+                      for actual_item, expected_item in zip(actual, expected, strict=True)
+                  )
+              return actual == expected
+
+          expected_predicate = json.loads(predicate_path.read_text(encoding="utf-8"))
+          expected_sha256 = digest.removeprefix("sha256:")
+          matches: list[dict[str, object]] = []
+          for line_number, line in enumerate(
+              verification_path.read_text(encoding="utf-8").splitlines(),
+              start=1,
+          ):
+              if not line.strip():
+                  continue
+              record = json.loads(line)
+              if (
+                  not isinstance(record, dict)
+                  or record.get("payloadType") != "application/vnd.in-toto+json"
+                  or not isinstance(record.get("payload"), str)
+              ):
+                  raise SystemExit(f"verification line {line_number} is not a DSSE record")
+              encoded = record["payload"]
+              padded = encoded + "=" * (-len(encoded) % 4)
+              statement = json.loads(base64.b64decode(padded, validate=True))
+              if type(statement) is not dict or set(statement) != {
+                  "_type",
+                  "subject",
+                  "predicateType",
+                  "predicate",
+              }:
+                  continue
+              subjects = statement.get("subject")
+              subject_matches = (
+                  type(subjects) is list
+                  and len(subjects) == 1
+                  and type(subjects[0]) is dict
+                  and set(subjects[0]) == {"name", "digest"}
+                  and subjects[0].get("name") == repository
+                  and type(subjects[0].get("digest")) is dict
+                  and set(subjects[0]["digest"]) == {"sha256"}
+                  and subjects[0]["digest"].get("sha256") == expected_sha256
+              )
+              if (
+                  statement.get("_type") == "https://in-toto.io/Statement/v1"
+                  and statement.get("predicateType") == predicate_type
+                  and subject_matches
+                  and json_exact_equal(statement.get("predicate"), expected_predicate)
+              ):
+                  matches.append(statement)
+
+          if not matches:
+              raise SystemExit(
+                  "no verified DSSE statement matched predicate type, image digest, and canonical predicate"
+              )
+          output_path.write_text(
+              json.dumps(matches[0], indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+            signature_bundle_sha256="$(sha256sum "$signature_bundle" | cut -d' ' -f1)"
+            signature_verification_sha256="$(sha256sum "$signature_verification" | cut -d' ' -f1)"
+            predicate_sha256="$(sha256sum "$predicate" | cut -d' ' -f1)"
+            attestation_bundle_sha256="$(sha256sum "$attestation_bundle" | cut -d' ' -f1)"
+            attestation_verification_sha256="$(sha256sum "$attestation_verification" | cut -d' ' -f1)"
+            matched_statement_sha256="$(sha256sum "$matched_statement" | cut -d' ' -f1)"
+
+            jq -n \
+              --arg service "$service" \
+              --arg repository "$repository" \
+              --arg tag "$IMMUTABLE_TAG" \
+              --arg staging_tag "$staging_tag" \
+              --arg digest "$digest" \
+              --arg digest_reference "$digest_ref" \
+              --arg sbom_path "sbom/${service}.cdx.json" \
+              --arg sbom_sha256 "$sbom_sha256" \
+              --arg vulnerability_path "vulnerabilities/${service}.trivy.json" \
+              --arg vulnerability_sha256 "$vulnerability_sha256" \
+              --arg signature_bundle_path "signatures/${service}.bundle.json" \
+              --arg signature_bundle_sha256 "$signature_bundle_sha256" \
+              --arg signature_verification_path "signatures/${service}.verification.json" \
+              --arg signature_verification_sha256 "$signature_verification_sha256" \
+              --arg predicate_type "$EVIDENCE_PREDICATE_TYPE" \
+              --arg predicate_path "attestations/${service}.predicate.json" \
+              --arg predicate_sha256 "$predicate_sha256" \
+              --arg attestation_bundle_path "attestations/${service}.bundle.json" \
+              --arg attestation_bundle_sha256 "$attestation_bundle_sha256" \
+              --arg attestation_verification_path "attestations/${service}.verification.jsonl" \
+              --arg attestation_verification_sha256 "$attestation_verification_sha256" \
+              --arg matched_statement_path "attestations/${service}.matched-statement.json" \
+              --arg matched_statement_sha256 "$matched_statement_sha256" \
+              '{
+                service: $service,
+                image: {
+                  repository: $repository,
+                  tag: $tag,
+                  staging_tag: $staging_tag,
+                  digest: $digest,
+                  digest_reference: $digest_reference
+                },
+                sbom: {
+                  path: $sbom_path,
+                  format: "cyclonedx-json",
+                  sha256: $sbom_sha256
+                },
+                vulnerability_scan: {
+                  path: $vulnerability_path,
+                  scanner: "trivy",
+                  severity: "CRITICAL",
+                  ignore_unfixed: false,
+                  critical_findings: 0,
+                  sha256: $vulnerability_sha256
+                },
+                signature: {
+                  format: "sigstore-keyless",
+                  bundle_path: $signature_bundle_path,
+                  bundle_sha256: $signature_bundle_sha256,
+                  verification_path: $signature_verification_path,
+                  verification_sha256: $signature_verification_sha256
+                },
+                attestation: {
+                  predicate_type: $predicate_type,
+                  predicate_path: $predicate_path,
+                  predicate_sha256: $predicate_sha256,
+                  bundle_path: $attestation_bundle_path,
+                  bundle_sha256: $attestation_bundle_sha256,
+                  verification_path: $attestation_verification_path,
+                  verification_sha256: $attestation_verification_sha256,
+                  matched_statement_path: $matched_statement_path,
+                  matched_statement_sha256: $matched_statement_sha256
+                }
+              }' > "$output/services/${service}.json"
+
             jq --arg service "$service" --arg reference "$digest_ref" \
               '. + {($service): $reference}' "$image_map" > "$image_map.tmp"
             mv "$image_map.tmp" "$image_map"
           done
 
+          missing_promotions="${RUNNER_TEMP%/}/rocketmq-missing-promotions-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.txt"
+          : > "$missing_promotions"
+          for service in broker namesrv controller proxy mcp; do
+            service_record="$output/services/${service}.json"
+            repository="$(jq -er '.image.repository' "$service_record")"
+            digest="$(jq -er '.image.digest' "$service_record")"
+            immutable_ref="${repository}:${IMMUTABLE_TAG}"
+            preflight_raw="${RUNNER_TEMP%/}/${service}-promotion-preflight.raw.json"
+            preflight_error="$output/diagnostics/${service}.promotion-preflight.stderr"
+            if docker buildx imagetools inspect --raw "$immutable_ref" > "$preflight_raw" 2> "$preflight_error"; then
+              existing_sha256="$(sha256sum "$preflight_raw" | cut -d' ' -f1)"
+              if [[ "sha256:${existing_sha256}" != "$digest" ]]; then
+                echo "$immutable_ref already exists with a different manifest digest" >&2
+                false
+              fi
+              rm -f -- "$preflight_error"
+            else
+              if ! grep -Eiq '(manifest unknown|name unknown|not found|no such manifest)' "$preflight_error"; then
+                cat "$preflight_error" >&2
+                false
+              fi
+              printf '%s\n' "$service" >> "$missing_promotions"
+            fi
+          done
+
+          for service in broker namesrv controller proxy mcp; do
+            service_record="$output/services/${service}.json"
+            repository="$(jq -er '.image.repository' "$service_record")"
+            digest="$(jq -er '.image.digest' "$service_record")"
+            digest_ref="${repository}@${digest}"
+            immutable_ref="${repository}:${IMMUTABLE_TAG}"
+            promotion_action=reused
+            if grep -Fxq "$service" "$missing_promotions"; then
+              recheck_raw="${RUNNER_TEMP%/}/${service}-promotion-recheck.raw.json"
+              recheck_error="$output/diagnostics/${service}.promotion-recheck.stderr"
+              if docker buildx imagetools inspect --raw "$immutable_ref" > "$recheck_raw" 2> "$recheck_error"; then
+                recheck_sha256="$(sha256sum "$recheck_raw" | cut -d' ' -f1)"
+                if [[ "sha256:${recheck_sha256}" != "$digest" ]]; then
+                  echo "$immutable_ref appeared with a different manifest digest" >&2
+                  false
+                fi
+                rm -f -- "$recheck_error"
+              else
+                if ! grep -Eiq '(manifest unknown|name unknown|not found|no such manifest)' "$recheck_error"; then
+                  cat "$recheck_error" >&2
+                  false
+                fi
+                docker buildx imagetools create --prefer-index=false --tag "$immutable_ref" "$digest_ref"
+                promotion_action=created
+              fi
+            fi
+
+            promoted_manifest="$output/promotion/${service}.manifest.raw.json"
+            docker buildx imagetools inspect --raw "$immutable_ref" > "$promoted_manifest"
+            promoted_manifest_sha256="$(sha256sum "$promoted_manifest" | cut -d' ' -f1)"
+            if [[ "sha256:${promoted_manifest_sha256}" != "$digest" ]]; then
+              echo "$immutable_ref read-back digest does not match the qualified digest" >&2
+              false
+            fi
+            jq -S \
+              --arg immutable_reference "$immutable_ref" \
+              --arg action "$promotion_action" \
+              --arg raw_manifest_path "promotion/${service}.manifest.raw.json" \
+              --arg raw_manifest_sha256 "$promoted_manifest_sha256" \
+              '.promotion = {
+                immutable_reference: $immutable_reference,
+                action: $action,
+                raw_manifest_path: $raw_manifest_path,
+                raw_manifest_sha256: $raw_manifest_sha256
+              }' "$service_record" > "$service_record.tmp"
+            mv "$service_record.tmp" "$service_record"
+          done
+
           jq --sort-keys . "$image_map" > "$image_map.sorted"
           mv "$image_map.sorted" "$image_map"
-          jq -n \
+          jq -S -s 'sort_by(.service)' "$output"/services/*.json > "$output/services.json"
+          jq -e --slurpfile images "$image_map" '
+            length == 5 and
+            all(.[];
+              $images[0][.service] == .image.digest_reference and
+              .image.digest_reference == (.image.repository + "@" + .image.digest) and
+              .promotion.raw_manifest_sha256 == (.image.digest | ltrimstr("sha256:"))
+            )
+          ' "$output/services.json" > /dev/null
+
+          artifacts_ndjson="$output/.artifacts.ndjson.tmp"
+          artifacts_json="$output/.artifacts.json.tmp"
+          : > "$artifacts_ndjson"
+          while IFS= read -r -d '' artifact; do
+            relative_path="${artifact#"$output"/}"
+            artifact_sha256="$(sha256sum "$artifact" | cut -d' ' -f1)"
+            jq -cn \
+              --arg path "$relative_path" \
+              --arg sha256 "$artifact_sha256" \
+              '{path: $path, sha256: $sha256}' >> "$artifacts_ndjson"
+          done < <(
+            find "$output" -type f \
+              ! -name 'evidence-manifest.json' \
+              ! -name 'publication.json' \
+              ! -name 'SHA256SUMS' \
+              ! -name '.artifacts*' \
+              ! -name '.evidence-manifest.json.tmp' \
+              ! -name '.publication.json.tmp' \
+              ! -name '.SHA256SUMS.tmp' \
+              -print0 | sort -z
+          )
+          jq -S -s . "$artifacts_ndjson" > "$artifacts_json"
+          jq -e '
+            length > 0 and
+            all(.[];
+              (.path | type == "string" and length > 0) and
+              (.sha256 | type == "string" and test("^[0-9a-f]{64}$"))
+            )
+          ' "$artifacts_json" > /dev/null
+
+          jq -S -n \
             --arg source_commit "$SOURCE_COMMIT" \
             --arg source_version "$SOURCE_VERSION" \
+            --arg source_kind "$SOURCE_KIND" \
             --arg immutable_tag "$IMMUTABLE_TAG" \
             --arg workflow_run "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --arg syft_version "$SYFT_VERSION" \
+            --arg trivy_version "$TRIVY_VERSION" \
+            --arg cosign_version "$COSIGN_VERSION" \
             --slurpfile images "$image_map" \
+            --slurpfile services "$output/services.json" \
+            --slurpfile artifacts "$artifacts_json" \
             '{
               schema_version: 1,
-              source_commit: $source_commit,
-              source_version: $source_version,
-              immutable_tag: $immutable_tag,
+              category: "five_image_supply_chain",
+              fixture: false,
+              candidate_commit: $source_commit,
+              status: "pass",
+              source: "workflow://mxsm/rocketmq-rust/service-image-publish",
+              candidate: {
+                source_commit: $source_commit,
+                source_version: $source_version,
+                source_kind: $source_kind,
+                immutable_tag: $immutable_tag
+              },
               workflow_run: $workflow_run,
+              tools: {
+                syft: $syft_version,
+                trivy: $trivy_version,
+                cosign: $cosign_version
+              },
+              policy: {
+                critical_vulnerability_severity: "CRITICAL",
+                maximum_critical_findings: 0,
+                ignore_unfixed: false
+              },
               images: $images[0],
-              signature: {
-                format: "sigstore-keyless",
-                oidc_issuer: "https://token.actions.githubusercontent.com"
-              }
-            }' > "$output/publication.json"
-          sha256sum "$image_map" "$output/publication.json" > "$output/SHA256SUMS"
+              services: $services[0],
+              artifacts: $artifacts[0]
+            }' > "$manifest_tmp"
+          jq -e --arg candidate_commit "$SOURCE_COMMIT" '
+            .schema_version == 1 and
+            .category == "five_image_supply_chain" and
+            .fixture == false and
+            .candidate_commit == $candidate_commit and
+            .status == "pass" and
+            (.source | type == "string" and length > 0) and
+            (.images | keys | length == 5) and
+            (.services | length == 5) and
+            (.artifacts | length > 0)
+          ' "$manifest_tmp" > /dev/null
+          cp "$manifest_tmp" "$publication_tmp"
+          rm -f -- "$artifacts_ndjson" "$artifacts_json"
+          (
+            cd "$output"
+            find . -type f \
+              ! -name 'evidence-manifest.json' \
+              ! -name 'publication.json' \
+              ! -name 'SHA256SUMS' \
+              ! -name '.evidence-manifest.json.tmp' \
+              ! -name '.publication.json.tmp' \
+              ! -name '.SHA256SUMS.tmp' \
+              -print0 \
+              | sort -z \
+              | xargs -0 sha256sum
+          ) > "$checksum_tmp"
+          mv "$checksum_tmp" "$checksum_manifest"
+          mv "$publication_tmp" "$publication_manifest"
+          mv "$manifest_tmp" "$pass_manifest"
+          publication_complete=true
+          trap - ERR TERM EXIT
 
-      - name: Upload commit-bound image map
+      - name: Upload candidate- and digest-bound service image evidence
+        if: success()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: architecture-service-images-${{ steps.source.outputs.commit }}
           path: target/service-image-publication
           if-no-files-found: error
           retention-days: 90
+
+      - name: Remove pass manifests from incomplete diagnostics
+        if: failure() && steps.source.outputs.commit != ''
+        shell: bash
+        env:
+          SOURCE_COMMIT: ${{ steps.source.outputs.commit }}
+        run: |
+          set -euo pipefail
+          output="$GITHUB_WORKSPACE/target/service-image-publication"
+          mkdir -p "$output/diagnostics"
+          rm -f -- \
+            "$output/evidence-manifest.json" \
+            "$output/publication.json" \
+            "$output/.evidence-manifest.json.tmp" \
+            "$output/.publication.json.tmp" \
+            "$output/SHA256SUMS" \
+            "$output/.SHA256SUMS.tmp"
+          jq -S -n \
+            --arg candidate_commit "$SOURCE_COMMIT" \
+            --arg workflow_run "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            '{
+              schema_version: 1,
+              category: "five_image_supply_chain",
+              fixture: false,
+              candidate_commit: $candidate_commit,
+              status: "fail",
+              source: "workflow://mxsm/rocketmq-rust/service-image-publish",
+              workflow_run: $workflow_run,
+              finding: "publication workflow did not complete; inspect the run log and partial diagnostics"
+            }' > "$output/diagnostics/incomplete.json"
+          test ! -e "$output/evidence-manifest.json"
+          test ! -e "$output/publication.json"
+
+      - name: Upload incomplete service image diagnostics
+        if: failure() && steps.source.outputs.commit != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: architecture-service-images-incomplete-${{ steps.source.outputs.commit }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/service-image-publication
+          if-no-files-found: error
+          retention-days: 30

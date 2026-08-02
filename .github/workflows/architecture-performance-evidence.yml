@@ -27,6 +27,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
 
+      - name: Bind immutable contract commit
+        id: bind-contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          CONTRACT_COMMIT=$(git rev-parse HEAD)
+          [[ "$CONTRACT_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          echo "contract_commit=$CONTRACT_COMMIT" >> "$GITHUB_OUTPUT"
+
       - name: Validate reproducible profiles and sidecar
         run: |
           python scripts/architecture_performance_guard.py --validate-profiles
@@ -42,7 +51,7 @@ jobs:
       - name: Upload profile contract
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: architecture-performance-contract-${{ github.sha }}
+          name: architecture-performance-contract-${{ steps.bind-contract.outputs.contract_commit }}
           path: target/architecture-refactor/M10/contract
           if-no-files-found: error
           retention-days: 30
@@ -75,6 +84,7 @@ jobs:
           path: candidate
 
       - name: Bind immutable baseline and candidate commits
+        id: bind-commits
         shell: bash
         run: |
           set -euo pipefail
@@ -91,6 +101,7 @@ jobs:
             echo "BASELINE_COMMIT=$BASELINE_COMMIT"
             echo "CANDIDATE_COMMIT=$CANDIDATE_COMMIT"
           } >> "$GITHUB_ENV"
+          echo "candidate_commit=$CANDIDATE_COMMIT" >> "$GITHUB_OUTPUT"
           mkdir -p target/architecture-refactor/M10
           printf '%s\n' \
             "baseline=$BASELINE_COMMIT" \
@@ -146,20 +157,36 @@ jobs:
       - name: Compare approved baseline with candidate
         run: |
           set -euo pipefail
-          BASELINE_REPORT=$(find baseline/target/architecture-refactor/M10/performance -name measurement-report.json -print -quit)
-          CANDIDATE_REPORT=$(find candidate/target/architecture-refactor/M10/performance -name measurement-report.json -print -quit)
-          test -n "$BASELINE_REPORT"
-          test -n "$CANDIDATE_REPORT"
+          EVIDENCE_DIR="target/architecture-refactor/M10/evidence/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "$EVIDENCE_DIR"
+          BASELINE_SOURCE_REPORT=$(find baseline/target/architecture-refactor/M10/performance -name measurement-report.json -print -quit)
+          CANDIDATE_SOURCE_REPORT=$(find candidate/target/architecture-refactor/M10/performance -name measurement-report.json -print -quit)
+          test -n "$BASELINE_SOURCE_REPORT"
+          test -n "$CANDIDATE_SOURCE_REPORT"
+          cp "$BASELINE_SOURCE_REPORT" "$EVIDENCE_DIR/baseline-report.json"
+          cp "$CANDIDATE_SOURCE_REPORT" "$EVIDENCE_DIR/candidate-report.json"
+          BASELINE_REPORT="$EVIDENCE_DIR/baseline-report.json"
+          CANDIDATE_REPORT="$EVIDENCE_DIR/candidate-report.json"
           python candidate/scripts/architecture_performance_guard.py \
             --baseline "$BASELINE_REPORT" \
             --candidate "$CANDIDATE_REPORT" \
-            --output target/architecture-refactor/M10/comparison.json
+            --output "$EVIDENCE_DIR/comparison.json"
+          python candidate/scripts/architecture_evidence_bundle.py assemble \
+            --candidate "$CANDIDATE_COMMIT" \
+            --evidence-root "$EVIDENCE_DIR" \
+            --evidence performance=comparison.json \
+            --output bundle.json
+          python candidate/scripts/architecture_evidence_bundle.py validate \
+            --evidence-root "$EVIDENCE_DIR" \
+            --manifest bundle.json \
+            --require-category-pass performance \
+            --candidate "$CANDIDATE_COMMIT"
 
       - name: Upload immutable performance evidence
-        if: always()
+        if: always() && steps.bind-commits.outputs.candidate_commit != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: architecture-performance-${{ github.sha }}
+          name: architecture-performance-${{ steps.bind-commits.outputs.candidate_commit }}
           path: |
             baseline/target/architecture-refactor/M10
             candidate/target/architecture-refactor/M10

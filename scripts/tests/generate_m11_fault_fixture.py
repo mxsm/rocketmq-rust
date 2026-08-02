@@ -64,6 +64,7 @@ def main() -> int:
         "milestone": "M11-11",
         "policy_sha256": canonical_json_sha256(policy),
         "run_id": "fixture-m11-11-positive",
+        "candidate_commit": "0123456789abcdef0123456789abcdef01234567",
         "started_at": "2026-07-17T01:00:00Z",
         "finished_at": "2026-07-17T01:16:00Z",
         "backend": "kind",

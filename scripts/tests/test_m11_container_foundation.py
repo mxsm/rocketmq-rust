@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import base64
 import copy
 import importlib.util
 import json
@@ -165,12 +166,362 @@ class ContainerFoundationTests(unittest.TestCase):
         )
 
         mutable = self.publication_workflow.replace(
-            'tagged_ref="${repository}:${IMMUTABLE_TAG}"',
-            'tagged_ref="${repository}:latest"',
+            'staging_ref="${repository}:${staging_tag}"',
+            'staging_ref="${repository}:latest"',
             1,
         )
         self.assertTrue(
             any("mutable tag: :latest" in finding for finding in self.audit(publication_workflow=mutable))
+        )
+
+    def test_publication_rejects_untrusted_manual_source_refs(self) -> None:
+        direct_checkout = self.publication_workflow.replace(
+            "ref: refs/heads/main",
+            "ref: ${{ inputs.source_ref }}",
+            1,
+        )
+        findings = self.audit(publication_workflow=direct_checkout)
+        self.assertTrue(any("source trust boundary" in finding for finding in findings))
+        self.assertTrue(any("must never flow directly" in finding for finding in findings))
+
+        arbitrary_commit = self.publication_workflow.replace(
+            '[[ ! "$REQUESTED_SOURCE_REF" =~ ^[0-9a-f]{40}$ ]]',
+            '[[ -z "$REQUESTED_SOURCE_REF" ]]',
+            1,
+        )
+        self.assertTrue(
+            any(
+                "source trust boundary" in finding
+                for finding in self.audit(publication_workflow=arbitrary_commit)
+            )
+        )
+
+        untrusted_history = self.publication_workflow.replace(
+            'git merge-base --is-ancestor "$source_commit" "$trusted_main"',
+            "true # ancestry check removed",
+            1,
+        )
+        self.assertTrue(
+            any(
+                "source trust boundary" in finding
+                for finding in self.audit(publication_workflow=untrusted_history)
+            )
+        )
+
+    def test_publication_retains_digest_bound_supply_chain_evidence(self) -> None:
+        no_remote_sbom = self.publication_workflow.replace(
+            '"registry:$digest_ref"',
+            '"docker:$digest_ref"',
+            1,
+        )
+        self.assertTrue(
+            any(
+                "evidence boundary" in finding
+                for finding in self.audit(publication_workflow=no_remote_sbom)
+            )
+        )
+
+        no_attestation_bundle = self.publication_workflow.replace(
+            '--bundle "$attestation_bundle"',
+            "--no-upload",
+            1,
+        )
+        self.assertTrue(
+            any(
+                "evidence boundary" in finding
+                for finding in self.audit(publication_workflow=no_attestation_bundle)
+            )
+        )
+
+        unbound_manifest = self.publication_workflow.replace(
+            "digest_reference: $digest_reference",
+            "repository: $repository",
+            1,
+        )
+        self.assertTrue(
+            any(
+                "evidence boundary" in finding
+                for finding in self.audit(publication_workflow=unbound_manifest)
+            )
+        )
+
+    def test_publication_qualifies_staging_before_global_idempotent_promotion(self) -> None:
+        per_candidate_concurrency = self.publication_workflow.replace(
+            "group: service-image-publish",
+            "group: service-image-publish-${{ inputs.source_ref }}",
+            1,
+        )
+        findings = self.audit(publication_workflow=per_candidate_concurrency)
+        self.assertTrue(any("must be global" in finding for finding in findings))
+
+        direct_immutable_push = self.publication_workflow.replace(
+            '--tag "$staging_ref"',
+            '--tag "${repository}:${IMMUTABLE_TAG}"',
+            1,
+        )
+        findings = self.audit(publication_workflow=direct_immutable_push)
+        self.assertTrue(any("must not build directly" in finding for finding in findings))
+
+        rewritten_manifest = self.publication_workflow.replace(
+            "imagetools create --prefer-index=false",
+            "imagetools create --prefer-index=true",
+            1,
+        )
+        self.assertTrue(
+            any(
+                "evidence boundary" in finding
+                for finding in self.audit(publication_workflow=rewritten_manifest)
+            )
+        )
+
+        no_readback = self.publication_workflow.replace(
+            'docker buildx imagetools inspect --raw "$immutable_ref" > "$promoted_manifest"',
+            'cp "$preflight_raw" "$promoted_manifest"',
+            1,
+        )
+        self.assertTrue(
+            any("evidence boundary" in finding for finding in self.audit(publication_workflow=no_readback))
+        )
+
+    def test_publication_verifies_annotations_and_exact_dsse_statement(self) -> None:
+        annotation_not_required = self.publication_workflow.replace(
+            '-a "org.opencontainers.image.revision=$SOURCE_COMMIT"',
+            "# revision annotation removed",
+            1,
+        )
+        self.assertTrue(
+            any(
+                "must require annotation" in finding
+                for finding in self.audit(publication_workflow=annotation_not_required)
+            )
+        )
+
+        loose_predicate_match = self.publication_workflow.replace(
+            'json_exact_equal(statement.get("predicate"), expected_predicate)',
+            "True",
+            1,
+        )
+        self.assertTrue(
+            any(
+                "evidence boundary" in finding
+                for finding in self.audit(publication_workflow=loose_predicate_match)
+            )
+        )
+
+        no_matched_statement = self.publication_workflow.replace(
+            "matched_statement_sha256",
+            "unchecked_statement_sha256",
+        )
+        self.assertTrue(
+            any(
+                "evidence boundary" in finding
+                for finding in self.audit(publication_workflow=no_matched_statement)
+            )
+        )
+
+    def test_publication_dsse_matcher_requires_exact_verified_statement(self) -> None:
+        lines = self.publication_workflow.splitlines()
+        marker = next(
+            index for index, line in enumerate(lines) if '"$matched_statement" <<\'PY\'' in line
+        )
+        end = next(index for index in range(marker + 1, len(lines)) if lines[index] == "          PY")
+        matcher = "\n".join(line[10:] for line in lines[marker + 1 : end]) + "\n"
+
+        digest = "sha256:" + "a" * 64
+        repository = "ghcr.io/mxsm/rocketmq-rust/broker"
+        predicate_type = "https://github.com/mxsm/rocketmq-rust/attestations/service-image-evidence/v1"
+        predicate = {
+            "schema_version": 1,
+            "source_commit": "b" * 40,
+            "service": "broker",
+            "image": {"digest": digest},
+        }
+        unrelated = {
+            "_type": "https://in-toto.io/Statement/v1",
+            "subject": [{"name": repository, "digest": {"sha256": "c" * 64}}],
+            "predicateType": predicate_type,
+            "predicate": predicate,
+        }
+        matching = {
+            "_type": "https://in-toto.io/Statement/v1",
+            "subject": [{"name": repository, "digest": {"sha256": "a" * 64}}],
+            "predicateType": predicate_type,
+            "predicate": predicate,
+        }
+
+        def envelope(statement: dict) -> str:
+            payload = base64.b64encode(json.dumps(statement).encode()).decode()
+            return json.dumps({"payload": payload, "payloadType": "application/vnd.in-toto+json"})
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            verification = root / "verification.jsonl"
+            predicate_path = root / "predicate.json"
+            matched_path = root / "matched.json"
+            verification.write_text(
+                envelope(unrelated) + "\n" + envelope(matching) + "\n",
+                encoding="utf-8",
+            )
+            predicate_path.write_text(json.dumps(predicate), encoding="utf-8")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-",
+                    str(verification),
+                    str(predicate_path),
+                    digest,
+                    predicate_type,
+                    repository,
+                    str(matched_path),
+                ],
+                input=matcher,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual(matching, json.loads(matched_path.read_text(encoding="utf-8")))
+
+            predicate_path.write_text(json.dumps({**predicate, "service": "namesrv"}), encoding="utf-8")
+            rejected_path = root / "rejected.json"
+            rejected = subprocess.run(
+                [
+                    sys.executable,
+                    "-",
+                    str(verification),
+                    str(predicate_path),
+                    digest,
+                    predicate_type,
+                    repository,
+                    str(rejected_path),
+                ],
+                input=matcher,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertNotEqual(0, rejected.returncode)
+            self.assertFalse(rejected_path.exists())
+            predicate_path.write_text(json.dumps(predicate), encoding="utf-8")
+
+            for label, statement, payload_type in (
+                (
+                    "wrong-statement-type",
+                    {**matching, "_type": "https://in-toto.io/Statement/v0.1"},
+                    "application/vnd.in-toto+json",
+                ),
+                (
+                    "duplicate-subject",
+                    {**matching, "subject": matching["subject"] * 2},
+                    "application/vnd.in-toto+json",
+                ),
+                (
+                    "wrong-subject-name",
+                    {
+                        **matching,
+                        "subject": [
+                            {"name": "broker", "digest": {"sha256": "a" * 64}}
+                        ],
+                    },
+                    "application/vnd.in-toto+json",
+                ),
+                (
+                    "extra-statement-field",
+                    {**matching, "extra": "untrusted"},
+                    "application/vnd.in-toto+json",
+                ),
+                ("wrong-payload-type", matching, "application/json"),
+            ):
+                with self.subTest(label=label):
+                    payload = base64.b64encode(json.dumps(statement).encode()).decode()
+                    verification.write_text(
+                        json.dumps({"payload": payload, "payloadType": payload_type})
+                        + "\n",
+                        encoding="utf-8",
+                    )
+                    rejected_path.unlink(missing_ok=True)
+                    rejected = subprocess.run(
+                        [
+                            sys.executable,
+                            "-",
+                            str(verification),
+                            str(predicate_path),
+                            digest,
+                            predicate_type,
+                            repository,
+                            str(rejected_path),
+                        ],
+                        input=matcher,
+                        text=True,
+                        capture_output=True,
+                        check=False,
+                    )
+                    self.assertNotEqual(0, rejected.returncode)
+                    self.assertFalse(rejected_path.exists())
+
+    def test_publication_isolates_scanners_and_never_uploads_partial_pass(self) -> None:
+        implicit_scanner_config = self.publication_workflow.replace("--config /dev/null", "", 1)
+        self.assertTrue(
+            any(
+                "explicit empty configuration" in finding
+                for finding in self.audit(publication_workflow=implicit_scanner_config)
+            )
+        )
+
+        always_upload = self.publication_workflow.replace("if: success()", "if: always()", 1)
+        self.assertTrue(
+            any(
+                "only upload on success" in finding
+                for finding in self.audit(publication_workflow=always_upload)
+            )
+        )
+
+        non_atomic_manifest = self.publication_workflow.replace(
+            'mv "$manifest_tmp" "$pass_manifest"',
+            'cp "$manifest_tmp" "$pass_manifest"',
+            1,
+        )
+        self.assertTrue(
+            any(
+                "evidence boundary" in finding
+                for finding in self.audit(publication_workflow=non_atomic_manifest)
+            )
+        )
+
+        no_error_cleanup = self.publication_workflow.replace(
+            "trap cleanup_pass_manifests ERR",
+            "# ERR cleanup removed",
+            1,
+        )
+        self.assertTrue(
+            any(
+                "evidence boundary" in finding
+                for finding in self.audit(publication_workflow=no_error_cleanup)
+            )
+        )
+
+    def test_publication_manifest_is_bundle_compatible_and_hashes_raw_artifacts(self) -> None:
+        wrong_category = self.publication_workflow.replace(
+            'category: "five_image_supply_chain"',
+            'category: "container_images"',
+        )
+        self.assertTrue(
+            any(
+                "evidence boundary" in finding
+                for finding in self.audit(publication_workflow=wrong_category)
+            )
+        )
+
+        no_artifact_hashes = self.publication_workflow.replace(
+            "{path: $path, sha256: $sha256}",
+            "{path: $path}",
+            1,
+        )
+        self.assertTrue(
+            any(
+                "evidence boundary" in finding
+                for finding in self.audit(publication_workflow=no_artifact_hashes)
+            )
         )
 
     def test_unregistered_dockerfile_or_restored_legacy_exception_is_rejected(self) -> None:

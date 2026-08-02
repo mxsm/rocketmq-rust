@@ -228,13 +228,13 @@ and inject `ChildServiceContext`/`TaskGroup` capabilities.
 
 ## Python architecture test inventory
 
-- Inventoried test modules: 60.
+- Inventoried test modules: 62.
 - Guard runner: `python scripts/run_architecture_tests.py --tier pr_static`.
 - Contract runner: `python scripts/run_architecture_tests.py --tier milestone_contract --tier phase_contract --tier dynamic_fixture`.
 
 | Tier | Modules |
 |---|---:|
-| `pr_static` | 22 |
+| `pr_static` | 24 |
 | `milestone_contract` | 26 |
 | `phase_contract` | 4 |
 | `dynamic_fixture` | 7 |
@@ -260,6 +260,42 @@ Benchmark reports must include the runner fingerprint, toolchain, profile, featu
 and comparison result required by `scripts/architecture-performance-profiles.json`. Fault and soak
 artifacts use the production-readiness and fault-matrix policies; failures retain replay inputs and
 diagnostics without committing runtime output.
+The SLO and fault workflows now accept `candidate_publication_json` (or the scheduled
+`ARCHITECTURE_CANDIDATE_PUBLICATION_JSON`) instead of the former self-reported image-map
+input. Callers must pass the signed five-image publication manifest; the workflows verify it and
+derive the candidate image map only after all five service identities and digests match.
+
+## Unified production qualification bundle
+
+`scripts/architecture_evidence_bundle.py` assembles a relocatable manifest for exactly five
+release evidence classes: performance, HA soak with observed RPO/RTO, disaster recovery,
+N-1 rolling upgrade, and the five-image supply chain. Records bind a fixed category/source, a full
+candidate commit, a strict fixture boolean, and an explicit `pass`, `fail`, or `not-run` status.
+A pass record requires a non-empty artifact list. The bundle hashes the record and verifies every
+explicit first-level artifact by raw bytes relative to the record directory; paths cannot escape or
+repeat. It does not recursively discover files or decide domain semantics such as performance budgets,
+RPO/RTO, disaster recovery, compatibility, vulnerability, or signature validity. Those verdicts remain
+the responsibility of the producer guard named by the fixed source.
+
+Missing records remain `not-run`; fixture records cannot claim `pass`; candidate, source, category,
+or artifact mismatches become `fail`. At promotion, `--require-pass` also requires `--candidate` and
+rejects both incomplete bundles and a manifest bound to a different commit.
+Bundle and comparison outputs reject exact, symbolic-link, and hard-link aliases of their protected
+inputs, then publish through a unique same-directory temporary file and atomic replacement.
+`--require-category-pass <category>` is a scoped gate: it requires a matching full `--candidate` and
+a pass for that category while allowing the other categories to remain `not-run`. It does not weaken
+the full-bundle semantics of `--require-pass`.
+
+```text
+python scripts/architecture_evidence_bundle.py assemble --candidate <full-sha> \
+  --evidence-root <dir> --evidence performance=<record.json> --output bundle.json
+python scripts/architecture_evidence_bundle.py validate --evidence-root <dir> \
+  --manifest bundle.json
+python scripts/architecture_evidence_bundle.py validate --evidence-root <dir> \
+  --manifest bundle.json --require-pass --candidate <full-sha>
+python scripts/architecture_evidence_bundle.py validate --evidence-root <dir> \
+  --manifest bundle.json --require-category-pass performance --candidate <full-sha>
+```
 
 ## Architecture evidence cross-checks
 
@@ -274,6 +310,7 @@ diagnostics without committing runtime output.
 - Deterministic property suites: `scripts/property-state-suite-registry.json`.
 - Fuzz corpus ownership and retention: `fuzz/corpus-registry.json`.
 - Cross-registry guard: `scripts/architecture_evidence_governance_guard.py`.
+- Unified production qualification manifest: `scripts/architecture_evidence_bundle.py`.
 - Core capability contracts: `rocketmq-doc/en/core-capability-contracts.md`.
 - Acknowledgement/failover ADR: `rocketmq-doc/en/acknowledgement-failover-contract-adr.md`.
 - Regional DR boundary: `rocketmq-doc/en/regional-disaster-recovery-adr.md`.

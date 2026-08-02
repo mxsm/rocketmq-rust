@@ -501,13 +501,16 @@ def audit_foundation(
         "docker buildx build",
         "--platform linux/amd64",
         '--target "$service"',
-        '--tag "$tagged_ref"',
+        '--tag "$staging_ref"',
         "--push",
         "cosign sign --yes",
         "cosign verify",
+        "cosign attest --yes",
+        "cosign verify-attestation",
         "containerimage.digest",
         "image-map.json",
         "publication.json",
+        "evidence-manifest.json",
         "architecture-service-images-${{ steps.source.outputs.commit }}",
     ]
     for fragment in publication_fragments:
@@ -518,6 +521,131 @@ def audit_foundation(
     for mutable_tag in (":latest", ":main", ":master"):
         if mutable_tag in publication_workflow:
             findings.append(f"service image publication workflow contains mutable tag: {mutable_tag}")
+
+    publication_actions = (
+        "actions/checkout",
+        "docker/setup-buildx-action",
+        "anchore/sbom-action/download-syft",
+        "aquasecurity/setup-trivy",
+        "sigstore/cosign-installer",
+        "actions/upload-artifact",
+    )
+    for action in publication_actions:
+        sha = policy["workflow"]["actions"][action]
+        if f"uses: {action}@{sha}" not in publication_workflow:
+            findings.append(f"service image publication workflow must pin {action}@{sha}")
+    for version_key, input_name in (
+        ("syft_version", "syft-version"),
+        ("trivy_version", "version"),
+        ("cosign_version", "cosign-release"),
+    ):
+        version = policy["supply_chain"][version_key]
+        if f"{input_name}: {version}" not in publication_workflow:
+            findings.append(f"service image publication workflow must pin {input_name}: {version}")
+
+    trusted_source_fragments = (
+        "ref: refs/heads/main",
+        "fetch-depth: 0",
+        "fetch-tags: true",
+        "persist-credentials: false",
+        '[[ "$GITHUB_REF" != "refs/heads/main" ]]',
+        '[[ ! "$REQUESTED_SOURCE_REF" =~ ^[0-9a-f]{40}$ ]]',
+        'git cat-file -e "${REQUESTED_SOURCE_REF}^{commit}"',
+        'git merge-base --is-ancestor "$source_commit" "$trusted_main"',
+        'git checkout --detach "$source_commit"',
+        '[[ "$(git rev-parse HEAD)" == "$source_commit" ]]',
+    )
+    for fragment in trusted_source_fragments:
+        if fragment not in publication_workflow:
+            findings.append(f"service image publication source trust boundary missing: {fragment}")
+    if re.search(r"(?m)^\s+ref:\s*\$\{\{[^\n]*source_ref", publication_workflow):
+        findings.append("manual source_ref must never flow directly into actions/checkout")
+    if re.search(r"(?m)^\s+default:\s*(?:main|master)\s*$", publication_workflow):
+        findings.append("manual source_ref must not default to a mutable branch")
+
+    publication_evidence_fragments = (
+        "for service in broker namesrv controller proxy mcp",
+        "group: service-image-publish",
+        'staging_tag="staging-${SOURCE_COMMIT:0:12}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"',
+        'staging_ref="${repository}:${staging_tag}"',
+        '--tag "$staging_ref"',
+        'scan_workdir="$(mktemp -d "${RUNNER_TEMP%/}/rocketmq-service-scan-${service}.XXXXXX")"',
+        'cd "$scan_workdir"',
+        '"registry:$digest_ref"',
+        "cyclonedx-json=$sbom",
+        "trivy image",
+        "--ignorefile /dev/null",
+        "--scanners vuln",
+        "--severity CRITICAL",
+        "--exit-code 0",
+        'critical_findings="$(jq',
+        '[[ "$critical_findings" != "0" ]]',
+        '--bundle "$signature_bundle"',
+        '--predicate "$predicate"',
+        '--type "$EVIDENCE_PREDICATE_TYPE"',
+        '--bundle "$attestation_bundle"',
+        'attestation_verification="$output/attestations/${service}.verification.jsonl"',
+        'matched_statement="$output/attestations/${service}.matched-statement.json"',
+        'verification_path.read_text(encoding="utf-8").splitlines()',
+        'record["payload"]',
+        "base64.b64decode(padded, validate=True)",
+        'record.get("payloadType") != "application/vnd.in-toto+json"',
+        'set(statement) != {',
+        'statement.get("_type") == "https://in-toto.io/Statement/v1"',
+        'statement.get("predicateType") == predicate_type',
+        "len(subjects) == 1",
+        'subjects[0].get("name") == repository',
+        'subjects[0]["digest"].get("sha256") == expected_sha256',
+        'json_exact_equal(statement.get("predicate"), expected_predicate)',
+        "if not matches:",
+        "matched_statement_sha256",
+        'docker buildx imagetools create --prefer-index=false --tag "$immutable_ref" "$digest_ref"',
+        'docker buildx imagetools inspect --raw "$immutable_ref"',
+        'docker buildx imagetools inspect --raw "$immutable_ref" > "$promoted_manifest"',
+        'if [[ "sha256:${promoted_manifest_sha256}" != "$digest" ]]',
+        "raw_manifest_sha256",
+        "signature_bundle_sha256",
+        "attestation_bundle_sha256",
+        "vulnerability_report_sha256",
+        "source_commit: $source_commit",
+        "digest_reference: $digest_reference",
+        "schema_version: 1",
+        "candidate_commit: $source_commit",
+        "category: \"five_image_supply_chain\"",
+        "fixture: false",
+        "status: \"pass\"",
+        "source: \"workflow://mxsm/rocketmq-rust/service-image-publish\"",
+        "artifacts: $artifacts[0]",
+        "{path: $path, sha256: $sha256}",
+        "trap cleanup_pass_manifests ERR",
+        "trap terminate_publication TERM",
+        "trap cleanup_unless_complete EXIT",
+        'mv "$manifest_tmp" "$pass_manifest"',
+        "if: success()",
+        "if: failure() && steps.source.outputs.commit != ''",
+        "architecture-service-images-incomplete-${{ steps.source.outputs.commit }}",
+        'test ! -e "$output/evidence-manifest.json"',
+        'test ! -e "$output/publication.json"',
+    )
+    for fragment in publication_evidence_fragments:
+        if fragment not in publication_workflow:
+            findings.append(f"service image publication evidence boundary missing: {fragment}")
+    if "--ignore-unfixed" in publication_workflow:
+        findings.append("service image publication must scan unfixed CRITICAL vulnerabilities")
+    if publication_workflow.count("--config /dev/null") < 2:
+        findings.append("service image publication scanners must both use explicit empty configuration")
+    for annotation in (
+        '-a "org.opencontainers.image.revision=$SOURCE_COMMIT"',
+        '-a "io.rocketmq.service=$service"',
+    ):
+        if publication_workflow.count(annotation) < 2:
+            findings.append(f"service image signature verification must require annotation: {annotation}")
+    if "group: service-image-publish-${{" in publication_workflow:
+        findings.append("service image publication concurrency must be global")
+    if '--tag "${repository}:${IMMUTABLE_TAG}"' in publication_workflow:
+        findings.append("service images must not build directly to the immutable tag")
+    if "if: always()" in publication_workflow:
+        findings.append("service image pass artifacts must only upload on success")
     return findings
 
 

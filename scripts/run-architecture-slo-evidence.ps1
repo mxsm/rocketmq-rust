@@ -64,6 +64,18 @@ function Get-CanonicalTextSha256 {
     }
 }
 
+function Get-RawFileSha256 {
+    param([Parameter(Mandatory)][string]$Path)
+    $bytes = [IO.File]::ReadAllBytes($Path)
+    $sha256 = [Security.Cryptography.SHA256]::Create()
+    try {
+        ([BitConverter]::ToString($sha256.ComputeHash($bytes))).Replace("-", "").ToLowerInvariant()
+    }
+    finally {
+        $sha256.Dispose()
+    }
+}
+
 function Write-Utf8 {
     param(
         [Parameter(Mandatory)][string]$Path,
@@ -159,6 +171,7 @@ Invoke-Native python @(
 $FaultRunPath = Join-Path $FaultDirectory 'run.json'
 $FaultRun = Get-Content -Raw -LiteralPath $FaultRunPath | ConvertFrom-Json
 Assert-True ($FaultRun.dynamic_execution -eq $true -and $FaultRun.fixture -eq $false) "fault evidence must be dynamic and non-fixture"
+Assert-True ($FaultRun.candidate_commit -eq $CandidateCommit) "fault and SLO candidate commits differ"
 foreach ($service in $ExpectedServices) {
     Assert-True ($FaultRun.candidate_images.$service -eq $CandidateImages[$service]) "fault and SLO candidate images differ: $service"
 }
@@ -215,7 +228,7 @@ try {
     function Add-Artifact {
         param([Parameter(Mandatory)][string]$Path)
         $relative = [IO.Path]::GetRelativePath($RunDirectory, $Path).Replace('\', '/')
-        $ArtifactRecords.Add([ordered]@{ path = $relative; sha256 = Get-CanonicalTextSha256 $Path })
+        $ArtifactRecords.Add([ordered]@{ path = $relative; sha256 = Get-RawFileSha256 $Path })
         $relative
     }
     Add-Artifact $SamplesPath | Out-Null
@@ -302,6 +315,9 @@ try {
         execution_unit = 'R24'
         policy_sha256 = $PolicySha256
         candidate_commit = $CandidateCommit
+        category = 'ha_soak_rpo_rto'
+        source = 'architecture-slo-evidence'
+        status = 'pass'
         candidate_images = $CandidateImages
         run_id = $RunId
         started_at = $RunStarted.ToString('o')
@@ -312,7 +328,7 @@ try {
         missing_sample_ratio = $MissingSampleRatio
         dynamic_execution = $true
         fixture = $false
-        fault_evidence = [ordered]@{ path = $FaultRelative; sha256 = Get-CanonicalTextSha256 $FaultSnapshotPath }
+        fault_evidence = [ordered]@{ path = $FaultRelative; sha256 = Get-RawFileSha256 $FaultSnapshotPath }
         objectives = @($ObjectiveRecords)
         rollback_assertions = $Rollback
         unresolved_alerts = @()

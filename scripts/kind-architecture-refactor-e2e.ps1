@@ -22,6 +22,7 @@ param(
 
     [string]$ClusterName = "rocketmq-architecture-refactor",
     [string]$Namespace = "rocketmq-system",
+    [string]$CandidateCommit,
     [string]$BaselineImageMap,
     [string]$CandidateImageMap,
     [string]$RuntimeSecretManifest,
@@ -465,12 +466,15 @@ if ($Mode -eq "Validate") {
     exit 0
 }
 
-foreach ($command in @('python', 'cargo', 'docker', 'kubectl', 'helm')) { Require-Command $command }
+foreach ($command in @('python', 'git', 'cargo', 'docker', 'kubectl', 'helm')) { Require-Command $command }
 Require-Command $Backend
 foreach ($path in @($BaselineImageMap, $CandidateImageMap, $RuntimeSecretManifest, $RotatedRuntimeSecretManifest, $BaselineDriverSecretManifest, $RotatedDriverSecretManifest)) {
     Assert-True (-not [string]::IsNullOrWhiteSpace($path) -and (Test-Path -LiteralPath $path -PathType Leaf)) "Run mode requires every image/secret input file"
 }
 Assert-True ($CollectorImage -match '^[^@\s]+@sha256:[0-9a-f]{64}$') 'CollectorImage must be pinned by digest'
+Assert-True ($CandidateCommit -match '^[0-9a-f]{40}$') 'CandidateCommit must be a full lowercase Git SHA'
+$CheckedOutCommit = (Invoke-Native git @('-C', $Root, 'rev-parse', 'HEAD')).Output
+Assert-True ($CandidateCommit -eq $CheckedOutCommit) 'CandidateCommit must equal the checked-out commit'
 $BaselineImages = Read-ImageMap $BaselineImageMap 'baseline'
 $CandidateImages = Read-ImageMap $CandidateImageMap 'candidate'
 Assert-True ((@('broker', 'namesrv', 'controller', 'proxy', 'mcp') | Where-Object { $BaselineImages[$_] -ne $CandidateImages[$_] }).Count -gt 0) 'candidate images must differ from baseline'
@@ -1116,6 +1120,7 @@ echo "active=$active attempts=$attempt"
     foreach ($assertion in $globalAssertions.Keys) { Assert-True $globalAssertions[$assertion] "global.$assertion" }
     $run = [ordered]@{
         schema_version = 1; milestone = 'M11-11'; policy_sha256 = $PolicySha256; run_id = $RunId
+        candidate_commit = $CandidateCommit
         started_at = $RunStarted.ToString('o'); finished_at = [DateTimeOffset]::UtcNow.ToString('o'); backend = $Backend
         dynamic_execution = $true; fixture = $false; cluster_profile = $clusterProfile; tool_versions = $toolVersions
         chart_sha256 = Get-TreeSha256 $ChartPath; overlay_sha256 = Get-Sha256 $OverlayPath

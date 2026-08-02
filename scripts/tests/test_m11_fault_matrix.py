@@ -47,6 +47,10 @@ class FaultMatrixGuardTests(unittest.TestCase):
             self.root / "scripts" / "new-m11-evidence-secrets.ps1",
         )
         shutil.copy2(
+            REPO_ROOT / "scripts" / "verify_service_image_publication.py",
+            self.root / "scripts" / "verify_service_image_publication.py",
+        )
+        shutil.copy2(
             REPO_ROOT / "scripts" / "tests" / "test_m11_fault_matrix.py",
             self.root / "scripts" / "tests" / "test_m11_fault_matrix.py",
         )
@@ -111,6 +115,13 @@ class FaultMatrixGuardTests(unittest.TestCase):
         self.mutate_run(lambda run: run.update(fixture=False))
         result = self.run_guard("--evidence", str(FIXTURE), expect_success=False)
         self.assertIn("dynamic execution", result.stderr)
+
+    def test_candidate_commit_must_be_a_full_sha(self) -> None:
+        self.mutate_run(lambda run: run.update(candidate_commit="main"))
+        result = self.run_guard(
+            "--evidence", str(FIXTURE), "--allow-fixture", expect_success=False
+        )
+        self.assertIn("candidate_commit must be a full Git SHA", result.stderr)
 
     def test_failed_global_assertion_is_rejected(self) -> None:
         self.mutate_run(lambda run: run["global_assertions"].update(rollback_verified=False))
@@ -190,6 +201,55 @@ class FaultMatrixGuardTests(unittest.TestCase):
         )
         result = self.run_guard("--policy-only", expect_success=False)
         self.assertIn("docker @('pull', $image)", result.stderr)
+
+    def test_workflow_artifact_uses_resolved_candidate_commit(self) -> None:
+        workflow = self.root / ".github" / "workflows" / "kubernetes-fault-matrix.yml"
+        source = workflow.read_text(encoding="utf-8")
+        workflow.write_text(
+            source.replace(
+                "m11-11-${{ env.EVIDENCE_BACKEND }}-${{ steps.bind-candidate.outputs.candidate_commit }}",
+                "m11-11-${{ env.EVIDENCE_BACKEND }}-${{ github.sha }}",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        result = self.run_guard("--policy-only", expect_success=False)
+        self.assertIn("checked-out candidate commit", result.stderr)
+
+    def test_signed_publication_workflow_regressions_are_rejected(self) -> None:
+        workflow = self.root / ".github" / "workflows" / "kubernetes-fault-matrix.yml"
+        source = workflow.read_text(encoding="utf-8")
+        mutations = (
+            ("candidate_publication_json:", "candidate_images_json:", "signed candidate publication"),
+            ('--candidate "$CANDIDATE_COMMIT"', '--candidate "f"', "before deriving its image map"),
+            ("cosign-release: v3.1.2", "cosign-release: latest", "pinned Cosign v3.1.2"),
+        )
+        for old, new, finding in mutations:
+            with self.subTest(old=old):
+                self.assertIn(old, source)
+                workflow.write_text(source.replace(old, new, 1), encoding="utf-8")
+                result = self.run_guard("--policy-only", expect_success=False)
+                self.assertIn(finding, result.stderr)
+
+    def test_attestation_verifier_regressions_are_rejected(self) -> None:
+        verifier = self.root / "scripts" / "verify_service_image_publication.py"
+        source = verifier.read_text(encoding="utf-8")
+        mutations = (
+            (
+                'subjects[0].get("name") == repository',
+                'subjects[0].get("name") is not None',
+            ),
+            (
+                "base64.b64decode(padded_payload, validate=True)",
+                "base64.b64decode(padded_payload)",
+            ),
+        )
+        for old, new in mutations:
+            with self.subTest(old=old):
+                self.assertIn(old, source)
+                verifier.write_text(source.replace(old, new, 1), encoding="utf-8")
+                result = self.run_guard("--policy-only", expect_success=False)
+                self.assertIn("publication verifier contract missing", result.stderr)
 
     def test_deliberate_fault_causality_regressions_are_rejected(self) -> None:
         runner = self.root / "scripts" / "kind-architecture-refactor-e2e.ps1"

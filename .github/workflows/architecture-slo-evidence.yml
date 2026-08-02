@@ -5,6 +5,7 @@ on:
     paths:
       - ".github/actionlint.yaml"
       - ".github/workflows/architecture-slo-evidence.yml"
+      - ".github/workflows/service-image-publish.yml"
       - "distribution/config/architecture-production-readiness-policy.json"
       - "distribution/config/grafana-architecture-production-readiness.json"
       - "distribution/config/prometheus-architecture-production-readiness-alerts.yaml"
@@ -17,7 +18,9 @@ on:
       - "scripts/run-architecture-slo-cluster.ps1"
       - "scripts/run-architecture-slo-evidence.ps1"
       - "scripts/telemetry-semantic-registry.json"
+      - "scripts/verify_service_image_publication.py"
       - "scripts/tests/test_architecture_slo_guard.py"
+      - "scripts/tests/test_service_image_publication_verifier.py"
       - "scripts/tests/test_m11_dynamic_evidence.py"
       - "scripts/tests/fixtures/m11-slo/**"
   push:
@@ -25,6 +28,7 @@ on:
     paths:
       - ".github/actionlint.yaml"
       - ".github/workflows/architecture-slo-evidence.yml"
+      - ".github/workflows/service-image-publish.yml"
       - "distribution/config/architecture-production-readiness-policy.json"
       - "distribution/config/grafana-architecture-production-readiness.json"
       - "distribution/config/prometheus-architecture-production-readiness-alerts.yaml"
@@ -37,7 +41,9 @@ on:
       - "scripts/run-architecture-slo-cluster.ps1"
       - "scripts/run-architecture-slo-evidence.ps1"
       - "scripts/telemetry-semantic-registry.json"
+      - "scripts/verify_service_image_publication.py"
       - "scripts/tests/test_architecture_slo_guard.py"
+      - "scripts/tests/test_service_image_publication_verifier.py"
       - "scripts/tests/test_m11_dynamic_evidence.py"
       - "scripts/tests/fixtures/m11-slo/**"
   workflow_dispatch:
@@ -51,8 +57,8 @@ on:
         description: Five baseline service image@sha256 references
         required: true
         type: string
-      candidate_images_json:
-        description: Five candidate service image@sha256 references
+      candidate_publication_json:
+        description: Signed five-image service publication.json for the checked-out candidate
         required: true
         type: string
       collector_image:
@@ -103,12 +109,26 @@ jobs:
     env:
       EVIDENCE_BACKEND: ${{ github.event_name == 'workflow_dispatch' && inputs.backend || vars.ARCHITECTURE_FAULT_BACKEND || 'kind' }}
       BASELINE_IMAGES: ${{ github.event_name == 'workflow_dispatch' && inputs.baseline_images_json || vars.ARCHITECTURE_BASELINE_IMAGES_JSON }}
-      CANDIDATE_IMAGES: ${{ github.event_name == 'workflow_dispatch' && inputs.candidate_images_json || vars.ARCHITECTURE_CANDIDATE_IMAGES_JSON }}
+      CANDIDATE_PUBLICATION: ${{ github.event_name == 'workflow_dispatch' && inputs.candidate_publication_json || vars.ARCHITECTURE_CANDIDATE_PUBLICATION_JSON }}
       COLLECTOR_IMAGE: ${{ github.event_name == 'workflow_dispatch' && inputs.collector_image || vars.ARCHITECTURE_COLLECTOR_IMAGE || 'docker.io/otel/opentelemetry-collector-contrib@sha256:9c247564e65ca19f97d891cca19a1a8d291ce631b890885b44e3503c5fdb3895' }}
       PROMETHEUS_IMAGE: ${{ github.event_name == 'workflow_dispatch' && inputs.prometheus_image || vars.ARCHITECTURE_PROMETHEUS_IMAGE || 'docker.io/prom/prometheus@sha256:63805ebb8d2b3920190daf1cb14a60871b16fd38bed42b857a3182bc621f4996' }}
     steps:
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+
+      - name: Bind immutable candidate commit
+        id: bind-candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          CANDIDATE_COMMIT=$(git rev-parse HEAD)
+          [[ "$CANDIDATE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          echo "candidate_commit=$CANDIDATE_COMMIT" >> "$GITHUB_OUTPUT"
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
+        with:
+          cosign-release: v3.1.2
 
       - name: Install digest-verified cluster tools
         shell: bash
@@ -143,18 +163,26 @@ jobs:
           set -euo pipefail
           printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "${{ github.actor }}" --password-stdin
 
-      - name: Materialize dynamic inputs
+      - name: Verify candidate publication and export immutable image map
+        shell: bash
+        env:
+          CANDIDATE_COMMIT: ${{ steps.bind-candidate.outputs.candidate_commit }}
+        run: |
+          set -euo pipefail
+          mkdir -p target/slo-inputs
+          printf '%s' "$CANDIDATE_PUBLICATION" > target/slo-inputs/publication.json
+          python scripts/verify_service_image_publication.py \
+            --publication target/slo-inputs/publication.json \
+            --candidate "$CANDIDATE_COMMIT" \
+            --output-image-map target/slo-inputs/candidate-images.json
+
+      - name: Materialize baseline and run-scoped credentials
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path target/slo-inputs | Out-Null
           [IO.File]::WriteAllText(
             (Join-Path $PWD target/slo-inputs/baseline-images.json),
             $env:BASELINE_IMAGES,
-            [Text.UTF8Encoding]::new($false)
-          )
-          [IO.File]::WriteAllText(
-            (Join-Path $PWD target/slo-inputs/candidate-images.json),
-            $env:CANDIDATE_IMAGES,
             [Text.UTF8Encoding]::new($false)
           )
           ./scripts/new-m11-evidence-secrets.ps1 `
@@ -167,6 +195,7 @@ jobs:
           ./scripts/kind-architecture-refactor-e2e.ps1
           -Mode Run
           -Backend '${{ env.EVIDENCE_BACKEND }}'
+          -CandidateCommit '${{ steps.bind-candidate.outputs.candidate_commit }}'
           -BaselineImageMap target/slo-inputs/baseline-images.json
           -CandidateImageMap target/slo-inputs/candidate-images.json
           -RuntimeSecretManifest target/slo-inputs/runtime-secret.yaml
@@ -198,7 +227,7 @@ jobs:
           if (-not $fault) { throw 'dynamic fault evidence directory is missing' }
           ./scripts/run-architecture-slo-cluster.ps1 `
             -Mode Run `
-            -CandidateCommit '${{ github.sha }}' `
+            -CandidateCommit '${{ steps.bind-candidate.outputs.candidate_commit }}' `
             -CandidateImageMap target/slo-inputs/candidate-images.json `
             -FaultEvidence $fault.FullName `
             -PrometheusImage '${{ env.PROMETHEUS_IMAGE }}' `
@@ -228,10 +257,10 @@ jobs:
           $global:LASTEXITCODE = 0
 
       - name: Upload immutable release evidence
-        if: always()
+        if: always() && steps.bind-candidate.outputs.candidate_commit != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: m11-12-r24-${{ env.EVIDENCE_BACKEND }}-${{ github.sha }}
+          name: m11-12-r24-${{ env.EVIDENCE_BACKEND }}-${{ steps.bind-candidate.outputs.candidate_commit }}
           path: |
             target/architecture-refactor/M11/fault-matrix
             target/architecture-refactor/M11/slo
