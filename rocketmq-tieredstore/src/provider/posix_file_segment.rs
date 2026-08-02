@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::io::SeekFrom;
+use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
@@ -53,6 +54,21 @@ struct PosixProviderIoCounters {
     bytes_written: AtomicU64,
 }
 
+#[derive(Clone, Copy)]
+enum PathAccess {
+    Read,
+    Write,
+}
+
+impl PathAccess {
+    fn io_error(self, path: &Path, source: std::io::Error) -> RocketMQError {
+        match self {
+            Self::Read => error::storage_read_failed(path_to_string(path), source.to_string()),
+            Self::Write => error::storage_write_failed(path_to_string(path), source.to_string()),
+        }
+    }
+}
+
 /// Read-only cumulative POSIX provider I/O counters.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PosixProviderIoSnapshot {
@@ -74,8 +90,202 @@ impl PosixProvider {
         }
     }
 
-    fn resolve(&self, path: &str) -> PathBuf {
-        self.root.join(path)
+    pub(crate) fn validate_root(root: &Path) -> Result<(), RocketMQError> {
+        if root.as_os_str().is_empty() {
+            return Err(RocketMQError::illegal_argument(
+                "tiered POSIX provider root must not be empty",
+            ));
+        }
+        let has_normal_leaf = matches!(root.components().next_back(), Some(Component::Normal(_)));
+        let safe_components = if root.is_absolute() {
+            root.components().all(|component| {
+                matches!(
+                    component,
+                    Component::Prefix(_) | Component::RootDir | Component::Normal(_)
+                )
+            })
+        } else {
+            root.components()
+                .all(|component| matches!(component, Component::Normal(_)))
+        };
+        if !has_normal_leaf || !safe_components {
+            return Err(RocketMQError::illegal_argument(
+                "tiered POSIX provider root must be a normalized non-root path with only normal relative components",
+            ));
+        }
+        Ok(())
+    }
+
+    fn resolve_lexical(&self, path: &str) -> Result<(PathBuf, PathBuf), RocketMQError> {
+        Self::validate_root(&self.root)?;
+        let provider_path = Path::new(path);
+        let mut relative = PathBuf::new();
+        for component in provider_path.components() {
+            match component {
+                Component::Normal(component) => relative.push(component),
+                Component::CurDir => {}
+                Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                    return Err(RocketMQError::illegal_argument(format!(
+                        "tiered POSIX provider path must be relative and must not contain parent traversal: {path}"
+                    )));
+                }
+            }
+        }
+        if relative.as_os_str().is_empty() {
+            return Err(RocketMQError::illegal_argument(
+                "tiered POSIX provider key must not be empty",
+            ));
+        }
+        let full_path = self.root.join(&relative);
+        Ok((relative, full_path))
+    }
+
+    async fn resolve_existing(&self, path: &str, access: PathAccess) -> Result<PathBuf, RocketMQError> {
+        let (relative, full_path) = self.resolve_lexical(path)?;
+        let Some(canonical_root) = self.canonical_root(false, access).await? else {
+            return Ok(full_path);
+        };
+
+        let mut current = self.root.clone();
+        let mut components = relative.components().peekable();
+        while let Some(component) = components.next() {
+            current.push(component.as_os_str());
+            let metadata = match tokio::fs::symlink_metadata(&current).await {
+                Ok(metadata) => metadata,
+                Err(source) if source.kind() == std::io::ErrorKind::NotFound => break,
+                Err(source) => return Err(access.io_error(&current, source)),
+            };
+            self.validate_existing_component(
+                &current,
+                &metadata,
+                components.peek().is_some(),
+                &canonical_root,
+                access,
+            )
+            .await?;
+        }
+        Ok(full_path)
+    }
+
+    async fn resolve_for_write(&self, path: &str) -> Result<PathBuf, RocketMQError> {
+        let (relative, full_path) = self.resolve_lexical(path)?;
+        let canonical_root = self
+            .canonical_root(true, PathAccess::Write)
+            .await?
+            .ok_or_else(|| RocketMQError::illegal_argument("tiered POSIX provider root must exist after creation"))?;
+
+        let mut current = self.root.clone();
+        if let Some(parent) = relative.parent() {
+            for component in parent.components() {
+                current.push(component.as_os_str());
+                let metadata = match tokio::fs::symlink_metadata(&current).await {
+                    Ok(metadata) => metadata,
+                    Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+                        match tokio::fs::create_dir(&current).await {
+                            Ok(()) => {}
+                            Err(source) if source.kind() == std::io::ErrorKind::AlreadyExists => {}
+                            Err(source) => return Err(PathAccess::Write.io_error(&current, source)),
+                        }
+                        tokio::fs::symlink_metadata(&current)
+                            .await
+                            .map_err(|source| PathAccess::Write.io_error(&current, source))?
+                    }
+                    Err(source) => return Err(PathAccess::Write.io_error(&current, source)),
+                };
+                self.validate_existing_component(&current, &metadata, true, &canonical_root, PathAccess::Write)
+                    .await?;
+            }
+        }
+
+        match tokio::fs::symlink_metadata(&full_path).await {
+            Ok(metadata) => {
+                self.validate_existing_component(&full_path, &metadata, false, &canonical_root, PathAccess::Write)
+                    .await?;
+            }
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => {}
+            Err(source) => return Err(PathAccess::Write.io_error(&full_path, source)),
+        }
+        Ok(full_path)
+    }
+
+    async fn canonical_root(&self, create: bool, access: PathAccess) -> Result<Option<PathBuf>, RocketMQError> {
+        Self::validate_root(&self.root)?;
+        let metadata = match tokio::fs::symlink_metadata(&self.root).await {
+            Ok(metadata) => metadata,
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound && !create => return Ok(None),
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+                tokio::fs::create_dir_all(&self.root)
+                    .await
+                    .map_err(|source| access.io_error(&self.root, source))?;
+                tokio::fs::symlink_metadata(&self.root)
+                    .await
+                    .map_err(|source| access.io_error(&self.root, source))?
+            }
+            Err(source) => return Err(access.io_error(&self.root, source)),
+        };
+        validate_path_metadata(&self.root, &metadata, true)?;
+        let canonical_root = tokio::fs::canonicalize(&self.root)
+            .await
+            .map_err(|source| access.io_error(&self.root, source))?;
+        let confirmed = tokio::fs::symlink_metadata(&self.root)
+            .await
+            .map_err(|source| access.io_error(&self.root, source))?;
+        validate_path_metadata(&self.root, &confirmed, true)?;
+        Ok(Some(canonical_root))
+    }
+
+    async fn validate_existing_component(
+        &self,
+        path: &Path,
+        metadata: &std::fs::Metadata,
+        must_be_directory: bool,
+        canonical_root: &Path,
+        access: PathAccess,
+    ) -> Result<(), RocketMQError> {
+        validate_path_metadata(path, metadata, must_be_directory)?;
+        let canonical = tokio::fs::canonicalize(path)
+            .await
+            .map_err(|source| access.io_error(path, source))?;
+        if !canonical.starts_with(canonical_root) {
+            return Err(RocketMQError::illegal_argument(format!(
+                "tiered POSIX provider path escaped its configured root: {}",
+                path.display()
+            )));
+        }
+        let confirmed = tokio::fs::symlink_metadata(path)
+            .await
+            .map_err(|source| access.io_error(path, source))?;
+        validate_path_metadata(path, &confirmed, must_be_directory)
+    }
+
+    async fn validate_directory_tree(
+        &self,
+        root: &Path,
+        canonical_root: &Path,
+        access: PathAccess,
+    ) -> Result<(), RocketMQError> {
+        let mut directories = vec![root.to_path_buf()];
+        while let Some(directory) = directories.pop() {
+            let mut entries = tokio::fs::read_dir(&directory)
+                .await
+                .map_err(|source| access.io_error(&directory, source))?;
+            while let Some(entry) = entries
+                .next_entry()
+                .await
+                .map_err(|source| access.io_error(&directory, source))?
+            {
+                let path = entry.path();
+                let metadata = tokio::fs::symlink_metadata(&path)
+                    .await
+                    .map_err(|source| access.io_error(&path, source))?;
+                self.validate_existing_component(&path, &metadata, false, canonical_root, access)
+                    .await?;
+                if metadata.is_dir() {
+                    directories.push(path);
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Returns a clone-shared cumulative snapshot suitable for measured-window deltas.
@@ -100,6 +310,7 @@ impl TieredStoreProvider for PosixProvider {
     where
         Self: Sized,
     {
+        self.resolve_lexical(&path)?;
         let metadata = FileSegmentMetadata::new(path.clone(), segment_type, base_offset);
         Ok(TieredFileSegment::new(
             path,
@@ -112,7 +323,8 @@ impl TieredStoreProvider for PosixProvider {
     }
 
     async fn segment_size(&self, path: String) -> Result<u64, RocketMQError> {
-        match tokio::fs::metadata(self.resolve(&path)).await {
+        let full_path = self.resolve_existing(&path, PathAccess::Read).await?;
+        match tokio::fs::metadata(full_path).await {
             Ok(metadata) => Ok(metadata.len()),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(0),
             Err(err) => Err(error::storage_read_failed(path, err.to_string())),
@@ -120,8 +332,8 @@ impl TieredStoreProvider for PosixProvider {
     }
 
     async fn read(&self, path: String, position: u64, length: usize) -> Result<Bytes, RocketMQError> {
+        let full_path = self.resolve_existing(&path, PathAccess::Read).await?;
         self.io_counters.read_operations.fetch_add(1, Ordering::Relaxed);
-        let full_path = self.resolve(&path);
         let mut file = OpenOptions::new()
             .read(true)
             .open(&full_path)
@@ -148,13 +360,8 @@ impl TieredStoreProvider for PosixProvider {
     }
 
     async fn write(&self, path: String, position: u64, data: Bytes) -> Result<usize, RocketMQError> {
+        let full_path = self.resolve_for_write(&path).await?;
         self.io_counters.write_operations.fetch_add(1, Ordering::Relaxed);
-        let full_path = self.resolve(&path);
-        if let Some(parent) = full_path.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(|err| error::storage_write_failed(path_to_string(parent), err.to_string()))?;
-        }
         let mut file = OpenOptions::new()
             .create(true)
             .write(true)
@@ -178,7 +385,7 @@ impl TieredStoreProvider for PosixProvider {
     }
 
     async fn delete(&self, path: String) -> Result<(), RocketMQError> {
-        let full_path = self.resolve(&path);
+        let full_path = self.resolve_existing(&path, PathAccess::Write).await?;
         match tokio::fs::remove_file(&full_path).await {
             Ok(()) => Ok(()),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -187,7 +394,7 @@ impl TieredStoreProvider for PosixProvider {
     }
 
     async fn sync(&self, path: String) -> Result<(), RocketMQError> {
-        let full_path = self.resolve(&path);
+        let full_path = self.resolve_existing(&path, PathAccess::Write).await?;
         let metadata = match tokio::fs::metadata(&full_path).await {
             Ok(metadata) => metadata,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -208,13 +415,8 @@ impl TieredStoreProvider for PosixProvider {
     }
 
     async fn rename(&self, source: String, destination: String) -> Result<(), RocketMQError> {
-        let source_path = self.resolve(&source);
-        let destination_path = self.resolve(&destination);
-        if let Some(parent) = destination_path.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(|err| error::storage_write_failed(path_to_string(parent), err.to_string()))?;
-        }
+        let source_path = self.resolve_existing(&source, PathAccess::Write).await?;
+        let destination_path = self.resolve_for_write(&destination).await?;
         rename_path(&source_path, &destination_path)
             .await
             .map_err(|err| error::storage_write_failed(path_to_string(&destination_path), err.to_string()))?;
@@ -225,12 +427,18 @@ impl TieredStoreProvider for PosixProvider {
     }
 
     async fn list(&self, prefix: String) -> Result<Vec<String>, RocketMQError> {
-        let root = self.resolve(&prefix);
-        let metadata = match tokio::fs::metadata(&root).await {
+        let root = self.resolve_existing(&prefix, PathAccess::Read).await?;
+        let metadata = match tokio::fs::symlink_metadata(&root).await {
             Ok(metadata) => metadata,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(err) => return Err(error::storage_read_failed(path_to_string(&root), err.to_string())),
         };
+        let canonical_root = self
+            .canonical_root(false, PathAccess::Read)
+            .await?
+            .ok_or_else(|| RocketMQError::illegal_argument("tiered POSIX provider root disappeared during list"))?;
+        self.validate_existing_component(&root, &metadata, false, &canonical_root, PathAccess::Read)
+            .await?;
         if metadata.is_file() {
             return Ok(vec![prefix]);
         }
@@ -247,13 +455,14 @@ impl TieredStoreProvider for PosixProvider {
                 .map_err(|err| error::storage_read_failed(path_to_string(&directory), err.to_string()))?
             {
                 let path = entry.path();
-                let file_type = entry
-                    .file_type()
+                let metadata = tokio::fs::symlink_metadata(&path)
                     .await
                     .map_err(|err| error::storage_read_failed(path_to_string(&path), err.to_string()))?;
-                if file_type.is_dir() {
+                self.validate_existing_component(&path, &metadata, false, &canonical_root, PathAccess::Read)
+                    .await?;
+                if metadata.is_dir() {
                     directories.push(path);
-                } else if file_type.is_file() {
+                } else if metadata.is_file() {
                     paths.push(relative_provider_path(&self.root, &path)?);
                 }
             }
@@ -263,13 +472,21 @@ impl TieredStoreProvider for PosixProvider {
     }
 
     async fn delete_prefix(&self, prefix: String) -> Result<(), RocketMQError> {
-        let full_path = self.resolve(&prefix);
-        let metadata = match tokio::fs::metadata(&full_path).await {
+        let full_path = self.resolve_existing(&prefix, PathAccess::Write).await?;
+        let metadata = match tokio::fs::symlink_metadata(&full_path).await {
             Ok(metadata) => metadata,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
             Err(err) => return Err(error::storage_write_failed(path_to_string(&full_path), err.to_string())),
         };
+        let canonical_root = self
+            .canonical_root(false, PathAccess::Write)
+            .await?
+            .ok_or_else(|| RocketMQError::illegal_argument("tiered POSIX provider root disappeared during delete"))?;
+        self.validate_existing_component(&full_path, &metadata, false, &canonical_root, PathAccess::Write)
+            .await?;
         let result = if metadata.is_dir() {
+            self.validate_directory_tree(&full_path, &canonical_root, PathAccess::Write)
+                .await?;
             tokio::fs::remove_dir_all(&full_path).await
         } else {
             tokio::fs::remove_file(&full_path).await
@@ -278,13 +495,9 @@ impl TieredStoreProvider for PosixProvider {
     }
 
     async fn atomic_write(&self, path: String, data: Bytes) -> Result<(), RocketMQError> {
-        let destination = self.resolve(&path);
-        let temporary = destination.with_extension("atomic.tmp");
-        if let Some(parent) = destination.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(|err| error::storage_write_failed(path_to_string(parent), err.to_string()))?;
-        }
+        let destination = self.resolve_for_write(&path).await?;
+        let temporary_key = Path::new(&path).with_extension("atomic.tmp");
+        let temporary = self.resolve_for_write(&path_to_string(&temporary_key)).await?;
         let mut file = OpenOptions::new()
             .create(true)
             .truncate(true)
@@ -308,6 +521,39 @@ impl TieredStoreProvider for PosixProvider {
         }
         Ok(())
     }
+}
+
+fn validate_path_metadata(
+    path: &Path,
+    metadata: &std::fs::Metadata,
+    must_be_directory: bool,
+) -> Result<(), RocketMQError> {
+    if is_symlink_or_reparse(metadata) {
+        return Err(RocketMQError::illegal_argument(format!(
+            "tiered POSIX provider path must not contain symbolic links or reparse points: {}",
+            path.display()
+        )));
+    }
+    if must_be_directory && !metadata.is_dir() {
+        return Err(RocketMQError::illegal_argument(format!(
+            "tiered POSIX provider path ancestor must be a directory: {}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn is_symlink_or_reparse(metadata: &std::fs::Metadata) -> bool {
+    metadata.file_type().is_symlink()
+}
+
+#[cfg(windows)]
+fn is_symlink_or_reparse(metadata: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+
+    metadata.file_type().is_symlink()
+        || metadata.file_attributes() & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
 
 fn path_to_string(path: &Path) -> String {
@@ -411,6 +657,8 @@ fn wide_path(path: &Path) -> Vec<u16> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use bytes::Bytes;
     use rocketmq_error::RocketMQError;
 
@@ -487,5 +735,216 @@ mod tests {
         assert_eq!(recovered.commit_position(), 11);
         assert_eq!(recovered.read(6..11).await?, Bytes::from_static(b"posix"));
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn unsafe_provider_paths_are_rejected_before_io() -> Result<(), RocketMQError> {
+        let temp_dir =
+            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
+        let provider_root = temp_dir.path().join("provider");
+        let outside_root = temp_dir.path().join("outside");
+        std::fs::create_dir_all(&provider_root)
+            .map_err(|source| RocketMQError::internal("create provider directory", source))?;
+        std::fs::create_dir_all(&outside_root)
+            .map_err(|source| RocketMQError::internal("create outside directory", source))?;
+        let sentinel = outside_root.join("sentinel");
+        std::fs::write(&sentinel, b"outside")
+            .map_err(|source| RocketMQError::internal("write outside sentinel", source))?;
+        let provider = PosixProvider::new(provider_root);
+
+        assert_unsafe_paths_rejected(
+            &provider,
+            PathBuf::from("..").join("outside").join("sentinel"),
+            PathBuf::from("..").join("outside"),
+        )
+        .await;
+        assert_unsafe_paths_rejected(&provider, sentinel.clone(), outside_root).await;
+
+        assert_eq!(
+            std::fs::read(&sentinel).map_err(|source| RocketMQError::internal("read outside sentinel", source))?,
+            b"outside"
+        );
+        assert_eq!(provider.io_snapshot(), super::PosixProviderIoSnapshot::default());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn empty_provider_root_is_rejected_before_io() {
+        let provider = PosixProvider::new(PathBuf::new());
+
+        let error = provider
+            .write("topic/0/commitlog/000".to_owned(), 0, Bytes::from_static(b"unsafe"))
+            .await
+            .expect_err("an empty provider root must be rejected");
+
+        assert!(matches!(error, RocketMQError::IllegalArgument(_)), "{error}");
+        assert_eq!(provider.io_snapshot(), super::PosixProviderIoSnapshot::default());
+    }
+
+    #[test]
+    fn dangerous_provider_roots_are_rejected() {
+        let temp_dir = tempfile::tempdir().expect("create temporary directory");
+        let filesystem_root = temp_dir
+            .path()
+            .ancestors()
+            .last()
+            .expect("temporary path has a filesystem root")
+            .to_path_buf();
+        let roots = [
+            PathBuf::from("."),
+            PathBuf::from(".."),
+            filesystem_root,
+            temp_dir.path().join("..").join("unstable-root"),
+        ];
+
+        for root in roots {
+            let error = PosixProvider::validate_root(&root).expect_err("dangerous roots must fail closed");
+            assert!(matches!(error, RocketMQError::IllegalArgument(_)), "{root:?}: {error}");
+        }
+
+        #[cfg(windows)]
+        {
+            let root = PathBuf::from(r"C:drive-relative");
+            let error = PosixProvider::validate_root(&root).expect_err("drive-relative roots must fail closed");
+            assert!(matches!(error, RocketMQError::IllegalArgument(_)), "{root:?}: {error}");
+        }
+    }
+
+    #[test]
+    fn normalized_relative_provider_roots_are_accepted() {
+        for root in [PathBuf::from("provider"), PathBuf::from("relative/provider")] {
+            PosixProvider::validate_root(&root).expect("normalized relative roots remain compatible");
+        }
+    }
+
+    #[tokio::test]
+    async fn empty_provider_key_cannot_delete_the_configured_root() -> Result<(), RocketMQError> {
+        let temp_dir =
+            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
+        let provider_root = temp_dir.path().join("provider");
+        std::fs::create_dir_all(&provider_root)
+            .map_err(|source| RocketMQError::internal("create provider directory", source))?;
+        let sentinel = provider_root.join("sentinel");
+        std::fs::write(&sentinel, b"inside-root")
+            .map_err(|source| RocketMQError::internal("write provider sentinel", source))?;
+        let provider = PosixProvider::new(provider_root);
+
+        let error = provider
+            .delete_prefix(String::new())
+            .await
+            .expect_err("an empty provider key must not delete the configured root");
+
+        assert!(matches!(error, RocketMQError::IllegalArgument(_)), "{error}");
+        assert_eq!(
+            std::fs::read(&sentinel).map_err(|source| RocketMQError::internal("read provider sentinel", source))?,
+            b"inside-root"
+        );
+        assert_eq!(provider.io_snapshot(), super::PosixProviderIoSnapshot::default());
+        Ok(())
+    }
+
+    #[cfg(any(unix, windows))]
+    #[tokio::test]
+    async fn symlink_escape_is_rejected_before_provider_io() -> Result<(), RocketMQError> {
+        let temp_dir =
+            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
+        let provider_root = temp_dir.path().join("provider");
+        let outside_root = temp_dir.path().join("outside");
+        std::fs::create_dir_all(&provider_root)
+            .map_err(|source| RocketMQError::internal("create provider directory", source))?;
+        std::fs::create_dir_all(&outside_root)
+            .map_err(|source| RocketMQError::internal("create outside directory", source))?;
+        let sentinel = outside_root.join("sentinel");
+        std::fs::write(&sentinel, b"outside")
+            .map_err(|source| RocketMQError::internal("write outside sentinel", source))?;
+        let escape = provider_root.join("escape");
+        if let Err(source) = create_directory_symlink(&outside_root, &escape) {
+            if symlink_creation_is_unavailable(&source) {
+                return Ok(());
+            }
+            return Err(RocketMQError::internal("create escape symlink", source));
+        }
+        let provider = PosixProvider::new(provider_root);
+
+        assert_unsafe_paths_rejected(
+            &provider,
+            PathBuf::from("escape").join("sentinel"),
+            PathBuf::from("escape"),
+        )
+        .await;
+
+        assert_eq!(
+            std::fs::read(&sentinel).map_err(|source| RocketMQError::internal("read outside sentinel", source))?,
+            b"outside"
+        );
+        assert_eq!(provider.io_snapshot(), super::PosixProviderIoSnapshot::default());
+        Ok(())
+    }
+
+    async fn assert_unsafe_paths_rejected(provider: &PosixProvider, file_path: PathBuf, prefix_path: PathBuf) {
+        let file_path = file_path.to_string_lossy().into_owned();
+        let prefix_path = prefix_path.to_string_lossy().into_owned();
+
+        let read_error = provider
+            .read(file_path.clone(), 0, 1)
+            .await
+            .expect_err("unsafe reads must be rejected");
+        assert!(matches!(read_error, RocketMQError::IllegalArgument(_)), "{read_error}");
+
+        let write_error = provider
+            .write(file_path.clone(), 0, Bytes::from_static(b"unsafe"))
+            .await
+            .expect_err("unsafe writes must be rejected");
+        assert!(
+            matches!(write_error, RocketMQError::IllegalArgument(_)),
+            "{write_error}"
+        );
+
+        let list_error = provider
+            .list(prefix_path.clone())
+            .await
+            .expect_err("unsafe prefix listings must be rejected");
+        assert!(matches!(list_error, RocketMQError::IllegalArgument(_)), "{list_error}");
+
+        let delete_error = provider
+            .delete(file_path)
+            .await
+            .expect_err("unsafe deletes must be rejected");
+        assert!(
+            matches!(delete_error, RocketMQError::IllegalArgument(_)),
+            "{delete_error}"
+        );
+
+        let delete_prefix_error = provider
+            .delete_prefix(prefix_path)
+            .await
+            .expect_err("unsafe recursive deletes must be rejected");
+        assert!(
+            matches!(delete_prefix_error, RocketMQError::IllegalArgument(_)),
+            "{delete_prefix_error}"
+        );
+    }
+
+    #[cfg(unix)]
+    fn create_directory_symlink(target: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
+        std::os::unix::fs::symlink(target, link)
+    }
+
+    #[cfg(windows)]
+    fn create_directory_symlink(target: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
+        std::os::windows::fs::symlink_dir(target, link)
+    }
+
+    #[cfg(unix)]
+    const fn symlink_creation_is_unavailable(_error: &std::io::Error) -> bool {
+        false
+    }
+
+    #[cfg(windows)]
+    fn symlink_creation_is_unavailable(error: &std::io::Error) -> bool {
+        matches!(
+            error.kind(),
+            std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::Unsupported
+        ) || error.raw_os_error() == Some(1314)
     }
 }

@@ -20,6 +20,9 @@ pub(super) struct BrokerRequestPipeline {
     pub(super) proxy_request_processor: Option<DefaultServerProcessor>,
     pub(super) authorized_dispatcher:
         Option<Arc<rocketmq_transport::AuthorizedCommandDispatcher<DefaultServerProcessor>>>,
+    pub(super) auth_runtime: Option<Arc<AuthRuntime>>,
+    pub(super) maintenance_authorizer: Option<Arc<MaintenanceAuthorizer>>,
+    pub(super) auth_admin_service: Option<Arc<AuthAdminService>>,
     pub(super) consumer_ids_change_listener: Arc<dyn ConsumerIdsChangeListener + Send + Sync + 'static>,
     pub(super) processor_wiring_complete: bool,
 }
@@ -31,6 +34,9 @@ impl BrokerRequestPipeline {
         Self {
             proxy_request_processor: None,
             authorized_dispatcher: None,
+            auth_runtime: None,
+            maintenance_authorizer: None,
+            auth_admin_service: None,
             consumer_ids_change_listener,
             processor_wiring_complete: false,
         }
@@ -45,10 +51,10 @@ impl BrokerRuntime {
 
     #[cfg(test)]
     pub(super) fn init_processor(&mut self) -> (DefaultServerProcessor, FasterServerProcessor) {
-        if self.composition.state.auth_admin_service.is_none() {
+        if self.composition.request_pipeline.auth_admin_service.is_none() {
             let provider_registry =
                 rocketmq_auth::ProviderRegistry::local(&AuthConfig::default()).expect("create in-memory auth registry");
-            self.composition.state.auth_admin_service =
+            self.composition.request_pipeline.auth_admin_service =
                 Some(Arc::new(AuthAdminService::with_provider_registry(provider_registry)));
         }
         self.init_processor_checked()
@@ -268,21 +274,25 @@ impl BrokerRuntime {
             broker_request_processor.set_request_task_group(task_group);
         }
         self.lifecycle.request_processor_task_group = request_processor_task_group;
-        if let Some(auth_runtime) = &self.composition.state.auth_runtime {
+        if let Some(auth_runtime) = &self.composition.request_pipeline.auth_runtime {
             broker_request_processor.set_auth_runtime(auth_runtime.clone());
         }
         broker_request_processor.set_broker_fast_failure(self.composition.state.broker_fast_failure.clone());
         let broker_config = self.composition.state.broker_config();
         if broker_config.maintenance_enabled {
-            let auth_runtime = self.composition.state.auth_runtime.as_ref().cloned().ok_or_else(|| {
-                BrokerStartupError::Initialization {
+            let auth_runtime = self
+                .composition
+                .request_pipeline
+                .auth_runtime
+                .as_ref()
+                .cloned()
+                .ok_or_else(|| BrokerStartupError::Initialization {
                     component: "maintenance_request_processor",
                     detail: "maintenance API requires an initialized auth runtime".to_string(),
-                }
-            })?;
+                })?;
             let authorizer = self
                 .composition
-                .state
+                .request_pipeline
                 .maintenance_authorizer
                 .as_ref()
                 .cloned()
@@ -602,15 +612,15 @@ impl BrokerRuntime {
                 ),
             ))),
         );
-        let auth_admin_service =
-            self.composition
-                .state
-                .auth_admin_service
-                .clone()
-                .ok_or_else(|| BrokerStartupError::Initialization {
-                    component: "auth_admin_service",
-                    detail: "auth admin service must be initialized before request processors".to_owned(),
-                })?;
+        let auth_admin_service = self
+            .composition
+            .request_pipeline
+            .auth_admin_service
+            .clone()
+            .ok_or_else(|| BrokerStartupError::Initialization {
+                component: "auth_admin_service",
+                detail: "auth admin service must be initialized before request processors".to_owned(),
+            })?;
         let admin_broker_processor = Arc::new(AdminBrokerProcessor::new(self.admin_runtime(), auth_admin_service));
         broker_request_processor.register_default_processor(BrokerProcessorType::AdminBroker(admin_broker_processor));
 

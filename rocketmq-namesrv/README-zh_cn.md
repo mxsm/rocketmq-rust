@@ -21,7 +21,7 @@ topic route metadata、broker member group、写权限、KV 配置、运行时�
 | KV 配置 | 通过 `KVConfigManager` 支持 KV namespace 的 put/get/delete/list 和磁盘持久化。 |
 | 运行时配置 | `GetNamesrvConfig` 和 `UpdateNamesrvConfig` 支持 Java-properties payload，并对敏感路径和 home 设置保留固定黑名单。 |
 | Cluster test 模式 | 本地无 route data 时，可通过 `DefaultMQAdminExtImpl` 回查 product environment。 |
-| 内嵌 controller | 可通过 `enableControllerInNamesrv` 初始化并运行 `rocketmq-controller`，同时检查 controller listen 地址不能与 NameServer 冲突。 |
+| 内嵌 controller | 编译时启用 `embedded-controller` feature，并设置 `enableControllerInNamesrv=true`，才会初始化 `rocketmq-controller`；默认依赖图不包含 Controller，同时会检查监听地址冲突。 |
 | 可观测性 | 可选 `observability` feature 记录 route request 数量/延迟、broker registration 和 active broker gauge。 |
 
 ## 架构
@@ -29,7 +29,13 @@ topic route metadata、broker member group、写权限、KV 配置、运行时�
 ![rocketmq-namesrv 架构](../resources/namesrv-architecture.svg)
 
 `KVConfigManager` 负责 namespace config 持久化，`BrokerHousekeepingService` 响应 channel event，定时任务扫描 inactive
-broker；启用内嵌 controller 时，`ControllerManager` 会随 NameServer 生命周期启动和关闭。
+broker；只有同时启用 `embedded-controller` Cargo feature 和 `enableControllerInNamesrv` 运行时配置时，
+`ControllerManager` 才会随 NameServer 生命周期启动和关闭。默认构建若收到该运行时配置会返回明确配置错误。
+
+兼容性说明：调用 `Builder::set_controller_config` 或
+`Builder::set_controller_config_opt` 的应用必须启用 `embedded-controller`
+feature。这是有意的编译期选择：默认 NameServer 依赖图不再携带 Controller、OpenRaft 和 RocksDB，
+内嵌部署仍保留原有的类型化 Builder API。
 
 ## 协议覆盖
 

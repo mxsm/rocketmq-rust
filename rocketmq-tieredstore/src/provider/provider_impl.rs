@@ -18,9 +18,11 @@ use rocketmq_error::RocketMQError;
 use crate::config::TieredStoreConfig;
 use crate::file::FileSegmentType;
 use crate::file::TieredFileSegment;
+use crate::provider::BuiltinTieredStoreProviderFactory;
 use crate::provider::MemoryProvider;
 use crate::provider::PosixProvider;
 use crate::provider::TieredStoreProvider;
+use crate::provider::TieredStoreProviderFactory;
 
 #[derive(Clone)]
 pub enum ProviderKind {
@@ -30,13 +32,7 @@ pub enum ProviderKind {
 
 impl ProviderKind {
     pub fn from_config(config: &TieredStoreConfig) -> Result<Self, RocketMQError> {
-        match config.backend_provider.as_str() {
-            "posix" => Ok(Self::Posix(PosixProvider::new(config.store_path_root_dir.clone()))),
-            "memory" => Ok(Self::Memory(MemoryProvider::default())),
-            provider => Err(RocketMQError::illegal_argument(format!(
-                "unsupported tiered backend provider: {provider}"
-            ))),
-        }
+        BuiltinTieredStoreProviderFactory::select(config)?.create(config)
     }
 }
 

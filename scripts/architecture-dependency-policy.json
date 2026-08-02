@@ -306,6 +306,9 @@
       "rocketmq-broker",
       "rocketmq-store-api",
       "rocketmq-model",
+      "rocketmq-observability",
+      "rocketmq-protocol",
+      "rocketmq-transport",
       "rocketmq-runtime",
       "rocketmq-error"
     ],

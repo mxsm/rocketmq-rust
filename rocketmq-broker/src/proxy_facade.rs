@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::config::broker_config::BrokerConfig;
+pub use crate::config::broker_config::BrokerConfig;
 use crate::config::error::BrokerConfigError;
 use crate::config::validated::ValidatedBrokerConfig;
 use cheetah_string::CheetahString;
@@ -41,76 +41,28 @@ use crate::lifecycle::BrokerStartupError;
 
 const LOCAL_PROXY_RESPONSE_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// Compatibility types required by the extracted local Proxy adapter.
-///
-/// The adapter depends on this Broker-owned surface instead of taking direct
-/// dependencies on Broker implementation crates and wire-protocol crates.
-#[doc(hidden)]
-pub mod proxy_adapter_compat {
-    pub use crate::config::broker_config::BrokerConfig;
-    pub use crate::config::validated::ValidatedBrokerConfig;
-    pub use rocketmq_model::common::attribute::topic_message_type::TopicMessageType;
-    pub use rocketmq_model::common::boundary_type::BoundaryType;
-    pub use rocketmq_model::common::filter::expression_type::ExpressionType;
-    pub use rocketmq_model::common::message::message_ext::MessageExt;
-    pub use rocketmq_model::common::message::message_id::MessageId;
-    pub use rocketmq_model::common::message::message_queue::MessageQueue;
-    pub use rocketmq_model::common::message::message_queue_assignment::MessageQueueAssignment;
-    pub use rocketmq_model::common::message::message_single::Message;
-    pub use rocketmq_model::common::message::MessageConst;
-    pub use rocketmq_model::common::message::MessageTrait;
-    pub use rocketmq_model::common::mix_all;
-    pub use rocketmq_model::common::sys_flag::message_sys_flag::MessageSysFlag;
-    pub use rocketmq_model::common::sys_flag::pull_sys_flag::PullSysFlag;
-    pub use rocketmq_model::common::topic::TopicValidator;
-    pub use rocketmq_observability::TelemetryHandle;
-    pub use rocketmq_protocol::code::request_code::RequestCode;
-    pub use rocketmq_protocol::code::response_code::ResponseCode;
-    pub use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
-    pub use rocketmq_protocol::protocol::body::query_assignment_request_body::QueryAssignmentRequestBody;
-    pub use rocketmq_protocol::protocol::body::query_assignment_response_body::QueryAssignmentResponseBody;
-    pub use rocketmq_protocol::protocol::header::ack_message_request_header::AckMessageRequestHeader;
-    pub use rocketmq_protocol::protocol::header::change_invisible_time_request_header::ChangeInvisibleTimeRequestHeader;
-    pub use rocketmq_protocol::protocol::header::change_invisible_time_response_header::ChangeInvisibleTimeResponseHeader;
-    pub use rocketmq_protocol::protocol::header::consumer_send_msg_back_request_header::ConsumerSendMsgBackRequestHeader;
-    pub use rocketmq_protocol::protocol::header::end_transaction_request_header::EndTransactionRequestHeader;
-    pub use rocketmq_protocol::protocol::header::extra_info_util::ExtraInfoUtil;
-    pub use rocketmq_protocol::protocol::header::get_max_offset_request_header::GetMaxOffsetRequestHeader;
-    pub use rocketmq_protocol::protocol::header::get_max_offset_response_header::GetMaxOffsetResponseHeader;
-    pub use rocketmq_protocol::protocol::header::get_min_offset_request_header::GetMinOffsetRequestHeader;
-    pub use rocketmq_protocol::protocol::header::get_min_offset_response_header::GetMinOffsetResponseHeader;
-    pub use rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
-    pub use rocketmq_protocol::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
-    pub use rocketmq_protocol::protocol::header::namesrv::topic_operation_header::TopicRequestHeader as OperationTopicRequestHeader;
-    pub use rocketmq_protocol::protocol::header::pop_message_request_header::PopMessageRequestHeader;
-    pub use rocketmq_protocol::protocol::header::pop_message_response_header::PopMessageResponseHeader;
-    pub use rocketmq_protocol::protocol::header::pull_message_request_header::PullMessageRequestHeader;
-    pub use rocketmq_protocol::protocol::header::pull_message_response_header::PullMessageResponseHeader;
-    pub use rocketmq_protocol::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
-    pub use rocketmq_protocol::protocol::header::query_consumer_offset_response_header::QueryConsumerOffsetResponseHeader;
-    pub use rocketmq_protocol::protocol::header::recall_message_request_header::RecallMessageRequestHeader;
-    pub use rocketmq_protocol::protocol::header::recall_message_response_header::RecallMessageResponseHeader;
-    pub use rocketmq_protocol::protocol::header::search_offset_request_header::SearchOffsetRequestHeader;
-    pub use rocketmq_protocol::protocol::header::search_offset_response_header::SearchOffsetResponseHeader;
-    pub use rocketmq_protocol::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
-    pub use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
-    pub use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-    pub use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
-    pub use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
-    pub use rocketmq_protocol::protocol::RemotingSerializable;
-    pub use rocketmq_runtime::common::time_utils::current_millis;
-    pub use rocketmq_store::MessageStoreConfig;
-    pub use rocketmq_transport::RemotingDeserializable;
-    pub use rocketmq_transport::RpcRequestHeader;
-    pub use rocketmq_transport::TopicRequestHeader;
-}
-
 pub struct ProxyBrokerFacade {
     runtime: BrokerRuntime,
     local_request_tasks: TaskGroup,
 }
 
 impl ProxyBrokerFacade {
+    /// Creates an embedded Broker using the store root carried by `broker_config`.
+    ///
+    /// This is the narrow constructor for local Proxy composition. Callers that
+    /// need non-default store tuning can continue to use [`Self::try_new`].
+    pub fn try_new_from_broker_config(
+        broker_config: BrokerConfig,
+        service_context: ChildServiceContext,
+        telemetry_handle: TelemetryHandle,
+    ) -> Result<Self, BrokerConfigError> {
+        let message_store_config = MessageStoreConfig {
+            store_path_root_dir: broker_config.store_path_root_dir.clone(),
+            ..MessageStoreConfig::default()
+        };
+        Self::try_new(broker_config, message_store_config, service_context, telemetry_handle)
+    }
+
     pub fn try_new(
         mut broker_config: BrokerConfig,
         message_store_config: MessageStoreConfig,

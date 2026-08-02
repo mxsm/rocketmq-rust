@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod factory;
 pub mod memory_file_segment;
 pub mod posix_file_segment;
 pub mod provider_impl;
@@ -24,6 +25,14 @@ use rocketmq_error::RocketMQError;
 use crate::file::FileSegmentType;
 use crate::file::TieredFileSegment;
 
+pub use factory::BuiltinTieredStoreProviderFactory;
+pub use factory::MemoryProviderFactory;
+pub use factory::PosixProviderFactory;
+pub use factory::TieredProviderCapabilities;
+pub use factory::TieredProviderCapability;
+pub use factory::TieredProviderDescriptor;
+pub use factory::TieredProviderPersistence;
+pub use factory::TieredStoreProviderFactory;
 pub use memory_file_segment::MemoryProvider;
 pub use posix_file_segment::PosixProvider;
 pub use posix_file_segment::PosixProviderIoSnapshot;

@@ -366,10 +366,6 @@ impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
         )
     }
 
-    pub(crate) fn auth_metrics_snapshot(&self) -> Option<AuthMetricsSnapshot> {
-        self.auth_runtime.as_ref().map(|runtime| runtime.metrics_snapshot())
-    }
-
     pub(crate) fn broker_task_group_or_current(
         &self,
         name: impl Into<Arc<str>>,
@@ -1227,9 +1223,6 @@ impl BrokerRuntime {
             ack_message_processor: None,
             notification_processor: None,
             query_assignment_processor: None,
-            auth_runtime: None,
-            maintenance_authorizer: None,
-            auth_admin_service: None,
             metadata_io,
             broker_attached_plugins: vec![],
             transactional_message_service: None,
@@ -1495,7 +1488,11 @@ impl BrokerRuntime {
     }
 
     pub(crate) fn auth_metrics_snapshot(&self) -> Option<AuthMetricsSnapshot> {
-        self.composition.state.auth_metrics_snapshot()
+        self.composition
+            .request_pipeline
+            .auth_runtime
+            .as_ref()
+            .map(|runtime| runtime.metrics_snapshot())
     }
 
     pub(crate) fn topic_config(&self, topic: &CheetahString) -> Option<Arc<TopicConfig>> {

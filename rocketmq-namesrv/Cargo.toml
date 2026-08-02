@@ -29,6 +29,7 @@ rust-version.workspace = true
 
 [features]
 default       = []
+embedded-controller = ["dep:rocketmq-controller"]
 observability = ["otel-metrics", "otel-traces"]
 otel-metrics  = ["rocketmq-observability/otel-metrics", "rocketmq-transport/observability"]
 otel-traces   = ["rocketmq-observability/otel-traces"]
@@ -42,7 +43,7 @@ rocketmq-model         = { workspace = true }
 rocketmq-error         = { workspace = true }
 rocketmq-protocol      = { workspace = true }
 rocketmq-transport     = { workspace = true }
-rocketmq-controller    = { workspace = true }
+rocketmq-controller    = { workspace = true, optional = true }
 rocketmq-observability = { workspace = true }
 rocketmq-runtime       = { workspace = true }
 rocketmq-security-api  = { workspace = true }

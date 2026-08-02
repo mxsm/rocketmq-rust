@@ -35,6 +35,9 @@ use std::time::Duration;
 
 use crate::config::ControllerConfigReader;
 use crate::controller::broker_heartbeat_manager::DEFAULT_BROKER_CHANNEL_EXPIRED_TIME;
+use crate::controller::membership::ConsensusMembership;
+use crate::controller::membership::MembershipChangeOutcome;
+use crate::controller::membership::MembershipChangeRequest;
 use crate::controller::release_snapshot::controller_snapshot_error;
 use crate::controller::release_snapshot::ControllerReleaseSnapshot;
 use crate::controller::release_snapshot::ControllerReleaseSnapshotRepository;
@@ -522,6 +525,9 @@ impl OpenRaftController {
         serde_json::from_slice(&body).map_err(openraft_response_decode_failed)
     }
 
+    /// Initializes a brand-new cluster during first-node bootstrap only.
+    ///
+    /// Post-bootstrap membership changes must use [`Self::apply_membership_change`].
     pub async fn initialize_cluster(&self, nodes: BTreeMap<NodeId, Node>) -> Result<()> {
         let node = self
             .node()
@@ -702,18 +708,48 @@ impl OpenRaftController {
         ))
     }
 
-    pub async fn add_learner(&self, node_id: NodeId, node_info: Node, blocking: bool) -> Result<()> {
+    pub(crate) async fn add_learner(&self, node_id: NodeId, node_info: Node, blocking: bool) -> Result<()> {
         let node = self
             .node()
             .ok_or_else(|| ControllerError::NotInitialized("OpenRaft node is not started".to_string()))?;
         node.add_learner(node_id, node_info, blocking).await
     }
 
-    pub async fn change_membership(&self, members: BTreeSet<NodeId>, retain: bool) -> Result<()> {
+    pub(crate) async fn change_membership(&self, members: BTreeSet<NodeId>, retain: bool) -> Result<()> {
         let node = self
             .node()
             .ok_or_else(|| ControllerError::NotInitialized("OpenRaft node is not started".to_string()))?;
         node.change_membership(members, retain).await
+    }
+
+    /// Applies one authorized, version-fenced, process-local-idempotent membership step.
+    ///
+    /// This boundary temporarily reuses the release-maintenance
+    /// [`rocketmq_security_api::MaintenanceCapability::ReleaseCheckpoint`] permission. A future
+    /// versioned maintenance policy should split membership administration into a dedicated
+    /// capability.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error when authorization, request validation, optimistic membership
+    /// fencing, learner catch-up, remaining quorum, deadline, or consensus verification fails.
+    pub async fn apply_membership_change(
+        &self,
+        authorization: &MaintenanceAuthorizationGrant,
+        request: MembershipChangeRequest,
+    ) -> RocketMQResult<MembershipChangeOutcome> {
+        let node = self
+            .node()
+            .ok_or_else(|| RocketMQError::not_initialized("OpenRaft node is not started"))?;
+        node.apply_membership_change(authorization, request).await
+    }
+
+    /// Returns the current OpenRaft-independent consensus membership projection.
+    pub async fn consensus_membership(&self) -> Result<ConsensusMembership> {
+        let node = self
+            .node()
+            .ok_or_else(|| ControllerError::NotInitialized("OpenRaft node is not started".to_string()))?;
+        node.consensus_membership().await
     }
 
     pub async fn allow_next_revert(&self, node_id: NodeId, allow: bool) -> Result<()> {

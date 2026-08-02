@@ -50,6 +50,9 @@ use crate::helper::broker_lifecycle_listener::BrokerLifecycleListener;
 use crate::metrics::controller_metrics_manager::ControllerMetricsManager;
 use crate::typ::Node;
 use crate::typ::NodeId;
+use crate::ConsensusMembership;
+use crate::MembershipChangeOutcome;
+use crate::MembershipChangeRequest;
 
 /// Controller wrapper used by the rest of the controller stack.
 ///
@@ -106,16 +109,36 @@ impl RaftController {
         self.inner.shutdown_shared().await
     }
 
+    /// Initializes a brand-new cluster during first-node bootstrap only.
+    ///
+    /// Post-bootstrap membership changes must use [`Self::apply_membership_change`].
     pub async fn initialize_cluster(&self, nodes: BTreeMap<NodeId, Node>) -> Result<()> {
         self.inner.initialize_cluster(nodes).await
     }
 
-    pub async fn add_learner(&self, node_id: NodeId, node: Node, blocking: bool) -> Result<()> {
+    pub(crate) async fn add_learner(&self, node_id: NodeId, node: Node, blocking: bool) -> Result<()> {
         self.inner.add_learner(node_id, node, blocking).await
     }
 
-    pub async fn change_membership(&self, members: BTreeSet<NodeId>, retain: bool) -> Result<()> {
+    pub(crate) async fn change_membership(&self, members: BTreeSet<NodeId>, retain: bool) -> Result<()> {
         self.inner.change_membership(members, retain).await
+    }
+
+    /// Applies an authorized, version-fenced, process-local-idempotent membership step.
+    ///
+    /// This temporarily reuses the release-checkpoint maintenance permission; a future versioned
+    /// maintenance policy should introduce a dedicated membership capability.
+    pub async fn apply_membership_change(
+        &self,
+        authorization: &MaintenanceAuthorizationGrant,
+        request: MembershipChangeRequest,
+    ) -> RocketMQResult<MembershipChangeOutcome> {
+        self.inner.apply_membership_change(authorization, request).await
+    }
+
+    /// Returns the current OpenRaft-independent consensus membership projection.
+    pub async fn consensus_membership(&self) -> Result<ConsensusMembership> {
+        self.inner.consensus_membership().await
     }
 
     /// Creates an authorized, fenced, deadline-bounded Controller snapshot.
