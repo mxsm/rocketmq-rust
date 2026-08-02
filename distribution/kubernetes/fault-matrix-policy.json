@@ -490,6 +490,7 @@
       "milestone",
       "policy_sha256",
       "run_id",
+      "candidate_commit",
       "started_at",
       "finished_at",
       "backend",

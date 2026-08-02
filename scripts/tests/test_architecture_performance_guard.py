@@ -17,6 +17,7 @@ from __future__ import annotations
 import copy
 import json
 import math
+import os
 import subprocess
 import sys
 import tempfile
@@ -30,6 +31,7 @@ SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 import architecture_performance_guard as guard  # noqa: E402
+import architecture_evidence_bundle as bundle  # noqa: E402
 
 
 class ArchitecturePerformanceGuardTest(unittest.TestCase):
@@ -156,6 +158,16 @@ class ArchitecturePerformanceGuardTest(unittest.TestCase):
         findings = guard.validate_workflow_contract(external_path)
         self.assertTrue(any("external baseline report path" in finding for finding in findings))
 
+    def test_workflow_artifacts_use_resolved_checkout_commits(self) -> None:
+        workflow = guard.DEFAULT_WORKFLOW.read_text(encoding="utf-8")
+        trigger_sha = workflow.replace(
+            "name: architecture-performance-${{ steps.bind-commits.outputs.candidate_commit }}",
+            "name: architecture-performance-${{ github.sha }}",
+            1,
+        )
+        findings = guard.validate_workflow_contract(trigger_sha)
+        self.assertTrue(any("candidate artifact commit binding" in finding for finding in findings))
+
     def test_collection_contract_preserves_target_hardware_requirement(self) -> None:
         invalid = copy.deepcopy(self.policy)
         invalid["profiles"][0]["collection"]["status"] = "measured"
@@ -180,7 +192,11 @@ class ArchitecturePerformanceGuardTest(unittest.TestCase):
                     self.metric(candidate, profile["id"], variant["id"], contract["id"])["samples"] = [value] * 5
 
         result = self.evaluate(baseline, candidate)
-        self.assertEqual("pass", result["status"], result["failures"])
+        self.assertEqual("not-run", result["status"], result["failures"])
+        self.assertEqual("2" * 40, result["candidate_commit"])
+        self.assertEqual("performance", result["category"])
+        self.assertEqual("architecture-performance-evidence", result["source"])
+        self.assertIs(result["fixture"], True)
         self.assertEqual(76, len(result["comparisons"]))
         self.assertTrue(any(item["status"] == "missed" for item in result["hypotheses"]))
         self.assertTrue(all(item["gate"] is False for item in result["hypotheses"]))
@@ -266,7 +282,7 @@ class ArchitecturePerformanceGuardTest(unittest.TestCase):
         self.metric(candidate, "local-append", "producers-1", "throughput_per_second")["samples"] = [92.0] * 5
 
         result = self.evaluate(baseline, candidate, self.exception_document())
-        self.assertEqual("pass", result["status"], result["failures"])
+        self.assertEqual("not-run", result["status"], result["failures"])
         comparison = next(
             item
             for item in result["comparisons"]
@@ -300,6 +316,15 @@ class ArchitecturePerformanceGuardTest(unittest.TestCase):
         self.assertEqual("fail", result["status"])
         self.assertTrue(any("--allow-fixture" in finding for finding in result["failures"]))
 
+        measurement_result = guard.evaluate_documents(
+            self.policy,
+            self.build_report("1" * 40, kind="measurement"),
+            self.build_report("2" * 40, kind="measurement"),
+            self.empty_exceptions,
+        )
+        self.assertEqual("pass", measurement_result["status"], measurement_result["failures"])
+        self.assertIs(measurement_result["fixture"], False)
+
     def test_missing_profile_raw_hash_dirty_measurement_and_unknown_exception_fail(self) -> None:
         baseline = self.build_report("1" * 40)
         candidate = self.build_report("2" * 40)
@@ -331,9 +356,11 @@ class ArchitecturePerformanceGuardTest(unittest.TestCase):
         candidate = self.build_report("2" * 40)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            baseline_path = root / "baseline.json"
-            candidate_path = root / "candidate.json"
-            output_path = root / "comparison.json"
+            evidence_root = root / "target/architecture-refactor/M10/evidence"
+            evidence_root.mkdir(parents=True)
+            baseline_path = evidence_root / "baseline-report.json"
+            candidate_path = evidence_root / "candidate-report.json"
+            output_path = evidence_root / "comparison.json"
             baseline_path.write_text(json.dumps(baseline), encoding="utf-8")
             candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
             exit_code = guard.main(
@@ -349,10 +376,60 @@ class ArchitecturePerformanceGuardTest(unittest.TestCase):
             )
             self.assertEqual(0, exit_code)
             output = json.loads(output_path.read_text(encoding="utf-8"))
-            self.assertEqual("pass", output["status"])
+            self.assertEqual("not-run", output["status"])
+            self.assertEqual("performance", output["category"])
+            self.assertIs(output["fixture"], True)
+            self.assertEqual(
+                ["baseline-report.json", "candidate-report.json"],
+                [item["path"] for item in output["artifacts"]],
+            )
             self.assertRegex(output["baseline_sha256"], r"^[0-9a-f]{64}$")
             self.assertRegex(output["candidate_sha256"], r"^[0-9a-f]{64}$")
             self.assertRegex(output["environment_sha256"], r"^[0-9a-f]{64}$")
+            manifest = bundle.assemble(
+                "2" * 40,
+                evidence_root,
+                {"performance": output_path.name},
+            )
+            self.assertEqual("not-run", manifest["evidence"][0]["status"])
+            self.assertEqual([], bundle.validate_manifest(manifest, evidence_root))
+
+    def test_output_and_inputs_reject_hardlink_aliases(self) -> None:
+        baseline = self.build_report("1" * 40)
+        candidate = self.build_report("2" * 40)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            baseline_path = root / "baseline.json"
+            candidate_path = root / "candidate.json"
+            baseline_path.write_text(json.dumps(baseline), encoding="utf-8")
+            candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
+            original_baseline = baseline_path.read_bytes()
+            original_candidate = candidate_path.read_bytes()
+
+            for label, protected in (("baseline", baseline_path), ("candidate", candidate_path)):
+                with self.subTest(label=label):
+                    output = root / f"{label}-output.json"
+                    os.link(protected, output)
+                    exit_code = guard.main(
+                        [
+                            "--baseline",
+                            str(baseline_path),
+                            "--candidate",
+                            str(candidate_path),
+                            "--output",
+                            str(output),
+                            "--allow-fixture",
+                        ]
+                    )
+                    self.assertEqual(1, exit_code)
+                    self.assertEqual(original_baseline, baseline_path.read_bytes())
+                    self.assertEqual(original_candidate, candidate_path.read_bytes())
+                    output.unlink()
+
+            candidate_alias = root / "candidate-alias.json"
+            os.link(baseline_path, candidate_alias)
+            with self.assertRaisesRegex(ValueError, "must be distinct"):
+                guard.comparison_artifacts(root / "comparison.json", baseline_path, candidate_alias)
 
 
 if __name__ == "__main__":

@@ -20,6 +20,7 @@ import argparse
 import hashlib
 import json
 import re
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -60,12 +61,14 @@ GLOBAL_ASSERTIONS = (
 )
 DIGEST_RE = re.compile(r"^[^@\s]+@sha256:([0-9a-f]{64})$")
 SHA_RE = re.compile(r"^[0-9a-f]{64}$")
+COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 PLACEHOLDER_HASHES = {character * 64 for character in "0123456789abcdef"}
 REQUIRED_RUN_FIELDS = {
     "schema_version",
     "milestone",
     "policy_sha256",
     "run_id",
+    "candidate_commit",
     "started_at",
     "finished_at",
     "backend",
@@ -126,6 +129,22 @@ def sha256_file(path: Path) -> str:
 def canonical_json_sha256(value: dict[str, Any]) -> str:
     encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def current_commit(root: Path, guard: Guard) -> str:
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    if result.returncode != 0:
+        guard.errors.append("unable to resolve current Git commit")
+        return ""
+    return result.stdout.strip()
 
 
 def parse_utc(value: object, label: str, guard: Guard) -> datetime | None:
@@ -218,6 +237,7 @@ def validate_sources(guard: Guard) -> None:
     runner = guard.read("scripts/kind-architecture-refactor-e2e.ps1")
     secret_generator = guard.read("scripts/new-m11-evidence-secrets.ps1")
     workflow = guard.read(".github/workflows/kubernetes-fault-matrix.yml")
+    publication_verifier = guard.read("scripts/verify_service_image_publication.py")
     dockerfile = guard.read("docker/Dockerfile.base")
     tests = guard.read("scripts/tests/test_m11_fault_matrix.py")
     readme = guard.read("distribution/kubernetes/README.md")
@@ -225,6 +245,7 @@ def validate_sources(guard: Guard) -> None:
         '[ValidateSet("Validate", "Run")]',
         '[ValidateSet("kind", "k3d")]',
         "dynamic_execution",
+        "candidate_commit = $CandidateCommit",
         "rolling_upgrade",
         "node_eviction",
         "nameserver_minority_partition",
@@ -285,6 +306,71 @@ def validate_sources(guard: Guard) -> None:
         "fault workflow must retain least-privilege contents/package reads",
     )
     guard.require("docker login ghcr.io" in workflow, "fault workflow must authenticate immutable GHCR pulls")
+    guard.require(
+        "CANDIDATE_COMMIT=$(git rev-parse HEAD)" in workflow
+        and "-CandidateCommit '${{ steps.bind-candidate.outputs.candidate_commit }}'" in workflow
+        and "m11-11-${{ env.EVIDENCE_BACKEND }}-${{ steps.bind-candidate.outputs.candidate_commit }}" in workflow,
+        "fault workflow must bind execution and artifact identity to the checked-out candidate commit",
+    )
+    guard.require(
+        "candidate_publication_json:" in workflow
+        and "ARCHITECTURE_CANDIDATE_PUBLICATION_JSON" in workflow
+        and "candidate_images_json" not in workflow
+        and "ARCHITECTURE_CANDIDATE_IMAGES_JSON" not in workflow,
+        "fault workflow must accept a signed candidate publication, not a self-reported image map",
+    )
+    guard.require(
+        "sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6" in workflow
+        and "cosign-release: v3.1.2" in workflow,
+        "fault workflow must install pinned Cosign v3.1.2",
+    )
+    publication_command = "python scripts/verify_service_image_publication.py"
+    candidate_map_argument = "-CandidateImageMap target/fault-inputs/candidate-images.json"
+    guard.require(
+        publication_command in workflow
+        and '--publication target/fault-inputs/publication.json' in workflow
+        and '--candidate "$CANDIDATE_COMMIT"' in workflow
+        and "--output-image-map target/fault-inputs/candidate-images.json" in workflow
+        and candidate_map_argument in workflow
+        and workflow.index(publication_command) < workflow.index(candidate_map_argument),
+        "fault workflow must validate the signed candidate publication before deriving its image map",
+    )
+    for marker in (
+        'SOURCE = "workflow://mxsm/rocketmq-rust/service-image-publish"',
+        'CATEGORY = "five_image_supply_chain"',
+        'CERTIFICATE_OIDC_ISSUER = "https://token.actions.githubusercontent.com"',
+        'service-image-publish\\.yml@refs/(heads/main|tags/',
+        '"service-image-evidence/v1"',
+        'publication.get("candidate_commit") == candidate',
+        'json_exact_equal(tools, TOOLS)',
+        'json_exact_equal(policy, POLICY)',
+        'path not in artifact_map',
+        'artifacts.get(normalized_path) == normalized_sha256',
+        'digest not in image_digests',
+        'image.get("digest") == digest',
+        'image.get("digest_reference") == reference',
+        '"org.opencontainers.image.revision=',
+        '"io.rocketmq.service=',
+        '"verify-attestation"',
+        'envelope.get("payloadType") == DSSE_PAYLOAD_TYPE',
+        'base64.b64decode(padded_payload, validate=True)',
+        'set(statement) != {',
+        'statement.get("_type") == STATEMENT_TYPE',
+        'statement.get("predicateType") == PREDICATE_TYPE',
+        'len(subjects) == 1',
+        'subjects[0].get("name") == repository',
+        'json_exact_equal(statement.get("predicate"), predicate)',
+    ):
+        guard.require(
+            marker in publication_verifier,
+            f"signed service-image publication verifier contract missing: {marker}",
+        )
+    verification_index = publication_verifier.find("images = verify_publication")
+    output_index = publication_verifier.find("write_image_map(", verification_index)
+    guard.require(
+        verification_index >= 0 and output_index > verification_index,
+        "candidate image map must be written only after signed publication verification",
+    )
     guard.require(
         "new-m11-evidence-secrets.ps1" in workflow,
         "fault workflow must generate isolated run-scoped evidence credentials",
@@ -350,6 +436,17 @@ def validate_evidence(guard: Guard, policy: dict[str, Any], evidence_dir: Path, 
     else:
         guard.require(run.get("fixture") is False, "production evidence must set fixture=false")
         guard.require(run.get("dynamic_execution") is True, "production evidence must come from dynamic execution")
+
+    candidate_commit = run.get("candidate_commit")
+    guard.require(
+        isinstance(candidate_commit, str) and COMMIT_RE.fullmatch(candidate_commit) is not None,
+        "candidate_commit must be a full Git SHA",
+    )
+    if not fixture and isinstance(candidate_commit, str) and COMMIT_RE.fullmatch(candidate_commit):
+        guard.require(
+            candidate_commit == current_commit(guard.root, guard),
+            "production evidence candidate_commit differs from the checked-out commit",
+        )
 
     profile = run.get("cluster_profile")
     guard.require(isinstance(profile, dict), "cluster_profile must be an object")

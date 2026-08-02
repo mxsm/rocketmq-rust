@@ -21,9 +21,11 @@ import argparse
 import hashlib
 import json
 import math
+import os
 import re
 import statistics
 import sys
+import tempfile
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
@@ -74,6 +76,13 @@ def validate_workflow_contract(workflow: str) -> list[str]:
         "candidate checkout": "ref: ${{ env.CANDIDATE_REF }}\n          path: candidate",
         "baseline commit binding": "BASELINE_COMMIT=$(git -C baseline rev-parse HEAD)",
         "candidate commit binding": "CANDIDATE_COMMIT=$(git -C candidate rev-parse HEAD)",
+        "contract commit binding": "CONTRACT_COMMIT=$(git rev-parse HEAD)",
+        "contract artifact commit binding": (
+            "name: architecture-performance-contract-${{ steps.bind-contract.outputs.contract_commit }}"
+        ),
+        "candidate artifact commit binding": (
+            "name: architecture-performance-${{ steps.bind-commits.outputs.candidate_commit }}"
+        ),
         "different commit assertion": 'test "$BASELINE_COMMIT" != "$CANDIDATE_COMMIT"',
         "fixed Rust toolchain": "RUSTUP_TOOLCHAIN: 1.95.0",
         "baseline measurement": "python baseline/scripts/architecture_performance_sidecar.py",
@@ -86,7 +95,16 @@ def validate_workflow_contract(workflow: str) -> list[str]:
             "find candidate/target/architecture-refactor/M10/performance "
             "-name measurement-report.json"
         ),
+        "run-scoped decision evidence root": (
+            'EVIDENCE_DIR="target/architecture-refactor/M10/evidence/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"'
+        ),
+        "baseline decision input copy": 'cp "$BASELINE_SOURCE_REPORT" "$EVIDENCE_DIR/baseline-report.json"',
+        "candidate decision input copy": 'cp "$CANDIDATE_SOURCE_REPORT" "$EVIDENCE_DIR/candidate-report.json"',
         "mandatory comparison": "python candidate/scripts/architecture_performance_guard.py",
+        "bundle assembly": "python candidate/scripts/architecture_evidence_bundle.py assemble",
+        "bundle validation": "python candidate/scripts/architecture_evidence_bundle.py validate",
+        "scoped performance qualification": "--require-category-pass performance",
+        "scoped candidate binding": '--candidate "$CANDIDATE_COMMIT"',
         "baseline evidence upload": "baseline/target/architecture-refactor/M10",
         "candidate evidence upload": "candidate/target/architecture-refactor/M10",
     }
@@ -603,6 +621,14 @@ def evaluate_documents(
     allow_fixture: bool = False,
     now: datetime | None = None,
 ) -> dict[str, Any]:
+    candidate_git = candidate.get("git")
+    record_identity = {
+        "candidate_commit": candidate_git.get("commit") if isinstance(candidate_git, dict) else None,
+        "category": "performance",
+        "source": "architecture-performance-evidence",
+        "fixture": allow_fixture,
+        "artifacts": [],
+    }
     findings = validate_profile_policy(policy)
     findings.extend(validate_report(baseline, policy, "baseline", allow_fixture))
     findings.extend(validate_report(candidate, policy, "candidate", allow_fixture))
@@ -610,13 +636,21 @@ def evaluate_documents(
     exceptions = active_exception_map(exception_document, effective_now, findings)
     validate_exception_contracts(policy, exceptions, findings)
     if findings:
-        return {"schema_version": 1, "status": "fail", "failures": findings, "comparisons": [], "hypotheses": []}
+        return {
+            "schema_version": 1,
+            **record_identity,
+            "status": "fail",
+            "failures": findings,
+            "comparisons": [],
+            "hypotheses": [],
+        }
 
     baseline_environment = environment_fingerprint(baseline, policy)
     candidate_environment = environment_fingerprint(candidate, policy)
     if baseline_environment != candidate_environment:
         return {
             "schema_version": 1,
+            **record_identity,
             "status": "fail",
             "failures": ["baseline and candidate environments differ from the frozen profile metadata"],
             "comparisons": [],
@@ -627,6 +661,7 @@ def evaluate_documents(
     if candidate_time < baseline_time:
         return {
             "schema_version": 1,
+            **record_identity,
             "status": "fail",
             "failures": ["candidate measurement predates the baseline measurement"],
             "comparisons": [],
@@ -639,6 +674,7 @@ def evaluate_documents(
     ):
         return {
             "schema_version": 1,
+            **record_identity,
             "status": "fail",
             "failures": ["baseline and candidate measurements must bind different Git commits"],
             "comparisons": [],
@@ -738,7 +774,8 @@ def evaluate_documents(
 
     return {
         "schema_version": 1,
-        "status": "fail" if failures else "pass",
+        **record_identity,
+        "status": "fail" if failures else ("not-run" if allow_fixture else "pass"),
         "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "policy_sha256": canonical_sha256(policy),
         "environment_sha256": canonical_sha256(baseline_environment),
@@ -750,9 +787,59 @@ def evaluate_documents(
     }
 
 
+def paths_alias(left: Path, right: Path) -> bool:
+    """Return whether two paths name the same target or existing file."""
+    if left.resolve(strict=False) == right.resolve(strict=False):
+        return True
+    try:
+        return left.samefile(right)
+    except FileNotFoundError:
+        return False
+
+
 def write_json(path: Path, value: dict[str, Any]) -> None:
+    """Atomically replace JSON through a unique temporary sibling."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, indent=2, ensure_ascii=False, allow_nan=False) + "\n", encoding="utf-8")
+    encoded = json.dumps(value, indent=2, ensure_ascii=False, allow_nan=False) + "\n"
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        text=True,
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as output_file:
+            descriptor = -1
+            output_file.write(encoded)
+            output_file.flush()
+            os.fsync(output_file.fileno())
+        os.replace(temporary, path)
+    except BaseException:
+        if descriptor >= 0:
+            os.close(descriptor)
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def comparison_artifacts(output: Path, baseline: Path, candidate: Path) -> list[dict[str, str]]:
+    parent = output.parent.resolve(strict=False)
+    output_file = parent / output.name
+    artifacts: list[dict[str, str]] = []
+    seen: list[Path] = []
+    for label, source in (("baseline", baseline), ("candidate", candidate)):
+        resolved = source.resolve(strict=True)
+        try:
+            relative = resolved.relative_to(parent)
+        except ValueError as error:
+            raise ValueError(f"{label} decision input must stay below the comparison output directory") from error
+        if paths_alias(output_file, resolved):
+            raise ValueError(f"comparison output must not overwrite the {label} decision input")
+        if any(paths_alias(resolved, existing) for existing in seen):
+            raise ValueError("baseline and candidate decision inputs must be distinct files")
+        seen.append(resolved)
+        artifacts.append({"path": relative.as_posix(), "sha256": file_sha256(resolved)})
+    return artifacts
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -822,7 +909,12 @@ def main(argv: list[str] | None = None) -> int:
     result["baseline_sha256"] = file_sha256(args.baseline)
     result["candidate_sha256"] = file_sha256(args.candidate)
     if args.output is not None:
-        write_json(args.output, result)
+        try:
+            result["artifacts"] = comparison_artifacts(args.output, args.baseline, args.candidate)
+            write_json(args.output, result)
+        except (OSError, ValueError) as error:
+            print(f"ARCHITECTURE_PERFORMANCE_GUARD_FAILED {error}", file=sys.stderr)
+            return 1
     print(
         "ARCHITECTURE_PERFORMANCE_GUARD_"
         f"{result['status'].upper()} comparisons={len(result['comparisons'])} "
@@ -830,7 +922,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     for failure in result["failures"]:
         print(f"PERFORMANCE_FINDING {failure}", file=sys.stderr)
-    return 0 if result["status"] == "pass" else 1
+    return 0 if not result["failures"] else 1
 
 
 if __name__ == "__main__":

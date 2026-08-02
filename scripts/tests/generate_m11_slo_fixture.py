@@ -32,6 +32,10 @@ def canonical_text_sha256(path: Path) -> str:
     return hashlib.sha256(text.encode()).hexdigest()
 
 
+def raw_file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def write_json(path: Path, value: dict[str, object]) -> None:
     path.write_text(
         json.dumps(value, indent=2, ensure_ascii=False) + "\n",
@@ -58,17 +62,21 @@ def main() -> int:
     )
 
     fault = json.loads(fault_path.read_text(encoding="utf-8"))
+    run = json.loads(run_path.read_text(encoding="utf-8"))
+    run["category"] = "ha_soak_rpo_rto"
+    run["source"] = "architecture-slo-evidence"
+    run["status"] = "not-run"
+    fault["candidate_commit"] = run["candidate_commit"]
     fault["scenarios"] = [{"id": item["id"]} for item in fault_policy["scenarios"]]
     write_json(fault_path, fault)
 
-    run = json.loads(run_path.read_text(encoding="utf-8"))
     run["policy_sha256"] = canonical_json_sha256(readiness_policy)
-    fault_hash = canonical_text_sha256(fault_path)
+    fault_hash = raw_file_sha256(fault_path)
     run["fault_evidence"]["sha256"] = fault_hash
     for relative in run["release_artifacts"]:
         run["release_artifacts"][relative] = canonical_text_sha256(root / relative)
     for artifact in run["artifacts"]:
-        artifact["sha256"] = canonical_text_sha256(fixture / artifact["path"])
+        artifact["sha256"] = raw_file_sha256(fixture / artifact["path"])
     write_json(run_path, run)
     print(f"generated {len(fault['scenarios'])} embedded fault scenarios")
     return 0

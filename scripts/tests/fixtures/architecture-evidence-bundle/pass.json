@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "candidate_commit": "0123456789abcdef0123456789abcdef01234567",
+  "category": "performance",
+  "status": "pass",
+  "source": "architecture-performance-evidence",
+  "fixture": false,
+  "artifacts": [
+    {
+      "path": "artifact.txt",
+      "sha256": "0fc7c8c357dfa2cc6116cdf1172b5734908a31644d6a807152023dd63d7f151a"
+    }
+  ]
+}

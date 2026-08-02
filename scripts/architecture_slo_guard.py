@@ -76,6 +76,9 @@ RUN_FIELDS = {
     "execution_unit",
     "policy_sha256",
     "candidate_commit",
+    "category",
+    "source",
+    "status",
     "candidate_images",
     "run_id",
     "started_at",
@@ -134,6 +137,14 @@ def canonical_text_sha256(path: Path) -> str | None:
         return None
     normalized = text.replace("\r\n", "\n").replace("\r", "\n")
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def raw_file_sha256(path: Path) -> str | None:
+    try:
+        encoded = path.read_bytes()
+    except OSError:
+        return None
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def canonical_json_sha256(value: dict[str, Any]) -> str:
@@ -343,6 +354,7 @@ def validate_release_assets(
     cluster_runner = guard.read("scripts/run-architecture-slo-cluster.ps1")
     secret_generator = guard.read("scripts/new-m11-evidence-secrets.ps1")
     workflow = guard.read(".github/workflows/architecture-slo-evidence.yml")
+    publication_verifier = guard.read("scripts/verify_service_image_publication.py")
     tests = guard.read("scripts/tests/test_architecture_slo_guard.py")
     for marker in (
         '[ValidateSet("Validate", "Run")]',
@@ -376,6 +388,75 @@ def validate_release_assets(
         "untrusted refs must never reach the dynamic evidence runner",
     )
     guard.require("docker login ghcr.io" in workflow, "SLO workflow must authenticate immutable GHCR pulls")
+    guard.require(
+        "CANDIDATE_COMMIT=$(git rev-parse HEAD)" in workflow
+        and "-CandidateCommit '${{ steps.bind-candidate.outputs.candidate_commit }}'" in workflow
+        and "m11-12-r24-${{ env.EVIDENCE_BACKEND }}-${{ steps.bind-candidate.outputs.candidate_commit }}" in workflow,
+        "SLO workflow must bind execution and artifact identity to the checked-out candidate commit",
+    )
+    guard.require(
+        "candidate_publication_json:" in workflow
+        and "ARCHITECTURE_CANDIDATE_PUBLICATION_JSON" in workflow
+        and "candidate_images_json" not in workflow
+        and "ARCHITECTURE_CANDIDATE_IMAGES_JSON" not in workflow,
+        "SLO workflow must accept a signed candidate publication, not a self-reported image map",
+    )
+    guard.require(
+        "sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6" in workflow
+        and "cosign-release: v3.1.2" in workflow,
+        "SLO workflow must install pinned Cosign v3.1.2",
+    )
+    publication_command = "python scripts/verify_service_image_publication.py"
+    candidate_map_argument = "-CandidateImageMap target/slo-inputs/candidate-images.json"
+    guard.require(
+        publication_command in workflow
+        and '--publication target/slo-inputs/publication.json' in workflow
+        and '--candidate "$CANDIDATE_COMMIT"' in workflow
+        and "--output-image-map target/slo-inputs/candidate-images.json" in workflow
+        and candidate_map_argument in workflow
+        and workflow.index(publication_command) < workflow.index(candidate_map_argument),
+        "SLO workflow must validate the signed candidate publication before deriving its image map",
+    )
+    for marker in (
+        'SOURCE = "workflow://mxsm/rocketmq-rust/service-image-publish"',
+        'CATEGORY = "five_image_supply_chain"',
+        'CERTIFICATE_OIDC_ISSUER = "https://token.actions.githubusercontent.com"',
+        'service-image-publish\\.yml@refs/(heads/main|tags/',
+        '"service-image-evidence/v1"',
+        'publication.get("candidate_commit") == candidate',
+        'json_exact_equal(tools, TOOLS)',
+        'json_exact_equal(policy, POLICY)',
+        'path not in artifact_map',
+        'artifacts.get(normalized_path) == normalized_sha256',
+        'digest not in image_digests',
+        'image.get("digest") == digest',
+        'image.get("digest_reference") == reference',
+        '"org.opencontainers.image.revision=',
+        '"io.rocketmq.service=',
+        '"verify-attestation"',
+        'envelope.get("payloadType") == DSSE_PAYLOAD_TYPE',
+        'base64.b64decode(padded_payload, validate=True)',
+        'set(statement) != {',
+        'statement.get("_type") == STATEMENT_TYPE',
+        'statement.get("predicateType") == PREDICATE_TYPE',
+        'len(subjects) == 1',
+        'subjects[0].get("name") == repository',
+        'json_exact_equal(statement.get("predicate"), predicate)',
+    ):
+        guard.require(
+            marker in publication_verifier,
+            f"signed service-image publication verifier contract missing: {marker}",
+        )
+    verification_index = publication_verifier.find("images = verify_publication")
+    output_index = publication_verifier.find("write_image_map(", verification_index)
+    guard.require(
+        verification_index >= 0 and output_index > verification_index,
+        "candidate image map must be written only after signed publication verification",
+    )
+    guard.require(
+        "$FaultRun.candidate_commit -eq $CandidateCommit" in runner,
+        "SLO runner must reject fault evidence from a different candidate commit",
+    )
     guard.require(
         "new-m11-evidence-secrets.ps1" in workflow,
         "SLO workflow must generate isolated run-scoped evidence credentials",
@@ -459,12 +540,17 @@ def current_commit(root: Path, guard: Guard) -> str:
 def validate_fault_snapshot(
     guard: Guard,
     snapshot: dict[str, Any],
+    candidate_commit: object,
     candidate_images: dict[str, str],
     production: bool,
 ) -> None:
     guard.require(
         snapshot.get("milestone") == "M11-11",
         "fault evidence must come from M11-11",
+    )
+    guard.require(
+        snapshot.get("candidate_commit") == candidate_commit,
+        "fault and SLO evidence candidate commits differ",
     )
     guard.require(
         snapshot.get("candidate_images") == candidate_images,
@@ -515,7 +601,9 @@ def validate_evidence(
         "run policy_sha256 does not match the committed policy",
     )
 
-    fixture = run.get("fixture") is True
+    fixture_value = run.get("fixture")
+    guard.require(type(fixture_value) is bool, "fixture must be a boolean")
+    fixture = fixture_value is True
     dynamic = run.get("dynamic_execution") is True
     if fixture:
         guard.require(allow_fixture, "fixture evidence requires --allow-fixture")
@@ -523,6 +611,20 @@ def validate_evidence(
     else:
         guard.require(dynamic, "production evidence requires dynamic execution")
     production = not fixture
+
+    guard.require(
+        run.get("category") == "ha_soak_rpo_rto",
+        "evidence category must identify ha_soak_rpo_rto",
+    )
+    guard.require(
+        run.get("source") == "architecture-slo-evidence",
+        "evidence source must identify architecture-slo-evidence",
+    )
+    expected_status = "not-run" if fixture else "pass"
+    guard.require(
+        run.get("status") == expected_status,
+        f"evidence status must be {expected_status}",
+    )
 
     commit = run.get("candidate_commit")
     guard.require(
@@ -602,7 +704,7 @@ def validate_evidence(
         )
         if path.is_file() and isinstance(expected_hash, str):
             guard.require(
-                canonical_text_sha256(path) == expected_hash,
+                raw_file_sha256(path) == expected_hash,
                 f"artifact hash mismatch: {relative}",
             )
         indexed[relative] = str(expected_hash)
@@ -625,7 +727,9 @@ def validate_evidence(
         fault_path = evidence_dir / str(path)
         snapshot = guard.load_json(fault_path, "fault evidence snapshot")
         if snapshot:
-            validate_fault_snapshot(guard, snapshot, candidate_images, production)
+            validate_fault_snapshot(
+                guard, snapshot, commit, candidate_images, production
+            )
 
     policy_objectives = {
         item["id"]: item
