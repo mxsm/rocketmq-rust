@@ -70,6 +70,25 @@ impl TransportTelemetry {
     }
 
     #[inline]
+    pub(crate) fn record_lifecycle_event(&self, event: &'static str, result: &'static str) {
+        #[cfg(feature = "observability")]
+        self.remoting.record_lifecycle_event(event, result);
+
+        #[cfg(not(feature = "observability"))]
+        let _ = (event, result);
+    }
+
+    #[inline]
+    pub(crate) fn record_lifecycle_listener_latency(&self, latency: std::time::Duration, event: &'static str) {
+        #[cfg(feature = "observability")]
+        self.remoting
+            .record_lifecycle_listener_latency(latency.as_millis().min(u128::from(u64::MAX)) as u64, event);
+
+        #[cfg(not(feature = "observability"))]
+        let _ = (latency, event);
+    }
+
+    #[inline]
     pub(crate) fn request_guard(
         &self,
         request_code: i32,
@@ -150,6 +169,8 @@ mod tests {
     fn noop_transport_telemetry_covers_request_and_network_paths() {
         let telemetry = TransportTelemetry::noop();
         telemetry.record_network_bytes(128);
+        telemetry.record_lifecycle_event("connected", "queued");
+        telemetry.record_lifecycle_listener_latency(std::time::Duration::from_millis(1), "connected");
         assert!(telemetry.request_span(10, 1).is_disabled());
         let mut guard = telemetry.request_guard(10, 64, false);
         guard.complete_response(0);

@@ -288,6 +288,51 @@ async fn task_capability_spawns_only_parent_owned_work() {
     );
 }
 
+#[tokio::test]
+async fn cancellable_service_apis_exit_on_owner_cancellation_without_abort() {
+    let context = RuntimeContext::from_current("cancellable-service-api-test");
+    let service = context.service_context("cancellable-service");
+    let group = service.task_group().clone();
+    let spawner = service.task_spawner();
+    let started = Arc::new(Barrier::new(4));
+
+    let group_started = Arc::clone(&started);
+    group
+        .spawn_cancellable_service("task-group-service", async move {
+            group_started.wait().await;
+            std::future::pending::<()>().await;
+        })
+        .expect("task-group cancellable service should spawn");
+
+    let context_started = Arc::clone(&started);
+    service
+        .spawn_cancellable_service("service-context-service", async move {
+            context_started.wait().await;
+            std::future::pending::<()>().await;
+        })
+        .expect("service-context cancellable service should spawn");
+
+    let spawner_started = Arc::clone(&started);
+    spawner
+        .spawn_cancellable_service("task-spawner-service", async move {
+            spawner_started.wait().await;
+            std::future::pending::<()>().await;
+        })
+        .expect("task-spawner cancellable service should spawn");
+
+    started.wait().await;
+
+    let report = group.shutdown(Duration::from_secs(1)).await;
+    assert!(report.is_healthy(), "{}", report.to_json());
+    assert_eq!(report.cancelled, 3, "{}", report.to_json());
+    assert_eq!(report.aborted, 0, "{}", report.to_json());
+    assert_eq!(report.timed_out, 0, "{}", report.to_json());
+    assert_eq!(group.task_count(), 0);
+
+    let root_report = context.shutdown_tasks(Duration::from_secs(1)).await;
+    assert!(root_report.is_healthy(), "{}", root_report.to_json());
+}
+
 #[test]
 fn task_capability_source_does_not_expose_raw_runtime_or_detached_spawn() {
     let source = include_str!("../src/task_spawner.rs");

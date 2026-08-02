@@ -19,8 +19,9 @@ use std::sync::atomic::AtomicI32;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
-use std::sync::Mutex;
 
+use parking_lot::Mutex;
+use parking_lot::MutexGuard;
 use rocketmq_store_api::MasterEpoch;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -119,7 +120,7 @@ impl ReplicationStateRoot {
     pub fn set_local_broker_id(&self, local_broker_id: i64) {
         self.local_broker_id.store(local_broker_id, Ordering::SeqCst);
         if self.is_master() && local_broker_id >= 0 {
-            let mut tracker = self.tracker.lock().expect("lock Local replication state");
+            let mut tracker = self.tracker();
             if tracker.local_sync_state_set.is_empty() {
                 tracker.local_sync_state_set.insert(local_broker_id);
             }
@@ -127,15 +128,11 @@ impl ReplicationStateRoot {
     }
 
     pub fn local_sync_state_set(&self) -> HashSet<i64> {
-        self.tracker
-            .lock()
-            .expect("lock Local replication state")
-            .local_sync_state_set
-            .clone()
+        self.tracker().local_sync_state_set.clone()
     }
 
     pub fn sync_state_set(&self) -> HashSet<i64> {
-        let tracker = self.tracker.lock().expect("lock Local replication state");
+        let tracker = self.tracker();
         if self.is_synchronizing_sync_state_set() {
             tracker
                 .local_sync_state_set
@@ -148,7 +145,7 @@ impl ReplicationStateRoot {
     }
 
     pub fn replace_sync_state_set(&self, sync_state_set: HashSet<i64>) {
-        let mut tracker = self.tracker.lock().expect("lock Local replication state");
+        let mut tracker = self.tracker();
         self.is_synchronizing_sync_state_set.store(false, Ordering::SeqCst);
         tracker.local_sync_state_set = sync_state_set;
         tracker.remote_sync_state_set.clear();
@@ -160,7 +157,7 @@ impl ReplicationStateRoot {
     }
 
     pub fn record_caught_up(&self, slave_broker_id: i64, last_caught_up_time_ms: u64) {
-        let mut tracker = self.tracker.lock().expect("lock Local replication state");
+        let mut tracker = self.tracker();
         let previous = tracker
             .connection_caught_up_time_table
             .get(&slave_broker_id)
@@ -173,7 +170,7 @@ impl ReplicationStateRoot {
 
     pub fn maybe_shrink_sync_state_set(&self, now_millis: u64, timeout_millis: u64) -> HashSet<i64> {
         let local_broker_id = self.local_broker_id();
-        let mut tracker = self.tracker.lock().expect("lock Local replication state");
+        let mut tracker = self.tracker();
         let mut next = tracker.local_sync_state_set.clone();
         let mut changed = false;
         next.retain(|broker_id| {
@@ -204,7 +201,7 @@ impl ReplicationStateRoot {
         if slave_max_offset < confirm_offset {
             return None;
         }
-        let mut tracker = self.tracker.lock().expect("lock Local replication state");
+        let mut tracker = self.tracker();
         if tracker.local_sync_state_set.contains(&slave_broker_id) {
             return None;
         }
@@ -216,7 +213,7 @@ impl ReplicationStateRoot {
     }
 
     pub fn remove_replica(&self, slave_broker_id: i64) -> bool {
-        let mut tracker = self.tracker.lock().expect("lock Local replication state");
+        let mut tracker = self.tracker();
         let removed = tracker.local_sync_state_set.remove(&slave_broker_id);
         tracker.remote_sync_state_set.remove(&slave_broker_id);
         tracker.connection_caught_up_time_table.remove(&slave_broker_id);
@@ -224,7 +221,7 @@ impl ReplicationStateRoot {
     }
 
     pub fn tracked_sync_state_set_size(&self) -> Option<usize> {
-        let tracker = self.tracker.lock().expect("lock Local replication state");
+        let tracker = self.tracker();
         if self.is_synchronizing_sync_state_set() {
             Some(
                 tracker
@@ -240,7 +237,7 @@ impl ReplicationStateRoot {
     }
 
     pub fn clear_pending_sync_state_tracking(&self) {
-        let mut tracker = self.tracker.lock().expect("lock Local replication state");
+        let mut tracker = self.tracker();
         self.is_synchronizing_sync_state_set.store(false, Ordering::SeqCst);
         tracker.remote_sync_state_set.clear();
         tracker.connection_caught_up_time_table.clear();
@@ -251,7 +248,7 @@ impl ReplicationStateRoot {
         if local_broker_id < 0 {
             return;
         }
-        let mut tracker = self.tracker.lock().expect("lock Local replication state");
+        let mut tracker = self.tracker();
         if tracker.local_sync_state_set.is_empty() {
             tracker.local_sync_state_set.insert(local_broker_id);
         }
@@ -279,6 +276,10 @@ impl ReplicationStateRoot {
 
     pub fn current_master_epoch(&self) -> Option<MasterEpoch> {
         MasterEpoch::try_from(self.current_master_epoch.load(Ordering::SeqCst)).ok()
+    }
+
+    fn tracker(&self) -> MutexGuard<'_, SyncStateTracker> {
+        self.tracker.lock()
     }
 }
 
@@ -349,5 +350,18 @@ mod tests {
         assert!(progress.record_ack(64));
         assert!(!progress.record_ack(32));
         assert_eq!(progress.max_ack_offset(), 64);
+    }
+
+    #[test]
+    fn replication_state_remains_available_after_a_panicking_holder() {
+        let root = ReplicationStateRoot::new(true);
+        let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _tracker = root.tracker();
+            panic!("injected replication-state panic");
+        }));
+
+        assert!(panic_result.is_err());
+        root.set_local_broker_id(7);
+        assert_eq!(root.local_sync_state_set(), HashSet::from([7]));
     }
 }

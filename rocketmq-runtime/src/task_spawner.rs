@@ -70,7 +70,11 @@ impl TaskSpawner {
         self.task_group.spawn(name, kind, future)
     }
 
-    /// Registers a long-lived service future as parent-owned work.
+    /// Registers a long-lived service future with a custom shutdown protocol.
+    ///
+    /// The future must observe a cancellation token and perform its own
+    /// ordered cleanup. Use [`Self::spawn_cancellable_service`] when owner
+    /// cancellation may drop the future immediately.
     ///
     /// # Errors
     ///
@@ -80,5 +84,17 @@ impl TaskSpawner {
         F: Future<Output = ()> + Send + 'static,
     {
         self.task_group.spawn_service(name, future)
+    }
+
+    /// Registers a service that exits when either its future completes or its owner is cancelled.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the parent group is shutting down or closed.
+    pub fn spawn_cancellable_service<F>(&self, name: impl Into<Arc<str>>, future: F) -> RuntimeResult<TaskId>
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        self.task_group.spawn_cancellable_service(name, future)
     }
 }

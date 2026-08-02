@@ -160,11 +160,10 @@ impl MQAdminUtils {
         let cluster_info = default_mq_admin_ext.examine_broker_cluster_info().await?;
         if cluster_info.broker_addr_table.is_some() {
             client_metadata.refresh_cluster_info(Some(&cluster_info));
-            let keys = {
-                let addr_table = client_metadata.broker_addr_table();
-                let addr_table = addr_table.read();
-                addr_table.keys().cloned().collect::<Vec<CheetahString>>()
-            };
+            let keys = client_metadata
+                .broker_addr_snapshot()
+                .into_keys()
+                .collect::<Vec<CheetahString>>();
             for broker in keys {
                 let addr = client_metadata.find_master_broker_addr(&broker);
                 if let Some(addr) = &addr {

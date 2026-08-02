@@ -416,7 +416,6 @@ impl TransportListener {
             ) else {
                 continue;
             };
-            let session_operation = OperationContext::without_deadline(TaskKind::Service);
             let session_group = self.task_group.clone();
             let tls = self.tls.clone();
             let admission = admission.clone();
@@ -428,7 +427,7 @@ impl TransportListener {
             let telemetry = self.telemetry.clone();
             let spawn_group = session_group.clone();
             if spawn_group
-                .spawn_operation(&session_operation, "rocketmq.transport.session", async move {
+                .spawn_service("rocketmq.transport.session", async move {
                     let _connection_permit = connection_permit;
                     let handshake_cancellation = session_group.cancellation_token();
                     let negotiated = tokio::select! {
@@ -508,75 +507,82 @@ async fn run_framed_session<H>(
     let reader_cancellation = CancellationToken::new();
     let reader_shutdown = reader_cancellation.clone();
     let writer_group = task_group.clone();
-    let writer_task_id =
-        match writer_group.spawn_operation(&writer_operation, "rocketmq.transport.session.writer", async move {
-            while let Some(next) = writes.recv().await {
-                match next.operation {
-                    WriterOperation::Send(payload) => {
-                        let started_at = next
-                            .queue_id
-                            .map(|id| writer_task_diagnostics.start_write(id))
-                            .unwrap_or_else(std::time::Instant::now);
-                        let completion = next.completion;
-                        let deadline = next.deadline;
-                        let target = next.target;
-                        let progress = next.progress;
-                        let deadline_expired = deadline.is_some_and(|deadline| deadline.is_expired());
-                        let result = if deadline_expired {
-                            Err(RocketMQError::network_deadline_exceeded_before_send(target))
-                        } else {
-                            if let Some(progress) = progress.as_ref() {
-                                progress.start_write();
-                            }
-                            payload
-                                .write_to(&mut frame_writer)
-                                .await
-                                .map_err(|error| RocketMQError::network_connection_failed(target, error.to_string()))
-                        };
-                        if result.is_ok() {
-                            record_transport_write(payload.encoded_len());
+    let writer_cancellation = writer_operation.cancellation_token();
+    let writer_loop = async move {
+        while let Some(next) = writes.recv().await {
+            match next.operation {
+                WriterOperation::Send(payload) => {
+                    let started_at = next
+                        .queue_id
+                        .map(|id| writer_task_diagnostics.start_write(id))
+                        .unwrap_or_else(std::time::Instant::now);
+                    let completion = next.completion;
+                    let deadline = next.deadline;
+                    let target = next.target;
+                    let progress = next.progress;
+                    let deadline_expired = deadline.is_some_and(|deadline| deadline.is_expired());
+                    let result = if deadline_expired {
+                        Err(RocketMQError::network_deadline_exceeded_before_send(target))
+                    } else {
+                        if let Some(progress) = progress.as_ref() {
+                            progress.start_write();
                         }
-                        writer_task_diagnostics.finish_write(started_at, result.is_ok(), deadline_expired);
-                        let poisoned = frame_writer.is_poisoned();
-                        if poisoned {
-                            let _ = writer_state.send(ConnectionState::Degraded);
-                        }
-                        drop(next.permit);
-                        let _ = completion.send(result);
-                        if poisoned {
-                            writes.close();
-                            let _ = frame_writer.shutdown().await;
-                            while let Some(pending) = writes.recv().await {
-                                if let Some(id) = pending.queue_id {
-                                    let started_at = writer_task_diagnostics.start_write(id);
-                                    writer_task_diagnostics.finish_write(started_at, false, false);
-                                }
-                                let target = match pending.operation {
-                                    WriterOperation::Send(_) => pending.target,
-                                    WriterOperation::Close => "transport-session-writer".to_string(),
-                                };
-                                drop(pending.permit);
-                                let _ = pending.completion.send(Err(RocketMQError::network_connection_failed(
-                                    target,
-                                    "connection writer is poisoned by a previous frame failure",
-                                )));
-                            }
-                            let _ = writer_state.send(ConnectionState::Closed);
-                            reader_shutdown.cancel();
-                            break;
-                        }
+                        payload
+                            .write_to(&mut frame_writer)
+                            .await
+                            .map_err(|error| RocketMQError::network_connection_failed(target, error.to_string()))
+                    };
+                    if result.is_ok() {
+                        record_transport_write(payload.encoded_len());
                     }
-                    WriterOperation::Close => {
-                        let result = frame_writer.shutdown().await.map_err(Into::into);
-                        let _ = next.completion.send(result);
+                    writer_task_diagnostics.finish_write(started_at, result.is_ok(), deadline_expired);
+                    let poisoned = frame_writer.is_poisoned();
+                    if poisoned {
+                        let _ = writer_state.send(ConnectionState::Degraded);
+                    }
+                    drop(next.permit);
+                    let _ = completion.send(result);
+                    if poisoned {
+                        writes.close();
+                        let _ = frame_writer.shutdown().await;
+                        while let Some(pending) = writes.recv().await {
+                            if let Some(id) = pending.queue_id {
+                                let started_at = writer_task_diagnostics.start_write(id);
+                                writer_task_diagnostics.finish_write(started_at, false, false);
+                            }
+                            let target = match pending.operation {
+                                WriterOperation::Send(_) => pending.target,
+                                WriterOperation::Close => "transport-session-writer".to_string(),
+                            };
+                            drop(pending.permit);
+                            let _ = pending.completion.send(Err(RocketMQError::network_connection_failed(
+                                target,
+                                "connection writer is poisoned by a previous frame failure",
+                            )));
+                        }
+                        let _ = writer_state.send(ConnectionState::Closed);
+                        reader_shutdown.cancel();
                         break;
                     }
                 }
+                WriterOperation::Close => {
+                    let result = frame_writer.shutdown().await.map_err(Into::into);
+                    let _ = next.completion.send(result);
+                    break;
+                }
             }
-        }) {
-            Ok(writer_task_id) => writer_task_id,
-            Err(_) => return,
-        };
+        }
+    };
+    let writer_task_id = match writer_group.spawn("rocketmq.transport.session.writer", TaskKind::Worker, async move {
+        tokio::select! {
+            biased;
+            () = writer_cancellation.cancelled() => {}
+            () = writer_loop => {}
+        }
+    }) {
+        Ok(writer_task_id) => writer_task_id,
+        Err(_) => return,
+    };
     let session = SessionHandle {
         session_id,
         local_addr,
@@ -901,13 +907,12 @@ impl TransportServer {
                     drop(stream);
                     continue;
                 };
-                let session_operation = OperationContext::without_deadline(TaskKind::Service);
                 let session_group = server.service_context.task_group().clone();
                 let session = server.clone();
                 let active_session = ActiveSessionGuard::new(server.clone());
                 let spawn_group = session_group.clone();
                 if spawn_group
-                    .spawn_operation(&session_operation, "rocketmq.transport.session", async move {
+                    .spawn_service("rocketmq.transport.session", async move {
                         let _active_session = active_session;
                         let _connection_permit = connection_permit;
                         session
@@ -1029,6 +1034,11 @@ mod retirement_tests {
         sender: std::sync::Mutex<Option<oneshot::Sender<SessionHandle>>>,
     }
 
+    struct ObserveSessionRetirement {
+        connected: std::sync::Mutex<Option<oneshot::Sender<SessionHandle>>>,
+        disconnected: std::sync::Mutex<Option<oneshot::Sender<()>>>,
+    }
+
     impl ConnectionHandler for CaptureSession {
         fn connected(&self, session: SessionHandle) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
             Box::pin(async move {
@@ -1045,6 +1055,84 @@ mod retirement_tests {
         ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
             Box::pin(async {})
         }
+    }
+
+    impl ConnectionHandler for ObserveSessionRetirement {
+        fn connected(&self, session: SessionHandle) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+            Box::pin(async move {
+                if let Some(sender) = self.connected.lock().expect("connected signal lock").take() {
+                    let _ = sender.send(session);
+                }
+            })
+        }
+
+        fn command(
+            &self,
+            _session: SessionHandle,
+            _command: RemotingCommand,
+        ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+            Box::pin(async {})
+        }
+
+        fn disconnected(&self, _session: SessionHandle) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+            Box::pin(async move {
+                if let Some(sender) = self.disconnected.lock().expect("disconnected signal lock").take() {
+                    let _ = sender.send(());
+                }
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn owner_cancellation_runs_disconnected_and_retires_the_session() {
+        let runtime = RuntimeContext::from_current("transport-owner-cancellation-retirement-test");
+        let service = runtime.service_context("transport-owner-cancellation-retirement");
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind listener");
+        let addr = listener.local_addr().expect("listener address");
+        let tls = TlsServerRuntime::initialize_with_service_context(TlsConfig::default(), &service)
+            .await
+            .expect("initialize TLS runtime");
+        let (connected_tx, connected_rx) = oneshot::channel();
+        let (disconnected_tx, disconnected_rx) = oneshot::channel();
+        let handler = Arc::new(ObserveSessionRetirement {
+            connected: std::sync::Mutex::new(Some(connected_tx)),
+            disconnected: std::sync::Mutex::new(Some(disconnected_tx)),
+        });
+        let transport = TransportListener::new(
+            listener,
+            service.task_group().clone(),
+            tls,
+            Arc::new(AdmissionController::new(AdmissionLimits::default())),
+            Duration::from_secs(1),
+        )
+        .with_idle_timeout(Duration::from_secs(30));
+        let server = tokio::spawn(transport.run(handler));
+
+        let mut client = TcpStream::connect(addr).await.expect("connect client");
+        client.write_all(&[0]).await.expect("start plaintext session");
+        let session = tokio::time::timeout(Duration::from_secs(1), connected_rx)
+            .await
+            .expect("session should connect")
+            .expect("connected signal");
+
+        service.task_group().cancel();
+
+        tokio::time::timeout(Duration::from_secs(1), disconnected_rx)
+            .await
+            .expect("owner cancellation must run disconnected")
+            .expect("disconnected signal");
+        tokio::time::timeout(Duration::from_secs(1), server)
+            .await
+            .expect("listener should stop accepting")
+            .expect("listener task")
+            .expect("listener result");
+        let report = service.task_group().shutdown(Duration::from_secs(1)).await;
+
+        assert!(report.is_healthy(), "{}", report.to_json());
+        assert_eq!(report.aborted, 0, "{}", report.to_json());
+        assert_eq!(session.connection().state(), crate::connection::ConnectionState::Closed);
+        let mut byte = [0_u8; 1];
+        assert_eq!(client.read(&mut byte).await.expect("read retired socket"), 0);
     }
 
     #[tokio::test]

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -79,6 +80,45 @@ impl ConsumerGroupInfo {
         None
     }
 
+    /// Returns an owned, weakly consistent snapshot of current subscriptions.
+    ///
+    /// Concurrent updates may be observed per entry; callers that require one atomic transition
+    /// must coordinate that transition through the consumer manager.
+    pub fn subscription_snapshot(&self) -> HashMap<CheetahString, Arc<SubscriptionData>> {
+        self.subscription_table
+            .iter()
+            .map(|entry| (entry.key().clone(), entry.value().clone()))
+            .collect()
+    }
+
+    /// Returns the number of current subscriptions.
+    pub fn subscription_count(&self) -> usize {
+        self.subscription_table.len()
+    }
+
+    /// Returns whether the group has no current subscriptions.
+    pub fn subscriptions_is_empty(&self) -> bool {
+        self.subscription_table.is_empty()
+    }
+
+    /// Inserts or replaces one subscription through the group boundary.
+    pub fn upsert_subscription(&self, subscription: SubscriptionData) -> Option<Arc<SubscriptionData>> {
+        self.subscription_table
+            .insert(subscription.topic.clone(), Arc::new(subscription))
+    }
+
+    /// Removes one subscription through the group boundary.
+    pub fn remove_subscription(&self, topic: &str) -> Option<Arc<SubscriptionData>> {
+        self.subscription_table
+            .remove(topic)
+            .map(|(_, subscription)| subscription)
+    }
+
+    /// Returns the shared mutable subscription table for legacy integrations.
+    ///
+    /// Use the owned snapshot, query, and controlled command methods instead. This compatibility
+    /// API will be removed in 2.0.0.
+    #[deprecated(note = "use subscription_snapshot/query/command methods; removal in 2.0.0")]
     pub fn get_subscription_table(&self) -> Arc<DashMap<CheetahString, Arc<SubscriptionData>>> {
         Arc::clone(&self.subscription_table)
     }
@@ -87,6 +127,41 @@ impl ConsumerGroupInfo {
         self.channel_info_table.get(channel).map(|item| item.value().clone())
     }
 
+    /// Returns an owned, weakly consistent snapshot of channel registrations.
+    ///
+    /// Concurrent updates may be observed per entry. The returned values never retain map guards.
+    pub fn channel_info_snapshot(&self) -> Vec<(Channel, ClientChannelInfo)> {
+        self.channel_info_table
+            .iter()
+            .map(|entry| (entry.key().clone(), entry.value().clone()))
+            .collect()
+    }
+
+    /// Returns the number of registered channels.
+    pub fn channel_count(&self) -> usize {
+        self.channel_info_table.len()
+    }
+
+    /// Returns whether the group has no registered channels.
+    pub fn channels_is_empty(&self) -> bool {
+        self.channel_info_table.is_empty()
+    }
+
+    /// Inserts or replaces one channel registration using its channel identity as the key.
+    pub fn upsert_channel_info(&self, info: ClientChannelInfo) -> Option<ClientChannelInfo> {
+        self.channel_info_table.insert(info.channel().clone(), info)
+    }
+
+    /// Removes one channel registration through the group boundary.
+    pub fn remove_channel(&self, channel: &Channel) -> Option<ClientChannelInfo> {
+        self.channel_info_table.remove(channel).map(|(_, info)| info)
+    }
+
+    /// Returns the shared mutable channel table for legacy integrations.
+    ///
+    /// Use the owned snapshot, query, and controlled command methods instead. This compatibility
+    /// API will be removed in 2.0.0.
+    #[deprecated(note = "use channel_info_snapshot/query/command methods; removal in 2.0.0")]
     pub fn get_channel_info_table(&self) -> Arc<DashMap<Channel, ClientChannelInfo>> {
         Arc::clone(&self.channel_info_table)
     }
@@ -331,5 +406,22 @@ mod tests {
         sub_list.insert(subscription_data);
 
         assert!(consumer_group_info.update_subscription(&sub_list));
+    }
+
+    #[test]
+    fn snapshots_are_owned_and_commands_preserve_table_invariants() {
+        let info = ConsumerGroupInfo::with_group_name("test_group");
+        let subscription = SubscriptionData {
+            topic: "topic".into(),
+            ..Default::default()
+        };
+        info.upsert_subscription(subscription.clone());
+
+        let mut snapshot = info.subscription_snapshot();
+        snapshot.clear();
+        assert_eq!(info.subscription_count(), 1);
+        assert_eq!(info.find_subscription_data(&subscription.topic), Some(subscription));
+        assert!(info.remove_subscription("topic").is_some());
+        assert!(info.subscriptions_is_empty());
     }
 }

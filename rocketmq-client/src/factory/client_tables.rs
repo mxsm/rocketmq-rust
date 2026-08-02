@@ -42,53 +42,24 @@ use crate::types::TopicName;
 
 // ===== Table Type Aliases =====
 
-/// Container for registered producers, indexed by producer group name.
-pub type ProducerTable = Arc<DashMap<ProducerGroupName, MQProducerInnerImpl>>;
-
-/// Container for registered consumers, indexed by consumer group name.
-pub type ConsumerTable = Arc<DashMap<ConsumerGroupName, MQConsumerInnerImpl>>;
-
-/// Container for registered admin extensions, indexed by admin group name.
-pub type AdminExtTable = Arc<DashMap<AdminGroupName, ()>>;
-
-/// Topic routing information table.
-/// Maps topic name to its routing data (broker addresses, queue configuration, etc.).
-pub type TopicRouteTable = Arc<DashMap<TopicName, TopicRouteData>>;
-
-/// Monotonic route snapshot versions, indexed by topic name.
-pub type TopicRouteVersionTable = Arc<DashMap<TopicName, u64>>;
-
-/// Broker address route reference counts, used for O(1) heartbeat failure checks.
-pub type BrokerAddrRouteIndex = Arc<DashMap<BrokerAddr, usize>>;
-
-/// Topic endpoint mapping table for static topics.
-/// Maps topic name to a mapping of message queues to their broker names.
-pub type TopicEndPointsTable = Arc<DashMap<TopicName, HashMap<MessageQueue, BrokerName>>>;
-
-/// Broker address table.
-/// Maps broker name to a mapping of broker ID to broker address.
-/// Broker ID 0 is master, others are slaves.
-pub type BrokerAddrTable = Arc<DashMap<BrokerName, HashMap<u64, BrokerAddr>>>;
-
-/// Broker version table.
-/// Maps broker name to a mapping of broker address to version code.
-pub type BrokerVersionTable = Arc<DashMap<BrokerName, HashMap<BrokerAddr, i32>>>;
-
-/// Broker heartbeat fingerprint cache for HeartbeatV2 protocol.
-/// Maps broker address to the last heartbeat fingerprint value.
-/// Used to optimize heartbeat by sending minimal data when fingerprint unchanged.
-pub type BrokerHeartbeatFingerprintTable = Arc<DashMap<BrokerAddr, i32>>;
-
-/// Set of brokers that support HeartbeatV2 protocol.
-/// Maps broker address to unit value (used as a set).
-pub type BrokerSupportV2HeartbeatSet = Arc<DashMap<BrokerAddr, ()>>;
+pub(crate) type SharedProducerTable = Arc<DashMap<ProducerGroupName, MQProducerInnerImpl>>;
+pub(crate) type SharedConsumerTable = Arc<DashMap<ConsumerGroupName, MQConsumerInnerImpl>>;
+pub(crate) type SharedAdminExtTable = Arc<DashMap<AdminGroupName, ()>>;
+pub(crate) type SharedTopicRouteTable = Arc<DashMap<TopicName, TopicRouteData>>;
+pub(crate) type SharedTopicRouteVersionTable = Arc<DashMap<TopicName, u64>>;
+pub(crate) type SharedBrokerAddrRouteIndex = Arc<DashMap<BrokerAddr, usize>>;
+pub(crate) type SharedTopicEndPointsTable = Arc<DashMap<TopicName, HashMap<MessageQueue, BrokerName>>>;
+pub(crate) type SharedBrokerAddrTable = Arc<DashMap<BrokerName, HashMap<u64, BrokerAddr>>>;
+pub(crate) type SharedBrokerVersionTable = Arc<DashMap<BrokerName, HashMap<BrokerAddr, i32>>>;
+pub(crate) type SharedBrokerHeartbeatFingerprintTable = Arc<DashMap<BrokerAddr, i32>>;
+pub(crate) type SharedBrokerSupportV2HeartbeatSet = Arc<DashMap<BrokerAddr, ()>>;
 
 /// Shared route-refresh state used to shard periodic refreshes and expose counters.
 #[derive(Default)]
 pub struct TopicRouteRefreshState {
     pub periodic_cursor: AtomicUsize,
-    pub versions: TopicRouteVersionTable,
-    pub broker_addr_route_index: BrokerAddrRouteIndex,
+    pub versions: SharedTopicRouteVersionTable,
+    pub broker_addr_route_index: SharedBrokerAddrRouteIndex,
     pub metrics: TopicRouteRefreshMetrics,
 }
 

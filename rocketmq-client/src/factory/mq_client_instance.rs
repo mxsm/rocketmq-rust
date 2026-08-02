@@ -203,23 +203,23 @@ pub struct MQClientInstance {
      * The container of the producer in the current client. The key is the name of
      * producerGroup.
      */
-    producer_table: ProducerTable,
+    producer_table: SharedProducerTable,
     producer_registration_admission: StdMutex<bool>,
     producer_registry_transition: Mutex<()>,
     /**
      * The container of the consumer in the current client. The key is the name of
      * consumer_group.
      */
-    consumer_table: ConsumerTable,
+    consumer_table: SharedConsumerTable,
     /**
      * The container of the adminExt in the current client. The key is the name of
      * adminExtGroup.
      */
-    admin_ext_table: AdminExtTable,
+    admin_ext_table: SharedAdminExtTable,
     pub(crate) mq_client_api_impl: ArcSwapOption<MQClientAPIImpl>,
     pub(crate) mq_admin_impl: Arc<MQAdminImpl>,
-    pub(crate) topic_route_table: TopicRouteTable,
-    topic_end_points_table: TopicEndPointsTable,
+    pub(crate) topic_route_table: SharedTopicRouteTable,
+    topic_end_points_table: SharedTopicEndPointsTable,
     lock_namesrv: Arc<RocketMQTokioMutex<()>>,
     route_update_coordinator: RouteUpdateCoordinator,
     lock_heartbeat: Arc<RocketMQTokioMutex<()>>,
@@ -229,14 +229,14 @@ pub struct MQClientInstance {
     pub(crate) pull_message_service: Arc<PullMessageService>,
     rebalance_service: RebalanceService,
     pub(crate) default_producer: Mutex<DefaultMQProducer>,
-    broker_addr_table: BrokerAddrTable,
-    broker_version_table: BrokerVersionTable,
+    broker_addr_table: SharedBrokerAddrTable,
+    broker_version_table: SharedBrokerVersionTable,
     send_heartbeat_times_total: Arc<AtomicI64>,
     scheduled_task_manager: ScheduledTaskManager,
     /// HeartbeatV2: Cache of broker address -> last fingerprint
-    broker_heartbeat_fingerprint_table: BrokerHeartbeatFingerprintTable,
+    broker_heartbeat_fingerprint_table: SharedBrokerHeartbeatFingerprintTable,
     /// HeartbeatV2: Set of brokers that support V2 protocol
-    broker_support_v2_heartbeat_set: BrokerSupportV2HeartbeatSet,
+    broker_support_v2_heartbeat_set: SharedBrokerSupportV2HeartbeatSet,
     route_refresh_state: Arc<TopicRouteRefreshState>,
     consumer_stats_manager: ConsumerStatsManager,
     connection_event_shutdown: CancellationToken,
@@ -1998,6 +1998,60 @@ impl MQClientInstance {
             .collect()
     }
 
+    /// Returns an owned, deterministically ordered snapshot of registered producer groups.
+    pub fn registered_producer_groups(&self) -> Vec<CheetahString> {
+        let mut groups = self
+            .producer_table
+            .iter()
+            .filter(|entry| entry.value().is_alive())
+            .map(|entry| entry.key().clone())
+            .collect::<Vec<_>>();
+        groups.sort_unstable();
+        groups
+    }
+
+    /// Returns an owned, deterministically ordered snapshot of registered consumer groups.
+    pub fn registered_consumer_groups(&self) -> Vec<CheetahString> {
+        let mut groups = self
+            .consumer_table
+            .iter()
+            .map(|entry| entry.key().clone())
+            .collect::<Vec<_>>();
+        groups.sort_unstable();
+        groups
+    }
+
+    /// Returns an owned, deterministically ordered snapshot of registered admin groups.
+    pub fn registered_admin_groups(&self) -> Vec<CheetahString> {
+        let mut groups = self
+            .admin_ext_table
+            .iter()
+            .map(|entry| entry.key().clone())
+            .collect::<Vec<_>>();
+        groups.sort_unstable();
+        groups
+    }
+
+    /// Returns an owned, weakly consistent snapshot of topic route data.
+    ///
+    /// Concurrent per-topic refreshes may be observed independently; the snapshot does not retain
+    /// any table guards.
+    pub fn topic_route_snapshot(&self) -> HashMap<CheetahString, TopicRouteData> {
+        self.topic_route_table
+            .iter()
+            .map(|entry| (entry.key().clone(), entry.value().clone()))
+            .collect()
+    }
+
+    /// Returns an owned, weakly consistent snapshot of broker addresses keyed by broker name and
+    /// broker id. Concurrent per-broker refreshes may be observed independently.
+    pub fn broker_addr_snapshot(&self) -> HashMap<CheetahString, HashMap<u64, CheetahString>> {
+        self.broker_addr_table
+            .iter()
+            .map(|entry| (entry.key().clone(), entry.value().clone()))
+            .collect()
+    }
+
     fn broker_address_snapshot(&self, master_only: bool) -> Vec<(u64, CheetahString, CheetahString)> {
         self.broker_addr_table
             .iter()
@@ -2686,6 +2740,10 @@ mod tests {
         assert!(instance.register_admin_ext("admin-group").await);
         assert!(!instance.register_admin_ext("admin-group").await);
         assert!(instance.admin_ext_table.contains_key("admin-group"));
+        assert_eq!(
+            instance.registered_admin_groups(),
+            vec![CheetahString::from_static_str("admin-group")]
+        );
 
         instance.unregister_admin_ext("admin-group").await;
 
@@ -2721,6 +2779,32 @@ mod tests {
             .expect("the original live producer should stay registered");
         assert!(selected.points_to_same_producer(&same));
         assert_eq!(instance.producer_table.len(), 1);
+        assert_eq!(
+            instance.registered_producer_groups(),
+            vec![CheetahString::from_static_str("producer-group")]
+        );
+    }
+
+    #[tokio::test]
+    async fn broker_and_route_snapshots_do_not_expose_live_tables() {
+        let instance = test_instance(ClientConfig::default(), "owned-table-snapshots");
+        let broker = CheetahString::from_static_str("broker-a");
+        instance.broker_addr_table.insert(
+            broker.clone(),
+            HashMap::from([(mix_all::MASTER_ID, CheetahString::from_static_str("127.0.0.1:10911"))]),
+        );
+        let topic = CheetahString::from_static_str("topic-a");
+        instance
+            .topic_route_table
+            .insert(topic.clone(), TopicRouteData::default());
+
+        let mut broker_snapshot = instance.broker_addr_snapshot();
+        let mut route_snapshot = instance.topic_route_snapshot();
+        broker_snapshot.clear();
+        route_snapshot.clear();
+
+        assert!(instance.broker_addr_table.contains_key(&broker));
+        assert!(instance.topic_route_table.contains_key(&topic));
     }
 
     #[tokio::test]

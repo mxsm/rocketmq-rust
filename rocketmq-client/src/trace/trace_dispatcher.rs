@@ -57,7 +57,9 @@ pub enum Type {
 /// 2. Call [`start`](TraceDispatcher::start) to initialize and connect
 /// 3. Call [`append`](TraceDispatcher::append) to add trace contexts
 /// 4. Call [`flush`](TraceDispatcher::flush) periodically or before shutdown
-/// 5. Call [`shutdown`](TraceDispatcher::shutdown) for graceful cleanup
+/// 5. Explicitly shut down the dispatcher for graceful cleanup. Async
+///    implementations should expose and document a non-blocking async shutdown
+///    entry point for callers running on a Tokio worker.
 pub trait TraceDispatcher: Any {
     /// Starts the trace dispatcher and establishes connection to the trace backend.
     ///
@@ -128,6 +130,8 @@ pub trait TraceDispatcher: Any {
     ///
     /// After calling this method, the dispatcher should not be used again.
     /// Any subsequent calls to other methods may result in errors or panics.
+    /// Dropping a dispatcher is only a cancellation fallback and is not
+    /// required to flush pending trace data.
     fn shutdown(&self);
 
     /// Returns a reference to this dispatcher as an `Any` trait object.

@@ -13,6 +13,8 @@
 // limitations under the License.
 
 pub use crate::semantic::metrics::RPC_LATENCY;
+pub use crate::semantic::metrics::TRANSPORT_LIFECYCLE_EVENTS_TOTAL;
+pub use crate::semantic::metrics::TRANSPORT_LIFECYCLE_LISTENER_LATENCY;
 pub use crate::semantic::metrics::TRANSPORT_NETWORK_BYTES;
 pub use crate::semantic::metrics::TRANSPORT_REQUESTS_TOTAL;
 pub use crate::semantic::metrics::TRANSPORT_REQUEST_LATENCY;
@@ -138,6 +140,12 @@ impl RemotingMetrics {
     pub fn record_network_bytes(&self, _bytes: u64) {}
 
     #[inline]
+    pub fn record_lifecycle_event(&self, _event: &'static str, _result: &'static str) {}
+
+    #[inline]
+    pub fn record_lifecycle_listener_latency(&self, _latency_ms: u64, _event: &'static str) {}
+
+    #[inline]
     pub fn record_rpc_latency(
         &self,
         _latency_ms: u64,
@@ -162,6 +170,8 @@ struct RemotingMetricInstruments {
     requests_total: opentelemetry::metrics::Counter<u64>,
     request_latency: opentelemetry::metrics::Histogram<u64>,
     network_bytes: opentelemetry::metrics::Counter<u64>,
+    lifecycle_events: opentelemetry::metrics::Counter<u64>,
+    lifecycle_listener_latency: opentelemetry::metrics::Histogram<u64>,
     rpc_latency: opentelemetry::metrics::Histogram<u64>,
 }
 
@@ -231,6 +241,35 @@ impl RemotingMetrics {
     }
 
     #[inline]
+    pub fn record_lifecycle_event(&self, event: &'static str, result: &'static str) {
+        if !self.is_active() {
+            return;
+        }
+        if let Some(instruments) = &self.instruments {
+            instruments.lifecycle_events.add(
+                1,
+                &[
+                    opentelemetry::KeyValue::new(crate::semantic::labels::EVENT, event),
+                    opentelemetry::KeyValue::new(crate::semantic::labels::RESULT, result),
+                ],
+            );
+        }
+    }
+
+    #[inline]
+    pub fn record_lifecycle_listener_latency(&self, latency_ms: u64, event: &'static str) {
+        if !self.is_active() {
+            return;
+        }
+        if let Some(instruments) = &self.instruments {
+            instruments.lifecycle_listener_latency.record(
+                latency_ms,
+                &[opentelemetry::KeyValue::new(crate::semantic::labels::EVENT, event)],
+            );
+        }
+    }
+
+    #[inline]
     pub fn record_rpc_latency(
         &self,
         latency_ms: u64,
@@ -277,6 +316,18 @@ impl RemotingMetricInstruments {
             .with_unit("By")
             .build();
 
+        let lifecycle_events = meter
+            .u64_counter(TRANSPORT_LIFECYCLE_EVENTS_TOTAL)
+            .with_description("Connection lifecycle events by enqueue and delivery result")
+            .with_unit("{event}")
+            .build();
+
+        let lifecycle_listener_latency = meter
+            .u64_histogram(TRANSPORT_LIFECYCLE_LISTENER_LATENCY)
+            .with_description("Connection lifecycle listener callback latency")
+            .with_unit("ms")
+            .build();
+
         let rpc_latency = meter
             .u64_histogram(RPC_LATENCY)
             .with_description("Rpc latency")
@@ -287,6 +338,8 @@ impl RemotingMetricInstruments {
             requests_total,
             request_latency,
             network_bytes,
+            lifecycle_events,
+            lifecycle_listener_latency,
             rpc_latency,
         }
     }
@@ -327,6 +380,8 @@ mod tests {
         metrics.record_requests_total(1);
         metrics.record_request_latency(3);
         metrics.record_network_bytes(256);
+        metrics.record_lifecycle_event("connected", "queued");
+        metrics.record_lifecycle_listener_latency(2, "connected");
         metrics.record_rpc_latency(5, 10, 0, false, RESULT_SUCCESS);
     }
 }

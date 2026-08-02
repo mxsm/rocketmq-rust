@@ -57,7 +57,7 @@ impl BrokerRuntime {
                 metrics_manager.register_observables(
                     Some(move || broker_fast_failure.pending_count_snapshot()),
                     move || broker_permission,
-                    move || i64::try_from(topic_config_manager.topic_config_table().len()).unwrap_or(i64::MAX),
+                    move || i64::try_from(topic_config_manager.topic_count()).unwrap_or(i64::MAX),
                     move || i64::try_from(subscription_group_manager.group_count()).unwrap_or(i64::MAX),
                     move || {
                         producer_manager

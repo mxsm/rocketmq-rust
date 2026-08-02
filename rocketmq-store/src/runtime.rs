@@ -24,6 +24,7 @@ use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskId;
 use rocketmq_runtime::TaskKind;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Clone)]
 pub(crate) struct StoreRuntimeScope {
@@ -118,6 +119,10 @@ impl StoreRuntimeScope {
 
     pub(crate) fn task_group(&self, name: &'static str) -> TaskGroup {
         self.service_context.component(name).task_group().clone()
+    }
+
+    pub(crate) fn child_cancellation_token(&self) -> CancellationToken {
+        self.service_context.task_group().cancellation_token().child_token()
     }
 
     pub(crate) fn blocking_snapshot(&self) -> BlockingExecutorSnapshot {

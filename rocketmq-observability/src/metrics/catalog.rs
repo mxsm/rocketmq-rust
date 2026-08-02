@@ -115,6 +115,8 @@ const REMOTING_RPC_LABELS: &[&str] = &[
     labels::IS_LONG_POLLING,
     labels::RESULT,
 ];
+const REMOTING_LIFECYCLE_LABELS: &[&str] = &[labels::EVENT, labels::RESULT];
+const REMOTING_LIFECYCLE_LISTENER_LABELS: &[&str] = &[labels::EVENT];
 const STORE_STORAGE_LABELS: &[&str] = &[labels::STORAGE_TYPE, labels::STORAGE_MEDIUM];
 const STORE_TOPIC_LABELS: &[&str] = &[labels::STORAGE_TYPE, labels::STORAGE_MEDIUM, labels::TOPIC];
 const STORE_MEMORY_LOCK_CATEGORY_LABELS: &[&str] = &[labels::CATEGORY];
@@ -894,6 +896,20 @@ pub const RUST_METRICS: &[MetricDescriptor] = &[
         source: MetricSource::Remoting,
     },
     MetricDescriptor {
+        name: metrics::TRANSPORT_LIFECYCLE_EVENTS_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{event}",
+        labels: REMOTING_LIFECYCLE_LABELS,
+        source: MetricSource::Remoting,
+    },
+    MetricDescriptor {
+        name: metrics::TRANSPORT_LIFECYCLE_LISTENER_LATENCY,
+        kind: MetricKind::Histogram,
+        unit: "ms",
+        labels: REMOTING_LIFECYCLE_LISTENER_LABELS,
+        source: MetricSource::Remoting,
+    },
+    MetricDescriptor {
         name: metrics::CLIENT_SEND_TOTAL,
         kind: MetricKind::Counter,
         unit: "{message}",
@@ -1377,8 +1393,8 @@ mod tests {
             .collect::<HashSet<_>>();
 
         assert_eq!(JAVA_METRICS.len(), 94);
-        assert_eq!(RUST_METRICS.len(), 59);
-        assert_eq!(combined.len(), 153, "duplicate metric names across catalogs");
+        assert_eq!(RUST_METRICS.len(), 61);
+        assert_eq!(combined.len(), 155, "duplicate metric names across catalogs");
     }
 
     #[test]

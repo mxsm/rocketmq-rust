@@ -77,7 +77,10 @@ impl BrokerRuntime {
         let factory_config = StoreFactoryConfig::new(
             Arc::clone(&message_store_config),
             store_runtime_config,
-            self.composition.state.topic_config_manager().topic_config_table(),
+            self.composition
+                .state
+                .topic_config_manager()
+                .shared_topic_config_table(),
             self.composition.state.broker_stats_manager.clone(),
             false,
             self.composition.state.store_telemetry.clone(),
@@ -188,7 +191,11 @@ impl BrokerRuntime {
     #[inline(always)]
     pub fn register_message_store_hook(&mut self) {
         let config = self.composition.state.message_store_config_arc();
-        let topic_config_table = self.composition.state.topic_config_manager().topic_config_table();
+        let topic_config_table = self
+            .composition
+            .state
+            .topic_config_manager()
+            .shared_topic_config_table();
         let timer_message_store = self.composition.state.timer_message_store().cloned();
         let schedule_message_service = self.composition.state.schedule_message_service().clone();
         let put_message_preflight = self

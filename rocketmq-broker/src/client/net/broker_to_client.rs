@@ -306,12 +306,11 @@ impl Broker2Client {
         // Notify all consumers in the group
         let consumer_group_info = broker_inner.consumer_manager().get_consumer_group_info(group);
         if let Some(consumer_group_info) = consumer_group_info {
-            let channel_info_table = consumer_group_info.get_channel_info_table();
-            if !channel_info_table.is_empty() {
-                for entry in channel_info_table.iter() {
-                    let version = entry.value().version();
+            let channel_info_snapshot = consumer_group_info.channel_info_snapshot();
+            if !channel_info_snapshot.is_empty() {
+                for (channel, channel_info) in channel_info_snapshot {
+                    let version = channel_info.version();
                     if version >= MIN_CLIENT_VERSION {
-                        let channel = entry.key().clone();
                         // Java uses timeout=5000ms for oneway
                         if let Err(e) = channel.send_oneway(request.clone(), 5000).await {
                             error!(
@@ -323,7 +322,7 @@ impl Broker2Client {
                                 "[reset-offset] reset offset success. topic={}, group={}, clientId={}",
                                 topic,
                                 group,
-                                entry.value().client_id()
+                                channel_info.client_id()
                             );
                         }
                     } else {
@@ -335,7 +334,7 @@ impl Broker2Client {
                         ));
                         warn!(
                             "[reset-offset] the client does not support this feature. channel={}, version={}",
-                            entry.key().remote_address(),
+                            channel.remote_address(),
                             version_desc
                         );
                         return response;
@@ -393,8 +392,8 @@ impl Broker2Client {
         let mut consumer_status_table: HashMap<CheetahString, HashMap<MessageQueue, i64>> = HashMap::new();
 
         let consumer_group_info = broker_inner.consumer_manager().get_consumer_group_info(group);
-        let channel_info_table = match consumer_group_info {
-            Some(info) => info.get_channel_info_table(),
+        let channel_info_snapshot = match consumer_group_info {
+            Some(info) => info.channel_info_snapshot(),
             None => {
                 result.set_code_ref(ResponseCode::SystemError);
                 result.set_remark_mut(format!("No Any Consumer online in the consumer group: [{}]", group));
@@ -402,15 +401,15 @@ impl Broker2Client {
             }
         };
 
-        if channel_info_table.is_empty() {
+        if channel_info_snapshot.is_empty() {
             result.set_code_ref(ResponseCode::SystemError);
             result.set_remark_mut(format!("No Any Consumer online in the consumer group: [{}]", group));
             return result;
         }
 
-        for entry in channel_info_table.iter() {
-            let version = entry.value().version();
-            let client_id = entry.value().client_id().clone();
+        for (channel, channel_info) in channel_info_snapshot {
+            let version = channel_info.version();
+            let client_id = channel_info.client_id().clone();
 
             if version < MIN_CLIENT_VERSION {
                 let version_desc = RocketMqVersion::from_ordinal(version as u32).name();
@@ -421,7 +420,7 @@ impl Broker2Client {
                 ));
                 warn!(
                     "[get-consumer-status] the client does not support this feature. channel={}, version={}",
-                    entry.key().remote_address(),
+                    channel.remote_address(),
                     version_desc
                 );
                 return result;
@@ -433,7 +432,6 @@ impl Broker2Client {
                 .unwrap_or(true);
 
             if should_query {
-                let channel = entry.key().clone();
                 // Java uses timeout=5000ms
                 match channel.send_wait_response(request.clone(), 5000).await {
                     Ok(response) => {
