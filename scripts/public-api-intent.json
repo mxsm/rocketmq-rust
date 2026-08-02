@@ -6519,6 +6519,15 @@
         },
         {
           "category": "stable",
+          "declaration": "pub use runtime::processor::SessionRequestProcessorAdapter",
+          "identity": "rocketmq-transport/src/lib.rs:pub use runtime::processor::SessionRequestProcessorAdapter",
+          "owner": "transport",
+          "path": "rocketmq-transport/src/lib.rs",
+          "rationale": "deliberate root entry point",
+          "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
           "declaration": "pub use runtime::processor_v2::AdminProcessorExample",
           "identity": "rocketmq-transport/src/lib.rs:pub use runtime::processor_v2::AdminProcessorExample",
           "owner": "transport",
@@ -6896,7 +6905,7 @@
           "removal_condition": "retain while the stable entry point remains supported"
         }
       ],
-      "maximum_exports": 148
+      "maximum_exports": 149
     }
   },
   "policy": "Every deliberate export is classified; additions and count growth fail closed.",

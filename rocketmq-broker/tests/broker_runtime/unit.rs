@@ -35,9 +35,12 @@ use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
 use rocketmq_controller::BrokerHeartbeatManager;
+use rocketmq_controller::ConsensusNode;
 use rocketmq_controller::Controller;
 use rocketmq_controller::ControllerConfig as TestControllerConfig;
 use rocketmq_controller::ControllerManager as TestControllerManager;
+use rocketmq_controller::MembershipChange;
+use rocketmq_controller::MembershipChangeRequest;
 use rocketmq_controller::Node;
 use rocketmq_controller::RaftPeer;
 use rocketmq_controller::StorageBackendType;
@@ -122,6 +125,17 @@ use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::RuntimeContext;
+use rocketmq_security_api::MaintenanceAuthorizationContext;
+use rocketmq_security_api::MaintenanceAuthorizationGrant;
+use rocketmq_security_api::MaintenanceAuthorizer;
+use rocketmq_security_api::MaintenanceCapability;
+use rocketmq_security_api::MaintenancePolicy;
+use rocketmq_security_api::MaintenancePrincipalBinding;
+use rocketmq_security_api::MaintenanceRequestClass;
+use rocketmq_security_api::MaintenanceResourceBudget;
+use rocketmq_security_api::MaintenanceRole;
+use rocketmq_security_api::MaintenanceRoleGrant;
+use rocketmq_security_api::MAINTENANCE_POLICY_SCHEMA_VERSION;
 use rocketmq_store::BrokerReadStore;
 use rocketmq_store::BrokerReplicationStore;
 use rocketmq_store::BrokerStorePort;
@@ -1162,7 +1176,7 @@ accounts:
     assert!(runtime.initial_acl().await);
     let auth_runtime = runtime
         .composition
-        .state
+        .request_pipeline
         .auth_runtime
         .as_ref()
         .expect("auth runtime should be initialized")
@@ -1171,7 +1185,7 @@ accounts:
     tokio::time::timeout(Duration::from_secs(5), runtime.shutdown_basic_service())
         .await
         .expect("broker basic service shutdown should be bounded");
-    assert!(runtime.composition.state.auth_runtime.is_none());
+    assert!(runtime.composition.request_pipeline.auth_runtime.is_none());
 
     let generation = auth_runtime.acl_generation();
     let reload_attempts = auth_runtime.metrics_snapshot().acl_reload_attempts;
@@ -1223,7 +1237,7 @@ accounts:
 
     let auth_runtime = runtime
         .composition
-        .state
+        .request_pipeline
         .auth_runtime
         .as_ref()
         .expect("auth runtime should be initialized")
@@ -2028,6 +2042,45 @@ async fn new_test_controller_manager(
     manager
 }
 
+fn controller_membership_authorization() -> MaintenanceAuthorizationGrant {
+    let policy = MaintenancePolicy {
+        schema_version: MAINTENANCE_POLICY_SCHEMA_VERSION,
+        policy_id: "broker-runtime.controller-membership".to_string(),
+        policy_version: 1,
+        require_authentication: true,
+        require_authorization: true,
+        require_fencing_token: true,
+        max_request_lifetime_millis: 30_000,
+        resource_budget: MaintenanceResourceBudget {
+            max_checkpoint_bytes: 1_024,
+            max_store_members: 3,
+            max_concurrent_operations: 1,
+        },
+        principal_bindings: vec![MaintenancePrincipalBinding {
+            principal: "broker-runtime-release-operator".to_string(),
+            roles: BTreeSet::from([MaintenanceRole::ReleaseOperator]),
+        }],
+        role_grants: vec![MaintenanceRoleGrant {
+            role: MaintenanceRole::ReleaseOperator,
+            capabilities: BTreeSet::from([MaintenanceCapability::ReleaseCheckpoint]),
+        }],
+    };
+    MaintenanceAuthorizer::new(policy.into_validated().expect("valid membership policy"))
+        .authorize(
+            Some(&MaintenanceAuthorizationContext {
+                authentication_enabled: true,
+                authorization_enabled: true,
+                principal: Some("broker-runtime-release-operator".to_string()),
+                request_class: MaintenanceRequestClass::PrivilegedMaintenance,
+                capability: MaintenanceCapability::ReleaseCheckpoint,
+                deadline_unix_millis: current_millis() + 30_000,
+                fencing_token: Some(1),
+            }),
+            current_millis(),
+        )
+        .expect("controller membership authorization")
+}
+
 async fn start_controller_cluster(base_port: u16, root: &Path) -> (Vec<Arc<TestControllerManager>>, Vec<RaftPeer>) {
     let controller_peers = vec![
         RaftPeer {
@@ -2127,36 +2180,64 @@ async fn start_controller_cluster(base_port: u16, root: &Path) -> (Vec<Arc<TestC
         learner_manager
             .set_raft_runtime_tick_enabled(false)
             .expect("disable learner tick during bootstrap");
+        let membership = bootstrap_manager
+            .raft()
+            .consensus_membership()
+            .await
+            .expect("read controller membership before adding learner");
+        let request = MembershipChangeRequest::new(
+            format!("broker-runtime-add-controller-learner-{}", controller_peer.id),
+            membership.version(),
+            MembershipChange::AddLearner {
+                node: ConsensusNode::new(controller_peer.id, raft_peer.addr.to_string())
+                    .expect("valid controller learner"),
+            },
+            "form broker runtime Controller test cluster",
+        )
+        .expect("valid add-learner request");
         bootstrap_manager
             .raft()
-            .add_learner(
-                controller_peer.id,
-                Node {
-                    node_id: controller_peer.id,
-                    rpc_addr: raft_peer.addr.to_string(),
-                },
-                true,
-            )
+            .apply_membership_change(&controller_membership_authorization(), request)
             .await
             .expect("add controller learner");
     }
 
-    let expected_voters = controller_peers.iter().map(|peer| peer.id).collect::<BTreeSet<_>>();
-    match tokio::time::timeout(
-        Duration::from_secs(20),
-        bootstrap_manager.raft().change_membership(expected_voters, false),
-    )
-    .await
-    {
-        Ok(result) => result.expect("promote controller learners to voters"),
-        Err(_) => {
-            panic!(
-                "Timed out promoting controller learners; states={:?}",
-                managers
-                    .iter()
-                    .map(|manager| (manager.is_leader(), manager.raft().has_committed_log().unwrap_or(false)))
-                    .collect::<Vec<_>>()
-            );
+    for controller_peer in controller_peers.iter().skip(1) {
+        let membership = bootstrap_manager
+            .raft()
+            .consensus_membership()
+            .await
+            .expect("read controller membership before promotion");
+        let request = MembershipChangeRequest::new(
+            format!("broker-runtime-promote-controller-voter-{}", controller_peer.id),
+            membership.version(),
+            MembershipChange::PromoteVoter {
+                node_id: controller_peer.id,
+            },
+            "form broker runtime Controller voting set",
+        )
+        .expect("valid promote-voter request");
+        match tokio::time::timeout(
+            Duration::from_secs(20),
+            bootstrap_manager
+                .raft()
+                .apply_membership_change(&controller_membership_authorization(), request),
+        )
+        .await
+        {
+            Ok(result) => {
+                result.expect("promote controller learner to voter");
+            }
+            Err(_) => {
+                panic!(
+                    "Timed out promoting controller learner {}; states={:?}",
+                    controller_peer.id,
+                    managers
+                        .iter()
+                        .map(|manager| (manager.is_leader(), manager.raft().has_committed_log().unwrap_or(false)))
+                        .collect::<Vec<_>>()
+                );
+            }
         }
     }
 

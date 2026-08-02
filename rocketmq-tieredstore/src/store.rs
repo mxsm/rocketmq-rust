@@ -21,12 +21,15 @@ use tokio_util::sync::CancellationToken;
 use crate::config::TieredStoreConfig;
 use crate::dispatcher::DefaultTieredDispatcher;
 use crate::dispatcher::TieredDispatcher;
+use crate::factory::TieredStoreFactory;
 use crate::fetcher::DefaultTieredMessageFetcher;
 use crate::file::TieredFlatFileStore;
 use crate::lifecycle::TieredLifecycle;
 use crate::metadata::JsonMetadataStore;
 use crate::metadata::TieredMetadataStore;
+use crate::provider::BuiltinTieredStoreProviderFactory;
 use crate::provider::ProviderKind;
+use crate::provider::TieredProviderDescriptor;
 use crate::provider::TieredStoreProvider;
 use crate::service::CommitLogRecoverService;
 use crate::service::TieredServiceSet;
@@ -45,6 +48,7 @@ where
     metrics: Arc<TieredStoreMetrics>,
     services: TieredServiceSet<P>,
     shutdown: CancellationToken,
+    provider_descriptor: Option<TieredProviderDescriptor>,
 }
 
 impl TieredStore<ProviderKind> {
@@ -57,8 +61,8 @@ impl TieredStore<ProviderKind> {
         metrics: TieredStoreMetricsRecorder,
         parent_task_group: TaskGroup,
     ) -> Result<Self, RocketMQError> {
-        let provider = ProviderKind::from_config(&config)?;
-        Self::with_provider_and_metrics(config, provider, metrics, parent_task_group)
+        let factory = BuiltinTieredStoreProviderFactory::select(&config)?;
+        TieredStoreFactory::open_with_metrics(config, factory, metrics, parent_task_group)
     }
 }
 
@@ -77,6 +81,26 @@ where
     pub fn with_provider_and_metrics(
         config: TieredStoreConfig,
         provider: P,
+        metrics: TieredStoreMetricsRecorder,
+        parent_task_group: TaskGroup,
+    ) -> Result<Self, RocketMQError> {
+        Self::build(config, provider, None, metrics, parent_task_group)
+    }
+
+    pub(crate) fn with_provider_descriptor_and_metrics(
+        config: TieredStoreConfig,
+        provider: P,
+        descriptor: TieredProviderDescriptor,
+        metrics: TieredStoreMetricsRecorder,
+        parent_task_group: TaskGroup,
+    ) -> Result<Self, RocketMQError> {
+        Self::build(config, provider, Some(descriptor), metrics, parent_task_group)
+    }
+
+    fn build(
+        config: TieredStoreConfig,
+        provider: P,
+        provider_descriptor: Option<TieredProviderDescriptor>,
         metrics: TieredStoreMetricsRecorder,
         parent_task_group: TaskGroup,
     ) -> Result<Self, RocketMQError> {
@@ -112,6 +136,7 @@ where
             metrics,
             services: TieredServiceSet::new(parent_task_group),
             shutdown,
+            provider_descriptor,
         })
     }
 
@@ -129,6 +154,14 @@ where
 
     pub fn metrics(&self) -> Arc<TieredStoreMetrics> {
         self.metrics.clone()
+    }
+
+    /// Returns the declaration supplied by the startup provider factory.
+    ///
+    /// Stores created through a direct-provider constructor do not have a
+    /// registered descriptor.
+    pub const fn provider_descriptor(&self) -> Option<TieredProviderDescriptor> {
+        self.provider_descriptor
     }
 }
 

@@ -18,6 +18,7 @@
 
 use std::collections::HashMap;
 use std::future::Future;
+#[cfg(feature = "embedded-controller")]
 use std::net::IpAddr;
 use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
@@ -29,7 +30,9 @@ use std::time::Instant;
 
 use arc_swap::ArcSwap;
 use cheetah_string::CheetahString;
+#[cfg(feature = "embedded-controller")]
 use rocketmq_controller::ControllerConfig;
+#[cfg(feature = "embedded-controller")]
 use rocketmq_controller::ControllerManager;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
@@ -103,6 +106,7 @@ struct NameServerStartupJournal {
 pub struct Builder {
     name_server_config: Option<NamesrvConfig>,
     server_config: Option<ServerConfig>,
+    #[cfg(feature = "embedded-controller")]
     controller_config: Option<ControllerConfig>,
     cluster_test_route_lookup: Option<Arc<dyn ClusterTestRouteLookup>>,
     telemetry: TelemetryHandle,
@@ -435,6 +439,16 @@ impl NameServerRuntime {
     fn validate_runtime_config(&self) -> RocketMQResult<()> {
         let namesrv_config = self.inner.name_server_config();
 
+        #[cfg(not(feature = "embedded-controller"))]
+        if namesrv_config.enable_controller_in_namesrv {
+            return Err(RocketMQError::ConfigInvalidValue {
+                key: "enableControllerInNamesrv",
+                value: namesrv_config.enable_controller_in_namesrv.to_string(),
+                reason: "the NameServer binary was compiled without the `embedded-controller` feature".to_string(),
+            });
+        }
+
+        #[cfg(feature = "embedded-controller")]
         if namesrv_config.enable_controller_in_namesrv {
             let controller_config =
                 self.inner
@@ -484,6 +498,7 @@ impl NameServerRuntime {
             debug!("Cluster test route lookup started successfully");
         }
 
+        #[cfg(feature = "embedded-controller")]
         if self.inner.name_server_config().enable_controller_in_namesrv {
             let controller_config = self
                 .inner
@@ -665,6 +680,7 @@ impl NameServerRuntime {
         // Start remoting client directly (no spawn needed as it's managed by self.inner)
         self.inner.remoting_client.start(weak_client).await;
 
+        #[cfg(feature = "embedded-controller")]
         if let Some(controller_manager) = self.inner.controller_manager() {
             controller_manager.start().await?;
         }
@@ -770,6 +786,7 @@ impl NameServerRuntime {
         shutdown_report.metadata_io_healthy = Some(metadata_persisted && metadata_drained);
 
         info!("Phase 3/5: Shutting down embedded controller...");
+        #[cfg(feature = "embedded-controller")]
         if let Some(controller_manager) = self.inner.controller_manager() {
             shutdown_report.embedded_controller_healthy =
                 Some(match controller_manager.shutdown_until(deadline).await {
@@ -965,6 +982,7 @@ impl Builder {
         Builder {
             name_server_config: None,
             server_config: None,
+            #[cfg(feature = "embedded-controller")]
             controller_config: None,
             cluster_test_route_lookup: None,
             telemetry,
@@ -985,12 +1003,14 @@ impl Builder {
     }
 
     #[inline]
+    #[cfg(feature = "embedded-controller")]
     pub fn set_controller_config(mut self, controller_config: ControllerConfig) -> Self {
         self.controller_config = Some(controller_config);
         self
     }
 
     #[inline]
+    #[cfg(feature = "embedded-controller")]
     pub fn set_controller_config_opt(mut self, controller_config: Option<ControllerConfig>) -> Self {
         self.controller_config = controller_config;
         self
@@ -1018,6 +1038,7 @@ impl Builder {
         let name_server_config = self.name_server_config.unwrap_or_default();
         let tokio_client_config = TokioClientConfig::default();
         let server_config = self.server_config.unwrap_or_default();
+        #[cfg(feature = "embedded-controller")]
         let controller_config = if name_server_config.enable_controller_in_namesrv {
             Some(self.controller_config.unwrap_or_else(|| {
                 ControllerConfig::default().with_rocketmq_home(name_server_config.rocketmq_home.clone())
@@ -1062,6 +1083,7 @@ impl Builder {
             name_server_config: Arc::new(name_server_config),
             tokio_client_config: Arc::new(tokio_client_config),
             server_config: Arc::new(server_config),
+            #[cfg(feature = "embedded-controller")]
             controller_config: controller_config.map(Arc::new),
         });
 
@@ -1082,6 +1104,7 @@ impl Builder {
                 kvconfig_manager: Arc::new(KVConfigManager::new(runtime_handle.clone(), metadata_io.clone())),
                 remoting_client,
                 broker_housekeeping_service: Arc::new(BrokerHousekeepingService::new(runtime_handle)),
+                #[cfg(feature = "embedded-controller")]
                 controller_manager: OnceLock::new(),
                 cluster_test_route_lookup,
                 service_context: Some(service_context),
@@ -1121,6 +1144,7 @@ pub(crate) struct NameServerRuntimeInner {
     kvconfig_manager: Arc<KVConfigManager>,
     remoting_client: Arc<RocketmqDefaultClient>,
     broker_housekeeping_service: Arc<BrokerHousekeepingService>,
+    #[cfg(feature = "embedded-controller")]
     controller_manager: OnceLock<Arc<ControllerManager>>,
     telemetry: TelemetryHandle,
     transport_telemetry: TransportTelemetry,
@@ -1135,6 +1159,7 @@ struct NameServerRuntimeConfig {
     name_server_config: Arc<NamesrvConfig>,
     tokio_client_config: Arc<TokioClientConfig>,
     server_config: Arc<ServerConfig>,
+    #[cfg(feature = "embedded-controller")]
     controller_config: Option<Arc<ControllerConfig>>,
 }
 
@@ -1264,6 +1289,7 @@ impl NameServerRuntimeInner {
     }
 
     #[inline]
+    #[cfg(feature = "embedded-controller")]
     pub fn controller_config(&self) -> Option<Arc<ControllerConfig>> {
         self.config.load().controller_config.clone()
     }
@@ -1280,10 +1306,12 @@ impl NameServerRuntimeInner {
         let current = self.config_snapshot();
         let mut name_server_config = (*current.name_server_config).clone();
         name_server_config.update(updates)?;
+        validate_startup_only_namesrv_config(&current.name_server_config, &name_server_config)?;
         self.config.store(Arc::new(NameServerRuntimeConfig {
             name_server_config: Arc::new(name_server_config),
             tokio_client_config: Arc::clone(&current.tokio_client_config),
             server_config: Arc::clone(&current.server_config),
+            #[cfg(feature = "embedded-controller")]
             controller_config: current.controller_config.clone(),
         }));
         Ok(())
@@ -1609,11 +1637,13 @@ impl NameServerRuntimeInner {
         if !namesrv_updates.is_empty() {
             name_server_config.update(namesrv_updates)?;
         }
+        validate_startup_only_namesrv_config(&current.name_server_config, &name_server_config)?;
 
         self.config.store(Arc::new(NameServerRuntimeConfig {
             name_server_config: Arc::new(name_server_config),
             tokio_client_config: Arc::new(tokio_client_config),
             server_config: Arc::new(server_config),
+            #[cfg(feature = "embedded-controller")]
             controller_config: current.controller_config.clone(),
         }));
         Ok(())
@@ -1642,10 +1672,12 @@ impl NameServerRuntimeInner {
     }
 
     #[inline]
+    #[cfg(feature = "embedded-controller")]
     pub fn controller_manager(&self) -> Option<Arc<ControllerManager>> {
         self.controller_manager.get().cloned()
     }
 
+    #[cfg(feature = "embedded-controller")]
     fn install_controller_manager(&self, controller_manager: Arc<ControllerManager>) -> RocketMQResult<()> {
         self.controller_manager
             .set(controller_manager)
@@ -1658,6 +1690,19 @@ impl NameServerRuntimeInner {
     }
 }
 
+fn validate_startup_only_namesrv_config(current: &NamesrvConfig, candidate: &NamesrvConfig) -> RocketMQResult<()> {
+    if current.enable_controller_in_namesrv != candidate.enable_controller_in_namesrv {
+        return Err(RocketMQError::ConfigInvalidValue {
+            key: "enableControllerInNamesrv",
+            value: candidate.enable_controller_in_namesrv.to_string(),
+            reason: "embedded Controller topology is startup-only; restart a binary built with the required feature"
+                .to_string(),
+        });
+    }
+    Ok(())
+}
+
+#[cfg(feature = "embedded-controller")]
 fn controller_conflicts_with_namesrv(controller_config: &ControllerConfig, server_config: &ServerConfig) -> bool {
     if controller_config.listen_addr.port() != server_config.listen_port as u16 {
         return false;
@@ -1719,6 +1764,7 @@ mod tests {
     use std::time::Duration;
 
     use cheetah_string::CheetahString;
+    #[cfg(feature = "embedded-controller")]
     use rocketmq_controller::ControllerConfig;
     use rocketmq_error::ErrorKind;
     use rocketmq_model::common::config::TopicConfig;
@@ -1902,6 +1948,41 @@ mod tests {
         assert!(matches!(
             error,
             RocketMQError::Tools(rocketmq_error::ToolsError::NameServerConfigInvalid { .. })
+        ));
+        assert!(Arc::ptr_eq(&before, &runtime.config_snapshot()));
+    }
+
+    #[test]
+    fn runtime_config_rejects_dynamic_embedded_controller_topology() {
+        let bootstrap = build_default_bootstrap();
+        let runtime = bootstrap.runtime_inner();
+        let before = runtime.config_snapshot();
+        let update = HashMap::from([(
+            CheetahString::from_static_str("enableControllerInNamesrv"),
+            CheetahString::from_static_str("true"),
+        )]);
+
+        let aggregate_error = runtime
+            .update_runtime_config(update.clone())
+            .expect_err("aggregate runtime update must reject an embedded Controller topology change");
+        assert!(matches!(
+            aggregate_error,
+            RocketMQError::ConfigInvalidValue {
+                key: "enableControllerInNamesrv",
+                ..
+            }
+        ));
+        assert!(Arc::ptr_eq(&before, &runtime.config_snapshot()));
+
+        let namesrv_error = runtime
+            .update_name_server_config(update)
+            .expect_err("NameServer-only update must reject an embedded Controller topology change");
+        assert!(matches!(
+            namesrv_error,
+            RocketMQError::ConfigInvalidValue {
+                key: "enableControllerInNamesrv",
+                ..
+            }
         ));
         assert!(Arc::ptr_eq(&before, &runtime.config_snapshot()));
     }
@@ -2146,6 +2227,7 @@ mod tests {
         (config, root)
     }
 
+    #[cfg(feature = "embedded-controller")]
     fn embedded_controller_config() -> (ControllerConfig, tempfile::TempDir) {
         let root = tempfile::Builder::new()
             .prefix("rocketmq-controller-test-")
@@ -3709,6 +3791,7 @@ mod tests {
             .unwrap();
     }
 
+    #[cfg(feature = "embedded-controller")]
     #[tokio::test]
     async fn boot_supports_enable_controller_in_namesrv_mode() {
         let (namesrv_config, _namesrv_root) = isolated_namesrv_config(NamesrvConfig {
@@ -3726,6 +3809,29 @@ mod tests {
             .boot_with_shutdown(async {})
             .await
             .expect("controller-in-namesrv mode should boot and shut down cleanly once implemented");
+    }
+
+    #[cfg(not(feature = "embedded-controller"))]
+    #[tokio::test]
+    async fn embedded_controller_config_requires_compile_time_capability() {
+        let namesrv_config = NamesrvConfig {
+            enable_controller_in_namesrv: true,
+            ..NamesrvConfig::default()
+        };
+        let mut bootstrap = Builder::new(test_service_context(), TelemetryHandle::noop())
+            .set_name_server_config(namesrv_config)
+            .set_server_config(namesrv_server_config())
+            .build();
+
+        let error = bootstrap
+            .name_server_runtime
+            .initialize()
+            .await
+            .expect_err("a binary without embedded-controller must reject the runtime setting");
+
+        assert!(error
+            .to_string()
+            .contains("compiled without the `embedded-controller` feature"));
     }
 
     #[tokio::test]
@@ -3811,6 +3917,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "embedded-controller")]
     #[tokio::test]
     async fn enable_controller_in_namesrv_rejects_conflicting_listen_addr() {
         let server_config = namesrv_server_config();
@@ -3835,6 +3942,7 @@ mod tests {
         assert!(error.to_string().contains("conflicts with namesrv address"));
     }
 
+    #[cfg(feature = "embedded-controller")]
     #[tokio::test]
     async fn enable_controller_in_namesrv_lifecycle_matches_namesrv_runtime() {
         let (namesrv_config, _namesrv_root) = isolated_namesrv_config(NamesrvConfig {

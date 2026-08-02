@@ -13,8 +13,10 @@
 // limitations under the License.
 
 use std::future;
+use std::future::Future;
 use std::net::IpAddr;
 use std::net::Ipv4Addr;
+use std::pin::Pin;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -50,6 +52,8 @@ use rocketmq_transport::ResourceLimit;
 use rocketmq_transport::ResponseSinkError;
 use rocketmq_transport::RocketMQServer;
 use rocketmq_transport::ServerConfig;
+use rocketmq_transport::SessionRequestProcessor;
+use rocketmq_transport::SessionRequestProcessorAdapter;
 use rocketmq_transport::TransportSecurity;
 use rocketmq_transport::TransportTelemetry;
 use tokio::net::TcpStream;
@@ -127,6 +131,23 @@ struct DispatchFixture {
     dispatcher: Arc<AuthorizedCommandDispatcher<ConformanceProcessor>>,
     security: Arc<TransportSecurity>,
     admission: Arc<AdmissionController>,
+}
+
+struct SessionContractProcessor {
+    calls: Arc<AtomicUsize>,
+}
+
+impl SessionRequestProcessor for SessionContractProcessor {
+    fn process(
+        &self,
+        request: RemotingCommand,
+    ) -> Pin<Box<dyn Future<Output = rocketmq_error::RocketMQResult<RemotingCommand>> + Send + '_>> {
+        let calls = Arc::clone(&self.calls);
+        Box::pin(async move {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Ok(RemotingCommand::create_response_command_with_code(ResponseCode::Success).set_opaque(request.opaque()))
+        })
+    }
 }
 
 fn dispatch_fixture(
@@ -242,6 +263,59 @@ fn assert_equivalent(actual: &RemotingCommand, expected: &RemotingCommand) {
     assert_eq!(actual.remark(), expected.remark());
     assert_eq!(actual.ext_fields(), expected.ext_fields());
     assert_eq!(actual.body(), expected.body());
+}
+
+#[tokio::test]
+async fn session_processor_adapter_runs_through_authorized_dispatch() {
+    let runtime = RuntimeContext::from_current("session-processor-adapter-conformance");
+    let service = runtime.service_context("session-adapter");
+    let process_budget = service.process_budget();
+    let admission = Arc::new(
+        AdmissionController::try_new_with_budget(AdmissionLimits::default(), &process_budget)
+            .expect("test admission limits should be valid"),
+    );
+    let security = Arc::new(TransportSecurity::secure_enforced(
+        Some(Arc::new(AllowOnlyNamedPrincipal)),
+        None,
+    ));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let processor: Arc<dyn SessionRequestProcessor> = Arc::new(SessionContractProcessor {
+        calls: Arc::clone(&calls),
+    });
+    let dispatcher = Arc::new(
+        AuthorizedCommandDispatcher::try_new(
+            SessionRequestProcessorAdapter::from_shared(processor),
+            Vec::new(),
+            &process_budget,
+            TransportTelemetry::noop(),
+            security,
+            admission,
+        )
+        .expect("adapter dispatcher should fit the process budget"),
+    );
+
+    let denied = dispatcher
+        .dispatch_embedded(
+            service.task_group(),
+            embedded_context("denied", None),
+            RemotingCommand::create_remoting_command(RequestCode::SendMessage).set_opaque(81),
+        )
+        .await
+        .expect("denied request should produce a protocol response");
+    assert_eq!(denied.code(), ResponseCode::NoPermission.to_i32());
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+    let allowed = dispatcher
+        .dispatch_embedded(
+            service.task_group(),
+            embedded_context("allowed", None),
+            RemotingCommand::create_remoting_command(RequestCode::SendMessage).set_opaque(82),
+        )
+        .await
+        .expect("allowed request should produce a protocol response");
+    assert_eq!(allowed.code(), ResponseCode::Success.to_i32());
+    assert_eq!(allowed.opaque(), 82);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]

@@ -22,17 +22,26 @@ use std::sync::Arc;
 
 use openraft::Config;
 use openraft::ReadPolicy;
+use rocketmq_error::RocketMQResult;
 use rocketmq_runtime::BlockingExecutor;
+use rocketmq_security_api::MaintenanceAuthorizationGrant;
 use tracing::info;
 
 use crate::config::ControllerConfigReader;
+use crate::controller::membership::ConsensusMembership;
+use crate::controller::membership::ConsensusMembershipPort;
+use crate::controller::membership::MembershipChangeCoordinator;
+use crate::controller::membership::MembershipChangeOutcome;
+use crate::controller::membership::MembershipChangeRequest;
 use crate::error::ControllerError;
 use crate::error::Result;
+use crate::openraft::GrpcRaftService;
 use crate::openraft::NetworkFactory;
 use crate::openraft::Store;
 use crate::typ::Node;
 use crate::typ::NodeId;
 use crate::typ::Raft;
+use crate::typ::RaftMetrics;
 
 /// OpenRaft node manager
 ///
@@ -49,6 +58,9 @@ pub struct RaftNodeManager {
 
     /// Storage
     store: Arc<Store>,
+
+    /// Serializes and reconciles all administrative membership mutations.
+    membership_changes: MembershipChangeCoordinator,
 }
 
 impl RaftNodeManager {
@@ -105,10 +117,19 @@ impl RaftNodeManager {
             node_id,
             raft: Arc::new(raft),
             store,
+            membership_changes: MembershipChangeCoordinator::default(),
         })
     }
 
-    /// Initialize the cluster (called on the first node only)
+    /// Initializes a brand-new cluster during first-node bootstrap only.
+    ///
+    /// This is the sole bootstrap exception to the guarded membership mutation boundary. It must
+    /// not be used for administrative membership changes after the initial cluster is formed;
+    /// those changes must use [`Self::apply_membership_change`].
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed Controller error if OpenRaft rejects cluster initialization.
     pub async fn initialize_cluster(&self, nodes: BTreeMap<NodeId, Node>) -> Result<()> {
         info!("Initializing Raft cluster with {} nodes", nodes.len());
 
@@ -122,7 +143,7 @@ impl RaftNodeManager {
     }
 
     /// Add a learner node to the cluster
-    pub async fn add_learner(&self, node_id: NodeId, node: Node, blocking: bool) -> Result<()> {
+    pub(crate) async fn add_learner(&self, node_id: NodeId, node: Node, blocking: bool) -> Result<()> {
         info!("Adding learner node {} to cluster", node_id);
 
         self.raft
@@ -135,7 +156,7 @@ impl RaftNodeManager {
     }
 
     /// Change cluster membership
-    pub async fn change_membership(&self, members: BTreeSet<NodeId>, retain: bool) -> Result<()> {
+    pub(crate) async fn change_membership(&self, members: BTreeSet<NodeId>, retain: bool) -> Result<()> {
         info!("Changing cluster membership: members={:?}, retain={}", members, retain);
 
         self.raft
@@ -145,6 +166,34 @@ impl RaftNodeManager {
 
         info!("Cluster membership changed successfully");
         Ok(())
+    }
+
+    /// Applies one authorized and version-fenced consensus membership step.
+    ///
+    /// This boundary temporarily reuses the release-maintenance
+    /// [`rocketmq_security_api::MaintenanceCapability::ReleaseCheckpoint`] permission. A future
+    /// versioned maintenance policy should split membership administration into a dedicated
+    /// capability.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error when request validation, authorization, optimistic fencing,
+    /// consensus application, or verification fails.
+    pub async fn apply_membership_change(
+        &self,
+        authorization: &MaintenanceAuthorizationGrant,
+        request: MembershipChangeRequest,
+    ) -> RocketMQResult<MembershipChangeOutcome> {
+        self.membership_changes.apply(self, authorization, request).await
+    }
+
+    /// Returns the current OpenRaft-independent consensus membership projection.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed Controller error if the membership projection cannot be read.
+    pub async fn consensus_membership(&self) -> Result<ConsensusMembership> {
+        ConsensusMembershipPort::current_membership(self).await
     }
 
     /// Allow a specific follower/learner to reset replication progress once when log
@@ -202,9 +251,36 @@ impl RaftNodeManager {
             .map_err(|error| ControllerError::raft_source("linearizable ReadIndex", error))
     }
 
-    /// Get the Raft instance
-    pub fn raft(&self) -> Arc<Raft> {
+    /// Returns the raw Raft handle for internal adapters only.
+    pub(crate) fn raft(&self) -> Arc<Raft> {
         self.raft.clone()
+    }
+
+    /// Returns a read-only snapshot of current Raft metrics.
+    pub fn raft_metrics(&self) -> RaftMetrics {
+        use openraft::async_runtime::WatchReceiver;
+
+        self.raft.metrics().borrow_watched().clone()
+    }
+
+    /// Creates the gRPC service adapter without exposing the raw Raft handle.
+    pub fn grpc_service(&self) -> GrpcRaftService {
+        GrpcRaftService::new(self.raft.clone())
+    }
+
+    /// Enables or disables Raft runtime ticks.
+    pub fn set_runtime_tick_enabled(&self, enabled: bool) {
+        self.raft.runtime_config().tick(enabled);
+    }
+
+    /// Enables or disables Raft runtime heartbeats.
+    pub fn set_runtime_heartbeat_enabled(&self, enabled: bool) {
+        self.raft.runtime_config().heartbeat(enabled);
+    }
+
+    /// Enables or disables Raft runtime elections.
+    pub fn set_runtime_elect_enabled(&self, enabled: bool) {
+        self.raft.runtime_config().elect(enabled);
     }
 
     /// Get the storage

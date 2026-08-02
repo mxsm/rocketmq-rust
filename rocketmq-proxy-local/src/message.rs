@@ -15,7 +15,7 @@
 use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
-use rocketmq_broker::proxy_adapter_compat::MessageExt;
+use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_proxy_core::ProxyMessage;
 use rocketmq_proxy_core::ProxyMessageExt;
 

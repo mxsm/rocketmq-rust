@@ -18,65 +18,59 @@ use std::time::Duration;
 use std::time::Instant;
 
 use cheetah_string::CheetahString;
-use rocketmq_broker::proxy_adapter_compat::current_millis;
-use rocketmq_broker::proxy_adapter_compat::mix_all;
-use rocketmq_broker::proxy_adapter_compat::AckMessageRequestHeader;
-use rocketmq_broker::proxy_adapter_compat::BoundaryType;
-use rocketmq_broker::proxy_adapter_compat::BrokerConfig;
-use rocketmq_broker::proxy_adapter_compat::ChangeInvisibleTimeRequestHeader;
-use rocketmq_broker::proxy_adapter_compat::ChangeInvisibleTimeResponseHeader;
-use rocketmq_broker::proxy_adapter_compat::ConsumerSendMsgBackRequestHeader;
-use rocketmq_broker::proxy_adapter_compat::EndTransactionRequestHeader;
-use rocketmq_broker::proxy_adapter_compat::ExpressionType;
-use rocketmq_broker::proxy_adapter_compat::ExtraInfoUtil;
-use rocketmq_broker::proxy_adapter_compat::GetMaxOffsetRequestHeader;
-use rocketmq_broker::proxy_adapter_compat::GetMaxOffsetResponseHeader;
-use rocketmq_broker::proxy_adapter_compat::GetMinOffsetRequestHeader;
-use rocketmq_broker::proxy_adapter_compat::GetMinOffsetResponseHeader;
-use rocketmq_broker::proxy_adapter_compat::MessageConst;
-use rocketmq_broker::proxy_adapter_compat::MessageDecoder;
-use rocketmq_broker::proxy_adapter_compat::MessageExt;
-use rocketmq_broker::proxy_adapter_compat::MessageId;
-use rocketmq_broker::proxy_adapter_compat::MessageModel;
-use rocketmq_broker::proxy_adapter_compat::MessageQueue;
-use rocketmq_broker::proxy_adapter_compat::MessageQueueAssignment;
-use rocketmq_broker::proxy_adapter_compat::MessageStoreConfig;
-use rocketmq_broker::proxy_adapter_compat::MessageSysFlag;
-use rocketmq_broker::proxy_adapter_compat::MessageTrait;
-use rocketmq_broker::proxy_adapter_compat::OperationTopicRequestHeader;
-use rocketmq_broker::proxy_adapter_compat::PopMessageRequestHeader;
-use rocketmq_broker::proxy_adapter_compat::PopMessageResponseHeader;
-use rocketmq_broker::proxy_adapter_compat::PullMessageRequestHeader;
-use rocketmq_broker::proxy_adapter_compat::PullMessageResponseHeader;
-use rocketmq_broker::proxy_adapter_compat::PullSysFlag;
-use rocketmq_broker::proxy_adapter_compat::QueryAssignmentRequestBody;
-use rocketmq_broker::proxy_adapter_compat::QueryAssignmentResponseBody;
-use rocketmq_broker::proxy_adapter_compat::QueryConsumerOffsetRequestHeader;
-use rocketmq_broker::proxy_adapter_compat::QueryConsumerOffsetResponseHeader;
-use rocketmq_broker::proxy_adapter_compat::RecallMessageRequestHeader;
-use rocketmq_broker::proxy_adapter_compat::RecallMessageResponseHeader;
-use rocketmq_broker::proxy_adapter_compat::RemotingCommand;
-use rocketmq_broker::proxy_adapter_compat::RemotingDeserializable;
-use rocketmq_broker::proxy_adapter_compat::RemotingSerializable;
-use rocketmq_broker::proxy_adapter_compat::RequestCode;
-use rocketmq_broker::proxy_adapter_compat::ResponseCode;
-use rocketmq_broker::proxy_adapter_compat::RpcRequestHeader;
-use rocketmq_broker::proxy_adapter_compat::SearchOffsetRequestHeader;
-use rocketmq_broker::proxy_adapter_compat::SearchOffsetResponseHeader;
-use rocketmq_broker::proxy_adapter_compat::SendMessageRequestHeader;
-use rocketmq_broker::proxy_adapter_compat::SendMessageResponseHeader;
-use rocketmq_broker::proxy_adapter_compat::SubscriptionGroupConfig;
-use rocketmq_broker::proxy_adapter_compat::TelemetryHandle;
-use rocketmq_broker::proxy_adapter_compat::TopicMessageType;
-use rocketmq_broker::proxy_adapter_compat::TopicRequestHeader;
-use rocketmq_broker::proxy_adapter_compat::TopicRouteData;
-use rocketmq_broker::proxy_adapter_compat::TopicValidator;
-use rocketmq_broker::proxy_adapter_compat::UpdateConsumerOffsetRequestHeader;
-use rocketmq_broker::proxy_adapter_compat::ValidatedBrokerConfig;
+use rocketmq_broker::proxy_facade::BrokerConfig;
 use rocketmq_broker::ProxyBrokerFacade;
 use rocketmq_error::RocketMQError;
+use rocketmq_model::common::attribute::topic_message_type::TopicMessageType;
+use rocketmq_model::common::boundary_type::BoundaryType;
+use rocketmq_model::common::filter::expression_type::ExpressionType;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_id::MessageId;
+use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::message::message_queue_assignment::MessageQueueAssignment;
+use rocketmq_model::common::message::MessageConst;
+use rocketmq_model::common::message::MessageTrait;
+use rocketmq_model::common::mix_all;
+use rocketmq_model::common::sys_flag::message_sys_flag::MessageSysFlag;
+use rocketmq_model::common::sys_flag::pull_sys_flag::PullSysFlag;
+use rocketmq_model::common::topic::TopicValidator;
 use rocketmq_model::result::SendResult;
 use rocketmq_model::result::SendStatus;
+use rocketmq_observability::TelemetryHandle;
+use rocketmq_protocol::code::request_code::RequestCode;
+use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
+use rocketmq_protocol::protocol::body::query_assignment_request_body::QueryAssignmentRequestBody;
+use rocketmq_protocol::protocol::body::query_assignment_response_body::QueryAssignmentResponseBody;
+use rocketmq_protocol::protocol::header::ack_message_request_header::AckMessageRequestHeader;
+use rocketmq_protocol::protocol::header::change_invisible_time_request_header::ChangeInvisibleTimeRequestHeader;
+use rocketmq_protocol::protocol::header::change_invisible_time_response_header::ChangeInvisibleTimeResponseHeader;
+use rocketmq_protocol::protocol::header::consumer_send_msg_back_request_header::ConsumerSendMsgBackRequestHeader;
+use rocketmq_protocol::protocol::header::end_transaction_request_header::EndTransactionRequestHeader;
+use rocketmq_protocol::protocol::header::extra_info_util::ExtraInfoUtil;
+use rocketmq_protocol::protocol::header::get_max_offset_request_header::GetMaxOffsetRequestHeader;
+use rocketmq_protocol::protocol::header::get_max_offset_response_header::GetMaxOffsetResponseHeader;
+use rocketmq_protocol::protocol::header::get_min_offset_request_header::GetMinOffsetRequestHeader;
+use rocketmq_protocol::protocol::header::get_min_offset_response_header::GetMinOffsetResponseHeader;
+use rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
+use rocketmq_protocol::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
+use rocketmq_protocol::protocol::header::namesrv::topic_operation_header::TopicRequestHeader as OperationTopicRequestHeader;
+use rocketmq_protocol::protocol::header::pop_message_request_header::PopMessageRequestHeader;
+use rocketmq_protocol::protocol::header::pop_message_response_header::PopMessageResponseHeader;
+use rocketmq_protocol::protocol::header::pull_message_request_header::PullMessageRequestHeader;
+use rocketmq_protocol::protocol::header::pull_message_response_header::PullMessageResponseHeader;
+use rocketmq_protocol::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
+use rocketmq_protocol::protocol::header::query_consumer_offset_response_header::QueryConsumerOffsetResponseHeader;
+use rocketmq_protocol::protocol::header::recall_message_request_header::RecallMessageRequestHeader;
+use rocketmq_protocol::protocol::header::recall_message_response_header::RecallMessageResponseHeader;
+use rocketmq_protocol::protocol::header::search_offset_request_header::SearchOffsetRequestHeader;
+use rocketmq_protocol::protocol::header::search_offset_response_header::SearchOffsetResponseHeader;
+use rocketmq_protocol::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
+use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
+use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
+use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_proxy_core::status::ProxyStatusMapper;
 use rocketmq_proxy_core::AckMessageRequest;
 use rocketmq_proxy_core::AckMessageResultEntry;
@@ -121,8 +115,12 @@ use rocketmq_proxy_core::TransactionService;
 use rocketmq_proxy_core::TransactionSource;
 use rocketmq_proxy_core::UpdateOffsetPlan;
 use rocketmq_proxy_core::UpdateOffsetRequest;
+use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ShutdownDeadline;
+use rocketmq_transport::RemotingDeserializable;
+use rocketmq_transport::RpcRequestHeader;
+use rocketmq_transport::TopicRequestHeader;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::oneshot;
@@ -337,23 +335,21 @@ impl LocalBrokerFacadeClient {
         telemetry_handle: TelemetryHandle,
     ) -> ProxyResult<Self> {
         validate_local_queue_config(&config)?;
-        let validated_broker_config =
-            ValidatedBrokerConfig::try_from_parts(build_broker_config(&config), build_message_store_config(&config))
-                .map_err(|error| {
-                    ProxyError::RocketMQ(RocketMQError::ConfigInvalidValue {
-                        key: "proxy.local.embeddedBroker",
-                        value: config.broker_name.clone(),
-                        reason: error.to_string(),
-                    })
-                })?;
+        let broker_config = build_broker_config(&config);
         let (sender, receiver) = mpsc::channel(config.command_queue_capacity);
         let byte_budget = Arc::new(Semaphore::new(config.command_queue_max_bytes));
         let max_queue_age = config.command_queue_max_age();
         let broker_name = config.broker_name.clone();
         let worker_context = service_context.component("command-worker");
         let broker_context = worker_context.component("embedded-broker-store");
-        let facade =
-            ProxyBrokerFacade::from_validated_config(validated_broker_config, broker_context, telemetry_handle);
+        let facade = ProxyBrokerFacade::try_new_from_broker_config(broker_config, broker_context, telemetry_handle)
+            .map_err(|error| {
+                ProxyError::RocketMQ(RocketMQError::ConfigInvalidValue {
+                    key: "proxy.local.embeddedBroker",
+                    value: config.broker_name.clone(),
+                    reason: error.to_string(),
+                })
+            })?;
         let shutdown_context = service_context.clone();
         let cancellation = worker_context.task_group().cancellation_token();
         worker_context
@@ -2145,13 +2141,6 @@ fn build_broker_config(config: &LocalConfig) -> BrokerConfig {
     broker_config
 }
 
-fn build_message_store_config(config: &LocalConfig) -> MessageStoreConfig {
-    MessageStoreConfig {
-        store_path_root_dir: CheetahString::from(config.store_root_dir.as_str()),
-        ..Default::default()
-    }
-}
-
 fn convert_topic_message_type(message_type: TopicMessageType) -> ProxyTopicMessageType {
     match message_type {
         TopicMessageType::Unspecified => ProxyTopicMessageType::Unspecified,
@@ -2192,13 +2181,13 @@ mod tests {
     use std::time::Instant;
 
     use cheetah_string::CheetahString;
-    use rocketmq_broker::proxy_adapter_compat::ExtraInfoUtil;
-    use rocketmq_broker::proxy_adapter_compat::RemotingCommand;
-    use rocketmq_broker::proxy_adapter_compat::ResponseCode;
-    use rocketmq_broker::proxy_adapter_compat::SendMessageRequestHeader;
-    use rocketmq_broker::proxy_adapter_compat::TelemetryHandle;
-    use rocketmq_broker::proxy_adapter_compat::TopicMessageType;
     use rocketmq_error::RocketMQError;
+    use rocketmq_model::common::attribute::topic_message_type::TopicMessageType;
+    use rocketmq_observability::TelemetryHandle;
+    use rocketmq_protocol::code::response_code::ResponseCode;
+    use rocketmq_protocol::protocol::header::extra_info_util::ExtraInfoUtil;
+    use rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
+    use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     use rocketmq_proxy_core::ConsumerFilterExpression;
     use rocketmq_proxy_core::MessageQueueTarget;
     use rocketmq_proxy_core::ProxyError;

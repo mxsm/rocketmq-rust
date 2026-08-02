@@ -249,9 +249,7 @@ impl ControllerRequestProcessor {
             .await?;
         let header = request
             .decode_command_custom_header::<MaintenanceRequestHeader>()
-            .map_err(|error| {
-                RocketMQError::request_header_error(format!("failed to decode privileged maintenance header: {error}"))
-            })?;
+            .map_err(|error| RocketMQError::request_header_source("decode privileged maintenance header", error))?;
         header
             .validate()
             .map_err(|reason| RocketMQError::request_header_error(reason.to_string()))?;
@@ -278,7 +276,7 @@ impl ControllerRequestProcessor {
                 }),
                 rocketmq_runtime::common::time_utils::current_millis(),
             )
-            .map_err(|error| RocketMQError::authentication_failed(error.to_string()))?;
+            .map_err(|error| RocketMQError::authentication_source("authorize Controller maintenance request", error))?;
         Ok((header, grant))
     }
 
@@ -329,10 +327,8 @@ impl ControllerRequestProcessor {
         let request_body = request.body().ok_or_else(|| {
             RocketMQError::request_body_invalid("MAINTENANCE_CREATE_CONTROLLER_SNAPSHOT", "request body is empty")
         })?;
-        let snapshot_request: ControllerReleaseSnapshotRequest =
-            serde_json::from_slice(request_body).map_err(|error| {
-                RocketMQError::request_body_invalid("MAINTENANCE_CREATE_CONTROLLER_SNAPSHOT", error.to_string())
-            })?;
+        let snapshot_request: ControllerReleaseSnapshotRequest = serde_json::from_slice(request_body)
+            .map_err(|error| RocketMQError::request_body_source("MAINTENANCE_CREATE_CONTROLLER_SNAPSHOT", error))?;
         let controller_manager = self.controller_manager()?;
         let snapshot = controller_manager
             .controller()
@@ -1042,7 +1038,7 @@ fn decode_controller_release_snapshot_manifest(
     let body = request
         .body()
         .ok_or_else(|| RocketMQError::request_body_invalid(operation, "request body is empty"))?;
-    serde_json::from_slice(body).map_err(|error| RocketMQError::request_body_invalid(operation, error.to_string()))
+    serde_json::from_slice(body).map_err(|error| RocketMQError::request_body_source(operation, error))
 }
 
 impl ControllerRequestProcessor {
@@ -1151,6 +1147,20 @@ mod tests {
 
         assert_eq!(error.kind(), ErrorKind::RequestBodyInvalid);
         assert!(error.to_string().contains("UPDATE_CONTROLLER_CONFIG"));
+    }
+
+    #[test]
+    fn malformed_release_snapshot_manifest_preserves_serde_source() {
+        let request =
+            RemotingCommand::create_remoting_command(RequestCode::MaintenanceVerifyCheckpoint).set_body(b"{".to_vec());
+
+        let error = decode_controller_release_snapshot_manifest(&request, "MAINTENANCE_VERIFY_CHECKPOINT")
+            .expect_err("malformed JSON must be rejected");
+
+        assert_eq!(error.kind(), ErrorKind::RequestBodyInvalid);
+        let source = std::error::Error::source(&error).expect("serde source must be retained");
+        assert!(source.downcast_ref::<serde_json::Error>().is_some());
+        assert!(!error.boundary_view().context().to_string().contains("expected ident"));
     }
 
     #[test]

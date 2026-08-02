@@ -24,7 +24,7 @@ the `bootstrap::Builder` API for tests and service composition.
 | KV configuration | Put/get/delete/list KV config namespaces with on-disk persistence through `KVConfigManager`. |
 | Runtime configuration | `GetNamesrvConfig` and `UpdateNamesrvConfig` support Java-properties payloads with a fixed blacklist for sensitive paths and home settings. |
 | Cluster test mode | Optional product-environment route fallback via `DefaultMQAdminExtImpl` when local route data is missing. |
-| Embedded controller | Optional `enableControllerInNamesrv` mode initializes and runs `rocketmq-controller` with conflict checks against the NameServer listen address. |
+| Embedded controller | Compile with `--features embedded-controller` and set `enableControllerInNamesrv=true` to initialize `rocketmq-controller`, with conflict checks against the NameServer listen address. The default dependency graph excludes Controller. |
 | Observability | Optional `observability` feature records route request counts/latency, broker registrations, and active broker gauges. |
 
 ## Architecture
@@ -33,7 +33,16 @@ the `bootstrap::Builder` API for tests and service composition.
 
 `KVConfigManager` persists namespace config, `BrokerHousekeepingService` reacts
 to channel events, scheduled tasks scan inactive brokers, and optional
-`ControllerManager` runs when embedded-controller mode is enabled.
+`ControllerManager` runs only when the `embedded-controller` Cargo feature and
+the `enableControllerInNamesrv` runtime setting are both enabled. A default
+build rejects the runtime setting with a configuration error instead of
+silently starting a partial topology.
+
+Compatibility note: applications that call
+`Builder::set_controller_config` or `Builder::set_controller_config_opt` must
+enable the `embedded-controller` feature. This deliberate opt-in keeps the
+default NameServer dependency graph free of Controller, OpenRaft, and RocksDB
+while preserving the existing typed builder API for embedded deployments.
 
 ## Protocol Surface
 

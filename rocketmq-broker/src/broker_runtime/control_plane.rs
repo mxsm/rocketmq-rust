@@ -609,16 +609,16 @@ impl BrokerRuntime {
                 return false;
             }
         };
-        self.composition.state.maintenance_authorizer = maintenance_authorizer;
+        self.composition.request_pipeline.maintenance_authorizer = maintenance_authorizer;
         if !broker_config.authentication_enabled && !broker_config.authorization_enabled {
-            self.composition.state.auth_runtime = None;
+            self.composition.request_pipeline.auth_runtime = None;
             let Some(service_context) = self.composition.state.service_context.as_ref() else {
                 error!("Initialize auth admin service failed because ChildServiceContext is unavailable");
                 return false;
             };
             return match AuthAdminService::new(auth_config, service_context.component("broker.auth-admin")).await {
                 Ok(service) => {
-                    self.composition.state.auth_admin_service = Some(Arc::new(service));
+                    self.composition.request_pipeline.auth_admin_service = Some(Arc::new(service));
                     true
                 }
                 Err(error) => {
@@ -653,12 +653,12 @@ impl BrokerRuntime {
                     metrics_manager
                         .register_auth_observable_gauge(move || Some(auth_runtime_for_metrics.metrics_snapshot()));
                 }
-                self.composition.state.auth_admin_service =
+                self.composition.request_pipeline.auth_admin_service =
                     Some(Arc::new(AuthAdminService::with_provider_registry_and_config(
                         auth_runtime.provider_registry().clone(),
                         auth_runtime.config().clone(),
                     )));
-                self.composition.state.auth_runtime = Some(auth_runtime);
+                self.composition.request_pipeline.auth_runtime = Some(auth_runtime);
                 true
             }
             Err(error) => {

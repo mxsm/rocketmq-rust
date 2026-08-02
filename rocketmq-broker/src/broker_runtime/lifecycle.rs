@@ -120,7 +120,7 @@ impl BrokerRuntime {
         // them before store-dependent drains so a later unhealthy phase
         // cannot leak security background work.
         let started = Instant::now();
-        if let Some(auth_runtime) = self.composition.state.auth_runtime.take() {
+        if let Some(auth_runtime) = self.composition.request_pipeline.auth_runtime.take() {
             if let Err(error) = auth_runtime.shutdown().await {
                 warn!("Failed to shutdown auth runtime: {error}");
                 shutdown_report.auth =
@@ -1063,7 +1063,7 @@ impl BrokerRuntime {
             && self.composition.request_pipeline.proxy_request_processor.is_some()
             && self.composition.request_pipeline.processor_wiring_complete;
         let security_ready = (!live_broker_config.authentication_enabled && !live_broker_config.authorization_enabled)
-            || self.composition.state.auth_runtime.is_some();
+            || self.composition.request_pipeline.auth_runtime.is_some();
         let readiness = BrokerReadiness::new(
             store_writable,
             normal_listener,

@@ -26,19 +26,20 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
-use openraft::async_runtime::WatchReceiver;
 use openraft::ServerState;
 use rocketmq_controller::protobuf::openraft::open_raft_service_server::OpenRaftServiceServer;
 #[cfg(feature = "dev-single")]
 use rocketmq_controller::BrokerIdentityInfoSnapshot;
 #[cfg(feature = "dev-single")]
 use rocketmq_controller::BrokerLiveInfoSnapshot;
+use rocketmq_controller::ConsensusNode;
 use rocketmq_controller::ControllerConfig;
 use rocketmq_controller::ControllerConfigReader;
 use rocketmq_controller::ControllerRequest;
 #[cfg(feature = "dev-single")]
 use rocketmq_controller::ControllerResponseHeader;
-use rocketmq_controller::GrpcRaftService;
+use rocketmq_controller::MembershipChange;
+use rocketmq_controller::MembershipChangeRequest;
 use rocketmq_controller::Node;
 use rocketmq_controller::RaftMetrics;
 use rocketmq_controller::RaftNodeManager;
@@ -50,8 +51,18 @@ use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::body::sync_state_set_body::SyncStateSet;
 #[cfg(feature = "dev-single")]
 use rocketmq_protocol::protocol::RemotingDeserializable;
-#[cfg(feature = "dev-single")]
 use rocketmq_runtime::common::time_utils::current_millis;
+use rocketmq_security_api::MaintenanceAuthorizationContext;
+use rocketmq_security_api::MaintenanceAuthorizationGrant;
+use rocketmq_security_api::MaintenanceAuthorizer;
+use rocketmq_security_api::MaintenanceCapability;
+use rocketmq_security_api::MaintenancePolicy;
+use rocketmq_security_api::MaintenancePrincipalBinding;
+use rocketmq_security_api::MaintenanceRequestClass;
+use rocketmq_security_api::MaintenanceResourceBudget;
+use rocketmq_security_api::MaintenanceRole;
+use rocketmq_security_api::MaintenanceRoleGrant;
+use rocketmq_security_api::MAINTENANCE_POLICY_SCHEMA_VERSION;
 #[cfg(feature = "dev-single")]
 use tokio::sync::oneshot;
 #[cfg(feature = "dev-single")]
@@ -72,6 +83,82 @@ fn raft_node(node_id: u64, base_port: u16) -> Node {
         node_id,
         rpc_addr: format!("127.0.0.1:{}", base_port + node_id as u16),
     }
+}
+
+fn membership_authorization() -> MaintenanceAuthorizationGrant {
+    let policy = MaintenancePolicy {
+        schema_version: MAINTENANCE_POLICY_SCHEMA_VERSION,
+        policy_id: "controller.cluster-test-membership".to_string(),
+        policy_version: 1,
+        require_authentication: true,
+        require_authorization: true,
+        require_fencing_token: true,
+        max_request_lifetime_millis: 30_000,
+        resource_budget: MaintenanceResourceBudget {
+            max_checkpoint_bytes: 1_024,
+            max_store_members: 9,
+            max_concurrent_operations: 1,
+        },
+        principal_bindings: vec![MaintenancePrincipalBinding {
+            principal: "cluster-test-release-operator".to_string(),
+            roles: BTreeSet::from([MaintenanceRole::ReleaseOperator]),
+        }],
+        role_grants: vec![MaintenanceRoleGrant {
+            role: MaintenanceRole::ReleaseOperator,
+            capabilities: BTreeSet::from([MaintenanceCapability::ReleaseCheckpoint]),
+        }],
+    };
+    MaintenanceAuthorizer::new(policy.into_validated().expect("valid cluster test policy"))
+        .authorize(
+            Some(&MaintenanceAuthorizationContext {
+                authentication_enabled: true,
+                authorization_enabled: true,
+                principal: Some("cluster-test-release-operator".to_string()),
+                request_class: MaintenanceRequestClass::PrivilegedMaintenance,
+                capability: MaintenanceCapability::ReleaseCheckpoint,
+                deadline_unix_millis: current_millis() + 30_000,
+                fencing_token: Some(1),
+            }),
+            current_millis(),
+        )
+        .expect("membership authorization")
+}
+
+async fn add_cluster_learner(node: &RaftNodeManager, peer_id: u64, base_port: u16, operation: &str) {
+    let membership = node
+        .consensus_membership()
+        .await
+        .expect("read membership before adding learner");
+    let request = MembershipChangeRequest::new(
+        operation,
+        membership.version(),
+        MembershipChange::AddLearner {
+            node: ConsensusNode::new(peer_id, format!("127.0.0.1:{}", base_port + peer_id as u16))
+                .expect("valid learner node"),
+        },
+        "form integration-test Controller cluster",
+    )
+    .expect("valid add-learner request");
+    node.apply_membership_change(&membership_authorization(), request)
+        .await
+        .expect("add caught-up learner through membership boundary");
+}
+
+async fn promote_cluster_voter(node: &RaftNodeManager, node_id: u64, operation: &str) {
+    let membership = node
+        .consensus_membership()
+        .await
+        .expect("read membership before promoting learner");
+    let request = MembershipChangeRequest::new(
+        operation,
+        membership.version(),
+        MembershipChange::PromoteVoter { node_id },
+        "form integration-test Controller voting set",
+    )
+    .expect("valid promote-voter request");
+    node.apply_membership_change(&membership_authorization(), request)
+        .await
+        .expect("promote voter through membership boundary");
 }
 
 #[cfg(feature = "dev-single")]
@@ -143,15 +230,15 @@ impl ManagedNode {
     }
 
     fn enable_runtime(&self) {
-        self.node.raft().runtime_config().tick(true);
-        self.node.raft().runtime_config().heartbeat(true);
-        self.node.raft().runtime_config().elect(true);
+        self.node.set_runtime_tick_enabled(true);
+        self.node.set_runtime_heartbeat_enabled(true);
+        self.node.set_runtime_elect_enabled(true);
     }
 
     fn disable_runtime(&self) {
-        self.node.raft().runtime_config().tick(false);
-        self.node.raft().runtime_config().heartbeat(false);
-        self.node.raft().runtime_config().elect(false);
+        self.node.set_runtime_tick_enabled(false);
+        self.node.set_runtime_heartbeat_enabled(false);
+        self.node.set_runtime_elect_enabled(false);
     }
 
     async fn shutdown(&mut self) {
@@ -211,7 +298,7 @@ async fn start_managed_node(config: ControllerConfig, enable_runtime: bool) -> M
         .await
         .unwrap(),
     );
-    let service = GrpcRaftService::new(node.raft());
+    let service = node.grpc_service();
     let (server_shutdown_tx, server_shutdown_rx) = oneshot::channel();
     let server_handle = tokio::spawn(async move {
         let result = Server::builder()
@@ -289,10 +376,8 @@ async fn bootstrap_persistent_cluster(node_count: u64, base_port: u16, storage_r
         );
         tokio::time::sleep(Duration::from_millis(200)).await;
         println!("Adding persistent node {} as learner", peer.id);
-        first_node
-            .add_learner(peer.id, raft_node(peer.id, base_port), true)
-            .await
-            .unwrap();
+        let operation = format!("persistent-bootstrap-add-learner-{}", peer.id);
+        add_cluster_learner(&first_node, peer.id, base_port, &operation).await;
         let node_refs = managed_refs(&nodes);
         wait_for_learner_readiness(&node_refs, peer.id, first_node_id).await;
     }
@@ -302,10 +387,10 @@ async fn bootstrap_persistent_cluster(node_count: u64, base_port: u16, storage_r
         "Promoting persistent cluster membership to voters: {:?}",
         expected_voters
     );
-    first_node
-        .change_membership(expected_voters.clone(), false)
-        .await
-        .unwrap();
+    for peer in all_peers.iter().skip(1) {
+        let operation = format!("persistent-bootstrap-promote-voter-{}", peer.id);
+        promote_cluster_voter(&first_node, peer.id, &operation).await;
+    }
     let node_refs = managed_refs(&nodes);
     wait_for_stable_voters(&node_refs, &expected_voters).await;
 
@@ -502,7 +587,7 @@ fn membership_voters(metrics: &RaftMetrics) -> BTreeSet<u64> {
 fn snapshot_metrics(nodes: &[(u64, Arc<RaftNodeManager>)]) -> Vec<(u64, RaftMetrics)> {
     nodes
         .iter()
-        .map(|(node_id, node)| (*node_id, node.raft().metrics().borrow_watched().clone()))
+        .map(|(node_id, node)| (*node_id, node.raft_metrics()))
         .collect()
 }
 
@@ -536,12 +621,12 @@ async fn start_node(
     );
 
     if !seed_known_peers {
-        node.raft().runtime_config().heartbeat(false);
-        node.raft().runtime_config().elect(false);
-        node.raft().runtime_config().tick(false);
+        node.set_runtime_heartbeat_enabled(false);
+        node.set_runtime_elect_enabled(false);
+        node.set_runtime_tick_enabled(false);
     }
 
-    let service = GrpcRaftService::new(node.raft());
+    let service = node.grpc_service();
     let server = Server::builder()
         .add_service(OpenRaftServiceServer::new(service))
         .serve(addr);
@@ -752,25 +837,23 @@ async fn bootstrap_cluster(node_count: u64, base_port: u16) -> Vec<(u64, Arc<Raf
         nodes.push(start_node(peer.id, base_port, &all_peers, false).await);
         tokio::time::sleep(Duration::from_millis(200)).await;
         println!("Adding node {} as learner", peer.id);
-        first_node
-            .add_learner(peer.id, raft_node(peer.id, base_port), true)
-            .await
-            .unwrap();
+        let operation = format!("ephemeral-bootstrap-add-learner-{}", peer.id);
+        add_cluster_learner(&first_node, peer.id, base_port, &operation).await;
         wait_for_learner_readiness(&nodes, peer.id, first_node_id).await;
     }
 
     let expected_voters = all_peers.iter().map(|peer| peer.id).collect::<BTreeSet<_>>();
     println!("Promoting cluster membership to voters: {:?}", expected_voters);
-    first_node
-        .change_membership(expected_voters.clone(), false)
-        .await
-        .unwrap();
+    for peer in all_peers.iter().skip(1) {
+        let operation = format!("ephemeral-bootstrap-promote-voter-{}", peer.id);
+        promote_cluster_voter(&first_node, peer.id, &operation).await;
+    }
     wait_for_stable_voters(&nodes, &expected_voters).await;
 
     for (_, node) in nodes.iter().skip(1) {
-        node.raft().runtime_config().tick(true);
-        node.raft().runtime_config().heartbeat(true);
-        node.raft().runtime_config().elect(true);
+        node.set_runtime_tick_enabled(true);
+        node.set_runtime_heartbeat_enabled(true);
+        node.set_runtime_elect_enabled(true);
     }
 
     println!("Multi-voter cluster initialized with membership: {:?}", expected_voters);
@@ -794,7 +877,7 @@ async fn test_three_node_cluster_formation() {
 
     for (node_id, node) in &nodes {
         let is_leader = node.is_leader().await.unwrap_or(false);
-        let metrics = node.raft().metrics().borrow_watched().clone();
+        let metrics = node.raft_metrics();
         if metrics.state == ServerState::Learner {
             learner_count += 1;
         }
@@ -837,7 +920,7 @@ async fn test_cluster_client_write() {
 
     for (node_id, node) in &nodes {
         let is_leader = node.is_leader().await.unwrap_or(false);
-        let metrics = node.raft().metrics().borrow_watched().clone();
+        let metrics = node.raft_metrics();
 
         if metrics.state == openraft::ServerState::Learner {
             learner_count += 1;
@@ -883,13 +966,13 @@ async fn test_cluster_client_write() {
             tokio::time::sleep(Duration::from_millis(500)).await;
 
             // Verify data is replicated (metrics check)
-            let leader_metrics = leader_node.raft().metrics().borrow_watched().clone();
+            let leader_metrics = leader_node.raft_metrics();
             assert!(
                 leader_metrics.last_applied.is_some(),
                 "Leader should apply the client write"
             );
             for (node_id, node) in &nodes {
-                let metrics = node.raft().metrics().borrow_watched().clone();
+                let metrics = node.raft_metrics();
                 assert_eq!(
                     membership_voters(&metrics),
                     BTreeSet::from([1, 2, 3]),
@@ -911,8 +994,7 @@ async fn test_cluster_client_write() {
         Err(_) => {
             println!(" Write operation timed out after 10 seconds");
             for (node_id, node) in &nodes {
-                use openraft::async_runtime::WatchReceiver;
-                let metrics = node.raft().metrics().borrow_watched().clone();
+                let metrics = node.raft_metrics();
                 println!(
                     "  Node {}: state={:?}, term={}, leader={:?}",
                     node_id, metrics.state, metrics.current_term, metrics.current_leader
@@ -1029,8 +1111,7 @@ async fn test_five_node_cluster() {
     // Wait for replication
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    use openraft::async_runtime::WatchReceiver;
-    let metrics = leader_node.raft().metrics().borrow_watched().clone();
+    let metrics = leader_node.raft_metrics();
     println!("Final metrics: last_applied={:?}", metrics.last_applied);
 }
 
@@ -1046,8 +1127,7 @@ async fn test_cluster_metrics() {
 
     // Check metrics for all nodes
     for (node_id, node) in &nodes {
-        use openraft::async_runtime::WatchReceiver;
-        let metrics = node.raft().metrics().borrow_watched().clone();
+        let metrics = node.raft_metrics();
 
         println!("Node {} metrics:", node_id);
         println!("  State: {:?}", metrics.state);
@@ -1138,7 +1218,7 @@ async fn test_three_node_cluster_re_elects_after_leader_shutdown() {
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     for (node_id, node) in nodes.iter().filter(|(node_id, _)| *node_id != old_leader_id) {
-        let metrics = node.raft().metrics().borrow_watched().clone();
+        let metrics = node.raft_metrics();
         assert_eq!(
             metrics.current_leader,
             Some(new_leader_id),

@@ -27,6 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **refactor(error):** Preserve typed header, JSON, and authorization sources through Controller maintenance handling while retaining the existing error kinds and redacted boundary projections.
+- **fix(controller):** Route online consensus membership changes through `apply_membership_change`, which requires a maintenance authorization grant, optimistic membership version, idempotency key, quorum checks, and audit facts. Direct public `add_learner` and `change_membership` mutation methods are no longer exposed; embedders must migrate online changes to the authorized boundary.
+- **refactor(proxy):** Remove the hidden `rocketmq_broker::proxy_adapter_compat` re-export surface. Embedded proxy integrations must import model, protocol, store, transport, and observability types from their owning crates and use `ProxyBrokerFacade` for Broker use cases.
+- **refactor(namesrv):** Make embedded Controller support opt-in through the `embedded-controller` feature. Applications using `Builder::set_controller_config` or `Builder::set_controller_config_opt` must enable this feature; default builds reject `enableControllerInNamesrv=true` and no longer include Controller, OpenRaft, or RocksDB.
 - **chore(broker):** Remove commented-out dead logging code in `pull_request_hold_service.rs` ([#6579](https://github.com/mxsm/rocketmq-rust/issues/6579))
 - **refactor(remoting/tools):** Return references from `TopicStatsTable::get_offset_table` and add `into_offset_table`/`get_offset_table_mut` to avoid unnecessary `HashMap` cloning in topic status flows
 - **refactor(common):** Rename foundational `MessageTrait` methods to the idiomatic Rust naming: `get_property` to `property` and `get_property_ref` to `property_ref` (other getters like `get_topic`, `get_flag`, etc.. will be renamed in subsequent commits)

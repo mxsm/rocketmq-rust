@@ -22,17 +22,24 @@ use anyhow::bail;
 use anyhow::Context;
 use anyhow::Result;
 use clap::Parser;
+#[cfg(feature = "embedded-controller")]
 use config::Config;
+#[cfg(feature = "embedded-controller")]
 use rocketmq_controller::resolve_controller_raft_bind_addr;
+#[cfg(feature = "embedded-controller")]
 use rocketmq_controller::ControllerCli;
+#[cfg(feature = "embedded-controller")]
 use rocketmq_controller::ControllerConfig;
+#[cfg(feature = "embedded-controller")]
 use rocketmq_controller::RaftPeer;
+#[cfg(feature = "embedded-controller")]
 use rocketmq_controller::StorageBackendType;
 use rocketmq_model::utils::env_utils::EnvUtils;
 use rocketmq_model::version::CURRENT_VERSION;
 use rocketmq_namesrv::bootstrap::Builder;
 use rocketmq_namesrv::parse_command_and_config_file;
 use rocketmq_namesrv::NamesrvConfig;
+#[cfg(feature = "embedded-controller")]
 use rocketmq_observability::MetricsExporterType;
 use rocketmq_protocol::protocol::remoting_command_facade::initialize_remoting_version;
 use rocketmq_runtime::common::parse_config_file;
@@ -48,6 +55,7 @@ use rocketmq_security_api::SecurityBootstrapConfig;
 use rocketmq_security_api::SecurityBootstrapOutcome;
 use rocketmq_security_api::SecurityBootstrapProfile;
 use rocketmq_transport::ServerConfig;
+#[cfg(feature = "embedded-controller")]
 use serde::Deserialize;
 use tracing::info;
 
@@ -59,6 +67,11 @@ const LOGO: &str = r#"
      | | \ \ (_) | (__|   <  __/ |_| |  | | |__| |      | | \ \ |_| \__ \ |_  | |\  | (_| | | | | | |  __/  ____) |  __/ |   \ V /  __/ |
      |_|  \_\___/ \___|_|\_\___|\__|_|  |_|\___\_\      |_|  \_\__,_|___/\__| |_| \_|\__,_|_| |_| |_|\___| |_____/ \___|_|    \_/ \___|_|
     "#;
+
+#[cfg(feature = "embedded-controller")]
+type EmbeddedControllerConfig = ControllerConfig;
+#[cfg(not(feature = "embedded-controller"))]
+type EmbeddedControllerConfig = ();
 
 fn main() -> Result<()> {
     let owner = RuntimeOwner::new(namesrv_runtime_config()).context("failed to build namesrv runtime")?;
@@ -196,10 +209,14 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
     info!("Config Store Path: {}", namesrv_config.config_store_path);
     info!("===============================================");
     // Start the name server
-    let boot_result = Builder::new(service_context.clone(), telemetry_guard.handle())
+    let builder = Builder::new(service_context.clone(), telemetry_guard.handle())
         .set_name_server_config(namesrv_config)
-        .set_server_config(server_config)
-        .set_controller_config_opt(controller_config)
+        .set_server_config(server_config);
+    #[cfg(feature = "embedded-controller")]
+    let builder = builder.set_controller_config_opt(controller_config);
+    #[cfg(not(feature = "embedded-controller"))]
+    let _ = controller_config;
+    let boot_result = builder
         .build()
         .boot_with_lifecycle(lifecycle.clone())
         .await
@@ -241,7 +258,7 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
 fn validate_namesrv_security(
     security_bootstrap: &SecurityBootstrap,
     server_config: &ServerConfig,
-    controller_config: Option<&ControllerConfig>,
+    controller_config: Option<&EmbeddedControllerConfig>,
     prometheus_bind_addr: Option<SocketAddr>,
     probe_bind_addr: Option<SocketAddr>,
 ) -> Result<SecurityBootstrapOutcome> {
@@ -254,6 +271,7 @@ fn validate_namesrv_security(
         .context("NameServer bindAddress must be an IP address")?;
     let listen_port = u16::try_from(server_config.listen_port).context("NameServer listenPort must fit a TCP port")?;
     let mut listeners = vec![SocketAddr::new(bind_ip, listen_port)];
+    #[cfg(feature = "embedded-controller")]
     if let Some(controller_config) = controller_config {
         listeners.push(controller_config.listen_addr);
         listeners.push(
@@ -261,6 +279,8 @@ fn validate_namesrv_security(
                 .context("failed to resolve embedded Controller Raft listener address")?,
         );
     }
+    #[cfg(not(feature = "embedded-controller"))]
+    let _ = controller_config;
     if let Some(prometheus_bind_addr) = prometheus_bind_addr {
         listeners.push(prometheus_bind_addr);
     }
@@ -371,7 +391,7 @@ fn parse_and_merge_config(
 ) -> Result<(
     NamesrvConfig,
     ServerConfig,
-    Option<ControllerConfig>,
+    Option<EmbeddedControllerConfig>,
     rocketmq_observability::LoggingOverrides,
 )> {
     let home = EnvUtils::get_rocketmq_home();
@@ -406,8 +426,15 @@ fn parse_and_merge_config(
         apply_tls_properties_from_file(&mut server_config, config_file)?;
     }
 
-    let controller_config = if namesrv_config.enable_controller_in_namesrv {
-        Some(load_controller_config(args.config_file.clone(), &namesrv_config)?)
+    let controller_config: Option<EmbeddedControllerConfig> = if namesrv_config.enable_controller_in_namesrv {
+        #[cfg(feature = "embedded-controller")]
+        {
+            Some(load_controller_config(args.config_file.clone(), &namesrv_config)?)
+        }
+        #[cfg(not(feature = "embedded-controller"))]
+        {
+            bail!("enableControllerInNamesrv requires a NameServer binary built with the `embedded-controller` feature")
+        }
     } else {
         None
     };
@@ -448,7 +475,7 @@ fn apply_tls_properties_from_file(server_config: &mut ServerConfig, config_file:
 fn print_config(
     namesrv_config: &NamesrvConfig,
     server_config: &ServerConfig,
-    controller_config: Option<&ControllerConfig>,
+    controller_config: Option<&EmbeddedControllerConfig>,
 ) {
     println!("\n========== Name Server Configuration ==========");
     println!("rocketmqHome = {}", namesrv_config.rocketmq_home);
@@ -504,13 +531,17 @@ fn print_config(
     println!("listenPort = {}", server_config.listen_port);
     println!("bindAddress = {}", server_config.bind_address);
 
+    #[cfg(feature = "embedded-controller")]
     if let Some(controller_config) = controller_config {
         ControllerCli::print_config(controller_config);
     }
+    #[cfg(not(feature = "embedded-controller"))]
+    let _ = controller_config;
 
     println!("\n===========================================\n");
 }
 
+#[cfg(feature = "embedded-controller")]
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ControllerConfigOverrides {
@@ -549,6 +580,7 @@ struct ControllerConfigOverrides {
     enable_elect_unclean_master_local: Option<bool>,
 }
 
+#[cfg(feature = "embedded-controller")]
 fn load_controller_config(config_file: Option<PathBuf>, namesrv_config: &NamesrvConfig) -> Result<ControllerConfig> {
     let mut controller_config = ControllerConfig::default().with_rocketmq_home(namesrv_config.rocketmq_home.clone());
 
@@ -563,6 +595,7 @@ fn load_controller_config(config_file: Option<PathBuf>, namesrv_config: &Namesrv
     Ok(controller_config)
 }
 
+#[cfg(feature = "embedded-controller")]
 fn apply_controller_config_overrides(
     controller_config: &mut ControllerConfig,
     overrides: ControllerConfigOverrides,
@@ -678,6 +711,7 @@ fn apply_controller_config_overrides(
     Ok(())
 }
 
+#[cfg(feature = "embedded-controller")]
 fn parse_raft_peers(value: &str) -> Result<Vec<RaftPeer>> {
     if value.trim().is_empty() {
         return Ok(Vec::new());

@@ -21,7 +21,6 @@ use std::time::Duration;
 use rocketmq_controller::protobuf::openraft::open_raft_service_server::OpenRaftServiceServer;
 use rocketmq_controller::ControllerConfig;
 use rocketmq_controller::ControllerConfigReader;
-use rocketmq_controller::GrpcRaftService;
 use rocketmq_controller::Node;
 use rocketmq_controller::RaftNodeManager;
 use rocketmq_controller::RaftPeer;
@@ -79,7 +78,7 @@ async fn test_simple_cluster_setup() {
         );
 
         // Start gRPC server
-        let service = GrpcRaftService::new(node.raft());
+        let service = node.grpc_service();
         let server = Server::builder()
             .add_service(OpenRaftServiceServer::new(service))
             .serve(addr);
@@ -143,8 +142,7 @@ async fn test_simple_cluster_setup() {
         }
 
         // Print metrics
-        use openraft::async_runtime::WatchReceiver;
-        let metrics = node.raft().metrics().borrow_watched().clone();
+        let metrics = node.raft_metrics();
         println!("  - State: {:?}", metrics.state);
         println!("  - Term: {}", metrics.current_term);
         println!("  - Leader: {:?}", metrics.current_leader);

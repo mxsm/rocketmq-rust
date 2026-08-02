@@ -123,6 +123,7 @@ pub use runtime::connection_handler_context::ConnectionHandlerContextWrapper;
 pub use runtime::processor::LocalRequestProcessor;
 pub use runtime::processor::RejectRequestResponse;
 pub use runtime::processor::RequestProcessor as RemotingRequestProcessor;
+pub use runtime::processor::SessionRequestProcessorAdapter;
 pub use runtime::processor_v2::AdminProcessorExample;
 pub use runtime::processor_v2::CoreProcessor;
 pub use runtime::processor_v2::CoreProcessorVariant;
