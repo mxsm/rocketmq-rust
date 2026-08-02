@@ -14,7 +14,6 @@
 
 use std::hint::black_box;
 use std::io::Write as IoWrite;
-use std::sync::Arc;
 
 use criterion::criterion_group;
 use criterion::criterion_main;
@@ -22,12 +21,11 @@ use criterion::BenchmarkId;
 use criterion::Criterion;
 use criterion::Throughput;
 use memmap2::MmapMut;
-use parking_lot::RwLock;
 use rocketmq_store::MappedBuffer;
 use tempfile::NamedTempFile;
 
 /// Create a test mmap of specified size
-fn create_test_mmap(size: usize) -> (NamedTempFile, Arc<RwLock<MmapMut>>) {
+fn create_test_mmap(size: usize) -> (NamedTempFile, MmapMut) {
     let mut file = NamedTempFile::new().unwrap();
     file.write_all(&vec![0u8; size]).unwrap();
     file.flush().unwrap();
@@ -35,7 +33,7 @@ fn create_test_mmap(size: usize) -> (NamedTempFile, Arc<RwLock<MmapMut>>) {
     let file_handle = file.reopen().unwrap();
     let mmap = unsafe { MmapMut::map_mut(&file_handle).unwrap() };
 
-    (file, Arc::new(RwLock::new(mmap)))
+    (file, mmap)
 }
 
 /// Benchmark sequential writes of different sizes
@@ -46,7 +44,7 @@ fn bench_sequential_write(c: &mut Criterion) {
         group.throughput(Throughput::Bytes(*size as u64));
         group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, &size| {
             let (_file, mmap) = create_test_mmap(1024 * 1024);
-            let buffer = MappedBuffer::new(mmap, 0, 1024 * 1024).unwrap();
+            let buffer = MappedBuffer::from_mmap(mmap, 0, 1024 * 1024).unwrap();
             let data = vec![0xAAu8; size];
 
             b.iter(|| {
@@ -68,7 +66,7 @@ fn bench_random_write(c: &mut Criterion) {
     group.throughput(Throughput::Bytes(size as u64));
     group.bench_function("random_1kb", |b| {
         let (_file, mmap) = create_test_mmap(1024 * 1024);
-        let buffer = MappedBuffer::new(mmap, 0, 1024 * 1024).unwrap();
+        let buffer = MappedBuffer::from_mmap(mmap, 0, 1024 * 1024).unwrap();
         let data = vec![0xBBu8; size];
 
         // Pre-generate random offsets
@@ -91,7 +89,7 @@ fn bench_batch_write(c: &mut Criterion) {
     // Individual writes
     group.bench_function("individual_100x1kb", |b| {
         let (_file, mmap) = create_test_mmap(1024 * 1024);
-        let buffer = MappedBuffer::new(mmap, 0, 1024 * 1024).unwrap();
+        let buffer = MappedBuffer::from_mmap(mmap, 0, 1024 * 1024).unwrap();
         let data = vec![0xCCu8; 1024];
 
         b.iter(|| {
@@ -104,7 +102,7 @@ fn bench_batch_write(c: &mut Criterion) {
     // Batch writes
     group.bench_function("batch_100x1kb", |b| {
         let (_file, mmap) = create_test_mmap(1024 * 1024);
-        let buffer = MappedBuffer::new(mmap, 0, 1024 * 1024).unwrap();
+        let buffer = MappedBuffer::from_mmap(mmap, 0, 1024 * 1024).unwrap();
         let data = vec![0xCCu8; 1024];
 
         b.iter(|| {
@@ -125,7 +123,7 @@ fn bench_read(c: &mut Criterion) {
 
         group.bench_with_input(BenchmarkId::new("bytes_copy", size), size, |b, &size| {
             let (_file, mmap) = create_test_mmap(1024 * 1024);
-            let buffer = MappedBuffer::new(mmap, 0, 1024 * 1024).unwrap();
+            let buffer = MappedBuffer::from_mmap(mmap, 0, 1024 * 1024).unwrap();
 
             b.iter(|| {
                 let data = buffer.read_copy(0..size).unwrap();
@@ -144,7 +142,7 @@ fn bench_flush(c: &mut Criterion) {
     // Full flush
     group.bench_function("full_1mb", |b| {
         let (_file, mmap) = create_test_mmap(1024 * 1024);
-        let buffer = MappedBuffer::new(mmap, 0, 1024 * 1024).unwrap();
+        let buffer = MappedBuffer::from_mmap(mmap, 0, 1024 * 1024).unwrap();
 
         // Write some data
         let data = vec![0xDDu8; 1024];
@@ -160,7 +158,7 @@ fn bench_flush(c: &mut Criterion) {
     // Range flush
     group.bench_function("range_4kb", |b| {
         let (_file, mmap) = create_test_mmap(1024 * 1024);
-        let buffer = MappedBuffer::new(mmap, 0, 1024 * 1024).unwrap();
+        let buffer = MappedBuffer::from_mmap(mmap, 0, 1024 * 1024).unwrap();
 
         // Write some data
         let data = vec![0xDDu8; 4096];
@@ -180,14 +178,15 @@ fn bench_concurrent(c: &mut Criterion) {
 
     group.bench_function("8_threads_write", |b| {
         let (_file, mmap) = create_test_mmap(8 * 1024 * 1024);
+        let root = MappedBuffer::from_mmap(mmap, 0, 8 * 1024 * 1024).unwrap();
 
         b.iter(|| {
             let handles: Vec<_> = (0..8)
                 .map(|i| {
-                    let mmap_clone = Arc::clone(&mmap);
+                    let root = root.clone();
                     std::thread::spawn(move || {
                         let offset = i * 1024 * 1024;
-                        let buffer = MappedBuffer::new(mmap_clone, offset, 1024 * 1024).unwrap();
+                        let buffer = root.region(offset..offset + 1024 * 1024).unwrap();
                         let data = vec![i as u8; 1024];
 
                         for j in 0..1024 {

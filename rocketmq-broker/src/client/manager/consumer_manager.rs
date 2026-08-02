@@ -305,8 +305,7 @@ impl ConsumerManager {
             let group_info = entry.value();
             let group = group_info.get_group_name().clone();
             let consume_type = group_info.get_consume_type();
-            for channel_info in group_info.get_channel_info_table().iter() {
-                let client = channel_info.value();
+            for (_, client) in group_info.channel_info_snapshot() {
                 *counts
                     .entry((group.clone(), client.language(), client.version(), consume_type))
                     .or_default() += 1;
@@ -409,7 +408,7 @@ impl ConsumerManager {
     /// Number of subscriptions
     pub fn find_subscription_data_count(&self, group: &CheetahString) -> usize {
         if let Some(consumer_group_info) = self.get_consumer_group_info(group) {
-            return consumer_group_info.get_subscription_table().len();
+            return consumer_group_info.subscription_count();
         }
         0
     }
@@ -465,9 +464,9 @@ impl ConsumerManager {
             .consumer_compensation_table
             .entry(group.clone())
             .or_insert_with(|| ConsumerGroupInfo::with_group_name(group.clone()));
-        consumer_group_info
-            .get_subscription_table()
-            .insert(topic.into(), Arc::new(subscription_data.clone()));
+        let mut subscription = subscription_data.clone();
+        subscription.topic = topic.clone();
+        consumer_group_info.upsert_subscription(subscription);
     }
 
     /// Compensates basic consumer info (consume type and message model).
@@ -790,7 +789,7 @@ impl ConsumerManager {
         }
         let message_model = consumer_group_info.get_message_model();
         let channels = consumer_group_info.get_all_channels();
-        if consumer_group_info.get_channel_info_table().is_empty() {
+        if consumer_group_info.channels_is_empty() {
             // Clone consumer_group_info for cleanup before dropping the reference
             let group_info_clone = consumer_group_info.clone();
             drop(consumer_group_info); // Release the reference
@@ -823,20 +822,20 @@ impl ConsumerManager {
             let group = entry.key().clone();
             let consumer_group_info = entry.value_mut();
             let mut topics_to_remove = Vec::new();
-            let subscription_table = consumer_group_info.get_subscription_table();
+            let subscription_snapshot = consumer_group_info.subscription_snapshot();
 
             // Find expired subscriptions
-            for subscription_data in subscription_table.iter() {
+            for (topic, subscription_data) in subscription_snapshot {
                 let diff = current_millis() as i64 - subscription_data.sub_version;
                 if diff > self.subscription_expired_timeout as i64 {
-                    topics_to_remove.push(subscription_data.key().clone());
+                    topics_to_remove.push(topic);
                 }
             }
 
             // Remove expired subscriptions
             for topic in topics_to_remove {
-                subscription_table.remove(&topic);
-                if subscription_table.is_empty() {
+                consumer_group_info.remove_subscription(topic.as_str());
+                if consumer_group_info.subscriptions_is_empty() {
                     groups_to_remove.push(group.clone());
                 }
             }
@@ -871,21 +870,21 @@ impl ConsumerManager {
         for entry in self.consumer_table.iter() {
             let group = entry.key().clone();
             let consumer_group_info = entry.value();
-            let channel_info_table = consumer_group_info.get_channel_info_table();
+            let channel_info_snapshot = consumer_group_info.channel_info_snapshot();
 
             let mut group_has_expired = false;
             // Collect expired channels for this group
-            for client_channel_info in channel_info_table.iter() {
+            for (channel, client_channel_info) in channel_info_snapshot {
                 let diff = current_time as i64 - client_channel_info.last_update_timestamp() as i64;
 
                 if diff > self.channel_expired_timeout as i64 {
                     warn!(
                         "SCAN: remove expired channel from ConsumerManager consumerTable. channel={}, consumerGroup={}",
-                        client_channel_info.key().channel_id(),
+                        channel.channel_id(),
                         group
                     );
 
-                    expired_channels.push((group.clone(), client_channel_info.key().clone()));
+                    expired_channels.push((group.clone(), channel));
                     group_has_expired = true;
                 }
             }
@@ -901,7 +900,7 @@ impl ConsumerManager {
         for (group, channel) in expired_channels {
             // Remove channel from group
             if let Some(consumer_group_info) = self.consumer_table.get(&group) {
-                consumer_group_info.get_channel_info_table().remove(&channel);
+                consumer_group_info.remove_channel(&channel);
 
                 // Clean up fast channel event process mapping
                 if self.is_fast_channel_event_process_enabled() {
@@ -934,9 +933,7 @@ impl ConsumerManager {
 
         for group in groups_to_check_empty {
             if let Some(consumer_group_info) = self.consumer_table.get(&group) {
-                let channel_info_table = consumer_group_info.get_channel_info_table();
-
-                if channel_info_table.is_empty() {
+                if consumer_group_info.channels_is_empty() {
                     warn!(
                         "SCAN: remove expired channel from ConsumerManager consumerTable, all clear, consumerGroup={}",
                         group
@@ -998,7 +995,7 @@ impl ConsumerManager {
                                 ],
                             );
 
-                            if info.get_channel_info_table().is_empty() {
+                            if info.channels_is_empty() {
                                 remove_list.push(group.clone());
                             } else if !is_broadcast_mode(info.get_message_model()) {
                                 self.call_consumer_ids_change_listener(
@@ -1045,7 +1042,7 @@ impl ConsumerManager {
                     ],
                 );
 
-                if info.get_channel_info_table().is_empty() {
+                if info.channels_is_empty() {
                     remove_list.push(group.clone());
                 } else if !is_broadcast_mode(info.get_message_model()) {
                     // Send Change event only if group still has active channels
@@ -1142,9 +1139,7 @@ mod tests {
             LanguageCode::default(),
             1,
         );
-        group_info
-            .get_channel_info_table()
-            .insert(client.channel().clone(), client.clone());
+        group_info.upsert_channel_info(client.clone());
         consumer_table.insert(group.clone(), group_info.clone());
 
         assert_eq!(

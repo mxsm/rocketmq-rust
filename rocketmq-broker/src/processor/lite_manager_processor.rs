@@ -599,11 +599,11 @@ impl<MS: BrokerReadWriteStore> LiteManagerProcessor<MS> {
     fn build_lite_topic_meta(&self) -> HashMap<CheetahString, i32> {
         self.context
             .topic_config_manager
-            .topic_config_table()
-            .iter()
-            .filter_map(|entry| {
-                (entry.value().get_topic_message_type() == TopicMessageType::Lite)
-                    .then(|| (entry.key().clone(), entry.value().get_lite_topic_expiration()))
+            .topic_config_snapshot()
+            .into_iter()
+            .filter_map(|(topic, config)| {
+                (config.get_topic_message_type() == TopicMessageType::Lite)
+                    .then(|| (topic, config.get_lite_topic_expiration()))
             })
             .collect()
     }

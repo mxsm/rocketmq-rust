@@ -393,12 +393,40 @@ impl TaskGroup {
         self.spawn_inner(name.into(), kind, None, future)
     }
 
-    /// Spawns service.
+    /// Spawns a service that owns its shutdown protocol.
+    ///
+    /// The service remains tracked during owner shutdown, but its future must
+    /// observe an appropriate cancellation signal and perform any required
+    /// ordered cleanup itself. Use [`Self::spawn_cancellable_service`] when it
+    /// is safe to drop the service future as soon as its owner is cancelled.
     pub fn spawn_service<F>(&self, name: impl Into<Arc<str>>, future: F) -> RuntimeResult<TaskId>
     where
         F: Future<Output = ()> + Send + 'static,
     {
         self.spawn(name, TaskKind::Service, future)
+    }
+
+    /// Spawns a service that exits when either its future completes or its owner is cancelled.
+    ///
+    /// Owner cancellation drops `future`; services that require an ordered
+    /// cleanup sequence must use [`Self::spawn_service`] and observe a
+    /// cancellation token explicitly.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when this task group is shutting down or closed.
+    pub fn spawn_cancellable_service<F>(&self, name: impl Into<Arc<str>>, future: F) -> RuntimeResult<TaskId>
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        let owner_cancellation = self.cancellation_token();
+        self.spawn_service(name, async move {
+            tokio::select! {
+                biased;
+                _ = owner_cancellation.cancelled() => {}
+                _ = future => {}
+            }
+        })
     }
 
     /// Spawns work for a bounded operation under this fixed component owner.

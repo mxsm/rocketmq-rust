@@ -647,7 +647,7 @@ mod tests {
         let consumer_group_info = consumer_manager
             .get_consumer_group_info(&CheetahString::from_static_str("group-a"))
             .expect("consumer should be registered");
-        assert!(consumer_group_info.get_subscription_table().is_empty());
+        assert!(consumer_group_info.subscriptions_is_empty());
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }
 

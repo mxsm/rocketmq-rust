@@ -27,6 +27,9 @@ use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_utils::TopicQueueMappingUtils;
 
+/// Owned broker-address view keyed by broker name and broker id.
+pub type BrokerAddressSnapshot = HashMap<CheetahString, HashMap<u64, CheetahString>>;
+
 pub struct ClientMetadata {
     topic_route_table: Arc<RwLock<HashMap<CheetahString /* Topic */, TopicRouteData>>>,
     topic_end_points_table:
@@ -103,10 +106,39 @@ impl ClientMetadata {
     }
 
     pub fn find_master_broker_addr(&self, broker_name: &str) -> Option<CheetahString> {
-        let read_guard = self.broker_addr_table.read();
-        read_guard
+        self.find_broker_addr(broker_name, MASTER_ID)
+    }
+
+    /// Returns one broker address without exposing the shared table or its lock.
+    pub fn find_broker_addr(&self, broker_name: &str, broker_id: u64) -> Option<CheetahString> {
+        self.broker_addr_table
+            .read()
             .get(broker_name)
-            .and_then(|broker_addrs| broker_addrs.get(&(MASTER_ID)).cloned())
+            .and_then(|broker_addrs| broker_addrs.get(&broker_id).cloned())
+    }
+
+    /// Returns an owned snapshot of all known broker addresses.
+    pub fn broker_addr_snapshot(&self) -> BrokerAddressSnapshot {
+        self.broker_addr_table.read().clone()
+    }
+
+    /// Returns an owned address map for one broker.
+    pub fn broker_addresses(&self, broker_name: &str) -> Option<HashMap<u64, CheetahString>> {
+        self.broker_addr_table.read().get(broker_name).cloned()
+    }
+
+    /// Replaces the addresses for one broker and returns the previous owned value.
+    pub fn update_broker_addresses(
+        &self,
+        broker_name: impl Into<CheetahString>,
+        broker_addrs: HashMap<u64, CheetahString>,
+    ) -> Option<HashMap<u64, CheetahString>> {
+        self.broker_addr_table.write().insert(broker_name.into(), broker_addrs)
+    }
+
+    /// Removes one broker and returns its previous owned address map.
+    pub fn remove_broker_addresses(&self, broker_name: &str) -> Option<HashMap<u64, CheetahString>> {
+        self.broker_addr_table.write().remove(broker_name)
     }
 
     pub fn topic_route_data2endpoints_for_static_topic(
@@ -186,7 +218,12 @@ impl ClientMetadata {
         Some(mq_end_points_of_broker)
     }
 
-    pub fn broker_addr_table(&self) -> Arc<RwLock<HashMap<CheetahString, HashMap<u64, CheetahString>>>> {
+    /// Returns the shared mutable broker table for legacy integrations.
+    ///
+    /// New code should use [`Self::broker_addr_snapshot`], [`Self::broker_addresses`], and the
+    /// controlled update methods instead. This compatibility API will be removed in 2.0.0.
+    #[deprecated(note = "use broker_addr_snapshot, broker_addresses, or controlled update methods; removal in 2.0.0")]
+    pub fn broker_addr_table(&self) -> Arc<RwLock<BrokerAddressSnapshot>> {
         self.broker_addr_table.clone()
     }
 }
@@ -327,5 +364,44 @@ mod tests {
         metadata.fresh_topic_route(&topic, Some(TopicRouteData::default()));
 
         assert!(!metadata.topic_end_points_table.read().contains_key(&topic));
+    }
+
+    #[test]
+    fn broker_address_queries_and_snapshot_do_not_expose_shared_state() {
+        let metadata = ClientMetadata::new();
+        let broker = CheetahString::from_static_str("BrokerA");
+        let mut addresses = HashMap::new();
+        addresses.insert(MASTER_ID, CheetahString::from_static_str("127.0.0.1:10911"));
+        metadata.update_broker_addresses(broker.clone(), addresses);
+
+        assert_eq!(
+            metadata.find_master_broker_addr(broker.as_str()),
+            Some(CheetahString::from_static_str("127.0.0.1:10911"))
+        );
+        assert_eq!(metadata.broker_addresses(broker.as_str()).unwrap().len(), 1);
+
+        let mut snapshot = metadata.broker_addr_snapshot();
+        snapshot.clear();
+        assert_eq!(metadata.broker_addr_snapshot().len(), 1);
+    }
+
+    #[test]
+    fn controlled_broker_address_updates_return_owned_previous_values() {
+        let metadata = ClientMetadata::new();
+        let broker = CheetahString::from_static_str("BrokerA");
+        let mut first = HashMap::new();
+        first.insert(MASTER_ID, CheetahString::from_static_str("old"));
+        assert!(metadata.update_broker_addresses(broker.clone(), first).is_none());
+
+        let mut replacement = HashMap::new();
+        replacement.insert(MASTER_ID, CheetahString::from_static_str("new"));
+        let previous = metadata
+            .update_broker_addresses(broker.clone(), replacement)
+            .expect("previous addresses");
+        assert_eq!(previous.get(&MASTER_ID).map(CheetahString::as_str), Some("old"));
+        assert_eq!(
+            metadata.remove_broker_addresses(broker.as_str()),
+            Some(HashMap::from([(MASTER_ID, CheetahString::from_static_str("new"))]))
+        );
     }
 }

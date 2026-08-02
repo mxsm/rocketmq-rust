@@ -354,11 +354,26 @@ impl ChildServiceContext {
         self.task_group.spawn(name, kind, future)
     }
 
-    /// Spawns service.
+    /// Spawns a service that owns its shutdown protocol.
+    ///
+    /// Use [`Self::spawn_cancellable_service`] when owner cancellation may
+    /// safely drop the service future immediately.
     pub fn spawn_service<F>(&self, name: impl Into<Arc<str>>, future: F) -> RuntimeResult<TaskId>
     where
         F: Future<Output = ()> + Send + 'static,
     {
         self.task_group.spawn_service(name, future)
+    }
+
+    /// Spawns a service that exits when either its future completes or this context is cancelled.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when this service context is shutting down or closed.
+    pub fn spawn_cancellable_service<F>(&self, name: impl Into<Arc<str>>, future: F) -> RuntimeResult<TaskId>
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        self.task_group.spawn_cancellable_service(name, future)
     }
 }

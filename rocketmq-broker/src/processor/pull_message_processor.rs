@@ -1587,16 +1587,13 @@ mod tests {
             .consumers()
             .get_consumer_group_info(&group.into())
             .expect("registered consumer group should exist");
-        group_info.get_subscription_table().insert(
-            topic.into(),
-            Arc::new(SubscriptionData {
-                topic: topic.into(),
-                sub_string: expression.into(),
-                expression_type: ExpressionType::SQL92.into(),
-                sub_version: version,
-                ..Default::default()
-            }),
-        );
+        group_info.upsert_subscription(SubscriptionData {
+            topic: topic.into(),
+            sub_string: expression.into(),
+            expression_type: ExpressionType::SQL92.into(),
+            sub_version: version,
+            ..Default::default()
+        });
     }
 
     #[test]

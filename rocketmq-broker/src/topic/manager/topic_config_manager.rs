@@ -754,12 +754,32 @@ impl TopicConfigManager {
         topic_config.attributes.clone()
     }
 
-    pub fn topic_config_table(&self) -> Arc<DashMap<CheetahString, Arc<TopicConfig>>> {
+    /// Returns the live table for Store composition inside the broker crate.
+    pub(crate) fn shared_topic_config_table(&self) -> Arc<DashMap<CheetahString, Arc<TopicConfig>>> {
         self.topic_config_table.clone()
     }
 
-    pub fn topic_config_table_hash_map(&self) -> HashMap<CheetahString, TopicConfig> {
+    /// Returns the shared mutable table for legacy integrations.
+    ///
+    /// Use [`Self::topic_config_snapshot`], [`Self::select_topic_config`], and manager commands
+    /// instead. This compatibility API will be removed in 2.0.0.
+    #[deprecated(note = "use topic_config_snapshot, select_topic_config, or manager commands; removal in 2.0.0")]
+    pub fn topic_config_table(&self) -> Arc<DashMap<CheetahString, Arc<TopicConfig>>> {
+        self.shared_topic_config_table()
+    }
+
+    /// Returns an owned snapshot of all topic configurations.
+    pub fn topic_config_snapshot(&self) -> HashMap<CheetahString, TopicConfig> {
         self.metadata_snapshot().0
+    }
+
+    pub fn topic_config_table_hash_map(&self) -> HashMap<CheetahString, TopicConfig> {
+        self.topic_config_snapshot()
+    }
+
+    /// Returns the number of topics in the current immutable generation.
+    pub fn topic_count(&self) -> usize {
+        self.topic_config_snapshot.load().len()
     }
 
     pub fn create_topic_of_tran_check_max_time(
@@ -1359,6 +1379,20 @@ mod tests {
 
         manager.delete_topic_config(&topic, 0);
         assert!(manager.select_topic_config(&topic).is_none());
+    }
+
+    #[test]
+    fn owned_topic_snapshot_cannot_mutate_manager_state() {
+        let (_temp_dir, manager) = test_topic_config_manager();
+        let topic = CheetahString::from_static_str("OwnedSnapshotTopic");
+        manager.put_topic_config(TopicConfig::with_queues(topic.clone(), 2, 3));
+
+        let mut snapshot = manager.topic_config_snapshot();
+        snapshot.clear();
+
+        assert_eq!(manager.topic_count(), 1);
+        assert!(manager.contains_topic(&topic));
+        assert!(manager.select_topic_config(&topic).is_some());
     }
 
     #[test]

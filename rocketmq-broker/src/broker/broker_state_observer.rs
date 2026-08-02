@@ -38,11 +38,8 @@ impl ProducerStateGetter {
 
 impl StateGetter for ProducerStateGetter {
     fn online(&self, instance_id: &CheetahString, group: &CheetahString, topic: &CheetahString) -> bool {
-        if self
-            .topic_config_manager
-            .topic_config_table()
-            .contains_key(NamespaceUtil::wrap_namespace(instance_id, topic).as_str())
-        {
+        let namespaced_topic = NamespaceUtil::wrap_namespace(instance_id, topic);
+        if self.topic_config_manager.contains_topic(&namespaced_topic) {
             self.producer_manager
                 .group_online(&NamespaceUtil::wrap_namespace(instance_id, group))
         } else {
@@ -67,7 +64,7 @@ impl ConsumerStateGetter {
 
 impl StateGetter for ConsumerStateGetter {
     fn online(&self, instance_id: &CheetahString, group: &CheetahString, topic: &CheetahString) -> bool {
-        if self.topic_config_manager.topic_config_table().contains_key(topic) {
+        if self.topic_config_manager.contains_topic(topic) {
             let topic_full_name = NamespaceUtil::wrap_namespace(instance_id, topic);
             self.consumer_manager
                 .find_subscription_data(&NamespaceUtil::wrap_namespace(instance_id, group), &topic_full_name)

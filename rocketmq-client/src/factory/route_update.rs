@@ -26,12 +26,12 @@ use rocketmq_transport::ClientMetadata;
 use tracing::info;
 use tracing::warn;
 
-use super::client_tables::BrokerAddrTable;
-use super::client_tables::ConsumerTable;
-use super::client_tables::ProducerTable;
-use super::client_tables::TopicEndPointsTable;
+use super::client_tables::SharedBrokerAddrTable;
+use super::client_tables::SharedConsumerTable;
+use super::client_tables::SharedProducerTable;
+use super::client_tables::SharedTopicEndPointsTable;
+use super::client_tables::SharedTopicRouteTable;
 use super::client_tables::TopicRouteRefreshState;
-use super::client_tables::TopicRouteTable;
 use super::mq_client_instance::topic_route_data2topic_publish_info;
 use super::mq_client_instance::topic_route_data2topic_subscribe_info;
 use crate::consumer::mq_consumer_inner::MQConsumerInner;
@@ -51,11 +51,11 @@ pub(super) enum TopicRouteApplyOutcome {
 
 #[derive(Clone)]
 pub(super) struct RouteUpdateCoordinator {
-    producer_table: ProducerTable,
-    consumer_table: ConsumerTable,
-    topic_route_table: TopicRouteTable,
-    topic_end_points_table: TopicEndPointsTable,
-    broker_addr_table: BrokerAddrTable,
+    producer_table: SharedProducerTable,
+    consumer_table: SharedConsumerTable,
+    topic_route_table: SharedTopicRouteTable,
+    topic_end_points_table: SharedTopicEndPointsTable,
+    broker_addr_table: SharedBrokerAddrTable,
     refresh_state: Arc<TopicRouteRefreshState>,
     commit_lock: Arc<RocketMQTokioMutex<()>>,
 }
@@ -75,11 +75,11 @@ struct RouteUpdatePlan {
 
 impl RouteUpdateCoordinator {
     pub(super) fn new(
-        producer_table: ProducerTable,
-        consumer_table: ConsumerTable,
-        topic_route_table: TopicRouteTable,
-        topic_end_points_table: TopicEndPointsTable,
-        broker_addr_table: BrokerAddrTable,
+        producer_table: SharedProducerTable,
+        consumer_table: SharedConsumerTable,
+        topic_route_table: SharedTopicRouteTable,
+        topic_end_points_table: SharedTopicEndPointsTable,
+        broker_addr_table: SharedBrokerAddrTable,
         refresh_state: Arc<TopicRouteRefreshState>,
         commit_lock: Arc<RocketMQTokioMutex<()>>,
     ) -> Self {

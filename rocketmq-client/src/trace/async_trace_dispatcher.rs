@@ -43,6 +43,7 @@ use rocketmq_transport::RPCHook;
 use serde::Serialize;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
+use tokio::sync::OnceCell;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -226,6 +227,7 @@ pub struct AsyncTraceDispatcher {
     tx: mpsc::Sender<TraceWorkerCommand>,
     rx: Mutex<Option<mpsc::Receiver<TraceWorkerCommand>>>,
     worker_handle: Mutex<Option<TraceTaskHandle>>,
+    shutdown_completion: OnceCell<()>,
     trace_producer: RwLock<Option<Arc<tokio::sync::Mutex<DefaultMQProducer>>>>,
     instance_counter: Arc<AtomicUsize>,
 }
@@ -278,6 +280,7 @@ impl AsyncTraceDispatcher {
             tx,
             rx: Mutex::new(Some(rx)),
             worker_handle: Mutex::new(None),
+            shutdown_completion: OnceCell::new(),
             trace_producer: RwLock::new(None),
             instance_counter: Arc::new(AtomicUsize::new(0)),
         }
@@ -377,12 +380,24 @@ impl AsyncTraceDispatcher {
     }
 
     /// Asynchronously shuts down the dispatcher without blocking the current Tokio worker.
+    ///
+    /// Concurrent callers await the same shutdown sequence, so pending traces
+    /// are flushed and the worker is joined at most once.
     pub async fn shutdown_async(&self) {
         if !self.state.is_started.load(Ordering::SeqCst) {
-            warn!("AsyncTraceDispatcher not started");
+            if self.shutdown_completion.get().is_none() {
+                warn!("AsyncTraceDispatcher not started");
+            }
             return;
         }
 
+        self.shutdown_completion
+            .get_or_init(|| self.shutdown_async_once())
+            .await;
+        self.state.is_started.store(false, Ordering::SeqCst);
+    }
+
+    async fn shutdown_async_once(&self) {
         info!("Shutting down AsyncTraceDispatcher...");
 
         if let Err(error) = self.flush_async().await {
@@ -406,7 +421,6 @@ impl AsyncTraceDispatcher {
             info!("Trace producer shut down");
         }
 
-        self.state.is_started.store(false, Ordering::SeqCst);
         *self.trace_producer.write() = None;
 
         info!("AsyncTraceDispatcher stopped");
@@ -656,13 +670,13 @@ impl TraceDispatcher for AsyncTraceDispatcher {
 
 impl Drop for AsyncTraceDispatcher {
     fn drop(&mut self) {
-        if self.state.is_started.load(Ordering::SeqCst) && !self.state.is_stopped.load(Ordering::SeqCst) {
-            warn!("AsyncTraceDispatcher dropped without explicit shutdown, auto-flushing...");
-            // Best effort flush before drop
-            if let Err(e) = self.flush() {
-                error!("Auto-flush on drop failed: {:?}", e);
+        if self.state.is_started.load(Ordering::SeqCst) {
+            warn!("AsyncTraceDispatcher dropped without completed explicit shutdown; pending trace data may be lost");
+            self.request_worker_shutdown();
+            if let Some(handle) = self.worker_handle.lock().take() {
+                handle.abort();
             }
-            self.shutdown();
+            self.state.is_started.store(false, Ordering::SeqCst);
         }
     }
 }
@@ -1192,6 +1206,122 @@ mod tests {
 
         assert!(!handle.shutdown_async(Duration::from_millis(20)).await);
         assert!(dropped.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn concurrent_shutdown_async_flushes_and_joins_the_worker_once() {
+        let dispatcher = Arc::new(AsyncTraceDispatcher::new(
+            test_runtime(),
+            "TestGroup",
+            Type::Produce,
+            20,
+            "TRACE_TOPIC",
+            None,
+        ));
+        let mut rx = dispatcher
+            .rx
+            .lock()
+            .take()
+            .expect("test worker receiver should be available");
+        let flush_count = Arc::new(AtomicUsize::new(0));
+        let worker_flush_count = Arc::clone(&flush_count);
+        let release_first_flush = Arc::new(tokio::sync::Notify::new());
+        let worker_release_first_flush = Arc::clone(&release_first_flush);
+        let (first_flush_started_tx, first_flush_started_rx) = oneshot::channel();
+
+        let handle = spawn_trace_task(
+            &dispatcher.service_context,
+            "rocketmq-client-trace-idempotent-shutdown-test",
+            async move {
+                let mut first_flush_started_tx = Some(first_flush_started_tx);
+                while let Some(command) = rx.recv().await {
+                    match command {
+                        TraceWorkerCommand::Trace(_) => {}
+                        TraceWorkerCommand::Flush(responder) => {
+                            let flush_index = worker_flush_count.fetch_add(1, Ordering::AcqRel);
+                            if flush_index == 0 {
+                                let sender = first_flush_started_tx
+                                    .take()
+                                    .expect("the first flush should signal exactly once");
+                                let _ = sender.send(());
+                                worker_release_first_flush.notified().await;
+                            }
+                            responder.send(Ok(()));
+                        }
+                        TraceWorkerCommand::Shutdown => break,
+                    }
+                }
+            },
+        )
+        .expect("test trace worker should spawn");
+        *dispatcher.worker_handle.lock() = Some(handle);
+        dispatcher.state.is_started.store(true, Ordering::Release);
+
+        let first_dispatcher = Arc::clone(&dispatcher);
+        let first_shutdown = tokio::spawn(async move {
+            first_dispatcher.shutdown_async().await;
+        });
+        first_flush_started_rx
+            .await
+            .expect("the first shutdown should reach the worker flush");
+
+        let second_shutdown = dispatcher.shutdown_async();
+        tokio::pin!(second_shutdown);
+        assert!(
+            futures::poll!(second_shutdown.as_mut()).is_pending(),
+            "the concurrent shutdown should wait for the in-flight shutdown"
+        );
+
+        release_first_flush.notify_one();
+        let (first_result, ()) = tokio::time::timeout(Duration::from_secs(1), async {
+            tokio::join!(first_shutdown, second_shutdown)
+        })
+        .await
+        .expect("both shutdown callers should complete");
+        first_result.expect("the first shutdown task should not panic");
+
+        dispatcher.shutdown_async().await;
+        assert_eq!(flush_count.load(Ordering::Acquire), 1);
+        assert!(!dispatcher.is_started());
+        assert!(dispatcher.is_stopped());
+        assert_eq!(dispatcher.service_context.task_group().task_count(), 0);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn drop_requests_nonblocking_worker_cancellation() {
+        let dispatcher = AsyncTraceDispatcher::new(test_runtime(), "TestGroup", Type::Produce, 20, "TRACE_TOPIC", None);
+        let (worker_started_tx, worker_started_rx) = oneshot::channel();
+        let handle = spawn_trace_task(
+            &dispatcher.service_context,
+            "rocketmq-client-trace-drop-test",
+            async move {
+                let _ = worker_started_tx.send(());
+                std::future::pending::<()>().await;
+            },
+        )
+        .expect("test trace worker should spawn");
+        *dispatcher.worker_handle.lock() = Some(handle);
+        dispatcher.state.is_started.store(true, Ordering::Release);
+        let worker_group = dispatcher.service_context.task_group().clone();
+        worker_started_rx.await.expect("test trace worker should start");
+
+        let (ticker_tx, ticker_rx) = oneshot::channel();
+        tokio::spawn(async move {
+            tokio::task::yield_now().await;
+            let _ = ticker_tx.send(());
+        });
+
+        let drop_started = Instant::now();
+        drop(dispatcher);
+        assert!(
+            drop_started.elapsed() < Duration::from_millis(500),
+            "dropping a trace dispatcher must not synchronously flush or await its worker"
+        );
+        tokio::time::timeout(Duration::from_secs(1), ticker_rx)
+            .await
+            .expect("the current-thread runtime should keep advancing after drop")
+            .expect("the ticker task should complete");
+        assert_eq!(worker_group.task_count(), 0);
     }
 
     #[tokio::test]

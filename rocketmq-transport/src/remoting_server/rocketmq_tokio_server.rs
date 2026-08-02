@@ -17,6 +17,7 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
 
 use crate::config::ServerConfig;
 use crate::dispatch::AuthorizedCommandDispatcher;
@@ -27,14 +28,16 @@ use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
-use rocketmq_runtime::TaskKind;
+use rocketmq_runtime::TaskId;
 use rocketmq_security_api::Principal;
 use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
 use tracing::error;
 use tracing::info;
+use tracing::warn;
 
 use crate::admission::AdmissionController;
 use crate::admission::AdmissionLimits;
@@ -59,7 +62,203 @@ const DEFAULT_MAX_CONNECTIONS: usize = 1000;
 
 const DEFAULT_TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
-const EVENT_QUEUE_CAPACITY: usize = 1024;
+#[derive(Clone, Copy, Debug)]
+struct LifecycleEventConfig {
+    queue_capacity: usize,
+    publish_timeout: Duration,
+    drain_timeout: Duration,
+    listener_warn_threshold: Duration,
+}
+
+impl Default for LifecycleEventConfig {
+    fn default() -> Self {
+        Self {
+            queue_capacity: 1024,
+            publish_timeout: Duration::from_millis(10),
+            drain_timeout: Duration::from_millis(250),
+            listener_warn_threshold: Duration::from_millis(50),
+        }
+    }
+}
+
+impl LifecycleEventConfig {
+    fn validate(self) -> RocketMQResult<Self> {
+        validate_positive_config("channelEventQueueCapacity", self.queue_capacity)?;
+        validate_duration_config("channelEventPublishTimeoutMillis", self.publish_timeout)?;
+        validate_duration_config("channelEventDrainTimeoutMillis", self.drain_timeout)?;
+        validate_duration_config("channelEventListenerWarnMillis", self.listener_warn_threshold)?;
+        Ok(self)
+    }
+}
+
+fn validate_positive_config(
+    key: &'static str,
+    value: impl TryInto<u64> + Copy + std::fmt::Display,
+) -> RocketMQResult<()> {
+    if value.try_into().ok().is_some_and(|value| value > 0) {
+        return Ok(());
+    }
+    Err(RocketMQError::ConfigInvalidValue {
+        key,
+        value: value.to_string(),
+        reason: "must be greater than zero".to_owned(),
+    })
+}
+
+fn validate_duration_config(key: &'static str, value: Duration) -> RocketMQResult<()> {
+    if !value.is_zero() {
+        return Ok(());
+    }
+    Err(RocketMQError::ConfigInvalidValue {
+        key,
+        value: format!("{value:?}"),
+        reason: "must be greater than zero".to_owned(),
+    })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[must_use]
+enum LifecycleEventPublishOutcome {
+    Queued,
+    DeadlineExpired,
+    DispatcherClosed,
+    ShuttingDown,
+}
+
+impl LifecycleEventPublishOutcome {
+    const fn metric_label(self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::DeadlineExpired => "deadline_expired",
+            Self::DispatcherClosed => "dropped_dispatcher_closed",
+            Self::ShuttingDown => "dropped_shutdown",
+        }
+    }
+
+    const fn is_queued(self) -> bool {
+        matches!(self, Self::Queued)
+    }
+}
+
+#[derive(Clone)]
+struct LifecycleEventPublisher {
+    sender: mpsc::Sender<TokioEvent>,
+    publish_timeout: Duration,
+    cancellation: CancellationToken,
+    telemetry: TransportTelemetry,
+}
+
+impl LifecycleEventPublisher {
+    async fn publish(&self, event: TokioEvent) -> LifecycleEventPublishOutcome {
+        let event_name = lifecycle_event_name(event.type_());
+        let outcome = enqueue_lifecycle_event(&self.sender, event, self.publish_timeout, &self.cancellation).await;
+        self.telemetry
+            .record_lifecycle_event(event_name, outcome.metric_label());
+        outcome
+    }
+}
+
+async fn enqueue_lifecycle_event<T>(
+    sender: &mpsc::Sender<T>,
+    event: T,
+    publish_timeout: Duration,
+    cancellation: &CancellationToken,
+) -> LifecycleEventPublishOutcome {
+    if cancellation.is_cancelled() {
+        return LifecycleEventPublishOutcome::ShuttingDown;
+    }
+
+    tokio::select! {
+        biased;
+        _ = cancellation.cancelled() => LifecycleEventPublishOutcome::ShuttingDown,
+        result = tokio::time::timeout(publish_timeout, sender.send(event)) => match result {
+            Ok(Ok(())) => LifecycleEventPublishOutcome::Queued,
+            Ok(Err(_)) => LifecycleEventPublishOutcome::DispatcherClosed,
+            Err(_) => LifecycleEventPublishOutcome::DeadlineExpired,
+        },
+    }
+}
+
+const fn lifecycle_event_name(event: &ConnectionNetEvent) -> &'static str {
+    match event {
+        ConnectionNetEvent::CONNECTED(_) => "connected",
+        ConnectionNetEvent::DISCONNECTED => "disconnected",
+        ConnectionNetEvent::EXCEPTION => "exception",
+        ConnectionNetEvent::IDLE => "idle",
+    }
+}
+
+async fn run_lifecycle_event_dispatcher(
+    mut receiver: mpsc::Receiver<TokioEvent>,
+    listener: Arc<dyn ChannelEventListener>,
+    cancellation: CancellationToken,
+    config: LifecycleEventConfig,
+    telemetry: TransportTelemetry,
+) {
+    loop {
+        tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => break,
+            event = receiver.recv() => match event {
+                Some(event) => dispatch_lifecycle_event(
+                    listener.as_ref(),
+                    event,
+                    config.listener_warn_threshold,
+                    &telemetry,
+                ),
+                None => {
+                    info!("Remoting lifecycle event dispatcher closed");
+                    return;
+                }
+            },
+        }
+    }
+
+    let drain_deadline = Instant::now() + config.drain_timeout;
+    while Instant::now() < drain_deadline {
+        let Ok(event) = receiver.try_recv() else {
+            break;
+        };
+        dispatch_lifecycle_event(listener.as_ref(), event, config.listener_warn_threshold, &telemetry);
+    }
+
+    let dropped = receiver.len();
+    for _ in 0..dropped {
+        telemetry.record_lifecycle_event("pending", "dropped_drain_deadline");
+    }
+    if dropped > 0 {
+        warn!(dropped, "Remoting lifecycle event drain deadline expired");
+    }
+    receiver.close();
+    info!("Remoting lifecycle event dispatcher terminated");
+}
+
+fn dispatch_lifecycle_event(
+    listener: &dyn ChannelEventListener,
+    event: TokioEvent,
+    listener_warn_threshold: Duration,
+    telemetry: &TransportTelemetry,
+) {
+    let event_name = lifecycle_event_name(event.type_());
+    let addr = event.remote_addr().to_string();
+    let started = Instant::now();
+    match event.type_() {
+        ConnectionNetEvent::CONNECTED(_) => listener.on_channel_connect(&addr, event.channel()),
+        ConnectionNetEvent::DISCONNECTED => listener.on_channel_close(&addr, event.channel()),
+        ConnectionNetEvent::EXCEPTION => listener.on_channel_exception(&addr, event.channel()),
+        ConnectionNetEvent::IDLE => listener.on_channel_idle(&addr, event.channel()),
+    }
+    let elapsed = started.elapsed();
+    telemetry.record_lifecycle_event(event_name, "delivered");
+    telemetry.record_lifecycle_listener_latency(elapsed, event_name);
+    if elapsed >= listener_warn_threshold {
+        warn!(
+            event = event_name,
+            elapsed_ms = elapsed.as_millis(),
+            "Slow remoting lifecycle listener callback"
+        );
+    }
+}
 
 #[cfg(all(test, not(doctest)))]
 enum TestRequestHookResult {
@@ -115,12 +314,6 @@ struct ConnectionListener<RP> {
     ///
     /// Permits acquired before accept, released on handler drop.
     /// Provides backpressure when server reaches capacity.
-    /// Shutdown broadcast sender
-    ///
-    /// All connection handlers subscribe to this channel.
-    /// Sending signal triggers graceful termination across all connections.
-    notify_shutdown: broadcast::Sender<()>,
-
     /// Completion coordination channel
     ///
     /// Each handler holds a clone of this sender.
@@ -153,6 +346,9 @@ struct ConnectionListener<RP> {
     transport_principal: Option<Principal>,
     command_interceptor: Arc<dyn SessionCommandInterceptor>,
     telemetry: TransportTelemetry,
+    lifecycle_event_config: LifecycleEventConfig,
+    lifecycle_shutdown: CancellationToken,
+    lifecycle_dispatcher_task: Option<TaskId>,
 }
 
 impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
@@ -183,39 +379,38 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
     async fn run(&mut self) -> RocketMQResult<()> {
         info!("Server ready to accept connections");
 
-        let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<TokioEvent>(EVENT_QUEUE_CAPACITY);
-
-        // Spawn event dispatcher task if listener configured
-        if let Some(listener) = self.channel_event_listener.take() {
-            let spawn_result =
-                self.task_group
-                    .spawn("rocketmq.remoting.event_dispatcher", TaskKind::Service, async move {
-                        while let Some(event) = event_rx.recv().await {
-                            let addr = event.remote_addr();
-                            let addr_str = addr.to_string();
-
-                            // HOT PATH: Match on event type and dispatch to listener
-                            match event.type_() {
-                                ConnectionNetEvent::CONNECTED(_) => {
-                                    listener.on_channel_connect(&addr_str, event.channel());
-                                }
-                                ConnectionNetEvent::DISCONNECTED => {
-                                    listener.on_channel_close(&addr_str, event.channel());
-                                }
-                                ConnectionNetEvent::EXCEPTION => {
-                                    listener.on_channel_exception(&addr_str, event.channel());
-                                }
-                                ConnectionNetEvent::IDLE => {
-                                    listener.on_channel_idle(&addr_str, event.channel());
-                                }
-                            }
-                        }
-                        info!("Event dispatcher task terminated");
-                    });
-            if let Err(error) = spawn_result {
-                error!("Failed to spawn remoting event dispatcher: {}", error);
+        let event_publisher = if let Some(listener) = self.channel_event_listener.take() {
+            let (sender, receiver) = mpsc::channel(self.lifecycle_event_config.queue_capacity);
+            let cancellation = self.lifecycle_shutdown.clone();
+            let publisher = LifecycleEventPublisher {
+                sender,
+                publish_timeout: self.lifecycle_event_config.publish_timeout,
+                cancellation: cancellation.clone(),
+                telemetry: self.telemetry.clone(),
+            };
+            let spawn_result = self.task_group.spawn_service(
+                "rocketmq.remoting.event_dispatcher",
+                run_lifecycle_event_dispatcher(
+                    receiver,
+                    listener,
+                    cancellation,
+                    self.lifecycle_event_config,
+                    self.telemetry.clone(),
+                ),
+            );
+            match spawn_result {
+                Ok(task_id) => {
+                    self.lifecycle_dispatcher_task = Some(task_id);
+                    Some(publisher)
+                }
+                Err(error) => {
+                    error!(%error, "Failed to spawn remoting lifecycle event dispatcher");
+                    None
+                }
             }
-        }
+        } else {
+            None
+        };
 
         let listener = self.listener.take().ok_or_else(|| {
             RocketMQError::network_connection_failed("remoting-server", "transport listener already started")
@@ -235,7 +430,7 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
                     shutdown_complete_tx: self.shutdown_complete_tx.clone(),
                     conn_disconnect_notify: self.conn_disconnect_notify.clone(),
                     dispatcher: self.dispatcher.clone(),
-                    event_tx,
+                    event_publisher,
                     sessions: dashmap::DashMap::new(),
                 },
                 command_interceptor: self.command_interceptor.clone(),
@@ -248,7 +443,7 @@ struct ConnectionHandler<RP> {
     shutdown_complete_tx: mpsc::Sender<()>,
     conn_disconnect_notify: Option<broadcast::Sender<SocketAddr>>,
     dispatcher: Arc<AuthorizedCommandDispatcher<RP>>,
-    event_tx: mpsc::Sender<TokioEvent>,
+    event_publisher: Option<LifecycleEventPublisher>,
     sessions: dashmap::DashMap<u64, RemotingSession<ConnectionHandlerContext>>,
 }
 
@@ -310,12 +505,20 @@ impl<RP: RequestProcessor + Sync + Clone + 'static> ConnectionHandler<RP> {
         };
         match action {
             RemotingSessionAction::Connect => {
-                let _ = self.event_tx.try_send(TokioEvent::new(
-                    ConnectionNetEvent::CONNECTED(session.remote_addr()),
-                    session.remote_addr(),
-                    remoting_session.context.channel().clone(),
-                ));
+                let event_channel = remoting_session.context.channel().clone();
                 self.sessions.insert(session.session_id(), remoting_session);
+                if let Some(publisher) = &self.event_publisher {
+                    let outcome = publisher
+                        .publish(TokioEvent::new(
+                            ConnectionNetEvent::CONNECTED(session.remote_addr()),
+                            session.remote_addr(),
+                            event_channel,
+                        ))
+                        .await;
+                    if !outcome.is_queued() {
+                        warn!(?outcome, event = "connected", "Remoting lifecycle event was not queued");
+                    }
+                }
             }
             RemotingSessionAction::Command(command) => {
                 if let Some(command_interceptor) = command_interceptor {
@@ -360,7 +563,7 @@ impl<RP: RequestProcessor + Sync + Clone + 'static> TransportConnectionHandler f
     }
 
     fn disconnected(&self, session: crate::server::SessionHandle) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
-        let event_tx = self.event_tx.clone();
+        let event_publisher = self.event_publisher.clone();
         let conn_disconnect_notify = self.conn_disconnect_notify.clone();
         Box::pin(async move {
             let Some((_, remoting_session)) = self.sessions.remove(&session.session_id()) else {
@@ -375,11 +578,22 @@ impl<RP: RequestProcessor + Sync + Clone + 'static> TransportConnectionHandler f
             if let Some(notify) = conn_disconnect_notify {
                 let _ = notify.send(session.remote_addr());
             }
-            let _ = event_tx.try_send(TokioEvent::new(
-                ConnectionNetEvent::DISCONNECTED,
-                session.remote_addr(),
-                remoting_session.context.channel().clone(),
-            ));
+            if let Some(publisher) = event_publisher {
+                let outcome = publisher
+                    .publish(TokioEvent::new(
+                        ConnectionNetEvent::DISCONNECTED,
+                        session.remote_addr(),
+                        remoting_session.context.channel().clone(),
+                    ))
+                    .await;
+                if !outcome.is_queued() {
+                    warn!(
+                        ?outcome,
+                        event = "disconnected",
+                        "Remoting lifecycle event was not queued"
+                    );
+                }
+            }
         })
     }
 }
@@ -426,6 +640,7 @@ pub struct RocketMQServer<RP> {
     admission: Option<Arc<AdmissionController>>,
     authorized_dispatcher: Option<Arc<AuthorizedCommandDispatcher<RP>>>,
     telemetry: TransportTelemetry,
+    lifecycle_event_config: LifecycleEventConfig,
     #[cfg(all(test, not(doctest)))]
     test_request_hook: Option<TestRequestHook>,
     _phantom_data: std::marker::PhantomData<RP>,
@@ -442,6 +657,7 @@ impl<RP> RocketMQServer<RP> {
             admission: None,
             authorized_dispatcher: None,
             telemetry: TransportTelemetry::noop(),
+            lifecycle_event_config: LifecycleEventConfig::default(),
             #[cfg(all(test, not(doctest)))]
             test_request_hook: None,
             _phantom_data: std::marker::PhantomData,
@@ -573,6 +789,14 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> RocketMQServer<RP> {
     where
         S: Future,
     {
+        let lifecycle_event_config = match self.lifecycle_event_config.validate() {
+            Ok(config) => config,
+            Err(error) => {
+                error!(%error, "Invalid remoting lifecycle event configuration");
+                notify_server_startup(&mut startup, Err(error));
+                return None;
+            }
+        };
         let addr = format!("{}:{}", self.config.bind_address, self.config.listen_port);
         let listener = match TcpListener::bind(&addr).await {
             Ok(listener) => listener,
@@ -646,6 +870,7 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> RocketMQServer<RP> {
                 admission: self.admission.clone(),
                 command_interceptor,
                 telemetry: self.telemetry.clone(),
+                lifecycle_event_config,
             },
         )
         .await
@@ -769,6 +994,7 @@ pub async fn run_with_report_with_service_context_and_telemetry<RP: RequestProce
             admission: None,
             command_interceptor: Arc::new(()),
             telemetry,
+            lifecycle_event_config: LifecycleEventConfig::default(),
         },
     )
     .await
@@ -783,6 +1009,7 @@ struct RemotingServerRunCapabilities {
     admission: Option<Arc<AdmissionController>>,
     command_interceptor: Arc<dyn SessionCommandInterceptor>,
     telemetry: TransportTelemetry,
+    lifecycle_event_config: LifecycleEventConfig,
 }
 
 async fn run_with_tls_config_report<RP: RequestProcessor + Sync + 'static + Clone>(
@@ -804,9 +1031,10 @@ async fn run_with_tls_config_report<RP: RequestProcessor + Sync + 'static + Clon
         admission,
         command_interceptor,
         telemetry,
+        lifecycle_event_config,
     } = capabilities;
-    let (notify_shutdown, _) = broadcast::channel(1);
     let (shutdown_complete_tx, mut shutdown_complete_rx) = mpsc::channel(1);
+    let lifecycle_shutdown = CancellationToken::new();
     let mut admission_limits = AdmissionLimits::default();
     admission_limits.connections = ResourceLimit {
         count: DEFAULT_MAX_CONNECTIONS,
@@ -852,7 +1080,6 @@ async fn run_with_tls_config_report<RP: RequestProcessor + Sync + 'static + Clon
     };
     let mut listener = ConnectionListener {
         listener: Some(listener),
-        notify_shutdown,
         shutdown_complete_tx,
         conn_disconnect_notify,
         channel_event_listener,
@@ -862,6 +1089,9 @@ async fn run_with_tls_config_report<RP: RequestProcessor + Sync + 'static + Clon
         transport_principal,
         command_interceptor,
         telemetry,
+        lifecycle_event_config,
+        lifecycle_shutdown: lifecycle_shutdown.clone(),
+        lifecycle_dispatcher_task: None,
     };
 
     tokio::select! {
@@ -883,24 +1113,33 @@ async fn run_with_tls_config_report<RP: RequestProcessor + Sync + 'static + Clon
 
     let ConnectionListener {
         shutdown_complete_tx,
-        notify_shutdown,
         tls_runtime,
+        lifecycle_dispatcher_task,
         ..
     } = listener;
     let deadline = task_group
         .shutdown_deadline()
         .unwrap_or_else(|| ShutdownDeadline::after(Duration::from_secs(30)));
+    task_group.cancel();
+    drop(shutdown_complete_tx);
+    let _ = tokio::time::timeout(deadline.remaining(), shutdown_complete_rx.recv()).await;
+
+    lifecycle_shutdown.cancel();
+    if let Some(task_id) = lifecycle_dispatcher_task {
+        if !task_group.wait_task(task_id, deadline.remaining()).await {
+            warn!(
+                task_id = task_id.as_u64(),
+                "Remoting lifecycle event dispatcher did not drain before shutdown deadline"
+            );
+        }
+    }
+
     let tls_report = tls_runtime
         .shutdown_gracefully(deadline.remaining().min(Duration::from_secs(3)))
         .await;
     if let Some(report) = tls_report.as_ref() {
         report.log_if_unhealthy();
     }
-    drop(notify_shutdown);
-    drop(shutdown_complete_tx);
-
-    task_group.cancel();
-    let _ = tokio::time::timeout(deadline.remaining(), shutdown_complete_rx.recv()).await;
     let mut report = task_group.shutdown_until(deadline).await;
     if let Some(tls_report) = tls_report {
         report.children.push(tls_report);
@@ -961,6 +1200,13 @@ mod tests {
 
     struct ConnectSignalListener {
         connected: std::sync::Mutex<Option<oneshot::Sender<()>>>,
+        disconnected: std::sync::Mutex<Option<oneshot::Sender<()>>>,
+    }
+
+    struct SlowLifecycleListener {
+        first_delivery: std::sync::Mutex<Option<oneshot::Sender<()>>>,
+        release: Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
+        deliveries: std::sync::atomic::AtomicUsize,
     }
 
     struct RequireTransportSignature {
@@ -997,6 +1243,136 @@ mod tests {
             .expect("remoting server should bind")
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn lifecycle_event_queue_reports_capacity_overload_and_shutdown() {
+        let (sender, receiver) = mpsc::channel(1);
+        let cancellation = CancellationToken::new();
+
+        let first = enqueue_lifecycle_event(&sender, 1_u8, Duration::from_millis(5), &cancellation).await;
+        assert_eq!(first, LifecycleEventPublishOutcome::Queued);
+
+        let overloaded = enqueue_lifecycle_event(&sender, 2_u8, Duration::from_millis(5), &cancellation).await;
+        assert_eq!(overloaded, LifecycleEventPublishOutcome::DeadlineExpired);
+
+        cancellation.cancel();
+        let shutting_down = enqueue_lifecycle_event(&sender, 3_u8, Duration::from_millis(5), &cancellation).await;
+        assert_eq!(shutting_down, LifecycleEventPublishOutcome::ShuttingDown);
+
+        drop(receiver);
+    }
+
+    #[tokio::test]
+    async fn lifecycle_event_queue_reports_closed_dispatcher() {
+        let (sender, receiver) = mpsc::channel(1);
+        drop(receiver);
+
+        let outcome = enqueue_lifecycle_event(&sender, 1_u8, Duration::from_millis(5), &CancellationToken::new()).await;
+
+        assert_eq!(outcome, LifecycleEventPublishOutcome::DispatcherClosed);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn capacity_one_slow_listener_makes_overload_explicit_and_drains_queued_event() {
+        let context = RuntimeContext::from_current("remoting-lifecycle-overload-test");
+        let service = context.service_context("remoting-lifecycle-overload");
+        let task_group = service.task_group().clone();
+        let harness = crate::local::LocalRequestHarness::new(task_group.clone())
+            .await
+            .expect("local channel harness");
+        let channel = harness.channel();
+        let remote_addr = harness.remote_address();
+        let release = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+        let (first_delivery_tx, first_delivery_rx) = oneshot::channel();
+        let listener = Arc::new(SlowLifecycleListener {
+            first_delivery: std::sync::Mutex::new(Some(first_delivery_tx)),
+            release: Arc::clone(&release),
+            deliveries: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let (sender, receiver) = mpsc::channel(1);
+        let cancellation = task_group.cancellation_token();
+        let config = LifecycleEventConfig {
+            queue_capacity: 1,
+            publish_timeout: Duration::from_millis(5),
+            drain_timeout: Duration::from_millis(100),
+            listener_warn_threshold: Duration::from_millis(1),
+        };
+        let telemetry = TransportTelemetry::noop();
+        task_group
+            .spawn_service(
+                "remoting-lifecycle-overload-dispatcher",
+                run_lifecycle_event_dispatcher(
+                    receiver,
+                    listener.clone(),
+                    cancellation.clone(),
+                    config,
+                    telemetry.clone(),
+                ),
+            )
+            .expect("event dispatcher should spawn");
+        let publisher = LifecycleEventPublisher {
+            sender,
+            publish_timeout: config.publish_timeout,
+            cancellation,
+            telemetry,
+        };
+
+        assert_eq!(
+            publisher
+                .publish(TokioEvent::new(
+                    ConnectionNetEvent::CONNECTED(remote_addr),
+                    remote_addr,
+                    channel.clone(),
+                ))
+                .await,
+            LifecycleEventPublishOutcome::Queued
+        );
+        first_delivery_rx
+            .await
+            .expect("slow listener should receive the first event");
+        assert_eq!(
+            publisher
+                .publish(TokioEvent::new(
+                    ConnectionNetEvent::DISCONNECTED,
+                    remote_addr,
+                    channel.clone(),
+                ))
+                .await,
+            LifecycleEventPublishOutcome::Queued
+        );
+        assert_eq!(
+            publisher
+                .publish(TokioEvent::new(
+                    ConnectionNetEvent::DISCONNECTED,
+                    remote_addr,
+                    channel.clone(),
+                ))
+                .await,
+            LifecycleEventPublishOutcome::DeadlineExpired
+        );
+
+        {
+            let (released, condition) = release.as_ref();
+            *released.lock().expect("slow listener release lock") = true;
+            condition.notify_all();
+        }
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while listener.deliveries.load(std::sync::atomic::Ordering::Acquire) < 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("queued lifecycle event should be delivered");
+
+        let channel_report = channel.close_with_report(Duration::from_secs(1)).await;
+        assert!(channel_report.is_healthy(), "{}", channel_report.to_json());
+
+        task_group.cancel();
+        drop(publisher);
+        let report = task_group.shutdown(Duration::from_secs(1)).await;
+        assert!(report.is_healthy(), "{}", report.to_json());
+        assert_eq!(listener.deliveries.load(std::sync::atomic::Ordering::Acquire), 2);
+    }
+
     impl rocketmq_security_api::OutboundSigner for RemotingMarkerSigner {
         fn sign(
             &self,
@@ -1016,7 +1392,38 @@ mod tests {
             }
         }
 
-        fn on_channel_close(&self, _remote_addr: &str, _channel: &Channel) {}
+        fn on_channel_close(&self, _remote_addr: &str, _channel: &Channel) {
+            if let Some(sender) = self.disconnected.lock().expect("disconnect signal lock").take() {
+                let _ = sender.send(());
+            }
+        }
+
+        fn on_channel_exception(&self, _remote_addr: &str, _channel: &Channel) {}
+
+        fn on_channel_idle(&self, _remote_addr: &str, _channel: &Channel) {}
+
+        fn on_channel_active(&self, _remote_addr: &str, _channel: &Channel) {}
+    }
+
+    impl ChannelEventListener for SlowLifecycleListener {
+        fn on_channel_connect(&self, _remote_addr: &str, _channel: &Channel) {
+            let delivery = self.deliveries.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            if delivery != 0 {
+                return;
+            }
+            if let Some(sender) = self.first_delivery.lock().expect("first delivery lock").take() {
+                let _ = sender.send(());
+            }
+            let (released, condition) = self.release.as_ref();
+            let mut released = released.lock().expect("slow listener release lock");
+            while !*released {
+                released = condition.wait(released).expect("slow listener release wait");
+            }
+        }
+
+        fn on_channel_close(&self, _remote_addr: &str, _channel: &Channel) {
+            self.deliveries.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        }
 
         fn on_channel_exception(&self, _remote_addr: &str, _channel: &Channel) {}
 
@@ -1089,6 +1496,43 @@ mod tests {
         server
             .run_with_shutdown(DefaultRemotingRequestProcessor, None, future::pending::<()>())
             .await;
+    }
+
+    #[tokio::test]
+    async fn startup_rejects_zero_lifecycle_event_queue_capacity() {
+        let config = Arc::new(ServerConfig {
+            bind_address: "127.0.0.1".to_owned(),
+            listen_port: 0,
+            ..ServerConfig::default()
+        });
+        let mut server = RocketMQServer::<DefaultRemotingRequestProcessor>::new(
+            config,
+            test_service_context("remoting-server-invalid-event-config-test"),
+        );
+        server.lifecycle_event_config.queue_capacity = 0;
+        let (startup_tx, startup_rx) = oneshot::channel();
+
+        let report = server
+            .run_with_shutdown_report_and_startup(
+                DefaultRemotingRequestProcessor,
+                None,
+                future::pending::<()>(),
+                startup_tx,
+            )
+            .await;
+
+        assert!(report.is_none());
+        let error = startup_rx
+            .await
+            .expect("startup error should be reported")
+            .expect_err("zero event queue capacity must be rejected");
+        assert!(matches!(
+            error,
+            RocketMQError::ConfigInvalidValue {
+                key: "channelEventQueueCapacity",
+                ..
+            }
+        ));
     }
 
     #[tokio::test]
@@ -1661,7 +2105,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_shutdown_report_is_healthy_after_dynamic_connection_child_prunes() {
+    async fn run_shutdown_delivers_disconnect_before_lifecycle_dispatcher_stops() {
         let context = RuntimeContext::from_current("remoting-server-channel-report-test");
         let service = context.service_context("remoting-server-channel-report");
         let listener = TcpListener::bind("127.0.0.1:0")
@@ -1670,8 +2114,10 @@ mod tests {
         let addr = listener.local_addr().expect("listener should have local addr");
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let (connected_tx, connected_rx) = oneshot::channel::<()>();
+        let (disconnected_tx, disconnected_rx) = oneshot::channel::<()>();
         let channel_listener = std::sync::Arc::new(ConnectSignalListener {
             connected: std::sync::Mutex::new(Some(connected_tx)),
+            disconnected: std::sync::Mutex::new(Some(disconnected_tx)),
         });
         let server_task = tokio::spawn(run_with_report_with_service_context(
             service,
@@ -1695,6 +2141,10 @@ mod tests {
             .expect("server should accept connection before timeout")
             .expect("connect signal should be sent");
         let _ = shutdown_tx.send(());
+        tokio::time::timeout(Duration::from_secs(3), disconnected_rx)
+            .await
+            .expect("disconnect event should be delivered before shutdown")
+            .expect("disconnect signal should be sent");
         let report = tokio::time::timeout(Duration::from_secs(3), server_task)
             .await
             .expect("server should shut down before timeout")
@@ -1750,6 +2200,7 @@ mod tests {
                 admission: None,
                 command_interceptor: Arc::new(()),
                 telemetry: TransportTelemetry::noop(),
+                lifecycle_event_config: LifecycleEventConfig::default(),
             },
         );
         let server_task = tokio::spawn(report);
