@@ -195,6 +195,7 @@ async fn sleep_or_cancel(shutdown_signal: &Arc<AtomicBool>, cancelled: &Arc<Atom
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug, Clone, Serialize)]
 pub struct LitePullAssignmentRegistryProbe {
     pub iterations: usize,
@@ -3051,6 +3052,7 @@ pub async fn run_lite_pull_task_lifecycle_probe(service_context: ChildServiceCon
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub async fn run_lite_pull_assignment_registry_probe(iterations: usize) -> LitePullAssignmentRegistryProbe {
     let registry = AssignmentRegistry::new();

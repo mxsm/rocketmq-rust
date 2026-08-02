@@ -61,11 +61,13 @@ use crate::mapped_file::kernel::ReferenceResourceCounter;
 pub use crate::mapped_file::kernel::OS_PAGE_SIZE;
 pub use crate::mapped_file::mapping::LazyMmapStats;
 use crate::mapped_file::mapping::MappedFileMapping;
+use crate::utils::ffi::advise_memory;
 use crate::utils::ffi::get_page_size;
-use crate::utils::ffi::madvise;
+use crate::utils::ffi::lock_memory_region;
 #[cfg(target_os = "linux")]
-use crate::utils::ffi::mincore;
-use crate::utils::ffi::MADV_WILLNEED;
+use crate::utils::ffi::memory_residency;
+use crate::utils::ffi::unlock_memory_region;
+use crate::utils::ffi::MemoryAdvice;
 
 static TOTAL_MAPPED_VIRTUAL_MEMORY: AtomicI64 = AtomicI64::new(0);
 static TOTAL_MAPPED_FILES: AtomicI32 = AtomicI32::new(0);
@@ -841,18 +843,14 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
 
     #[inline]
     fn mlock(&self) {
-        if let Err(error) =
-            crate::utils::ffi::mlock(self.get_mapped_file().as_ptr(), self.raw_core.file_size() as usize)
-        {
+        if let Err(error) = lock_memory_region(self.get_mapped_file()) {
             warn!(file_name = %self.file_name, error = %error, "failed to mlock mapped file");
         }
     }
 
     #[inline]
     fn munlock(&self) {
-        if let Err(error) =
-            crate::utils::ffi::munlock(self.get_mapped_file().as_ptr(), self.raw_core.file_size() as usize)
-        {
+        if let Err(error) = unlock_memory_region(self.get_mapped_file()) {
             warn!(file_name = %self.file_name, error = %error, "failed to munlock mapped file");
         }
     }
@@ -943,13 +941,20 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
             return false;
         };
 
-        let mut residency = vec![0u8; plan.page_count];
-        let result = mincore(
-            plan.aligned_start as *const u8,
-            plan.checked_len,
-            residency.as_mut_ptr(),
-        );
-        result == 0 && residency.iter().all(|page| page & 1 == 1)
+        let mapped = self.get_mapped_file();
+        let Some(offset) = plan.aligned_start.checked_sub(base_addr) else {
+            return false;
+        };
+        let Some(end) = offset.checked_add(plan.checked_len) else {
+            return false;
+        };
+        let Some(region) = mapped.get(offset..end) else {
+            return false;
+        };
+        match memory_residency(region) {
+            Ok(residency) => residency.len() == plan.page_count && residency.iter().all(|page| page & 1 == 1),
+            Err(_) => false,
+        }
     }
 
     #[inline]
@@ -1114,12 +1119,8 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         mapped_file.flush_range(offset, len)
     }
 
-    fn advise_mapped_file(addr: *const u8, len: usize, advice: i32) -> io::Result<()> {
-        if madvise(addr, len, advice) == 0 {
-            Ok(())
-        } else {
-            Err(io::Error::last_os_error())
-        }
+    fn advise_mapped_file(memory: &[u8], advice: MemoryAdvice) -> io::Result<()> {
+        advise_memory(memory, advice)
     }
 
     /// Applies an operating-system memory-access hint while excluding mapped-file mutation.
@@ -1127,10 +1128,10 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
     /// # Errors
     ///
     /// Returns the platform error reported by the advice operation.
-    pub fn apply_memory_advice(&self, advice: i32) -> io::Result<()> {
+    pub fn apply_memory_advice(&self, advice: MemoryAdvice) -> io::Result<()> {
         let _writer = self.write_state.lock();
         let mapped = self.try_get_mapped_file_ref()?;
-        Self::advise_mapped_file(mapped.as_slice().as_ptr(), mapped.as_slice().len(), advice)
+        Self::advise_mapped_file(mapped.as_slice(), advice)
     }
 
     fn warm_mapped_file_with_ops<T, F, A, R>(
@@ -1144,7 +1145,7 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
     ) where
         T: FnMut(*mut u8, usize) -> io::Result<()>,
         F: FnMut(&M, usize, usize) -> io::Result<()>,
-        A: FnMut(*const u8, usize, i32) -> io::Result<()>,
+        A: FnMut(&[u8], MemoryAdvice) -> io::Result<()>,
         R: FnMut(LinuxStorageDegradationEvent),
     {
         let _writer = self.write_state.lock();
@@ -1209,7 +1210,7 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
             );
         }
 
-        if let Err(error) = advise(self.get_mapped_file().as_ptr(), file_size, MADV_WILLNEED) {
+        if let Err(error) = advise(self.get_mapped_file(), MemoryAdvice::WillNeed) {
             record_degradation(LinuxStorageDegradationEvent::new(
                 LINUX_STORAGE_OP_MADVISE,
                 LINUX_STORAGE_REASON_FAILED,
@@ -1238,7 +1239,10 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         offset: u64,
         len: usize,
     ) -> RocketMQResult<Option<MemoryLockHandle>> {
-        self.lock_region_with(memory_lock_manager, category, offset, len, crate::utils::ffi::mlock)
+        let Some(region) = self.lock_region_owner(offset, len) else {
+            return Ok(None);
+        };
+        memory_lock_manager.lock_region(category, region)
     }
 
     pub fn lock_region_with<F>(
@@ -1250,37 +1254,37 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         locker: F,
     ) -> RocketMQResult<Option<MemoryLockHandle>>
     where
-        F: FnMut(*const u8, usize) -> RocketMQResult<()>,
+        F: FnMut(&[u8]) -> RocketMQResult<()>,
     {
-        let Some((addr, len)) = self.lock_region_address_and_len(offset, len) else {
+        let Some(region) = self.lock_region_owner(offset, len) else {
             return Ok(None);
         };
-        memory_lock_manager.lock_region_with(category, addr, len, locker)
+        memory_lock_manager.lock_region_with(category, region, locker)
     }
 
     pub fn unlock_region(
         &self,
         memory_lock_manager: &MemoryLockManager,
-        handle: MemoryLockHandle,
+        handle: &mut MemoryLockHandle,
     ) -> RocketMQResult<()> {
-        self.unlock_region_with(memory_lock_manager, handle, crate::utils::ffi::munlock)
+        memory_lock_manager.unlock_region(handle)
     }
 
     pub fn unlock_region_with<F>(
         &self,
         memory_lock_manager: &MemoryLockManager,
-        handle: MemoryLockHandle,
+        handle: &mut MemoryLockHandle,
         unlocker: F,
     ) -> RocketMQResult<()>
     where
-        F: FnMut(*const u8, usize) -> RocketMQResult<()>,
+        F: FnMut(&[u8]) -> RocketMQResult<()>,
     {
         memory_lock_manager.unlock_region_with(handle, unlocker)
     }
 
-    fn lock_region_address_and_len(&self, offset: u64, requested_len: usize) -> Option<(*const u8, usize)> {
+    fn lock_region_owner(&self, offset: u64, requested_len: usize) -> Option<M::Region> {
         let (offset, len) = self.raw_core.lock_region_range(offset, requested_len)?;
-        Some((self.get_mapped_file().as_ptr().wrapping_add(offset), len))
+        self.try_get_mapped_file_ref().ok()?.region(offset, len).ok()
     }
 
     /// Gets the start timestamp of the mapped file.
@@ -2039,7 +2043,7 @@ mod tests {
                     Err(io::Error::from_raw_os_error(28))
                 }
             },
-            |_, _, _| Err(io::Error::from_raw_os_error(12)),
+            |_, _| Err(io::Error::from_raw_os_error(12)),
             |event| events.push(event),
         );
 
@@ -2062,15 +2066,15 @@ mod tests {
         let manager = MemoryLockManager::warn_only_with_budget(4096);
         let expected_addr = mapped_file.get_mapped_file().as_ptr().wrapping_add(3072);
 
-        let handle = mapped_file
+        let mut handle = mapped_file
             .lock_region_with(
                 &manager,
                 MemoryLockCategory::CommitLogActiveWindow,
                 3072,
                 4096,
-                |addr, len| {
-                    assert_eq!(addr, expected_addr);
-                    assert_eq!(len, 1024);
+                |memory| {
+                    assert_eq!(memory.as_ptr(), expected_addr);
+                    assert_eq!(memory.len(), 1024);
                     Ok(())
                 },
             )
@@ -2082,9 +2086,9 @@ mod tests {
         assert_eq!(manager.locked_bytes(), 1024);
 
         mapped_file
-            .unlock_region_with(&manager, handle, |addr, len| {
-                assert_eq!(addr, expected_addr);
-                assert_eq!(len, 1024);
+            .unlock_region_with(&manager, &mut handle, |memory| {
+                assert_eq!(memory.as_ptr(), expected_addr);
+                assert_eq!(memory.len(), 1024);
                 Ok(())
             })
             .expect("range unlock should not fail");
@@ -2097,7 +2101,7 @@ mod tests {
         let manager = MemoryLockManager::warn_only_with_budget(4096);
 
         let zero_len = mapped_file
-            .lock_region_with(&manager, MemoryLockCategory::CommitLogActiveWindow, 0, 0, |_, _| {
+            .lock_region_with(&manager, MemoryLockCategory::CommitLogActiveWindow, 0, 0, |_| {
                 panic!("zero-length request must not call locker")
             })
             .expect("zero-length request should be accepted as a no-op");
@@ -2107,7 +2111,7 @@ mod tests {
                 MemoryLockCategory::CommitLogActiveWindow,
                 mapped_file.get_file_size(),
                 1024,
-                |_, _| panic!("out-of-range request must not call locker"),
+                |_| panic!("out-of-range request must not call locker"),
             )
             .expect("out-of-range request should be accepted as a no-op");
 

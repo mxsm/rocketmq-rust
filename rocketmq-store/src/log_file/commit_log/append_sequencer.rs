@@ -665,16 +665,8 @@ impl CommitLogAppendProcessor {
             active_memory_lock_present,
             target,
             mapped_file.get_file_from_offset(),
-            |manager, target| {
-                mapped_file.lock_region_with(
-                    manager,
-                    target.category,
-                    target.offset,
-                    target.len,
-                    crate::utils::ffi::mlock,
-                )
-            },
-            crate::utils::ffi::munlock,
+            |manager, target| mapped_file.lock_region(manager, target.category, target.offset, target.len),
+            |manager, handle| manager.unlock_region(handle),
         )
     }
 

@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Canonical RouteInfoManager with DashMap-based concurrent tables
+//! Canonical RouteInfoManager with immutable route snapshot publication
 //!
-//! Fine-grained concurrent tables and segmented locks preserve cross-table
-//! invariants without a single global route lock.
+//! Mutable DashMap tables form the write model. A single mutation gate protects
+//! cross-table updates, then complete per-topic snapshots are atomically published.
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -57,60 +57,64 @@ use crate::route::tables::ClusterAddrTable;
 use crate::route::tables::FilterServerTable;
 use crate::route::tables::TopicQueueMappingInfoTable;
 use crate::route::tables::TopicQueueTable;
+use crate::route::topic_route_snapshot::RouteMutationCoordinator;
+use crate::route::topic_route_snapshot::RouteMutationGuard;
 use crate::route::types::BrokerName;
 use crate::route::types::TopicName;
 use crate::route_info::broker_addr_info::BrokerAddrInfo;
 
 const DEFAULT_BROKER_CHANNEL_EXPIRED_TIME: u64 = 1000 * 60 * 2; // 2 minutes
 
-/// Canonical route manager with DashMap-based concurrent tables and segmented locking
+/// Canonical route manager with serialized mutations and immutable route snapshots
 ///
 /// Key properties:
-/// - Fine-grained concurrency: DashMap per table instead of global RwLock
-/// - Segmented locking: Per-broker/topic locks for atomic cross-table operations
+/// - Coherent reads: one atomic per-topic snapshot load
+/// - Serialized writes: one mutation gate covers every route-visible source-table update
+/// - Existing segmented locks remain for keyed validation after the mutation gate
 /// - Zero-copy: Arc<str> for shared strings instead of String clones
 /// - Type-safe errors: Result<T, RocketMQError> instead of Option
 /// - Better modularity: Separate table modules for maintainability
 ///
 /// ## Concurrency Model
 ///
-/// This implementation uses a hybrid approach combining DashMap's lock-free concurrency
-/// with segmented read-write locks for operations that span multiple tables:
+/// This implementation separates the mutable write model from the immutable read model:
 ///
-/// 1. **DashMap**: Each table (topic, broker, cluster, live) uses DashMap for lock-free concurrent
-///    reads and writes within a single table.
+/// 1. **Mutation gate**: All route-visible source-table mutations are serialized. This first
+///    version intentionally accepts write contention to make cross-table publication provable.
 ///
-/// 2. **Segmented Locks**: For operations that need to atomically update multiple tables (e.g.,
-///    broker registration, unregistration), we use segment-level read-write locks based on the
-///    broker name or topic name hash.
+/// 2. **Source tables**: DashMap tables retain the converged broker/topic/filter/mapping model
+///    used by mutations and management queries.
+///
+/// 3. **Published snapshots**: Route lookups atomically load one complete topic snapshot and do
+///    not revisit mutable source tables.
 ///
 /// ### Lock Acquisition Strategy
 ///
-/// - **Single-table operations**: Use DashMap directly (no explicit locking)
-/// - **Multi-table reads**: Acquire segment read lock, then use DashMap
-/// - **Multi-table writes**: Acquire segment write lock, then use DashMap
+/// - **Route-visible writes**: Acquire the mutation gate before any broker/topic segmented lock.
+/// - **Route reads**: Load one immutable snapshot without the mutation or segmented locks.
+/// - **Management reads**: May continue to inspect source tables directly.
 ///
 /// ### Deadlock Prevention
 ///
-/// When acquiring multiple locks, always sort by segment index to prevent deadlocks.
-/// The `SegmentedLock::*_lock_multiple` methods handle this automatically.
+/// The mutation gate is always the outermost write lock. When multiple segmented locks are
+/// needed, `SegmentedLock::*_lock_multiple` keeps their segment order deterministic.
 ///
 /// ## Performance Characteristics
 ///
-/// - **Single-table ops**: O(1) lock-free (DashMap only)
-/// - **Multi-table read**: O(1) segment read lock + O(1) DashMap read
-/// - **Multi-table write**: O(1) segment write lock + O(1) DashMap write
-/// - **Contention**: Minimal due to 16-way lock striping
+/// - **Route read**: one ArcSwap load plus a response clone
+/// - **Route write**: serialized source mutation plus rebuilding each affected topic
+/// - **Tradeoff**: higher write contention and write amplification for coherent read semantics
 pub struct RouteInfoManager {
-    // DashMap-based concurrent tables (lock-free for single-table operations)
+    // Mutable source tables used by the write model and management queries.
     topic_queue_table: TopicQueueTable,
     broker_addr_table: BrokerAddrTable,
     cluster_addr_table: ClusterAddrTable,
     broker_live_table: BrokerLiveTable,
     filter_server_table: FilterServerTable,
     topic_queue_mapping_info_table: TopicQueueMappingInfoTable,
+    route_mutations: RouteMutationCoordinator,
 
-    // Segmented locks for atomic cross-table operations
+    // Keyed validation locks, always acquired after the route mutation gate.
     // - broker_locks: Locks for broker-related operations (keyed by broker name)
     // - topic_locks: Locks for topic-related operations (keyed by topic name)
     broker_locks: SegmentedLock,
@@ -120,10 +124,13 @@ pub struct RouteInfoManager {
     name_server_runtime_inner: NameServerRuntimeHandle,
     un_register_service: Arc<BatchUnregistrationService>,
     metrics: rocketmq_observability::metrics::namesrv::NameServerMetrics,
+
+    #[cfg(test)]
+    before_topic_cleanup_hook: parking_lot::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
 
 impl RouteInfoManager {
-    /// Create a new RouteInfoManager with DashMap-based tables and segmented locks
+    /// Create a route manager with mutable source tables and snapshot publication.
     pub(crate) fn new(
         name_server_runtime_inner: NameServerRuntimeHandle,
         queue_capacity: usize,
@@ -142,15 +149,89 @@ impl RouteInfoManager {
             broker_live_table: BrokerLiveTable::with_capacity(256),
             filter_server_table: FilterServerTable::with_capacity(128),
             topic_queue_mapping_info_table: TopicQueueMappingInfoTable::with_capacity(256),
+            route_mutations: RouteMutationCoordinator::new(),
 
-            // Initialize segmented locks (16 segments each for optimal performance)
+            // Retain 16-way keyed locks inside the outer mutation gate.
             broker_locks: SegmentedLock::new(),
             topic_locks: SegmentedLock::new(),
 
             name_server_runtime_inner,
             un_register_service,
             metrics,
+
+            #[cfg(test)]
+            before_topic_cleanup_hook: parking_lot::Mutex::new(None),
         }
+    }
+
+    #[cfg(test)]
+    fn set_before_topic_cleanup_hook(&self, hook: Arc<dyn Fn() + Send + Sync>) {
+        *self.before_topic_cleanup_hook.lock() = Some(hook);
+    }
+
+    #[cfg(test)]
+    fn run_before_topic_cleanup_hook(&self) {
+        let hook = self.before_topic_cleanup_hook.lock().clone();
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
+
+    /// Builds a complete route view from source tables while the mutation gate is held.
+    fn build_topic_route_data(&self, topic: &str) -> Option<TopicRouteData> {
+        let queue_datas = self
+            .topic_queue_table
+            .get_topic_queues(topic)
+            .into_iter()
+            .map(|(_, queue_data)| (*queue_data).clone())
+            .collect::<Vec<_>>();
+        if queue_datas.is_empty() {
+            return None;
+        }
+
+        let broker_datas = queue_datas
+            .iter()
+            .map(|queue_data| {
+                self.broker_addr_table
+                    .get(queue_data.broker_name())
+                    .map(|broker_data| (*broker_data).clone())
+            })
+            .collect::<Option<Vec<_>>>()?;
+
+        let mut route_data = TopicRouteData {
+            queue_datas,
+            broker_datas,
+            ..Default::default()
+        };
+
+        for broker_data in &route_data.broker_datas {
+            for broker_addr in broker_data.broker_addrs().values() {
+                let broker_addr_info = Arc::new(BrokerAddrInfo {
+                    cluster_name: broker_data.cluster().into(),
+                    broker_addr: broker_addr.clone(),
+                });
+                if let Some(filter_servers) = self.filter_server_table.get(&broker_addr_info) {
+                    route_data
+                        .filter_server_table
+                        .insert(broker_addr.clone(), filter_servers);
+                }
+            }
+        }
+
+        route_data.topic_queue_mapping_by_broker = self.topic_queue_mapping_info_table.get_topic_mappings(topic);
+        Some(route_data)
+    }
+
+    fn publish_topic_route_snapshots(&self, mutation: &RouteMutationGuard<'_>, affected_topics: HashSet<TopicName>) {
+        for topic in affected_topics {
+            let route_data = self.build_topic_route_data(topic.as_str());
+            mutation.publish(topic, route_data);
+        }
+    }
+
+    #[cfg(test)]
+    fn topic_route_snapshot_version(&self, topic: &str) -> Option<u64> {
+        self.route_mutations.load(topic).map(|snapshot| snapshot.version)
     }
 
     /// Start the route manager
@@ -171,26 +252,6 @@ impl RouteInfoManager {
         socket_addr: SocketAddr,
     ) -> Option<(Arc<BrokerAddrInfo>, Arc<BrokerLiveInfo>)> {
         broker_live_table.get_broker_info_by_remote_addr(socket_addr)
-    }
-
-    /// Cleanup broker from all tables
-    fn cleanup_broker_from_tables(
-        broker_name: &str,
-        cluster_name: &str,
-        broker_addr_table: &BrokerAddrTable,
-        cluster_addr_table: &ClusterAddrTable,
-        topic_queue_table: &TopicQueueTable,
-    ) {
-        broker_addr_table.remove(broker_name);
-        cluster_addr_table.remove_broker(cluster_name, broker_name);
-
-        // Remove broker from topics that actually contain it
-        for topic in topic_queue_table.topics_for_broker(broker_name) {
-            topic_queue_table.remove_broker(topic.as_ref(), broker_name);
-        }
-
-        // Cleanup empty topics
-        topic_queue_table.cleanup_empty_topics();
     }
 
     /// Handle connection disconnection by socket address
@@ -285,19 +346,27 @@ impl RouteInfoManager {
     ) -> RouteResult<RegisterBrokerResult> {
         let registration_span = rocketmq_observability::trace::namesrv::broker_registration_span();
         let _registration_guard = registration_span.enter();
+        let route_mutation = self.route_mutations.begin_mutation();
+        let mut affected_topics = self.topic_set_of_broker_name(broker_name.as_str());
+        affected_topics.extend(
+            topic_config_wrapper
+                .topic_config_serialize_wrapper()
+                .topic_config_table()
+                .keys()
+                .cloned(),
+        );
+        affected_topics.extend(topic_config_wrapper.topic_queue_mapping_info_map().keys().cloned());
         // ===================================================================
         // SEGMENTED LOCK ACQUISITION
         // ===================================================================
-        // Acquire write lock for this broker segment to ensure atomic updates
-        // across multiple tables (cluster, broker_addr, topic_queue, broker_live).
+        // Acquire the keyed broker lock after the outer mutation gate.
         //
         // This prevents race conditions such as:
         // 1. Concurrent registrations of the same broker
         // 2. Registration racing with unregistration
         // 3. Inconsistent state across tables
         //
-        // Lock scope: Only brokers hashing to the same segment will contend.
-        // Other brokers can register concurrently in different segments.
+        // The outer mutation gate intentionally serializes all route-visible writes.
         let _broker_lock = self.broker_locks.write_lock(&broker_name.as_str());
 
         let mut result = RegisterBrokerResult::default();
@@ -306,7 +375,7 @@ impl RouteInfoManager {
         let broker_name_arc = broker_name.clone();
 
         // Step 1: Update cluster membership
-        // This is safe because we hold the broker write lock
+        // The mutation gate keeps this update in the unpublished write model.
         self.cluster_addr_table
             .add_broker(cluster_name_arc, broker_name_arc.clone());
 
@@ -316,7 +385,7 @@ impl RouteInfoManager {
         );
 
         // Step 2: Update broker address table with conflict detection
-        // Protected by broker write lock - atomic with cluster update
+        // Still unpublished under the mutation gate.
         let update_result = self.update_broker_addr_table(
             &cluster_name,
             &broker_name,
@@ -340,7 +409,7 @@ impl RouteInfoManager {
         let (register_first, is_min_broker_id_changed) = update_result.unwrap();
 
         // Step 4: Update topic queue configurations
-        // Protected by broker write lock - atomic with broker updates
+        // Still unpublished under the mutation gate.
         let is_master = broker_id == mix_all::MASTER_ID;
         let is_old_version_broker = enable_acting_master.is_none();
 
@@ -365,7 +434,7 @@ impl RouteInfoManager {
         }
 
         // Step 5: Register broker live status
-        // Protected by broker write lock - atomic with all above updates
+        // Still unpublished under the mutation gate.
         let prev_broker_live_info = self.register_broker_live_info(
             cluster_name.clone(),
             broker_addr.clone(),
@@ -393,6 +462,8 @@ impl RouteInfoManager {
             self.filter_server_table
                 .register(broker_addr_info.clone(), filter_server_list);
         }
+
+        self.publish_topic_route_snapshots(&route_mutation, affected_topics);
 
         // Step 7: Handle master address for slaves
         // Protected by broker write lock - consistent read of master info
@@ -603,6 +674,8 @@ impl RouteInfoManager {
                         broker_name, to_delete_topic, removed_qd
                     );
                 }
+                self.topic_queue_mapping_info_table
+                    .remove_broker(to_delete_topic.as_ref(), broker_name.as_str());
 
                 // Check if topic is now empty
                 if self
@@ -905,9 +978,8 @@ impl RouteInfoManager {
 
     /// Register a topic with queue data for multiple brokers
     ///
-    /// This method ensures atomicity by acquiring locks for:
-    /// 1. The topic being registered (write lock)
-    /// 2. All brokers referenced in queue_data_vec (read locks)
+    /// This method mutates and publishes under the global route mutation gate,
+    /// then uses keyed topic/broker locks for validation within that transaction.
     ///
     /// ## Consistency Guarantee
     ///
@@ -921,8 +993,8 @@ impl RouteInfoManager {
     ///
     /// ## Lock Strategy
     ///
-    /// - **Topic write lock**: Prevents concurrent modifications to this topic
-    /// - **Broker read locks**: Prevents brokers from being deleted during registration
+    /// - **Mutation gate**: Serializes every route-visible write and publication
+    /// - **Topic/broker locks**: Preserve existing keyed validation invariants
     ///
     /// This ensures that if all brokers pass validation, they're guaranteed to
     /// still exist when we insert the queue data.
@@ -930,6 +1002,8 @@ impl RouteInfoManager {
         if queue_data_vec.is_empty() {
             return;
         }
+
+        let route_mutation = self.route_mutations.begin_mutation();
 
         // Acquire topic write lock and broker read locks atomically
         // This prevents:
@@ -967,6 +1041,8 @@ impl RouteInfoManager {
         } else {
             info!("Register topic route:{}, {:?}", topic, queue_data_vec);
         }
+
+        self.publish_topic_route_snapshots(&route_mutation, HashSet::from([topic]));
     }
 
     /// Delete a topic from the name server
@@ -981,14 +1057,11 @@ impl RouteInfoManager {
     /// 2. Remove topic-broker mappings (topic_queue_table)
     /// 3. Cleanup empty topics (topic_queue_table)
     ///
-    /// ## Lock Strategy
-    ///
-    /// - **Topic write lock**: Ensures no concurrent topic registration/deletion
-    /// - **Cluster read lock** (if cluster specified): Prevents cluster modification
-    ///
-    /// This ensures consistent deletion without race conditions with register_topic
-    /// or register_broker operations.
+    /// The mutation gate is acquired before the topic lock. Deletion is published
+    /// atomically as a replacement snapshot or explicit absence.
     pub(crate) fn delete_topic(&self, topic: CheetahString, cluster_name: Option<CheetahString>) {
+        let route_mutation = self.route_mutations.begin_mutation();
+
         // Acquire topic write lock to prevent concurrent modifications
         let _topic_lock = self.topic_locks.write_lock(&topic);
 
@@ -1011,6 +1084,8 @@ impl RouteInfoManager {
                             broker_name, topic, qd
                         );
                     }
+                    self.topic_queue_mapping_info_table
+                        .remove_broker(topic_str, broker_name.as_str());
                 }
 
                 // Check if topic queue map is empty after removal
@@ -1027,8 +1102,11 @@ impl RouteInfoManager {
             None => {
                 // Delete entire topic across all brokers
                 self.topic_queue_table.remove_topic(topic.as_str());
+                self.topic_queue_mapping_info_table.remove_topic(topic.as_str());
             }
         }
+
+        self.publish_topic_route_snapshots(&route_mutation, HashSet::from([topic]));
     }
 }
 
@@ -1044,8 +1122,8 @@ impl RouteInfoManager {
 
     /// Unregister a broker from the name server
     ///
-    /// This method atomically removes a broker from all tables using segmented locking
-    /// to prevent race conditions with concurrent registrations or route lookups.
+    /// This method removes a broker under the route mutation gate and publishes every
+    /// affected topic before releasing that gate.
     pub fn unregister_broker(
         &self,
         cluster_name: CheetahString,
@@ -1053,25 +1131,31 @@ impl RouteInfoManager {
         broker_name: CheetahString,
         broker_id: u64,
     ) -> RouteResult<()> {
+        let route_mutation = self.route_mutations.begin_mutation();
+        let affected_topics = self
+            .topic_queue_table
+            .topics_for_broker(broker_name.as_str())
+            .into_iter()
+            .collect();
+
         // ===================================================================
         // SEGMENTED LOCK ACQUISITION
         // ===================================================================
-        // Acquire write lock for this broker segment to ensure atomic cleanup
-        // across multiple tables (broker_live, broker_addr, cluster, topic_queue).
+        // Acquire the keyed broker lock after the outer mutation gate.
         //
         // This prevents race conditions such as:
         // 1. Unregistration racing with registration
         // 2. Partial cleanup visible to route lookups
         // 3. Inconsistent broker state across tables
         //
-        // Lock scope: Only brokers hashing to the same segment will contend.
-        // Other broker operations can proceed concurrently in different segments.
+        // The outer mutation gate intentionally serializes all route-visible writes.
         let _broker_lock = self.broker_locks.write_lock(&broker_name.as_str());
 
         // Step 1: Remove from broker live table
-        // Protected by broker write lock - atomic with all cleanup operations
+        // Still unpublished under the mutation gate.
         let broker_addr_info = BrokerAddrInfo::new(cluster_name.clone(), broker_addr.clone());
         let removed = self.broker_live_table.remove(&broker_addr_info);
+        self.filter_server_table.remove(&broker_addr_info);
 
         info!(
             "Broker live info removed: cluster={}, broker={}, addr={}, success={}",
@@ -1082,13 +1166,13 @@ impl RouteInfoManager {
         );
 
         // Step 2: Remove broker address from broker table
-        // Protected by broker write lock - atomic with live table update
+        // Still unpublished under the mutation gate.
         let _broker_removed = self
             .broker_addr_table
             .remove_broker_address(broker_name.as_str(), broker_id);
 
         // Step 3: Check if all broker addresses are gone
-        // Protected by broker write lock - consistent visibility
+        // Source tables remain stable under the mutation gate.
         let broker_empty = if let Some(broker_data) = self.broker_addr_table.get(&broker_name) {
             broker_data.broker_addrs().is_empty()
         } else {
@@ -1096,7 +1180,7 @@ impl RouteInfoManager {
         };
 
         // Step 4: If broker completely removed, clean up cluster and topics
-        // All cleanup operations are atomic within the broker write lock
+        // Complete source-table cleanup before publishing affected topics.
         if broker_empty {
             self.broker_addr_table.remove(&broker_name);
             self.cluster_addr_table
@@ -1109,6 +1193,7 @@ impl RouteInfoManager {
             );
         }
 
+        self.publish_topic_route_snapshots(&route_mutation, affected_topics);
         self.metrics.record_active_broker_count(self.active_broker_count());
         Ok(())
     }
@@ -1118,6 +1203,8 @@ impl RouteInfoManager {
         for topic in self.topic_queue_table.topics_for_broker(broker_name) {
             // Remove broker from topic
             self.topic_queue_table.remove_broker(topic.as_ref(), broker_name);
+            self.topic_queue_mapping_info_table
+                .remove_broker(topic.as_ref(), broker_name);
         }
 
         // Clean up empty topics
@@ -1146,6 +1233,12 @@ impl RouteInfoManager {
         if un_register_requests.is_empty() {
             return;
         }
+
+        let route_mutation = self.route_mutations.begin_mutation();
+        let affected_topics = un_register_requests
+            .iter()
+            .flat_map(|request| self.topic_queue_table.topics_for_broker(request.broker_name.as_str()))
+            .collect();
 
         // Track brokers that are completely removed vs reduced (still have addresses)
         let mut removed_broker: HashSet<CheetahString> = HashSet::new();
@@ -1237,8 +1330,12 @@ impl RouteInfoManager {
             }
         }
 
+        #[cfg(test)]
+        self.run_before_topic_cleanup_hook();
+
         // Step 5: Clean topics by unregister requests
         self.clean_topic_by_un_register_requests(&removed_broker, &reduced_broker);
+        self.publish_topic_route_snapshots(&route_mutation, affected_topics);
 
         // Step 6: Notify min broker ID changed if needed
         if !need_notify_broker_map.is_empty()
@@ -1277,6 +1374,8 @@ impl RouteInfoManager {
                     topic, removed_qd
                 );
             }
+            self.topic_queue_mapping_info_table
+                .remove_broker(topic.as_str(), broker_name.as_str());
         }
 
         let removed_topic_count = self.topic_queue_table.cleanup_empty_topics();
@@ -1324,112 +1423,21 @@ impl RouteInfoManager {
     ///
     /// ## Consistency Guarantee
     ///
-    /// This method acquires a segment-level read lock for the topic to ensure
-    /// consistent reads across multiple tables. Without this lock, we could see:
-    /// - Topic queues that reference non-existent brokers
-    /// - Partial broker registration state
-    /// - Inconsistent broker address mappings
-    ///
-    /// The read lock allows concurrent reads of the same topic while preventing
-    /// concurrent writes (broker registration/unregistration) from causing
-    /// inconsistent state.
+    /// This method loads one immutable snapshot. Source tables are consulted only
+    /// by the serialized write model when publishing a replacement snapshot.
     pub fn pickup_topic_route_data(&self, topic: &str) -> RouteResult<TopicRouteData> {
         use rocketmq_model::common::constant::PermName;
         use rocketmq_model::common::topic::TopicValidator;
 
-        // ===================================================================
-        // SEGMENTED LOCK ACQUISITION
-        // ===================================================================
-        // Acquire read lock for this topic segment to ensure consistent reads
-        // across multiple tables (topic_queue, broker_addr, broker_live).
-        //
-        // This prevents reading inconsistent state such as:
-        // 1. Queue data referencing brokers that are being unregistered
-        // 2. Broker data that is partially updated
-        // 3. Stale broker addresses during registration
-        //
-        // Lock scope: Only topics hashing to the same segment will share a lock.
-        // Other topic queries can proceed concurrently in different segments.
-        // Multiple readers can hold the lock simultaneously.
-        let _topic_lock = self.topic_locks.read_lock(&topic);
-
-        let mut found_queue_data = false;
-        let mut found_broker_data = false;
-
-        // Get queue data for the topic
-        // Protected by topic read lock - consistent with broker table
-        let queue_data_list = self.topic_queue_table.get_topic_queues(topic);
-
-        if queue_data_list.is_empty() {
-            return Err(RocketMQError::route_not_found(topic));
-        }
-
-        // Convert queue data to Vec<QueueData>
-        let queue_data_vec: Vec<QueueData> = queue_data_list
-            .into_iter()
-            .map(|(_, queue_data)| {
-                found_queue_data = true;
-                (*queue_data).clone()
-            })
-            .collect();
-
-        // Collect broker names from queue data (already CheetahString)
-        // Protected by topic read lock - brokers are stable during this read
-        let broker_names: Vec<BrokerName> = queue_data_vec.iter().map(|qd| qd.broker_name.clone()).collect();
-
-        // Get broker data for each broker
-        // Protected by topic read lock - broker data is consistent
-        let mut broker_data_list = Vec::new();
-        for broker_name in broker_names {
-            if let Some(broker_data) = self.broker_addr_table.get(broker_name.as_str()) {
-                // Clone BrokerData for the route response
-                broker_data_list.push((*broker_data).clone());
-                found_broker_data = true;
-            }
-        }
-
+        let snapshot = self
+            .route_mutations
+            .load(topic)
+            .ok_or_else(|| RocketMQError::route_not_found(topic))?;
         debug!(
-            "pickup_topic_route_data topic={}, found_queue_data={}, found_broker_data={}",
-            topic, found_queue_data, found_broker_data
+            "Loaded topic route snapshot: topic={}, version={}, published_at={}",
+            topic, snapshot.version, snapshot.published_at
         );
-
-        if !found_broker_data || !found_queue_data {
-            return Err(RocketMQError::route_not_found(topic));
-        }
-
-        // Construct TopicRouteData
-        let mut topic_route_data = TopicRouteData {
-            queue_datas: queue_data_vec,
-            broker_datas: broker_data_list.clone(),
-            ..Default::default()
-        };
-
-        // Populate filter server table from filter_server_table
-        if !self.filter_server_table.is_empty() {
-            for broker_data in &broker_data_list {
-                for broker_addr in broker_data.broker_addrs().values() {
-                    let broker_addr_info = Arc::new(BrokerAddrInfo {
-                        cluster_name: broker_data.cluster().into(),
-                        broker_addr: broker_addr.clone(),
-                    });
-
-                    // Get filter server list (may be None)
-                    let filter_servers = self.filter_server_table.get(&broker_addr_info);
-
-                    // Insert into map even if None
-                    if let Some(servers) = filter_servers {
-                        topic_route_data
-                            .filter_server_table
-                            .insert(broker_addr.clone(), servers.clone());
-                    }
-                }
-            }
-        }
-
-        // Set topic queue mapping info for static topic support
-        if let Some(mapping_info) = self.topic_queue_mapping_info_table.get_topic_mappings(topic) {
-            topic_route_data.topic_queue_mapping_by_broker = Some(mapping_info);
-        }
+        let mut topic_route_data = snapshot.route_data.clone();
 
         // Check if acting master support is enabled
         if !self
@@ -1563,7 +1571,7 @@ impl RouteInfoManager {
     /// The key difference from directly calling unregister_broker:
     /// - uses BatchUnregistrationService for better performance
     /// - Submissions are batched and processed together
-    /// - This reduces lock contention on the global route tables
+    /// - This coalesces source-table cleanup and snapshot publication
     pub fn scan_not_active_broker(&self) -> usize {
         debug!("start scanNotActiveBroker");
         let current_time = current_millis();
@@ -1765,7 +1773,7 @@ impl RouteInfoManager {
     ///
     /// This method removes write permission from all topics that contain queue data
     /// for the specified broker:
-    /// 1. Acquiring a write lock
+    /// 1. Acquiring the route mutation gate and keyed broker lock
     /// 2. Directly looking up the broker in each topic's queue map
     /// 3. Removing write permission from matched queue data
     ///
@@ -1777,27 +1785,29 @@ impl RouteInfoManager {
     pub fn wipe_write_perm_of_broker_by_lock(&self, broker_name: String) -> i32 {
         use rocketmq_model::common::constant::PermName;
 
-        // Acquire write lock for this broker segment
-        // This ensures no concurrent modifications to topics containing this broker
+        let route_mutation = self.route_mutations.begin_mutation();
+
+        // Keyed broker lock is nested inside the route mutation gate.
         let _broker_lock = self.broker_locks.write_lock(&broker_name);
 
-        let mut wipe_topic_count = 0;
+        let topic_queue_pairs = self.topic_queue_table.topic_queue_pairs_for_broker(&broker_name);
+        let affected_topics = topic_queue_pairs.iter().map(|(topic, _)| topic.clone()).collect();
 
-        for (topic, queue_data) in self.topic_queue_table.topic_queue_pairs_for_broker(&broker_name) {
+        for (topic, queue_data) in &topic_queue_pairs {
             let perm = queue_data.perm() & !PermName::PERM_WRITE;
             self.topic_queue_table
-                .update_queue_data_perm(&topic, &broker_name, perm as i32);
-            wipe_topic_count += 1;
+                .update_queue_data_perm(topic, &broker_name, perm as i32);
         }
 
-        wipe_topic_count
+        self.publish_topic_route_snapshots(&route_mutation, affected_topics);
+        topic_queue_pairs.len() as i32
     }
 
     /// Add write permission of broker by lock.
     ///
     /// This method adds write permission to all topics that contain queue data
     /// for the specified broker:
-    /// 1. Acquiring a write lock
+    /// 1. Acquiring the route mutation gate and keyed broker lock
     /// 2. Directly looking up the broker in each topic's queue map
     /// 3. Setting permission to READ | WRITE (not just adding write flag)
     ///
@@ -1809,20 +1819,22 @@ impl RouteInfoManager {
     pub fn add_write_perm_of_broker_by_lock(&self, broker_name: String) -> i32 {
         use rocketmq_model::common::constant::PermName;
 
-        // Acquire write lock for this broker segment
-        // This ensures no concurrent modifications to topics containing this broker
+        let route_mutation = self.route_mutations.begin_mutation();
+
+        // Keyed broker lock is nested inside the route mutation gate.
         let _broker_lock = self.broker_locks.write_lock(&broker_name);
 
-        let mut add_topic_count = 0;
+        let topic_queue_pairs = self.topic_queue_table.topic_queue_pairs_for_broker(&broker_name);
+        let affected_topics = topic_queue_pairs.iter().map(|(topic, _)| topic.clone()).collect();
 
-        for (topic, _) in self.topic_queue_table.topic_queue_pairs_for_broker(&broker_name) {
+        for (topic, _) in &topic_queue_pairs {
             let perm = PermName::PERM_READ | PermName::PERM_WRITE;
             self.topic_queue_table
-                .update_queue_data_perm(&topic, &broker_name, perm as i32);
-            add_topic_count += 1;
+                .update_queue_data_perm(topic, &broker_name, perm as i32);
         }
 
-        add_topic_count
+        self.publish_topic_route_snapshots(&route_mutation, affected_topics);
+        topic_queue_pairs.len() as i32
     }
 
     /// Get system topic list.
@@ -1898,7 +1910,30 @@ impl RouteInfoManager {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Barrier;
+    use std::sync::OnceLock;
+
+    use rocketmq_observability::TelemetryHandle;
+    use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo;
+    use rocketmq_runtime::RuntimeConfig;
+    use rocketmq_runtime::RuntimeOwner;
+
     use super::*;
+    use crate::bootstrap::Builder;
+
+    fn test_route_manager() -> (crate::bootstrap::NameServerBootstrap, Arc<RouteInfoManager>) {
+        static OWNER: OnceLock<RuntimeOwner> = OnceLock::new();
+        let service_context = OWNER
+            .get_or_init(|| {
+                RuntimeOwner::new(RuntimeConfig::server_default("namesrv-route-snapshot-test"))
+                    .expect("test runtime owner should build")
+            })
+            .root_context()
+            .component("namesrv");
+        let bootstrap = Builder::new(service_context, TelemetryHandle::noop()).build();
+        let manager = bootstrap.runtime_inner().route_info_manager();
+        (bootstrap, manager)
+    }
 
     // NOTE: Integration tests for RouteInfoManager require complex setup.
     // Unit tests for underlying components are in their respective modules:
@@ -1913,6 +1948,157 @@ mod tests {
     #[test]
     fn test_default_broker_timeout() {
         assert_eq!(DEFAULT_BROKER_CHANNEL_EXPIRED_TIME, 1000 * 60 * 2);
+    }
+
+    #[test]
+    fn route_snapshot_hides_unregister_intermediate_state() {
+        let (_bootstrap, manager) = test_route_manager();
+        let cluster_name = CheetahString::from_static_str("snapshot-cluster");
+        let broker_name = CheetahString::from_static_str("snapshot-broker");
+        let broker_addr = CheetahString::from_static_str("127.0.0.1:10911");
+        let topic = CheetahString::from_static_str("snapshot-topic");
+
+        manager
+            .cluster_addr_table
+            .add_broker(cluster_name.clone(), broker_name.clone());
+        manager.broker_addr_table.insert(
+            broker_name.clone(),
+            BrokerData::new(
+                cluster_name.clone(),
+                broker_name.clone(),
+                HashMap::from([(mix_all::MASTER_ID, broker_addr.clone())]),
+                None,
+            ),
+        );
+        manager.register_topic(topic.clone(), vec![QueueData::new(broker_name.clone(), 4, 4, 6, 0)]);
+
+        let first_version = manager
+            .topic_route_snapshot_version(topic.as_str())
+            .expect("registering the topic should publish a snapshot");
+        let route_before_rejected_update = manager
+            .pickup_topic_route_data(topic.as_str())
+            .expect("registered topic should have a route");
+        manager.register_topic(
+            topic.clone(),
+            vec![QueueData::new(
+                CheetahString::from_static_str("missing-broker"),
+                8,
+                8,
+                6,
+                0,
+            )],
+        );
+        assert_eq!(
+            manager.topic_route_snapshot_version(topic.as_str()),
+            Some(first_version)
+        );
+        assert_eq!(
+            manager
+                .pickup_topic_route_data(topic.as_str())
+                .expect("rejected update must preserve the old snapshot"),
+            route_before_rejected_update
+        );
+
+        assert_eq!(manager.wipe_write_perm_of_broker_by_lock(broker_name.to_string()), 1);
+        let second_version = manager
+            .topic_route_snapshot_version(topic.as_str())
+            .expect("permission mutation should republish the topic");
+        assert!(second_version > first_version);
+
+        let initial_route = manager
+            .pickup_topic_route_data(topic.as_str())
+            .expect("registered topic should have a complete route");
+        assert_eq!(initial_route.queue_datas.len(), 1);
+        assert_eq!(initial_route.broker_datas.len(), 1);
+        assert!(!PermName::is_writeable(initial_route.queue_datas[0].perm()));
+
+        let mutation_paused = Arc::new(Barrier::new(2));
+        let resume_mutation = Arc::new(Barrier::new(2));
+        manager.set_before_topic_cleanup_hook({
+            let mutation_paused = Arc::clone(&mutation_paused);
+            let resume_mutation = Arc::clone(&resume_mutation);
+            Arc::new(move || {
+                mutation_paused.wait();
+                resume_mutation.wait();
+            })
+        });
+
+        let unregister_manager = Arc::clone(&manager);
+        let unregister_thread = std::thread::spawn(move || {
+            unregister_manager.un_register_broker(vec![UnRegisterBrokerRequestHeader {
+                cluster_name,
+                broker_addr,
+                broker_name,
+                broker_id: mix_all::MASTER_ID,
+            }]);
+        });
+
+        mutation_paused.wait();
+        let route_while_unregistration_is_paused = manager.pickup_topic_route_data(topic.as_str());
+        resume_mutation.wait();
+        unregister_thread.join().expect("unregister thread should not panic");
+
+        let route_while_unregistration_is_paused = route_while_unregistration_is_paused
+            .expect("an unpublished unregister mutation must leave the complete old route visible");
+        assert_eq!(route_while_unregistration_is_paused, initial_route);
+        assert!(manager.pickup_topic_route_data(topic.as_str()).is_err());
+    }
+
+    #[test]
+    fn route_snapshot_republishes_filter_mapping_and_delete_changes() {
+        let (_bootstrap, manager) = test_route_manager();
+        let cluster_name = CheetahString::from_static_str("snapshot-metadata-cluster");
+        let broker_name = CheetahString::from_static_str("snapshot-metadata-broker");
+        let broker_addr = CheetahString::from_static_str("127.0.0.2:10911");
+        let filter_server = CheetahString::from_static_str("127.0.0.2:12000");
+        let topic = CheetahString::from_static_str("snapshot-metadata-topic");
+
+        manager
+            .cluster_addr_table
+            .add_broker(cluster_name.clone(), broker_name.clone());
+        manager.broker_addr_table.insert(
+            broker_name.clone(),
+            BrokerData::new(
+                cluster_name.clone(),
+                broker_name.clone(),
+                HashMap::from([(mix_all::MASTER_ID, broker_addr.clone())]),
+                None,
+            ),
+        );
+        manager.register_topic(topic.clone(), vec![QueueData::new(broker_name.clone(), 4, 4, 6, 0)]);
+        let initial_version = manager
+            .topic_route_snapshot_version(topic.as_str())
+            .expect("topic registration should publish a snapshot");
+
+        {
+            let mutation = manager.route_mutations.begin_mutation();
+            manager.filter_server_table.register(
+                Arc::new(BrokerAddrInfo::new(cluster_name, broker_addr.clone())),
+                vec![filter_server.clone()],
+            );
+            manager.topic_queue_mapping_info_table.register(
+                topic.clone(),
+                broker_name.clone(),
+                Arc::new(TopicQueueMappingInfo::new(topic.clone(), 4, broker_name.clone(), 1)),
+            );
+            manager.publish_topic_route_snapshots(&mutation, HashSet::from([topic.clone()]));
+        }
+
+        let metadata_version = manager
+            .topic_route_snapshot_version(topic.as_str())
+            .expect("metadata mutation should republish the snapshot");
+        assert!(metadata_version > initial_version);
+        let route = manager
+            .pickup_topic_route_data(topic.as_str())
+            .expect("metadata update should keep a complete route");
+        assert_eq!(route.filter_server_table.get(&broker_addr), Some(&vec![filter_server]));
+        assert!(route
+            .topic_queue_mapping_by_broker
+            .as_ref()
+            .is_some_and(|mapping| mapping.contains_key(&broker_name)));
+
+        manager.delete_topic(topic.clone(), None);
+        assert!(manager.pickup_topic_route_data(topic.as_str()).is_err());
     }
 
     #[test]

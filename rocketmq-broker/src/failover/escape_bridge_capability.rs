@@ -447,7 +447,10 @@ impl<MS: BrokerReadStore> EscapeBridgeStoreCapability<MS> {
         Ok(self.shared_append()?.put_message(message).await?.result)
     }
 
-    pub(crate) fn set_commitlog_read_mode(&self, read_ahead_mode: i32) -> Result<(), BackendStoreError>
+    pub(crate) fn set_commitlog_read_mode(
+        &self,
+        read_ahead_mode: rocketmq_store::CommitLogReadMode,
+    ) -> Result<(), BackendStoreError>
     where
         MS: BrokerAdminStore,
     {

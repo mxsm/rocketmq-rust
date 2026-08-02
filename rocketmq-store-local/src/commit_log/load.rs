@@ -476,10 +476,9 @@ pub fn apply_recovery_mmap_advice(advice: RecoveryMmapAdvice, mmap: &[u8], file_
             #[cfg(unix)]
             {
                 let start = std::time::Instant::now();
-                let result = crate::utils::ffi::madvise(mmap.as_ptr(), mmap.len(), crate::utils::ffi::MADV_SEQUENTIAL);
+                let result = crate::utils::ffi::advise_memory(mmap, crate::utils::ffi::MemoryAdvice::Sequential);
                 let elapsed = start.elapsed();
-                if result != 0 {
-                    let error = std::io::Error::last_os_error();
+                if let Err(error) = result {
                     tracing::warn!(
                         target: "rocketmq_store::log_file::commit_log_loader",
                         "Failed to apply sequential memory hint for {}: {}",
@@ -523,7 +522,7 @@ fn prefetch_virtual_memory(mmap: &[u8]) -> io::Result<bool> {
         return Ok(false);
     }
 
-    crate::utils::ffi::prefetch_virtual_memory(mmap.as_ptr(), mmap.len()).map_err(io::Error::other)
+    crate::utils::ffi::prefetch_memory(mmap).map_err(io::Error::other)
 }
 
 /// Applies the configured recovery file-prefetch hint to an initialized mapping.

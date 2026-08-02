@@ -36,8 +36,7 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::DataVersion;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::BrokerAdminStore;
-use rocketmq_store::MADV_NORMAL;
-use rocketmq_store::MADV_RANDOM;
+use rocketmq_store::CommitLogReadMode;
 use rocketmq_transport::request_code_not_supported_with_remark;
 use rocketmq_transport::Channel;
 use rocketmq_transport::ConnectionHandlerContext;
@@ -402,15 +401,15 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
             ));
         };
 
-        if mode != MADV_NORMAL && mode != MADV_RANDOM {
+        let Some(read_mode) = CommitLogReadMode::from_wire_value(mode) else {
             return Ok(Some(
                 response
                     .set_code(ResponseCode::InvalidParameter)
                     .set_remark("set commitlog readahead mode param value error"),
             ));
-        }
+        };
 
-        match self.broker_runtime_inner.set_commitlog_read_mode(mode) {
+        match self.broker_runtime_inner.set_commitlog_read_mode(read_mode) {
             Ok(()) => {
                 Ok(Some(response.set_code(ResponseCode::Success).set_remark(format!(
                     "set commitlog readahead mode success, mode: {mode}"
@@ -1053,14 +1052,13 @@ mod tests {
     use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
     use rocketmq_runtime::common::time_utils::current_millis;
     use rocketmq_store::BrokerReadStore;
+    use rocketmq_store::CommitLogReadMode;
     use rocketmq_store::MessageStoreConfig;
     #[cfg(feature = "rocksdb_store")]
     use rocketmq_store::StoreType;
     use rocketmq_store::TimerCheckpointSnapshot;
     use rocketmq_store::TimerMessageStore;
     use rocketmq_store::TimerMetricsSerializeWrapper;
-    use rocketmq_store::MADV_NORMAL;
-    use rocketmq_store::MADV_RANDOM;
     use rocketmq_transport::Channel;
     use rocketmq_transport::ChannelInner;
     use rocketmq_transport::Connection;
@@ -1191,7 +1189,10 @@ mod tests {
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request =
             RemotingCommand::create_remoting_command(RequestCode::SetCommitlogReadMode).set_ext_fields(HashMap::new());
-        request.add_ext_field(CheetahString::from_static_str(READ_AHEAD_MODE), MADV_NORMAL.to_string());
+        request.add_ext_field(
+            CheetahString::from_static_str(READ_AHEAD_MODE),
+            CommitLogReadMode::Normal.wire_value().to_string(),
+        );
 
         let response = handler
             .set_commitlog_read_mode(channel, ctx, RequestCode::SetCommitlogReadMode, &mut request)
@@ -1210,7 +1211,10 @@ mod tests {
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request =
             RemotingCommand::create_remoting_command(RequestCode::SetCommitlogReadMode).set_ext_fields(HashMap::new());
-        request.add_ext_field(CheetahString::from_static_str(READ_AHEAD_MODE), MADV_RANDOM.to_string());
+        request.add_ext_field(
+            CheetahString::from_static_str(READ_AHEAD_MODE),
+            CommitLogReadMode::Random.wire_value().to_string(),
+        );
 
         let response = handler
             .set_commitlog_read_mode(channel, ctx, RequestCode::SetCommitlogReadMode, &mut request)

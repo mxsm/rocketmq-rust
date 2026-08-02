@@ -31,13 +31,13 @@ use rocketmq_protocol::protocol::DataVersion;
 use rocketmq_store::BrokerAdminStore;
 use rocketmq_store::BrokerStats;
 use rocketmq_store::BrokerStatsManager;
+use rocketmq_store::CommitLogReadMode;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::PutMessageResult;
 use rocketmq_store::StoreError;
 use rocketmq_store::StoreErrorKind;
 use rocketmq_store::StoreOperation;
 use rocketmq_store::TimerMessageStore;
-use rocketmq_store::MADV_NORMAL;
 use rocketmq_transport::ServerConfig;
 use tracing::warn;
 
@@ -289,12 +289,16 @@ impl<MS: BrokerAdminStore> BrokerAdminRuntime<MS> {
         message_store.put_message_to_local_store(message).await
     }
 
-    pub(crate) fn set_commitlog_read_mode(&self, read_ahead_mode: i32) -> Result<(), CommitLogReadModeUpdateError> {
+    pub(crate) fn set_commitlog_read_mode(
+        &self,
+        read_ahead_mode: CommitLogReadMode,
+    ) -> Result<(), CommitLogReadModeUpdateError> {
         self.message_store_provider
             .upgrade()
             .ok_or(StoreError::new(StoreErrorKind::NotStarted, StoreOperation::Admin))?
             .set_commitlog_read_mode(read_ahead_mode)?;
-        self.config.apply_data_read_ahead(read_ahead_mode == MADV_NORMAL)?;
+        self.config
+            .apply_data_read_ahead(read_ahead_mode == CommitLogReadMode::Normal)?;
         Ok(())
     }
 

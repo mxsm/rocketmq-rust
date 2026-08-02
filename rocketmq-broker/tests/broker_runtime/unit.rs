@@ -125,6 +125,7 @@ use rocketmq_runtime::RuntimeContext;
 use rocketmq_store::BrokerReadStore;
 use rocketmq_store::BrokerReplicationStore;
 use rocketmq_store::BrokerStorePort;
+use rocketmq_store::CommitLogReadMode;
 use rocketmq_store::ConsumeQueueStoreTrait;
 use rocketmq_store::FlushDiskType;
 use rocketmq_store::GetMessageStatus;
@@ -132,7 +133,6 @@ use rocketmq_store::HAService;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::TimerCheckpointSnapshot;
 use rocketmq_store::TimerMessageStore;
-use rocketmq_store::MADV_NORMAL;
 use rocketmq_transport::test_support::LocalRequestHarness;
 use rocketmq_transport::Channel;
 use rocketmq_transport::ChannelInner;
@@ -2740,7 +2740,7 @@ async fn admin_runtime_does_not_retain_message_store_root() {
         store_owner_count,
         "Admin runtime instances must retain only a weak Store provider"
     );
-    assert!(admin.set_commitlog_read_mode(MADV_NORMAL).is_ok());
+    assert!(admin.set_commitlog_read_mode(CommitLogReadMode::Normal).is_ok());
     assert_eq!(admin.delete_topics(Vec::new()).expect("empty topic deletion"), 0);
     assert_eq!(
         runtime
@@ -2770,7 +2770,7 @@ async fn admin_runtime_does_not_retain_message_store_root() {
     assert!(admin.message_store().is_none());
     assert!(admin.put_message(MessageExtBrokerInner::default()).await.is_err());
     assert!(matches!(
-        admin.set_commitlog_read_mode(MADV_NORMAL),
+        admin.set_commitlog_read_mode(CommitLogReadMode::Normal),
         Err(crate::broker::broker_admin_runtime::CommitLogReadModeUpdateError::Store(error))
             if error.kind() == rocketmq_store::StoreErrorKind::NotStarted
     ));
@@ -3778,7 +3778,10 @@ async fn phase6_timer_delay_and_clean_admin_requests_return_expected_responses()
 
     let mut read_mode_request =
         RemotingCommand::create_remoting_command(RequestCode::SetCommitlogReadMode).set_ext_fields(HashMap::new());
-    read_mode_request.add_ext_field(CheetahString::from_static_str(READ_AHEAD_MODE), MADV_NORMAL.to_string());
+    read_mode_request.add_ext_field(
+        CheetahString::from_static_str(READ_AHEAD_MODE),
+        CommitLogReadMode::Normal.wire_value().to_string(),
+    );
     let read_mode_response = process_broker_request(&mut processor, &mut read_mode_request).await;
     assert_eq!(ResponseCode::from(read_mode_response.code()), ResponseCode::Success);
 

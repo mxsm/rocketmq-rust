@@ -35,6 +35,7 @@ use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::request_source::RequestSource;
+use rocketmq_protocol::protocol::static_topic::logic_queue_mapping_item::LogicQueueMappingItem;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_utils::TopicQueueMappingUtils;
@@ -166,6 +167,113 @@ struct SubscriptionDataResult {
     consumer_filter_data: Option<ConsumerFilterData>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum StaticTopicMappingField {
+    LeaderItem,
+    CurrentItem,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum StaticTopicMappingItem {
+    RequestedOffset,
+    Earliest,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum StaticTopicRequestField {
+    TopicRequest,
+    RpcHeader,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum StaticTopicRewriteError {
+    NotStaticTopic,
+    IncompleteMapping(StaticTopicMappingField),
+    InvalidLogicOffset(i64),
+    MappingItemMissing(StaticTopicMappingItem),
+    IncompleteRequest(StaticTopicRequestField),
+    MissingResponseHeader,
+}
+
+impl StaticTopicRewriteError {
+    fn response_code(self) -> ResponseCode {
+        match self {
+            Self::IncompleteMapping(StaticTopicMappingField::LeaderItem) => ResponseCode::NotLeaderForQueue,
+            _ => ResponseCode::SystemError,
+        }
+    }
+
+    fn client_remark(self) -> &'static str {
+        match self {
+            Self::NotStaticTopic => "static topic mapping is unavailable",
+            Self::IncompleteMapping(_) => "static topic mapping is incomplete",
+            Self::InvalidLogicOffset(_) => "static topic mapping contains an invalid logic offset",
+            Self::MappingItemMissing(_) => "static topic mapping item is unavailable",
+            Self::IncompleteRequest(_) => "static topic request metadata is incomplete",
+            Self::MissingResponseHeader => "static topic response header is missing",
+        }
+    }
+}
+
+struct ValidatedStaticTopicMapping<'a> {
+    mapping_detail: &'a TopicQueueMappingDetail,
+    leader_item: &'a LogicQueueMappingItem,
+    current_item: &'a LogicQueueMappingItem,
+    earliest_item: &'a LogicQueueMappingItem,
+    mapping_items: &'a [LogicQueueMappingItem],
+    global_id: Option<i32>,
+}
+
+impl<'a> ValidatedStaticTopicMapping<'a> {
+    fn from_context(mapping_context: &'a TopicQueueMappingContext) -> Result<Self, StaticTopicRewriteError> {
+        let mapping_detail = mapping_context
+            .mapping_detail
+            .as_ref()
+            .ok_or(StaticTopicRewriteError::NotStaticTopic)?;
+        let leader_item = mapping_context
+            .leader_item
+            .as_ref()
+            .ok_or(StaticTopicRewriteError::IncompleteMapping(
+                StaticTopicMappingField::LeaderItem,
+            ))?;
+        let current_item = mapping_context
+            .current_item
+            .as_ref()
+            .ok_or(StaticTopicRewriteError::IncompleteMapping(
+                StaticTopicMappingField::CurrentItem,
+            ))?;
+        if current_item.logic_offset < 0 {
+            return Err(StaticTopicRewriteError::InvalidLogicOffset(current_item.logic_offset));
+        }
+        let mapping_items = mapping_context.mapping_item_list.as_slice();
+        let earliest_item = TopicQueueMappingUtils::find_logic_queue_mapping_item(mapping_items, 0, true).ok_or(
+            StaticTopicRewriteError::MappingItemMissing(StaticTopicMappingItem::Earliest),
+        )?;
+
+        Ok(Self {
+            mapping_detail,
+            leader_item,
+            current_item,
+            earliest_item,
+            mapping_items,
+            global_id: mapping_context.global_id,
+        })
+    }
+}
+
+pub(super) fn static_topic_rewrite_error_response(
+    error: StaticTopicRewriteError,
+    mapping_context: &TopicQueueMappingContext,
+) -> RemotingCommand {
+    warn!(
+        topic = %mapping_context.topic,
+        queue_id = ?mapping_context.global_id,
+        ?error,
+        "rejecting invalid static topic request state"
+    );
+    RemotingCommand::create_response_command_with_code_remark(error.response_code(), error.client_remark())
+}
+
 impl<MS> PullMessageProcessor<MS>
 where
     MS: BrokerReadStore,
@@ -216,32 +324,25 @@ where
         request_header: &mut PullMessageRequestHeader,
         mapping_context: &mut TopicQueueMappingContext,
     ) -> Option<RemotingCommand> {
-        mapping_context.mapping_detail.as_ref()?;
-        let mapping_detail = mapping_context.mapping_detail.as_ref().unwrap();
-        let topic = mapping_context.topic.as_str();
-        let global_id = mapping_context.global_id;
+        let mapping_detail = mapping_context.mapping_detail.as_ref()?;
         if !mapping_context.is_leader() {
-            return Some(RemotingCommand::create_response_command_with_code_remark(
-                ResponseCode::NotLeaderForQueue,
-                format!(
-                    "{}-{} cannot find mapping item in request process of current broker {}",
-                    topic,
-                    global_id.unwrap_or_default(),
-                    mapping_detail
-                        .topic_queue_mapping_info
-                        .bname
-                        .clone()
-                        .unwrap_or_default()
-                ),
+            return Some(static_topic_rewrite_error_response(
+                StaticTopicRewriteError::IncompleteMapping(StaticTopicMappingField::LeaderItem),
+                mapping_context,
             ));
         }
 
         let global_offset = request_header.queue_offset;
-        let mapping_item = TopicQueueMappingUtils::find_logic_queue_mapping_item(
+        let Some(mapping_item) = TopicQueueMappingUtils::find_logic_queue_mapping_item(
             &mapping_context.mapping_item_list,
             global_offset,
             true,
-        )?;
+        ) else {
+            return Some(static_topic_rewrite_error_response(
+                StaticTopicRewriteError::MappingItemMissing(StaticTopicMappingItem::RequestedOffset),
+                mapping_context,
+            ));
+        };
         mapping_context.current_item = Some(mapping_item.clone());
 
         if global_offset < mapping_item.logic_offset {
@@ -265,9 +366,20 @@ where
         }
 
         let mut sys_flag = request_header.sys_flag;
-        let topic_request = request_header.topic_request.as_mut().unwrap();
+        let Some(topic_request) = request_header.topic_request.as_mut() else {
+            return Some(static_topic_rewrite_error_response(
+                StaticTopicRewriteError::IncompleteRequest(StaticTopicRequestField::TopicRequest),
+                mapping_context,
+            ));
+        };
         topic_request.lo = Some(false);
-        topic_request.rpc.as_mut().unwrap().broker_name = bname.clone();
+        let Some(rpc_header) = topic_request.rpc.as_mut() else {
+            return Some(static_topic_rewrite_error_response(
+                StaticTopicRewriteError::IncompleteRequest(StaticTopicRequestField::RpcHeader),
+                mapping_context,
+            ));
+        };
+        rpc_header.broker_name = bname.clone();
         sys_flag = PullSysFlag::clear_suspend_flag(sys_flag as u32) as i32;
         sys_flag = PullSysFlag::clear_commit_offset_flag(sys_flag as u32) as i32;
         request_header.sys_flag = sys_flag;
@@ -284,11 +396,16 @@ where
             }
         };
         let response_code = ResponseCode::from(rpc_response.code);
-        let response_header = rpc_response.get_header_mut::<PullMessageResponseHeader>();
-        let rewrite_result =
-            rewrite_response_for_static_topic(request_header, response_header?, mapping_context, response_code);
-        if rewrite_result.is_some() {
-            return rewrite_result;
+        let Some(response_header) = rpc_response.get_header_mut::<PullMessageResponseHeader>() else {
+            return Some(static_topic_rewrite_error_response(
+                StaticTopicRewriteError::MissingResponseHeader,
+                mapping_context,
+            ));
+        };
+        match rewrite_response_for_static_topic(request_header, response_header, mapping_context, response_code) {
+            Ok(Some(response)) => return Some(response),
+            Ok(None) => {}
+            Err(error) => return Some(static_topic_rewrite_error_response(error, mapping_context)),
         }
         Some(RpcClientUtils::create_command_for_rpc_response(rpc_response))
     }
@@ -496,20 +613,22 @@ where
     }
 }
 
-pub fn rewrite_response_for_static_topic(
+pub(super) fn rewrite_response_for_static_topic(
     request_header: &PullMessageRequestHeader,
     response_header: &mut PullMessageResponseHeader,
     mapping_context: &mut TopicQueueMappingContext,
     code: ResponseCode,
-) -> Option<RemotingCommand> {
-    mapping_context.mapping_detail.as_ref()?;
-    let mapping_detail = mapping_context.mapping_detail.as_ref().unwrap();
-    let leader_item = mapping_context.leader_item.as_ref().unwrap();
-    let current_item = mapping_context.current_item.as_ref().unwrap();
-    let mapping_items = &mut mapping_context.mapping_item_list;
-    let earlist_item = TopicQueueMappingUtils::find_logic_queue_mapping_item(mapping_items, 0, true).unwrap();
-
-    assert!(current_item.logic_offset >= 0);
+) -> Result<Option<RemotingCommand>, StaticTopicRewriteError> {
+    let validated_mapping = match ValidatedStaticTopicMapping::from_context(mapping_context) {
+        Ok(validated_mapping) => validated_mapping,
+        Err(StaticTopicRewriteError::NotStaticTopic) => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let mapping_detail = validated_mapping.mapping_detail;
+    let leader_item = validated_mapping.leader_item;
+    let current_item = validated_mapping.current_item;
+    let earliest_item = validated_mapping.earliest_item;
+    let mapping_items = validated_mapping.mapping_items;
 
     let request_offset = request_header.queue_offset;
     let mut next_begin_offset = response_header.next_begin_offset;
@@ -535,7 +654,7 @@ pub fn rewrite_response_for_static_topic(
             }
         }
 
-        if earlist_item.gen == current_item.gen {
+        if earliest_item.gen == current_item.gen {
             if request_offset < min_offset {
                 /*if code == ResponseCode::PullOffsetMoved {
                     response_code = ResponseCode::PullOffsetMoved;
@@ -561,7 +680,7 @@ pub fn rewrite_response_for_static_topic(
             }
         }
 
-        if !is_revised && leader_item.gen != current_item.gen && earlist_item.gen != current_item.gen {
+        if !is_revised && leader_item.gen != current_item.gen && earliest_item.gen != current_item.gen {
             if request_offset < min_offset {
                 next_begin_offset = min_offset;
                 response_code = ResponseCode::PullRetryImmediately;
@@ -588,14 +707,16 @@ pub fn rewrite_response_for_static_topic(
     response_header.min_offset =
         current_item.compute_static_queue_offset_strictly(min_offset.max(current_item.start_offset));
     response_header.max_offset = current_item.compute_static_queue_offset_strictly(max_offset).max(
-        TopicQueueMappingDetail::compute_max_offset_from_mapping(mapping_detail, mapping_context.global_id),
+        TopicQueueMappingDetail::compute_max_offset_from_mapping(mapping_detail, validated_mapping.global_id),
     );
     response_header.offset_delta = Some(current_item.compute_offset_delta());
 
     if code != ResponseCode::Success {
-        Some(RemotingCommand::create_response_command_with_header(response_header.clone()).set_code(response_code))
+        Ok(Some(
+            RemotingCommand::create_response_command_with_header(response_header.clone()).set_code(response_code),
+        ))
     } else {
-        None
+        Ok(None)
     }
 }
 
@@ -1074,6 +1195,10 @@ mod tests {
     use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     use rocketmq_protocol::protocol::request_source::RequestSource;
+    use rocketmq_protocol::protocol::static_topic::logic_queue_mapping_item::LogicQueueMappingItem;
+    use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
+    use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
+    use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo;
     use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
     use rocketmq_protocol::protocol::LanguageCode;
     use rocketmq_store::BrokerReadStore;
@@ -1085,9 +1210,14 @@ mod tests {
 
     use super::consumer_compensation_for_request_source;
     use super::is_broadcast;
+    use super::rewrite_response_for_static_topic;
     use super::spawn_wakeup_pull_task;
+    use super::static_topic_rewrite_error_response;
     use super::store_read_max_msg_bytes;
     use super::PullMessageProcessor;
+    use super::StaticTopicMappingField;
+    use super::StaticTopicMappingItem;
+    use super::StaticTopicRewriteError;
     use crate::broker_runtime::BrokerRuntime;
     use crate::client::client_channel_info::ClientChannelInfo;
     use crate::client::consumer_group_info::ConsumerGroupInfo;
@@ -1196,6 +1326,215 @@ mod tests {
             sub_version: version,
             ..Default::default()
         }
+    }
+
+    fn static_topic_mapping_item(generation: i32, logic_offset: i64) -> LogicQueueMappingItem {
+        LogicQueueMappingItem {
+            gen: generation,
+            queue_id: 3,
+            bname: Some("broker-a".into()),
+            logic_offset,
+            start_offset: 0,
+            end_offset: 100,
+            time_of_start: -1,
+            time_of_end: -1,
+        }
+    }
+
+    fn static_topic_mapping_context(
+        mapping_items: Vec<LogicQueueMappingItem>,
+        leader_item: Option<LogicQueueMappingItem>,
+        current_item: Option<LogicQueueMappingItem>,
+    ) -> TopicQueueMappingContext {
+        let mapping_detail = TopicQueueMappingDetail {
+            topic_queue_mapping_info: TopicQueueMappingInfo {
+                topic: Some("topic-a".into()),
+                total_queues: 1,
+                bname: Some("broker-a".into()),
+                ..TopicQueueMappingInfo::default()
+            },
+            hosted_queues: Some(HashMap::from([(0, mapping_items.clone())])),
+        };
+        TopicQueueMappingContext {
+            topic: "topic-a".into(),
+            global_id: Some(0),
+            mapping_detail: Some(mapping_detail),
+            mapping_item_list: mapping_items,
+            leader_item,
+            current_item,
+        }
+    }
+
+    fn assert_static_topic_rewrite_error(
+        mut mapping_context: TopicQueueMappingContext,
+        expected_error: StaticTopicRewriteError,
+        expected_code: ResponseCode,
+        expected_remark: &str,
+    ) {
+        let request_header = PullMessageRequestHeader::default();
+        let mut response_header = PullMessageResponseHeader::default();
+        let error = match rewrite_response_for_static_topic(
+            &request_header,
+            &mut response_header,
+            &mut mapping_context,
+            ResponseCode::Success,
+        ) {
+            Err(error) => error,
+            Ok(_) => panic!("incomplete static topic mapping should be rejected"),
+        };
+
+        assert_eq!(error, expected_error);
+        let response = static_topic_rewrite_error_response(error, &mapping_context);
+        assert_eq!(response.code(), expected_code as i32);
+        assert_eq!(response.remark().map(|remark| remark.as_str()), Some(expected_remark));
+        assert!(!response.remark().is_some_and(|remark| remark.contains("broker-a")));
+    }
+
+    #[test]
+    fn static_topic_response_rewrite_ignores_non_static_topics() {
+        let request_header = PullMessageRequestHeader::default();
+        let mut response_header = PullMessageResponseHeader::default();
+        let mut mapping_context = TopicQueueMappingContext::default();
+
+        let result = rewrite_response_for_static_topic(
+            &request_header,
+            &mut response_header,
+            &mut mapping_context,
+            ResponseCode::Success,
+        );
+
+        assert!(matches!(result, Ok(None)));
+    }
+
+    #[test]
+    fn static_topic_response_rewrite_rejects_missing_leader() {
+        let current_item = static_topic_mapping_item(0, 0);
+        let mapping_context = static_topic_mapping_context(vec![current_item.clone()], None, Some(current_item));
+
+        assert_static_topic_rewrite_error(
+            mapping_context,
+            StaticTopicRewriteError::IncompleteMapping(StaticTopicMappingField::LeaderItem),
+            ResponseCode::NotLeaderForQueue,
+            "static topic mapping is incomplete",
+        );
+    }
+
+    #[test]
+    fn static_topic_response_rewrite_rejects_missing_current_item() {
+        let leader_item = static_topic_mapping_item(0, 0);
+        let mapping_context = static_topic_mapping_context(vec![leader_item.clone()], Some(leader_item), None);
+
+        assert_static_topic_rewrite_error(
+            mapping_context,
+            StaticTopicRewriteError::IncompleteMapping(StaticTopicMappingField::CurrentItem),
+            ResponseCode::SystemError,
+            "static topic mapping is incomplete",
+        );
+    }
+
+    #[test]
+    fn static_topic_response_rewrite_rejects_empty_mapping_list() {
+        let leader_item = static_topic_mapping_item(0, 0);
+        let current_item = leader_item.clone();
+        let mapping_context = static_topic_mapping_context(vec![], Some(leader_item), Some(current_item));
+
+        assert_static_topic_rewrite_error(
+            mapping_context,
+            StaticTopicRewriteError::MappingItemMissing(StaticTopicMappingItem::Earliest),
+            ResponseCode::SystemError,
+            "static topic mapping item is unavailable",
+        );
+    }
+
+    #[test]
+    fn static_topic_response_rewrite_rejects_missing_earliest_item() {
+        let unavailable_item = static_topic_mapping_item(0, -1);
+        let leader_item = static_topic_mapping_item(1, 0);
+        let current_item = leader_item.clone();
+        let mapping_context =
+            static_topic_mapping_context(vec![unavailable_item], Some(leader_item), Some(current_item));
+
+        assert_static_topic_rewrite_error(
+            mapping_context,
+            StaticTopicRewriteError::MappingItemMissing(StaticTopicMappingItem::Earliest),
+            ResponseCode::SystemError,
+            "static topic mapping item is unavailable",
+        );
+    }
+
+    #[test]
+    fn static_topic_response_rewrite_rejects_negative_current_logic_offset() {
+        let leader_item = static_topic_mapping_item(0, 0);
+        let current_item = static_topic_mapping_item(0, -1);
+        let mapping_context =
+            static_topic_mapping_context(vec![leader_item.clone()], Some(leader_item), Some(current_item));
+
+        assert_static_topic_rewrite_error(
+            mapping_context,
+            StaticTopicRewriteError::InvalidLogicOffset(-1),
+            ResponseCode::SystemError,
+            "static topic mapping contains an invalid logic offset",
+        );
+    }
+
+    #[test]
+    fn static_topic_response_rewrite_preserves_valid_non_success_response_codes() {
+        for response_code in [
+            ResponseCode::PullNotFound,
+            ResponseCode::PullRetryImmediately,
+            ResponseCode::PullOffsetMoved,
+        ] {
+            let mapping_item = static_topic_mapping_item(0, 0);
+            let mut mapping_context = static_topic_mapping_context(
+                vec![mapping_item.clone()],
+                Some(mapping_item.clone()),
+                Some(mapping_item),
+            );
+            let request_header = PullMessageRequestHeader {
+                queue_offset: 5,
+                ..PullMessageRequestHeader::default()
+            };
+            let mut response_header = PullMessageResponseHeader {
+                next_begin_offset: 5,
+                min_offset: 0,
+                max_offset: 10,
+                ..PullMessageResponseHeader::default()
+            };
+
+            let response = match rewrite_response_for_static_topic(
+                &request_header,
+                &mut response_header,
+                &mut mapping_context,
+                response_code,
+            ) {
+                Ok(Some(response)) => response,
+                _ => panic!("valid static topic response should be rewritten"),
+            };
+
+            assert_eq!(response.code(), response_code as i32);
+        }
+    }
+
+    #[test]
+    fn static_topic_response_rewrite_preserves_valid_success_path() {
+        let mapping_item = static_topic_mapping_item(0, 0);
+        let mut mapping_context = static_topic_mapping_context(
+            vec![mapping_item.clone()],
+            Some(mapping_item.clone()),
+            Some(mapping_item),
+        );
+        let request_header = PullMessageRequestHeader::default();
+        let mut response_header = PullMessageResponseHeader::default();
+
+        let result = rewrite_response_for_static_topic(
+            &request_header,
+            &mut response_header,
+            &mut mapping_context,
+            ResponseCode::Success,
+        );
+
+        assert!(matches!(result, Ok(None)));
+        assert_eq!(response_header.offset_delta, Some(0));
     }
 
     async fn new_client_channel_info(client_id: &str) -> ClientChannelInfo {

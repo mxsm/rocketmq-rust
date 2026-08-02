@@ -22,5 +22,6 @@ pub mod error;
 pub mod route_info_manager;
 pub mod segmented_lock;
 pub mod tables;
+mod topic_route_snapshot;
 pub mod types;
 pub(crate) mod zone_route_rpc_hook;

@@ -187,7 +187,6 @@ use crate::timer::timer_message_store::TimerMessageStore;
 use crate::timer::timer_message_store::TimerStoreContext;
 use crate::transfer::error::TransferResult;
 use crate::transfer::segment::SegmentLease;
-use crate::utils::ffi::MADV_NORMAL;
 use crate::utils::store_util::TOTAL_PHYSICAL_MEMORY_SIZE;
 
 mod composition;
@@ -1858,8 +1857,8 @@ impl BackendOps for LocalFileMessageStore {
         &mut self.commit_log
     }
 
-    fn set_commitlog_read_mode(&self, read_ahead_mode: i32) -> Result<(), StoreError> {
-        let data_read_ahead_enable = read_ahead_mode == MADV_NORMAL;
+    fn set_commitlog_read_mode(&self, read_ahead_mode: crate::capability::CommitLogReadMode) -> Result<(), StoreError> {
+        let data_read_ahead_enable = read_ahead_mode == crate::capability::CommitLogReadMode::Normal;
         self.commit_log.set_data_read_ahead_enable(data_read_ahead_enable);
         self.commit_log.scan_file_and_set_read_mode(read_ahead_mode);
         Ok(())

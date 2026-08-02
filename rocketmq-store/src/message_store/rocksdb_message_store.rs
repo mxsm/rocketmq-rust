@@ -1054,7 +1054,7 @@ impl BackendOps for RocksDBMessageStore {
         self.local_file_store.get_commit_log_mut()
     }
 
-    fn set_commitlog_read_mode(&self, read_ahead_mode: i32) -> Result<(), StoreError> {
+    fn set_commitlog_read_mode(&self, read_ahead_mode: crate::capability::CommitLogReadMode) -> Result<(), StoreError> {
         self.local_file_store.set_commitlog_read_mode(read_ahead_mode)
     }
 

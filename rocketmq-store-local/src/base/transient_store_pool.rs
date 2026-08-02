@@ -20,8 +20,8 @@ use rocketmq_error::RocketMQResult;
 use tracing::warn;
 
 use crate::base::memory_lock_manager::MemoryLockManager;
-use crate::utils::ffi::mlock;
-use crate::utils::ffi::munlock;
+use crate::utils::ffi::lock_memory_region;
+use crate::utils::ffi::unlock_memory_region;
 
 #[derive(Clone)]
 pub struct TransientStorePool {
@@ -74,34 +74,33 @@ impl TransientStorePool {
     }
 
     pub fn init(&self) -> RocketMQResult<()> {
-        self.init_with_locker(mlock)
+        self.init_with_locker(lock_memory_region)
     }
 
     pub(crate) fn init_with_locker<F>(&self, mut locker: F) -> RocketMQResult<()>
     where
-        F: FnMut(*const u8, usize) -> RocketMQResult<()>,
+        F: FnMut(&[u8]) -> RocketMQResult<()>,
     {
         let mut available_buffers = self.available_buffers.lock();
         for _ in 0..self.pool_size {
             let buffer = vec![0u8; self.file_size];
-            self.memory_lock_manager
-                .lock_buffer_with(buffer.as_ptr(), self.file_size, &mut locker)?;
+            self.memory_lock_manager.lock_buffer_with(&buffer, &mut locker)?;
             available_buffers.push_back(buffer);
         }
         Ok(())
     }
 
     pub fn destroy(&self) -> RocketMQResult<()> {
-        self.destroy_with_unlocker(munlock)
+        self.destroy_with_unlocker(unlock_memory_region)
     }
 
     fn destroy_with_unlocker<F>(&self, mut unlocker: F) -> RocketMQResult<()>
     where
-        F: FnMut(*const u8, usize) -> RocketMQResult<()>,
+        F: FnMut(&[u8]) -> RocketMQResult<()>,
     {
         let mut available_buffers = self.available_buffers.lock();
         for available_buffer in available_buffers.drain(0..) {
-            unlocker(available_buffer.as_ptr(), self.file_size)?;
+            unlocker(&available_buffer)?;
         }
         Ok(())
     }
@@ -174,7 +173,7 @@ mod tests {
     fn init_keeps_buffers_when_memory_lock_fails_warn_only() {
         let pool = TransientStorePool::new(2, 4096);
 
-        let result = pool.init_with_locker(|_, _| {
+        let result = pool.init_with_locker(|_| {
             Err(RocketMQError::StorageLockFailed {
                 path: "test mlock failure".to_string(),
             })
@@ -201,7 +200,7 @@ mod tests {
     fn init_applies_configured_memory_lock_budget() {
         let pool = TransientStorePool::new_with_memory_lock_budget(2, 4096, 4096);
 
-        let result = pool.init_with_locker(|_, _| Ok(()));
+        let result = pool.init_with_locker(|_| Ok(()));
 
         assert!(result.is_ok());
         assert_eq!(pool.lock_attempt_count(), 2);
@@ -215,8 +214,8 @@ mod tests {
     fn repeated_init_appends_buffers_and_accumulates_lock_statistics() {
         let pool = TransientStorePool::new(2, 16);
 
-        pool.init_with_locker(|_, _| Ok(())).expect("first init succeeds");
-        pool.init_with_locker(|_, _| Ok(())).expect("second init succeeds");
+        pool.init_with_locker(|_| Ok(())).expect("first init succeeds");
+        pool.init_with_locker(|_| Ok(())).expect("second init succeeds");
 
         assert_eq!(pool.available_buffer_nums(), 4);
         assert_eq!(pool.lock_attempt_count(), 4);
@@ -227,7 +226,7 @@ mod tests {
     #[test]
     fn destroy_unlocks_failed_lock_buffers_without_updating_manager_statistics() {
         let pool = TransientStorePool::new(2, 32);
-        pool.init_with_locker(|_, _| {
+        pool.init_with_locker(|_| {
             Err(RocketMQError::StorageLockFailed {
                 path: "injected lock failure".to_string(),
             })
@@ -235,9 +234,9 @@ mod tests {
         .expect("warn-only init keeps failed buffers");
         let mut unlock_calls = 0;
 
-        pool.destroy_with_unlocker(|_, len| {
+        pool.destroy_with_unlocker(|memory| {
             unlock_calls += 1;
-            assert_eq!(len, 32);
+            assert_eq!(memory.len(), 32);
             Ok(())
         })
         .expect("injected unlock succeeds");
@@ -252,12 +251,12 @@ mod tests {
     #[test]
     fn destroy_unlocks_budget_skipped_buffer_and_keeps_locked_statistics() {
         let pool = TransientStorePool::new_with_memory_lock_budget(2, 4096, 4096);
-        pool.init_with_locker(|_, _| Ok(())).expect("warn-only init succeeds");
+        pool.init_with_locker(|_| Ok(())).expect("warn-only init succeeds");
         let mut unlock_calls = 0;
 
-        pool.destroy_with_unlocker(|_, len| {
+        pool.destroy_with_unlocker(|memory| {
             unlock_calls += 1;
-            assert_eq!(len, 4096);
+            assert_eq!(memory.len(), 4096);
             Ok(())
         })
         .expect("injected unlock succeeds");
@@ -279,7 +278,7 @@ mod tests {
         let mut unlock_calls = 0;
 
         let error = pool
-            .destroy_with_unlocker(|_, _| {
+            .destroy_with_unlocker(|_| {
                 unlock_calls += 1;
                 Err(RocketMQError::StorageLockFailed {
                     path: "injected unlock failure".to_string(),
@@ -303,7 +302,7 @@ mod tests {
         let borrowed = pool.borrow_buffer().expect("one buffer is borrowed");
         let mut unlock_calls = 0;
 
-        pool.destroy_with_unlocker(|_, _| {
+        pool.destroy_with_unlocker(|_| {
             unlock_calls += 1;
             Ok(())
         })
