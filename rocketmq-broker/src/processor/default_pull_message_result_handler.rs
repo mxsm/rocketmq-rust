@@ -56,6 +56,8 @@ use crate::mqtrace::consume_message_hook::ConsumeMessageHook;
 use crate::processor::pull_message_processor::capability::PullMessageProcessorContext;
 use crate::processor::pull_message_processor::is_broadcast;
 use crate::processor::pull_message_processor::rewrite_response_for_static_topic;
+use crate::processor::pull_message_processor::static_topic_rewrite_error_response;
+use crate::processor::pull_message_processor::StaticTopicRewriteError;
 use crate::processor::pull_message_result_handler::PullMessageResultHandler;
 
 pub struct DefaultPullMessageResultHandler<MS: BrokerReadStore> {
@@ -116,11 +118,16 @@ impl<MS: BrokerReadStore> PullMessageResultHandler for DefaultPullMessageResultH
             code,
         );
         {
-            let response_header = response.read_custom_header_mut::<PullMessageResponseHeader>().unwrap();
-            let rewrite_result =
-                rewrite_response_for_static_topic(&request_header, response_header, &mut mapping_context, code);
-            if rewrite_result.is_some() {
-                return rewrite_result;
+            let Some(response_header) = response.read_custom_header_mut::<PullMessageResponseHeader>() else {
+                return Some(static_topic_rewrite_error_response(
+                    StaticTopicRewriteError::MissingResponseHeader,
+                    &mapping_context,
+                ));
+            };
+            match rewrite_response_for_static_topic(&request_header, response_header, &mut mapping_context, code) {
+                Ok(Some(response)) => return Some(response),
+                Ok(None) => {}
+                Err(error) => return Some(static_topic_rewrite_error_response(error, &mapping_context)),
             }
         }
         self.update_broadcast_pulled_offset(

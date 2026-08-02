@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Require deliberate classification for Client, Transport, and Runtime exports."""
+"""Require deliberate classification for core runtime, transport, and data-plane exports."""
 
 from __future__ import annotations
 
@@ -55,9 +55,32 @@ CRATES = {
             "rocketmq-runtime/src/prelude.rs",
         ),
     ),
+    "rocketmq-store": (
+        "store",
+        (
+            "rocketmq-store/src/lib.rs",
+            "rocketmq-store/src/public_api.rs",
+        ),
+    ),
+    "rocketmq-store-local": (
+        "store-local",
+        ("rocketmq-store-local/src/lib.rs",),
+    ),
+    "rocketmq-store-rocksdb": (
+        "store-rocksdb",
+        ("rocketmq-store-rocksdb/src/lib.rs",),
+    ),
+    "rocketmq-model": (
+        "model",
+        ("rocketmq-model/src/lib.rs",),
+    ),
+    "rocketmq-protocol": (
+        "protocol",
+        ("rocketmq-protocol/src/lib.rs",),
+    ),
 }
 PUBLIC_DECLARATION = re.compile(
-    r"\bpub(?:\s*\([^)]*\))?\s+(?P<kind>mod|use|type|struct|enum|trait|fn|const|static)\s+"
+    r"\bpub\s+(?P<kind>mod|use|type|struct|enum|trait|fn|const|static)\s+"
 )
 CATEGORIES = {"stable", "experimental", "compat"}
 REQUIRED_ENTRY_FIELDS = {
@@ -146,7 +169,35 @@ def current_inventory(root: Path = ROOT) -> dict[str, list[dict[str, str]]]:
     return result
 
 
-def render_manifest(inventory: dict[str, list[dict[str, str]]]) -> dict[str, Any]:
+def render_manifest(
+    inventory: dict[str, list[dict[str, str]]],
+    previous: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    previous_entries: dict[str, dict[str, str]] = {}
+    if isinstance(previous, dict):
+        crates = previous.get("crates")
+        if isinstance(crates, dict):
+            for spec in crates.values():
+                if not isinstance(spec, dict) or not isinstance(spec.get("entries"), list):
+                    continue
+                for entry in spec["entries"]:
+                    if isinstance(entry, dict) and isinstance(entry.get("identity"), str):
+                        previous_entries[entry["identity"]] = entry
+
+    preserved_inventory: dict[str, list[dict[str, str]]] = {}
+    for crate, entries in inventory.items():
+        preserved_entries: list[dict[str, str]] = []
+        for entry in entries:
+            preserved = dict(entry)
+            previous_entry = previous_entries.get(entry["identity"])
+            if previous_entry is not None:
+                for field in ("category", "owner", "rationale", "removal_condition"):
+                    value = previous_entry.get(field)
+                    if isinstance(value, str) and value:
+                        preserved[field] = value
+            preserved_entries.append(preserved)
+        preserved_inventory[crate] = preserved_entries
+
     return {
         "schema_version": 1,
         "policy": "Every deliberate export is classified; additions and count growth fail closed.",
@@ -155,7 +206,7 @@ def render_manifest(inventory: dict[str, list[dict[str, str]]]) -> dict[str, Any
                 "maximum_exports": len(entries),
                 "entries": entries,
             }
-            for crate, entries in sorted(inventory.items())
+            for crate, entries in sorted(preserved_inventory.items())
         },
     }
 
@@ -167,7 +218,7 @@ def validate_manifest(value: Any) -> dict[str, Any]:
         raise ValueError("invalid manifest metadata")
     crates = value["crates"]
     if not isinstance(crates, dict) or set(crates) != set(CRATES):
-        raise ValueError("manifest must cover Client, Transport, and Runtime")
+        raise ValueError("manifest must cover every configured public API boundary")
     for crate, spec in crates.items():
         if not isinstance(spec, dict) or set(spec) != {"maximum_exports", "entries"}:
             raise ValueError(f"{crate} has an invalid manifest entry")
@@ -192,12 +243,18 @@ def compare(manifest: dict[str, Any], inventory: dict[str, list[dict[str, str]]]
     findings: list[str] = []
     for crate, entries in inventory.items():
         expected = manifest["crates"][crate]
-        approved = {entry["identity"] for entry in expected["entries"]}
-        current = {entry["identity"] for entry in entries}
+        approved_entries = {entry["identity"]: entry for entry in expected["entries"]}
+        current_entries = {entry["identity"]: entry for entry in entries}
+        approved = set(approved_entries)
+        current = set(current_entries)
         for identity in sorted(current - approved):
             findings.append(f"{crate}: unclassified export: {identity}")
         for identity in sorted(approved - current):
             findings.append(f"{crate}: stale export declaration: {identity}")
+        for identity in sorted(approved & current):
+            for field in ("path", "declaration", "owner"):
+                if approved_entries[identity][field] != current_entries[identity][field]:
+                    findings.append(f"{crate}: {field} metadata drift: {identity}")
         if len(entries) > expected["maximum_exports"]:
             findings.append(
                 f"{crate}: export count grew: current={len(entries)} maximum={expected['maximum_exports']}"
@@ -225,7 +282,13 @@ def main() -> int:
     try:
         inventory = current_inventory(root)
         if args.write_manifest:
-            value = render_manifest(inventory)
+            previous = None
+            if MANIFEST.exists():
+                previous = json.loads(MANIFEST.read_text(encoding="utf-8"))
+            value = validate_manifest(render_manifest(inventory, previous))
+            generated_findings = compare(value, inventory)
+            if generated_findings:
+                raise ValueError("generated manifest is inconsistent: " + "; ".join(generated_findings))
             MANIFEST.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
             print(
                 "PUBLIC_API_INTENT_WRITTEN "

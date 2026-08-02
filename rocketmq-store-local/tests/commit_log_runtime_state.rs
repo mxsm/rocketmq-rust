@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::ptr::NonNull;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -30,9 +29,7 @@ fn test_handle(
 ) -> rocketmq_store_local::base::memory_lock_manager::MemoryLockHandle {
     state
         .manager()
-        .lock_region_with(category, NonNull::<u8>::dangling().as_ptr(), 1, |_, _| {
-            Ok::<_, rocketmq_error::RocketMQError>(())
-        })
+        .lock_region_with(category, vec![0u8; 1], |_| Ok::<_, rocketmq_error::RocketMQError>(()))
         .expect("test lock")
         .expect("non-empty test handle")
 }
@@ -72,7 +69,7 @@ fn active_window_reuses_only_offsets_inside_the_current_region() {
 }
 
 #[test]
-fn active_file_requires_exact_region_and_take_clear_removes_identity() -> RocketMQResult<()> {
+fn active_file_requires_exact_region_and_successful_unlock_removes_identity() -> RocketMQResult<()> {
     let mut state = CommitLogActiveMemoryLock::new(true, 1024);
     let target = CommitLogMemoryLockTarget {
         category: MemoryLockCategory::CommitLogActiveFile,
@@ -87,11 +84,47 @@ fn active_file_requires_exact_region_and_take_clear_removes_identity() -> Rocket
 
     assert!(state.is_current(200, target));
     assert!(!state.is_current(200, CommitLogMemoryLockTarget { len: 63, ..target }));
-    let handle = state.take_handle().expect("active handle");
-    state.manager().unlock_region_with(handle, |_, _| Ok(()))?;
-    state.clear();
+    assert!(state.unlock_current_with(|manager, handle| { manager.unlock_region_with(handle, |_| Ok(())) })?);
     assert!(!state.is_current(200, target));
-    assert!(state.take_handle().is_none());
+    assert!(!state.unlock_current_with(|_, _| panic!("cleared state must not invoke unlocker"))?);
+    Ok(())
+}
+
+#[test]
+fn failed_active_unlock_preserves_identity_for_retry() -> RocketMQResult<()> {
+    let mut state = CommitLogActiveMemoryLock::new(true, 1024);
+    let target = CommitLogMemoryLockTarget {
+        category: MemoryLockCategory::CommitLogActiveFile,
+        offset: 0,
+        len: 64,
+    };
+    state.set_current(
+        200,
+        target,
+        test_handle(&state, MemoryLockCategory::CommitLogActiveFile),
+    );
+
+    let error = state
+        .unlock_current_with(|manager, handle| {
+            manager.unlock_region_with(handle, |_| {
+                Err(rocketmq_error::RocketMQError::StorageLockFailed {
+                    path: "retry active unlock".to_string(),
+                })
+            })
+        })
+        .expect_err("failed unlock must remain observable");
+
+    assert!(matches!(
+        error,
+        rocketmq_error::RocketMQError::StorageLockFailed { path }
+            if path == "retry active unlock"
+    ));
+    assert!(state.is_current(200, target));
+    assert_eq!(state.manager().locked_bytes(), 1);
+
+    assert!(state.unlock_current_with(|manager, handle| { manager.unlock_region_with(handle, |_| Ok(())) })?);
+    assert!(!state.is_current(200, target));
+    assert_eq!(state.manager().locked_bytes(), 0);
     Ok(())
 }
 

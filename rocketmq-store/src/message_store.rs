@@ -578,7 +578,7 @@ macro_rules! message_store_methods {
         delegate_store!(self, get_commit_log_mut())
     }
 
-    fn set_commitlog_read_mode(&self, read_ahead_mode: i32) -> Result<(), StoreError> {
+    fn set_commitlog_read_mode(&self, read_ahead_mode: crate::capability::CommitLogReadMode) -> Result<(), StoreError> {
         delegate_store!(self, set_commitlog_read_mode(read_ahead_mode))
     }
 

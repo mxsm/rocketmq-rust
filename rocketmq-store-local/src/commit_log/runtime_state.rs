@@ -21,6 +21,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
+use rocketmq_error::RocketMQResult;
 
 use crate::base::memory_lock_manager::MemoryLockCategory;
 use crate::base::memory_lock_manager::MemoryLockHandle;
@@ -132,7 +133,7 @@ impl CommitLogActiveMemoryLock {
     /// Returns whether `target` is already covered by the current locked region.
     #[doc(hidden)]
     pub fn is_current(&self, file_from_offset: u64, target: CommitLogMemoryLockTarget) -> bool {
-        let Some(handle) = self.handle else {
+        let Some(handle) = self.handle.as_ref() else {
             return false;
         };
         if self.file_from_offset != Some(file_from_offset) || handle.category() != target.category {
@@ -162,10 +163,27 @@ impl CommitLogActiveMemoryLock {
         self.region_len = target.len;
     }
 
-    /// Takes the current handle so the platform adapter can unlock it exactly once.
+    /// Unlocks the current handle and clears its identity only after success.
+    ///
+    /// A failed unlock leaves the handle, its region owner, and identity intact for retry.
+    /// Returns `Ok(false)` when no handle is active.
+    ///
+    /// # Errors
+    ///
+    /// Returns the platform adapter error without consuming the current handle.
     #[doc(hidden)]
-    pub fn take_handle(&mut self) -> Option<MemoryLockHandle> {
-        self.handle.take()
+    pub fn unlock_current_with<U>(&mut self, mut unlock_region: U) -> RocketMQResult<bool>
+    where
+        U: FnMut(&MemoryLockManager, &mut MemoryLockHandle) -> RocketMQResult<()>,
+    {
+        let Some(handle) = self.handle.as_mut() else {
+            self.clear();
+            return Ok(false);
+        };
+
+        unlock_region(&self.manager, handle)?;
+        self.clear();
+        Ok(true)
     }
 
     /// Clears the current locked-region identity.

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::fmt;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
@@ -19,8 +20,8 @@ use std::sync::atomic::Ordering;
 use rocketmq_error::RocketMQResult;
 use tracing::warn;
 
-use crate::utils::ffi::mlock;
-use crate::utils::ffi::munlock;
+use crate::utils::ffi::lock_memory_region;
+use crate::utils::ffi::unlock_memory_region;
 
 #[cfg(test)]
 const TRANSIENT_STORE_POOL_CATEGORY: &str = MemoryLockCategory::TransientStorePool.as_str();
@@ -50,36 +51,59 @@ impl MemoryLockCategory {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+trait LockedMemoryRegion: Send + Sync {
+    fn as_slice(&self) -> &[u8];
+}
+
+impl<T> LockedMemoryRegion for T
+where
+    T: AsRef<[u8]> + Send + Sync,
+{
+    fn as_slice(&self) -> &[u8] {
+        self.as_ref()
+    }
+}
+
+#[must_use = "an armed memory-lock handle must be unlocked or retained for a later retry"]
 pub struct MemoryLockHandle {
-    addr: usize,
-    len: usize,
+    region: Box<dyn LockedMemoryRegion>,
     category: MemoryLockCategory,
+    locked: bool,
 }
 
 impl MemoryLockHandle {
-    fn new(addr: *const u8, len: usize, category: MemoryLockCategory) -> Self {
+    fn new(region: Box<dyn LockedMemoryRegion>, category: MemoryLockCategory) -> Self {
         Self {
-            addr: addr as usize,
-            len,
+            region,
             category,
+            locked: true,
         }
     }
 
-    pub fn addr(self) -> *const u8 {
-        self.addr as *const u8
+    fn region(&self) -> &[u8] {
+        self.region.as_slice()
     }
 
-    pub fn len(self) -> usize {
-        self.len
+    pub fn len(&self) -> usize {
+        self.region().len()
     }
 
-    pub fn is_empty(self) -> bool {
-        self.len == 0
+    pub fn is_empty(&self) -> bool {
+        self.region().is_empty()
     }
 
-    pub fn category(self) -> MemoryLockCategory {
+    pub fn category(&self) -> MemoryLockCategory {
         self.category
+    }
+}
+
+impl fmt::Debug for MemoryLockHandle {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("MemoryLockHandle")
+            .field("len", &self.len())
+            .field("category", &self.category)
+            .finish_non_exhaustive()
     }
 }
 
@@ -160,8 +184,8 @@ impl MemoryLockManager {
         Self::new(true, budget_bytes)
     }
 
-    pub fn lock_buffer(&self, addr: *const u8, len: usize) -> RocketMQResult<()> {
-        self.lock_buffer_with(addr, len, mlock)
+    pub fn lock_buffer(&self, memory: &[u8]) -> RocketMQResult<()> {
+        self.lock_buffer_with(memory, lock_memory_region)
     }
 
     /// Runs the lock operation through an injected compatibility callback.
@@ -172,21 +196,83 @@ impl MemoryLockManager {
     /// # Errors
     ///
     /// Returns the injected lock error when strict locking is enabled or budget reservation fails.
-    pub(crate) fn lock_buffer_with<F>(&self, addr: *const u8, len: usize, mut locker: F) -> RocketMQResult<()>
+    pub(crate) fn lock_buffer_with<F>(&self, memory: &[u8], mut locker: F) -> RocketMQResult<()>
     where
-        F: FnMut(*const u8, usize) -> RocketMQResult<()>,
+        F: FnMut(&[u8]) -> RocketMQResult<()>,
     {
-        let _ = self.lock_region_with(MemoryLockCategory::TransientStorePool, addr, len, &mut locker)?;
-        Ok(())
+        let len = memory.len();
+        self.lock_attempts.fetch_add(1, Ordering::Relaxed);
+        emit_memory_lock_attempt_observability(self, MemoryLockCategory::TransientStorePool);
+
+        let len_bytes = len as u64;
+        if !self.reserve_lock_budget(len_bytes) {
+            self.lock_skipped_buffers.fetch_add(1, Ordering::Relaxed);
+            self.lock_skipped_bytes.fetch_add(len_bytes, Ordering::Relaxed);
+            emit_memory_lock_skip_observability(
+                self,
+                MemoryLockCategory::TransientStorePool,
+                self.locked_bytes.load(Ordering::Relaxed),
+            );
+            if self.warn_only {
+                warn!(
+                    "Skipped {} memory lock of {} bytes because lock budget {} bytes is exhausted",
+                    MemoryLockCategory::TransientStorePool.as_str(),
+                    len_bytes,
+                    self.budget_bytes.load(Ordering::Relaxed)
+                );
+                return Ok(());
+            }
+            return Err(rocketmq_error::RocketMQError::StorageLockFailed {
+                path: format!(
+                    "memory lock budget exhausted: requested={} budget={}",
+                    len_bytes,
+                    self.budget_bytes.load(Ordering::Relaxed)
+                ),
+            });
+        }
+
+        match locker(memory) {
+            Ok(()) => {
+                self.locked_buffers.fetch_add(1, Ordering::Relaxed);
+                if self.budget_bytes.load(Ordering::Relaxed) == 0 {
+                    self.locked_bytes.fetch_add(len_bytes, Ordering::Relaxed);
+                }
+                emit_memory_lock_success_observability(
+                    self,
+                    MemoryLockCategory::TransientStorePool,
+                    self.locked_bytes.load(Ordering::Relaxed),
+                );
+                Ok(())
+            }
+            Err(error) => {
+                self.release_reserved_budget(len_bytes);
+                self.lock_failed_buffers.fetch_add(1, Ordering::Relaxed);
+                self.lock_failed_bytes.fetch_add(len_bytes, Ordering::Relaxed);
+                emit_memory_lock_failure_observability(
+                    self,
+                    MemoryLockCategory::TransientStorePool,
+                    self.locked_bytes.load(Ordering::Relaxed),
+                );
+                if self.warn_only {
+                    warn!(
+                        "Failed to lock {} memory region of {} bytes, continuing without mlock: {}",
+                        MemoryLockCategory::TransientStorePool.as_str(),
+                        len,
+                        error
+                    );
+                    Ok(())
+                } else {
+                    Err(error)
+                }
+            }
+        }
     }
 
-    pub fn lock_region(
-        &self,
-        category: MemoryLockCategory,
-        addr: *const u8,
-        len: usize,
-    ) -> RocketMQResult<Option<MemoryLockHandle>> {
-        self.lock_region_with(category, addr, len, mlock)
+    pub fn lock_region<R>(&self, category: MemoryLockCategory, region: R) -> RocketMQResult<Option<MemoryLockHandle>>
+    where
+        R: AsRef<[u8]> + Send + Sync + 'static,
+    {
+        self.lock_region_with(category, region, lock_memory_region)
     }
 
     /// Runs a categorized lock through an injected compatibility callback.
@@ -199,16 +285,18 @@ impl MemoryLockManager {
     ///
     /// Returns the injected lock error when strict locking is enabled or budget reservation fails.
     #[doc(hidden)]
-    pub fn lock_region_with<F>(
+    pub fn lock_region_with<R, F>(
         &self,
         category: MemoryLockCategory,
-        addr: *const u8,
-        len: usize,
+        region: R,
         mut locker: F,
     ) -> RocketMQResult<Option<MemoryLockHandle>>
     where
-        F: FnMut(*const u8, usize) -> RocketMQResult<()>,
+        R: AsRef<[u8]> + Send + Sync + 'static,
+        F: FnMut(&[u8]) -> RocketMQResult<()>,
     {
+        let region: Box<dyn LockedMemoryRegion> = Box::new(region);
+        let len = region.as_slice().len();
         self.lock_attempts.fetch_add(1, Ordering::Relaxed);
         emit_memory_lock_attempt_observability(self, category);
 
@@ -235,14 +323,14 @@ impl MemoryLockManager {
             });
         }
 
-        match locker(addr, len) {
+        match locker(region.as_slice()) {
             Ok(()) => {
                 self.locked_buffers.fetch_add(1, Ordering::Relaxed);
                 if self.budget_bytes.load(Ordering::Relaxed) == 0 {
                     self.locked_bytes.fetch_add(len_bytes, Ordering::Relaxed);
                 }
                 emit_memory_lock_success_observability(self, category, self.locked_bytes.load(Ordering::Relaxed));
-                Ok(Some(MemoryLockHandle::new(addr, len, category)))
+                Ok(Some(MemoryLockHandle::new(region, category)))
             }
             Err(error) => {
                 self.release_reserved_budget(len_bytes);
@@ -264,8 +352,8 @@ impl MemoryLockManager {
         }
     }
 
-    pub fn unlock_region(&self, handle: MemoryLockHandle) -> RocketMQResult<()> {
-        self.unlock_region_with(handle, munlock)
+    pub fn unlock_region(&self, handle: &mut MemoryLockHandle) -> RocketMQResult<()> {
+        self.unlock_region_with(handle, unlock_memory_region)
     }
 
     /// Runs the unlock operation through an injected compatibility callback.
@@ -276,14 +364,22 @@ impl MemoryLockManager {
     ///
     /// # Errors
     ///
-    /// Returns the injected unlock error when strict locking is enabled.
+    /// A failed unlock leaves `handle` armed and its owned region live so the caller can retry.
+    /// Unlock failures are returned even in warn-only mode because discarding an armed handle
+    /// would lose both the region owner and the lock-accounting identity. Repeating the operation
+    /// after a successful unlock is an idempotent no-op.
     #[doc(hidden)]
-    pub fn unlock_region_with<F>(&self, handle: MemoryLockHandle, mut unlocker: F) -> RocketMQResult<()>
+    pub fn unlock_region_with<F>(&self, handle: &mut MemoryLockHandle, mut unlocker: F) -> RocketMQResult<()>
     where
-        F: FnMut(*const u8, usize) -> RocketMQResult<()>,
+        F: FnMut(&[u8]) -> RocketMQResult<()>,
     {
-        match unlocker(handle.addr(), handle.len()) {
+        if !handle.locked {
+            return Ok(());
+        }
+
+        match unlocker(handle.region()) {
             Ok(()) => {
+                handle.locked = false;
                 self.release_locked_bytes(handle.len() as u64);
                 emit_memory_lock_locked_bytes_observability(
                     self,
@@ -300,15 +396,13 @@ impl MemoryLockManager {
                 );
                 if self.warn_only {
                     warn!(
-                        "Failed to unlock {} memory region of {} bytes, continuing: {}",
+                        "Failed to unlock {} memory region of {} bytes; retaining handle for retry: {}",
                         handle.category().as_str(),
                         handle.len(),
                         error
                     );
-                    Ok(())
-                } else {
-                    Err(error)
                 }
+                Err(error)
             }
         }
     }
@@ -576,7 +670,8 @@ mod tests {
     fn warn_only_manager_records_failure_without_returning_error() {
         let manager = MemoryLockManager::warn_only();
 
-        let result = manager.lock_buffer_with(std::ptr::null(), 4096, |_, _| {
+        let memory = vec![0u8; 4096];
+        let result = manager.lock_buffer_with(&memory, |_| {
             Err(RocketMQError::StorageLockFailed {
                 path: "test mlock failure".to_string(),
             })
@@ -592,7 +687,8 @@ mod tests {
         let manager = MemoryLockManager::warn_only_with_budget(4096);
         let mut called = false;
 
-        let result = manager.lock_buffer_with(std::ptr::null(), 8192, |_, _| {
+        let memory = vec![0u8; 8192];
+        let result = manager.lock_buffer_with(&memory, |_| {
             called = true;
             Ok(())
         });
@@ -634,10 +730,11 @@ mod tests {
     #[test]
     fn lock_region_handle_releases_reserved_budget_on_unlock() {
         let manager = MemoryLockManager::warn_only_with_budget(8192);
-        let addr = std::ptr::NonNull::<u8>::dangling().as_ptr();
+        let region = vec![0u8; 4096];
+        let addr = region.as_ptr();
 
-        let handle = manager
-            .lock_region_with(MemoryLockCategory::CommitLogActiveWindow, addr, 4096, |_, _| Ok(()))
+        let mut handle = manager
+            .lock_region_with(MemoryLockCategory::CommitLogActiveWindow, region, |_| Ok(()))
             .expect("lock should not fail")
             .expect("successful lock should return handle");
 
@@ -647,16 +744,101 @@ mod tests {
 
         let mut unlocked = false;
         manager
-            .unlock_region_with(handle, |unlock_addr, unlock_len| {
+            .unlock_region_with(&mut handle, |memory| {
                 unlocked = true;
-                assert_eq!(unlock_addr, addr);
-                assert_eq!(unlock_len, 4096);
+                assert_eq!(memory.as_ptr(), addr);
+                assert_eq!(memory.len(), 4096);
                 Ok(())
             })
             .expect("unlock should not fail");
 
         assert!(unlocked);
         assert_eq!(manager.locked_bytes(), 0);
+    }
+
+    #[test]
+    fn inline_region_owner_is_fixed_before_lock_and_unlock() {
+        let manager = MemoryLockManager::warn_only_with_budget(32);
+        let mut locked_addr = std::ptr::null();
+
+        let mut handle = manager
+            .lock_region_with(MemoryLockCategory::CommitLogActiveWindow, [0u8; 32], |memory| {
+                locked_addr = memory.as_ptr();
+                Ok(())
+            })
+            .expect("lock should not fail")
+            .expect("successful lock should return handle");
+
+        manager
+            .unlock_region_with(&mut handle, |memory| {
+                assert_eq!(memory.as_ptr(), locked_addr);
+                assert_eq!(memory.len(), 32);
+                Ok(())
+            })
+            .expect("unlock should not fail");
+    }
+
+    #[test]
+    fn failed_unlock_retains_owner_and_budget_for_retry() {
+        struct TrackedRegion {
+            memory: Box<[u8]>,
+            drops: std::sync::Arc<AtomicUsize>,
+        }
+
+        impl AsRef<[u8]> for TrackedRegion {
+            fn as_ref(&self) -> &[u8] {
+                &self.memory
+            }
+        }
+
+        impl Drop for TrackedRegion {
+            fn drop(&mut self) {
+                self.drops.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        let manager = MemoryLockManager::warn_only_with_budget(64);
+        let drops = std::sync::Arc::new(AtomicUsize::new(0));
+        let region = TrackedRegion {
+            memory: vec![0u8; 64].into_boxed_slice(),
+            drops: std::sync::Arc::clone(&drops),
+        };
+        let locked_addr = region.as_ref().as_ptr();
+        let mut handle = manager
+            .lock_region_with(MemoryLockCategory::CommitLogActiveWindow, region, |_| Ok(()))
+            .expect("lock should not fail")
+            .expect("successful lock should return handle");
+
+        let error = manager
+            .unlock_region_with(&mut handle, |_| {
+                Err(rocketmq_error::RocketMQError::StorageLockFailed {
+                    path: "retryable unlock failure".to_string(),
+                })
+            })
+            .expect_err("warn-only unlock failure must remain observable");
+
+        assert!(matches!(
+            error,
+            rocketmq_error::RocketMQError::StorageLockFailed { path }
+                if path == "retryable unlock failure"
+        ));
+        assert_eq!(manager.locked_bytes(), 64);
+        assert_eq!(drops.load(Ordering::Relaxed), 0);
+
+        manager
+            .unlock_region_with(&mut handle, |memory| {
+                assert_eq!(memory.as_ptr(), locked_addr);
+                Ok(())
+            })
+            .expect("retry should unlock the retained region");
+        assert_eq!(manager.locked_bytes(), 0);
+        assert_eq!(drops.load(Ordering::Relaxed), 0);
+
+        manager
+            .unlock_region_with(&mut handle, |_| panic!("disarmed handle must be an idempotent no-op"))
+            .expect("repeated unlock after success should be a no-op");
+        drop(handle);
+        assert_eq!(drops.load(Ordering::Relaxed), 1);
     }
 
     #[test]

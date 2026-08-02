@@ -38,6 +38,7 @@ use tempfile::TempDir;
 use super::get_result;
 use super::query_result;
 use super::selected_result;
+use super::CommitLogReadMode;
 use super::MessageReadRequest;
 use super::MessageReadResult;
 use super::MessageStoreReadCapability;
@@ -45,6 +46,20 @@ use super::MessageStoreReadPort;
 use crate::consume_queue::mapped_file_queue::MappedFileQueue;
 use crate::log_file::mapped_file::MappedFile;
 use rocketmq_store_local::mapped_file::kernel::ReferenceResource;
+
+#[test]
+fn commitlog_read_mode_accepts_only_protocol_compatible_values() {
+    assert_eq!(
+        CommitLogReadMode::from_wire_value(CommitLogReadMode::Normal.wire_value()),
+        Some(CommitLogReadMode::Normal)
+    );
+    assert_eq!(
+        CommitLogReadMode::from_wire_value(CommitLogReadMode::Random.wire_value()),
+        Some(CommitLogReadMode::Random)
+    );
+    assert_eq!(CommitLogReadMode::from_wire_value(-1), None);
+    assert_eq!(CommitLogReadMode::from_wire_value(2), None);
+}
 
 fn selected(payload: Bytes, start_offset: u64, cache_state: SelectMappedBufferCacheState) -> SelectMappedBufferResult {
     SelectMappedBufferResult {

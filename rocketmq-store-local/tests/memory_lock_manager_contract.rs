@@ -25,9 +25,7 @@ fn successful_lock(
     category: MemoryLockCategory,
     len: usize,
 ) -> RocketMQResult<Option<MemoryLockHandle>> {
-    manager.lock_region_with(category, std::ptr::NonNull::<u8>::dangling().as_ptr(), len, |_, _| {
-        Ok(())
-    })
+    manager.lock_region_with(category, vec![0u8; len], |_| Ok(()))
 }
 
 #[test]
@@ -53,16 +51,11 @@ fn strict_manager_preserves_lock_error_and_failure_counters() {
     let manager = MemoryLockManager::new(false, 4096);
 
     let error = manager
-        .lock_region_with(
-            MemoryLockCategory::CommitLogActiveFile,
-            std::ptr::null(),
-            4096,
-            |_, _| {
-                Err(RocketMQError::StorageLockFailed {
-                    path: "injected strict failure".to_string(),
-                })
-            },
-        )
+        .lock_region_with(MemoryLockCategory::CommitLogActiveFile, vec![0u8; 4096], |_| {
+            Err(RocketMQError::StorageLockFailed {
+                path: "injected strict failure".to_string(),
+            })
+        })
         .expect_err("strict manager must return the injected error");
 
     assert!(matches!(
@@ -82,15 +75,10 @@ fn warn_only_manager_skips_exhausted_budget_without_calling_locker() {
     let mut called = false;
 
     let handle = manager
-        .lock_region_with(
-            MemoryLockCategory::CommitLogActiveWindow,
-            std::ptr::null(),
-            2048,
-            |_, _| {
-                called = true;
-                Ok(())
-            },
-        )
+        .lock_region_with(MemoryLockCategory::CommitLogActiveWindow, vec![0u8; 2048], |_| {
+            called = true;
+            Ok(())
+        })
         .expect("warn-only budget exhaustion is non-fatal");
 
     assert!(handle.is_none());
@@ -106,12 +94,9 @@ fn strict_manager_reports_the_legacy_budget_error_text() {
     let manager = MemoryLockManager::new(false, 1024);
 
     let error = manager
-        .lock_region_with(
-            MemoryLockCategory::CommitLogActiveWindow,
-            std::ptr::null(),
-            2048,
-            |_, _| panic!("budget rejection must happen before the locker"),
-        )
+        .lock_region_with(MemoryLockCategory::CommitLogActiveWindow, vec![0u8; 2048], |_| {
+            panic!("budget rejection must happen before the locker")
+        })
         .expect_err("strict budget exhaustion must fail");
 
     assert!(matches!(
@@ -146,9 +131,9 @@ fn concurrent_reservations_do_not_exceed_budget_and_unlock_to_zero() {
     assert_eq!(manager.lock_attempt_count(), 8);
     assert_eq!(manager.locked_buffer_count(), 4);
     assert_eq!(manager.locked_bytes(), 4096);
-    for handle in handles {
+    for mut handle in handles {
         manager
-            .unlock_region_with(handle, |_, _| Ok(()))
+            .unlock_region_with(&mut handle, |_| Ok(()))
             .expect("injected unlock succeeds");
     }
     assert_eq!(manager.locked_bytes(), 0);

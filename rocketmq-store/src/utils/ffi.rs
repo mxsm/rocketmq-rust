@@ -13,13 +13,4 @@
 // limitations under the License.
 
 pub use rocketmq_store_local::utils::ffi::get_page_size;
-pub use rocketmq_store_local::utils::ffi::madvise;
-pub use rocketmq_store_local::utils::ffi::mincore;
-pub use rocketmq_store_local::utils::ffi::mlock;
-pub use rocketmq_store_local::utils::ffi::munlock;
-pub use rocketmq_store_local::utils::ffi::prefetch_virtual_memory;
-pub use rocketmq_store_local::utils::ffi::MADV_DONTNEED;
-pub use rocketmq_store_local::utils::ffi::MADV_NORMAL;
-pub use rocketmq_store_local::utils::ffi::MADV_RANDOM;
-pub use rocketmq_store_local::utils::ffi::MADV_SEQUENTIAL;
-pub use rocketmq_store_local::utils::ffi::MADV_WILLNEED;
+pub(crate) use rocketmq_store_local::utils::ffi::MemoryAdvice;

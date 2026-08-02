@@ -37,6 +37,16 @@ BASELINE = ROOT / "scripts" / "rust-hygiene-baseline.json"
 UNSAFE_REGION = re.compile(r"\bunsafe\s*(?:impl\b|\{)")
 MANUAL_PIN = re.compile(r"\b(?:get_unchecked_mut|map_unchecked(?:_mut)?|Pin\s*::\s*new_unchecked)\b")
 PANIC_SURFACE = re.compile(r"(?:\.\s*(unwrap|expect)\s*\(|\b(panic|unreachable)\s*!\s*\()")
+PUBLIC_SAFE_FUNCTION = re.compile(
+    r"\bpub\s+(?:(?:async|const|extern)\b\s*)*fn\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)",
+    re.MULTILINE,
+)
+PUBLIC_TRAIT = re.compile(
+    r"\bpub\s+(?:unsafe\s+)?trait\s+[A-Za-z_][A-Za-z0-9_]*",
+    re.MULTILINE,
+)
+TRAIT_FUNCTION = re.compile(r"\bfn\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)", re.MULTILINE)
+RAW_POINTER = re.compile(r"\*(?:const|mut)\b")
 FUNCTION = re.compile(
     r"\b(?:async\s+)?(?:unsafe\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)",
     re.MULTILINE,
@@ -56,10 +66,63 @@ DEBT_FIELDS = {
     "expiry",
 }
 
+REVIEWED_PANIC_INVARIANTS: dict[tuple[str, str], tuple[str, str]] = {
+    (
+        "rocketmq-broker/src/processor/admin_broker_processor/broker_config_request_handler.rs",
+        "prepare_runtime_info",
+    ): (
+        "lifecycle_invariant",
+        "broker initialization installs the message store before runtime diagnostics are served",
+    ),
+    ("rocketmq-namesrv/src/bootstrap.rs", "component_task_group"): (
+        "lifecycle_invariant",
+        "the injected NameServer service context always owns a component task group",
+    ),
+    ("rocketmq-runtime/src/resource_budget/budget.rs", "try_rebind"): (
+        "resource_budget_invariant",
+        "a successful budget rebind retains the validated root reservation",
+    ),
+    ("rocketmq-sre/crates/rocketmq-sre-control-plane/src/openapi.rs", "<module>"): (
+        "checked_artifact_invariant",
+        "the checked-in OpenAPI document is validated by repository tests before release",
+    ),
+    ("rocketmq-store-api/src/ha_contract.rs", "try_new"): (
+        "validated_constructor_invariant",
+        "ReplicaCount validates that the value is at least two before constructing NonZeroUsize",
+    ),
+    ("rocketmq-store/src/runtime.rs", "new"): (
+        "resource_budget_invariant",
+        "Store runtime child budgets are derived from a validated parent budget configuration",
+    ),
+    (
+        "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/client_adapter/mutation.rs",
+        "inner",
+    ): (
+        "documented_state_invariant",
+        "MutationAdminGuard documents that access after the guard is consumed is a programmer error",
+    ),
+    (
+        "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/client_adapter/mutation.rs",
+        "inner_mut",
+    ): (
+        "documented_state_invariant",
+        "MutationAdminGuard documents that access after the guard is consumed is a programmer error",
+    ),
+    ("rocketmq-tools/rocketmq-mcp/src/guard/sanitizer.rs", "<module>"): (
+        "static_definition_invariant",
+        "literal sanitizer regular expressions are compiled once and covered by sanitizer tests",
+    ),
+    ("rocketmq-transport/src/clients/rocketmq_tokio_client.rs", "new_with_cl_and_telemetry"): (
+        "resource_budget_invariant",
+        "the transport request budget is clamped before constructing its non-zero limit",
+    ),
+}
+
 
 class SafetyFinding(NamedTuple):
     path: str
     line: int
+    reason: str
 
 
 def is_test_only(offset: int, ranges: list[tuple[int, int]]) -> bool:
@@ -71,17 +134,53 @@ def is_test_source_path(relative: str) -> bool:
     stem = path.stem.lower()
     return (
         "tests" in {part.lower() for part in path.parts}
+        or stem == "tests"
         or stem.startswith("test_")
         or stem.endswith("_test")
         or stem.endswith("_tests")
     )
 
 
-def cfg_test_item_ranges(masked: str) -> list[tuple[int, int]]:
+def split_cfg_arguments(arguments: str) -> list[str]:
+    result: list[str] = []
+    depth = 0
+    start = 0
+    for index, character in enumerate(arguments):
+        if character == "(":
+            depth += 1
+        elif character == ")":
+            depth = max(0, depth - 1)
+        elif character == "," and depth == 0:
+            result.append(arguments[start:index].strip())
+            start = index + 1
+    result.append(arguments[start:].strip())
+    return [argument for argument in result if argument]
+
+
+def cfg_requires_test(expression: str) -> bool:
+    expression = expression.strip()
+    if expression == "test" or re.fullmatch(r'feature\s*=\s*"test-support"', expression):
+        return True
+    match = re.fullmatch(r"(?P<operator>all|any)\s*\((?P<arguments>.*)\)", expression, re.DOTALL)
+    if match is None:
+        return False
+    requirements = [cfg_requires_test(argument) for argument in split_cfg_arguments(match.group("arguments"))]
+    if not requirements:
+        return False
+    if match.group("operator") == "all":
+        return any(requirements)
+    return all(requirements)
+
+
+def cfg_test_item_ranges(masked: str, source: str | None = None) -> list[tuple[int, int]]:
     ranges: list[tuple[int, int]] = []
     for match in CFG_ATTRIBUTE.finditer(masked):
-        body = match.group("body")
-        if not re.search(r"\btest\b", body) or re.search(r"\bnot\s*\(\s*test\s*\)", body):
+        body = (
+            source[match.start("body"):match.end("body")]
+            if source is not None
+            else match.group("body")
+        )
+        if not cfg_requires_test(body):
             continue
         cursor = match.end()
         while True:
@@ -111,6 +210,110 @@ def cfg_test_item_ranges(masked: str) -> list[tuple[int, int]]:
                     ranges.append((match.start(), index + 1))
                     break
     return ranges
+
+
+def brace_depths(masked: str) -> list[int]:
+    depths = [0] * (len(masked) + 1)
+    depth = 0
+    for index, character in enumerate(masked):
+        depths[index] = depth
+        if character == "{":
+            depth += 1
+        elif character == "}":
+            depth = max(0, depth - 1)
+    depths[len(masked)] = depth
+    return depths
+
+
+def matching_delimiter(masked: str, opening: int, opener: str, closer: str) -> int | None:
+    depth = 0
+    for index in range(opening, len(masked)):
+        character = masked[index]
+        if character == opener:
+            depth += 1
+        elif character == closer:
+            depth -= 1
+            if depth == 0:
+                return index
+    return None
+
+
+def matching_generic_delimiter(masked: str, opening: int) -> int | None:
+    angle_depth = 0
+    nested_depth = 0
+    for index in range(opening, len(masked)):
+        character = masked[index]
+        if character in "([{":
+            nested_depth += 1
+        elif character in ")]}":
+            nested_depth = max(0, nested_depth - 1)
+        elif nested_depth == 0 and character == "<":
+            angle_depth += 1
+        elif nested_depth == 0 and character == ">" and masked[index - 1] != "-":
+            angle_depth -= 1
+            if angle_depth == 0:
+                return index
+    return None
+
+
+def function_parameters(masked: str, name_end: int) -> str | None:
+    cursor = name_end
+    while cursor < len(masked) and masked[cursor].isspace():
+        cursor += 1
+    if cursor < len(masked) and masked[cursor] == "<":
+        closing = matching_generic_delimiter(masked, cursor)
+        if closing is None:
+            return None
+        cursor = closing + 1
+        while cursor < len(masked) and masked[cursor].isspace():
+            cursor += 1
+    if cursor >= len(masked) or masked[cursor] != "(":
+        return None
+    closing = matching_delimiter(masked, cursor, "(", ")")
+    if closing is None:
+        return None
+    return masked[cursor + 1:closing]
+
+
+def public_trait_body_ranges(masked: str) -> list[tuple[int, int]]:
+    ranges: list[tuple[int, int]] = []
+    for match in PUBLIC_TRAIT.finditer(masked):
+        opening = masked.find("{", match.end())
+        if opening == -1:
+            continue
+        closing = matching_delimiter(masked, opening, "{", "}")
+        if closing is not None:
+            ranges.append((opening, closing))
+    return ranges
+
+
+def trait_function_is_unsafe(masked: str, trait_opening: int, function_start: int) -> bool:
+    boundary = max(
+        trait_opening,
+        masked.rfind(";", trait_opening + 1, function_start),
+        masked.rfind("{", trait_opening + 1, function_start),
+        masked.rfind("}", trait_opening + 1, function_start),
+    )
+    return re.search(r"\bunsafe\b", masked[boundary + 1:function_start]) is not None
+
+
+def public_safe_functions(masked: str) -> list[tuple[int, str, str]]:
+    functions: list[tuple[int, str, str]] = []
+    for match in PUBLIC_SAFE_FUNCTION.finditer(masked):
+        parameters = function_parameters(masked, match.end())
+        if parameters is not None:
+            functions.append((match.start(), match.group("name"), parameters))
+
+    depths = brace_depths(masked)
+    for opening, closing in public_trait_body_ranges(masked):
+        item_depth = depths[opening] + 1
+        for match in TRAIT_FUNCTION.finditer(masked, opening + 1, closing):
+            if depths[match.start()] != item_depth or trait_function_is_unsafe(masked, opening, match.start()):
+                continue
+            parameters = function_parameters(masked, match.end())
+            if parameters is not None:
+                functions.append((match.start(), match.group("name"), parameters))
+    return functions
 
 
 def preceding_safety_comment(source: str, offset: int) -> bool:
@@ -153,6 +356,9 @@ def debt_entry(relative: str, kind: str, masked: str, source: str, offset: int) 
         "manual_pin": "unsafe_invariant",
         "legacy_mod_rs": "legacy_layout",
     }.get(kind, "reviewed_legacy")
+    justification = "reviewed legacy identity; additions are forbidden and deletion is monotonic"
+    if kind == "panic_surface" and (relative, item) in REVIEWED_PANIC_INVARIANTS:
+        classification, justification = REVIEWED_PANIC_INVARIANTS[(relative, item)]
     return {
         "identity": f"{relative}:{kind}:{item}:{fingerprint}",
         "path": relative,
@@ -163,7 +369,7 @@ def debt_entry(relative: str, kind: str, masked: str, source: str, offset: int) 
         "classification": classification,
         "owner": relative.split("/", 1)[0],
         "reachability": "production-internal",
-        "justification": "reviewed legacy identity; additions are forbidden and deletion is monotonic",
+        "justification": justification,
         "expiry": "2.0.0",
     }
 
@@ -172,16 +378,32 @@ def scan_source(source: str, relative: str) -> tuple[list[SafetyFinding], list[d
     if is_test_source_path(relative):
         return [], []
     masked = rust_source.mask_comments_and_literals(source)
-    test_ranges = rust_source.test_module_ranges(masked) + cfg_test_item_ranges(masked)
+    test_ranges = rust_source.test_module_ranges(masked) + cfg_test_item_ranges(masked, source)
     safety_findings: list[SafetyFinding] = []
     debt: list[dict[str, object]] = []
+
+    for offset, name, parameters in public_safe_functions(masked):
+        if is_test_only(offset, test_ranges):
+            continue
+        if RAW_POINTER.search(parameters):
+            safety_findings.append(
+                SafetyFinding(
+                    relative,
+                    source.count("\n", 0, offset) + 1,
+                    f"safe public function {name} accepts a raw pointer",
+                )
+            )
 
     for match in UNSAFE_REGION.finditer(masked):
         if is_test_only(match.start(), test_ranges):
             continue
         if not preceding_safety_comment(source, match.start()):
             safety_findings.append(
-                SafetyFinding(relative, source.count("\n", 0, match.start()) + 1)
+                SafetyFinding(
+                    relative,
+                    source.count("\n", 0, match.start()) + 1,
+                    "unsafe region requires an adjacent // SAFETY: comment",
+                )
             )
 
     for kind, pattern in (("manual_pin", MANUAL_PIN), ("panic_surface", PANIC_SURFACE)):
@@ -238,6 +460,7 @@ def write_baseline(path: Path, debt: list[dict[str, object]]) -> None:
         "schema_version": 2,
         "policy": {
             "unsafe": "Every production unsafe block or impl requires an adjacent // SAFETY: comment.",
+            "safe_raw_pointer_api": "Public safe functions must not accept raw pointers.",
             "debt": "Existing panic surfaces, manual Pin projection, and mod.rs files may be deleted but not added.",
         },
         "entries": debt,
@@ -275,11 +498,8 @@ def main() -> int:
     safety_findings, debt = scan_tree(root)
     if safety_findings:
         for finding in safety_findings:
-            print(
-                f"{finding.path}:{finding.line}: unsafe region requires an adjacent // SAFETY: comment",
-                file=sys.stderr,
-            )
-        print(f"RUST_HYGIENE_GUARD_FAILED unsafe_findings={len(safety_findings)}", file=sys.stderr)
+            print(f"{finding.path}:{finding.line}: {finding.reason}", file=sys.stderr)
+        print(f"RUST_HYGIENE_GUARD_FAILED hygiene_findings={len(safety_findings)}", file=sys.stderr)
         return 1
 
     if args.write_baseline:
@@ -306,11 +526,23 @@ def main() -> int:
         return 1
 
     counts = Counter(str(entry["kind"]) for entry in debt)
+    reviewed_invariants = sum(
+        1
+        for entry in debt
+        if (str(entry["path"]), str(entry["item"])) in REVIEWED_PANIC_INVARIANTS
+    )
+    excluded_test_sources = sum(
+        1
+        for path in rust_source.production_sources(root)
+        if is_test_source_path(path.relative_to(root).as_posix())
+    )
     print(
         "RUST_HYGIENE_GUARD_OK "
         f"manual_pin={counts['manual_pin']} "
         f"panic_surface={counts['panic_surface']} "
-        f"legacy_mod_rs={counts['legacy_mod_rs']}"
+        f"legacy_mod_rs={counts['legacy_mod_rs']} "
+        f"reviewed_invariants={reviewed_invariants} "
+        f"excluded_test_sources={excluded_test_sources}"
     )
     return 0
 

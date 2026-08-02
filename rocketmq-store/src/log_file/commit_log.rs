@@ -80,6 +80,7 @@ use crate::base::put_message_context::PutMessageContext;
 use crate::base::select_result::SelectMappedBufferResult;
 use crate::base::store_checkpoint::StoreCheckpoint;
 use crate::base::swappable::Swappable;
+use crate::capability::CommitLogReadMode;
 use crate::config::flush_disk_type::FlushDiskType;
 use crate::config::message_store_config::LinuxMemoryLockMode;
 use crate::config::message_store_config::LinuxRecoveryFadviseMode;
@@ -111,8 +112,7 @@ use crate::store_error::StoreError;
 use crate::store_error::StoreOperation;
 use crate::transfer::error::TransferResult;
 use crate::transfer::segment::SegmentLease;
-use crate::utils::ffi::MADV_NORMAL;
-use crate::utils::ffi::MADV_RANDOM;
+use crate::utils::ffi::MemoryAdvice;
 
 use rocketmq_store_local::commit_log::abnormal_recovery::AbnormalRecoveryObservation;
 use rocketmq_store_local::commit_log::abnormal_recovery::AbnormalRecoveryRecord;
@@ -316,7 +316,7 @@ macro_rules! lock_active_mapped_file_parts {
             |manager, target| {
                 mapped_file.lock_region_with(manager, target.category, target.offset, target.len, $locker)
             },
-            $unlocker,
+            |manager, handle| manager.unlock_region_with(handle, $unlocker),
         )
     }};
 }
@@ -564,7 +564,16 @@ impl CommitLog {
     }
 
     fn ensure_active_mapped_file_locked(&self, mapped_file: &DefaultMappedFile) -> RocketMQResult<()> {
-        self.ensure_active_mapped_file_locked_with(mapped_file, crate::utils::ffi::mlock, crate::utils::ffi::munlock)
+        let target = self.active_memory_lock_target(mapped_file);
+        let (active_memory_lock, active_memory_lock_present) = self.runtime_state.active_memory_lock_parts();
+        Self::ensure_active_mapped_file_locked_parts(
+            active_memory_lock,
+            active_memory_lock_present,
+            target,
+            mapped_file.get_file_from_offset(),
+            |manager, target| mapped_file.lock_region(manager, target.category, target.offset, target.len),
+            MemoryLockManager::unlock_region,
+        )
     }
 
     fn ensure_active_mapped_file_locked_with<F, G>(
@@ -574,8 +583,8 @@ impl CommitLog {
         mut unlocker: G,
     ) -> RocketMQResult<()>
     where
-        F: FnMut(*const u8, usize) -> RocketMQResult<()>,
-        G: FnMut(*const u8, usize) -> RocketMQResult<()>,
+        F: FnMut(&[u8]) -> RocketMQResult<()>,
+        G: FnMut(&[u8]) -> RocketMQResult<()>,
     {
         let target = self.active_memory_lock_target(mapped_file);
         let (active_memory_lock, active_memory_lock_present) = self.runtime_state.active_memory_lock_parts();
@@ -589,23 +598,23 @@ impl CommitLog {
         )
     }
 
-    fn ensure_active_mapped_file_locked_parts<L, G>(
+    fn ensure_active_mapped_file_locked_parts<L, U>(
         active_memory_lock: &ParkingMutex<CommitLogActiveMemoryLock>,
         active_memory_lock_present: &AtomicBool,
         target: Option<CommitLogMemoryLockTarget>,
         file_from_offset: u64,
         mut lock_region: L,
-        mut unlocker: G,
+        mut unlock_region: U,
     ) -> RocketMQResult<()>
     where
         L: FnMut(&MemoryLockManager, CommitLogMemoryLockTarget) -> RocketMQResult<Option<MemoryLockHandle>>,
-        G: FnMut(*const u8, usize) -> RocketMQResult<()>,
+        U: FnMut(&MemoryLockManager, &mut MemoryLockHandle) -> RocketMQResult<()>,
     {
         let Some(target) = target else {
             return Self::release_active_memory_lock_if_present_parts(
                 active_memory_lock,
                 active_memory_lock_present,
-                &mut unlocker,
+                &mut unlock_region,
             );
         };
         let mut active_memory_lock_guard = active_memory_lock.lock();
@@ -614,7 +623,7 @@ impl CommitLog {
             return Ok(());
         }
 
-        Self::release_active_memory_lock_locked(&mut active_memory_lock_guard, &mut unlocker)?;
+        Self::release_active_memory_lock_locked(&mut active_memory_lock_guard, &mut unlock_region)?;
         active_memory_lock_present.store(false, Ordering::Release);
         if let Some(handle) = lock_region(active_memory_lock_guard.manager(), target)? {
             active_memory_lock_guard.set_current(file_from_offset, target, handle);
@@ -627,56 +636,90 @@ impl CommitLog {
 
     fn release_active_memory_lock_if_present<G>(&self, unlocker: G) -> RocketMQResult<()>
     where
-        G: FnMut(*const u8, usize) -> RocketMQResult<()>,
+        G: FnMut(&[u8]) -> RocketMQResult<()>,
     {
         let (active_memory_lock, active_memory_lock_present) = self.runtime_state.active_memory_lock_parts();
-        Self::release_active_memory_lock_if_present_parts(active_memory_lock, active_memory_lock_present, unlocker)
+        let mut unlocker = unlocker;
+        Self::release_active_memory_lock_if_present_parts(
+            active_memory_lock,
+            active_memory_lock_present,
+            |manager, handle| manager.unlock_region_with(handle, &mut unlocker),
+        )
     }
 
-    fn release_active_memory_lock_if_present_parts<G>(
+    fn release_active_memory_lock(&self) -> RocketMQResult<()> {
+        self.release_active_memory_lock_with(MemoryLockManager::unlock_region)
+    }
+
+    fn release_active_memory_lock_with<U>(&self, unlock_region: U) -> RocketMQResult<()>
+    where
+        U: FnMut(&MemoryLockManager, &mut MemoryLockHandle) -> RocketMQResult<()>,
+    {
+        let (active_memory_lock, active_memory_lock_present) = self.runtime_state.active_memory_lock_parts();
+        Self::release_active_memory_lock_if_present_parts(active_memory_lock, active_memory_lock_present, unlock_region)
+    }
+
+    fn release_active_memory_lock_if_present_parts<U>(
         active_memory_lock: &ParkingMutex<CommitLogActiveMemoryLock>,
         active_memory_lock_present: &AtomicBool,
-        unlocker: G,
+        unlock_region: U,
     ) -> RocketMQResult<()>
     where
-        G: FnMut(*const u8, usize) -> RocketMQResult<()>,
+        U: FnMut(&MemoryLockManager, &mut MemoryLockHandle) -> RocketMQResult<()>,
     {
         if !active_memory_lock_present.load(Ordering::Acquire) {
             return Ok(());
         }
 
-        Self::release_active_memory_lock_parts(active_memory_lock, active_memory_lock_present, unlocker)
+        Self::release_active_memory_lock_parts(active_memory_lock, active_memory_lock_present, unlock_region)
     }
 
-    fn release_active_memory_lock_parts<G>(
+    fn release_active_memory_lock_parts<U>(
         active_memory_lock: &ParkingMutex<CommitLogActiveMemoryLock>,
         active_memory_lock_present: &AtomicBool,
-        mut unlocker: G,
+        mut unlock_region: U,
     ) -> RocketMQResult<()>
     where
-        G: FnMut(*const u8, usize) -> RocketMQResult<()>,
+        U: FnMut(&MemoryLockManager, &mut MemoryLockHandle) -> RocketMQResult<()>,
     {
         let mut active_memory_lock = active_memory_lock.lock();
-        Self::release_active_memory_lock_locked(&mut active_memory_lock, &mut unlocker)?;
+        Self::release_active_memory_lock_locked(&mut active_memory_lock, &mut unlock_region)?;
         active_memory_lock_present.store(false, Ordering::Release);
         Ok(())
     }
 
-    fn release_active_memory_lock_locked<G>(
+    fn release_active_memory_lock_locked<U>(
         active_memory_lock: &mut CommitLogActiveMemoryLock,
-        mut unlocker: G,
+        mut unlock_region: U,
     ) -> RocketMQResult<()>
     where
-        G: FnMut(*const u8, usize) -> RocketMQResult<()>,
+        U: FnMut(&MemoryLockManager, &mut MemoryLockHandle) -> RocketMQResult<()>,
     {
-        let Some(handle) = active_memory_lock.take_handle() else {
-            active_memory_lock.clear();
-            return Ok(());
-        };
-
-        active_memory_lock.manager().unlock_region_with(handle, &mut unlocker)?;
-        active_memory_lock.clear();
+        active_memory_lock.unlock_current_with(&mut unlock_region)?;
         Ok(())
+    }
+
+    fn release_active_memory_lock_for_drop(&self) {
+        self.release_active_memory_lock_for_drop_with(MemoryLockManager::unlock_region);
+    }
+
+    fn release_active_memory_lock_for_drop_with<U>(&self, unlock_region: U)
+    where
+        U: FnMut(&MemoryLockManager, &mut MemoryLockHandle) -> RocketMQResult<()>,
+    {
+        if let Err(error) = self.release_active_memory_lock_with(unlock_region) {
+            warn!(
+                %error,
+                "Failed to unlock the active CommitLog memory region during drop; the owned mapping will remain live until runtime state teardown"
+            );
+        }
+    }
+}
+
+impl Drop for CommitLog {
+    fn drop(&mut self) {
+        self.append_runtime.close();
+        self.release_active_memory_lock_for_drop();
     }
 }
 
@@ -802,7 +845,20 @@ impl CommitLog {
     }
 
     pub fn shutdown(&mut self) {
+        self.shutdown_with(MemoryLockManager::unlock_region);
+    }
+
+    fn shutdown_with<U>(&mut self, mut unlock_region: U)
+    where
+        U: FnMut(&MemoryLockManager, &mut MemoryLockHandle) -> RocketMQResult<()>,
+    {
         self.append_runtime.close();
+        if let Err(error) = self.release_active_memory_lock_with(&mut unlock_region) {
+            warn!(
+                %error,
+                "Failed to unlock the active CommitLog memory region during shutdown; retaining it for retry"
+            );
+        }
         self.flush_manager.shutdown();
     }
 
@@ -822,12 +878,48 @@ impl CommitLog {
     pub async fn shutdown_gracefully(
         &mut self,
     ) -> Result<crate::consume_queue::mapped_file_queue::FlushProgress, StoreError> {
+        self.shutdown_gracefully_with(MemoryLockManager::unlock_region).await
+    }
+
+    async fn shutdown_gracefully_with<U>(
+        &mut self,
+        mut unlock_region: U,
+    ) -> Result<crate::consume_queue::mapped_file_queue::FlushProgress, StoreError>
+    where
+        U: FnMut(&MemoryLockManager, &mut MemoryLockHandle) -> RocketMQResult<()>,
+    {
         self.append_runtime.shutdown_gracefully().await;
-        self.flush_manager.shutdown_gracefully().await
+        let unlock_result = self.release_active_memory_lock_with(&mut unlock_region);
+        let flush_result = self.flush_manager.shutdown_gracefully().await;
+
+        match (unlock_result, flush_result) {
+            (Ok(()), flush_result) => flush_result,
+            (Err(unlock_error), Err(flush_error)) => {
+                warn!(
+                    error = %unlock_error,
+                    "Failed to unlock the active CommitLog memory region during graceful shutdown; retaining it for retry while preserving the flush failure"
+                );
+                Err(flush_error)
+            }
+            (Err(unlock_error), Ok(_)) => Err(StoreError::mapped_file(StoreOperation::Shutdown, unlock_error)),
+        }
     }
 
     pub fn destroy(&mut self) {
-        self.shutdown();
+        self.destroy_with(MemoryLockManager::unlock_region);
+    }
+
+    fn destroy_with<U>(&mut self, mut unlock_region: U)
+    where
+        U: FnMut(&MemoryLockManager, &mut MemoryLockHandle) -> RocketMQResult<()>,
+    {
+        self.shutdown_with(&mut unlock_region);
+        if let Err(error) = self.release_active_memory_lock_with(&mut unlock_region) {
+            warn!(
+                %error,
+                "Failed to unlock the active CommitLog memory region before destroying the mapped-file queue; retaining its mapping owner for the drop fallback"
+            );
+        }
         self.mapped_file_queue.destroy();
         self.mapped_file_queue.set_committed_where(0);
     }
@@ -2281,24 +2373,25 @@ impl CommitLog {
         self.store_runtime_state.data_read_ahead_enable()
     }
 
-    pub fn scan_file_and_set_read_mode(&self, read_ahead_mode: i32) -> usize {
+    pub fn scan_file_and_set_read_mode(&self, read_ahead_mode: CommitLogReadMode) -> usize {
         if !self.message_store_config.store_io_hint_enable {
             return 0;
         }
 
-        if read_ahead_mode != MADV_NORMAL && read_ahead_mode != MADV_RANDOM {
-            return 0;
-        }
+        let advice = match read_ahead_mode {
+            CommitLogReadMode::Normal => MemoryAdvice::Normal,
+            CommitLogReadMode::Random => MemoryAdvice::Random,
+        };
 
         let mapped_files = self.mapped_file_queue.get_mapped_files().load();
         let mut updated = 0;
         for mapped_file in mapped_files.iter() {
-            if mapped_file.apply_memory_advice(read_ahead_mode).is_ok() {
+            if mapped_file.apply_memory_advice(advice).is_ok() {
                 updated += 1;
             } else {
                 warn!(
                     "failed to apply read mode {} for {}",
-                    read_ahead_mode,
+                    read_ahead_mode.wire_value(),
                     mapped_file.get_file_name()
                 );
             }
@@ -2934,12 +3027,12 @@ mod tests {
             .get_commit_log_mut()
             .ensure_active_mapped_file_locked_with(
                 &first,
-                |_, len| {
-                    events.borrow_mut().push(("lock", len));
+                |memory| {
+                    events.borrow_mut().push(("lock", memory.len()));
                     Ok(())
                 },
-                |_, len| {
-                    events.borrow_mut().push(("unlock", len));
+                |memory| {
+                    events.borrow_mut().push(("unlock", memory.len()));
                     Ok(())
                 },
             )
@@ -2948,12 +3041,12 @@ mod tests {
             .get_commit_log_mut()
             .ensure_active_mapped_file_locked_with(
                 &second,
-                |_, len| {
-                    events.borrow_mut().push(("lock", len));
+                |memory| {
+                    events.borrow_mut().push(("lock", memory.len()));
                     Ok(())
                 },
-                |_, len| {
-                    events.borrow_mut().push(("unlock", len));
+                |memory| {
+                    events.borrow_mut().push(("unlock", memory.len()));
                     Ok(())
                 },
             )
@@ -2992,12 +3085,12 @@ mod tests {
             .get_commit_log_mut()
             .ensure_active_mapped_file_locked_with(
                 &mapped_file,
-                |_, len| {
-                    events.borrow_mut().push(("lock", len));
+                |memory| {
+                    events.borrow_mut().push(("lock", memory.len()));
                     Ok(())
                 },
-                |_, len| {
-                    events.borrow_mut().push(("unlock", len));
+                |memory| {
+                    events.borrow_mut().push(("unlock", memory.len()));
                     Ok(())
                 },
             )
@@ -3011,8 +3104,8 @@ mod tests {
 
         store
             .get_commit_log()
-            .release_active_memory_lock_if_present(|_, len| {
-                events.borrow_mut().push(("unlock", len));
+            .release_active_memory_lock_if_present(|memory| {
+                events.borrow_mut().push(("unlock", memory.len()));
                 Ok(())
             })
             .expect("active file lock release should succeed");
@@ -3025,13 +3118,160 @@ mod tests {
 
         store
             .get_commit_log()
-            .release_active_memory_lock_if_present(|_, len| {
-                events.borrow_mut().push(("unexpected_unlock", len));
+            .release_active_memory_lock_if_present(|memory| {
+                events.borrow_mut().push(("unexpected_unlock", memory.len()));
                 Ok(())
             })
             .expect("inactive release should be a fast no-op");
 
         assert_eq!(events.into_inner(), vec![("lock", 4096), ("unlock", 4096)]);
+
+        let _ = fs::remove_dir_all(temp_root);
+    }
+
+    #[test]
+    fn failed_active_memory_unlock_retains_handle_for_retry() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "rocketmq-rust-commitlog-active-lock-retry-{}",
+            current_millis()
+        ));
+        let mut store = new_test_message_store_with_config(
+            &temp_root,
+            MessageStoreConfig {
+                mapped_file_size_commit_log: 4096,
+                linux_memory_lock_mode: LinuxMemoryLockMode::ActiveFile,
+                linux_memory_lock_budget_bytes: 8192,
+                linux_memory_lock_warn_only: true,
+                ..MessageStoreConfig::default()
+            },
+            BrokerRole::SyncMaster,
+            false,
+        );
+        let mapped_file = new_test_mapped_file(&temp_root, 0, 4096);
+        let commit_log = store.get_commit_log_mut();
+        commit_log
+            .ensure_active_mapped_file_locked_with(&mapped_file, |_| Ok(()), |_| Ok(()))
+            .expect("active file lock should succeed");
+
+        let error = commit_log
+            .release_active_memory_lock_if_present(|_| {
+                Err(rocketmq_error::RocketMQError::StorageLockFailed {
+                    path: "retryable active unlock".to_string(),
+                })
+            })
+            .expect_err("warn-only unlock failure must be returned");
+        assert!(matches!(
+            error,
+            rocketmq_error::RocketMQError::StorageLockFailed { path }
+                if path == "retryable active unlock"
+        ));
+        let (active_memory_lock, active_memory_lock_present) = commit_log.runtime_state.active_memory_lock_parts();
+        assert!(active_memory_lock_present.load(Ordering::Acquire));
+        assert_eq!(active_memory_lock.lock().manager().locked_bytes(), 4096);
+
+        commit_log
+            .release_active_memory_lock_if_present(|memory| {
+                assert_eq!(memory.len(), 4096);
+                Ok(())
+            })
+            .expect("retry should release the retained handle");
+        assert!(!active_memory_lock_present.load(Ordering::Acquire));
+        assert_eq!(active_memory_lock.lock().manager().locked_bytes(), 0);
+
+        let _ = fs::remove_dir_all(temp_root);
+    }
+
+    #[test]
+    fn shutdown_and_destroy_release_active_lock_after_closing_append_admission() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "rocketmq-rust-commitlog-active-lock-destroy-{}",
+            current_millis()
+        ));
+        let mut store = new_test_message_store_with_config(
+            &temp_root,
+            MessageStoreConfig {
+                mapped_file_size_commit_log: 4096,
+                linux_memory_lock_mode: LinuxMemoryLockMode::ActiveFile,
+                linux_memory_lock_budget_bytes: 8192,
+                linux_memory_lock_warn_only: true,
+                ..MessageStoreConfig::default()
+            },
+            BrokerRole::SyncMaster,
+            false,
+        );
+        let mapped_file = new_test_mapped_file(&temp_root, 0, 4096);
+        let commit_log = store.get_commit_log_mut();
+        commit_log
+            .ensure_active_mapped_file_locked_with(&mapped_file, |_| Ok(()), |_| Ok(()))
+            .expect("active file lock should succeed");
+        let append_port = commit_log.append_runtime.port();
+        let mut unlock_calls = 0;
+
+        commit_log.destroy_with(|manager, handle| {
+            assert!(
+                append_port.snapshot().closed,
+                "append admission must close before unlock"
+            );
+            manager.unlock_region_with(handle, |memory| {
+                unlock_calls += 1;
+                assert_eq!(memory.len(), 4096);
+                Ok(())
+            })
+        });
+
+        assert_eq!(unlock_calls, 1);
+        assert!(!commit_log
+            .runtime_state
+            .active_memory_lock_parts()
+            .1
+            .load(Ordering::Acquire));
+        assert_eq!(commit_log.mapped_file_queue.get_mapped_files_size(), 0);
+
+        let _ = fs::remove_dir_all(temp_root);
+    }
+
+    #[test]
+    fn drop_fallback_retains_failed_handle_and_can_release_it_without_panicking() {
+        let temp_root =
+            std::env::temp_dir().join(format!("rocketmq-rust-commitlog-active-lock-drop-{}", current_millis()));
+        let mut store = new_test_message_store_with_config(
+            &temp_root,
+            MessageStoreConfig {
+                mapped_file_size_commit_log: 4096,
+                linux_memory_lock_mode: LinuxMemoryLockMode::ActiveFile,
+                linux_memory_lock_budget_bytes: 8192,
+                linux_memory_lock_warn_only: true,
+                ..MessageStoreConfig::default()
+            },
+            BrokerRole::SyncMaster,
+            false,
+        );
+        let mapped_file = new_test_mapped_file(&temp_root, 0, 4096);
+        let commit_log = store.get_commit_log_mut();
+        commit_log
+            .ensure_active_mapped_file_locked_with(&mapped_file, |_| Ok(()), |_| Ok(()))
+            .expect("active file lock should succeed");
+
+        commit_log.release_active_memory_lock_for_drop_with(|manager, handle| {
+            manager.unlock_region_with(handle, |_| {
+                Err(rocketmq_error::RocketMQError::StorageLockFailed {
+                    path: "drop retry".to_string(),
+                })
+            })
+        });
+        assert!(commit_log
+            .runtime_state
+            .active_memory_lock_parts()
+            .1
+            .load(Ordering::Acquire));
+
+        commit_log
+            .release_active_memory_lock_for_drop_with(|manager, handle| manager.unlock_region_with(handle, |_| Ok(())));
+        assert!(!commit_log
+            .runtime_state
+            .active_memory_lock_parts()
+            .1
+            .load(Ordering::Acquire));
 
         let _ = fs::remove_dir_all(temp_root);
     }
@@ -3062,12 +3302,12 @@ mod tests {
             .get_commit_log_mut()
             .ensure_active_mapped_file_locked_with(
                 &mapped_file,
-                |_, len| {
-                    events.borrow_mut().push(("lock", len));
+                |memory| {
+                    events.borrow_mut().push(("lock", memory.len()));
                     Ok(())
                 },
-                |_, len| {
-                    events.borrow_mut().push(("unlock", len));
+                |memory| {
+                    events.borrow_mut().push(("unlock", memory.len()));
                     Ok(())
                 },
             )
@@ -3077,12 +3317,12 @@ mod tests {
             .get_commit_log_mut()
             .ensure_active_mapped_file_locked_with(
                 &mapped_file,
-                |_, len| {
-                    events.borrow_mut().push(("lock", len));
+                |memory| {
+                    events.borrow_mut().push(("lock", memory.len()));
                     Ok(())
                 },
-                |_, len| {
-                    events.borrow_mut().push(("unlock", len));
+                |memory| {
+                    events.borrow_mut().push(("unlock", memory.len()));
                     Ok(())
                 },
             )
@@ -3096,7 +3336,18 @@ mod tests {
     #[tokio::test]
     async fn shutdown_flushes_pending_commitlog_data() {
         let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-commitlog-shutdown-{}", current_millis()));
-        let mut store = new_test_message_store(&temp_root, BrokerRole::SyncMaster, false);
+        let mut store = new_test_message_store_with_config(
+            &temp_root,
+            MessageStoreConfig {
+                mapped_file_size_commit_log: 4096,
+                linux_memory_lock_mode: LinuxMemoryLockMode::ActiveFile,
+                linux_memory_lock_budget_bytes: 8192,
+                linux_memory_lock_warn_only: true,
+                ..MessageStoreConfig::default()
+            },
+            BrokerRole::SyncMaster,
+            false,
+        );
         store.init().await.expect("init message store");
 
         store
@@ -3108,12 +3359,31 @@ mod tests {
         assert_eq!(store.get_commit_log().get_flushed_where(), 0);
         assert_eq!(store.get_commit_log().get_max_offset(), 4);
 
+        let mapped_file = new_test_mapped_file(&temp_root, 4096, 4096);
         store
             .get_commit_log_mut()
-            .shutdown_gracefully()
+            .ensure_active_mapped_file_locked_with(&mapped_file, |_| Ok(()), |_| Ok(()))
+            .expect("active file lock should succeed");
+        let append_port = store.get_commit_log().append_runtime.port();
+        let mut unlock_calls = 0;
+
+        store
+            .get_commit_log_mut()
+            .shutdown_gracefully_with(|manager, handle| {
+                assert!(
+                    append_port.snapshot().closed,
+                    "append worker admission must close before unlock"
+                );
+                manager.unlock_region_with(handle, |memory| {
+                    unlock_calls += 1;
+                    assert_eq!(memory.len(), 4096);
+                    Ok(())
+                })
+            })
             .await
             .expect("commitlog shutdown flush should succeed");
 
+        assert_eq!(unlock_calls, 1);
         assert_eq!(store.get_commit_log().get_flushed_where(), 4);
         assert_eq!(
             store.get_commit_log().get_flushed_where(),

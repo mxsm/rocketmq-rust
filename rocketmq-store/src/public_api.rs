@@ -58,6 +58,7 @@ pub use crate::capability::BrokerReadWriteStore;
 pub use crate::capability::BrokerReplicationStore;
 pub use crate::capability::BrokerStorePort;
 pub use crate::capability::BrokerWriteStore;
+pub use crate::capability::CommitLogReadMode;
 pub use crate::capability::MessageReadRequest;
 pub use crate::capability::MessageReadResult;
 pub use crate::capability::MessageStoreHealthCapability;
@@ -217,16 +218,6 @@ pub use crate::transfer::planner::TransferPlanner;
 pub use crate::transfer::planner::DEFAULT_TRANSFER_BATCH_SIZE;
 pub use crate::transfer::segment::SegmentLease;
 pub use crate::transfer::segment::TransferCacheState;
-pub use crate::utils::ffi::madvise;
-pub use crate::utils::ffi::mincore;
-pub use crate::utils::ffi::mlock;
-pub use crate::utils::ffi::munlock;
-pub use crate::utils::ffi::prefetch_virtual_memory;
-pub use crate::utils::ffi::MADV_DONTNEED;
-pub use crate::utils::ffi::MADV_NORMAL;
-pub use crate::utils::ffi::MADV_RANDOM;
-pub use crate::utils::ffi::MADV_SEQUENTIAL;
-pub use crate::utils::ffi::MADV_WILLNEED;
 
 #[cfg(feature = "rocksdb_store")]
 mod rocksdb_api {

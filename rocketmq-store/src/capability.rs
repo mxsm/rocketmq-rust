@@ -76,6 +76,41 @@ use crate::stats::broker_stats_manager::BrokerStatsManager;
 use crate::store::running_flags::RunningFlags;
 use crate::timer::timer_message_store::TimerMessageStore;
 
+/// Supported CommitLog access patterns exposed through the Store administration capability.
+///
+/// Numeric values remain only at the remoting protocol boundary. Store callers use this enum so
+/// arbitrary platform memory-advice integers cannot cross the safe capability API.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum CommitLogReadMode {
+    /// Use the platform's normal access heuristic and enable sequential read-ahead.
+    Normal,
+    /// Prefer random-access behavior and disable sequential read-ahead.
+    Random,
+}
+
+impl CommitLogReadMode {
+    const NORMAL_WIRE_VALUE: i32 = 0;
+    const RANDOM_WIRE_VALUE: i32 = 1;
+
+    /// Converts the legacy administration request value into a supported mode.
+    pub const fn from_wire_value(value: i32) -> Option<Self> {
+        match value {
+            Self::NORMAL_WIRE_VALUE => Some(Self::Normal),
+            Self::RANDOM_WIRE_VALUE => Some(Self::Random),
+            _ => None,
+        }
+    }
+
+    /// Returns the stable value used by the existing administration protocol.
+    pub const fn wire_value(self) -> i32 {
+        match self {
+            Self::Normal => Self::NORMAL_WIRE_VALUE,
+            Self::Random => Self::RANDOM_WIRE_VALUE,
+        }
+    }
+}
+
 /// Sealed adapter from public Broker capabilities to the private backend implementation contract.
 ///
 /// The trait is intentionally not re-exported. Capability users can call only the operations
@@ -547,7 +582,10 @@ pub trait BrokerAdminStore: BrokerReplicationStore {
         BackendOps::execute_delete_files_manually(self.backend());
     }
 
-    fn set_commitlog_read_mode(&self, read_ahead_mode: i32) -> Result<(), crate::store_error::StoreError> {
+    fn set_commitlog_read_mode(
+        &self,
+        read_ahead_mode: CommitLogReadMode,
+    ) -> Result<(), crate::store_error::StoreError> {
         BackendOps::set_commitlog_read_mode(self.backend(), read_ahead_mode)
     }
 
