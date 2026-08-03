@@ -609,6 +609,16 @@ services:
       - "3200:3200"
     networks: [rocketmq-sre]
 
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    profiles: ["observability"]
+    command: ["--config.file=/etc/alertmanager/alertmanager.yaml"]
+    volumes:
+      - ./alertmanager.yaml:/etc/alertmanager/alertmanager.yaml:ro
+    ports:
+      - "9093:9093"
+    networks: [rocketmq-sre]
+
 networks:
   rocketmq-sre:
     name: rocketmq-sre-phase00

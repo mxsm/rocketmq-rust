@@ -1,0 +1,11 @@
+route:
+  receiver: bounded-webhook
+  group_by: [alertname, rocketmq_cluster, rocketmq_tenant]
+  group_wait: 5s
+  group_interval: 30s
+  repeat_interval: 4h
+
+receivers:
+  - name: bounded-webhook
+
+inhibit_rules: []
