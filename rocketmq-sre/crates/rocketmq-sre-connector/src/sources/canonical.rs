@@ -425,13 +425,29 @@ mod tests {
         let registry = full_registry().expect("complete built-in registry");
         let mut pack_ids = BTreeSet::new();
         let mut requirement_count = 0;
+        let mut required_count = 0;
+        let mut optional_count = 0;
         let mut query_count = 0;
         let mut unsupported_count = 0;
+        let mut required_query_count = 0;
+        let mut required_unsupported_count = 0;
+        let mut optional_query_count = 0;
+        let mut optional_unsupported_count = 0;
 
         for pack in registry.active_packs() {
             pack_ids.insert(pack.qualified_id());
-            for requirement in pack.required_evidence().iter().chain(pack.optional_evidence()) {
+            for (requirement, required) in pack
+                .required_evidence()
+                .iter()
+                .map(|requirement| (requirement, true))
+                .chain(pack.optional_evidence().iter().map(|requirement| (requirement, false)))
+            {
                 requirement_count += 1;
+                if required {
+                    required_count += 1;
+                } else {
+                    optional_count += 1;
+                }
                 let resource = example_resource(requirement);
                 let source = normalize_source(requirement.source).expect("registered pack source");
                 let route = resolve(source, &resource).unwrap_or_else(|| {
@@ -441,10 +457,22 @@ mod tests {
                     )
                 });
                 match route {
-                    CanonicalResourceRoute::Query { .. } => query_count += 1,
+                    CanonicalResourceRoute::Query { .. } => {
+                        query_count += 1;
+                        if required {
+                            required_query_count += 1;
+                        } else {
+                            optional_query_count += 1;
+                        }
+                    }
                     CanonicalResourceRoute::NotProductionVerified { reason_code } => {
                         assert!(!reason_code.is_empty());
                         unsupported_count += 1;
+                        if required {
+                            required_unsupported_count += 1;
+                        } else {
+                            optional_unsupported_count += 1;
+                        }
                     }
                 }
             }
@@ -452,8 +480,14 @@ mod tests {
 
         assert_eq!(pack_ids, full_pack_ids().into_iter().collect());
         assert_eq!(requirement_count, 69);
+        assert_eq!(required_count, 32);
+        assert_eq!(optional_count, 37);
         assert_eq!(query_count, 18);
         assert_eq!(unsupported_count, 51);
+        assert_eq!(required_query_count, 7);
+        assert_eq!(required_unsupported_count, 25);
+        assert_eq!(optional_query_count, 11);
+        assert_eq!(optional_unsupported_count, 26);
     }
 
     #[test]
