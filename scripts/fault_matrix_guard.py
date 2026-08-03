@@ -293,6 +293,7 @@ def validate_sources(guard: Guard) -> None:
         "leaked=0 detached_still_running=0",
         "Invoke-Native docker @('pull', $image)",
         "'org.opencontainers.image.revision'",
+        "@($revisions | Sort-Object -Unique)",
         "candidate image revision must equal CandidateCommit",
         "'ROCKETMQ_RELEASE_COMMIT'",
         "'--patch-file', $patchPath",
