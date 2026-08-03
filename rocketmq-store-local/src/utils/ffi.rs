@@ -79,29 +79,21 @@ pub(crate) fn advise_memory(memory: &[u8], advice: MemoryAdvice) -> io::Result<(
 
 /// Requests best-effort prefetching for a live process-local memory region.
 ///
-/// Returns `Ok(false)` when the operation is unsupported or the region is empty.
+/// Returns `Ok(false)` when the region is empty.
 ///
 /// # Errors
 ///
 /// Returns [`RocketMQError::StorageReadFailed`] when Windows rejects the request.
+#[cfg(windows)]
 pub(crate) fn prefetch_memory(memory: &[u8]) -> RocketMQResult<bool> {
     if memory.is_empty() {
         return Ok(false);
     }
 
-    #[cfg(windows)]
-    {
-        // SAFETY: the slice proves the range is live for the duration of the call. Windows does
-        // not retain the range after PrefetchVirtualMemory returns.
-        unsafe { sys_prefetch_virtual_memory(memory.as_ptr(), memory.len()) }?;
-        Ok(true)
-    }
-
-    #[cfg(not(windows))]
-    {
-        let _ = memory;
-        Ok(false)
-    }
+    // SAFETY: the slice proves the range is live for the duration of the call. Windows does
+    // not retain the range after PrefetchVirtualMemory returns.
+    unsafe { sys_prefetch_virtual_memory(memory.as_ptr(), memory.len()) }?;
+    Ok(true)
 }
 
 /// Reports one residency byte for every page covered by a live mapped region.
@@ -121,7 +113,7 @@ pub(crate) fn memory_residency(memory: &[u8]) -> io::Result<Vec<u8>> {
 
     let page_size = get_page_size();
     let page_count = residency_page_count(memory.len(), page_size)?;
-    if (memory.as_ptr() as usize) % page_size != 0 {
+    if !(memory.as_ptr() as usize).is_multiple_of(page_size) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "memory residency range must start on a page boundary",
