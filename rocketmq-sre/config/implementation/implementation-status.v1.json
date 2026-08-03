@@ -1,0 +1,279 @@
+{
+  "schema_version": "rocketmq-sre.implementation-status.v1",
+  "status_definitions": [
+    "completed",
+    "partial",
+    "deferred",
+    "not_started"
+  ],
+  "maturity_definitions": [
+    "implemented",
+    "contract_tested",
+    "live_smoke_passed",
+    "production_certified"
+  ],
+  "evidence_requirement_baseline": {
+    "total": 69,
+    "required": 32,
+    "optional": 37,
+    "query": 18,
+    "not_production_verified": 51,
+    "required_query": 7,
+    "required_not_production_verified": 25,
+    "optional_query": 11,
+    "optional_not_production_verified": 26,
+    "source": "rocketmq-sre/crates/rocketmq-sre-connector/src/sources/canonical.rs"
+  },
+  "capability_areas": [
+    {
+      "id": "workspace-foundation",
+      "status": "completed",
+      "maturity": {
+        "implemented": true,
+        "contract_tested": true,
+        "live_smoke_passed": false,
+        "production_certified": false
+      },
+      "evidence": [
+        {
+          "kind": "configuration",
+          "path": "rocketmq-sre/Cargo.toml"
+        },
+        {
+          "kind": "test",
+          "path": "rocketmq-sre/scripts/check_source_layout.py"
+        },
+        {
+          "kind": "test",
+          "path": "rocketmq-sre/scripts/check_execution_dependency_boundary.py"
+        }
+      ],
+      "limitations": []
+    },
+    {
+      "id": "evidence-sources",
+      "status": "partial",
+      "target_outcome": "evidence-coverage",
+      "maturity": {
+        "implemented": true,
+        "contract_tested": true,
+        "live_smoke_passed": false,
+        "production_certified": false
+      },
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "rocketmq-sre/crates/rocketmq-sre-connector/src/sources/canonical.rs"
+        },
+        {
+          "kind": "configuration",
+          "path": "rocketmq-sre/config/evidence/required-source-profiles.v1.yaml"
+        },
+        {
+          "kind": "test",
+          "path": "rocketmq-sre/crates/rocketmq-sre-connector/tests/read_gateway_contract.rs"
+        }
+      ],
+      "limitations": [
+        "Only 18 of 69 declared Evidence requirements have a production query route.",
+        "Twenty-five required Evidence requirements remain not production verified."
+      ]
+    },
+    {
+      "id": "diagnostic-packs",
+      "status": "partial",
+      "target_outcome": "evidence-coverage",
+      "maturity": {
+        "implemented": true,
+        "contract_tested": true,
+        "live_smoke_passed": false,
+        "production_certified": false
+      },
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "rocketmq-sre/crates/rocketmq-sre-core/src/diagnostics/packs/catalog.rs"
+        },
+        {
+          "kind": "test",
+          "path": "rocketmq-sre/crates/rocketmq-sre-core/tests/full_diagnostic_catalog.rs"
+        },
+        {
+          "kind": "test",
+          "path": "rocketmq-sre/crates/rocketmq-sre-core/tests/diagnostic_replay.rs"
+        }
+      ],
+      "limitations": [
+        "Pack registration and deterministic replay are contract tested, but required Evidence is not yet fully production queryable.",
+        "Pack-level live fault and missing-source qualification is incomplete."
+      ]
+    },
+    {
+      "id": "operator-workspace",
+      "status": "partial",
+      "target_outcome": "production-readiness",
+      "maturity": {
+        "implemented": true,
+        "contract_tested": true,
+        "live_smoke_passed": false,
+        "production_certified": false
+      },
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "rocketmq-sre/ui/src/pages/EvidenceWorkbenchPage.tsx"
+        },
+        {
+          "kind": "test",
+          "path": "rocketmq-sre/ui/src/api/openapiContract.test.ts"
+        }
+      ],
+      "limitations": [
+        "Desktop operator flows are implemented, while production identity, scale, and handoff qualification remain incomplete."
+      ]
+    },
+    {
+      "id": "controlled-actions",
+      "status": "partial",
+      "target_outcome": "execution-qualification",
+      "maturity": {
+        "implemented": true,
+        "contract_tested": true,
+        "live_smoke_passed": false,
+        "production_certified": false
+      },
+      "evidence": [
+        {
+          "kind": "configuration",
+          "path": "rocketmq-sre/config/action-implementation/implementation-plan.v1.yaml"
+        },
+        {
+          "kind": "test",
+          "path": "rocketmq-sre/crates/rocketmq-sre-executor/tests/execution_flow.rs"
+        },
+        {
+          "kind": "source",
+          "path": "rocketmq-sre/crates/rocketmq-sre-execution-agent/src/dispatch_barrier.rs"
+        }
+      ],
+      "limitations": [
+        "Only explicitly registered bounded actions have implementations; production qualification is incomplete.",
+        "R3 operations and arbitrary requests remain permanently forbidden."
+      ]
+    },
+    {
+      "id": "bounded-autonomy",
+      "status": "partial",
+      "target_outcome": "execution-qualification",
+      "maturity": {
+        "implemented": true,
+        "contract_tested": true,
+        "live_smoke_passed": false,
+        "production_certified": false
+      },
+      "evidence": [
+        {
+          "kind": "configuration",
+          "path": "rocketmq-sre/config/autonomy/defaults.yaml"
+        },
+        {
+          "kind": "source",
+          "path": "rocketmq-sre/crates/rocketmq-sre-control-plane/src/autonomy/service.rs"
+        },
+        {
+          "kind": "test",
+          "path": "rocketmq-sre/crates/rocketmq-sre-control-plane/src/autonomy/logger_ttl_lifecycle_tests.rs"
+        }
+      ],
+      "limitations": [
+        "Autonomy remains disabled by default and has not completed disposable-cluster production qualification.",
+        "Per-organization and per-cluster operational evidence is incomplete."
+      ]
+    },
+    {
+      "id": "enterprise-integrations",
+      "status": "partial",
+      "target_outcome": "enterprise-integrations",
+      "maturity": {
+        "implemented": true,
+        "contract_tested": true,
+        "live_smoke_passed": false,
+        "production_certified": false
+      },
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "rocketmq-sre/crates/rocketmq-sre-model-gateway/src/secret.rs"
+        },
+        {
+          "kind": "test",
+          "path": "rocketmq-sre/crates/rocketmq-sre-model-gateway/tests/vault_agent_file_secret.rs"
+        },
+        {
+          "kind": "source",
+          "path": "rocketmq-sre/crates/rocketmq-sre-control-plane/src/evidence/blob.rs"
+        }
+      ],
+      "limitations": [
+        "Adapters exist, but a representative enterprise identity, credential provider, object store, and observability backend are not live qualified."
+      ]
+    },
+    {
+      "id": "model-providers",
+      "status": "partial",
+      "target_outcome": "model-diagnosis",
+      "maturity": {
+        "implemented": true,
+        "contract_tested": true,
+        "live_smoke_passed": false,
+        "production_certified": false
+      },
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "rocketmq-sre/crates/rocketmq-sre-model-gateway/src/http_transport.rs"
+        },
+        {
+          "kind": "test",
+          "path": "rocketmq-sre/crates/rocketmq-sre-model-gateway/tests/provider_contracts.rs"
+        },
+        {
+          "kind": "test",
+          "path": "rocketmq-sre/crates/rocketmq-sre-model-gateway/tests/live_provider_smoke.rs"
+        }
+      ],
+      "limitations": [
+        "Protocol adapters are contract tested without a real provider credential.",
+        "DeepSeek live qualification is intentionally deferred until all non-model readiness work is complete."
+      ]
+    },
+    {
+      "id": "production-qualification",
+      "status": "not_started",
+      "target_outcome": "production-readiness",
+      "maturity": {
+        "implemented": false,
+        "contract_tested": false,
+        "live_smoke_passed": false,
+        "production_certified": false
+      },
+      "evidence": [],
+      "reason": "Current and previous-version binaries, multi-region recovery, sustained load, soak, and independent handoff evidence have not been completed.",
+      "limitations": []
+    },
+    {
+      "id": "ai-assisted-diagnosis",
+      "status": "deferred",
+      "target_outcome": "model-diagnosis",
+      "maturity": {
+        "implemented": false,
+        "contract_tested": false,
+        "live_smoke_passed": false,
+        "production_certified": false
+      },
+      "evidence": [],
+      "reason": "DeepSeek credential intake and AI-assisted diagnosis are intentionally last, after Evidence, enterprise integration, execution-boundary, and production-readiness qualification.",
+      "limitations": []
+    }
+  ]
+}
