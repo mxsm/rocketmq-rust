@@ -98,7 +98,7 @@
     "distribution/config/prometheus-architecture-production-readiness-alerts.yaml": "44bfcbb119343fd848fe7c32ffaeab235eee960c2ec3ad2130b31493893f4646",
     "rocketmq-doc/en/architecture-production-readiness-runbook.md": "e75c7a668d83c48cbe65c2f57b1d2511ddc0102405403604b37c946cce289cbb",
     "distribution/kubernetes/fault-matrix-policy.json": "96aa7c3dbce82626cc80e6120d9752331d65071597a6c76525146f37a48a9bcb",
-    "scripts/telemetry-semantic-registry.json": "8bec197663405d716ed087d86e2655291562d826821315ed48549248dd482f47"
+    "scripts/telemetry-semantic-registry.json": "408bd367d003cec63ce8695ca0888cfc460c36656337b29fa831a5587a4ccfb1"
   },
   "artifacts": [
     {
