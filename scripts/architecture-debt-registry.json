@@ -49,7 +49,7 @@
         "scripts/rust-hygiene-baseline.json",
         "scripts/rust_hygiene_guard.py"
       ],
-      "scope_count": 737
+      "scope_count": 578
     },
     {
       "id": "ARC-TRAIT-001",

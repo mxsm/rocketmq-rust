@@ -8,15 +8,15 @@ A high rank is a review priority, not evidence that line count alone is a defect
 
 | Rank | File | Score | Production LOC | Churn | Authors | Defects | Public | Locks | State owners | Fan-out |
 |---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 1 | `rocketmq-broker/src/broker_runtime.rs` | 730.425 | 767 | 229 | 12 | 2 | 1 | 9 | 2 | 29 |
+| 1 | `rocketmq-broker/src/broker_runtime.rs` | 732.850 | 764 | 230 | 12 | 2 | 1 | 9 | 2 | 29 |
 | 2 | `rocketmq-client/src/producer/default_mq_producer.rs` | 663.404 | 2138 | 98 | 14 | 1 | 182 | 0 | 0 | 10 |
-| 3 | `rocketmq-store/src/message_store/local_file_message_store.rs` | 577.375 | 1985 | 164 | 5 | 4 | 5 | 21 | 0 | 25 |
-| 4 | `rocketmq-store/src/log_file/commit_log.rs` | 500.090 | 2277 | 103 | 6 | 4 | 64 | 10 | 0 | 15 |
+| 3 | `rocketmq-store/src/message_store/local_file_message_store.rs` | 579.850 | 1984 | 165 | 5 | 4 | 5 | 21 | 0 | 25 |
+| 4 | `rocketmq-store/src/log_file/commit_log.rs` | 507.248 | 2358 | 104 | 6 | 4 | 64 | 10 | 0 | 16 |
 | 5 | `rocketmq-client/src/consumer/default_mq_push_consumer.rs` | 430.892 | 1152 | 31 | 3 | 0 | 190 | 0 | 0 | 9 |
-| 6 | `rocketmq-client/src/factory/mq_client_instance.rs` | 415.691 | 2261 | 74 | 3 | 2 | 72 | 12 | 0 | 13 |
-| 7 | `rocketmq-client/src/consumer/consumer_impl/default_lite_pull_consumer_impl.rs` | 400.031 | 2499 | 41 | 1 | 0 | 99 | 43 | 0 | 11 |
+| 6 | `rocketmq-client/src/factory/mq_client_instance.rs` | 426.854 | 2301 | 75 | 3 | 2 | 77 | 12 | 0 | 13 |
+| 7 | `rocketmq-client/src/consumer/consumer_impl/default_lite_pull_consumer_impl.rs` | 402.581 | 2501 | 42 | 1 | 0 | 99 | 43 | 0 | 11 |
 | 8 | `rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/operations.rs` | 399.900 | 2916 | 5 | 1 | 0 | 203 | 0 | 0 | 3 |
-| 9 | `rocketmq-observability/src/semantic.rs` | 385.850 | 234 | 13 | 1 | 0 | 229 | 0 | 0 | 0 |
+| 9 | `rocketmq-observability/src/semantic.rs` | 392.925 | 237 | 14 | 1 | 0 | 232 | 0 | 0 | 0 |
 | 10 | `rocketmq-store/src/config/message_store_config.rs` | 354.040 | 1982 | 32 | 2 | 1 | 126 | 0 | 0 | 5 |
 | 11 | `rocketmq-broker/src/config/broker_config.rs` | 353.333 | 1794 | 5 | 1 | 1 | 181 | 0 | 0 | 4 |
 | 12 | `rocketmq-client/src/implementation/mq_client_api_impl.rs` | 346.275 | 401 | 104 | 10 | 0 | 6 | 3 | 1 | 13 |

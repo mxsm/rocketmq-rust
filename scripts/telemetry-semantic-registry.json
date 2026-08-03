@@ -159,6 +159,15 @@
       "redaction": "none"
     },
     {
+      "id": "event",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
       "id": "file_type",
       "cardinality": "bounded",
       "privacy": "operational",
@@ -3436,6 +3445,57 @@
       "stability": "stable",
       "attributes": [],
       "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_transport_lifecycle_events_total",
+      "source_symbol": "TRANSPORT_LIFECYCLE_EVENTS_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{event}",
+      "owner": "remoting",
+      "catalog": "rust",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "event",
+        "result"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_transport_lifecycle_listener_latency",
+      "source_symbol": "TRANSPORT_LIFECYCLE_LISTENER_LATENCY",
+      "signal_type": "metric",
+      "kind": "histogram",
+      "unit": "ms",
+      "owner": "remoting",
+      "catalog": "rust",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "event"
+      ],
+      "cardinality_budget": 10000,
       "privacy": "operational",
       "sampling": {
         "strategy": "aggregate"
