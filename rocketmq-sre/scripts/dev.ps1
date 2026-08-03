@@ -247,7 +247,7 @@ function New-DevelopmentCertificates {
     $extensionFile = Join-Path $certificateDirectory 'server.ext'
     [IO.File]::WriteAllText(
         $extensionFile,
-        "subjectAltName=DNS:mcp,DNS:rocketmq-mcp,DNS:dev-issuer-tls,DNS:localhost,IP:127.0.0.1`nextendedKeyUsage=serverAuth`n",
+        "subjectAltName=DNS:mcp,DNS:rocketmq-mcp,DNS:dev-issuer-tls,DNS:keycloak-tls,DNS:minio-tls,DNS:localhost,IP:127.0.0.1`nextendedKeyUsage=serverAuth`n",
         [Text.UTF8Encoding]::new($false)
     )
     $mount = "${certificateDirectory}:/certs"

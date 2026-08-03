@@ -1,0 +1,139 @@
+{
+  "realm": "rocketmq-sre",
+  "enabled": true,
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "resetPasswordAllowed": false,
+  "roles": {
+    "realm": [
+      { "name": "operator" },
+      { "name": "approver" },
+      { "name": "model-governance" }
+    ]
+  },
+  "clientScopes": [
+    { "name": "rocketmq:read", "protocol": "openid-connect" },
+    { "name": "rocketmq:diagnose", "protocol": "openid-connect" },
+    { "name": "rocketmq:model-governance", "protocol": "openid-connect" }
+  ],
+  "clients": [
+    {
+      "clientId": "rocketmq-sre-ui",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": ["http://localhost:3004/*"],
+      "webOrigins": ["http://localhost:3004"],
+      "defaultClientScopes": [
+        "openid",
+        "profile",
+        "roles",
+        "rocketmq:read",
+        "rocketmq:diagnose",
+        "rocketmq:model-governance"
+      ],
+      "protocolMappers": [
+        {
+          "name": "rocketmq-tenant",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-hardcoded-claim-mapper",
+          "config": {
+            "claim.name": "rocketmq_tenant",
+            "claim.value": "00000000-0000-4000-8000-000000000002",
+            "jsonType.label": "String",
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        },
+        {
+          "name": "rocketmq-clusters",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-hardcoded-claim-mapper",
+          "config": {
+            "claim.name": "rocketmq_clusters",
+            "claim.value": "[\"00000000-0000-4000-8000-000000000001\"]",
+            "jsonType.label": "JSON",
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        },
+        {
+          "name": "control-plane-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.custom.audience": "rocketmq-sre-control-plane",
+            "access.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "rocketmq-sre-qualification",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "qualification-client-secret",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "defaultClientScopes": [
+        "openid",
+        "profile",
+        "roles",
+        "rocketmq:read",
+        "rocketmq:diagnose",
+        "rocketmq:model-governance"
+      ],
+      "protocolMappers": [
+        {
+          "name": "rocketmq-tenant",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-hardcoded-claim-mapper",
+          "config": {
+            "claim.name": "rocketmq_tenant",
+            "claim.value": "00000000-0000-4000-8000-000000000002",
+            "jsonType.label": "String",
+            "access.token.claim": "true"
+          }
+        },
+        {
+          "name": "rocketmq-clusters",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-hardcoded-claim-mapper",
+          "config": {
+            "claim.name": "rocketmq_clusters",
+            "claim.value": "[\"00000000-0000-4000-8000-000000000001\"]",
+            "jsonType.label": "JSON",
+            "access.token.claim": "true"
+          }
+        },
+        {
+          "name": "control-plane-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.custom.audience": "rocketmq-sre-control-plane",
+            "access.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "sre-operator",
+      "enabled": true,
+      "email": "sre-operator@example.invalid",
+      "emailVerified": true,
+      "firstName": "RocketMQ",
+      "lastName": "SRE Operator",
+      "requiredActions": [],
+      "credentials": [
+        { "type": "password", "value": "qualification-only", "temporary": false }
+      ],
+      "realmRoles": ["operator", "approver", "model-governance"]
+    }
+  ]
+}

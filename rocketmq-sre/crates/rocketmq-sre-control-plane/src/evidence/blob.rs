@@ -16,6 +16,8 @@ use std::path::Path as FileSystemPath;
 use std::sync::Arc;
 
 use bytes::Bytes;
+use object_store::Certificate;
+use object_store::ClientOptions;
 use object_store::ObjectStore;
 use object_store::ObjectStoreExt;
 use object_store::PutPayload;
@@ -27,17 +29,24 @@ use object_store::path::Path as ObjectPath;
 
 use crate::ControlPlaneError;
 
+mod credentials;
+
+use self::credentials::s3_credentials;
+
 const LOCAL_STORE_ENV: &str = "ROCKETMQ_SRE_OBJECT_STORE_LOCAL_PATH";
 const LOCAL_URI_PREFIX: &str = "rocketmq-sre-local://evidence/";
 #[cfg(test)]
 const MEMORY_URI_PREFIX: &str = "rocketmq-sre-memory://evidence/";
 const MAX_OBJECT_PATH_BYTES: usize = 1_024;
+const DEFAULT_MAX_OBJECT_BYTES: usize = 16 * 1024 * 1024;
+const HARD_MAX_OBJECT_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Clone)]
 pub(crate) struct EvidenceBlobStore {
     store: Arc<dyn ObjectStore>,
     uri_prefix: Arc<str>,
     max_inline_bytes: usize,
+    max_object_bytes: usize,
 }
 
 impl EvidenceBlobStore {
@@ -56,6 +65,22 @@ impl EvidenceBlobStore {
                 "ROCKETMQ_SRE_EVIDENCE_INLINE_BYTES must be between 1024 and 1048576",
             ));
         }
+        let max_object_bytes = std::env::var("ROCKETMQ_SRE_EVIDENCE_MAX_OBJECT_BYTES")
+            .ok()
+            .map(|value| {
+                value.parse::<usize>().map_err(|error| {
+                    ControlPlaneError::configuration(format!(
+                        "ROCKETMQ_SRE_EVIDENCE_MAX_OBJECT_BYTES is invalid: {error}"
+                    ))
+                })
+            })
+            .transpose()?
+            .unwrap_or(DEFAULT_MAX_OBJECT_BYTES);
+        if !(max_inline_bytes..=HARD_MAX_OBJECT_BYTES).contains(&max_object_bytes) {
+            return Err(ControlPlaneError::configuration(
+                "ROCKETMQ_SRE_EVIDENCE_MAX_OBJECT_BYTES must be at least the inline limit and at most 67108864",
+            ));
+        }
 
         let local_path = optional_env(LOCAL_STORE_ENV);
         let endpoint = optional_env("ROCKETMQ_SRE_OBJECT_STORE_ENDPOINT");
@@ -70,7 +95,7 @@ impl EvidenceBlobStore {
                     "{LOCAL_STORE_ENV} is permitted only when ROCKETMQ_SRE_DEV_AUTH=true"
                 )));
             }
-            return Self::local(local_path, max_inline_bytes);
+            return Self::local(local_path, max_inline_bytes, max_object_bytes);
         }
         if endpoint.is_none() && dev_mode {
             return Err(ControlPlaneError::configuration(format!(
@@ -80,8 +105,6 @@ impl EvidenceBlobStore {
         let endpoint = endpoint
             .ok_or_else(|| ControlPlaneError::configuration("ROCKETMQ_SRE_OBJECT_STORE_ENDPOINT must be configured"))?;
         let bucket = required_env("ROCKETMQ_SRE_OBJECT_STORE_BUCKET")?;
-        let access_key = required_env("ROCKETMQ_SRE_OBJECT_STORE_ACCESS_KEY")?;
-        let secret_key = required_env("ROCKETMQ_SRE_OBJECT_STORE_SECRET_KEY")?;
         let region = optional_env("ROCKETMQ_SRE_OBJECT_STORE_REGION").unwrap_or_else(|| "us-east-1".to_owned());
         let endpoint_is_http = endpoint.starts_with("http://");
         let endpoint_is_https = endpoint.starts_with("https://");
@@ -91,23 +114,37 @@ impl EvidenceBlobStore {
             ));
         }
         let allow_http = endpoint_is_http && dev_mode;
-        let store = AmazonS3Builder::new()
+        let credentials = s3_credentials(dev_mode)?;
+        let mut builder = AmazonS3Builder::new()
             .with_bucket_name(&bucket)
             .with_region(region)
             .with_endpoint(endpoint)
-            .with_access_key_id(access_key)
-            .with_secret_access_key(secret_key)
+            .with_credentials(credentials)
             .with_allow_http(allow_http)
+            .with_virtual_hosted_style_request(false);
+        if let Some(ca_path) = optional_env("ROCKETMQ_SRE_OBJECT_STORE_CA_PATH") {
+            let pem = std::fs::read(ca_path)
+                .map_err(|_| ControlPlaneError::configuration("object storage CA certificate cannot be read"))?;
+            let certificate = Certificate::from_pem(&pem)
+                .map_err(|_| ControlPlaneError::configuration("object storage CA certificate is invalid"))?;
+            builder = builder.with_client_options(ClientOptions::new().with_root_certificate(certificate));
+        }
+        let store = builder
             .build()
             .map_err(|_| ControlPlaneError::configuration("S3-compatible evidence store cannot be configured"))?;
         Ok(Self {
             store: Arc::new(store),
             uri_prefix: Arc::from(format!("s3://{bucket}/")),
             max_inline_bytes,
+            max_object_bytes,
         })
     }
 
-    fn local(path: impl AsRef<FileSystemPath>, max_inline_bytes: usize) -> Result<Self, ControlPlaneError> {
+    fn local(
+        path: impl AsRef<FileSystemPath>,
+        max_inline_bytes: usize,
+        max_object_bytes: usize,
+    ) -> Result<Self, ControlPlaneError> {
         let path = path.as_ref();
         if !path.is_absolute() {
             return Err(ControlPlaneError::configuration(format!(
@@ -129,6 +166,7 @@ impl EvidenceBlobStore {
             store: Arc::new(store),
             uri_prefix: Arc::from(LOCAL_URI_PREFIX),
             max_inline_bytes,
+            max_object_bytes,
         })
     }
 
@@ -138,6 +176,7 @@ impl EvidenceBlobStore {
             store: Arc::new(InMemory::new()),
             uri_prefix: Arc::from(MEMORY_URI_PREFIX),
             max_inline_bytes,
+            max_object_bytes: DEFAULT_MAX_OBJECT_BYTES,
         }
     }
 
@@ -146,6 +185,12 @@ impl EvidenceBlobStore {
     }
 
     pub(crate) async fn put(&self, path: &str, value: Vec<u8>) -> Result<String, ControlPlaneError> {
+        if value.len() > self.max_object_bytes {
+            return Err(ControlPlaneError::validation(
+                "output_too_large",
+                "evidence object exceeds the configured object size limit",
+            ));
+        }
         let path = valid_path(path)?;
         self.store
             .put(&path, PutPayload::from(value))
@@ -229,7 +274,8 @@ mod tests {
     async fn local_store_survives_store_reconstruction() {
         let directory = TestDirectory::new();
         let uri = {
-            let store = EvidenceBlobStore::local(directory.path(), 1_024).expect("local store");
+            let store =
+                EvidenceBlobStore::local(directory.path(), 1_024, DEFAULT_MAX_OBJECT_BYTES).expect("local store");
             store
                 .put("evidence/tenant/cluster/item.json", b"durable-payload".to_vec())
                 .await
@@ -239,7 +285,8 @@ mod tests {
         assert!(uri.starts_with(LOCAL_URI_PREFIX));
         let local_path = directory.path().to_string_lossy();
         assert!(!uri.contains(local_path.as_ref()));
-        let restarted = EvidenceBlobStore::local(directory.path(), 1_024).expect("restarted local store");
+        let restarted =
+            EvidenceBlobStore::local(directory.path(), 1_024, DEFAULT_MAX_OBJECT_BYTES).expect("restarted local store");
         let value = restarted.get(&uri, 128).await.expect("get after restart");
         assert_eq!(value.as_ref(), b"durable-payload");
     }
@@ -255,6 +302,48 @@ mod tests {
         ] {
             assert!(valid_path(path).is_err(), "{path} must be rejected");
         }
+    }
+
+    #[tokio::test]
+    async fn object_store_rejects_content_above_the_configured_limit() {
+        let store = EvidenceBlobStore {
+            store: Arc::new(InMemory::new()),
+            uri_prefix: Arc::from(MEMORY_URI_PREFIX),
+            max_inline_bytes: 1_024,
+            max_object_bytes: 1_024,
+        };
+
+        let error = store
+            .put("evidence/tenant/cluster/oversize.json", vec![0; 1_025])
+            .await
+            .expect_err("oversize object must fail closed");
+
+        assert!(matches!(
+            error,
+            ControlPlaneError::Validation {
+                code: "output_too_large",
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires an explicit HTTPS S3-compatible qualification environment"]
+    async fn s3_compatible_https_live_round_trip_uses_external_secret_references() {
+        let store = EvidenceBlobStore::from_env(false).expect("production object-store configuration");
+        let path = format!("qualification/{}/round-trip.json", Uuid::new_v4());
+        let uri = store
+            .put(&path, b"bounded-enterprise-evidence".to_vec())
+            .await
+            .expect("HTTPS object put");
+        let value = store.get(&uri, 1_024).await.expect("HTTPS object get");
+        assert_eq!(value.as_ref(), b"bounded-enterprise-evidence");
+
+        store
+            .store
+            .delete(&valid_path(&path).expect("bounded object path"))
+            .await
+            .expect("qualification object cleanup");
     }
 
     struct TestDirectory {
