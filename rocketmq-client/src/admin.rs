@@ -50,7 +50,11 @@ pub use mq_admin_mutation_ext::TopicConfigPatchOutcome;
 #[cfg(feature = "admin-read")]
 pub use mq_admin_read_ext::BrokerConfigAllowlisted;
 #[cfg(feature = "admin-read")]
+pub use mq_admin_read_ext::MQAdminMessageReadExt;
+#[cfg(feature = "admin-read")]
 pub use mq_admin_read_ext::MQAdminReadExt;
+#[cfg(feature = "admin-read")]
+pub use mq_admin_read_ext::MessageMetadataRead;
 #[cfg(feature = "admin-read")]
 pub use mq_admin_read_ext::SubscriptionGroupConfigVersioned;
 #[cfg(feature = "admin-read")]

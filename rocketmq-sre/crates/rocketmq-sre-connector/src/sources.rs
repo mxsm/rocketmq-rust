@@ -20,6 +20,7 @@ mod canonical;
 mod change_timeline;
 mod common;
 mod deployment_state;
+mod diagnostic_projection;
 mod inventory;
 mod kubernetes;
 mod kubernetes_events;
@@ -240,7 +241,7 @@ where
 
     pub(crate) async fn query(
         &self,
-        query: EvidenceQuery,
+        mut query: EvidenceQuery,
         external_cluster: &str,
         subject: &str,
         operation: Option<&EvidenceOperation>,
@@ -263,6 +264,7 @@ where
         let session = self.read_gateway.admit(&context, gateway_audit_target(source)).await?;
         let cache_key = cache_key(&query, external_cluster)?;
         if let Some(output) = self.cached(&cache_key).await {
+            pseudonymize_evidence_resource(&mut query.resource, self.config.pseudonymization_key());
             return capture(query, output);
         }
 
@@ -311,6 +313,7 @@ where
         );
         validate_query_completion(&context)?;
         self.insert_cache(cache_key, output.clone()).await;
+        pseudonymize_evidence_resource(&mut query.resource, self.config.pseudonymization_key());
         capture(query, output)
     }
 
@@ -959,6 +962,19 @@ fn cache_key(query: &EvidenceQuery, external_cluster: &str) -> Result<String, Co
     Ok(format!("sha256:{:x}", Sha256::digest(canonical)))
 }
 
+fn pseudonymize_evidence_resource(resource: &mut String, pseudonym_key: &[u8]) {
+    let Some(value) = resource.strip_prefix("message-metadata/") else {
+        return;
+    };
+    let (prefix, identifier) = value.rsplit_once('/').unwrap_or(("", value));
+    let identifier = self::common::pseudonymize_identifier(identifier, pseudonym_key);
+    *resource = if prefix.is_empty() {
+        format!("message-metadata/{identifier}")
+    } else {
+        format!("message-metadata/{prefix}/{identifier}")
+    };
+}
+
 fn capture(query: EvidenceQuery, output: SourceOutput) -> Result<EvidenceSnapshot, ConnectorError> {
     let correlation_id = query.correlation_id;
     let mut snapshot = EvidenceSnapshot::capture(
@@ -1149,6 +1165,18 @@ mod tests {
     }
 
     #[test]
+    fn evidence_resource_retains_topic_but_pseudonymizes_message_id() {
+        let mut resource = "message-metadata/orders/raw-message-id".to_owned();
+        pseudonymize_evidence_resource(&mut resource, b"tenant-key");
+
+        assert!(resource.starts_with("message-metadata/orders/sha256:"));
+        assert!(!resource.contains("raw-message-id"));
+        let first = resource.clone();
+        pseudonymize_evidence_resource(&mut resource, b"tenant-key");
+        assert_eq!(resource, first);
+    }
+
+    #[test]
     fn mcp_parser_accepts_only_fixed_read_operations() {
         assert!(matches!(
             mcp_operation("consumer-groups/billing/lag/orders"),
@@ -1158,7 +1186,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn manager_preserves_canonical_resource_for_unverified_body_free_metadata() {
+    async fn manager_pseudonymizes_message_metadata_resource_when_identifiers_are_incomplete() {
         let tenant_id = TenantId::new();
         let cluster_id = ClusterId::new();
         let config = Arc::new(ConnectorConfig {
@@ -1214,7 +1242,8 @@ mod tests {
             .await
             .expect("fail-closed evidence");
 
-        assert_eq!(snapshot.resource, resource);
+        assert!(snapshot.resource.starts_with("message-metadata/sha256:"));
+        assert!(!snapshot.resource.contains("id-hash-a"));
         assert_eq!(snapshot.coverage, CoverageStatus::NotProductionVerified);
         assert!(snapshot.partial);
         let EvidenceContent::Inline(content) = &snapshot.content else {

@@ -16,12 +16,12 @@
     "total": 69,
     "required": 32,
     "optional": 37,
-    "query": 18,
-    "not_production_verified": 51,
-    "required_query": 7,
-    "required_not_production_verified": 25,
-    "optional_query": 11,
-    "optional_not_production_verified": 26,
+    "query": 48,
+    "not_production_verified": 21,
+    "required_query": 32,
+    "required_not_production_verified": 0,
+    "optional_query": 16,
+    "optional_not_production_verified": 21,
     "source": "rocketmq-sre/crates/rocketmq-sre-connector/src/sources/canonical.rs"
   },
   "capability_areas": [
@@ -66,6 +66,10 @@
           "path": "rocketmq-sre/crates/rocketmq-sre-connector/src/sources/canonical.rs"
         },
         {
+          "kind": "source",
+          "path": "rocketmq-sre/crates/rocketmq-sre-connector/src/sources/diagnostic_projection.rs"
+        },
+        {
           "kind": "configuration",
           "path": "rocketmq-sre/config/evidence/required-source-profiles.v1.yaml"
         },
@@ -75,8 +79,8 @@
         }
       ],
       "limitations": [
-        "Only 18 of 69 declared Evidence requirements have a production query route.",
-        "Twenty-five required Evidence requirements remain not production verified."
+        "All 32 required Evidence requirements have fixed read-only query routes; live backend qualification remains environment-specific.",
+        "Twenty-one optional Evidence requirements retain explicit stable not-production-verified routes."
       ]
     },
     {
@@ -104,7 +108,7 @@
         }
       ],
       "limitations": [
-        "Pack registration and deterministic replay are contract tested, but required Evidence is not yet fully production queryable.",
+        "Pack registration and deterministic replay are contract tested, and required Evidence has complete fixed query routing.",
         "Pack-level live fault and missing-source qualification is incomplete."
       ]
     },

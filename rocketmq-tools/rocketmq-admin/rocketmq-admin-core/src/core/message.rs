@@ -47,6 +47,27 @@ pub struct MessageRecord {
     pub properties: BTreeMap<String, String>,
 }
 
+/// Body-free message metadata safe for diagnostic evidence collection.
+///
+/// Identifiers still require caller-owned pseudonymization before external
+/// exposure. The contract intentionally excludes network addresses, arbitrary
+/// properties, body bytes, and body digests.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MessageMetadata {
+    pub topic: String,
+    pub message_id: String,
+    pub unique_message_id: Option<String>,
+    pub born_timestamp: i64,
+    pub store_timestamp: i64,
+    pub queue_id: i32,
+    pub queue_offset: i64,
+    pub store_size: i32,
+    pub reconsume_times: i32,
+    pub sys_flag: i32,
+    pub flag: i32,
+    pub prepared_transaction_offset: i64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QueryMessagesByKeyRequest {
     pub topic: String,

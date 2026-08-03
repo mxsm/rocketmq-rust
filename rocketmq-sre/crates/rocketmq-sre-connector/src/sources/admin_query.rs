@@ -26,9 +26,11 @@ use rocketmq_admin_core::core::client_connection::ListProducerConnectionsResult;
 use rocketmq_admin_core::core::client_connection::QueryConsumerConnectionsRequest;
 use rocketmq_admin_core::core::client_connection::QueryConsumerConnectionsResult;
 use rocketmq_admin_core::core::consumer::ConsumerQueryAdmin;
+use rocketmq_admin_core::core::consumer::DashboardConsumerConfigRequest;
 use rocketmq_admin_core::core::consumer::ListConsumerGroupsRequest;
 use rocketmq_admin_core::core::consumer::QueryConsumerLagRequest;
 use rocketmq_admin_core::core::security::AdminCredentials;
+use rocketmq_admin_core::core::topic::GetTopicConfigRequest;
 use rocketmq_admin_core::core::topic::GetTopicRouteRequest;
 use rocketmq_admin_core::core::topic::ListTopicsRequest;
 use rocketmq_admin_core::core::topic::TopicQueryAdmin;
@@ -287,6 +289,97 @@ impl AdminQuerySource {
                 )
                 .await?,
             )?
+        } else if let Some(value) = resource.strip_prefix("topic-subscription-config/") {
+            let (consumer_group, topic) = exact_pair(value, "topic subscription config")?;
+            let topic_request = GetTopicConfigRequest::try_new(topic, None)
+                .map_err(|_| ConnectorError::source("read-only Topic configuration query is invalid"))?;
+            let topic_config = bounded_admin(
+                deadline,
+                cancel,
+                session.get_topic_config(&topic_request),
+                "read-only Topic configuration query failed",
+            )
+            .await?;
+            let group_request = DashboardConsumerConfigRequest {
+                consumer_group: consumer_group.to_owned(),
+                address: None,
+            };
+            let group_config = bounded_admin(
+                deadline,
+                cancel,
+                session.query_dashboard_consumer_config(&group_request),
+                "read-only Subscription Group configuration query failed",
+            )
+            .await;
+            let group = group_config.as_ref().ok().map(|config| {
+                serde_json::json!({
+                    "name": config.consumer_group,
+                    "consume_enable": config.consume_enable,
+                    "consume_from_min_enable": config.consume_from_min_enable,
+                    "consume_broadcast_enable": config.consume_broadcast_enable,
+                    "consume_message_orderly": config.consume_message_orderly,
+                    "retry_queue_nums": config.retry_queue_nums,
+                    "retry_max_times": config.retry_max_times,
+                    "broker_id": config.broker_id,
+                    "which_broker_when_consume_slowly": config.which_broker_when_consume_slowly,
+                    "notify_consumer_ids_changed_enable": config.notify_consumer_ids_changed_enable,
+                    "group_sys_flag": config.group_sys_flag,
+                    "consume_timeout_minute": config.consume_timeout_minute,
+                    "subscription_topics": config.subscription_topics
+                })
+            });
+            let mut output = SourceOutput::available(
+                serde_json::json!({
+                    "schema_version": "rocketmq.sre-topic-subscription-config.v1",
+                    "topic": {
+                        "name": topic_config.topic_name,
+                        "read_queue_nums": topic_config.read_queue_nums,
+                        "write_queue_nums": topic_config.write_queue_nums,
+                        "perm": topic_config.perm,
+                        "ordered": topic_config.order,
+                        "message_type": topic_config.message_type,
+                        "broker_count": topic_config.broker_name_list.len(),
+                        "inconsistent_fields": topic_config.inconsistent_fields
+                    },
+                    "consumer_group": group
+                }),
+                Utc::now(),
+            );
+            if group_config.is_err() {
+                output.partial = true;
+                output.coverage = rocketmq_sre_contracts::CoverageStatus::Partial;
+                output
+                    .warnings
+                    .push("subscription_group_configuration_unavailable".to_owned());
+            }
+            return Ok(output);
+        } else if let Some(value) = resource.strip_prefix("message-metadata/") {
+            let (topic, message_id) = exact_pair(value, "message metadata")?;
+            let metadata = bounded_admin(
+                deadline,
+                cancel,
+                session.query_message_metadata(topic, message_id),
+                "read-only body-free message metadata query failed",
+            )
+            .await?;
+            return Ok(SourceOutput::available(
+                serde_json::json!({
+                    "schema_version": "rocketmq.sre-message-metadata.v1",
+                    "topic": metadata.topic,
+                    "message_id": metadata.message_id,
+                    "unique_message_id": metadata.unique_message_id,
+                    "born_timestamp": metadata.born_timestamp,
+                    "store_timestamp": metadata.store_timestamp,
+                    "queue_id": metadata.queue_id,
+                    "queue_offset": metadata.queue_offset,
+                    "store_size": metadata.store_size,
+                    "reconsume_times": metadata.reconsume_times,
+                    "sys_flag": metadata.sys_flag,
+                    "flag": metadata.flag,
+                    "prepared_transaction_offset": metadata.prepared_transaction_offset
+                }),
+                Utc::now(),
+            ));
         } else if let Some(broker_name) = resource
             .strip_prefix("admin/broker-connections/")
             .or_else(|| resource.strip_prefix("broker-connections/"))
@@ -429,6 +522,22 @@ async fn query_client_connections(
 
 fn serialize(value: impl serde::Serialize) -> Result<Value, ConnectorError> {
     serde_json::to_value(value).map_err(|_| ConnectorError::source("read-only Admin result cannot be encoded"))
+}
+
+fn exact_pair<'a>(value: &'a str, resource: &str) -> Result<(&'a str, &'a str), ConnectorError> {
+    let Some((first, second)) = value.split_once('/') else {
+        return Err(ConnectorError::source(format!(
+            "read-only {resource} query requires exactly two identifiers"
+        )));
+    };
+    if second.contains('/') {
+        return Err(ConnectorError::source(format!(
+            "read-only {resource} query requires exactly two identifiers"
+        )));
+    }
+    validate_identifier(first, resource)?;
+    validate_identifier(second, resource)?;
+    Ok((first, second))
 }
 
 async fn bounded_admin<T>(

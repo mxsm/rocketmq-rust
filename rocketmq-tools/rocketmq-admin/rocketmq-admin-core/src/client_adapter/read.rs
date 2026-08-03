@@ -23,6 +23,7 @@ use std::time::Duration;
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::AclClientRPCHook;
 use rocketmq_client_rust::DefaultMQAdminExt;
+use rocketmq_client_rust::MQAdminMessageReadExt;
 use rocketmq_client_rust::MQAdminReadExt;
 use rocketmq_client_rust::SessionCredentials;
 use rocketmq_client_rust::SigningAlgorithm;
@@ -251,6 +252,37 @@ impl ReadAdminSession {
         } else {
             Ok(())
         }
+    }
+
+    /// Reads one message through the compile-time read-only client and returns
+    /// only the fixed body-free metadata contract.
+    pub async fn query_message_metadata(
+        &self,
+        topic: &str,
+        message_id: &str,
+    ) -> AdminResult<crate::core::message::MessageMetadata> {
+        self.ensure_open()?;
+        let metadata = MQAdminMessageReadExt::query_message_metadata(
+            &self.inner,
+            CheetahString::from(topic),
+            CheetahString::from(message_id),
+        )
+        .await
+        .map_err(|error| backend_error("query_message_metadata", error))?;
+        Ok(crate::core::message::MessageMetadata {
+            topic: metadata.topic,
+            message_id: metadata.message_id,
+            unique_message_id: metadata.unique_message_id,
+            born_timestamp: metadata.born_timestamp,
+            store_timestamp: metadata.store_timestamp,
+            queue_id: metadata.queue_id,
+            queue_offset: metadata.queue_offset,
+            store_size: metadata.store_size,
+            reconsume_times: metadata.reconsume_times,
+            sys_flag: metadata.sys_flag,
+            flag: metadata.flag,
+            prepared_transaction_offset: metadata.prepared_transaction_offset,
+        })
     }
 }
 
