@@ -1,0 +1,98 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rocketmq-mcp-config
+  namespace: rocketmq-system
+  labels:
+    app.kubernetes.io/name: rocketmq-rust
+    app.kubernetes.io/instance: rocketmq
+    rocketmq.apache.org/service: mcp
+data:
+  mcp.toml: |-
+    [server]
+    name = "rocketmq-mcp"
+    version = "1.0.0"
+    transport = "streamable-http"
+    log_level = "info"
+
+    [server.stdio]
+    log_to_stderr = true
+
+    [server.http]
+    bind = "127.0.0.1:8089"
+    endpoint = "/mcp"
+    public_base_url = "https://localhost:8089"
+    validate_origin = false
+    allowed_origins = ["https://localhost:8089"]
+
+    [server.http.tls]
+    cert_path = "/var/run/secrets/rocketmq/tls.crt"
+    key_path = "/var/run/secrets/rocketmq/tls.key"
+
+    [server.http.auth]
+    mode = "development-token"
+    development_token_env = "ROCKETMQ_MCP_HTTP_TOKEN"
+    development_tenant = "00000000-0000-4000-8000-000000000002"
+    issuer = ""
+    audience = ""
+    required_scopes = []
+    jwt_algorithm = "rs256"
+    jwt_key_env = ""
+    jwks_url = ""
+    jwks_refresh_seconds = 300
+    jwks_max_stale_seconds = 900
+    protected_resource_metadata_path = "/.well-known/oauth-protected-resource"
+
+    [[clusters]]
+    name = "rocketmq-rust"
+    rocketmq_cluster_name = "RocketmqRust"
+    tenant = "00000000-0000-4000-8000-000000000002"
+    namesrv_addr = "rocketmq-namesrv-0.rocketmq-namesrv-headless.rocketmq-system.svc.cluster.local:9876"
+    default = true
+
+    [security]
+    profile = "diagnose"
+    allow_change_planning = false
+    sanitize_output = true
+    rate_limit_per_minute = 120
+    permissions_file = "/etc/rocketmq/permissions.toml"
+    max_concurrent_requests_per_cluster = 4
+
+    [audit]
+    enabled = true
+    sink = "file"
+    path = "/var/lib/rocketmq/mcp/rocketmq-mcp-audit.log"
+    queue_capacity = 128
+    max_record_bytes = 4096
+    queue_max_bytes = 262144
+    history_limit = 100
+
+    [cache]
+    enabled = true
+    max_entries = 64
+    cluster_overview_ttl_ms = 1000
+    topic_list_ttl_ms = 1000
+    broker_metrics_ttl_ms = 1000
+    consumer_lag_ttl_ms = 1000
+
+    [diagnosis]
+    consumer_lag_policy_profile = "production-default"
+    consumer_lag_threshold = 1000
+  permissions.toml: |-
+    [roles.read_only]
+    allowed_clusters = ["rocketmq-rust"]
+    allow_tools = [
+      "rocketmq_get_cluster_overview",
+      "rocketmq_list_topics",
+      "rocketmq_describe_topic",
+      "rocketmq_get_topic_route",
+      "rocketmq_list_consumer_groups",
+      "rocketmq_get_consumer_lag",
+      "rocketmq_describe_broker"
+    ]
+    deny_tools = ["*"]
+
+    [roles.diagnose]
+    include = ["read_only"]
+    allowed_clusters = ["rocketmq-rust"]
+    allow_tools = ["rocketmq_diagnose_consumer_lag"]

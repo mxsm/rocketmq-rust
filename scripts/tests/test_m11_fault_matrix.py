@@ -177,6 +177,24 @@ class FaultMatrixGuardTests(unittest.TestCase):
         result = self.run_guard("--policy-only", expect_success=False)
         self.assertIn("commitlog_offset_preserved", result.stderr)
 
+    def test_runner_that_drops_fixed_synthetic_topic_initialization_is_rejected(self) -> None:
+        runner = self.root / "scripts" / "kind-architecture-refactor-e2e.ps1"
+        source = runner.read_text(encoding="utf-8")
+        marker = "fault matrix may create only its fixed synthetic topic"
+        self.assertIn(marker, source)
+        runner.write_text(source.replace(marker, "arbitrary topic creation allowed", 1), encoding="utf-8")
+        result = self.run_guard("--policy-only", expect_success=False)
+        self.assertIn("fixed synthetic topic", result.stderr)
+
+    def test_runner_that_drops_atomic_release_identity_rollout_is_rejected(self) -> None:
+        runner = self.root / "scripts" / "kind-architecture-refactor-e2e.ps1"
+        source = runner.read_text(encoding="utf-8")
+        marker = "candidate image revision must equal CandidateCommit"
+        self.assertIn(marker, source)
+        runner.write_text(source.replace(marker, "candidate revision unchecked", 1), encoding="utf-8")
+        result = self.run_guard("--policy-only", expect_success=False)
+        self.assertIn("CandidateCommit", result.stderr)
+
     def test_runner_that_drops_network_fault_injection_is_rejected(self) -> None:
         runner = self.root / "scripts" / "kind-architecture-refactor-e2e.ps1"
         source = runner.read_text(encoding="utf-8")
@@ -201,6 +219,17 @@ class FaultMatrixGuardTests(unittest.TestCase):
         )
         result = self.run_guard("--policy-only", expect_success=False)
         self.assertIn("docker @('pull', $image)", result.stderr)
+
+        runner.write_text(
+            runner_source.replace(
+                "Invoke-Native kind @('load', 'image-archive', $archivePath, '--name', $ClusterName)",
+                "Kind archive import skipped",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        result = self.run_guard("--policy-only", expect_success=False)
+        self.assertIn("image-archive", result.stderr)
 
     def test_workflow_artifact_uses_resolved_candidate_commit(self) -> None:
         workflow = self.root / ".github" / "workflows" / "kubernetes-fault-matrix.yml"

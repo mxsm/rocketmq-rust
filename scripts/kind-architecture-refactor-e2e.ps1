@@ -43,11 +43,17 @@ $OverlayPath = Join-Path $Root "distribution/kubernetes/overlays/secure/kustomiz
 $Policy = Get-Content -Raw -LiteralPath $PolicyPath | ConvertFrom-Json
 $ScenarioRecords = [System.Collections.Generic.List[object]]::new()
 $ArtifactRecords = [System.Collections.Generic.List[object]]::new()
+$TemporaryImageTags = [System.Collections.Generic.List[string]]::new()
 $CreatedCluster = $false
 $RunSucceeded = $false
 $RunStarted = [DateTimeOffset]::UtcNow
 $RunId = "m11-11-$Backend-$($RunStarted.ToString('yyyyMMddTHHmmssZ'))"
-$RunDirectory = Join-Path (Join-Path $Root $EvidenceRoot) $RunId
+$EvidenceBase = if ([IO.Path]::IsPathRooted($EvidenceRoot)) {
+    [IO.Path]::GetFullPath($EvidenceRoot)
+} else {
+    [IO.Path]::GetFullPath((Join-Path $Root $EvidenceRoot))
+}
+$RunDirectory = Join-Path $EvidenceBase $RunId
 $ArtifactsDirectory = Join-Path $RunDirectory "artifacts"
 $ScenariosDirectory = Join-Path $RunDirectory "scenarios"
 $FaultDriverImage = "rocketmq-rust/fault-driver:$RunId"
@@ -136,7 +142,9 @@ function Read-ImageMap {
     }
     $map = Get-Content -Raw -LiteralPath $Path | ConvertFrom-Json -AsHashtable
     $expected = @('broker', 'namesrv', 'controller', 'proxy', 'mcp')
-    Assert-True (($map.Keys | Sort-Object) -join ',' -eq ($expected | Sort-Object) -join ',') "$Label image map must contain exactly five services"
+    Assert-True (
+        (($map.Keys | Sort-Object) -join ',') -eq (($expected | Sort-Object) -join ',')
+    ) "$Label image map must contain exactly five services"
     foreach ($service in $expected) {
         Assert-True ($map[$service] -match '^[^@\s]+@sha256:[0-9a-f]{64}$') "$Label $service image must be pinned by digest"
         $digest = $map[$service].Split('@sha256:')[1]
@@ -154,14 +162,31 @@ function Get-ImageDigest {
     "sha256:" + $Reference.Split('@sha256:')[1]
 }
 
+function Get-ContainerdImageReference {
+    param([Parameter(Mandatory)][string]$Reference)
+    $repository = $Reference.Split('@')[0]
+    $firstComponent = $repository.Split('/')[0]
+    if ($firstComponent -notmatch '[.:]' -and $firstComponent -ne 'localhost') {
+        return "docker.io/$Reference"
+    }
+    $Reference
+}
+
 function New-HelmValues {
-    param([Parameter(Mandatory)][hashtable]$Images, [Parameter(Mandatory)][string]$StorageClass)
+    param(
+        [Parameter(Mandatory)][hashtable]$Images,
+        [Parameter(Mandatory)][string]$StorageClass,
+        [Parameter(Mandatory)][string]$ReleaseCommit,
+        [Parameter(Mandatory)][string]$ReleaseNonce
+    )
     $path = Join-Path $RunDirectory "helm-values-$([Guid]::NewGuid().ToString('N')).yaml"
     $controllerIps = if ($Backend -eq 'kind') { @('10.96.0.201', '10.96.0.202', '10.96.0.203') } else { @('10.43.0.201', '10.43.0.202', '10.43.0.203') }
-    $registry = $Images['broker'] -replace '/broker@sha256:[0-9a-f]{64}$', ''
+    $repositories = @{}
+    foreach ($service in @('broker', 'namesrv', 'controller', 'proxy', 'mcp')) {
+        $repositories[$service] = $Images[$service].Split('@')[0]
+    }
     $content = @"
 global:
-  imageRegistry: $registry
   imagePullSecrets: []
   otelEndpoint: http://otel-collector.observability.svc.cluster.local:4317
   secretRefs:
@@ -171,8 +196,14 @@ global:
     runAsUser: 10001
     runAsGroup: 10001
     fsGroup: 10001
+releaseIdentity:
+  commit: $ReleaseCommit
+  nonce: $ReleaseNonce
+  configDigest: sha256:$PolicySha256
+  secretVersion: m4-runtime-1
+  storageGeneration: 1
 namespace:
-  create: true
+  create: false
 networkPolicy:
   enabled: true
   clientNamespaceLabel: rocketmq.apache.org/client-access
@@ -181,14 +212,14 @@ services:
   broker:
     replicas: 3
     autoCreateTopicEnable: true
-    image: { digest: $(Get-ImageDigest $Images['broker']) }
+    image: { repository: $($repositories['broker']), digest: $(Get-ImageDigest $Images['broker']), pullPolicy: Never }
     persistence: { storageClassName: $StorageClass, size: 10Gi }
     resources:
       requests: { cpu: 500m, memory: 1Gi }
       limits: { cpu: 2000m, memory: 4Gi }
   namesrv:
     replicas: 3
-    image: { digest: $(Get-ImageDigest $Images['namesrv']) }
+    image: { repository: $($repositories['namesrv']), digest: $(Get-ImageDigest $Images['namesrv']), pullPolicy: Never }
     persistence: { storageClassName: $StorageClass, size: 1Gi }
     resources:
       requests: { cpu: 100m, memory: 128Mi }
@@ -196,20 +227,20 @@ services:
   controller:
     replicas: 3
     peerServiceClusterIPs: [$(($controllerIps | ForEach-Object { '"' + $_ + '"' }) -join ', ')]
-    image: { digest: $(Get-ImageDigest $Images['controller']) }
+    image: { repository: $($repositories['controller']), digest: $(Get-ImageDigest $Images['controller']), pullPolicy: Never }
     persistence: { storageClassName: $StorageClass, size: 2Gi }
     resources:
       requests: { cpu: 250m, memory: 256Mi }
       limits: { cpu: 1000m, memory: 1Gi }
   proxy:
     replicas: 2
-    image: { digest: $(Get-ImageDigest $Images['proxy']) }
+    image: { repository: $($repositories['proxy']), digest: $(Get-ImageDigest $Images['proxy']), pullPolicy: Never }
     resources:
       requests: { cpu: 250m, memory: 256Mi }
       limits: { cpu: 1000m, memory: 1Gi }
   mcp:
     replicas: 1
-    image: { digest: $(Get-ImageDigest $Images['mcp']) }
+    image: { repository: $($repositories['mcp']), digest: $(Get-ImageDigest $Images['mcp']), pullPolicy: Never }
     publicBaseUrl: https://mcp.example.invalid
     oauth:
       issuer: https://issuer.example.invalid
@@ -318,6 +349,46 @@ function Send-AcknowledgedMessage {
     $id = ($lines[-1] -split '\s+')[-1]
     Assert-True ($id -match '^[0-9A-Za-z_-]{8,}$') 'send acknowledgement must contain a message ID'
     [pscustomobject]@{ Id = $id; Output = $result.Output }
+}
+
+function Get-UniformImageRevision {
+    param(
+        [Parameter(Mandatory)][hashtable]$Images,
+        [Parameter(Mandatory)][string]$Label
+    )
+    $revisions = @(
+        foreach ($service in @('broker', 'namesrv', 'controller', 'proxy', 'mcp')) {
+            $inspect = (Invoke-Native docker @('image', 'inspect', $Images[$service])).Output | ConvertFrom-Json
+            $revision = $inspect[0].Config.Labels.'org.opencontainers.image.revision'
+            Assert-True ($revision -match '^[0-9a-f]{40}$') "$Label.$service image must carry a full OCI source revision"
+            $revision
+        }
+    )
+    $uniqueRevisions = @($revisions | Sort-Object -Unique)
+    Assert-True ($uniqueRevisions.Count -eq 1) "$Label images must share one OCI source revision"
+    $uniqueRevisions[0]
+}
+
+function Initialize-SyntheticTopic {
+    Assert-True ($Topic -eq 'ArchitectureRefactorFaultMatrix') 'fault matrix may create only its fixed synthetic topic'
+    Invoke-FaultDriver -SecretName 'rocketmq-fault-driver-baseline' -Arguments @(
+        'topic',
+        'updateTopic',
+        '-c',
+        'RocketmqRust',
+        '-t',
+        $Topic,
+        '-r',
+        '1',
+        '-w',
+        '1',
+        '-p',
+        '6',
+        '-n',
+        $NamesrvAddress
+    ) | Out-Null
+    $route = Invoke-RouteProbe
+    Assert-True ($route.ExitCode -eq 0) 'fixed synthetic topic route must be queryable before message probes'
 }
 
 function Query-AcknowledgedMessage {
@@ -447,13 +518,67 @@ function Complete-Scenario {
 }
 
 function Set-ServiceImages {
-    param([Parameter(Mandatory)][hashtable]$Images)
+    param(
+        [Parameter(Mandatory)][hashtable]$Images,
+        [Parameter(Mandatory)][string]$ReleaseCommit,
+        [Parameter(Mandatory)][string]$ReleaseNonce
+    )
     foreach ($service in @('broker', 'namesrv', 'controller')) {
-        Invoke-Native kubectl @('-n', $Namespace, 'set', 'image', "statefulset/rocketmq-$service", "$service=$($Images[$service])") | Out-Null
+        $patchPath = Join-Path $RunDirectory "$service-$ReleaseNonce-patch.json"
+        $patch = [ordered]@{
+            spec = [ordered]@{
+                template = [ordered]@{
+                    metadata = [ordered]@{
+                        annotations = [ordered]@{
+                            'rocketmq.apache.org/release-commit' = $ReleaseCommit
+                            'rocketmq.apache.org/release-nonce' = $ReleaseNonce
+                        }
+                    }
+                    spec = [ordered]@{
+                        containers = @([ordered]@{
+                            name = $service
+                            image = $Images[$service]
+                            env = @(
+                                [ordered]@{ name = 'ROCKETMQ_RELEASE_COMMIT'; value = $ReleaseCommit },
+                                [ordered]@{ name = 'ROCKETMQ_RELEASE_NONCE'; value = $ReleaseNonce }
+                            )
+                        })
+                    }
+                }
+            }
+        } | ConvertTo-Json -Depth 12 -Compress
+        [IO.File]::WriteAllText($patchPath, $patch, [Text.UTF8Encoding]::new($false))
+        Invoke-Native kubectl @('-n', $Namespace, 'patch', "statefulset/rocketmq-$service", '--type=strategic', '--patch-file', $patchPath) | Out-Null
+        Remove-Item -LiteralPath $patchPath -Force
         Invoke-Native kubectl @('-n', $Namespace, 'rollout', 'status', "statefulset/rocketmq-$service", '--timeout=300s') | Out-Null
     }
     foreach ($service in @('proxy', 'mcp')) {
-        Invoke-Native kubectl @('-n', $Namespace, 'set', 'image', "deployment/rocketmq-$service", "$service=$($Images[$service])") | Out-Null
+        $patchPath = Join-Path $RunDirectory "$service-$ReleaseNonce-patch.json"
+        $patch = [ordered]@{
+            spec = [ordered]@{
+                template = [ordered]@{
+                    metadata = [ordered]@{
+                        annotations = [ordered]@{
+                            'rocketmq.apache.org/release-commit' = $ReleaseCommit
+                            'rocketmq.apache.org/release-nonce' = $ReleaseNonce
+                        }
+                    }
+                    spec = [ordered]@{
+                        containers = @([ordered]@{
+                            name = $service
+                            image = $Images[$service]
+                            env = @(
+                                [ordered]@{ name = 'ROCKETMQ_RELEASE_COMMIT'; value = $ReleaseCommit },
+                                [ordered]@{ name = 'ROCKETMQ_RELEASE_NONCE'; value = $ReleaseNonce }
+                            )
+                        })
+                    }
+                }
+            }
+        } | ConvertTo-Json -Depth 12 -Compress
+        [IO.File]::WriteAllText($patchPath, $patch, [Text.UTF8Encoding]::new($false))
+        Invoke-Native kubectl @('-n', $Namespace, 'patch', "deployment/rocketmq-$service", '--type=strategic', '--patch-file', $patchPath) | Out-Null
+        Remove-Item -LiteralPath $patchPath -Force
         Invoke-Native kubectl @('-n', $Namespace, 'rollout', 'status', "deployment/rocketmq-$service", '--timeout=300s') | Out-Null
     }
 }
@@ -516,17 +641,51 @@ nodes:
     foreach ($image in $clusterImages) {
         Invoke-Native docker @('pull', $image) | Out-Null
     }
+    $BaselineCommit = Get-UniformImageRevision $BaselineImages 'baseline'
+    $CandidateImageCommit = Get-UniformImageRevision $CandidateImages 'candidate'
+    Assert-True ($CandidateImageCommit -eq $CandidateCommit) 'candidate image revision must equal CandidateCommit'
+    $nodes = ((Invoke-Native kubectl @('get', 'nodes', '-o', 'json')).Output | ConvertFrom-Json).items
+    Assert-True ($nodes.Count -eq 4) 'fault cluster must contain exactly four nodes'
+    $workers = @(
+        $nodes | Where-Object {
+            $_.metadata.labels.PSObject.Properties.Name -notcontains 'node-role.kubernetes.io/control-plane'
+        }
+    )
+    Assert-True ($workers.Count -eq 3) 'fault cluster must contain exactly three workers'
+    $workerNames = @($workers | ForEach-Object { $_.metadata.name })
+    $nodeArchitectures = @($nodes | ForEach-Object { $_.status.nodeInfo.architecture } | Sort-Object -Unique)
+    Assert-True ($nodeArchitectures.Count -eq 1) 'fault cluster nodes must use one architecture'
+    $nodePlatform = "linux/$($nodeArchitectures[0])"
+
     if ($Backend -eq 'kind') {
-        Invoke-Native kind (@('load', 'docker-image') + $clusterImages + @('--name', $ClusterName)) | Out-Null
+        foreach ($image in $clusterImages) {
+            $digest = Get-ImageDigest $image
+            $cacheTag = "rocketmq-sre-cache/qualification:$($digest.Replace(':', '-'))"
+            Invoke-Native docker @('tag', $image, $cacheTag) | Out-Null
+            $TemporaryImageTags.Add($cacheTag)
+            $archiveName = ($image -replace '[^A-Za-z0-9_.-]', '_') + '.tar'
+            $archivePath = Join-Path $ArtifactsDirectory $archiveName
+            try {
+                Invoke-Native docker @(
+                    'image', 'save', '--platform', $nodePlatform,
+                    '--output', $archivePath, $cacheTag
+                ) | Out-Null
+                Invoke-Native kind @('load', 'image-archive', $archivePath, '--name', $ClusterName) | Out-Null
+                $cacheReference = "docker.io/$cacheTag"
+                $targetReference = Get-ContainerdImageReference $image
+                foreach ($node in $nodes) {
+                    Invoke-Native docker @(
+                        'exec', $node.metadata.name, 'ctr', '-n', 'k8s.io',
+                        'images', 'tag', $cacheReference, $targetReference
+                    ) | Out-Null
+                }
+            } finally {
+                Remove-Item -LiteralPath $archivePath -Force -ErrorAction SilentlyContinue
+            }
+        }
     } else {
         Invoke-Native k3d (@('image', 'import') + $clusterImages + @('--cluster', $ClusterName)) | Out-Null
     }
-
-    $nodes = ((Invoke-Native kubectl @('get', 'nodes', '-o', 'json')).Output | ConvertFrom-Json).items
-    Assert-True ($nodes.Count -eq 4) 'fault cluster must contain exactly four nodes'
-    $workers = @($nodes | Where-Object { -not $_.metadata.labels.'node-role.kubernetes.io/control-plane' })
-    Assert-True ($workers.Count -eq 3) 'fault cluster must contain exactly three workers'
-    $workerNames = @($workers | ForEach-Object { $_.metadata.name })
 
     Invoke-Native docker @('build', '--file', (Join-Path $Root 'docker/Dockerfile.base'), '--target', 'fault-driver', '--tag', $FaultDriverImage, $Root) | Out-Null
     if ($Backend -eq 'kind') {
@@ -571,6 +730,7 @@ spec:
       containers:
         - name: collector
           image: $CollectorImage
+          imagePullPolicy: IfNotPresent
           args: ["--config=/etc/otelcol/config.yaml"]
           ports: [{ name: otlp, containerPort: 4317 }]
           volumeMounts: [{ name: config, mountPath: /etc/otelcol }]
@@ -586,18 +746,35 @@ spec: { selector: { app: otel-collector }, ports: [{ name: otlp, port: 4317, tar
     Invoke-Native kubectl @('apply', '-f', $collectorPath) | Out-Null
     Invoke-Native kubectl @('-n', 'observability', 'rollout', 'status', 'deployment/otel-collector', '--timeout=180s') | Out-Null
 
-    $baselineValues = New-HelmValues $BaselineImages $StorageClass
-    Invoke-Native helm @('upgrade', '--install', 'rocketmq', $ChartPath, '--namespace', $Namespace, '--create-namespace', '--values', $baselineValues, '--wait', '--timeout', '10m') | Out-Null
+    $baselineValues = New-HelmValues $BaselineImages $StorageClass $BaselineCommit "$($RunId.ToLowerInvariant())-baseline"
+    Invoke-Native helm @('upgrade', '--install', 'rocketmq', $ChartPath, '--namespace', $Namespace, '--create-namespace', '--values', $baselineValues, '--wait=hookOnly', '--force-conflicts', '--timeout', '10m') | Out-Null
+    if ($Backend -eq 'kind') {
+        $mcpTokenBytes = [byte[]]::new(32)
+        [Security.Cryptography.RandomNumberGenerator]::Fill($mcpTokenBytes)
+        $mcpToken = [Convert]::ToHexString($mcpTokenBytes).ToLowerInvariant()
+        Invoke-Native kubectl @(
+            '-n', $Namespace, 'create', 'secret', 'generic', 'rocketmq-m4-mcp-env',
+            "--from-literal=ROCKETMQ_MCP_HTTP_TOKEN=$mcpToken"
+        ) | Out-Null
+        Invoke-Native kubectl @(
+            'apply', '-f', (Join-Path $Root 'rocketmq-sre/deploy/kind/mcp-readiness-config.yaml')
+        ) | Out-Null
+        Invoke-Native kubectl @(
+            '-n', $Namespace, 'set', 'env', 'deployment/rocketmq-mcp',
+            '--from=secret/rocketmq-m4-mcp-env'
+        ) | Out-Null
+    }
     Wait-Workloads
     $InitialPvcUids = Get-PvcUidSet
     Assert-True (-not [string]::IsNullOrWhiteSpace($InitialPvcUids)) 'PVC UID evidence must not be empty'
+    Initialize-SyntheticTopic
     $ack = Send-AcknowledgedMessage
     $before = Query-AcknowledgedMessage $ack.Id
 
     $rolloutTimer = [Diagnostics.Stopwatch]::StartNew()
-    Set-ServiceImages $CandidateImages
+    Set-ServiceImages $CandidateImages $CandidateImageCommit "$($RunId.ToLowerInvariant())-candidate"
     $afterUpgrade = Query-AcknowledgedMessage $ack.Id
-    Set-ServiceImages $BaselineImages
+    Set-ServiceImages $BaselineImages $BaselineCommit "$($RunId.ToLowerInvariant())-rollback"
     $rolloutTimer.Stop()
     $afterRollback = Query-AcknowledgedMessage $ack.Id
     $pvcAfterUpgrade = Get-PvcUidSet
@@ -1164,5 +1341,8 @@ echo "active=$active attempts=$attempt"
     }
     if (-not $RunSucceeded -and (Test-Path -LiteralPath (Join-Path $RunDirectory 'run.json'))) {
         Remove-Item -LiteralPath (Join-Path $RunDirectory 'run.json') -Force
+    }
+    foreach ($tag in $TemporaryImageTags) {
+        Invoke-Native docker @('image', 'rm', $tag) -AllowFailure | Out-Null
     }
 }

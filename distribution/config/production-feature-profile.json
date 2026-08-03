@@ -57,12 +57,14 @@
       "binary": "rocketmq-namesrv-rust",
       "docker_target": "namesrv",
       "features": [
+        "observability",
         "otlp-metrics",
         "otlp-traces",
         "otlp-logs"
       ],
       "resolved_features": [
         "default",
+        "observability",
         "otel-logs",
         "otel-metrics",
         "otel-traces",

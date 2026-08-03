@@ -201,6 +201,7 @@ accounts:
         "admin.identity" = "m11-evidence-admin-$Nonce"
         "broker-acl.yml" = $acl
         "ca.crt" = "m11-evidence-trust-anchor-$Nonce"
+        "controller-acl.yml" = $acl
         "proxy-acl.yml" = $acl
         "request-policy.json" = '{"profile":"m11-ephemeral-evidence"}'
         "tls.crt" = $TlsIdentity.Certificate

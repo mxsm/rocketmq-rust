@@ -611,14 +611,12 @@ impl ControllerConfig {
 
     /// Resolve the broker-facing controller remoting address for a node.
     pub fn controller_addr_for(&self, node_id: u64) -> Option<SocketAddr> {
-        if node_id == self.node_id {
-            return Some(self.listen_addr);
-        }
-
-        self.controller_peers
+        let advertised = self
+            .controller_peers
             .iter()
             .find(|peer| peer.id == node_id)
-            .map(|peer| peer.addr)
+            .map(|peer| peer.addr);
+        advertised.or_else(|| (node_id == self.node_id).then_some(self.listen_addr))
     }
 
     /// Return the broker-facing controller remoting addresses that should be advertised.
@@ -628,11 +626,13 @@ impl ControllerConfig {
         }
 
         let mut addrs = Vec::with_capacity(self.controller_peers.len() + 1);
-        addrs.push(self.listen_addr);
         for peer in &self.controller_peers {
             if !addrs.contains(&peer.addr) {
                 addrs.push(peer.addr);
             }
+        }
+        if !self.controller_peers.iter().any(|peer| peer.id == self.node_id) && !addrs.contains(&self.listen_addr) {
+            addrs.push(self.listen_addr);
         }
         addrs
     }
@@ -1024,6 +1024,41 @@ mod tests {
         assert_eq!(config.scan_not_active_broker_interval, 10000);
         assert_eq!(config.controller_thread_pool_nums, 32);
         assert!(config.enable_elect_unclean_master);
+    }
+
+    #[test]
+    fn configured_controller_peers_override_the_wildcard_bind_address() {
+        let advertised_self = SocketAddr::from(([10, 96, 0, 201], 60109));
+        let advertised_peer = SocketAddr::from(([10, 96, 0, 202], 60109));
+        let mut config = ControllerConfig::default().with_node_info(1, SocketAddr::from(([0, 0, 0, 0], 60109)));
+        config.controller_peers = vec![
+            RaftPeer {
+                id: 1,
+                addr: advertised_self,
+            },
+            RaftPeer {
+                id: 2,
+                addr: advertised_peer,
+            },
+        ];
+
+        assert_eq!(config.controller_addr_for(1), Some(advertised_self));
+        assert_eq!(config.controller_addr_for(2), Some(advertised_peer));
+        assert_eq!(config.controller_peer_addrs(), vec![advertised_self, advertised_peer]);
+    }
+
+    #[test]
+    fn incomplete_controller_peers_keep_the_local_bind_fallback() {
+        let listen_addr = SocketAddr::from(([127, 0, 0, 1], 60109));
+        let advertised_peer = SocketAddr::from(([127, 0, 0, 2], 60109));
+        let mut config = ControllerConfig::default().with_node_info(1, listen_addr);
+        config.controller_peers = vec![RaftPeer {
+            id: 2,
+            addr: advertised_peer,
+        }];
+
+        assert_eq!(config.controller_addr_for(1), Some(listen_addr));
+        assert_eq!(config.controller_peer_addrs(), vec![advertised_peer, listen_addr]);
     }
 
     #[test]
