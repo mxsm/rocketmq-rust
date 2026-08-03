@@ -565,6 +565,7 @@ def collect_report(
     executor: CommandExecutor = execute_command,
     post_collection_git_snapshot: GitSnapshotReader | None = None,
 ) -> tuple[dict[str, Any], Path]:
+    repository_root = repository_root.resolve()
     findings = validate_manifest(manifest, policy)
     if findings:
         raise SidecarError("invalid runner manifest:\n- " + "\n- ".join(findings))
