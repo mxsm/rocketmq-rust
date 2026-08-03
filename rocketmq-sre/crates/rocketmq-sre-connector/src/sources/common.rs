@@ -404,7 +404,14 @@ fn is_forbidden_field(key: &str) -> bool {
 fn is_pseudonymized_field(key: &str) -> bool {
     matches!(
         normalized_key(key).as_str(),
-        "messageid" | "msgid" | "messagekey" | "messagekeys" | "keys" | "traceid"
+        "messageid"
+            | "uniquemessageid"
+            | "originmessageid"
+            | "msgid"
+            | "messagekey"
+            | "messagekeys"
+            | "keys"
+            | "traceid"
     )
 }
 
@@ -452,6 +459,7 @@ mod tests {
                 "access_token": "no",
                 "client_ip": "10.0.0.1",
                 "message_id": "message-a",
+                "unique_message_id": "unique-message-a",
                 "keys": ["order-1"],
                 "rows": [1, 2, 3]
             }),
@@ -465,6 +473,11 @@ mod tests {
         assert!(value.get("client_ip").is_none());
         assert!(
             value["message_id"]
+                .as_str()
+                .is_some_and(|value| value.starts_with("sha256:"))
+        );
+        assert!(
+            value["unique_message_id"]
                 .as_str()
                 .is_some_and(|value| value.starts_with("sha256:"))
         );

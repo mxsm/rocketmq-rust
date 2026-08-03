@@ -33,8 +33,8 @@ const MESSAGE_FOLLOW_UP: &[FollowUpQuery] = &[
     },
     FollowUpQuery {
         source: "admin-query",
-        resource_template: "message-metadata/{message_hash}",
-        reason: "Collect body-free metadata only when an approved pseudonymous key exists",
+        resource_template: "message-metadata/{topic}/{message_id}",
+        reason: "Collect body-free metadata only when an exact Topic and Message ID are approved",
     },
 ];
 

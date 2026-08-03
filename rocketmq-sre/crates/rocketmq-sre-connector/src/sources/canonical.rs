@@ -14,6 +14,44 @@
 
 use crate::EvidenceOperation;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum BrokerDiagnosticProfile {
+    StorePressure,
+    StoreIntegrity,
+    RocksDbHealth,
+    TieredStore,
+    BrokerHa,
+    AuthFailure,
+    ColdDataFlow,
+    DrReadiness,
+    SecurityPosture,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum MetricDiagnosticProfile {
+    CapacityRunway,
+    ControllerHa,
+    SendLatency,
+    ProxyConnectivity,
+    RetryDlq,
+    TransactionMessage,
+    PopRevive,
+    TimerBacklog,
+    QueueHotspot,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum RouteDiagnosticProfile {
+    NameServer,
+    StaticTopic,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum KubernetesDiagnosticProfile {
+    UpgradeReadiness,
+    ChangeRegression,
+}
+
 /// Canonical projection applied after a source-owned wire response has passed
 /// its native contract validation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -32,6 +70,13 @@ pub(super) enum CanonicalProjection {
     CollectorWorkload,
     RuntimeObservability,
     ClusterTopology,
+    BrokerDiagnostics(BrokerDiagnosticProfile),
+    MetricDiagnostics(MetricDiagnosticProfile),
+    RouteDiagnostics(RouteDiagnosticProfile),
+    TopicSubscriptionConfig,
+    MessageMetadata,
+    RuntimeSaturation,
+    KubernetesDiagnostics(KubernetesDiagnosticProfile),
 }
 
 /// A fixed read-only query that can collect bounded source material for a
@@ -132,11 +177,13 @@ fn resolve_mcp(resource: &str) -> Option<CanonicalResourceRoute> {
             },
         ));
     }
-    resolve_catalog_resource(
-        resource,
-        &["namesrv-route/", "static-topic-route/"],
-        "wave_b_mcp_projection_not_production_verified",
-    )
+    if let Some(topic) = resource.strip_prefix("namesrv-route/") {
+        return Some(topic_route_diagnostics(topic, RouteDiagnosticProfile::NameServer));
+    }
+    if let Some(topic) = resource.strip_prefix("static-topic-route/") {
+        return Some(topic_route_diagnostics(topic, RouteDiagnosticProfile::StaticTopic));
+    }
+    None
 }
 
 fn resolve_admin(resource: &str) -> Option<CanonicalResourceRoute> {
@@ -173,8 +220,14 @@ fn resolve_admin(resource: &str) -> Option<CanonicalResourceRoute> {
             },
         ));
     }
-    if resource.starts_with("message-metadata/") {
-        return Some(not_verified("body_free_message_metadata_query_not_implemented"));
+    if let Some(value) = resource.strip_prefix("message-metadata/") {
+        return Some(match exact_pair(value) {
+            Some((topic, message_id)) => query(
+                CanonicalQuery::Admin(format!("message-metadata/{topic}/{message_id}")),
+                CanonicalProjection::MessageMetadata,
+            ),
+            None => not_verified("message_metadata_topic_and_id_required"),
+        });
     }
     if let Some(producer_group) = resource.strip_prefix("producer-connectivity/") {
         return Some(identifier(producer_group).map_or_else(
@@ -187,22 +240,62 @@ fn resolve_admin(resource: &str) -> Option<CanonicalResourceRoute> {
             },
         ));
     }
-    resolve_catalog_resource(
-        resource,
-        &[
+    if let Some(value) = resource.strip_prefix("topic-subscription-config/") {
+        return Some(match exact_pair(value) {
+            Some((consumer_group, topic)) => query(
+                CanonicalQuery::Admin(format!("topic-subscription-config/{consumer_group}/{topic}")),
+                CanonicalProjection::TopicSubscriptionConfig,
+            ),
+            None => not_verified("topic_subscription_group_and_topic_required"),
+        });
+    }
+    for (prefix, query_resource, profile) in [
+        (
             "store-pressure/",
+            "store/health",
+            BrokerDiagnosticProfile::StorePressure,
+        ),
+        (
             "store-integrity/",
+            "store/recovery",
+            BrokerDiagnosticProfile::StoreIntegrity,
+        ),
+        (
             "rocksdb-health/",
-            "tiered-store/",
-            "broker-ha/",
-            "topic-subscription-config/",
+            "store/rocksdb",
+            BrokerDiagnosticProfile::RocksDbHealth,
+        ),
+        ("tiered-store/", "store/tiered", BrokerDiagnosticProfile::TieredStore),
+        ("broker-ha/", "broker/diagnostics", BrokerDiagnosticProfile::BrokerHa),
+        (
             "auth-failure/",
-            "cold-data-flow/",
+            "auth/diagnostics",
+            BrokerDiagnosticProfile::AuthFailure,
+        ),
+        ("cold-data-flow/", "store/tiered", BrokerDiagnosticProfile::ColdDataFlow),
+        (
             "dr-readiness/",
+            "broker/diagnostics",
+            BrokerDiagnosticProfile::DrReadiness,
+        ),
+        (
             "security-posture/",
-        ],
-        "wave_b_admin_projection_not_production_verified",
-    )
+            "auth/diagnostics",
+            BrokerDiagnosticProfile::SecurityPosture,
+        ),
+    ] {
+        if let Some(target) = resource.strip_prefix(prefix) {
+            return Some(if safe_resource_path(target) {
+                query(
+                    CanonicalQuery::Admin(query_resource.to_owned()),
+                    CanonicalProjection::BrokerDiagnostics(profile),
+                )
+            } else {
+                not_verified("canonical_resource_parameters_unavailable")
+            });
+        }
+    }
+    None
 }
 
 fn resolve_prometheus(resource: &str) -> Option<CanonicalResourceRoute> {
@@ -248,26 +341,78 @@ fn resolve_prometheus(resource: &str) -> Option<CanonicalResourceRoute> {
             },
         ));
     }
+    for (prefix, query_resource, profile) in [
+        (
+            "capacity-runway/",
+            "trend/30d/rocketmq_store_disk_usage",
+            MetricDiagnosticProfile::CapacityRunway,
+        ),
+        (
+            "controller-ha/",
+            "metrics/rocketmq_controller_quorum_health_ratio",
+            MetricDiagnosticProfile::ControllerHa,
+        ),
+        (
+            "send-latency/",
+            "metrics/rocketmq_send_message_latency_milliseconds_bucket",
+            MetricDiagnosticProfile::SendLatency,
+        ),
+        (
+            "proxy-connectivity/",
+            "metrics/rocketmq_proxy_grpc_errors_total",
+            MetricDiagnosticProfile::ProxyConnectivity,
+        ),
+        (
+            "retry-dlq/",
+            "metrics/rocketmq_send_to_dlq_messages_total",
+            MetricDiagnosticProfile::RetryDlq,
+        ),
+        (
+            "transaction-message/",
+            "metrics/rocketmq_half_messages",
+            MetricDiagnosticProfile::TransactionMessage,
+        ),
+        (
+            "pop-revive/",
+            "metrics/rocketmq_pop_revive_lag",
+            MetricDiagnosticProfile::PopRevive,
+        ),
+        (
+            "timer-backlog/",
+            "metrics/rocketmq_timer_dequeue_lag",
+            MetricDiagnosticProfile::TimerBacklog,
+        ),
+        (
+            "queue-hotspot/",
+            "metrics/rocketmq_consumer_lag_messages",
+            MetricDiagnosticProfile::QueueHotspot,
+        ),
+    ] {
+        if let Some(target) = resource.strip_prefix(prefix) {
+            return Some(if safe_resource_path(target) {
+                query(
+                    CanonicalQuery::Prometheus {
+                        resource: query_resource.to_owned(),
+                        matchers: Vec::new(),
+                    },
+                    CanonicalProjection::MetricDiagnostics(profile),
+                )
+            } else {
+                not_verified("canonical_resource_parameters_unavailable")
+            });
+        }
+    }
     resolve_catalog_resource(
         resource,
         &[
             "store-trend/",
             "ha-network/",
-            "controller-ha/",
             "namesrv-network/",
-            "send-latency/",
-            "proxy-connectivity/",
-            "retry-dlq/",
-            "transaction-message/",
-            "pop-revive/",
-            "timer-backlog/",
-            "queue-hotspot/",
             "auth-telemetry/",
             "runtime-telemetry/",
-            "capacity-runway/",
             "prevention-trend/",
         ],
-        "wave_b_metric_projection_not_production_verified",
+        "optional_metric_projection_not_production_verified",
     )
 }
 
@@ -316,10 +461,30 @@ fn resolve_kubernetes(resource: &str) -> Option<CanonicalResourceRoute> {
             },
         ));
     }
+    if let Some(namespace) = resource.strip_prefix("upgrade-readiness/") {
+        return Some(if safe_resource_path(namespace) {
+            query(
+                CanonicalQuery::Kubernetes("statefulsets".to_owned()),
+                CanonicalProjection::KubernetesDiagnostics(KubernetesDiagnosticProfile::UpgradeReadiness),
+            )
+        } else {
+            not_verified("canonical_resource_parameters_unavailable")
+        });
+    }
+    if let Some(namespace) = resource.strip_prefix("change-regression/") {
+        return Some(if safe_resource_path(namespace) {
+            query(
+                CanonicalQuery::Kubernetes("change-timeline".to_owned()),
+                CanonicalProjection::KubernetesDiagnostics(KubernetesDiagnosticProfile::ChangeRegression),
+            )
+        } else {
+            not_verified("canonical_resource_parameters_unavailable")
+        });
+    }
     resolve_catalog_resource(
         resource,
-        &["proxy-workload/", "upgrade-readiness/", "change-regression/"],
-        "wave_c_kubernetes_projection_not_production_verified",
+        &["proxy-workload/"],
+        "optional_kubernetes_projection_not_production_verified",
     )
 }
 
@@ -341,11 +506,17 @@ fn resolve_runtime(resource: &str) -> Option<CanonicalResourceRoute> {
             |_| not_verified("runtime_build_metadata_not_exposed"),
         ));
     }
-    resolve_catalog_resource(
-        resource,
-        &["runtime-saturation/"],
-        "wave_b_runtime_projection_not_production_verified",
-    )
+    resource.strip_prefix("runtime-saturation/").map(|component| {
+        identifier(component).map_or_else(
+            || not_verified("canonical_resource_parameters_unavailable"),
+            |component| {
+                query(
+                    CanonicalQuery::Runtime(format!("runtime/{component}")),
+                    CanonicalProjection::RuntimeSaturation,
+                )
+            },
+        )
+    })
 }
 
 fn resolve_topology(resource: &str) -> Option<CanonicalResourceRoute> {
@@ -360,6 +531,22 @@ fn resolve_topology(resource: &str) -> Option<CanonicalResourceRoute> {
             },
         )
     })
+}
+
+fn topic_route_diagnostics(topic: &str, profile: RouteDiagnosticProfile) -> CanonicalResourceRoute {
+    identifier(topic).map_or_else(
+        || not_verified("canonical_resource_parameters_unavailable"),
+        |topic| {
+            query(
+                CanonicalQuery::Mcp(EvidenceOperation::TopicDescribe {
+                    topic,
+                    limit: Some(200),
+                    cursor: None,
+                }),
+                CanonicalProjection::RouteDiagnostics(profile),
+            )
+        },
+    )
 }
 
 const fn query(query: CanonicalQuery, projection: CanonicalProjection) -> CanonicalResourceRoute {
@@ -482,12 +669,12 @@ mod tests {
         assert_eq!(requirement_count, 69);
         assert_eq!(required_count, 32);
         assert_eq!(optional_count, 37);
-        assert_eq!(query_count, 18);
-        assert_eq!(unsupported_count, 51);
-        assert_eq!(required_query_count, 7);
-        assert_eq!(required_unsupported_count, 25);
-        assert_eq!(optional_query_count, 11);
-        assert_eq!(optional_unsupported_count, 26);
+        assert_eq!(query_count, 48);
+        assert_eq!(unsupported_count, 21);
+        assert_eq!(required_query_count, 32);
+        assert_eq!(required_unsupported_count, 0);
+        assert_eq!(optional_query_count, 16);
+        assert_eq!(optional_unsupported_count, 21);
     }
 
     #[test]
@@ -540,6 +727,174 @@ mod tests {
     }
 
     #[test]
+    fn required_diagnostic_profiles_use_fixed_read_only_queries() {
+        for (resource, query_resource, profile) in [
+            (
+                "store-pressure/broker-a",
+                "store/health",
+                BrokerDiagnosticProfile::StorePressure,
+            ),
+            (
+                "store-integrity/broker-a",
+                "store/recovery",
+                BrokerDiagnosticProfile::StoreIntegrity,
+            ),
+            (
+                "rocksdb-health/broker-a",
+                "store/rocksdb",
+                BrokerDiagnosticProfile::RocksDbHealth,
+            ),
+            (
+                "tiered-store/broker-a",
+                "store/tiered",
+                BrokerDiagnosticProfile::TieredStore,
+            ),
+            (
+                "broker-ha/broker-a",
+                "broker/diagnostics",
+                BrokerDiagnosticProfile::BrokerHa,
+            ),
+            (
+                "auth-failure/broker-a",
+                "auth/diagnostics",
+                BrokerDiagnosticProfile::AuthFailure,
+            ),
+            (
+                "cold-data-flow/broker-a",
+                "store/tiered",
+                BrokerDiagnosticProfile::ColdDataFlow,
+            ),
+            (
+                "dr-readiness/broker-a",
+                "broker/diagnostics",
+                BrokerDiagnosticProfile::DrReadiness,
+            ),
+            (
+                "security-posture/broker-a",
+                "auth/diagnostics",
+                BrokerDiagnosticProfile::SecurityPosture,
+            ),
+        ] {
+            assert_eq!(
+                resolve("admin-query", resource),
+                Some(query(
+                    CanonicalQuery::Admin(query_resource.to_owned()),
+                    CanonicalProjection::BrokerDiagnostics(profile),
+                ))
+            );
+        }
+
+        for (resource, query_resource, profile) in [
+            (
+                "capacity-runway/cluster-a",
+                "trend/30d/rocketmq_store_disk_usage",
+                MetricDiagnosticProfile::CapacityRunway,
+            ),
+            (
+                "controller-ha/controller-a",
+                "metrics/rocketmq_controller_quorum_health_ratio",
+                MetricDiagnosticProfile::ControllerHa,
+            ),
+            (
+                "send-latency/topic-a",
+                "metrics/rocketmq_send_message_latency_milliseconds_bucket",
+                MetricDiagnosticProfile::SendLatency,
+            ),
+            (
+                "proxy-connectivity/proxy-a",
+                "metrics/rocketmq_proxy_grpc_errors_total",
+                MetricDiagnosticProfile::ProxyConnectivity,
+            ),
+            (
+                "retry-dlq/group-a",
+                "metrics/rocketmq_send_to_dlq_messages_total",
+                MetricDiagnosticProfile::RetryDlq,
+            ),
+            (
+                "transaction-message/topic-a",
+                "metrics/rocketmq_half_messages",
+                MetricDiagnosticProfile::TransactionMessage,
+            ),
+            (
+                "pop-revive/group-a",
+                "metrics/rocketmq_pop_revive_lag",
+                MetricDiagnosticProfile::PopRevive,
+            ),
+            (
+                "timer-backlog/topic-a",
+                "metrics/rocketmq_timer_dequeue_lag",
+                MetricDiagnosticProfile::TimerBacklog,
+            ),
+            (
+                "queue-hotspot/topic-a",
+                "metrics/rocketmq_consumer_lag_messages",
+                MetricDiagnosticProfile::QueueHotspot,
+            ),
+        ] {
+            assert_eq!(
+                resolve("prometheus", resource),
+                Some(query(
+                    CanonicalQuery::Prometheus {
+                        resource: query_resource.to_owned(),
+                        matchers: Vec::new(),
+                    },
+                    CanonicalProjection::MetricDiagnostics(profile),
+                ))
+            );
+        }
+
+        assert!(matches!(
+            resolve("admin-query", "message-metadata/topic-a/message-a"),
+            Some(CanonicalResourceRoute::Query {
+                query: CanonicalQuery::Admin(_),
+                projection: CanonicalProjection::MessageMetadata,
+            })
+        ));
+        assert!(matches!(
+            resolve("admin-query", "topic-subscription-config/group-a/topic-a"),
+            Some(CanonicalResourceRoute::Query {
+                query: CanonicalQuery::Admin(_),
+                projection: CanonicalProjection::TopicSubscriptionConfig,
+            })
+        ));
+        assert!(matches!(
+            resolve("rocketmq-mcp", "namesrv-route/topic-a"),
+            Some(CanonicalResourceRoute::Query {
+                query: CanonicalQuery::Mcp(EvidenceOperation::TopicDescribe { .. }),
+                projection: CanonicalProjection::RouteDiagnostics(RouteDiagnosticProfile::NameServer),
+            })
+        ));
+        assert!(matches!(
+            resolve("rocketmq-mcp", "static-topic-route/topic-a"),
+            Some(CanonicalResourceRoute::Query {
+                query: CanonicalQuery::Mcp(EvidenceOperation::TopicDescribe { .. }),
+                projection: CanonicalProjection::RouteDiagnostics(RouteDiagnosticProfile::StaticTopic),
+            })
+        ));
+        assert!(matches!(
+            resolve("runtime", "runtime-saturation/broker"),
+            Some(CanonicalResourceRoute::Query {
+                query: CanonicalQuery::Runtime(_),
+                projection: CanonicalProjection::RuntimeSaturation,
+            })
+        ));
+        assert!(matches!(
+            resolve("kubernetes", "upgrade-readiness/rocketmq"),
+            Some(CanonicalResourceRoute::Query {
+                query: CanonicalQuery::Kubernetes(_),
+                projection: CanonicalProjection::KubernetesDiagnostics(KubernetesDiagnosticProfile::UpgradeReadiness),
+            })
+        ));
+        assert!(matches!(
+            resolve("kubernetes", "change-regression/rocketmq"),
+            Some(CanonicalResourceRoute::Query {
+                query: CanonicalQuery::Kubernetes(_),
+                projection: CanonicalProjection::KubernetesDiagnostics(KubernetesDiagnosticProfile::ChangeRegression),
+            })
+        ));
+    }
+
+    #[test]
     fn parameterized_routes_never_guess_missing_identifiers() {
         assert!(matches!(
             resolve("rocketmq-mcp", "consumer-lag/group-a"),
@@ -562,9 +917,16 @@ mod tests {
             })
         ));
         assert!(matches!(
-            resolve("admin-query", "message-metadata/id-hash-a"),
+            resolve("admin-query", "message-metadata/topic-a/message-a"),
+            Some(CanonicalResourceRoute::Query {
+                query: CanonicalQuery::Admin(_),
+                projection: CanonicalProjection::MessageMetadata
+            })
+        ));
+        assert!(matches!(
+            resolve("admin-query", "message-metadata/message-a"),
             Some(CanonicalResourceRoute::NotProductionVerified {
-                reason_code: "body_free_message_metadata_query_not_implemented"
+                reason_code: "message_metadata_topic_and_id_required"
             })
         ));
         assert!(resolve("rocketmq-mcp", "messages/raw-body").is_none());
@@ -582,11 +944,13 @@ mod tests {
             "consumer-runtime/" => "group-a",
             "deployment-drift/" => "broker-a",
             "build-info/" => "broker-a",
-            "message-metadata/" => "id-hash-a",
+            "message-metadata/" => "topic-a/message-a",
             "message-trace/" => "trace-hash-a",
             "topic-route/" => "topic-a",
+            "topic-subscription-config/" => "group-a/topic-a",
             "producer-connectivity/" => "producer-a",
             "observability/" => "mcp",
+            "runtime-saturation/" => "broker",
             "telemetry-pipeline/" => "collector-a",
             "otel-collector/" => "rocketmq",
             prefix if is_catalog_prefix(prefix) => "fixture",
@@ -612,7 +976,6 @@ mod tests {
             "proxy-workload/",
             "routing-trace/",
             "static-topic-route/",
-            "topic-subscription-config/",
             "retry-dlq/",
             "transaction-message/",
             "pop-revive/",
@@ -620,7 +983,6 @@ mod tests {
             "queue-hotspot/",
             "auth-failure/",
             "auth-telemetry/",
-            "runtime-saturation/",
             "runtime-telemetry/",
             "upgrade-readiness/",
             "capacity-runway/",

@@ -41,6 +41,18 @@ struct Projected {
 /// field names consumed by Wave A. A projection never supplies neutral
 /// defaults for unavailable fields.
 pub(super) fn apply(mut output: SourceOutput, projection: CanonicalProjection) -> Result<SourceOutput, ConnectorError> {
+    if matches!(
+        projection,
+        CanonicalProjection::BrokerDiagnostics(_)
+            | CanonicalProjection::MetricDiagnostics(_)
+            | CanonicalProjection::RouteDiagnostics(_)
+            | CanonicalProjection::TopicSubscriptionConfig
+            | CanonicalProjection::MessageMetadata
+            | CanonicalProjection::RuntimeSaturation
+            | CanonicalProjection::KubernetesDiagnostics(_)
+    ) {
+        return super::diagnostic_projection::apply(output, projection);
+    }
     let projected = match projection {
         CanonicalProjection::BrokerRuntime => broker_runtime(&output.content)?,
         CanonicalProjection::ConsumerLag => consumer_lag(&output.content)?,
@@ -56,6 +68,13 @@ pub(super) fn apply(mut output: SourceOutput, projection: CanonicalProjection) -
         CanonicalProjection::CollectorWorkload => kubernetes_workloads(&output.content, true)?,
         CanonicalProjection::RuntimeObservability => runtime_observability(&output.content)?,
         CanonicalProjection::ClusterTopology => cluster_topology(&output.content)?,
+        CanonicalProjection::BrokerDiagnostics(_)
+        | CanonicalProjection::MetricDiagnostics(_)
+        | CanonicalProjection::RouteDiagnostics(_)
+        | CanonicalProjection::TopicSubscriptionConfig
+        | CanonicalProjection::MessageMetadata
+        | CanonicalProjection::RuntimeSaturation
+        | CanonicalProjection::KubernetesDiagnostics(_) => unreachable!("diagnostic projection handled above"),
     };
 
     output.content = projected.content;

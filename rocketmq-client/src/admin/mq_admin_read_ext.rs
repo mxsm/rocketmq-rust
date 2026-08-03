@@ -22,6 +22,7 @@ use cheetah_string::CheetahString;
 use rand::seq::IndexedRandom;
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::mix_all;
+use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
 use rocketmq_protocol::protocol::admin::consume_stats::ConsumeStats;
 use rocketmq_protocol::protocol::body::broker_body::cluster_info::ClusterInfo;
 use rocketmq_protocol::protocol::body::consumer_connection::ConsumerConnection;
@@ -33,6 +34,7 @@ use rocketmq_protocol::protocol::body::proxy_drain::ProxyDrainStateResponseBody;
 use rocketmq_protocol::protocol::body::topic::topic_list::TopicList;
 use rocketmq_protocol::protocol::header::get_consume_stats_request_header::GetConsumeStatsRequestHeader;
 use rocketmq_protocol::protocol::header::query_topic_consume_by_who_request_header::QueryTopicConsumeByWhoRequestHeader;
+use rocketmq_protocol::protocol::header::view_message_request_header::ViewMessageRequestHeader;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::route_facade::BrokerDataExt;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
@@ -63,6 +65,27 @@ pub struct TopicConfigVersioned {
 pub struct SubscriptionGroupConfigVersioned {
     pub version: u64,
     pub config: SubscriptionGroupConfig,
+}
+
+/// Fixed, body-free metadata returned by the read-only message lookup.
+///
+/// Network addresses, arbitrary properties, body bytes, and body digests are
+/// intentionally absent. Callers must pseudonymize identifier fields before
+/// exposing the value outside their trusted read boundary.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MessageMetadataRead {
+    pub topic: String,
+    pub message_id: String,
+    pub unique_message_id: Option<String>,
+    pub born_timestamp: i64,
+    pub store_timestamp: i64,
+    pub queue_id: i32,
+    pub queue_offset: i64,
+    pub store_size: i32,
+    pub reconsume_times: i32,
+    pub sys_flag: i32,
+    pub flag: i32,
+    pub prepared_transaction_offset: i64,
 }
 
 #[allow(async_fn_in_trait)]
@@ -137,6 +160,18 @@ pub trait MQAdminReadExt: Send {
     ) -> rocketmq_error::RocketMQResult<ProducerTableInfo>;
 
     async fn query_topic_consume_by_who(&self, topic: CheetahString) -> rocketmq_error::RocketMQResult<GroupList>;
+}
+
+/// Additive read-only capability for fixed, body-free message metadata.
+#[allow(async_fn_in_trait)]
+pub trait MQAdminMessageReadExt: Send {
+    /// Looks up one message while returning only a fixed body-free metadata
+    /// projection.
+    async fn query_message_metadata(
+        &self,
+        topic: CheetahString,
+        message_id: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<MessageMetadataRead>;
 }
 
 impl MQAdminReadExt for DefaultMQAdminExt {
@@ -398,6 +433,51 @@ impl MQAdminReadExt for DefaultMQAdminExt {
             }
         }
         Ok(GroupList::default())
+    }
+}
+
+impl MQAdminMessageReadExt for DefaultMQAdminExt {
+    async fn query_message_metadata(
+        &self,
+        topic: CheetahString,
+        message_id: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<MessageMetadataRead> {
+        MessageDecoder::validate_message_id(message_id.as_str())
+            .map_err(|error| rocketmq_error::RocketMQError::IllegalArgument(format!("Invalid message ID: {error}")))?;
+        let decoded = MessageDecoder::decode_message_id(message_id.as_str()).map_err(|error| {
+            rocketmq_error::RocketMQError::IllegalArgument(format!("Failed to decode message ID: {error}"))
+        })?;
+        let broker_addr = CheetahString::from_string(format!("{}:{}", decoded.address.ip(), decoded.address.port()));
+        let message = self
+            .inner()
+            .mq_client_api()?
+            .view_message(
+                &broker_addr,
+                ViewMessageRequestHeader {
+                    topic: Some(topic.clone()),
+                    offset: decoded.offset,
+                },
+                self.inner().remoting_timeout_millis()?,
+            )
+            .await?;
+        Ok(MessageMetadataRead {
+            topic: topic.to_string(),
+            message_id: message.msg_id().to_string(),
+            unique_message_id: message
+                .properties()
+                .get(rocketmq_model::common::message::MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX)
+                .map(ToString::to_string)
+                .filter(|value| !value.is_empty()),
+            born_timestamp: message.born_timestamp(),
+            store_timestamp: message.store_timestamp(),
+            queue_id: message.queue_id(),
+            queue_offset: message.queue_offset(),
+            store_size: message.store_size(),
+            reconsume_times: message.reconsume_times(),
+            sys_flag: message.sys_flag(),
+            flag: message.flag(),
+            prepared_transaction_offset: message.prepared_transaction_offset(),
+        })
     }
 }
 

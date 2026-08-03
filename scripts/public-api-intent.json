@@ -1525,6 +1525,15 @@
         },
         {
           "category": "stable",
+          "declaration": "pub use crate::admin::MQAdminMessageReadExt",
+          "identity": "rocketmq-client/src/public_api.rs:pub use crate::admin::MQAdminMessageReadExt",
+          "owner": "client",
+          "path": "rocketmq-client/src/public_api.rs",
+          "rationale": "deliberate root entry point",
+          "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
           "declaration": "pub use crate::admin::MQAdminMutationExt",
           "identity": "rocketmq-client/src/public_api.rs:pub use crate::admin::MQAdminMutationExt",
           "owner": "client",
@@ -1536,6 +1545,15 @@
           "category": "stable",
           "declaration": "pub use crate::admin::MQAdminReadExt",
           "identity": "rocketmq-client/src/public_api.rs:pub use crate::admin::MQAdminReadExt",
+          "owner": "client",
+          "path": "rocketmq-client/src/public_api.rs",
+          "rationale": "deliberate root entry point",
+          "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use crate::admin::MessageMetadataRead",
+          "identity": "rocketmq-client/src/public_api.rs:pub use crate::admin::MessageMetadataRead",
           "owner": "client",
           "path": "rocketmq-client/src/public_api.rs",
           "rationale": "deliberate root entry point",
@@ -1794,7 +1812,7 @@
           "removal_condition": "retain while the stable entry point remains supported"
         }
       ],
-      "maximum_exports": 199
+      "maximum_exports": 201
     },
     "rocketmq-model": {
       "entries": [
