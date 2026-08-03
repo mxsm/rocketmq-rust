@@ -13,8 +13,33 @@ $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $sreRoot '..'))
 $composeDirectory = Join-Path $sreRoot 'deploy/dev'
 $composeFile = Join-Path $composeDirectory 'compose.yaml'
 $kindDirectory = Join-Path $sreRoot 'deploy/kind'
-$certificateDirectory = Join-Path $repositoryRoot 'target/phase00-certs'
+$targetDirectory = [IO.Path]::GetFullPath((Join-Path $repositoryRoot 'target'))
+$certificateDirectory = [IO.Path]::GetFullPath((Join-Path $targetDirectory 'phase00-certs'))
 $opensslImage = 'alpine/openssl:3.5.2@sha256:ef8657028239a006f3de0bd04529e22c073bf0ab6655ece9f25c8dde9adec146'
+$validationEnvironmentFixtures = [ordered]@{
+    'admin-read.env' = @(
+        'ROCKETMQ_SRE_ADMIN_ACCESS_KEY=validation-only-denied'
+        'ROCKETMQ_SRE_ADMIN_SECRET_KEY=validation-only-denied'
+        ''
+    ) -join "`n"
+    'agent-broker.env' = @(
+        'ROCKETMQ_SRE_AGENT_BROKER_READ_ACCESS_KEY=validation-only-denied'
+        'ROCKETMQ_SRE_AGENT_BROKER_READ_SECRET_KEY=validation-only-denied'
+        'ROCKETMQ_SRE_AGENT_BROKER_MUTATION_ACCESS_KEY=validation-only-denied'
+        'ROCKETMQ_SRE_AGENT_BROKER_MUTATION_SECRET_KEY=validation-only-denied'
+        ''
+    ) -join "`n"
+    'probe.env' = @(
+        'ROCKETMQ_SRE_PROBE_ACCESS_KEY=validation-only-denied'
+        'ROCKETMQ_SRE_PROBE_SECRET_KEY_FILE=/validation-only/missing'
+        ''
+    ) -join "`n"
+    'bootstrap.env' = @(
+        'ROCKETMQ_ACL_ACCESS_KEY=validation-only-denied'
+        'ROCKETMQ_ACL_SECRET_KEY=validation-only-denied'
+        ''
+    ) -join "`n"
+}
 
 function Require-Command([string]$Name) {
     if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
@@ -45,6 +70,67 @@ function Assert-NotContains([string]$Path, [string]$Pattern, [string]$Descriptio
     $content = Get-Content -Raw -LiteralPath $Path
     if ($content -match $Pattern) {
         throw "$Description is forbidden in $Path."
+    }
+}
+
+function New-ValidationEnvironmentFixtureScope {
+    $targetPrefix = $targetDirectory + [IO.Path]::DirectorySeparatorChar
+    if (-not $certificateDirectory.StartsWith($targetPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Validation fixture output escaped the repository target directory.'
+    }
+
+    $directoryCreated = $false
+    if (-not (Test-Path -LiteralPath $certificateDirectory)) {
+        New-Item -ItemType Directory -Path $certificateDirectory | Out-Null
+        $directoryCreated = $true
+    }
+    elseif (-not (Test-Path -LiteralPath $certificateDirectory -PathType Container)) {
+        throw "Validation fixture directory is not a directory: $certificateDirectory"
+    }
+
+    $createdFiles = [Collections.Generic.List[string]]::new()
+    try {
+        foreach ($fixture in $validationEnvironmentFixtures.GetEnumerator()) {
+            $path = Join-Path $certificateDirectory $fixture.Key
+            if (Test-Path -LiteralPath $path) {
+                if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+                    throw "Validation fixture path is not a file: $path"
+                }
+                continue
+            }
+            [IO.File]::WriteAllText($path, $fixture.Value, [Text.UTF8Encoding]::new($false))
+            $createdFiles.Add($path)
+        }
+    }
+    catch {
+        foreach ($path in $createdFiles) {
+            if (Test-Path -LiteralPath $path -PathType Leaf) {
+                Remove-Item -LiteralPath $path -Force
+            }
+        }
+        if ($directoryCreated -and
+            -not (Get-ChildItem -LiteralPath $certificateDirectory -Force | Select-Object -First 1)) {
+            Remove-Item -LiteralPath $certificateDirectory -Force
+        }
+        throw
+    }
+
+    [pscustomobject]@{
+        CreatedFiles = $createdFiles
+        DirectoryCreated = $directoryCreated
+    }
+}
+
+function Remove-ValidationEnvironmentFixtureScope([pscustomobject]$Scope) {
+    foreach ($path in $Scope.CreatedFiles) {
+        if (Test-Path -LiteralPath $path -PathType Leaf) {
+            Remove-Item -LiteralPath $path -Force
+        }
+    }
+    if ($Scope.DirectoryCreated -and
+        (Test-Path -LiteralPath $certificateDirectory -PathType Container) -and
+        -not (Get-ChildItem -LiteralPath $certificateDirectory -Force | Select-Object -First 1)) {
+        Remove-Item -LiteralPath $certificateDirectory -Force
     }
 }
 
@@ -145,92 +231,102 @@ if ($connectorContainer -match '(?m)^\s*-\s+\{?name:\s*runtime-secrets(?:,|\})')
     throw 'Kind Connector container must not mount the MCP runtime Secret.'
 }
 
-Require-Command docker
-Invoke-Native docker @(
-    'compose',
-    '--project-directory', $composeDirectory,
-    '--file', $composeFile,
-    '--profile', 'observability',
-    'config', '--quiet'
-)
+$validationFixtureScope = $null
+try {
+    $validationFixtureScope = New-ValidationEnvironmentFixtureScope
 
-Require-Command kubectl
-$renderedKind = & kubectl kustomize $kindDirectory
-if ($LASTEXITCODE -ne 0) {
-    throw "kubectl kustomize failed with exit code $LASTEXITCODE."
-}
-$renderedText = $renderedKind -join "`n"
-foreach ($requiredRender in @(
-    'name: sre-control-plane-mtls-proxy',
-    'name: connector-mtls-proxy',
-    'name: rocketmq-sre-control-plane-channel-server',
-    'name: rocketmq-sre-connector',
-    'name: rocketmq-sre-connector-read',
-    'name: rocketmq-sre-connector-node-read',
-    'name: sre-executor',
-    'name: sre-execution-agent',
-    'name: sre-executor-isolation',
-    'name: sre-execution-agent-isolation',
-    'port: 8444',
-    'kind: NetworkPolicy'
-)) {
-    if ($renderedText -notmatch [regex]::Escape($requiredRender)) {
-        throw "Rendered Kind assets do not contain '$requiredRender'."
+    Require-Command docker
+    Invoke-Native docker @(
+        'compose',
+        '--project-directory', $composeDirectory,
+        '--file', $composeFile,
+        '--profile', 'observability',
+        'config', '--quiet'
+    )
+
+    Require-Command kubectl
+    $renderedKind = & kubectl kustomize $kindDirectory
+    if ($LASTEXITCODE -ne 0) {
+        throw "kubectl kustomize failed with exit code $LASTEXITCODE."
     }
-}
-
-if ($CheckCertificates) {
-    $requiredCertificates = @(
-        'control-plane-server-ca-cert.pem',
-        'control-plane-server-cert.pem',
-        'connector-client-ca-cert.pem',
-        'connector-client-cert.pem',
-        'connector-client-identity.pem'
-    )
-    $missing = @(
-        $requiredCertificates |
-            Where-Object { -not (Test-Path -LiteralPath (Join-Path $certificateDirectory $_) -PathType Leaf) }
-    )
-    if ($missing.Count -gt 0) {
-        throw "Generated mTLS material is incomplete: $($missing -join ', '). Run dev.ps1 -Action Certs."
+    $renderedText = $renderedKind -join "`n"
+    foreach ($requiredRender in @(
+        'name: sre-control-plane-mtls-proxy',
+        'name: connector-mtls-proxy',
+        'name: rocketmq-sre-control-plane-channel-server',
+        'name: rocketmq-sre-connector',
+        'name: rocketmq-sre-connector-read',
+        'name: rocketmq-sre-connector-node-read',
+        'name: sre-executor',
+        'name: sre-execution-agent',
+        'name: sre-executor-isolation',
+        'name: sre-execution-agent-isolation',
+        'port: 8444',
+        'kind: NetworkPolicy'
+    )) {
+        if ($renderedText -notmatch [regex]::Escape($requiredRender)) {
+            throw "Rendered Kind assets do not contain '$requiredRender'."
+        }
     }
 
-    $mount = "${certificateDirectory}:/certs:ro"
-    Invoke-Native docker @(
-        'run', '--rm', '--volume', $mount, $opensslImage,
-        'verify', '-CAfile', '/certs/control-plane-server-ca-cert.pem',
-        '-purpose', 'sslserver', '/certs/control-plane-server-cert.pem'
-    )
-    Invoke-Native docker @(
-        'run', '--rm', '--volume', $mount, $opensslImage,
-        'verify', '-CAfile', '/certs/connector-client-ca-cert.pem',
-        '-purpose', 'sslclient', '/certs/connector-client-cert.pem'
-    )
-    Invoke-Native docker @(
-        'run', '--rm', '--volume', $mount, $opensslImage,
-        'x509', '-in', '/certs/control-plane-server-cert.pem',
-        '-noout', '-checkhost', 'sre-control-plane.rocketmq-sre.svc.cluster.local'
-    )
-    Invoke-Native docker @(
-        'run', '--rm', '--volume', $mount, $opensslImage,
-        'pkey', '-in', '/certs/connector-client-identity.pem', '-check', '-noout'
-    )
-    foreach ($proxyConfig in @($composeProxy, $kindProxy)) {
-        Invoke-Native docker @(
-            'run', '--rm',
-            '--user', '10001:10001',
-            '--read-only',
-            '--tmpfs', '/tmp:size=16m,mode=1777',
-            '--cap-drop', 'ALL',
-            '--security-opt', 'no-new-privileges:true',
-            '--volume', "${proxyConfig}:/etc/nginx/nginx.conf:ro",
-            '--volume', "$(Join-Path $certificateDirectory 'control-plane-server-cert.pem'):/etc/rocketmq/sre-channel/control-plane-server-cert.pem:ro",
-            '--volume', "$(Join-Path $certificateDirectory 'control-plane-server-key.pem'):/etc/rocketmq/sre-channel/control-plane-server-key.pem:ro",
-            '--volume', "$(Join-Path $certificateDirectory 'connector-client-ca-cert.pem'):/etc/rocketmq/sre-channel/connector-client-ca-cert.pem:ro",
-            '--entrypoint', 'nginx',
-            'nginx:1.29-alpine',
-            '-t', '-c', '/etc/nginx/nginx.conf'
+    if ($CheckCertificates) {
+        $requiredCertificates = @(
+            'control-plane-server-ca-cert.pem',
+            'control-plane-server-cert.pem',
+            'connector-client-ca-cert.pem',
+            'connector-client-cert.pem',
+            'connector-client-identity.pem'
         )
+        $missing = @(
+            $requiredCertificates |
+                Where-Object { -not (Test-Path -LiteralPath (Join-Path $certificateDirectory $_) -PathType Leaf) }
+        )
+        if ($missing.Count -gt 0) {
+            throw "Generated mTLS material is incomplete: $($missing -join ', '). Run dev.ps1 -Action Certs."
+        }
+
+        $mount = "${certificateDirectory}:/certs:ro"
+        Invoke-Native docker @(
+            'run', '--rm', '--volume', $mount, $opensslImage,
+            'verify', '-CAfile', '/certs/control-plane-server-ca-cert.pem',
+            '-purpose', 'sslserver', '/certs/control-plane-server-cert.pem'
+        )
+        Invoke-Native docker @(
+            'run', '--rm', '--volume', $mount, $opensslImage,
+            'verify', '-CAfile', '/certs/connector-client-ca-cert.pem',
+            '-purpose', 'sslclient', '/certs/connector-client-cert.pem'
+        )
+        Invoke-Native docker @(
+            'run', '--rm', '--volume', $mount, $opensslImage,
+            'x509', '-in', '/certs/control-plane-server-cert.pem',
+            '-noout', '-checkhost', 'sre-control-plane.rocketmq-sre.svc.cluster.local'
+        )
+        Invoke-Native docker @(
+            'run', '--rm', '--volume', $mount, $opensslImage,
+            'pkey', '-in', '/certs/connector-client-identity.pem', '-check', '-noout'
+        )
+        foreach ($proxyConfig in @($composeProxy, $kindProxy)) {
+            Invoke-Native docker @(
+                'run', '--rm',
+                '--user', '10001:10001',
+                '--read-only',
+                '--tmpfs', '/tmp:size=16m,mode=1777',
+                '--cap-drop', 'ALL',
+                '--security-opt', 'no-new-privileges:true',
+                '--volume', "${proxyConfig}:/etc/nginx/nginx.conf:ro",
+                '--volume', "$(Join-Path $certificateDirectory 'control-plane-server-cert.pem'):/etc/rocketmq/sre-channel/control-plane-server-cert.pem:ro",
+                '--volume', "$(Join-Path $certificateDirectory 'control-plane-server-key.pem'):/etc/rocketmq/sre-channel/control-plane-server-key.pem:ro",
+                '--volume', "$(Join-Path $certificateDirectory 'connector-client-ca-cert.pem'):/etc/rocketmq/sre-channel/connector-client-ca-cert.pem:ro",
+                '--entrypoint', 'nginx',
+                'nginx:1.29-alpine',
+                '-t', '-c', '/etc/nginx/nginx.conf'
+            )
+        }
+    }
+}
+finally {
+    if ($null -ne $validationFixtureScope) {
+        Remove-ValidationEnvironmentFixtureScope $validationFixtureScope
     }
 }
 
