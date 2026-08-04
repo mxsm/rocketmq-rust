@@ -1169,15 +1169,8 @@ spec: { selector: { app.kubernetes.io/name: otel-collector }, ports: [{ name: ot
     $latencyBeforeTimer = [Diagnostics.Stopwatch]::StartNew()
     $latencyBeforeMessage = Query-AcknowledgedMessage $ack.Id
     $latencyBeforeTimer.Stop()
-    $contentionStart = Invoke-BrokerShell @'
-i=0
-while [ "$i" -lt 4 ]; do
-  dd if=/dev/zero of="/var/lib/rocketmq/.phase06-fsync-$i" bs=1048576 count=64 conv=fsync >/tmp/phase06-fsync-$i.log 2>&1 &
-  echo "$!" >>/tmp/phase06-fsync.pids
-  i=$((i + 1))
-done
-echo "started=4"
-'@
+    $contentionStartScript = 'i=0; : > /tmp/rocketmq/phase06-fsync.pids; while [ "$i" -lt 4 ]; do dd if=/dev/zero of="/var/lib/rocketmq/.phase06-fsync-$i" bs=1048576 count=64 conv=fsync >/tmp/rocketmq/phase06-fsync-$i.log 2>&1 & echo "$!" >>/tmp/rocketmq/phase06-fsync.pids; i=$((i + 1)); done; echo "started=4"'
+    $contentionStart = Invoke-BrokerShell $contentionStartScript
     $latencyDuringTimer = [Diagnostics.Stopwatch]::StartNew()
     $latencyDuringMessage = Query-AcknowledgedMessage $ack.Id
     $latencyDuringTimer.Stop()
@@ -1185,24 +1178,8 @@ echo "started=4"
         '--lib',
         'log_file::group_commit_request::tests::test_timeout'
     )
-    $contentionCleanup = Invoke-BrokerShell @'
-attempt=0
-while [ "$attempt" -lt 120 ]; do
-  active=0
-  for pid in $(cat /tmp/phase06-fsync.pids 2>/dev/null); do
-    kill -0 "$pid" 2>/dev/null && active=1
-  done
-  [ "$active" -eq 0 ] && break
-  sleep 1
-  attempt=$((attempt + 1))
-done
-for pid in $(cat /tmp/phase06-fsync.pids 2>/dev/null); do
-  kill "$pid" 2>/dev/null || true
-done
-rm -f /var/lib/rocketmq/.phase06-fsync-* /tmp/phase06-fsync-*.log /tmp/phase06-fsync.pids
-sync
-echo "active=$active attempts=$attempt"
-'@
+    $contentionCleanupScript = 'attempt=0; active=1; while [ "$attempt" -lt 120 ]; do active=0; for pid in $(cat /tmp/rocketmq/phase06-fsync.pids 2>/dev/null); do state=$(ps -o stat= -p "$pid" 2>/dev/null | tr -d " "); case "$state" in ""|Z*) ;; *) active=1 ;; esac; done; [ "$active" -eq 0 ] && break; sleep 1; attempt=$((attempt + 1)); done; for pid in $(cat /tmp/rocketmq/phase06-fsync.pids 2>/dev/null); do kill "$pid" 2>/dev/null || true; done; rm -f /var/lib/rocketmq/.phase06-fsync-* /tmp/rocketmq/phase06-fsync-*.log /tmp/rocketmq/phase06-fsync.pids; sync; echo "active=$active attempts=$attempt"'
+    $contentionCleanup = Invoke-BrokerShell $contentionCleanupScript
     $brokerReadyAfterContention = (Invoke-Native kubectl @('-n', $Namespace, 'get', 'pod', 'rocketmq-broker-0', '-o', 'jsonpath={.status.containerStatuses[0].ready}')).Output
     Complete-Scenario 'slow_disk_fsync_jitter' ([ordered]@{
         fsync_jitter_observed = $contentionStart.Output -match 'started=4'
@@ -1532,7 +1509,7 @@ echo "active=$active attempts=$attempt"
             '--',
             '/bin/sh',
             '-c',
-            'for pid in $(cat /tmp/phase06-fsync.pids 2>/dev/null); do kill "$pid" 2>/dev/null || true; done; rm -f /var/lib/rocketmq/.phase06-fsync-* /tmp/phase06-fsync-*'
+            'for pid in $(cat /tmp/rocketmq/phase06-fsync.pids 2>/dev/null); do kill "$pid" 2>/dev/null || true; done; rm -f /var/lib/rocketmq/.phase06-fsync-* /tmp/rocketmq/phase06-fsync-*'
         ) -AllowFailure | Out-Null
     }
     if ($CreatedCluster -and -not $KeepCluster) {

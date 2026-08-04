@@ -204,6 +204,21 @@ class FaultMatrixGuardTests(unittest.TestCase):
         result = self.run_guard("--policy-only", expect_success=False)
         self.assertIn("Set-NodeNetworkImpairment", result.stderr)
 
+    def test_runner_that_restores_multiline_broker_shell_scripts_is_rejected(self) -> None:
+        runner = self.root / "scripts" / "kind-architecture-refactor-e2e.ps1"
+        source = runner.read_text(encoding="utf-8")
+        for marker in (
+            "i=0; : > /tmp/rocketmq/phase06-fsync.pids; while",
+            "attempt=0; active=1; while",
+            'case "$state" in ""|Z*)',
+        ):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, source)
+                runner.write_text(source.replace(marker, "multiline shell regression", 1), encoding="utf-8")
+                result = self.run_guard("--policy-only", expect_success=False)
+                self.assertIn(marker, result.stderr)
+                runner.write_text(source, encoding="utf-8")
+
     def test_runner_that_mislabels_the_otel_collector_is_rejected(self) -> None:
         runner = self.root / "scripts" / "kind-architecture-refactor-e2e.ps1"
         source = runner.read_text(encoding="utf-8")
