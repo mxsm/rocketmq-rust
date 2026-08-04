@@ -29,7 +29,7 @@ default = []
 simd = ["dep:simd-json"]
 
 [dependencies]
-base64 = "0.22.1"
+base64 = "0.23.0"
 byteorder = "1.5.0"
 bytes.workspace = true
 cheetah-string.workspace = true
