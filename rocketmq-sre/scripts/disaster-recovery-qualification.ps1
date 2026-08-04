@@ -71,7 +71,6 @@ $faultMatrix = Read-Evidence $faultMatrixPath 'fault-matrix evidence'
 $postgres = Read-Evidence $postgresPath 'PostgreSQL HA evidence'
 $objectRecovery = Read-Evidence $objectPath 'object recovery evidence'
 $controlPlane = Read-Evidence $controlPlanePath 'Control Plane restore evidence'
-Assert-Passed $faultMatrix 'fault-matrix exercise'
 Assert-Passed $postgres 'PostgreSQL HA exercise'
 Assert-Passed $objectRecovery 'object recovery exercise'
 Assert-Passed $controlPlane 'Control Plane restore exercise'
@@ -79,21 +78,31 @@ Assert-Passed $controlPlane 'Control Plane restore exercise'
 if (-not [bool]$faultMatrix.dynamic_execution -or [bool]$faultMatrix.fixture) {
     throw 'Kubernetes fault-matrix evidence must come from dynamic non-fixture execution.'
 }
+if (@($faultMatrix.unresolved_faults).Count -ne 0) {
+    throw 'Kubernetes fault-matrix evidence contains unresolved faults.'
+}
+foreach ($assertion in $faultMatrix.global_assertions.PSObject.Properties) {
+    if (-not [bool]$assertion.Value) {
+        throw "Kubernetes fault-matrix global assertion $($assertion.Name) did not pass."
+    }
+}
 $scenarioMap = @{}
 foreach ($scenario in @($faultMatrix.scenarios)) {
+    if ([string]$scenario.status -ne 'passed') {
+        throw "Fault-matrix scenario $([string]$scenario.id) did not pass."
+    }
     $scenarioMap[[string]$scenario.id] = $scenario
 }
 foreach ($scenarioId in $requiredFaultScenarios) {
     if (-not $scenarioMap.ContainsKey($scenarioId)) {
         throw "Fault-matrix evidence is missing $scenarioId."
     }
-    $scenario = $scenarioMap[$scenarioId]
-    if ([string]$scenario.status -ne 'passed') {
-        throw "Fault-matrix scenario $scenarioId did not pass."
-    }
 }
-if ([int]$scenarioMap['ha_replication_lag'].rpo_seconds -ne 0 -or
-    [int]$scenarioMap['acknowledged_message_recovery'].rpo_seconds -ne 0) {
+if (-not [bool]$scenarioMap['ha_replication_lag'].assertions.rpo_satisfied -or
+    -not [bool]$scenarioMap['ha_replication_lag'].assertions.acknowledged_message_visible -or
+    -not [bool]$scenarioMap['acknowledged_message_recovery'].assertions.message_id_preserved -or
+    -not [bool]$scenarioMap['acknowledged_message_recovery'].assertions.queue_offset_preserved -or
+    -not [bool]$scenarioMap['acknowledged_message_recovery'].assertions.commitlog_offset_preserved) {
     throw 'Broker replication and acknowledged-message recovery require RPO=0.'
 }
 if (-not [bool]$faultMatrix.global_assertions.controller_quorum_restored -or
