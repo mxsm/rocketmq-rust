@@ -81,6 +81,21 @@ impl GetControllerMetadataSubCommand {
         let is_leader = meta_data.is_leader.unwrap_or(false).to_string();
         println!("IsLeader\t{}", is_leader);
 
+        let last_log_index = meta_data
+            .last_log_index
+            .map_or(String::from("<NONE>"), |value| value.to_string());
+        println!("LastLogIndex\t{}", last_log_index);
+
+        let committed_log_index = meta_data
+            .committed_log_index
+            .map_or(String::from("<NONE>"), |value| value.to_string());
+        println!("CommittedLogIndex\t{}", committed_log_index);
+
+        let applied_log_index = meta_data
+            .applied_log_index
+            .map_or(String::from("<NONE>"), |value| value.to_string());
+        println!("AppliedLogIndex\t{}", applied_log_index);
+
         if let Some(peers) = &meta_data.peers {
             peers.split(";").for_each(|peer| println!("#Peer:\t{}", peer));
         } else {

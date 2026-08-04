@@ -1241,11 +1241,18 @@ impl Controller for OpenRaftController {
             };
 
             let raft_node_manager = self.node();
-            let controller_leader_id: Option<u64> = if let Some(raft_node_manager) = raft_node_manager {
-                raft_node_manager.get_leader().await.ok().flatten()
-            } else {
-                None
-            };
+            let (controller_leader_id, last_log_index, committed_log_index, applied_log_index) =
+                if let Some(raft_node_manager) = raft_node_manager {
+                    let metrics = raft_node_manager.raft_metrics();
+                    (
+                        metrics.current_leader,
+                        metrics.last_log_index,
+                        metrics.committed.map(|log_id| log_id.index),
+                        metrics.last_applied.map(|log_id| log_id.index),
+                    )
+                } else {
+                    (None, None, None, None)
+                };
 
             let controller_leader_address: Option<CheetahString> = controller_leader_id
                 .and_then(|leader_node_id| config.controller_addr_for(leader_node_id))
@@ -1262,6 +1269,9 @@ impl Controller for OpenRaftController {
                 controller_leader_address,
                 is_leader,
                 peers,
+                last_log_index,
+                committed_log_index,
+                applied_log_index,
             }
         };
         Ok(Some(
