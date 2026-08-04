@@ -325,9 +325,26 @@ def validate_sources(guard: Guard) -> None:
         "$null = Wait-ControllerLeadershipStable -Ordinals $survivingOrdinals",
         "Invoke-Native kubectl @('cordon', $failureLeaderNode)",
         "Wait-ControllerLeadershipStable -Ordinals $failureSurvivingOrdinals",
+        "$restoredLeadership = Wait-ControllerLeadershipStable",
         "$snapshotLeadershipBefore = Wait-ControllerLeadershipStable",
+        "function Test-MessageQuerySucceeded",
+        "function Wait-CredentialCutover",
+        "credential rotation must converge through hot reload without restarting Broker pods",
+        "semantic_query=$($rotationResult.DeniedSucceeded)",
     ):
         guard.require(marker in runner, f"fault runner contract marker missing: {marker}")
+    secret_rotation_start = runner.find("$preRotation = Query-AcknowledgedMessage $ack.Id")
+    secret_rotation_end = runner.find("$pvcBeforeRestart = Get-PvcUidSet", secret_rotation_start)
+    guard.require(
+        secret_rotation_start >= 0 and secret_rotation_end > secret_rotation_start,
+        "secret rotation block boundaries are missing",
+    )
+    if secret_rotation_start >= 0 and secret_rotation_end > secret_rotation_start:
+        secret_rotation_block = runner[secret_rotation_start:secret_rotation_end]
+        guard.require(
+            "rollout', 'restart', 'statefulset/rocketmq-broker" not in secret_rotation_block,
+            "secret rotation must use Broker hot reload instead of a rollout restart",
+        )
     guard.require("Mode -eq \"Validate\"" in runner, "runner must provide a non-dynamic Validate mode")
     guard.require("throw" in runner, "runner must fail closed on missing prerequisites or failed assertions")
     guard.require("FROM builder-base AS fault-driver-builder" in dockerfile, "fault-driver builder target missing")

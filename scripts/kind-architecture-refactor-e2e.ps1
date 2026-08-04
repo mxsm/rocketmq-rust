@@ -447,14 +447,68 @@ function Initialize-SyntheticTopic {
     Assert-True ($route.ExitCode -eq 0) 'fixed synthetic topic route must be queryable before message probes'
 }
 
+function Convert-MessageQueryEvidence {
+    param([Parameter(Mandatory)][object]$Result)
+    $queue = [regex]::Match($Result.Output, 'Queue Offset:\s+(-?\d+)').Groups[1].Value
+    $commitlog = [regex]::Match($Result.Output, 'CommitLog Offset:\s+(-?\d+)').Groups[1].Value
+    Assert-True ($queue -match '^\d+$') 'query evidence must contain Queue Offset'
+    Assert-True ($commitlog -match '^\d+$') 'query evidence must contain CommitLog Offset'
+    [pscustomobject]@{ QueueOffset = $queue; CommitLogOffset = $commitlog; Output = $Result.Output }
+}
+
 function Query-AcknowledgedMessage {
     param([Parameter(Mandatory)][string]$MessageId, [string]$SecretName = 'rocketmq-fault-driver-baseline')
     $result = Invoke-FaultDriver -SecretName $SecretName -Arguments @('message', 'queryMsgByUniqueKey', '-t', $Topic, '-i', $MessageId)
-    $queue = [regex]::Match($result.Output, 'Queue Offset:\s+(-?\d+)').Groups[1].Value
-    $commitlog = [regex]::Match($result.Output, 'CommitLog Offset:\s+(-?\d+)').Groups[1].Value
-    Assert-True ($queue -match '^\d+$') 'query evidence must contain Queue Offset'
-    Assert-True ($commitlog -match '^\d+$') 'query evidence must contain CommitLog Offset'
-    [pscustomobject]@{ QueueOffset = $queue; CommitLogOffset = $commitlog; Output = $result.Output }
+    Convert-MessageQueryEvidence $result
+}
+
+function Test-MessageQuerySucceeded {
+    param([Parameter(Mandatory)][object]$Result)
+    $queue = [regex]::Match($Result.Output, 'Queue Offset:\s+(-?\d+)')
+    $commitlog = [regex]::Match($Result.Output, 'CommitLog Offset:\s+(-?\d+)')
+    $Result.ExitCode -eq 0 -and $queue.Success -and $commitlog.Success
+}
+
+function Wait-CredentialCutover {
+    param(
+        [Parameter(Mandatory)][string]$MessageId,
+        [Parameter(Mandatory)][string]$AllowedSecretName,
+        [Parameter(Mandatory)][string]$DeniedSecretName,
+        [ValidateRange(1, 600)][int]$TimeoutSeconds = 240
+    )
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSeconds)
+    $allowedProbe = $null
+    $deniedProbe = $null
+    do {
+        $deniedProbe = Invoke-FaultDriver -SecretName $DeniedSecretName -Arguments @(
+            'message',
+            'queryMsgByUniqueKey',
+            '-t',
+            $Topic,
+            '-i',
+            $MessageId
+        ) -AllowFailure
+        $allowedProbe = Invoke-FaultDriver -SecretName $AllowedSecretName -Arguments @(
+            'message',
+            'queryMsgByUniqueKey',
+            '-t',
+            $Topic,
+            '-i',
+            $MessageId
+        ) -AllowFailure
+        $deniedSucceeded = Test-MessageQuerySucceeded $deniedProbe
+        $allowedSucceeded = Test-MessageQuerySucceeded $allowedProbe
+        if ($allowedSucceeded -and -not $deniedSucceeded) {
+            return [pscustomobject]@{
+                Allowed = $allowedProbe
+                Denied = $deniedProbe
+                AllowedSucceeded = $allowedSucceeded
+                DeniedSucceeded = $deniedSucceeded
+            }
+        }
+        Start-Sleep -Seconds 3
+    } while ([DateTimeOffset]::UtcNow -lt $deadline)
+    throw 'credential projection did not converge to the required semantic query state before the deadline'
 }
 
 function Invoke-RouteProbe {
@@ -1253,9 +1307,12 @@ spec: { selector: { app.kubernetes.io/name: otel-collector }, ports: [{ name: ot
         $quorumLossMessage = Query-AcknowledgedMessage $ack.Id
     } finally {
         $quorumRestore = Set-StatefulSetReplicas 'rocketmq-controller' 3
+    }
+    try {
+        $restoredLeadership = Wait-ControllerLeadershipStable
+    } finally {
         $quorumLossTimer.Stop()
     }
-    $restoredLeadership = Get-ControllerLeadershipSnapshot
     Complete-Scenario 'controller_quorum_loss' ([ordered]@{
         quorum_loss_observed = $quorumLossScale.State.status.readyReplicas -eq 1
         control_plane_failed_closed = $quorumLossProbe.ExitCode -ne 0 -or $quorumLossLeadership.Responders -le 1
@@ -1404,23 +1461,57 @@ spec: { selector: { app.kubernetes.io/name: otel-collector }, ports: [{ name: ot
     })
 
     $preRotation = Query-AcknowledgedMessage $ack.Id
-    Invoke-Native kubectl @('-n', $Namespace, 'apply', '-f', $RotatedRuntimeSecretManifest) | Out-Null
-    Invoke-Native kubectl @('-n', $Namespace, 'rollout', 'restart', 'statefulset/rocketmq-broker') | Out-Null
-    Invoke-Native kubectl @('-n', $Namespace, 'rollout', 'status', 'statefulset/rocketmq-broker', '--timeout=180s') | Out-Null
-    $oldDenied = Invoke-FaultDriver -SecretName 'rocketmq-fault-driver-baseline' -Arguments @('message', 'queryMsgByUniqueKey', '-t', $Topic, '-i', $ack.Id) -AllowFailure
-    $newAllowed = Query-AcknowledgedMessage $ack.Id 'rocketmq-fault-driver-rotated'
-    Invoke-Native kubectl @('-n', $Namespace, 'apply', '-f', $RuntimeSecretManifest) | Out-Null
-    Invoke-Native kubectl @('-n', $Namespace, 'rollout', 'restart', 'statefulset/rocketmq-broker') | Out-Null
-    Invoke-Native kubectl @('-n', $Namespace, 'rollout', 'status', 'statefulset/rocketmq-broker', '--timeout=180s') | Out-Null
-    $restored = Query-AcknowledgedMessage $ack.Id
-    $redactionText = "$($oldDenied.Output)`n$($newAllowed.Output)"
+    $brokerUidsBeforeRotation = ((Invoke-Native kubectl @('-n', $Namespace, 'get', 'pods', '-l', 'rocketmq.apache.org/service=broker', '-o', 'json')).Output | ConvertFrom-Json).items |
+        ForEach-Object { "$($_.metadata.name)=$($_.metadata.uid)" } |
+        Sort-Object
+    $rotationResult = $null
+    $rollbackResult = $null
+    $rotationFailure = $null
+    $rollbackFailure = $null
+    try {
+        Invoke-Native kubectl @('-n', $Namespace, 'apply', '-f', $RotatedRuntimeSecretManifest) | Out-Null
+        try {
+            $rotationResult = Wait-CredentialCutover `
+                -MessageId $ack.Id `
+                -AllowedSecretName 'rocketmq-fault-driver-rotated' `
+                -DeniedSecretName 'rocketmq-fault-driver-baseline'
+        } catch {
+            $rotationFailure = $_
+        }
+    } finally {
+        Invoke-Native kubectl @('-n', $Namespace, 'apply', '-f', $RuntimeSecretManifest) | Out-Null
+        try {
+            $rollbackResult = Wait-CredentialCutover `
+                -MessageId $ack.Id `
+                -AllowedSecretName 'rocketmq-fault-driver-baseline' `
+                -DeniedSecretName 'rocketmq-fault-driver-rotated'
+        } catch {
+            $rollbackFailure = $_
+        }
+    }
+    if ($null -ne $rollbackFailure) { throw $rollbackFailure }
+    if ($null -ne $rotationFailure) { throw $rotationFailure }
+    $newAllowed = Convert-MessageQueryEvidence $rotationResult.Allowed
+    $restored = Convert-MessageQueryEvidence $rollbackResult.Allowed
+    $brokerUidsAfterRotation = ((Invoke-Native kubectl @('-n', $Namespace, 'get', 'pods', '-l', 'rocketmq.apache.org/service=broker', '-o', 'json')).Output | ConvertFrom-Json).items |
+        ForEach-Object { "$($_.metadata.name)=$($_.metadata.uid)" } |
+        Sort-Object
+    $brokerPodsUnchanged = ($brokerUidsBeforeRotation -join "`n") -eq ($brokerUidsAfterRotation -join "`n")
+    Assert-True $brokerPodsUnchanged 'credential rotation must converge through hot reload without restarting Broker pods'
+    $redactionText = "$($preRotation.Output)`n$($newAllowed.Output)`n$($restored.Output)"
     Complete-Scenario 'secret_rotation' ([ordered]@{
         old_credentials_worked_before_rotation = $preRotation.QueueOffset -eq $before.QueueOffset
-        old_credentials_rejected_after_rotation = $oldDenied.ExitCode -ne 0
+        old_credentials_rejected_after_rotation = -not $rotationResult.DeniedSucceeded
         new_credentials_worked_after_rotation = $newAllowed.QueueOffset -eq $before.QueueOffset
         baseline_credentials_restored = $restored.QueueOffset -eq $before.QueueOffset
         secret_values_redacted = $redactionText -notmatch '(?i)secret[_-]?key\s*[=:]\s*\S+'
-    }) ([ordered]@{ pre_rotation_access = $preRotation.Output; old_access_denied = "exit=$($oldDenied.ExitCode)"; new_access_allowed = $newAllowed.Output; rollback_access = $restored.Output; redaction_scan = 'no secret value pattern present' })
+    }) ([ordered]@{
+        pre_rotation_access = $preRotation.Output
+        old_access_denied = "job_exit=$($rotationResult.Denied.ExitCode) semantic_query=$($rotationResult.DeniedSucceeded)"
+        new_access_allowed = $newAllowed.Output
+        rollback_access = $restored.Output
+        redaction_scan = "no secret value pattern present; broker_pods_unchanged=$brokerPodsUnchanged"
+    })
 
     $pvcBeforeRestart = Get-PvcUidSet
     $brokerRestart = Invoke-Native kubectl @('-n', $Namespace, 'delete', 'pod', 'rocketmq-broker-0', '--wait=false')
@@ -1507,6 +1598,9 @@ spec: { selector: { app.kubernetes.io/name: otel-collector }, ports: [{ name: ot
     Write-Output "M11-11 dynamic fault matrix passed: $RunDirectory"
 } finally {
     if ($CreatedCluster) {
+        if (-not [string]::IsNullOrWhiteSpace($RuntimeSecretManifest) -and (Test-Path -LiteralPath $RuntimeSecretManifest)) {
+            Invoke-Native kubectl @('-n', $Namespace, 'apply', '-f', $RuntimeSecretManifest) -AllowFailure | Out-Null
+        }
         foreach ($statefulSet in @('rocketmq-namesrv', 'rocketmq-controller')) {
             Invoke-Native kubectl @('-n', $Namespace, 'scale', "statefulset/$statefulSet", '--replicas=3') -AllowFailure | Out-Null
         }

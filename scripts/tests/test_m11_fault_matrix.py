@@ -306,7 +306,12 @@ class FaultMatrixGuardTests(unittest.TestCase):
             "$null = Wait-ControllerLeadershipStable -Ordinals $survivingOrdinals",
             "Invoke-Native kubectl @('cordon', $failureLeaderNode)",
             "Wait-ControllerLeadershipStable -Ordinals $failureSurvivingOrdinals",
+            "$restoredLeadership = Wait-ControllerLeadershipStable",
             "$snapshotLeadershipBefore = Wait-ControllerLeadershipStable",
+            "function Test-MessageQuerySucceeded",
+            "function Wait-CredentialCutover",
+            "credential rotation must converge through hot reload without restarting Broker pods",
+            "semantic_query=$($rotationResult.DeniedSucceeded)",
         )
         for marker in markers:
             self.assertIn(marker, source)
@@ -314,6 +319,16 @@ class FaultMatrixGuardTests(unittest.TestCase):
             result = self.run_guard("--policy-only", expect_success=False)
             self.assertIn(marker, result.stderr)
             runner.write_text(source, encoding="utf-8")
+
+    def test_runner_that_restarts_brokers_for_secret_rotation_is_rejected(self) -> None:
+        runner = self.root / "scripts" / "kind-architecture-refactor-e2e.ps1"
+        source = runner.read_text(encoding="utf-8")
+        marker = "$preRotation = Query-AcknowledgedMessage $ack.Id"
+        restart = "Invoke-Native kubectl @('-n', $Namespace, 'rollout', 'restart', 'statefulset/rocketmq-broker') | Out-Null"
+        self.assertIn(marker, source)
+        runner.write_text(source.replace(marker, f"{marker}\n    {restart}", 1), encoding="utf-8")
+        result = self.run_guard("--policy-only", expect_success=False)
+        self.assertIn("hot reload", result.stderr)
 
     def test_dynamic_input_and_registry_regressions_are_rejected(self) -> None:
         workflow = self.root / ".github" / "workflows" / "kubernetes-fault-matrix.yml"
