@@ -89,37 +89,44 @@ where
         message: format!("proxy gRPC server failed to resolve local address for {addr}: {error}"),
     })?;
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let (housekeeping_report_tx, housekeeping_report_rx) = tokio::sync::oneshot::channel();
-    let housekeeping_task_group = task_group.clone();
-    task_group
-        .spawn_service("proxy.grpc.housekeeping", async move {
-            let report = housekeeping(shutdown_rx.clone(), housekeeping_task_group).await;
-            let _ = housekeeping_report_tx.send(report);
-        })
-        .map_err(|error| ProxyError::Transport {
-            message: format!("proxy gRPC server failed to spawn housekeeping task: {error}"),
-        })?;
+    let housekeeping_future = housekeeping(shutdown_rx.clone(), task_group.clone());
 
     let serve_future = serve(listener, local_addr, shutdown_tx.subscribe());
     ready()?;
     tokio::pin!(serve_future);
+    tokio::pin!(housekeeping_future);
     tokio::pin!(shutdown);
-    let (serve_result, shutdown_deadline) = tokio::select! {
-        result = &mut serve_future => (result, ShutdownDeadline::after(config.shutdown_timeout())),
-        deadline = &mut shutdown => {
-            let _ = shutdown_tx.send(true);
-            (serve_future.await, deadline)
-        }
+    let mut serve_result = None;
+    let mut housekeeping_report = None;
+    let shutdown_deadline = tokio::select! {
+        result = &mut serve_future => {
+            serve_result = Some(result);
+            ShutdownDeadline::after(config.shutdown_timeout())
+        },
+        report = &mut housekeeping_future => {
+            housekeeping_report = Some(report);
+            ShutdownDeadline::after(config.shutdown_timeout())
+        },
+        deadline = &mut shutdown => deadline,
     };
     let _ = shutdown_tx.send(true);
-    let task_group_report = task_group.shutdown_until(shutdown_deadline).await;
-    let housekeeping_report = match tokio::time::timeout(shutdown_deadline.remaining(), housekeeping_report_rx).await {
-        Ok(Ok(report)) => Some(report),
-        Ok(Err(_)) | Err(_) => None,
+    let serve_completion = async {
+        match serve_result {
+            Some(result) => result,
+            None => serve_future.await,
+        }
     };
+    let housekeeping_completion = async {
+        match housekeeping_report {
+            Some(report) => report,
+            None => housekeeping_future.await,
+        }
+    };
+    let (serve_result, housekeeping_report) = tokio::join!(serve_completion, housekeeping_completion);
+    let task_group_report = task_group.shutdown_until(shutdown_deadline).await;
     serve_result?;
     Ok(GrpcServerShutdownReport {
         task_group: task_group_report,
-        housekeeping: housekeeping_report,
+        housekeeping: Some(housekeeping_report),
     })
 }

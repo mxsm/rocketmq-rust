@@ -317,7 +317,10 @@ mod tests {
         let report = serve_with_report(
             config,
             service,
-            async { ShutdownDeadline::after(Duration::from_secs(1)) },
+            async {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                ShutdownDeadline::after(Duration::from_secs(1))
+            },
             context.service_context("proxy").task_group().clone(),
         )
         .await

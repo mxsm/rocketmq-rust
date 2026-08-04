@@ -222,48 +222,31 @@ pub mod bench_support {
             .task_group()
             .clone();
         let housekeeping_parent = task_group.clone();
-        let (started_tx, started_rx) = oneshot::channel();
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let (report_tx, report_rx) = oneshot::channel();
-        let housekeeping = service.clone();
-
-        task_group
-            .spawn_service("proxy.grpc.housekeeping", async move {
-                let _ = started_tx.send(());
-                let run_report = housekeeping
-                    .run_housekeeping_until_with_report(
-                        async move {
-                            let _ = shutdown_rx.await;
-                        },
-                        housekeeping_parent,
-                    )
-                    .await;
-                let _ = report_tx.send(run_report);
-            })
-            .expect("proxy housekeeping benchmark task should spawn");
-
-        started_rx
-            .await
-            .expect("proxy housekeeping benchmark task should start");
-        let task_count_before_shutdown = task_group.task_count();
-        tokio::time::sleep(shutdown_delay).await;
-
-        let shutdown_started_at = Instant::now();
-        let _ = shutdown_tx.send(());
-        let report = task_group.shutdown(Duration::from_secs(5)).await;
+        let housekeeping = service.run_housekeeping_until_with_report(
+            async move {
+                let _ = shutdown_rx.await;
+            },
+            housekeeping_parent,
+        );
+        let shutdown_trigger = async {
+            tokio::task::yield_now().await;
+            let task_count_before_shutdown = task_group.task_count();
+            tokio::time::sleep(shutdown_delay).await;
+            let shutdown_started_at = Instant::now();
+            let _ = shutdown_tx.send(());
+            (task_count_before_shutdown, shutdown_started_at)
+        };
+        let (housekeeping_report, (task_count_before_shutdown, shutdown_started_at)) =
+            tokio::join!(housekeeping, shutdown_trigger);
         let shutdown_elapsed_us = shutdown_started_at.elapsed().as_micros();
-        let housekeeping_report = report_rx.await.ok();
-        let schedule_snapshot = housekeeping_report
-            .as_ref()
-            .map(|report| report.schedule_snapshot.as_slice())
-            .unwrap_or_default();
+        let report = housekeeping_report.shutdown_report.clone();
+        let schedule_snapshot = housekeeping_report.schedule_snapshot.as_slice();
         let scheduled_runs = schedule_snapshot.iter().map(|snapshot| snapshot.runs).sum();
         let scheduled_skips = schedule_snapshot.iter().map(|snapshot| snapshot.skips).sum();
         let scheduled_overlaps = schedule_snapshot.iter().map(|snapshot| snapshot.overlaps).sum();
         let scheduled_failures = schedule_snapshot.iter().map(|snapshot| snapshot.failures).sum();
-        let housekeeping_shutdown_report = housekeeping_report
-            .as_ref()
-            .map(|report| report.shutdown_report.clone());
+        let housekeeping_shutdown_report = Some(housekeeping_report.shutdown_report);
         let task_count_after_shutdown = task_group.task_count();
         let finished_tasks = report.completed + report.cancelled;
         let housekeeping_healthy = housekeeping_shutdown_report
@@ -273,7 +256,7 @@ pub mod bench_support {
         let healthy = report.is_healthy()
             && task_count_before_shutdown == 1
             && task_count_after_shutdown == 0
-            && finished_tasks == 1
+            && finished_tasks >= task_count_before_shutdown
             && scheduled_overlaps == 0
             && scheduled_failures == 0
             && housekeeping_healthy;
