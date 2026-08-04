@@ -254,14 +254,22 @@ class FaultMatrixGuardTests(unittest.TestCase):
             self.assertIn(marker, result.stderr)
             runner.write_text(source, encoding="utf-8")
 
-    def test_runner_that_drops_idempotent_disk_pressure_cleanup_is_rejected(self) -> None:
+    def test_runner_that_drops_stable_disk_pressure_evidence_is_rejected(self) -> None:
         runner = self.root / "scripts" / "kind-architecture-refactor-e2e.ps1"
         source = runner.read_text(encoding="utf-8")
-        marker = "$taintCleanup.ExitCode -eq 0 -or $taintCleanup.Output -match 'not found'"
-        self.assertIn(marker, source)
-        runner.write_text(source.replace(marker, "$taintCleanup.ExitCode -eq 0", 1), encoding="utf-8")
-        result = self.run_guard("--policy-only", expect_success=False)
-        self.assertIn(marker, result.stderr)
+        markers = (
+            "rocketmq.apache.org/simulated-disk-pressure",
+            "$pressureStatusDuring -match 'rocketmq.apache.org/simulated-disk-pressure'",
+            "$taintCleanup.ExitCode -eq 0 -or $taintCleanup.Output -match 'not found'",
+            "$simulationTaintCleanup.ExitCode -eq 0 -or $simulationTaintCleanup.Output -match 'not found'",
+        )
+        for marker in markers:
+            with self.subTest(marker=marker):
+                self.assertIn(marker, source)
+                runner.write_text(source.replace(marker, "disk pressure evidence removed"), encoding="utf-8")
+                result = self.run_guard("--policy-only", expect_success=False)
+                self.assertIn(marker, result.stderr)
+                runner.write_text(source, encoding="utf-8")
 
     def test_runner_that_uses_nonexistent_component_labels_is_rejected(self) -> None:
         runner = self.root / "scripts" / "kind-architecture-refactor-e2e.ps1"

@@ -1089,6 +1089,17 @@ spec: { selector: { app.kubernetes.io/name: otel-collector }, ports: [{ name: ot
     $pressureProxyUid = $pressureProxyPod.metadata.uid
     $proxyUidsBeforePressure = @($proxyPodsBeforePressure | ForEach-Object { $_.metadata.uid })
     $taint = Invoke-Native kubectl @('taint', 'node', $pressureNode, 'node.kubernetes.io/disk-pressure=true:NoSchedule', '--overwrite')
+    $simulationTaint = Invoke-Native kubectl @(
+        'taint',
+        'node',
+        $pressureNode,
+        'rocketmq.apache.org/simulated-disk-pressure=true:NoSchedule',
+        '--overwrite'
+    )
+    $pressureStatusDuring = (Invoke-Native kubectl @('get', 'node', $pressureNode, '-o', 'json')).Output
+    Assert-True (
+        $pressureStatusDuring -match 'rocketmq.apache.org/simulated-disk-pressure'
+    ) 'stable disk-pressure simulation taint must be observable before deleting the Proxy pod'
     Invoke-Native kubectl @('-n', $Namespace, 'delete', 'pod', $pressureProxyPod.metadata.name, '--wait=false') | Out-Null
     Wait-Workloads
     $proxyPodsAfterPressure = ((Invoke-Native kubectl @('-n', $Namespace, 'get', 'pods', '-l', 'rocketmq.apache.org/service=proxy', '-o', 'json')).Output | ConvertFrom-Json).items
@@ -1111,17 +1122,26 @@ spec: { selector: { app.kubernetes.io/name: otel-collector }, ports: [{ name: ot
     Assert-True (
         $taintCleanup.ExitCode -eq 0 -or $taintCleanup.Output -match 'not found'
     ) 'disk-pressure taint cleanup must either remove the taint or observe that kubelet already removed it'
+    $simulationTaintCleanup = Invoke-Native kubectl @(
+        'taint',
+        'node',
+        $pressureNode,
+        'rocketmq.apache.org/simulated-disk-pressure:NoSchedule-'
+    ) -AllowFailure
+    Assert-True (
+        $simulationTaintCleanup.ExitCode -eq 0 -or $simulationTaintCleanup.Output -match 'not found'
+    ) 'simulated disk-pressure taint cleanup must be idempotent'
     $pressureStatus = (Invoke-Native kubectl @('get', 'node', $pressureNode, '-o', 'json')).Output
     Complete-Scenario 'disk_pressure' ([ordered]@{
-        disk_pressure_taint_observed = $taint.Output -match 'tainted'
+        disk_pressure_taint_observed = $taint.ExitCode -eq 0 -and $simulationTaint.ExitCode -eq 0 -and $pressureStatusDuring -match 'rocketmq.apache.org/simulated-disk-pressure'
         stateless_pod_rescheduled = $null -ne $replacementProxyPod
-        acknowledged_message_visible = $true; pvc_uid_set_preserved = $InitialPvcUids -eq (Get-PvcUidSet); taint_removed = $pressureStatus -notmatch 'node.kubernetes.io/disk-pressure'
+        acknowledged_message_visible = $true; pvc_uid_set_preserved = $InitialPvcUids -eq (Get-PvcUidSet); taint_removed = $pressureStatus -notmatch 'node.kubernetes.io/disk-pressure' -and $pressureStatus -notmatch 'rocketmq.apache.org/simulated-disk-pressure'
     }) ([ordered]@{
-        taint_status = $taint.Output
+        taint_status = "$($taint.Output)`n$($simulationTaint.Output)`n$pressureStatusDuring"
         pod_reschedule = "deletedUid=$pressureProxyUid replacementUid=$($replacementProxyPod.metadata.uid)`n$podPlacement"
         message_after = $afterPressure.Output
         pvc_uids = Get-PvcUidSet
-        node_status = "$($taintCleanup.Output)`n$pressureStatus"
+        node_status = "$($taintCleanup.Output)`n$($simulationTaintCleanup.Output)`n$pressureStatus"
     })
 
     $diskBefore = Invoke-BrokerShell 'df -Pk /var/lib/rocketmq'
@@ -1501,6 +1521,7 @@ echo "active=$active attempts=$attempt"
         foreach ($node in @($cleanupNodes)) {
             Invoke-Native kubectl @('uncordon', $node.metadata.name) -AllowFailure | Out-Null
             Invoke-Native kubectl @('taint', 'node', $node.metadata.name, 'node.kubernetes.io/disk-pressure:NoSchedule-') -AllowFailure | Out-Null
+            Invoke-Native kubectl @('taint', 'node', $node.metadata.name, 'rocketmq.apache.org/simulated-disk-pressure:NoSchedule-') -AllowFailure | Out-Null
             Clear-NodeNetworkImpairment $node.metadata.name | Out-Null
         }
         Invoke-Native kubectl @(
