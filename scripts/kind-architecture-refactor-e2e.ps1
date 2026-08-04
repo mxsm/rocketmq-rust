@@ -331,12 +331,25 @@ spec:
     [IO.File]::WriteAllText($manifestPath, $manifest, [Text.UTF8Encoding]::new($false))
     try {
         Invoke-Native kubectl @('apply', '-f', $manifestPath) | Out-Null
-        $wait = Invoke-Native kubectl @('-n', $Namespace, 'wait', "job/$job", '--for=condition=complete', '--timeout=120s') -AllowFailure
+        $deadline = [DateTimeOffset]::UtcNow.AddSeconds(120)
+        $completed = $false
+        $failed = $false
+        do {
+            $jobStatus = ((Invoke-Native kubectl @('-n', $Namespace, 'get', 'job', $job, '-o', 'json')).Output | ConvertFrom-Json).status
+            $completed = @($jobStatus.conditions | Where-Object { $_.type -eq 'Complete' -and $_.status -eq 'True' }).Count -eq 1
+            $failed = [int]($jobStatus.failed ?? 0) -gt 0 -or
+                @($jobStatus.conditions | Where-Object { $_.type -eq 'Failed' -and $_.status -eq 'True' }).Count -eq 1
+            if (-not $completed -and -not $failed) {
+                Start-Sleep -Seconds 1
+            }
+        } while (-not $completed -and -not $failed -and [DateTimeOffset]::UtcNow -lt $deadline)
         $logs = (Invoke-Native kubectl @('-n', $Namespace, 'logs', "job/$job") -AllowFailure).Output
-        if ($wait.ExitCode -ne 0 -and -not $AllowFailure) {
-            throw "fault driver failed: $($wait.Output)`n$logs"
+        $exitCode = if ($completed) { 0 } elseif ($failed) { 1 } else { 124 }
+        if ($exitCode -ne 0 -and -not $AllowFailure) {
+            $condition = if ($failed) { 'failed' } else { 'timed out' }
+            throw "fault driver $condition`n$logs"
         }
-        [pscustomobject]@{ ExitCode = $wait.ExitCode; Output = $logs }
+        [pscustomobject]@{ ExitCode = $exitCode; Output = $logs }
     } finally {
         Invoke-Native kubectl @('-n', $Namespace, 'delete', 'job', $job, '--ignore-not-found=true', '--wait=false') -AllowFailure | Out-Null
         Remove-Item -LiteralPath $manifestPath -Force -ErrorAction SilentlyContinue
@@ -349,6 +362,30 @@ function Send-AcknowledgedMessage {
     $id = ($lines[-1] -split '\s+')[-1]
     Assert-True ($id -match '^[0-9A-Za-z_-]{8,}$') 'send acknowledgement must contain a message ID'
     [pscustomobject]@{ Id = $id; Output = $result.Output }
+}
+
+function Wait-ReadyWorkerPod {
+    param(
+        [Parameter(Mandatory)][string]$Selector,
+        [Parameter(Mandatory)][string[]]$WorkerNames,
+        [int]$TimeoutSeconds = 60
+    )
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSeconds)
+    do {
+        $pods = ((Invoke-Native kubectl @('-n', $Namespace, 'get', 'pods', '-l', $Selector, '-o', 'json')).Output | ConvertFrom-Json).items
+        $readyPod = $pods |
+            Where-Object {
+                $WorkerNames -contains $_.spec.nodeName -and
+                $null -eq $_.metadata.deletionTimestamp -and
+                @($_.status.conditions | Where-Object { $_.type -eq 'Ready' -and $_.status -eq 'True' }).Count -eq 1
+            } |
+            Select-Object -First 1
+        if ($null -ne $readyPod) {
+            return $readyPod
+        }
+        Start-Sleep -Seconds 1
+    } while ([DateTimeOffset]::UtcNow -lt $deadline)
+    return $null
 }
 
 function Get-UniformImageRevision {
@@ -371,23 +408,38 @@ function Get-UniformImageRevision {
 
 function Initialize-SyntheticTopic {
     Assert-True ($Topic -eq 'ArchitectureRefactorFaultMatrix') 'fault matrix may create only its fixed synthetic topic'
-    Invoke-FaultDriver -SecretName 'rocketmq-fault-driver-baseline' -Arguments @(
-        'topic',
-        'updateTopic',
-        '-c',
-        'RocketmqRust',
-        '-t',
-        $Topic,
-        '-r',
-        '1',
-        '-w',
-        '1',
-        '-p',
-        '6',
-        '-n',
-        $NamesrvAddress
-    ) | Out-Null
-    $route = Invoke-RouteProbe
+    $clusterDeadline = [DateTimeOffset]::UtcNow.AddSeconds(120)
+    do {
+        $topicUpdate = Invoke-FaultDriver -SecretName 'rocketmq-fault-driver-baseline' -Arguments @(
+            'topic',
+            'updateTopic',
+            '-c',
+            'RocketmqRust',
+            '-t',
+            $Topic,
+            '-r',
+            '1',
+            '-w',
+            '1',
+            '-p',
+            '6',
+            '-n',
+            $NamesrvAddress
+        ) -AllowFailure
+        if ($topicUpdate.ExitCode -ne 0) {
+            Assert-True ($topicUpdate.Output -match 'CLUSTER_NOT_FOUND') 'synthetic topic initialization failed unexpectedly'
+            Start-Sleep -Seconds 2
+        }
+    } while ($topicUpdate.ExitCode -ne 0 -and [DateTimeOffset]::UtcNow -lt $clusterDeadline)
+    Assert-True ($topicUpdate.ExitCode -eq 0) 'broker cluster registration was not observed before the synthetic topic deadline'
+
+    $routeDeadline = [DateTimeOffset]::UtcNow.AddSeconds(60)
+    do {
+        $route = Invoke-RouteProbe -AllowFailure
+        if ($route.ExitCode -ne 0) {
+            Start-Sleep -Seconds 1
+        }
+    } while ($route.ExitCode -ne 0 -and [DateTimeOffset]::UtcNow -lt $routeDeadline)
     Assert-True ($route.ExitCode -eq 0) 'fixed synthetic topic route must be queryable before message probes'
 }
 
@@ -723,9 +775,9 @@ kind: Deployment
 metadata: { name: otel-collector, namespace: observability }
 spec:
   replicas: 1
-  selector: { matchLabels: { app: otel-collector } }
+  selector: { matchLabels: { app.kubernetes.io/name: otel-collector } }
   template:
-    metadata: { labels: { app: otel-collector } }
+    metadata: { labels: { app.kubernetes.io/name: otel-collector } }
     spec:
       containers:
         - name: collector
@@ -739,7 +791,7 @@ spec:
 apiVersion: v1
 kind: Service
 metadata: { name: otel-collector, namespace: observability }
-spec: { selector: { app: otel-collector }, ports: [{ name: otlp, port: 4317, targetPort: otlp }] }
+spec: { selector: { app.kubernetes.io/name: otel-collector }, ports: [{ name: otlp, port: 4317, targetPort: otlp }] }
 "@
     $collectorPath = Join-Path $RunDirectory 'collector.yaml'
     [IO.File]::WriteAllText($collectorPath, $collectorManifest, [Text.UTF8Encoding]::new($false))
@@ -791,21 +843,15 @@ spec: { selector: { app: otel-collector }, ports: [{ name: otlp, port: 4317, tar
         rollback_status = $afterRollback.Output; pvc_uids = $pvcAfterUpgrade
     })
 
-    $proxyPodsBeforeEviction = ((Invoke-Native kubectl @('-n', $Namespace, 'get', 'pods', '-l', 'app.kubernetes.io/component=proxy', '-o', 'json')).Output | ConvertFrom-Json).items
-    $evictionProxyPod = $proxyPodsBeforeEviction |
-        Where-Object {
-            $workerNames -contains $_.spec.nodeName -and
-            $null -eq $_.metadata.deletionTimestamp -and
-            @($_.status.conditions | Where-Object { $_.type -eq 'Ready' -and $_.status -eq 'True' }).Count -eq 1
-        } |
-        Select-Object -First 1
+    $evictionProxyPod = Wait-ReadyWorkerPod -Selector 'rocketmq.apache.org/service=proxy' -WorkerNames $workerNames
     Assert-True ($null -ne $evictionProxyPod) 'a ready Proxy pod must exist before node eviction'
+    $proxyPodsBeforeEviction = ((Invoke-Native kubectl @('-n', $Namespace, 'get', 'pods', '-l', 'rocketmq.apache.org/service=proxy', '-o', 'json')).Output | ConvertFrom-Json).items
     $evictionNode = $evictionProxyPod.spec.nodeName
     $evictionProxyUid = $evictionProxyPod.metadata.uid
     $proxyUidsBeforeEviction = @($proxyPodsBeforeEviction | ForEach-Object { $_.metadata.uid })
-    $drain = Invoke-Native kubectl @('drain', $evictionNode, '--pod-selector=app.kubernetes.io/component=proxy', '--ignore-daemonsets', '--delete-emptydir-data', '--timeout=180s')
+    $drain = Invoke-Native kubectl @('drain', $evictionNode, '--pod-selector=rocketmq.apache.org/service=proxy', '--ignore-daemonsets', '--delete-emptydir-data', '--timeout=180s')
     Wait-Workloads
-    $proxyPodsAfterEviction = ((Invoke-Native kubectl @('-n', $Namespace, 'get', 'pods', '-l', 'app.kubernetes.io/component=proxy', '-o', 'json')).Output | ConvertFrom-Json).items
+    $proxyPodsAfterEviction = ((Invoke-Native kubectl @('-n', $Namespace, 'get', 'pods', '-l', 'rocketmq.apache.org/service=proxy', '-o', 'json')).Output | ConvertFrom-Json).items
     $evictionReplacementProxyPod = $proxyPodsAfterEviction |
         Where-Object {
             $proxyUidsBeforeEviction -notcontains $_.metadata.uid -and
@@ -905,22 +951,16 @@ spec: { selector: { app: otel-collector }, ports: [{ name: otlp, port: 4317, tar
         collector_recovered = $collectorRecovery.ExitCode -eq 0; slo_budget_satisfied = $outageStart.Elapsed.TotalSeconds -lt 30
     }) ([ordered]@{ collector_scale = $collectorDown.Output; message_during_outage = $duringOutage.Output; telemetry_metrics = $telemetryLogs; collector_recovery = $collectorRecovery.Output; slo_report = "message query seconds=$($outageStart.Elapsed.TotalSeconds) budget=30" })
 
-    $proxyPodsBeforePressure = ((Invoke-Native kubectl @('-n', $Namespace, 'get', 'pods', '-l', 'app.kubernetes.io/component=proxy', '-o', 'json')).Output | ConvertFrom-Json).items
-    $pressureProxyPod = $proxyPodsBeforePressure |
-        Where-Object {
-            $workerNames -contains $_.spec.nodeName -and
-            $null -eq $_.metadata.deletionTimestamp -and
-            @($_.status.conditions | Where-Object { $_.type -eq 'Ready' -and $_.status -eq 'True' }).Count -eq 1
-        } |
-        Select-Object -First 1
+    $pressureProxyPod = Wait-ReadyWorkerPod -Selector 'rocketmq.apache.org/service=proxy' -WorkerNames $workerNames
     Assert-True ($null -ne $pressureProxyPod) 'a ready Proxy pod must exist before disk-pressure injection'
+    $proxyPodsBeforePressure = ((Invoke-Native kubectl @('-n', $Namespace, 'get', 'pods', '-l', 'rocketmq.apache.org/service=proxy', '-o', 'json')).Output | ConvertFrom-Json).items
     $pressureNode = $pressureProxyPod.spec.nodeName
     $pressureProxyUid = $pressureProxyPod.metadata.uid
     $proxyUidsBeforePressure = @($proxyPodsBeforePressure | ForEach-Object { $_.metadata.uid })
     $taint = Invoke-Native kubectl @('taint', 'node', $pressureNode, 'node.kubernetes.io/disk-pressure=true:NoSchedule', '--overwrite')
     Invoke-Native kubectl @('-n', $Namespace, 'delete', 'pod', $pressureProxyPod.metadata.name, '--wait=false') | Out-Null
     Wait-Workloads
-    $proxyPodsAfterPressure = ((Invoke-Native kubectl @('-n', $Namespace, 'get', 'pods', '-l', 'app.kubernetes.io/component=proxy', '-o', 'json')).Output | ConvertFrom-Json).items
+    $proxyPodsAfterPressure = ((Invoke-Native kubectl @('-n', $Namespace, 'get', 'pods', '-l', 'rocketmq.apache.org/service=proxy', '-o', 'json')).Output | ConvertFrom-Json).items
     $replacementProxyPod = $proxyPodsAfterPressure |
         Where-Object {
             $proxyUidsBeforePressure -notcontains $_.metadata.uid -and
@@ -929,7 +969,7 @@ spec: { selector: { app: otel-collector }, ports: [{ name: otlp, port: 4317, tar
             @($_.status.conditions | Where-Object { $_.type -eq 'Ready' -and $_.status -eq 'True' }).Count -eq 1
         } |
         Select-Object -First 1
-    $podPlacement = (Invoke-Native kubectl @('-n', $Namespace, 'get', 'pods', '-l', 'app.kubernetes.io/component=proxy', '-o', 'wide')).Output
+    $podPlacement = (Invoke-Native kubectl @('-n', $Namespace, 'get', 'pods', '-l', 'rocketmq.apache.org/service=proxy', '-o', 'wide')).Output
     $afterPressure = Query-AcknowledgedMessage $ack.Id
     Invoke-Native kubectl @('taint', 'node', $pressureNode, 'node.kubernetes.io/disk-pressure:NoSchedule-') | Out-Null
     $pressureStatus = (Invoke-Native kubectl @('get', 'node', $pressureNode, '-o', 'json')).Output

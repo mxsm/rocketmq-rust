@@ -266,7 +266,7 @@ def validate_sources(guard: Guard) -> None:
         "node.kubernetes.io/disk-pressure",
         "queryMsgByUniqueKey",
         "fault matrix may create only its fixed synthetic topic",
-        "'topic',\n        'updateTopic'",
+        "'updateTopic'",
         "'RocketmqRust'",
         "queue_offset_preserved",
         "commitlog_offset_preserved",
@@ -301,6 +301,10 @@ def validate_sources(guard: Guard) -> None:
         "Invoke-Native kind @('load', 'image-archive', $archivePath, '--name', $ClusterName)",
         "'images', 'tag', $cacheReference, $targetReference",
         "Invoke-Native k3d (@('image', 'import') + $clusterImages",
+        "selector: { matchLabels: { app.kubernetes.io/name: otel-collector } }",
+        "$jobStatus.failed ?? 0",
+        "broker cluster registration was not observed before the synthetic topic deadline",
+        "Wait-ReadyWorkerPod -Selector 'rocketmq.apache.org/service=proxy'",
     ):
         guard.require(marker in runner, f"fault runner contract marker missing: {marker}")
     guard.require("Mode -eq \"Validate\"" in runner, "runner must provide a non-dynamic Validate mode")

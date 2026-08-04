@@ -204,6 +204,45 @@ class FaultMatrixGuardTests(unittest.TestCase):
         result = self.run_guard("--policy-only", expect_success=False)
         self.assertIn("Set-NodeNetworkImpairment", result.stderr)
 
+    def test_runner_that_mislabels_the_otel_collector_is_rejected(self) -> None:
+        runner = self.root / "scripts" / "kind-architecture-refactor-e2e.ps1"
+        source = runner.read_text(encoding="utf-8")
+        marker = "selector: { matchLabels: { app.kubernetes.io/name: otel-collector } }"
+        self.assertIn(marker, source)
+        runner.write_text(
+            source.replace(marker, "selector: { matchLabels: { app: otel-collector } }", 1),
+            encoding="utf-8",
+        )
+        result = self.run_guard("--policy-only", expect_success=False)
+        self.assertIn("app.kubernetes.io/name: otel-collector", result.stderr)
+
+    def test_runner_that_drops_fault_job_failure_detection_is_rejected(self) -> None:
+        runner = self.root / "scripts" / "kind-architecture-refactor-e2e.ps1"
+        source = runner.read_text(encoding="utf-8")
+        marker = "$jobStatus.failed ?? 0"
+        self.assertIn(marker, source)
+        runner.write_text(source.replace(marker, "$jobStatus.succeeded ?? 0", 1), encoding="utf-8")
+        result = self.run_guard("--policy-only", expect_success=False)
+        self.assertIn("$jobStatus.failed ?? 0", result.stderr)
+
+    def test_runner_that_drops_broker_registration_wait_is_rejected(self) -> None:
+        runner = self.root / "scripts" / "kind-architecture-refactor-e2e.ps1"
+        source = runner.read_text(encoding="utf-8")
+        marker = "broker cluster registration was not observed before the synthetic topic deadline"
+        self.assertIn(marker, source)
+        runner.write_text(source.replace(marker, "cluster readiness unchecked", 1), encoding="utf-8")
+        result = self.run_guard("--policy-only", expect_success=False)
+        self.assertIn("broker cluster registration", result.stderr)
+
+    def test_runner_that_drops_ready_proxy_wait_is_rejected(self) -> None:
+        runner = self.root / "scripts" / "kind-architecture-refactor-e2e.ps1"
+        source = runner.read_text(encoding="utf-8")
+        marker = "Wait-ReadyWorkerPod -Selector 'rocketmq.apache.org/service=proxy'"
+        self.assertIn(marker, source)
+        runner.write_text(source.replace(marker, "Get-UncheckedProxyPod"), encoding="utf-8")
+        result = self.run_guard("--policy-only", expect_success=False)
+        self.assertIn("Wait-ReadyWorkerPod", result.stderr)
+
     def test_dynamic_input_and_registry_regressions_are_rejected(self) -> None:
         workflow = self.root / ".github" / "workflows" / "kubernetes-fault-matrix.yml"
         source = workflow.read_text(encoding="utf-8")
