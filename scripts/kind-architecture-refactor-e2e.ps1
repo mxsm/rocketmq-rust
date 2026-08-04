@@ -273,9 +273,13 @@ function Get-ControllerMetadata {
 
 function Get-ControllerLeaderOrdinal {
     param([Parameter(Mandatory)][object]$Metadata)
-    $match = [regex]::Match($Metadata.Output, 'rocketmq-controller-(\d+)')
-    Assert-True $match.Success 'Controller metadata must identify leader ordinal'
-    [int]$match.Groups[1].Value
+    $leaderIdMatch = [regex]::Match($Metadata.Output, '(?m)^ControllerLeaderId\s+([1-3])\s*$')
+    if ($leaderIdMatch.Success) {
+        return [int]$leaderIdMatch.Groups[1].Value - 1
+    }
+    $addressMatch = [regex]::Match($Metadata.Output, 'rocketmq-controller-(\d+)')
+    Assert-True $addressMatch.Success 'Controller metadata must identify leader ordinal'
+    [int]$addressMatch.Groups[1].Value
 }
 
 function Invoke-FaultDriver {
@@ -489,9 +493,10 @@ function Set-StatefulSetReplicas {
 }
 
 function Get-ControllerLeadershipSnapshot {
+    param([int[]]$Ordinals = @(0, 1, 2))
     $records = [System.Collections.Generic.List[string]]::new()
     $leaders = [System.Collections.Generic.List[int]]::new()
-    foreach ($ordinal in 0..2) {
+    foreach ($ordinal in $Ordinals) {
         $address = "rocketmq-controller-$ordinal.rocketmq-controller-headless.$Namespace.svc.cluster.local:60109"
         try {
             $metadata = Invoke-FaultDriver -SecretName 'rocketmq-fault-driver-baseline' -Arguments @(
@@ -515,15 +520,23 @@ function Get-ControllerLeadershipSnapshot {
 }
 
 function Wait-ControllerLeadershipStable {
-    param([ValidateRange(1, 600)][int]$TimeoutSeconds = 120)
+    param(
+        [ValidateRange(1, 600)][int]$TimeoutSeconds = 120,
+        [int[]]$Ordinals = @(0, 1, 2)
+    )
     $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSeconds)
     $previousLeader = $null
     $consecutiveStableSnapshots = 0
     $lastSnapshot = $null
     do {
-        $lastSnapshot = Get-ControllerLeadershipSnapshot
-        if ($lastSnapshot.Responders -eq 3 -and $lastSnapshot.Leaders.Count -eq 1) {
-            $leader = [int]$lastSnapshot.Leaders[0]
+        $lastSnapshot = Get-ControllerLeadershipSnapshot -Ordinals $Ordinals
+        $observedLeader = if ($lastSnapshot.Leaders.Count -eq 1) { [int]$lastSnapshot.Leaders[0] } else { -1 }
+        if (
+            $lastSnapshot.Responders -eq $Ordinals.Count -and
+            $lastSnapshot.Leaders.Count -eq 1 -and
+            $Ordinals -contains $observedLeader
+        ) {
+            $leader = $observedLeader
             if ($null -ne $previousLeader -and $leader -eq $previousLeader) {
                 $consecutiveStableSnapshots++
             } else {
@@ -541,6 +554,28 @@ function Wait-ControllerLeadershipStable {
     } while ([DateTimeOffset]::UtcNow -lt $deadline)
     $details = if ($null -eq $lastSnapshot) { 'no leadership snapshot was collected' } else { $lastSnapshot.Output }
     throw "Controller leadership did not stabilize before the deadline`n$details"
+}
+
+function Wait-ControllerPodRecreatedAndReady {
+    param(
+        [Parameter(Mandatory)][ValidateRange(0, 2)][int]$Ordinal,
+        [Parameter(Mandatory)][string]$PreviousUid,
+        [ValidateRange(1, 600)][int]$TimeoutSeconds = 180
+    )
+    $pod = "rocketmq-controller-$Ordinal"
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSeconds)
+    do {
+        $result = Invoke-Native kubectl @('-n', $Namespace, 'get', 'pod', $pod, '-o', 'json') -AllowFailure
+        if ($result.ExitCode -eq 0) {
+            $state = $result.Output | ConvertFrom-Json
+            $ready = @($state.status.conditions | Where-Object { $_.type -eq 'Ready' -and $_.status -eq 'True' }).Count -eq 1
+            if ($state.metadata.uid -ne $PreviousUid -and $ready) {
+                return $state
+            }
+        }
+        Start-Sleep -Seconds 2
+    } while ([DateTimeOffset]::UtcNow -lt $deadline)
+    throw "$pod was not recreated and Ready before the deadline"
 }
 
 function Invoke-ModelTest {
@@ -633,11 +668,14 @@ function Set-ServiceImages {
         Remove-Item -LiteralPath $patchPath -Force
         Invoke-Native kubectl @('-n', $Namespace, 'rollout', 'status', "statefulset/rocketmq-$service", '--timeout=300s') | Out-Null
     }
+    $leadershipBeforeControllerRollout = Wait-ControllerLeadershipStable
+    $controllerLeaderOrdinal = [int]$leadershipBeforeControllerRollout.Leaders[0]
     $controllerPatchPath = Join-Path $RunDirectory "controller-$ReleaseNonce-patch.json"
     $controllerPatch = [ordered]@{
         spec = [ordered]@{
             updateStrategy = [ordered]@{
-                rollingUpdate = [ordered]@{ partition = 2 }
+                '$patch' = 'replace'
+                type = 'OnDelete'
             }
             template = [ordered]@{
                 metadata = [ordered]@{
@@ -662,20 +700,38 @@ function Set-ServiceImages {
     [IO.File]::WriteAllText($controllerPatchPath, $controllerPatch, [Text.UTF8Encoding]::new($false))
     Invoke-Native kubectl @('-n', $Namespace, 'patch', 'statefulset/rocketmq-controller', '--type=strategic', '--patch-file', $controllerPatchPath) | Out-Null
     Remove-Item -LiteralPath $controllerPatchPath -Force
-    foreach ($partition in 2, 1, 0) {
-        if ($partition -ne 2) {
-            $partitionPatch = [ordered]@{
-                spec = [ordered]@{
-                    updateStrategy = [ordered]@{
-                        rollingUpdate = [ordered]@{ partition = $partition }
-                    }
-                }
-            } | ConvertTo-Json -Depth 6 -Compress
-            Invoke-Native kubectl @('-n', $Namespace, 'patch', 'statefulset/rocketmq-controller', '--type=merge', '--patch', $partitionPatch) | Out-Null
-        }
-        Invoke-Native kubectl @('-n', $Namespace, 'rollout', 'status', 'statefulset/rocketmq-controller', '--timeout=300s') | Out-Null
+    $followerOrdinals = @(@(0, 1, 2) | Where-Object { $_ -ne $controllerLeaderOrdinal })
+    foreach ($ordinal in $followerOrdinals) {
+        $pod = "rocketmq-controller-$ordinal"
+        $previous = (Invoke-Native kubectl @('-n', $Namespace, 'get', 'pod', $pod, '-o', 'json')).Output | ConvertFrom-Json
+        Invoke-Native kubectl @('-n', $Namespace, 'delete', 'pod', $pod, '--wait=true', '--timeout=120s') | Out-Null
+        $null = Wait-ControllerPodRecreatedAndReady -Ordinal $ordinal -PreviousUid $previous.metadata.uid
         $null = Wait-ControllerLeadershipStable
     }
+    $leaderPod = "rocketmq-controller-$controllerLeaderOrdinal"
+    $leaderState = (Invoke-Native kubectl @('-n', $Namespace, 'get', 'pod', $leaderPod, '-o', 'json')).Output | ConvertFrom-Json
+    $leaderNode = $leaderState.spec.nodeName
+    $survivingOrdinals = @(@(0, 1, 2) | Where-Object { $_ -ne $controllerLeaderOrdinal })
+    Invoke-Native kubectl @('cordon', $leaderNode) | Out-Null
+    try {
+        Invoke-Native kubectl @('-n', $Namespace, 'delete', 'pod', $leaderPod, '--wait=true', '--timeout=120s') | Out-Null
+        $null = Wait-ControllerLeadershipStable -Ordinals $survivingOrdinals
+    } finally {
+        Invoke-Native kubectl @('uncordon', $leaderNode) -AllowFailure | Out-Null
+    }
+    $null = Wait-ControllerPodRecreatedAndReady -Ordinal $controllerLeaderOrdinal -PreviousUid $leaderState.metadata.uid
+    $null = Wait-ControllerLeadershipStable
+    $rollingUpdatePatch = [ordered]@{
+        spec = [ordered]@{
+            updateStrategy = [ordered]@{
+                '$patch' = 'replace'
+                type = 'RollingUpdate'
+                rollingUpdate = [ordered]@{ partition = 0 }
+            }
+        }
+    } | ConvertTo-Json -Depth 6 -Compress
+    Invoke-Native kubectl @('-n', $Namespace, 'patch', 'statefulset/rocketmq-controller', '--type=strategic', '--patch', $rollingUpdatePatch) | Out-Null
+    Invoke-Native kubectl @('-n', $Namespace, 'rollout', 'status', 'statefulset/rocketmq-controller', '--timeout=300s') | Out-Null
     foreach ($service in @('proxy', 'mcp')) {
         $patchPath = Join-Path $RunDirectory "$service-$ReleaseNonce-patch.json"
         $patch = [ordered]@{

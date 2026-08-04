@@ -263,12 +263,14 @@ class FaultMatrixGuardTests(unittest.TestCase):
         result = self.run_guard("--policy-only", expect_success=False)
         self.assertIn(marker, result.stderr)
 
-    def test_runner_that_drops_partitioned_controller_rollout_is_rejected(self) -> None:
+    def test_runner_that_drops_leader_aware_controller_rollout_is_rejected(self) -> None:
         runner = self.root / "scripts" / "kind-architecture-refactor-e2e.ps1"
         source = runner.read_text(encoding="utf-8")
         markers = (
-            "rollingUpdate = [ordered]@{ partition = 2 }",
-            "$null = Wait-ControllerLeadershipStable",
+            "type = 'OnDelete'",
+            "ControllerLeaderId\\s+([1-3])",
+            "Invoke-Native kubectl @('cordon', $leaderNode)",
+            "$null = Wait-ControllerLeadershipStable -Ordinals $survivingOrdinals",
         )
         for marker in markers:
             self.assertIn(marker, source)
