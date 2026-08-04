@@ -102,9 +102,7 @@ use support::audit;
 use support::cleanup_schema;
 use support::isolated_pool;
 use support::seed_fixture;
-use support::seed_logger_fixture;
-use support::seed_proxy_restart_fixture;
-use support::seed_telemetry_collector_restart_fixture;
+use support::seed_fixture_for_action;
 use support::step_intent;
 
 type TestFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, ExecutorError>> + Send + 'a>>;
@@ -931,6 +929,111 @@ async fn all_r1_actions_persist_recovery_qualification_matrix() {
     fs::write(path, bytes).expect("write R1 recovery qualification fragment");
 }
 
+#[derive(Serialize)]
+struct R2RecoveryOutcome {
+    id: String,
+    recovery_mode: &'static str,
+    verified_success: &'static str,
+    verification_failure: &'static str,
+    rollback_failure: &'static str,
+    compensation_intents: i64,
+    active_quarantines: i64,
+}
+
+#[derive(Serialize)]
+struct R2RecoveryFragment {
+    schema_version: &'static str,
+    model_provider_network_calls: u8,
+    actions: Vec<R2RecoveryOutcome>,
+}
+
+#[tokio::test]
+#[ignore = "requires ROCKETMQ_SRE_TEST_DATABASE_URL and an explicit machine-local report path"]
+async fn all_r2_actions_persist_recovery_qualification_matrix() {
+    let Ok(fragment_path) = std::env::var("ROCKETMQ_SRE_R2_RECOVERY_FRAGMENT") else {
+        return;
+    };
+    let actions = [
+        ExecutionAction::BrokerConfigPatchAllowlisted,
+        ExecutionAction::TopicConfigPatchAllowlisted,
+        ExecutionAction::SubscriptionGroupPatchAllowlisted,
+        ExecutionAction::ProxyRolloutImageCanary,
+        ExecutionAction::SecurityCredentialRotateOverlap,
+    ];
+    let mut outcomes = Vec::with_capacity(actions.len());
+    for action in actions {
+        let success = run_execution_for_action(&r2_success_signals(action), false, action).await;
+        assert_eq!(success.state, ExecutionState::Succeeded, "{} success case", action.id());
+        assert_eq!(success.dispatches, vec![false], "{} success dispatches", action.id());
+        assert_eq!(success.active_locks, 0, "{} success lock cleanup", action.id());
+
+        let rollback = run_execution_for_action(&r2_rollback_signals(action, true), false, action).await;
+        assert_eq!(
+            rollback.state,
+            ExecutionState::RolledBack,
+            "{} verification-failure case",
+            action.id()
+        );
+        assert_eq!(
+            rollback.dispatches,
+            vec![false, true],
+            "{} compensation dispatches",
+            action.id()
+        );
+        assert_eq!(rollback.compensation_intents, 1, "{} compensation intent", action.id());
+        assert_eq!(rollback.active_locks, 0, "{} rollback lock cleanup", action.id());
+
+        let quarantine = run_execution_for_action(&r2_rollback_signals(action, false), false, action).await;
+        assert_eq!(
+            quarantine.state,
+            ExecutionState::Escalated,
+            "{} rollback-failure case",
+            action.id()
+        );
+        assert_eq!(
+            quarantine.dispatches,
+            vec![false, true],
+            "{} failed compensation dispatches",
+            action.id()
+        );
+        assert_eq!(
+            quarantine.compensation_intents,
+            1,
+            "{} failed compensation intent",
+            action.id()
+        );
+        assert_eq!(quarantine.active_quarantines, 1, "{} active quarantine", action.id());
+        assert_eq!(quarantine.active_locks, 0, "{} quarantine lock cleanup", action.id());
+
+        outcomes.push(R2RecoveryOutcome {
+            id: action.id().to_owned(),
+            recovery_mode: "automatic_compensation",
+            verified_success: "succeeded",
+            verification_failure: "rolled_back",
+            rollback_failure: "escalated",
+            compensation_intents: rollback.compensation_intents + quarantine.compensation_intents,
+            active_quarantines: quarantine.active_quarantines,
+        });
+        for run in [success, rollback, quarantine] {
+            cleanup_schema(&run.pool, &run.schema).await;
+        }
+    }
+
+    let path = Path::new(&fragment_path);
+    assert!(
+        path.is_absolute(),
+        "R2 recovery qualification fragment path must be absolute"
+    );
+    let fragment = R2RecoveryFragment {
+        schema_version: "rocketmq-sre.r2-action-recovery-fragment.v1",
+        model_provider_network_calls: 0,
+        actions: outcomes,
+    };
+    let mut bytes = serde_json::to_vec_pretty(&fragment).expect("serialize R2 recovery qualification fragment");
+    bytes.push(b'\n');
+    fs::write(path, bytes).expect("write R2 recovery qualification fragment");
+}
+
 fn r1_success_signals(action: ExecutionAction) -> Vec<Signal> {
     let stable = match action {
         ExecutionAction::ObservabilityLoggerLevelTtl => 32,
@@ -957,6 +1060,38 @@ fn r1_rollback_signals(action: ExecutionAction, rollback_succeeds: bool) -> Vec<
         signal(3, true),
         signal(4, rollback_succeeds),
         signal(rollback_timeout, rollback_succeeds),
+    ]
+}
+
+fn r2_success_signals(action: ExecutionAction) -> Vec<Signal> {
+    let stable = match action {
+        ExecutionAction::BrokerConfigPatchAllowlisted
+        | ExecutionAction::TopicConfigPatchAllowlisted
+        | ExecutionAction::SubscriptionGroupPatchAllowlisted => 182,
+        ExecutionAction::ProxyRolloutImageCanary => 602,
+        ExecutionAction::SecurityCredentialRotateOverlap => 302,
+        _ => panic!("only R2 actions are qualified"),
+    };
+    vec![signal(0, true), signal(1, true), signal(2, true), signal(stable, true)]
+}
+
+fn r2_rollback_signals(action: ExecutionAction, rollback_succeeds: bool) -> Vec<Signal> {
+    let (forward_timeout, rollback_stable) = match action {
+        ExecutionAction::BrokerConfigPatchAllowlisted
+        | ExecutionAction::TopicConfigPatchAllowlisted
+        | ExecutionAction::SubscriptionGroupPatchAllowlisted => (902, 184),
+        ExecutionAction::ProxyRolloutImageCanary => (1_802, 604),
+        ExecutionAction::SecurityCredentialRotateOverlap => (1_802, 304),
+        _ => panic!("only R2 actions are qualified"),
+    };
+    vec![
+        signal(0, true),
+        signal(1, true),
+        signal(2, false),
+        signal(forward_timeout, false),
+        signal(3, true),
+        signal(4, rollback_succeeds),
+        signal(rollback_stable, rollback_succeeds),
     ]
 }
 
@@ -992,13 +1127,7 @@ async fn run_execution_for_action(signals: &[Signal], autonomous: bool, action: 
         .run(&pool)
         .await
         .expect("empty-schema migrations");
-    let mut fixture = match action {
-        ExecutionAction::ProxyScaleOutOne => seed_fixture(&pool).await,
-        ExecutionAction::ObservabilityLoggerLevelTtl => seed_logger_fixture(&pool).await,
-        ExecutionAction::ProxyRestartOne => seed_proxy_restart_fixture(&pool).await,
-        ExecutionAction::TelemetryCollectorRestartOne => seed_telemetry_collector_restart_fixture(&pool).await,
-        _ => panic!("the executor integration flow supports only the qualified R1 scenarios under test"),
-    };
+    let mut fixture = seed_fixture_for_action(&pool, action).await;
     if autonomous {
         fixture.request.approvals.clear();
         fixture.request.autonomy_grant = Some(autonomy_grant(&fixture));
@@ -1013,10 +1142,25 @@ async fn run_execution_for_action(signals: &[Signal], autonomous: bool, action: 
         ExecutionAction::TelemetryCollectorRestartOne => {
             include_str!("../../../config/actions/telemetry.collector.restart_one.v1.yaml")
         }
-        _ => panic!("the executor integration flow supports only the qualified R1 descriptors under test"),
+        ExecutionAction::BrokerConfigPatchAllowlisted => {
+            include_str!("../../../config/actions/broker.config.patch_allowlisted.v1.yaml")
+        }
+        ExecutionAction::TopicConfigPatchAllowlisted => {
+            include_str!("../../../config/actions/topic.config.patch_allowlisted.v1.yaml")
+        }
+        ExecutionAction::SubscriptionGroupPatchAllowlisted => {
+            include_str!("../../../config/actions/subscription_group.patch_allowlisted.v1.yaml")
+        }
+        ExecutionAction::ProxyRolloutImageCanary => {
+            include_str!("../../../config/actions/proxy.rollout_image_canary.v1.yaml")
+        }
+        ExecutionAction::SecurityCredentialRotateOverlap => {
+            include_str!("../../../config/actions/security.credential_rotate_overlap.v1.yaml")
+        }
+        _ => panic!("the executor integration flow does not support this qualification descriptor"),
     };
     let mut descriptor: rocketmq_sre_contracts::ActionDescriptor =
-        serde_yaml::from_str(descriptor_yaml).expect("R1 action descriptor");
+        serde_yaml::from_str(descriptor_yaml).expect("qualification action descriptor");
     descriptor.execution_supported = true;
     let registry = Arc::new(ExecutorActionRegistry::from_descriptors([descriptor]).expect("test registry"));
     let dispatches = Arc::new(Mutex::new(Vec::new()));

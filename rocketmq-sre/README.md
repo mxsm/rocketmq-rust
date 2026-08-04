@@ -271,6 +271,38 @@ committed catalog independently with:
 python scripts/check_r1_action_qualification.py
 ```
 
+### Controlled R2 action qualification
+
+The R2 qualification contract covers the five approved moderate-risk actions:
+allowlisted Broker, Topic, and Subscription Group configuration patches; a
+single digest-pinned Proxy image canary; and overlap-first credential rotation.
+Every plan must pass an offline heterogeneous Critic, independent human
+approval, hash-bound authorization, generation or version fencing, typed Agent
+precheck, durable execution journaling, stable-window verification, and
+automatic compensation. Unattended execution remains disabled.
+
+The qualification entry point creates a new disposable Kind cluster from a
+clean committed revision, registers an immutable local canary image, runs all
+five actions through the Control Plane, Executor, and Execution Agent, and
+validates deterministic recovery cases in isolated PostgreSQL schemas. It then
+removes the canary, credential fixtures, bootstrap job, cluster, and generated
+runtime artifacts before writing a passing report. The scripted Critic uses a
+different model family but performs no provider network call.
+
+Run from `rocketmq-sre/`; build output stays on `D:` and `F:`, and the redacted
+report is written outside the repository on `D:`:
+
+```powershell
+.\scripts\r2-action-live-qualification.ps1
+```
+
+The report is implementation qualification rather than production
+certification. Validate the committed catalog independently with:
+
+```powershell
+python scripts/check_r2_action_qualification.py
+```
+
 ## User interface
 
 The UI is designed as a full-screen desktop operations workspace using
