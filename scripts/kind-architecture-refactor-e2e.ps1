@@ -749,6 +749,56 @@ function Clear-NodeNetworkImpairment {
     }
 }
 
+function Set-PodNetworkIsolation {
+    param(
+        [Parameter(Mandatory)][string]$Node,
+        [Parameter(Mandatory)][string]$PodIp,
+        [Parameter(Mandatory)][ValidatePattern('^[a-z0-9-]+$')][string]$RuleTag
+    )
+    Assert-True ($PodIp -match '^(?:\d{1,3}\.){3}\d{1,3}$') 'pod network isolation requires an IPv4 pod address'
+    $cidr = "$PodIp/32"
+    $sourceRule = @('exec', $Node, 'iptables', '-I', 'FORWARD', '1', '-s', $cidr, '-m', 'comment', '--comment', $RuleTag, '-j', 'DROP')
+    $destinationRule = @('exec', $Node, 'iptables', '-I', 'FORWARD', '1', '-d', $cidr, '-m', 'comment', '--comment', $RuleTag, '-j', 'DROP')
+    $sourceInstalled = $false
+    $destinationInstalled = $false
+    try {
+        Invoke-Native docker $sourceRule | Out-Null
+        $sourceInstalled = $true
+        Invoke-Native docker $destinationRule | Out-Null
+        $destinationInstalled = $true
+        $rules = Invoke-Native docker @('exec', $Node, 'iptables', '-S', 'FORWARD')
+        $matchingRules = @($rules.Output -split "`r?`n" | Where-Object { $_ -match [regex]::Escape($RuleTag) })
+        Assert-True ($matchingRules.Count -eq 2) 'pod network isolation must install exactly two tagged DROP rules'
+        [pscustomobject]@{ ExitCode = 0; Output = $matchingRules -join "`n"; Node = $Node; PodIp = $PodIp; RuleTag = $RuleTag }
+    } catch {
+        if ($destinationInstalled) {
+            Invoke-Native docker @('exec', $Node, 'iptables', '-D', 'FORWARD', '-d', $cidr, '-m', 'comment', '--comment', $RuleTag, '-j', 'DROP') -AllowFailure | Out-Null
+        }
+        if ($sourceInstalled) {
+            Invoke-Native docker @('exec', $Node, 'iptables', '-D', 'FORWARD', '-s', $cidr, '-m', 'comment', '--comment', $RuleTag, '-j', 'DROP') -AllowFailure | Out-Null
+        }
+        throw
+    }
+}
+
+function Clear-PodNetworkIsolation {
+    param(
+        [Parameter(Mandatory)][string]$Node,
+        [Parameter(Mandatory)][string]$PodIp,
+        [Parameter(Mandatory)][ValidatePattern('^[a-z0-9-]+$')][string]$RuleTag
+    )
+    $cidr = "$PodIp/32"
+    $destination = Invoke-Native docker @('exec', $Node, 'iptables', '-D', 'FORWARD', '-d', $cidr, '-m', 'comment', '--comment', $RuleTag, '-j', 'DROP') -AllowFailure
+    $source = Invoke-Native docker @('exec', $Node, 'iptables', '-D', 'FORWARD', '-s', $cidr, '-m', 'comment', '--comment', $RuleTag, '-j', 'DROP') -AllowFailure
+    $rules = Invoke-Native docker @('exec', $Node, 'iptables', '-S', 'FORWARD') -AllowFailure
+    $remainingRules = @($rules.Output -split "`r?`n" | Where-Object { $_ -match [regex]::Escape($RuleTag) })
+    $exitCode = if ($destination.ExitCode -eq 0 -and $source.ExitCode -eq 0 -and $rules.ExitCode -eq 0 -and $remainingRules.Count -eq 0) { 0 } else { 1 }
+    [pscustomobject]@{
+        ExitCode = $exitCode
+        Output = "destination=$($destination.ExitCode) source=$($source.ExitCode) remaining=$($remainingRules.Count)"
+    }
+}
+
 function Complete-Scenario {
     param(
         [Parameter(Mandatory)][string]$Id,
@@ -1145,40 +1195,48 @@ spec: { selector: { app.kubernetes.io/name: otel-collector }, ports: [{ name: ot
         node_status = $nodeStatus
     })
 
-    $minorityNode = (Invoke-Native kubectl @(
+    $minorityPod = ((Invoke-Native kubectl @(
         '-n',
         $Namespace,
         'get',
         'pod',
         'rocketmq-namesrv-2',
         '-o',
-        'jsonpath={.spec.nodeName}'
-    )).Output
+        'json'
+    )).Output | ConvertFrom-Json)
+    $minorityNode = $minorityPod.spec.nodeName
+    $minorityPodIp = $minorityPod.status.podIP
+    $minorityRuleTag = 'rocketmq-m4-namesrv-minority'
+    $minorityAddress = "rocketmq-namesrv-2.rocketmq-namesrv-headless.$Namespace.svc.cluster.local:9876"
     $minorityFault = $null
+    $minorityDirectProbe = $null
     $minorityRoute = $null
     $minorityMessage = $null
     $minorityTimer = [Diagnostics.Stopwatch]::StartNew()
     $minorityCordon = Invoke-Native kubectl @('cordon', $minorityNode)
     try {
-        $minorityFault = Set-NodeNetworkImpairment $minorityNode @('loss', '100%')
+        $minorityFault = Set-PodNetworkIsolation -Node $minorityNode -PodIp $minorityPodIp -RuleTag $minorityRuleTag
+        $minorityDirectProbe = Invoke-RouteProbe -Namesrv $minorityAddress -AllowFailure
         $minorityRoute = Invoke-RouteProbe
         $minorityMessage = Query-AcknowledgedMessage $ack.Id
     } finally {
-        $minorityRestore = Clear-NodeNetworkImpairment $minorityNode
+        $minorityRestore = Clear-PodNetworkIsolation -Node $minorityNode -PodIp $minorityPodIp -RuleTag $minorityRuleTag
         $minorityReady = Invoke-Native kubectl @('wait', "node/$minorityNode", '--for=condition=Ready', '--timeout=60s') -AllowFailure
         $minorityUncordon = Invoke-Native kubectl @('uncordon', $minorityNode) -AllowFailure
         $minorityTimer.Stop()
     }
+    $minorityRestoredRoute = Invoke-RouteProbe -Namesrv $minorityAddress -AllowFailure
     $minorityState = ((Invoke-Native kubectl @('-n', $Namespace, 'get', 'statefulset/rocketmq-namesrv', '-o', 'json')).Output | ConvertFrom-Json).status
     Complete-Scenario 'nameserver_minority_partition' ([ordered]@{
-        minority_isolated = $minorityFault.Output -match 'qdisc'
+        minority_isolated = $minorityFault.Output -match 'DROP' -and $minorityDirectProbe.ExitCode -ne 0
         route_discovery_available = $minorityRoute.ExitCode -eq 0
         acknowledged_message_visible = $minorityMessage.QueueOffset -eq $before.QueueOffset
-        nameserver_replicas_restored = $minorityState.readyReplicas -eq 3 -and $minorityReady.ExitCode -eq 0 -and $minorityUncordon.ExitCode -eq 0
+        nameserver_replicas_restored = $minorityState.readyReplicas -eq 3 -and $minorityRestore.ExitCode -eq 0 -and
+            $minorityReady.ExitCode -eq 0 -and $minorityUncordon.ExitCode -eq 0 -and $minorityRestoredRoute.ExitCode -eq 0
     }) ([ordered]@{
-        partition_policy = "node=$minorityNode`n$($minorityFault.Output)"
+        partition_policy = "node=$minorityNode podIp=$minorityPodIp`n$($minorityFault.Output)"
         nameserver_status = "$($minorityCordon.Output)`n$($minorityRestore.Output)`n$($minorityReady.Output)`n$($minorityUncordon.Output)"
-        route_probe = $minorityRoute.Output
+        route_probe = "isolatedExit=$($minorityDirectProbe.ExitCode)`n$($minorityDirectProbe.Output)`navailableExit=$($minorityRoute.ExitCode)`n$($minorityRoute.Output)`nrestoredExit=$($minorityRestoredRoute.ExitCode)`n$($minorityRestoredRoute.Output)"
         message_after = $minorityMessage.Output
         recovery_timing = "seconds=$($minorityTimer.Elapsed.TotalSeconds) budget=30"
     })

@@ -324,6 +324,10 @@ class FaultMatrixGuardTests(unittest.TestCase):
             "Wait-ControllerLeadershipStable -Ordinals $failureSurvivingOrdinals",
             "$restoredLeadership = Wait-ControllerLeadershipStable",
             "$snapshotLeadershipBefore = Wait-ControllerLeadershipStable",
+            "function Set-PodNetworkIsolation",
+            "$minorityFault = Set-PodNetworkIsolation",
+            "$minorityDirectProbe = Invoke-RouteProbe -Namesrv $minorityAddress -AllowFailure",
+            "$minorityRestore = Clear-PodNetworkIsolation",
             "function Test-MessageQuerySucceeded",
             "$querySucceeded = Test-MessageQuerySucceeded $result",
             "function Wait-CredentialCutover",
@@ -336,6 +340,16 @@ class FaultMatrixGuardTests(unittest.TestCase):
             result = self.run_guard("--policy-only", expect_success=False)
             self.assertIn(marker, result.stderr)
             runner.write_text(source, encoding="utf-8")
+
+    def test_nameserver_minority_fault_cannot_isolate_the_co_located_node(self) -> None:
+        runner = self.root / "scripts" / "kind-architecture-refactor-e2e.ps1"
+        source = runner.read_text(encoding="utf-8")
+        marker = "$minorityFault = Set-PodNetworkIsolation -Node $minorityNode -PodIp $minorityPodIp -RuleTag $minorityRuleTag"
+        replacement = "$minorityFault = Set-NodeNetworkImpairment $minorityNode @('loss', '100%')"
+        self.assertIn(marker, source)
+        runner.write_text(source.replace(marker, replacement, 1), encoding="utf-8")
+        result = self.run_guard("--policy-only", expect_success=False)
+        self.assertIn("target pod", result.stderr)
 
     def test_runner_that_restarts_brokers_for_secret_rotation_is_rejected(self) -> None:
         runner = self.root / "scripts" / "kind-architecture-refactor-e2e.ps1"

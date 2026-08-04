@@ -287,7 +287,6 @@ def validate_sources(guard: Guard) -> None:
         "leader_changed = $leaderAfterOrdinal -ne $failureLeaderOrdinal",
         "Set-StatefulSetReplicas 'rocketmq-namesrv' 1",
         "Set-StatefulSetReplicas 'rocketmq-controller' 1",
-        "Set-NodeNetworkImpairment $minorityNode @('loss', '100%')",
         "Set-NodeNetworkImpairment $networkNode @('delay', '200ms', '50ms', 'loss', '10%')",
         "disk_full_state_rejects_new_writes_without_losing_acknowledged_data",
         "i=0; : > /tmp/rocketmq/phase06-fsync.pids; while",
@@ -316,6 +315,10 @@ def validate_sources(guard: Guard) -> None:
         "broker cluster registration was not observed before the synthetic topic deadline",
         "Wait-ReadyWorkerPod -Selector 'rocketmq.apache.org/service=proxy'",
         "Invoke-Native kubectl @('cordon', $minorityNode)",
+        "function Set-PodNetworkIsolation",
+        "$minorityFault = Set-PodNetworkIsolation",
+        "$minorityDirectProbe = Invoke-RouteProbe -Namesrv $minorityAddress -AllowFailure",
+        "$minorityRestore = Clear-PodNetworkIsolation",
         "Invoke-Native kubectl @('cordon', $networkNode)",
         "rocketmq.apache.org/service=controller",
         "rocketmq.apache.org/service=broker",
@@ -345,6 +348,18 @@ def validate_sources(guard: Guard) -> None:
         "semantic_query=$($rotationResult.DeniedSucceeded)",
     ):
         guard.require(marker in runner, f"fault runner contract marker missing: {marker}")
+    minority_start = runner.find("$minorityPod =")
+    minority_end = runner.find("$majorityScale =", minority_start)
+    guard.require(
+        minority_start >= 0 and minority_end > minority_start,
+        "NameServer minority fault block boundaries are missing",
+    )
+    if minority_start >= 0 and minority_end > minority_start:
+        minority_block = runner[minority_start:minority_end]
+        guard.require(
+            "Set-NodeNetworkImpairment" not in minority_block,
+            "NameServer minority fault must isolate only the target pod, not its co-located node",
+        )
     secret_rotation_start = runner.find("$preRotation = Query-AcknowledgedMessage $ack.Id")
     secret_rotation_end = runner.find("$pvcBeforeRestart = Get-PvcUidSet", secret_rotation_start)
     guard.require(
