@@ -3102,6 +3102,7 @@ dependencies = [
  "parking_lot",
  "prost",
  "protoc-bin-vendored",
+ "rocketmq-auth",
  "rocketmq-error",
  "rocketmq-model",
  "rocketmq-observability",

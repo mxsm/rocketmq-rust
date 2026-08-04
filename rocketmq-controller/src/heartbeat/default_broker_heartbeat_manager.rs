@@ -142,17 +142,11 @@ impl DefaultBrokerHeartbeatManager {
 
     pub(crate) fn scan_task_count(&self) -> usize {
         let lifecycle = self.lifecycle.lock();
-        let root_count = lifecycle
+        lifecycle
             .scan_task_group
             .as_ref()
             .map(TaskGroup::task_count)
-            .unwrap_or_default();
-        let scheduled_count = lifecycle
-            .scan_scheduled_tasks
-            .as_ref()
-            .map(|scheduled_tasks| scheduled_tasks.group().task_count())
-            .unwrap_or_default();
-        root_count + scheduled_count
+            .unwrap_or_default()
     }
 
     pub(crate) fn scan_schedule_snapshot(&self) -> Vec<ScheduledTaskSnapshot> {
