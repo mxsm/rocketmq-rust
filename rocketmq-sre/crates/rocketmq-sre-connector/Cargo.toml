@@ -29,7 +29,7 @@ chrono.workspace = true
 http.workspace = true
 jsonschema = { version = "0.47.0", default-features = false }
 reqwest = { workspace = true, features = ["form", "query"] }
-rmcp = { version = "2.2.0", default-features = false, features = ["client", "transport-streamable-http-client-reqwest"] }
+rmcp = { version = "3.1.0", default-features = false, features = ["client", "transport-streamable-http-client-reqwest"] }
 rocketmq-admin-core = { path = "../../../rocketmq-tools/rocketmq-admin/rocketmq-admin-core", default-features = false, features = ["read-client-adapter"] }
 rocketmq-observability.workspace = true
 rocketmq-sre-contracts.workspace = true
