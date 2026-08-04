@@ -266,7 +266,7 @@ spec:
         - name: controller
           image: {{ include "rocketmq.image" (dict "service" "controller" "image" .Values.services.controller.image) | quote }}
           imagePullPolicy: {{ .Values.services.controller.image.pullPolicy }}
-          args: ["--config-file", "/etc/rocketmq/controller.toml"]
+          args: ["--config-file", "/etc/rocketmq/controller-config/$(POD_NAME).toml"]
           env:
 {{ include "rocketmq.lifecycleEnv" . | indent 12 }}
 {{ include "rocketmq.telemetryEnv" . | indent 12 }}
@@ -298,12 +298,7 @@ spec:
 {{ include "rocketmq.containerSecurityContext" . | indent 12 }}
           volumeMounts:
             - name: config
-              mountPath: /etc/rocketmq/controller.toml
-{{- if eq (int .Values.services.controller.replicas) 1 }}
-              subPath: controller-0.toml
-{{- else }}
-              subPathExpr: $(POD_NAME).toml
-{{- end }}
+              mountPath: /etc/rocketmq/controller-config
               readOnly: true
 {{- if .Values.maintenance.enabled }}
             - name: maintenance-policy

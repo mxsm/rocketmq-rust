@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "milestone": "M11-11",
-  "policy_sha256": "97d863e92385cf8268d45a391185badd7ff7a69099e3d4dee9246a9e17588796",
+  "policy_sha256": "d6f52e68f830311286658748387798160d28f6fe78afcd432bf99c7a43cf2a1e",
   "run_id": "fixture-m11-11-positive",
   "candidate_commit": "0123456789abcdef0123456789abcdef01234567",
   "started_at": "2026-07-17T01:00:00Z",

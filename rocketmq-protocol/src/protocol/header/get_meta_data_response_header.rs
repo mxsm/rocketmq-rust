@@ -26,6 +26,9 @@ pub struct GetMetaDataResponseHeader {
     pub controller_leader_address: Option<CheetahString>,
     pub is_leader: Option<bool>,
     pub peers: Option<CheetahString>,
+    pub last_log_index: Option<u64>,
+    pub committed_log_index: Option<u64>,
+    pub applied_log_index: Option<u64>,
 }
 
 #[cfg(test)]
@@ -44,6 +47,9 @@ mod tests {
             controller_leader_address: Some(CheetahString::from_static_str("192.168.1.1:9876")),
             is_leader: Some(true),
             peers: Some(CheetahString::from_static_str("192.168.1.1:9876,192.168.1.2:9876")),
+            last_log_index: Some(103),
+            committed_log_index: Some(102),
+            applied_log_index: Some(101),
         };
         let map = header.to_map().unwrap();
         assert_eq!(
@@ -75,6 +81,27 @@ mod tests {
                 .unwrap(),
             "192.168.1.1:9876,192.168.1.2:9876"
         );
+        assert_eq!(
+            map.get(&CheetahString::from_static_str(
+                GetMetaDataResponseHeader::LAST_LOG_INDEX
+            ))
+            .unwrap(),
+            "103"
+        );
+        assert_eq!(
+            map.get(&CheetahString::from_static_str(
+                GetMetaDataResponseHeader::COMMITTED_LOG_INDEX
+            ))
+            .unwrap(),
+            "102"
+        );
+        assert_eq!(
+            map.get(&CheetahString::from_static_str(
+                GetMetaDataResponseHeader::APPLIED_LOG_INDEX
+            ))
+            .unwrap(),
+            "101"
+        );
     }
 
     #[test]
@@ -100,6 +127,18 @@ mod tests {
             CheetahString::from_static_str(GetMetaDataResponseHeader::PEERS),
             CheetahString::from("192.168.1.1:9876,192.168.1.2:9876"),
         );
+        map.insert(
+            CheetahString::from_static_str(GetMetaDataResponseHeader::LAST_LOG_INDEX),
+            CheetahString::from("103"),
+        );
+        map.insert(
+            CheetahString::from_static_str(GetMetaDataResponseHeader::COMMITTED_LOG_INDEX),
+            CheetahString::from("102"),
+        );
+        map.insert(
+            CheetahString::from_static_str(GetMetaDataResponseHeader::APPLIED_LOG_INDEX),
+            CheetahString::from("101"),
+        );
         let header = <GetMetaDataResponseHeader as FromMap>::from(&map).unwrap();
         assert_eq!(header.group, Some(CheetahString::from_static_str("test_group")));
         assert_eq!(header.controller_leader_id, Some(CheetahString::from_static_str("1")));
@@ -112,6 +151,9 @@ mod tests {
             header.peers,
             Some(CheetahString::from_static_str("192.168.1.1:9876,192.168.1.2:9876"))
         );
+        assert_eq!(header.last_log_index, Some(103));
+        assert_eq!(header.committed_log_index, Some(102));
+        assert_eq!(header.applied_log_index, Some(101));
     }
 
     #[test]
@@ -123,5 +165,8 @@ mod tests {
         assert!(header.controller_leader_address.is_none());
         assert!(header.is_leader.is_none());
         assert!(header.peers.is_none());
+        assert!(header.last_log_index.is_none());
+        assert!(header.committed_log_index.is_none());
+        assert!(header.applied_log_index.is_none());
     }
 }

@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 
 # Copyright 2026 The RocketMQ Rust Authors
 #
@@ -163,7 +163,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=rocketmq-service-target-${SOURCE_REVISION},target=/workspace/target,sharing=locked <<EOF
 set -eux
 cargo build --locked --release --package rocketmq-broker --features otlp-metrics,otlp-traces,otlp-logs --bin rocketmq-broker-rust
-cargo build --locked --release --package rocketmq-namesrv --features otlp-metrics,otlp-traces,otlp-logs --bin rocketmq-namesrv-rust
+cargo build --locked --release --package rocketmq-namesrv --features observability,otlp-metrics,otlp-traces,otlp-logs --bin rocketmq-namesrv-rust
 cargo build --locked --release --package rocketmq-controller --features metrics-otlp,otlp-traces,otlp-logs --bin rocketmq-controller-rust
 cargo build --locked --release --package rocketmq-proxy --features otlp-metrics,otlp-traces,otlp-logs --bin rocketmq-proxy-rust
 install -d /opt/rocketmq-binaries

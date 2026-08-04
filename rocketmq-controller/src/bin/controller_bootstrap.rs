@@ -14,6 +14,9 @@
 
 #![recursion_limit = "256"]
 
+#[path = "controller_bootstrap/controller_security.rs"]
+mod controller_security;
+
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -46,6 +49,8 @@ use rocketmq_security_api::SecurityBootstrapConfig;
 use rocketmq_security_api::SecurityBootstrapOutcome;
 use rocketmq_security_api::SecurityBootstrapProfile;
 use tracing::info;
+
+use controller_security::build_controller_security;
 
 /// RocketMQ Controller Bootstrap
 ///
@@ -321,7 +326,10 @@ async fn run_controller(
 ) -> Result<()> {
     // Create controller manager
     info!("Creating Controller Manager...");
-    let controller_manager = ControllerManager::new(config, service_context.clone(), telemetry_handle.clone()).await?;
+    let security = build_controller_security(&config, &service_context).await?;
+    let controller_manager =
+        ControllerManager::new_with_security(config, service_context.clone(), telemetry_handle.clone(), security)
+            .await?;
     let controller_manager = Arc::new(controller_manager);
     // Initialize controller
     info!("Initializing Controller...");
@@ -528,7 +536,7 @@ async fn initialize_cluster_if_configured(controller_manager: &Arc<ControllerMan
     if bootstrap_node_id != config.node_id {
         return Ok(());
     }
-    if controller_manager.controller().has_committed_log()? {
+    if controller_manager.controller().has_persisted_committed_log().await? {
         info!(
             node_id = config.node_id,
             "Controller cluster already has committed logs; skip bootstrap"

@@ -177,6 +177,24 @@ class FaultMatrixGuardTests(unittest.TestCase):
         result = self.run_guard("--policy-only", expect_success=False)
         self.assertIn("commitlog_offset_preserved", result.stderr)
 
+    def test_runner_that_drops_fixed_synthetic_topic_initialization_is_rejected(self) -> None:
+        runner = self.root / "scripts" / "kind-architecture-refactor-e2e.ps1"
+        source = runner.read_text(encoding="utf-8")
+        marker = "fault matrix may create only its fixed synthetic topic"
+        self.assertIn(marker, source)
+        runner.write_text(source.replace(marker, "arbitrary topic creation allowed", 1), encoding="utf-8")
+        result = self.run_guard("--policy-only", expect_success=False)
+        self.assertIn("fixed synthetic topic", result.stderr)
+
+    def test_runner_that_drops_atomic_release_identity_rollout_is_rejected(self) -> None:
+        runner = self.root / "scripts" / "kind-architecture-refactor-e2e.ps1"
+        source = runner.read_text(encoding="utf-8")
+        marker = "candidate image revision must equal CandidateCommit"
+        self.assertIn(marker, source)
+        runner.write_text(source.replace(marker, "candidate revision unchecked", 1), encoding="utf-8")
+        result = self.run_guard("--policy-only", expect_success=False)
+        self.assertIn("CandidateCommit", result.stderr)
+
     def test_runner_that_drops_network_fault_injection_is_rejected(self) -> None:
         runner = self.root / "scripts" / "kind-architecture-refactor-e2e.ps1"
         source = runner.read_text(encoding="utf-8")
@@ -185,6 +203,163 @@ class FaultMatrixGuardTests(unittest.TestCase):
         runner.write_text(source.replace(marker, "network impairment skipped"), encoding="utf-8")
         result = self.run_guard("--policy-only", expect_success=False)
         self.assertIn("Set-NodeNetworkImpairment", result.stderr)
+
+    def test_runner_that_restores_multiline_broker_shell_scripts_is_rejected(self) -> None:
+        runner = self.root / "scripts" / "kind-architecture-refactor-e2e.ps1"
+        source = runner.read_text(encoding="utf-8")
+        for marker in (
+            "i=0; : > /tmp/rocketmq/phase06-fsync.pids; while",
+            "attempt=0; active=1; while",
+            'case "$state" in ""|Z*)',
+        ):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, source)
+                runner.write_text(source.replace(marker, "multiline shell regression", 1), encoding="utf-8")
+                result = self.run_guard("--policy-only", expect_success=False)
+                self.assertIn(marker, result.stderr)
+                runner.write_text(source, encoding="utf-8")
+
+    def test_runner_that_mislabels_the_otel_collector_is_rejected(self) -> None:
+        runner = self.root / "scripts" / "kind-architecture-refactor-e2e.ps1"
+        source = runner.read_text(encoding="utf-8")
+        marker = "selector: { matchLabels: { app.kubernetes.io/name: otel-collector } }"
+        self.assertIn(marker, source)
+        runner.write_text(
+            source.replace(marker, "selector: { matchLabels: { app: otel-collector } }", 1),
+            encoding="utf-8",
+        )
+        result = self.run_guard("--policy-only", expect_success=False)
+        self.assertIn("app.kubernetes.io/name: otel-collector", result.stderr)
+
+    def test_runner_that_drops_fault_job_failure_detection_is_rejected(self) -> None:
+        runner = self.root / "scripts" / "kind-architecture-refactor-e2e.ps1"
+        source = runner.read_text(encoding="utf-8")
+        marker = "$jobStatus.failed ?? 0"
+        self.assertIn(marker, source)
+        runner.write_text(source.replace(marker, "$jobStatus.succeeded ?? 0", 1), encoding="utf-8")
+        result = self.run_guard("--policy-only", expect_success=False)
+        self.assertIn("$jobStatus.failed ?? 0", result.stderr)
+
+    def test_runner_that_drops_broker_registration_wait_is_rejected(self) -> None:
+        runner = self.root / "scripts" / "kind-architecture-refactor-e2e.ps1"
+        source = runner.read_text(encoding="utf-8")
+        marker = "broker cluster registration was not observed before the synthetic topic deadline"
+        self.assertIn(marker, source)
+        runner.write_text(source.replace(marker, "cluster readiness unchecked", 1), encoding="utf-8")
+        result = self.run_guard("--policy-only", expect_success=False)
+        self.assertIn("broker cluster registration", result.stderr)
+
+    def test_runner_that_drops_ready_proxy_wait_is_rejected(self) -> None:
+        runner = self.root / "scripts" / "kind-architecture-refactor-e2e.ps1"
+        source = runner.read_text(encoding="utf-8")
+        marker = "Wait-ReadyWorkerPod -Selector 'rocketmq.apache.org/service=proxy'"
+        self.assertIn(marker, source)
+        runner.write_text(source.replace(marker, "Get-UncheckedProxyPod"), encoding="utf-8")
+        result = self.run_guard("--policy-only", expect_success=False)
+        self.assertIn("Wait-ReadyWorkerPod", result.stderr)
+
+    def test_runner_that_allows_fault_jobs_on_impaired_nodes_is_rejected(self) -> None:
+        runner = self.root / "scripts" / "kind-architecture-refactor-e2e.ps1"
+        source = runner.read_text(encoding="utf-8")
+        for node in ("minorityNode", "networkNode"):
+            marker = f"Invoke-Native kubectl @('cordon', ${node})"
+            self.assertIn(marker, source)
+            runner.write_text(source.replace(marker, "fault node left schedulable", 1), encoding="utf-8")
+            result = self.run_guard("--policy-only", expect_success=False)
+            self.assertIn(marker, result.stderr)
+            runner.write_text(source, encoding="utf-8")
+
+    def test_runner_that_drops_stable_disk_pressure_evidence_is_rejected(self) -> None:
+        runner = self.root / "scripts" / "kind-architecture-refactor-e2e.ps1"
+        source = runner.read_text(encoding="utf-8")
+        markers = (
+            "rocketmq.apache.org/simulated-disk-pressure",
+            "$pressureStatusDuring -match 'rocketmq.apache.org/simulated-disk-pressure'",
+            "$_.key -in $diskPressureTaintKeys",
+            "$taintCleanup.ExitCode -eq 0 -or $taintCleanup.Output -match 'not found'",
+            "$simulationTaintCleanup.ExitCode -eq 0 -or $simulationTaintCleanup.Output -match 'not found'",
+        )
+        for marker in markers:
+            with self.subTest(marker=marker):
+                self.assertIn(marker, source)
+                runner.write_text(source.replace(marker, "disk pressure evidence removed"), encoding="utf-8")
+                result = self.run_guard("--policy-only", expect_success=False)
+                self.assertIn(marker, result.stderr)
+                runner.write_text(source, encoding="utf-8")
+
+    def test_runner_that_uses_nonexistent_component_labels_is_rejected(self) -> None:
+        runner = self.root / "scripts" / "kind-architecture-refactor-e2e.ps1"
+        source = runner.read_text(encoding="utf-8")
+        markers = (
+            "rocketmq.apache.org/service=controller",
+            "app.kubernetes.io/part-of=rocketmq-rust",
+            "$null -eq $_.metadata.deletionTimestamp",
+            "$readyFinalPods = @(",
+            "$readyFinalPods.Count -eq 12",
+        )
+        for marker in markers:
+            with self.subTest(marker=marker):
+                self.assertIn(marker, source)
+                runner.write_text(source.replace(marker, "component label contract removed"), encoding="utf-8")
+                result = self.run_guard("--policy-only", expect_success=False)
+                self.assertIn(marker, result.stderr)
+                runner.write_text(source, encoding="utf-8")
+
+    def test_runner_that_drops_leader_aware_controller_rollout_is_rejected(self) -> None:
+        runner = self.root / "scripts" / "kind-architecture-refactor-e2e.ps1"
+        source = runner.read_text(encoding="utf-8")
+        markers = (
+            "type = 'OnDelete'",
+            "ControllerLeaderId\\s+([1-3])",
+            "Invoke-Native kubectl @('cordon', $leaderNode)",
+            "Sort-Object -Descending",
+            "Wait-ControllerReplicationCaughtUp",
+            "CommittedLogIndex",
+            "AppliedLogIndex",
+            "$actualScenarioOrder = (($ScenarioRecords | ForEach-Object { $_.id }) -join ',')",
+            "Assert-True ($actualScenarioOrder -eq $expectedScenarioOrder)",
+            "Wait-PodRecreatedAndReady -Pod 'rocketmq-broker-0' -PreviousUid $brokerStateBeforeRestart.metadata.uid",
+            "$null = Wait-ControllerLeadershipStable -Ordinals $survivingOrdinals",
+            "Invoke-Native kubectl @('cordon', $failureLeaderNode)",
+            "Wait-ControllerLeadershipStable -Ordinals $failureSurvivingOrdinals",
+            "$restoredLeadership = Wait-ControllerLeadershipStable",
+            "$snapshotLeadershipBefore = Wait-ControllerLeadershipStable",
+            "function Set-PodNetworkIsolation",
+            "$minorityFault = Set-PodNetworkIsolation",
+            "$minorityDirectProbe = Invoke-RouteProbe -Namesrv $minorityAddress -AllowFailure",
+            "$minorityRestore = Clear-PodNetworkIsolation",
+            "function Test-MessageQuerySucceeded",
+            "$querySucceeded = Test-MessageQuerySucceeded $result",
+            "function Wait-CredentialCutover",
+            "credential rotation must converge through hot reload without restarting Broker pods",
+            "semantic_query=$($rotationResult.DeniedSucceeded)",
+        )
+        for marker in markers:
+            self.assertIn(marker, source)
+            runner.write_text(source.replace(marker, "controller rollout stability skipped"), encoding="utf-8")
+            result = self.run_guard("--policy-only", expect_success=False)
+            self.assertIn(marker, result.stderr)
+            runner.write_text(source, encoding="utf-8")
+
+    def test_nameserver_minority_fault_cannot_isolate_the_co_located_node(self) -> None:
+        runner = self.root / "scripts" / "kind-architecture-refactor-e2e.ps1"
+        source = runner.read_text(encoding="utf-8")
+        marker = "$minorityFault = Set-PodNetworkIsolation -Node $minorityNode -PodIp $minorityPodIp -RuleTag $minorityRuleTag"
+        replacement = "$minorityFault = Set-NodeNetworkImpairment $minorityNode @('loss', '100%')"
+        self.assertIn(marker, source)
+        runner.write_text(source.replace(marker, replacement, 1), encoding="utf-8")
+        result = self.run_guard("--policy-only", expect_success=False)
+        self.assertIn("target pod", result.stderr)
+
+    def test_runner_that_restarts_brokers_for_secret_rotation_is_rejected(self) -> None:
+        runner = self.root / "scripts" / "kind-architecture-refactor-e2e.ps1"
+        source = runner.read_text(encoding="utf-8")
+        marker = "$preRotation = Query-AcknowledgedMessage $ack.Id"
+        restart = "Invoke-Native kubectl @('-n', $Namespace, 'rollout', 'restart', 'statefulset/rocketmq-broker') | Out-Null"
+        self.assertIn(marker, source)
+        runner.write_text(source.replace(marker, f"{marker}\n    {restart}", 1), encoding="utf-8")
+        result = self.run_guard("--policy-only", expect_success=False)
+        self.assertIn("hot reload", result.stderr)
 
     def test_dynamic_input_and_registry_regressions_are_rejected(self) -> None:
         workflow = self.root / ".github" / "workflows" / "kubernetes-fault-matrix.yml"
@@ -201,6 +376,17 @@ class FaultMatrixGuardTests(unittest.TestCase):
         )
         result = self.run_guard("--policy-only", expect_success=False)
         self.assertIn("docker @('pull', $image)", result.stderr)
+
+        runner.write_text(
+            runner_source.replace(
+                "Invoke-Native kind @('load', 'image-archive', $archivePath, '--name', $ClusterName)",
+                "Kind archive import skipped",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        result = self.run_guard("--policy-only", expect_success=False)
+        self.assertIn("image-archive", result.stderr)
 
     def test_workflow_artifact_uses_resolved_candidate_commit(self) -> None:
         workflow = self.root / ".github" / "workflows" / "kubernetes-fault-matrix.yml"
@@ -279,8 +465,8 @@ class FaultMatrixGuardTests(unittest.TestCase):
 
         runner.write_text(
             source.replace(
-                "leader_changed = $leaderAfterOrdinal -ne $leaderBeforeOrdinal",
-                "leader_changed = $leaderAfter.Output -ne $leaderBefore.Output",
+                "leader_changed = $leaderAfterOrdinal -ne $failureLeaderOrdinal",
+                "leader_changed = $leaderAfter.Output -ne $failureLeaderBefore.Output",
                 1,
             ),
             encoding="utf-8",

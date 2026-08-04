@@ -12,7 +12,7 @@ metadata:
     rocketmq.apache.org/maintenance-policy-sha256: {{ .Values.maintenance.sha256 | quote }}
 immutable: true
 data:
-  {{ .Values.maintenance.policyKey }}: |-
+  {{ .Values.maintenance.policyKey }}: |
 {{ .Files.Get "files/maintenance-policy.json" | indent 4 }}
 ---
 {{- end }}
@@ -35,7 +35,7 @@ data:
     autoCreateTopicEnable = {{ $.Values.services.broker.autoCreateTopicEnable }}
     enableControllerMode = {{ eq $.Values.deploymentProfile "production-controller-ha" }}
     controllerAddr = "{{ include "rocketmq.controllerAddresses" $ }}"
-    authConfigPath = "/etc/rocketmq/auth"
+    authConfigPath = "/var/lib/rocketmq/auth"
     aclFile = "/var/run/secrets/rocketmq/broker-acl.yml"
     aclFileWatchEnabled = true
     authenticationEnabled = true
@@ -43,7 +43,7 @@ data:
     signatureAlgorithm = "HmacSHA256"
 {{- if $.Values.maintenance.enabled }}
     maintenanceEnabled = true
-    maintenancePolicyPath = "maintenance-policy.json"
+    maintenancePolicyPath = "/etc/rocketmq/auth/maintenance-policy.json"
     maintenancePolicyVersion = {{ $.Values.maintenance.version }}
     maintenancePolicySha256 = {{ $.Values.maintenance.sha256 | quote }}
     maintenanceCheckpointRoot = "/var/lib/rocketmq/checkpoints"
@@ -90,7 +90,7 @@ metadata:
 {{ include "rocketmq.labels" (dict "root" . "service" "controller") | indent 4 }}
 data:
 {{- range $ordinal := until (int .Values.services.controller.replicas) }}
-  controller-{{ $ordinal }}.toml: |-
+  rocketmq-controller-{{ $ordinal }}.toml: |-
     rocketmqHome = "/var/lib/rocketmq/controller"
     configStorePath = "/var/lib/rocketmq/controller/controller.properties"
     controllerType = "Raft"
@@ -118,7 +118,7 @@ data:
     configBlackList = "configBlackList;configStorePath;maintenanceCheckpointRoot"
     nodeId = {{ add $ordinal 1 }}
     listenAddr = "0.0.0.0:60109"
-    electionTimeoutMs = 1000
+    electionTimeoutMs = 5000
     heartbeatIntervalMs = 300
     storagePath = "/var/lib/rocketmq/controller/node-{{ add $ordinal 1 }}"
     storageBackend = {{ $.Values.services.controller.storageBackend | quote }}
@@ -126,10 +126,10 @@ data:
 {{- if $.Values.maintenance.enabled }}
     authenticationEnabled = true
     authorizationEnabled = true
-    authConfigPath = "/etc/rocketmq/auth"
+    authConfigPath = "/var/lib/rocketmq/controller/auth/node-{{ add $ordinal 1 }}"
     aclFile = "/var/run/secrets/rocketmq/controller-acl.yml"
     maintenanceEnabled = true
-    maintenancePolicyPath = "maintenance-policy.json"
+    maintenancePolicyPath = "/etc/rocketmq/auth/maintenance-policy.json"
     maintenancePolicyVersion = {{ $.Values.maintenance.version }}
     maintenancePolicySha256 = {{ $.Values.maintenance.sha256 | quote }}
     maintenanceCheckpointRoot = "/var/lib/rocketmq/controller/checkpoints/node-{{ add $ordinal 1 }}"

@@ -158,10 +158,19 @@
         {
           "kind": "source",
           "path": "rocketmq-sre/crates/rocketmq-sre-execution-agent/src/dispatch_barrier.rs"
+        },
+        {
+          "kind": "configuration",
+          "path": "rocketmq-sre/config/qualification/execution-recovery.v1.json"
+        },
+        {
+          "kind": "test",
+          "path": "rocketmq-sre/scripts/check_execution_recovery_qualification.py"
         }
       ],
       "limitations": [
-        "Only explicitly registered bounded actions have implementations; production qualification is incomplete.",
+        "All nine explicitly registered bounded actions have independent switches, owners, and contract evidence; the sixteen-scenario Kubernetes platform fault matrix has passed.",
+        "Per-action disposable-cluster success, deny, unknown-result, verification-failure, and rollback qualification remains incomplete.",
         "R3 operations and arbitrary requests remain permanently forbidden."
       ]
     },
@@ -187,21 +196,29 @@
         {
           "kind": "test",
           "path": "rocketmq-sre/crates/rocketmq-sre-control-plane/src/autonomy/logger_ttl_lifecycle_tests.rs"
+        },
+        {
+          "kind": "configuration",
+          "path": "rocketmq-sre/config/qualification/execution-recovery.v1.json"
+        },
+        {
+          "kind": "test",
+          "path": "rocketmq-sre/scripts/check_execution_recovery_qualification.py"
         }
       ],
       "limitations": [
-        "Autonomy remains disabled by default and has not completed disposable-cluster production qualification.",
+        "Autonomy remains disabled by default; the Kubernetes platform fault matrix has passed, while per-action shadow and supervised qualification remains incomplete.",
         "Per-organization and per-cluster operational evidence is incomplete."
       ]
     },
     {
       "id": "enterprise-integrations",
-      "status": "partial",
+      "status": "completed",
       "target_outcome": "enterprise-integrations",
       "maturity": {
         "implemented": true,
         "contract_tested": true,
-        "live_smoke_passed": false,
+        "live_smoke_passed": true,
         "production_certified": false
       },
       "evidence": [
@@ -216,10 +233,14 @@
         {
           "kind": "source",
           "path": "rocketmq-sre/crates/rocketmq-sre-control-plane/src/evidence/blob.rs"
+        },
+        {
+          "kind": "test",
+          "path": "rocketmq-sre/scripts/enterprise-integrations-smoke.ps1"
         }
       ],
       "limitations": [
-        "Adapters exist, but a representative enterprise identity, credential provider, object store, and observability backend are not live qualified."
+        "Representative Keycloak, Vault, HTTPS MinIO, Prometheus, Loki, Tempo, and Alertmanager backends passed disposable-environment live qualification; deployment-specific production certification remains required."
       ]
     },
     {
@@ -229,7 +250,7 @@
       "maturity": {
         "implemented": true,
         "contract_tested": true,
-        "live_smoke_passed": false,
+        "live_smoke_passed": true,
         "production_certified": false
       },
       "evidence": [
@@ -253,17 +274,52 @@
     },
     {
       "id": "production-qualification",
-      "status": "not_started",
+      "status": "partial",
       "target_outcome": "production-readiness",
       "maturity": {
-        "implemented": false,
-        "contract_tested": false,
+        "implemented": true,
+        "contract_tested": true,
         "live_smoke_passed": false,
         "production_certified": false
       },
-      "evidence": [],
-      "reason": "Current and previous-version binaries, multi-region recovery, sustained load, soak, and independent handoff evidence have not been completed.",
-      "limitations": []
+      "evidence": [
+        {
+          "kind": "configuration",
+          "path": "rocketmq-sre/config/qualification/execution-recovery.v1.json"
+        },
+        {
+          "kind": "test",
+          "path": "rocketmq-sre/scripts/binary-compatibility-qualification.ps1"
+        },
+        {
+          "kind": "test",
+          "path": "rocketmq-sre/scripts/two-region-isolation-qualification.ps1"
+        },
+        {
+          "kind": "test",
+          "path": "rocketmq-sre/scripts/docker-infrastructure-recovery-smoke.ps1"
+        },
+        {
+          "kind": "test",
+          "path": "rocketmq-sre/scripts/disaster-recovery-qualification.ps1"
+        },
+        {
+          "kind": "test",
+          "path": "rocketmq-sre/scripts/phase05-control-plane-restore.ps1"
+        },
+        {
+          "kind": "test",
+          "path": "scripts/kind-architecture-refactor-e2e.ps1"
+        },
+        {
+          "kind": "test",
+          "path": "scripts/service-image-contract.ps1"
+        }
+      ],
+      "limitations": [
+        "Current/N-1 native binaries, two independent Kubernetes regions, the sixteen-scenario Kubernetes fault matrix, synchronous PostgreSQL failover, object recovery, and Control Plane backup/restore have passed disposable-environment qualification.",
+        "Deployment-specific production certification, sustained load, soak, and independent operator handoff evidence remain incomplete."
+      ]
     },
     {
       "id": "ai-assisted-diagnosis",
@@ -276,8 +332,10 @@
         "production_certified": false
       },
       "evidence": [],
-      "reason": "DeepSeek credential intake and AI-assisted diagnosis are intentionally last, after Evidence, enterprise integration, execution-boundary, and production-readiness qualification.",
-      "limitations": []
+      "reason": "DeepSeek credential intake and AI-assisted diagnosis are intentionally last, after Evidence, enterprise integration, execution-boundary, and production-readiness qualification; the user will provide the API key at that time.",
+      "limitations": [
+        "No real provider credential has been supplied and no model network call has been performed."
+      ]
     }
   ]
 }

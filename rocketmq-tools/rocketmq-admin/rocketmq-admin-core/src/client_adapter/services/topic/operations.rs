@@ -110,6 +110,23 @@ impl TopicService {
         result
     }
 
+    /// Query a topic route using the caller-owned runtime and optional credentials.
+    ///
+    /// This application-facing variant keeps runtime ownership explicit and applies
+    /// the same authentication hook as the other CLI-backed topic operations.
+    pub async fn query_topic_route_by_request_with_credentials(
+        request: TopicRouteQueryRequest,
+        credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
+    ) -> RocketMQResult<Option<rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData>> {
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime)
+            .build_and_start()
+            .await?;
+        let result = Self::get_topic_route(&mut admin, request.topic().clone()).await;
+        admin.shutdown().await;
+        result
+    }
+
     /// Query topic status through a complete core request lifecycle.
     pub async fn query_topic_status(
         request: TopicStatusQueryRequest,

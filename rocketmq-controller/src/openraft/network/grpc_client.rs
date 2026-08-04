@@ -181,11 +181,20 @@ impl RaftNetworkV2<TypeConfig> for GrpcNetworkClient {
             }),
         };
 
-        let client = self.get_client().await.map_err(RPCError::Network)?;
-        let response = client.append_entries(Request::new(proto_req)).await.map_err(|e| {
-            error!("AppendEntries RPC failed: {}", e);
-            RPCError::Network(NetworkError::new(&std::io::Error::other(e.to_string())))
-        })?;
+        let response = {
+            let client = self.get_client().await.map_err(RPCError::Network)?;
+            client.append_entries(Request::new(proto_req)).await
+        };
+        let response = match response {
+            Ok(response) => response,
+            Err(error) => {
+                self.client = None;
+                error!("AppendEntries RPC failed: {}", error);
+                return Err(RPCError::Network(NetworkError::new(&std::io::Error::other(
+                    error.to_string(),
+                ))));
+            }
+        };
 
         let proto_resp = response.into_inner();
 
@@ -213,8 +222,6 @@ impl RaftNetworkV2<TypeConfig> for GrpcNetworkClient {
             "Sending full_snapshot to node {}: vote={:?}, meta={:?}",
             self.target, vote, snapshot.meta
         );
-
-        let client = self.get_client().await.map_err(StreamingError::Network)?;
 
         // Serialize snapshot metadata
         let last_membership = serde_json::to_vec(&snapshot.meta.last_membership).map_err(|e| {
@@ -275,10 +282,20 @@ impl RaftNetworkV2<TypeConfig> for GrpcNetworkClient {
         });
 
         // Send streaming request
-        let response = client.install_snapshot(Request::new(stream)).await.map_err(|e| {
-            error!("InstallSnapshot RPC failed: {}", e);
-            StreamingError::Network(NetworkError::new(&std::io::Error::other(e.to_string())))
-        })?;
+        let response = {
+            let client = self.get_client().await.map_err(StreamingError::Network)?;
+            client.install_snapshot(Request::new(stream)).await
+        };
+        let response = match response {
+            Ok(response) => response,
+            Err(error) => {
+                self.client = None;
+                error!("InstallSnapshot RPC failed: {}", error);
+                return Err(StreamingError::Network(NetworkError::new(&std::io::Error::other(
+                    error.to_string(),
+                ))));
+            }
+        };
 
         let proto_resp = response.into_inner();
 
@@ -311,11 +328,20 @@ impl RaftNetworkV2<TypeConfig> for GrpcNetworkClient {
             }),
         };
 
-        let client = self.get_client().await.map_err(RPCError::Network)?;
-        let response = client.vote(Request::new(proto_req)).await.map_err(|e| {
-            error!("Vote RPC failed: {}", e);
-            RPCError::Network(NetworkError::new(&std::io::Error::other(e.to_string())))
-        })?;
+        let response = {
+            let client = self.get_client().await.map_err(RPCError::Network)?;
+            client.vote(Request::new(proto_req)).await
+        };
+        let response = match response {
+            Ok(response) => response,
+            Err(error) => {
+                self.client = None;
+                error!("Vote RPC failed: {}", error);
+                return Err(RPCError::Network(NetworkError::new(&std::io::Error::other(
+                    error.to_string(),
+                ))));
+            }
+        };
 
         let proto_resp = response.into_inner();
 
@@ -327,5 +353,40 @@ impl RaftNetworkV2<TypeConfig> for GrpcNetworkClient {
             vote_granted: proto_resp.vote_granted,
             last_log_id: None, // Simplified - the vote response doesn't always need the last_log_id
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::TcpListener;
+
+    use openraft::network::RPCOption;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn vote_rpc_failure_discards_cached_channel() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind unused test port");
+        let address = listener.local_addr().expect("read unused test port");
+        drop(listener);
+
+        let endpoint = Channel::from_shared(format!("http://{address}"))
+            .expect("valid test endpoint")
+            .timeout(Duration::from_millis(100));
+        let mut network = GrpcNetworkClient::new(2, address.to_string());
+        network.client = Some(OpenRaftServiceClient::new(endpoint.connect_lazy()));
+
+        let result = network
+            .vote(
+                VoteRequest {
+                    vote: Vote::new(1, 1),
+                    last_log_id: None,
+                },
+                RPCOption::new(Duration::from_secs(1)),
+            )
+            .await;
+
+        assert!(result.is_err());
+        assert!(network.client.is_none());
     }
 }

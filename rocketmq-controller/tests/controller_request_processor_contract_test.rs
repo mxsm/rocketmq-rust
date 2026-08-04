@@ -519,6 +519,11 @@ async fn controller_request_contract_get_metadata_info() {
         Some(harness.manager.controller_config().listen_addr.to_string().as_str())
     );
     assert_eq!(header.is_leader, Some(true));
+    let last_log_index = header.last_log_index.expect("last log index");
+    let committed_log_index = header.committed_log_index.expect("committed log index");
+    let applied_log_index = header.applied_log_index.expect("applied log index");
+    assert!(last_log_index >= committed_log_index);
+    assert!(committed_log_index >= applied_log_index);
     assert!(header.peers.as_ref().is_some_and(|peers| peers
         .as_str()
         .contains(&harness.manager.controller_config().listen_addr.to_string())));

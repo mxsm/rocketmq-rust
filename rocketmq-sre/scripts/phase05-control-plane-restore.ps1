@@ -39,6 +39,8 @@ $stdoutPath = Join-Path $runtimeDirectory 'control-plane.stdout.log'
 $stderrPath = Join-Path $runtimeDirectory 'control-plane.stderr.log'
 $process = $null
 $restoreCreated = $false
+$exerciseStartedAt = [DateTimeOffset]::UtcNow
+$restoreStartedAt = $null
 
 function Invoke-Native {
     param(
@@ -181,6 +183,7 @@ try {
         '--no-owner',
         '--file', $dumpPath
     ) 'Control Plane PostgreSQL backup'
+    $restoreStartedAt = [DateTimeOffset]::UtcNow
     Invoke-Native docker @(
         'exec', $PostgresContainer,
         'createdb',
@@ -258,11 +261,20 @@ try {
         -RedirectStandardOutput $stdoutPath `
         -RedirectStandardError $stderrPath
     $ready = Wait-ControlPlaneReady
+    $finishedAt = [DateTimeOffset]::UtcNow
+    $revision = (& git -C $sreRoot rev-parse HEAD).Trim()
+    if ($LASTEXITCODE -ne 0 -or $revision -notmatch '^[0-9a-f]{40}$') {
+        throw 'Unable to resolve the Control Plane restore revision.'
+    }
 
     $evidence = [ordered]@{
         schema_version = 'rocketmq-sre.phase05-control-plane-restore.v1'
         status = 'passed'
-        observed_at = [DateTimeOffset]::UtcNow.ToString('O')
+        environment = 'docker-postgresql-backup-restore'
+        started_at = $exerciseStartedAt.ToString('O')
+        finished_at = $finishedAt.ToString('O')
+        observed_at = $finishedAt.ToString('O')
+        revision = $revision
         source_database = $SourceDatabase
         restore_database_ephemeral = $true
         backup_format = 'postgres-custom'
@@ -270,6 +282,9 @@ try {
         restored_counts = $restoredCounts
         control_plane_health = 'healthy'
         control_plane_ready = [bool]$ready.ready
+        restore_verified = [bool]$ready.ready
+        rpo_rows = 0
+        rto_seconds = [int][Math]::Ceiling(($finishedAt - $restoreStartedAt).TotalSeconds)
         public_port = $PublicPort
         secrets_recorded = $false
     }

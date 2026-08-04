@@ -75,6 +75,7 @@ class DynamicEvidenceInputTests(unittest.TestCase):
                     "admin.identity",
                     "broker-acl.yml",
                     "ca.crt",
+                    "controller-acl.yml",
                     "proxy-acl.yml",
                     "request-policy.json",
                     "tls.crt",
@@ -84,14 +85,19 @@ class DynamicEvidenceInputTests(unittest.TestCase):
             )
             self.assertEqual(set(runtime), set(rotated_runtime))
             self.assertNotEqual(runtime["broker-acl.yml"], rotated_runtime["broker-acl.yml"])
+            self.assertNotEqual(runtime["controller-acl.yml"], rotated_runtime["controller-acl.yml"])
             self.assertTrue(runtime["tls.crt"].startswith("-----BEGIN CERTIFICATE-----"))
             self.assertTrue(runtime["tls.key"].startswith("-----BEGIN RSA PRIVATE KEY-----"))
             self.assertEqual(runtime["tls.crt"], rotated_runtime["tls.crt"])
             self.assertEqual(runtime["tls.key"], rotated_runtime["tls.key"])
             self.assertIn(baseline_driver["ROCKETMQ_ACL_ACCESS_KEY"], runtime["broker-acl.yml"])
             self.assertIn(baseline_driver["ROCKETMQ_ACL_SECRET_KEY"], runtime["broker-acl.yml"])
+            self.assertIn(baseline_driver["ROCKETMQ_ACL_ACCESS_KEY"], runtime["controller-acl.yml"])
+            self.assertIn(baseline_driver["ROCKETMQ_ACL_SECRET_KEY"], runtime["controller-acl.yml"])
             self.assertIn(rotated_driver["ROCKETMQ_ACL_ACCESS_KEY"], rotated_runtime["broker-acl.yml"])
             self.assertIn(rotated_driver["ROCKETMQ_ACL_SECRET_KEY"], rotated_runtime["broker-acl.yml"])
+            self.assertIn(rotated_driver["ROCKETMQ_ACL_ACCESS_KEY"], rotated_runtime["controller-acl.yml"])
+            self.assertIn(rotated_driver["ROCKETMQ_ACL_SECRET_KEY"], rotated_runtime["controller-acl.yml"])
             for value in (*baseline_driver.values(), *rotated_driver.values()):
                 self.assertNotIn(value, completed.stdout)
 

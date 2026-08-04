@@ -61,7 +61,8 @@ EXPECTED_SERVICES: dict[str, dict[str, Any]] = {
         "kind": "StatefulSet",
         "replicas": 3,
         "ports": [8088, 60109, 60110],
-        "config": "/etc/rocketmq/controller.toml",
+        "config": "/etc/rocketmq/controller-config",
+        "container_config": "/etc/rocketmq/controller.toml",
         "data": "/var/lib/rocketmq/controller",
         "pdb": 2,
         "storage": "10Gi",
@@ -310,7 +311,11 @@ def validate_exact_policy(guard: Guard, policy: dict[str, Any], container_policy
             == sorted([*EXPECTED_CONTAINER_AUXILIARY_PORTS[service], *expected["ports"]]),
             f"{service} deployment/container port drift",
         )
-        guard.require(container.get("config_path") == expected["config"], f"{service} deployment/container config drift")
+        expected_container_config = expected.get("container_config", expected["config"])
+        guard.require(
+            container.get("config_path") == expected_container_config,
+            f"{service} deployment/container config drift",
+        )
         guard.require(container.get("data_path") == expected["data"], f"{service} deployment/container data drift")
     guard.require(services.get("controller", {}).get("quorum") == 2, "Controller quorum must remain two of three")
     guard.require(
@@ -393,6 +398,15 @@ def validate_source_assets(guard: Guard) -> None:
             "pdbs.yaml",
             "networkpolicies.yaml",
         )
+    )
+    controller_config_template = guard.read("distribution/helm/rocketmq-rust/templates/configmaps.yaml")
+    guard.require(
+        controller_config_template.count("electionTimeoutMs = 5000") == 1,
+        "Controller Helm config must retain the five-second Kubernetes recovery election window",
+    )
+    guard.require(
+        "electionTimeoutMs = 1000" not in controller_config_template,
+        "Controller Helm config must not restore the disruptive one-second election window",
     )
     require_security_bootstrap_environment(guard, "Helm chart", chart_sources)
     all_yaml_sources = chart_sources + "\n" + guard.read("distribution/kubernetes/base/manifest.yaml")
@@ -543,7 +557,14 @@ def validate_workload(guard: Guard, label: str, document: Document, service: str
         guard.require("replicas: 1" in text and "type: Recreate" in text, f"{label}: MCP audit deployment must be singleton/Recreate")
     if service == "controller":
         guard.require("topologyKey: topology.kubernetes.io/zone" in text, f"{label}: Controller zone spread missing")
-        guard.require("subPathExpr: $(POD_NAME).toml" in text, f"{label}: Controller ordinal config selection missing")
+        guard.require(
+            "/etc/rocketmq/controller-config/$(POD_NAME).toml" in text,
+            f"{label}: Controller ordinal config selection missing",
+        )
+        guard.require(
+            "subPathExpr: $(POD_NAME).toml" not in text,
+            f"{label}: Controller config must use the restart-safe directory mount",
+        )
         guard.require(
             "ROCKETMQ_CONTROLLER_RAFT_BIND_ADDR" in text and "0.0.0.0:60110" in text,
             f"{label}: Controller separate Raft bind address missing",
@@ -610,6 +631,14 @@ def validate_render(guard: Guard, label: str, text: str) -> dict[str, Any]:
     controller_config = find_document(documents, "ConfigMap", "rocketmq-controller-config")
     guard.require(controller_config is not None, f"{label}: Controller config map missing")
     if controller_config is not None:
+        guard.require(
+            controller_config.text.count("electionTimeoutMs = 5000") == 3,
+            f"{label}: Controller must render the five-second election window for every ordinal",
+        )
+        guard.require(
+            "electionTimeoutMs = 1000" not in controller_config.text,
+            f"{label}: Controller must not render the disruptive one-second election window",
+        )
         for node_id in (1, 2, 3):
             guard.require(f"nodeId = {node_id}" in controller_config.text, f"{label}: Controller nodeId {node_id} missing")
         guard.require(controller_config.text.count("[[raftPeers]]") == 9, f"{label}: Controller must render three Raft peers per ordinal")
@@ -631,7 +660,7 @@ def validate_render(guard: Guard, label: str, text: str) -> dict[str, Any]:
             if peer_service is not None:
                 guard.require(f"clusterIP: {address}" in peer_service.text, f"{label}: Controller Service IP {ordinal} drifted")
                 guard.require("statefulset.kubernetes.io/pod-name:" in peer_service.text, f"{label}: Controller Service selector drifted")
-            require_valid_toml(guard, label, controller_config, f"controller-{ordinal}.toml")
+            require_valid_toml(guard, label, controller_config, f"rocketmq-controller-{ordinal}.toml")
 
     broker_config = find_document(documents, "ConfigMap", "rocketmq-broker-config")
     guard.require(broker_config is not None, f"{label}: broker config map missing")

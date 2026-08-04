@@ -431,7 +431,7 @@ metadata:
     rocketmq.apache.org/maintenance-policy-sha256: "951aca122bb23b78e29235aaf05b2dffe9422bf97636ce6ac04fddab969ba0ee"
 immutable: true
 data:
-  maintenance-policy.json: |-
+  maintenance-policy.json: |
     {
       "schema_version": 1,
       "policy_id": "rocketmq.production-maintenance",
@@ -492,14 +492,14 @@ data:
     autoCreateTopicEnable = false
     enableControllerMode = true
     controllerAddr = "10.96.0.201:60109;10.96.0.202:60109;10.96.0.203:60109"
-    authConfigPath = "/etc/rocketmq/auth"
+    authConfigPath = "/var/lib/rocketmq/auth"
     aclFile = "/var/run/secrets/rocketmq/broker-acl.yml"
     aclFileWatchEnabled = true
     authenticationEnabled = true
     authorizationEnabled = true
     signatureAlgorithm = "HmacSHA256"
     maintenanceEnabled = true
-    maintenancePolicyPath = "maintenance-policy.json"
+    maintenancePolicyPath = "/etc/rocketmq/auth/maintenance-policy.json"
     maintenancePolicyVersion = 1
     maintenancePolicySha256 = "951aca122bb23b78e29235aaf05b2dffe9422bf97636ce6ac04fddab969ba0ee"
     maintenanceCheckpointRoot = "/var/lib/rocketmq/checkpoints"
@@ -523,14 +523,14 @@ data:
     autoCreateTopicEnable = false
     enableControllerMode = true
     controllerAddr = "10.96.0.201:60109;10.96.0.202:60109;10.96.0.203:60109"
-    authConfigPath = "/etc/rocketmq/auth"
+    authConfigPath = "/var/lib/rocketmq/auth"
     aclFile = "/var/run/secrets/rocketmq/broker-acl.yml"
     aclFileWatchEnabled = true
     authenticationEnabled = true
     authorizationEnabled = true
     signatureAlgorithm = "HmacSHA256"
     maintenanceEnabled = true
-    maintenancePolicyPath = "maintenance-policy.json"
+    maintenancePolicyPath = "/etc/rocketmq/auth/maintenance-policy.json"
     maintenancePolicyVersion = 1
     maintenancePolicySha256 = "951aca122bb23b78e29235aaf05b2dffe9422bf97636ce6ac04fddab969ba0ee"
     maintenanceCheckpointRoot = "/var/lib/rocketmq/checkpoints"
@@ -554,14 +554,14 @@ data:
     autoCreateTopicEnable = false
     enableControllerMode = true
     controllerAddr = "10.96.0.201:60109;10.96.0.202:60109;10.96.0.203:60109"
-    authConfigPath = "/etc/rocketmq/auth"
+    authConfigPath = "/var/lib/rocketmq/auth"
     aclFile = "/var/run/secrets/rocketmq/broker-acl.yml"
     aclFileWatchEnabled = true
     authenticationEnabled = true
     authorizationEnabled = true
     signatureAlgorithm = "HmacSHA256"
     maintenanceEnabled = true
-    maintenancePolicyPath = "maintenance-policy.json"
+    maintenancePolicyPath = "/etc/rocketmq/auth/maintenance-policy.json"
     maintenancePolicyVersion = 1
     maintenancePolicySha256 = "951aca122bb23b78e29235aaf05b2dffe9422bf97636ce6ac04fddab969ba0ee"
     maintenanceCheckpointRoot = "/var/lib/rocketmq/checkpoints"
@@ -613,7 +613,7 @@ metadata:
     rocketmq.apache.org/service: controller
     rocketmq.apache.org/architecture-milestone: P0-05
 data:
-  controller-0.toml: |-
+  rocketmq-controller-0.toml: |-
     rocketmqHome = "/var/lib/rocketmq/controller"
     configStorePath = "/var/lib/rocketmq/controller/controller.properties"
     controllerType = "Raft"
@@ -641,17 +641,17 @@ data:
     configBlackList = "configBlackList;configStorePath;maintenanceCheckpointRoot"
     nodeId = 1
     listenAddr = "0.0.0.0:60109"
-    electionTimeoutMs = 1000
+    electionTimeoutMs = 5000
     heartbeatIntervalMs = 300
     storagePath = "/var/lib/rocketmq/controller/node-1"
     storageBackend = "RocksDB"
     enableElectUncleanMasterLocal = false
     authenticationEnabled = true
     authorizationEnabled = true
-    authConfigPath = "/etc/rocketmq/auth"
+    authConfigPath = "/var/lib/rocketmq/controller/auth/node-1"
     aclFile = "/var/run/secrets/rocketmq/controller-acl.yml"
     maintenanceEnabled = true
-    maintenancePolicyPath = "maintenance-policy.json"
+    maintenancePolicyPath = "/etc/rocketmq/auth/maintenance-policy.json"
     maintenancePolicyVersion = 1
     maintenancePolicySha256 = "951aca122bb23b78e29235aaf05b2dffe9422bf97636ce6ac04fddab969ba0ee"
     maintenanceCheckpointRoot = "/var/lib/rocketmq/controller/checkpoints/node-1"
@@ -679,7 +679,7 @@ data:
     [[controllerPeers]]
     id = 3
     addr = "10.96.0.203:60109"
-  controller-1.toml: |-
+  rocketmq-controller-1.toml: |-
     rocketmqHome = "/var/lib/rocketmq/controller"
     configStorePath = "/var/lib/rocketmq/controller/controller.properties"
     controllerType = "Raft"
@@ -707,17 +707,17 @@ data:
     configBlackList = "configBlackList;configStorePath;maintenanceCheckpointRoot"
     nodeId = 2
     listenAddr = "0.0.0.0:60109"
-    electionTimeoutMs = 1000
+    electionTimeoutMs = 5000
     heartbeatIntervalMs = 300
     storagePath = "/var/lib/rocketmq/controller/node-2"
     storageBackend = "RocksDB"
     enableElectUncleanMasterLocal = false
     authenticationEnabled = true
     authorizationEnabled = true
-    authConfigPath = "/etc/rocketmq/auth"
+    authConfigPath = "/var/lib/rocketmq/controller/auth/node-2"
     aclFile = "/var/run/secrets/rocketmq/controller-acl.yml"
     maintenanceEnabled = true
-    maintenancePolicyPath = "maintenance-policy.json"
+    maintenancePolicyPath = "/etc/rocketmq/auth/maintenance-policy.json"
     maintenancePolicyVersion = 1
     maintenancePolicySha256 = "951aca122bb23b78e29235aaf05b2dffe9422bf97636ce6ac04fddab969ba0ee"
     maintenanceCheckpointRoot = "/var/lib/rocketmq/controller/checkpoints/node-2"
@@ -745,7 +745,7 @@ data:
     [[controllerPeers]]
     id = 3
     addr = "10.96.0.203:60109"
-  controller-2.toml: |-
+  rocketmq-controller-2.toml: |-
     rocketmqHome = "/var/lib/rocketmq/controller"
     configStorePath = "/var/lib/rocketmq/controller/controller.properties"
     controllerType = "Raft"
@@ -773,17 +773,17 @@ data:
     configBlackList = "configBlackList;configStorePath;maintenanceCheckpointRoot"
     nodeId = 3
     listenAddr = "0.0.0.0:60109"
-    electionTimeoutMs = 1000
+    electionTimeoutMs = 5000
     heartbeatIntervalMs = 300
     storagePath = "/var/lib/rocketmq/controller/node-3"
     storageBackend = "RocksDB"
     enableElectUncleanMasterLocal = false
     authenticationEnabled = true
     authorizationEnabled = true
-    authConfigPath = "/etc/rocketmq/auth"
+    authConfigPath = "/var/lib/rocketmq/controller/auth/node-3"
     aclFile = "/var/run/secrets/rocketmq/controller-acl.yml"
     maintenanceEnabled = true
-    maintenancePolicyPath = "maintenance-policy.json"
+    maintenancePolicyPath = "/etc/rocketmq/auth/maintenance-policy.json"
     maintenancePolicyVersion = 1
     maintenancePolicySha256 = "951aca122bb23b78e29235aaf05b2dffe9422bf97636ce6ac04fddab969ba0ee"
     maintenanceCheckpointRoot = "/var/lib/rocketmq/controller/checkpoints/node-3"
@@ -2214,7 +2214,7 @@ spec:
         - name: controller
           image: "rocketmq-rust/controller:local"
           imagePullPolicy: Never
-          args: ["--config-file", "/etc/rocketmq/controller.toml"]
+          args: ["--config-file", "/etc/rocketmq/controller-config/$(POD_NAME).toml"]
           env:
             - {name: ROCKETMQ_HEALTH_BIND_ADDR, value: "0.0.0.0:8088"}
             - {name: ROCKETMQ_SHUTDOWN_TIMEOUT_SECONDS, value: "45"}
@@ -2294,8 +2294,7 @@ spec:
               type: RuntimeDefault
           volumeMounts:
             - name: config
-              mountPath: /etc/rocketmq/controller.toml
-              subPathExpr: $(POD_NAME).toml
+              mountPath: /etc/rocketmq/controller-config
               readOnly: true
             - name: maintenance-policy
               mountPath: /etc/rocketmq/auth/maintenance-policy.json

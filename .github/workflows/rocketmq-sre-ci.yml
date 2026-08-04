@@ -115,6 +115,9 @@ jobs:
       - name: Check Executor and Agent dependency boundary
         run: python rocketmq-sre/scripts/check_execution_dependency_boundary.py
 
+      - name: Check execution and recovery qualification catalog
+        run: python rocketmq-sre/scripts/check_execution_recovery_qualification.py
+
       - name: Check formatting
         run: |
           cargo fmt --manifest-path rocketmq-sre/Cargo.toml \

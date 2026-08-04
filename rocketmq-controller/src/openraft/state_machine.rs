@@ -251,6 +251,14 @@ impl StateMachine {
         }
     }
 
+    /// Returns whether durable state contains an applied Raft log entry.
+    ///
+    /// Bootstrap uses this storage-backed value instead of the asynchronously published
+    /// OpenRaft metrics so a restarting node cannot be mistaken for a new cluster.
+    pub(crate) async fn has_persisted_applied_state(&self) -> bool {
+        self.last_applied.read().await.is_some()
+    }
+
     fn response_from_result<T, F>(
         replicas_info_manager: &ReplicasInfoManager,
         result: ControllerResult<T>,
@@ -766,6 +774,39 @@ mod tests {
         assert!(restored
             .replicas_info_manager()
             .is_broker_active_at("test-cluster", "broker-a", 1, 2_000));
+    }
+
+    #[tokio::test]
+    async fn reopened_state_reports_persisted_applied_log_before_raft_metrics_publish() {
+        let context = rocketmq_runtime::RuntimeContext::from_current("controller-persisted-bootstrap-state-test");
+        let backend = crate::storage::create_storage(
+            crate::storage::StorageConfig::Memory,
+            context.service_context("storage").storage_io().clone(),
+        )
+        .await
+        .expect("create shared memory backend");
+        let config = ControllerConfigReader::new(
+            ControllerConfig::default().with_node_info(1, "127.0.0.1:39877".parse().expect("valid addr")),
+        );
+        let state_machine = StateMachine::open(config.clone(), backend.clone())
+            .await
+            .expect("open state machine");
+        let last_applied = LogId {
+            leader_id: crate::typ::Vote::new(7, 1).leader_id,
+            index: 42,
+        };
+        let serialized_state = state_machine
+            .replicas_info_manager()
+            .serialize()
+            .expect("serialize state machine");
+        state_machine
+            .persist_state_values(serialized_state, Some(last_applied), &StoredMembership::default())
+            .await
+            .expect("persist applied state");
+
+        let reopened = StateMachine::open(config, backend).await.expect("reopen state machine");
+
+        assert!(reopened.has_persisted_applied_state().await);
     }
 
     #[test]

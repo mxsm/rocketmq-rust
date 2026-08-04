@@ -264,7 +264,16 @@ def validate_sources(guard: Guard) -> None:
         "acknowledged_message_recovery",
         "Invoke-Native kubectl @('drain'",
         "node.kubernetes.io/disk-pressure",
+        "rocketmq.apache.org/simulated-disk-pressure",
+        "$pressureStatusDuring -match 'rocketmq.apache.org/simulated-disk-pressure'",
+        "$_.key -in $diskPressureTaintKeys",
+        "$taintCleanup.ExitCode -eq 0 -or $taintCleanup.Output -match 'not found'",
+        "$simulationTaintCleanup.ExitCode -eq 0 -or $simulationTaintCleanup.Output -match 'not found'",
+        "kubelet already removed it",
         "queryMsgByUniqueKey",
+        "fault matrix may create only its fixed synthetic topic",
+        "'updateTopic'",
+        "'RocketmqRust'",
         "queue_offset_preserved",
         "commitlog_offset_preserved",
         "pvc_uid_set_preserved",
@@ -275,12 +284,15 @@ def validate_sources(guard: Guard) -> None:
         "$proxyUidsBeforePressure -notcontains",
         "stateless_pod_rescheduled = $null -ne $replacementProxyPod",
         "Get-ControllerLeaderOrdinal",
-        "leader_changed = $leaderAfterOrdinal -ne $leaderBeforeOrdinal",
+        "leader_changed = $leaderAfterOrdinal -ne $failureLeaderOrdinal",
         "Set-StatefulSetReplicas 'rocketmq-namesrv' 1",
         "Set-StatefulSetReplicas 'rocketmq-controller' 1",
-        "Set-NodeNetworkImpairment $minorityNode @('loss', '100%')",
         "Set-NodeNetworkImpairment $networkNode @('delay', '200ms', '50ms', 'loss', '10%')",
         "disk_full_state_rejects_new_writes_without_losing_acknowledged_data",
+        "i=0; : > /tmp/rocketmq/phase06-fsync.pids; while",
+        "attempt=0; active=1; while",
+        'case "$state" in ""|Z*)',
+        "/tmp/rocketmq/phase06-fsync-",
         "sync_master_without_slave_ack_returns_flush_slave_timeout",
         "three_controller_two_broker_controller_mode_failover_and_rejoin",
         "interrupted_snapshot_install_is_rejected_and_full_retry_recovers",
@@ -289,10 +301,77 @@ def validate_sources(guard: Guard) -> None:
         "data_saturation_preserves_readiness_capacity_and_releases_all_permits",
         "leaked=0 detached_still_running=0",
         "Invoke-Native docker @('pull', $image)",
-        "Invoke-Native kind (@('load', 'docker-image') + $clusterImages",
+        "'org.opencontainers.image.revision'",
+        "@($revisions | Sort-Object -Unique)",
+        "candidate image revision must equal CandidateCommit",
+        "'ROCKETMQ_RELEASE_COMMIT'",
+        "'--patch-file', $patchPath",
+        "Invoke-Native docker @('tag', $image, $cacheTag)",
+        "Invoke-Native kind @('load', 'image-archive', $archivePath, '--name', $ClusterName)",
+        "'images', 'tag', $cacheReference, $targetReference",
         "Invoke-Native k3d (@('image', 'import') + $clusterImages",
+        "selector: { matchLabels: { app.kubernetes.io/name: otel-collector } }",
+        "$jobStatus.failed ?? 0",
+        "broker cluster registration was not observed before the synthetic topic deadline",
+        "Wait-ReadyWorkerPod -Selector 'rocketmq.apache.org/service=proxy'",
+        "Invoke-Native kubectl @('cordon', $minorityNode)",
+        "function Set-PodNetworkIsolation",
+        "$minorityFault = Set-PodNetworkIsolation",
+        "$minorityDirectProbe = Invoke-RouteProbe -Namesrv $minorityAddress -AllowFailure",
+        "$minorityRestore = Clear-PodNetworkIsolation",
+        "Invoke-Native kubectl @('cordon', $networkNode)",
+        "rocketmq.apache.org/service=controller",
+        "rocketmq.apache.org/service=broker",
+        "app.kubernetes.io/part-of=rocketmq-rust",
+        "$null -eq $_.metadata.deletionTimestamp",
+        "$readyFinalPods = @(",
+        "$readyFinalPods.Count -eq 12",
+        "type = 'OnDelete'",
+        "ControllerLeaderId\\s+([1-3])",
+        "Invoke-Native kubectl @('cordon', $leaderNode)",
+        "Sort-Object -Descending",
+        "Wait-ControllerReplicationCaughtUp",
+        "CommittedLogIndex",
+        "AppliedLogIndex",
+        "$actualScenarioOrder = (($ScenarioRecords | ForEach-Object { $_.id }) -join ',')",
+        "Assert-True ($actualScenarioOrder -eq $expectedScenarioOrder)",
+        "Wait-PodRecreatedAndReady -Pod 'rocketmq-broker-0' -PreviousUid $brokerStateBeforeRestart.metadata.uid",
+        "$null = Wait-ControllerLeadershipStable -Ordinals $survivingOrdinals",
+        "Invoke-Native kubectl @('cordon', $failureLeaderNode)",
+        "Wait-ControllerLeadershipStable -Ordinals $failureSurvivingOrdinals",
+        "$restoredLeadership = Wait-ControllerLeadershipStable",
+        "$snapshotLeadershipBefore = Wait-ControllerLeadershipStable",
+        "function Test-MessageQuerySucceeded",
+        "$querySucceeded = Test-MessageQuerySucceeded $result",
+        "function Wait-CredentialCutover",
+        "credential rotation must converge through hot reload without restarting Broker pods",
+        "semantic_query=$($rotationResult.DeniedSucceeded)",
     ):
         guard.require(marker in runner, f"fault runner contract marker missing: {marker}")
+    minority_start = runner.find("$minorityPod =")
+    minority_end = runner.find("$majorityScale =", minority_start)
+    guard.require(
+        minority_start >= 0 and minority_end > minority_start,
+        "NameServer minority fault block boundaries are missing",
+    )
+    if minority_start >= 0 and minority_end > minority_start:
+        minority_block = runner[minority_start:minority_end]
+        guard.require(
+            "Set-NodeNetworkImpairment" not in minority_block,
+            "NameServer minority fault must isolate only the target pod, not its co-located node",
+        )
+    secret_rotation_start = runner.find("$preRotation = Query-AcknowledgedMessage $ack.Id")
+    secret_rotation_end = runner.find("$pvcBeforeRestart = Get-PvcUidSet", secret_rotation_start)
+    guard.require(
+        secret_rotation_start >= 0 and secret_rotation_end > secret_rotation_start,
+        "secret rotation block boundaries are missing",
+    )
+    if secret_rotation_start >= 0 and secret_rotation_end > secret_rotation_start:
+        secret_rotation_block = runner[secret_rotation_start:secret_rotation_end]
+        guard.require(
+            "rollout', 'restart', 'statefulset/rocketmq-broker" not in secret_rotation_block,
+            "secret rotation must use Broker hot reload instead of a rollout restart",
+        )
     guard.require("Mode -eq \"Validate\"" in runner, "runner must provide a non-dynamic Validate mode")
     guard.require("throw" in runner, "runner must fail closed on missing prerequisites or failed assertions")
     guard.require("FROM builder-base AS fault-driver-builder" in dockerfile, "fault-driver builder target missing")
