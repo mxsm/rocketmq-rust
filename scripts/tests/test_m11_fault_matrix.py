@@ -263,6 +263,20 @@ class FaultMatrixGuardTests(unittest.TestCase):
         result = self.run_guard("--policy-only", expect_success=False)
         self.assertIn(marker, result.stderr)
 
+    def test_runner_that_drops_partitioned_controller_rollout_is_rejected(self) -> None:
+        runner = self.root / "scripts" / "kind-architecture-refactor-e2e.ps1"
+        source = runner.read_text(encoding="utf-8")
+        markers = (
+            "rollingUpdate = [ordered]@{ partition = 2 }",
+            "$null = Wait-ControllerLeadershipStable",
+        )
+        for marker in markers:
+            self.assertIn(marker, source)
+            runner.write_text(source.replace(marker, "controller rollout stability skipped"), encoding="utf-8")
+            result = self.run_guard("--policy-only", expect_success=False)
+            self.assertIn(marker, result.stderr)
+            runner.write_text(source, encoding="utf-8")
+
     def test_dynamic_input_and_registry_regressions_are_rejected(self) -> None:
         workflow = self.root / ".github" / "workflows" / "kubernetes-fault-matrix.yml"
         source = workflow.read_text(encoding="utf-8")

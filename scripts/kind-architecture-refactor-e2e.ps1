@@ -514,6 +514,35 @@ function Get-ControllerLeadershipSnapshot {
     }
 }
 
+function Wait-ControllerLeadershipStable {
+    param([ValidateRange(1, 600)][int]$TimeoutSeconds = 120)
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSeconds)
+    $previousLeader = $null
+    $consecutiveStableSnapshots = 0
+    $lastSnapshot = $null
+    do {
+        $lastSnapshot = Get-ControllerLeadershipSnapshot
+        if ($lastSnapshot.Responders -eq 3 -and $lastSnapshot.Leaders.Count -eq 1) {
+            $leader = [int]$lastSnapshot.Leaders[0]
+            if ($null -ne $previousLeader -and $leader -eq $previousLeader) {
+                $consecutiveStableSnapshots++
+            } else {
+                $previousLeader = $leader
+                $consecutiveStableSnapshots = 1
+            }
+            if ($consecutiveStableSnapshots -ge 2) {
+                return $lastSnapshot
+            }
+        } else {
+            $previousLeader = $null
+            $consecutiveStableSnapshots = 0
+        }
+        Start-Sleep -Seconds 2
+    } while ([DateTimeOffset]::UtcNow -lt $deadline)
+    $details = if ($null -eq $lastSnapshot) { 'no leadership snapshot was collected' } else { $lastSnapshot.Output }
+    throw "Controller leadership did not stabilize before the deadline`n$details"
+}
+
 function Invoke-ModelTest {
     param(
         [Parameter(Mandatory)][string]$Package,
@@ -575,7 +604,7 @@ function Set-ServiceImages {
         [Parameter(Mandatory)][string]$ReleaseCommit,
         [Parameter(Mandatory)][string]$ReleaseNonce
     )
-    foreach ($service in @('broker', 'namesrv', 'controller')) {
+    foreach ($service in @('broker', 'namesrv')) {
         $patchPath = Join-Path $RunDirectory "$service-$ReleaseNonce-patch.json"
         $patch = [ordered]@{
             spec = [ordered]@{
@@ -603,6 +632,49 @@ function Set-ServiceImages {
         Invoke-Native kubectl @('-n', $Namespace, 'patch', "statefulset/rocketmq-$service", '--type=strategic', '--patch-file', $patchPath) | Out-Null
         Remove-Item -LiteralPath $patchPath -Force
         Invoke-Native kubectl @('-n', $Namespace, 'rollout', 'status', "statefulset/rocketmq-$service", '--timeout=300s') | Out-Null
+    }
+    $controllerPatchPath = Join-Path $RunDirectory "controller-$ReleaseNonce-patch.json"
+    $controllerPatch = [ordered]@{
+        spec = [ordered]@{
+            updateStrategy = [ordered]@{
+                rollingUpdate = [ordered]@{ partition = 2 }
+            }
+            template = [ordered]@{
+                metadata = [ordered]@{
+                    annotations = [ordered]@{
+                        'rocketmq.apache.org/release-commit' = $ReleaseCommit
+                        'rocketmq.apache.org/release-nonce' = $ReleaseNonce
+                    }
+                }
+                spec = [ordered]@{
+                    containers = @([ordered]@{
+                        name = 'controller'
+                        image = $Images['controller']
+                        env = @(
+                            [ordered]@{ name = 'ROCKETMQ_RELEASE_COMMIT'; value = $ReleaseCommit },
+                            [ordered]@{ name = 'ROCKETMQ_RELEASE_NONCE'; value = $ReleaseNonce }
+                        )
+                    })
+                }
+            }
+        }
+    } | ConvertTo-Json -Depth 12 -Compress
+    [IO.File]::WriteAllText($controllerPatchPath, $controllerPatch, [Text.UTF8Encoding]::new($false))
+    Invoke-Native kubectl @('-n', $Namespace, 'patch', 'statefulset/rocketmq-controller', '--type=strategic', '--patch-file', $controllerPatchPath) | Out-Null
+    Remove-Item -LiteralPath $controllerPatchPath -Force
+    foreach ($partition in 2, 1, 0) {
+        if ($partition -ne 2) {
+            $partitionPatch = [ordered]@{
+                spec = [ordered]@{
+                    updateStrategy = [ordered]@{
+                        rollingUpdate = [ordered]@{ partition = $partition }
+                    }
+                }
+            } | ConvertTo-Json -Depth 6 -Compress
+            Invoke-Native kubectl @('-n', $Namespace, 'patch', 'statefulset/rocketmq-controller', '--type=merge', '--patch', $partitionPatch) | Out-Null
+        }
+        Invoke-Native kubectl @('-n', $Namespace, 'rollout', 'status', 'statefulset/rocketmq-controller', '--timeout=300s') | Out-Null
+        $null = Wait-ControllerLeadershipStable
     }
     foreach ($service in @('proxy', 'mcp')) {
         $patchPath = Join-Path $RunDirectory "$service-$ReleaseNonce-patch.json"

@@ -309,6 +309,8 @@ def validate_sources(guard: Guard) -> None:
         "Invoke-Native kubectl @('cordon', $networkNode)",
         "rocketmq.apache.org/service=controller",
         "rocketmq.apache.org/service=broker",
+        "rollingUpdate = [ordered]@{ partition = 2 }",
+        "$null = Wait-ControllerLeadershipStable",
     ):
         guard.require(marker in runner, f"fault runner contract marker missing: {marker}")
     guard.require("Mode -eq \"Validate\"" in runner, "runner must provide a non-dynamic Validate mode")
