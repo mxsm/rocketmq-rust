@@ -266,6 +266,7 @@ def validate_sources(guard: Guard) -> None:
         "node.kubernetes.io/disk-pressure",
         "rocketmq.apache.org/simulated-disk-pressure",
         "$pressureStatusDuring -match 'rocketmq.apache.org/simulated-disk-pressure'",
+        "$_.key -in $diskPressureTaintKeys",
         "$taintCleanup.ExitCode -eq 0 -or $taintCleanup.Output -match 'not found'",
         "$simulationTaintCleanup.ExitCode -eq 0 -or $simulationTaintCleanup.Output -match 'not found'",
         "kubelet already removed it",
@@ -322,6 +323,7 @@ def validate_sources(guard: Guard) -> None:
         "ControllerLeaderId\\s+([1-3])",
         "Invoke-Native kubectl @('cordon', $leaderNode)",
         "$null = Wait-ControllerLeadershipStable -Ordinals $survivingOrdinals",
+        "$snapshotLeadershipBefore = Wait-ControllerLeadershipStable",
     ):
         guard.require(marker in runner, f"fault runner contract marker missing: {marker}")
     guard.require("Mode -eq \"Validate\"" in runner, "runner must provide a non-dynamic Validate mode")

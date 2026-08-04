@@ -1347,7 +1347,9 @@ spec: { selector: { app.kubernetes.io/name: otel-collector }, ports: [{ name: ot
         'controller_snapshot_restore',
         'interrupted_snapshot_install_is_rejected_and_full_retry_recovers'
     )
-    $snapshotFollower = if ($leaderAfterOrdinal -eq 2) { 1 } else { 2 }
+    $snapshotLeadershipBefore = Wait-ControllerLeadershipStable
+    $snapshotLeaderOrdinal = [int]$snapshotLeadershipBefore.Leaders[0]
+    $snapshotFollower = @(0, 1, 2) | Where-Object { $_ -ne $snapshotLeaderOrdinal } | Select-Object -First 1
     $snapshotBefore = (Invoke-Native kubectl @('-n', $Namespace, 'logs', "rocketmq-controller-$snapshotFollower", '--tail=200') -AllowFailure).Output
     $snapshotDelete = Invoke-Native kubectl @('-n', $Namespace, 'delete', 'pod', "rocketmq-controller-$snapshotFollower", '--wait=false')
     Invoke-Native kubectl @('-n', $Namespace, 'rollout', 'status', 'statefulset/rocketmq-controller', '--timeout=180s') | Out-Null
@@ -1360,7 +1362,7 @@ spec: { selector: { app.kubernetes.io/name: otel-collector }, ports: [{ name: ot
         follower_caught_up = $snapshotLeadership.Responders -eq 3
         single_leader_observed = $snapshotLeadership.Leaders.Count -eq 1
     }) ([ordered]@{
-        snapshot_before = $snapshotBefore
+        snapshot_before = "$($snapshotLeadershipBefore.Output)`n--- follower logs ---`n$snapshotBefore"
         interruption_status = $snapshotDelete.Output
         checksum_validation = $snapshotModel.Output
         snapshot_after = $snapshotAfter
@@ -1434,7 +1436,16 @@ spec: { selector: { app.kubernetes.io/name: otel-collector }, ports: [{ name: ot
     $finalPods = ((Invoke-Native kubectl @('-n', $Namespace, 'get', 'pods', '-l', 'app.kubernetes.io/name=rocketmq-rust', '-o', 'json')).Output | ConvertFrom-Json).items
     $allPodsReady = $finalPods.Count -eq 12 -and @($finalPods | Where-Object { ($_.status.conditions | Where-Object { $_.type -eq 'Ready' -and $_.status -eq 'True' }).Count -eq 1 }).Count -eq 12
     $finalNodes = ((Invoke-Native kubectl @('get', 'nodes', '-o', 'json')).Output | ConvertFrom-Json).items
-    $nodesClean = @($finalNodes | Where-Object { $_.spec.unschedulable -eq $true -or ($_.spec.taints | Where-Object { $_.key -eq 'node.kubernetes.io/disk-pressure' }) }).Count -eq 0
+    $diskPressureTaintKeys = @(
+        'node.kubernetes.io/disk-pressure',
+        'rocketmq.apache.org/simulated-disk-pressure'
+    )
+    $nodesClean = @(
+        $finalNodes | Where-Object {
+            $_.spec.unschedulable -eq $true -or
+                ($_.spec.taints | Where-Object { $_.key -in $diskPressureTaintKeys })
+        }
+    ).Count -eq 0
     $collectorReady = ((Invoke-Native kubectl @('-n', 'observability', 'get', 'deployment/otel-collector', '-o', 'json')).Output | ConvertFrom-Json).status.readyReplicas -eq 1
     $baselineImagesRestored = $true
     foreach ($service in @('broker', 'namesrv', 'controller')) {

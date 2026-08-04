@@ -275,6 +275,7 @@ class FaultMatrixGuardTests(unittest.TestCase):
         markers = (
             "rocketmq.apache.org/simulated-disk-pressure",
             "$pressureStatusDuring -match 'rocketmq.apache.org/simulated-disk-pressure'",
+            "$_.key -in $diskPressureTaintKeys",
             "$taintCleanup.ExitCode -eq 0 -or $taintCleanup.Output -match 'not found'",
             "$simulationTaintCleanup.ExitCode -eq 0 -or $simulationTaintCleanup.Output -match 'not found'",
         )
@@ -303,6 +304,7 @@ class FaultMatrixGuardTests(unittest.TestCase):
             "ControllerLeaderId\\s+([1-3])",
             "Invoke-Native kubectl @('cordon', $leaderNode)",
             "$null = Wait-ControllerLeadershipStable -Ordinals $survivingOrdinals",
+            "$snapshotLeadershipBefore = Wait-ControllerLeadershipStable",
         )
         for marker in markers:
             self.assertIn(marker, source)
