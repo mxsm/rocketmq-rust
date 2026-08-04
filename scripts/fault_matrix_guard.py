@@ -264,6 +264,8 @@ def validate_sources(guard: Guard) -> None:
         "acknowledged_message_recovery",
         "Invoke-Native kubectl @('drain'",
         "node.kubernetes.io/disk-pressure",
+        "$taintCleanup.ExitCode -eq 0 -or $taintCleanup.Output -match 'not found'",
+        "kubelet already removed it",
         "queryMsgByUniqueKey",
         "fault matrix may create only its fixed synthetic topic",
         "'updateTopic'",
