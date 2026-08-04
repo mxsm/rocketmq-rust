@@ -85,12 +85,12 @@
     },
     {
       "id": "diagnostic-packs",
-      "status": "partial",
+      "status": "completed",
       "target_outcome": "evidence-coverage",
       "maturity": {
         "implemented": true,
         "contract_tested": true,
-        "live_smoke_passed": false,
+        "live_smoke_passed": true,
         "production_certified": false
       },
       "evidence": [
@@ -105,11 +105,27 @@
         {
           "kind": "test",
           "path": "rocketmq-sre/crates/rocketmq-sre-core/tests/diagnostic_replay.rs"
+        },
+        {
+          "kind": "configuration",
+          "path": "rocketmq-sre/config/qualification/diagnostic-packs.v1.json"
+        },
+        {
+          "kind": "source",
+          "path": "rocketmq-sre/crates/rocketmq-sre-eval/src/diagnostic_qualification/live.rs"
+        },
+        {
+          "kind": "test",
+          "path": "rocketmq-sre/scripts/check_diagnostic_pack_qualification.py"
+        },
+        {
+          "kind": "smoke",
+          "path": "rocketmq-sre/scripts/diagnostic-pack-live-qualification.ps1"
         }
       ],
       "limitations": [
-        "Pack registration and deterministic replay are contract tested, and required Evidence has complete fixed query routing.",
-        "Pack-level live fault and missing-source qualification is incomplete."
+        "All 32 built-in packs pass isolated normal, fault, and missing-Evidence qualification through the running Control Plane and disposable Docker PostgreSQL, covering 96 persisted results with citations and zero model, mutation, or execution calls.",
+        "Deployment-specific production certification remains required."
       ]
     },
     {

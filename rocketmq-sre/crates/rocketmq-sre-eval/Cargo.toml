@@ -28,6 +28,7 @@ axum.workspace = true
 base64.workspace = true
 chrono.workspace = true
 jsonwebtoken.workspace = true
+reqwest.workspace = true
 rocketmq-sre-contracts.workspace = true
 rocketmq-sre-core.workspace = true
 rocketmq-sre-model-gateway.workspace = true
@@ -36,6 +37,7 @@ schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
+sqlx.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
@@ -63,3 +65,7 @@ path = "src/bin/phase01_shadow_eval.rs"
 [[bin]]
 name = "phase01-model-mock"
 path = "src/bin/phase01_model_mock.rs"
+
+[[bin]]
+name = "diagnostic-pack-qualification"
+path = "src/bin/diagnostic_pack_qualification.rs"
