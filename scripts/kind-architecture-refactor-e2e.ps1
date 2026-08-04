@@ -666,13 +666,12 @@ function Wait-ControllerLeadershipStable {
     throw "Controller leadership did not stabilize before the deadline`n$details"
 }
 
-function Wait-ControllerPodRecreatedAndReady {
+function Wait-PodRecreatedAndReady {
     param(
-        [Parameter(Mandatory)][ValidateRange(0, 2)][int]$Ordinal,
+        [Parameter(Mandatory)][string]$Pod,
         [Parameter(Mandatory)][string]$PreviousUid,
         [ValidateRange(1, 600)][int]$TimeoutSeconds = 180
     )
-    $pod = "rocketmq-controller-$Ordinal"
     $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSeconds)
     do {
         $result = Invoke-Native kubectl @('-n', $Namespace, 'get', 'pod', $pod, '-o', 'json') -AllowFailure
@@ -686,6 +685,18 @@ function Wait-ControllerPodRecreatedAndReady {
         Start-Sleep -Seconds 2
     } while ([DateTimeOffset]::UtcNow -lt $deadline)
     throw "$pod was not recreated and Ready before the deadline"
+}
+
+function Wait-ControllerPodRecreatedAndReady {
+    param(
+        [Parameter(Mandatory)][ValidateRange(0, 2)][int]$Ordinal,
+        [Parameter(Mandatory)][string]$PreviousUid,
+        [ValidateRange(1, 600)][int]$TimeoutSeconds = 180
+    )
+    Wait-PodRecreatedAndReady `
+        -Pod "rocketmq-controller-$Ordinal" `
+        -PreviousUid $PreviousUid `
+        -TimeoutSeconds $TimeoutSeconds
 }
 
 function Invoke-ModelTest {
@@ -1576,8 +1587,9 @@ spec: { selector: { app.kubernetes.io/name: otel-collector }, ports: [{ name: ot
     })
 
     $pvcBeforeRestart = Get-PvcUidSet
+    $brokerStateBeforeRestart = (Invoke-Native kubectl @('-n', $Namespace, 'get', 'pod', 'rocketmq-broker-0', '-o', 'json')).Output | ConvertFrom-Json
     $brokerRestart = Invoke-Native kubectl @('-n', $Namespace, 'delete', 'pod', 'rocketmq-broker-0', '--wait=false')
-    Invoke-Native kubectl @('-n', $Namespace, 'rollout', 'status', 'statefulset/rocketmq-broker', '--timeout=180s') | Out-Null
+    $null = Wait-PodRecreatedAndReady -Pod 'rocketmq-broker-0' -PreviousUid $brokerStateBeforeRestart.metadata.uid
     $afterRestart = Query-AcknowledgedMessage $ack.Id
     $pvcAfterRestart = Get-PvcUidSet
     Complete-Scenario 'acknowledged_message_recovery' ([ordered]@{

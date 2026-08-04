@@ -309,6 +309,7 @@ class FaultMatrixGuardTests(unittest.TestCase):
             "AppliedLogIndex",
             "$actualScenarioOrder = (($ScenarioRecords | ForEach-Object { $_.id }) -join ',')",
             "Assert-True ($actualScenarioOrder -eq $expectedScenarioOrder)",
+            "Wait-PodRecreatedAndReady -Pod 'rocketmq-broker-0' -PreviousUid $brokerStateBeforeRestart.metadata.uid",
             "$null = Wait-ControllerLeadershipStable -Ordinals $survivingOrdinals",
             "Invoke-Native kubectl @('cordon', $failureLeaderNode)",
             "Wait-ControllerLeadershipStable -Ordinals $failureSurvivingOrdinals",
