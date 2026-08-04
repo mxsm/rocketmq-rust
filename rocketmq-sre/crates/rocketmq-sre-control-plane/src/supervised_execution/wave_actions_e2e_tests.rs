@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::fs;
+use std::path::Path;
 use std::time::Duration as StdDuration;
 
 use chrono::Duration;
@@ -24,6 +26,7 @@ use rocketmq_sre_contracts::ExecutionAction;
 use rocketmq_sre_contracts::ExecutionState;
 use rocketmq_sre_contracts::PlanStatus;
 use rocketmq_sre_contracts::TenantId;
+use serde::Serialize;
 use serde_json::Value;
 use serde_json::json;
 use uuid::Uuid;
@@ -56,9 +59,32 @@ struct LiveActionCase {
     required_conditions: &'static [&'static str],
 }
 
+#[derive(Serialize)]
+struct LiveActionOutcome {
+    id: String,
+    state: &'static str,
+    execution_id: String,
+    correlation_id: String,
+    approval_events: i64,
+    intent_records: i64,
+    result_records: i64,
+    confirmed_agent_effects: i64,
+    successful_verifications: i64,
+    verification_evidence_records: i64,
+    target_mutations: i64,
+}
+
+#[derive(Serialize)]
+struct LiveActionFragment<'a> {
+    schema_version: &'static str,
+    model_provider_network_calls: u8,
+    logger_ttl_restored: bool,
+    actions: &'a [LiveActionOutcome],
+}
+
 #[tokio::test]
 #[ignore = "requires live Kind PostgreSQL, Executor, Execution Agent, Broker, and Proxy"]
-async fn real_kind_wave_one_r1_actions_share_the_supervised_execution_chain() {
+async fn real_kind_all_r1_actions_share_the_supervised_execution_chain() {
     let Some(environment) = LiveEnvironment::from_process() else {
         return;
     };
@@ -66,6 +92,14 @@ async fn real_kind_wave_one_r1_actions_share_the_supervised_execution_chain() {
         .and_then(|value| value.parse::<u32>().ok())
         .expect("ROCKETMQ_SRE_PHASE3_PROXY_EXPECTED_REPLICAS must contain a positive replica count");
     assert!(expected_replicas > 0);
+    let proxy_pod = required_env("ROCKETMQ_SRE_PHASE3_PROXY_POD")
+        .expect("ROCKETMQ_SRE_PHASE3_PROXY_POD must identify one live Proxy pod");
+    let proxy_uid = required_env("ROCKETMQ_SRE_PHASE3_PROXY_UID")
+        .expect("ROCKETMQ_SRE_PHASE3_PROXY_UID must identify the live Proxy pod UID");
+    let collector_pod = required_env("ROCKETMQ_SRE_PHASE4_COLLECTOR_POD")
+        .expect("ROCKETMQ_SRE_PHASE4_COLLECTOR_POD must identify one live Collector pod");
+    let collector_uid = required_env("ROCKETMQ_SRE_PHASE4_COLLECTOR_UID")
+        .expect("ROCKETMQ_SRE_PHASE4_COLLECTOR_UID must identify the live Collector pod UID");
     let cases = [
         LiveActionCase {
             action: ExecutionAction::ObservabilityLoggerLevelTtl,
@@ -88,14 +122,76 @@ async fn real_kind_wave_one_r1_actions_share_the_supervised_execution_chain() {
             }),
             required_conditions: &["desired_replicas_plus_one", "new_replica_ready"],
         },
+        LiveActionCase {
+            action: ExecutionAction::ProxyRestartOne,
+            target: format!("pod/rocketmq-system/{proxy_pod}"),
+            parameters: json!({
+                "namespace": "rocketmq-system",
+                "pod": proxy_pod,
+                "expected_uid": proxy_uid,
+            }),
+            required_conditions: &["replacement_ready", "accepting_and_routed"],
+        },
+        LiveActionCase {
+            action: ExecutionAction::TelemetryCollectorRestartOne,
+            target: format!("pod/observability/{collector_pod}"),
+            parameters: json!({
+                "namespace": "observability",
+                "pod": collector_pod,
+                "expected_uid": collector_uid,
+                "pipeline": "combined",
+            }),
+            required_conditions: &["replacement_uid_observed", "collector_ready", "exporter_connected"],
+        },
     ];
 
+    let mut outcomes = Vec::with_capacity(cases.len());
     for case in cases {
-        execute_r1_case(&environment, case).await;
+        outcomes.push(execute_r1_case(&environment, case).await);
+    }
+    assert_eq!(outcomes.len(), 4);
+    wait_for_logger_ttl_restoration(&environment).await;
+    if let Some(path) = required_env("ROCKETMQ_SRE_R1_LIVE_FRAGMENT") {
+        write_live_fragment(Path::new(&path), &outcomes);
     }
 }
 
-async fn execute_r1_case(environment: &LiveEnvironment, case: LiveActionCase) {
+async fn wait_for_logger_ttl_restoration(environment: &LiveEnvironment) {
+    let deadline = tokio::time::Instant::now() + StdDuration::from_secs(180);
+    loop {
+        let state = fetch_agent_state(
+            &environment.agent_url,
+            &environment.workload_token,
+            environment.tenant_id,
+            environment.cluster_id,
+            ExecutionAction::ObservabilityLoggerLevelTtl,
+            "broker/rocketmq-broker.rocketmq-system.svc.cluster.local:10911",
+            json!({
+                "component": "broker",
+                "logger": "rocketmq_broker::processor",
+                "level": "DEBUG",
+                "ttl_seconds": 120,
+            }),
+        )
+        .await;
+        let override_active = state
+            .resource_conditions
+            .get("ttl_restore_scheduled")
+            .copied()
+            .unwrap_or(false);
+        if state.ready && !override_active {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "logger TTL override was not restored before qualification cleanup: {:?}",
+            state.reason_codes
+        );
+        tokio::time::sleep(StdDuration::from_secs(5)).await;
+    }
+}
+
+async fn execute_r1_case(environment: &LiveEnvironment, case: LiveActionCase) -> LiveActionOutcome {
     let baseline = fetch_agent_state(
         &environment.agent_url,
         &environment.workload_token,
@@ -192,10 +288,19 @@ async fn execute_r1_case(environment: &LiveEnvironment, case: LiveActionCase) {
         )
         .await
         .unwrap_or_else(|error| panic!("create {} plan: {error}", case.action.id()));
-    let CreatePlanResponse::ActionPlan { plan, .. } = created else {
+    let CreatePlanResponse::ActionPlan {
+        plan, policy_decision, ..
+    } = created
+    else {
         panic!("{} must create an executable ActionPlan", case.action.id());
     };
-    assert_eq!(plan.status, PlanStatus::ReadyForApproval);
+    assert_eq!(
+        plan.status,
+        PlanStatus::ReadyForApproval,
+        "{} policy rejected the live plan: {:?}",
+        case.action.id(),
+        policy_decision.reason_codes
+    );
     assert_eq!(plan.steps[0].precondition_hash, refreshed.precondition_hash);
     let precondition_hash = plan.compute_precondition_hash().expect("plan precondition hash");
     service
@@ -271,6 +376,97 @@ async fn execute_r1_case(environment: &LiveEnvironment, case: LiveActionCase) {
             case.action.id()
         );
     }
+
+    let execution_id = submitted.execution.id;
+    let approval_events = count_for_execution(
+        &repository,
+        "SELECT COUNT(*) FROM audit_events WHERE correlation_id = $1 AND event_kind = 'approved'",
+        correlation_id.as_uuid(),
+    )
+    .await;
+    let intent_records = count_for_execution(
+        &repository,
+        "SELECT COUNT(*) FROM execution_steps WHERE execution_id = $1 AND record_kind = 'intent'",
+        execution_id.as_uuid(),
+    )
+    .await;
+    let result_records = count_for_execution(
+        &repository,
+        "SELECT COUNT(*) FROM execution_steps WHERE execution_id = $1 AND record_kind = 'result'",
+        execution_id.as_uuid(),
+    )
+    .await;
+    let confirmed_agent_effects = count_for_execution(
+        &repository,
+        "SELECT COUNT(*) FROM execution_agent_effects WHERE execution_id = $1 AND state = 'confirmed'",
+        execution_id.as_uuid(),
+    )
+    .await;
+    let successful_verifications = count_for_execution(
+        &repository,
+        "SELECT COUNT(*) FROM execution_verifications WHERE execution_id = $1 AND outcome = 'succeeded'",
+        execution_id.as_uuid(),
+    )
+    .await;
+    let verification_evidence_records = count_for_execution(
+        &repository,
+        "SELECT COUNT(*) FROM execution_verification_evidence WHERE execution_id = $1",
+        execution_id.as_uuid(),
+    )
+    .await;
+    for (name, count) in [
+        ("approval event", approval_events),
+        ("intent record", intent_records),
+        ("result record", result_records),
+        ("confirmed Agent effect", confirmed_agent_effects),
+        ("successful verification", successful_verifications),
+        ("verification Evidence record", verification_evidence_records),
+    ] {
+        assert!(count > 0, "{} persisted no {name}", case.action.id());
+    }
+    assert_eq!(
+        confirmed_agent_effects,
+        1,
+        "{} must perform exactly one bounded target mutation",
+        case.action.id()
+    );
+    LiveActionOutcome {
+        id: case.action.id().to_owned(),
+        state: "succeeded",
+        execution_id: execution_id.to_string(),
+        correlation_id: correlation_id.to_string(),
+        approval_events,
+        intent_records,
+        result_records,
+        confirmed_agent_effects,
+        successful_verifications,
+        verification_evidence_records,
+        target_mutations: confirmed_agent_effects,
+    }
+}
+
+async fn count_for_execution(repository: &PostgresRepository, query: &'static str, id: Uuid) -> i64 {
+    sqlx::query_scalar(query)
+        .bind(id)
+        .fetch_one(&repository.pool)
+        .await
+        .unwrap_or_else(|error| panic!("query persisted R1 qualification record: {error}"))
+}
+
+fn write_live_fragment(path: &Path, outcomes: &[LiveActionOutcome]) {
+    assert!(
+        path.is_absolute(),
+        "R1 live qualification fragment path must be absolute"
+    );
+    let fragment = LiveActionFragment {
+        schema_version: "rocketmq-sre.r1-action-live-fragment.v1",
+        model_provider_network_calls: 0,
+        logger_ttl_restored: true,
+        actions: outcomes,
+    };
+    let mut bytes = serde_json::to_vec_pretty(&fragment).expect("serialize R1 live qualification fragment");
+    bytes.push(b'\n');
+    fs::write(path, bytes).expect("write R1 live qualification fragment");
 }
 
 async fn submit_with_slo_refresh(

@@ -480,7 +480,7 @@ pub(super) async fn persist_agent_evidence(
         EvidenceContent::Inline(serde_json::to_value(agent_state).expect("Agent Evidence content")),
     )
     .expect("Agent Evidence");
-    evidence.freshness_seconds = 1_800;
+    evidence.freshness_seconds = 120;
     evidence.coverage = CoverageStatus::Available;
     evidence.sensitivity = Sensitivity::Internal;
     evidence.exposure = EvidenceExposure::Synthetic;
@@ -638,7 +638,7 @@ pub(super) async fn seed_complete_slo_evidence(repository: &PostgresRepository, 
         })),
     )
     .expect("SLO Evidence");
-    evidence.freshness_seconds = 1_800;
+    evidence.freshness_seconds = 600;
     evidence.coverage = CoverageStatus::Available;
     evidence.sensitivity = Sensitivity::Internal;
     evidence.exposure = EvidenceExposure::Synthetic;
