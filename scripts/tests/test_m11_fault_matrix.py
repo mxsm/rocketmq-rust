@@ -290,11 +290,20 @@ class FaultMatrixGuardTests(unittest.TestCase):
     def test_runner_that_uses_nonexistent_component_labels_is_rejected(self) -> None:
         runner = self.root / "scripts" / "kind-architecture-refactor-e2e.ps1"
         source = runner.read_text(encoding="utf-8")
-        marker = "rocketmq.apache.org/service=controller"
-        self.assertIn(marker, source)
-        runner.write_text(source.replace(marker, "app.kubernetes.io/component=controller"), encoding="utf-8")
-        result = self.run_guard("--policy-only", expect_success=False)
-        self.assertIn(marker, result.stderr)
+        markers = (
+            "rocketmq.apache.org/service=controller",
+            "app.kubernetes.io/part-of=rocketmq-rust",
+            "$null -eq $_.metadata.deletionTimestamp",
+            "$readyFinalPods = @(",
+            "$readyFinalPods.Count -eq 12",
+        )
+        for marker in markers:
+            with self.subTest(marker=marker):
+                self.assertIn(marker, source)
+                runner.write_text(source.replace(marker, "component label contract removed"), encoding="utf-8")
+                result = self.run_guard("--policy-only", expect_success=False)
+                self.assertIn(marker, result.stderr)
+                runner.write_text(source, encoding="utf-8")
 
     def test_runner_that_drops_leader_aware_controller_rollout_is_rejected(self) -> None:
         runner = self.root / "scripts" / "kind-architecture-refactor-e2e.ps1"

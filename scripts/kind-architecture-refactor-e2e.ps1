@@ -1606,8 +1606,16 @@ spec: { selector: { app.kubernetes.io/name: otel-collector }, ports: [{ name: ot
     Wait-Workloads
     $FinalPvcUids = Get-PvcUidSet
     $finalController = (Invoke-Native kubectl @('-n', $Namespace, 'get', 'statefulset/rocketmq-controller', '-o', 'json')).Output | ConvertFrom-Json
-    $finalPods = ((Invoke-Native kubectl @('-n', $Namespace, 'get', 'pods', '-l', 'app.kubernetes.io/name=rocketmq-rust', '-o', 'json')).Output | ConvertFrom-Json).items
-    $allPodsReady = $finalPods.Count -eq 12 -and @($finalPods | Where-Object { ($_.status.conditions | Where-Object { $_.type -eq 'Ready' -and $_.status -eq 'True' }).Count -eq 1 }).Count -eq 12
+    $finalPods = @(
+        ((Invoke-Native kubectl @('-n', $Namespace, 'get', 'pods', '-l', 'app.kubernetes.io/part-of=rocketmq-rust', '-o', 'json')).Output | ConvertFrom-Json).items |
+            Where-Object { $null -eq $_.metadata.deletionTimestamp }
+    )
+    $readyFinalPods = @(
+        $finalPods | Where-Object {
+            @($_.status.conditions | Where-Object { $_.type -eq 'Ready' -and $_.status -eq 'True' }).Count -eq 1
+        }
+    )
+    $allPodsReady = $finalPods.Count -eq 12 -and $readyFinalPods.Count -eq 12
     $finalNodes = ((Invoke-Native kubectl @('get', 'nodes', '-o', 'json')).Output | ConvertFrom-Json).items
     $diskPressureTaintKeys = @(
         'node.kubernetes.io/disk-pressure',
