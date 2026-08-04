@@ -196,30 +196,39 @@ pub struct ControllerConfig {
     pub config_black_list: String,
 
     /// Enable signed identity verification for Controller requests.
+    #[serde(default)]
     pub authentication_enabled: bool,
 
     /// Enable ordinary authorization checks.
+    #[serde(default)]
     pub authorization_enabled: bool,
 
     /// Root directory for Controller auth metadata.
+    #[serde(default)]
     pub auth_config_path: String,
 
     /// Credential/ACL file loaded before the Controller listener is bound.
+    #[serde(default)]
     pub acl_file: String,
 
     /// Expose privileged maintenance APIs after pinned-policy validation.
+    #[serde(default)]
     pub maintenance_enabled: bool,
 
     /// Maintenance policy path, resolved relative to `auth_config_path`.
+    #[serde(default)]
     pub maintenance_policy_path: String,
 
     /// Expected maintenance policy version.
+    #[serde(default)]
     pub maintenance_policy_version: u64,
 
     /// Expected SHA-256 of the exact maintenance policy bytes.
+    #[serde(default)]
     pub maintenance_policy_sha256: String,
 
     /// Persistent root for immutable Controller release-snapshot artifacts.
+    #[serde(default)]
     pub maintenance_checkpoint_root: String,
 
     // --- node-specific fields (added for controller usage) ---
@@ -1010,6 +1019,35 @@ mod tests {
         assert!(!config.is_process_read_event);
         assert!(config.notify_broker_role_changed);
         assert_eq!(config.metrics_prom_exporter_port, 5557);
+    }
+
+    #[test]
+    fn legacy_config_without_security_fields_defaults_to_disabled() {
+        let mut value = serde_json::to_value(ControllerConfig::default()).expect("serialize default config");
+        let object = value.as_object_mut().expect("controller config is an object");
+        for field in [
+            "authenticationEnabled",
+            "authorizationEnabled",
+            "authConfigPath",
+            "aclFile",
+            "maintenanceEnabled",
+            "maintenancePolicyPath",
+            "maintenancePolicyVersion",
+            "maintenancePolicySha256",
+            "maintenanceCheckpointRoot",
+        ] {
+            object.remove(field);
+        }
+
+        let config: ControllerConfig = serde_json::from_value(value).expect("deserialize legacy config");
+
+        assert!(!config.authentication_enabled);
+        assert!(!config.authorization_enabled);
+        assert!(!config.maintenance_enabled);
+        assert!(config.auth_config_path.is_empty());
+        assert!(config.acl_file.is_empty());
+        assert_eq!(config.maintenance_policy_version, 0);
+        assert!(config.validate().is_ok());
     }
 
     #[test]

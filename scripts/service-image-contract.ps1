@@ -183,18 +183,32 @@ $smokeNetwork = ""
 $smokeNetworkCreated = $false
 $smokeContainerIds = [System.Collections.Generic.List[string]]::new()
 $dependencyContainerIds = @{}
+$helperSmokeConfigPath = Join-Path $outputPath "helper-smoke-config"
 
 try {
     $random.GetBytes($randomBytes)
     $env:COSIGN_PASSWORD = [Convert]::ToBase64String($randomBytes)
     Invoke-Checked cosign generate-key-pair --output-key-prefix $keyPrefix
 
+    New-Item -ItemType Directory -Force -Path $helperSmokeConfigPath | Out-Null
+    Copy-Item -Path (Join-Path $smokeConfigPath "*") -Destination $helperSmokeConfigPath -Force
+    $networkNameServerAddress = "$($policy.smoke_network.namesrv_alias):$($policy.smoke_network.namesrv_port)"
+    $loopbackNameServerAddress = "127.0.0.1:$($policy.smoke_network.namesrv_port)"
+    foreach ($configName in @("broker.toml", "proxy.toml", "mcp.toml")) {
+        $configPath = Join-Path $helperSmokeConfigPath $configName
+        $configText = (Get-Content -Raw -LiteralPath $configPath).Replace(
+            $networkNameServerAddress,
+            $loopbackNameServerAddress
+        )
+        [System.IO.File]::WriteAllText($configPath, $configText, [System.Text.UTF8Encoding]::new($false))
+    }
+
     $nameServerImageRef = "rocketmq-rust/namesrv:verification"
     Invoke-Checked docker buildx build --load --file $dockerfilePath --target namesrv --tag $nameServerImageRef --build-arg "SOURCE_REVISION=$sourceCommit" --build-arg "SOURCE_VERSION=$sourceVersion" $root
     $nameServerHelperId = (
         Invoke-Captured docker run --detach --interactive --network none --read-only `
             --mount "type=volume,destination=$($policy.runtime.writable_data_path)" `
-            --mount "type=bind,source=$smokeConfigPath,target=/etc/rocketmq,readonly" `
+            --mount "type=bind,source=$helperSmokeConfigPath,target=/etc/rocketmq,readonly" `
             --tmpfs $tmpfsOptions `
             --env "ROCKETMQ_SECURITY_PROFILE=development-insecure-loopback" `
             --env "ROCKETMQ_HEALTH_BIND_ADDR=127.0.0.1:18088" `
@@ -328,7 +342,7 @@ try {
                     --network "container:$nameServerHelperId" `
                     --read-only `
                     --mount "type=volume,destination=$($policy.runtime.writable_data_path)" `
-                    --mount "type=bind,source=$smokeConfigPath,target=/etc/rocketmq,readonly" `
+                    --mount "type=bind,source=$helperSmokeConfigPath,target=/etc/rocketmq,readonly" `
                     --tmpfs $tmpfsOptions `
                     --env "ROCKETMQ_SECURITY_PROFILE=development-insecure-loopback" `
                     --env "ROCKETMQ_HEALTH_BIND_ADDR=127.0.0.1:18089" `
@@ -345,7 +359,7 @@ try {
 
         $containerId = ""
         try {
-            $smokeNetwork = if ($serviceName -in @("broker", "proxy")) {
+            $smokeNetwork = if ($serviceName -in @("broker", "proxy", "mcp")) {
                 "container:$nameServerHelperId"
             }
             else {
@@ -361,7 +375,7 @@ try {
                 "--mount",
                 "type=volume,destination=$($policy.runtime.writable_data_path)",
                 "--mount",
-                "type=bind,source=$smokeConfigPath,target=/etc/rocketmq,readonly",
+                "type=bind,source=$helperSmokeConfigPath,target=/etc/rocketmq,readonly",
                 "--tmpfs",
                 $tmpfsOptions,
                 "--env",
@@ -511,6 +525,9 @@ finally {
     }
     if ($smokeNetworkCreated) {
         & docker network rm $smokeNetwork *> $null
+    }
+    if (Test-Path -LiteralPath $helperSmokeConfigPath) {
+        Remove-Item -LiteralPath $helperSmokeConfigPath -Recurse -Force
     }
     $random.Dispose()
     $env:COSIGN_PASSWORD = $oldPassword
