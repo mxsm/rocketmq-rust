@@ -243,6 +243,26 @@ class FaultMatrixGuardTests(unittest.TestCase):
         result = self.run_guard("--policy-only", expect_success=False)
         self.assertIn("Wait-ReadyWorkerPod", result.stderr)
 
+    def test_runner_that_allows_fault_jobs_on_impaired_nodes_is_rejected(self) -> None:
+        runner = self.root / "scripts" / "kind-architecture-refactor-e2e.ps1"
+        source = runner.read_text(encoding="utf-8")
+        for node in ("minorityNode", "networkNode"):
+            marker = f"Invoke-Native kubectl @('cordon', ${node})"
+            self.assertIn(marker, source)
+            runner.write_text(source.replace(marker, "fault node left schedulable", 1), encoding="utf-8")
+            result = self.run_guard("--policy-only", expect_success=False)
+            self.assertIn(marker, result.stderr)
+            runner.write_text(source, encoding="utf-8")
+
+    def test_runner_that_uses_nonexistent_component_labels_is_rejected(self) -> None:
+        runner = self.root / "scripts" / "kind-architecture-refactor-e2e.ps1"
+        source = runner.read_text(encoding="utf-8")
+        marker = "rocketmq.apache.org/service=controller"
+        self.assertIn(marker, source)
+        runner.write_text(source.replace(marker, "app.kubernetes.io/component=controller"), encoding="utf-8")
+        result = self.run_guard("--policy-only", expect_success=False)
+        self.assertIn(marker, result.stderr)
+
     def test_dynamic_input_and_registry_regressions_are_rejected(self) -> None:
         workflow = self.root / ".github" / "workflows" / "kubernetes-fault-matrix.yml"
         source = workflow.read_text(encoding="utf-8")

@@ -305,6 +305,10 @@ def validate_sources(guard: Guard) -> None:
         "$jobStatus.failed ?? 0",
         "broker cluster registration was not observed before the synthetic topic deadline",
         "Wait-ReadyWorkerPod -Selector 'rocketmq.apache.org/service=proxy'",
+        "Invoke-Native kubectl @('cordon', $minorityNode)",
+        "Invoke-Native kubectl @('cordon', $networkNode)",
+        "rocketmq.apache.org/service=controller",
+        "rocketmq.apache.org/service=broker",
     ):
         guard.require(marker in runner, f"fault runner contract marker missing: {marker}")
     guard.require("Mode -eq \"Validate\"" in runner, "runner must provide a non-dynamic Validate mode")

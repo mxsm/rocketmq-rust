@@ -889,12 +889,15 @@ spec: { selector: { app.kubernetes.io/name: otel-collector }, ports: [{ name: ot
     $minorityRoute = $null
     $minorityMessage = $null
     $minorityTimer = [Diagnostics.Stopwatch]::StartNew()
+    $minorityCordon = Invoke-Native kubectl @('cordon', $minorityNode)
     try {
         $minorityFault = Set-NodeNetworkImpairment $minorityNode @('loss', '100%')
         $minorityRoute = Invoke-RouteProbe
         $minorityMessage = Query-AcknowledgedMessage $ack.Id
     } finally {
         $minorityRestore = Clear-NodeNetworkImpairment $minorityNode
+        $minorityReady = Invoke-Native kubectl @('wait', "node/$minorityNode", '--for=condition=Ready', '--timeout=60s') -AllowFailure
+        $minorityUncordon = Invoke-Native kubectl @('uncordon', $minorityNode) -AllowFailure
         $minorityTimer.Stop()
     }
     $minorityState = ((Invoke-Native kubectl @('-n', $Namespace, 'get', 'statefulset/rocketmq-namesrv', '-o', 'json')).Output | ConvertFrom-Json).status
@@ -902,10 +905,10 @@ spec: { selector: { app.kubernetes.io/name: otel-collector }, ports: [{ name: ot
         minority_isolated = $minorityFault.Output -match 'qdisc'
         route_discovery_available = $minorityRoute.ExitCode -eq 0
         acknowledged_message_visible = $minorityMessage.QueueOffset -eq $before.QueueOffset
-        nameserver_replicas_restored = $minorityState.readyReplicas -eq 3
+        nameserver_replicas_restored = $minorityState.readyReplicas -eq 3 -and $minorityReady.ExitCode -eq 0 -and $minorityUncordon.ExitCode -eq 0
     }) ([ordered]@{
         partition_policy = "node=$minorityNode`n$($minorityFault.Output)"
-        nameserver_status = $minorityRestore.Output
+        nameserver_status = "$($minorityCordon.Output)`n$($minorityRestore.Output)`n$($minorityReady.Output)`n$($minorityUncordon.Output)"
         route_probe = $minorityRoute.Output
         message_after = $minorityMessage.Output
         recovery_timing = "seconds=$($minorityTimer.Elapsed.TotalSeconds) budget=30"
@@ -1083,7 +1086,7 @@ echo "active=$active attempts=$attempt"
     } while ($null -eq $leaderAfter -and [DateTimeOffset]::UtcNow -lt $leaderElectionDeadline)
     Assert-True ($null -ne $leaderAfter) 'Controller must elect a different leader ordinal before the deadline'
     Invoke-Native kubectl @('-n', $Namespace, 'rollout', 'status', 'statefulset/rocketmq-controller', '--timeout=180s') | Out-Null
-    $controllerStatus = (Invoke-Native kubectl @('-n', $Namespace, 'get', 'pods', '-l', 'app.kubernetes.io/component=controller', '-o', 'wide')).Output
+    $controllerStatus = (Invoke-Native kubectl @('-n', $Namespace, 'get', 'pods', '-l', 'rocketmq.apache.org/service=controller', '-o', 'wide')).Output
     $controllerState = ((Invoke-Native kubectl @('-n', $Namespace, 'get', 'statefulset/rocketmq-controller', '-o', 'json')).Output | ConvertFrom-Json).status
     $afterLeader = Query-AcknowledgedMessage $ack.Id
     $leadershipAfterFailure = Get-ControllerLeadershipSnapshot
@@ -1142,6 +1145,7 @@ echo "active=$active attempts=$attempt"
     $impairedMessage = $null
     $halfOpenProbe = $null
     $halfOpenTimer = [Diagnostics.Stopwatch]::StartNew()
+    $networkCordon = Invoke-Native kubectl @('cordon', $networkNode)
     try {
         $networkFault = Set-NodeNetworkImpairment $networkNode @('delay', '200ms', '50ms', 'loss', '10%')
         $impairedMessage = Query-AcknowledgedMessage $ack.Id
@@ -1156,6 +1160,8 @@ echo "active=$active attempts=$attempt"
         ) -AllowFailure
     } finally {
         $networkCleanup = Clear-NodeNetworkImpairment $networkNode
+        $networkReady = Invoke-Native kubectl @('wait', "node/$networkNode", '--for=condition=Ready', '--timeout=60s') -AllowFailure
+        $networkUncordon = Invoke-Native kubectl @('uncordon', $networkNode) -AllowFailure
         $halfOpenTimer.Stop()
     }
     $networkAfter = (Invoke-Native docker @('exec', $networkNode, 'tc', 'qdisc', 'show', 'dev', 'eth0')).Output
@@ -1165,13 +1171,13 @@ echo "active=$active attempts=$attempt"
         packet_loss_injected = $networkFault.Output -match 'loss 10%'
         half_open_bounded = $halfOpenTimer.Elapsed.TotalSeconds -lt 120
         acknowledged_message_visible = $networkRecoveredMessage.QueueOffset -eq $before.QueueOffset
-        network_faults_removed = $networkAfter -notmatch 'netem'
+        network_faults_removed = $networkAfter -notmatch 'netem' -and $networkReady.ExitCode -eq 0 -and $networkUncordon.ExitCode -eq 0
     }) ([ordered]@{
         network_before = $networkBefore
         tc_state = "$($networkFault.Output)`nmessageDuring=$($impairedMessage.Output)"
         half_open_probe = "exit=$($halfOpenProbe.ExitCode) seconds=$($halfOpenTimer.Elapsed.TotalSeconds)`n$($halfOpenProbe.Output)"
         message_after = $networkRecoveredMessage.Output
-        network_after = "$($networkCleanup.Output)`n$networkAfter"
+        network_after = "$($networkCordon.Output)`n$($networkCleanup.Output)`n$($networkReady.Output)`n$($networkUncordon.Output)`n$networkAfter"
     })
 
     $haTimer = [Diagnostics.Stopwatch]::StartNew()
@@ -1186,7 +1192,7 @@ echo "active=$active attempts=$attempt"
     )
     $haTimer.Stop()
     $haMessage = Query-AcknowledgedMessage $ack.Id
-    $brokerStatus = (Invoke-Native kubectl @('-n', $Namespace, 'get', 'pods', '-l', 'app.kubernetes.io/component=broker', '-o', 'wide')).Output
+    $brokerStatus = (Invoke-Native kubectl @('-n', $Namespace, 'get', 'pods', '-l', 'rocketmq.apache.org/service=broker', '-o', 'wide')).Output
     Complete-Scenario 'ha_replication_lag' ([ordered]@{
         replication_lag_observed = $haLagModel.Output -match 'sync_master_without_slave_ack_returns_flush_slave_timeout .* ok'
         single_master_preserved = $haModel.ExitCode -eq 0
