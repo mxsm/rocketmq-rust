@@ -169,7 +169,8 @@
         }
       ],
       "limitations": [
-        "All nine explicitly registered bounded actions have independent switches, owners, and contract evidence; the complete disposable-cluster fault matrix remains to be recorded.",
+        "All nine explicitly registered bounded actions have independent switches, owners, and contract evidence; the sixteen-scenario Kubernetes platform fault matrix has passed.",
+        "Per-action disposable-cluster success, deny, unknown-result, verification-failure, and rollback qualification remains incomplete.",
         "R3 operations and arbitrary requests remain permanently forbidden."
       ]
     },
@@ -206,7 +207,7 @@
         }
       ],
       "limitations": [
-        "Autonomy remains disabled by default and has not completed disposable-cluster production qualification.",
+        "Autonomy remains disabled by default; the Kubernetes platform fault matrix has passed, while per-action shadow and supervised qualification remains incomplete.",
         "Per-organization and per-cluster operational evidence is incomplete."
       ]
     },
@@ -249,7 +250,7 @@
       "maturity": {
         "implemented": true,
         "contract_tested": true,
-        "live_smoke_passed": false,
+        "live_smoke_passed": true,
         "production_certified": false
       },
       "evidence": [
@@ -305,11 +306,19 @@
         {
           "kind": "test",
           "path": "rocketmq-sre/scripts/phase05-control-plane-restore.ps1"
+        },
+        {
+          "kind": "test",
+          "path": "scripts/kind-architecture-refactor-e2e.ps1"
+        },
+        {
+          "kind": "test",
+          "path": "scripts/service-image-contract.ps1"
         }
       ],
       "limitations": [
-        "Current/N-1 native binaries, synchronous PostgreSQL failover, object recovery, and Control Plane backup/restore have executable qualification routes.",
-        "Two independent Kubernetes regions, node loss, replicated CommitLog/Controller quorum recovery, sustained load, soak, and independent handoff evidence remain incomplete."
+        "Current/N-1 native binaries, two independent Kubernetes regions, the sixteen-scenario Kubernetes fault matrix, synchronous PostgreSQL failover, object recovery, and Control Plane backup/restore have passed disposable-environment qualification.",
+        "Deployment-specific production certification, sustained load, soak, and independent operator handoff evidence remain incomplete."
       ]
     },
     {
@@ -323,8 +332,10 @@
         "production_certified": false
       },
       "evidence": [],
-      "reason": "DeepSeek credential intake and AI-assisted diagnosis are intentionally last, after Evidence, enterprise integration, execution-boundary, and production-readiness qualification.",
-      "limitations": []
+      "reason": "DeepSeek credential intake and AI-assisted diagnosis are intentionally last, after Evidence, enterprise integration, execution-boundary, and production-readiness qualification; the user will provide the API key at that time.",
+      "limitations": [
+        "No real provider credential has been supplied and no model network call has been performed."
+      ]
     }
   ]
 }
