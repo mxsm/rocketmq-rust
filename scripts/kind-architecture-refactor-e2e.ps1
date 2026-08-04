@@ -282,6 +282,16 @@ function Get-ControllerLeaderOrdinal {
     [int]$addressMatch.Groups[1].Value
 }
 
+function Get-ControllerLogIndex {
+    param(
+        [Parameter(Mandatory)][object]$Metadata,
+        [Parameter(Mandatory)][ValidateSet('LastLogIndex', 'CommittedLogIndex', 'AppliedLogIndex')][string]$Field
+    )
+    $match = [regex]::Match($Metadata.Output, "(?m)^$Field\s+(\d+)\s*$")
+    Assert-True $match.Success "Controller metadata must contain $Field"
+    [uint64]$match.Groups[1].Value
+}
+
 function Invoke-FaultDriver {
     param(
         [Parameter(Mandatory)][string]$SecretName,
@@ -550,6 +560,7 @@ function Get-ControllerLeadershipSnapshot {
     param([int[]]$Ordinals = @(0, 1, 2))
     $records = [System.Collections.Generic.List[string]]::new()
     $leaders = [System.Collections.Generic.List[int]]::new()
+    $observations = [System.Collections.Generic.List[object]]::new()
     foreach ($ordinal in $Ordinals) {
         $address = "rocketmq-controller-$ordinal.rocketmq-controller-headless.$Namespace.svc.cluster.local:60109"
         try {
@@ -560,8 +571,20 @@ function Get-ControllerLeadershipSnapshot {
                 $address
             )
             $leader = Get-ControllerLeaderOrdinal $metadata
+            $lastLogIndex = Get-ControllerLogIndex $metadata 'LastLogIndex'
+            $committedLogIndex = Get-ControllerLogIndex $metadata 'CommittedLogIndex'
+            $appliedLogIndex = Get-ControllerLogIndex $metadata 'AppliedLogIndex'
             $leaders.Add($leader)
-            $records.Add("controller=$ordinal leader=$leader`n$($metadata.Output)")
+            $observations.Add([pscustomobject]@{
+                Ordinal = $ordinal
+                Leader = $leader
+                LastLogIndex = $lastLogIndex
+                CommittedLogIndex = $committedLogIndex
+                AppliedLogIndex = $appliedLogIndex
+            })
+            $records.Add(
+                "controller=$ordinal leader=$leader last=$lastLogIndex committed=$committedLogIndex applied=$appliedLogIndex`n$($metadata.Output)"
+            )
         } catch {
             $records.Add("controller=$ordinal unavailable=$($_.Exception.Message)")
         }
@@ -570,7 +593,40 @@ function Get-ControllerLeadershipSnapshot {
         Output = $records -join "`n---`n"
         Leaders = @($leaders | Sort-Object -Unique)
         Responders = $leaders.Count
+        Observations = @($observations)
     }
+}
+
+function Wait-ControllerReplicationCaughtUp {
+    param([ValidateRange(1, 600)][int]$TimeoutSeconds = 180)
+    $leadership = Wait-ControllerLeadershipStable -TimeoutSeconds $TimeoutSeconds
+    $leader = [int]$leadership.Leaders[0]
+    $orderedOrdinals = @($leader) + @(@(0, 1, 2) | Where-Object { $_ -ne $leader })
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSeconds)
+    $lastSnapshot = $null
+    do {
+        $lastSnapshot = Get-ControllerLeadershipSnapshot -Ordinals $orderedOrdinals
+        $leaderObservation = $lastSnapshot.Observations | Where-Object { $_.Ordinal -eq $leader } | Select-Object -First 1
+        if (
+            $lastSnapshot.Responders -eq $orderedOrdinals.Count -and
+            $lastSnapshot.Leaders.Count -eq 1 -and
+            [int]$lastSnapshot.Leaders[0] -eq $leader -and
+            $null -ne $leaderObservation
+        ) {
+            $frontier = [uint64]$leaderObservation.CommittedLogIndex
+            $caughtUp = @(
+                $lastSnapshot.Observations | Where-Object {
+                    [uint64]$_.CommittedLogIndex -ge $frontier -and [uint64]$_.AppliedLogIndex -ge $frontier
+                }
+            )
+            if ($caughtUp.Count -eq $orderedOrdinals.Count) {
+                return $lastSnapshot
+            }
+        }
+        Start-Sleep -Seconds 2
+    } while ([DateTimeOffset]::UtcNow -lt $deadline)
+    $details = if ($null -eq $lastSnapshot) { 'no replication snapshot was collected' } else { $lastSnapshot.Output }
+    throw "Controller replicas did not reach the leader committed frontier before the deadline`n$details"
 }
 
 function Wait-ControllerLeadershipStable {
@@ -754,14 +810,20 @@ function Set-ServiceImages {
     [IO.File]::WriteAllText($controllerPatchPath, $controllerPatch, [Text.UTF8Encoding]::new($false))
     Invoke-Native kubectl @('-n', $Namespace, 'patch', 'statefulset/rocketmq-controller', '--type=strategic', '--patch-file', $controllerPatchPath) | Out-Null
     Remove-Item -LiteralPath $controllerPatchPath -Force
-    $followerOrdinals = @(@(0, 1, 2) | Where-Object { $_ -ne $controllerLeaderOrdinal })
+    $followerOrdinals = @(
+        @(0, 1, 2) |
+            Where-Object { $_ -ne $controllerLeaderOrdinal } |
+            Sort-Object -Descending
+    )
     foreach ($ordinal in $followerOrdinals) {
         $pod = "rocketmq-controller-$ordinal"
         $previous = (Invoke-Native kubectl @('-n', $Namespace, 'get', 'pod', $pod, '-o', 'json')).Output | ConvertFrom-Json
         Invoke-Native kubectl @('-n', $Namespace, 'delete', 'pod', $pod, '--wait=true', '--timeout=120s') | Out-Null
         $null = Wait-ControllerPodRecreatedAndReady -Ordinal $ordinal -PreviousUid $previous.metadata.uid
         $null = Wait-ControllerLeadershipStable
+        $null = Wait-ControllerReplicationCaughtUp
     }
+    $null = Wait-ControllerReplicationCaughtUp
     $leaderPod = "rocketmq-controller-$controllerLeaderOrdinal"
     $leaderState = (Invoke-Native kubectl @('-n', $Namespace, 'get', 'pod', $leaderPod, '-o', 'json')).Output | ConvertFrom-Json
     $leaderNode = $leaderState.spec.nodeName
