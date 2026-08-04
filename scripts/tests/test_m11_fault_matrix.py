@@ -325,6 +325,7 @@ class FaultMatrixGuardTests(unittest.TestCase):
             "$restoredLeadership = Wait-ControllerLeadershipStable",
             "$snapshotLeadershipBefore = Wait-ControllerLeadershipStable",
             "function Test-MessageQuerySucceeded",
+            "$querySucceeded = Test-MessageQuerySucceeded $result",
             "function Wait-CredentialCutover",
             "credential rotation must converge through hot reload without restarting Broker pods",
             "semantic_query=$($rotationResult.DeniedSucceeded)",

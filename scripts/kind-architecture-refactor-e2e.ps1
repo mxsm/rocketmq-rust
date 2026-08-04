@@ -467,8 +467,22 @@ function Convert-MessageQueryEvidence {
 }
 
 function Query-AcknowledgedMessage {
-    param([Parameter(Mandatory)][string]$MessageId, [string]$SecretName = 'rocketmq-fault-driver-baseline')
-    $result = Invoke-FaultDriver -SecretName $SecretName -Arguments @('message', 'queryMsgByUniqueKey', '-t', $Topic, '-i', $MessageId)
+    param(
+        [Parameter(Mandatory)][string]$MessageId,
+        [string]$SecretName = 'rocketmq-fault-driver-baseline',
+        [ValidateRange(1, 120)][int]$TimeoutSeconds = 20
+    )
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSeconds)
+    $result = $null
+    do {
+        $result = Invoke-FaultDriver -SecretName $SecretName -Arguments @(
+            'message', 'queryMsgByUniqueKey', '-t', $Topic, '-i', $MessageId
+        ) -AllowFailure
+        $querySucceeded = Test-MessageQuerySucceeded $result
+        if (-not $querySucceeded) {
+            Start-Sleep -Seconds 2
+        }
+    } while (-not $querySucceeded -and [DateTimeOffset]::UtcNow -lt $deadline)
     Convert-MessageQueryEvidence $result
 }
 
