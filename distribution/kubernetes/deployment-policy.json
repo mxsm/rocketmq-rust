@@ -140,7 +140,7 @@
       "workload_kind": "StatefulSet",
       "replicas": 3,
       "quorum": 2,
-      "config_path": "/etc/rocketmq/controller.toml",
+      "config_path": "/etc/rocketmq/controller-config",
       "data_path": "/var/lib/rocketmq/controller",
       "ports": [
         8088,

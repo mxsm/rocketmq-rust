@@ -82,6 +82,24 @@ class KubernetesAssetsGuardTests(unittest.TestCase):
         result = self.run_guard(expect_success=False)
         self.assertIn("Controller", result.stderr)
 
+    def test_controller_recovery_election_window_regression_is_rejected(self) -> None:
+        self.mutate_text(
+            "distribution/helm/rocketmq-rust/templates/configmaps.yaml",
+            "electionTimeoutMs = 5000",
+            "electionTimeoutMs = 1000",
+        )
+        result = self.run_guard(expect_success=False)
+        self.assertIn("five-second Kubernetes recovery election window", result.stderr)
+
+    def test_controller_ordinal_config_path_regression_is_rejected(self) -> None:
+        self.mutate_text(
+            "distribution/kubernetes/base/manifest.yaml",
+            "/etc/rocketmq/controller-config/$(POD_NAME).toml",
+            "/etc/rocketmq/controller.toml",
+        )
+        result = self.run_guard(expect_success=False)
+        self.assertIn("Controller ordinal config selection missing", result.stderr)
+
     def test_inline_secret_object_is_rejected(self) -> None:
         path = self.root / "distribution/kubernetes/base/manifest.yaml"
         with path.open("a", encoding="utf-8") as stream:

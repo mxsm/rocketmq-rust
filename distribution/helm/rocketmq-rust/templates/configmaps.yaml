@@ -118,7 +118,7 @@ data:
     configBlackList = "configBlackList;configStorePath;maintenanceCheckpointRoot"
     nodeId = {{ add $ordinal 1 }}
     listenAddr = "0.0.0.0:60109"
-    electionTimeoutMs = 1000
+    electionTimeoutMs = 5000
     heartbeatIntervalMs = 300
     storagePath = "/var/lib/rocketmq/controller/node-{{ add $ordinal 1 }}"
     storageBackend = {{ $.Values.services.controller.storageBackend | quote }}
