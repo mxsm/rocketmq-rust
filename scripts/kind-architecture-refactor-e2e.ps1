@@ -1588,7 +1588,9 @@ spec: { selector: { app.kubernetes.io/name: otel-collector }, ports: [{ name: ot
         pvc_uid_set_preserved = $pvcBeforeRestart -eq $pvcAfterRestart
     }) ([ordered]@{ send_ack = $ack.Output; message_before = $before.Output; broker_restart = $brokerRestart.Output; message_after = $afterRestart.Output; watermark = "queue=$($afterRestart.QueueOffset) commitlog=$($afterRestart.CommitLogOffset)"; pvc_uids = $pvcAfterRestart })
 
-    Assert-True (($ScenarioRecords | ForEach-Object { $_.id }) -join ',' -eq ($Policy.scenarios | ForEach-Object { $_.id }) -join ',') 'all required scenarios must execute in policy order'
+    $actualScenarioOrder = (($ScenarioRecords | ForEach-Object { $_.id }) -join ',')
+    $expectedScenarioOrder = (($Policy.scenarios | ForEach-Object { $_.id }) -join ',')
+    Assert-True ($actualScenarioOrder -eq $expectedScenarioOrder) 'all required scenarios must execute in policy order'
     Wait-Workloads
     $FinalPvcUids = Get-PvcUidSet
     $finalController = (Invoke-Native kubectl @('-n', $Namespace, 'get', 'statefulset/rocketmq-controller', '-o', 'json')).Output | ConvertFrom-Json
