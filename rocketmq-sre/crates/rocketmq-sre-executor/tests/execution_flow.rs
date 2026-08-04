@@ -20,7 +20,9 @@
 mod support;
 
 use std::collections::VecDeque;
+use std::fs;
 use std::future::Future;
+use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -91,6 +93,7 @@ use rocketmq_sre_executor::VerificationCaptureRequest;
 use rocketmq_sre_executor::VerificationFuture;
 use rocketmq_sre_executor::VerificationObservation;
 use rocketmq_sre_executor::VerificationSource;
+use serde::Serialize;
 use serde_json::json;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -283,10 +286,13 @@ impl ExecutionAgentClient for TestAgent {
                     step_id: request.request.intent.step_id,
                     state: EffectState::Confirmed,
                     operation_id: format!("test-operation-{}", request.request.intent.step_id),
-                    outcome_code: if compensation {
-                        "proxy_replicas_restored"
-                    } else {
-                        "proxy_scaled_out_one"
+                    outcome_code: match (self.action, compensation) {
+                        (ExecutionAction::ProxyRestartOne, true) => "proxy_restart_manual_takeover_required",
+                        (ExecutionAction::TelemetryCollectorRestartOne, true) => {
+                            "telemetry_collector_manual_takeover_required"
+                        }
+                        (_, true) => "bounded_action_restored",
+                        (_, false) => "bounded_action_applied",
                     }
                     .to_owned(),
                     sanitized_summary: "bounded test driver result".to_owned(),
@@ -781,6 +787,177 @@ async fn telemetry_collector_restart_autonomous_execution_uses_dynamic_safety_an
     assert_eq!(run.dispatches, vec![false]);
     assert_eq!(run.compensation_intents, 0);
     cleanup_schema(&run.pool, &run.schema).await;
+}
+
+#[derive(Serialize)]
+struct R1RecoveryOutcome {
+    id: String,
+    recovery_mode: &'static str,
+    verified_success: &'static str,
+    verification_failure: &'static str,
+    rollback_failure: &'static str,
+    compensation_intents: i64,
+    active_quarantines: i64,
+}
+
+#[derive(Serialize)]
+struct R1RecoveryFragment {
+    schema_version: &'static str,
+    model_provider_network_calls: u8,
+    actions: Vec<R1RecoveryOutcome>,
+}
+
+#[tokio::test]
+#[ignore = "requires ROCKETMQ_SRE_TEST_DATABASE_URL and an explicit machine-local report path"]
+async fn all_r1_actions_persist_recovery_qualification_matrix() {
+    let Ok(fragment_path) = std::env::var("ROCKETMQ_SRE_R1_RECOVERY_FRAGMENT") else {
+        return;
+    };
+    let actions = [
+        ExecutionAction::ObservabilityLoggerLevelTtl,
+        ExecutionAction::ProxyScaleOutOne,
+        ExecutionAction::ProxyRestartOne,
+        ExecutionAction::TelemetryCollectorRestartOne,
+    ];
+    let mut outcomes = Vec::with_capacity(actions.len());
+    for action in actions {
+        let success = run_execution_for_action(&r1_success_signals(action), false, action).await;
+        assert_eq!(success.state, ExecutionState::Succeeded, "{} success case", action.id());
+        assert_eq!(success.dispatches, vec![false], "{} success dispatches", action.id());
+        assert_eq!(success.active_locks, 0, "{} success lock cleanup", action.id());
+
+        let automatic = matches!(
+            action,
+            ExecutionAction::ObservabilityLoggerLevelTtl | ExecutionAction::ProxyScaleOutOne
+        );
+        let rollback = run_execution_for_action(&r1_rollback_signals(action, true), false, action).await;
+        let (recovery_mode, verification_failure, rollback_failure, compensation_intents, active_quarantines) =
+            if automatic {
+                assert_eq!(
+                    rollback.state,
+                    ExecutionState::RolledBack,
+                    "{} verification-failure case",
+                    action.id()
+                );
+                assert_eq!(
+                    rollback.dispatches,
+                    vec![false, true],
+                    "{} compensation dispatches",
+                    action.id()
+                );
+                assert_eq!(rollback.compensation_intents, 1, "{} compensation intent", action.id());
+                assert_eq!(rollback.active_locks, 0, "{} rollback lock cleanup", action.id());
+                let quarantine = run_execution_for_action(&r1_rollback_signals(action, false), false, action).await;
+                assert_eq!(
+                    quarantine.state,
+                    ExecutionState::Escalated,
+                    "{} rollback-failure case",
+                    action.id()
+                );
+                assert_eq!(
+                    quarantine.dispatches,
+                    vec![false, true],
+                    "{} failed compensation dispatches",
+                    action.id()
+                );
+                assert_eq!(
+                    quarantine.compensation_intents,
+                    1,
+                    "{} failed compensation intent",
+                    action.id()
+                );
+                assert_eq!(quarantine.active_quarantines, 1, "{} active quarantine", action.id());
+                assert_eq!(quarantine.active_locks, 0, "{} quarantine lock cleanup", action.id());
+                let counts = (
+                    "automatic_compensation",
+                    "rolled_back",
+                    "escalated",
+                    rollback.compensation_intents + quarantine.compensation_intents,
+                    quarantine.active_quarantines,
+                );
+                cleanup_schema(&quarantine.pool, &quarantine.schema).await;
+                counts
+            } else {
+                assert_eq!(
+                    rollback.state,
+                    ExecutionState::Escalated,
+                    "{} manual-takeover safe-stop case",
+                    action.id()
+                );
+                assert_eq!(
+                    rollback.dispatches,
+                    vec![false, true],
+                    "{} safe-stop dispatches",
+                    action.id()
+                );
+                assert_eq!(rollback.compensation_intents, 1, "{} safe-stop intent", action.id());
+                assert_eq!(rollback.active_quarantines, 1, "{} safe-stop quarantine", action.id());
+                assert_eq!(rollback.active_locks, 0, "{} safe-stop lock cleanup", action.id());
+                (
+                    "manual_takeover_safe_stop",
+                    "escalated",
+                    "not_applicable_manual_takeover",
+                    rollback.compensation_intents,
+                    rollback.active_quarantines,
+                )
+            };
+
+        outcomes.push(R1RecoveryOutcome {
+            id: action.id().to_owned(),
+            recovery_mode,
+            verified_success: "succeeded",
+            verification_failure,
+            rollback_failure,
+            compensation_intents,
+            active_quarantines,
+        });
+        for run in [success, rollback] {
+            cleanup_schema(&run.pool, &run.schema).await;
+        }
+    }
+
+    let path = Path::new(&fragment_path);
+    assert!(
+        path.is_absolute(),
+        "R1 recovery qualification fragment path must be absolute"
+    );
+    let fragment = R1RecoveryFragment {
+        schema_version: "rocketmq-sre.r1-action-recovery-fragment.v1",
+        model_provider_network_calls: 0,
+        actions: outcomes,
+    };
+    let mut bytes = serde_json::to_vec_pretty(&fragment).expect("serialize R1 recovery qualification fragment");
+    bytes.push(b'\n');
+    fs::write(path, bytes).expect("write R1 recovery qualification fragment");
+}
+
+fn r1_success_signals(action: ExecutionAction) -> Vec<Signal> {
+    let stable = match action {
+        ExecutionAction::ObservabilityLoggerLevelTtl => 32,
+        ExecutionAction::ProxyScaleOutOne => 122,
+        ExecutionAction::ProxyRestartOne | ExecutionAction::TelemetryCollectorRestartOne => 182,
+        _ => panic!("only R1 actions are qualified"),
+    };
+    vec![signal(0, true), signal(1, true), signal(2, true), signal(stable, true)]
+}
+
+fn r1_rollback_signals(action: ExecutionAction, rollback_succeeds: bool) -> Vec<Signal> {
+    let (forward_timeout, rollback_timeout) = match action {
+        ExecutionAction::ObservabilityLoggerLevelTtl => (122, 64),
+        ExecutionAction::ProxyScaleOutOne => (902, 124),
+        ExecutionAction::ProxyRestartOne => (1_202, 184),
+        ExecutionAction::TelemetryCollectorRestartOne => (902, 184),
+        _ => panic!("only R1 actions are qualified"),
+    };
+    vec![
+        signal(0, true),
+        signal(1, true),
+        signal(2, false),
+        signal(forward_timeout, false),
+        signal(3, true),
+        signal(4, rollback_succeeds),
+        signal(rollback_timeout, rollback_succeeds),
+    ]
 }
 
 struct ExecutionRun {

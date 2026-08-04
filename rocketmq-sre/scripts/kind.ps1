@@ -200,7 +200,16 @@ function Ensure-Kubeconfig {
     Write-Utf8File $kubeconfigPath $kubeconfig
 }
 
-function Build-Images {
+function Get-SourceRevision {
+    Require-Command git
+    $sourceRevision = (Invoke-Native git @('-C', $repositoryRoot, 'rev-parse', 'HEAD')).Output.Trim()
+    if ($sourceRevision -notmatch '^[0-9a-f]{40}$' -or $sourceRevision -match '^0{40}$') {
+        throw 'Kind image builds require a non-zero 40-character source revision.'
+    }
+    return $sourceRevision
+}
+
+function Build-Images([string]$SourceRevision) {
     foreach ($entry in $localImages.GetEnumerator()) {
         if ($entry.Key -in @(
                 'sre-control-plane',
@@ -246,6 +255,7 @@ function Build-Images {
                 'build',
                 '--file', (Join-Path $repositoryRoot 'docker/Dockerfile.base'),
                 '--target', $entry.Key,
+                '--build-arg', "SOURCE_REVISION=$SourceRevision",
                 '--tag', $entry.Value,
                 $repositoryRoot
             ) | Out-Null
@@ -635,24 +645,27 @@ switch ($Action) {
         Assert-PinnedTools
         Assert-ArtifactRoot
         New-Item -ItemType Directory -Force -Path $artifactRoot | Out-Null
+        $sourceRevision = Get-SourceRevision
 
         $renderedKind = (Invoke-Native kubectl @('kustomize', $kindDirectory)).Output
         Write-Utf8File (Join-Path $artifactRoot 'kind-rendered.yaml') $renderedKind
         Invoke-Native helm @(
             'lint', $chartPath, '--strict',
             '--values', $devValues,
-            '--values', $kindValues
+            '--values', $kindValues,
+            '--set-string', "releaseIdentity.commit=$sourceRevision"
         ) | Out-Null
         $renderedHelm = (Invoke-Native helm @(
             'template', 'rocketmq', $chartPath,
             '--namespace', $rocketmqNamespace,
             '--values', $devValues,
-            '--values', $kindValues
+            '--values', $kindValues,
+            '--set-string', "releaseIdentity.commit=$sourceRevision"
         )).Output
         Write-Utf8File (Join-Path $artifactRoot 'helm-rendered.yaml') $renderedHelm
 
         if (-not $SkipBuild) {
-            Build-Images
+            Build-Images $sourceRevision
         }
         Assert-ImagesExist
 
@@ -709,6 +722,7 @@ switch ($Action) {
             '--create-namespace',
             '--values', $devValues,
             '--values', $kindValues,
+            '--set-string', "releaseIdentity.commit=$sourceRevision",
             '--force-conflicts',
             '--wait=hookOnly'
         ) | Out-Null

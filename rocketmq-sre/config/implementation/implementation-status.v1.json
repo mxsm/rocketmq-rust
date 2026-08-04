@@ -182,11 +182,24 @@
         {
           "kind": "test",
           "path": "rocketmq-sre/scripts/check_execution_recovery_qualification.py"
+        },
+        {
+          "kind": "configuration",
+          "path": "rocketmq-sre/config/qualification/r1-actions.v1.json"
+        },
+        {
+          "kind": "test",
+          "path": "rocketmq-sre/scripts/check_r1_action_qualification.py"
+        },
+        {
+          "kind": "test",
+          "path": "rocketmq-sre/scripts/r1-action-live-qualification.ps1"
         }
       ],
       "limitations": [
         "All nine explicitly registered bounded actions have independent switches, owners, and contract evidence; the sixteen-scenario Kubernetes platform fault matrix has passed.",
-        "Per-action disposable-cluster success, deny, unknown-result, verification-failure, and rollback qualification remains incomplete.",
+        "All four R1 actions have independently passed disposable Kind success, denial, idempotency, fencing, reconciliation, verification-failure, compensation or manual-takeover safe-stop, quarantine, scope, and kill-switch qualification with zero model-provider calls.",
+        "The five R2 actions still require the same independent disposable-cluster outcome qualification, so aggregate controlled-action live maturity remains partial.",
         "R3 operations and arbitrary requests remain permanently forbidden."
       ]
     },

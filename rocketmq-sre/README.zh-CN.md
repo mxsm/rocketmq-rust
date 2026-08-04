@@ -214,6 +214,32 @@ PostgreSQL 使用有界的 Docker `tmpfs`，运行结束后自动删除。可独
 python scripts/check_diagnostic_pack_qualification.py
 ```
 
+### 有界 R1 动作资格验证
+
+R1 资格契约覆盖四个已注册的低风险动作，同时不开放通用 Admin、Shell 或 Kubernetes
+Patch 能力。每个动作都绑定自己的描述符、负责人、独立启用开关和类型化预检，并统一经过
+租约、Fence、执行日志、验证、审计和隔离边界。
+
+实测工具使用一次性 Kind 部署以及真实运行的 Control Plane、Executor、Execution Agent、
+PostgreSQL、Broker、Proxy 和 OpenTelemetry Collector。真实目标变更严格限制为一个日志级别
+TTL 覆盖、一个 Proxy 副本、一个 Proxy Pod 或一个 Collector Pod。确定性的失败与恢复用例在
+隔离的 PostgreSQL Schema 中配合类型化 Agent 测试替身执行，因此报告会明确区分真实目标执行
+与可控恢复模拟。只有在 Proxy 副本数恢复、日志覆盖到期、工作负载恢复 Ready，且资格验证自有
+资源被清理后，运行才可判定为通过。
+
+按 Kind 环境文档完成启动后，在 `rocketmq-sre/` 中运行：
+
+```powershell
+.\scripts\r1-action-live-qualification.ps1
+```
+
+脱敏报告写入 `D:\rocketmq-sre-evidence`，且不构成生产认证。整个过程的模型供应商网络调用保持
+为零。可使用以下命令独立校验已提交的清单：
+
+```powershell
+python scripts/check_r1_action_qualification.py
+```
+
 ## 用户界面
 
 UI 按照 shadcn/ui 规范和可访问的 Radix UI primitive 设计为全屏桌面运维

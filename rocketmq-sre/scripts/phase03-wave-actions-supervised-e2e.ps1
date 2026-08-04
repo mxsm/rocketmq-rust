@@ -19,7 +19,13 @@ param(
     [int]$ExecutorLocalPort = 58096,
 
     [ValidateRange(1024, 65535)]
-    [int]$AgentLocalPort = 58097
+    [int]$AgentLocalPort = 58097,
+
+    [switch]$R1Only,
+
+    [string]$LiveFragment,
+
+    [string]$RecoveryFragment
 )
 
 $ErrorActionPreference = 'Stop'
@@ -144,6 +150,20 @@ foreach ($path in @(
 )) {
     Assert-DataPath $path.Value $path.Description
 }
+foreach ($fragment in @(
+    @{ Value = $LiveFragment; Description = 'live qualification fragment' },
+    @{ Value = $RecoveryFragment; Description = 'recovery qualification fragment' }
+)) {
+    if (-not [string]::IsNullOrWhiteSpace($fragment.Value)) {
+        Assert-DataPath $fragment.Value $fragment.Description
+        # Windows PowerShell 5.1 runs on .NET Framework, which does not expose
+        # Path.IsPathFullyQualified. Data paths are already restricted to D/F,
+        # so an explicit drive-root check provides the same invariant here.
+        if ($fragment.Value -notmatch '^[A-Za-z]:[\\/]') {
+            throw "$($fragment.Description) path must be absolute."
+        }
+    }
+}
 foreach ($port in @($PostgresLocalPort, $ExecutorLocalPort, $AgentLocalPort)) {
     Assert-PortAvailable $port
 }
@@ -187,7 +207,14 @@ foreach ($name in @(
     'ROCKETMQ_SRE_PHASE3_AGENT_URL',
     'ROCKETMQ_SRE_PHASE3_WORKLOAD_TOKEN',
     'ROCKETMQ_SRE_PHASE3_SIGNING_KEY',
-    'ROCKETMQ_SRE_PHASE3_PROXY_EXPECTED_REPLICAS'
+    'ROCKETMQ_SRE_PHASE3_PROXY_EXPECTED_REPLICAS',
+    'ROCKETMQ_SRE_PHASE3_PROXY_POD',
+    'ROCKETMQ_SRE_PHASE3_PROXY_UID',
+    'ROCKETMQ_SRE_PHASE4_COLLECTOR_POD',
+    'ROCKETMQ_SRE_PHASE4_COLLECTOR_UID',
+    'ROCKETMQ_SRE_TEST_DATABASE_URL',
+    'ROCKETMQ_SRE_R1_LIVE_FRAGMENT',
+    'ROCKETMQ_SRE_R1_RECOVERY_FRAGMENT'
 )) {
     $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
 }
@@ -195,6 +222,7 @@ foreach ($name in @(
 $postgresForward = $null
 $executorForward = $null
 $agentForward = $null
+$baselineProxyReplicas = $null
 try {
     & kubectl `
         --kubeconfig $resolvedKubeconfig `
@@ -249,6 +277,44 @@ try {
     if ($LASTEXITCODE -ne 0 -or [int]$proxy.spec.replicas -lt 1) {
         throw 'A live Proxy Deployment with at least one replica is required.'
     }
+    $baselineProxyReplicas = [int]$proxy.spec.replicas
+    if ($baselineProxyReplicas -lt 2) {
+        throw 'The combined R1 qualification requires at least two live Proxy replicas for safe restart.'
+    }
+    $proxyPods = & kubectl `
+        --kubeconfig $resolvedKubeconfig `
+        -n rocketmq-system `
+        get pods `
+        -l app.kubernetes.io/name=rocketmq-proxy `
+        -o json |
+        ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Unable to list live Proxy pods.'
+    }
+    $proxyPod = $proxyPods.items |
+        Where-Object { $_.status.containerStatuses[0].ready -eq $true } |
+        Sort-Object { $_.metadata.creationTimestamp } |
+        Select-Object -First 1
+    if ($null -eq $proxyPod -or [string]::IsNullOrWhiteSpace($proxyPod.metadata.uid)) {
+        throw 'No Ready Proxy pod with a stable UID is available.'
+    }
+    $collectorPods = & kubectl `
+        --kubeconfig $resolvedKubeconfig `
+        -n observability `
+        get pods `
+        -l app.kubernetes.io/name=otel-collector `
+        -o json |
+        ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Unable to list live OpenTelemetry Collector pods.'
+    }
+    $collectorPod = $collectorPods.items |
+        Where-Object { $_.status.containerStatuses[0].ready -eq $true } |
+        Sort-Object { $_.metadata.creationTimestamp } |
+        Select-Object -First 1
+    if ($null -eq $collectorPod -or [string]::IsNullOrWhiteSpace($collectorPod.metadata.uid)) {
+        throw 'No Ready OpenTelemetry Collector pod with a stable UID is available.'
+    }
 
     $env:CARGO_HOME = [IO.Path]::GetFullPath($CargoHome)
     $env:CARGO_TARGET_DIR = [IO.Path]::GetFullPath($CargoTargetDir)
@@ -261,13 +327,38 @@ try {
     $env:ROCKETMQ_SRE_PHASE3_WORKLOAD_TOKEN = $workloadToken
     $env:ROCKETMQ_SRE_PHASE3_SIGNING_KEY = $workloadToken
     $env:ROCKETMQ_SRE_PHASE3_PROXY_EXPECTED_REPLICAS = [string]$proxy.spec.replicas
+    $env:ROCKETMQ_SRE_PHASE3_PROXY_POD = [string]$proxyPod.metadata.name
+    $env:ROCKETMQ_SRE_PHASE3_PROXY_UID = [string]$proxyPod.metadata.uid
+    $env:ROCKETMQ_SRE_PHASE4_COLLECTOR_POD = [string]$collectorPod.metadata.name
+    $env:ROCKETMQ_SRE_PHASE4_COLLECTOR_UID = [string]$collectorPod.metadata.uid
+    $env:ROCKETMQ_SRE_TEST_DATABASE_URL = $databaseUri.Uri.AbsoluteUri
+    if (-not [string]::IsNullOrWhiteSpace($LiveFragment)) {
+        $env:ROCKETMQ_SRE_R1_LIVE_FRAGMENT = [IO.Path]::GetFullPath($LiveFragment)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($RecoveryFragment)) {
+        $env:ROCKETMQ_SRE_R1_RECOVERY_FRAGMENT = [IO.Path]::GetFullPath($RecoveryFragment)
+        & cargo +1.95.0 test `
+            --manifest-path $manifestPath `
+            --locked `
+            -p rocketmq-sre-executor `
+            --test execution_flow `
+            all_r1_actions_persist_recovery_qualification_matrix `
+            -- `
+            --ignored `
+            --exact `
+            --nocapture `
+            --test-threads=1
+        if ($LASTEXITCODE -ne 0) {
+            throw 'R1 persisted recovery qualification matrix failed.'
+        }
+    }
 
     & cargo +1.95.0 test `
         --manifest-path $manifestPath `
         --locked `
         -p rocketmq-sre-control-plane `
         --lib `
-        supervised_execution::wave_actions_e2e_tests::real_kind_wave_one_r1_actions_share_the_supervised_execution_chain `
+        supervised_execution::wave_actions_e2e_tests::real_kind_all_r1_actions_share_the_supervised_execution_chain `
         -- `
         --ignored `
         --exact `
@@ -278,35 +369,89 @@ try {
 
     Write-Host (
         'PHASE03_WAVE1_R1_SUPERVISED_E2E_OK ' +
-        'actions=observability.logger_level_ttl.v1,proxy.scale_out_one.v1 ' +
+        'actions=observability.logger_level_ttl.v1,proxy.scale_out_one.v1,' +
+        'proxy.restart_one.v1,telemetry.collector.restart_one.v1 ' +
         'approval=independent executor=true agent=true verification=true audit=correlated'
     )
 
-    & cargo +1.95.0 test `
-        --manifest-path $manifestPath `
-        --locked `
-        -p rocketmq-sre-control-plane `
-        --lib `
-        supervised_execution::wave_admin_actions_e2e_tests::real_kind_wave_admin_actions_share_r2_critic_approval_and_verification `
-        -- `
-        --ignored `
-        --exact `
-        --nocapture
-    if ($LASTEXITCODE -ne 0) {
-        throw 'Wave Admin R2 formal supervised E2E failed.'
+    if (-not $R1Only) {
+        & cargo +1.95.0 test `
+            --manifest-path $manifestPath `
+            --locked `
+            -p rocketmq-sre-control-plane `
+            --lib `
+            supervised_execution::wave_admin_actions_e2e_tests::real_kind_wave_admin_actions_share_r2_critic_approval_and_verification `
+            -- `
+            --ignored `
+            --exact `
+            --nocapture
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Wave Admin R2 formal supervised E2E failed.'
+        }
+
+        Write-Host (
+            'PHASE03_WAVE_ADMIN_R2_SUPERVISED_E2E_OK ' +
+            'actions=broker.config.patch_allowlisted.v1,topic.config.patch_allowlisted.v1,' +
+            'subscription_group.patch_allowlisted.v1 critic=kimi-moonshot ' +
+            'approval=independent executor=true agent=true verification=true audit=correlated'
+        )
     }
-
-    Write-Host (
-        'PHASE03_WAVE_ADMIN_R2_SUPERVISED_E2E_OK ' +
-        'actions=broker.config.patch_allowlisted.v1,topic.config.patch_allowlisted.v1,' +
-        'subscription_group.patch_allowlisted.v1 critic=kimi-moonshot ' +
-        'approval=independent executor=true agent=true verification=true audit=correlated'
-    )
 }
 finally {
+    $cleanupFailures = [Collections.Generic.List[string]]::new()
     Stop-OwnedProcess $agentForward
     Stop-OwnedProcess $executorForward
     Stop-OwnedProcess $postgresForward
+    if ($null -ne $baselineProxyReplicas) {
+        try {
+            & kubectl `
+                --kubeconfig $resolvedKubeconfig `
+                -n rocketmq-system `
+                scale deployment/rocketmq-proxy `
+                --replicas=$baselineProxyReplicas
+            if ($LASTEXITCODE -ne 0) {
+                throw 'Unable to restore the original Proxy replica count.'
+            }
+            & kubectl `
+                --kubeconfig $resolvedKubeconfig `
+                -n rocketmq-system `
+                rollout status deployment/rocketmq-proxy `
+                --timeout=300s
+            if ($LASTEXITCODE -ne 0) {
+                throw 'Proxy Deployment did not become Ready after replica restoration.'
+            }
+        }
+        catch {
+            $cleanupFailures.Add($_.Exception.Message)
+        }
+        try {
+            & kubectl `
+                --kubeconfig $resolvedKubeconfig `
+                -n observability `
+                rollout status deployment/otel-collector `
+                --timeout=300s
+            if ($LASTEXITCODE -ne 0) {
+                throw 'Collector Deployment did not remain Ready after qualification.'
+            }
+        }
+        catch {
+            $cleanupFailures.Add($_.Exception.Message)
+        }
+    }
+    try {
+        & kubectl `
+            --kubeconfig $resolvedKubeconfig `
+            -n rocketmq-system `
+            delete job rocketmq-sre-phase03-wave-admin-bootstrap `
+            --ignore-not-found=true `
+            --wait=true
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Unable to remove the bounded wave Admin bootstrap Job.'
+        }
+    }
+    catch {
+        $cleanupFailures.Add($_.Exception.Message)
+    }
     foreach ($entry in $savedEnvironment.GetEnumerator()) {
         [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, 'Process')
     }
@@ -315,5 +460,8 @@ finally {
         $runRoot.StartsWith($expectedTemporaryPrefix, [StringComparison]::OrdinalIgnoreCase)
     ) {
         Remove-Item -LiteralPath $runRoot -Recurse -Force
+    }
+    if ($cleanupFailures.Count -gt 0) {
+        throw "R1 wave cleanup failed: $($cleanupFailures -join '; ')"
     }
 }

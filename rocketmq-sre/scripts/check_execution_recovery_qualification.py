@@ -187,6 +187,25 @@ def validate(manifest: dict[str, Any]) -> list[str]:
             findings.append(f"{location}.qualification is not recognized")
     if catalog_actions != EXPECTED_ACTIONS:
         findings.append(f"controlled action catalog drifted: {catalog_actions}")
+    for action in actions:
+        if not isinstance(action, dict):
+            continue
+        expected = "disposable_cluster_smoke_passed" if action.get("risk") == "r1" else "contract_tested"
+        if action.get("qualification") != expected:
+            findings.append(f"controlled action {action.get('id')} must be qualified as {expected}")
+
+    r1_live = manifest.get("r1_live_qualification")
+    if not isinstance(r1_live, dict):
+        findings.append("R1 live qualification contract is missing")
+    else:
+        if r1_live.get("actions") != 4 or r1_live.get("required_outcomes_per_action") != 10:
+            findings.append("R1 live qualification must cover four actions by ten outcomes")
+        if r1_live.get("model_provider_network_calls") is not False:
+            findings.append("R1 live qualification must not call model providers")
+        if r1_live.get("production_certified") is not False:
+            findings.append("R1 disposable qualification must not claim production certification")
+        for field in ("manifest", "script", "checker"):
+            _repository_path(r1_live.get(field), findings, f"r1_live_qualification.{field}")
 
     common = manifest.get("common_execution_safety_evidence")
     required_safety = {

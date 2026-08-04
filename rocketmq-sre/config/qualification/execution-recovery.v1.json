@@ -38,6 +38,15 @@
       "test": "rollback_failure_atomically_escalates_quarantines_and_notifies"
     }
   },
+  "r1_live_qualification": {
+    "manifest": "rocketmq-sre/config/qualification/r1-actions.v1.json",
+    "script": "rocketmq-sre/scripts/r1-action-live-qualification.ps1",
+    "checker": "rocketmq-sre/scripts/check_r1_action_qualification.py",
+    "actions": 4,
+    "required_outcomes_per_action": 10,
+    "model_provider_network_calls": false,
+    "production_certified": false
+  },
   "controlled_actions": [
     {
       "id": "observability.logger_level_ttl.v1",
@@ -51,7 +60,7 @@
       "descriptor": "rocketmq-sre/config/actions/observability.logger_level_ttl.v1.yaml",
       "precheck_test": "rocketmq-sre/crates/rocketmq-sre-execution-agent/src/drivers/logger_level_ttl_tests.rs",
       "disposable_cluster_smoke": "rocketmq-sre/scripts/phase03-logger-ttl-smoke.ps1",
-      "qualification": "contract_tested"
+      "qualification": "disposable_cluster_smoke_passed"
     },
     {
       "id": "proxy.scale_out_one.v1",
@@ -65,7 +74,7 @@
       "descriptor": "rocketmq-sre/config/actions/proxy.scale_out_one.v1.yaml",
       "precheck_test": "rocketmq-sre/crates/rocketmq-sre-execution-agent/src/drivers/proxy_scale_out_one_tests.rs",
       "disposable_cluster_smoke": "rocketmq-sre/scripts/phase03-proxy-scale-smoke.ps1",
-      "qualification": "contract_tested"
+      "qualification": "disposable_cluster_smoke_passed"
     },
     {
       "id": "proxy.restart_one.v1",
@@ -79,7 +88,7 @@
       "descriptor": "rocketmq-sre/config/actions/proxy.restart_one.v1.yaml",
       "precheck_test": "rocketmq-sre/crates/rocketmq-sre-execution-agent/src/drivers/proxy_restart_one_tests.rs",
       "disposable_cluster_smoke": "rocketmq-sre/scripts/phase03-proxy-restart-e2e.ps1",
-      "qualification": "contract_tested"
+      "qualification": "disposable_cluster_smoke_passed"
     },
     {
       "id": "telemetry.collector.restart_one.v1",
@@ -93,7 +102,7 @@
       "descriptor": "rocketmq-sre/config/actions/telemetry.collector.restart_one.v1.yaml",
       "precheck_test": "rocketmq-sre/crates/rocketmq-sre-execution-agent/src/drivers/telemetry_collector_restart_one_tests.rs",
       "disposable_cluster_smoke": "rocketmq-sre/scripts/phase04-collector-restart-e2e.ps1",
-      "qualification": "contract_tested"
+      "qualification": "disposable_cluster_smoke_passed"
     },
     {
       "id": "broker.config.patch_allowlisted.v1",

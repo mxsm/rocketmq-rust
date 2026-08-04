@@ -239,6 +239,38 @@ committed contract is checked independently with:
 python scripts/check_diagnostic_pack_qualification.py
 ```
 
+### Bounded R1 action qualification
+
+The R1 qualification contract covers the four registered low-risk actions
+without granting generic Admin, shell, or Kubernetes patch access. Each action
+is bound to its descriptor, owner, independent enable switch, typed precheck,
+and the shared lease, fence, journal, verification, audit, and quarantine
+boundaries.
+
+The live harness uses a disposable Kind deployment and the running Control
+Plane, Executor, Execution Agent, PostgreSQL, Broker, Proxy, and OpenTelemetry
+Collector. Real target changes are limited to one logger TTL override, one
+Proxy replica, one Proxy pod, or one Collector pod. Deterministic failure and
+recovery cases use an isolated PostgreSQL schema and a typed Agent test double,
+so the report distinguishes real target execution from controlled recovery
+simulation. Proxy capacity is restored, the logger override expires, workloads
+must return Ready, and qualification-owned resources are removed before a run
+can pass.
+
+Run from `rocketmq-sre/` after bringing up the documented Kind environment:
+
+```powershell
+.\scripts\r1-action-live-qualification.ps1
+```
+
+The redacted report is written under `D:\rocketmq-sre-evidence` and is never a
+production certificate. Model-provider network calls remain zero. Validate the
+committed catalog independently with:
+
+```powershell
+python scripts/check_r1_action_qualification.py
+```
+
 ## User interface
 
 The UI is designed as a full-screen desktop operations workspace using
