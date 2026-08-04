@@ -1,0 +1,1295 @@
+{
+  "schema_version": "rocketmq-sre.diagnostic-pack-qualification.v1",
+  "operating_mode": "rules_only",
+  "model_provider_network_calls": false,
+  "target_mutation_calls": 0,
+  "execution_eligible": false,
+  "pack_count": 32,
+  "scenario_count": 3,
+  "pack_scenario_count": 96,
+  "inspection_templates": [
+    "cluster_health",
+    "consumer",
+    "broker",
+    "telemetry",
+    "producer_consumer"
+  ],
+  "fixture_assets": [
+    "tests/fixtures/diagnostics/cluster-topology.v1/normal.json",
+    "tests/fixtures/diagnostics/cluster-topology.v1/fault.json",
+    "tests/fixtures/diagnostics/cluster-topology.v1/missing.json",
+    "tests/fixtures/diagnostics/consumer-lag.v2/normal.json",
+    "tests/fixtures/diagnostics/consumer-lag.v2/fault.json",
+    "tests/fixtures/diagnostics/consumer-lag.v2/missing.json",
+    "tests/fixtures/diagnostics/consumer-runtime.v1/normal.json",
+    "tests/fixtures/diagnostics/consumer-runtime.v1/fault.json",
+    "tests/fixtures/diagnostics/consumer-runtime.v1/missing.json",
+    "tests/fixtures/diagnostics/producer-connectivity.v1/normal.json",
+    "tests/fixtures/diagnostics/producer-connectivity.v1/fault.json",
+    "tests/fixtures/diagnostics/producer-connectivity.v1/missing.json",
+    "tests/fixtures/diagnostics/broker-health.v1/normal.json",
+    "tests/fixtures/diagnostics/broker-health.v1/fault.json",
+    "tests/fixtures/diagnostics/broker-health.v1/missing.json",
+    "tests/fixtures/diagnostics/message-path.v1/normal.json",
+    "tests/fixtures/diagnostics/message-path.v1/fault.json",
+    "tests/fixtures/diagnostics/message-path.v1/missing.json",
+    "tests/fixtures/diagnostics/telemetry-pipeline.v1/normal.json",
+    "tests/fixtures/diagnostics/telemetry-pipeline.v1/fault.json",
+    "tests/fixtures/diagnostics/telemetry-pipeline.v1/missing.json",
+    "tests/fixtures/diagnostics/deployment-drift.v1/normal.json",
+    "tests/fixtures/diagnostics/deployment-drift.v1/fault.json",
+    "tests/fixtures/diagnostics/deployment-drift.v1/missing.json",
+    "tests/fixtures/diagnostics/wave-b/catalog.v1.json",
+    "tests/fixtures/diagnostics/wave-c/catalog.v1.json"
+  ],
+  "packs": [
+    {
+      "id": "cluster-topology.v1",
+      "inspection_template": "cluster_health",
+      "required_evidence": [
+        {
+          "key": "topology",
+          "source": "topology",
+          "resource_prefix": "asset-graph/"
+        }
+      ],
+      "scenarios": [
+        {
+          "scenario": "normal",
+          "expected_status": "healthy",
+          "expected_reason_codes": [
+            "TOPOLOGY_HEALTHY"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "fault",
+          "expected_status": "fault",
+          "expected_reason_codes": [
+            "TOPOLOGY_BROKEN_DEPENDENCY",
+            "TOPOLOGY_CHANGED",
+            "TOPOLOGY_CLIENT_DISCONNECTED",
+            "TOPOLOGY_ORPHAN_ASSET",
+            "TOPOLOGY_WORKLOAD_UNREADY"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "missing",
+          "expected_status": "inconclusive",
+          "expected_reason_codes": [],
+          "partial": true,
+          "execution_eligible": false
+        }
+      ]
+    },
+    {
+      "id": "consumer-lag.v2",
+      "inspection_template": "consumer",
+      "required_evidence": [
+        {
+          "key": "consumer-lag",
+          "source": "rocketmq-mcp",
+          "resource_prefix": "consumer-lag/"
+        }
+      ],
+      "scenarios": [
+        {
+          "scenario": "normal",
+          "expected_status": "healthy",
+          "expected_reason_codes": [
+            "CONSUMER_LAG_HEALTHY"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "fault",
+          "expected_status": "fault",
+          "expected_reason_codes": [
+            "CONSUMER_QUEUE_SKEW",
+            "CONSUMER_RUNTIME_UNAVAILABLE",
+            "CONSUMER_THROUGHPUT_DEFICIT"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "missing",
+          "expected_status": "inconclusive",
+          "expected_reason_codes": [],
+          "partial": true,
+          "execution_eligible": false
+        }
+      ]
+    },
+    {
+      "id": "consumer-runtime.v1",
+      "inspection_template": "consumer",
+      "required_evidence": [
+        {
+          "key": "runtime",
+          "source": "admin-query",
+          "resource_prefix": "consumer-runtime/"
+        }
+      ],
+      "scenarios": [
+        {
+          "scenario": "normal",
+          "expected_status": "healthy",
+          "expected_reason_codes": [
+            "CONSUMER_RUNTIME_HEALTHY"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "fault",
+          "expected_status": "fault",
+          "expected_reason_codes": [
+            "CONSUMER_CLIENT_VERSION_UNSUPPORTED",
+            "CONSUMER_CONNECTION_LOST",
+            "CONSUMER_OFFSET_CONTROL_ANOMALY",
+            "CONSUMER_PROCESSING_SLOW",
+            "CONSUMER_REBALANCE_STALLED"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "missing",
+          "expected_status": "inconclusive",
+          "expected_reason_codes": [],
+          "partial": true,
+          "execution_eligible": false
+        }
+      ]
+    },
+    {
+      "id": "producer-connectivity.v1",
+      "inspection_template": "producer_consumer",
+      "required_evidence": [
+        {
+          "key": "producer",
+          "source": "admin-query",
+          "resource_prefix": "producer-connectivity/"
+        }
+      ],
+      "scenarios": [
+        {
+          "scenario": "normal",
+          "expected_status": "healthy",
+          "expected_reason_codes": [
+            "PRODUCER_CONNECTIVITY_HEALTHY"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "fault",
+          "expected_status": "fault",
+          "expected_reason_codes": [
+            "PRODUCER_BACKPRESSURE",
+            "PRODUCER_CLIENT_VERSION_UNSUPPORTED",
+            "PRODUCER_CONNECTION_LOST",
+            "PRODUCER_QUEUE_SELECTION_FAILED",
+            "PRODUCER_ROUTE_STALE",
+            "PRODUCER_SEND_FAILURES"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "missing",
+          "expected_status": "inconclusive",
+          "expected_reason_codes": [],
+          "partial": true,
+          "execution_eligible": false
+        }
+      ]
+    },
+    {
+      "id": "broker-health.v1",
+      "inspection_template": "broker",
+      "required_evidence": [
+        {
+          "key": "broker-metrics",
+          "source": "prometheus",
+          "resource_prefix": "broker-health/"
+        }
+      ],
+      "scenarios": [
+        {
+          "scenario": "normal",
+          "expected_status": "healthy",
+          "expected_reason_codes": [
+            "BROKER_HEALTHY"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "fault",
+          "expected_status": "fault",
+          "expected_reason_codes": [
+            "BROKER_DISK_PRESSURE",
+            "BROKER_FLUSH_DISPATCH_STALL",
+            "BROKER_HA_LAG",
+            "BROKER_NOT_READY",
+            "BROKER_REQUEST_ERRORS",
+            "BROKER_RESOURCE_PRESSURE"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "missing",
+          "expected_status": "inconclusive",
+          "expected_reason_codes": [],
+          "partial": true,
+          "execution_eligible": false
+        }
+      ]
+    },
+    {
+      "id": "message-path.v1",
+      "inspection_template": "producer_consumer",
+      "required_evidence": [
+        {
+          "key": "message-metadata",
+          "source": "admin-query",
+          "resource_prefix": "message-metadata/"
+        }
+      ],
+      "scenarios": [
+        {
+          "scenario": "normal",
+          "expected_status": "healthy",
+          "expected_reason_codes": [
+            "MESSAGE_PATH_COMPLETE"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "fault",
+          "expected_status": "fault",
+          "expected_reason_codes": [
+            "MESSAGE_ACK_STAGE_MISSING",
+            "MESSAGE_DELIVERY_STAGE_MISSING",
+            "MESSAGE_TRANSACTION_STATUS_UNKNOWN"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "missing",
+          "expected_status": "inconclusive",
+          "expected_reason_codes": [],
+          "partial": true,
+          "execution_eligible": false
+        }
+      ]
+    },
+    {
+      "id": "telemetry-pipeline.v1",
+      "inspection_template": "telemetry",
+      "required_evidence": [
+        {
+          "key": "runtime-observability",
+          "source": "runtime",
+          "resource_prefix": "observability/"
+        }
+      ],
+      "scenarios": [
+        {
+          "scenario": "normal",
+          "expected_status": "healthy",
+          "expected_reason_codes": [
+            "TELEMETRY_PIPELINE_HEALTHY"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "fault",
+          "expected_status": "fault",
+          "expected_reason_codes": [
+            "TELEMETRY_BACKEND_UNAVAILABLE",
+            "TELEMETRY_BUILD_FEATURE_DISABLED",
+            "TELEMETRY_COLLECTOR_UNAVAILABLE",
+            "TELEMETRY_EXPORTER_DISABLED",
+            "TELEMETRY_EXPORT_STALE",
+            "TELEMETRY_QUEUE_DROPPING"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "missing",
+          "expected_status": "inconclusive",
+          "expected_reason_codes": [],
+          "partial": true,
+          "execution_eligible": false
+        }
+      ]
+    },
+    {
+      "id": "deployment-drift.v1",
+      "inspection_template": "cluster_health",
+      "required_evidence": [
+        {
+          "key": "deployment-diff",
+          "source": "kubernetes",
+          "resource_prefix": "deployment-drift/"
+        }
+      ],
+      "scenarios": [
+        {
+          "scenario": "normal",
+          "expected_status": "healthy",
+          "expected_reason_codes": [
+            "DEPLOYMENT_IN_SYNC"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "fault",
+          "expected_status": "fault",
+          "expected_reason_codes": [
+            "DEPLOYMENT_AVAILABILITY_DRIFT",
+            "DEPLOYMENT_CONFIG_DRIFT",
+            "DEPLOYMENT_IMAGE_FEATURE_DRIFT",
+            "DEPLOYMENT_SECURITY_DRIFT",
+            "DEPLOYMENT_STORAGE_DRIFT",
+            "DEPLOYMENT_TOPOLOGY_DRIFT"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "missing",
+          "expected_status": "inconclusive",
+          "expected_reason_codes": [],
+          "partial": true,
+          "execution_eligible": false
+        }
+      ]
+    },
+    {
+      "id": "store-pressure.v1",
+      "inspection_template": "broker",
+      "required_evidence": [
+        {
+          "key": "store-pressure",
+          "source": "admin-query",
+          "resource_prefix": "store-pressure/"
+        }
+      ],
+      "scenarios": [
+        {
+          "scenario": "normal",
+          "expected_status": "healthy",
+          "expected_reason_codes": [
+            "STORE_PRESSURE_HEALTHY"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "fault",
+          "expected_status": "fault",
+          "expected_reason_codes": [
+            "STORE_DISK_PRESSURE"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "missing",
+          "expected_status": "inconclusive",
+          "expected_reason_codes": [],
+          "partial": true,
+          "execution_eligible": false
+        }
+      ]
+    },
+    {
+      "id": "store-integrity.v1",
+      "inspection_template": "broker",
+      "required_evidence": [
+        {
+          "key": "store-integrity",
+          "source": "admin-query",
+          "resource_prefix": "store-integrity/"
+        }
+      ],
+      "scenarios": [
+        {
+          "scenario": "normal",
+          "expected_status": "healthy",
+          "expected_reason_codes": [
+            "STORE_INTEGRITY_HEALTHY"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "fault",
+          "expected_status": "fault",
+          "expected_reason_codes": [
+            "STORE_OFFSET_INCONSISTENT"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "missing",
+          "expected_status": "inconclusive",
+          "expected_reason_codes": [],
+          "partial": true,
+          "execution_eligible": false
+        }
+      ]
+    },
+    {
+      "id": "rocksdb-health.v1",
+      "inspection_template": "broker",
+      "required_evidence": [
+        {
+          "key": "rocksdb-health",
+          "source": "admin-query",
+          "resource_prefix": "rocksdb-health/"
+        }
+      ],
+      "scenarios": [
+        {
+          "scenario": "normal",
+          "expected_status": "healthy",
+          "expected_reason_codes": [
+            "ROCKSDB_HEALTHY"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "fault",
+          "expected_status": "fault",
+          "expected_reason_codes": [
+            "ROCKSDB_MAINTENANCE_STUCK"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "missing",
+          "expected_status": "inconclusive",
+          "expected_reason_codes": [],
+          "partial": true,
+          "execution_eligible": false
+        }
+      ]
+    },
+    {
+      "id": "tiered-store.v1",
+      "inspection_template": "broker",
+      "required_evidence": [
+        {
+          "key": "tiered-store",
+          "source": "admin-query",
+          "resource_prefix": "tiered-store/"
+        }
+      ],
+      "scenarios": [
+        {
+          "scenario": "normal",
+          "expected_status": "healthy",
+          "expected_reason_codes": [
+            "TIERED_STORE_HEALTHY"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "fault",
+          "expected_status": "fault",
+          "expected_reason_codes": [
+            "TIERED_PROVIDER_UNAVAILABLE"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "missing",
+          "expected_status": "inconclusive",
+          "expected_reason_codes": [],
+          "partial": true,
+          "execution_eligible": false
+        }
+      ]
+    },
+    {
+      "id": "broker-ha.v1",
+      "inspection_template": "broker",
+      "required_evidence": [
+        {
+          "key": "broker-ha",
+          "source": "admin-query",
+          "resource_prefix": "broker-ha/"
+        }
+      ],
+      "scenarios": [
+        {
+          "scenario": "normal",
+          "expected_status": "healthy",
+          "expected_reason_codes": [
+            "BROKER_HA_HEALTHY"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "fault",
+          "expected_status": "fault",
+          "expected_reason_codes": [
+            "BROKER_HA_REPLICA_LAG"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "missing",
+          "expected_status": "inconclusive",
+          "expected_reason_codes": [],
+          "partial": true,
+          "execution_eligible": false
+        }
+      ]
+    },
+    {
+      "id": "controller-ha.v1",
+      "inspection_template": "cluster_health",
+      "required_evidence": [
+        {
+          "key": "controller-ha",
+          "source": "prometheus",
+          "resource_prefix": "controller-ha/"
+        }
+      ],
+      "scenarios": [
+        {
+          "scenario": "normal",
+          "expected_status": "healthy",
+          "expected_reason_codes": [
+            "CONTROLLER_HA_HEALTHY"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "fault",
+          "expected_status": "fault",
+          "expected_reason_codes": [
+            "CONTROLLER_LEADER_UNKNOWN"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "missing",
+          "expected_status": "inconclusive",
+          "expected_reason_codes": [],
+          "partial": true,
+          "execution_eligible": false
+        }
+      ]
+    },
+    {
+      "id": "namesrv-route.v1",
+      "inspection_template": "cluster_health",
+      "required_evidence": [
+        {
+          "key": "namesrv-route",
+          "source": "rocketmq-mcp",
+          "resource_prefix": "namesrv-route/"
+        }
+      ],
+      "scenarios": [
+        {
+          "scenario": "normal",
+          "expected_status": "healthy",
+          "expected_reason_codes": [
+            "NAMESRV_ROUTE_HEALTHY"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "fault",
+          "expected_status": "fault",
+          "expected_reason_codes": [
+            "NAMESRV_ROUTE_DIVERGENT"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "missing",
+          "expected_status": "inconclusive",
+          "expected_reason_codes": [],
+          "partial": true,
+          "execution_eligible": false
+        }
+      ]
+    },
+    {
+      "id": "send-latency.v1",
+      "inspection_template": "telemetry",
+      "required_evidence": [
+        {
+          "key": "send-latency",
+          "source": "prometheus",
+          "resource_prefix": "send-latency/"
+        }
+      ],
+      "scenarios": [
+        {
+          "scenario": "normal",
+          "expected_status": "healthy",
+          "expected_reason_codes": [
+            "SEND_LATENCY_HEALTHY"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "fault",
+          "expected_status": "fault",
+          "expected_reason_codes": [
+            "SEND_CLIENT_PROXY_LATENCY"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "missing",
+          "expected_status": "inconclusive",
+          "expected_reason_codes": [],
+          "partial": true,
+          "execution_eligible": false
+        }
+      ]
+    },
+    {
+      "id": "proxy-connectivity.v1",
+      "inspection_template": "telemetry",
+      "required_evidence": [
+        {
+          "key": "proxy-connectivity",
+          "source": "prometheus",
+          "resource_prefix": "proxy-connectivity/"
+        }
+      ],
+      "scenarios": [
+        {
+          "scenario": "normal",
+          "expected_status": "healthy",
+          "expected_reason_codes": [
+            "PROXY_CONNECTIVITY_HEALTHY"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "fault",
+          "expected_status": "fault",
+          "expected_reason_codes": [
+            "PROXY_GRPC_REMOTING_UNHEALTHY"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "missing",
+          "expected_status": "inconclusive",
+          "expected_reason_codes": [],
+          "partial": true,
+          "execution_eligible": false
+        }
+      ]
+    },
+    {
+      "id": "static-topic-route.v1",
+      "inspection_template": "broker",
+      "required_evidence": [
+        {
+          "key": "static-topic-route",
+          "source": "rocketmq-mcp",
+          "resource_prefix": "static-topic-route/"
+        }
+      ],
+      "scenarios": [
+        {
+          "scenario": "normal",
+          "expected_status": "healthy",
+          "expected_reason_codes": [
+            "STATIC_TOPIC_ROUTE_HEALTHY"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "fault",
+          "expected_status": "fault",
+          "expected_reason_codes": [
+            "STATIC_ROUTE_EPOCH_DIVERGENT"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "missing",
+          "expected_status": "inconclusive",
+          "expected_reason_codes": [],
+          "partial": true,
+          "execution_eligible": false
+        }
+      ]
+    },
+    {
+      "id": "topic-subscription-config.v1",
+      "inspection_template": "consumer",
+      "required_evidence": [
+        {
+          "key": "topic-subscription-config",
+          "source": "admin-query",
+          "resource_prefix": "topic-subscription-config/"
+        }
+      ],
+      "scenarios": [
+        {
+          "scenario": "normal",
+          "expected_status": "healthy",
+          "expected_reason_codes": [
+            "TOPIC_SUBSCRIPTION_CONFIG_HEALTHY"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "fault",
+          "expected_status": "fault",
+          "expected_reason_codes": [
+            "TOPIC_GROUP_PERMISSION_MISMATCH"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "missing",
+          "expected_status": "inconclusive",
+          "expected_reason_codes": [],
+          "partial": true,
+          "execution_eligible": false
+        }
+      ]
+    },
+    {
+      "id": "retry-dlq.v1",
+      "inspection_template": "consumer",
+      "required_evidence": [
+        {
+          "key": "retry-dlq",
+          "source": "prometheus",
+          "resource_prefix": "retry-dlq/"
+        }
+      ],
+      "scenarios": [
+        {
+          "scenario": "normal",
+          "expected_status": "healthy",
+          "expected_reason_codes": [
+            "RETRY_DLQ_HEALTHY"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "fault",
+          "expected_status": "fault",
+          "expected_reason_codes": [
+            "RETRY_DLQ_GROWTH"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "missing",
+          "expected_status": "inconclusive",
+          "expected_reason_codes": [],
+          "partial": true,
+          "execution_eligible": false
+        }
+      ]
+    },
+    {
+      "id": "transaction-message.v1",
+      "inspection_template": "consumer",
+      "required_evidence": [
+        {
+          "key": "transaction-message",
+          "source": "prometheus",
+          "resource_prefix": "transaction-message/"
+        }
+      ],
+      "scenarios": [
+        {
+          "scenario": "normal",
+          "expected_status": "healthy",
+          "expected_reason_codes": [
+            "TRANSACTION_MESSAGE_HEALTHY"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "fault",
+          "expected_status": "fault",
+          "expected_reason_codes": [
+            "TRANSACTION_HALF_BACKLOG"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "missing",
+          "expected_status": "inconclusive",
+          "expected_reason_codes": [],
+          "partial": true,
+          "execution_eligible": false
+        }
+      ]
+    },
+    {
+      "id": "pop-revive.v1",
+      "inspection_template": "consumer",
+      "required_evidence": [
+        {
+          "key": "pop-revive",
+          "source": "prometheus",
+          "resource_prefix": "pop-revive/"
+        }
+      ],
+      "scenarios": [
+        {
+          "scenario": "normal",
+          "expected_status": "healthy",
+          "expected_reason_codes": [
+            "POP_REVIVE_HEALTHY"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "fault",
+          "expected_status": "fault",
+          "expected_reason_codes": [
+            "POP_INFLIGHT_PRESSURE"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "missing",
+          "expected_status": "inconclusive",
+          "expected_reason_codes": [],
+          "partial": true,
+          "execution_eligible": false
+        }
+      ]
+    },
+    {
+      "id": "timer-backlog.v1",
+      "inspection_template": "consumer",
+      "required_evidence": [
+        {
+          "key": "timer-backlog",
+          "source": "prometheus",
+          "resource_prefix": "timer-backlog/"
+        }
+      ],
+      "scenarios": [
+        {
+          "scenario": "normal",
+          "expected_status": "healthy",
+          "expected_reason_codes": [
+            "TIMER_BACKLOG_HEALTHY"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "fault",
+          "expected_status": "fault",
+          "expected_reason_codes": [
+            "TIMER_DEQUEUE_LAG"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "missing",
+          "expected_status": "inconclusive",
+          "expected_reason_codes": [],
+          "partial": true,
+          "execution_eligible": false
+        }
+      ]
+    },
+    {
+      "id": "queue-hotspot.v1",
+      "inspection_template": "consumer",
+      "required_evidence": [
+        {
+          "key": "queue-hotspot",
+          "source": "prometheus",
+          "resource_prefix": "queue-hotspot/"
+        }
+      ],
+      "scenarios": [
+        {
+          "scenario": "normal",
+          "expected_status": "healthy",
+          "expected_reason_codes": [
+            "QUEUE_HOTSPOT_HEALTHY"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "fault",
+          "expected_status": "fault",
+          "expected_reason_codes": [
+            "QUEUE_TRAFFIC_HOTSPOT"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "missing",
+          "expected_status": "inconclusive",
+          "expected_reason_codes": [],
+          "partial": true,
+          "execution_eligible": false
+        }
+      ]
+    },
+    {
+      "id": "auth-failure.v1",
+      "inspection_template": "telemetry",
+      "required_evidence": [
+        {
+          "key": "auth-failure",
+          "source": "admin-query",
+          "resource_prefix": "auth-failure/"
+        }
+      ],
+      "scenarios": [
+        {
+          "scenario": "normal",
+          "expected_status": "healthy",
+          "expected_reason_codes": [
+            "AUTH_FAILURE_NOT_OBSERVED"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "fault",
+          "expected_status": "fault",
+          "expected_reason_codes": [
+            "AUTH_SCOPE_DENIED"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "missing",
+          "expected_status": "inconclusive",
+          "expected_reason_codes": [],
+          "partial": true,
+          "execution_eligible": false
+        }
+      ]
+    },
+    {
+      "id": "runtime-saturation.v1",
+      "inspection_template": "telemetry",
+      "required_evidence": [
+        {
+          "key": "runtime-saturation",
+          "source": "runtime",
+          "resource_prefix": "runtime-saturation/"
+        }
+      ],
+      "scenarios": [
+        {
+          "scenario": "normal",
+          "expected_status": "healthy",
+          "expected_reason_codes": [
+            "RUNTIME_SATURATION_HEALTHY"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "fault",
+          "expected_status": "fault",
+          "expected_reason_codes": [
+            "RUNTIME_TASKGROUP_SATURATED"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "missing",
+          "expected_status": "inconclusive",
+          "expected_reason_codes": [],
+          "partial": true,
+          "execution_eligible": false
+        }
+      ]
+    },
+    {
+      "id": "upgrade-readiness.v1",
+      "inspection_template": "cluster_health",
+      "required_evidence": [
+        {
+          "key": "upgrade-readiness",
+          "source": "kubernetes",
+          "resource_prefix": "upgrade-readiness/"
+        }
+      ],
+      "scenarios": [
+        {
+          "scenario": "normal",
+          "expected_status": "healthy",
+          "expected_reason_codes": [
+            "UPGRADE_READY"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "fault",
+          "expected_status": "fault",
+          "expected_reason_codes": [
+            "UPGRADE_PROTOCOL_INCOMPATIBLE"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "missing",
+          "expected_status": "inconclusive",
+          "expected_reason_codes": [],
+          "partial": true,
+          "execution_eligible": false
+        }
+      ]
+    },
+    {
+      "id": "capacity-runway.v1",
+      "inspection_template": "cluster_health",
+      "required_evidence": [
+        {
+          "key": "capacity-runway",
+          "source": "prometheus",
+          "resource_prefix": "capacity-runway/"
+        }
+      ],
+      "scenarios": [
+        {
+          "scenario": "normal",
+          "expected_status": "healthy",
+          "expected_reason_codes": [
+            "CAPACITY_RUNWAY_HEALTHY"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "fault",
+          "expected_status": "fault",
+          "expected_reason_codes": [
+            "CAPACITY_DISK_RUNWAY_LOW"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "missing",
+          "expected_status": "inconclusive",
+          "expected_reason_codes": [],
+          "partial": true,
+          "execution_eligible": false
+        }
+      ]
+    },
+    {
+      "id": "cold-data-flow.v1",
+      "inspection_template": "broker",
+      "required_evidence": [
+        {
+          "key": "cold-data-flow",
+          "source": "admin-query",
+          "resource_prefix": "cold-data-flow/"
+        }
+      ],
+      "scenarios": [
+        {
+          "scenario": "normal",
+          "expected_status": "healthy",
+          "expected_reason_codes": [
+            "COLD_DATA_FLOW_HEALTHY"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "fault",
+          "expected_status": "fault",
+          "expected_reason_codes": [
+            "COLD_DATA_HIT_RATE_LOW"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "missing",
+          "expected_status": "inconclusive",
+          "expected_reason_codes": [],
+          "partial": true,
+          "execution_eligible": false
+        }
+      ]
+    },
+    {
+      "id": "dr-readiness.v1",
+      "inspection_template": "broker",
+      "required_evidence": [
+        {
+          "key": "dr-readiness",
+          "source": "admin-query",
+          "resource_prefix": "dr-readiness/"
+        }
+      ],
+      "scenarios": [
+        {
+          "scenario": "normal",
+          "expected_status": "healthy",
+          "expected_reason_codes": [
+            "DR_READY"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "fault",
+          "expected_status": "fault",
+          "expected_reason_codes": [
+            "DR_BACKUP_OR_SNAPSHOT_STALE"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "missing",
+          "expected_status": "inconclusive",
+          "expected_reason_codes": [],
+          "partial": true,
+          "execution_eligible": false
+        }
+      ]
+    },
+    {
+      "id": "security-posture.v1",
+      "inspection_template": "cluster_health",
+      "required_evidence": [
+        {
+          "key": "security-posture",
+          "source": "admin-query",
+          "resource_prefix": "security-posture/"
+        }
+      ],
+      "scenarios": [
+        {
+          "scenario": "normal",
+          "expected_status": "healthy",
+          "expected_reason_codes": [
+            "SECURITY_POSTURE_HEALTHY"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "fault",
+          "expected_status": "fault",
+          "expected_reason_codes": [
+            "SECURITY_PRIVILEGE_DRIFT"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "missing",
+          "expected_status": "inconclusive",
+          "expected_reason_codes": [],
+          "partial": true,
+          "execution_eligible": false
+        }
+      ]
+    },
+    {
+      "id": "change-regression.v1",
+      "inspection_template": "cluster_health",
+      "required_evidence": [
+        {
+          "key": "change-regression",
+          "source": "kubernetes",
+          "resource_prefix": "change-regression/"
+        }
+      ],
+      "scenarios": [
+        {
+          "scenario": "normal",
+          "expected_status": "healthy",
+          "expected_reason_codes": [
+            "CHANGE_NO_REGRESSION"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "fault",
+          "expected_status": "fault",
+          "expected_reason_codes": [
+            "CHANGE_SLO_REGRESSION"
+          ],
+          "partial": false,
+          "execution_eligible": false
+        },
+        {
+          "scenario": "missing",
+          "expected_status": "inconclusive",
+          "expected_reason_codes": [],
+          "partial": true,
+          "execution_eligible": false
+        }
+      ]
+    }
+  ]
+}

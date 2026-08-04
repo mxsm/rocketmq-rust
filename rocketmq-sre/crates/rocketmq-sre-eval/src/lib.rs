@@ -15,6 +15,7 @@
 //! Deterministic schema export and signal-coverage manifest loading.
 
 pub mod assertions;
+pub mod diagnostic_qualification;
 pub mod phase1_shadow;
 pub mod phase2;
 pub mod replay;

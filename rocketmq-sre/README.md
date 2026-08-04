@@ -216,6 +216,29 @@ npm --prefix rocketmq-sre/ui run build
 The Rust workspace uses the Rust 2024 module layout: `foo.rs` owns child modules
 under `foo/`. Legacy `foo/mod.rs` entry points are rejected.
 
+### Diagnostic qualification
+
+The versioned qualification manifest covers every built-in Diagnostic Pack with
+isolated normal, fault, and missing-Evidence scenarios. The live harness starts
+a disposable PostgreSQL 17 container, exercises the running Control Plane, and
+verifies persisted results, Evidence citations, schema rejection, and tenant and
+cluster boundaries. It remains rules-only: model network calls, target mutation,
+and execution records must all remain zero.
+
+Run the qualification from `rocketmq-sre/`; build output stays on `F:` and the
+redacted report is written outside the repository on `D:`:
+
+```powershell
+.\scripts\diagnostic-pack-live-qualification.ps1
+```
+
+PostgreSQL uses a bounded Docker `tmpfs` and is removed after the run. The
+committed contract is checked independently with:
+
+```powershell
+python scripts/check_diagnostic_pack_qualification.py
+```
+
 ## User interface
 
 The UI is designed as a full-screen desktop operations workspace using

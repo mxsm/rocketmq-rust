@@ -186,18 +186,19 @@ impl InspectionService {
                 )
             })?;
             let completed_at = Utc::now();
-            partial |= !report.missing_required_evidence.is_empty()
-                || matches!(
-                    report.status,
-                    DiagnosticStatus::Inconclusive | DiagnosticStatus::Unsupported
-                );
+            let pack_partial = diagnostic_pack_is_partial(
+                page.partial,
+                !report.missing_required_evidence.is_empty(),
+                report.status,
+            );
+            partial |= pack_partial;
             recommendations.extend(recommendations_from_report(&report));
             pack_runs.push(InspectionPackRun {
                 pack_id: report.pack_id.clone(),
                 pack_version: report.pack_version.to_string(),
                 input_evidence_ids: page.items.iter().map(|snapshot| snapshot.evidence_id).collect(),
                 output: report_json(&report),
-                partial,
+                partial: pack_partial,
                 started_at,
                 completed_at,
             });
@@ -233,6 +234,16 @@ impl InspectionService {
             )),
         }
     }
+}
+
+const fn diagnostic_pack_is_partial(
+    input_partial: bool,
+    missing_required_evidence: bool,
+    status: DiagnosticStatus,
+) -> bool {
+    input_partial
+        || missing_required_evidence
+        || matches!(status, DiagnosticStatus::Inconclusive | DiagnosticStatus::Unsupported)
 }
 
 fn template_packs(template: InspectionTemplate) -> &'static [&'static str] {
@@ -294,6 +305,8 @@ fn template_packs(template: InspectionTemplate) -> &'static [&'static str] {
             "change-regression.v1",
         ],
         InspectionTemplate::ProducerConsumer => &[
+            "producer-connectivity.v1",
+            "message-path.v1",
             "send-latency.v1",
             "consumer-lag.v2",
             "consumer-runtime.v1",
@@ -530,6 +543,38 @@ mod tests {
         ] {
             assert!(!template_packs(template).is_empty());
         }
+    }
+
+    #[test]
+    fn operational_templates_cover_the_complete_diagnostic_catalog() {
+        let covered = [
+            InspectionTemplate::ClusterHealth,
+            InspectionTemplate::Consumer,
+            InspectionTemplate::Broker,
+            InspectionTemplate::Telemetry,
+            InspectionTemplate::ProducerConsumer,
+        ]
+        .into_iter()
+        .flat_map(template_packs)
+        .copied()
+        .collect::<BTreeSet<_>>();
+        let expected = rocketmq_sre_core::diagnostics::full_pack_ids()
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(
+            covered,
+            expected.iter().map(String::as_str).collect(),
+            "the bounded operational inspection surface must reach every built-in pack"
+        );
+    }
+
+    #[test]
+    fn pack_partial_status_is_scoped_to_the_current_pack() {
+        assert!(!diagnostic_pack_is_partial(false, false, DiagnosticStatus::Healthy));
+        assert!(!diagnostic_pack_is_partial(false, false, DiagnosticStatus::Fault));
+        assert!(diagnostic_pack_is_partial(false, true, DiagnosticStatus::Healthy));
+        assert!(diagnostic_pack_is_partial(false, false, DiagnosticStatus::Inconclusive));
     }
 
     #[test]

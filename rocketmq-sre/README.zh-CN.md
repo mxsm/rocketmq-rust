@@ -195,6 +195,25 @@ npm --prefix rocketmq-sre/ui run build
 Rust workspace 使用 Rust 2024 模块布局：`foo.rs` 负责声明放在 `foo/`
 目录下的子模块。项目拒绝旧式 `foo/mod.rs` 入口。
 
+### 诊断包资格验证
+
+版本化资格清单覆盖全部内置 Diagnostic Pack，并为每个包提供相互隔离的正常、故障和
+Evidence 缺失场景。实测工具会启动一次性 PostgreSQL 17 容器，通过运行中的 Control
+Plane 验证持久化结果、Evidence 引用、Schema 拒绝以及租户和集群边界。整个过程保持
+rules-only：模型网络调用、目标变更和执行记录必须全部为零。
+
+在 `rocketmq-sre/` 中运行下列命令；构建产物位于 `F:`，脱敏报告写入仓库外的 `D:`：
+
+```powershell
+.\scripts\diagnostic-pack-live-qualification.ps1
+```
+
+PostgreSQL 使用有界的 Docker `tmpfs`，运行结束后自动删除。可独立校验已提交的契约：
+
+```powershell
+python scripts/check_diagnostic_pack_qualification.py
+```
+
 ## 用户界面
 
 UI 按照 shadcn/ui 规范和可访问的 Radix UI primitive 设计为全屏桌面运维
