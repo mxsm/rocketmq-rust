@@ -1195,40 +1195,46 @@ spec: { selector: { app.kubernetes.io/name: otel-collector }, ports: [{ name: ot
         cleanup_status = "$($contentionCleanup.Output)`n$($slowDiskModel.Output)"
     })
 
-    $leaderBefore = Get-ControllerMetadata
-    $leaderBeforeOrdinal = Get-ControllerLeaderOrdinal $leaderBefore
-    $leaderPod = "rocketmq-controller-$leaderBeforeOrdinal"
-    Invoke-Native kubectl @('-n', $Namespace, 'delete', 'pod', $leaderPod, '--wait=false') | Out-Null
-    $leaderAfter = $null
-    $leaderAfterOrdinal = $leaderBeforeOrdinal
-    $leaderElectionDeadline = [DateTimeOffset]::UtcNow.AddSeconds(180)
-    do {
-        try {
-            $candidateMetadata = Get-ControllerMetadata
-            $candidateOrdinal = Get-ControllerLeaderOrdinal $candidateMetadata
-            if ($candidateOrdinal -ne $leaderBeforeOrdinal) {
-                $leaderAfter = $candidateMetadata
-                $leaderAfterOrdinal = $candidateOrdinal
-            }
-        } catch {
-            # Controller metadata can be temporarily unavailable during election.
-        }
-        if ($null -eq $leaderAfter) {
-            Start-Sleep -Seconds 5
-        }
-    } while ($null -eq $leaderAfter -and [DateTimeOffset]::UtcNow -lt $leaderElectionDeadline)
-    Assert-True ($null -ne $leaderAfter) 'Controller must elect a different leader ordinal before the deadline'
-    Invoke-Native kubectl @('-n', $Namespace, 'rollout', 'status', 'statefulset/rocketmq-controller', '--timeout=180s') | Out-Null
+    $failureLeaderBefore = Wait-ControllerLeadershipStable
+    $failureLeaderOrdinal = [int]$failureLeaderBefore.Leaders[0]
+    $failureLeaderPod = "rocketmq-controller-$failureLeaderOrdinal"
+    $failureLeaderState = (Invoke-Native kubectl @('-n', $Namespace, 'get', 'pod', $failureLeaderPod, '-o', 'json')).Output | ConvertFrom-Json
+    $failureLeaderNode = $failureLeaderState.spec.nodeName
+    $failureSurvivingOrdinals = @(@(0, 1, 2) | Where-Object { $_ -ne $failureLeaderOrdinal })
+    $failureCordon = Invoke-Native kubectl @('cordon', $failureLeaderNode)
+    try {
+        $failureDelete = Invoke-Native kubectl @(
+            '-n',
+            $Namespace,
+            'delete',
+            'pod',
+            $failureLeaderPod,
+            '--wait=true',
+            '--timeout=120s'
+        )
+        $leaderAfter = Wait-ControllerLeadershipStable -Ordinals $failureSurvivingOrdinals
+        $leaderAfterOrdinal = [int]$leaderAfter.Leaders[0]
+    } finally {
+        $failureUncordon = Invoke-Native kubectl @('uncordon', $failureLeaderNode) -AllowFailure
+    }
+    $null = Wait-ControllerPodRecreatedAndReady -Ordinal $failureLeaderOrdinal -PreviousUid $failureLeaderState.metadata.uid
+    $leadershipAfterFailure = Wait-ControllerLeadershipStable
     $controllerStatus = (Invoke-Native kubectl @('-n', $Namespace, 'get', 'pods', '-l', 'rocketmq.apache.org/service=controller', '-o', 'wide')).Output
     $controllerState = ((Invoke-Native kubectl @('-n', $Namespace, 'get', 'statefulset/rocketmq-controller', '-o', 'json')).Output | ConvertFrom-Json).status
     $afterLeader = Query-AcknowledgedMessage $ack.Id
-    $leadershipAfterFailure = Get-ControllerLeadershipSnapshot
     Complete-Scenario 'controller_leader_failure' ([ordered]@{
-        leader_changed = $leaderAfterOrdinal -ne $leaderBeforeOrdinal
+        leader_changed = $leaderAfterOrdinal -ne $failureLeaderOrdinal
         single_leader_observed = $leadershipAfterFailure.Leaders.Count -eq 1
-        controller_quorum_preserved = $controllerState.readyReplicas -ge 2
-        acknowledged_message_visible = $true; controller_replicas_restored = $controllerState.readyReplicas -eq 3
-    }) ([ordered]@{ leader_before = $leaderBefore.Output; leader_after = $leaderAfter.Output; quorum_status = $controllerStatus; message_after = $afterLeader.Output; controller_status = "$controllerStatus`n$($leadershipAfterFailure.Output)" })
+        controller_quorum_preserved = $leaderAfter.Responders -eq 2
+        acknowledged_message_visible = $afterLeader.QueueOffset -eq $before.QueueOffset
+        controller_replicas_restored = $controllerState.readyReplicas -eq 3 -and $failureUncordon.ExitCode -eq 0
+    }) ([ordered]@{
+        leader_before = $failureLeaderBefore.Output
+        leader_after = $leaderAfter.Output
+        quorum_status = "$($failureCordon.Output)`n$($failureDelete.Output)`n$($failureUncordon.Output)"
+        message_after = $afterLeader.Output
+        controller_status = "$controllerStatus`n$($leadershipAfterFailure.Output)"
+    })
 
     $quorumLossTimer = [Diagnostics.Stopwatch]::StartNew()
     $quorumLossScale = $null

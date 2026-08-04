@@ -284,7 +284,7 @@ def validate_sources(guard: Guard) -> None:
         "$proxyUidsBeforePressure -notcontains",
         "stateless_pod_rescheduled = $null -ne $replacementProxyPod",
         "Get-ControllerLeaderOrdinal",
-        "leader_changed = $leaderAfterOrdinal -ne $leaderBeforeOrdinal",
+        "leader_changed = $leaderAfterOrdinal -ne $failureLeaderOrdinal",
         "Set-StatefulSetReplicas 'rocketmq-namesrv' 1",
         "Set-StatefulSetReplicas 'rocketmq-controller' 1",
         "Set-NodeNetworkImpairment $minorityNode @('loss', '100%')",
@@ -323,6 +323,8 @@ def validate_sources(guard: Guard) -> None:
         "ControllerLeaderId\\s+([1-3])",
         "Invoke-Native kubectl @('cordon', $leaderNode)",
         "$null = Wait-ControllerLeadershipStable -Ordinals $survivingOrdinals",
+        "Invoke-Native kubectl @('cordon', $failureLeaderNode)",
+        "Wait-ControllerLeadershipStable -Ordinals $failureSurvivingOrdinals",
         "$snapshotLeadershipBefore = Wait-ControllerLeadershipStable",
     ):
         guard.require(marker in runner, f"fault runner contract marker missing: {marker}")

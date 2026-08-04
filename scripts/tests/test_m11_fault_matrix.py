@@ -304,6 +304,8 @@ class FaultMatrixGuardTests(unittest.TestCase):
             "ControllerLeaderId\\s+([1-3])",
             "Invoke-Native kubectl @('cordon', $leaderNode)",
             "$null = Wait-ControllerLeadershipStable -Ordinals $survivingOrdinals",
+            "Invoke-Native kubectl @('cordon', $failureLeaderNode)",
+            "Wait-ControllerLeadershipStable -Ordinals $failureSurvivingOrdinals",
             "$snapshotLeadershipBefore = Wait-ControllerLeadershipStable",
         )
         for marker in markers:
@@ -417,8 +419,8 @@ class FaultMatrixGuardTests(unittest.TestCase):
 
         runner.write_text(
             source.replace(
-                "leader_changed = $leaderAfterOrdinal -ne $leaderBeforeOrdinal",
-                "leader_changed = $leaderAfter.Output -ne $leaderBefore.Output",
+                "leader_changed = $leaderAfterOrdinal -ne $failureLeaderOrdinal",
+                "leader_changed = $leaderAfter.Output -ne $failureLeaderBefore.Output",
                 1,
             ),
             encoding="utf-8",
