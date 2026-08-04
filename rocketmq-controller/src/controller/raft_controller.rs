@@ -179,6 +179,10 @@ impl RaftController {
         self.inner.has_committed_log()
     }
 
+    pub async fn has_persisted_committed_log(&self) -> Result<bool> {
+        self.inner.has_persisted_committed_log().await
+    }
+
     /// Returns whether this node has observed a Raft leader and applied committed state.
     ///
     /// This is the minimum recovery evidence required before publishing process readiness.

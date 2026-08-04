@@ -231,6 +231,11 @@ impl RaftNodeManager {
         metrics.last_applied.is_some()
     }
 
+    /// Checks durable applied state without waiting for the asynchronous metrics publisher.
+    pub async fn has_persisted_committed_log(&self) -> bool {
+        self.store.state_machine.has_persisted_applied_state().await
+    }
+
     /// Submit a client write request
     pub async fn client_write(
         &self,

@@ -536,7 +536,7 @@ async fn initialize_cluster_if_configured(controller_manager: &Arc<ControllerMan
     if bootstrap_node_id != config.node_id {
         return Ok(());
     }
-    if controller_manager.controller().has_committed_log()? {
+    if controller_manager.controller().has_persisted_committed_log().await? {
         info!(
             node_id = config.node_id,
             "Controller cluster already has committed logs; skip bootstrap"

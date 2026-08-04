@@ -790,6 +790,13 @@ impl OpenRaftController {
         Ok(node.has_committed_log())
     }
 
+    pub async fn has_persisted_committed_log(&self) -> Result<bool> {
+        let node = self
+            .node()
+            .ok_or_else(|| ControllerError::NotInitialized("OpenRaft node is not started".to_string()))?;
+        Ok(node.has_persisted_committed_log().await)
+    }
+
     pub(crate) async fn startup_shared(&self) -> RocketMQResult<()> {
         let _lifecycle_guard = self.lifecycle_lock.lock().await;
         if self.node().is_some() {

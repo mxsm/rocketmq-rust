@@ -93,14 +93,15 @@ impl TopicRouteSubCommand {
 impl CommandExecute for TopicRouteSubCommand {
     async fn execute(
         &self,
-        _credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
-        _client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> rocketmq_error::RocketMQResult<()> {
         let request = TopicRouteQueryRequest::try_new(self.topic.clone())?
             .with_optional_namesrv_addr(self.common_args.namesrv_addr.clone());
-        let topic_route_data = TopicService::query_topic_route(request)
-            .await?
-            .ok_or_else(|| ToolsError::topic_not_found(self.topic.trim()))?;
+        let topic_route_data =
+            TopicService::query_topic_route_by_request_with_credentials(request, credentials, client_runtime)
+                .await?
+                .ok_or_else(|| ToolsError::topic_not_found(self.topic.trim()))?;
         self.print_data(&topic_route_data, self.list_format.is_some())?;
         Ok(())
     }
