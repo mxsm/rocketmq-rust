@@ -1,0 +1,15 @@
+{
+    "schemaVersion":  1,
+    "platform":  "windows-x86_64-msvc",
+    "os":  "Microsoft Windows NT 10.0.26200.0",
+    "processor":  "11th Gen Intel(R) Core(TM) i7-11700K @ 3.60GHz",
+    "physicalCores":  8,
+    "logicalProcessors":  16,
+    "memoryBytes":  34219397120,
+    "rustc":  "rustc 1.95.0 (59807616e 2026-04-14)\nbinary: rustc\ncommit-hash: 59807616e1fa2540724bfbac14d7976d7e4a3860\ncommit-date: 2026-04-14\nhost: x86_64-pc-windows-msvc\nrelease: 1.95.0\nLLVM version: 22.1.2",
+    "cargo":  "cargo 1.95.0 (f2d3ce0bd 2026-03-21)",
+    "java":  "java version \"25.0.1\" 2025-10-21 LTS\r\nJava(TM) SE Runtime Environment (build 25.0.1+8-LTS-27)\r\nJava HotSpot(TM) 64-Bit Server VM (build 25.0.1+8-LTS-27, mixed mode, sharing)",
+    "maven":  "Apache Maven 3.9.15 (98b2cdbfdb5f1ac8781f537ea9acccaed7922349)\nMaven home: D:\\DevelopTools\\apache-maven-3.9.15\nJava version: 25.0.1, vendor: Oracle Corporation, runtime: D:\\Program Files\\Java\\jdk-25\nDefault locale: zh_CN, platform encoding: UTF-8\nOS name: \"windows 11\", version: \"10.0\", arch: \"amd64\", family: \"windows\"",
+    "powerPolicy":  "电源方案 GUID: 381b4222-f694-41f0-9685-ff5bb260df2e  (平衡)",
+    "id":  "windows-11th-gen-intel-r-core-tm-i7-11700k-3-60ghz-bf74ad7167ef"
+}

@@ -1,0 +1,2367 @@
+{
+  "schemaVersion": 1,
+  "rustHistoricalCommit": "0c4722568a74987f7be51df12ec87dbfdc05fbba",
+  "javaCommit": "2daf0e2ca91a1592d18235d43e5d709d1c35d15f",
+  "generatedBy": "scripts/request-header-codec/generate_header_class_map.py",
+  "historicalDeriveCount": 150,
+  "currentDeriveCount": 151,
+  "manualHeaderCount": 1,
+  "entryCount": 152,
+  "mappedCount": 143,
+  "rustOnlyExtensionCount": 9,
+  "entries": [
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::ack_message_request_header::AckMessageRequestHeader",
+      "rustType": "AckMessageRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/ack_message_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.AckMessageRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/AckMessageRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "ACK_MESSAGE"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::add_broker_request_header::AddBrokerRequestHeader",
+      "rustType": "AddBrokerRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/add_broker_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.AddBrokerRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/AddBrokerRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "ADD_BROKER"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::broker::broker_heartbeat_request_header::BrokerHeartbeatRequestHeader",
+      "rustType": "BrokerHeartbeatRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/broker/broker_heartbeat_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.namesrv.BrokerHeartbeatRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/namesrv/BrokerHeartbeatRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "BROKER_HEARTBEAT"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::change_invisible_time_request_header::ChangeInvisibleTimeRequestHeader",
+      "rustType": "ChangeInvisibleTimeRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/change_invisible_time_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.ChangeInvisibleTimeRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/ChangeInvisibleTimeRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "CHANGE_MESSAGE_INVISIBLETIME"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::change_invisible_time_response_header::ChangeInvisibleTimeResponseHeader",
+      "rustType": "ChangeInvisibleTimeResponseHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/change_invisible_time_response_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.ChangeInvisibleTimeResponseHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/ChangeInvisibleTimeResponseHeader.java",
+      "direction": "response",
+      "requestCodes": [],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::check_rocksdb_cq_write_progress_request_header::CheckRocksdbCqWriteProgressRequestHeader",
+      "rustType": "CheckRocksdbCqWriteProgressRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/check_rocksdb_cq_write_progress_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.CheckRocksdbCqWriteProgressRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/CheckRocksdbCqWriteProgressRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "CHECK_ROCKSDB_CQ_WRITE_PROGRESS"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::check_transaction_state_request_header::CheckTransactionStateRequestHeader",
+      "rustType": "CheckTransactionStateRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/check_transaction_state_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.CheckTransactionStateRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/CheckTransactionStateRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "CHECK_TRANSACTION_STATE"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::check_transaction_state_response_header::CheckTransactionStateResponseHeader",
+      "rustType": "CheckTransactionStateResponseHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/check_transaction_state_response_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.CheckTransactionStateResponseHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/CheckTransactionStateResponseHeader.java",
+      "direction": "response",
+      "requestCodes": [],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::client_request_header::GetRouteInfoRequestHeader",
+      "rustType": "GetRouteInfoRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/client_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.namesrv.GetRouteInfoRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/namesrv/GetRouteInfoRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "GET_ROUTEINFO_BY_TOPIC"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::clone_group_offset_request_header::CloneGroupOffsetRequestHeader",
+      "rustType": "CloneGroupOffsetRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/clone_group_offset_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.CloneGroupOffsetRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/CloneGroupOffsetRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "CLONE_GROUP_OFFSET"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::consume_message_directly_result_request_header::ConsumeMessageDirectlyResultRequestHeader",
+      "rustType": "ConsumeMessageDirectlyResultRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/consume_message_directly_result_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.ConsumeMessageDirectlyResultRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/ConsumeMessageDirectlyResultRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "CONSUME_MESSAGE_DIRECTLY"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::consumer_send_msg_back_request_header::ConsumerSendMsgBackRequestHeader",
+      "rustType": "ConsumerSendMsgBackRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/consumer_send_msg_back_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.ConsumerSendMsgBackRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/ConsumerSendMsgBackRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "CONSUMER_SEND_MSG_BACK"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::controller::alter_sync_state_set_request_header::AlterSyncStateSetRequestHeader",
+      "rustType": "AlterSyncStateSetRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/controller/alter_sync_state_set_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.controller.AlterSyncStateSetRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/controller/AlterSyncStateSetRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "CONTROLLER_ALTER_SYNC_STATE_SET"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::controller::alter_sync_state_set_response_header::AlterSyncStateSetResponseHeader",
+      "rustType": "AlterSyncStateSetResponseHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/controller/alter_sync_state_set_response_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.controller.AlterSyncStateSetResponseHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/controller/AlterSyncStateSetResponseHeader.java",
+      "direction": "response",
+      "requestCodes": [],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::controller::apply_broker_id_request_header::ApplyBrokerIdRequestHeader",
+      "rustType": "ApplyBrokerIdRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/controller/apply_broker_id_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.controller.register.ApplyBrokerIdRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/controller/register/ApplyBrokerIdRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "CONTROLLER_APPLY_BROKER_ID"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::controller::apply_broker_id_response_header::ApplyBrokerIdResponseHeader",
+      "rustType": "ApplyBrokerIdResponseHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/controller/apply_broker_id_response_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.controller.register.ApplyBrokerIdResponseHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/controller/register/ApplyBrokerIdResponseHeader.java",
+      "direction": "response",
+      "requestCodes": [],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::controller::clean_broker_data_request_header::CleanBrokerDataRequestHeader",
+      "rustType": "CleanBrokerDataRequestHeader",
+      "rustAliases": [
+        "rocketmq_protocol::protocol::header::controller::clean_broker_data_request_header::CleanControllerBrokerDataRequestHeader"
+      ],
+      "rustSource": "rocketmq-protocol/src/protocol/header/controller/clean_broker_data_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.controller.admin.CleanControllerBrokerDataRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/controller/admin/CleanControllerBrokerDataRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "CLEAN_BROKER_DATA"
+      ],
+      "exactName": false,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "explicit-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::controller::elect_master_request_header::ElectMasterRequestHeader",
+      "rustType": "ElectMasterRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/controller/elect_master_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.controller.ElectMasterRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/controller/ElectMasterRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "CONTROLLER_ELECT_MASTER"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::controller::get_next_broker_id_request_header::GetNextBrokerIdRequestHeader",
+      "rustType": "GetNextBrokerIdRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/controller/get_next_broker_id_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.controller.register.GetNextBrokerIdRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/controller/register/GetNextBrokerIdRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "CONTROLLER_GET_NEXT_BROKER_ID"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::controller::get_next_broker_id_response_header::GetNextBrokerIdResponseHeader",
+      "rustType": "GetNextBrokerIdResponseHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/controller/get_next_broker_id_response_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.controller.register.GetNextBrokerIdResponseHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/controller/register/GetNextBrokerIdResponseHeader.java",
+      "direction": "response",
+      "requestCodes": [],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::controller::get_replica_info_request_header::GetReplicaInfoRequestHeader",
+      "rustType": "GetReplicaInfoRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/controller/get_replica_info_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.controller.GetReplicaInfoRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/controller/GetReplicaInfoRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "CONTROLLER_GET_REPLICA_INFO"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::controller::get_replica_info_response_header::GetReplicaInfoResponseHeader",
+      "rustType": "GetReplicaInfoResponseHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/controller/get_replica_info_response_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.controller.GetReplicaInfoResponseHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/controller/GetReplicaInfoResponseHeader.java",
+      "direction": "response",
+      "requestCodes": [],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::controller::register_broker_to_controller_request_header::RegisterBrokerToControllerRequestHeader",
+      "rustType": "RegisterBrokerToControllerRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/controller/register_broker_to_controller_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.controller.register.RegisterBrokerToControllerRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/controller/register/RegisterBrokerToControllerRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "CONTROLLER_REGISTER_BROKER"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::controller::register_broker_to_controller_response_header::RegisterBrokerToControllerResponseHeader",
+      "rustType": "RegisterBrokerToControllerResponseHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/controller/register_broker_to_controller_response_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.controller.register.RegisterBrokerToControllerResponseHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/controller/register/RegisterBrokerToControllerResponseHeader.java",
+      "direction": "response",
+      "requestCodes": [],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::create_acl_request_header::CreateAclRequestHeader",
+      "rustType": "CreateAclRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/create_acl_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.CreateAclRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/CreateAclRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "AUTH_CREATE_ACL"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::create_topic_list_request_header::CreateTopicListRequestHeader",
+      "rustType": "CreateTopicListRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/create_topic_list_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.CreateTopicListRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/CreateTopicListRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "UPDATE_AND_CREATE_TOPIC_LIST"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::create_topic_request_header::CreateTopicRequestHeader",
+      "rustType": "CreateTopicRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/create_topic_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.CreateTopicRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/CreateTopicRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "UPDATE_AND_CREATE_TOPIC"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::create_user_request_header::CreateUserRequestHeader",
+      "rustType": "CreateUserRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/create_user_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.CreateUserRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/CreateUserRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "AUTH_CREATE_USER"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::delete_acl_request_header::DeleteAclRequestHeader",
+      "rustType": "DeleteAclRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/delete_acl_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.DeleteAclRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/DeleteAclRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "AUTH_DELETE_ACL"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::delete_subscription_group_request_header::DeleteSubscriptionGroupRequestHeader",
+      "rustType": "DeleteSubscriptionGroupRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/delete_subscription_group_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.DeleteSubscriptionGroupRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/DeleteSubscriptionGroupRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "DELETE_SUBSCRIPTIONGROUP"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::delete_topic_request_header::DeleteTopicRequestHeader",
+      "rustType": "DeleteTopicRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/delete_topic_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.DeleteTopicRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/DeleteTopicRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "DELETE_TOPIC_IN_BROKER"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::delete_user_request_header::DeleteUserRequestHeader",
+      "rustType": "DeleteUserRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/delete_user_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.DeleteUserRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/DeleteUserRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "AUTH_DELETE_USER"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::elect_master_response_header::ElectMasterResponseHeader",
+      "rustType": "ElectMasterResponseHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/elect_master_response_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.controller.ElectMasterResponseHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/controller/ElectMasterResponseHeader.java",
+      "direction": "response",
+      "requestCodes": [],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::end_transaction_request_header::EndTransactionRequestHeader",
+      "rustType": "EndTransactionRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/end_transaction_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.EndTransactionRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/EndTransactionRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "END_TRANSACTION"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::exchange_ha_info_request_header::ExchangeHAInfoRequestHeader",
+      "rustType": "ExchangeHAInfoRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/exchange_ha_info_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.ExchangeHAInfoRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/ExchangeHAInfoRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "EXCHANGE_BROKER_HA_INFO"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::exchange_ha_info_response_header::ExchangeHaInfoResponseHeader",
+      "rustType": "ExchangeHaInfoResponseHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/exchange_ha_info_response_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.ExchangeHAInfoResponseHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/ExchangeHAInfoResponseHeader.java",
+      "direction": "response",
+      "requestCodes": [],
+      "exactName": false,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "explicit-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::export_rocksdb_config_to_json_request_header::ExportRocksdbConfigToJsonRequestHeader",
+      "rustType": "ExportRocksdbConfigToJsonRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/export_rocksdb_config_to_json_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.ExportRocksDBConfigToJsonRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/ExportRocksDBConfigToJsonRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "EXPORT_ROCKSDB_CONFIG_TO_JSON"
+      ],
+      "exactName": false,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "explicit-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::get_acl_request_header::GetAclRequestHeader",
+      "rustType": "GetAclRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/get_acl_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.GetAclRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/GetAclRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "AUTH_GET_ACL"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::get_all_producer_info_request_header::GetAllProducerInfoRequestHeader",
+      "rustType": "GetAllProducerInfoRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/get_all_producer_info_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.GetAllProducerInfoRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/GetAllProducerInfoRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "GET_ALL_PRODUCER_INFO"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::get_all_subscription_group_request_header::GetAllSubscriptionGroupRequestHeader",
+      "rustType": "GetAllSubscriptionGroupRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/get_all_subscription_group_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.GetAllSubscriptionGroupRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/GetAllSubscriptionGroupRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "GET_ALL_SUBSCRIPTIONGROUP_CONFIG"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::get_all_subscription_group_request_header::GetAllSubscriptionGroupResponseHeader",
+      "rustType": "GetAllSubscriptionGroupResponseHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/get_all_subscription_group_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.GetAllSubscriptionGroupResponseHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/GetAllSubscriptionGroupResponseHeader.java",
+      "direction": "response",
+      "requestCodes": [
+        "GET_ALL_SUBSCRIPTIONGROUP_CONFIG"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::get_all_topic_config_request_header::GetAllTopicConfigRequestHeader",
+      "rustType": "GetAllTopicConfigRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/get_all_topic_config_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.GetAllTopicConfigRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/GetAllTopicConfigRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "GET_ALL_TOPIC_CONFIG"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::get_all_topic_config_response_header::GetAllTopicConfigResponseHeader",
+      "rustType": "GetAllTopicConfigResponseHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/get_all_topic_config_response_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.GetAllTopicConfigResponseHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/GetAllTopicConfigResponseHeader.java",
+      "direction": "response",
+      "requestCodes": [
+        "GET_ALL_TOPIC_CONFIG"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::get_broker_config_response_header::GetBrokerConfigResponseHeader",
+      "rustType": "GetBrokerConfigResponseHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/get_broker_config_response_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.GetBrokerConfigResponseHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/GetBrokerConfigResponseHeader.java",
+      "direction": "response",
+      "requestCodes": [],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::get_consume_stats_in_broker_header::GetConsumeStatsInBrokerHeader",
+      "rustType": "GetConsumeStatsInBrokerHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/get_consume_stats_in_broker_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.GetConsumeStatsInBrokerHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/GetConsumeStatsInBrokerHeader.java",
+      "direction": "shared",
+      "requestCodes": [
+        "GET_BROKER_CONSUME_STATS"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::get_consume_stats_request_header::GetConsumeStatsRequestHeader",
+      "rustType": "GetConsumeStatsRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/get_consume_stats_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.GetConsumeStatsRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/GetConsumeStatsRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "GET_CONSUME_STATS"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::get_consumer_connection_list_request_header::GetConsumerConnectionListRequestHeader",
+      "rustType": "GetConsumerConnectionListRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/get_consumer_connection_list_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.GetConsumerConnectionListRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/GetConsumerConnectionListRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "GET_CONSUMER_CONNECTION_LIST"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::get_consumer_listby_group_request_header::GetConsumerListByGroupRequestHeader",
+      "rustType": "GetConsumerListByGroupRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/get_consumer_listby_group_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.GetConsumerListByGroupRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/GetConsumerListByGroupRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "GET_CONSUMER_LIST_BY_GROUP"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::get_consumer_listby_group_response_header::GetConsumerListByGroupResponseHeader",
+      "rustType": "GetConsumerListByGroupResponseHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/get_consumer_listby_group_response_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.GetConsumerListByGroupResponseHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/GetConsumerListByGroupResponseHeader.java",
+      "direction": "response",
+      "requestCodes": [],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::get_consumer_running_info_request_header::GetConsumerRunningInfoRequestHeader",
+      "rustType": "GetConsumerRunningInfoRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/get_consumer_running_info_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.GetConsumerRunningInfoRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/GetConsumerRunningInfoRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "GET_CONSUMER_RUNNING_INFO"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::get_consumer_status_request_header::GetConsumerStatusRequestHeader",
+      "rustType": "GetConsumerStatusRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/get_consumer_status_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.GetConsumerStatusRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/GetConsumerStatusRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "INVOKE_BROKER_TO_GET_CONSUMER_STATUS"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::get_earliest_msg_storetime_request_header::GetEarliestMsgStoretimeRequestHeader",
+      "rustType": "GetEarliestMsgStoretimeRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/get_earliest_msg_storetime_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.GetEarliestMsgStoretimeRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/GetEarliestMsgStoretimeRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "GET_EARLIEST_MSG_STORETIME"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::get_earliest_msg_storetime_response_header::GetEarliestMsgStoretimeResponseHeader",
+      "rustType": "GetEarliestMsgStoretimeResponseHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/get_earliest_msg_storetime_response_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.GetEarliestMsgStoretimeResponseHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/GetEarliestMsgStoretimeResponseHeader.java",
+      "direction": "response",
+      "requestCodes": [],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::get_lite_client_info_request_header::GetLiteClientInfoRequestHeader",
+      "rustType": "GetLiteClientInfoRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/get_lite_client_info_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.GetLiteClientInfoRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/GetLiteClientInfoRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::get_lite_group_info_request_header::GetLiteGroupInfoRequestHeader",
+      "rustType": "GetLiteGroupInfoRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/get_lite_group_info_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.GetLiteGroupInfoRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/GetLiteGroupInfoRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::get_lite_topic_info_request_header::GetLiteTopicInfoRequestHeader",
+      "rustType": "GetLiteTopicInfoRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/get_lite_topic_info_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.GetLiteTopicInfoRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/GetLiteTopicInfoRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::get_max_offset_request_header::GetMaxOffsetRequestHeader",
+      "rustType": "GetMaxOffsetRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/get_max_offset_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.GetMaxOffsetRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/GetMaxOffsetRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "GET_MAX_OFFSET"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::get_max_offset_response_header::GetMaxOffsetResponseHeader",
+      "rustType": "GetMaxOffsetResponseHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/get_max_offset_response_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.GetMaxOffsetResponseHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/GetMaxOffsetResponseHeader.java",
+      "direction": "response",
+      "requestCodes": [],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::get_meta_data_response_header::GetMetaDataResponseHeader",
+      "rustType": "GetMetaDataResponseHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/get_meta_data_response_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.controller.GetMetaDataResponseHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/controller/GetMetaDataResponseHeader.java",
+      "direction": "response",
+      "requestCodes": [],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::get_min_offset_request_header::GetMinOffsetRequestHeader",
+      "rustType": "GetMinOffsetRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/get_min_offset_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.GetMinOffsetRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/GetMinOffsetRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "GET_MIN_OFFSET"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::get_min_offset_response_header::GetMinOffsetResponseHeader",
+      "rustType": "GetMinOffsetResponseHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/get_min_offset_response_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.GetMinOffsetResponseHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/GetMinOffsetResponseHeader.java",
+      "direction": "response",
+      "requestCodes": [],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::get_parent_topic_info_request_header::GetParentTopicInfoRequestHeader",
+      "rustType": "GetParentTopicInfoRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/get_parent_topic_info_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.GetParentTopicInfoRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/GetParentTopicInfoRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::get_producer_connection_list_request_header::GetProducerConnectionListRequestHeader",
+      "rustType": "GetProducerConnectionListRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/get_producer_connection_list_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.GetProducerConnectionListRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/GetProducerConnectionListRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "GET_PRODUCER_CONNECTION_LIST"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::get_subscription_group_config_request_header::GetSubscriptionGroupConfigRequestHeader",
+      "rustType": "GetSubscriptionGroupConfigRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/get_subscription_group_config_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.GetSubscriptionGroupConfigRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/GetSubscriptionGroupConfigRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "GET_SUBSCRIPTIONGROUP_CONFIG"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::get_topic_config_request_header::GetTopicConfigRequestHeader",
+      "rustType": "GetTopicConfigRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/get_topic_config_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.GetTopicConfigRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/GetTopicConfigRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "GET_TOPIC_CONFIG"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::get_topic_stats_info_request_header::GetTopicStatsInfoRequestHeader",
+      "rustType": "GetTopicStatsInfoRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/get_topic_stats_info_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.GetTopicStatsInfoRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/GetTopicStatsInfoRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "GET_TOPIC_STATS_INFO"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::get_topic_stats_request_header::GetTopicStatsRequestHeader",
+      "rustType": "GetTopicStatsRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/get_topic_stats_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.GetTopicStatsInfoRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/GetTopicStatsInfoRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "GET_TOPIC_STATS_INFO"
+      ],
+      "exactName": false,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "explicit-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::get_user_request_headers::GetUserRequestHeader",
+      "rustType": "GetUserRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/get_user_request_headers.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.GetUserRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/GetUserRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "AUTH_GET_USER"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::heartbeat_request_header::HeartbeatRequestHeader",
+      "rustType": "HeartbeatRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/heartbeat_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.HeartbeatRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/HeartbeatRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "HEART_BEAT"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::list_acl_request_header::ListAclRequestHeader",
+      "rustType": "ListAclRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/list_acl_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.ListAclsRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/ListAclsRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "AUTH_LIST_ACL"
+      ],
+      "exactName": false,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "explicit-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::list_users_request_header::ListUsersRequestHeader",
+      "rustType": "ListUsersRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/list_users_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.ListUsersRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/ListUsersRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "AUTH_LIST_USER"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::lite_subscription_ctl_request_header::LiteSubscriptionCtlRequestHeader",
+      "rustType": "LiteSubscriptionCtlRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/lite_subscription_ctl_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.LiteSubscriptionCtlRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/LiteSubscriptionCtlRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::lock_batch_mq_request_header::LockBatchMqRequestHeader",
+      "rustType": "LockBatchMqRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/lock_batch_mq_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.LockBatchMqRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/LockBatchMqRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "LOCK_BATCH_MQ"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::maintenance_request_header::MaintenanceRequestHeader",
+      "rustType": "MaintenanceRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/maintenance_request_header.rs",
+      "javaClass": null,
+      "javaSource": null,
+      "direction": "request",
+      "requestCodes": [
+        "MAINTENANCE_CREATE_CONTROLLER_SNAPSHOT",
+        "MAINTENANCE_CREATE_STORE_CHECKPOINT",
+        "MAINTENANCE_VERIFY_CHECKPOINT",
+        "MAINTENANCE_RESTORE_VERIFY"
+      ],
+      "exactName": false,
+      "javaFast": false,
+      "status": "rust-only-extension",
+      "reason": "Rust maintenance authorization and fencing extension"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader",
+      "rustType": "SendMessageRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/message_operation_header/send_message_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.SendMessageRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/SendMessageRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "SEND_MESSAGE"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2",
+      "rustType": "SendMessageRequestHeaderV2",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/message_operation_header/send_message_request_header_v2.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.SendMessageRequestHeaderV2",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/SendMessageRequestHeaderV2.java",
+      "direction": "shared",
+      "requestCodes": [
+        "SEND_MESSAGE_V2"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader",
+      "rustType": "SendMessageResponseHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/message_operation_header/send_message_response_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.SendMessageResponseHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/SendMessageResponseHeader.java",
+      "direction": "response",
+      "requestCodes": [],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::namesrv::broker_request::BrokerHeartbeatRequestHeader",
+      "rustType": "BrokerHeartbeatRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/namesrv/broker_request.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.namesrv.BrokerHeartbeatRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/namesrv/BrokerHeartbeatRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "BROKER_HEARTBEAT"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::namesrv::broker_request::GetBrokerMemberGroupRequestHeader",
+      "rustType": "GetBrokerMemberGroupRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/namesrv/broker_request.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.GetBrokerMemberGroupRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/GetBrokerMemberGroupRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "GET_BROKER_MEMBER_GROUP"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::namesrv::broker_request::UnRegisterBrokerRequestHeader",
+      "rustType": "UnRegisterBrokerRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/namesrv/broker_request.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.namesrv.UnRegisterBrokerRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/namesrv/UnRegisterBrokerRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "UNREGISTER_BROKER"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::namesrv::brokerid_change_request_header::NotifyMinBrokerIdChangeRequestHeader",
+      "rustType": "NotifyMinBrokerIdChangeRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/namesrv/brokerid_change_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.NotifyMinBrokerIdChangeRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/NotifyMinBrokerIdChangeRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "NOTIFY_MIN_BROKER_ID_CHANGE"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::namesrv::config_header::GetNamesrvConfigRequestHeader",
+      "rustType": "GetNamesrvConfigRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/namesrv/config_header.rs",
+      "javaClass": null,
+      "javaSource": null,
+      "direction": "request",
+      "requestCodes": [
+        "GET_NAMESRV_CONFIG"
+      ],
+      "exactName": false,
+      "javaFast": false,
+      "status": "rust-only-extension",
+      "reason": "Rust probe-only extension for the otherwise empty Java request header"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::namesrv::kv_config_header::DeleteKVConfigRequestHeader",
+      "rustType": "DeleteKVConfigRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/namesrv/kv_config_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.namesrv.DeleteKVConfigRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/namesrv/DeleteKVConfigRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "DELETE_KV_CONFIG"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::namesrv::kv_config_header::GetKVConfigRequestHeader",
+      "rustType": "GetKVConfigRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/namesrv/kv_config_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.namesrv.GetKVConfigRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/namesrv/GetKVConfigRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "GET_KV_CONFIG"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::namesrv::kv_config_header::GetKVConfigResponseHeader",
+      "rustType": "GetKVConfigResponseHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/namesrv/kv_config_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.namesrv.GetKVConfigResponseHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/namesrv/GetKVConfigResponseHeader.java",
+      "direction": "response",
+      "requestCodes": [],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::namesrv::kv_config_header::GetKVListByNamespaceRequestHeader",
+      "rustType": "GetKVListByNamespaceRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/namesrv/kv_config_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.namesrv.GetKVListByNamespaceRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/namesrv/GetKVListByNamespaceRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "GET_KVLIST_BY_NAMESPACE"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::namesrv::kv_config_header::PutKVConfigRequestHeader",
+      "rustType": "PutKVConfigRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/namesrv/kv_config_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.namesrv.PutKVConfigRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/namesrv/PutKVConfigRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "PUT_KV_CONFIG"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::namesrv::perm_broker_header::AddWritePermOfBrokerRequestHeader",
+      "rustType": "AddWritePermOfBrokerRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/namesrv/perm_broker_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.namesrv.AddWritePermOfBrokerRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/namesrv/AddWritePermOfBrokerRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "ADD_WRITE_PERM_OF_BROKER"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::namesrv::perm_broker_header::AddWritePermOfBrokerResponseHeader",
+      "rustType": "AddWritePermOfBrokerResponseHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/namesrv/perm_broker_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.namesrv.AddWritePermOfBrokerResponseHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/namesrv/AddWritePermOfBrokerResponseHeader.java",
+      "direction": "response",
+      "requestCodes": [],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::namesrv::perm_broker_header::WipeWritePermOfBrokerRequestHeader",
+      "rustType": "WipeWritePermOfBrokerRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/namesrv/perm_broker_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.namesrv.WipeWritePermOfBrokerRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/namesrv/WipeWritePermOfBrokerRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "WIPE_WRITE_PERM_OF_BROKER"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::namesrv::perm_broker_header::WipeWritePermOfBrokerResponseHeader",
+      "rustType": "WipeWritePermOfBrokerResponseHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/namesrv/perm_broker_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.namesrv.WipeWritePermOfBrokerResponseHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/namesrv/WipeWritePermOfBrokerResponseHeader.java",
+      "direction": "response",
+      "requestCodes": [],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::namesrv::query_data_version_header::QueryDataVersionRequestHeader",
+      "rustType": "QueryDataVersionRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/namesrv/query_data_version_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.namesrv.QueryDataVersionRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/namesrv/QueryDataVersionRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "QUERY_DATA_VERSION"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::namesrv::query_data_version_header::QueryDataVersionResponseHeader",
+      "rustType": "QueryDataVersionResponseHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/namesrv/query_data_version_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.namesrv.QueryDataVersionResponseHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/namesrv/QueryDataVersionResponseHeader.java",
+      "direction": "response",
+      "requestCodes": [],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::namesrv::register_broker_header::RegisterBrokerRequestHeader",
+      "rustType": "RegisterBrokerRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/namesrv/register_broker_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.namesrv.RegisterBrokerRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/namesrv/RegisterBrokerRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "REGISTER_BROKER"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::namesrv::register_broker_header::RegisterBrokerResponseHeader",
+      "rustType": "RegisterBrokerResponseHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/namesrv/register_broker_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.namesrv.RegisterBrokerResponseHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/namesrv/RegisterBrokerResponseHeader.java",
+      "direction": "response",
+      "requestCodes": [],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::namesrv::topic_operation_header::DeleteTopicFromNamesrvRequestHeader",
+      "rustType": "DeleteTopicFromNamesrvRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/namesrv/topic_operation_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.namesrv.DeleteTopicFromNamesrvRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/namesrv/DeleteTopicFromNamesrvRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "DELETE_TOPIC_IN_NAMESRV"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::namesrv::topic_operation_header::GetTopicsByClusterRequestHeader",
+      "rustType": "GetTopicsByClusterRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/namesrv/topic_operation_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.GetTopicsByClusterRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/GetTopicsByClusterRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "GET_TOPICS_BY_CLUSTER"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::namesrv::topic_operation_header::RegisterTopicRequestHeader",
+      "rustType": "RegisterTopicRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/namesrv/topic_operation_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.namesrv.RegisterTopicRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/namesrv/RegisterTopicRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "REGISTER_TOPIC_IN_NAMESRV"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::namesrv::topic_operation_header::TopicRequestHeader",
+      "rustType": "TopicRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/namesrv/topic_operation_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.rpc.TopicRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/rpc/TopicRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::notification_request_header::NotificationRequestHeader",
+      "rustType": "NotificationRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/notification_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.NotificationRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/NotificationRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "NOTIFICATION"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::notification_response_header::NotificationResponseHeader",
+      "rustType": "NotificationResponseHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/notification_response_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.NotificationResponseHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/NotificationResponseHeader.java",
+      "direction": "response",
+      "requestCodes": [],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::notify_broker_role_change_request_header::NotifyBrokerRoleChangedRequestHeader",
+      "rustType": "NotifyBrokerRoleChangedRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/notify_broker_role_change_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.NotifyBrokerRoleChangedRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/NotifyBrokerRoleChangedRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "NOTIFY_BROKER_ROLE_CHANGED"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::notify_consumer_ids_changed_request_header::NotifyConsumerIdsChangedRequestHeader",
+      "rustType": "NotifyConsumerIdsChangedRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/notify_consumer_ids_changed_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.NotifyConsumerIdsChangedRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/NotifyConsumerIdsChangedRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "NOTIFY_CONSUMER_IDS_CHANGED"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::notify_unsubscribe_lite_request_header::NotifyUnsubscribeLiteRequestHeader",
+      "rustType": "NotifyUnsubscribeLiteRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/notify_unsubscribe_lite_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.NotifyUnsubscribeLiteRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/NotifyUnsubscribeLiteRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "NOTIFY_UNSUBSCRIBE_LITE"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::peek_message_request_header::PeekMessageRequestHeader",
+      "rustType": "PeekMessageRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/peek_message_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.PeekMessageRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/PeekMessageRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "PEEK_MESSAGE"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::polling_info_request_header::PollingInfoRequestHeader",
+      "rustType": "PollingInfoRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/polling_info_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.PollingInfoRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/PollingInfoRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "POLLING_INFO"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::polling_info_response_header::PollingInfoResponseHeader",
+      "rustType": "PollingInfoResponseHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/polling_info_response_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.PollingInfoResponseHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/PollingInfoResponseHeader.java",
+      "direction": "response",
+      "requestCodes": [],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::pop_lite_message_request_header::PopLiteMessageRequestHeader",
+      "rustType": "PopLiteMessageRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/pop_lite_message_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.PopLiteMessageRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/PopLiteMessageRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::pop_lite_message_response_header::PopLiteMessageResponseHeader",
+      "rustType": "PopLiteMessageResponseHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/pop_lite_message_response_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.PopLiteMessageResponseHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/PopLiteMessageResponseHeader.java",
+      "direction": "response",
+      "requestCodes": [],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::pop_message_request_header::PopMessageRequestHeader",
+      "rustType": "PopMessageRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/pop_message_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.PopMessageRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/PopMessageRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "POP_MESSAGE"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::pop_message_response_header::PopMessageResponseHeader",
+      "rustType": "PopMessageResponseHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/pop_message_response_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.PopMessageResponseHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/PopMessageResponseHeader.java",
+      "direction": "response",
+      "requestCodes": [],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::pull_message_request_header::PullMessageRequestHeader",
+      "rustType": "PullMessageRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/pull_message_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.PullMessageRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/PullMessageRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "PULL_MESSAGE"
+      ],
+      "exactName": true,
+      "javaFast": true,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::pull_message_response_header::PullMessageResponseHeader",
+      "rustType": "PullMessageResponseHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/pull_message_response_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.PullMessageResponseHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/PullMessageResponseHeader.java",
+      "direction": "response",
+      "requestCodes": [],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::query_consume_queue_request_header::QueryConsumeQueueRequestHeader",
+      "rustType": "QueryConsumeQueueRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/query_consume_queue_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.QueryConsumeQueueRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/QueryConsumeQueueRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "QUERY_CONSUME_QUEUE"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::query_consume_time_span_request_header::QueryConsumeTimeSpanRequestHeader",
+      "rustType": "QueryConsumeTimeSpanRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/query_consume_time_span_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.QueryConsumeTimeSpanRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/QueryConsumeTimeSpanRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "QUERY_CONSUME_TIME_SPAN"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader",
+      "rustType": "QueryConsumerOffsetRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/query_consumer_offset_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.QueryConsumerOffsetRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/QueryConsumerOffsetRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "QUERY_CONSUMER_OFFSET"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::query_consumer_offset_response_header::QueryConsumerOffsetResponseHeader",
+      "rustType": "QueryConsumerOffsetResponseHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/query_consumer_offset_response_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.QueryConsumerOffsetResponseHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/QueryConsumerOffsetResponseHeader.java",
+      "direction": "response",
+      "requestCodes": [],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::query_correction_offset_header::QueryCorrectionOffsetHeader",
+      "rustType": "QueryCorrectionOffsetHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/query_correction_offset_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.QueryCorrectionOffsetHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/QueryCorrectionOffsetHeader.java",
+      "direction": "shared",
+      "requestCodes": [
+        "QUERY_CORRECTION_OFFSET"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::query_message_request_header::QueryMessageRequestHeader",
+      "rustType": "QueryMessageRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/query_message_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.QueryMessageRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/QueryMessageRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "QUERY_MESSAGE"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::query_message_response_header::QueryMessageResponseHeader",
+      "rustType": "QueryMessageResponseHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/query_message_response_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.QueryMessageResponseHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/QueryMessageResponseHeader.java",
+      "direction": "response",
+      "requestCodes": [],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::query_subscription_by_consumer_request_header::QuerySubscriptionByConsumerRequestHeader",
+      "rustType": "QuerySubscriptionByConsumerRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/query_subscription_by_consumer_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.QuerySubscriptionByConsumerRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/QuerySubscriptionByConsumerRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "QUERY_SUBSCRIPTION_BY_CONSUMER"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::query_topic_consume_by_who_request_header::QueryTopicConsumeByWhoRequestHeader",
+      "rustType": "QueryTopicConsumeByWhoRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/query_topic_consume_by_who_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.QueryTopicConsumeByWhoRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/QueryTopicConsumeByWhoRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "QUERY_TOPIC_CONSUME_BY_WHO"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::query_topics_by_consumer_request_header::QueryTopicsByConsumerRequestHeader",
+      "rustType": "QueryTopicsByConsumerRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/query_topics_by_consumer_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.QueryTopicsByConsumerRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/QueryTopicsByConsumerRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "QUERY_TOPICS_BY_CONSUMER"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::recall_message_request_header::RecallMessageRequestHeader",
+      "rustType": "RecallMessageRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/recall_message_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.RecallMessageRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/RecallMessageRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "RECALL_MESSAGE"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::recall_message_response_header::RecallMessageResponseHeader",
+      "rustType": "RecallMessageResponseHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/recall_message_response_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.RecallMessageResponseHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/RecallMessageResponseHeader.java",
+      "direction": "response",
+      "requestCodes": [],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::remove_broker_request_header::RemoveBrokerRequestHeader",
+      "rustType": "RemoveBrokerRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/remove_broker_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.RemoveBrokerRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/RemoveBrokerRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "REMOVE_BROKER"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::reply_message_request_header::ReplyMessageRequestHeader",
+      "rustType": "ReplyMessageRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/reply_message_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.ReplyMessageRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/ReplyMessageRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "PUSH_REPLY_MESSAGE_TO_CLIENT"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::reset_master_flush_offset_header::ResetMasterFlushOffsetHeader",
+      "rustType": "ResetMasterFlushOffsetHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/reset_master_flush_offset_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.ResetMasterFlushOffsetHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/ResetMasterFlushOffsetHeader.java",
+      "direction": "shared",
+      "requestCodes": [
+        "RESET_MASTER_FLUSH_OFFSET"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::reset_offset_request_header::ResetOffsetRequestHeader",
+      "rustType": "ResetOffsetRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/reset_offset_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.ResetOffsetRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/ResetOffsetRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "INVOKE_BROKER_TO_RESET_OFFSET"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::resume_check_half_message_request_header::ResumeCheckHalfMessageRequestHeader",
+      "rustType": "ResumeCheckHalfMessageRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/resume_check_half_message_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.ResumeCheckHalfMessageRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/ResumeCheckHalfMessageRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "RESUME_CHECK_HALF_MESSAGE"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::search_offset_request_header::SearchOffsetRequestHeader",
+      "rustType": "SearchOffsetRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/search_offset_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.SearchOffsetRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/SearchOffsetRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "SEARCH_OFFSET_BY_TIMESTAMP"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::search_offset_response_header::SearchOffsetResponseHeader",
+      "rustType": "SearchOffsetResponseHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/search_offset_response_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.SearchOffsetResponseHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/SearchOffsetResponseHeader.java",
+      "direction": "response",
+      "requestCodes": [],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::trigger_lite_dispatch_request_header::TriggerLiteDispatchRequestHeader",
+      "rustType": "TriggerLiteDispatchRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/trigger_lite_dispatch_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.TriggerLiteDispatchRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/TriggerLiteDispatchRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::unlock_batch_mq_request_header::UnlockBatchMqRequestHeader",
+      "rustType": "UnlockBatchMqRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/unlock_batch_mq_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.UnlockBatchMqRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/UnlockBatchMqRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "UNLOCK_BATCH_MQ"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::unregister_client_request_header::UnregisterClientRequestHeader",
+      "rustType": "UnregisterClientRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/unregister_client_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.UnregisterClientRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/UnregisterClientRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "UNREGISTER_CLIENT"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::update_acl_request_header::UpdateAclRequestHeader",
+      "rustType": "UpdateAclRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/update_acl_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.UpdateAclRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/UpdateAclRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "AUTH_UPDATE_ACL"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::update_broker_config_request_header::UpdateBrokerConfigRequestHeader",
+      "rustType": "UpdateBrokerConfigRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/update_broker_config_request_header.rs",
+      "javaClass": null,
+      "javaSource": null,
+      "direction": "request",
+      "requestCodes": [
+        "UPDATE_BROKER_CONFIG_CAS"
+      ],
+      "exactName": false,
+      "javaFast": false,
+      "status": "rust-only-extension",
+      "reason": "Rust compare-and-set broker configuration extension"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::update_broker_config_response_header::UpdateBrokerConfigResponseHeader",
+      "rustType": "UpdateBrokerConfigResponseHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/update_broker_config_response_header.rs",
+      "javaClass": null,
+      "javaSource": null,
+      "direction": "response",
+      "requestCodes": [
+        "UPDATE_BROKER_CONFIG_CAS"
+      ],
+      "exactName": false,
+      "javaFast": false,
+      "status": "rust-only-extension",
+      "reason": "Rust compare-and-set broker configuration response extension"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader",
+      "rustType": "UpdateConsumerOffsetRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/update_consumer_offset_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.UpdateConsumerOffsetRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/UpdateConsumerOffsetRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "UPDATE_CONSUMER_OFFSET"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetResponseHeader",
+      "rustType": "UpdateConsumerOffsetResponseHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/update_consumer_offset_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.UpdateConsumerOffsetResponseHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/UpdateConsumerOffsetResponseHeader.java",
+      "direction": "response",
+      "requestCodes": [],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::update_global_white_addrs_config_request_header::UpdateGlobalWhiteAddrsConfigRequestHeader",
+      "rustType": "UpdateGlobalWhiteAddrsConfigRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/update_global_white_addrs_config_request_header.rs",
+      "javaClass": null,
+      "javaSource": null,
+      "direction": "request",
+      "requestCodes": [
+        "UPDATE_GLOBAL_WHITE_ADDRS_CONFIG"
+      ],
+      "exactName": false,
+      "javaFast": false,
+      "status": "rust-only-extension",
+      "reason": "Rust typed header for a Java request that uses dynamic fields and body data"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::update_group_forbidden_request_header::UpdateGroupForbiddenRequestHeader",
+      "rustType": "UpdateGroupForbiddenRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/update_group_forbidden_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.UpdateGroupForbiddenRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/UpdateGroupForbiddenRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "UPDATE_AND_GET_GROUP_FORBIDDEN"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::update_subscription_group_config_cas_request_header::UpdateSubscriptionGroupConfigCasRequestHeader",
+      "rustType": "UpdateSubscriptionGroupConfigCasRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/update_subscription_group_config_cas_request_header.rs",
+      "javaClass": null,
+      "javaSource": null,
+      "direction": "request",
+      "requestCodes": [
+        "UPDATE_SUBSCRIPTION_GROUP_CONFIG_CAS"
+      ],
+      "exactName": false,
+      "javaFast": false,
+      "status": "rust-only-extension",
+      "reason": "Rust compare-and-set subscription group extension"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::update_subscription_group_config_cas_response_header::UpdateSubscriptionGroupConfigCasResponseHeader",
+      "rustType": "UpdateSubscriptionGroupConfigCasResponseHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/update_subscription_group_config_cas_response_header.rs",
+      "javaClass": null,
+      "javaSource": null,
+      "direction": "response",
+      "requestCodes": [
+        "UPDATE_SUBSCRIPTION_GROUP_CONFIG_CAS"
+      ],
+      "exactName": false,
+      "javaFast": false,
+      "status": "rust-only-extension",
+      "reason": "Rust compare-and-set subscription group response extension"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::update_topic_config_cas_request_header::UpdateTopicConfigCasRequestHeader",
+      "rustType": "UpdateTopicConfigCasRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/update_topic_config_cas_request_header.rs",
+      "javaClass": null,
+      "javaSource": null,
+      "direction": "request",
+      "requestCodes": [
+        "UPDATE_TOPIC_CONFIG_CAS"
+      ],
+      "exactName": false,
+      "javaFast": false,
+      "status": "rust-only-extension",
+      "reason": "Rust compare-and-set topic configuration extension"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::update_topic_config_cas_response_header::UpdateTopicConfigCasResponseHeader",
+      "rustType": "UpdateTopicConfigCasResponseHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/update_topic_config_cas_response_header.rs",
+      "javaClass": null,
+      "javaSource": null,
+      "direction": "response",
+      "requestCodes": [
+        "UPDATE_TOPIC_CONFIG_CAS"
+      ],
+      "exactName": false,
+      "javaFast": false,
+      "status": "rust-only-extension",
+      "reason": "Rust compare-and-set topic configuration response extension"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::update_user_request_header::UpdateUserRequestHeader",
+      "rustType": "UpdateUserRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/update_user_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.UpdateUserRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/UpdateUserRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "AUTH_UPDATE_USER"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::view_broker_stats_data_request_header::ViewBrokerStatsDataRequestHeader",
+      "rustType": "ViewBrokerStatsDataRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/view_broker_stats_data_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.ViewBrokerStatsDataRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/ViewBrokerStatsDataRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "VIEW_BROKER_STATS_DATA"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::view_message_request_header::ViewMessageRequestHeader",
+      "rustType": "ViewMessageRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/view_message_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.ViewMessageRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/ViewMessageRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [
+        "VIEW_MESSAGE_BY_ID"
+      ],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::view_message_response_header::ViewMessageResponseHeader",
+      "rustType": "ViewMessageResponseHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/view_message_response_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.protocol.header.ViewMessageResponseHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/ViewMessageResponseHeader.java",
+      "direction": "response",
+      "requestCodes": [],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::rpc::rpc_request_header::RpcRequestHeader",
+      "rustType": "RpcRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/rpc/rpc_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.rpc.RpcRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/rpc/RpcRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::rpc::topic_request_header::TopicRequestHeader",
+      "rustType": "TopicRequestHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/rpc/topic_request_header.rs",
+      "javaClass": "org.apache.rocketmq.remoting.rpc.TopicRequestHeader",
+      "javaSource": "remoting/src/main/java/org/apache/rocketmq/remoting/rpc/TopicRequestHeader.java",
+      "direction": "request",
+      "requestCodes": [],
+      "exactName": true,
+      "javaFast": false,
+      "status": "mapped",
+      "reason": "exact-name mapping"
+    }
+  ]
+}

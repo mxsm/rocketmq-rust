@@ -17,7 +17,7 @@ use rocketmq_macros::RequestHeaderCodecV2;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::rpc::rpc_request_header::RpcRequestHeader;
+use crate::rpc::topic_request_header::TopicRequestHeader;
 
 /// Request header for getting consumer status from client.
 #[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
@@ -32,7 +32,7 @@ pub struct GetConsumerStatusRequestHeader {
     pub client_addr: Option<CheetahString>,
 
     #[serde(flatten)]
-    pub rpc_request_header: Option<RpcRequestHeader>,
+    pub topic_request_header: Option<TopicRequestHeader>,
 }
 
 impl GetConsumerStatusRequestHeader {
@@ -41,7 +41,7 @@ impl GetConsumerStatusRequestHeader {
             topic,
             group,
             client_addr: None,
-            rpc_request_header: None,
+            topic_request_header: None,
         }
     }
 }
@@ -59,7 +59,7 @@ mod tests {
         assert_eq!(header.topic, "");
         assert_eq!(header.group, "");
         assert!(header.client_addr.is_none());
-        assert!(header.rpc_request_header.is_none());
+        assert!(header.topic_request_header.is_none());
     }
 
     #[test]
@@ -68,7 +68,7 @@ mod tests {
         assert_eq!(header.topic, "topic1");
         assert_eq!(header.group, "group1");
         assert!(header.client_addr.is_none());
-        assert!(header.rpc_request_header.is_none());
+        assert!(header.topic_request_header.is_none());
     }
 
     #[test]
@@ -77,27 +77,36 @@ mod tests {
             topic: CheetahString::from("topic1"),
             group: CheetahString::from("group1"),
             client_addr: Some(CheetahString::from("127.0.0.1")),
-            rpc_request_header: Some(RpcRequestHeader {
-                broker_name: Some(CheetahString::from("broker")),
-                ..Default::default()
+            topic_request_header: Some(TopicRequestHeader {
+                lo: Some(true),
+                rpc_request_header: Some(crate::rpc::rpc_request_header::RpcRequestHeader {
+                    broker_name: Some(CheetahString::from("broker")),
+                    ..Default::default()
+                }),
             }),
         };
         let json = serde_json::to_string(&header).unwrap();
         assert!(json.contains("\"topic\":\"topic1\""));
         assert!(json.contains("\"group\":\"group1\""));
         assert!(json.contains("\"clientAddr\":\"127.0.0.1\""));
-        assert!(json.contains("\"brokerName\":\"broker\""));
+        assert!(json.contains("\"bname\":\"broker\""));
+        assert!(json.contains("\"lo\":true"));
     }
 
     #[test]
     fn get_consumer_status_request_header_deserialization() {
-        let json = r#"{"topic":"topic1","group":"group1","clientAddr":"127.0.0.1","brokerName":"broker"}"#;
+        let json = r#"{"topic":"topic1","group":"group1","clientAddr":"127.0.0.1","lo":true,"bname":"broker"}"#;
         let header: GetConsumerStatusRequestHeader = serde_json::from_str(json).unwrap();
         assert_eq!(header.topic, "topic1");
         assert_eq!(header.group, "group1");
         assert_eq!(header.client_addr, Some(CheetahString::from("127.0.0.1")));
         assert_eq!(
-            header.rpc_request_header.unwrap().broker_name,
+            header
+                .topic_request_header
+                .unwrap()
+                .rpc_request_header
+                .unwrap()
+                .broker_name,
             Some(CheetahString::from("broker"))
         );
     }
@@ -108,14 +117,20 @@ mod tests {
         map.insert(CheetahString::from("topic"), CheetahString::from("topic1"));
         map.insert(CheetahString::from("group"), CheetahString::from("group1"));
         map.insert(CheetahString::from("clientAddr"), CheetahString::from("127.0.0.1"));
-        map.insert(CheetahString::from("brokerName"), CheetahString::from("broker1"));
+        map.insert(CheetahString::from("lo"), CheetahString::from("true"));
+        map.insert(CheetahString::from("bname"), CheetahString::from("broker1"));
 
         let header = <GetConsumerStatusRequestHeader as FromMap>::from(&map).unwrap();
         assert_eq!(header.topic, "topic1");
         assert_eq!(header.group, "group1");
         assert_eq!(header.client_addr, Some(CheetahString::from("127.0.0.1")));
         assert_eq!(
-            header.rpc_request_header.unwrap().broker_name,
+            header
+                .topic_request_header
+                .unwrap()
+                .rpc_request_header
+                .unwrap()
+                .broker_name,
             Some(CheetahString::from("broker1"))
         );
     }

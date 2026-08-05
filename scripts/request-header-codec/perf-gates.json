@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "baselinePolicy": {
+    "v2Role": "phase1-hardened",
+    "v2ManifestFileName": "v2-phase1.json",
+    "requireSameRunReplay": true,
+    "rejectV2Roles": ["historical", "post-p0"]
+  },
+  "buildRecipe": {
+    "id": "request-header-codec-build-v1-windows-x86_64-msvc",
+    "path": "scripts/request-header-codec/perf-build-recipe-v1.json",
+    "sha256": "e9d7ea807b903d41c942cfa58211dbd35b688b17c0eb3682f29a63d3fe8ccc4b"
+  },
+  "gates": {
+    "PERF-01": {"operator": "gte", "threshold": 1.15},
+    "PERF-02": {"operator": "gte", "threshold": 1.10},
+    "PERF-03": {"operator": "gte", "threshold": 1.05},
+    "PERF-04": {
+      "operator": "gt",
+      "threshold": 1.00,
+      "appliesTo": ["PERF-01", "PERF-02", "PERF-03"]
+    },
+    "PERF-05": {"operator": "gte", "threshold": 0.97},
+    "PERF-06": {"operator": "lte", "allocationRatio": 0.70},
+    "PERF-07": {
+      "operator": "lte",
+      "eachMetric": ["textBytesGrowth", "artifactBytesGrowth"],
+      "growth": 0.03
+    },
+    "PERF-08": {
+      "operator": "lte",
+      "eachMetric": ["cleanBuildGrowth", "processTreePeakWorkingSetGrowth"],
+      "cleanBuildGrowth": 0.10,
+      "processTreePeakWorkingSetGrowth": 0.10
+    },
+    "PERF-09": {"operator": "lte", "incrementalBuildGrowth": 0.05}
+  }
+}

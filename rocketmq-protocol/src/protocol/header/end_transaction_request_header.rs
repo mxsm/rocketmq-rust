@@ -20,9 +20,9 @@ use serde::Serialize;
 use crate::rpc::rpc_request_header::RpcRequestHeader;
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
+#[request_header(validate = "validate")]
 #[serde(rename_all = "camelCase")]
 pub struct EndTransactionRequestHeader {
-    #[required]
     pub topic: CheetahString,
 
     #[required]
@@ -41,7 +41,6 @@ pub struct EndTransactionRequestHeader {
     pub commit_or_rollback: i32,
 
     //Whether the check-back is initiated by the Broker
-    #[required]
     pub from_transaction_check: bool,
 
     #[required]
@@ -51,6 +50,21 @@ pub struct EndTransactionRequestHeader {
 
     #[serde(flatten)]
     pub rpc_request_header: RpcRequestHeader,
+}
+
+impl EndTransactionRequestHeader {
+    fn validate(&self) -> rocketmq_error::RocketMQResult<()> {
+        use rocketmq_model::common::sys_flag::message_sys_flag::MessageSysFlag;
+
+        match self.commit_or_rollback {
+            MessageSysFlag::TRANSACTION_NOT_TYPE
+            | MessageSysFlag::TRANSACTION_COMMIT_TYPE
+            | MessageSysFlag::TRANSACTION_ROLLBACK_TYPE => Ok(()),
+            _ => Err(rocketmq_error::RocketMQError::request_header_error(
+                "EndTransactionRequestHeader.commitOrRollback: unsupported transaction state",
+            )),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -77,7 +91,7 @@ mod tests {
             producer_group: CheetahString::from("group1"),
             tran_state_table_offset: 123,
             commit_log_offset: 456,
-            commit_or_rollback: 1,
+            commit_or_rollback: 8,
             from_transaction_check: true,
             msg_id: CheetahString::from("msg1"),
             transaction_id: Some(CheetahString::from("tran1")),
@@ -88,7 +102,7 @@ mod tests {
         assert_eq!(cloned_header.producer_group, "group1");
         assert_eq!(cloned_header.tran_state_table_offset, 123);
         assert_eq!(cloned_header.commit_log_offset, 456);
-        assert_eq!(cloned_header.commit_or_rollback, 1);
+        assert_eq!(cloned_header.commit_or_rollback, 8);
         assert!(cloned_header.from_transaction_check);
         assert_eq!(cloned_header.msg_id, "msg1");
         assert_eq!(cloned_header.transaction_id.as_ref().unwrap(), "tran1");
@@ -101,7 +115,7 @@ mod tests {
             producer_group: CheetahString::from("group1"),
             tran_state_table_offset: 123,
             commit_log_offset: 456,
-            commit_or_rollback: 1,
+            commit_or_rollback: 8,
             from_transaction_check: true,
             msg_id: CheetahString::from("msg1"),
             transaction_id: Some(CheetahString::from("tran1")),
@@ -115,22 +129,22 @@ mod tests {
         assert!(json.contains("\"producerGroup\":\"group1\""));
         assert!(json.contains("\"tranStateTableOffset\":123"));
         assert!(json.contains("\"commitLogOffset\":456"));
-        assert!(json.contains("\"commitOrRollback\":1"));
+        assert!(json.contains("\"commitOrRollback\":8"));
         assert!(json.contains("\"fromTransactionCheck\":true"));
         assert!(json.contains("\"msgId\":\"msg1\""));
         assert!(json.contains("\"transactionId\":\"tran1\""));
-        assert!(json.contains("\"brokerName\":\"broker1\""));
+        assert!(json.contains("\"bname\":\"broker1\""));
     }
 
     #[test]
     fn end_transaction_request_header_deserialization() {
-        let json = r#"{"topic":"topic1","producerGroup":"group1","tranStateTableOffset":123,"commitLogOffset":456,"commitOrRollback":1,"fromTransactionCheck":true,"msgId":"msg1","transactionId":"tran1","brokerName":"broker1"}"#;
+        let json = r#"{"topic":"topic1","producerGroup":"group1","tranStateTableOffset":123,"commitLogOffset":456,"commitOrRollback":8,"fromTransactionCheck":true,"msgId":"msg1","transactionId":"tran1","bname":"broker1"}"#;
         let header: EndTransactionRequestHeader = serde_json::from_str(json).unwrap();
         assert_eq!(header.topic, "topic1");
         assert_eq!(header.producer_group, "group1");
         assert_eq!(header.tran_state_table_offset, 123);
         assert_eq!(header.commit_log_offset, 456);
-        assert_eq!(header.commit_or_rollback, 1);
+        assert_eq!(header.commit_or_rollback, 8);
         assert!(header.from_transaction_check);
         assert_eq!(header.msg_id, "msg1");
         assert_eq!(header.transaction_id.as_ref().unwrap(), "tran1");
@@ -138,13 +152,13 @@ mod tests {
     }
     #[test]
     fn end_transaction_request_header_required_fields() {
-        let json = r#"{"topic":"topic1","producerGroup":"group1","tranStateTableOffset":123,"commitLogOffset":456,"commitOrRollback":1,"fromTransactionCheck":true,"msgId":"msg1"}"#;
+        let json = r#"{"topic":"topic1","producerGroup":"group1","tranStateTableOffset":123,"commitLogOffset":456,"commitOrRollback":8,"fromTransactionCheck":true,"msgId":"msg1"}"#;
         let header: EndTransactionRequestHeader = serde_json::from_str(json).unwrap();
         assert_eq!(header.topic, "topic1");
         assert_eq!(header.producer_group, "group1");
         assert_eq!(header.tran_state_table_offset, 123);
         assert_eq!(header.commit_log_offset, 456);
-        assert_eq!(header.commit_or_rollback, 1);
+        assert_eq!(header.commit_or_rollback, 8);
         assert!(header.from_transaction_check);
         assert_eq!(header.msg_id, "msg1");
         assert!(header.transaction_id.is_none());
@@ -157,7 +171,7 @@ mod tests {
             producer_group: CheetahString::from("group1"),
             tran_state_table_offset: 123,
             commit_log_offset: 456,
-            commit_or_rollback: 1,
+            commit_or_rollback: 8,
             from_transaction_check: true,
             msg_id: CheetahString::from("msg1"),
             transaction_id: Some(CheetahString::from("tran1")),
@@ -183,7 +197,7 @@ mod tests {
             producer_group: CheetahString::from("group1"),
             tran_state_table_offset: 123,
             commit_log_offset: 456,
-            commit_or_rollback: 1,
+            commit_or_rollback: 8,
             from_transaction_check: true,
             msg_id: CheetahString::from("msg1"),
             transaction_id: Some(CheetahString::from("tran1")),
@@ -222,7 +236,7 @@ mod tests {
                 EndTransactionRequestHeader::COMMIT_OR_ROLLBACK
             ))
             .unwrap(),
-            "1"
+            "8"
         );
         assert_eq!(
             map.get(&CheetahString::from_static_str(
@@ -254,7 +268,7 @@ mod tests {
             producer_group: CheetahString::from("group1"),
             tran_state_table_offset: 123,
             commit_log_offset: 456,
-            commit_or_rollback: 1,
+            commit_or_rollback: 8,
             from_transaction_check: true,
             msg_id: CheetahString::from("msg1"),
             transaction_id: None,
@@ -296,7 +310,7 @@ mod tests {
         );
         map.insert(
             CheetahString::from_static_str(EndTransactionRequestHeader::COMMIT_OR_ROLLBACK),
-            CheetahString::from_static_str("1"),
+            CheetahString::from_static_str("8"),
         );
         map.insert(
             CheetahString::from_static_str(EndTransactionRequestHeader::FROM_TRANSACTION_CHECK),
@@ -316,7 +330,7 @@ mod tests {
         assert_eq!(header.producer_group, "group1");
         assert_eq!(header.tran_state_table_offset, 123);
         assert_eq!(header.commit_log_offset, 456);
-        assert_eq!(header.commit_or_rollback, 1);
+        assert_eq!(header.commit_or_rollback, 8);
         assert!(header.from_transaction_check);
         assert_eq!(header.msg_id, "msg1");
         assert_eq!(header.transaction_id.unwrap(), "tran1");
@@ -333,7 +347,7 @@ mod tests {
             producer_group: CheetahString::from("group1"),
             tran_state_table_offset: -123,
             commit_log_offset: -456,
-            commit_or_rollback: 1,
+            commit_or_rollback: 8,
             from_transaction_check: true,
             msg_id: CheetahString::from("msg1"),
             transaction_id: None,
@@ -372,7 +386,7 @@ mod tests {
             ),
             (
                 CheetahString::from_static_str(EndTransactionRequestHeader::COMMIT_OR_ROLLBACK),
-                CheetahString::from_static_str("1"),
+                CheetahString::from_static_str("8"),
             ),
             (
                 CheetahString::from_static_str(EndTransactionRequestHeader::FROM_TRANSACTION_CHECK),
@@ -413,7 +427,7 @@ mod tests {
         );
         map.insert(
             CheetahString::from_static_str(EndTransactionRequestHeader::COMMIT_OR_ROLLBACK),
-            CheetahString::from_static_str("1"),
+            CheetahString::from_static_str("8"),
         );
         map.insert(
             CheetahString::from_static_str(EndTransactionRequestHeader::FROM_TRANSACTION_CHECK),
@@ -429,7 +443,7 @@ mod tests {
         assert_eq!(header.producer_group, "group1");
         assert_eq!(header.tran_state_table_offset, 123);
         assert_eq!(header.commit_log_offset, 456);
-        assert_eq!(header.commit_or_rollback, 1);
+        assert_eq!(header.commit_or_rollback, 8);
         assert!(header.from_transaction_check);
         assert_eq!(header.msg_id, "msg1");
         assert!(header.transaction_id.is_none());
@@ -442,48 +456,40 @@ mod tests {
 
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
         enum RequiredField {
-            Topic,
             ProducerGroup,
             TranStateTableOffset,
             CommitLogOffset,
             CommitOrRollback,
-            FromTransactionCheck,
             MsgId,
         }
 
         impl RequiredField {
             fn as_str(&self) -> &'static str {
                 match self {
-                    RequiredField::Topic => EndTransactionRequestHeader::TOPIC,
                     RequiredField::ProducerGroup => EndTransactionRequestHeader::PRODUCER_GROUP,
                     RequiredField::TranStateTableOffset => EndTransactionRequestHeader::TRAN_STATE_TABLE_OFFSET,
                     RequiredField::CommitLogOffset => EndTransactionRequestHeader::COMMIT_LOG_OFFSET,
                     RequiredField::CommitOrRollback => EndTransactionRequestHeader::COMMIT_OR_ROLLBACK,
-                    RequiredField::FromTransactionCheck => EndTransactionRequestHeader::FROM_TRANSACTION_CHECK,
                     RequiredField::MsgId => EndTransactionRequestHeader::MSG_ID,
                 }
             }
 
             fn test_value(&self) -> &'static str {
                 match self {
-                    RequiredField::Topic => "topic1",
                     RequiredField::ProducerGroup => "group1",
                     RequiredField::TranStateTableOffset => "123",
                     RequiredField::CommitLogOffset => "456",
-                    RequiredField::CommitOrRollback => "1",
-                    RequiredField::FromTransactionCheck => "true",
+                    RequiredField::CommitOrRollback => "8",
                     RequiredField::MsgId => "msg1",
                 }
             }
         }
 
         let all_required_fields: &[RequiredField] = &[
-            RequiredField::Topic,
             RequiredField::ProducerGroup,
             RequiredField::TranStateTableOffset,
             RequiredField::CommitLogOffset,
             RequiredField::CommitOrRollback,
-            RequiredField::FromTransactionCheck,
             RequiredField::MsgId,
         ];
 
@@ -531,7 +537,7 @@ mod tests {
         );
         map.insert(
             CheetahString::from_static_str(EndTransactionRequestHeader::COMMIT_OR_ROLLBACK),
-            CheetahString::from_static_str("1"),
+            CheetahString::from_static_str("8"),
         );
         map.insert(
             CheetahString::from_static_str(EndTransactionRequestHeader::FROM_TRANSACTION_CHECK),
@@ -570,7 +576,7 @@ mod tests {
         );
         map.insert(
             CheetahString::from_static_str(EndTransactionRequestHeader::COMMIT_OR_ROLLBACK),
-            CheetahString::from_static_str("1"),
+            CheetahString::from_static_str("8"),
         );
         map.insert(
             CheetahString::from_static_str(EndTransactionRequestHeader::FROM_TRANSACTION_CHECK),
@@ -652,6 +658,21 @@ mod tests {
                 case.value
             );
         }
+    }
+
+    #[test]
+    fn end_transaction_request_header_rejects_unsupported_transaction_state() {
+        use crate::protocol::command_custom_header::FromMap;
+        use std::collections::HashMap;
+
+        let fields = HashMap::from([
+            ("producerGroup".into(), "group-a".into()),
+            ("tranStateTableOffset".into(), "1".into()),
+            ("commitLogOffset".into(), "2".into()),
+            ("commitOrRollback".into(), "999".into()),
+            ("msgId".into(), "msg-a".into()),
+        ]);
+        assert!(<EndTransactionRequestHeader as FromMap>::from(&fields).is_err());
     }
 
     #[test]

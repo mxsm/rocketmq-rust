@@ -1,0 +1,92 @@
+{
+  "schemaVersion": 1,
+  "id": "request-header-codec-build-v1-windows-x86_64-msvc",
+  "platform": "windows-x86_64-msvc",
+  "aggregate": "median",
+  "repetitions": 8,
+  "environmentTemplate": {
+    "CARGO_INCREMENTAL": "0-for-clean-1-for-incremental",
+    "CARGO_TARGET_DIR": "target/request-header-codec-perf/build/{variant}/{runId}",
+    "RUSTFLAGS": "",
+    "powerPolicy": "stable-runner-fixed",
+    "cpuAffinity": "recorded-by-runner",
+    "backgroundLoad": "quiescent"
+  },
+  "cleanBuild": {
+    "workingDirectory": ".",
+    "command": [
+      "cargo",
+      "build",
+      "--locked",
+      "--release",
+      "-p",
+      "rocketmq-protocol",
+      "--bench",
+      "request_header_codec"
+    ],
+    "freshUniqueTargetPerRun": true,
+    "processTreeMemorySampleIntervalMillis": 25,
+    "metrics": ["wallTimeNanos", "processTreePeakWorkingSetBytes"]
+  },
+  "artifact": {
+    "glob": "release/deps/request_header_codec-*.exe",
+    "requireExactlyOne": true,
+    "metrics": ["artifactBytes", "textBytes"],
+    "textSection": ".text",
+    "parser": "scripts/request-header-codec/measure_artifact.py"
+  },
+  "incrementalBuild": {
+    "initialCommand": [
+      "cargo",
+      "build",
+      "--locked",
+      "--release",
+      "-p",
+      "rocketmq-protocol",
+      "--bench",
+      "request_header_codec"
+    ],
+    "probeCommand": [
+      "cargo",
+      "build",
+      "--locked",
+      "--release",
+      "-p",
+      "rocketmq-protocol",
+      "--bench",
+      "request_header_codec"
+    ],
+    "edit": {
+      "file": "rocketmq-protocol/src/protocol/header/get_lite_client_info_request_header.rs",
+      "kind": "temporary-doc-attribute",
+      "tool": "scripts/request-header-codec/apply-incremental-probe.py",
+      "from": "#[doc = \"REQUEST_HEADER_CODEC_INCREMENTAL_PROBE: 0\"]",
+      "to": "#[doc = \"REQUEST_HEADER_CODEC_INCREMENTAL_PROBE: 1\"]",
+      "wireGoldenMustRemainUnchanged": true
+    },
+    "freshUniqueTargetPerVariant": true,
+    "metrics": ["wallTimeNanos"]
+  },
+  "rustBenchmark": {
+    "command": ["cargo", "bench", "--locked", "-p", "rocketmq-protocol", "--bench", "request_header_codec"],
+    "profile": "release",
+    "warmupSeconds": 5,
+    "measurementSeconds": 10,
+    "samples": 100,
+    "freshCommand": true,
+    "freshDecodeFrameView": true,
+    "fullEncodeBufferAllocationTimed": true
+  },
+  "javaBenchmark": {
+    "harness": "JMH",
+    "forks": 5,
+    "warmupIterations": 10,
+    "warmupSeconds": 1,
+    "measurementIterations": 15,
+    "measurementSeconds": 1,
+    "jvmArgs": ["-Xms2g", "-Xmx2g", "-XX:+AlwaysPreTouch"],
+    "freshCommand": true,
+    "freshDecodeFrameView": true,
+    "fullEncodeBufferAllocationTimed": true
+  }
+}

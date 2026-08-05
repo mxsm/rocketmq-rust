@@ -80,7 +80,7 @@ mod tests {
         };
         let json = serde_json::to_string(&header).unwrap();
         assert!(json.contains("\"group\":\"group1\""));
-        assert!(json.contains("\"brokerName\":\"broker\""));
+        assert!(json.contains("\"bname\":\"broker\""));
     }
 
     #[test]
@@ -138,8 +138,8 @@ mod tests {
         let header = QueryTopicsByConsumerRequestHeader::new("");
         let json = serde_json::to_string(&header).unwrap();
         assert!(json.contains("\"group\":"));
-        // rpc_request_header is None so brokerName should not appear
-        assert!(!json.contains("brokerName"));
+        // rpc_request_header is None so bname should not appear
+        assert!(!json.contains("bname"));
     }
 
     #[test]
@@ -153,7 +153,7 @@ mod tests {
         };
         let json = serde_json::to_string(&header).unwrap();
         assert!(json.contains("\"group\":\"g_with_rpc\""));
-        assert!(json.contains("\"brokerName\":\"brokerX\""));
+        assert!(json.contains("\"bname\":\"brokerX\""));
     }
 
     #[test]

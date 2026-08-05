@@ -31,12 +31,17 @@ use rocketmq_store::MessageStoreConfig;
 /// the other configuration.
 pub(crate) struct BrokerRuntimeConfigGeneration {
     id: ConfigGeneration,
+    published_at_millis: u64,
     config: Arc<ValidatedBrokerConfig>,
 }
 
 impl BrokerRuntimeConfigGeneration {
     pub(crate) const fn id(&self) -> ConfigGeneration {
         self.id
+    }
+
+    pub(crate) const fn published_at_millis(&self) -> u64 {
+        self.published_at_millis
     }
 
     pub(crate) fn validated(&self) -> &Arc<ValidatedBrokerConfig> {
@@ -64,6 +69,7 @@ impl BrokerRuntimeConfigState {
         Self {
             current: Arc::new(ArcSwap::from_pointee(BrokerRuntimeConfigGeneration {
                 id: ConfigGeneration::INITIAL,
+                published_at_millis: rocketmq_model::time::current_millis(),
                 config,
             })),
         }
@@ -97,6 +103,7 @@ impl BrokerRuntimeConfigState {
 
         let next = Arc::new(BrokerRuntimeConfigGeneration {
             id: next_id,
+            published_at_millis: rocketmq_model::time::current_millis(),
             config: Arc::new(transaction.into_candidate()),
         });
         let previous = self.current.compare_and_swap(&current, Arc::clone(&next));

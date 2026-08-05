@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "id": "delete-topic-inherited-rocketmq",
+  "javaCommit": "2daf0e2ca91a1592d18235d43e5d709d1c35d15f",
+  "rustTypeId": "rocketmq_protocol::protocol::header::namesrv::topic_operation_header::DeleteTopicFromNamesrvRequestHeader",
+  "javaClass": "org.apache.rocketmq.remoting.protocol.header.namesrv.DeleteTopicFromNamesrvRequestHeader",
+  "requestCode": "DELETE_TOPIC_IN_NAMESRV",
+  "requestCodeValue": 216,
+  "wireCodeValue": 216,
+  "direction": "request",
+  "serializeType": "ROCKETMQ",
+  "actualPath": "normal",
+  "inputFields": {
+    "topic": "TopicA",
+    "clusterName": "DefaultCluster",
+    "lo": true,
+    "ns": "tenant-a",
+    "nsd": true,
+    "bname": "broker-a",
+    "oway": false
+  },
+  "declaredLogicalFields": {
+    "bname": "broker-a",
+    "clusterName": "DefaultCluster",
+    "lo": "true",
+    "ns": "tenant-a",
+    "nsd": "true",
+    "oway": "false",
+    "topic": "TopicA"
+  },
+  "canonicalExtFields": {
+    "bname": "broker-a",
+    "clusterName": "DefaultCluster",
+    "lo": "true",
+    "ns": "tenant-a",
+    "nsd": "true",
+    "oway": "false",
+    "topic": "TopicA"
+  },
+  "frameBase64": "AAAAlAEAAJAA2AwB9QAAAAcAAAAAAAAAAAAAAHsAAmxvAAAABHRydWUABG93YXkAAAAFZmFsc2UAAm5zAAAACHRlbmFudC1hAAVibmFtZQAAAAhicm9rZXItYQALY2x1c3Rlck5hbWUAAAAORGVmYXVsdENsdXN0ZXIABXRvcGljAAAABlRvcGljQQADbnNkAAAABHRydWU=",
+  "frameLength": 152,
+  "fnv1a64": "4b7acd505bd5f372",
+  "opaque": 7,
+  "version": 501,
+  "language": "RUST"
+}

@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "headers": [
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::empty_header::EmptyHeader",
+      "source": "rocketmq-protocol/src/protocol/header/empty_header.rs",
+      "owner": "rocketmq-rust maintainers",
+      "reason": "The header intentionally has no wire fields",
+      "golden": "empty-header"
+    }
+  ]
+}
