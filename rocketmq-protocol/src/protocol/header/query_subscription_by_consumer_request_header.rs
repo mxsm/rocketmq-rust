@@ -25,7 +25,6 @@ pub struct QuerySubscriptionByConsumerRequestHeader {
     #[required]
     pub group: CheetahString,
 
-    #[required]
     pub topic: CheetahString,
 
     #[serde(flatten)]

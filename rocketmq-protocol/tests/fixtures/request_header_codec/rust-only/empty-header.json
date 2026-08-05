@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "id": "empty-header",
+  "rustTypeId": "rocketmq_protocol::protocol::header::empty_header::EmptyHeader",
+  "classification": "intentional-empty-header",
+  "logicalMap": null,
+  "jsonObject": {},
+  "owner": "rocketmq-rust maintainers",
+  "reason": "The header intentionally has no wire fields"
+}

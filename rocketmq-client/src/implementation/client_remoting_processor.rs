@@ -795,7 +795,7 @@ mod tests {
                 topic,
                 group,
                 client_addr: None,
-                rpc_request_header: None,
+                topic_request_header: None,
             },
         );
         request.make_custom_header_to_net();
@@ -825,7 +825,7 @@ mod tests {
                 topic: CheetahString::from_static_str("missing-status-topic"),
                 group: CheetahString::from_static_str("missing-status-group"),
                 client_addr: None,
-                rpc_request_header: None,
+                topic_request_header: None,
             },
         );
         request.make_custom_header_to_net();

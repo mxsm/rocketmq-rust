@@ -51,6 +51,7 @@ impl QueryDataVersionRequestHeader {
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
 pub struct QueryDataVersionResponseHeader {
+    #[required]
     changed: bool,
 }
 

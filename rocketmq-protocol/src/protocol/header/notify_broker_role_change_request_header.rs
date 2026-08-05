@@ -22,16 +22,12 @@ use serde::Serialize;
 #[derive(Serialize, Deserialize, Debug, RequestHeaderCodecV2)]
 #[serde(rename_all = "camelCase")]
 pub struct NotifyBrokerRoleChangedRequestHeader {
-    #[required]
     pub master_address: Option<CheetahString>,
 
-    #[required]
     pub master_epoch: Option<i32>,
 
-    #[required]
     pub sync_state_set_epoch: Option<i32>,
 
-    #[required]
     pub master_broker_id: Option<u64>,
 }
 

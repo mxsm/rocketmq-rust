@@ -42,10 +42,10 @@ const FIELD_K: &str = "k";
 const FIELD_L: &str = "l";
 const FIELD_M: &str = "m";
 const FIELD_N: &str = "n";
-const FIELD_BROKER_NAME: &str = "brokerName";
-const FIELD_NAMESPACE: &str = "namespace";
-const FIELD_NAMESPACED: &str = "namespaced";
-const FIELD_ONEWAY: &str = "oneway";
+const FIELD_BROKER_NAME: &str = "bname";
+const FIELD_NAMESPACE: &str = "ns";
+const FIELD_NAMESPACED: &str = "nsd";
+const FIELD_ONEWAY: &str = "oway";
 const FIELD_LO: &str = "lo";
 
 const KEY_A: CheetahString = CheetahString::from_static_str(FIELD_A);
@@ -260,6 +260,7 @@ impl CommandCustomHeader for SendMessageRequestHeaderV2 {
         if let Some(v) = fields.get(&KEY_N) {
             self.n = Some(v.clone());
         }
+        self.topic_request_header = Some(<TopicRequestHeader as FromMap>::from(fields)?);
         Ok(())
     }
 
@@ -604,20 +605,21 @@ mod tests {
         let map = header.to_map().expect("header should encode");
         assert_eq!(map.get("n").map(CheetahString::as_str), Some("broker-a"));
         assert_eq!(map.get("lo").map(CheetahString::as_str), Some("true"));
-        assert_eq!(map.get("brokerName").map(CheetahString::as_str), Some("broker-a"));
-        assert_eq!(map.get("namespace").map(CheetahString::as_str), Some("ns-a"));
-        assert_eq!(map.get("namespaced").map(CheetahString::as_str), Some("true"));
-        assert_eq!(map.get("oneway").map(CheetahString::as_str), Some("true"));
+        assert_eq!(map.get("bname").map(CheetahString::as_str), Some("broker-a"));
+        assert_eq!(map.get("ns").map(CheetahString::as_str), Some("ns-a"));
+        assert_eq!(map.get("nsd").map(CheetahString::as_str), Some("true"));
+        assert_eq!(map.get("oway").map(CheetahString::as_str), Some("true"));
 
         let mut encoded = BytesMut::new();
         header.encode_fast(&mut encoded);
         let encoded = String::from_utf8_lossy(&encoded);
         assert!(encoded.contains("n"));
         assert!(encoded.contains("broker-a"));
-        assert!(encoded.contains("namespace"));
+        assert!(encoded.contains("bname"));
+        assert!(encoded.contains("ns"));
         assert!(encoded.contains("ns-a"));
-        assert!(encoded.contains("namespaced"));
-        assert!(encoded.contains("oneway"));
+        assert!(encoded.contains("nsd"));
+        assert!(encoded.contains("oway"));
         assert!(encoded.contains("lo"));
     }
 

@@ -1,0 +1,202 @@
+{
+  "schemaVersion": 1,
+  "contractVersion": "request-header-codec-v1",
+  "javaCommit": "2daf0e2ca91a1592d18235d43e5d709d1c35d15f",
+  "rustHistoricalCommit": "0c4722568a74987f7be51df12ec87dbfdc05fbba",
+  "schema": {
+    "file": "java-schema.json",
+    "sha256": "9f045244eed3ed6096cc87fae61c818cdb797d2a07fdc9fff097c5757b06322b",
+    "mappedHeaderCount": 143
+  },
+  "goldenIndex": {
+    "file": "golden/index.json",
+    "sha256": "08fbab786092d227fa6f4b4a6068578ea72416b7c97af2bff20275ea35e529fd",
+    "fixtureCount": 22
+  },
+  "goldenFiles": [
+    {
+      "id": "clean-controller-canonical-json",
+      "file": "golden/clean-controller-canonical-json.json",
+      "sha256": "9b181701742f4790e326d1e70c57a3ad80f7474d28d6ebf34cc500828e8108d6",
+      "frameLength": 268,
+      "fnv1a64": "32b1e46af361ba51"
+    },
+    {
+      "id": "clean-controller-canonical-rocketmq",
+      "file": "golden/clean-controller-canonical-rocketmq.json",
+      "sha256": "26ead24c96b206da2587bcec38b3dcfeb5433550dfacae7c954fea7fd19d1218",
+      "frameLength": 177,
+      "fnv1a64": "d93787e6f6bab89b"
+    },
+    {
+      "id": "consume-direct-collision-json",
+      "file": "golden/consume-direct-collision-json.json",
+      "sha256": "cf14288f2491a8ac3d6a43750dcf8d19c93e2ccdb65909bbe6315c9b30cd9f31",
+      "frameLength": 330,
+      "fnv1a64": "c58b9c837c62ffa1"
+    },
+    {
+      "id": "consume-direct-collision-rocketmq",
+      "file": "golden/consume-direct-collision-rocketmq.json",
+      "sha256": "87c7b2988ca30e6fe25b1998ce25ead2c99f93fe93d43eb70e52047a1160c749",
+      "frameLength": 240,
+      "fnv1a64": "dd64d3ce1d232c62"
+    },
+    {
+      "id": "consumer-status-inherited-json",
+      "file": "golden/consumer-status-inherited-json.json",
+      "sha256": "6329a50c537cf1e6ccb821fe0ad0a11d891ae8abaf1dcd56b041bb6d8ba66db1",
+      "frameLength": 260,
+      "fnv1a64": "12a21ec66d3ff5d6"
+    },
+    {
+      "id": "consumer-status-inherited-rocketmq",
+      "file": "golden/consumer-status-inherited-rocketmq.json",
+      "sha256": "ec52a1693bce8f0a9cbd4313b3f193d4bff36dce46c5d5c0eb5b49f37fae9b6c",
+      "frameLength": 170,
+      "fnv1a64": "9704096b4f5c2cee"
+    },
+    {
+      "id": "delete-topic-inherited-json",
+      "file": "golden/delete-topic-inherited-json.json",
+      "sha256": "17300e399d68faecf201517d89e5e44ca2504bfd33cdf0c502554e89e6be0304",
+      "frameLength": 242,
+      "fnv1a64": "e6248f1d0823a656"
+    },
+    {
+      "id": "delete-topic-inherited-rocketmq",
+      "file": "golden/delete-topic-inherited-rocketmq.json",
+      "sha256": "b7b12f58c601ea4e7c12afc0342135d03170487ffaed52d7a0106be8df1a568b",
+      "frameLength": 152,
+      "fnv1a64": "4b7acd505bd5f372"
+    },
+    {
+      "id": "get-lite-explicit-default-json",
+      "file": "golden/get-lite-explicit-default-json.json",
+      "sha256": "beae988b92bc74bda009e431e7d4d5f04d82a1f6e0cec57d959a94995c50b4f5",
+      "frameLength": 208,
+      "fnv1a64": "933b27ff23a2e023"
+    },
+    {
+      "id": "get-lite-explicit-default-rocketmq",
+      "file": "golden/get-lite-explicit-default-rocketmq.json",
+      "sha256": "021869671a9bd6e32ddc396e710c10d29c82b7ba09100188e89c45063ba6a4c0",
+      "frameLength": 115,
+      "fnv1a64": "3339e05ce02dfde8"
+    },
+    {
+      "id": "notification-defaults-json",
+      "file": "golden/notification-defaults-json.json",
+      "sha256": "02e72582b3984782423935bf6ccb4c9329af0648032d3c6651203edbb03fba81",
+      "frameLength": 414,
+      "fnv1a64": "f76c830795cf59f1"
+    },
+    {
+      "id": "notification-defaults-rocketmq",
+      "file": "golden/notification-defaults-rocketmq.json",
+      "sha256": "b9755150bc7e7ae47d3662b689f9c9b6c9abe0820e7948d89c8691a8e98e05cc",
+      "frameLength": 321,
+      "fnv1a64": "44b7a20bd4f58cc5"
+    },
+    {
+      "id": "pull-fast-inherited-json",
+      "file": "golden/pull-fast-inherited-json.json",
+      "sha256": "f21550353a88564360d95b02afd191865f856e3723fd5951538396f93675c79a",
+      "frameLength": 512,
+      "fnv1a64": "06e19d8a2c341fc1"
+    },
+    {
+      "id": "pull-fast-inherited-rocketmq",
+      "file": "golden/pull-fast-inherited-rocketmq.json",
+      "sha256": "6e889b3506d6add4f55796cd8cd330f14a85a17019e22c567d9e5556a3f44986",
+      "frameLength": 423,
+      "fnv1a64": "8cd6d4885da4e11e"
+    },
+    {
+      "id": "query-consume-queue-sparse-json",
+      "file": "golden/query-consume-queue-sparse-json.json",
+      "sha256": "3d4bfa080eb4ab0d012dc5d151be8ccbbf1227d8c0deda78bd970ddd5cf15422",
+      "frameLength": 277,
+      "fnv1a64": "27f92a2f7f650a8a"
+    },
+    {
+      "id": "query-consume-queue-sparse-rocketmq",
+      "file": "golden/query-consume-queue-sparse-rocketmq.json",
+      "sha256": "6b09bb37e76c86d7dba6f5a5f4bc315ab0e1936d9b3501df4080624e5466bdf6",
+      "frameLength": 187,
+      "fnv1a64": "5b6eb5baba68b423"
+    },
+    {
+      "id": "send-response-fast-json",
+      "file": "golden/send-response-fast-json.json",
+      "sha256": "cd64af5b91288ecff384880a4edd3cf0655328b33294469db22b4541f73f7b2b",
+      "frameLength": 267,
+      "fnv1a64": "121af834fa925d6c"
+    },
+    {
+      "id": "send-response-fast-rocketmq",
+      "file": "golden/send-response-fast-rocketmq.json",
+      "sha256": "3d1fd4e36bceec64b5d37cc98b1bf8ec59b73740e8fca26dc58efc5b1f3e2519",
+      "frameLength": 178,
+      "fnv1a64": "2a693c3b067e457e"
+    },
+    {
+      "id": "send-v1-fast-json",
+      "file": "golden/send-v1-fast-json.json",
+      "sha256": "33d1a03339f9c1fa3cc8b994f6036154bd708eee4d273662c6a87d45feda4dad",
+      "frameLength": 481,
+      "fnv1a64": "1669ba2ea82149cf"
+    },
+    {
+      "id": "send-v1-fast-rocketmq",
+      "file": "golden/send-v1-fast-rocketmq.json",
+      "sha256": "e43e13903b8a5208618f225bf79711c94dde0d508ee5c17cf80194fbdd681496",
+      "frameLength": 382,
+      "fnv1a64": "69d420ff02f6c292"
+    },
+    {
+      "id": "send-v2-fast-json",
+      "file": "golden/send-v2-fast-json.json",
+      "sha256": "51ab9021376e9256ad65d7a82883c9b74eddc3244315e77c7945a4bbd41917d0",
+      "frameLength": 373,
+      "fnv1a64": "d824f72829f19b60"
+    },
+    {
+      "id": "send-v2-fast-rocketmq",
+      "file": "golden/send-v2-fast-rocketmq.json",
+      "sha256": "d6e7f1d0d37aa211d9e4f73bb9b0553be7c6c47ea3b582485d4f4fdfa4617503",
+      "frameLength": 198,
+      "fnv1a64": "1d1a29ae2269b43a"
+    }
+  ],
+  "legacyEmptyHeaders": [
+    {
+      "id": "empty-header",
+      "rustTypeId": "rocketmq_protocol::protocol::header::empty_header::EmptyHeader",
+      "file": "rust-only/empty-header.json",
+      "sha256": "dbc04184b62c3f4b49a47ce8a44547ab507291135334b1761d419df30fe2b05e"
+    }
+  ],
+  "wirePolicies": {
+    "canonicalRpcKeys": [
+      "ns",
+      "nsd",
+      "bname",
+      "oway"
+    ],
+    "legacyRpcDecodeAliases": [
+      "namespace",
+      "namespaced",
+      "brokerName",
+      "oneway"
+    ],
+    "logicalMapEmpty": "preserve",
+    "jsonEmpty": "preserve",
+    "rocketmqBinaryEmpty": "normalize-to-absent",
+    "unknownFields": "ignore-after-envelope-limits",
+    "malformedInteger": "reject",
+    "malformedBoolean": "reject",
+    "requiredStringEmpty": "reject-before-encode",
+    "aliasConflict": "reviewed-prefer-canonical-only"
+  }
+}

@@ -781,6 +781,7 @@ impl ConsumerAdmin for DefaultMQAdminExtImpl {
             let request_header = GetConsumeStatsRequestHeader {
                 consumer_group,
                 topic: topic_str,
+                topic_list: None,
                 topic_request_header: None,
             };
             return self
@@ -803,6 +804,7 @@ impl ConsumerAdmin for DefaultMQAdminExtImpl {
                     let request_header = GetConsumeStatsRequestHeader {
                         consumer_group: consumer_group.clone(),
                         topic: topic_str.clone(),
+                        topic_list: None,
                         topic_request_header: None,
                     };
                     let cs = self

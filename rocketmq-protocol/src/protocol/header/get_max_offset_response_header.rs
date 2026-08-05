@@ -18,6 +18,7 @@ use serde::Serialize;
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
 pub struct GetMaxOffsetResponseHeader {
+    #[required]
     pub offset: i64,
 }
 

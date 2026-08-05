@@ -251,6 +251,7 @@ impl MQAdminReadExt for DefaultMQAdminExt {
                     GetConsumeStatsRequestHeader {
                         consumer_group,
                         topic,
+                        topic_list: None,
                         topic_request_header: None,
                     },
                     timeout,
@@ -276,6 +277,7 @@ impl MQAdminReadExt for DefaultMQAdminExt {
                             GetConsumeStatsRequestHeader {
                                 consumer_group: consumer_group.clone(),
                                 topic: topic.clone(),
+                                topic_list: None,
                                 topic_request_header: None,
                             },
                             timeout,

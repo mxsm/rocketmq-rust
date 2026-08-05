@@ -36,9 +36,14 @@ pub struct ConsumeMessageDirectlyResultRequestHeader {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use cheetah_string::CheetahString;
 
     use super::*;
+    use crate::protocol::command_custom_header::CommandCustomHeader;
+    use crate::protocol::command_custom_header::FromMap;
+    use crate::rpc::rpc_request_header::RpcRequestHeader;
 
     #[test]
     fn consume_message_directly_result_request_header_serializes_correctly() {
@@ -91,5 +96,43 @@ mod tests {
         let data = r#"{"consumerGroup":12345}"#;
         let result: Result<ConsumeMessageDirectlyResultRequestHeader, _> = serde_json::from_str(data);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn business_and_rpc_broker_names_do_not_collide() {
+        let header = ConsumeMessageDirectlyResultRequestHeader {
+            consumer_group: "group-a".into(),
+            broker_name: Some("outer".into()),
+            topic_request_header: Some(TopicRequestHeader {
+                rpc_request_header: Some(RpcRequestHeader {
+                    broker_name: Some("base".into()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let map = header.to_map().unwrap();
+        assert_eq!(map.get("brokerName").map(CheetahString::as_str), Some("outer"));
+        assert_eq!(map.get("bname").map(CheetahString::as_str), Some("base"));
+
+        let decoded = <ConsumeMessageDirectlyResultRequestHeader as FromMap>::from(&map).unwrap();
+        assert_eq!(decoded.broker_name.as_deref(), Some("outer"));
+        assert_eq!(
+            decoded
+                .topic_request_header
+                .and_then(|topic| topic.rpc_request_header)
+                .and_then(|rpc| rpc.broker_name)
+                .as_deref(),
+            Some("base")
+        );
+    }
+
+    #[test]
+    fn required_consumer_group_rejects_present_empty() {
+        let map = HashMap::from([(CheetahString::from_static_str("consumerGroup"), CheetahString::new())]);
+
+        assert!(<ConsumeMessageDirectlyResultRequestHeader as FromMap>::from(&map).is_err());
     }
 }

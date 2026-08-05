@@ -220,7 +220,7 @@ impl MQClientAPIImpl {
             } else {
                 Some(client_addr)
             },
-            rpc_request_header: None,
+            topic_request_header: None,
         };
         let request =
             RemotingCommand::create_request_command(RequestCode::InvokeBrokerToGetConsumerStatus, request_header);

@@ -54,12 +54,10 @@ pub struct RegisterBrokerRequestHeader {
     pub enable_acting_master: Option<bool>,
 
     /// Indicates whether the data is compressed.
-    #[required]
     pub compressed: bool,
 
     /// The CRC32 checksum for the message body.
     #[serde(rename = "bodyCrc32")]
-    #[required]
     pub body_crc32: u32,
 }
 

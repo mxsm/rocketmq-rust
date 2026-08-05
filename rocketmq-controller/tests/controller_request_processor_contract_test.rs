@@ -604,6 +604,7 @@ async fn controller_request_contract_alter_sync_state_set() {
                     broker_name: CheetahString::from_static_str(BROKER_NAME),
                     master_broker_id: seed.master_broker_id,
                     master_epoch: seed.master_epoch,
+                    invoke_time: 1,
                 },
             )
             .set_body(request_body),

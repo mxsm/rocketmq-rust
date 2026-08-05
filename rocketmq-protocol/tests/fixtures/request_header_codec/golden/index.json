@@ -1,0 +1,183 @@
+{
+  "schemaVersion": 1,
+  "javaCommit": "2daf0e2ca91a1592d18235d43e5d709d1c35d15f",
+  "fixtureCount": 22,
+  "fixtures": [
+    {
+      "id": "clean-controller-canonical-json",
+      "file": "clean-controller-canonical-json.json",
+      "rustTypeId": "rocketmq_protocol::protocol::header::controller::clean_broker_data_request_header::CleanBrokerDataRequestHeader",
+      "serializeType": "JSON",
+      "frameLength": 268,
+      "fnv1a64": "32b1e46af361ba51"
+    },
+    {
+      "id": "clean-controller-canonical-rocketmq",
+      "file": "clean-controller-canonical-rocketmq.json",
+      "rustTypeId": "rocketmq_protocol::protocol::header::controller::clean_broker_data_request_header::CleanBrokerDataRequestHeader",
+      "serializeType": "ROCKETMQ",
+      "frameLength": 177,
+      "fnv1a64": "d93787e6f6bab89b"
+    },
+    {
+      "id": "consume-direct-collision-json",
+      "file": "consume-direct-collision-json.json",
+      "rustTypeId": "rocketmq_protocol::protocol::header::consume_message_directly_result_request_header::ConsumeMessageDirectlyResultRequestHeader",
+      "serializeType": "JSON",
+      "frameLength": 330,
+      "fnv1a64": "c58b9c837c62ffa1"
+    },
+    {
+      "id": "consume-direct-collision-rocketmq",
+      "file": "consume-direct-collision-rocketmq.json",
+      "rustTypeId": "rocketmq_protocol::protocol::header::consume_message_directly_result_request_header::ConsumeMessageDirectlyResultRequestHeader",
+      "serializeType": "ROCKETMQ",
+      "frameLength": 240,
+      "fnv1a64": "dd64d3ce1d232c62"
+    },
+    {
+      "id": "consumer-status-inherited-json",
+      "file": "consumer-status-inherited-json.json",
+      "rustTypeId": "rocketmq_protocol::protocol::header::get_consumer_status_request_header::GetConsumerStatusRequestHeader",
+      "serializeType": "JSON",
+      "frameLength": 260,
+      "fnv1a64": "12a21ec66d3ff5d6"
+    },
+    {
+      "id": "consumer-status-inherited-rocketmq",
+      "file": "consumer-status-inherited-rocketmq.json",
+      "rustTypeId": "rocketmq_protocol::protocol::header::get_consumer_status_request_header::GetConsumerStatusRequestHeader",
+      "serializeType": "ROCKETMQ",
+      "frameLength": 170,
+      "fnv1a64": "9704096b4f5c2cee"
+    },
+    {
+      "id": "delete-topic-inherited-json",
+      "file": "delete-topic-inherited-json.json",
+      "rustTypeId": "rocketmq_protocol::protocol::header::namesrv::topic_operation_header::DeleteTopicFromNamesrvRequestHeader",
+      "serializeType": "JSON",
+      "frameLength": 242,
+      "fnv1a64": "e6248f1d0823a656"
+    },
+    {
+      "id": "delete-topic-inherited-rocketmq",
+      "file": "delete-topic-inherited-rocketmq.json",
+      "rustTypeId": "rocketmq_protocol::protocol::header::namesrv::topic_operation_header::DeleteTopicFromNamesrvRequestHeader",
+      "serializeType": "ROCKETMQ",
+      "frameLength": 152,
+      "fnv1a64": "4b7acd505bd5f372"
+    },
+    {
+      "id": "get-lite-explicit-default-json",
+      "file": "get-lite-explicit-default-json.json",
+      "rustTypeId": "rocketmq_protocol::protocol::header::get_lite_client_info_request_header::GetLiteClientInfoRequestHeader",
+      "serializeType": "JSON",
+      "frameLength": 208,
+      "fnv1a64": "933b27ff23a2e023"
+    },
+    {
+      "id": "get-lite-explicit-default-rocketmq",
+      "file": "get-lite-explicit-default-rocketmq.json",
+      "rustTypeId": "rocketmq_protocol::protocol::header::get_lite_client_info_request_header::GetLiteClientInfoRequestHeader",
+      "serializeType": "ROCKETMQ",
+      "frameLength": 115,
+      "fnv1a64": "3339e05ce02dfde8"
+    },
+    {
+      "id": "notification-defaults-json",
+      "file": "notification-defaults-json.json",
+      "rustTypeId": "rocketmq_protocol::protocol::header::notification_request_header::NotificationRequestHeader",
+      "serializeType": "JSON",
+      "frameLength": 414,
+      "fnv1a64": "f76c830795cf59f1"
+    },
+    {
+      "id": "notification-defaults-rocketmq",
+      "file": "notification-defaults-rocketmq.json",
+      "rustTypeId": "rocketmq_protocol::protocol::header::notification_request_header::NotificationRequestHeader",
+      "serializeType": "ROCKETMQ",
+      "frameLength": 321,
+      "fnv1a64": "44b7a20bd4f58cc5"
+    },
+    {
+      "id": "pull-fast-inherited-json",
+      "file": "pull-fast-inherited-json.json",
+      "rustTypeId": "rocketmq_protocol::protocol::header::pull_message_request_header::PullMessageRequestHeader",
+      "serializeType": "JSON",
+      "frameLength": 512,
+      "fnv1a64": "06e19d8a2c341fc1"
+    },
+    {
+      "id": "pull-fast-inherited-rocketmq",
+      "file": "pull-fast-inherited-rocketmq.json",
+      "rustTypeId": "rocketmq_protocol::protocol::header::pull_message_request_header::PullMessageRequestHeader",
+      "serializeType": "ROCKETMQ",
+      "frameLength": 423,
+      "fnv1a64": "8cd6d4885da4e11e"
+    },
+    {
+      "id": "query-consume-queue-sparse-json",
+      "file": "query-consume-queue-sparse-json.json",
+      "rustTypeId": "rocketmq_protocol::protocol::header::query_consume_queue_request_header::QueryConsumeQueueRequestHeader",
+      "serializeType": "JSON",
+      "frameLength": 277,
+      "fnv1a64": "27f92a2f7f650a8a"
+    },
+    {
+      "id": "query-consume-queue-sparse-rocketmq",
+      "file": "query-consume-queue-sparse-rocketmq.json",
+      "rustTypeId": "rocketmq_protocol::protocol::header::query_consume_queue_request_header::QueryConsumeQueueRequestHeader",
+      "serializeType": "ROCKETMQ",
+      "frameLength": 187,
+      "fnv1a64": "5b6eb5baba68b423"
+    },
+    {
+      "id": "send-response-fast-json",
+      "file": "send-response-fast-json.json",
+      "rustTypeId": "rocketmq_protocol::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader",
+      "serializeType": "JSON",
+      "frameLength": 267,
+      "fnv1a64": "121af834fa925d6c"
+    },
+    {
+      "id": "send-response-fast-rocketmq",
+      "file": "send-response-fast-rocketmq.json",
+      "rustTypeId": "rocketmq_protocol::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader",
+      "serializeType": "ROCKETMQ",
+      "frameLength": 178,
+      "fnv1a64": "2a693c3b067e457e"
+    },
+    {
+      "id": "send-v1-fast-json",
+      "file": "send-v1-fast-json.json",
+      "rustTypeId": "rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader",
+      "serializeType": "JSON",
+      "frameLength": 481,
+      "fnv1a64": "1669ba2ea82149cf"
+    },
+    {
+      "id": "send-v1-fast-rocketmq",
+      "file": "send-v1-fast-rocketmq.json",
+      "rustTypeId": "rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader",
+      "serializeType": "ROCKETMQ",
+      "frameLength": 382,
+      "fnv1a64": "69d420ff02f6c292"
+    },
+    {
+      "id": "send-v2-fast-json",
+      "file": "send-v2-fast-json.json",
+      "rustTypeId": "rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2",
+      "serializeType": "JSON",
+      "frameLength": 373,
+      "fnv1a64": "d824f72829f19b60"
+    },
+    {
+      "id": "send-v2-fast-rocketmq",
+      "file": "send-v2-fast-rocketmq.json",
+      "rustTypeId": "rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2",
+      "serializeType": "ROCKETMQ",
+      "frameLength": 198,
+      "fnv1a64": "1d1a29ae2269b43a"
+    }
+  ]
+}
