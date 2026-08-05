@@ -47,6 +47,27 @@
     "model_provider_network_calls": false,
     "production_certified": false
   },
+  "r2_live_qualification": {
+    "manifest": "rocketmq-sre/config/qualification/r2-actions.v1.json",
+    "script": "rocketmq-sre/scripts/r2-action-live-qualification.ps1",
+    "checker": "rocketmq-sre/scripts/check_r2_action_qualification.py",
+    "actions": 5,
+    "required_outcomes_per_action": 12,
+    "model_provider_network_calls": false,
+    "unattended_execution": false,
+    "production_certified": false
+  },
+  "autonomy_live_qualification": {
+    "manifest": "rocketmq-sre/config/qualification/autonomy-actions.v1.json",
+    "script": "rocketmq-sre/scripts/autonomy-action-live-qualification.ps1",
+    "checker": "rocketmq-sre/scripts/check_autonomy_action_qualification.py",
+    "actions": 4,
+    "required_outcomes_per_action": 16,
+    "live_mode_ceiling": "supervised",
+    "unattended_autonomous_execution": false,
+    "model_provider_network_calls": false,
+    "production_certified": false
+  },
   "controlled_actions": [
     {
       "id": "observability.logger_level_ttl.v1",
@@ -116,7 +137,7 @@
       "descriptor": "rocketmq-sre/config/actions/broker.config.patch_allowlisted.v1.yaml",
       "precheck_test": "rocketmq-sre/crates/rocketmq-sre-execution-agent/src/drivers/broker_config_patch_tests.rs",
       "disposable_cluster_smoke": "rocketmq-sre/scripts/phase03-broker-cas-smoke.ps1",
-      "qualification": "contract_tested"
+      "qualification": "disposable_cluster_smoke_passed"
     },
     {
       "id": "topic.config.patch_allowlisted.v1",
@@ -130,7 +151,7 @@
       "descriptor": "rocketmq-sre/config/actions/topic.config.patch_allowlisted.v1.yaml",
       "precheck_test": "rocketmq-sre/crates/rocketmq-sre-execution-agent/src/drivers/topic_config_patch_tests.rs",
       "disposable_cluster_smoke": "rocketmq-sre/scripts/phase03-topic-cas-smoke.ps1",
-      "qualification": "contract_tested"
+      "qualification": "disposable_cluster_smoke_passed"
     },
     {
       "id": "subscription_group.patch_allowlisted.v1",
@@ -144,7 +165,7 @@
       "descriptor": "rocketmq-sre/config/actions/subscription_group.patch_allowlisted.v1.yaml",
       "precheck_test": "rocketmq-sre/crates/rocketmq-sre-execution-agent/src/drivers/subscription_group_patch_tests.rs",
       "disposable_cluster_smoke": "rocketmq-sre/scripts/phase03-subscription-group-cas-smoke.ps1",
-      "qualification": "contract_tested"
+      "qualification": "disposable_cluster_smoke_passed"
     },
     {
       "id": "proxy.rollout_image_canary.v1",
@@ -158,7 +179,7 @@
       "descriptor": "rocketmq-sre/config/actions/proxy.rollout_image_canary.v1.yaml",
       "precheck_test": "rocketmq-sre/crates/rocketmq-sre-execution-agent/src/drivers/proxy_image_canary_tests.rs",
       "disposable_cluster_smoke": "rocketmq-sre/scripts/phase03-proxy-image-canary-smoke.ps1",
-      "qualification": "contract_tested"
+      "qualification": "disposable_cluster_smoke_passed"
     },
     {
       "id": "security.credential_rotate_overlap.v1",
@@ -172,7 +193,7 @@
       "descriptor": "rocketmq-sre/config/actions/security.credential_rotate_overlap.v1.yaml",
       "precheck_test": "rocketmq-sre/crates/rocketmq-sre-execution-agent/src/drivers/credential_rotation_tests.rs",
       "disposable_cluster_smoke": "rocketmq-sre/scripts/phase03-credential-supervised-e2e.ps1",
-      "qualification": "contract_tested"
+      "qualification": "disposable_cluster_smoke_passed"
     }
   ],
   "r2_authorization": {

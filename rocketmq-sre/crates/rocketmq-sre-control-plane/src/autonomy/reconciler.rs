@@ -59,6 +59,12 @@ impl AutonomyPauseReconciler {
                AND lifecycle.action_version = outcome.action_version
              WHERE outcome.outcome_class = 'autonomous_execution_failure'
                AND lifecycle.mode <> 'paused'
+               AND NOT EXISTS (
+                   SELECT 1
+                   FROM autonomy_outbox AS pause_event
+                   WHERE pause_event.outcome_id = outcome.id
+                     AND pause_event.event_kind = 'autonomy_paused'
+               )
              ORDER BY outcome.reconciled_at, outcome.sequence_id
              LIMIT $1",
         )

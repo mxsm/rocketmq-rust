@@ -1538,7 +1538,7 @@ impl PostgresRepository {
                         .map_err(|_| invalid_request("lifecycle revision is too large"))?,
                 )
                 .bind(actor)
-                .bind(effective.reconciled_at)
+                .bind(pause_at)
                 .execute(&mut *transaction)
                 .await?;
                 insert_lifecycle_event(

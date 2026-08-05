@@ -492,7 +492,7 @@ async fn postgres_pause_reconciler_repairs_a_dropped_failure_event_once() {
     .bind(fixture.cluster_id.as_uuid())
     .bind(ExecutionAction::ObservabilityLoggerLevelTtl.id())
     .bind(&stored.action_version)
-    .bind(now + Duration::seconds(1))
+    .bind(now + Duration::seconds(10))
     .execute(&repository.pool)
     .await
     .expect("simulate an autonomous lifecycle");
@@ -560,6 +560,7 @@ async fn postgres_pause_reconciler_repairs_a_dropped_failure_event_once() {
         .expect("reconciled scope");
     assert_eq!(scope.lifecycle.mode, AutonomyMode::Paused);
     assert_eq!(scope.lifecycle.previous_mode, Some(AutonomyMode::Autonomous));
+    assert_eq!(scope.lifecycle.updated_at, now + Duration::seconds(10));
     let pause_events: i64 = sqlx::query_scalar(
         "SELECT COUNT(*)
          FROM autonomy_outbox
@@ -571,9 +572,39 @@ async fn postgres_pause_reconciler_repairs_a_dropped_failure_event_once() {
     .expect("pause outbox count");
     assert_eq!(pause_events, 1);
 
+    sqlx::query(
+        "UPDATE autonomy_lifecycle_states
+         SET mode = 'supervised',
+             previous_mode = NULL,
+             pause_reason = NULL,
+             lifecycle_revision = lifecycle_revision + 1,
+             updated_by = 'repository-test-human-recovery',
+             updated_at = $5
+         WHERE tenant_id = $1 AND cluster_id = $2
+           AND action_id = $3 AND action_version = $4",
+    )
+    .bind(fixture.tenant_id.as_uuid())
+    .bind(fixture.cluster_id.as_uuid())
+    .bind(ExecutionAction::ObservabilityLoggerLevelTtl.id())
+    .bind(&outcome.action_version)
+    .bind(now + Duration::seconds(11))
+    .execute(&repository.pool)
+    .await
+    .expect("simulate a human recovery after the repaired pause");
+
     let retry = reconciler.run_once().await.expect("idempotent reconciliation");
     assert_eq!(retry.candidates, 0);
     assert_eq!(retry.repaired, 0);
+    let recovered_scope = repository
+        .autonomy_scope(
+            fixture.tenant_id,
+            fixture.cluster_id,
+            ExecutionAction::ObservabilityLoggerLevelTtl,
+            &outcome.action_version,
+        )
+        .await
+        .expect("recovered scope");
+    assert_eq!(recovered_scope.lifecycle.mode, AutonomyMode::Supervised);
     let pause_events_after_retry: i64 = sqlx::query_scalar(
         "SELECT COUNT(*)
          FROM autonomy_outbox

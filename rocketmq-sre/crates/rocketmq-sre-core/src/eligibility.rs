@@ -457,4 +457,43 @@ mod tests {
             assert!(!EligibilityEngine::evaluate_dynamic_safety(denied).allowed);
         }
     }
+
+    #[test]
+    fn base_eligibility_fails_closed_for_stale_or_partial_evidence() {
+        let (policy, lifecycle, descriptor) = fixture();
+        for (facts, reason) in [
+            (
+                BaseEligibilityFacts {
+                    evidence_complete: false,
+                    ..allow_base()
+                },
+                "evidence_incomplete",
+            ),
+            (
+                BaseEligibilityFacts {
+                    evidence_fresh: false,
+                    ..allow_base()
+                },
+                "evidence_stale",
+            ),
+            (
+                BaseEligibilityFacts {
+                    required_sources_present: false,
+                    ..allow_base()
+                },
+                "evidence_incomplete",
+            ),
+        ] {
+            let denied = EligibilityEngine::evaluate_base(
+                AutonomyCandidatePath::Autonomous,
+                &policy,
+                &lifecycle,
+                &descriptor,
+                &facts,
+                chrono::Utc::now(),
+            );
+            assert!(!denied.allowed);
+            assert!(denied.reason_codes.contains(&reason.to_owned()));
+        }
+    }
 }
