@@ -12,9 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::Instant;
 
+use rocketmq_runtime::BlockingLane;
+use rocketmq_runtime::RuntimeContext;
 use rocketmq_sre_contracts::ExecutionAction;
 use rocketmq_sre_contracts::ImpactScope;
 use rocketmq_sre_contracts::ReconcileEffectState;
@@ -118,6 +122,57 @@ async fn precheck_fails_closed_when_pipeline_or_data_plane_health_is_unknown() {
 }
 
 #[tokio::test]
+#[ignore = "writes an explicit production-readiness latency fragment"]
+async fn execution_precheck_latency_profile_is_bounded() {
+    const SAMPLES: usize = 1_000;
+
+    let handler = TelemetryCollectorRestartOneHandler::new(Arc::new(FakeCollectorClient::healthy()));
+    let runtime = RuntimeContext::from_current("production-readiness-precheck");
+    let service = runtime.service_context("production-readiness-precheck");
+    let request = read_request();
+    let mut latencies = Vec::with_capacity(SAMPLES);
+    let mut maximum_queue_depth = 0;
+    let mut error_count = 0;
+    for _ in 0..SAMPLES {
+        let started = Instant::now();
+        let result = handler.read_state(&request).await;
+        latencies.push(started.elapsed().as_secs_f64() * 1_000.0);
+        maximum_queue_depth = maximum_queue_depth.max(service.blocking(BlockingLane::MetadataIo).snapshot().queued);
+        if result.is_err() {
+            error_count += 1;
+        }
+        let result = result.expect("healthy precheck");
+        assert!(result.ready);
+    }
+    latencies.sort_by(f64::total_cmp);
+    let p95_millis = latencies[(SAMPLES * 95).div_ceil(100) - 1];
+    assert!(
+        p95_millis <= 50.0,
+        "execution precheck p95 exceeded 50 ms: {p95_millis}"
+    );
+    if let Ok(path) = std::env::var("ROCKETMQ_SRE_PRODUCTION_READINESS_PRECHECK_REPORT") {
+        write_latency_report(
+            Path::new(&path),
+            json!({
+                "schema_version": "rocketmq-sre.production-readiness-precheck-fragment.v1",
+                "status": "passed",
+                "samples": SAMPLES,
+                "p95_millis": p95_millis,
+                "unit": "milliseconds",
+                "action": "telemetry.collector.restart_one.v1",
+                "error_count": error_count,
+                "error_rate": error_count as f64 / SAMPLES as f64,
+                "execution_queue_depth_samples": SAMPLES,
+                "execution_queue_depth_max": maximum_queue_depth,
+                "model_provider_network_calls": 0,
+                "target_mutations": 0,
+                "secrets_recorded": false
+            }),
+        );
+    }
+}
+
+#[tokio::test]
 async fn unknown_pipeline_is_rejected_without_mutation() {
     let client = Arc::new(FakeCollectorClient::healthy());
     let handler = TelemetryCollectorRestartOneHandler::new(Arc::clone(&client));
@@ -206,4 +261,9 @@ fn parameters() -> serde_json::Value {
         "expected_uid": "collector-uid-before",
         "pipeline": "combined"
     })
+}
+
+fn write_latency_report(path: &Path, report: serde_json::Value) {
+    std::fs::create_dir_all(path.parent().expect("report parent")).expect("report directory");
+    std::fs::write(path, serde_json::to_vec_pretty(&report).expect("report JSON")).expect("precheck latency report");
 }

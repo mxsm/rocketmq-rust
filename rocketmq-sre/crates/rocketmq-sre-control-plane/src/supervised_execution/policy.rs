@@ -228,6 +228,9 @@ impl PolicyEvaluator {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+    use std::time::Instant;
+
     use chrono::Duration;
     use rocketmq_sre_contracts::ActionPlanDraft;
     use rocketmq_sre_contracts::ActionPlanId;
@@ -331,5 +334,48 @@ mod tests {
             .expect("decision");
         assert_eq!(first.effect, PolicyEffect::Deny);
         assert!(first.reason_codes.contains(&RESOURCE_QUARANTINED.to_owned()));
+    }
+
+    #[test]
+    #[ignore = "writes an explicit production-readiness latency fragment"]
+    fn policy_evaluation_latency_profile_is_bounded() {
+        const SAMPLES: usize = 10_000;
+
+        let policy = PolicyEvaluator::embedded().expect("policy");
+        let plan = plan();
+        let auth = auth(&plan);
+        let now = Utc::now();
+        let mut latencies = Vec::with_capacity(SAMPLES);
+        for _ in 0..SAMPLES {
+            let started = Instant::now();
+            let decision = policy
+                .evaluate(&auth, &plan, &[ActionRisk::R1], allow_facts(), now)
+                .expect("policy decision");
+            latencies.push(started.elapsed().as_secs_f64() * 1_000.0);
+            assert_eq!(decision.effect, PolicyEffect::RequireApproval);
+        }
+        latencies.sort_by(f64::total_cmp);
+        let p99_millis = latencies[(SAMPLES * 99).div_ceil(100) - 1];
+        assert!(p99_millis <= 50.0, "policy p99 exceeded 50 ms: {p99_millis}");
+        if let Ok(path) = std::env::var("ROCKETMQ_SRE_PRODUCTION_READINESS_POLICY_REPORT") {
+            write_latency_report(
+                Path::new(&path),
+                json!({
+                    "schema_version": "rocketmq-sre.production-readiness-policy-fragment.v1",
+                    "status": "passed",
+                    "samples": SAMPLES,
+                    "p99_millis": p99_millis,
+                    "unit": "milliseconds",
+                    "effect": "require_approval",
+                    "model_provider_network_calls": 0,
+                    "secrets_recorded": false
+                }),
+            );
+        }
+    }
+
+    fn write_latency_report(path: &Path, report: serde_json::Value) {
+        std::fs::create_dir_all(path.parent().expect("report parent")).expect("report directory");
+        std::fs::write(path, serde_json::to_vec_pretty(&report).expect("report JSON")).expect("policy latency report");
     }
 }

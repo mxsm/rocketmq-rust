@@ -71,6 +71,18 @@ $faultMatrix = Read-Evidence $faultMatrixPath 'fault-matrix evidence'
 $postgres = Read-Evidence $postgresPath 'PostgreSQL HA evidence'
 $objectRecovery = Read-Evidence $objectPath 'object recovery evidence'
 $controlPlane = Read-Evidence $controlPlanePath 'Control Plane restore evidence'
+$revision = (& git -C (Split-Path -Parent $PSScriptRoot) rev-parse HEAD).Trim()
+if ($LASTEXITCODE -ne 0 -or $revision -notmatch '^[0-9a-f]{40}$') {
+    throw 'Unable to resolve the qualification revision.'
+}
+if (
+    [string]$faultMatrix.candidate_commit -ne $revision -or
+    [string]$postgres.revision -ne $revision -or
+    [string]$objectRecovery.revision -ne $revision -or
+    [string]$controlPlane.revision -ne $revision
+) {
+    throw 'Disaster-recovery source evidence must match the qualification revision.'
+}
 Assert-Passed $postgres 'PostgreSQL HA exercise'
 Assert-Passed $objectRecovery 'object recovery exercise'
 Assert-Passed $controlPlane 'Control Plane restore exercise'
@@ -137,10 +149,6 @@ if (-not [bool]$controlPlane.restore_verified -or
     throw 'Control Plane restore evidence is incomplete or violates RPO=0.'
 }
 
-$revision = (& git -C (Split-Path -Parent $PSScriptRoot) rev-parse HEAD).Trim()
-if ($LASTEXITCODE -ne 0 -or $revision -notmatch '^[0-9a-f]{40}$') {
-    throw 'Unable to resolve the qualification revision.'
-}
 $evidence = [ordered]@{
     schema_version = 'rocketmq-sre.disaster-recovery-qualification.v1'
     status = 'passed'
