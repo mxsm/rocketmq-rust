@@ -142,6 +142,8 @@ mod tests {
             attempt_id: None,
             exp_type: None,
             exp: None,
+            is_lite_consumer: false,
+            client_id: None,
             poll_time: 1234567890,
             topic_request_header: None,
         };

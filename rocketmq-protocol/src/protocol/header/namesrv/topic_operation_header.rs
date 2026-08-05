@@ -25,6 +25,8 @@ pub struct DeleteTopicFromNamesrvRequestHeader {
     #[required]
     pub topic: CheetahString,
     pub cluster_name: Option<CheetahString>,
+    #[serde(flatten)]
+    pub topic_request: Option<TopicRequestHeader>,
 }
 
 impl DeleteTopicFromNamesrvRequestHeader {
@@ -32,6 +34,7 @@ impl DeleteTopicFromNamesrvRequestHeader {
         Self {
             topic: topic.into(),
             cluster_name: cluster_name.map(|s| s.into()),
+            topic_request: None,
         }
     }
 }

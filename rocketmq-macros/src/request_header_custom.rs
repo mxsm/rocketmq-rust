@@ -282,6 +282,7 @@ struct FieldMetadata {
     is_required: bool,
     wire_key: String,
     aliases: Vec<String>,
+    default_path: Option<syn::Path>,
     type_category: TypeCategory,
 }
 
@@ -304,6 +305,7 @@ impl FieldMetadata {
         let mut is_flatten = false;
         let mut wire_key = snake_to_camel_case(&ident.to_string());
         let mut aliases = Vec::new();
+        let mut default_path = None;
 
         for attr in &field.attrs {
             if let Some(id) = attr.path().get_ident() {
@@ -329,6 +331,12 @@ impl FieldMetadata {
                             if alias != wire_key && !aliases.iter().any(|existing| existing == &alias) {
                                 aliases.push(alias);
                             }
+                            return Ok(());
+                        }
+                        if meta.path.is_ident("default") && !meta.input.is_empty() {
+                            let value = meta.value()?;
+                            let lit: syn::LitStr = value.parse()?;
+                            default_path = lit.parse::<syn::Path>().ok();
                             return Ok(());
                         }
                         Ok(())
@@ -363,6 +371,7 @@ impl FieldMetadata {
             is_required,
             wire_key,
             aliases,
+            default_path,
             type_category,
         }
     }
@@ -475,9 +484,14 @@ impl FieldMetadata {
             .collect();
 
         Some(quote! {
-            #key_lit #( | #alias_lits )* => {
+            #key_lit => {
                 #local_ident = Some(v.clone());
             }
+            #( #alias_lits => {
+                if #local_ident.is_none() {
+                    #local_ident = Some(v.clone());
+                }
+            } )*
         })
     }
 
@@ -562,10 +576,17 @@ impl FieldMetadata {
             // Primitive (optional with default)
             (TypeCategory::Primitive, false, false) => {
                 let ty = &self.ty;
+                let missing_value = self
+                    .default_path
+                    .as_ref()
+                    .map_or_else(|| quote! { <#ty as Default>::default() }, |path| quote! { #path() });
+                let parse_error = format!("Parse {} field error", self.wire_key);
                 quote! {
-                    #field_ident: #local_ident
-                        .and_then(|s| s.as_str().parse::<#ty>().ok())
-                        .unwrap_or_default(),
+                    #field_ident: match #local_ident {
+                        Some(s) => s.as_str().parse::<#ty>()
+                            .map_err(|_| rocketmq_error::RocketMQError::request_header_error(#parse_error.to_string()))?,
+                        None => #missing_value,
+                    },
                 }
             }
         }
@@ -575,6 +596,19 @@ impl FieldMetadata {
 pub(super) fn request_header_codec_inner_v2(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let struct_name = &input.ident;
+    let mut validation_method = None;
+    for attr in &input.attrs {
+        if attr.path().is_ident("request_header") {
+            let _ = attr.parse_nested_meta(|meta| {
+                if meta.path.is_ident("validate") {
+                    let value = meta.value()?;
+                    let lit: syn::LitStr = value.parse()?;
+                    validation_method = lit.parse::<syn::Ident>().ok();
+                }
+                Ok(())
+            });
+        }
+    }
 
     // Extract named fields
     let fields = match input.data {
@@ -601,6 +635,41 @@ pub(super) fn request_header_codec_inner_v2(input: proc_macro::TokenStream) -> p
     let match_arms: Vec<_> = field_metas.iter().filter_map(|m| m.gen_match_arm()).collect();
 
     let construct_fields: Vec<_> = field_metas.iter().map(|m| m.gen_field_construct()).collect();
+    let required_string_checks: Vec<_> = field_metas
+        .iter()
+        .filter(|meta| {
+            meta.is_required
+                && meta.inner_type.is_none()
+                && matches!(meta.type_category, TypeCategory::CheetahString | TypeCategory::String)
+        })
+        .map(|meta| {
+            let field = &meta.ident;
+            let key = syn::LitStr::new(&meta.wire_key, Span::call_site());
+            quote! {
+                if self.#field.is_empty() {
+                    return Err(rocketmq_error::RocketMQError::request_header_error(
+                        format!("Required header field {} must not be empty", #key),
+                    ));
+                }
+            }
+        })
+        .collect();
+    let custom_validation = validation_method.map(|method| {
+        quote! {
+            self.#method()?;
+        }
+    });
+    let check_fields_impl = if required_string_checks.is_empty() && custom_validation.is_none() {
+        quote! {}
+    } else {
+        quote! {
+            fn check_fields(&self) -> rocketmq_error::RocketMQResult<()> {
+                #(#required_string_checks)*
+                #custom_validation
+                Ok(())
+            }
+        }
+    };
 
     // Generate final implementation
     let expanded = quote! {
@@ -609,6 +678,8 @@ pub(super) fn request_header_codec_inner_v2(input: proc_macro::TokenStream) -> p
         }
 
         impl crate::protocol::command_custom_header::CommandCustomHeader for #struct_name {
+            #check_fields_impl
+
             fn to_map(&self) -> Option<std::collections::HashMap<cheetah_string::CheetahString, cheetah_string::CheetahString>> {
                 // Pre-allocate with exact capacity to avoid rehashing
                 let mut map = std::collections::HashMap::with_capacity(#fields_count);
@@ -636,10 +707,12 @@ pub(super) fn request_header_codec_inner_v2(input: proc_macro::TokenStream) -> p
                     }
                 }
 
-                // Construct struct with validation
-                Ok(#struct_name {
+                // Construct the complete object before applying Java-compatible validation.
+                let header = #struct_name {
                     #(#construct_fields)*
-                })
+                };
+                crate::protocol::command_custom_header::CommandCustomHeader::check_fields(&header)?;
+                Ok(header)
             }
         }
     };

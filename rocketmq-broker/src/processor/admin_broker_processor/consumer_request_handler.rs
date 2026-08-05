@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 
 use crate::config::config_manager::ConfigManager;
+use cheetah_string::CheetahString;
 use rocketmq_model::common::broker::broker_role::BrokerRole;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_model::common::mq_version::RocketMqVersion;
@@ -119,12 +120,14 @@ impl ConsumerRequestHandler {
         let request_header =
             request.decode_required_header::<GetConsumeStatsRequestHeader>("decode consume-stats request header")?;
         let mut consume_stats = ConsumeStats::new();
-        let mut topics = HashSet::new();
-        if request_header.get_topic().is_empty() {
+        let topic_list = request_header.fetch_topic_list();
+        let topic_list_provided = !topic_list.is_empty();
+        let mut topics: HashSet<CheetahString> = topic_list.into_iter().collect();
+        if !topic_list_provided && request_header.get_topic().is_empty() {
             topics = broker_runtime_inner
                 .consumer_offset_manager()
                 .which_topic_by_consumer(request_header.get_consumer_group());
-        } else {
+        } else if !topic_list_provided {
             topics.insert(request_header.get_topic().clone());
         }
         for topic in topics.iter() {
@@ -145,7 +148,8 @@ impl ConsumerRequestHandler {
                 .consumer_manager()
                 .find_subscription_data(request_header.get_consumer_group(), topic);
 
-            if find_subscription_data.is_none()
+            if !topic_list_provided
+                && find_subscription_data.is_none()
                 && broker_runtime_inner
                     .consumer_manager()
                     .find_subscription_data_count(request_header.get_consumer_group())

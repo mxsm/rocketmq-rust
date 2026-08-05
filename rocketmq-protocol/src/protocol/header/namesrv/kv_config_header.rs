@@ -70,7 +70,6 @@ impl GetKVConfigRequestHeader {
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
 pub struct GetKVConfigResponseHeader {
-    #[required]
     pub value: Option<CheetahString>,
 }
 

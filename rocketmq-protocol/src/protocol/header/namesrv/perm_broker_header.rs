@@ -35,6 +35,7 @@ impl WipeWritePermOfBrokerRequestHeader {
 #[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
 #[serde(rename_all = "camelCase")]
 pub struct WipeWritePermOfBrokerResponseHeader {
+    #[required]
     pub wipe_topic_count: i32,
 }
 
@@ -51,6 +52,7 @@ impl WipeWritePermOfBrokerResponseHeader {
 #[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
 #[serde(rename_all = "camelCase")]
 pub struct AddWritePermOfBrokerRequestHeader {
+    #[required]
     pub broker_name: CheetahString,
 }
 
@@ -65,6 +67,7 @@ impl AddWritePermOfBrokerRequestHeader {
 #[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
 #[serde(rename_all = "camelCase")]
 pub struct AddWritePermOfBrokerResponseHeader {
+    #[required]
     pub add_topic_count: i32,
 }
 

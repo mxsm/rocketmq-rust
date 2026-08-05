@@ -513,7 +513,10 @@ mod tests {
     fn generation_is_bound_to_the_same_allowlisted_response_body() {
         let mut response = RemotingCommand::create_response_command()
             .set_code(ResponseCode::Success)
-            .set_command_custom_header(GetBrokerConfigResponseHeader { config_generation: 7 })
+            .set_command_custom_header(GetBrokerConfigResponseHeader {
+                version: Some("{\"stateVersion\":0,\"timestamp\":6,\"counter\":7}".into()),
+                config_generation: 7,
+            })
             .set_body("sendMessageThreadPoolNums=32\naccessKey=must-not-escape");
         response.make_custom_header_to_net();
 

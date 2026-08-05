@@ -710,7 +710,7 @@ mod tests {
                 index: 0,
                 count: 1,
                 consumer_group: Some(CheetahString::from_static_str("group-a")),
-                rpc: None,
+                topic_request_header: None,
             },
         );
         request.make_custom_header_to_net();

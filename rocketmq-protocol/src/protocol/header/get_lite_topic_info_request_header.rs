@@ -20,10 +20,8 @@ use serde::Serialize;
 #[derive(Clone, Debug, Serialize, Deserialize, RequestHeaderCodecV2)]
 #[serde(rename_all = "camelCase")]
 pub struct GetLiteTopicInfoRequestHeader {
-    #[required]
     pub parent_topic: CheetahString,
 
-    #[required]
     pub lite_topic: CheetahString,
 }
 

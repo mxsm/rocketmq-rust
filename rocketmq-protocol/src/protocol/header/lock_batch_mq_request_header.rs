@@ -49,11 +49,10 @@ mod tests {
 
         let json_str = serde_json::to_string(&header).unwrap();
 
-        // Verify the serialized JSON contains expected fields with camelCase naming
-        assert!(json_str.contains("\"namespace\":\"some_value\""));
-        assert!(json_str.contains("\"namespaced\":true"));
-        assert!(json_str.contains("\"brokerName\":\"brokerName\""));
-        assert!(json_str.contains("\"oneway\":true"));
+        assert!(json_str.contains("\"ns\":\"some_value\""));
+        assert!(json_str.contains("\"nsd\":true"));
+        assert!(json_str.contains("\"bname\":\"brokerName\""));
+        assert!(json_str.contains("\"oway\":true"));
     }
 
     #[test]

@@ -26,6 +26,8 @@ pub struct GetConsumeStatsRequestHeader {
     pub consumer_group: CheetahString,
     #[serde(rename = "topic")]
     pub topic: CheetahString,
+    #[serde(rename = "topicList")]
+    pub topic_list: Option<CheetahString>,
     #[serde(flatten)]
     pub topic_request_header: Option<TopicRequestHeader>,
 }
@@ -44,6 +46,19 @@ impl GetConsumeStatsRequestHeader {
     pub fn set_topic(&mut self, topic: CheetahString) {
         self.topic = topic;
     }
+
+    pub fn fetch_topic_list(&self) -> Vec<CheetahString> {
+        self.topic_list
+            .as_deref()
+            .map(|topics| {
+                topics
+                    .split(';')
+                    .filter(|topic| !topic.is_empty())
+                    .map(CheetahString::from)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
 }
 
 #[cfg(test)]
@@ -55,6 +70,7 @@ mod tests {
         let mut header = GetConsumeStatsRequestHeader {
             consumer_group: CheetahString::from("testGroup"),
             topic: CheetahString::from("testTopic"),
+            topic_list: None,
             topic_request_header: None,
         };
 
@@ -72,6 +88,7 @@ mod tests {
         let header = GetConsumeStatsRequestHeader {
             consumer_group: CheetahString::from("testGroup"),
             topic: CheetahString::from("testTopic"),
+            topic_list: None,
             topic_request_header: None,
         };
 
@@ -105,6 +122,7 @@ mod tests {
         let header = GetConsumeStatsRequestHeader {
             consumer_group: CheetahString::from("testGroup"),
             topic: CheetahString::from("testTopic"),
+            topic_list: None,
             topic_request_header: Some(topic_header),
         };
 
