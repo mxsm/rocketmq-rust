@@ -1264,7 +1264,6 @@ impl BrokerOuterAPI {
             broker_name,
             master_broker_id,
             master_epoch,
-            invoke_time: rocketmq_model::time::current_millis(),
         };
         let mut request =
             RemotingCommand::create_request_command(RequestCode::ControllerAlterSyncStateSet, request_header);

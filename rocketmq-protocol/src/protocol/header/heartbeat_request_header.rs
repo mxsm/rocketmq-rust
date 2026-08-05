@@ -58,10 +58,10 @@ mod tests {
             }),
         };
         let json = serde_json::to_string(&header).unwrap();
-        assert!(json.contains("\"ns\":\"test_namespace\""));
-        assert!(json.contains("\"nsd\":true"));
-        assert!(json.contains("\"bname\":\"test_broker\""));
-        assert!(json.contains("\"oway\":false"));
+        assert!(json.contains("\"namespace\":\"test_namespace\""));
+        assert!(json.contains("\"namespaced\":true"));
+        assert!(json.contains("\"brokerName\":\"test_broker\""));
+        assert!(json.contains("\"oneway\":false"));
 
         // Should not contain a nested "rpc_request" or "rpcRequest" field
         assert!(!json.contains("rpcRequest"));
@@ -183,10 +183,10 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
 
         // Verify fields are at top level (not nested)
-        assert!(value.get("ns").is_some());
-        assert!(value.get("nsd").is_some());
-        assert!(value.get("bname").is_some());
-        assert!(value.get("oway").is_some());
+        assert!(value.get("namespace").is_some());
+        assert!(value.get("namespaced").is_some());
+        assert!(value.get("brokerName").is_some());
+        assert!(value.get("oneway").is_some());
 
         // Verify no nested structure
         assert!(value.get("rpcRequest").is_none());
@@ -380,11 +380,11 @@ mod tests {
 
         let json = serde_json::to_string(&header).unwrap();
 
-        // Verify Java's canonical compact RPC keys are used.
-        assert!(json.contains("bname"));
+        // Verify camelCase is used (not snake_case)
+        assert!(json.contains("brokerName"));
         assert!(!json.contains("broker_name"));
-        assert!(json.contains("\"ns\""));
-        assert!(json.contains("nsd"));
-        assert!(json.contains("oway"));
+        assert!(json.contains("namespace"));
+        assert!(json.contains("namespaced"));
+        assert!(json.contains("oneway"));
     }
 }

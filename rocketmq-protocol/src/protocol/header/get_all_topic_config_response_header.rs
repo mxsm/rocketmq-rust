@@ -17,7 +17,4 @@ use serde::Deserialize;
 use serde::Serialize;
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
-#[serde(rename_all = "camelCase")]
-pub struct GetAllTopicConfigResponseHeader {
-    pub total_topic_num: Option<i32>,
-}
+pub struct GetAllTopicConfigResponseHeader {}

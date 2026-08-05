@@ -25,8 +25,10 @@ pub struct GetLiteGroupInfoRequestHeader {
     #[required]
     pub group: CheetahString,
 
+    #[required]
     pub lite_topic: CheetahString,
 
+    #[required]
     pub top_k: i32,
 
     #[serde(flatten)]

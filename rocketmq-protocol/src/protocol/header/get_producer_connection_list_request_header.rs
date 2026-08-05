@@ -61,7 +61,7 @@ mod tests {
         header.rpc_request_header = Some(rpc_header);
         let json = serde_json::to_string(&header).unwrap();
         assert!(json.contains("\"producerGroup\":\"test_group\""));
-        assert!(json.contains("\"bname\":\"broker_a\""));
+        assert!(json.contains("\"brokerName\":\"broker_a\""));
     }
 
     #[test]

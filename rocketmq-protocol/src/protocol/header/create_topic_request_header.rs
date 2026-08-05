@@ -20,7 +20,6 @@ use serde::Serialize;
 use crate::rpc::topic_request_header::TopicRequestHeader;
 
 #[derive(Serialize, Deserialize, Debug, RequestHeaderCodecV2)]
-#[request_header(validate = "validate")]
 pub struct CreateTopicRequestHeader {
     #[required]
     #[serde(rename = "topic")]
@@ -63,17 +62,6 @@ pub struct CreateTopicRequestHeader {
     pub topic_request_header: Option<TopicRequestHeader>,
 }
 
-impl CreateTopicRequestHeader {
-    fn validate(&self) -> rocketmq_error::RocketMQResult<()> {
-        match self.topic_filter_type.as_str() {
-            "SINGLE_TAG" | "MULTI_TAG" => Ok(()),
-            _ => Err(rocketmq_error::RocketMQError::request_header_error(
-                "CreateTopicRequestHeader.topicFilterType: unsupported value",
-            )),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -90,7 +78,7 @@ mod tests {
             read_queue_nums: 4,
             write_queue_nums: 4,
             perm: 6,
-            topic_filter_type: CheetahString::from("SINGLE_TAG"),
+            topic_filter_type: CheetahString::from("filter_type"),
             topic_sys_flag: Some(1),
             order: true,
             attributes: Some(CheetahString::from("attributes")),
@@ -133,7 +121,7 @@ mod tests {
                 CreateTopicRequestHeader::TOPIC_FILTER_TYPE
             ))
             .unwrap(),
-            &CheetahString::from("SINGLE_TAG")
+            &CheetahString::from("filter_type")
         );
         assert_eq!(
             map.get(&CheetahString::from_static_str(
@@ -184,7 +172,7 @@ mod tests {
         );
         map.insert(
             CheetahString::from_static_str(CreateTopicRequestHeader::TOPIC_FILTER_TYPE),
-            CheetahString::from("SINGLE_TAG"),
+            CheetahString::from("filter_type"),
         );
         map.insert(
             CheetahString::from_static_str(CreateTopicRequestHeader::TOPIC_SYS_FLAG),
@@ -209,7 +197,7 @@ mod tests {
         assert_eq!(header.read_queue_nums, 4);
         assert_eq!(header.write_queue_nums, 4);
         assert_eq!(header.perm, 6);
-        assert_eq!(header.topic_filter_type, CheetahString::from("SINGLE_TAG"));
+        assert_eq!(header.topic_filter_type, CheetahString::from("filter_type"));
         assert_eq!(header.topic_sys_flag, Some(1));
         assert!(header.order);
         assert_eq!(header.attributes, Some(CheetahString::from("attributes")));
@@ -241,7 +229,7 @@ mod tests {
         );
         map.insert(
             CheetahString::from_static_str(CreateTopicRequestHeader::TOPIC_FILTER_TYPE),
-            CheetahString::from("SINGLE_TAG"),
+            CheetahString::from("filter_type"),
         );
         map.insert(
             CheetahString::from_static_str(CreateTopicRequestHeader::ORDER),
@@ -254,30 +242,10 @@ mod tests {
         assert_eq!(header.read_queue_nums, 4);
         assert_eq!(header.write_queue_nums, 4);
         assert_eq!(header.perm, 6);
-        assert_eq!(header.topic_filter_type, CheetahString::from("SINGLE_TAG"));
+        assert_eq!(header.topic_filter_type, CheetahString::from("filter_type"));
         assert_eq!(header.topic_sys_flag, None);
         assert!(header.order);
         assert_eq!(header.attributes, None);
         assert_eq!(header.force, None);
-    }
-
-    #[test]
-    fn create_topic_request_header_validates_java_filter_types() {
-        let base = HashMap::from([
-            ("topic".into(), "TopicA".into()),
-            ("defaultTopic".into(), "TBW102".into()),
-            ("readQueueNums".into(), "4".into()),
-            ("writeQueueNums".into(), "4".into()),
-            ("perm".into(), "6".into()),
-            ("order".into(), "false".into()),
-        ]);
-        for value in ["SINGLE_TAG", "MULTI_TAG"] {
-            let mut fields = base.clone();
-            fields.insert("topicFilterType".into(), value.into());
-            assert!(<CreateTopicRequestHeader as FromMap>::from(&fields).is_ok());
-        }
-        let mut fields = base;
-        fields.insert("topicFilterType".into(), "SQL92".into());
-        assert!(<CreateTopicRequestHeader as FromMap>::from(&fields).is_err());
     }
 }

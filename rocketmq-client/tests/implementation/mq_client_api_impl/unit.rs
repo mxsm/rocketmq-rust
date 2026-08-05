@@ -766,8 +766,6 @@ fn notification_request_matches_java_header_fields() {
         attempt_id: Some(CheetahString::from_static_str("attempt-a")),
         exp_type: Some(CheetahString::from_static_str("TAG")),
         exp: Some(CheetahString::from_static_str("tag-a")),
-        is_lite_consumer: false,
-        client_id: None,
         topic_request_header: None,
     });
 

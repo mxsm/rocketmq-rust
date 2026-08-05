@@ -388,10 +388,10 @@ mod tests {
 
         let map = header.to_map().expect("header should encode");
         assert_eq!(map.get("lo").map(CheetahString::as_str), Some("true"));
-        assert_eq!(map.get("bname").map(CheetahString::as_str), Some("broker-a"));
-        assert_eq!(map.get("ns").map(CheetahString::as_str), Some("ns-a"));
-        assert_eq!(map.get("nsd").map(CheetahString::as_str), Some("true"));
-        assert_eq!(map.get("oway").map(CheetahString::as_str), Some("true"));
+        assert_eq!(map.get("brokerName").map(CheetahString::as_str), Some("broker-a"));
+        assert_eq!(map.get("namespace").map(CheetahString::as_str), Some("ns-a"));
+        assert_eq!(map.get("namespaced").map(CheetahString::as_str), Some("true"));
+        assert_eq!(map.get("oneway").map(CheetahString::as_str), Some("true"));
     }
 
     #[test]

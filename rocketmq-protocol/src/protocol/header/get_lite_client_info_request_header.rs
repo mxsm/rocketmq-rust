@@ -21,9 +21,7 @@ fn default_max_count() -> i32 {
     1000
 }
 
-#[doc = "REQUEST_HEADER_CODEC_INCREMENTAL_PROBE: 0"]
 #[derive(Clone, Debug, Serialize, Deserialize, RequestHeaderCodecV2)]
-#[request_header(validate = "validate")]
 #[serde(rename_all = "camelCase")]
 pub struct GetLiteClientInfoRequestHeader {
     pub parent_topic: Option<CheetahString>,
@@ -32,17 +30,6 @@ pub struct GetLiteClientInfoRequestHeader {
 
     #[serde(default = "default_max_count")]
     pub max_count: i32,
-}
-
-impl GetLiteClientInfoRequestHeader {
-    fn validate(&self) -> rocketmq_error::RocketMQResult<()> {
-        if self.max_count > 0 {
-            return Ok(());
-        }
-        Err(rocketmq_error::RocketMQError::request_header_error(
-            "GetLiteClientInfoRequestHeader.maxCount: must be greater than zero",
-        ))
-    }
 }
 
 impl Default for GetLiteClientInfoRequestHeader {
@@ -117,19 +104,5 @@ mod tests {
         assert_eq!(header.group, Some("group".into()));
         assert_eq!(header.client_id, Some("client".into()));
         assert_eq!(header.max_count, 16);
-    }
-
-    #[test]
-    fn missing_max_count_uses_java_default() {
-        let header = <GetLiteClientInfoRequestHeader as FromMap>::from(&HashMap::new()).unwrap();
-        assert_eq!(header.max_count, 1000);
-    }
-
-    #[test]
-    fn malformed_or_non_positive_max_count_is_rejected() {
-        for value in ["invalid", "0", "-1"] {
-            let map = HashMap::from([("maxCount".into(), value.into())]);
-            assert!(<GetLiteClientInfoRequestHeader as FromMap>::from(&map).is_err());
-        }
     }
 }

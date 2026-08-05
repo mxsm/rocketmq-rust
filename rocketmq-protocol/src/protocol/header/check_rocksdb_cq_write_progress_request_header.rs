@@ -25,6 +25,7 @@ pub struct CheckRocksdbCqWriteProgressRequestHeader {
     #[required]
     pub topic: CheetahString,
 
+    #[required]
     pub check_store_time: i64,
 
     #[serde(flatten)]

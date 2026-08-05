@@ -17,29 +17,12 @@ use rocketmq_macros::RequestHeaderCodecV2;
 use serde::Deserialize;
 use serde::Serialize;
 
-fn default_invoke_time() -> u64 {
-    rocketmq_model::time::current_millis()
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, RequestHeaderCodecV2)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
 #[serde(rename_all = "camelCase")]
 pub struct AlterSyncStateSetRequestHeader {
     pub broker_name: CheetahString,
     pub master_broker_id: i64,
     pub master_epoch: i32,
-    #[serde(default = "default_invoke_time")]
-    pub invoke_time: u64,
-}
-
-impl Default for AlterSyncStateSetRequestHeader {
-    fn default() -> Self {
-        Self {
-            broker_name: CheetahString::new(),
-            master_broker_id: 0,
-            master_epoch: 0,
-            invoke_time: default_invoke_time(),
-        }
-    }
 }
 
 #[cfg(test)]
@@ -56,7 +39,6 @@ mod tests {
             broker_name: CheetahString::from_static_str("test_broker"),
             master_broker_id: 1234567890,
             master_epoch: 5,
-            invoke_time: 1234567891,
         };
         let map = header.to_map().unwrap();
         assert_eq!(
@@ -68,10 +50,6 @@ mod tests {
             "1234567890"
         );
         assert_eq!(map.get(&CheetahString::from_static_str("masterEpoch")).unwrap(), "5");
-        assert_eq!(
-            map.get(&CheetahString::from_static_str("invokeTime")).unwrap(),
-            "1234567891"
-        );
     }
 
     #[test]
@@ -94,7 +72,6 @@ mod tests {
         assert_eq!(header.broker_name, "test_broker");
         assert_eq!(header.master_broker_id, 1234567890);
         assert_eq!(header.master_epoch, 5);
-        assert!(header.invoke_time > 0);
     }
 
     #[test]
@@ -103,7 +80,6 @@ mod tests {
         assert_eq!(header.broker_name, "");
         assert_eq!(header.master_broker_id, 0);
         assert_eq!(header.master_epoch, 0);
-        assert!(header.invoke_time > 0);
     }
 
     #[test]
@@ -112,7 +88,6 @@ mod tests {
             broker_name: CheetahString::from_static_str("test_broker"),
             master_broker_id: 1234567890,
             master_epoch: 5,
-            invoke_time: 1234567891,
         };
         let cloned = header.clone();
         assert_eq!(header.broker_name, cloned.broker_name);
