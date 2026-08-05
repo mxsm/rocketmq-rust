@@ -13,10 +13,8 @@
 // limitations under the License.
 
 use rmcp::model::ListToolsResult;
-use rmcp::model::TaskSupport;
 use rmcp::model::Tool;
 use rmcp::model::ToolAnnotations;
-use rmcp::model::ToolExecution;
 use schemars::JsonSchema;
 
 use crate::guard::RiskLevel;
@@ -277,7 +275,6 @@ impl ToolDescriptor {
                     .idempotent(self.annotations.idempotent)
                     .open_world(self.annotations.open_world),
             )
-            .with_execution(ToolExecution::new().with_task_support(TaskSupport::Forbidden))
     }
 }
 
@@ -320,6 +317,11 @@ mod tests {
             let tool = get_tool(descriptor.name).expect("catalog tool");
             assert_eq!(tool.name, descriptor.name);
             assert!(tool.output_schema.is_some());
+            let wire = serde_json::to_value(&tool).expect("tool serializes");
+            assert!(
+                wire.get("execution").is_none(),
+                "rmcp 3.1 tools must not expose a task-capable execution surface"
+            );
             assert!(matches!(
                 descriptor.risk_level,
                 RiskLevel::ReadOnly | RiskLevel::Diagnose | RiskLevel::Plan

@@ -220,7 +220,7 @@ fn streamable_server_config(
 ) -> StreamableHttpServerConfig {
     let mut server_config = StreamableHttpServerConfig::default()
         .with_allowed_hosts(allowed_hosts(&http_config))
-        .with_stateful_mode(false)
+        .with_legacy_session_mode(false)
         .with_json_response(true)
         .with_cancellation_token(cancellation_token);
 
@@ -341,7 +341,7 @@ mod tests {
 
         assert!(server_config.allowed_origins.contains(&"https://localhost".to_string()));
         assert!(server_config.json_response);
-        assert!(!server_config.stateful_mode);
+        assert!(!server_config.legacy_session_mode);
     }
 
     #[test]

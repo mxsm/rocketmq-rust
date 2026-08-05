@@ -61,11 +61,9 @@ pub fn list_resources_for(
         );
     }
     let page = discovery_page(resources, request)?;
-    Ok(ListResourcesResult {
-        meta: None,
-        next_cursor: page.next_cursor,
-        resources: page.items,
-    })
+    let mut result = ListResourcesResult::with_all_items(page.items);
+    result.next_cursor = page.next_cursor;
+    Ok(result)
 }
 
 pub fn list_resource_templates(
@@ -104,11 +102,9 @@ pub fn list_resource_templates(
         ),
     ];
     let page = discovery_page(templates, request)?;
-    Ok(ListResourceTemplatesResult {
-        meta: None,
-        next_cursor: page.next_cursor,
-        resource_templates: page.items,
-    })
+    let mut result = ListResourceTemplatesResult::with_all_items(page.items);
+    result.next_cursor = page.next_cursor;
+    Ok(result)
 }
 
 fn resource_descriptor(uri: RocketmqResourceUri) -> Resource {
