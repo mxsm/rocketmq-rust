@@ -19,6 +19,7 @@ param(
     [string]$CargoTargetDir = 'D:\BuildCache\rocketmq-sre-target',
     [string]$TempDir = 'D:\BuildCache\rocketmq-sre-temp',
     [string]$AdminCliPath = '',
+    [string]$LiveFragment = '',
     [ValidateRange(1024, 65535)]
     [int]$PostgresLocalPort = 60032,
     [ValidateRange(1024, 65535)]
@@ -52,6 +53,23 @@ function Assert-NonSystemBuildPath {
     $resolved = [IO.Path]::GetFullPath($Path)
     if ($resolved.StartsWith('C:\', [StringComparison]::OrdinalIgnoreCase)) {
         throw "$Description must not use the C drive: $resolved"
+    }
+}
+
+function Assert-DataPath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+        [Parameter(Mandatory = $true)]
+        [string]$Description
+    )
+    $resolved = [IO.Path]::GetFullPath($Path)
+    $root = [IO.Path]::GetPathRoot($resolved)
+    if (
+        -not $root.Equals('D:\', [StringComparison]::OrdinalIgnoreCase) -and
+        -not $root.Equals('F:\', [StringComparison]::OrdinalIgnoreCase)
+    ) {
+        throw "$Description must use the D or F drive."
     }
 }
 
@@ -179,6 +197,12 @@ foreach ($path in @(
 )) {
     Assert-NonSystemBuildPath $path.Value $path.Description
 }
+if (-not [string]::IsNullOrWhiteSpace($LiveFragment)) {
+    Assert-DataPath $LiveFragment 'credential live qualification fragment'
+    if ($LiveFragment -notmatch '^[A-Za-z]:[\\/]') {
+        throw 'Credential live qualification fragment path must be absolute.'
+    }
+}
 $Kubeconfig = [IO.Path]::GetFullPath($Kubeconfig)
 if (-not (Test-Path -LiteralPath $Kubeconfig -PathType Leaf)) {
     throw "Kubeconfig does not exist: $Kubeconfig"
@@ -242,7 +266,8 @@ $environmentNames = @(
     'ROCKETMQ_SRE_PHASE3_EXECUTOR_URL',
     'ROCKETMQ_SRE_PHASE3_AGENT_URL',
     'ROCKETMQ_SRE_PHASE3_WORKLOAD_TOKEN',
-    'ROCKETMQ_SRE_PHASE3_SIGNING_KEY'
+    'ROCKETMQ_SRE_PHASE3_SIGNING_KEY',
+    'ROCKETMQ_SRE_R2_CREDENTIAL_LIVE_FRAGMENT'
 )
 $savedEnvironment = @{}
 foreach ($name in $environmentNames) {
@@ -349,6 +374,9 @@ try {
     $env:ROCKETMQ_SRE_PHASE3_AGENT_URL = "http://127.0.0.1:$AgentLocalPort"
     $env:ROCKETMQ_SRE_PHASE3_WORKLOAD_TOKEN = $workloadToken
     $env:ROCKETMQ_SRE_PHASE3_SIGNING_KEY = $workloadToken
+    if (-not [string]::IsNullOrWhiteSpace($LiveFragment)) {
+        $env:ROCKETMQ_SRE_R2_CREDENTIAL_LIVE_FRAGMENT = [IO.Path]::GetFullPath($LiveFragment)
+    }
     $env:CARGO_HOME = $CargoHome
     $env:CARGO_TARGET_DIR = $CargoTargetDir
     $env:TEMP = $TempDir
@@ -367,6 +395,12 @@ try {
         '--nocapture',
         '--test-threads=1'
     ) 'formal supervised credential rotation E2E'
+    if (
+        -not [string]::IsNullOrWhiteSpace($LiveFragment) -and
+        -not (Test-Path -LiteralPath $LiveFragment -PathType Leaf)
+    ) {
+        throw 'The supervised credential rotation did not emit its live qualification fragment.'
+    }
 
     $selectorView = kubectl --kubeconfig $Kubeconfig -n $namespace get configmap $selector -o json |
         ConvertFrom-Json

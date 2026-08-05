@@ -162,7 +162,7 @@ pub(crate) async fn seed_telemetry_collector_restart_fixture(pool: &PgPool) -> F
     seed_fixture_for_action(pool, ExecutionAction::TelemetryCollectorRestartOne).await
 }
 
-async fn seed_fixture_for_action(pool: &PgPool, action: ExecutionAction) -> Fixture {
+pub(crate) async fn seed_fixture_for_action(pool: &PgPool, action: ExecutionAction) -> Fixture {
     sqlx::raw_sql(include_str!("../../../../deploy/dev/postgres/phase3-seed.sql"))
         .execute(pool)
         .await
@@ -181,6 +181,18 @@ async fn seed_fixture_for_action(pool: &PgPool, action: ExecutionAction) -> Fixt
         primary_invocation_id,
         action,
     );
+    let risk = if matches!(
+        action,
+        ExecutionAction::BrokerConfigPatchAllowlisted
+            | ExecutionAction::TopicConfigPatchAllowlisted
+            | ExecutionAction::SubscriptionGroupPatchAllowlisted
+            | ExecutionAction::ProxyRolloutImageCanary
+            | ExecutionAction::SecurityCredentialRotateOverlap
+    ) {
+        "r2"
+    } else {
+        "r1"
+    };
     sqlx::query(
         "INSERT INTO action_plans (
             id, tenant_id, cluster_id, incident_id, diagnosis_revision_id,
@@ -190,8 +202,8 @@ async fn seed_fixture_for_action(pool: &PgPool, action: ExecutionAction) -> Fixt
          ) VALUES (
             $1, $2, $3, $4, $5,
             $6, $7, $8, $9,
-            'r1', 'approved', $10, $11, $12,
-            $13, $14
+            $10, 'approved', $11, $12, $13,
+            $14, $15
          )",
     )
     .bind(plan.id.as_uuid())
@@ -203,6 +215,7 @@ async fn seed_fixture_for_action(pool: &PgPool, action: ExecutionAction) -> Fixt
     .bind(i32::try_from(plan.version).expect("plan version"))
     .bind(&plan.plan_hash)
     .bind(&plan.evidence_hash)
+    .bind(risk)
     .bind(serde_json::to_value(&plan).expect("plan snapshot"))
     .bind(&plan.created_by)
     .bind(plan.created_at)
@@ -325,7 +338,131 @@ fn action_plan(
                 timeout_seconds: 300,
             },
         ),
-        _ => panic!("the executor integration fixture supports only the qualified R1 scenarios under test"),
+        ExecutionAction::BrokerConfigPatchAllowlisted => (
+            "broker/rocketmq-broker:10911".to_owned(),
+            json!({
+                "broker": "rocketmq-broker:10911",
+                "expected_generation": 1,
+                "patch": {"max_client_event_count": 9_999}
+            }),
+            ImpactScope::AllowlistedFields,
+            VerificationSpec {
+                resource_conditions: vec!["generation_incremented".to_owned(), "patch_visible".to_owned()],
+                technical_slis: vec!["broker_error_ratio".to_owned(), "store_dispatch_latency".to_owned()],
+                stable_window_seconds: 180,
+                max_wait_seconds: 900,
+            },
+            CompensationSpec {
+                mode: CompensationMode::Automatic,
+                required_before_fields: vec!["before_config".to_owned(), "latest_generation".to_owned()],
+                timeout_seconds: 600,
+            },
+        ),
+        ExecutionAction::TopicConfigPatchAllowlisted => (
+            "topic/SRE_R2_QUALIFICATION".to_owned(),
+            json!({
+                "topic": "SRE_R2_QUALIFICATION",
+                "expected_version": 1,
+                "patch": {"read_queue_nums": 5, "write_queue_nums": 5}
+            }),
+            ImpactScope::AllowlistedFields,
+            VerificationSpec {
+                resource_conditions: vec!["topic_version_incremented".to_owned(), "patch_visible".to_owned()],
+                technical_slis: vec!["send_success_ratio".to_owned(), "consume_success_ratio".to_owned()],
+                stable_window_seconds: 180,
+                max_wait_seconds: 900,
+            },
+            CompensationSpec {
+                mode: CompensationMode::Automatic,
+                required_before_fields: vec!["before_config".to_owned(), "latest_version".to_owned()],
+                timeout_seconds: 600,
+            },
+        ),
+        ExecutionAction::SubscriptionGroupPatchAllowlisted => (
+            "subscription-group/SRE_R2_QUALIFICATION".to_owned(),
+            json!({
+                "group": "SRE_R2_QUALIFICATION",
+                "expected_version": 1,
+                "patch": {"retry_max_times": 15}
+            }),
+            ImpactScope::AllowlistedFields,
+            VerificationSpec {
+                resource_conditions: vec![
+                    "subscription_group_version_incremented".to_owned(),
+                    "patch_visible".to_owned(),
+                ],
+                technical_slis: vec!["consume_success_ratio".to_owned(), "retry_backlog_growth".to_owned()],
+                stable_window_seconds: 180,
+                max_wait_seconds: 900,
+            },
+            CompensationSpec {
+                mode: CompensationMode::Automatic,
+                required_before_fields: vec!["before_config".to_owned(), "latest_version".to_owned()],
+                timeout_seconds: 600,
+            },
+        ),
+        ExecutionAction::ProxyRolloutImageCanary => (
+            "deployment/rocketmq-system/rocketmq-proxy".to_owned(),
+            json!({
+                "namespace": "rocketmq-system",
+                "workload": "rocketmq-proxy",
+                "container": "proxy",
+                "expected_generation": 1,
+                "image_digest": format!("sha256:{}", "c".repeat(64)),
+                "canary_replicas": 1
+            }),
+            ImpactScope::OneReplica,
+            VerificationSpec {
+                resource_conditions: vec![
+                    "canary_generation_observed".to_owned(),
+                    "canary_ready".to_owned(),
+                    "old_replicas_unchanged".to_owned(),
+                ],
+                technical_slis: vec![
+                    "proxy_error_ratio".to_owned(),
+                    "proxy_p99_latency".to_owned(),
+                    "synthetic_message_path".to_owned(),
+                ],
+                stable_window_seconds: 600,
+                max_wait_seconds: 1_800,
+            },
+            CompensationSpec {
+                mode: CompensationMode::Automatic,
+                required_before_fields: vec!["previous_image_digest".to_owned(), "expected_generation".to_owned()],
+                timeout_seconds: 900,
+            },
+        ),
+        ExecutionAction::SecurityCredentialRotateOverlap => (
+            "credential-set/broker-admin".to_owned(),
+            json!({
+                "credential_set": "broker-admin",
+                "active_version": "v1",
+                "candidate_version": "v2",
+                "candidate_secret_ref": "kubernetes://rocketmq-sre/broker-admin-credential-v2",
+                "overlap_seconds": 300,
+                "validation_probe_topic": "SRE_PROBE_CREDENTIAL_ROTATION"
+            }),
+            ImpactScope::SingleResource,
+            VerificationSpec {
+                resource_conditions: vec![
+                    "candidate_active".to_owned(),
+                    "previous_retiring".to_owned(),
+                    "overlap_deadline_recorded".to_owned(),
+                ],
+                technical_slis: vec![
+                    "credential_probe_success_ratio".to_owned(),
+                    "authentication_error_ratio".to_owned(),
+                ],
+                stable_window_seconds: 300,
+                max_wait_seconds: 1_800,
+            },
+            CompensationSpec {
+                mode: CompensationMode::Automatic,
+                required_before_fields: vec!["active_version".to_owned(), "candidate_version".to_owned()],
+                timeout_seconds: 600,
+            },
+        ),
+        _ => panic!("the executor integration fixture does not support this qualification action"),
     };
     let draft = ActionPlanDraft {
         id: rocketmq_sre_contracts::ActionPlanId::new(),

@@ -240,6 +240,30 @@ TTL 覆盖、一个 Proxy 副本、一个 Proxy Pod 或一个 Collector Pod。�
 python scripts/check_r1_action_qualification.py
 ```
 
+### 受控 R2 动作资格验证
+
+R2 资格契约覆盖五个已批准的中等风险动作：Broker、Topic 和订阅组的白名单配置补丁，
+单副本且使用镜像摘要固定的 Proxy 金丝雀，以及先重叠后切换的凭据轮换。每个计划都必须经过
+离线异构 Critic、独立人工审批、绑定哈希的授权、Generation 或版本 Fence、类型化 Agent
+预检、持久化执行日志、稳定窗口验证和自动补偿。无人值守执行保持关闭。
+
+资格验证入口从干净且已提交的源码版本创建全新的一次性 Kind 集群，注册不可变的本地金丝雀
+镜像，并让五个动作全部经过 Control Plane、Executor 和 Execution Agent。确定性恢复用例在
+隔离的 PostgreSQL Schema 中执行。通过前，工具会删除金丝雀、凭据夹具、Bootstrap Job、
+Kind 集群和生成的运行时文件。脚本化 Critic 使用不同的模型系列，但不会发起模型供应商网络调用。
+
+在 `rocketmq-sre/` 中运行；构建产物保留在 `D:` 和 `F:`，脱敏报告写入仓库外的 `D:`：
+
+```powershell
+.\scripts\r2-action-live-qualification.ps1
+```
+
+该报告用于证明实现资格，不构成生产认证。可独立校验已提交的清单：
+
+```powershell
+python scripts/check_r2_action_qualification.py
+```
+
 ## 用户界面
 
 UI 按照 shadcn/ui 规范和可访问的 Radix UI primitive 设计为全屏桌面运维

@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::BTreeMap;
 use std::collections::VecDeque;
+use std::fs;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration as StdDuration;
@@ -31,6 +34,7 @@ use rocketmq_sre_model_gateway::ProviderError;
 use rocketmq_sre_model_gateway::TransportFuture;
 use rocketmq_sre_model_gateway::TransportRequest;
 use rocketmq_sre_model_gateway::TransportResponse;
+use serde::Serialize;
 use serde_json::json;
 use uuid::Uuid;
 
@@ -55,6 +59,35 @@ use crate::workflow::WorkflowService;
 
 const DEFAULT_TENANT_ID: &str = "00000000-0000-4000-8000-000000000002";
 const DEFAULT_CLUSTER_ID: &str = "00000000-0000-4000-8000-000000000001";
+
+#[derive(Serialize)]
+struct CredentialLiveOutcome {
+    id: &'static str,
+    state: &'static str,
+    execution_id: String,
+    correlation_id: String,
+    critic_reviews: i64,
+    approval_events: i64,
+    intent_records: i64,
+    result_records: i64,
+    confirmed_agent_effects: i64,
+    successful_verifications: i64,
+    verification_evidence_records: i64,
+    target_mutations: i64,
+    actor_separation: bool,
+    critic_transport: &'static str,
+    primary_model_family: String,
+    critic_model_family: String,
+    safety_invariants: BTreeMap<String, bool>,
+}
+
+#[derive(Serialize)]
+struct CredentialLiveFragment<'a> {
+    schema_version: &'static str,
+    model_provider_network_calls: u8,
+    critic_transport: &'static str,
+    actions: [&'a CredentialLiveOutcome; 1],
+}
 
 #[tokio::test]
 #[ignore = "requires live Kind PostgreSQL, Executor, Agent, credential fixtures, and authenticated Broker"]
@@ -155,6 +188,7 @@ async fn real_kind_supervised_credential_overlap_passes_critic_and_verification(
     .expect("supervised execution service");
     let operator = auth(tenant_id, cluster_id, "phase3-credential-operator", &["operator"]);
     let approver = auth(tenant_id, cluster_id, "phase3-credential-approver", &["approver"]);
+    let correlation_id = CorrelationId::new();
     let created = service
         .create_plan(
             &operator,
@@ -171,7 +205,7 @@ async fn real_kind_supervised_credential_overlap_passes_critic_and_verification(
                     evidence_ids: vec![fixture.agent_evidence_id],
                 }],
             },
-            CorrelationId::new(),
+            correlation_id,
         )
         .await
         .expect("create credential rotation plan");
@@ -188,7 +222,7 @@ async fn real_kind_supervised_credential_overlap_passes_critic_and_verification(
             &CriticReviewRequest {
                 plan_hash: plan.plan_hash.clone(),
             },
-            CorrelationId::new(),
+            correlation_id,
         )
         .await
         .expect("heterogeneous credential rotation Critic");
@@ -198,6 +232,11 @@ async fn real_kind_supervised_credential_overlap_passes_critic_and_verification(
     assert_eq!(
         reviewed.review.critic_model_family.as_deref(),
         Some(critic_family.as_str())
+    );
+    assert_ne!(
+        reviewed.review.primary_model_family.trim().to_ascii_lowercase(),
+        critic_family.trim().to_ascii_lowercase(),
+        "credential Critic must use a different model family"
     );
     let precondition_hash = reviewed
         .plan
@@ -213,17 +252,18 @@ async fn real_kind_supervised_credential_overlap_passes_critic_and_verification(
                 reason: "Independent review accepted the bounded credential overlap and rollback".to_owned(),
                 validity_seconds: Some(1_500),
             },
-            CorrelationId::new(),
+            correlation_id,
         )
         .await
         .expect("independent human approval");
+    let plan_id = reviewed.plan.id;
     let execution_request = SubmitExecutionRequest {
         plan_id: reviewed.plan.id,
         plan_hash: reviewed.plan.plan_hash,
         precondition_hash,
         idempotency_key: format!("phase3-credential-overlap-{}", Uuid::new_v4()),
     };
-    let submission = service.submit_execution(&operator, &execution_request, CorrelationId::new());
+    let submission = service.submit_execution(&operator, &execution_request, correlation_id);
     tokio::pin!(submission);
     let submitted = loop {
         tokio::select! {
@@ -255,6 +295,10 @@ async fn real_kind_supervised_credential_overlap_passes_critic_and_verification(
     assert_eq!(applied.resource_conditions.get("candidate_active"), Some(&true));
     assert_eq!(applied.resource_conditions.get("previous_retiring"), Some(&true));
     assert_eq!(
+        applied.resource_conditions.get("overlap_deadline_recorded"),
+        Some(&true)
+    );
+    assert_eq!(
         sqlx::query_scalar::<_, i64>(
             "SELECT COUNT(*)
              FROM execution_agent_credential_rotation_before_states
@@ -266,6 +310,127 @@ async fn real_kind_supervised_credential_overlap_passes_critic_and_verification(
         .expect("credential rotation before-state count"),
         1
     );
+
+    if let Some(path) = required_env("ROCKETMQ_SRE_R2_CREDENTIAL_LIVE_FRAGMENT") {
+        let execution_id = submitted.execution.id;
+        let critic_reviews = count_for_id(
+            &repository,
+            "SELECT COUNT(*) FROM critic_reviews WHERE plan_id = $1 AND status = 'valid'",
+            plan_id.as_uuid(),
+        )
+        .await;
+        let approval_events = count_for_id(
+            &repository,
+            "SELECT COUNT(*) FROM audit_events WHERE correlation_id = $1 AND event_kind = 'approved'",
+            correlation_id.as_uuid(),
+        )
+        .await;
+        let actor_subjects = count_for_id(
+            &repository,
+            "SELECT COUNT(DISTINCT actor_subject) FROM audit_events WHERE correlation_id = $1 AND event_kind IN ('plan_created', 'approved')",
+            correlation_id.as_uuid(),
+        )
+        .await;
+        let intent_records = count_for_id(
+            &repository,
+            "SELECT COUNT(*) FROM execution_steps WHERE execution_id = $1 AND record_kind = 'intent'",
+            execution_id.as_uuid(),
+        )
+        .await;
+        let result_records = count_for_id(
+            &repository,
+            "SELECT COUNT(*) FROM execution_steps WHERE execution_id = $1 AND record_kind = 'result'",
+            execution_id.as_uuid(),
+        )
+        .await;
+        let confirmed_agent_effects = count_for_id(
+            &repository,
+            "SELECT COUNT(*) FROM execution_agent_effects WHERE execution_id = $1 AND state = 'confirmed'",
+            execution_id.as_uuid(),
+        )
+        .await;
+        let successful_verifications = count_for_id(
+            &repository,
+            "SELECT COUNT(*) FROM execution_verifications WHERE execution_id = $1 AND outcome = 'succeeded'",
+            execution_id.as_uuid(),
+        )
+        .await;
+        let verification_evidence_records = count_for_id(
+            &repository,
+            "SELECT COUNT(*) FROM execution_verification_evidence WHERE execution_id = $1",
+            execution_id.as_uuid(),
+        )
+        .await;
+        for (name, count) in [
+            ("Critic review", critic_reviews),
+            ("approval event", approval_events),
+            ("intent record", intent_records),
+            ("result record", result_records),
+            ("confirmed Agent effect", confirmed_agent_effects),
+            ("successful verification", successful_verifications),
+            ("verification Evidence record", verification_evidence_records),
+        ] {
+            assert!(count > 0, "credential qualification persisted no {name}");
+        }
+        assert!(
+            actor_subjects >= 2,
+            "credential qualification did not preserve actor separation"
+        );
+        assert_eq!(
+            confirmed_agent_effects, 1,
+            "credential qualification must perform exactly one bounded target mutation"
+        );
+        let outcome = CredentialLiveOutcome {
+            id: ExecutionAction::SecurityCredentialRotateOverlap.id(),
+            state: "succeeded",
+            execution_id: execution_id.to_string(),
+            correlation_id: correlation_id.to_string(),
+            critic_reviews,
+            approval_events,
+            intent_records,
+            result_records,
+            confirmed_agent_effects,
+            successful_verifications,
+            verification_evidence_records,
+            target_mutations: confirmed_agent_effects,
+            actor_separation: true,
+            critic_transport: "offline_scripted",
+            primary_model_family: reviewed.review.primary_model_family,
+            critic_model_family: critic_family,
+            safety_invariants: [
+                ("candidate_active".to_owned(), true),
+                ("previous_retiring".to_owned(), true),
+                ("overlap_deadline_recorded".to_owned(), true),
+            ]
+            .into_iter()
+            .collect(),
+        };
+        write_live_fragment(Path::new(&path), &outcome);
+    }
+}
+
+async fn count_for_id(repository: &PostgresRepository, query: &'static str, id: Uuid) -> i64 {
+    sqlx::query_scalar(query)
+        .bind(id)
+        .fetch_one(&repository.pool)
+        .await
+        .unwrap_or_else(|error| panic!("query persisted credential qualification record: {error}"))
+}
+
+fn write_live_fragment(path: &Path, outcome: &CredentialLiveOutcome) {
+    assert!(
+        path.is_absolute(),
+        "credential qualification fragment path must be absolute"
+    );
+    let fragment = CredentialLiveFragment {
+        schema_version: "rocketmq-sre.r2-action-live-fragment.v1",
+        model_provider_network_calls: 0,
+        critic_transport: "offline_scripted",
+        actions: [outcome],
+    };
+    let mut bytes = serde_json::to_vec_pretty(&fragment).expect("serialize credential qualification fragment");
+    bytes.push(b'\n');
+    fs::write(path, bytes).expect("write credential qualification fragment");
 }
 
 async fn ensure_kind_cluster(

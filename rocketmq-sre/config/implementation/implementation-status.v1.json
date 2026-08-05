@@ -154,12 +154,12 @@
     },
     {
       "id": "controlled-actions",
-      "status": "partial",
+      "status": "completed",
       "target_outcome": "execution-qualification",
       "maturity": {
         "implemented": true,
         "contract_tested": true,
-        "live_smoke_passed": false,
+        "live_smoke_passed": true,
         "production_certified": false
       },
       "evidence": [
@@ -194,12 +194,25 @@
         {
           "kind": "test",
           "path": "rocketmq-sre/scripts/r1-action-live-qualification.ps1"
+        },
+        {
+          "kind": "configuration",
+          "path": "rocketmq-sre/config/qualification/r2-actions.v1.json"
+        },
+        {
+          "kind": "test",
+          "path": "rocketmq-sre/scripts/check_r2_action_qualification.py"
+        },
+        {
+          "kind": "test",
+          "path": "rocketmq-sre/scripts/r2-action-live-qualification.ps1"
         }
       ],
       "limitations": [
         "All nine explicitly registered bounded actions have independent switches, owners, and contract evidence; the sixteen-scenario Kubernetes platform fault matrix has passed.",
         "All four R1 actions have independently passed disposable Kind success, denial, idempotency, fencing, reconciliation, verification-failure, compensation or manual-takeover safe-stop, quarantine, scope, and kill-switch qualification with zero model-provider calls.",
-        "The five R2 actions still require the same independent disposable-cluster outcome qualification, so aggregate controlled-action live maturity remains partial.",
+        "All five R2 actions have independently passed disposable Kind Critic, actor-separation, approval, live success, idempotency, generation or epoch fencing, reconciliation, verification-failure, automatic compensation, rollback-failure quarantine, scope, and kill-switch qualification with zero model-provider calls.",
+        "Disposable qualification proves implementation behavior but does not certify a deployment-specific production cluster.",
         "R3 operations and arbitrary requests remain permanently forbidden."
       ]
     },

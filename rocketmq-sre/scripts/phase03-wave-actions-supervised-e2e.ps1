@@ -23,9 +23,17 @@ param(
 
     [switch]$R1Only,
 
+    [switch]$R2Only,
+
     [string]$LiveFragment,
 
-    [string]$RecoveryFragment
+    [string]$RecoveryFragment,
+
+    [string]$R2AdminLiveFragment,
+
+    [string]$R2RecoveryFragment,
+
+    [string]$ProxyImageDigest
 )
 
 $ErrorActionPreference = 'Stop'
@@ -34,6 +42,16 @@ $scriptDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
 $sreRoot = [IO.Path]::GetFullPath((Join-Path $scriptDirectory '..'))
 $manifestPath = Join-Path $sreRoot 'Cargo.toml'
 $bootstrapManifest = Join-Path $sreRoot 'deploy\kind\phase03-wave-admin-bootstrap-job.yaml'
+
+if ($R1Only -and $R2Only) {
+    throw 'R1Only and R2Only are mutually exclusive.'
+}
+if ($R2Only -and [string]::IsNullOrWhiteSpace($ProxyImageDigest)) {
+    throw 'R2Only requires an immutable Proxy image digest for the complete action set.'
+}
+if (-not [string]::IsNullOrWhiteSpace($ProxyImageDigest) -and $ProxyImageDigest -notmatch '^sha256:[0-9a-f]{64}$') {
+    throw 'ProxyImageDigest must be an immutable lowercase SHA-256 digest.'
+}
 
 function Assert-DataPath([string]$Path, [string]$Description) {
     $fullPath = [IO.Path]::GetFullPath($Path)
@@ -152,7 +170,9 @@ foreach ($path in @(
 }
 foreach ($fragment in @(
     @{ Value = $LiveFragment; Description = 'live qualification fragment' },
-    @{ Value = $RecoveryFragment; Description = 'recovery qualification fragment' }
+    @{ Value = $RecoveryFragment; Description = 'recovery qualification fragment' },
+    @{ Value = $R2AdminLiveFragment; Description = 'R2 Admin live qualification fragment' },
+    @{ Value = $R2RecoveryFragment; Description = 'R2 recovery qualification fragment' }
 )) {
     if (-not [string]::IsNullOrWhiteSpace($fragment.Value)) {
         Assert-DataPath $fragment.Value $fragment.Description
@@ -214,7 +234,10 @@ foreach ($name in @(
     'ROCKETMQ_SRE_PHASE4_COLLECTOR_UID',
     'ROCKETMQ_SRE_TEST_DATABASE_URL',
     'ROCKETMQ_SRE_R1_LIVE_FRAGMENT',
-    'ROCKETMQ_SRE_R1_RECOVERY_FRAGMENT'
+    'ROCKETMQ_SRE_R1_RECOVERY_FRAGMENT',
+    'ROCKETMQ_SRE_R2_ADMIN_LIVE_FRAGMENT',
+    'ROCKETMQ_SRE_R2_RECOVERY_FRAGMENT',
+    'ROCKETMQ_SRE_PHASE3_PROXY_IMAGE_DIGEST'
 )) {
     $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
 }
@@ -224,6 +247,20 @@ $executorForward = $null
 $agentForward = $null
 $baselineProxyReplicas = $null
 try {
+    if (-not [string]::IsNullOrWhiteSpace($ProxyImageDigest)) {
+        $existingCanary = & kubectl `
+            --kubeconfig $resolvedKubeconfig `
+            -n rocketmq-system `
+            get deployment rocketmq-proxy-sre-canary `
+            --ignore-not-found=true `
+            -o name
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Unable to inspect the Proxy canary qualification target.'
+        }
+        if (-not [string]::IsNullOrWhiteSpace(($existingCanary -join ''))) {
+            throw 'A pre-existing Proxy SRE canary must not be reused by qualification.'
+        }
+    }
     & kubectl `
         --kubeconfig $resolvedKubeconfig `
         -n rocketmq-system `
@@ -332,49 +369,74 @@ try {
     $env:ROCKETMQ_SRE_PHASE4_COLLECTOR_POD = [string]$collectorPod.metadata.name
     $env:ROCKETMQ_SRE_PHASE4_COLLECTOR_UID = [string]$collectorPod.metadata.uid
     $env:ROCKETMQ_SRE_TEST_DATABASE_URL = $databaseUri.Uri.AbsoluteUri
-    if (-not [string]::IsNullOrWhiteSpace($LiveFragment)) {
-        $env:ROCKETMQ_SRE_R1_LIVE_FRAGMENT = [IO.Path]::GetFullPath($LiveFragment)
-    }
-    if (-not [string]::IsNullOrWhiteSpace($RecoveryFragment)) {
-        $env:ROCKETMQ_SRE_R1_RECOVERY_FRAGMENT = [IO.Path]::GetFullPath($RecoveryFragment)
+    if (-not $R2Only) {
+        if (-not [string]::IsNullOrWhiteSpace($LiveFragment)) {
+            $env:ROCKETMQ_SRE_R1_LIVE_FRAGMENT = [IO.Path]::GetFullPath($LiveFragment)
+        }
+        if (-not [string]::IsNullOrWhiteSpace($RecoveryFragment)) {
+            $env:ROCKETMQ_SRE_R1_RECOVERY_FRAGMENT = [IO.Path]::GetFullPath($RecoveryFragment)
+            & cargo +1.95.0 test `
+                --manifest-path $manifestPath `
+                --locked `
+                -p rocketmq-sre-executor `
+                --test execution_flow `
+                all_r1_actions_persist_recovery_qualification_matrix `
+                -- `
+                --ignored `
+                --exact `
+                --nocapture `
+                --test-threads=1
+            if ($LASTEXITCODE -ne 0) {
+                throw 'R1 persisted recovery qualification matrix failed.'
+            }
+        }
+
         & cargo +1.95.0 test `
             --manifest-path $manifestPath `
             --locked `
-            -p rocketmq-sre-executor `
-            --test execution_flow `
-            all_r1_actions_persist_recovery_qualification_matrix `
+            -p rocketmq-sre-control-plane `
+            --lib `
+            supervised_execution::wave_actions_e2e_tests::real_kind_all_r1_actions_share_the_supervised_execution_chain `
             -- `
             --ignored `
             --exact `
-            --nocapture `
-            --test-threads=1
+            --nocapture
         if ($LASTEXITCODE -ne 0) {
-            throw 'R1 persisted recovery qualification matrix failed.'
+            throw 'Wave 1 R1 formal supervised E2E failed.'
         }
-    }
 
-    & cargo +1.95.0 test `
-        --manifest-path $manifestPath `
-        --locked `
-        -p rocketmq-sre-control-plane `
-        --lib `
-        supervised_execution::wave_actions_e2e_tests::real_kind_all_r1_actions_share_the_supervised_execution_chain `
-        -- `
-        --ignored `
-        --exact `
-        --nocapture
-    if ($LASTEXITCODE -ne 0) {
-        throw 'Wave 1 R1 formal supervised E2E failed.'
+        Write-Host (
+            'PHASE03_WAVE1_R1_SUPERVISED_E2E_OK ' +
+            'actions=observability.logger_level_ttl.v1,proxy.scale_out_one.v1,' +
+            'proxy.restart_one.v1,telemetry.collector.restart_one.v1 ' +
+            'approval=independent executor=true agent=true verification=true audit=correlated'
+        )
     }
-
-    Write-Host (
-        'PHASE03_WAVE1_R1_SUPERVISED_E2E_OK ' +
-        'actions=observability.logger_level_ttl.v1,proxy.scale_out_one.v1,' +
-        'proxy.restart_one.v1,telemetry.collector.restart_one.v1 ' +
-        'approval=independent executor=true agent=true verification=true audit=correlated'
-    )
 
     if (-not $R1Only) {
+        if (-not [string]::IsNullOrWhiteSpace($R2RecoveryFragment)) {
+            $env:ROCKETMQ_SRE_R2_RECOVERY_FRAGMENT = [IO.Path]::GetFullPath($R2RecoveryFragment)
+            & cargo +1.95.0 test `
+                --manifest-path $manifestPath `
+                --locked `
+                -p rocketmq-sre-executor `
+                --test execution_flow `
+                all_r2_actions_persist_recovery_qualification_matrix `
+                -- `
+                --ignored `
+                --exact `
+                --nocapture `
+                --test-threads=1
+            if ($LASTEXITCODE -ne 0) {
+                throw 'R2 persisted recovery qualification matrix failed.'
+            }
+        }
+        if (-not [string]::IsNullOrWhiteSpace($R2AdminLiveFragment)) {
+            $env:ROCKETMQ_SRE_R2_ADMIN_LIVE_FRAGMENT = [IO.Path]::GetFullPath($R2AdminLiveFragment)
+        }
+        if (-not [string]::IsNullOrWhiteSpace($ProxyImageDigest)) {
+            $env:ROCKETMQ_SRE_PHASE3_PROXY_IMAGE_DIGEST = $ProxyImageDigest
+        }
         & cargo +1.95.0 test `
             --manifest-path $manifestPath `
             --locked `
@@ -392,7 +454,8 @@ try {
         Write-Host (
             'PHASE03_WAVE_ADMIN_R2_SUPERVISED_E2E_OK ' +
             'actions=broker.config.patch_allowlisted.v1,topic.config.patch_allowlisted.v1,' +
-            'subscription_group.patch_allowlisted.v1 critic=kimi-moonshot ' +
+            'subscription_group.patch_allowlisted.v1,proxy.rollout_image_canary.v1 ' +
+            'critic=kimi-moonshot critic_transport=offline_scripted ' +
             'approval=independent executor=true agent=true verification=true audit=correlated'
         )
     }
@@ -439,6 +502,23 @@ finally {
         }
     }
     try {
+        if (-not [string]::IsNullOrWhiteSpace($ProxyImageDigest)) {
+            & kubectl `
+                --kubeconfig $resolvedKubeconfig `
+                -n rocketmq-system `
+                delete deployment rocketmq-proxy-sre-canary `
+                --ignore-not-found=true `
+                --wait=true `
+                --timeout=180s
+            if ($LASTEXITCODE -ne 0) {
+                throw 'Unable to remove the bounded Proxy image canary.'
+            }
+        }
+    }
+    catch {
+        $cleanupFailures.Add($_.Exception.Message)
+    }
+    try {
         & kubectl `
             --kubeconfig $resolvedKubeconfig `
             -n rocketmq-system `
@@ -462,6 +542,6 @@ finally {
         Remove-Item -LiteralPath $runRoot -Recurse -Force
     }
     if ($cleanupFailures.Count -gt 0) {
-        throw "R1 wave cleanup failed: $($cleanupFailures -join '; ')"
+        throw "Wave action cleanup failed: $($cleanupFailures -join '; ')"
     }
 }
