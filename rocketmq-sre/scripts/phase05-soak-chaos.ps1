@@ -334,9 +334,9 @@ function Wait-NewReadyPod(
     throw "A replacement Pod for $Namespace selector '$Selector' did not become ready."
 }
 
-function Get-PvcUidSet {
+function Get-PvcUidSet([string]$Namespace) {
     $list = Get-KubernetesObject @(
-        '--namespace', 'rocketmq-system',
+        '--namespace', $Namespace,
         'get', 'persistentvolumeclaims',
         '--output', 'json'
     )
@@ -345,6 +345,58 @@ function Get-PvcUidSet {
             Sort-Object { $_.metadata.name } |
             ForEach-Object { "$($_.metadata.name)=$($_.metadata.uid)" }
     ) -join ',')
+}
+
+function Get-PostgresPersistenceSnapshot {
+    $pod = Get-PodIdentity `
+        'rocketmq-sre' `
+        'app.kubernetes.io/name=rocketmq-sre-postgres'
+    if (-not $pod.ready) {
+        throw 'PostgreSQL was not ready for persistence verification.'
+    }
+    $query = @'
+SELECT json_build_object(
+    'migrations', (SELECT COUNT(*) FROM _sqlx_migrations),
+    'clusters', (SELECT COUNT(*) FROM clusters),
+    'connector_sessions', (SELECT COUNT(*) FROM connector_channel_sessions)
+)::text;
+'@
+    $result = Invoke-Kubectl @(
+        '--namespace', 'rocketmq-sre',
+        'exec', $pod.name, '--',
+        'psql', '--username=rocketmq_sre', '--dbname=rocketmq_sre',
+        '--tuples-only', '--no-align', '--command', $query
+    )
+    $snapshot = $result.Output.Trim() | ConvertFrom-Json
+    if (
+        [int64]$snapshot.migrations -lt 1 -or
+        [int64]$snapshot.clusters -lt 1 -or
+        [int64]$snapshot.connector_sessions -lt 1
+    ) {
+        throw 'PostgreSQL persistence verification requires migrated onboarding and Connector state.'
+    }
+    [ordered]@{
+        migrations = [int64]$snapshot.migrations
+        clusters = [int64]$snapshot.clusters
+        connector_sessions = [int64]$snapshot.connector_sessions
+    }
+}
+
+function Wait-AllWorkloadsReady([string]$FaultId) {
+    $deadline = [DateTimeOffset]::UtcNow.AddMinutes(5)
+    do {
+        $snapshot = Get-ReadinessSnapshot
+        if ($snapshot.all_ready) {
+            return
+        }
+        Start-Sleep -Seconds 2
+    } while ([DateTimeOffset]::UtcNow -lt $deadline)
+    $unready = @(
+        $snapshot.workloads |
+            Where-Object { $_.status -ne 'ready' } |
+            ForEach-Object { $_.key }
+    ) -join ', '
+    throw "Cluster dependencies did not recover after fault '$FaultId': $unready"
 }
 
 function Convert-MemoryBytes([string]$Value) {
@@ -505,6 +557,7 @@ function Invoke-CollectorOutageFault {
         'observability' `
         'otel-collector' `
         $collectorOriginalReplicas
+    Wait-AllWorkloadsReady 'collector_outage'
     $timer.Stop()
     $faultRecords.Add([ordered]@{
         id = 'collector_outage'
@@ -593,6 +646,7 @@ function Invoke-WorkloadOutageFault(
             Wait-WorkloadReplicaCount $Namespace $Resource $Name $originalReplicas
         }
     }
+    Wait-AllWorkloadsReady $Id
     $after = Get-PodIdentity $Namespace $Selector
     if ($before.uid -eq $after.uid) {
         throw "Fault '$Id' did not replace its target Pod."
@@ -659,6 +713,7 @@ function Invoke-Fault([string]$Id) {
                 @('rocketmq-sre/deployment/sre-model-mock')
         }
         'postgres_pod_replacement' {
+            $persistenceBefore = Get-PostgresPersistenceSnapshot
             Invoke-WorkloadOutageFault `
                 $Id `
                 'rocketmq-sre' `
@@ -672,6 +727,18 @@ function Invoke-Fault([string]$Id) {
                     'rocketmq-sre/deployment/sre-execution-agent',
                     'rocketmq-system/deployment/rocketmq-mcp'
                 )
+            $persistenceAfter = Get-PostgresPersistenceSnapshot
+            if (
+                $persistenceBefore.migrations -ne $persistenceAfter.migrations -or
+                $persistenceBefore.clusters -ne $persistenceAfter.clusters -or
+                $persistenceBefore.connector_sessions -ne $persistenceAfter.connector_sessions
+            ) {
+                throw 'PostgreSQL durable state changed across Pod replacement.'
+            }
+            $fault = $faultRecords[$faultRecords.Count - 1]
+            $fault['postgres_persistence_verified'] = $true
+            $fault['postgres_persistence_before'] = $persistenceBefore
+            $fault['postgres_persistence_after'] = $persistenceAfter
         }
         'broker_pod_replacement' {
             Invoke-PodReplacementFault `
@@ -728,9 +795,13 @@ $collectorOriginalReplicas = [int]$collector.spec.replicas
 if ($collectorOriginalReplicas -lt 1) {
     throw 'The Collector must be running before the soak.'
 }
-$pvcUidsBefore = Get-PvcUidSet
-if ([string]::IsNullOrWhiteSpace($pvcUidsBefore)) {
+$brokerPvcUidsBefore = Get-PvcUidSet 'rocketmq-system'
+if ([string]::IsNullOrWhiteSpace($brokerPvcUidsBefore)) {
     throw 'Broker PVC identity evidence is empty.'
+}
+$postgresPvcUidsBefore = Get-PvcUidSet 'rocketmq-sre'
+if ([string]::IsNullOrWhiteSpace($postgresPvcUidsBefore)) {
+    throw 'PostgreSQL PVC identity evidence is empty.'
 }
 $node = Invoke-Native docker @('inspect', '--format', '{{.Name}}', $KindNodeContainer) -AllowFailure
 if ($node.ExitCode -ne 0) {
@@ -797,17 +868,29 @@ try {
     if (-not $final.all_ready) {
         throw 'The soak cluster did not return to full readiness.'
     }
-    $pvcUidsAfter = Get-PvcUidSet
-    if ($pvcUidsAfter -ne $pvcUidsBefore) {
+    $brokerPvcUidsAfter = Get-PvcUidSet 'rocketmq-system'
+    if ($brokerPvcUidsAfter -ne $brokerPvcUidsBefore) {
         throw 'Broker PVC UIDs changed during the soak.'
+    }
+    $postgresPvcUidsAfter = Get-PvcUidSet 'rocketmq-sre'
+    if ($postgresPvcUidsAfter -ne $postgresPvcUidsBefore) {
+        throw 'PostgreSQL PVC UIDs changed during the soak.'
     }
     $readySamples = @($sampleRecords | Where-Object { $_.all_ready }).Count
     $availabilityRatio = $readySamples / [double]$sampleRecords.Count
     if ($availabilityRatio -lt 0.99) {
         throw "Soak sampled availability $availabilityRatio below 0.99."
     }
-    $maximumCpu = ($resourceRecords | Measure-Object -Property cpu_percent -Maximum).Maximum
-    $maximumMemory = ($resourceRecords | Measure-Object -Property memory_bytes -Maximum).Maximum
+    $cpuValues = @(
+        $resourceRecords |
+            ForEach-Object { [double]$_['cpu_percent'] }
+    )
+    $memoryValues = @(
+        $resourceRecords |
+            ForEach-Object { [int64]$_['memory_bytes'] }
+    )
+    $maximumCpu = ($cpuValues | Measure-Object -Maximum).Maximum
+    $maximumMemory = ($memoryValues | Measure-Object -Maximum).Maximum
 
     $repositoryRoot = [IO.Path]::GetFullPath(
         (Join-Path (Split-Path -Parent $PSScriptRoot) '..')
@@ -836,6 +919,7 @@ try {
         faults = @($faultRecords)
         data_plane_independent = $true
         broker_pvc_uids_preserved = $true
+        postgres_pvc_uids_preserved = $true
         unresolved_faults = @()
         final_all_ready = $true
         samples = @($sampleRecords)

@@ -12,10 +12,13 @@ The runner uses the repository-pinned versions:
 - Helm `v4.2.3`
 - `kindest/node:v1.32.2@sha256:f226345927d7e348497136874b6d207e0b32cc52154ad8323129352923a3142f`
 
-PostgreSQL runs inside the cluster with an ephemeral `emptyDir`. The overlay
-also starts the SRE Control Plane and UI, places the Connector beside MCP as a
-loopback-only sidecar, and adds OTel Collector, Prometheus, Loki, and Tempo.
-The Broker uses a 10 GiB `standard` StorageClass PVC named
+PostgreSQL runs inside the cluster with a 2 GiB `standard` StorageClass PVC
+named `data-postgres-0`. Its StatefulSet retains the claim across Pod
+replacement so Connector sessions, onboarding state, and migrations survive
+the database fault used by the soak acceptance. The overlay also starts the
+SRE Control Plane and UI, places the Connector beside MCP as a loopback-only
+sidecar, and adds OTel Collector, Prometheus, Loki, and Tempo. The Broker uses
+a separate 10 GiB `standard` StorageClass PVC named
 `data-rocketmq-broker-0`. Its StatefulSet retains the claim across Pod
 replacement so the DR acceptance can verify message-history RPO and RTO.
 This single-node local-path fixture does not claim node-loss, Kind-cluster
