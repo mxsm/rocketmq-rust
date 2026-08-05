@@ -474,6 +474,18 @@ class FaultMatrixGuardTests(unittest.TestCase):
         result = self.run_guard("--policy-only", expect_success=False)
         self.assertIn("leaderAfterOrdinal", result.stderr)
 
+    def test_ha_rto_excludes_model_test_compilation(self) -> None:
+        runner = self.root / "scripts" / "kind-architecture-refactor-e2e.ps1"
+        source = runner.read_text(encoding="utf-8")
+        preparation_start = source.index("$haPreparationTimer = [Diagnostics.Stopwatch]::StartNew()")
+        rto_start = source.index("$haTimer = [Diagnostics.Stopwatch]::StartNew()", preparation_start)
+        execution_start = source.index("$haLagModel = Invoke-ModelTest", rto_start)
+        preparation = source[preparation_start:rto_start]
+
+        self.assertEqual(preparation.count("'--no-run'"), 2)
+        self.assertLess(rto_start, execution_start)
+        self.assertIn("preparation_seconds_excluded", source[execution_start:])
+
 
 if __name__ == "__main__":
     unittest.main()

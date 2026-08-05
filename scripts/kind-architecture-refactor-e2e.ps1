@@ -1521,6 +1521,18 @@ spec: { selector: { app.kubernetes.io/name: otel-collector }, ports: [{ name: ot
         network_after = "$($networkCordon.Output)`n$($networkCleanup.Output)`n$($networkReady.Output)`n$($networkUncordon.Output)`n$networkAfter"
     })
 
+    $haPreparationTimer = [Diagnostics.Stopwatch]::StartNew()
+    Invoke-Native cargo @(
+        'test', '-p', 'rocketmq-store',
+        '--test', 'ha_semantics_tests',
+        '--no-run'
+    ) | Out-Null
+    Invoke-Native cargo @(
+        'test', '-p', 'rocketmq-broker',
+        '--lib',
+        '--no-run'
+    ) | Out-Null
+    $haPreparationTimer.Stop()
     $haTimer = [Diagnostics.Stopwatch]::StartNew()
     $haLagModel = Invoke-ModelTest 'rocketmq-store' @(
         '--test',
@@ -1547,7 +1559,10 @@ spec: { selector: { app.kubernetes.io/name: otel-collector }, ports: [{ name: ot
         promotion_status = $haModel.Output
         message_after = $haMessage.Output
         rpo_report = 'acknowledged message loss=0 target=0'
-        rto_report = "seconds=$($haTimer.Elapsed.TotalSeconds) target=180"
+        rto_report = (
+            "seconds=$($haTimer.Elapsed.TotalSeconds) target=180 " +
+            "preparation_seconds_excluded=$($haPreparationTimer.Elapsed.TotalSeconds)"
+        )
     })
 
     $snapshotModel = Invoke-ModelTest 'rocketmq-controller' @(
