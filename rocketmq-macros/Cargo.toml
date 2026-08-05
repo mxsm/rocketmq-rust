@@ -32,9 +32,10 @@ rust-version.workspace = true
 proc-macro = true
 
 [dependencies]
-syn         = "2.0"
-quote       = "1.0"
-proc-macro2 = "1.0"
+syn              = "2.0"
+quote            = "1.0"
+proc-macro2      = "1.0"
+proc-macro-crate = "3.4"
 
 [dev-dependencies]
 # Temporarily disabled for publishing - these crates are not yet published as v0.7.0

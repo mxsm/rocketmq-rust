@@ -15,7 +15,7 @@ RocketMQ-Rust protocol 类型、请求头和 remoting 序列化辅助能力使�
 
 | 宏 | 状态 | 生成能力 |
 |----|------|----------|
-| `RequestHeaderCodecV2` | 主用 | 为具名 Rust struct 生成 `CommandCustomHeader::to_map` 和 `FromMap::from`，支持优化后的 map 解码、required 字段检查、`serde(rename)`、`serde(alias)` 和 flattened nested header。 |
+| `RequestHeaderCodecV2` | 主用 | 为具名 Rust struct 生成 `CommandCustomHeader::to_map`、低分配 `encode_into_map` 和借用式 `FromMap::from`，支持确定性 alias、required、泛型和 flattened nested header。 |
 | `RequestHeaderCodec` | 兼容 | 早期 request-header codec derive，支持 Java 风格 camelCase key、`#[required]`、可选字段、primitive parse 和 flattened nested header。 |
 | `RemotingSerializable` | 工具 | 为类型实现 `crate::protocol::RemotingSerializable`。当前多数 remoting 路径优先使用 serde-backed blanket impl。 |
 
@@ -26,7 +26,7 @@ typed protocol header struct
         |
         | #[derive(RequestHeaderCodecV2)]
         v
-generated constants + CommandCustomHeader::to_map()
+generated constants + CommandCustomHeader::encode_into_map()
         |
         v
 RocketMQ remoting ext fields: HashMap<CheetahString, CheetahString>
@@ -35,16 +35,21 @@ RocketMQ remoting ext fields: HashMap<CheetahString, CheetahString>
 generated FromMap::from() with required-field validation and parsing
 ```
 
-生成代码有意面向 `rocketmq-remoting` 使用的 protocol contract：
+生成代码面向 `rocketmq-protocol` 的公共 contract：
 
-- `crate::protocol::command_custom_header::CommandCustomHeader`
-- `crate::protocol::command_custom_header::FromMap`
-- `crate::protocol::RemotingSerializable`
-- `cheetah_string::CheetahString`
-- `rocketmq_error::RocketMQError`
+- `rocketmq_protocol::protocol::command_custom_header::CommandCustomHeader`
+- `rocketmq_protocol::protocol::command_custom_header::FromMap`
+- `rocketmq_protocol::HeaderMap`
 
-由于宏展开使用 `crate::protocol...` 路径，这些宏主要面向暴露兼容 protocol 模块的 crate。在当前 workspace 中，
-主要使用方是 `rocketmq-remoting`。
+derive 能自动解析 `Cargo.toml` 中重命名后的 `rocketmq-protocol` 依赖。生成代码或 re-export 场景也可以显式指定路径：
+
+```rust
+#[derive(RequestHeaderCodecV2)]
+#[request_header_codec_v2(crate = "path::to::protocol_api")]
+struct Header {
+    queue_id: i32,
+}
+```
 
 ## 快速开始
 
@@ -72,6 +77,7 @@ pub struct SendMessageRequestHeader {
 
 - wire key 对应的 associated string constants；
 - `CommandCustomHeader::to_map`，并省略 `None` 值；
+- `CommandCustomHeader::encode_into_map`，将 flattened 字段直接写入同一个目标 map；
 - `FromMap::from`，将 `CheetahString` map value 转回类型化字段；
 - `#[required]` 字段的缺失校验；
 - 非 required、非 `Option` 字段缺失时使用默认值。
@@ -87,7 +93,12 @@ pub struct SendMessageRequestHeader {
 | `#[serde(flatten)]` nested header | 合并 nested header map。 | 通过 nested type 的 `FromMap::from` 重建。 |
 
 `RequestHeaderCodecV2` 默认将 snake_case 字段名转换为 camelCase wire key；如果存在 `serde(rename = "...")`，则使用
-rename 指定的 wire key。`serde(alias = "...")` 会在解码时作为兼容 wire name 接受。
+rename 指定的 wire key。`serde(alias = "...")` 按声明顺序在 canonical key 之后查找，因此结果不受
+`HashMap` 迭代顺序影响。
+
+tuple/unit struct、enum、union、空或冲突 wire key、`#[required] Option<T>`、required 与
+`serde(default)` 组合、scalar 与 `serde(flatten)` 组合都会在编译期报错。跨 flattened child 的 key
+冲突由仓库 schema comparator 检查，因为 derive macro 无法检查另一类型的字段。
 
 ## Required 字段
 
@@ -110,7 +121,8 @@ pub struct QueryMessageRequestHeader {
 | 路径 | 职责 |
 |------|------|
 | [`src/lib.rs`](src/lib.rs) | 公共 proc-macro 入口和共享类型辅助函数。 |
-| [`src/request_header_custom.rs`](src/request_header_custom.rs) | `RequestHeaderCodec` 和 `RequestHeaderCodecV2` 展开逻辑。 |
+| [`src/request_header_custom.rs`](src/request_header_custom.rs) | 旧版 `RequestHeaderCodec` 展开逻辑。 |
+| [`src/request_header_codec_v2/`](src/request_header_codec_v2/) | V2 属性解析、语义模型、校验和代码生成。 |
 | [`src/remoting_serializable.rs`](src/remoting_serializable.rs) | `RemotingSerializable` derive 展开逻辑。 |
 | [`Cargo.toml`](Cargo.toml) | Proc-macro crate 配置和宏解析依赖。 |
 
@@ -118,7 +130,7 @@ pub struct QueryMessageRequestHeader {
 
 - Stable Rust `1.95.0`，使用仓库固定的工具链。
 - 使用仓库中的 [`../rust-toolchain.toml`](../rust-toolchain.toml) 工具链。
-- 消费方 crate 需要为生成的 protocol trait 实现暴露兼容的 `crate::protocol` 模块路径。
+- 直接或重命名的 `rocketmq-protocol` 依赖，或显式 `request_header_codec_v2(crate = "...")` 路径。
 
 ## 安装
 
@@ -136,7 +148,7 @@ rocketmq-macros = { path = "../rocketmq-macros" }
 rocketmq-macros = "1.0.0"
 ```
 
-外部使用只有在消费方 crate 暴露生成代码所需的相同 protocol traits 和辅助类型时才实际可行。
+依赖重命名无需修改源代码。`tests/fixtures/renamed-consumer` 会通过离线 Cargo check 验证该契约。
 
 ## 验证
 
@@ -144,12 +156,15 @@ rocketmq-macros = "1.0.0"
 
 ```bash
 cargo test -p rocketmq-macros --lib
+cargo test -p rocketmq-protocol --test request_header_codec_v2_wire_snapshot
+cargo test -p rocketmq-protocol --test request_header_codec_v2_ui
+cargo check --offline --manifest-path rocketmq-macros/tests/fixtures/renamed-consumer/Cargo.toml
 ```
 
-由于这些宏被 `rocketmq-remoting` 大量使用，修改宏展开逻辑后还应验证下游 protocol header：
+由于该宏被大多数 protocol header 使用，修改展开逻辑后还应验证 protocol crate：
 
 ```bash
-cargo test -p rocketmq-remoting --lib
+cargo test -p rocketmq-protocol --lib
 ```
 
 如果修改 Rust 代码，需要在仓库根目录执行 workspace 级验证：

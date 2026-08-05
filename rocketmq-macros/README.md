@@ -17,7 +17,7 @@ directly.
 
 | Macro | Status | What it generates |
 |-------|--------|-------------------|
-| `RequestHeaderCodecV2` | Primary | `CommandCustomHeader::to_map` and `FromMap::from` for named Rust structs, with optimized map decoding, required-field checks, `serde(rename)`, `serde(alias)`, and flattened nested headers. |
+| `RequestHeaderCodecV2` | Primary | `CommandCustomHeader::to_map`, allocation-aware `encode_into_map`, and borrowed `FromMap::from` generation for named Rust structs, with deterministic aliases, required-field checks, generics, and flattened nested headers. |
 | `RequestHeaderCodec` | Compatibility | Earlier request-header codec derive with Java-style camelCase keys, `#[required]`, optional fields, primitive parsing, and flattened nested headers. |
 | `RemotingSerializable` | Utility | Implements `crate::protocol::RemotingSerializable` for a type. In most current remoting paths, serde-backed blanket implementations are preferred. |
 
@@ -28,7 +28,7 @@ typed protocol header struct
         |
         | #[derive(RequestHeaderCodecV2)]
         v
-generated constants + CommandCustomHeader::to_map()
+generated constants + CommandCustomHeader::encode_into_map()
         |
         v
 RocketMQ remoting ext fields: HashMap<CheetahString, CheetahString>
@@ -37,16 +37,22 @@ RocketMQ remoting ext fields: HashMap<CheetahString, CheetahString>
 generated FromMap::from() with required-field validation and parsing
 ```
 
-The generated code intentionally targets the protocol contracts used by `rocketmq-remoting`:
+The generated code targets the public protocol contracts from `rocketmq-protocol`:
 
-- `crate::protocol::command_custom_header::CommandCustomHeader`
-- `crate::protocol::command_custom_header::FromMap`
-- `crate::protocol::RemotingSerializable`
-- `cheetah_string::CheetahString`
-- `rocketmq_error::RocketMQError`
+- `rocketmq_protocol::protocol::command_custom_header::CommandCustomHeader`
+- `rocketmq_protocol::protocol::command_custom_header::FromMap`
+- `rocketmq_protocol::HeaderMap`
 
-Because the expansion uses `crate::protocol...` paths, these macros are intended for crates that expose compatible
-protocol modules. Inside this workspace, that is primarily `rocketmq-remoting`.
+The derive resolves `rocketmq-protocol` even when the dependency is renamed in `Cargo.toml`. An explicit path can be
+provided for generated or re-exported protocol APIs:
+
+```rust
+#[derive(RequestHeaderCodecV2)]
+#[request_header_codec_v2(crate = "path::to::protocol_api")]
+struct Header {
+    queue_id: i32,
+}
+```
 
 ## Quick Start
 
@@ -74,6 +80,7 @@ The derive generates:
 
 - associated string constants for the wire keys;
 - `CommandCustomHeader::to_map`, omitting `None` values;
+- `CommandCustomHeader::encode_into_map`, writing flattened fields into one destination map;
 - `FromMap::from`, converting `CheetahString` map values back into typed fields;
 - required-field errors for fields annotated with `#[required]`;
 - default values for missing non-required, non-`Option` fields.
@@ -89,7 +96,13 @@ The derive generates:
 | `#[serde(flatten)]` nested header | Merge the nested header map. | Reconstruct by calling the nested type's `FromMap::from`. |
 
 `RequestHeaderCodecV2` uses the field name converted from snake_case to camelCase unless a `serde(rename = "...")`
-attribute is present. `serde(alias = "...")` values are accepted during decoding for backwards-compatible wire names.
+attribute is present. `serde(alias = "...")` values are checked in declaration order during decoding, after the
+canonical key. Canonical values therefore win independently of `HashMap` iteration order.
+
+Invalid combinations are rejected at compile time, including tuple/unit structs, enums, unions, empty or colliding
+wire keys, `#[required] Option<T>`, required fields with `serde(default)`, and scalar fields with `serde(flatten)`.
+Key collisions inside flattened child headers are checked by the repository schema comparator because a derive macro
+cannot inspect another type's fields.
 
 ## Required Fields
 
@@ -112,7 +125,8 @@ This mirrors the intent of Java RocketMQ's `@CFNotNull` annotation. Missing requ
 | Path | Purpose |
 |------|---------|
 | [`src/lib.rs`](src/lib.rs) | Public proc-macro entry points and shared type helpers. |
-| [`src/request_header_custom.rs`](src/request_header_custom.rs) | `RequestHeaderCodec` and `RequestHeaderCodecV2` expansion logic. |
+| [`src/request_header_custom.rs`](src/request_header_custom.rs) | Legacy `RequestHeaderCodec` expansion logic. |
+| [`src/request_header_codec_v2/`](src/request_header_codec_v2/) | V2 attribute parsing, semantic model, validation, and code generation. |
 | [`src/remoting_serializable.rs`](src/remoting_serializable.rs) | `RemotingSerializable` derive expansion. |
 | [`Cargo.toml`](Cargo.toml) | Proc-macro crate configuration and macro parsing dependencies. |
 
@@ -120,7 +134,7 @@ This mirrors the intent of Java RocketMQ's `@CFNotNull` annotation. Missing requ
 
 - Stable Rust `1.95.0`, using the pinned repository toolchain.
 - The repository toolchain from [`../rust-toolchain.toml`](../rust-toolchain.toml).
-- A consuming crate with compatible `crate::protocol` module paths for generated protocol trait implementations.
+- A direct or renamed `rocketmq-protocol` dependency, or an explicit `request_header_codec_v2(crate = "...")` path.
 
 ## Installation
 
@@ -138,8 +152,8 @@ For external consumers:
 rocketmq-macros = "1.0.0"
 ```
 
-External use is only practical when the consuming crate exposes the same protocol traits and supporting types expected
-by the generated code.
+Renamed dependencies are supported without source changes. The standalone fixture under
+`tests/fixtures/renamed-consumer` verifies this contract with an offline Cargo check.
 
 ## Validation
 
@@ -147,13 +161,15 @@ Focused checks for this crate:
 
 ```bash
 cargo test -p rocketmq-macros --lib
+cargo test -p rocketmq-protocol --test request_header_codec_v2_wire_snapshot
+cargo test -p rocketmq-protocol --test request_header_codec_v2_ui
+cargo check --offline --manifest-path rocketmq-macros/tests/fixtures/renamed-consumer/Cargo.toml
 ```
 
-Because the macros are consumed heavily by `rocketmq-remoting`, validate downstream protocol headers after changing macro
-generation logic:
+Because the macro is consumed by most protocol headers, validate the protocol crate after changing generation logic:
 
 ```bash
-cargo test -p rocketmq-remoting --lib
+cargo test -p rocketmq-protocol --lib
 ```
 
 Workspace-level Rust validation is run from the repository root when Rust code changes:

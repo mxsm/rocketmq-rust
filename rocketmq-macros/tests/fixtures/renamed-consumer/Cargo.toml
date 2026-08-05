@@ -1,0 +1,11 @@
+[package]
+name = "request-header-codec-v2-renamed-consumer"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+protocol_api = { package = "rocketmq-protocol", path = "../../../../rocketmq-protocol" }
+rocketmq-macros = { path = "../../.." }
