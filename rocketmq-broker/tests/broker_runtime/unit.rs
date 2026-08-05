@@ -3605,6 +3605,7 @@ async fn phase5_admin_config_runtime_stats_and_empty_connection_queries_are_comp
     let consume_stats_header = GetConsumeStatsRequestHeader {
         consumer_group: group.clone(),
         topic: topic.clone(),
+        topic_list: None,
         topic_request_header: None,
     };
     let mut consume_stats_request =
@@ -3784,7 +3785,7 @@ async fn phase6_store_offset_and_consume_queue_queries_return_decodable_models()
         index: 0,
         count: 16,
         consumer_group: None,
-        rpc: None,
+        topic_request_header: None,
     };
     let mut query_cq_request = RemotingCommand::create_request_command(RequestCode::QueryConsumeQueue, query_cq_header);
     query_cq_request.make_custom_header_to_net();

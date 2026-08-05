@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "id": "consumer-status-inherited-rocketmq",
+  "javaCommit": "2daf0e2ca91a1592d18235d43e5d709d1c35d15f",
+  "rustTypeId": "rocketmq_protocol::protocol::header::get_consumer_status_request_header::GetConsumerStatusRequestHeader",
+  "javaClass": "org.apache.rocketmq.remoting.protocol.header.GetConsumerStatusRequestHeader",
+  "requestCode": "INVOKE_BROKER_TO_GET_CONSUMER_STATUS",
+  "requestCodeValue": 223,
+  "wireCodeValue": 223,
+  "direction": "request",
+  "serializeType": "ROCKETMQ",
+  "actualPath": "normal",
+  "inputFields": {
+    "topic": "TopicA",
+    "group": "group-a",
+    "clientAddr": "127.0.0.1:10911",
+    "lo": true,
+    "ns": "tenant-a",
+    "nsd": true,
+    "bname": "broker-a",
+    "oway": false
+  },
+  "declaredLogicalFields": {
+    "bname": "broker-a",
+    "clientAddr": "127.0.0.1:10911",
+    "group": "group-a",
+    "lo": "true",
+    "ns": "tenant-a",
+    "nsd": "true",
+    "oway": "false",
+    "topic": "TopicA"
+  },
+  "canonicalExtFields": {
+    "bname": "broker-a",
+    "clientAddr": "127.0.0.1:10911",
+    "group": "group-a",
+    "lo": "true",
+    "ns": "tenant-a",
+    "nsd": "true",
+    "oway": "false",
+    "topic": "TopicA"
+  },
+  "frameBase64": "AAAApgEAAKIA3wwB9QAAAAcAAAAAAAAAAAAAAI0ACmNsaWVudEFkZHIAAAAPMTI3LjAuMC4xOjEwOTExAAJsbwAAAAR0cnVlAARvd2F5AAAABWZhbHNlAAJucwAAAAh0ZW5hbnQtYQAFYm5hbWUAAAAIYnJva2VyLWEABXRvcGljAAAABlRvcGljQQADbnNkAAAABHRydWUABWdyb3VwAAAAB2dyb3VwLWE=",
+  "frameLength": 170,
+  "fnv1a64": "9704096b4f5c2cee",
+  "opaque": 7,
+  "version": 501,
+  "language": "RUST"
+}

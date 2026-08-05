@@ -55,6 +55,12 @@ pub struct NotificationRequestHeader {
     #[serde(rename = "exp", skip_serializing_if = "Option::is_none")]
     pub exp: Option<CheetahString>,
 
+    #[serde(rename = "isLiteConsumer", default)]
+    pub is_lite_consumer: bool,
+
+    #[serde(rename = "clientId", skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<CheetahString>,
+
     #[serde(flatten)]
     pub topic_request_header: Option<TopicRequestHeader>,
 }
@@ -77,6 +83,8 @@ mod tests {
             attempt_id: Some(CheetahString::from("attempt_1")),
             exp_type: Some(CheetahString::from("TAG")),
             exp: Some(CheetahString::from("tag-a")),
+            is_lite_consumer: false,
+            client_id: Some(CheetahString::from("client-a")),
             topic_request_header: None,
         };
 
@@ -103,6 +111,8 @@ mod tests {
             attempt_id: None,
             exp_type: None,
             exp: None,
+            is_lite_consumer: false,
+            client_id: None,
             topic_request_header: None,
         };
 

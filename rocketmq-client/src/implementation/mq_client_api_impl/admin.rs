@@ -879,7 +879,7 @@ impl MQClientAPIImpl {
             } else {
                 Some(consumer_group)
             },
-            rpc: None,
+            topic_request_header: None,
         };
         let request = RemotingCommand::create_request_command(RequestCode::QueryConsumeQueue, request_header);
         let response = self

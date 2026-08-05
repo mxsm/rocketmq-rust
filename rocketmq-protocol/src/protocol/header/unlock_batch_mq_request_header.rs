@@ -45,9 +45,9 @@ mod tests {
 
         let json = serde_json::to_string(&header).unwrap();
 
-        assert!(json.contains("\"namespace\":\"test_ns\""));
-        assert!(json.contains("\"brokerName\":\"broker_a\""));
-        assert!(json.contains("\"oneway\":true"));
+        assert!(json.contains("\"ns\":\"test_ns\""));
+        assert!(json.contains("\"bname\":\"broker_a\""));
+        assert!(json.contains("\"oway\":true"));
     }
 
     #[test]

@@ -19,7 +19,9 @@ use serde::Serialize;
 #[derive(Debug, Clone, Serialize, Deserialize, RequestHeaderCodecV2, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct QueryMessageResponseHeader {
+    #[required]
     pub index_last_update_timestamp: i64,
+    #[required]
     pub index_last_update_phyoffset: i64,
 }
 

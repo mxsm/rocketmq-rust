@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "id": "send-response-fast-rocketmq",
+  "javaCommit": "2daf0e2ca91a1592d18235d43e5d709d1c35d15f",
+  "rustTypeId": "rocketmq_protocol::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader",
+  "javaClass": "org.apache.rocketmq.remoting.protocol.header.SendMessageResponseHeader",
+  "requestCode": "SEND_MESSAGE",
+  "requestCodeValue": 10,
+  "wireCodeValue": 10,
+  "direction": "response",
+  "serializeType": "ROCKETMQ",
+  "actualPath": "fast",
+  "inputFields": {
+    "msgId": "7F00000100002A9F0000000000000001",
+    "queueId": 1,
+    "queueOffset": 99,
+    "transactionId": "tx-a",
+    "batchUniqId": "batch-a",
+    "recallHandle": "recall-a"
+  },
+  "declaredLogicalFields": {
+    "batchUniqId": "batch-a",
+    "msgId": "7F00000100002A9F0000000000000001",
+    "queueId": "1",
+    "queueOffset": "99",
+    "recallHandle": "recall-a",
+    "transactionId": "tx-a"
+  },
+  "canonicalExtFields": {
+    "batchUniqId": "batch-a",
+    "msgId": "7F00000100002A9F0000000000000001",
+    "queueId": "1",
+    "queueOffset": "99",
+    "recallHandle": "recall-a",
+    "transactionId": "tx-a"
+  },
+  "frameBase64": "AAAArgEAAKoACgwB9QAAAAcAAAAAAAAAAAAAAJUABW1zZ0lkAAAAIDdGMDAwMDAxMDAwMDJBOUYwMDAwMDAwMDAwMDAwMDAxAAdxdWV1ZUlkAAAAATEAC3F1ZXVlT2Zmc2V0AAAAAjk5AA10cmFuc2FjdGlvbklkAAAABHR4LWEAC2JhdGNoVW5pcUlkAAAAB2JhdGNoLWEADHJlY2FsbEhhbmRsZQAAAAhyZWNhbGwtYQ==",
+  "frameLength": 178,
+  "fnv1a64": "2a693c3b067e457e",
+  "opaque": 7,
+  "version": 501,
+  "language": "RUST"
+}
