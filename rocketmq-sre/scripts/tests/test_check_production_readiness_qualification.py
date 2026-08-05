@@ -24,6 +24,7 @@ from pathlib import Path
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "check_production_readiness_qualification.py"
+SCRIPTS = SCRIPT.parent
 SPEC = importlib.util.spec_from_file_location("check_production_readiness_qualification", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 MODULE = importlib.util.module_from_spec(SPEC)
@@ -126,6 +127,15 @@ class ProductionReadinessQualificationTests(unittest.TestCase):
 
     def test_repository_manifest_is_valid(self) -> None:
         self.assertEqual(MODULE.validate_manifest(self.manifest), [])
+
+    def test_restore_uses_the_enterprise_database_url(self) -> None:
+        restore = (SCRIPTS / "phase05-control-plane-restore.ps1").read_text(encoding="utf-8")
+        enterprise = (SCRIPTS / "phase05-enterprise-smoke.ps1").read_text(encoding="utf-8")
+        self.assertIn("[string]$DatabaseUrl = ''", restore)
+        self.assertIn("$databaseUri.Port", restore)
+        self.assertIn("$databaseUri.UserInfo", restore)
+        self.assertNotIn("@127.0.0.1:5432/$restoreDatabase", restore)
+        self.assertIn("-DatabaseUrl $DatabaseUrl", enterprise)
 
     def test_complete_report_is_valid(self) -> None:
         self.assertEqual(MODULE.validate_report(self.report, self.manifest), [])

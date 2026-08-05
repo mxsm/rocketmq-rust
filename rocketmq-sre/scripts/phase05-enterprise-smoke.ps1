@@ -209,6 +209,7 @@ try {
 
     & $restoreScript `
         -PostgresContainer $PostgresContainer `
+        -DatabaseUrl $DatabaseUrl `
         -CargoTargetDir $CargoTargetDir `
         -CargoHome $CargoHome `
         -TemporaryRoot $TemporaryRoot `
