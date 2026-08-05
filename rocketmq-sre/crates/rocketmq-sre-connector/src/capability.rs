@@ -17,7 +17,6 @@ use std::collections::BTreeSet;
 
 use chrono::DateTime;
 use chrono::Utc;
-use rmcp::model::TaskSupport;
 use rmcp::model::Tool;
 use serde::Deserialize;
 use serde::Serialize;
@@ -195,16 +194,10 @@ pub fn verify_manifest(
                 format!("tool `{}` does not publish read-only annotations", manifest_tool.name),
             )
         })?;
-        if annotations.read_only_hint != Some(true)
-            || annotations.destructive_hint == Some(true)
-            || live_tool.task_support() != TaskSupport::Forbidden
-        {
+        if annotations.read_only_hint != Some(true) || annotations.destructive_hint == Some(true) {
             return Err(ConnectorError::capability(
                 ConnectorErrorCode::CapabilityMismatch,
-                format!(
-                    "tool `{}` live annotations are not read-only and task-forbidden",
-                    manifest_tool.name
-                ),
+                format!("tool `{}` live annotations are not read-only", manifest_tool.name),
             ));
         }
         let schema_digest = digest_value(Value::Object(Map::from_iter([
@@ -309,7 +302,6 @@ mod tests {
     use std::sync::Arc;
 
     use rmcp::model::ToolAnnotations;
-    use rmcp::model::ToolExecution;
     use serde_json::json;
 
     use super::*;
@@ -337,7 +329,6 @@ mod tests {
             Some(true),
             Some(false),
         ))
-        .with_execution(ToolExecution::default())
     }
 
     fn fixture() -> (CapabilityManifest, Vec<Tool>, BTreeSet<String>) {
@@ -398,6 +389,16 @@ mod tests {
         assert_eq!(
             verify_manifest(mutation, "local", &tools, &resources, None)
                 .expect_err("mutation must fail")
+                .code,
+            ConnectorErrorCode::CapabilityMismatch
+        );
+
+        let (mut tasks, tools, resources) = fixture();
+        tasks.tools[0].task_support = "optional".to_owned();
+        tasks.tool_surface_digest = digest_value(serde_json::to_value(&tasks.tools).expect("tools serialize"));
+        assert_eq!(
+            verify_manifest(tasks, "local", &tools, &resources, None)
+                .expect_err("task support must fail")
                 .code,
             ConnectorErrorCode::CapabilityMismatch
         );

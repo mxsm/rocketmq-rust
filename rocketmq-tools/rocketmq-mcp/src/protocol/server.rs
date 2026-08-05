@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use rmcp::model::CallToolRequestParams;
-use rmcp::model::CallToolResult;
+use rmcp::model::CallToolResponse;
 use rmcp::model::GetPromptRequestParams;
-use rmcp::model::GetPromptResult;
+use rmcp::model::GetPromptResponse;
 use rmcp::model::Implementation;
 use rmcp::model::InitializeRequestParams;
 use rmcp::model::InitializeResult;
@@ -26,6 +26,7 @@ use rmcp::model::ListToolsResult;
 use rmcp::model::PaginatedRequestParams;
 use rmcp::model::ProtocolVersion;
 use rmcp::model::ReadResourceRequestParams;
+use rmcp::model::ReadResourceResponse;
 use rmcp::model::ReadResourceResult;
 use rmcp::model::ServerCapabilities;
 use rmcp::model::ServerInfo;
@@ -169,7 +170,7 @@ impl ServerHandler for RocketmqMcpServer {
         &self,
         request: ReadResourceRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> Result<ReadResourceResult, ErrorData> {
+    ) -> Result<ReadResourceResponse, ErrorData> {
         let operation = crate::resources::uri::RocketmqResourceUri::parse(&request.uri)
             .map(|resource| resource.kind.metric_operation())
             .unwrap_or("invalid_resource_uri");
@@ -255,7 +256,7 @@ impl ServerHandler for RocketmqMcpServer {
         .instrument(span)
         .await;
         span_recorder.observe_call_result(&result);
-        result
+        result.map(Into::into)
     }
 
     async fn list_prompts(
@@ -273,11 +274,11 @@ impl ServerHandler for RocketmqMcpServer {
         &self,
         request: GetPromptRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> Result<GetPromptResult, ErrorData> {
+    ) -> Result<GetPromptResponse, ErrorData> {
         if !self.app.guard().allows_resources(&self.access_context(&context)?) {
             return Err(ErrorData::invalid_params("prompt access is denied", None));
         }
-        prompts::renderer::get_prompt(request)
+        prompts::renderer::get_prompt(request).map(Into::into)
     }
 
     async fn list_tools(
@@ -297,7 +298,7 @@ impl ServerHandler for RocketmqMcpServer {
         &self,
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, ErrorData> {
+    ) -> Result<CallToolResponse, ErrorData> {
         let query = self.app.query().as_ref().clone().with_cancellation(context.ct.clone());
         let access = self.access_context(&context)?;
         let result = ToolExecutor::new(query, self.app.guard().clone())
@@ -305,7 +306,7 @@ impl ServerHandler for RocketmqMcpServer {
             .call_with_request_id(request, &request_id_string(&context.id))
             .await;
         self.app.trace_cache_metrics();
-        result
+        result.map(Into::into)
     }
 
     fn get_tool(&self, name: &str) -> Option<Tool> {

@@ -1,6 +1,5 @@
 ---
-source: rocketmq-tools/rocketmq-mcp/src/tools/catalog.rs
-assertion_line: 361
+source: src/tools/catalog.rs
 expression: contracts
 ---
 [
@@ -13,9 +12,6 @@ expression: contracts
       "title": "RocketMQ cluster overview"
     },
     "description": "Summarize brokers, topic count, and consumer group count for one RocketMQ cluster.",
-    "execution": {
-      "taskSupport": "forbidden"
-    },
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
@@ -187,9 +183,6 @@ expression: contracts
       "title": "RocketMQ topic list"
     },
     "description": "List a bounded page of topics visible from one RocketMQ cluster.",
-    "execution": {
-      "taskSupport": "forbidden"
-    },
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
@@ -366,9 +359,6 @@ expression: contracts
       "title": "RocketMQ topic description"
     },
     "description": "Describe a topic with bounded queue route information.",
-    "execution": {
-      "taskSupport": "forbidden"
-    },
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
@@ -608,9 +598,6 @@ expression: contracts
       "title": "RocketMQ topic route"
     },
     "description": "Get bounded topic route data without exposing internal addresses by default.",
-    "execution": {
-      "taskSupport": "forbidden"
-    },
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
@@ -843,9 +830,6 @@ expression: contracts
       "title": "RocketMQ consumer groups"
     },
     "description": "List a bounded page of consumer groups and consumption summaries.",
-    "execution": {
-      "taskSupport": "forbidden"
-    },
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
@@ -1038,9 +1022,6 @@ expression: contracts
       "title": "RocketMQ consumer lag"
     },
     "description": "Get bounded per-queue lag for a topic and consumer group.",
-    "execution": {
-      "taskSupport": "forbidden"
-    },
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
@@ -1268,9 +1249,6 @@ expression: contracts
       "title": "RocketMQ broker description"
     },
     "description": "Describe broker state without exposing internal addresses by default.",
-    "execution": {
-      "taskSupport": "forbidden"
-    },
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
@@ -1438,9 +1416,6 @@ expression: contracts
       "title": "RocketMQ consumer lag diagnosis"
     },
     "description": "Diagnose consumer lag from read-only lag, topic route, and broker evidence.",
-    "execution": {
-      "taskSupport": "forbidden"
-    },
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
