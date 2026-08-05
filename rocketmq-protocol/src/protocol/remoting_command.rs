@@ -409,12 +409,6 @@ impl RemotingCommand {
     /// Encode header with optimized path selection
     #[inline]
     pub fn header_encode(&mut self) -> Option<Bytes> {
-        if self
-            .command_custom_header_ref()
-            .is_some_and(|header| header.check_fields().is_err())
-        {
-            return None;
-        }
         self.make_custom_header_to_net();
         match self.serialize_type {
             SerializeType::ROCKETMQ => Some(RocketMQSerializable::rocket_mq_protocol_encode_bytes(self)),
@@ -502,12 +496,6 @@ impl RemotingCommand {
 
     #[inline]
     pub fn fast_header_encode(&mut self, dst: &mut BytesMut) {
-        if self
-            .command_custom_header_ref()
-            .is_some_and(|header| header.check_fields().is_err())
-        {
-            return;
-        }
         match self.serialize_type {
             SerializeType::JSON => {
                 self.fast_encode_json(dst);
@@ -864,7 +852,6 @@ impl RemotingCommand {
                 let mut target = T::default();
                 if target.support_fast_codec() {
                     target.decode_fast(header)?;
-                    target.check_fields()?;
                     Ok(target)
                 } else {
                     T::from(header)

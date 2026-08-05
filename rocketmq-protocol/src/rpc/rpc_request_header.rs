@@ -20,16 +20,16 @@ use serde::Serialize;
 #[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
 pub struct RpcRequestHeader {
     // the namespace name
-    #[serde(rename = "ns", alias = "namespace")]
+    #[serde(rename = "namespace")]
     pub namespace: Option<CheetahString>,
     // if the data has been namespaced
-    #[serde(rename = "nsd", alias = "namespaced")]
+    #[serde(rename = "namespaced")]
     pub namespaced: Option<bool>,
     // the abstract remote addr name, usually the physical broker name
-    #[serde(rename = "bname", alias = "brokerName")]
+    #[serde(rename = "brokerName")]
     pub broker_name: Option<CheetahString>,
     // oneway
-    #[serde(rename = "oway", alias = "oneway")]
+    #[serde(rename = "oneway")]
     pub oneway: Option<bool>,
 }
 
@@ -45,77 +45,6 @@ impl RpcRequestHeader {
             namespaced,
             broker_name,
             oneway,
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::HashMap;
-
-    use super::*;
-    use crate::protocol::command_custom_header::CommandCustomHeader;
-    use crate::protocol::command_custom_header::FromMap;
-
-    #[test]
-    fn encodes_java_canonical_short_keys() {
-        let header = RpcRequestHeader::new(Some("tenant".into()), Some(true), Some("broker-a".into()), Some(false));
-
-        let map = header.to_map().unwrap();
-        assert_eq!(map.get("ns"), Some(&"tenant".into()));
-        assert_eq!(map.get("nsd"), Some(&"true".into()));
-        assert_eq!(map.get("bname"), Some(&"broker-a".into()));
-        assert_eq!(map.get("oway"), Some(&"false".into()));
-        for legacy_key in ["namespace", "namespaced", "brokerName", "oneway"] {
-            assert!(!map.contains_key(legacy_key));
-        }
-    }
-
-    #[test]
-    fn decodes_legacy_long_keys() {
-        let map = HashMap::from([
-            ("namespace".into(), "tenant".into()),
-            ("namespaced".into(), "true".into()),
-            ("brokerName".into(), "broker-a".into()),
-            ("oneway".into(), "false".into()),
-        ]);
-
-        let header = <RpcRequestHeader as FromMap>::from(&map).unwrap();
-        assert_eq!(header.namespace.as_deref(), Some("tenant"));
-        assert_eq!(header.namespaced, Some(true));
-        assert_eq!(header.broker_name.as_deref(), Some("broker-a"));
-        assert_eq!(header.oneway, Some(false));
-    }
-
-    #[test]
-    fn canonical_keys_win_alias_conflicts_independent_of_insertion_order() {
-        let entries = [
-            ("ns", "canonical-ns"),
-            ("namespace", "legacy-ns"),
-            ("nsd", "true"),
-            ("namespaced", "false"),
-            ("bname", "canonical-broker"),
-            ("brokerName", "legacy-broker"),
-            ("oway", "false"),
-            ("oneway", "true"),
-        ];
-
-        for reverse in [false, true] {
-            let mut map = HashMap::new();
-            let ordered: Vec<_> = if reverse {
-                entries.iter().rev().copied().collect()
-            } else {
-                entries.to_vec()
-            };
-            for (key, value) in ordered {
-                map.insert(key.into(), value.into());
-            }
-
-            let header = <RpcRequestHeader as FromMap>::from(&map).unwrap();
-            assert_eq!(header.namespace.as_deref(), Some("canonical-ns"));
-            assert_eq!(header.namespaced, Some(true));
-            assert_eq!(header.broker_name.as_deref(), Some("canonical-broker"));
-            assert_eq!(header.oneway, Some(false));
         }
     }
 }

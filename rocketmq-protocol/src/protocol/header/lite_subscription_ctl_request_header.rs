@@ -45,10 +45,10 @@ mod tests {
         };
 
         let map = header.to_map().expect("header should encode");
-        assert_eq!(map.get("bname").map(|value| value.as_str()), Some("broker-a"));
-        assert_eq!(map.get("ns").map(|value| value.as_str()), Some("ns-a"));
-        assert_eq!(map.get("nsd").map(|value| value.as_str()), Some("false"));
-        assert_eq!(map.get("oway").map(|value| value.as_str()), Some("true"));
+        assert_eq!(map.get("brokerName").map(|value| value.as_str()), Some("broker-a"));
+        assert_eq!(map.get("namespace").map(|value| value.as_str()), Some("ns-a"));
+        assert_eq!(map.get("namespaced").map(|value| value.as_str()), Some("false"));
+        assert_eq!(map.get("oneway").map(|value| value.as_str()), Some("true"));
 
         let decoded = <LiteSubscriptionCtlRequestHeader as FromMap>::from(&map).expect("header should decode");
         let rpc = decoded

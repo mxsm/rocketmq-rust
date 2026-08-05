@@ -20,6 +20,7 @@ use serde::Serialize;
 #[derive(Clone, Debug, Default, Serialize, Deserialize, RequestHeaderCodecV2)]
 #[serde(rename_all = "camelCase")]
 pub struct ResumeCheckHalfMessageRequestHeader {
+    #[required]
     pub topic: CheetahString,
 
     pub msg_id: Option<CheetahString>,

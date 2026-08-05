@@ -30,7 +30,7 @@ pub fn request_header_codec(input: TokenStream) -> TokenStream {
     request_header_codec_inner(input)
 }
 
-#[proc_macro_derive(RequestHeaderCodecV2, attributes(required, request_header))]
+#[proc_macro_derive(RequestHeaderCodecV2, attributes(required))]
 pub fn request_header_codec_v2(input: TokenStream) -> TokenStream {
     request_header_codec_inner_v2(input)
 }

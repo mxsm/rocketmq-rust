@@ -157,7 +157,6 @@ impl DefaultMQAdminExtImpl {
                 GetConsumeStatsRequestHeader {
                     consumer_group: consumer_group.clone(),
                     topic: CheetahString::empty(),
-                    topic_list: None,
                     topic_request_header: None,
                 },
                 self.remoting_timeout_millis()?,

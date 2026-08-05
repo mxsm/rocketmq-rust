@@ -24,11 +24,8 @@ use crate::protocol::FastCodesHeader;
 #[derive(Debug, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
 #[serde(rename_all = "camelCase")]
 pub struct SendMessageResponseHeader {
-    #[required]
     msg_id: CheetahString,
-    #[required]
     queue_id: i32,
-    #[required]
     queue_offset: i64,
     transaction_id: Option<CheetahString>,
     batch_uniq_id: Option<CheetahString>,

@@ -17,10 +17,6 @@ use rocketmq_macros::RequestHeaderCodecV2;
 use serde::Deserialize;
 use serde::Serialize;
 
-fn default_invoke_time() -> u64 {
-    rocketmq_model::time::current_millis()
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize, RequestHeaderCodecV2)]
 #[serde(rename_all = "camelCase")]
 pub struct CleanBrokerDataRequestHeader {
@@ -28,9 +24,7 @@ pub struct CleanBrokerDataRequestHeader {
     #[required]
     pub broker_name: CheetahString,
     pub broker_controller_ids_to_clean: Option<CheetahString>,
-    #[serde(rename = "isCleanLivingBroker", alias = "cleanLivingBroker")]
     pub clean_living_broker: bool,
-    #[serde(default = "default_invoke_time")]
     pub invoke_time: u64,
 }
 
@@ -43,7 +37,7 @@ impl Default for CleanBrokerDataRequestHeader {
             broker_name: CheetahString::new(),
             broker_controller_ids_to_clean: None,
             clean_living_broker: false,
-            invoke_time: default_invoke_time(),
+            invoke_time: 0,
         }
     }
 }
@@ -81,7 +75,7 @@ mod tests {
             "1;2"
         );
         assert_eq!(
-            map.get(&CheetahString::from_static_str("isCleanLivingBroker")).unwrap(),
+            map.get(&CheetahString::from_static_str("cleanLivingBroker")).unwrap(),
             "true"
         );
     }
@@ -102,7 +96,7 @@ mod tests {
             CheetahString::from_static_str("1;2"),
         );
         map.insert(
-            CheetahString::from_static_str("isCleanLivingBroker"),
+            CheetahString::from_static_str("cleanLivingBroker"),
             CheetahString::from_static_str("false"),
         );
         map.insert(
@@ -132,42 +126,5 @@ mod tests {
         };
 
         assert_eq!(header.broker_name, "broker-a");
-    }
-
-    #[test]
-    fn missing_invoke_time_uses_the_java_dynamic_default() {
-        let before = rocketmq_model::time::current_millis();
-        let map = HashMap::from([(
-            CheetahString::from_static_str("brokerName"),
-            CheetahString::from_static_str("broker-a"),
-        )]);
-
-        let header = <CleanBrokerDataRequestHeader as FromMap>::from(&map).unwrap();
-        let after = rocketmq_model::time::current_millis();
-
-        assert!((before..=after).contains(&header.invoke_time));
-        assert!(!header.clean_living_broker);
-    }
-
-    #[test]
-    fn canonical_clean_living_key_wins_the_legacy_alias() {
-        let map = HashMap::from([
-            (
-                CheetahString::from_static_str("brokerName"),
-                CheetahString::from_static_str("broker-a"),
-            ),
-            (
-                CheetahString::from_static_str("isCleanLivingBroker"),
-                CheetahString::from_static_str("true"),
-            ),
-            (
-                CheetahString::from_static_str("cleanLivingBroker"),
-                CheetahString::from_static_str("false"),
-            ),
-        ]);
-
-        let header = <CleanBrokerDataRequestHeader as FromMap>::from(&map).unwrap();
-
-        assert!(header.clean_living_broker);
     }
 }

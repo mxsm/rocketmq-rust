@@ -1664,7 +1664,6 @@ mod tests {
             broker_name: CheetahString::from_static_str("broker-a"),
             master_broker_id: 1,
             master_epoch: elect_response_header.master_epoch.expect("master epoch"),
-            invoke_time: rocketmq_model::time::current_millis(),
         };
         let alter_body = SyncStateSet::with_values(
             HashSet::from([1_i64, 2_i64]),
@@ -1862,7 +1861,6 @@ mod tests {
             broker_name: CheetahString::from_static_str("broker-a"),
             master_broker_id: 1,
             master_epoch: initial_header.master_epoch.expect("master epoch"),
-            invoke_time: rocketmq_model::time::current_millis(),
         };
         let alter_body = SyncStateSet::with_values(
             HashSet::from([1_i64, 2_i64]),

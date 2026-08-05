@@ -159,7 +159,6 @@ pub mod admin {
 
 pub mod transaction {
     pub use super::super::header::check_transaction_state_request_header::CheckTransactionStateRequestHeader;
-    pub use super::super::header::check_transaction_state_response_header::CheckTransactionStateResponseHeader;
     pub use super::super::header::end_transaction_request_header::EndTransactionRequestHeader;
 }
 

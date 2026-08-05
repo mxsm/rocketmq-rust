@@ -17,21 +17,25 @@ use rocketmq_macros::RequestHeaderCodecV2;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::rpc::topic_request_header::TopicRequestHeader;
+use crate::rpc::rpc_request_header::RpcRequestHeader;
 
 #[derive(Clone, Debug, Serialize, Deserialize, RequestHeaderCodecV2)]
 #[serde(rename_all = "camelCase")]
 pub struct QueryConsumeQueueRequestHeader {
+    #[required]
     pub topic: CheetahString,
 
+    #[required]
     pub queue_id: i32,
 
+    #[required]
     pub index: i64,
 
+    #[required]
     pub count: i32,
 
     pub consumer_group: Option<CheetahString>,
 
     #[serde(flatten)]
-    pub topic_request_header: Option<TopicRequestHeader>,
+    pub rpc: Option<RpcRequestHeader>,
 }

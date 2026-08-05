@@ -20,7 +20,6 @@ use serde::Serialize;
 #[derive(Debug, Clone, Serialize, Deserialize, RequestHeaderCodecV2, Default)]
 pub struct ViewMessageRequestHeader {
     pub topic: Option<CheetahString>,
-    #[required]
     pub offset: i64,
 }
 

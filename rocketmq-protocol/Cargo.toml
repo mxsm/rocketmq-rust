@@ -49,9 +49,4 @@ simd-json = { version = "0.17", optional = true }
 zstd = "0.13"
 
 [dev-dependencies]
-criterion = { version = "0.8", features = ["html_reports"] }
 serde_json.workspace = true
-
-[[bench]]
-name = "request_header_codec"
-harness = false

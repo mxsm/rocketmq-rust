@@ -349,18 +349,7 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
         if !body.is_empty() {
             response.set_body_mut_ref(body);
         }
-        let generation = i64::try_from(snapshot.id().value())
-            .map_err(|_| rocketmq_error::RocketMQError::invariant_violated("broker config generation fits i64"))?;
-        let published_at_millis = i64::try_from(snapshot.published_at_millis())
-            .map_err(|_| rocketmq_error::RocketMQError::invariant_violated("broker config timestamp fits i64"))?;
-        let version = serde_json::to_string(&rocketmq_protocol::protocol::DataVersion::with_values(
-            0,
-            published_at_millis,
-            generation,
-        ))
-        .map_err(|error| rocketmq_error::RocketMQError::internal("serialize broker config version", error))?;
         response.set_command_custom_header_ref(GetBrokerConfigResponseHeader {
-            version: Some(version.into()),
             config_generation: snapshot.id().value(),
         });
         Ok(Some(response))
@@ -1294,51 +1283,20 @@ mod tests {
         let mut request = RemotingCommand::create_remoting_command(RequestCode::GetBrokerConfig);
 
         let response = handler
-            .get_broker_config(
-                channel.clone(),
-                Arc::clone(&ctx),
-                RequestCode::GetBrokerConfig,
-                &mut request,
-            )
+            .get_broker_config(channel, ctx, RequestCode::GetBrokerConfig, &mut request)
             .await
             .expect("get broker config should return broker response")
             .expect("get broker config should return a response");
 
-        let first_header = response
-            .read_custom_header_ref::<GetBrokerConfigResponseHeader>()
-            .expect("get broker config should include a typed response header")
-            .clone();
         assert_eq!(
-            first_header.config_generation, 1,
-            "the response header should identify the body generation"
+            response
+                .read_custom_header_ref::<GetBrokerConfigResponseHeader>()
+                .map(|header| header.config_generation),
+            Some(1)
         );
-        let first_version: rocketmq_protocol::protocol::DataVersion = serde_json::from_str(
-            first_header
-                .version
-                .as_ref()
-                .expect("Java-compatible version metadata should be present")
-                .as_str(),
-        )
-        .expect("version metadata should use the Java DataVersion JSON shape");
-        assert_eq!(first_version.get_state_version(), 0);
-        assert_eq!(first_version.get_counter(), 1);
-        assert!(first_version.get_timestamp() > 0);
         assert!(response
             .get_body()
             .is_some_and(|body| String::from_utf8_lossy(body).contains("flushDelayOffsetInterval")));
-
-        let second_response = handler
-            .get_broker_config(channel, ctx, RequestCode::GetBrokerConfig, &mut request)
-            .await
-            .expect("repeated get broker config should return broker response")
-            .expect("repeated get broker config should return a response");
-        let second_header = second_response
-            .read_custom_header_ref::<GetBrokerConfigResponseHeader>()
-            .expect("repeated response should include a typed response header");
-        assert_eq!(
-            second_header, &first_header,
-            "reads of one committed generation must publish a stable DataVersion"
-        );
 
         let _ = fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }

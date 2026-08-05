@@ -18,7 +18,6 @@ use serde::Serialize;
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
 pub struct GetMinOffsetResponseHeader {
-    #[required]
     pub offset: i64,
 }
 
@@ -172,7 +171,8 @@ mod tests {
     #[test]
     fn get_min_offset_response_header_from_empty_map() {
         let map = HashMap::new();
-        assert!(<GetMinOffsetResponseHeader as FromMap>::from(&map).is_err());
+        let header = <GetMinOffsetResponseHeader as FromMap>::from(&map).unwrap();
+        assert_eq!(header.offset, 0); // should use default
     }
 
     // Edge Cases & Error Handling Tests
@@ -195,7 +195,9 @@ mod tests {
         let mut map = HashMap::new();
         map.insert(CheetahString::from("offset"), CheetahString::from("not_a_number"));
         let result = <GetMinOffsetResponseHeader as FromMap>::from(&map);
-        assert!(result.is_err());
+        // The macro-generated FromMap uses parse() which defaults to 0 on parse failure for non-required
+        // fields
+        assert_eq!(result.unwrap().offset, 0);
     }
 
     #[test]
