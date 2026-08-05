@@ -264,6 +264,32 @@ Kind 集群和生成的运行时文件。脚本化 Critic 使用不同的模型�
 python scripts/check_r2_action_qualification.py
 ```
 
+### 有界自治资格验证
+
+自治资格契约覆盖同一组四个已批准 R1 动作，但不会启用无人值守的目标执行。验证工具会把干净且
+已提交的源码版本部署到全新的一次性 Kind 集群，PostgreSQL 在集群内以容器运行。对于每个动作，
+工具会持久化 20 个 Shadow 结果，执行七天观察窗口约束，持久化 5 个经人工批准的 Supervised
+成功样本，验证离线异构 Critic 绑定，并覆盖 fail-closed 安全控制、ExpectedDeny 处理、失败暂停、
+负责人恢复、真实 Supervised 执行和清理。
+
+真实目标执行的上限固定为 `Supervised`。资格验证可以计算 Autonomous 晋级条件是否满足，但不会
+执行该实时状态转换，也不会下发无人值守的目标变更。脚本化的主模型与 Critic 身份仅用于契约夹具；
+模型凭据和模型网络调用均被禁止。使用 DeepSeek 的真实 AI 诊断会在其余非模型就绪工作完成后最后
+接入，届时再提供 API key。
+
+在 `rocketmq-sre/` 中运行；工具会自行创建并销毁集群，构建产物保留在 `D:` 和 `F:`，脱敏报告
+写入仓库外：
+
+```powershell
+.\scripts\autonomy-action-live-qualification.ps1
+```
+
+该报告用于证明实现资格，不构成生产认证。无需集群即可校验已提交的契约：
+
+```powershell
+python scripts/check_autonomy_action_qualification.py
+```
+
 ## 用户界面
 
 UI 按照 shadcn/ui 规范和可访问的 Radix UI primitive 设计为全屏桌面运维

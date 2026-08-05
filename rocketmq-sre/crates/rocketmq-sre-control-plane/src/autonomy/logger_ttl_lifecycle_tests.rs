@@ -13,6 +13,8 @@
 // limitations under the License.
 
 use std::collections::BTreeSet;
+use std::fs;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -24,7 +26,6 @@ use super::model::CreateShadowCohortRequest;
 use super::model::PrepareAutonomousCohortRequest;
 use super::model::RecordQualificationSampleRequest;
 use super::repository_tests::Fixture;
-use super::repository_tests::seed_critic_review;
 use super::repository_tests::seed_fixture;
 use super::repository_tests::seed_successful_supervised_execution_for_action_at;
 use super::repository_tests::unique_digest;
@@ -46,7 +47,11 @@ use rocketmq_sre_contracts::ActionDescriptor;
 use rocketmq_sre_contracts::ActionPlan;
 use rocketmq_sre_contracts::ActionPlanDraft;
 use rocketmq_sre_contracts::ActionRisk;
+use rocketmq_sre_contracts::AutonomousExecutionFailure;
 use rocketmq_sre_contracts::AutonomyMode;
+use rocketmq_sre_contracts::AutonomyOutcome;
+use rocketmq_sre_contracts::AutonomyOutcomeClass;
+use rocketmq_sre_contracts::AutonomyOutcomeId;
 use rocketmq_sre_contracts::AutonomySampleKind;
 use rocketmq_sre_contracts::CompensationMode;
 use rocketmq_sre_contracts::CompensationSpec;
@@ -59,11 +64,16 @@ use rocketmq_sre_contracts::PlanStepId;
 use rocketmq_sre_contracts::VerificationSpec;
 use rocketmq_sre_contracts::canonical_sha256;
 use rocketmq_sre_core::EMBEDDED_ACTION_DESCRIPTOR_YAMLS;
+use serde::Serialize;
 use uuid::Uuid;
 
 const SHADOW_SAMPLES: usize = 20;
 const SUPERVISED_SUCCESSES: usize = 5;
 const OBSERVATION_DAYS: i64 = 7;
+const PRIMARY_MODEL_FAMILY: &str = "qualification-primary";
+const PRIMARY_MODEL_REVISION: &str = "fixture-r1";
+const CRITIC_MODEL_FAMILY: &str = "qualification-critic";
+const CRITIC_MODEL_REVISION: &str = "fixture-r1";
 
 #[derive(Clone, Copy)]
 enum R1ActionScenario {
@@ -152,10 +162,86 @@ async fn telemetry_collector_restart_qualifies_through_shadow_supervised_and_aut
     qualify_r1_action_through_autonomy(R1ActionScenario::TelemetryCollectorRestartOne).await;
 }
 
-async fn qualify_r1_action_through_autonomy(scenario: R1ActionScenario) {
-    let Some(database_url) = std::env::var("ROCKETMQ_SRE_TEST_DATABASE_URL").ok() else {
+#[derive(Serialize)]
+struct AutonomyLifecycleOutcome {
+    id: String,
+    initial_mode: &'static str,
+    final_mode: &'static str,
+    shadow_samples: u32,
+    supervised_successes: u32,
+    observation_window_days: i64,
+    shadow_cohorts: u8,
+    supervised_cohorts: u8,
+    same_family_critic_denied: bool,
+    autonomous_transition_executed: bool,
+    expected_deny_paused: bool,
+    execution_failure_paused: bool,
+    critic_transport: &'static str,
+    primary_model_family: &'static str,
+    critic_model_family: &'static str,
+}
+
+#[derive(Serialize)]
+struct AutonomyLifecycleFragment {
+    schema_version: &'static str,
+    live_mode_ceiling: &'static str,
+    unattended_autonomous_execution: bool,
+    model_provider_network_calls: u8,
+    actions: Vec<AutonomyLifecycleOutcome>,
+}
+
+#[tokio::test]
+#[ignore = "requires ROCKETMQ_SRE_TEST_DATABASE_URL and an explicit machine-local fragment path"]
+async fn all_r1_actions_persist_shadow_and_supervised_qualification_matrix() {
+    let Ok(fragment_path) = std::env::var("ROCKETMQ_SRE_AUTONOMY_QUALIFICATION_FRAGMENT") else {
         return;
     };
+    let path = Path::new(&fragment_path);
+    let rendered = path.to_string_lossy();
+    assert!(
+        path.is_absolute(),
+        "autonomy qualification fragment path must be absolute"
+    );
+    assert!(
+        rendered.starts_with("D:\\") || rendered.starts_with("F:\\"),
+        "autonomy qualification fragment must use the D or F drive"
+    );
+
+    let scenarios = [
+        R1ActionScenario::LoggerTtl,
+        R1ActionScenario::ProxyScaleOut,
+        R1ActionScenario::ProxyRestartOne,
+        R1ActionScenario::TelemetryCollectorRestartOne,
+    ];
+    let mut outcomes = Vec::with_capacity(scenarios.len());
+    for scenario in scenarios {
+        outcomes.push(
+            qualify_r1_action(scenario, false)
+                .await
+                .expect("qualification database must be configured"),
+        );
+    }
+    let fragment = AutonomyLifecycleFragment {
+        schema_version: "rocketmq-sre.autonomy-action-lifecycle-fragment.v1",
+        live_mode_ceiling: "supervised",
+        unattended_autonomous_execution: false,
+        model_provider_network_calls: 0,
+        actions: outcomes,
+    };
+    let mut bytes = serde_json::to_vec_pretty(&fragment).expect("serialize autonomy lifecycle fragment");
+    bytes.push(b'\n');
+    fs::write(path, bytes).expect("write autonomy lifecycle fragment");
+}
+
+async fn qualify_r1_action_through_autonomy(scenario: R1ActionScenario) {
+    let _ = qualify_r1_action(scenario, true).await;
+}
+
+async fn qualify_r1_action(
+    scenario: R1ActionScenario,
+    promote_to_autonomous: bool,
+) -> Option<AutonomyLifecycleOutcome> {
+    let database_url = std::env::var("ROCKETMQ_SRE_TEST_DATABASE_URL").ok()?;
     let repository = PostgresRepository::connect(&database_url, 8)
         .await
         .expect("repository with migrations");
@@ -217,8 +303,8 @@ async fn qualify_r1_action_through_autonomy(scenario: R1ActionScenario) {
                 action: scenario.action(),
                 action_version: "1.0.0".to_owned(),
                 primary_profile: fixture.primary_profile.clone(),
-                primary_model_family: "deepseek".to_owned(),
-                primary_model_revision: "v3.2".to_owned(),
+                primary_model_family: PRIMARY_MODEL_FAMILY.to_owned(),
+                primary_model_revision: PRIMARY_MODEL_REVISION.to_owned(),
             },
         )
         .await
@@ -280,13 +366,41 @@ async fn qualify_r1_action_through_autonomy(scenario: R1ActionScenario) {
     assert_eq!(supervised.lifecycle.mode, AutonomyMode::Supervised);
     assert_eq!(supervised.qualification.qualified_shadow_samples, SHADOW_SAMPLES as u32);
     assert!(supervised.qualification.shadow_observation_window_met);
+    let qualified_shadow_samples = supervised.qualification.qualified_shadow_samples;
 
     let primary_plan = &plans[0];
-    let (base_review_id, critic_invocation_id, critic_profile) = seed_critic_review(&repository, primary_plan).await;
+    let (base_review_id, critic_invocation_id, critic_profile) =
+        seed_qualification_critic_review(&repository, primary_plan).await;
     let mut critic_reviews = vec![base_review_id];
     for plan in plans.iter().take(SUPERVISED_SUCCESSES).skip(1) {
         critic_reviews.push(seed_shared_critic_review(&repository, plan, critic_invocation_id, &critic_profile).await);
     }
+    assert!(
+        service
+            .prepare_autonomous_cohort(
+                &auth,
+                &PrepareAutonomousCohortRequest {
+                    cluster_id: fixture.cluster_id,
+                    action: scenario.action(),
+                    action_version: "1.0.0".to_owned(),
+                    diagnosis_revision_id: primary_plan.diagnosis_revision_id,
+                    plan_id: primary_plan.plan_id,
+                    plan_hash: primary_plan.plan_hash.clone(),
+                    critic_review_id: critic_reviews[0],
+                    primary_model_invocation_id: primary_plan.primary_invocation_id,
+                    critic_model_invocation_id: critic_invocation_id,
+                    primary_profile: primary_plan.primary_profile.clone(),
+                    primary_model_family: PRIMARY_MODEL_FAMILY.to_owned(),
+                    primary_model_revision: PRIMARY_MODEL_REVISION.to_owned(),
+                    critic_profile: critic_profile.clone(),
+                    critic_model_family: PRIMARY_MODEL_FAMILY.to_owned(),
+                    critic_model_revision: PRIMARY_MODEL_REVISION.to_owned(),
+                },
+            )
+            .await
+            .is_err(),
+        "same-family Critic must fail closed"
+    );
     let autonomous_cohort = service
         .prepare_autonomous_cohort(
             &auth,
@@ -301,11 +415,11 @@ async fn qualify_r1_action_through_autonomy(scenario: R1ActionScenario) {
                 primary_model_invocation_id: primary_plan.primary_invocation_id,
                 critic_model_invocation_id: critic_invocation_id,
                 primary_profile: primary_plan.primary_profile.clone(),
-                primary_model_family: "deepseek".to_owned(),
-                primary_model_revision: "v3.2".to_owned(),
+                primary_model_family: PRIMARY_MODEL_FAMILY.to_owned(),
+                primary_model_revision: PRIMARY_MODEL_REVISION.to_owned(),
                 critic_profile,
-                critic_model_family: "glm".to_owned(),
-                critic_model_revision: "glm-5".to_owned(),
+                critic_model_family: CRITIC_MODEL_FAMILY.to_owned(),
+                critic_model_revision: CRITIC_MODEL_REVISION.to_owned(),
             },
         )
         .await
@@ -357,6 +471,107 @@ async fn qualify_r1_action_through_autonomy(scenario: R1ActionScenario) {
         &clock_value,
         autonomous_cohort.created_at + Duration::days(OBSERVATION_DAYS) + Duration::seconds(30),
     );
+    if !promote_to_autonomous {
+        let qualified = service.scope(&auth, &query).await.expect("qualified Supervised scope");
+        assert_eq!(qualified.lifecycle.mode, AutonomyMode::Supervised);
+        assert_eq!(
+            qualified.qualification.qualified_supervised_successes,
+            SUPERVISED_SUCCESSES as u32
+        );
+        assert!(qualified.qualification.autonomous_observation_window_met);
+
+        let deny_plan = &plans[SUPERVISED_SUCCESSES];
+        let denied_at = autonomous_cohort.created_at + Duration::days(OBSERVATION_DAYS) + Duration::seconds(31);
+        repository
+            .record_autonomy_outcome(
+                &AutonomyOutcome {
+                    id: AutonomyOutcomeId::new(),
+                    tenant_id: fixture.tenant_id,
+                    cluster_id: fixture.cluster_id,
+                    action: scenario.action(),
+                    action_version: "1.0.0".to_owned(),
+                    incident_id: deny_plan.incident_id,
+                    plan_id: deny_plan.plan_id,
+                    plan_hash: deny_plan.plan_hash.clone(),
+                    execution_id: None,
+                    cohort_id: Some(autonomous_cohort.id),
+                    class: AutonomyOutcomeClass::ExpectedDeny,
+                    failure: None,
+                    reason_codes: vec!["freeze_active".to_owned()],
+                    first_positive_intent_persisted: false,
+                    occurred_at: denied_at,
+                    reconciled_at: denied_at,
+                },
+                "autonomy-qualification-reconciler",
+            )
+            .await
+            .expect("persist ExpectedDeny outcome");
+        let after_deny = service.scope(&auth, &query).await.expect("scope after ExpectedDeny");
+        assert_eq!(after_deny.lifecycle.mode, AutonomyMode::Supervised);
+
+        let failure_plan = &plans[SUPERVISED_SUCCESSES + 1];
+        let failed_at = denied_at + Duration::seconds(1);
+        repository
+            .record_autonomy_outcome(
+                &AutonomyOutcome {
+                    id: AutonomyOutcomeId::new(),
+                    tenant_id: fixture.tenant_id,
+                    cluster_id: fixture.cluster_id,
+                    action: scenario.action(),
+                    action_version: "1.0.0".to_owned(),
+                    incident_id: failure_plan.incident_id,
+                    plan_id: failure_plan.plan_id,
+                    plan_hash: failure_plan.plan_hash.clone(),
+                    execution_id: None,
+                    cohort_id: Some(autonomous_cohort.id),
+                    class: AutonomyOutcomeClass::AutonomousExecutionFailure,
+                    failure: Some(AutonomousExecutionFailure::VerificationFailed),
+                    reason_codes: vec!["qualification_failure_fixture".to_owned()],
+                    first_positive_intent_persisted: true,
+                    occurred_at: failed_at,
+                    reconciled_at: failed_at,
+                },
+                "autonomy-qualification-reconciler",
+            )
+            .await
+            .expect("persist failure and pause lifecycle");
+        let paused = service.scope(&auth, &query).await.expect("paused scope");
+        assert_eq!(paused.lifecycle.mode, AutonomyMode::Paused);
+        assert_eq!(paused.lifecycle.previous_mode, Some(AutonomyMode::Supervised));
+
+        set_clock(&clock_value, failed_at + Duration::seconds(1));
+        let resumed = service
+            .transition(
+                &auth,
+                &query,
+                &AutonomyTransitionRequest {
+                    target_mode: AutonomyMode::Supervised,
+                    reason: Some("owner reviewed bounded qualification failure".to_owned()),
+                    owner_confirmed: true,
+                },
+            )
+            .await
+            .expect("human owner resumes Supervised mode");
+        assert_eq!(resumed.lifecycle.mode, AutonomyMode::Supervised);
+
+        return Some(AutonomyLifecycleOutcome {
+            id: scenario.action().id().to_owned(),
+            initial_mode: "disabled",
+            final_mode: "supervised",
+            shadow_samples: qualified_shadow_samples,
+            supervised_successes: qualified.qualification.qualified_supervised_successes,
+            observation_window_days: OBSERVATION_DAYS,
+            shadow_cohorts: 1,
+            supervised_cohorts: 1,
+            same_family_critic_denied: true,
+            autonomous_transition_executed: false,
+            expected_deny_paused: false,
+            execution_failure_paused: true,
+            critic_transport: "offline_scripted",
+            primary_model_family: PRIMARY_MODEL_FAMILY,
+            critic_model_family: CRITIC_MODEL_FAMILY,
+        });
+    }
     let autonomous = service
         .transition(
             &auth,
@@ -377,6 +592,23 @@ async fn qualify_r1_action_through_autonomy(scenario: R1ActionScenario) {
     assert!(autonomous.qualification.autonomous_observation_window_met);
     assert_eq!(autonomous.qualification.unresolved_unknown, 0);
     assert_eq!(autonomous.qualification.recent_rollbacks, 0);
+    Some(AutonomyLifecycleOutcome {
+        id: scenario.action().id().to_owned(),
+        initial_mode: "disabled",
+        final_mode: "autonomous",
+        shadow_samples: autonomous.qualification.qualified_shadow_samples,
+        supervised_successes: autonomous.qualification.qualified_supervised_successes,
+        observation_window_days: OBSERVATION_DAYS,
+        shadow_cohorts: 1,
+        supervised_cohorts: 1,
+        same_family_critic_denied: true,
+        autonomous_transition_executed: true,
+        expected_deny_paused: false,
+        execution_failure_paused: false,
+        critic_transport: "offline_scripted",
+        primary_model_family: PRIMARY_MODEL_FAMILY,
+        critic_model_family: CRITIC_MODEL_FAMILY,
+    })
 }
 
 fn autonomy_service(repository: &PostgresRepository, clock: Arc<Mutex<DateTime<Utc>>>) -> AutonomyService {
@@ -519,7 +751,7 @@ async fn seed_action_plan(
          ) VALUES (
             $1, $2, $3, $4, $5,
             NULL, 'primary_diagnosis', $6,
-            $6, 'openai-compatible', 'deepseek', 'v3.2',
+            $6, 'offline-scripted', 'qualification-primary', 'fixture-r1',
             'local', '{}', 'r1-autonomy-test',
             'rocketmq-sre.model.v1', 'R1 qualification fixture', $7, $7
          )",
@@ -700,7 +932,8 @@ async fn seed_shared_critic_review(
             review_hash, review_snapshot, created_at
          ) VALUES (
             $1, $2, $3, $4, $5, $6,
-            'deepseek', 'glm', 'openai-compatible', $7, 'glm-5',
+            'qualification-primary', 'qualification-critic',
+            'offline-scripted', $7, 'fixture-r1',
             'local', '{}', 'logger-autonomy-test',
             'rocketmq-sre.critic.v1', $8, 'accept', 'valid',
             $9, '{}'::JSONB, NOW()
@@ -719,4 +952,90 @@ async fn seed_shared_critic_review(
     .await
     .expect("shared heterogeneous critic review");
     review_id
+}
+
+async fn seed_qualification_critic_review(
+    repository: &PostgresRepository,
+    fixture: &Fixture,
+) -> (CriticReviewId, rocketmq_sre_contracts::ModelInvocationId, String) {
+    let profile_id = Uuid::new_v4();
+    let profile_name = format!("qualification-critic-{profile_id}");
+    sqlx::query(
+        "INSERT INTO model_profiles (
+            id, tenant_id, profile_name, provider_family, protocol_family,
+            model_family, model_name, model_revision, endpoint_instance,
+            region, data_residency, data_classes, capabilities, priority,
+            credential_ref, credential_owner, enabled, health, created_at, updated_at
+         ) VALUES (
+            $1, $2, $3, 'offline-scripted', 'fixture',
+            'qualification-critic', 'qualification-critic', 'fixture-r1', 'local',
+            'local', 'local', '[]'::JSONB, '{}'::JSONB, 90,
+            'offline-fixture-reference', 'gateway', TRUE, 'healthy', NOW(), NOW()
+         )",
+    )
+    .bind(profile_id)
+    .bind(fixture.tenant_id.as_uuid())
+    .bind(&profile_name)
+    .execute(&repository.pool)
+    .await
+    .expect("offline Critic profile");
+
+    let critic_invocation_id = rocketmq_sre_contracts::ModelInvocationId::new();
+    sqlx::query(
+        "INSERT INTO model_invocations (
+            id, tenant_id, cluster_id, incident_id, diagnosis_revision_id,
+            parent_invocation_id, purpose, requested_profile_id,
+            actual_profile_id, provider_family, model_family, model_revision,
+            endpoint_instance, fallback_chain, prompt_version, schema_version,
+            rationale, started_at, completed_at
+         ) VALUES (
+            $1, $2, $3, $4, $5, $6, 'critic', $7,
+            $7, 'offline-scripted', 'qualification-critic', 'fixture-r1',
+            'local', '{}', 'autonomy-qualification-fixture',
+            'rocketmq-sre.critic.v1', 'offline qualification fixture', NOW(), NOW()
+         )",
+    )
+    .bind(critic_invocation_id.as_uuid())
+    .bind(fixture.tenant_id.as_uuid())
+    .bind(fixture.cluster_id.as_uuid())
+    .bind(fixture.incident_id.as_uuid())
+    .bind(fixture.diagnosis_revision_id.as_uuid())
+    .bind(fixture.primary_invocation_id.as_uuid())
+    .bind(profile_id)
+    .execute(&repository.pool)
+    .await
+    .expect("offline Critic invocation");
+
+    let critic_review_id = CriticReviewId::new();
+    sqlx::query(
+        "INSERT INTO critic_reviews (
+            id, plan_id, plan_hash, diagnosis_revision_id,
+            primary_invocation_id, critic_invocation_id,
+            primary_model_family, critic_model_family,
+            critic_provider, critic_profile, critic_model_revision,
+            endpoint_instance, fallback_chain, prompt_version,
+            schema_version, payload_hash, conclusion, status,
+            review_hash, review_snapshot, created_at
+         ) VALUES (
+            $1, $2, $3, $4, $5, $6,
+            'qualification-primary', 'qualification-critic',
+            'offline-scripted', $7, 'fixture-r1',
+            'local', '{}', 'autonomy-qualification-fixture',
+            'rocketmq-sre.critic.v1', $8, 'accept', 'valid',
+            $9, '{}'::JSONB, NOW()
+         )",
+    )
+    .bind(critic_review_id.as_uuid())
+    .bind(fixture.plan_id.as_uuid())
+    .bind(&fixture.plan_hash)
+    .bind(fixture.diagnosis_revision_id.as_uuid())
+    .bind(fixture.primary_invocation_id.as_uuid())
+    .bind(critic_invocation_id.as_uuid())
+    .bind(&profile_name)
+    .bind(unique_digest())
+    .bind(unique_digest())
+    .execute(&repository.pool)
+    .await
+    .expect("offline heterogeneous Critic review");
+    (critic_review_id, critic_invocation_id, profile_name)
 }

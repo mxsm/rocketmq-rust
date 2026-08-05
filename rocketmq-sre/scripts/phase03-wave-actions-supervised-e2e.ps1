@@ -29,6 +29,8 @@ param(
 
     [string]$RecoveryFragment,
 
+    [string]$AutonomyFragment,
+
     [string]$R2AdminLiveFragment,
 
     [string]$R2RecoveryFragment,
@@ -171,6 +173,7 @@ foreach ($path in @(
 foreach ($fragment in @(
     @{ Value = $LiveFragment; Description = 'live qualification fragment' },
     @{ Value = $RecoveryFragment; Description = 'recovery qualification fragment' },
+    @{ Value = $AutonomyFragment; Description = 'autonomy qualification fragment' },
     @{ Value = $R2AdminLiveFragment; Description = 'R2 Admin live qualification fragment' },
     @{ Value = $R2RecoveryFragment; Description = 'R2 recovery qualification fragment' }
 )) {
@@ -235,6 +238,7 @@ foreach ($name in @(
     'ROCKETMQ_SRE_TEST_DATABASE_URL',
     'ROCKETMQ_SRE_R1_LIVE_FRAGMENT',
     'ROCKETMQ_SRE_R1_RECOVERY_FRAGMENT',
+    'ROCKETMQ_SRE_AUTONOMY_QUALIFICATION_FRAGMENT',
     'ROCKETMQ_SRE_R2_ADMIN_LIVE_FRAGMENT',
     'ROCKETMQ_SRE_R2_RECOVERY_FRAGMENT',
     'ROCKETMQ_SRE_PHASE3_PROXY_IMAGE_DIGEST'
@@ -370,6 +374,61 @@ try {
     $env:ROCKETMQ_SRE_PHASE4_COLLECTOR_UID = [string]$collectorPod.metadata.uid
     $env:ROCKETMQ_SRE_TEST_DATABASE_URL = $databaseUri.Uri.AbsoluteUri
     if (-not $R2Only) {
+        if (-not [string]::IsNullOrWhiteSpace($AutonomyFragment)) {
+            $env:ROCKETMQ_SRE_AUTONOMY_QUALIFICATION_FRAGMENT = [IO.Path]::GetFullPath($AutonomyFragment)
+            & cargo +1.95.0 test `
+                --manifest-path $manifestPath `
+                --locked `
+                -p rocketmq-sre-control-plane `
+                --lib `
+                autonomy::logger_ttl_lifecycle_tests::all_r1_actions_persist_shadow_and_supervised_qualification_matrix `
+                -- `
+                --ignored `
+                --exact `
+                --nocapture `
+                --test-threads=1
+            if ($LASTEXITCODE -ne 0) {
+                throw 'R1 persisted Shadow and Supervised autonomy qualification matrix failed.'
+            }
+            & cargo +1.95.0 test `
+                --manifest-path $manifestPath `
+                --locked `
+                -p rocketmq-sre-core `
+                eligibility::tests::dynamic_safety_fails_closed_for_each_authoritative_control `
+                -- `
+                --exact
+            if ($LASTEXITCODE -ne 0) {
+                throw 'R1 authoritative dynamic-safety denial matrix failed.'
+            }
+            & cargo +1.95.0 test `
+                --manifest-path $manifestPath `
+                --locked `
+                -p rocketmq-sre-core `
+                eligibility::tests::base_eligibility_fails_closed_for_stale_or_partial_evidence `
+                -- `
+                --exact
+            if ($LASTEXITCODE -ne 0) {
+                throw 'R1 stale and partial Evidence denial matrix failed.'
+            }
+            foreach ($test in @(
+                'autonomy::repository_tests::postgres_autonomy_state_cohorts_and_controls_are_durable_and_idempotent',
+                'autonomy::repository_tests::postgres_pause_reconciler_repairs_a_dropped_failure_event_once'
+            )) {
+                & cargo +1.95.0 test `
+                    --manifest-path $manifestPath `
+                    --locked `
+                    -p rocketmq-sre-control-plane `
+                    --lib `
+                    $test `
+                    -- `
+                    --ignored `
+                    --exact `
+                    --test-threads=1
+                if ($LASTEXITCODE -ne 0) {
+                    throw "R1 autonomy boundary test failed: $test"
+                }
+            }
+        }
         if (-not [string]::IsNullOrWhiteSpace($LiveFragment)) {
             $env:ROCKETMQ_SRE_R1_LIVE_FRAGMENT = [IO.Path]::GetFullPath($LiveFragment)
         }

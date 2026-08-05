@@ -303,6 +303,40 @@ certification. Validate the committed catalog independently with:
 python scripts/check_r2_action_qualification.py
 ```
 
+### Bounded-autonomy qualification
+
+The autonomy qualification contract covers the same four approved R1 actions
+without enabling unattended target execution. A clean committed revision is
+deployed to a new disposable Kind cluster with PostgreSQL running inside the
+cluster. For each action, the harness persists 20 Shadow outcomes, enforces a
+seven-day observation window, persists five human-approved Supervised
+successes, verifies an offline heterogeneous Critic binding, and exercises
+fail-closed safety controls, ExpectedDeny handling, failure pause, owner
+recovery, real Supervised execution, and cleanup.
+
+Live target execution is capped at `Supervised`. Qualification may calculate
+that Autonomous promotion prerequisites are satisfied, but it never performs
+that live transition and never dispatches an unattended target mutation. The
+scripted primary and Critic identities are contract fixtures only; provider
+credentials and model network calls are forbidden. DeepSeek-backed diagnosis
+is intentionally integrated last, after the remaining non-model readiness
+work, when an API key is supplied.
+
+Run from `rocketmq-sre/`; the harness creates and destroys its own cluster,
+keeps build output on `D:` and `F:`, and writes the redacted report outside the
+repository:
+
+```powershell
+.\scripts\autonomy-action-live-qualification.ps1
+```
+
+The report is implementation qualification, not production certification. The
+committed contract can be checked without a cluster:
+
+```powershell
+python scripts/check_autonomy_action_qualification.py
+```
+
 ## User interface
 
 The UI is designed as a full-screen desktop operations workspace using

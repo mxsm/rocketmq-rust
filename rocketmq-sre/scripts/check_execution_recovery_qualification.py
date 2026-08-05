@@ -190,9 +190,10 @@ def validate(manifest: dict[str, Any]) -> list[str]:
     for action in actions:
         if not isinstance(action, dict):
             continue
-        expected = "disposable_cluster_smoke_passed" if action.get("risk") == "r1" else "contract_tested"
-        if action.get("qualification") != expected:
-            findings.append(f"controlled action {action.get('id')} must be qualified as {expected}")
+        if action.get("qualification") != "disposable_cluster_smoke_passed":
+            findings.append(
+                f"controlled action {action.get('id')} must be qualified as disposable_cluster_smoke_passed"
+            )
 
     r1_live = manifest.get("r1_live_qualification")
     if not isinstance(r1_live, dict):
@@ -206,6 +207,36 @@ def validate(manifest: dict[str, Any]) -> list[str]:
             findings.append("R1 disposable qualification must not claim production certification")
         for field in ("manifest", "script", "checker"):
             _repository_path(r1_live.get(field), findings, f"r1_live_qualification.{field}")
+
+    r2_live = manifest.get("r2_live_qualification")
+    if not isinstance(r2_live, dict):
+        findings.append("R2 live qualification contract is missing")
+    else:
+        if r2_live.get("actions") != 5 or r2_live.get("required_outcomes_per_action") != 12:
+            findings.append("R2 live qualification must cover five actions by twelve outcomes")
+        for field in ("model_provider_network_calls", "unattended_execution", "production_certified"):
+            if r2_live.get(field) is not False:
+                findings.append(f"R2 live qualification {field} must remain false")
+        for field in ("manifest", "script", "checker"):
+            _repository_path(r2_live.get(field), findings, f"r2_live_qualification.{field}")
+
+    autonomy_live = manifest.get("autonomy_live_qualification")
+    if not isinstance(autonomy_live, dict):
+        findings.append("autonomy live qualification contract is missing")
+    else:
+        if autonomy_live.get("actions") != 4 or autonomy_live.get("required_outcomes_per_action") != 16:
+            findings.append("autonomy live qualification must cover four actions by sixteen outcomes")
+        if autonomy_live.get("live_mode_ceiling") != "supervised":
+            findings.append("autonomy live qualification must stop at Supervised")
+        for field in (
+            "unattended_autonomous_execution",
+            "model_provider_network_calls",
+            "production_certified",
+        ):
+            if autonomy_live.get(field) is not False:
+                findings.append(f"autonomy live qualification {field} must remain false")
+        for field in ("manifest", "script", "checker"):
+            _repository_path(autonomy_live.get(field), findings, f"autonomy_live_qualification.{field}")
 
     common = manifest.get("common_execution_safety_evidence")
     required_safety = {

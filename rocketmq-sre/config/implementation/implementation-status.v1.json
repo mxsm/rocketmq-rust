@@ -223,7 +223,7 @@
       "maturity": {
         "implemented": true,
         "contract_tested": true,
-        "live_smoke_passed": false,
+        "live_smoke_passed": true,
         "production_certified": false
       },
       "evidence": [
@@ -246,11 +246,23 @@
         {
           "kind": "test",
           "path": "rocketmq-sre/scripts/check_execution_recovery_qualification.py"
+        },
+        {
+          "kind": "configuration",
+          "path": "rocketmq-sre/config/qualification/autonomy-actions.v1.json"
+        },
+        {
+          "kind": "test",
+          "path": "rocketmq-sre/scripts/check_autonomy_action_qualification.py"
+        },
+        {
+          "kind": "smoke",
+          "path": "rocketmq-sre/scripts/autonomy-action-live-qualification.ps1"
         }
       ],
       "limitations": [
-        "Autonomy remains disabled by default; the Kubernetes platform fault matrix has passed, while per-action shadow and supervised qualification remains incomplete.",
-        "Per-organization and per-cluster operational evidence is incomplete."
+        "Autonomy remains disabled by default; all four approved R1 actions have disposable Kind and PostgreSQL Shadow-to-Supervised qualification with persisted cohorts, samples, denials, pause recovery, real supervised target verification, and zero model-provider calls.",
+        "The live qualification ceiling is Supervised: unattended Autonomous target execution, per-organization evidence, deployment-specific production certification, and production owner acceptance remain incomplete."
       ]
     },
     {
