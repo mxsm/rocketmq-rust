@@ -676,7 +676,7 @@ async fn qualify_read_only_tool_selection(client: &AsyncBuiltinProviderClient, c
     );
 }
 
-async fn seed_diagnosis_scope(
+pub(super) async fn seed_diagnosis_scope(
     repository: &PostgresRepository,
     tenant_id: TenantId,
     cluster_id: ClusterId,
@@ -756,7 +756,7 @@ async fn seed_conversation_scope(
     .expect("qualification conversation");
 }
 
-fn synthetic_lag_evidence(
+pub(super) fn synthetic_lag_evidence(
     tenant_id: TenantId,
     cluster_id: ClusterId,
     correlation_id: CorrelationId,

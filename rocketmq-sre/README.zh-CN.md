@@ -115,6 +115,23 @@ selection 和 Evidence 绑定回答。该能力不会向模型授予 RocketMQ �
 值守 mutation 已通过认证。API key 必须通过仓库外的显式文件提供，并会在写入任何
 本机报告前从资格验证进程中清除。
 
+Provider fallback 采用有限次数和错误分类。Timeout、rate limit、service unavailable
+和 transport failure 可以进入下一个已认证 profile；authentication、policy、capability、
+data residency、结构化输出和 citation 错误会停止路由并降级到 rules-only。凭据门控的资格
+验证允许已选 Provider 最多进行一次有界的同 Provider 结构化输出修复，该修复不会授权新的
+fallback 跳转。验证使用 loopback primary 故障端点和真实 DeepSeek Responses secondary，核对持久化的
+Provider 身份与 fallback provenance，并证明所有 Provider 不可用时仍不可执行。智谱 GLM 与
+Kimi/Moonshot 已具备协议和 profile 支持，但在没有各自凭据时不会声明为 live-certified。
+
+```powershell
+.\scripts\provider-failover-qualification.ps1 -Mode Check
+.\scripts\provider-failover-qualification.ps1 -SecretFile <仓库外凭据文件>
+```
+
+脱敏报告仅写入 `D:` 或 `F:` 的专用 Evidence 根目录，不保存 prompt、response、消息正文、
+endpoint URL 或凭据。Loopback primary 使用独立的进程级随机 fixture 凭据，绝不会收到
+DeepSeek API key；两类环境变量都会在清理时删除。
+
 ## Workspace crate
 
 | Crate | 职责 |

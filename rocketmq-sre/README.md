@@ -142,6 +142,30 @@ written.
 .\scripts\deepseek-diagnosis-qualification.ps1 -SecretFile <outside-repository-secret-file>
 ```
 
+Provider fallback is finite and error-class aware. Timeout, rate limiting,
+service unavailability, and transport failure may advance to the next
+certified profile; authentication, policy, capability, data-residency,
+structured-output, and citation failures stop routing and degrade to
+rules-only behavior. A selected provider may make at most one bounded
+same-provider structured-output repair; that repair does not authorize another
+fallback hop. A credential-gated qualification combines a loopback
+primary fault endpoint with the real DeepSeek Responses secondary, verifies
+persisted provider identity and fallback provenance, and confirms that total
+provider unavailability remains non-executable. Zhipu GLM and Kimi/Moonshot
+remain protocol/profile supported but are not described as live-certified
+without separate credentials.
+
+```powershell
+.\scripts\provider-failover-qualification.ps1 -Mode Check
+.\scripts\provider-failover-qualification.ps1 -SecretFile <outside-repository-secret-file>
+```
+
+The sanitized report is machine-local under the dedicated `D:` or `F:`
+Evidence root. It contains no prompt, response, message body, endpoint URL, or
+credential. The loopback primary uses a separate random process-only fixture
+credential; it never receives the DeepSeek API key, and both environments are
+cleared during cleanup.
+
 ## Workspace crates
 
 | Crate | Responsibility |
