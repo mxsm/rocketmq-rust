@@ -26,7 +26,7 @@ use crate::rpc::rpc_request_header::RpcRequestHeader;
 )]
 pub struct TopicRequestHeader {
     #[serde(flatten)]
-    #[header(flatten, presence = "any")]
+    #[header(flatten, presence = "always")]
     pub rpc_request_header: Option<RpcRequestHeader>,
     pub lo: Option<bool>,
 }

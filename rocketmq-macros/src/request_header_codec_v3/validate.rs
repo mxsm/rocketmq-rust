@@ -194,26 +194,29 @@ fn validate_wire_name(name: &WireName, errors: &mut Option<syn::Error>) {
 fn validate_java_range(field: &FieldModel, errors: &mut Option<syn::Error>) {
     let java_type = field.java_type.as_ref().map(|value| value.value.as_str());
     match (field.kind, field.range, java_type) {
-        (ValueKind::U32, Some(HeaderRange::I32), Some("int" | "Integer")) => {}
-        (ValueKind::U64, Some(HeaderRange::I64), Some("long" | "Long")) => {}
+        (ValueKind::U32, Some(HeaderRange::I32), None | Some("int" | "Integer")) => {}
+        (ValueKind::U64, Some(HeaderRange::I64), None | Some("long" | "Long")) => {}
         (ValueKind::U32, Some(_), _) => combine_error(
             errors,
-            syn::Error::new(field.span, "u32 range requires java_type = \"int\" and range = \"i32\""),
+            syn::Error::new(
+                field.span,
+                "u32 fields require range = \"i32\"; java_type, when present, must be int or Integer",
+            ),
         ),
         (ValueKind::U64, Some(_), _) => combine_error(
             errors,
             syn::Error::new(
                 field.span,
-                "u64 range requires java_type = \"long\" and range = \"i64\"",
+                "u64 fields require range = \"i64\"; java_type, when present, must be long or Long",
             ),
         ),
-        (ValueKind::U32, None, Some("int" | "Integer")) => combine_error(
+        (ValueKind::U32, None, _) => combine_error(
             errors,
-            syn::Error::new(field.span, "unsigned Java int fields require range = \"i32\""),
+            syn::Error::new(field.span, "unsigned u32 fields require range = \"i32\""),
         ),
-        (ValueKind::U64, None, Some("long" | "Long")) => combine_error(
+        (ValueKind::U64, None, _) => combine_error(
             errors,
-            syn::Error::new(field.span, "unsigned Java long fields require range = \"i64\""),
+            syn::Error::new(field.span, "unsigned u64 fields require range = \"i64\""),
         ),
         (ValueKind::I32, Some(_), _)
         | (ValueKind::I64, Some(_), _)

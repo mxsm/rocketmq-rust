@@ -29,6 +29,7 @@ pub(super) struct HeaderModel {
     pub(super) java_class: Option<LitStr>,
     pub(super) validate_path: Option<Path>,
     pub(super) lookup: LookupPlan,
+    pub(super) legacy_shim: LegacyShim,
     pub(super) protocol_path: Path,
     pub(super) fast: bool,
     pub(super) fields: Vec<FieldModel>,
@@ -71,6 +72,12 @@ pub(super) enum LookupPlan {
     Auto,
     Scan,
     Get,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum LegacyShim {
+    Generated,
+    Manual,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -154,6 +161,7 @@ impl HeaderModel {
             LitStr::new("invalid::MissingTypeId", input.ident.span())
         });
         let lookup = parse_lookup(attrs.lookup, &mut errors);
+        let legacy_shim = parse_legacy_shim(attrs.legacy_shim, &mut errors);
         let protocol_path = match attrs.protocol_path {
             Some(path) => path,
             None => match resolve_protocol_path(input.ident.span()) {
@@ -229,6 +237,7 @@ impl HeaderModel {
             java_class: attrs.java_class,
             validate_path: attrs.validate,
             lookup,
+            legacy_shim,
             protocol_path,
             fast: attrs.fast.is_some(),
             fields,
@@ -337,6 +346,23 @@ fn parse_lookup(value: Option<LitStr>, errors: &mut Option<syn::Error>) -> Looku
                 syn::Error::new(value.span(), "lookup must be one of: auto, scan, get"),
             );
             LookupPlan::Auto
+        }
+    }
+}
+
+fn parse_legacy_shim(value: Option<LitStr>, errors: &mut Option<syn::Error>) -> LegacyShim {
+    let Some(value) = value else {
+        return LegacyShim::Generated;
+    };
+    match value.value().as_str() {
+        "generated" => LegacyShim::Generated,
+        "manual" => LegacyShim::Manual,
+        _ => {
+            combine_error(
+                errors,
+                syn::Error::new(value.span(), "legacy_shim must be generated or manual"),
+            );
+            LegacyShim::Generated
         }
     }
 }

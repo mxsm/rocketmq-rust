@@ -5,7 +5,7 @@ use rocketmq_macros::RequestHeaderCodecV3;
 struct InvalidRanges {
     #[header(required, java_type = "long", range = "i32")]
     wrong_u32_range: u32,
-    #[header(required, java_type = "long")]
+    #[header(required)]
     missing_u64_range: u64,
     #[header(required, java_type = "long", range = "i64")]
     signed_with_range: i64,

@@ -20,7 +20,7 @@ use syn::Generics;
 use super::codegen_map;
 use super::codegen_schema;
 use super::codegen_shim;
-use super::model::{HeaderModel, MissingPolicy};
+use super::model::{HeaderModel, LegacyShim, MissingPolicy};
 
 pub(super) fn generate(model: &HeaderModel) -> TokenStream {
     let ident = &model.ident;
@@ -37,7 +37,10 @@ pub(super) fn generate(model: &HeaderModel) -> TokenStream {
     let context_declarations = codegen_map::context_declarations(model);
     let map_items = codegen_map::codec_items(model, &codec_trait);
     let schema_items = codegen_schema::codec_items(model, &codec_trait);
-    let shims = codegen_shim::generate(model, &generics, &codec_trait);
+    let shims = match model.legacy_shim {
+        LegacyShim::Generated => codegen_shim::generate(model, &generics, &codec_trait),
+        LegacyShim::Manual => TokenStream::new(),
+    };
 
     quote! {
         impl #impl_generics #ident #ty_generics #where_clause {

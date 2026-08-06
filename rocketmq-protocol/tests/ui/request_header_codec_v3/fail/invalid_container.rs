@@ -21,4 +21,15 @@ struct UnknownContainerOption {
     value: String,
 }
 
+#[derive(RequestHeaderCodecV3)]
+#[header(
+    type_id = "fixtures::InvalidLegacyShim",
+    legacy_shim = "disabled",
+    crate = "rocketmq_protocol"
+)]
+struct InvalidLegacyShim {
+    #[header(required)]
+    value: String,
+}
+
 fn main() {}

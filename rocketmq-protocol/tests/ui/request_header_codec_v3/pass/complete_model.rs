@@ -30,9 +30,9 @@ struct CompleteHeader<T> {
     attempts: i32,
     #[header(required)]
     timestamp: i64,
-    #[header(required, java_type = "int", range = "i32")]
+    #[header(required, range = "i32")]
     queue_id: u32,
-    #[header(required, java_type = "long", range = "i64")]
+    #[header(required, range = "i64")]
     offset: u64,
     #[header(default, default_semantic = "literal:LOWER")]
     boundary: BoundaryType,

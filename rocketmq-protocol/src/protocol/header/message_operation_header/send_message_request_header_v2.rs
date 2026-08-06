@@ -17,6 +17,7 @@ use std::str::FromStr;
 
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -24,6 +25,10 @@ use crate::protocol::command_custom_header::CommandCustomHeader;
 use crate::protocol::command_custom_header::FromMap;
 use crate::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
 use crate::protocol::header::message_operation_header::TopicRequestHeaderTrait;
+use crate::protocol::header_codec::HeaderCodec;
+use crate::protocol::header_codec::HeaderCodecError;
+use crate::protocol::header_codec::MapSink;
+use crate::protocol::header_codec::ResolvedHeaderKey;
 use crate::rpc::rpc_request_header::RpcRequestHeader;
 use crate::rpc::topic_request_header::TopicRequestHeader;
 
@@ -48,32 +53,31 @@ const FIELD_NAMESPACED: &str = "nsd";
 const FIELD_ONEWAY: &str = "oway";
 const FIELD_LO: &str = "lo";
 
-const KEY_A: CheetahString = CheetahString::from_static_str(FIELD_A);
-const KEY_B: CheetahString = CheetahString::from_static_str(FIELD_B);
-const KEY_C: CheetahString = CheetahString::from_static_str(FIELD_C);
-const KEY_D: CheetahString = CheetahString::from_static_str(FIELD_D);
-const KEY_E: CheetahString = CheetahString::from_static_str(FIELD_E);
-const KEY_F: CheetahString = CheetahString::from_static_str(FIELD_F);
-const KEY_G: CheetahString = CheetahString::from_static_str(FIELD_G);
-const KEY_H: CheetahString = CheetahString::from_static_str(FIELD_H);
-const KEY_I: CheetahString = CheetahString::from_static_str(FIELD_I);
-const KEY_J: CheetahString = CheetahString::from_static_str(FIELD_J);
-const KEY_K: CheetahString = CheetahString::from_static_str(FIELD_K);
-const KEY_L: CheetahString = CheetahString::from_static_str(FIELD_L);
-const KEY_M: CheetahString = CheetahString::from_static_str(FIELD_M);
-const KEY_N: CheetahString = CheetahString::from_static_str(FIELD_N);
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.SendMessageRequestHeaderV2",
+    legacy_shim = "manual",
+    fast
+)]
 #[serde(rename_all = "camelCase")]
 pub struct SendMessageRequestHeaderV2 {
-    pub a: CheetahString,         // producerGroup
-    pub b: CheetahString,         // topic
-    pub c: CheetahString,         // defaultTopic
-    pub d: i32,                   // defaultTopicQueueNums
-    pub e: i32,                   // queueId
-    pub f: i32,                   // sysFlag
-    pub g: i64,                   // bornTimestamp
-    pub h: i32,                   // flag
+    #[header(required)]
+    pub a: CheetahString, // producerGroup
+    #[header(required)]
+    pub b: CheetahString, // topic
+    #[header(required)]
+    pub c: CheetahString, // defaultTopic
+    #[header(required)]
+    pub d: i32, // defaultTopicQueueNums
+    #[header(required)]
+    pub e: i32, // queueId
+    #[header(required)]
+    pub f: i32, // sysFlag
+    #[header(required)]
+    pub g: i64, // bornTimestamp
+    #[header(required)]
+    pub h: i32, // flag
     pub i: Option<CheetahString>, // properties
     pub j: Option<i32>,           // reconsumeTimes
     pub k: Option<bool>,          // unitMode
@@ -82,44 +86,46 @@ pub struct SendMessageRequestHeaderV2 {
     pub n: Option<CheetahString>, // brokerName
 
     #[serde(flatten)]
+    #[header(flatten, presence = "always")]
     pub topic_request_header: Option<TopicRequestHeader>,
 }
 
 impl CommandCustomHeader for SendMessageRequestHeaderV2 {
+    fn check_fields(&self) -> rocketmq_error::RocketMQResult<()> {
+        <Self as HeaderCodec>::validate_for_wire(self)
+            .map_err(|error| rocketmq_error::RocketMQError::request_header_error(error.to_string()))
+    }
+
     fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
-        let mut map = HashMap::with_capacity(14);
-        map.insert(KEY_A.clone(), self.a.clone());
-        map.insert(KEY_B.clone(), self.b.clone());
-        map.insert(KEY_C.clone(), self.c.clone());
-        map.insert(KEY_D.clone(), CheetahString::from_string_owned(self.d.to_string()));
-        map.insert(KEY_E.clone(), CheetahString::from_string_owned(self.e.to_string()));
-        map.insert(KEY_F.clone(), CheetahString::from_string_owned(self.f.to_string()));
-        map.insert(KEY_G.clone(), CheetahString::from_string_owned(self.g.to_string()));
-        map.insert(KEY_H.clone(), CheetahString::from_string_owned(self.h.to_string()));
-        if let Some(ref value) = self.i {
-            map.insert(KEY_I.clone(), value.clone());
-        }
-        if let Some(value) = self.j {
-            map.insert(KEY_J.clone(), CheetahString::from_string_owned(value.to_string()));
-        }
-        if let Some(value) = self.k {
-            map.insert(KEY_K.clone(), CheetahString::from_string_owned(value.to_string()));
-        }
-        if let Some(value) = self.l {
-            map.insert(KEY_L.clone(), CheetahString::from_string_owned(value.to_string()));
-        }
-        if let Some(value) = self.m {
-            map.insert(KEY_M.clone(), CheetahString::from_string_owned(value.to_string()));
-        }
-        if let Some(ref value) = self.n {
-            map.insert(KEY_N.clone(), value.clone());
-        }
-        if let Some(ref value) = self.topic_request_header {
-            if let Some(value) = value.to_map() {
-                map.extend(value);
-            }
-        }
+        let mut map = HashMap::with_capacity(<Self as HeaderCodec>::FIELD_COUNT_HINT);
+        self.try_encode_into_map(&mut map).ok()?;
         Some(map)
+    }
+
+    fn encode_into_map(&self, out: &mut HashMap<CheetahString, CheetahString>) {
+        let _ = self.try_encode_into_map(out);
+    }
+
+    fn try_encode_into_map(&self, out: &mut HashMap<CheetahString, CheetahString>) -> Result<(), HeaderCodecError> {
+        out.reserve(<Self as HeaderCodec>::FIELD_COUNT_HINT);
+        let mut sink = MapSink::new(out);
+        <Self as HeaderCodec>::encode_into(self, &mut sink)
+    }
+
+    fn resolve_wire_key(&self, key: &str) -> Option<ResolvedHeaderKey> {
+        <Self as HeaderCodec>::resolve_wire_key(key)
+    }
+
+    fn canonical_wire_key(&self, key: &str) -> Option<&'static str> {
+        <Self as HeaderCodec>::canonical_wire_key(key)
+    }
+
+    fn contains_wire_key(&self, key: &str) -> bool {
+        <Self as HeaderCodec>::contains_wire_key(key)
+    }
+
+    fn encoded_len_hint(&self) -> usize {
+        <Self as HeaderCodec>::encoded_len_hint(self)
     }
 
     fn encode_fast(&mut self, out: &mut BytesMut) {
@@ -323,70 +329,8 @@ impl FromMap for SendMessageRequestHeaderV2 {
     type Target = Self;
 
     fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
-        #[inline(always)]
-        fn get_required<'a>(
-            map: &'a HashMap<CheetahString, CheetahString>,
-            key: &CheetahString,
-            field: &'static str,
-        ) -> Result<&'a CheetahString, rocketmq_error::RocketMQError> {
-            map.get(key).ok_or_else(|| {
-                rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
-                    format: "header",
-                    message: format!("Missing field: {}", field),
-                })
-            })
-        }
-
-        #[inline(always)]
-        fn parse_required<T: FromStr>(
-            map: &HashMap<CheetahString, CheetahString>,
-            key: &CheetahString,
-            field: &'static str,
-        ) -> Result<T, rocketmq_error::RocketMQError> {
-            get_required(map, key, field)?.as_str().parse::<T>().map_err(|_| {
-                rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
-                    format: "header",
-                    message: format!("Parse {} field error", field),
-                })
-            })
-        }
-
-        #[inline(always)]
-        fn optional_parse<T: FromStr>(
-            map: &HashMap<CheetahString, CheetahString>,
-            key: &CheetahString,
-            field: &'static str,
-        ) -> Result<Option<T>, rocketmq_error::RocketMQError> {
-            match map.get(key) {
-                Some(value) => value.as_str().parse::<T>().map(Some).map_err(|_| {
-                    rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
-                        format: "header",
-                        message: format!("Parse {} field error", field),
-                    })
-                }),
-                None => Ok(None),
-            }
-        }
-
-        Ok(SendMessageRequestHeaderV2 {
-            a: get_required(map, &KEY_A, FIELD_A)?.clone(),
-            b: get_required(map, &KEY_B, FIELD_B)?.clone(),
-            c: get_required(map, &KEY_C, FIELD_C)?.clone(),
-
-            d: parse_required::<i32>(map, &KEY_D, FIELD_D)?,
-            e: parse_required::<i32>(map, &KEY_E, FIELD_E)?,
-            f: parse_required::<i32>(map, &KEY_F, FIELD_F)?,
-            g: parse_required::<i64>(map, &KEY_G, FIELD_G)?,
-            h: parse_required::<i32>(map, &KEY_H, FIELD_H)?,
-
-            i: map.get(&KEY_I).cloned(),
-            j: optional_parse::<i32>(map, &KEY_J, FIELD_J)?,
-            k: optional_parse::<bool>(map, &KEY_K, FIELD_K)?,
-            l: optional_parse::<i32>(map, &KEY_L, FIELD_L)?,
-            m: optional_parse::<bool>(map, &KEY_M, FIELD_M)?,
-            n: map.get(&KEY_N).cloned(),
-            topic_request_header: Some(<TopicRequestHeader as FromMap>::from(map)?),
-        })
+        <Self as HeaderCodec>::decode_from_map(map)
+            .map_err(|error| rocketmq_error::RocketMQError::request_header_error(error.to_string()))
     }
 }
 

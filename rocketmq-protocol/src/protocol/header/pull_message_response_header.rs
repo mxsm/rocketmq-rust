@@ -12,23 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Serialize, Deserialize, Debug, Default, Clone, RequestHeaderCodecV2)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::pull_message_response_header::PullMessageResponseHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.PullMessageResponseHeader",
+    fast
+)]
 #[serde(rename_all = "camelCase")]
 pub struct PullMessageResponseHeader {
-    #[required]
+    #[header(required, range = "i64")]
     pub suggest_which_broker_id: u64,
 
-    #[required]
+    #[header(required)]
     pub next_begin_offset: i64,
 
-    #[required]
+    #[header(required)]
     pub min_offset: i64,
 
-    #[required]
+    #[header(required)]
     pub max_offset: i64,
 
     pub offset_delta: Option<i64>,
