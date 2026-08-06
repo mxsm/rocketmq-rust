@@ -41,6 +41,11 @@ def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def canonical_text_digest(path: Path) -> str:
+    text = path.read_text(encoding="utf-8").replace("\r\n", "\n").replace("\r", "\n")
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 def percentile(values: list[float], probability: float) -> float:
     ordered = sorted(values)
     position = (len(ordered) - 1) * probability
@@ -100,13 +105,18 @@ def gate_result(actual: float, operator: str, threshold: float) -> dict[str, Any
     return {"pass": passed, "actual": actual, "operator": operator, "threshold": threshold}
 
 
-def checked_file(root: Path, manifest: dict[str, Any], name: str) -> tuple[Path, dict[str, Any]]:
+def checked_path(root: Path, manifest: dict[str, Any], name: str) -> Path:
     entry = manifest.get("files", {}).get(name)
     if not isinstance(entry, dict) or set(entry) != {"path", "sha256"}:
         raise ValueError(f"evidence manifest is missing the exact {name} file identity")
     path = (root / entry["path"]).resolve()
     if not path.is_file() or digest(path) != entry["sha256"]:
         raise ValueError(f"evidence file digest mismatch: {name}")
+    return path
+
+
+def checked_file(root: Path, manifest: dict[str, Any], name: str) -> tuple[Path, dict[str, Any]]:
+    path = checked_path(root, manifest, name)
     return path, read_json(path)
 
 
@@ -146,7 +156,7 @@ def validate_gates(gates_path: Path, gates: dict[str, Any]) -> None:
     if gates["gates"]["PERF-04"].get("appliesTo") != ["PERF-01", "PERF-02", "PERF-03"]:
         raise ValueError("PERF-04 must apply independently to PERF-01 through PERF-03")
     recipe = (gates_path.parent.parent.parent / gates["buildRecipe"]["path"]).resolve()
-    if not recipe.is_file() or digest(recipe) != gates["buildRecipe"]["sha256"]:
+    if not recipe.is_file() or canonical_text_digest(recipe) != gates["buildRecipe"]["sha256"]:
         raise ValueError("perf-gates.json build recipe digest is stale")
 
 
@@ -233,11 +243,12 @@ def main() -> None:
     validate_gates(args.gates.resolve(), gates)
     if manifest.get("schemaVersion") != 1 or manifest.get("mode") != "release":
         raise ValueError("only a release evidence bundle can produce a performance attestation")
-    if manifest.get("gatesSha256") != digest(args.gates):
+    if manifest.get("gatesSha256") != canonical_text_digest(args.gates):
         raise ValueError("evidence was collected with different performance gates")
 
     corpus_path, corpus = checked_file(root, manifest, "corpus")
     runner_path, _ = checked_file(root, manifest, "runner")
+    rust_benchmark_harness_path = checked_path(root, manifest, "rustBenchmarkHarness")
     _, v3 = checked_file(root, manifest, "v3")
     v2_replay_path, v2 = checked_file(root, manifest, "v2Replay")
     v2_manifest_path, v2_manifest = checked_file(root, manifest, "v2Manifest")
@@ -262,6 +273,12 @@ def main() -> None:
         raise ValueError("V2 replay does not reference the frozen baseline manifest")
     if v2_replay_path == v2_manifest_path:
         raise ValueError("same-run V2 replay cannot reuse the historical manifest file")
+    rust_benchmark_harness_sha = digest(rust_benchmark_harness_path)
+    if {
+        v3.get("benchmarkHarnessSha256"),
+        v2.get("benchmarkHarnessSha256"),
+    } != {rust_benchmark_harness_sha}:
+        raise ValueError("V3 and V2 replay did not use the bundled Rust benchmark harness")
 
     validate_runtime_identity([v3, v2, java], corpus, digest(runner_path))
     v3_samples = sample_index(v3)

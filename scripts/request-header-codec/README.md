@@ -33,7 +33,7 @@ Do not edit generated schema or golden files by hand. Do not commit raw JMH, Cri
 
 ## Performance workflow
 
-`perf-corpus-v1.json` defines the production-weighted set of 44 encode and decode operations. Regenerate it after the fixture manifest changes, or use `--check` in verification jobs:
+`perf-corpus-v1.json` defines the production-weighted set of 48 encode and decode operations. Regenerate it after the fixture manifest changes, or use `--check` in verification jobs:
 
 ```powershell
 python scripts/request-header-codec/generate_perf_corpus.py --check
@@ -69,6 +69,8 @@ $common = @{
 ```
 
 Interrupted runs can continue with `-Resume` and the same output directory. Never use `-Resume` after changing the corpus, fixtures, source commit, runner, or benchmark configuration.
+
+Release replay temporarily overlays the bundled current Rust benchmark harness and corpus onto the clean frozen V2 checkout. Only benchmark-driver files are replaced; codec library sources and the frozen commit identity are unchanged. The original bytes are restored in a `finally` path, the checkout must be clean afterward, and the evidence manifest records the shared harness digest used by V3 and V2.
 
 The release comparison is fail-closed. In addition to matching commits, corpus and fixture hashes, runner fingerprint, benchmark profile, and build recipe, it requires all gates in `perf-gates.json`. The primary throughput requirements are:
 

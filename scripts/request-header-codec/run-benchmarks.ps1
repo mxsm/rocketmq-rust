@@ -81,6 +81,11 @@ function Get-StringSha256([string]$Value) {
     }
 }
 
+function Get-CanonicalTextSha256([string]$Path) {
+    $text = [System.IO.File]::ReadAllText($Path).Replace("`r`n", "`n").Replace("`r", "`n")
+    return Get-StringSha256 $text
+}
+
 function Get-ProcessOutput([string]$FileName, [string]$Arguments) {
     $startInfo = New-Object System.Diagnostics.ProcessStartInfo
     $startInfo.FileName = $FileName
@@ -207,7 +212,10 @@ function Invoke-RustBenchmark(
     [string]$RunnerPath,
     [string]$Destination,
     [string]$Role,
-    [string]$BaselineManifestPath
+    [string]$BaselineManifestPath,
+    [string]$BenchmarkHarnessPath,
+    [string]$BenchmarkCorpusPath,
+    [bool]$UseReplayOverlay
 ) {
     $raw = Join-Path $Destination 'criterion-raw'
     $allocations = Join-Path $Destination 'allocations.json'
@@ -235,8 +243,30 @@ function Invoke-RustBenchmark(
         }
         $env:ROCKETMQ_HEADER_CODEC_CRITERION_DIR = $raw
         $env:ROCKETMQ_HEADER_CODEC_ALLOC_OUTPUT = $allocations
-        Push-Location $Repository
+        $overlay = @()
+        $locationPushed = $false
         try {
+            if ($UseReplayOverlay) {
+                $harnessDestination = Join-Path $Repository 'rocketmq-protocol\benches\request_header_codec.rs'
+                $corpusDestination = Join-Path $Repository 'scripts\request-header-codec\perf-corpus-v1.json'
+                $overlay = @(
+                    [pscustomobject]@{
+                        Destination = $harnessDestination
+                        OriginalBytes = [System.IO.File]::ReadAllBytes($harnessDestination)
+                        OverlayBytes = [System.IO.File]::ReadAllBytes($BenchmarkHarnessPath)
+                    },
+                    [pscustomobject]@{
+                        Destination = $corpusDestination
+                        OriginalBytes = [System.IO.File]::ReadAllBytes($corpusDestination)
+                        OverlayBytes = [System.IO.File]::ReadAllBytes($BenchmarkCorpusPath)
+                    }
+                )
+                foreach ($entry in $overlay) {
+                    [System.IO.File]::WriteAllBytes($entry.Destination, $entry.OverlayBytes)
+                }
+            }
+            Push-Location $Repository
+            $locationPushed = $true
             $previousErrorPreference = $ErrorActionPreference
             try {
                 $ErrorActionPreference = 'Continue'
@@ -249,7 +279,18 @@ function Invoke-RustBenchmark(
                 throw "Rust Criterion failed with exit code $criterionExitCode"
             }
         } finally {
-            Pop-Location
+            if ($locationPushed) {
+                Pop-Location
+            }
+            if ($overlay.Count -gt 0) {
+                foreach ($entry in $overlay) {
+                    [System.IO.File]::WriteAllBytes($entry.Destination, $entry.OriginalBytes)
+                }
+                $replayStatus = (& git -C $Repository status --short) -join "`n"
+                if ($LASTEXITCODE -ne 0 -or $replayStatus) {
+                    throw "V2 replay overlay did not restore a clean worktree: $replayStatus"
+                }
+            }
         }
     } finally {
         $env:ROCKETMQ_HEADER_CODEC_WARMUP_SECONDS = $oldWarmup
@@ -263,7 +304,8 @@ function Invoke-RustBenchmark(
     $normalizeArguments = @(
         (Join-Path $scriptRoot 'normalize_criterion.py'), '--raw-dir', $raw, '--corpus', $corpusPath,
         '--fixture-manifest', $fixtureManifest, '--runner', $RunnerPath, '--output', $normalized,
-        '--role', $Role, '--commit', $commit, '--profile', $profile, '--allocations', $allocations
+        '--role', $Role, '--commit', $commit, '--profile', $profile, '--allocations', $allocations,
+        '--benchmark-harness', $BenchmarkHarnessPath
     )
     if ($BaselineManifestPath) {
         $normalizeArguments += @('--baseline-manifest', $BaselineManifestPath)
@@ -276,9 +318,9 @@ function Invoke-RustBenchmark(
 }
 
 function Invoke-BuildEvidence([string]$Repository, [string]$Variant, [string]$Destination) {
-    $measureScript = Join-Path $Repository 'scripts\request-header-codec\measure-build.ps1'
+    $measureScript = Join-Path $scriptRoot 'measure-build.ps1'
     if (-not (Test-Path -LiteralPath $measureScript)) {
-        throw "Build measurement helper is absent from $Repository"
+        throw 'Build measurement helper is absent from the release harness'
     }
     $clean = Join-Path $Destination "$Variant-clean.json"
     $incremental = Join-Path $Destination "$Variant-incremental.json"
@@ -287,11 +329,14 @@ function Invoke-BuildEvidence([string]$Repository, [string]$Variant, [string]$De
     }
     $common = @{
         Variant = $Variant
+        Repository = $Repository
     }
     if ($Quick) {
         $common['Runs'] = 1
         $common['DiagnosticAllowRecipeOverride'] = $true
     }
+    $sourceCommit = (& git -C $Repository rev-parse HEAD).Trim()
+    Assert-CleanCommit $Repository $sourceCommit "$Variant build source"
     & $measureScript -Mode clean -Output $clean @common | Out-Host
     if ($LASTEXITCODE -ne 0) {
         throw "$Variant clean-build measurement failed"
@@ -300,6 +345,7 @@ function Invoke-BuildEvidence([string]$Repository, [string]$Variant, [string]$De
     if ($LASTEXITCODE -ne 0) {
         throw "$Variant incremental-build measurement failed"
     }
+    Assert-CleanCommit $Repository $sourceCommit "$Variant build source after measurement"
     return @($clean, $incremental)
 }
 
@@ -313,9 +359,11 @@ function Add-FileIdentity([System.Collections.Specialized.OrderedDictionary]$Fil
 }
 
 Assert-CleanCommit $javaRoot $expectedJavaCommit 'Java oracle'
+$currentRustCommit = (& git -C $repoRoot rev-parse HEAD).Trim()
+Assert-CleanCommit $repoRoot $currentRustCommit 'Rust release candidate'
 $gatesDocument = Get-Content -LiteralPath $gatesPath -Raw | ConvertFrom-Json
 $recipePath = Join-Path $repoRoot $gatesDocument.buildRecipe.path
-$recipeHash = (Get-FileHash -LiteralPath $recipePath -Algorithm SHA256).Hash.ToLowerInvariant()
+$recipeHash = Get-CanonicalTextSha256 $recipePath
 if ($recipeHash -ne $gatesDocument.buildRecipe.sha256) {
     throw 'perf-gates.json references a stale build recipe digest'
 }
@@ -331,6 +379,9 @@ $inputDirectory = Join-Path $outputRoot 'inputs'
 New-Item -ItemType Directory -Force -Path $inputDirectory | Out-Null
 $corpusCopy = Join-Path $inputDirectory 'perf-corpus-v1.json'
 Copy-Item -LiteralPath $corpusPath -Destination $corpusCopy -Force
+$benchmarkHarnessCopy = Join-Path $inputDirectory 'request_header_codec.rs'
+Copy-Item -LiteralPath (Join-Path $repoRoot 'rocketmq-protocol\benches\request_header_codec.rs') `
+    -Destination $benchmarkHarnessCopy -Force
 
 $javaNormalized = Join-Path $outputRoot 'java\java.json'
 if (-not ($Resume -and (Test-Path -LiteralPath $javaNormalized))) {
@@ -340,6 +391,7 @@ $files = [ordered]@{}
 Add-FileIdentity $files 'corpus' $corpusCopy
 Add-FileIdentity $files 'runner' $runnerPath
 Add-FileIdentity $files 'java' $javaNormalized
+Add-FileIdentity $files 'rustBenchmarkHarness' $benchmarkHarnessCopy
 
 if ($Mode -eq 'Release') {
     $v2Root = (Resolve-Path -LiteralPath $V2Worktree).Path
@@ -347,11 +399,13 @@ if ($Mode -eq 'Release') {
     Assert-CleanCommit $v2Root ((Get-Content -LiteralPath $v2ManifestPath -Raw | ConvertFrom-Json).commit) 'V2 replay'
     $v3Normalized = Join-Path $outputRoot 'rust\v3\release-candidate.json'
     if (-not ($Resume -and (Test-Path -LiteralPath $v3Normalized))) {
-        $v3Normalized = Invoke-RustBenchmark $repoRoot $runnerPath (Join-Path $outputRoot 'rust\v3') 'release-candidate' $null
+        $v3Normalized = Invoke-RustBenchmark $repoRoot $runnerPath (Join-Path $outputRoot 'rust\v3') `
+            'release-candidate' $null $benchmarkHarnessCopy $corpusCopy $false
     }
     $v2Normalized = Join-Path $outputRoot 'rust\v2\v2-replay.json'
     if (-not ($Resume -and (Test-Path -LiteralPath $v2Normalized))) {
-        $v2Normalized = Invoke-RustBenchmark $v2Root $runnerPath (Join-Path $outputRoot 'rust\v2') 'v2-replay' $v2ManifestPath
+        $v2Normalized = Invoke-RustBenchmark $v2Root $runnerPath (Join-Path $outputRoot 'rust\v2') `
+            'v2-replay' $v2ManifestPath $benchmarkHarnessCopy $corpusCopy $true
     }
     $v3Build = Invoke-BuildEvidence $repoRoot 'v3' (Join-Path $outputRoot 'build')
     $v2Build = Invoke-BuildEvidence $v2Root 'v2-replay' (Join-Path $outputRoot 'build')
@@ -370,7 +424,8 @@ if ($Mode -eq 'Release') {
     $role = if ($Mode -eq 'PostP0') { 'post-p0' } else { 'phase1-hardened' }
     $rustNormalized = Join-Path $outputRoot "rust\$role.json"
     if (-not ($Resume -and (Test-Path -LiteralPath $rustNormalized))) {
-        $rustNormalized = Invoke-RustBenchmark $repoRoot $runnerPath (Join-Path $outputRoot 'rust') $role $null
+        $rustNormalized = Invoke-RustBenchmark $repoRoot $runnerPath (Join-Path $outputRoot 'rust') `
+            $role $null $benchmarkHarnessCopy $corpusCopy $false
     }
     $build = Invoke-BuildEvidence $repoRoot $role (Join-Path $outputRoot 'build')
     Add-FileIdentity $files 'v2' $rustNormalized
@@ -399,7 +454,7 @@ $manifest = [ordered]@{
     schemaVersion = 1
     mode = $manifestMode
     quickDiagnostic = [bool]$Quick
-    gatesSha256 = (Get-FileHash -LiteralPath $gatesPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    gatesSha256 = Get-CanonicalTextSha256 $gatesPath
     buildRecipe = [ordered]@{
         id = $gatesDocument.buildRecipe.id
         sha256 = $gatesDocument.buildRecipe.sha256

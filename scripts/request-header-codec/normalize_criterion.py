@@ -50,6 +50,7 @@ def main() -> None:
     parser.add_argument("--corpus", type=Path, required=True)
     parser.add_argument("--fixture-manifest", type=Path, required=True)
     parser.add_argument("--runner", type=Path, required=True)
+    parser.add_argument("--benchmark-harness", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--role", required=True)
     parser.add_argument("--commit", required=True)
@@ -111,6 +112,7 @@ def main() -> None:
         "corpusSha256": digest(args.corpus),
         "fixtureManifestSha256": digest(args.fixture_manifest),
         "runnerFingerprintSha256": digest(args.runner),
+        "benchmarkHarnessSha256": digest(args.benchmark_harness),
         "runner": read_json(args.runner),
         "sampleCount": len(normalized),
         "missingCases": missing,

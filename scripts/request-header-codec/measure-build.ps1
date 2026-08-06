@@ -24,6 +24,8 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$Output,
 
+    [string]$Repository,
+
     [int]$Runs = 0,
 
     [switch]$DiagnosticAllowRecipeOverride,
@@ -33,7 +35,11 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $scriptRoot = Split-Path -Parent $PSCommandPath
-$repoRoot = (Resolve-Path -LiteralPath (Join-Path $scriptRoot '..\..')).Path
+$repoRoot = if ($Repository) {
+    (Resolve-Path -LiteralPath $Repository).Path
+} else {
+    (Resolve-Path -LiteralPath (Join-Path $scriptRoot '..\..')).Path
+}
 $recipePath = Join-Path $scriptRoot 'perf-build-recipe-v1.json'
 $recipe = Get-Content -LiteralPath $recipePath -Raw | ConvertFrom-Json
 $recipeRuns = [int]$recipe.repetitions
@@ -79,6 +85,11 @@ function Get-StringSha256([string]$Value) {
     } finally {
         $sha.Dispose()
     }
+}
+
+function Get-CanonicalTextSha256([string]$Path) {
+    $text = [System.IO.File]::ReadAllText($Path).Replace("`r`n", "`n").Replace("`r", "`n")
+    return Get-StringSha256 $text
 }
 
 function Get-Median([long[]]$Values) {
@@ -219,7 +230,7 @@ $document = [ordered]@{
     sourceCommit = (& git -C $repoRoot rev-parse HEAD).Trim()
     buildRecipe = [ordered]@{
         id = $recipe.id
-        sha256 = (Get-FileHash -LiteralPath $recipePath -Algorithm SHA256).Hash.ToLowerInvariant()
+        sha256 = Get-CanonicalTextSha256 $recipePath
     }
     mode = $Mode
     variant = $Variant
