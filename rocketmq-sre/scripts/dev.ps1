@@ -63,6 +63,18 @@ function Compose-Arguments([string[]]$Arguments) {
     ) + $Arguments
 }
 
+function Get-RepositorySourceRevision {
+    Require-Command git
+    $revision = (& git -C $repositoryRoot rev-parse HEAD 2>&1 | Out-String).Trim().ToLowerInvariant()
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unable to derive SOURCE_REVISION from the current repository: $revision"
+    }
+    if ($revision -notmatch '^[0-9a-f]{40}$' -or $revision -eq ('0' * 40)) {
+        throw "The current repository revision is not a non-zero 40-character lowercase hexadecimal commit."
+    }
+    return $revision
+}
+
 function Assert-CertificateDirectory {
     if (-not $certificateDirectory.StartsWith(
         $expectedCertificateRoot + [IO.Path]::DirectorySeparatorChar,
@@ -497,6 +509,15 @@ if (-not (Test-Path -LiteralPath $composeFile -PathType Leaf)) {
     throw "Compose file was not found at $composeFile"
 }
 
+$composeActions = @('Up', 'Down', 'Status', 'Reset')
+$restoreSourceRevision = $composeActions -contains $Action
+$hadSourceRevision = Test-Path Env:SOURCE_REVISION
+$previousSourceRevision = if ($hadSourceRevision) { $env:SOURCE_REVISION } else { $null }
+if ($restoreSourceRevision) {
+    $env:SOURCE_REVISION = Get-RepositorySourceRevision
+}
+
+try {
 switch ($Action) {
     'Certs' {
         New-DevelopmentCertificates
@@ -557,5 +578,16 @@ switch ($Action) {
                 Remove-Item -Force
         }
         Write-Host 'Phase 00 containers, volumes, and generated certificate files were removed.'
+    }
+}
+}
+finally {
+    if ($restoreSourceRevision) {
+        if ($hadSourceRevision) {
+            $env:SOURCE_REVISION = $previousSourceRevision
+        }
+        else {
+            Remove-Item Env:SOURCE_REVISION -ErrorAction SilentlyContinue
+        }
     }
 }

@@ -36,8 +36,12 @@ const MAX_IDENTIFIER_BYTES: usize = 255;
 const APPROVED_METRICS: &[&str] = &[
     "rocketmq_broker_up",
     "rocketmq_broker_up_ratio",
+    "rocketmq_controller_quorum_health_ratio",
     "rocketmq_consumer_lag_messages",
     "rocketmq_consumer_lag_latency",
+    "rocketmq_mcp_requests_total",
+    "rocketmq_namesrv_active_brokers",
+    "rocketmq_proxy_up_ratio",
     "rocketmq_store_flush_latency",
     "rocketmq_store_ha_replication_lag_bytes",
 ];
@@ -390,8 +394,16 @@ pub(super) fn diagnostic_pack_for_intent(intent: &ConversationQueryIntent) -> &'
                 "store-pressure.v1"
             } else if intent.resource.ends_with("rocketmq_store_ha_replication_lag_bytes") {
                 "broker-ha.v1"
+            } else if intent.resource.ends_with("rocketmq_controller_quorum_health_ratio") {
+                "controller-ha.v1"
             } else if intent.resource.contains("consumer_lag") {
                 "consumer-lag.v2"
+            } else if intent.resource.ends_with("rocketmq_namesrv_active_brokers") {
+                "namesrv-route.v1"
+            } else if intent.resource.ends_with("rocketmq_proxy_up_ratio") {
+                "proxy-connectivity.v1"
+            } else if intent.resource.ends_with("rocketmq_mcp_requests_total") {
+                "telemetry-pipeline.v1"
             } else {
                 "broker-health.v1"
             }
@@ -569,6 +581,13 @@ mod tests {
             ("metrics/range/rocketmq_store_flush_latency", "store-pressure.v1"),
             ("metrics/range/rocketmq_store_ha_replication_lag_bytes", "broker-ha.v1"),
             ("metrics/range/rocketmq_consumer_lag_messages", "consumer-lag.v2"),
+            (
+                "metrics/range/rocketmq_controller_quorum_health_ratio",
+                "controller-ha.v1",
+            ),
+            ("metrics/range/rocketmq_namesrv_active_brokers", "namesrv-route.v1"),
+            ("metrics/range/rocketmq_proxy_up_ratio", "proxy-connectivity.v1"),
+            ("metrics/range/rocketmq_mcp_requests_total", "telemetry-pipeline.v1"),
             ("metrics/instant/rocketmq_broker_up", "broker-health.v1"),
         ];
         for (resource, expected) in cases {

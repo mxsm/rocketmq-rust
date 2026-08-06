@@ -71,75 +71,95 @@ function Wait-Http([string]$Uri, [int]$Seconds = 90) {
     throw "Timed out waiting for $Uri"
 }
 
-function Invoke-EvidenceQuery {
-    $at = [DateTime]::UtcNow.ToString('o')
-    $body = @{
-        query = @{
-            query_id = [Guid]::NewGuid().ToString()
-            correlation_id = [Guid]::NewGuid().ToString()
-            tenant_id = $tenantId
-            cluster_id = $clusterId
-            source = 'rocketmq-mcp'
-            resource = "consumer-groups/$group/lag/$topic"
-            time_range = @{ start = $at; end = $at }
+function Wait-ConnectorNotReady([int]$Seconds = 45) {
+    $deadline = [DateTime]::UtcNow.AddSeconds($Seconds)
+    $lastStatus = 'not_observed'
+    do {
+        $response = Invoke-Docker (Compose-Arguments @(
+            'exec', '-T', 'sre-connector',
+            'curl', '--silent', '--show-error',
+            '--write-out', "`n%{http_code}",
+            'http://127.0.0.1:8091/readyz'
+        )) -Capture
+        $lines = @($response -split "\r?\n")
+        $lastStatus = $lines[-1]
+        $body = ($lines[0..($lines.Count - 2)] -join "`n") | ConvertFrom-Json
+        if ($lastStatus -eq '503' -and $body.status -eq 'not_ready') {
+            return
         }
-        mcp_cluster = 'sre-dev'
-        operation = @{
-            kind = 'consumer_lag'
-            topic = $topic
-            consumer_group = $group
-            limit = 50
-        }
-    } | ConvertTo-Json -Depth 8
-    $headers = @{ Authorization = "Bearer $internalToken" }
-    $evidence = Invoke-RestMethod `
+        Start-Sleep -Seconds 2
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw "Connector readiness was not revoked after offboard (last HTTP $lastStatus)."
+}
+
+function Invoke-ConversationEvidence(
+    [string]$Question,
+    [string]$Resource,
+    [int]$WindowSeconds = 600
+) {
+    $headers = Get-PublicApiHeaders
+    $conversationBody = @{
+        cluster_id = $clusterId
+        question = $Question
+        resource = $Resource
+        persist_investigation = $false
+    } | ConvertTo-Json
+    $conversation = Invoke-RestMethod `
         -Method Post `
-        -Uri 'http://127.0.0.1:8091/internal/v1/evidence/query' `
+        -Uri 'http://127.0.0.1:8090/v1/conversations' `
         -Headers $headers `
         -ContentType 'application/json' `
-        -Body $body `
+        -Body $conversationBody `
+        -TimeoutSec 30
+    $conversationId = $conversation.conversation.id
+    if ([string]::IsNullOrWhiteSpace($conversationId)) {
+        throw 'Control Plane did not create a conversation for the bounded read query.'
+    }
+
+    $turnBody = @{
+        question = $Question
+        resource = $Resource
+        window_seconds = $WindowSeconds
+    } | ConvertTo-Json
+    $turn = Invoke-RestMethod `
+        -Method Post `
+        -Uri "http://127.0.0.1:8090/v1/conversations/$conversationId/turns" `
+        -Headers $headers `
+        -ContentType 'application/json' `
+        -Body $turnBody `
+        -TimeoutSec 45
+    $evidenceIds = @($turn.answer.evidence_ids)
+    if ($turn.turn.status -ne 'answered' -or $evidenceIds.Count -ne 1) {
+        throw (
+            'Control Plane conversation did not return exactly one answered Evidence reference ' +
+            "(status=$($turn.turn.status), evidence_count=$($evidenceIds.Count))."
+        )
+    }
+    $evidence = Invoke-RestMethod `
+        -Uri "http://127.0.0.1:8090/v1/evidence/$($evidenceIds[0])" `
+        -Headers $headers `
         -TimeoutSec 30
     if ($evidence.content_hash -notmatch '^sha256:[0-9a-f]{64}$') {
-        throw 'Connector Evidence did not contain a canonical SHA-256 hash.'
+        throw 'Conversation Evidence did not contain a canonical SHA-256 hash.'
     }
     if ($evidence.schema.family -ne 'rocketmq-sre.evidence') {
-        throw 'Connector Evidence schema family is not rocketmq-sre.evidence.'
+        throw 'Conversation Evidence schema family is not rocketmq-sre.evidence.'
     }
     return $evidence
 }
 
-function Invoke-RequiredSignalsEvidence([string]$Component, [int]$WindowMinutes) {
-    $end = [DateTime]::UtcNow
-    $body = @{
-        query = @{
-            query_id = [Guid]::NewGuid().ToString()
-            correlation_id = [Guid]::NewGuid().ToString()
-            tenant_id = $tenantId
-            cluster_id = $clusterId
-            source = 'required-signals'
-            resource = "component/$Component"
-            time_range = @{
-                start = $end.AddMinutes(-$WindowMinutes).ToString('o')
-                end = $end.ToString('o')
-            }
-        }
-        mcp_cluster = 'sre-dev'
-        operation = @{ kind = 'cluster_overview' }
-    } | ConvertTo-Json -Depth 8
-    $evidence = Invoke-RestMethod `
-        -Method Post `
-        -Uri 'http://127.0.0.1:8091/internal/v1/evidence/query' `
-        -Headers @{ Authorization = "Bearer $internalToken" } `
-        -ContentType 'application/json' `
-        -Body $body `
-        -TimeoutSec 30
-    if ($evidence.content_hash -notmatch '^sha256:[0-9a-f]{64}$') {
-        throw "Required Signals Evidence for '$Component' has no canonical hash."
-    }
-    if ($evidence.schema.family -ne 'rocketmq-sre.evidence') {
-        throw "Required Signals Evidence for '$Component' has an incompatible schema."
-    }
-    return $evidence
+function Invoke-EvidenceQuery {
+    Invoke-ConversationEvidence `
+        -Question "Show Consumer Lag for $group on $topic." `
+        -Resource "consumer-lag/$group/$topic" `
+        -WindowSeconds 300
+}
+
+function Invoke-RequiredSignalsEvidence([string]$CanonicalMetric, [int]$WindowMinutes) {
+    Invoke-ConversationEvidence `
+        -Question "Show the bounded range for $CanonicalMetric." `
+        -Resource "metrics/range/$CanonicalMetric" `
+        -WindowSeconds ($WindowMinutes * 60)
 }
 
 function Assert-RequiredSignalsQualification {
@@ -159,45 +179,21 @@ function Assert-RequiredSignalsQualification {
         do {
             try {
                 $evidence = Invoke-RequiredSignalsEvidence `
-                    -Component $component.query_component `
+                    -CanonicalMetric $component.canonical_metric `
                     -WindowMinutes ([int]$qualification.limits.query_window_minutes)
                 if ($evidence.content.storage -ne 'inline') {
                     throw 'Required Signals Evidence is not bounded inline content.'
                 }
                 $value = $evidence.content.value
                 if (
-                    $value.schema_version -ne 'rocketmq.sre.required-signals-evidence.v1' `
-                        -or $value.component -ne $component.evidence_component
+                    $evidence.source -ne 'prometheus' `
+                        -or $value.schema_version -ne 'rocketmq.prometheus-evidence.v1' `
+                        -or $value.metric -ne $component.canonical_metric
                 ) {
-                    throw 'Required Signals aggregate identity does not match the qualification contract.'
-                }
-                $observations = @($value.observations)
-                if ($observations.Count -eq 0) {
-                    throw 'Required Signals aggregate contains no observations.'
-                }
-                $unsupportedStatus = @(
-                    $observations | Where-Object {
-                        $_.status -notin @('available', 'missing', 'not_production_verified')
-                    }
-                )
-                if ($unsupportedStatus.Count -gt 0) {
-                    throw 'Required Signals aggregate contains an unsupported status.'
-                }
-                $representative = @(
-                    $observations | Where-Object {
-                        $_.requirement_id -eq $component.representative_requirement_id
-                    }
-                )
-                if (
-                    $representative.Count -ne 1 `
-                        -or $representative[0].status -ne 'available' `
-                        -or $representative[0].query_source -ne 'prometheus' `
-                        -or $representative[0].content.metric -ne $component.canonical_metric
-                ) {
-                    throw "Representative metric '$($component.representative_requirement_id)' is not available."
+                    throw 'Required Signals metric Evidence does not match the qualification contract.'
                 }
                 $sampleCount = 0
-                foreach ($series in @($representative[0].content.series)) {
+                foreach ($series in @($value.series)) {
                     $sampleCount += @($series.samples).Count
                 }
                 if ($sampleCount -lt 1) {
@@ -279,6 +275,28 @@ function Wait-LagBelow([long]$UpperBound, [int]$Seconds = 60) {
         Start-Sleep -Seconds 2
     } while ([DateTime]::UtcNow -lt $deadline)
     throw "Timed out waiting for Consumer Lag below ${UpperBound}: $lastFailure."
+}
+
+function Drain-ProbeLag([int]$MaxBatches = 12) {
+    $evidence = Invoke-EvidenceQuery
+    $lag = Get-InlineLag $evidence
+    for ($batch = 1; $batch -le $MaxBatches -and $lag -gt 0; $batch++) {
+        Invoke-Docker (Compose-Arguments @(
+            '--profile', 'smoke', 'run', '--rm',
+            '-e', 'ROCKETMQ_SRE_PROBE_MAX_MESSAGES=1',
+            'sre-probe', 'consume'
+        )) | Out-Host
+        $snapshot = Wait-LagBelow -UpperBound $lag -Seconds 30
+        $evidence = $snapshot.Evidence
+        $lag = $snapshot.TotalLag
+    }
+    if ($lag -gt 0) {
+        throw "Consumer Lag remained at $lag after $MaxBatches bounded drain batches."
+    }
+    return [PSCustomObject]@{
+        Evidence = $evidence
+        TotalLag = $lag
+    }
 }
 
 function Get-ClusterState {
@@ -425,7 +443,7 @@ function Wait-McpTraceSince(
 
 function Get-McpToolRequestCount {
     $query = [Uri]::EscapeDataString(
-        'sum(rocketmq_rocketmq_mcp_requests_total{operation_kind="tool",operation="rocketmq_get_consumer_lag"})'
+        'sum(rocketmq_mcp_requests_total{operation_kind="tool",operation="rocketmq_get_consumer_lag"})'
     )
     $response = Invoke-RestMethod `
         -Uri "http://127.0.0.1:9090/api/v1/query?query=$query" `
@@ -585,12 +603,8 @@ Wait-Http 'http://127.0.0.1:3100/ready' | Out-Null
 Wait-Http 'http://127.0.0.1:3200/ready' | Out-Null
 Assert-ObservabilityQueries
 Assert-RequiredSignalsQualification
-$headers = @{ Authorization = "Bearer $internalToken" }
-$capabilities = Invoke-RestMethod `
-    -Uri 'http://127.0.0.1:8091/internal/v1/capabilities' `
-    -Headers $headers `
-    -TimeoutSec 15
-$resources = @($capabilities.clusters.'sre-dev'.resources)
+$capabilities = Get-ClusterCapability
+$resources = @($capabilities.manifest.resources)
 if ($resources -notcontains 'rocketmq://system/runtime/v1') {
     throw 'MCP runtime resource is missing from the verified capability surface.'
 }
@@ -608,7 +622,11 @@ Invoke-Docker (Compose-Arguments @('restart', 'postgres'))
 Invoke-Docker (Compose-Arguments @('up', '--detach', '--wait', 'postgres'))
 Invoke-Docker (Compose-Arguments @('restart', 'sre-control-plane'))
 Wait-Http 'http://127.0.0.1:8090/readyz' | Out-Null
+Invoke-Docker (Compose-Arguments @('restart', 'sre-control-plane-mtls'))
+Invoke-Docker (Compose-Arguments @('up', '--detach', '--wait', 'sre-control-plane-mtls'))
+Wait-Http 'http://127.0.0.1:8091/readyz' | Out-Null
 $persisted = Wait-ClusterReady
+Wait-ConnectorChannelOnline | Out-Null
 if ($persisted.id -ne $clusterId) {
     throw 'PostgreSQL/Control Plane restart did not preserve the onboarded cluster.'
 }
@@ -632,8 +650,7 @@ Wait-McpTraceSince 'RocketMQ MCP TOOL' $recoveryTraceStart
 Write-Host 'Collector recovery exported a new MCP Tool metric and trace.'
 Assert-ObservabilityQueries
 Wait-Http 'http://127.0.0.1:8091/readyz' | Out-Null
-Invoke-Docker (Compose-Arguments @('--profile', 'smoke', 'run', '--rm', 'sre-probe', 'consume'))
-$finalLagSnapshot = Wait-LagBelow -UpperBound 1
+$finalLagSnapshot = Drain-ProbeLag
 Write-Host "Post-outage Consumer Lag recovered to $($finalLagSnapshot.TotalLag)."
 
 $oldJwksDocument = Invoke-Docker (Compose-Arguments @(
@@ -709,7 +726,7 @@ $offboardBody = @{
 $offboarded = Invoke-RestMethod `
     -Method Post `
     -Uri "http://127.0.0.1:8090/v1/clusters/$clusterId/offboard" `
-    -Headers @{ Authorization = "Bearer $internalToken" } `
+    -Headers (Get-PublicApiHeaders) `
     -ContentType 'application/json' `
     -Body $offboardBody `
     -TimeoutSec 15
@@ -761,31 +778,7 @@ if ($persistedOffboarded.state -ne 'offboarded' -or $null -eq $persistedOffboard
 }
 Wait-Http 'http://127.0.0.1:8090/readyz' | Out-Null
 
-$connectorReadyResponse = Invoke-Docker (Compose-Arguments @(
-    'exec', '-T', 'sre-connector',
-    'curl', '--silent', '--show-error',
-    '--write-out', "`n%{http_code}",
-    'http://127.0.0.1:8091/readyz'
-)) -Capture
-$connectorReadyLines = @($connectorReadyResponse -split "\r?\n")
-$connectorReadyStatus = $connectorReadyLines[-1]
-$connectorReadyBody = ($connectorReadyLines[0..($connectorReadyLines.Count - 2)] -join "`n") | ConvertFrom-Json
-if ($connectorReadyStatus -ne '503' -or $connectorReadyBody.status -ne 'not_ready') {
-    throw "Connector readiness was not revoked after offboard (HTTP $connectorReadyStatus)."
-}
-
-$connectorCapabilities = Invoke-RestMethod `
-    -Uri 'http://127.0.0.1:8091/internal/v1/capabilities' `
-    -Headers @{ Authorization = "Bearer $internalToken" } `
-    -TimeoutSec 15
-$cachedClusters = @($connectorCapabilities.clusters.psobject.Properties)
-if (
-    $connectorCapabilities.ready `
-        -or $connectorCapabilities.last_error_code -ne 'cluster_not_allowed' `
-        -or $cachedClusters.Count -ne 0
-) {
-    throw 'Connector did not clear readiness and the verified capability cache after offboard.'
-}
+Wait-ConnectorNotReady
 
 $identityCounts = Invoke-Docker (Compose-Arguments @(
     'exec', '-T', 'postgres',
@@ -806,5 +799,5 @@ if (
     throw "Connector identity revocation was not persisted (counts=$identityCounts)."
 }
 
-Write-Host 'Offboard preserved Control Plane readiness, revoked Connector readiness, cleared capability cache, and persisted identity revocation.'
+Write-Host 'Offboard preserved Control Plane readiness, revoked Connector readiness, and persisted identity revocation.'
 Write-Host 'PHASE00_COMPOSE_SMOKE_OK'

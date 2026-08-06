@@ -23,12 +23,16 @@ x-rocketmq-environment: &rocketmq-environment
 
 x-dev-issuer-url: &dev-issuer-url https://dev-issuer-tls:8443
 
+x-rocketmq-build-args: &rocketmq-build-args
+  SOURCE_REVISION: ${SOURCE_REVISION:-0000000000000000000000000000000000000000}
+
 services:
   namesrv:
     build:
       context: ../../..
       dockerfile: docker/Dockerfile.base
       target: namesrv
+      args: *rocketmq-build-args
     command: ["--configFile", "/etc/rocketmq/namesrv.toml"]
     environment:
       <<: *rocketmq-environment
@@ -53,6 +57,7 @@ services:
       context: ../../..
       dockerfile: docker/Dockerfile.base
       target: controller
+      args: *rocketmq-build-args
     command: ["--config-file", "/etc/rocketmq/controller.toml"]
     environment:
       <<: *rocketmq-environment
@@ -78,6 +83,7 @@ services:
       context: ../../..
       dockerfile: docker/Dockerfile.base
       target: broker
+      args: *rocketmq-build-args
     command: ["--configFile", "/etc/rocketmq/broker.toml"]
     depends_on:
       - namesrv
@@ -108,6 +114,7 @@ services:
       context: ../../..
       dockerfile: docker/Dockerfile.base
       target: proxy
+      args: *rocketmq-build-args
     command: ["--config", "/etc/rocketmq/proxy.toml"]
     depends_on:
       - namesrv
@@ -186,6 +193,7 @@ services:
       ROCKETMQ_SRE_CONFIG_DIR: /opt/rocketmq-sre/config
       ROCKETMQ_SRE_MIGRATIONS_DIR: /opt/rocketmq-sre/migrations
       ROCKETMQ_SRE_INTERNAL_TOKEN: phase00-internal-token
+      ROCKETMQ_SRE_GRANT_SIGNING_KEY: phase00-development-grant-signing-key-000001
       ROCKETMQ_SRE_AGENT_ACK_KEY: phase03-development-agent-ack-key-00000001
       ROCKETMQ_SRE_EXECUTOR_URL: http://sre-executor:8094
       ROCKETMQ_SRE_EXECUTOR_TIMEOUT_SECONDS: "240"
@@ -401,6 +409,7 @@ services:
       context: ../../..
       dockerfile: docker/Dockerfile.base
       target: mcp
+      args: *rocketmq-build-args
     command:
       [
         "--config",
