@@ -37,6 +37,7 @@ pub use schema::HeaderFieldSpec;
 pub use schema::HeaderFlattenSpec;
 pub use schema::HeaderPresence;
 pub use schema::ResolvedHeaderKey;
+pub use sink::BinarySink;
 pub use sink::EncodeSink;
 pub use sink::MapSink;
 pub use value::validate_unsigned_java_range;

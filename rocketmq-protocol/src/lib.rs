@@ -38,6 +38,7 @@ pub use rpc::topic_request_header::TopicRequestHeader;
 /// Stable implementation details used by RocketMQ derive macros.
 #[doc(hidden)]
 pub mod __request_header_codec {
+    pub use bytes::BytesMut;
     pub use cheetah_string::CheetahString;
     pub use rocketmq_error::RocketMQError;
 }

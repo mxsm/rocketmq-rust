@@ -35,6 +35,11 @@ pub(super) fn generate(model: &HeaderModel) -> TokenStream {
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
     let context_declarations = codegen_map::context_declarations(model);
+    let manual_fast_helpers = if model.fast && matches!(model.legacy_shim, LegacyShim::Manual) {
+        codegen_map::manual_fast_helpers(model, &codec_trait)
+    } else {
+        TokenStream::new()
+    };
     let map_items = codegen_map::codec_items(model, &codec_trait);
     let schema_items = codegen_schema::codec_items(model, &codec_trait);
     let shims = match model.legacy_shim {
@@ -45,6 +50,7 @@ pub(super) fn generate(model: &HeaderModel) -> TokenStream {
     quote! {
         impl #impl_generics #ident #ty_generics #where_clause {
             #context_declarations
+            #manual_fast_helpers
         }
 
         impl #impl_generics #codec_trait for #ident #ty_generics #where_clause {

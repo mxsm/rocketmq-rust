@@ -26,6 +26,7 @@ use crate::protocol::command_custom_header::FromMap;
 use crate::protocol::command_custom_header::HeaderEncodeCapability;
 use crate::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
 use crate::protocol::header::message_operation_header::TopicRequestHeaderTrait;
+use crate::protocol::header_codec::BinarySink;
 use crate::protocol::header_codec::HeaderCodec;
 use crate::protocol::header_codec::HeaderCodecError;
 use crate::protocol::header_codec::MapSink;
@@ -134,62 +135,18 @@ impl CommandCustomHeader for SendMessageRequestHeaderV2 {
     }
 
     fn encode_direct_binary(&self, out: &mut BytesMut) -> Result<(), HeaderCodecError> {
-        self.write_if_not_null(out, FIELD_A, self.a.as_str());
-        self.write_if_not_null(out, FIELD_B, self.b.as_str());
-        self.write_if_not_null(out, FIELD_C, self.c.as_str());
-
-        // Reduce allocations by avoiding format! macro
-        let d_str = self.d.to_string();
-        self.write_if_not_null(out, FIELD_D, &d_str);
-        let e_str = self.e.to_string();
-        self.write_if_not_null(out, FIELD_E, &e_str);
-        let f_str = self.f.to_string();
-        self.write_if_not_null(out, FIELD_F, &f_str);
-        let g_str = self.g.to_string();
-        self.write_if_not_null(out, FIELD_G, &g_str);
-        let h_str = self.h.to_string();
-        self.write_if_not_null(out, FIELD_H, &h_str);
-
-        if let Some(ref value) = self.i {
-            self.write_if_not_null(out, FIELD_I, value.as_str());
+        let checkpoint = out.len();
+        // Java's V2 fast codec writes only the compact a..n fields. Inherited
+        // topic/RPC fields remain available through the compatibility map.
+        out.reserve(self.__request_header_codec_v3_local_encoded_len_hint());
+        let result = {
+            let mut sink = BinarySink::new(out);
+            self.__request_header_codec_v3_encode_local(&mut sink)
+        };
+        if result.is_err() {
+            out.truncate(checkpoint);
         }
-        if let Some(value) = self.j {
-            let j_str = value.to_string();
-            self.write_if_not_null(out, FIELD_J, &j_str);
-        }
-        if let Some(value) = self.k {
-            self.write_if_not_null(out, FIELD_K, if value { "true" } else { "false" });
-        }
-        if let Some(value) = self.l {
-            let l_str = value.to_string();
-            self.write_if_not_null(out, FIELD_L, &l_str);
-        }
-        if let Some(value) = self.m {
-            self.write_if_not_null(out, FIELD_M, if value { "true" } else { "false" });
-        }
-        if let Some(ref value) = self.n {
-            self.write_if_not_null(out, FIELD_N, value.as_str());
-        }
-        if let Some(ref header) = self.topic_request_header {
-            if let Some(ref rpc_header) = header.rpc_request_header {
-                if let Some(ref value) = rpc_header.broker_name {
-                    self.write_if_not_null(out, FIELD_BROKER_NAME, value.as_str());
-                }
-                if let Some(ref value) = rpc_header.namespace {
-                    self.write_if_not_null(out, FIELD_NAMESPACE, value.as_str());
-                }
-                if let Some(value) = rpc_header.namespaced {
-                    self.write_if_not_null(out, FIELD_NAMESPACED, if value { "true" } else { "false" });
-                }
-                if let Some(value) = rpc_header.oneway {
-                    self.write_if_not_null(out, FIELD_ONEWAY, if value { "true" } else { "false" });
-                }
-            }
-            if let Some(value) = header.lo {
-                self.write_if_not_null(out, FIELD_LO, if value { "true" } else { "false" });
-            }
-        }
-        Ok(())
+        result
     }
 
     fn decode_fast(&mut self, fields: &HashMap<CheetahString, CheetahString>) -> rocketmq_error::RocketMQResult<()> {
@@ -573,6 +530,23 @@ mod tests {
         ])
     }
 
+    fn decode_fast_fields(encoded: &[u8]) -> HashMap<CheetahString, CheetahString> {
+        let mut fields = HashMap::new();
+        let mut cursor = 0;
+        while cursor < encoded.len() {
+            let key_len = u16::from_be_bytes(encoded[cursor..cursor + 2].try_into().unwrap()) as usize;
+            cursor += 2;
+            let key = std::str::from_utf8(&encoded[cursor..cursor + key_len]).unwrap();
+            cursor += key_len;
+            let value_len = u32::from_be_bytes(encoded[cursor..cursor + 4].try_into().unwrap()) as usize;
+            cursor += 4;
+            let value = std::str::from_utf8(&encoded[cursor..cursor + value_len]).unwrap();
+            cursor += value_len;
+            fields.insert(key.into(), value.into());
+        }
+        fields
+    }
+
     #[test]
     fn send_message_request_header_v2_serializes_correctly() {
         let header = SendMessageRequestHeaderV2 {
@@ -622,7 +596,7 @@ mod tests {
     }
 
     #[test]
-    fn topic_request_header_setters_initialize_missing_nested_headers_and_fast_codec_fields() {
+    fn topic_request_header_setters_preserve_map_fields_without_expanding_java_v2_fast_fields() {
         let mut header = minimal_header_v2();
 
         header.set_lo(Some(true));
@@ -647,15 +621,11 @@ mod tests {
 
         let mut encoded = BytesMut::new();
         header.encode_fast(&mut encoded);
-        let encoded = String::from_utf8_lossy(&encoded);
-        assert!(encoded.contains("n"));
-        assert!(encoded.contains("broker-a"));
-        assert!(encoded.contains("bname"));
-        assert!(encoded.contains("ns"));
-        assert!(encoded.contains("ns-a"));
-        assert!(encoded.contains("nsd"));
-        assert!(encoded.contains("oway"));
-        assert!(encoded.contains("lo"));
+        let fast_fields = decode_fast_fields(&encoded);
+        assert_eq!(fast_fields.get("n").map(CheetahString::as_str), Some("broker-a"));
+        for inherited in ["bname", "ns", "nsd", "oway", "lo"] {
+            assert!(!fast_fields.contains_key(inherited));
+        }
     }
 
     #[test]

@@ -32,7 +32,7 @@ use rocketmq_protocol::protocol::header_codec::{
 use rocketmq_protocol::protocol::FastCodesHeader;
 use rocketmq_protocol::rpc::rpc_request_header::RpcRequestHeader;
 use rocketmq_protocol::rpc::topic_request_header::TopicRequestHeader;
-use rocketmq_protocol::{CommandCustomHeader, FromMap, HeaderMap};
+use rocketmq_protocol::{CommandCustomHeader, FromMap, HeaderEncodeCapability, HeaderMap};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -94,7 +94,13 @@ struct RegisteredSchema {
     flattens: Vec<HeaderFlattenSpec>,
 }
 
-fn register<T: HeaderCodec>() -> RegisteredSchema {
+fn register<T: HeaderCodec + CommandCustomHeader + Default>() -> RegisteredSchema {
+    assert_eq!(
+        T::default().encode_capability() == HeaderEncodeCapability::DirectBinary,
+        T::FAST_ENABLED,
+        "{} encode capability must follow its fast schema flag",
+        T::TYPE_ID
+    );
     let mut fields = Vec::new();
     T::visit_field_specs(&mut |field| fields.push(*field));
     let mut flattens = Vec::new();
@@ -349,7 +355,11 @@ fn typed_validation_errors_remain_classified_and_redacted() {
 }
 
 fn decode_fast_fields(encoded: &[u8]) -> HeaderMap {
-    let mut fields = HeaderMap::new();
+    decode_fast_pairs(encoded).into_iter().collect()
+}
+
+fn decode_fast_pairs(encoded: &[u8]) -> Vec<(CheetahString, CheetahString)> {
+    let mut fields = Vec::new();
     let mut cursor = 0;
     while cursor < encoded.len() {
         let key_len = u16::from_be_bytes(encoded[cursor..cursor + 2].try_into().unwrap()) as usize;
@@ -360,20 +370,141 @@ fn decode_fast_fields(encoded: &[u8]) -> HeaderMap {
         cursor += 4;
         let value = std::str::from_utf8(&encoded[cursor..cursor + value_len]).unwrap();
         cursor += value_len;
-        fields.insert(key.into(), value.into());
+        fields.push((key.into(), value.into()));
     }
     fields
 }
 
+fn assert_direct_binary_matches_typed_map<T>(header: &T, expected_keys: &[&str])
+where
+    T: CommandCustomHeader,
+{
+    assert_eq!(header.encode_capability(), HeaderEncodeCapability::DirectBinary);
+    let expected = header.to_map().expect("typed compatibility map");
+    let mut encoded = BytesMut::from(&b"prefix"[..]);
+    header
+        .encode_direct_binary(&mut encoded)
+        .expect("typed direct binary encoding");
+    assert_eq!(&encoded[..6], b"prefix");
+    assert_eq!(encoded.len() - 6, header.encoded_len_hint());
+
+    let pairs = decode_fast_pairs(&encoded[6..]);
+    assert_eq!(
+        pairs.iter().map(|(key, _)| key.as_str()).collect::<Vec<_>>(),
+        expected_keys
+    );
+    assert_eq!(pairs.into_iter().collect::<HeaderMap>(), expected);
+}
+
 #[test]
-fn typed_maps_preserve_existing_send_fast_codecs() {
+fn generated_fast_headers_write_canonical_binary_pairs_in_schema_order() {
     let rpc = RpcRequestHeader {
         namespace: Some("namespace-a".into()),
         namespaced: Some(true),
         broker_name: Some("broker-a".into()),
         oneway: Some(false),
     };
-    let mut request = SendMessageRequestHeaderV2 {
+    let pull_request = PullMessageRequestHeader {
+        consumer_group: "group-a".into(),
+        topic: "topic-a".into(),
+        lite_topic: Some("lite-a".into()),
+        queue_id: -1,
+        queue_offset: -42,
+        max_msg_nums: 32,
+        sys_flag: 1,
+        commit_offset: 7,
+        suspend_timeout_millis: 15_000,
+        sub_version: 99,
+        subscription: Some("tag-a".into()),
+        expression_type: Some("TAG".into()),
+        max_msg_bytes: Some(1024),
+        request_source: Some(2),
+        proxy_forward_client_id: Some("client-a".into()),
+        topic_request: Some(NamesrvTopicRequestHeader {
+            lo: Some(true),
+            rpc: Some(rpc),
+        }),
+    };
+    assert_direct_binary_matches_typed_map(
+        &pull_request,
+        &[
+            "consumerGroup",
+            "topic",
+            "liteTopic",
+            "queueId",
+            "queueOffset",
+            "maxMsgNums",
+            "sysFlag",
+            "commitOffset",
+            "suspendTimeoutMillis",
+            "subscription",
+            "subVersion",
+            "expressionType",
+            "maxMsgBytes",
+            "requestSource",
+            "proxyFrowardClientId",
+            "lo",
+            "ns",
+            "nsd",
+            "bname",
+            "oway",
+        ],
+    );
+
+    let pull_response = PullMessageResponseHeader {
+        suggest_which_broker_id: 1,
+        next_begin_offset: -2,
+        min_offset: -3,
+        max_offset: 4,
+        offset_delta: Some(-5),
+        topic_sys_flag: Some(6),
+        group_sys_flag: Some(7),
+        forbidden_type: Some(8),
+    };
+    assert_direct_binary_matches_typed_map(
+        &pull_response,
+        &[
+            "suggestWhichBrokerId",
+            "nextBeginOffset",
+            "minOffset",
+            "maxOffset",
+            "offsetDelta",
+            "topicSysFlag",
+            "groupSysFlag",
+            "forbiddenType",
+        ],
+    );
+
+    let send_response = SendMessageResponseHeader::new(
+        "message-a".into(),
+        -1,
+        -42,
+        Some("transaction-a".into()),
+        Some("batch-a".into()),
+        Some("recall-a".into()),
+    );
+    assert_direct_binary_matches_typed_map(
+        &send_response,
+        &[
+            "msgId",
+            "queueId",
+            "queueOffset",
+            "transactionId",
+            "batchUniqId",
+            "recallHandle",
+        ],
+    );
+}
+
+#[test]
+fn typed_schemas_preserve_java_send_fast_contracts() {
+    let rpc = RpcRequestHeader {
+        namespace: Some("namespace-a".into()),
+        namespaced: Some(true),
+        broker_name: Some("broker-a".into()),
+        oneway: Some(false),
+    };
+    let request = SendMessageRequestHeaderV2 {
         a: "producer-a".into(),
         b: "topic-a".into(),
         c: "TBW102".into(),
@@ -395,8 +526,19 @@ fn typed_maps_preserve_existing_send_fast_codecs() {
     };
     let typed_request_map = request.to_map().unwrap();
     let mut request_bytes = BytesMut::new();
-    CommandCustomHeader::encode_fast(&mut request, &mut request_bytes);
-    assert_eq!(decode_fast_fields(&request_bytes), typed_request_map);
+    CommandCustomHeader::encode_direct_binary(&request, &mut request_bytes).unwrap();
+    let direct_request_map = decode_fast_fields(&request_bytes);
+    const JAVA_FAST_KEYS: [&str; 14] = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n"];
+    let expected_direct_request_map = typed_request_map
+        .iter()
+        .filter(|(key, _)| JAVA_FAST_KEYS.contains(&key.as_str()))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect::<HeaderMap>();
+    assert_eq!(direct_request_map, expected_direct_request_map);
+    for inherited in ["lo", "ns", "nsd", "bname", "oway"] {
+        assert!(typed_request_map.contains_key(inherited));
+        assert!(!direct_request_map.contains_key(inherited));
+    }
 
     let typed_request = <SendMessageRequestHeaderV2 as HeaderCodec>::decode_from_map(&typed_request_map).unwrap();
     let legacy_request = <SendMessageRequestHeaderV2 as FromMap>::from(&typed_request_map).unwrap();
@@ -415,9 +557,12 @@ fn typed_maps_preserve_existing_send_fast_codecs() {
         Some("recall-a".into()),
     );
     let typed_response_map = response.to_map().unwrap();
-    let mut response_bytes = BytesMut::new();
-    FastCodesHeader::encode_fast(&mut response, &mut response_bytes);
-    assert_eq!(decode_fast_fields(&response_bytes), typed_response_map);
+    let mut legacy_response_bytes = BytesMut::new();
+    FastCodesHeader::encode_fast(&mut response, &mut legacy_response_bytes);
+    let mut typed_response_bytes = BytesMut::new();
+    CommandCustomHeader::encode_direct_binary(&response, &mut typed_response_bytes).unwrap();
+    assert_eq!(typed_response_bytes, legacy_response_bytes);
+    assert_eq!(decode_fast_fields(&typed_response_bytes), typed_response_map);
 
     let mut fast_response = SendMessageResponseHeader::default();
     FastCodesHeader::decode_fast(&mut fast_response, &typed_response_map);
@@ -446,6 +591,15 @@ fn unsigned_fast_header_fields_enforce_inferred_java_ranges() {
             ..
         })
     ));
+    let mut bytes = BytesMut::from(&b"prefix"[..]);
+    assert!(matches!(
+        request.encode_direct_binary(&mut bytes),
+        Err(HeaderCodecError::JavaRange {
+            key: "suspendTimeoutMillis",
+            ..
+        })
+    ));
+    assert_eq!(bytes.as_ref(), b"prefix");
 
     let response = PullMessageResponseHeader {
         suggest_which_broker_id: i64::MAX as u64 + 1,
@@ -459,4 +613,14 @@ fn unsigned_fast_header_fields_enforce_inferred_java_ranges() {
             ..
         })
     ));
+
+    let mut bytes = BytesMut::from(&b"prefix"[..]);
+    assert!(matches!(
+        response.encode_direct_binary(&mut bytes),
+        Err(HeaderCodecError::JavaRange {
+            key: "suggestWhichBrokerId",
+            ..
+        })
+    ));
+    assert_eq!(bytes.as_ref(), b"prefix");
 }
