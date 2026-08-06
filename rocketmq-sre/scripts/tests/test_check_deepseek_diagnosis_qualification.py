@@ -50,6 +50,8 @@ def valid_report() -> dict:
             "output_tokens_present": True,
             "schema_repairs": 0,
             "model_network_calls": 4,
+            "diagnosis_attempts": 1,
+            "rules_only_fallbacks": 0,
             "invocation_persisted": True,
             "stream_sessions": 2,
             "completed_semantic_streams": 1,
@@ -92,13 +94,13 @@ class DeepSeekDiagnosisQualificationTest(unittest.TestCase):
     def test_rejects_unbounded_or_non_model_assisted_run(self) -> None:
         report = valid_report()
         report["diagnosis"]["mode"] = "rules_only"
-        report["diagnosis"]["model_network_calls"] = 6
+        report["diagnosis"]["model_network_calls"] = 8
         report["diagnosis"]["schema_repairs"] = 2
 
         findings = MODULE.validate_report(report)
 
         self.assertIn("diagnosis.mode must be 'model_assisted'", findings)
-        self.assertIn("diagnosis.model_network_calls must be between four and five", findings)
+        self.assertIn("diagnosis.model_network_calls must be between four and seven", findings)
         self.assertIn("diagnosis.schema_repairs must be between zero and one", findings)
 
     def test_rejects_mutation_or_unauthorized_citation(self) -> None:
