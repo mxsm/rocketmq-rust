@@ -1,0 +1,68 @@
+{
+  "schema_version": "rocketmq-sre.production-ownership-qualification.v1",
+  "environment": "target_organization",
+  "production_certified": false,
+  "grants_execution_authority": false,
+  "model_provider_network_calls": false,
+  "unattended_autonomous_execution": false,
+  "live_mode_ceiling": "supervised",
+  "max_validity_days": 90,
+  "required_targets": [
+    {
+      "kind": "infrastructure",
+      "id": "postgresql",
+      "responsibilities": ["service_owner", "access_owner", "backup_owner", "recovery_owner"]
+    },
+    {
+      "kind": "infrastructure",
+      "id": "evidence_object_store",
+      "responsibilities": ["service_owner", "access_owner", "backup_owner", "recovery_owner"]
+    },
+    {
+      "kind": "infrastructure",
+      "id": "oidc",
+      "responsibilities": ["service_owner", "access_owner", "security_owner", "escalation_owner"]
+    },
+    {
+      "kind": "infrastructure",
+      "id": "vault_kms",
+      "responsibilities": ["service_owner", "access_owner", "security_owner", "recovery_owner"]
+    },
+    {
+      "kind": "infrastructure",
+      "id": "observability",
+      "responsibilities": ["service_owner", "access_owner", "data_owner", "escalation_owner"]
+    },
+    {
+      "kind": "action",
+      "id": "observability.logger_level_ttl.v1",
+      "responsibilities": ["component_owner", "sre_owner", "security_owner", "escalation_owner"]
+    },
+    {
+      "kind": "action",
+      "id": "proxy.scale_out_one.v1",
+      "responsibilities": ["component_owner", "sre_owner", "security_owner", "escalation_owner"]
+    },
+    {
+      "kind": "action",
+      "id": "proxy.restart_one.v1",
+      "responsibilities": ["component_owner", "sre_owner", "security_owner", "escalation_owner"]
+    },
+    {
+      "kind": "action",
+      "id": "telemetry.collector.restart_one.v1",
+      "responsibilities": ["component_owner", "sre_owner", "security_owner", "escalation_owner"]
+    }
+  ],
+  "report_contract": {
+    "schema_version": "rocketmq-sre.production-ownership-qualification-report.v1",
+    "machine_local_only": true,
+    "allowed_roots": ["D:\\rocketmq-sre-evidence", "F:\\rocketmq-sre-evidence"],
+    "owner_reference_scheme": "owner://",
+    "approval_reference_scheme": "approval://",
+    "on_call_reference_scheme": "oncall://",
+    "personal_data_recorded": false,
+    "secrets_recorded": false,
+    "message_bodies_recorded": false
+  }
+}
