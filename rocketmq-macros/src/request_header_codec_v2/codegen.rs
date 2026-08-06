@@ -31,6 +31,7 @@ pub(super) fn generate(model: HeaderModel) -> TokenStream {
     let map_type = quote!(#protocol_path::HeaderMap);
     let string_type = quote!(#protocol_path::__request_header_codec::CheetahString);
     let error_type = quote!(#protocol_path::__request_header_codec::RocketMQError);
+    let codec_error_type = quote!(#protocol_path::protocol::header_codec::HeaderCodecError);
 
     let const_decls = fields.iter().filter(|field| !field.flattened).map(gen_const_decl);
     let encode_stmts = fields
@@ -123,6 +124,16 @@ pub(super) fn generate(model: HeaderModel) -> TokenStream {
 
             fn encode_into_map(&self, out: &mut #map_type) {
                 #(#encode_stmts)*
+            }
+
+            fn try_encode_into_map(&self, out: &mut #map_type) -> Result<(), #codec_error_type> {
+                <Self as #command_trait>::check_fields(self).map_err(|_| {
+                    #codec_error_type::LegacyValidation {
+                        header: ::core::any::type_name::<Self>(),
+                    }
+                })?;
+                <Self as #command_trait>::encode_into_map(self, out);
+                Ok(())
             }
         }
 

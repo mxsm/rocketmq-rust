@@ -42,4 +42,10 @@ struct CompleteHeader<T> {
     nested: Option<Nested<T>>,
 }
 
+impl<T> CompleteHeader<T> {
+    fn validate_header(&self) -> Result<(), rocketmq_protocol::protocol::header_codec::HeaderCodecError> {
+        Ok(())
+    }
+}
+
 fn main() {}

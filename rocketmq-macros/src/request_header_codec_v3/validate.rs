@@ -115,16 +115,16 @@ fn validate_fields(model: &HeaderModel, errors: &mut Option<syn::Error>) {
             }
         }
 
-        if let Some((order, span)) = field.binary_order {
-            if let Some(owner) = order_owners.insert(order, &field.ident) {
-                combine_error(
-                    errors,
-                    syn::Error::new(
-                        span,
-                        format!("binary_order `{order}` is already used by field `{owner}`"),
-                    ),
-                );
-            }
+        let order = field.stable_order();
+        if let Some(owner) = order_owners.insert(order, &field.ident) {
+            let span = field.binary_order.map_or(field.span, |(_, span)| span);
+            combine_error(
+                errors,
+                syn::Error::new(
+                    span,
+                    format!("binary_order `{order}` is already used by field `{owner}`"),
+                ),
+            );
         }
     }
 }
@@ -147,6 +147,12 @@ fn validate_field(field: &FieldModel, errors: &mut Option<syn::Error>) {
         combine_error(
             errors,
             syn::Error::new(field.span, "alias_conflict requires at least one alias"),
+        );
+    }
+    if field.aliases.len() > u16::MAX as usize {
+        combine_error(
+            errors,
+            syn::Error::new(field.span, "a field supports at most 65535 decode aliases"),
         );
     }
 

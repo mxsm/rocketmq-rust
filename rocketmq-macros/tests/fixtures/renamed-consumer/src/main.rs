@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use protocol_api::CommandCustomHeader;
+use protocol_api::{CommandCustomHeader, HeaderCodec};
 use rocketmq_macros::{RequestHeaderCodecV2, RequestHeaderCodecV3};
 
 #[derive(RequestHeaderCodecV2)]
@@ -33,5 +33,10 @@ fn main() {
     assert_eq!(fields.get("queueId").map(|value| value.as_str()), Some("7"));
 
     let v3_header = RenamedV3Header { queue_id: 7 };
-    assert_eq!(v3_header.queue_id, 7);
+    let v3_fields = v3_header.to_map().expect("V3 header map");
+    assert_eq!(v3_fields.get("queueId").map(|value| value.as_str()), Some("7"));
+    assert_eq!(
+        <RenamedV3Header as HeaderCodec>::canonical_wire_key("queueId"),
+        Some("queueId")
+    );
 }

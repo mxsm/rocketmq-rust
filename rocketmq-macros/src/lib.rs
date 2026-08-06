@@ -38,10 +38,8 @@ pub fn request_header_codec_v2(input: TokenStream) -> TokenStream {
     request_header_codec_inner_v2(input)
 }
 
-/// Validates the explicit typed request-header wire model.
-///
-/// Map, schema, and compatibility implementations are added separately after
-/// the attribute grammar and diagnostics are frozen.
+/// Generates typed map codecs, schema metadata, and compatibility adapters for
+/// an explicit request-header wire model.
 #[proc_macro_derive(RequestHeaderCodecV3, attributes(header, required))]
 pub fn request_header_codec_v3(input: TokenStream) -> TokenStream {
     request_header_codec_inner_v3(input)
