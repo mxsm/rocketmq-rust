@@ -220,6 +220,7 @@ impl PostgresRepository {
                     &lifecycle,
                     &definition.action_version,
                     Some(lifecycle.mode),
+                    None,
                     "policy_definition_changed",
                     actor,
                 )
@@ -270,6 +271,7 @@ impl PostgresRepository {
                     &mut transaction,
                     &lifecycle,
                     &definition.action_version,
+                    None,
                     None,
                     "policy_definition_created",
                     actor,
@@ -392,6 +394,7 @@ impl PostgresRepository {
         next: &AutonomyLifecycleState,
         action_version: &str,
         owner_confirmed: bool,
+        owner_approval_ref: Option<&str>,
         reason_code: &str,
     ) -> Result<(), ControlPlaneError> {
         let mut transaction = self.pool.begin().await?;
@@ -436,6 +439,7 @@ impl PostgresRepository {
             next,
             action_version,
             Some(current.mode),
+            owner_approval_ref,
             reason_code,
             &next.updated_by,
         )
@@ -1546,6 +1550,7 @@ impl PostgresRepository {
                     &next,
                     &effective.action_version,
                     Some(current.mode),
+                    None,
                     reason,
                     actor,
                 )
@@ -1758,6 +1763,7 @@ async fn insert_lifecycle_event(
     state: &AutonomyLifecycleState,
     action_version: &str,
     from_mode: Option<AutonomyMode>,
+    owner_approval_ref: Option<&str>,
     reason_code: &str,
     actor: &str,
 ) -> Result<(), ControlPlaneError> {
@@ -1765,11 +1771,11 @@ async fn insert_lifecycle_event(
         "INSERT INTO autonomy_lifecycle_events (
             event_id, tenant_id, cluster_id, action_id, action_version,
             from_mode, to_mode, previous_mode, lifecycle_revision,
-            reason_code, actor_subject, event_snapshot, occurred_at
+            reason_code, actor_subject, owner_approval_ref, event_snapshot, occurred_at
          ) VALUES (
             $1, $2, $3, $4, $5,
             $6, $7, $8, $9,
-            $10, $11, $12, $13
+            $10, $11, $12, $13, $14
          )",
     )
     .bind(Uuid::new_v4())
@@ -1783,6 +1789,7 @@ async fn insert_lifecycle_event(
     .bind(i64::try_from(state.lifecycle_revision).map_err(|_| invalid_request("lifecycle revision is too large"))?)
     .bind(reason_code)
     .bind(actor)
+    .bind(owner_approval_ref)
     .bind(json_value(state)?)
     .bind(state.updated_at)
     .execute(&mut **transaction)

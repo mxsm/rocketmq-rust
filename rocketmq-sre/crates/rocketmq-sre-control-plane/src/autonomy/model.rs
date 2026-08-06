@@ -62,7 +62,8 @@ pub(crate) struct CreateAutonomyPolicyRequest {
 }
 
 /// Human lifecycle change. Autonomous promotion additionally requires the
-/// owner-confirmed flag and current qualification.
+/// owner-confirmed flag, an opaque approval reference, and current
+/// qualification.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AutonomyTransitionRequest {
@@ -70,6 +71,39 @@ pub(crate) struct AutonomyTransitionRequest {
     pub(crate) reason: Option<String>,
     #[serde(default)]
     pub(crate) owner_confirmed: bool,
+    #[serde(default)]
+    pub(crate) owner_approval_ref: Option<String>,
+}
+
+impl AutonomyTransitionRequest {
+    pub(crate) fn validated_owner_approval_ref(&self) -> Option<&str> {
+        let value = self.owner_approval_ref.as_deref()?;
+        if value.trim() != value || value.chars().count() > 160 {
+            return None;
+        }
+        let reference = value.strip_prefix("approval://")?;
+        let boundary_valid = reference
+            .chars()
+            .next()
+            .is_some_and(|character| character.is_ascii_lowercase() || character.is_ascii_digit())
+            && reference
+                .chars()
+                .next_back()
+                .is_some_and(|character| character.is_ascii_lowercase() || character.is_ascii_digit());
+        if reference.chars().count() < 3
+            || !boundary_valid
+            || reference.contains("..")
+            || reference.contains("//")
+            || !reference.chars().all(|character| {
+                character.is_ascii_lowercase()
+                    || character.is_ascii_digit()
+                    || matches!(character, '.' | '-' | '_' | '/')
+            })
+        {
+            return None;
+        }
+        Some(value)
+    }
 }
 
 /// Query one action/cluster scope.
