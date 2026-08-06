@@ -28,6 +28,10 @@ use crate::protocol::header_field_merge::merge_header_and_dynamic;
 use crate::protocol::remoting_command::RemotingCommand;
 use crate::protocol::LanguageCode;
 
+const MAP_ENTRY_ENCODED_BYTES_ESTIMATE: usize = 16;
+const MIN_MAP_CAPACITY: usize = 4;
+const MAX_MAP_CAPACITY: usize = 1024;
+
 fn decoding_error(required: usize, available: usize) -> rocketmq_error::RocketMQError {
     rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
         format: "binary",
@@ -44,6 +48,11 @@ fn sorted_ext_fields(map: &HashMap<CheetahString, CheetahString>) -> Vec<(&Cheet
 pub struct RocketMQSerializable;
 
 impl RocketMQSerializable {
+    #[inline]
+    fn estimated_map_capacity(encoded_len: usize) -> usize {
+        (encoded_len / MAP_ENTRY_ENCODED_BYTES_ESTIMATE).clamp(MIN_MAP_CAPACITY, MAX_MAP_CAPACITY)
+    }
+
     /// Optimized string write with inline hint for better performance
     #[inline]
     pub fn write_str(buf: &mut BytesMut, use_short_length: bool, s: &str) -> usize {
@@ -422,8 +431,9 @@ impl RocketMQSerializable {
             return Err(decoding_error(len, buffer.remaining()));
         }
 
-        // Pre-allocate HashMap with estimated capacity (assume ~50 bytes per entry)
-        let estimated_entries = (len / 50).clamp(4, 1024);
+        // Request-header pairs are compact; this bounded estimate avoids the
+        // predictable rehashes caused by the previous 50-byte assumption.
+        let estimated_entries = Self::estimated_map_capacity(len);
         let mut map = HashMap::with_capacity(estimated_entries);
 
         let target_remaining = buffer.remaining().saturating_sub(len);
@@ -543,6 +553,14 @@ mod tests {
         let mut buf = BytesMut::from(&[0, 3, 107, 101, 121, 0, 0, 0, 5, 118, 97, 108, 117, 101][..]);
         let deserialized = RocketMQSerializable::map_deserialize(&mut buf, 14).unwrap();
         assert_eq!(deserialized, [("key".into(), "value".into())].iter().cloned().collect());
+    }
+
+    #[test]
+    fn map_capacity_estimate_covers_compact_request_headers_and_stays_bounded() {
+        assert_eq!(RocketMQSerializable::estimated_map_capacity(1), 4);
+        assert_eq!(RocketMQSerializable::estimated_map_capacity(292), 18);
+        assert_eq!(RocketMQSerializable::estimated_map_capacity(385), 24);
+        assert_eq!(RocketMQSerializable::estimated_map_capacity(usize::MAX), 1024);
     }
 
     #[test]
