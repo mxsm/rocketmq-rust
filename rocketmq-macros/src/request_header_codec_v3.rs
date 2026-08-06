@@ -76,7 +76,7 @@ mod tests {
     use quote::{quote, ToTokens};
 
     use super::migration_diagnostics;
-    use super::model::{AliasConflict, FlattenPresence, HeaderModel, LookupPlan, MissingPolicy, ValueKind};
+    use super::model::{AliasConflict, FlattenPresence, HeaderModel, LegacyShim, LookupPlan, MissingPolicy, ValueKind};
     use super::validate;
 
     #[test]
@@ -87,6 +87,7 @@ mod tests {
                 java_class = "org.apache.rocketmq.fixtures.GenericHeader",
                 validate = "Self::validate_header",
                 lookup = "get",
+                legacy_shim = "manual",
                 crate = "protocol_api",
                 fast
             )]
@@ -104,6 +105,7 @@ mod tests {
         validate::validate(&model).expect("validation");
 
         assert_eq!(model.lookup, LookupPlan::Get);
+        assert_eq!(model.legacy_shim, LegacyShim::Manual);
         assert!(model.fast);
         assert_eq!(
             model.protocol_path.to_token_stream().to_string(),

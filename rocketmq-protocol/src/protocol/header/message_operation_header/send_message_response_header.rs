@@ -15,20 +15,25 @@
 use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::protocol::FastCodesHeader;
 
-#[derive(Debug, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
+#[derive(Debug, Serialize, Deserialize, Default, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.SendMessageResponseHeader",
+    fast
+)]
 #[serde(rename_all = "camelCase")]
 pub struct SendMessageResponseHeader {
-    #[required]
+    #[header(required)]
     msg_id: CheetahString,
-    #[required]
+    #[header(required)]
     queue_id: i32,
-    #[required]
+    #[header(required)]
     queue_offset: i64,
     transaction_id: Option<CheetahString>,
     batch_uniq_id: Option<CheetahString>,

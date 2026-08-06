@@ -14,15 +14,22 @@
 
 use std::collections::{HashMap, HashSet};
 
+use bytes::BytesMut;
 use cheetah_string::CheetahString;
 use rocketmq_model::boundary_type::BoundaryType;
 use rocketmq_protocol::protocol::header::get_lite_client_info_request_header::GetLiteClientInfoRequestHeader;
+use rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2;
+use rocketmq_protocol::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
+use rocketmq_protocol::protocol::header::namesrv::topic_operation_header::TopicRequestHeader as NamesrvTopicRequestHeader;
+use rocketmq_protocol::protocol::header::pull_message_request_header::PullMessageRequestHeader;
+use rocketmq_protocol::protocol::header::pull_message_response_header::PullMessageResponseHeader;
 use rocketmq_protocol::protocol::header::search_offset_request_header::SearchOffsetRequestHeader;
 use rocketmq_protocol::protocol::header::search_offset_response_header::SearchOffsetResponseHeader;
 use rocketmq_protocol::protocol::header_codec::{
     AliasConflictPolicy, HeaderCodec, HeaderCodecError, HeaderFieldSpec, HeaderFlattenSpec, HeaderPresence,
-    HeaderValueKind,
+    HeaderRange, HeaderValueKind,
 };
+use rocketmq_protocol::protocol::FastCodesHeader;
 use rocketmq_protocol::rpc::rpc_request_header::RpcRequestHeader;
 use rocketmq_protocol::rpc::topic_request_header::TopicRequestHeader;
 use rocketmq_protocol::{CommandCustomHeader, FromMap, HeaderMap};
@@ -106,9 +113,14 @@ fn registry() -> Vec<RegisteredSchema> {
     vec![
         register::<RpcRequestHeader>(),
         register::<TopicRequestHeader>(),
+        register::<NamesrvTopicRequestHeader>(),
         register::<GetLiteClientInfoRequestHeader>(),
         register::<SearchOffsetRequestHeader>(),
         register::<SearchOffsetResponseHeader>(),
+        register::<PullMessageRequestHeader>(),
+        register::<PullMessageResponseHeader>(),
+        register::<SendMessageRequestHeaderV2>(),
+        register::<SendMessageResponseHeader>(),
     ]
 }
 
@@ -179,6 +191,11 @@ fn registered_typed_schemas_match_the_pinned_java_contract() {
                 .find(|candidate| candidate.key == field.key)
                 .unwrap_or_else(|| panic!("missing Java field {}.{}", schema.type_id, field.key));
             assert_eq!(rust_kind(field.kind), java_kind(&java_field.java_type));
+            match field.kind {
+                HeaderValueKind::U32 => assert_eq!(field.java_range, Some(HeaderRange::I32)),
+                HeaderValueKind::U64 => assert_eq!(field.java_range, Some(HeaderRange::I64)),
+                _ => assert_eq!(field.java_range, None),
+            }
 
             let owner = by_type_id
                 .get(field.declared_in)
@@ -329,4 +346,117 @@ fn typed_validation_errors_remain_classified_and_redacted() {
         })
     ));
     assert!(map.is_empty());
+}
+
+fn decode_fast_fields(encoded: &[u8]) -> HeaderMap {
+    let mut fields = HeaderMap::new();
+    let mut cursor = 0;
+    while cursor < encoded.len() {
+        let key_len = u16::from_be_bytes(encoded[cursor..cursor + 2].try_into().unwrap()) as usize;
+        cursor += 2;
+        let key = std::str::from_utf8(&encoded[cursor..cursor + key_len]).unwrap();
+        cursor += key_len;
+        let value_len = u32::from_be_bytes(encoded[cursor..cursor + 4].try_into().unwrap()) as usize;
+        cursor += 4;
+        let value = std::str::from_utf8(&encoded[cursor..cursor + value_len]).unwrap();
+        cursor += value_len;
+        fields.insert(key.into(), value.into());
+    }
+    fields
+}
+
+#[test]
+fn typed_maps_preserve_existing_send_fast_codecs() {
+    let rpc = RpcRequestHeader {
+        namespace: Some("namespace-a".into()),
+        namespaced: Some(true),
+        broker_name: Some("broker-a".into()),
+        oneway: Some(false),
+    };
+    let mut request = SendMessageRequestHeaderV2 {
+        a: "producer-a".into(),
+        b: "topic-a".into(),
+        c: "TBW102".into(),
+        d: 4,
+        e: 2,
+        f: 0,
+        g: 42,
+        h: 1,
+        i: Some("properties".into()),
+        j: Some(3),
+        k: Some(true),
+        l: Some(5),
+        m: Some(false),
+        n: Some("broker-a".into()),
+        topic_request_header: Some(TopicRequestHeader {
+            rpc_request_header: Some(rpc),
+            lo: Some(true),
+        }),
+    };
+    let typed_request_map = request.to_map().unwrap();
+    let mut request_bytes = BytesMut::new();
+    CommandCustomHeader::encode_fast(&mut request, &mut request_bytes);
+    assert_eq!(decode_fast_fields(&request_bytes), typed_request_map);
+
+    let typed_request = <SendMessageRequestHeaderV2 as HeaderCodec>::decode_from_map(&typed_request_map).unwrap();
+    let legacy_request = <SendMessageRequestHeaderV2 as FromMap>::from(&typed_request_map).unwrap();
+    let mut fast_request = SendMessageRequestHeaderV2::default();
+    CommandCustomHeader::decode_fast(&mut fast_request, &typed_request_map).unwrap();
+    assert_eq!(typed_request.to_map(), Some(typed_request_map.clone()));
+    assert_eq!(legacy_request.to_map(), Some(typed_request_map.clone()));
+    assert_eq!(fast_request.to_map(), Some(typed_request_map));
+
+    let mut response = SendMessageResponseHeader::new(
+        "message-a".into(),
+        -1,
+        -42,
+        Some("transaction-a".into()),
+        Some("batch-a".into()),
+        Some("recall-a".into()),
+    );
+    let typed_response_map = response.to_map().unwrap();
+    let mut response_bytes = BytesMut::new();
+    FastCodesHeader::encode_fast(&mut response, &mut response_bytes);
+    assert_eq!(decode_fast_fields(&response_bytes), typed_response_map);
+
+    let mut fast_response = SendMessageResponseHeader::default();
+    FastCodesHeader::decode_fast(&mut fast_response, &typed_response_map);
+    assert_eq!(fast_response.to_map(), Some(typed_response_map));
+}
+
+#[test]
+fn unsigned_fast_header_fields_enforce_inferred_java_ranges() {
+    let request = PullMessageRequestHeader {
+        consumer_group: "group-a".into(),
+        topic: "topic-a".into(),
+        queue_id: 0,
+        queue_offset: 0,
+        max_msg_nums: 32,
+        sys_flag: 0,
+        commit_offset: 0,
+        suspend_timeout_millis: i64::MAX as u64 + 1,
+        sub_version: 1,
+        ..Default::default()
+    };
+    let mut map = HeaderMap::new();
+    assert!(matches!(
+        request.try_encode_into_map(&mut map),
+        Err(HeaderCodecError::JavaRange {
+            key: "suspendTimeoutMillis",
+            ..
+        })
+    ));
+
+    let response = PullMessageResponseHeader {
+        suggest_which_broker_id: i64::MAX as u64 + 1,
+        ..Default::default()
+    };
+    let mut map = HeaderMap::new();
+    assert!(matches!(
+        response.try_encode_into_map(&mut map),
+        Err(HeaderCodecError::JavaRange {
+            key: "suggestWhichBrokerId",
+            ..
+        })
+    ));
 }

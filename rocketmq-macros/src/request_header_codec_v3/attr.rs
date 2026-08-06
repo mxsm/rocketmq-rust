@@ -25,6 +25,7 @@ pub(super) struct ContainerAttrs {
     pub(super) java_class: Option<LitStr>,
     pub(super) validate: Option<Path>,
     pub(super) lookup: Option<LitStr>,
+    pub(super) legacy_shim: Option<LitStr>,
     pub(super) protocol_path: Option<Path>,
     pub(super) fast: Option<Span>,
 }
@@ -94,6 +95,17 @@ pub(super) fn parse_container_attrs(attrs: &[Attribute]) -> (ContainerAttrs, Opt
                     value,
                     meta.path.span(),
                     "duplicate lookup",
+                    &mut errors,
+                );
+                return Ok(());
+            }
+            if meta.path.is_ident("legacy_shim") {
+                let value = parse_lit_str(&meta)?;
+                set_once(
+                    &mut parsed.legacy_shim,
+                    value,
+                    meta.path.span(),
+                    "duplicate legacy_shim",
                     &mut errors,
                 );
                 return Ok(());

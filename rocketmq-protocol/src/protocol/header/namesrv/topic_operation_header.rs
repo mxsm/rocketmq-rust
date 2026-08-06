@@ -14,6 +14,7 @@
 
 use cheetah_string::CheetahString;
 use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -71,11 +72,16 @@ impl GetTopicsByClusterRequestHeader {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::namesrv::topic_operation_header::TopicRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.rpc.TopicRequestHeader"
+)]
 #[serde(rename_all = "camelCase")]
 pub struct TopicRequestHeader {
     pub lo: Option<bool>,
     #[serde(flatten)]
+    #[header(flatten, presence = "always")]
     pub rpc: Option<RpcRequestHeader>,
 }
 

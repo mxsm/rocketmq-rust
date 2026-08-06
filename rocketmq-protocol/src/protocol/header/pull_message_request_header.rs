@@ -13,43 +13,48 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::protocol::header::message_operation_header::TopicRequestHeaderTrait;
 use crate::protocol::header::namesrv::topic_operation_header::TopicRequestHeader;
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::pull_message_request_header::PullMessageRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.PullMessageRequestHeader",
+    fast
+)]
 #[serde(rename_all = "camelCase")]
 pub struct PullMessageRequestHeader {
-    #[required]
+    #[header(required)]
     pub consumer_group: CheetahString,
 
-    #[required]
+    #[header(required)]
     pub topic: CheetahString,
 
     pub lite_topic: Option<CheetahString>,
 
-    #[required]
+    #[header(required)]
     pub queue_id: i32,
 
-    #[required]
+    #[header(required)]
     pub queue_offset: i64,
 
-    #[required]
+    #[header(required)]
     pub max_msg_nums: i32,
 
-    #[required]
+    #[header(required)]
     pub sys_flag: i32,
 
-    #[required]
+    #[header(required)]
     pub commit_offset: i64,
 
-    #[required]
+    #[header(required, range = "i64")]
     pub suspend_timeout_millis: u64,
 
-    #[required]
+    #[header(required)]
     pub sub_version: i64,
 
     pub subscription: Option<CheetahString>,
@@ -57,8 +62,14 @@ pub struct PullMessageRequestHeader {
     pub max_msg_bytes: Option<i32>,
     pub request_source: Option<i32>,
     #[serde(rename = "proxyFrowardClientId", alias = "proxyForwardClientId")]
+    #[header(
+        key = "proxyFrowardClientId",
+        alias = "proxyForwardClientId",
+        alias_conflict = "prefer_canonical"
+    )]
     pub proxy_forward_client_id: Option<CheetahString>,
     #[serde(flatten)]
+    #[header(flatten, presence = "always")]
     pub topic_request: Option<TopicRequestHeader>,
 }
 

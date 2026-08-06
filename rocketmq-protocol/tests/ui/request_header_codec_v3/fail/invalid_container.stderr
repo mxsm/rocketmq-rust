@@ -21,3 +21,9 @@ error: unsupported RequestHeaderCodecV3 container option
    |
 18 | #[header(type_id = "fixtures::Unknown", unknown, crate = "rocketmq_protocol")]
    |                                         ^^^^^^^
+
+error: legacy_shim must be generated or manual
+  --> tests/ui/request_header_codec_v3/fail/invalid_container.rs:27:19
+   |
+27 |     legacy_shim = "disabled",
+   |                   ^^^^^^^^^^

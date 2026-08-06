@@ -4,7 +4,7 @@ error: range must be i32 or i64
 16 |     #[header(required, range = "u64")]
    |                                ^^^^^
 
-error: u32 range requires java_type = "int" and range = "i32"
+error: u32 fields require range = "i32"; java_type, when present, must be int or Integer
  --> tests/ui/request_header_codec_v3/fail/invalid_ranges_and_types.rs:6:5
   |
 6 |     #[header(required, java_type = "long", range = "i32")]
@@ -16,10 +16,10 @@ error: java_type is incompatible with the Rust header value type
 6 |     #[header(required, java_type = "long", range = "i32")]
   |                                    ^^^^^^
 
-error: unsigned Java long fields require range = "i64"
+error: unsigned u64 fields require range = "i64"
  --> tests/ui/request_header_codec_v3/fail/invalid_ranges_and_types.rs:8:5
   |
-8 |     #[header(required, java_type = "long")]
+8 |     #[header(required)]
   |     ^
 
 error: range is supported only for unsigned Rust fields mapped to signed Java integers
