@@ -31,6 +31,23 @@
       }
     },
     {
+      "id": "pull-response-fast",
+      "rustTypeId": "rocketmq_protocol::protocol::header::pull_message_response_header::PullMessageResponseHeader",
+      "direction": "response",
+      "requestCode": "PULL_MESSAGE",
+      "serializeTypes": ["ROCKETMQ", "JSON"],
+      "fields": {
+        "suggestWhichBrokerId": 1,
+        "nextBeginOffset": -2,
+        "minOffset": -3,
+        "maxOffset": 99,
+        "offsetDelta": -5,
+        "topicSysFlag": 6,
+        "groupSysFlag": 7,
+        "forbiddenType": 8
+      }
+    },
+    {
       "id": "send-v1-fast",
       "rustTypeId": "rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader",
       "direction": "request",

@@ -26,7 +26,7 @@ from pathlib import Path
 
 FAST_HEADERS = {
     "pull-fast-inherited",
-    "send-v1-fast",
+    "pull-response-fast",
     "send-v2-fast",
     "send-response-fast",
 }

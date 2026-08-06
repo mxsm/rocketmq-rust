@@ -5,13 +5,13 @@
   "rustHistoricalCommit": "0c4722568a74987f7be51df12ec87dbfdc05fbba",
   "schema": {
     "file": "java-schema.json",
-    "sha256": "9f045244eed3ed6096cc87fae61c818cdb797d2a07fdc9fff097c5757b06322b",
+    "sha256": "670154f7418b944bc31ff930866cb810cfa2e8ffcbede8dce7492161e976754c",
     "mappedHeaderCount": 143
   },
   "goldenIndex": {
     "file": "golden/index.json",
-    "sha256": "08fbab786092d227fa6f4b4a6068578ea72416b7c97af2bff20275ea35e529fd",
-    "fixtureCount": 22
+    "sha256": "3d31a495dc9c99de3e5556a9f002d1a9c6a618f1855b2fb0dfd2dc97fc2bc27f",
+    "fixtureCount": 24
   },
   "goldenFiles": [
     {
@@ -111,6 +111,20 @@
       "sha256": "6e889b3506d6add4f55796cd8cd330f14a85a17019e22c567d9e5556a3f44986",
       "frameLength": 423,
       "fnv1a64": "8cd6d4885da4e11e"
+    },
+    {
+      "id": "pull-response-fast-json",
+      "file": "golden/pull-response-fast-json.json",
+      "sha256": "09e67491eec9ed1672a6aa604bede5b505e3809a8c21780fe577458104530c74",
+      "frameLength": 279,
+      "fnv1a64": "68d2e82d5aa34e01"
+    },
+    {
+      "id": "pull-response-fast-rocketmq",
+      "file": "golden/pull-response-fast-rocketmq.json",
+      "sha256": "c7990781ef078d960a79bf2f3881171068bed0def676a2140f821fde029fba4a",
+      "frameLength": 190,
+      "fnv1a64": "087ad30b64622877"
     },
     {
       "id": "query-consume-queue-sparse-json",

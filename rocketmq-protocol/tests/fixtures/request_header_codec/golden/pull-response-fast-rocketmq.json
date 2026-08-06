@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "id": "pull-response-fast-rocketmq",
+  "javaCommit": "2daf0e2ca91a1592d18235d43e5d709d1c35d15f",
+  "rustTypeId": "rocketmq_protocol::protocol::header::pull_message_response_header::PullMessageResponseHeader",
+  "javaClass": "org.apache.rocketmq.remoting.protocol.header.PullMessageResponseHeader",
+  "requestCode": "PULL_MESSAGE",
+  "requestCodeValue": 11,
+  "wireCodeValue": 11,
+  "direction": "response",
+  "serializeType": "ROCKETMQ",
+  "actualPath": "fast",
+  "inputFields": {
+    "suggestWhichBrokerId": 1,
+    "nextBeginOffset": -2,
+    "minOffset": -3,
+    "maxOffset": 99,
+    "offsetDelta": -5,
+    "topicSysFlag": 6,
+    "groupSysFlag": 7,
+    "forbiddenType": 8
+  },
+  "declaredLogicalFields": {
+    "forbiddenType": "8",
+    "groupSysFlag": "7",
+    "maxOffset": "99",
+    "minOffset": "-3",
+    "nextBeginOffset": "-2",
+    "offsetDelta": "-5",
+    "suggestWhichBrokerId": "1",
+    "topicSysFlag": "6"
+  },
+  "canonicalExtFields": {
+    "forbiddenType": "8",
+    "groupSysFlag": "7",
+    "maxOffset": "99",
+    "minOffset": "-3",
+    "nextBeginOffset": "-2",
+    "offsetDelta": "-5",
+    "suggestWhichBrokerId": "1",
+    "topicSysFlag": "6"
+  },
+  "frameBase64": "AAAAugEAALYACwwB9QAAAAcAAAAAAAAAAAAAAKEAFHN1Z2dlc3RXaGljaEJyb2tlcklkAAAAATEAD25leHRCZWdpbk9mZnNldAAAAAItMgAJbWluT2Zmc2V0AAAAAi0zAAltYXhPZmZzZXQAAAACOTkAC29mZnNldERlbHRhAAAAAi01AAx0b3BpY1N5c0ZsYWcAAAABNgAMZ3JvdXBTeXNGbGFnAAAAATcADWZvcmJpZGRlblR5cGUAAAABOA==",
+  "frameLength": 190,
+  "fnv1a64": "087ad30b64622877",
+  "opaque": 7,
+  "version": 501,
+  "language": "RUST"
+}

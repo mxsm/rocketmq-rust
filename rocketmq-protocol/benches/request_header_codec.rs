@@ -41,6 +41,7 @@ use rocketmq_protocol::protocol::header::message_operation_header::send_message_
 use rocketmq_protocol::protocol::header::namesrv::topic_operation_header::DeleteTopicFromNamesrvRequestHeader;
 use rocketmq_protocol::protocol::header::notification_request_header::NotificationRequestHeader;
 use rocketmq_protocol::protocol::header::pull_message_request_header::PullMessageRequestHeader;
+use rocketmq_protocol::protocol::header::pull_message_response_header::PullMessageResponseHeader;
 use rocketmq_protocol::protocol::header::query_consume_queue_request_header::QueryConsumeQueueRequestHeader;
 use rocketmq_protocol::protocol::LanguageCode;
 use rocketmq_protocol::protocol::SerializeType;
@@ -270,6 +271,9 @@ fn benchmark_request_headers(criterion: &mut Criterion) {
         match case.header.as_str() {
             "rocketmq_protocol::protocol::header::pull_message_request_header::PullMessageRequestHeader" => {
                 register::<PullMessageRequestHeader, _>(criterion, case, &mut allocations, decode_fast)
+            }
+            "rocketmq_protocol::protocol::header::pull_message_response_header::PullMessageResponseHeader" => {
+                register::<PullMessageResponseHeader, _>(criterion, case, &mut allocations, decode_fast)
             }
             "rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader" => {
                 register::<SendMessageRequestHeader, _>(criterion, case, &mut allocations, decode_fast)
