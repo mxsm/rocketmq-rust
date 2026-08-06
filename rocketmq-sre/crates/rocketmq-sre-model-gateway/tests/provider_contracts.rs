@@ -244,9 +244,7 @@ fn deepseek_responses_maps_instructions_structured_output_tools_and_usage() {
         "Read current lag",
         serde_json::json!({"type":"object"}),
     ));
-    request.tool_choice = ToolChoice::Specific {
-        name: "query_consumer_lag".to_owned(),
-    };
+    request.tool_choice = ToolChoice::Auto;
 
     let response = provider
         .invoke(&InvocationContext::new(CorrelationId::new()), &request)
@@ -263,13 +261,7 @@ fn deepseek_responses_maps_instructions_structured_output_tools_and_usage() {
     assert_eq!(sent.body["tools"][0]["name"], "query_consumer_lag");
     assert!(sent.body["tools"][0].get("strict").is_none());
     assert!(sent.body["tools"][0].get("function").is_none());
-    assert_eq!(
-        sent.body["tool_choice"],
-        serde_json::json!({
-            "type": "function",
-            "name": "query_consumer_lag"
-        })
-    );
+    assert_eq!(sent.body["tool_choice"], serde_json::json!("auto"));
     assert!(sent.body.get("messages").is_none());
 
     let mut strict_request = request;
@@ -277,6 +269,16 @@ fn deepseek_responses_maps_instructions_structured_output_tools_and_usage() {
     let error = provider
         .invoke(&InvocationContext::new(CorrelationId::new()), &strict_request)
         .expect_err("standard DeepSeek Responses endpoint does not advertise strict tools");
+    assert_eq!(error.code, ProviderErrorCode::CapabilityUnsupported);
+
+    let mut specific_request = strict_request;
+    specific_request.tools[0].strict = false;
+    specific_request.tool_choice = ToolChoice::Specific {
+        name: "query_consumer_lag".to_owned(),
+    };
+    let error = provider
+        .invoke(&InvocationContext::new(CorrelationId::new()), &specific_request)
+        .expect_err("qualified DeepSeek Responses endpoint does not advertise forced tool selection");
     assert_eq!(error.code, ProviderErrorCode::CapabilityUnsupported);
     assert!(sent.body.get("response_format").is_none());
     assert_eq!(response.model, "deepseek-v4-flash");

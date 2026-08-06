@@ -440,9 +440,7 @@ async fn qualify_read_only_tool_selection(client: &AsyncBuiltinProviderClient, c
             "additionalProperties": false
         }),
     ));
-    request.tool_choice = ToolChoice::Specific {
-        name: "query_consumer_lag".to_owned(),
-    };
+    request.tool_choice = ToolChoice::Auto;
     request.max_output_tokens = Some(64);
     let response = client
         .invoke(&InvocationContext::new(correlation_id), &request, Some(credential))

@@ -414,12 +414,8 @@ pub fn builtin_provider_profiles() -> Vec<ProviderProfile> {
     let reasoning = full
         .clone()
         .with([ProviderCapability::Reasoning, ProviderCapability::Embeddings]);
-    let deepseek_responses = ProviderCapabilities::chat_default().with([
-        ProviderCapability::JsonSchema,
-        ProviderCapability::ToolChoiceRequired,
-        ProviderCapability::ToolChoiceSpecific,
-        ProviderCapability::Reasoning,
-    ]);
+    let deepseek_responses =
+        ProviderCapabilities::chat_default().with([ProviderCapability::JsonSchema, ProviderCapability::Reasoning]);
     let mut profiles = vec![
         profile(
             "openai",
