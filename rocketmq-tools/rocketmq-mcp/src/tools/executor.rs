@@ -24,6 +24,7 @@ use rmcp::model::JsonObject;
 use rmcp::model::Resource;
 use rmcp::ErrorData;
 use rocketmq_observability::metrics::mcp::McpErrorKind;
+use rocketmq_observability::metrics::mcp::McpMetricsRecorder;
 use rocketmq_observability::metrics::mcp::McpOperationKind;
 use rocketmq_observability::metrics::mcp::McpOperationOutcome;
 use tracing::Instrument;
@@ -179,6 +180,7 @@ impl ToolExecutionError {
 }
 
 struct ToolOperationRecorder {
+    metrics: McpMetricsRecorder,
     operation: &'static str,
     started_at: Instant,
     outcome: McpOperationOutcome,
@@ -186,8 +188,9 @@ struct ToolOperationRecorder {
 }
 
 impl ToolOperationRecorder {
-    fn new(operation: &'static str) -> Self {
+    fn new(metrics: McpMetricsRecorder, operation: &'static str) -> Self {
         Self {
+            metrics,
             operation,
             started_at: Instant::now(),
             outcome: McpOperationOutcome::Failure,
@@ -217,7 +220,7 @@ impl ToolOperationRecorder {
 impl Drop for ToolOperationRecorder {
     fn drop(&mut self) {
         rocketmq_observability::trace::mcp::record_outcome(&self.span, self.outcome);
-        rocketmq_observability::metrics::mcp::record_operation(
+        self.metrics.record_operation(
             McpOperationKind::Tool,
             self.operation,
             self.outcome,
@@ -252,11 +255,12 @@ impl From<GuardError> for ToolExecutionError {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(crate) struct ToolExecutor<A> {
     adapter: A,
     guard: Guard,
     context: RequestContext,
+    metrics: McpMetricsRecorder,
 }
 
 impl<A> ToolExecutor<A>
@@ -269,7 +273,13 @@ where
             adapter,
             guard,
             context,
+            metrics: McpMetricsRecorder::noop(),
         }
+    }
+
+    pub(crate) fn with_metrics(mut self, metrics: McpMetricsRecorder) -> Self {
+        self.metrics = metrics;
+        self
     }
 
     pub(crate) fn with_request_context(mut self, context: RequestContext) -> Self {
@@ -290,7 +300,7 @@ where
         let operation = ToolId::resolve(request.name.as_ref())
             .map(|tool_id| tool_id.descriptor().name)
             .unwrap_or("unknown_tool");
-        let mut operation_recorder = ToolOperationRecorder::new(operation);
+        let mut operation_recorder = ToolOperationRecorder::new(self.metrics.clone(), operation);
         let span = operation_recorder.span();
         let result = self
             .execute(request, request_id, &mut operation_recorder)

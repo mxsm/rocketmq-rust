@@ -37,21 +37,8 @@ use crate::read_gateway::ReadSession;
 
 const RUNTIME_RESOURCE_URI: &str = "rocketmq://system/runtime/v1";
 const OBSERVABILITY_RESOURCE_URI: &str = "rocketmq://system/observability/v1";
-const SYSTEM_RESOURCE_SCHEMA: &str = "rocketmq-mcp.system-resource.v1";
 const COMPONENT_SOURCE: &str = "rocketmq_process";
 const COMPONENTS_RESOURCE: &str = "runtime/components";
-
-#[derive(Deserialize)]
-struct SystemResourceEnvelope<T> {
-    schema_version: String,
-    resource: String,
-    source: String,
-    partial: bool,
-    #[serde(default)]
-    warnings: Vec<String>,
-    kind: String,
-    data: T,
-}
 
 #[derive(Deserialize)]
 struct ComponentRuntimeEnvelope {
@@ -290,70 +277,38 @@ fn component_source_unavailable() -> ConnectorError {
 }
 
 fn project_runtime(raw: Value) -> Result<SourceOutput, ConnectorError> {
-    let envelope: SystemResourceEnvelope<RuntimeDiagnosticsViewV1> =
-        serde_json::from_value(raw).map_err(|_| schema_mismatch("runtime"))?;
-    validate_envelope(&envelope, RUNTIME_RESOURCE_URI, "runtime")?;
-    if envelope.data.schema_version != RuntimeDiagnosticsViewV1::SCHEMA_VERSION {
+    let diagnostics: RuntimeDiagnosticsViewV1 = serde_json::from_value(raw).map_err(|_| schema_mismatch("runtime"))?;
+    if diagnostics.schema_version != RuntimeDiagnosticsViewV1::SCHEMA_VERSION {
         return Err(schema_mismatch("runtime"));
     }
-    let observed_at = envelope.data.observed_at;
-    let mut output = SourceOutput::available(
+    let observed_at = diagnostics.observed_at;
+    Ok(SourceOutput::available(
         json!({
             "schema_version": "rocketmq.sre-runtime-evidence.v1",
             "exposure": "mcp_system_resource",
-            "diagnostics": envelope.data
+            "diagnostics": diagnostics
         }),
         observed_at,
     )
-    .with_exposure(EvidenceExposure::RuntimeDiagnostics);
-    apply_envelope_status(&mut output, envelope.partial, envelope.warnings);
-    Ok(output)
+    .with_exposure(EvidenceExposure::RuntimeDiagnostics))
 }
 
 fn project_observability(raw: Value) -> Result<SourceOutput, ConnectorError> {
-    let envelope: SystemResourceEnvelope<ObservabilityStatusViewV1> =
+    let status: ObservabilityStatusViewV1 =
         serde_json::from_value(raw).map_err(|_| schema_mismatch("observability"))?;
-    validate_envelope(&envelope, OBSERVABILITY_RESOURCE_URI, "observability")?;
-    if envelope.data.schema_version != ObservabilityStatusViewV1::SCHEMA_VERSION {
+    if status.schema_version != ObservabilityStatusViewV1::SCHEMA_VERSION {
         return Err(schema_mismatch("observability"));
     }
-    let observed_at = envelope.data.observed_at;
-    let mut output = SourceOutput::available(
+    let observed_at = status.observed_at;
+    Ok(SourceOutput::available(
         json!({
             "schema_version": "rocketmq.sre-observability-evidence.v1",
             "exposure": "mcp_system_resource",
-            "status": envelope.data
+            "status": status
         }),
         observed_at,
     )
-    .with_exposure(EvidenceExposure::RuntimeDiagnostics);
-    apply_envelope_status(&mut output, envelope.partial, envelope.warnings);
-    Ok(output)
-}
-
-fn validate_envelope<T>(
-    envelope: &SystemResourceEnvelope<T>,
-    expected_resource: &str,
-    expected_kind: &str,
-) -> Result<(), ConnectorError> {
-    if envelope.schema_version != SYSTEM_RESOURCE_SCHEMA
-        || envelope.resource != expected_resource
-        || envelope.source != "mcp_process"
-        || envelope.kind != expected_kind
-    {
-        return Err(schema_mismatch(expected_kind));
-    }
-    Ok(())
-}
-
-fn apply_envelope_status(output: &mut SourceOutput, partial: bool, warnings: Vec<String>) {
-    if partial {
-        output.partial = true;
-        output.coverage = CoverageStatus::Partial;
-    }
-    if !warnings.is_empty() {
-        output.warnings.push("runtime_diagnostics_source_warning".to_owned());
-    }
+    .with_exposure(EvidenceExposure::RuntimeDiagnostics))
 }
 
 fn schema_mismatch(kind: &str) -> ConnectorError {
@@ -369,34 +324,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn runtime_projection_requires_versioned_wrapper_and_preserves_capacity() {
+    fn runtime_projection_accepts_gateway_validated_data_and_preserves_capacity() {
         let raw = json!({
-            "schema_version": SYSTEM_RESOURCE_SCHEMA,
-            "resource": RUNTIME_RESOURCE_URI,
-            "source": "mcp_process",
-            "partial": false,
-            "warnings": [],
-            "kind": "runtime",
-            "data": {
-                "schema_version": RuntimeDiagnosticsViewV1::SCHEMA_VERSION,
-                "observed_at": "2026-07-27T00:00:00Z",
-                "component": "mcp",
-                "lifecycle_state": "open",
-                "task_group_count": 2,
-                "task_count": 3,
-                "task_kinds": [],
-                "blocking_lanes": [{
-                    "lane": "metadata_io",
-                    "max_concurrency": 4,
-                    "max_queue_depth": 16,
-                    "queued": 2,
-                    "running": 1,
-                    "timed_out_still_running": 0,
-                    "blocking_still_running": 0,
-                    "task_kinds": []
-                }],
-                "truncated": false
-            }
+            "schema_version": RuntimeDiagnosticsViewV1::SCHEMA_VERSION,
+            "observed_at": "2026-07-27T00:00:00Z",
+            "component": "mcp",
+            "lifecycle_state": "open",
+            "task_group_count": 2,
+            "task_count": 3,
+            "task_kinds": [],
+            "blocking_lanes": [{
+                "lane": "metadata_io",
+                "max_concurrency": 4,
+                "max_queue_depth": 16,
+                "queued": 2,
+                "running": 1,
+                "timed_out_still_running": 0,
+                "blocking_still_running": 0,
+                "task_kinds": []
+            }],
+            "truncated": false
         });
         let output = project_runtime(raw).expect("runtime projection");
         assert_eq!(output.content["diagnostics"]["blocking_lanes"][0]["max_concurrency"], 4);
@@ -404,7 +351,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_projection_rejects_unversioned_or_wrong_resource_payloads() {
+    fn runtime_projection_rejects_unversioned_data() {
         assert!(project_runtime(json!({"data": {}})).is_err());
     }
 

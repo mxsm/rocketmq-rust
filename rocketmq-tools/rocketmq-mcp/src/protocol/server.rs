@@ -47,6 +47,7 @@ use crate::resources;
 use crate::tools;
 use crate::tools::executor::ToolExecutor;
 use rocketmq_observability::metrics::mcp::McpErrorKind;
+use rocketmq_observability::metrics::mcp::McpMetricsRecorder;
 use rocketmq_observability::metrics::mcp::McpOperationKind;
 use rocketmq_observability::metrics::mcp::McpOperationOutcome;
 
@@ -56,13 +57,19 @@ pub struct RocketmqMcpServer {
 }
 
 struct ResourceSpanRecorder {
+    metrics: McpMetricsRecorder,
+    operation: &'static str,
+    started_at: Instant,
     outcome: McpOperationOutcome,
     span: tracing::Span,
 }
 
 impl ResourceSpanRecorder {
-    fn new(operation: &'static str) -> Self {
+    fn new(metrics: McpMetricsRecorder, operation: &'static str) -> Self {
         Self {
+            metrics,
+            operation,
+            started_at: Instant::now(),
             outcome: McpOperationOutcome::Failure,
             span: rocketmq_observability::trace::mcp::resource_span(operation),
         }
@@ -90,6 +97,12 @@ impl ResourceSpanRecorder {
 impl Drop for ResourceSpanRecorder {
     fn drop(&mut self) {
         rocketmq_observability::trace::mcp::record_outcome(&self.span, self.outcome);
+        self.metrics.record_operation(
+            McpOperationKind::Resource,
+            self.operation,
+            self.outcome,
+            self.started_at.elapsed(),
+        );
     }
 }
 
@@ -174,7 +187,7 @@ impl ServerHandler for RocketmqMcpServer {
         let operation = crate::resources::uri::RocketmqResourceUri::parse(&request.uri)
             .map(|resource| resource.kind.metric_operation())
             .unwrap_or("invalid_resource_uri");
-        let mut span_recorder = ResourceSpanRecorder::new(operation);
+        let mut span_recorder = ResourceSpanRecorder::new(self.app.metrics().clone(), operation);
         let span = span_recorder.span();
         let result = async {
             let started_at = Instant::now();
@@ -302,6 +315,7 @@ impl ServerHandler for RocketmqMcpServer {
         let query = self.app.query().as_ref().clone().with_cancellation(context.ct.clone());
         let access = self.access_context(&context)?;
         let result = ToolExecutor::new(query, self.app.guard().clone())
+            .with_metrics(self.app.metrics().clone())
             .with_request_context(access)
             .call_with_request_id(request, &request_id_string(&context.id))
             .await;

@@ -14,6 +14,7 @@ $sreRoot = [IO.Path]::GetFullPath((Join-Path $scriptDirectory '..'))
 $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $sreRoot '..'))
 $composeDirectory = Join-Path $sreRoot 'deploy/dev'
 $composeFile = Join-Path $composeDirectory 'compose.yaml'
+$requiredSignalsQualificationPath = Join-Path $sreRoot 'config/qualification/required-signals.v1.json'
 $clusterId = '00000000-0000-4000-8000-000000000001'
 $tenantId = '00000000-0000-4000-8000-000000000002'
 $topic = 'SRE_PROBE_00000000000040008000000000000001_00000000000000000000000000000000'
@@ -105,6 +106,119 @@ function Invoke-EvidenceQuery {
         throw 'Connector Evidence schema family is not rocketmq-sre.evidence.'
     }
     return $evidence
+}
+
+function Invoke-RequiredSignalsEvidence([string]$Component, [int]$WindowMinutes) {
+    $end = [DateTime]::UtcNow
+    $body = @{
+        query = @{
+            query_id = [Guid]::NewGuid().ToString()
+            correlation_id = [Guid]::NewGuid().ToString()
+            tenant_id = $tenantId
+            cluster_id = $clusterId
+            source = 'required-signals'
+            resource = "component/$Component"
+            time_range = @{
+                start = $end.AddMinutes(-$WindowMinutes).ToString('o')
+                end = $end.ToString('o')
+            }
+        }
+        mcp_cluster = 'sre-dev'
+        operation = @{ kind = 'cluster_overview' }
+    } | ConvertTo-Json -Depth 8
+    $evidence = Invoke-RestMethod `
+        -Method Post `
+        -Uri 'http://127.0.0.1:8091/internal/v1/evidence/query' `
+        -Headers @{ Authorization = "Bearer $internalToken" } `
+        -ContentType 'application/json' `
+        -Body $body `
+        -TimeoutSec 30
+    if ($evidence.content_hash -notmatch '^sha256:[0-9a-f]{64}$') {
+        throw "Required Signals Evidence for '$Component' has no canonical hash."
+    }
+    if ($evidence.schema.family -ne 'rocketmq-sre.evidence') {
+        throw "Required Signals Evidence for '$Component' has an incompatible schema."
+    }
+    return $evidence
+}
+
+function Assert-RequiredSignalsQualification {
+    $qualification = Get-Content -Raw -LiteralPath $requiredSignalsQualificationPath | ConvertFrom-Json
+    $components = @($qualification.components)
+    if (
+        $qualification.production_certified `
+            -or $qualification.operating_mode -ne 'read_only' `
+            -or $components.Count -ne [int]$qualification.limits.maximum_components
+    ) {
+        throw 'Required Signals qualification contract is not bounded and read-only.'
+    }
+
+    foreach ($component in $components) {
+        $deadline = [DateTime]::UtcNow.AddSeconds([int]$qualification.limits.retry_seconds)
+        $lastFailure = 'no Evidence response'
+        do {
+            try {
+                $evidence = Invoke-RequiredSignalsEvidence `
+                    -Component $component.query_component `
+                    -WindowMinutes ([int]$qualification.limits.query_window_minutes)
+                if ($evidence.content.storage -ne 'inline') {
+                    throw 'Required Signals Evidence is not bounded inline content.'
+                }
+                $value = $evidence.content.value
+                if (
+                    $value.schema_version -ne 'rocketmq.sre.required-signals-evidence.v1' `
+                        -or $value.component -ne $component.evidence_component
+                ) {
+                    throw 'Required Signals aggregate identity does not match the qualification contract.'
+                }
+                $observations = @($value.observations)
+                if ($observations.Count -eq 0) {
+                    throw 'Required Signals aggregate contains no observations.'
+                }
+                $unsupportedStatus = @(
+                    $observations | Where-Object {
+                        $_.status -notin @('available', 'missing', 'not_production_verified')
+                    }
+                )
+                if ($unsupportedStatus.Count -gt 0) {
+                    throw 'Required Signals aggregate contains an unsupported status.'
+                }
+                $representative = @(
+                    $observations | Where-Object {
+                        $_.requirement_id -eq $component.representative_requirement_id
+                    }
+                )
+                if (
+                    $representative.Count -ne 1 `
+                        -or $representative[0].status -ne 'available' `
+                        -or $representative[0].query_source -ne 'prometheus' `
+                        -or $representative[0].content.metric -ne $component.canonical_metric
+                ) {
+                    throw "Representative metric '$($component.representative_requirement_id)' is not available."
+                }
+                $sampleCount = 0
+                foreach ($series in @($representative[0].content.series)) {
+                    $sampleCount += @($series.samples).Count
+                }
+                if ($sampleCount -lt 1) {
+                    throw "Representative metric '$($component.representative_requirement_id)' has no samples."
+                }
+                Write-Host (
+                    "Required Signals qualified: component=$($component.query_component) " +
+                    "requirement=$($component.representative_requirement_id) evidence=$($evidence.content_hash)"
+                )
+                $lastFailure = $null
+                break
+            }
+            catch {
+                $lastFailure = $_.Exception.Message
+            }
+            Start-Sleep -Seconds 2
+        } while ([DateTime]::UtcNow -lt $deadline)
+        if ($null -ne $lastFailure) {
+            throw "Required Signals qualification failed for '$($component.query_component)': $lastFailure"
+        }
+    }
 }
 
 function Get-InlineLag([object]$Evidence) {
@@ -470,6 +584,7 @@ Wait-Http 'http://127.0.0.1:9090/-/ready' | Out-Null
 Wait-Http 'http://127.0.0.1:3100/ready' | Out-Null
 Wait-Http 'http://127.0.0.1:3200/ready' | Out-Null
 Assert-ObservabilityQueries
+Assert-RequiredSignalsQualification
 $headers = @{ Authorization = "Bearer $internalToken" }
 $capabilities = Invoke-RestMethod `
     -Uri 'http://127.0.0.1:8091/internal/v1/capabilities' `

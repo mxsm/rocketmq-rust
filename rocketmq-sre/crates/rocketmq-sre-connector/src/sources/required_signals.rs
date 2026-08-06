@@ -124,6 +124,7 @@ impl RequiredSignalsSource {
         let context = session.context();
         let component = normalize_component(resource)?;
         let manifest = parse_manifest(component, manifest_source(component)?)?;
+        let signal_max_rows = per_signal_row_budget(max_rows, manifest.signals.len());
         let mut shared = SharedReads::default();
         let mut observations = Vec::with_capacity(manifest.signals.len());
 
@@ -142,7 +143,7 @@ impl RequiredSignalsSource {
                                 metric_resource,
                                 start,
                                 end,
-                                max_rows,
+                                signal_max_rows,
                                 max_bytes,
                                 context.deadline,
                                 context.cancel,
@@ -160,7 +161,7 @@ impl RequiredSignalsSource {
                                 log_resource,
                                 start,
                                 end,
-                                max_rows,
+                                signal_max_rows,
                                 max_bytes,
                                 context.deadline,
                                 context.cancel,
@@ -184,7 +185,7 @@ impl RequiredSignalsSource {
                                     trace_resource,
                                     start,
                                     end,
-                                    max_rows,
+                                    signal_max_rows,
                                     max_bytes,
                                     context.deadline,
                                     context.cancel,
@@ -208,6 +209,14 @@ impl RequiredSignalsSource {
 
         aggregate(manifest.component, observations)
     }
+}
+
+fn per_signal_row_budget(max_rows: usize, signal_count: usize) -> usize {
+    let reserved_observations = max_rows.saturating_sub(signal_count);
+    reserved_observations
+        .checked_div(signal_count.saturating_mul(3))
+        .unwrap_or_default()
+        .max(1)
 }
 
 fn normalize_component(resource: &str) -> Result<&'static str, ConnectorError> {
@@ -525,6 +534,14 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn composite_row_budget_reserves_space_for_every_observation() {
+        assert_eq!(per_signal_row_budget(500, 7), 23);
+        assert_eq!(per_signal_row_budget(500, 13), 12);
+        assert_eq!(per_signal_row_budget(1, 13), 1);
+        assert_eq!(per_signal_row_budget(500, 0), 1);
+    }
 
     #[test]
     fn embedded_manifests_have_fixed_fail_closed_routes() {
