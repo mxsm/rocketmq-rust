@@ -91,7 +91,7 @@ validator          = { version = "0.20", features = ["derive"] }
 url                = "2.5"
 
 [dev-dependencies]
-base64           = "0.22"
+base64           = "0.23"
 insta             = { version = "1.43", features = ["json"] }
 mockall           = "0.15.0"
 pretty_assertions = "1.4"
