@@ -74,6 +74,7 @@ mod tests {
         "/v1/conversations/{id}",
         "/v1/conversations/{id}/cancel",
         "/v1/conversations/{id}/turns",
+        "/v1/conversations/{id}/turns/stream",
         "/v1/event-entries",
         "/v1/events/stream",
         "/v1/evidence",

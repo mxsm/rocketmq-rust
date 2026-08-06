@@ -432,6 +432,31 @@ export interface ConversationCancelResult {
   observed_at: string;
 }
 
+export type ConversationStreamEventType =
+  | "accepted"
+  | "evidence_ready"
+  | "diagnosis_ready"
+  | "answer_delta"
+  | "preview_reset"
+  | "completed"
+  | "cancelled"
+  | "failed";
+
+export interface ConversationStreamEvent {
+  schema_version: "rocketmq-sre.conversation-stream-event.v1";
+  sequence: number;
+  event_type: ConversationStreamEventType;
+  conversation_id: string;
+  turn_id: string;
+  correlation_id: string;
+  provisional: boolean;
+  evidence_ids: string[];
+  delta?: string;
+  diagnostic_pack?: string;
+  final_turn?: ConversationTurnView;
+  warning?: string;
+}
+
 export type InvestigationStatus =
   | "open"
   | "collecting"

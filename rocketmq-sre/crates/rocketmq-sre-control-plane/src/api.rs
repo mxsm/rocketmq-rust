@@ -33,6 +33,7 @@ use chrono::Utc;
 use rocketmq_observability::ObservabilityStatusHandle;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ScheduledTaskConfig;
+use rocketmq_runtime::TaskSpawner;
 use rocketmq_runtime::wait_for_signal_result;
 use rocketmq_sre_contracts::ClusterId;
 use rocketmq_sre_contracts::Phase2ContractManifest;
@@ -630,6 +631,7 @@ pub fn build_router(
         DashboardDeepLinkPolicy::disabled(),
         model_gateway,
         workflow,
+        None,
     )?
     .public)
 }
@@ -656,6 +658,7 @@ fn build_routers_with_auth(
     dashboard_links: DashboardDeepLinkPolicy,
     model_gateway: ModelGatewayService,
     workflow: WorkflowService,
+    task_spawner: Option<TaskSpawner>,
 ) -> Result<ControlPlaneRouters, ControlPlaneError> {
     let alerting = AlertingService::new(repository.clone(), workflow.clone())?;
     let evidence = EvidenceService::new(repository.clone(), evidence_blobs);
@@ -676,6 +679,7 @@ fn build_routers_with_auth(
         connector_channel.clone(),
         evidence.clone(),
         model_gateway.clone(),
+        task_spawner,
     )?;
     let dr = crate::dr::DrService::new(repository.clone());
     let governance = crate::governance::GovernanceService::new(repository.clone(), grant_signing_key.as_bytes())?;
@@ -1005,6 +1009,7 @@ pub async fn run(config: ControlPlaneConfig, service_context: ChildServiceContex
         dashboard_links,
         model_gateway,
         workflow,
+        Some(service_context.task_spawner()),
     )?;
     let autonomy_report_worker = routers.autonomy_operations.clone();
     let autonomy_report_tasks = service_context.scheduled_tasks("autonomy-operations-reports");
@@ -1668,6 +1673,7 @@ mod tests {
             DashboardDeepLinkPolicy::disabled(),
             model_gateway,
             workflow,
+            None,
         )
         .expect("router pair");
         for (method, path) in [

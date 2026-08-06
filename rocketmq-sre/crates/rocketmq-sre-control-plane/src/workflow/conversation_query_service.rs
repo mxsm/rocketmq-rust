@@ -20,6 +20,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
+use rocketmq_runtime::TaskKind;
+use rocketmq_runtime::TaskSpawner;
 use rocketmq_sre_contracts::ConversationAnswerMode;
 use rocketmq_sre_contracts::ConversationCitation;
 use rocketmq_sre_contracts::ConversationId;
@@ -51,6 +53,8 @@ use crate::ControlPlaneError;
 use crate::PostgresRepository;
 use crate::auth::AuthContext;
 use crate::connector_channel::PostgresConnectorChannelService;
+use crate::conversation_stream::ConversationStreamEvent;
+use crate::conversation_stream::ConversationStreamWriter;
 use crate::evidence::EvidenceService;
 use crate::evidence::PersistEvidenceRequest;
 use crate::models::ModelGatewayService;
@@ -71,6 +75,16 @@ pub(crate) struct ConversationQueryService {
     models: ModelGatewayService,
     diagnostics: Arc<DiagnosticEngine>,
     active: Arc<Mutex<HashMap<ConversationId, watch::Sender<bool>>>>,
+    task_spawner: Option<TaskSpawner>,
+}
+
+struct PreparedConversationTurn {
+    conversation: rocketmq_sre_contracts::Conversation,
+    turn: ConversationTurn,
+    request: ConversationTurnRequest,
+    scoped_resource: Option<String>,
+    deterministic: Option<ConversationQueryIntent>,
+    cancel: watch::Receiver<bool>,
 }
 
 impl ConversationQueryService {
@@ -79,6 +93,7 @@ impl ConversationQueryService {
         connector: PostgresConnectorChannelService,
         evidence: EvidenceService,
         models: ModelGatewayService,
+        task_spawner: Option<TaskSpawner>,
     ) -> Result<Self, ControlPlaneError> {
         let registry = full_registry().map_err(|error| {
             ControlPlaneError::configuration(format!("diagnostic pack registry is invalid: {error}"))
@@ -90,6 +105,7 @@ impl ConversationQueryService {
             models,
             diagnostics: Arc::new(DiagnosticEngine::new(registry)),
             active: Arc::new(Mutex::new(HashMap::new())),
+            task_spawner,
         })
     }
 
@@ -100,13 +116,77 @@ impl ConversationQueryService {
         request: &ConversationTurnRequest,
         correlation_id: CorrelationId,
     ) -> Result<ConversationTurnView, ControlPlaneError> {
+        let prepared = self
+            .prepare_turn(auth, conversation_id, request, correlation_id)
+            .await?;
+        self.complete_prepared(auth, prepared, None).await
+    }
+
+    pub(crate) async fn start_stream(
+        &self,
+        auth: AuthContext,
+        conversation_id: ConversationId,
+        request: ConversationTurnRequest,
+        correlation_id: CorrelationId,
+    ) -> Result<tokio::sync::mpsc::Receiver<ConversationStreamEvent>, ControlPlaneError> {
+        let spawner = self.task_spawner.clone().ok_or_else(|| {
+            ControlPlaneError::configuration("conversation streaming requires a runtime-owned task spawner")
+        })?;
+        let prepared = self
+            .prepare_turn(&auth, conversation_id, &request, correlation_id)
+            .await?;
+        let cleanup_turn = prepared.turn.clone();
+        let cleanup_intent = prepared.deterministic.clone();
+        let (writer, receiver) =
+            ConversationStreamWriter::channel(prepared.conversation.id, prepared.turn.id, prepared.turn.correlation_id);
+        writer
+            .accepted()
+            .map_err(|_| ControlPlaneError::configuration("conversation stream could not queue its accepted event"))?;
+        let service = self.clone();
+        let task_auth = auth.clone();
+        let task_writer = writer.clone();
+        let task_name = format!("conversation-stream-{}", prepared.turn.id);
+        if spawner
+            .spawn(task_name, TaskKind::Worker, async move {
+                match service
+                    .complete_prepared(&task_auth, prepared, Some(&task_writer))
+                    .await
+                {
+                    Ok(view) => {
+                        let _ = task_writer.finish(view);
+                    }
+                    Err(_) => {
+                        tracing::warn!("conversation stream failed after the response was accepted");
+                        let _ = task_writer.failed();
+                    }
+                }
+            })
+            .is_err()
+        {
+            self.active.lock().await.remove(&conversation_id);
+            let _ = self.complete_failed(&auth, &cleanup_turn, cleanup_intent).await;
+            return Err(ControlPlaneError::configuration(
+                "conversation stream task could not be started",
+            ));
+        }
+        Ok(receiver)
+    }
+
+    async fn prepare_turn(
+        &self,
+        auth: &AuthContext,
+        conversation_id: ConversationId,
+        request: &ConversationTurnRequest,
+        correlation_id: CorrelationId,
+    ) -> Result<PreparedConversationTurn, ControlPlaneError> {
         request.validate()?;
         let conversation_view = self.repository.conversation(auth, conversation_id).await?;
         let scoped_resource = request
             .resource
-            .as_deref()
-            .or(conversation_view.conversation.resource.as_deref());
-        let deterministic = deterministic_intent(&request.question, scoped_resource, request.window_seconds)?;
+            .clone()
+            .or_else(|| conversation_view.conversation.resource.clone());
+        let deterministic =
+            deterministic_intent(&request.question, scoped_resource.as_deref(), request.window_seconds)?;
         let (cancel_sender, cancel_receiver) = watch::channel(false);
         {
             let mut active = self.active.lock().await;
@@ -139,41 +219,69 @@ impl ConversationQueryService {
                 return Err(error);
             }
         };
+        Ok(PreparedConversationTurn {
+            conversation: conversation_view.conversation,
+            turn,
+            request: request.clone(),
+            scoped_resource,
+            deterministic,
+            cancel: cancel_receiver,
+        })
+    }
+
+    async fn complete_prepared(
+        &self,
+        auth: &AuthContext,
+        prepared: PreparedConversationTurn,
+        stream: Option<&ConversationStreamWriter>,
+    ) -> Result<ConversationTurnView, ControlPlaneError> {
+        let conversation_id = prepared.conversation.id;
         let result = self
             .run_turn(
                 auth,
-                &conversation_view.conversation,
-                &turn,
-                request,
-                scoped_resource,
-                deterministic,
-                cancel_receiver,
+                &prepared.conversation,
+                &prepared.turn,
+                &prepared.request,
+                prepared.scoped_resource.as_deref(),
+                prepared.deterministic,
+                prepared.cancel,
+                stream,
             )
             .await;
         self.active.lock().await.remove(&conversation_id);
         match result {
             Ok(view) => Ok(view),
             Err(_) => {
-                self.repository
-                    .complete_conversation_turn(
-                        auth,
-                        &turn,
-                        ConversationCompletion {
-                            status: ConversationTurnStatus::Failed,
-                            intent: turn.query_intent.clone(),
-                            answer: "The bounded read-only query could not be completed. No cluster change was attempted. Retry after checking the registered source and model status.".to_owned(),
-                            mode: ConversationAnswerMode::RulesOnly,
-                            citations: Vec::new(),
-                            evidence_ids: Vec::new(),
-                            model_invocation_id: None,
-                            partial: true,
-                            warnings: vec!["conversation_query_failed".to_owned()],
-                            diagnosis: None,
-                        },
-                    )
+                self.complete_failed(auth, &prepared.turn, prepared.turn.query_intent.clone())
                     .await
             }
         }
+    }
+
+    async fn complete_failed(
+        &self,
+        auth: &AuthContext,
+        turn: &ConversationTurn,
+        intent: Option<ConversationQueryIntent>,
+    ) -> Result<ConversationTurnView, ControlPlaneError> {
+        self.repository
+            .complete_conversation_turn(
+                auth,
+                turn,
+                ConversationCompletion {
+                    status: ConversationTurnStatus::Failed,
+                    intent,
+                    answer: "The bounded read-only query could not be completed. No cluster change was attempted. Retry after checking the registered source and model status.".to_owned(),
+                    mode: ConversationAnswerMode::RulesOnly,
+                    citations: Vec::new(),
+                    evidence_ids: Vec::new(),
+                    model_invocation_id: None,
+                    partial: true,
+                    warnings: vec!["conversation_query_failed".to_owned()],
+                    diagnosis: None,
+                },
+            )
+            .await
     }
 
     pub(crate) async fn turns(
@@ -223,6 +331,7 @@ impl ConversationQueryService {
         scoped_resource: Option<&str>,
         deterministic: Option<ConversationQueryIntent>,
         mut cancel: watch::Receiver<bool>,
+        stream: Option<&ConversationStreamWriter>,
     ) -> Result<ConversationTurnView, ControlPlaneError> {
         let mut warnings = Vec::new();
         let tool_prompt = scoped_resource.map_or_else(
@@ -242,6 +351,9 @@ impl ConversationQueryService {
             ) => selection?,
             cancellation = self.wait_for_cancel(auth, turn, &mut cancel) => {
                 cancellation?;
+                return self.complete_cancelled(auth, turn, deterministic, warnings).await;
+            }
+            () = wait_for_stream_close(stream) => {
                 return self.complete_cancelled(auth, turn, deterministic, warnings).await;
             }
         };
@@ -321,6 +433,14 @@ impl ConversationQueryService {
                 ).await;
                 None
             }
+            () = wait_for_stream_close(stream) => {
+                let _ = self.connector.enqueue_cancel(
+                    auth.tenant_id,
+                    conversation.cluster_id,
+                    turn.correlation_id,
+                ).await;
+                None
+            }
         };
         let Some(response) = response else {
             return self.complete_cancelled(auth, turn, Some(intent), warnings).await;
@@ -362,6 +482,9 @@ impl ConversationQueryService {
         self.repository
             .link_conversation_evidence(auth, turn, evidence.evidence_id)
             .await?;
+        if stream.is_some_and(|writer| writer.evidence_ready(evidence.evidence_id).is_err()) {
+            return self.complete_cancelled(auth, turn, Some(intent), warnings).await;
+        }
         warnings.extend(evidence.warnings.iter().map(|warning| stable_warning(warning)));
         let pack_reference = diagnostic_pack_for_intent(&intent);
         let report = self
@@ -374,26 +497,62 @@ impl ConversationQueryService {
                 )
             })?;
         let deterministic_answer = diagnostic_evidence_answer(&intent, &evidence, &report);
+        if stream.is_some_and(|writer| writer.diagnosis_ready(pack_reference, evidence.evidence_id).is_err()) {
+            return self.complete_cancelled(auth, turn, Some(intent), warnings).await;
+        }
         if cancellation_requested(&cancel) || self.repository.conversation_cancel_requested(auth, turn).await? {
             return self.complete_cancelled(auth, turn, Some(intent), warnings).await;
         }
+        let answer_future = async {
+            if let Some(writer) = stream {
+                self.models
+                    .answer_conversation_streaming(
+                        auth,
+                        conversation.id,
+                        conversation.investigation_id,
+                        conversation.cluster_id,
+                        &request.question,
+                        &deterministic_answer,
+                        std::slice::from_ref(&evidence),
+                        turn.correlation_id,
+                        writer,
+                    )
+                    .await
+            } else {
+                self.models
+                    .answer_conversation(
+                        auth,
+                        conversation.id,
+                        conversation.investigation_id,
+                        conversation.cluster_id,
+                        &request.question,
+                        &deterministic_answer,
+                        std::slice::from_ref(&evidence),
+                        turn.correlation_id,
+                    )
+                    .await
+            }
+        };
+        tokio::pin!(answer_future);
         let model_answer = tokio::select! {
-            answer = self.models.answer_conversation(
-                auth,
-                conversation.id,
-                conversation.investigation_id,
-                conversation.cluster_id,
-                &request.question,
-                &deterministic_answer,
-                std::slice::from_ref(&evidence),
-                turn.correlation_id,
-            ) => answer?,
+            answer = &mut answer_future => answer?,
             cancellation = self.wait_for_cancel(auth, turn, &mut cancel) => {
                 cancellation?;
                 return self.complete_cancelled(auth, turn, Some(intent), warnings).await;
             }
+            () = wait_for_stream_close(stream) => {
+                return self.complete_cancelled(auth, turn, Some(intent), warnings).await;
+            }
         };
-        if cancellation_requested(&cancel) || self.repository.conversation_cancel_requested(auth, turn).await? {
+        if stream.is_some_and(ConversationStreamWriter::is_cancelled)
+            || cancellation_requested(&cancel)
+            || self.repository.conversation_cancel_requested(auth, turn).await?
+        {
+            return self.complete_cancelled(auth, turn, Some(intent), warnings).await;
+        }
+        if model_answer.is_none()
+            && stream.is_some_and(|writer| writer.answer_delta(deterministic_answer.clone()).is_err())
+        {
             return self.complete_cancelled(auth, turn, Some(intent), warnings).await;
         }
         let citation = citation(&evidence);
@@ -405,7 +564,7 @@ impl ConversationQueryService {
                 Some(answer.invocation_id),
             ),
             None => (
-                deterministic_answer,
+                deterministic_answer.clone(),
                 ConversationAnswerMode::RulesOnly,
                 vec![evidence.evidence_id],
                 None,
@@ -452,20 +611,28 @@ impl ConversationQueryService {
         turn: &ConversationTurn,
         local: &mut watch::Receiver<bool>,
     ) -> Result<(), ControlPlaneError> {
-        let mut poll = tokio::time::interval(CANCEL_POLL_INTERVAL);
-        poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut local_open = true;
         loop {
-            tokio::select! {
-                changed = local.changed() => {
-                    if changed.is_ok() && *local.borrow() {
-                        return Ok(());
+            let should_poll_repository = if local_open {
+                match tokio::time::timeout(CANCEL_POLL_INTERVAL, local.changed()).await {
+                    Ok(Ok(())) => {
+                        if *local.borrow() {
+                            return Ok(());
+                        }
+                        false
                     }
-                }
-                _ = poll.tick() => {
-                    if self.repository.conversation_cancel_requested(auth, turn).await? {
-                        return Ok(());
+                    Ok(Err(_)) => {
+                        local_open = false;
+                        true
                     }
+                    Err(_) => true,
                 }
+            } else {
+                let _ = tokio::time::timeout(CANCEL_POLL_INTERVAL, std::future::pending::<()>()).await;
+                true
+            };
+            if should_poll_repository && self.repository.conversation_cancel_requested(auth, turn).await? {
+                return Ok(());
             }
         }
     }
@@ -524,6 +691,13 @@ impl ConversationQueryService {
                 },
             )
             .await
+    }
+}
+
+async fn wait_for_stream_close(stream: Option<&ConversationStreamWriter>) {
+    match stream {
+        Some(stream) => stream.closed().await,
+        None => std::future::pending::<()>().await,
     }
 }
 

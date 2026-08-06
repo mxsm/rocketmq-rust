@@ -18,6 +18,7 @@ import type {
   ConversationCancelResult,
   ConversationTurnPage,
   ConversationTurnRequest,
+  ConversationStreamEvent,
   ConversationTurnView,
   CoverageMatrix,
   CreateConversationRequest,
@@ -75,6 +76,133 @@ export class ApiError extends Error {
     super(message);
     this.name = "ApiError";
   }
+}
+
+const CONVERSATION_STREAM_SCHEMA =
+  "rocketmq-sre.conversation-stream-event.v1";
+const MAX_CONVERSATION_SSE_FRAME_BYTES = 256 * 1024;
+const conversationEventTypes = new Set([
+  "accepted",
+  "evidence_ready",
+  "diagnosis_ready",
+  "answer_delta",
+  "preview_reset",
+  "completed",
+  "cancelled",
+  "failed",
+]);
+const terminalConversationEvents = new Set(["completed", "cancelled", "failed"]);
+
+export class ConversationSseDecoder {
+  private buffer = "";
+  private lastSequence = 0;
+  private terminal = false;
+
+  push(chunk: string): ConversationStreamEvent[] {
+    if (this.terminal && chunk.trim()) {
+      throw new Error("conversation stream emitted data after its terminal event");
+    }
+    this.buffer += chunk;
+    const events: ConversationStreamEvent[] = [];
+    for (;;) {
+      const separator = /\r?\n\r?\n/u.exec(this.buffer);
+      if (!separator || separator.index === undefined) {
+        break;
+      }
+      const frame = this.buffer.slice(0, separator.index);
+      this.buffer = this.buffer.slice(separator.index + separator[0].length);
+      if (frame.trim()) {
+        events.push(this.decodeFrame(frame));
+      }
+    }
+    if (new TextEncoder().encode(this.buffer).byteLength >= MAX_CONVERSATION_SSE_FRAME_BYTES) {
+      throw new Error("conversation SSE frame exceeded its byte bound");
+    }
+    return events;
+  }
+
+  finish(): ConversationStreamEvent[] {
+    const trailing = this.buffer;
+    this.buffer = "";
+    if (!trailing.trim()) {
+      return [];
+    }
+    return [this.decodeFrame(trailing)];
+  }
+
+  hasTerminalEvent(): boolean {
+    return this.terminal;
+  }
+
+  private decodeFrame(frame: string): ConversationStreamEvent {
+    if (new TextEncoder().encode(frame).byteLength >= MAX_CONVERSATION_SSE_FRAME_BYTES) {
+      throw new Error("conversation SSE frame exceeded its byte bound");
+    }
+    let eventName: string | undefined;
+    const data: string[] = [];
+    for (const line of frame.split(/\r?\n/u)) {
+      if (!line || line.startsWith(":")) {
+        continue;
+      }
+      if (line.startsWith("event:")) {
+        eventName = line.slice("event:".length).trim();
+      } else if (line.startsWith("data:")) {
+        data.push(line.slice("data:".length).trimStart());
+      }
+    }
+    let candidate: unknown;
+    try {
+      candidate = JSON.parse(data.join("\n"));
+    } catch {
+      throw new Error("conversation SSE event contains invalid JSON");
+    }
+    if (!isConversationStreamEvent(candidate)) {
+      throw new Error("conversation SSE event does not match the bounded schema");
+    }
+    if (candidate.schema_version !== CONVERSATION_STREAM_SCHEMA) {
+      throw new Error("conversation SSE schema major is unsupported");
+    }
+    if (!conversationEventTypes.has(candidate.event_type)) {
+      throw new Error("conversation SSE event type is unsupported");
+    }
+    if (eventName && eventName !== candidate.event_type) {
+      throw new Error("conversation SSE event header does not match its payload");
+    }
+    if (candidate.sequence !== this.lastSequence + 1) {
+      throw new Error("conversation SSE sequence is not contiguous");
+    }
+    if (this.lastSequence === 0 && candidate.event_type !== "accepted") {
+      throw new Error("conversation SSE sequence must begin with accepted");
+    }
+    if (this.terminal) {
+      throw new Error("conversation stream emitted a duplicate terminal event");
+    }
+    if (candidate.event_type === "answer_delta" && typeof candidate.delta !== "string") {
+      throw new Error("conversation answer delta is missing");
+    }
+    this.lastSequence = candidate.sequence;
+    this.terminal = terminalConversationEvents.has(candidate.event_type);
+    return candidate;
+  }
+}
+
+function isConversationStreamEvent(value: unknown): value is ConversationStreamEvent {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const event = value as Record<string, unknown>;
+  return (
+    typeof event.schema_version === "string" &&
+    Number.isSafeInteger(event.sequence) &&
+    (event.sequence as number) > 0 &&
+    typeof event.event_type === "string" &&
+    typeof event.conversation_id === "string" &&
+    typeof event.turn_id === "string" &&
+    typeof event.correlation_id === "string" &&
+    typeof event.provisional === "boolean" &&
+    Array.isArray(event.evidence_ids) &&
+    event.evidence_ids.every((id) => typeof id === "string")
+  );
 }
 
 export interface RequestOptions {
@@ -151,6 +279,59 @@ async function download(
     );
   }
   return response.blob();
+}
+
+async function streamConversationTurn(
+  path: string,
+  input: ConversationTurnRequest,
+  onEvent: (event: ConversationStreamEvent) => void,
+  auth?: ApiRequestContext,
+  signal?: AbortSignal,
+): Promise<ConversationTurnView | undefined> {
+  const headers = requestHeaders({ auth, body: input });
+  headers.set("Accept", "text/event-stream");
+  const response = await fetch(path, {
+    method: "POST",
+    headers,
+    credentials: "same-origin",
+    body: JSON.stringify(input),
+    signal,
+  });
+  if (!response.ok) {
+    throw new ApiError(
+      response.status,
+      response.status === 403 ? "cluster_not_allowed" : "source_unavailable",
+      "conversation stream is unavailable",
+    );
+  }
+  if (!response.body) {
+    throw new ApiError(502, "source_unavailable", "conversation stream body is unavailable");
+  }
+  const reader = response.body.getReader();
+  const text = new TextDecoder();
+  const decoder = new ConversationSseDecoder();
+  let finalTurn: ConversationTurnView | undefined;
+  const consume = (events: ConversationStreamEvent[]) => {
+    for (const event of events) {
+      onEvent(event);
+      if (event.final_turn) {
+        finalTurn = event.final_turn;
+      }
+    }
+  };
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) {
+      consume(decoder.push(text.decode()));
+      consume(decoder.finish());
+      break;
+    }
+    consume(decoder.push(text.decode(value, { stream: true })));
+  }
+  if (!decoder.hasTerminalEvent()) {
+    throw new ApiError(502, "source_unavailable", "conversation stream ended without a terminal event");
+  }
+  return finalTurn;
 }
 
 export function apiQuery(
@@ -262,6 +443,12 @@ export interface SreApi {
     input: ConversationTurnRequest,
     signal?: AbortSignal,
   ) => Promise<ConversationTurnView>;
+  streamConversationTurn: (
+    id: string,
+    input: ConversationTurnRequest,
+    onEvent: (event: ConversationStreamEvent) => void,
+    signal?: AbortSignal,
+  ) => Promise<ConversationTurnView | undefined>;
   cancelConversationQuery: (
     id: string,
     signal?: AbortSignal,
@@ -542,6 +729,14 @@ export function createHttpSreApi(auth?: ApiRequestContext): SreApi {
       post<ConversationTurnView>(
         `/v1/conversations/${encodeURIComponent(id)}/turns`,
         input,
+        signal,
+      ),
+    streamConversationTurn: (id, input, onEvent, signal) =>
+      streamConversationTurn(
+        `/v1/conversations/${encodeURIComponent(id)}/turns/stream`,
+        input,
+        onEvent,
+        auth,
         signal,
       ),
     cancelConversationQuery: (id, signal) =>

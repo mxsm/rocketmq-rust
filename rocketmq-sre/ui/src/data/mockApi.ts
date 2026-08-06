@@ -396,7 +396,7 @@ export function createMockSreApi(auth?: ApiRequestContext): SreApi {
         observed_at: new Date().toISOString(),
       } satisfies ConversationTurnPage;
     },
-    submitConversationTurn: async (id, input, signal) => {
+    async submitConversationTurn(id, input, signal) {
       await wait(signal);
       const conversation =
         conversations.find((item) => item.conversation.id === id) ??
@@ -525,6 +525,48 @@ export function createMockSreApi(auth?: ApiRequestContext): SreApi {
         });
       }
       return clone(result);
+    },
+    async streamConversationTurn(id, input, onEvent, signal) {
+      const result = await this.submitConversationTurn(id, input, signal);
+      const base = {
+        schema_version: "rocketmq-sre.conversation-stream-event.v1" as const,
+        conversation_id: id,
+        turn_id: result.turn.id,
+        correlation_id: result.turn.correlation_id,
+        provisional: false,
+        evidence_ids: result.answer?.evidence_ids ?? [],
+      };
+      onEvent({ ...base, sequence: 1, event_type: "accepted" });
+      if (result.answer) {
+        onEvent({ ...base, sequence: 2, event_type: "evidence_ready" });
+        onEvent({
+          ...base,
+          sequence: 3,
+          event_type: "diagnosis_ready",
+          diagnostic_pack: result.diagnosis_revision?.pack_id,
+        });
+        onEvent({
+          ...base,
+          sequence: 4,
+          event_type: "answer_delta",
+          provisional: true,
+          delta: result.answer.answer,
+        });
+        onEvent({
+          ...base,
+          sequence: 5,
+          event_type: "completed",
+          final_turn: result,
+        });
+      } else {
+        onEvent({
+          ...base,
+          sequence: 2,
+          event_type: result.turn.status === "cancelled" ? "cancelled" : "completed",
+          final_turn: result,
+        });
+      }
+      return result;
     },
     cancelConversationQuery: async (id, signal) => {
       await wait(signal);

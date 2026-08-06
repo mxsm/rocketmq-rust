@@ -13601,6 +13601,118 @@
           }
         ]
       }
+    },
+    "/v1/conversations/{id}/turns/stream": {
+      "post": {
+        "operationId": "streamConversationTurn",
+        "summary": "Stream one bounded read-only conversational diagnosis",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConversationTurnRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Ordered bounded Server-Sent Events",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                },
+                "x-event-schema": {
+                  "$ref": "#/components/schemas/ConversationStreamEvent"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Conversations"
+        ],
+        "security": [
+          {
+            "oidc": [
+              "rocketmq:diagnose"
+            ]
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -30233,6 +30345,83 @@
           "observed_at": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "ConversationStreamEvent": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "schema_version",
+          "sequence",
+          "event_type",
+          "conversation_id",
+          "turn_id",
+          "correlation_id",
+          "provisional",
+          "evidence_ids"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "rocketmq-sre.conversation-stream-event.v1"
+          },
+          "sequence": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          },
+          "event_type": {
+            "type": "string",
+            "enum": [
+              "accepted",
+              "evidence_ready",
+              "diagnosis_ready",
+              "answer_delta",
+              "preview_reset",
+              "completed",
+              "cancelled",
+              "failed"
+            ]
+          },
+          "conversation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "turn_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "correlation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "provisional": {
+            "type": "boolean"
+          },
+          "evidence_ids": {
+            "type": "array",
+            "maxItems": 32,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "delta": {
+            "type": "string",
+            "maxLength": 8000
+          },
+          "diagnostic_pack": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "final_turn": {
+            "$ref": "#/components/schemas/ConversationTurnView"
+          },
+          "warning": {
+            "type": "string",
+            "maxLength": 128
           }
         }
       }

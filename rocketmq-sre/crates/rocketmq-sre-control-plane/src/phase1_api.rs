@@ -52,6 +52,7 @@ use sha2::Digest;
 use sha2::Sha256;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::wrappers::ReceiverStream;
 use uuid::Uuid;
 
 use crate::ControlPlaneError;
@@ -125,6 +126,10 @@ pub(crate) fn public_routes() -> Router<AppState> {
             get(list_conversation_turns)
                 .post(submit_conversation_turn)
                 .layer(DefaultBodyLimit::max(16 * 1024)),
+        )
+        .route(
+            "/v1/conversations/{id}/turns/stream",
+            post(stream_conversation_turn).layer(DefaultBodyLimit::max(16 * 1024)),
         )
         .route("/v1/conversations/{id}/cancel", post(cancel_conversation_query))
         .route(
@@ -354,11 +359,36 @@ async fn submit_conversation_turn(
     Json(request): Json<ConversationTurnRequest>,
 ) -> Result<Json<ConversationTurnView>, ControlPlaneError> {
     let auth = state.auth.authorize(&headers, None).await?;
+    state.workflow.ensure_operator(&auth)?;
     state
         .conversation_queries
         .submit_turn(&auth, parse_conversation_id(&id)?, &request, correlation_id(&headers))
         .await
         .map(Json)
+}
+
+async fn stream_conversation_turn(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<ConversationTurnRequest>,
+) -> Result<Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>>, ControlPlaneError> {
+    let auth = state.auth.authorize(&headers, None).await?;
+    state.workflow.ensure_operator(&auth)?;
+    let receiver = state
+        .conversation_queries
+        .start_stream(auth, parse_conversation_id(&id)?, request, correlation_id(&headers))
+        .await?;
+    let stream = ReceiverStream::new(receiver).filter_map(|event| {
+        serde_json::to_string(&event)
+            .ok()
+            .map(|payload| Ok(Event::default().event(event.event_type).data(payload)))
+    });
+    Ok(Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(15))
+            .text("rocketmq-sre-conversation"),
+    ))
 }
 
 async fn list_conversation_turns(

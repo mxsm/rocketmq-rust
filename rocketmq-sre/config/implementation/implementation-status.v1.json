@@ -146,10 +146,19 @@
         {
           "kind": "test",
           "path": "rocketmq-sre/ui/src/api/openapiContract.test.ts"
+        },
+        {
+          "kind": "source",
+          "path": "rocketmq-sre/ui/src/pages/WorkflowPages.tsx"
+        },
+        {
+          "kind": "source",
+          "path": "rocketmq-sre/crates/rocketmq-sre-control-plane/src/conversation_stream.rs"
         }
       ],
       "limitations": [
-        "Desktop operator flows are implemented, while production identity, scale, and handoff qualification remain incomplete."
+        "Desktop operator flows include bounded Server-Sent Event progress, provisional answer rendering, cancellation, and final persisted evidence-cited answers.",
+        "Production identity, scale, and independent operator handoff qualification remain incomplete."
       ]
     },
     {
@@ -433,10 +442,19 @@
         {
           "kind": "test",
           "path": "rocketmq-sre/scripts/check_deepseek_diagnosis_qualification.py"
+        },
+        {
+          "kind": "source",
+          "path": "rocketmq-sre/crates/rocketmq-sre-control-plane/src/conversation_stream.rs"
+        },
+        {
+          "kind": "test",
+          "path": "rocketmq-sre/ui/src/api/client.test.ts"
         }
       ],
       "limitations": [
         "The credential-gated DeepSeek qualification uses sanitized synthetic Evidence and a disposable PostgreSQL database, verifies bounded semantic streaming and read-only tool selection without tool execution, and is not a production-cluster certification.",
+        "The conversational API and desktop workspace stream only bounded provisional text; the final turn is persisted and emitted only after schema, citation, and sensitive-output validation.",
         "AI output remains advisory, read-only, schema-validated, evidence-cited, and ineligible for direct execution; no autonomous production mutation is enabled."
       ]
     }
