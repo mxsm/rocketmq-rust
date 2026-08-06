@@ -17,6 +17,7 @@ use bytes::BytesMut;
 use cheetah_string::CheetahString;
 
 use super::private::Sealed;
+use super::write_json_string;
 use super::HeaderCodecError;
 use super::HeaderFieldContext;
 use super::HeaderValue;
@@ -76,6 +77,53 @@ impl EncodeSink for MapSink<'_> {
     ) -> Result<(), HeaderCodecError> {
         self.out
             .insert(CheetahString::from_static_str(key), value.to_map_value());
+        Ok(())
+    }
+}
+
+/// An [`EncodeSink`] that writes one JSON extension-field object directly.
+///
+/// All RocketMQ extension-field values remain JSON strings, including scalar
+/// Rust fields. String escaping is performed directly into the destination.
+pub struct JsonSink<'a> {
+    out: &'a mut BytesMut,
+    first: bool,
+}
+
+impl<'a> JsonSink<'a> {
+    /// Starts a JSON object in `out`.
+    #[inline]
+    pub fn new(out: &'a mut BytesMut) -> Self {
+        out.extend_from_slice(b"{");
+        Self { out, first: true }
+    }
+
+    /// Completes the JSON object and returns the destination.
+    #[inline]
+    pub fn finish(self) -> &'a mut BytesMut {
+        self.out.extend_from_slice(b"}");
+        self.out
+    }
+}
+
+impl Sealed for JsonSink<'_> {}
+
+impl EncodeSink for JsonSink<'_> {
+    #[inline]
+    fn write<V: HeaderValue>(
+        &mut self,
+        key: &'static str,
+        value: &V,
+        _context: HeaderFieldContext,
+    ) -> Result<(), HeaderCodecError> {
+        if self.first {
+            self.first = false;
+        } else {
+            self.out.extend_from_slice(b",");
+        }
+        write_json_string(self.out, key);
+        self.out.extend_from_slice(b":");
+        value.write_json_string(self.out);
         Ok(())
     }
 }
@@ -239,5 +287,31 @@ mod tests {
 
         assert!(matches!(error, HeaderCodecError::KeyLengthOverflow { .. }));
         assert_eq!(out.as_ref(), b"prefix");
+    }
+
+    #[test]
+    fn json_sink_writes_string_scalars_and_escapes_text_without_allocating_values() {
+        let mut out = BytesMut::new();
+        let mut sink = JsonSink::new(&mut out);
+        sink.write("topic", &CheetahString::from("主题\"\\\n"), CONTEXT)
+            .unwrap();
+        sink.write(
+            "queueOffset",
+            &-42_i64,
+            HeaderFieldContext::new("ExampleHeader", "queueOffset", HeaderValueKind::I64, None),
+        )
+        .unwrap();
+        sink.write(
+            "enabled",
+            &true,
+            HeaderFieldContext::new("ExampleHeader", "enabled", HeaderValueKind::Bool, None),
+        )
+        .unwrap();
+        sink.finish();
+
+        let value: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(value["topic"], "主题\"\\\n");
+        assert_eq!(value["queueOffset"], "-42");
+        assert_eq!(value["enabled"], "true");
     }
 }

@@ -26,7 +26,8 @@ fn default_max_count() -> i32 {
 #[header(
     type_id = "rocketmq_protocol::protocol::header::get_lite_client_info_request_header::GetLiteClientInfoRequestHeader",
     java_class = "org.apache.rocketmq.remoting.protocol.header.GetLiteClientInfoRequestHeader",
-    validate = "Self::validate"
+    validate = "Self::validate",
+    fast
 )]
 #[serde(rename_all = "camelCase")]
 pub struct GetLiteClientInfoRequestHeader {

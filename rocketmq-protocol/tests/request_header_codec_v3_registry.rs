@@ -133,6 +133,12 @@ fn register<T: HeaderCodec + CommandCustomHeader + Default>() -> RegisteredSchem
         "{} encode capability must follow its fast schema flag",
         T::TYPE_ID
     );
+    assert_eq!(
+        T::default().supports_direct_json_fields(),
+        T::FAST_ENABLED,
+        "{} direct JSON capability must follow its fast schema flag",
+        T::TYPE_ID
+    );
     let mut fields = Vec::new();
     T::visit_field_specs(&mut |field| fields.push(*field));
     let mut flattens = Vec::new();

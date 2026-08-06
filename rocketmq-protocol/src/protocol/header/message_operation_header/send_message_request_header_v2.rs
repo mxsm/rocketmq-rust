@@ -30,6 +30,7 @@ use crate::protocol::header_codec::BinarySink;
 use crate::protocol::header_codec::HeaderCodec;
 use crate::protocol::header_codec::HeaderCodecError;
 use crate::protocol::header_codec::HeaderFieldSource;
+use crate::protocol::header_codec::JsonSink;
 use crate::protocol::header_codec::MapSink;
 use crate::protocol::header_codec::ResolvedHeaderKey;
 use crate::rpc::rpc_request_header::RpcRequestHeader;
@@ -143,6 +144,26 @@ impl CommandCustomHeader for SendMessageRequestHeaderV2 {
         let result = {
             let mut sink = BinarySink::new(out);
             self.__request_header_codec_v3_encode_local(&mut sink)
+        };
+        if result.is_err() {
+            out.truncate(checkpoint);
+        }
+        result
+    }
+
+    fn supports_direct_json_fields(&self) -> bool {
+        true
+    }
+
+    fn encode_direct_json_fields(&self, out: &mut BytesMut) -> Result<(), HeaderCodecError> {
+        let checkpoint = out.len();
+        let result = {
+            let mut sink = JsonSink::new(out);
+            let result = <Self as HeaderCodec>::encode_into(self, &mut sink);
+            if result.is_ok() {
+                sink.finish();
+            }
+            result
         };
         if result.is_err() {
             out.truncate(checkpoint);

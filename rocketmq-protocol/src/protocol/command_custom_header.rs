@@ -138,6 +138,28 @@ pub trait CommandCustomHeader: AsAny {
         })
     }
 
+    /// Returns whether this header can write its complete JSON extension-field
+    /// object without first materializing a [`HeaderMap`].
+    fn supports_direct_json_fields(&self) -> bool {
+        false
+    }
+
+    /// Writes this header as one complete JSON extension-field object.
+    ///
+    /// Callers must check [`Self::supports_direct_json_fields`] before invoking
+    /// this method. Implementations must validate before writing and must leave
+    /// rollback to the enclosing frame encoder.
+    ///
+    /// # Errors
+    ///
+    /// Returns a classified header codec error when direct JSON encoding is
+    /// unavailable or validation fails.
+    fn encode_direct_json_fields(&self, _out: &mut bytes::BytesMut) -> Result<(), HeaderCodecError> {
+        Err(HeaderCodecError::FastCodecUnavailable {
+            header: std::any::type_name::<Self>(),
+        })
+    }
+
     /// Writes the provided `key` to the `out` buffer if the `value` is not empty.
     ///
     /// # Arguments
