@@ -17,6 +17,7 @@ use cheetah_string::CheetahString;
 use rocketmq_model::boundary_type::BoundaryType;
 
 use super::private::Sealed;
+use super::write_json_string;
 use super::HeaderCodecError;
 
 /// Protocol-reviewed value categories supported by typed request headers.
@@ -98,6 +99,17 @@ pub trait HeaderValue: Sealed + Sized {
     /// Appends the canonical UTF-8/ASCII wire representation without a
     /// temporary `String` for scalar values.
     fn write_ascii(&self, out: &mut BytesMut);
+
+    /// Appends the canonical extension-field value as a JSON string.
+    ///
+    /// Scalar implementations use their allocation-free ASCII form. Text
+    /// implementations override this method to apply JSON escaping.
+    #[inline]
+    fn write_json_string(&self, out: &mut BytesMut) {
+        out.extend_from_slice(b"\"");
+        self.write_ascii(out);
+        out.extend_from_slice(b"\"");
+    }
 
     /// Decodes a complete map value according to the field context.
     ///
@@ -181,6 +193,11 @@ impl HeaderValue for CheetahString {
     }
 
     #[inline]
+    fn write_json_string(&self, out: &mut BytesMut) {
+        write_json_string(out, self.as_str());
+    }
+
+    #[inline]
     fn decode(raw: &str, _context: HeaderFieldContext) -> Result<Self, HeaderCodecError> {
         Ok(CheetahString::from_slice(raw))
     }
@@ -204,6 +221,11 @@ impl HeaderValue for String {
     #[inline]
     fn write_ascii(&self, out: &mut BytesMut) {
         out.extend_from_slice(self.as_bytes());
+    }
+
+    #[inline]
+    fn write_json_string(&self, out: &mut BytesMut) {
+        write_json_string(out, self);
     }
 
     #[inline]

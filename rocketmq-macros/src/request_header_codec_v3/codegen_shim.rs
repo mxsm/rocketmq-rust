@@ -30,6 +30,7 @@ pub(super) fn generate(model: &HeaderModel, generics: &Generics, codec_trait: &T
     let map_sink = quote!(#protocol_path::protocol::header_codec::MapSink);
     let fast_methods = if model.fast {
         let binary_sink = quote!(#protocol_path::protocol::header_codec::BinarySink);
+        let json_sink = quote!(#protocol_path::protocol::header_codec::JsonSink);
         let encode_capability = quote!(#protocol_path::protocol::command_custom_header::HeaderEncodeCapability);
         let bytes_mut = quote!(#protocol_path::__request_header_codec::BytesMut);
         quote! {
@@ -43,6 +44,26 @@ pub(super) fn generate(model: &HeaderModel, generics: &Generics, codec_trait: &T
                 let result = {
                     let mut sink = #binary_sink::new(out);
                     <Self as #codec_trait>::encode_into(self, &mut sink)
+                };
+                if result.is_err() {
+                    out.truncate(checkpoint);
+                }
+                result
+            }
+
+            fn supports_direct_json_fields(&self) -> bool {
+                true
+            }
+
+            fn encode_direct_json_fields(&self, out: &mut #bytes_mut) -> Result<(), #codec_error> {
+                let checkpoint = out.len();
+                let result = {
+                    let mut sink = #json_sink::new(out);
+                    let result = <Self as #codec_trait>::encode_into(self, &mut sink);
+                    if result.is_ok() {
+                        sink.finish();
+                    }
+                    result
                 };
                 if result.is_err() {
                     out.truncate(checkpoint);

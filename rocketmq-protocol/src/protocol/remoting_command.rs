@@ -37,6 +37,7 @@ use crate::code::response_code::RemotingSysResponseCode;
 use crate::protocol::command_custom_header::CommandCustomHeader;
 use crate::protocol::command_custom_header::FromMap;
 use crate::protocol::command_custom_header::HeaderEncodeCapability;
+use crate::protocol::header_codec::write_json_string;
 use crate::protocol::header_codec::BinaryHeaderFields;
 use crate::protocol::header_codec::HeaderCodecError;
 use crate::protocol::header_codec::JsonHeaderFields;
@@ -49,6 +50,31 @@ pub const SERIALIZE_TYPE_ENV: &str = "ROCKETMQ_SERIALIZE_TYPE";
 pub const REMOTING_VERSION_KEY: &str = "rocketmq.remoting.version";
 
 static REQUEST_ID: std::sync::LazyLock<Arc<AtomicI32>> = std::sync::LazyLock::new(|| Arc::new(AtomicI32::new(0)));
+
+#[inline]
+fn write_json_i32(out: &mut BytesMut, value: i32) {
+    let mut buffer = itoa::Buffer::new();
+    out.extend_from_slice(buffer.format(value).as_bytes());
+}
+
+#[inline]
+const fn language_name(language: LanguageCode) -> &'static str {
+    match language {
+        LanguageCode::JAVA => "JAVA",
+        LanguageCode::CPP => "CPP",
+        LanguageCode::DOTNET => "DOTNET",
+        LanguageCode::PYTHON => "PYTHON",
+        LanguageCode::DELPHI => "DELPHI",
+        LanguageCode::ERLANG => "ERLANG",
+        LanguageCode::RUBY => "RUBY",
+        LanguageCode::OTHER => "OTHER",
+        LanguageCode::HTTP => "HTTP",
+        LanguageCode::GO => "GO",
+        LanguageCode::PHP => "PHP",
+        LanguageCode::OMS => "OMS",
+        LanguageCode::RUST => "RUST",
+    }
+}
 
 mod extension_fields;
 
@@ -580,6 +606,15 @@ impl RemotingCommand {
     /// Optimized JSON encoding with pre-calculated capacity and zero-copy optimizations
     #[inline]
     fn fast_encode_json(&mut self, dst: &mut BytesMut) -> rocketmq_error::RocketMQResult<()> {
+        let direct_fields = !self.custom_header_to_net
+            && self.ext_fields.is_absent()
+            && self
+                .command_custom_header_ref()
+                .is_some_and(CommandCustomHeader::supports_direct_json_fields);
+        if direct_fields {
+            return self.fast_encode_json_direct(dst);
+        }
+
         self.try_make_custom_header_to_net()
             .map_err(|error| rocketmq_error::RocketMQError::request_header_error(error.to_string()))?;
 
@@ -604,6 +639,54 @@ impl RemotingCommand {
         let (total_length, marked_header_length) =
             Self::checked_frame_lengths(header_length, body_length, SerializeType::JSON)?;
 
+        dst[begin_index..begin_index + 4].copy_from_slice(&total_length.to_be_bytes());
+        dst[begin_index + 4..begin_index + 8].copy_from_slice(&marked_header_length.to_be_bytes());
+        Ok(())
+    }
+
+    #[inline]
+    fn fast_encode_json_direct(&self, dst: &mut BytesMut) -> rocketmq_error::RocketMQResult<()> {
+        let header = self.command_custom_header_ref().ok_or_else(|| {
+            rocketmq_error::SerializationError::encode_failed(
+                "remoting-command",
+                "direct JSON header capability was selected without a custom header",
+            )
+        })?;
+        let body_length = self.body.as_ref().map_or(0, |body| body.len());
+        let begin_index = dst.len();
+
+        // Avoid a full preflight walk over every typed field. A single 1 KiB
+        // allocation covers normal request headers and lets unusually large
+        // values fall back to BytesMut's regular growth policy.
+        dst.reserve(1024);
+        dst.put_i64(0);
+        let header_index = dst.len();
+
+        dst.extend_from_slice(b"{\"code\":");
+        write_json_i32(dst, self.code);
+        dst.extend_from_slice(b",\"language\":");
+        write_json_string(dst, language_name(self.language));
+        dst.extend_from_slice(b",\"version\":");
+        write_json_i32(dst, self.version);
+        dst.extend_from_slice(b",\"opaque\":");
+        write_json_i32(dst, self.opaque);
+        dst.extend_from_slice(b",\"flag\":");
+        write_json_i32(dst, self.flag);
+        dst.extend_from_slice(b",\"remark\":");
+        if let Some(remark) = &self.remark {
+            write_json_string(dst, remark.as_str());
+        } else {
+            dst.extend_from_slice(b"null");
+        }
+        dst.extend_from_slice(b",\"extFields\":");
+        header
+            .encode_direct_json_fields(dst)
+            .map_err(|error| rocketmq_error::RocketMQError::request_header_error(error.to_string()))?;
+        dst.extend_from_slice(b",\"serializeTypeCurrentRPC\":\"JSON\"}");
+
+        let header_length = dst.len() - header_index;
+        let (total_length, marked_header_length) =
+            Self::checked_frame_lengths(header_length, body_length, SerializeType::JSON)?;
         dst[begin_index..begin_index + 4].copy_from_slice(&total_length.to_be_bytes());
         dst[begin_index + 4..begin_index + 8].copy_from_slice(&marked_header_length.to_be_bytes());
         Ok(())
@@ -1466,6 +1549,42 @@ mod tests {
                 Some("dynamic")
             );
         }
+    }
+
+    #[test]
+    fn generated_fast_header_streams_json_without_materializing_extension_fields() {
+        use crate::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
+
+        let header = SendMessageResponseHeader::new(
+            "msg-\"\\\n-主题".into(),
+            -3,
+            i64::MAX,
+            Some(CheetahString::new()),
+            Some("batch-a".into()),
+            None,
+        );
+        let mut command = RemotingCommand::create_response_command_with_header(header)
+            .set_language(LanguageCode::GO)
+            .set_version(501)
+            .set_opaque(7)
+            .set_remark("remark-\"\\\n-主题")
+            .set_serialize_type(SerializeType::JSON);
+        let mut materialized = command.clone();
+        materialized.try_make_custom_header_to_net().unwrap();
+        let expected = serde_json::to_value(&materialized).unwrap();
+
+        let mut encoded = BytesMut::new();
+        command.try_fast_header_encode(&mut encoded).unwrap();
+
+        assert!(!command.custom_header_to_net);
+        assert!(command.ext_fields.is_absent());
+        let marked_header_length = i32::from_be_bytes(encoded[4..8].try_into().unwrap());
+        let header_length = (marked_header_length & 0x00ff_ffff) as usize;
+        let actual: serde_json::Value = serde_json::from_slice(&encoded[8..8 + header_length]).unwrap();
+        assert_eq!(actual, expected);
+        assert_eq!(actual["extFields"]["transactionId"], "");
+        assert_eq!(actual["extFields"]["queueId"], "-3");
+        assert_eq!(actual["extFields"]["queueOffset"], i64::MAX.to_string());
     }
 
     #[test]
