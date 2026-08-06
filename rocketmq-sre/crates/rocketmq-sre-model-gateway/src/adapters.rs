@@ -1157,7 +1157,7 @@ fn parse_deepseek_responses_response(
     })
 }
 
-fn parse_responses_usage(body: &Value) -> ModelUsage {
+pub(crate) fn parse_responses_usage(body: &Value) -> ModelUsage {
     let usage = body.get("usage").unwrap_or(&Value::Null);
     ModelUsage {
         input_tokens: u32_field(usage, "input_tokens"),

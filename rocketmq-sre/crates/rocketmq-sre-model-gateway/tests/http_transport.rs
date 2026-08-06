@@ -19,11 +19,13 @@ use std::time::Duration;
 
 use axum::Json;
 use axum::Router;
+use axum::body::Body;
 use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::http::StatusCode;
 use axum::http::Uri;
+use axum::http::header::CONTENT_TYPE;
 use axum::http::header::LOCATION;
 use axum::response::IntoResponse;
 use axum::response::Response;
@@ -37,12 +39,15 @@ use rocketmq_sre_model_gateway::HttpTransportConfig;
 use rocketmq_sre_model_gateway::InvocationContext;
 use rocketmq_sre_model_gateway::ModelMessage;
 use rocketmq_sre_model_gateway::ModelRole;
+use rocketmq_sre_model_gateway::ModelStreamEvent;
 use rocketmq_sre_model_gateway::ModelTool;
 use rocketmq_sre_model_gateway::ProviderDialect;
 use rocketmq_sre_model_gateway::ProviderErrorCode;
 use rocketmq_sre_model_gateway::ResponseFormat;
 use rocketmq_sre_model_gateway::SecretMaterial;
+use rocketmq_sre_model_gateway::StreamBounds;
 use rocketmq_sre_model_gateway::TlsClientIdentity;
+use rocketmq_sre_model_gateway::ToolChoice;
 use rocketmq_sre_model_gateway::TransportRequest;
 use rocketmq_sre_model_gateway::builtin_provider_profiles;
 use serde_json::Value;
@@ -124,6 +129,7 @@ async fn mock_handler(State(state): State<Arc<MockState>>, uri: Uri, headers: He
         ),
         "/auth/bedrock" => auth_response(bedrock_authorized(&headers)),
         "/chat/completions" => openai_response(&headers, &body),
+        "/responses" => deepseek_responses_response(&headers, &body).await,
         "/messages" => {
             if headers
                 .get("x-api-key")
@@ -190,6 +196,86 @@ async fn mock_handler(State(state): State<Arc<MockState>>, uri: Uri, headers: He
         }
         _ => (StatusCode::NOT_FOUND, Json(json!({"error": "not_found"}))).into_response(),
     }
+}
+
+async fn deepseek_responses_response(headers: &HeaderMap, bytes: &[u8]) -> Response {
+    if headers
+        .get("authorization")
+        .is_none_or(|value| value.as_bytes() != b"Bearer test-secret")
+    {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let request: Value = match serde_json::from_slice(bytes) {
+        Ok(request) => request,
+        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+    };
+    let serialized = request.to_string();
+    if serialized.contains("STATUS_401") {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    if serialized.contains("STATUS_429") {
+        return StatusCode::TOO_MANY_REQUESTS.into_response();
+    }
+    if serialized.contains("STATUS_503") {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    if serialized.contains("TIMEOUT") {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    if request["stream"] == true {
+        let body = if serialized.contains("NO_TERMINAL") {
+            concat!(
+                "data: {\"event\":\"response.created\",\"sequence_number\":0,",
+                "\"response\":{\"id\":\"resp-local\",\"status\":\"in_progress\"}}\n\n",
+                "data: {\"event\":\"response.output_text.delta\",\"sequence_number\":1,",
+                "\"delta\":\"partial\"}\n\n",
+            )
+        } else {
+            concat!(
+                "data: {\"event\":\"response.created\",\"sequence_number\":0,",
+                "\"response\":{\"id\":\"resp-local\",\"status\":\"in_progress\"}}\n\n",
+                "data: {\"event\":\"response.output_text.delta\",\"sequence_number\":1,",
+                "\"delta\":\"broker \"}\n\n",
+                "data: {\"event\":\"response.output_text.delta\",\"sequence_number\":2,",
+                "\"delta\":\"healthy\"}\n\n",
+                "data: {\"event\":\"response.completed\",\"sequence_number\":3,",
+                "\"response\":{\"id\":\"resp-local\",\"status\":\"completed\",",
+                "\"usage\":{\"input_tokens\":4,\"output_tokens\":3,\"total_tokens\":7}}}\n\n",
+            )
+        };
+        return Response::builder()
+            .status(StatusCode::OK)
+            .header(CONTENT_TYPE, "text/event-stream")
+            .body(Body::from(body))
+            .expect("SSE response");
+    }
+    if request["tools"].as_array().is_some_and(|tools| !tools.is_empty()) {
+        return Json(json!({
+            "id": "resp-tool-local",
+            "model": "test-model",
+            "status": "completed",
+            "output": [{
+                "type": "function_call",
+                "call_id": "call-1",
+                "name": "query_consumer_lag",
+                "arguments": "{\"consumer_group\":\"synthetic-group\"}"
+            }],
+            "usage": {"input_tokens": 4, "output_tokens": 3, "total_tokens": 7}
+        }))
+        .into_response();
+    }
+    Json(json!({
+        "id": "resp-local",
+        "model": "test-model",
+        "status": "completed",
+        "output": [{
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "broker is healthy"}]
+        }],
+        "usage": {"input_tokens": 4, "output_tokens": 3, "total_tokens": 7}
+    }))
+    .into_response()
 }
 
 fn auth_response(authorized: bool) -> Response {
@@ -546,6 +632,188 @@ async fn invalid_json_and_expired_credentials_fail_closed() {
         .expect_err("expired secret");
     assert_eq!(expired_secret.code, ProviderErrorCode::SecretUnavailable);
 
+    server.stop().await;
+}
+
+fn deepseek_client(endpoint: &str, timeout: Duration) -> AsyncBuiltinProviderClient {
+    let mut profile = builtin_provider_profiles()
+        .into_iter()
+        .find(|candidate| candidate.id == "deepseek-responses")
+        .expect("DeepSeek Responses profile");
+    profile.endpoint = endpoint.to_owned();
+    profile.model = "test-model".to_owned();
+    AsyncBuiltinProviderClient::new(
+        profile,
+        transport(HttpTransportConfig::default().with_timeouts(Duration::from_secs(1), timeout)),
+    )
+    .expect("async DeepSeek provider")
+}
+
+fn deepseek_request(prompt: &str) -> rocketmq_sre_model_gateway::CanonicalModelRequest {
+    rocketmq_sre_model_gateway::CanonicalModelRequest::new(
+        CorrelationId::new(),
+        "test-model",
+        vec![ModelMessage::text(ModelRole::User, prompt)],
+    )
+}
+
+#[tokio::test]
+async fn deepseek_http_stream_maps_semantic_events_and_enforces_termination() {
+    let server = MockServer::start().await;
+    let client = deepseek_client(&server.endpoint, Duration::from_secs(2));
+    let request = deepseek_request("stream health");
+    let context = InvocationContext::new(request.correlation_id);
+    let mut stream = client
+        .invoke_stream(&context, &request, Some(secret("test-secret")))
+        .await
+        .expect("DeepSeek SSE stream");
+    let mut events = Vec::new();
+    while let Some(event) = stream.recv().await.expect("bounded SSE event") {
+        events.push(event);
+    }
+    assert!(matches!(events.first(), Some(ModelStreamEvent::Start { .. })));
+    assert_eq!(
+        events
+            .iter()
+            .filter_map(|event| match event {
+                ModelStreamEvent::TextDelta { delta } => Some(delta.as_str()),
+                _ => None,
+            })
+            .collect::<String>(),
+        "broker healthy"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, ModelStreamEvent::Usage { .. }))
+    );
+    assert!(matches!(
+        events.last(),
+        Some(ModelStreamEvent::Finish {
+            reason: FinishReason::Stop
+        })
+    ));
+
+    let request = deepseek_request("NO_TERMINAL");
+    let context = InvocationContext::new(request.correlation_id);
+    let mut stream = client
+        .invoke_stream(&context, &request, Some(secret("test-secret")))
+        .await
+        .expect("unterminated DeepSeek SSE stream");
+    assert!(matches!(
+        stream.recv().await.expect("start"),
+        Some(ModelStreamEvent::Start { .. })
+    ));
+    assert!(matches!(
+        stream.recv().await.expect("partial delta"),
+        Some(ModelStreamEvent::TextDelta { .. })
+    ));
+    assert_eq!(
+        stream.recv().await.expect_err("premature EOF must fail closed").code,
+        ProviderErrorCode::ProtocolError
+    );
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn deepseek_http_stream_honors_cancellation_and_event_bounds() {
+    let server = MockServer::start().await;
+    let client = deepseek_client(&server.endpoint, Duration::from_secs(2));
+    let request = deepseek_request("stream health");
+    let context = InvocationContext::new(request.correlation_id);
+    let mut stream = client
+        .invoke_stream(&context, &request, Some(secret("test-secret")))
+        .await
+        .expect("DeepSeek SSE stream");
+    assert!(matches!(
+        stream.recv().await.expect("start"),
+        Some(ModelStreamEvent::Start { .. })
+    ));
+    stream.cancel();
+    assert_eq!(
+        stream.recv().await.expect_err("cancelled stream").code,
+        ProviderErrorCode::Cancelled
+    );
+
+    let mut bounded_context = InvocationContext::new(request.correlation_id);
+    bounded_context.stream_bounds = StreamBounds {
+        channel_capacity: 1,
+        max_events: 1,
+        max_bytes: 4 * 1024,
+    };
+    let mut stream = client
+        .invoke_stream(&bounded_context, &request, Some(secret("test-secret")))
+        .await
+        .expect("bounded DeepSeek SSE stream");
+    assert!(matches!(
+        stream.recv().await.expect("first event"),
+        Some(ModelStreamEvent::Start { .. })
+    ));
+    assert_eq!(
+        stream.recv().await.expect_err("event bound").code,
+        ProviderErrorCode::OutputTooLarge
+    );
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn deepseek_http_tool_selection_and_error_matrix_are_stable() {
+    let server = MockServer::start().await;
+    let client = deepseek_client(&server.endpoint, Duration::from_secs(2));
+    let mut tool_request = deepseek_request("Call the declared read-only lag query exactly once");
+    tool_request.tools.push(ModelTool::read_only(
+        "query_consumer_lag",
+        "Read current lag",
+        json!({
+            "type": "object",
+            "properties": {"consumer_group": {"type": "string"}},
+            "required": ["consumer_group"],
+            "additionalProperties": false
+        }),
+    ));
+    tool_request.tool_choice = ToolChoice::Specific {
+        name: "query_consumer_lag".to_owned(),
+    };
+    let response = client
+        .invoke(
+            &InvocationContext::new(tool_request.correlation_id),
+            &tool_request,
+            Some(secret("test-secret")),
+        )
+        .await
+        .expect("read-only tool selection");
+    assert_eq!(response.tool_calls.len(), 1);
+    assert_eq!(response.tool_calls[0].name, "query_consumer_lag");
+    assert_eq!(response.tool_calls[0].arguments["consumer_group"], "synthetic-group");
+
+    for (prompt, expected) in [
+        ("STATUS_401", ProviderErrorCode::AuthenticationFailed),
+        ("STATUS_429", ProviderErrorCode::RateLimited),
+        ("STATUS_503", ProviderErrorCode::ServiceUnavailable),
+    ] {
+        let request = deepseek_request(prompt);
+        let error = client
+            .invoke_stream(
+                &InvocationContext::new(request.correlation_id),
+                &request,
+                Some(secret("test-secret")),
+            )
+            .await
+            .expect_err("provider status must fail");
+        assert_eq!(error.code, expected, "{prompt}");
+    }
+
+    let timeout_client = deepseek_client(&server.endpoint, Duration::from_millis(40));
+    let request = deepseek_request("TIMEOUT");
+    let error = timeout_client
+        .invoke_stream(
+            &InvocationContext::new(request.correlation_id),
+            &request,
+            Some(secret("test-secret")),
+        )
+        .await
+        .expect_err("stream handshake timeout");
+    assert_eq!(error.code, ProviderErrorCode::Timeout);
     server.stop().await;
 }
 

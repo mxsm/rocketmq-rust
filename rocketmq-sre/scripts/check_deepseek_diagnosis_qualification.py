@@ -43,8 +43,13 @@ EXPECTED_ASSERTIONS: dict[str, bool | int] = {
     "output_tokens_present": True,
     "invocation_persisted": True,
     "maximum_schema_repairs": 1,
-    "maximum_model_network_calls": 2,
-    "tool_calls": 0,
+    "maximum_model_network_calls": 5,
+    "stream_sessions": 2,
+    "completed_semantic_streams": 1,
+    "stream_terminal_verified": True,
+    "stream_cancellation_verified": True,
+    "read_only_tool_selections": 1,
+    "tool_execution_calls": 0,
     "mutation_calls": 0,
     "execution_eligible": False,
 }
@@ -194,7 +199,12 @@ def validate_report(report: dict[str, Any]) -> list[str]:
             "input_tokens_present": True,
             "output_tokens_present": True,
             "invocation_persisted": True,
-            "tool_calls": 0,
+            "stream_sessions": 2,
+            "completed_semantic_streams": 1,
+            "stream_terminal_verified": True,
+            "stream_cancellation_verified": True,
+            "read_only_tool_selections": 1,
+            "tool_execution_calls": 0,
             "mutation_calls": 0,
             "execution_eligible": False,
         }
@@ -208,8 +218,11 @@ def validate_report(report: dict[str, Any]) -> list[str]:
         if not isinstance(repairs, int) or isinstance(repairs, bool) or not 0 <= repairs <= 1:
             findings.append("diagnosis.schema_repairs must be between zero and one")
         calls = diagnosis.get("model_network_calls")
-        if not isinstance(calls, int) or isinstance(calls, bool) or not 1 <= calls <= 2:
-            findings.append("diagnosis.model_network_calls must be between one and two")
+        if not isinstance(calls, int) or isinstance(calls, bool) or not 4 <= calls <= 5:
+            findings.append("diagnosis.model_network_calls must be between four and five")
+        event_count = diagnosis.get("stream_event_count")
+        if not isinstance(event_count, int) or isinstance(event_count, bool) or event_count < 4 or event_count > 128:
+            findings.append("diagnosis.stream_event_count must be between four and 128")
 
     safety = report.get("safety")
     expected_safety = {

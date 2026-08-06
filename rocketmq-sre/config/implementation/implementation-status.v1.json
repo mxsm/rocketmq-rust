@@ -334,6 +334,10 @@
         },
         {
           "kind": "test",
+          "path": "rocketmq-sre/crates/rocketmq-sre-model-gateway/tests/http_transport.rs"
+        },
+        {
+          "kind": "test",
           "path": "rocketmq-sre/crates/rocketmq-sre-model-gateway/tests/live_provider_smoke.rs"
         },
         {
@@ -346,7 +350,7 @@
         }
       ],
       "limitations": [
-        "DeepSeek Responses API diagnosis passed one credential-gated disposable-environment qualification; other provider profiles remain contract-tested or deployment-qualified independently.",
+        "DeepSeek Responses API diagnosis, bounded semantic streaming, cancellation, and read-only tool selection passed one credential-gated disposable-environment qualification; the selected tool was not executed and other provider profiles remain contract-tested or deployment-qualified independently.",
         "Production credentials, deployment-specific networking, sustained load, provider failover, and operator handoff still require environment-specific certification."
       ]
     },
@@ -432,7 +436,7 @@
         }
       ],
       "limitations": [
-        "The credential-gated DeepSeek qualification uses sanitized synthetic Evidence and a disposable PostgreSQL database; it is not a production-cluster certification.",
+        "The credential-gated DeepSeek qualification uses sanitized synthetic Evidence and a disposable PostgreSQL database, verifies bounded semantic streaming and read-only tool selection without tool execution, and is not a production-cluster certification.",
         "AI output remains advisory, read-only, schema-validated, evidence-cited, and ineligible for direct execution; no autonomous production mutation is enabled."
       ]
     }

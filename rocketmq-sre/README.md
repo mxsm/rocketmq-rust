@@ -125,6 +125,19 @@ instead of silently degrading the contract.
 See [Model compatibility](docs/compatibility.md) and
 [Extension guide](docs/phase05-extension-guide.md).
 
+The DeepSeek Responses integration includes bounded semantic SSE, cooperative
+cancellation, stable provider-error mapping, structured output, and read-only
+tool selection. A credential-gated qualification exercises those protocol
+paths together with the persisted, evidence-cited diagnosis flow against a
+disposable Docker PostgreSQL instance. It does not execute the selected tool,
+grant model credentials to RocketMQ, or certify unattended mutation. API keys
+must be supplied from an explicit file outside the repository and are cleared
+from the qualification process before the machine-local report is written.
+
+```powershell
+.\scripts\deepseek-diagnosis-qualification.ps1 -SecretFile <outside-repository-secret-file>
+```
+
 ## Workspace crates
 
 | Crate | Responsibility |

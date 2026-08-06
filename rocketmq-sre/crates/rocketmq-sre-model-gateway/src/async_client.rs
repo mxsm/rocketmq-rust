@@ -29,6 +29,7 @@ use crate::profile::ProviderProfile;
 use crate::provider::InvocationContext;
 use crate::secret::SecretMaterial;
 use crate::secret::SecretReferenceKind;
+use crate::stream::AsyncBoundedModelStream;
 use crate::transport::AsyncModelTransport;
 
 /// Async end-to-end client for the four built-in provider protocol families.
@@ -107,6 +108,37 @@ impl AsyncBuiltinProviderClient {
         request: &CanonicalModelRequest,
         credential: Option<SecretMaterial>,
     ) -> Result<CanonicalModelResponse, ProviderError> {
+        self.validate_credential_presence(credential.as_ref())?;
+        let transport_request = build_chat_transport_request(&self.profile, context, request, credential)?;
+        let response = self.transport.invoke(transport_request).await?;
+        parse_chat_transport_response(&self.profile, response, context.max_response_bytes)
+    }
+
+    /// Starts a bounded provider stream through the canonical event model.
+    ///
+    /// The returned stream is pull-based. Cancelling or dropping it stops
+    /// provider body reads without an unowned background task.
+    ///
+    /// # Errors
+    ///
+    /// Returns stable validation, secret, deadline, transport, provider,
+    /// protocol, cancellation, or output-bound errors.
+    pub async fn invoke_stream(
+        &self,
+        context: &InvocationContext,
+        request: &CanonicalModelRequest,
+        credential: Option<SecretMaterial>,
+    ) -> Result<AsyncBoundedModelStream, ProviderError> {
+        self.validate_credential_presence(credential.as_ref())?;
+        let mut streaming_request = request.clone();
+        streaming_request.stream = true;
+        let transport_request = build_chat_transport_request(&self.profile, context, &streaming_request, credential)?;
+        self.transport
+            .invoke_stream(transport_request, context.stream_bounds, context.cancellation.clone())
+            .await
+    }
+
+    fn validate_credential_presence(&self, credential: Option<&SecretMaterial>) -> Result<(), ProviderError> {
         match (self.profile.credential_ref.is_some(), credential.is_some()) {
             (true, false) => {
                 return Err(ProviderError::new(
@@ -121,9 +153,7 @@ impl AsyncBuiltinProviderClient {
             }
             _ => {}
         }
-        let transport_request = build_chat_transport_request(&self.profile, context, request, credential)?;
-        let response = self.transport.invoke(transport_request).await?;
-        parse_chat_transport_response(&self.profile, response, context.max_response_bytes)
+        Ok(())
     }
 }
 

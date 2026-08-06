@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::net::IpAddr;
@@ -22,6 +23,7 @@ use reqwest::Certificate;
 use reqwest::Client;
 use reqwest::Identity;
 use reqwest::RequestBuilder;
+use reqwest::Response;
 use reqwest::header::ACCEPT;
 use reqwest::header::CONTENT_TYPE;
 use reqwest::header::HeaderValue;
@@ -30,16 +32,26 @@ use serde_json::Value;
 use url::Host;
 use url::Url;
 
+use crate::adapters::parse_responses_usage;
 use crate::aws_sigv4::sign_bedrock_request;
 use crate::error::ProviderError;
 use crate::error::ProviderErrorCode;
+use crate::error::map_provider_status;
+use crate::ir::FinishReason;
+use crate::ir::ModelStreamEvent;
 use crate::profile::ProviderDialect;
 use crate::secret::SecretMaterial;
 use crate::secret::current_unix_ms;
+use crate::stream::AsyncBoundedModelStream;
+use crate::stream::AsyncModelStreamSource;
+use crate::stream::CancellationToken;
+use crate::stream::StreamBounds;
+use crate::stream::StreamEventFuture;
 use crate::transport::AsyncModelTransport;
 use crate::transport::TransportFuture;
 use crate::transport::TransportRequest;
 use crate::transport::TransportResponse;
+use crate::transport::TransportStreamFuture;
 
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
@@ -374,6 +386,99 @@ impl HttpModelTransport {
         }
     }
 
+    async fn invoke_http_stream(
+        &self,
+        request: TransportRequest,
+        bounds: StreamBounds,
+        cancellation: CancellationToken,
+    ) -> Result<AsyncBoundedModelStream, ProviderError> {
+        if request.dialect != ProviderDialect::DeepSeekResponses {
+            return Err(ProviderError::capability_unsupported(
+                "HTTP streaming is not implemented for this provider dialect",
+            ));
+        }
+        if cancellation.is_cancelled() {
+            return Err(ProviderError::new(
+                ProviderErrorCode::Cancelled,
+                "model stream was cancelled",
+            ));
+        }
+        let timeout = effective_timeout(request.deadline_unix_ms, self.request_timeout)?;
+        let url = self.provider_url(&request.endpoint, &request.path)?;
+        let body = serde_json::to_vec(&request.body).map_err(|_| {
+            ProviderError::new(
+                ProviderErrorCode::InvalidRequest,
+                "model request JSON could not be encoded",
+            )
+        })?;
+        if body.len() > self.max_request_bytes {
+            return Err(ProviderError::new(
+                ProviderErrorCode::OutputTooLarge,
+                "model request exceeded the configured transport bound",
+            ));
+        }
+        let response_bound = request.max_response_bytes.min(self.max_response_bytes);
+        if response_bound == 0 {
+            return Err(ProviderError::new(
+                ProviderErrorCode::InvalidRequest,
+                "model response bound must be non-zero",
+            ));
+        }
+        validate_credential_expiry(request.credential.as_ref())?;
+        let mut builder = self
+            .client
+            .post(url.clone())
+            .header(CONTENT_TYPE, "application/json")
+            .header(ACCEPT, "text/event-stream")
+            .header("x-rocketmq-correlation-id", request.correlation_id.to_string())
+            .body(body.clone())
+            .timeout(timeout);
+        builder = apply_provider_auth(builder, &url, request.dialect, request.credential.as_ref(), &body)?;
+        let response = tokio::time::timeout(timeout, builder.send())
+            .await
+            .map_err(|_| ProviderError::timeout("model provider stream handshake exceeded its deadline"))?
+            .map_err(map_reqwest_error)?;
+        let status = response.status();
+        if status.is_redirection() {
+            return Err(ProviderError::policy_denied("model provider redirects are disabled")
+                .with_provider_status(status.as_u16()));
+        }
+        if !status.is_success() {
+            return Err(map_provider_status(status.as_u16()));
+        }
+        if response
+            .content_length()
+            .is_some_and(|length| length > response_bound as u64)
+        {
+            return Err(ProviderError::new(
+                ProviderErrorCode::OutputTooLarge,
+                "model provider stream exceeded the configured transport bound",
+            )
+            .with_provider_status(status.as_u16()));
+        }
+        let content_type = response
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default();
+        if !content_type
+            .split(';')
+            .next()
+            .is_some_and(|value| value.trim().eq_ignore_ascii_case("text/event-stream"))
+        {
+            return Err(ProviderError::new(
+                ProviderErrorCode::ProtocolError,
+                "model provider stream returned an unexpected content type",
+            )
+            .with_provider_status(status.as_u16()));
+        }
+        AsyncBoundedModelStream::new(
+            Box::new(DeepSeekResponsesSseSource::new(response, response_bound)),
+            bounds,
+            cancellation,
+        )
+    }
+
     fn provider_url(&self, endpoint: &str, path: &str) -> Result<Url, ProviderError> {
         let base = Url::parse(endpoint).map_err(|_| invalid_endpoint())?;
         if !base.username().is_empty()
@@ -450,6 +555,264 @@ impl AsyncModelTransport for HttpModelTransport {
     fn invoke(&self, request: TransportRequest) -> TransportFuture<'_> {
         Box::pin(async move { self.invoke_http(request).await })
     }
+
+    fn invoke_stream(
+        &self,
+        request: TransportRequest,
+        bounds: StreamBounds,
+        cancellation: CancellationToken,
+    ) -> TransportStreamFuture<'_> {
+        Box::pin(async move { self.invoke_http_stream(request, bounds, cancellation).await })
+    }
+}
+
+struct DeepSeekResponsesSseSource {
+    response: Response,
+    buffer: Vec<u8>,
+    pending: VecDeque<ModelStreamEvent>,
+    max_response_bytes: usize,
+    received_bytes: usize,
+    last_sequence_number: Option<u64>,
+    saw_tool_call: bool,
+}
+
+impl DeepSeekResponsesSseSource {
+    fn new(response: Response, max_response_bytes: usize) -> Self {
+        Self {
+            response,
+            buffer: Vec::new(),
+            pending: VecDeque::new(),
+            max_response_bytes,
+            received_bytes: 0,
+            last_sequence_number: None,
+            saw_tool_call: false,
+        }
+    }
+
+    async fn read_event(&mut self) -> Result<Option<ModelStreamEvent>, ProviderError> {
+        loop {
+            if let Some(event) = self.pending.pop_front() {
+                return Ok(Some(event));
+            }
+            if let Some((frame_end, delimiter_len)) = find_sse_frame(&self.buffer) {
+                let frame = self.buffer[..frame_end].to_vec();
+                self.buffer.drain(..frame_end + delimiter_len);
+                self.decode_frame(&frame)?;
+                continue;
+            }
+            let Some(chunk) = self.response.chunk().await.map_err(map_reqwest_error)? else {
+                if self.buffer.iter().all(u8::is_ascii_whitespace) {
+                    self.buffer.clear();
+                    return Ok(None);
+                }
+                return Err(ProviderError::new(
+                    ProviderErrorCode::ProtocolError,
+                    "model provider stream ended with an incomplete SSE frame",
+                ));
+            };
+            if chunk.len() > self.max_response_bytes.saturating_sub(self.received_bytes) {
+                return Err(ProviderError::new(
+                    ProviderErrorCode::OutputTooLarge,
+                    "model provider stream exceeded the configured transport bound",
+                ));
+            }
+            self.received_bytes += chunk.len();
+            self.buffer.extend_from_slice(&chunk);
+        }
+    }
+
+    fn decode_frame(&mut self, frame: &[u8]) -> Result<(), ProviderError> {
+        let frame = std::str::from_utf8(frame).map_err(|_| {
+            ProviderError::new(
+                ProviderErrorCode::ProtocolError,
+                "model provider stream returned invalid UTF-8",
+            )
+        })?;
+        let mut event_field = None;
+        let mut data = String::new();
+        for line in frame.lines() {
+            if line.is_empty() || line.starts_with(':') {
+                continue;
+            }
+            let (field, value) = line.split_once(':').unwrap_or((line, ""));
+            let value = value.strip_prefix(' ').unwrap_or(value);
+            match field {
+                "event" => event_field = Some(value),
+                "data" => {
+                    if !data.is_empty() {
+                        data.push('\n');
+                    }
+                    data.push_str(value);
+                }
+                _ => {}
+            }
+        }
+        if data.is_empty() {
+            return Ok(());
+        }
+        if data == "[DONE]" {
+            return Err(ProviderError::new(
+                ProviderErrorCode::ProtocolError,
+                "DeepSeek Responses stream used a non-semantic terminal marker",
+            ));
+        }
+        let payload: Value = serde_json::from_str(&data).map_err(|_| {
+            ProviderError::new(
+                ProviderErrorCode::ProtocolError,
+                "model provider stream returned invalid event JSON",
+            )
+        })?;
+        let payload_event = payload
+            .get("event")
+            .or_else(|| payload.get("type"))
+            .and_then(Value::as_str);
+        if let (Some(sse_event), Some(json_event)) = (event_field, payload_event)
+            && sse_event != json_event
+        {
+            return Err(ProviderError::new(
+                ProviderErrorCode::ProtocolError,
+                "model provider stream event type was inconsistent",
+            ));
+        }
+        let event = payload_event.or(event_field).ok_or_else(|| {
+            ProviderError::new(
+                ProviderErrorCode::ProtocolError,
+                "model provider stream event type was missing",
+            )
+        })?;
+        let sequence_number = payload.get("sequence_number").and_then(Value::as_u64).ok_or_else(|| {
+            ProviderError::new(
+                ProviderErrorCode::ProtocolError,
+                "model provider stream sequence number was missing",
+            )
+        })?;
+        if self
+            .last_sequence_number
+            .is_some_and(|last_sequence_number| sequence_number <= last_sequence_number)
+        {
+            return Err(ProviderError::new(
+                ProviderErrorCode::ProtocolError,
+                "model provider stream sequence number was not increasing",
+            ));
+        }
+        self.last_sequence_number = Some(sequence_number);
+        self.map_event(event, &payload)
+    }
+
+    fn map_event(&mut self, event: &str, payload: &Value) -> Result<(), ProviderError> {
+        match event {
+            "response.created" => self.pending.push_back(ModelStreamEvent::Start {
+                provider_request_id: payload
+                    .get("response")
+                    .and_then(|response| response.get("id"))
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+            }),
+            "response.output_text.delta" => self.pending.push_back(ModelStreamEvent::TextDelta {
+                delta: required_string(payload, "delta")?.to_owned(),
+            }),
+            "response.output_item.added" => {
+                let item = payload.get("item").unwrap_or(&Value::Null);
+                if item.get("type").and_then(Value::as_str) == Some("function_call") {
+                    self.saw_tool_call = true;
+                    self.pending.push_back(ModelStreamEvent::ToolCallDelta {
+                        index: optional_u32(payload, "output_index"),
+                        id: item
+                            .get("call_id")
+                            .or_else(|| item.get("id"))
+                            .and_then(Value::as_str)
+                            .map(ToOwned::to_owned),
+                        name: item.get("name").and_then(Value::as_str).map(ToOwned::to_owned),
+                        arguments_delta: item
+                            .get("arguments")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned(),
+                    });
+                }
+            }
+            "response.function_call_arguments.delta" | "response.custom_tool_call_input.delta" => {
+                self.saw_tool_call = true;
+                self.pending.push_back(ModelStreamEvent::ToolCallDelta {
+                    index: optional_u32(payload, "output_index"),
+                    id: payload
+                        .get("item_id")
+                        .or_else(|| payload.get("call_id"))
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned),
+                    name: None,
+                    arguments_delta: required_string(payload, "delta")?.to_owned(),
+                });
+            }
+            "response.completed" => {
+                let response = payload.get("response").unwrap_or(&Value::Null);
+                self.pending.push_back(ModelStreamEvent::Usage {
+                    usage: parse_responses_usage(response),
+                });
+                self.pending.push_back(ModelStreamEvent::Finish {
+                    reason: if self.saw_tool_call {
+                        FinishReason::ToolCalls
+                    } else {
+                        FinishReason::Stop
+                    },
+                });
+            }
+            "response.incomplete" => {
+                let response = payload.get("response").unwrap_or(&Value::Null);
+                self.pending.push_back(ModelStreamEvent::Usage {
+                    usage: parse_responses_usage(response),
+                });
+                self.pending.push_back(ModelStreamEvent::Finish {
+                    reason: FinishReason::Length,
+                });
+            }
+            "response.failed" | "error" => self.pending.push_back(ModelStreamEvent::Error {
+                code: "provider_response_failed".to_owned(),
+                retryable: false,
+            }),
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
+impl AsyncModelStreamSource for DeepSeekResponsesSseSource {
+    fn next_event(&mut self) -> StreamEventFuture<'_> {
+        Box::pin(async move { self.read_event().await })
+    }
+}
+
+fn find_sse_frame(buffer: &[u8]) -> Option<(usize, usize)> {
+    let lf = buffer
+        .windows(2)
+        .position(|window| window == b"\n\n")
+        .map(|index| (index, 2));
+    let crlf = buffer
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map(|index| (index, 4));
+    match (lf, crlf) {
+        (Some(left), Some(right)) => Some(left.min(right)),
+        (Some(frame), None) | (None, Some(frame)) => Some(frame),
+        (None, None) => None,
+    }
+}
+
+fn required_string<'a>(payload: &'a Value, field: &str) -> Result<&'a str, ProviderError> {
+    payload.get(field).and_then(Value::as_str).ok_or_else(|| {
+        ProviderError::new(
+            ProviderErrorCode::ProtocolError,
+            "model provider stream event field was invalid",
+        )
+    })
+}
+
+fn optional_u32(payload: &Value, field: &str) -> u32 {
+    payload
+        .get(field)
+        .and_then(Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+        .unwrap_or_default()
 }
 
 async fn receive_bounded_json(
