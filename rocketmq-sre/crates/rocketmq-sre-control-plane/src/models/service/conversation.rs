@@ -34,9 +34,11 @@ use rocketmq_sre_model_gateway::ModelRole;
 use rocketmq_sre_model_gateway::ModelStreamEvent;
 use rocketmq_sre_model_gateway::ModelTool;
 use rocketmq_sre_model_gateway::ProviderCapability;
+use rocketmq_sre_model_gateway::ProviderDialect;
 use rocketmq_sre_model_gateway::ProviderError;
 use rocketmq_sre_model_gateway::ProviderErrorCode;
 use rocketmq_sre_model_gateway::ProviderHealth;
+use rocketmq_sre_model_gateway::ProviderProfile;
 use rocketmq_sre_model_gateway::ResponseFormat;
 use rocketmq_sre_model_gateway::ToolChoice;
 use serde_json::Value;
@@ -416,13 +418,7 @@ impl ModelGatewayService {
         for profile in profiles.iter().take(self.config.max_fallbacks.saturating_add(1)) {
             let started_at = Utc::now();
             let invocation = match stream {
-                Some(writer)
-                    if profile
-                        .profile
-                        .capabilities
-                        .supported
-                        .contains(&ProviderCapability::Streaming) =>
-                {
+                Some(writer) if conversation_http_streaming_supported(&profile.profile) => {
                     self.invoke_conversation_answer_profile_stream(
                         profile,
                         &prompt,
@@ -958,6 +954,11 @@ fn bounded(value: &str, max_chars: usize) -> String {
     value.chars().take(max_chars).collect()
 }
 
+fn conversation_http_streaming_supported(profile: &ProviderProfile) -> bool {
+    profile.dialect == ProviderDialect::DeepSeekResponses
+        && profile.capabilities.supported.contains(&ProviderCapability::Streaming)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1028,5 +1029,21 @@ mod tests {
         let error = preview.push(second).expect_err("sensitive preview must fail closed");
 
         assert_eq!(error.code, ProviderErrorCode::SchemaValidationFailed);
+    }
+
+    #[test]
+    fn conversation_http_streaming_uses_only_the_implemented_dialect() {
+        let profiles = rocketmq_sre_model_gateway::builtin_provider_profiles();
+        let deepseek = profiles
+            .iter()
+            .find(|profile| profile.id == "deepseek-responses")
+            .expect("DeepSeek Responses profile");
+        let local = profiles
+            .iter()
+            .find(|profile| profile.id == "vllm")
+            .expect("local OpenAI-compatible profile");
+
+        assert!(conversation_http_streaming_supported(deepseek));
+        assert!(!conversation_http_streaming_supported(local));
     }
 }

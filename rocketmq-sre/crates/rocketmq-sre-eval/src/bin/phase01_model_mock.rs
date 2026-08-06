@@ -199,18 +199,34 @@ fn build_completion(request: &ChatCompletionRequest) -> Result<Value, StatusCode
     let prompt: Value = serde_json::from_str(prompt).map_err(|_| StatusCode::UNPROCESSABLE_ENTITY)?;
     let evidence_ids = allowed_evidence_ids(&prompt);
     let evidence_id = evidence_ids.first().ok_or(StatusCode::UNPROCESSABLE_ENTITY)?;
-    let diagnosis = json!({
-        "summary": "The cited read-only evidence confirms positive consumer lag.",
-        "assessment": "The consumer is not keeping pace with the bounded synthetic workload. No cluster mutation was requested.",
-        "confidence_percent": 91,
-        "cited_evidence_ids": [evidence_id],
-        "recommended_read_only_queries": [
-            "Re-check consumer lag and broker runtime through RocketMQ MCP."
-        ],
-        "rationale": "The conclusion is limited to the supplied canonical Evidence citation."
-    });
-    let content = serde_json::to_string(&diagnosis).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let response = if response_schema_name(request) == Some("rocketmq_sre_conversation_answer") {
+        json!({
+            "answer": "The cited read-only RocketMQ evidence supports this operational answer. No cluster mutation was requested or performed.",
+            "cited_evidence_ids": [evidence_id]
+        })
+    } else {
+        json!({
+            "summary": "The cited read-only evidence confirms positive consumer lag.",
+            "assessment": "The consumer is not keeping pace with the bounded synthetic workload. No cluster mutation was requested.",
+            "confidence_percent": 91,
+            "cited_evidence_ids": [evidence_id],
+            "recommended_read_only_queries": [
+                "Re-check consumer lag and broker runtime through RocketMQ MCP."
+            ],
+            "rationale": "The conclusion is limited to the supplied canonical Evidence citation."
+        })
+    };
+    let content = serde_json::to_string(&response).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     completion(request, Value::String(content), None, "stop")
+}
+
+fn response_schema_name(request: &ChatCompletionRequest) -> Option<&str> {
+    request
+        .response_format
+        .as_ref()?
+        .get("json_schema")?
+        .get("name")?
+        .as_str()
 }
 
 fn provider_connectivity_probe(request: &ChatCompletionRequest, prompt: &str) -> bool {
@@ -379,6 +395,41 @@ mod tests {
         assert_eq!(diagnosis["cited_evidence_ids"], json!([EVIDENCE_ID]));
         assert_eq!(diagnosis["recommended_read_only_queries"].as_array().unwrap().len(), 1);
         assert!(response.get("tools").is_none());
+    }
+
+    #[test]
+    fn fixture_returns_the_bounded_conversation_answer_schema() {
+        let request = ChatCompletionRequest {
+            model: "phase01-mock".to_owned(),
+            messages: vec![ChatMessage {
+                role: "user".to_owned(),
+                content: Value::String(
+                    json!({
+                        "schema_version": "rocketmq-sre.conversation-answer-input.v1",
+                        "evidence": [{"evidence_id": EVIDENCE_ID}]
+                    })
+                    .to_string(),
+                ),
+            }],
+            tools: None,
+            tool_choice: Some(Value::String("none".to_owned())),
+            response_format: Some(json!({
+                "type": "json_schema",
+                "json_schema": {"name": "rocketmq_sre_conversation_answer"}
+            })),
+        };
+
+        let response = build_completion(&request).expect("bounded conversation completion");
+        let answer: Value = serde_json::from_str(
+            response["choices"][0]["message"]["content"]
+                .as_str()
+                .expect("completion content"),
+        )
+        .expect("structured conversation answer");
+
+        assert!(answer["answer"].as_str().is_some_and(|value| !value.is_empty()));
+        assert_eq!(answer["cited_evidence_ids"], json!([EVIDENCE_ID]));
+        assert!(answer.get("summary").is_none());
     }
 
     #[test]
