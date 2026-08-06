@@ -167,9 +167,18 @@ def validate_manifest(manifest: dict[str, Any], sre_root: Path = SRE_ROOT) -> li
         "config/qualification/required-signals.v1.json",
         "Assert-RequiredSignalsQualification",
         "representative_requirement_id",
+        "/v1/conversations",
+        "/v1/evidence/",
+        "metrics/range/",
     ):
         if marker not in smoke:
             findings.append(f"live smoke is missing {marker}")
+    for forbidden in (
+        "127.0.0.1:8091/internal/v1/evidence/query",
+        "127.0.0.1:8091/internal/v1/capabilities",
+    ):
+        if forbidden in smoke:
+            findings.append("live smoke bypasses the authenticated reverse Connector channel")
     return findings
 
 
