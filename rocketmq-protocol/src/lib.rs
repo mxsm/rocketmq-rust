@@ -26,8 +26,16 @@ pub use code::request_code::RequestCode;
 pub use code::response_code::RemotingSysResponseCode;
 pub use protocol::command_custom_header::CommandCustomHeader;
 pub use protocol::command_custom_header::FromMap;
+pub use protocol::command_custom_header::HeaderMap;
 pub use protocol::encoded_frame::EncodedFrame;
 pub use protocol::remoting_command::RemotingCommand;
 pub use protocol::rocketmq_serializable;
 pub use rpc::rpc_request_header::RpcRequestHeader;
 pub use rpc::topic_request_header::TopicRequestHeader;
+
+/// Stable implementation details used by RocketMQ derive macros.
+#[doc(hidden)]
+pub mod __request_header_codec {
+    pub use cheetah_string::CheetahString;
+    pub use rocketmq_error::RocketMQError;
+}

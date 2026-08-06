@@ -1,0 +1,5 @@
+error: RequestHeaderCodecV2 requires a named struct
+ --> tests/ui/request_header_codec_v2/fail/tuple_struct.rs:5:19
+  |
+5 | struct TupleHeader(String);
+  |                   ^^^^^^^^

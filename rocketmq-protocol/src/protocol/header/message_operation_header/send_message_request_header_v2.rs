@@ -181,86 +181,134 @@ impl CommandCustomHeader for SendMessageRequestHeaderV2 {
     }
 
     fn decode_fast(&mut self, fields: &HashMap<CheetahString, CheetahString>) -> rocketmq_error::RocketMQResult<()> {
-        // Use static keys to avoid repeated allocations
-
-        self.a = self.get_and_check_not_none_ref(fields, &KEY_A)?.clone(); //producerGroup
-        self.b = self.get_and_check_not_none_ref(fields, &KEY_B)?.clone(); //topic
-        self.c = self.get_and_check_not_none_ref(fields, &KEY_C)?.clone(); //defaultTopic
-        self.d = self.get_and_check_not_none_ref(fields, &KEY_D)?.parse().map_err(|_| {
-            rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
-                format: "header",
-                message: "Parse field d error".to_string(),
-            })
-        })?; //defaultTopicQueueNums
-        self.e = self.get_and_check_not_none_ref(fields, &KEY_E)?.parse().map_err(|_| {
-            rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
-                format: "header",
-                message: "Parse field e error".to_string(),
-            })
-        })?; //queueId
-        self.f = self.get_and_check_not_none_ref(fields, &KEY_F)?.parse().map_err(|_| {
-            rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
-                format: "header",
-                message: "Parse field f error".to_string(),
-            })
-        })?; //sysFlag
-        self.g = self.get_and_check_not_none_ref(fields, &KEY_G)?.parse().map_err(|_| {
-            rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
-                format: "header",
-                message: "Parse field g error".to_string(),
-            })
-        })?; //bornTimestamp
-        self.h = self.get_and_check_not_none_ref(fields, &KEY_H)?.parse().map_err(|_| {
-            rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
-                format: "header",
-                message: "Parse field h error".to_string(),
-            })
-        })?; //flag
-
-        if let Some(v) = fields.get(&KEY_I) {
-            self.i = Some(v.clone());
+        #[derive(Default)]
+        struct BorrowedFields<'a> {
+            a: Option<&'a CheetahString>,
+            b: Option<&'a CheetahString>,
+            c: Option<&'a CheetahString>,
+            d: Option<&'a CheetahString>,
+            e: Option<&'a CheetahString>,
+            f: Option<&'a CheetahString>,
+            g: Option<&'a CheetahString>,
+            h: Option<&'a CheetahString>,
+            i: Option<&'a CheetahString>,
+            j: Option<&'a CheetahString>,
+            k: Option<&'a CheetahString>,
+            l: Option<&'a CheetahString>,
+            m: Option<&'a CheetahString>,
+            n: Option<&'a CheetahString>,
+            broker_name: Option<&'a CheetahString>,
+            broker_name_alias: Option<&'a CheetahString>,
+            namespace: Option<&'a CheetahString>,
+            namespace_alias: Option<&'a CheetahString>,
+            namespaced: Option<&'a CheetahString>,
+            namespaced_alias: Option<&'a CheetahString>,
+            oneway: Option<&'a CheetahString>,
+            oneway_alias: Option<&'a CheetahString>,
+            lo: Option<&'a CheetahString>,
         }
 
-        if let Some(v) = fields.get(&KEY_J) {
-            self.j = Some(v.parse().map_err(|_| {
+        #[inline(always)]
+        fn required<'a>(
+            value: Option<&'a CheetahString>,
+            field: &'static str,
+        ) -> rocketmq_error::RocketMQResult<&'a CheetahString> {
+            value.ok_or_else(|| {
                 rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
                     format: "header",
-                    message: "Parse field j error".to_string(),
+                    message: format!("The field {field} is required."),
                 })
-            })?);
+            })
         }
 
-        if let Some(v) = fields.get(&KEY_K) {
-            self.k = Some(v.parse().map_err(|_| {
+        #[inline(always)]
+        fn parse_required<T: FromStr>(
+            value: Option<&CheetahString>,
+            field: &'static str,
+        ) -> rocketmq_error::RocketMQResult<T> {
+            required(value, field)?.parse().map_err(|_| {
                 rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
                     format: "header",
-                    message: "Parse field k error".to_string(),
+                    message: format!("Parse field {field} error"),
                 })
-            })?);
+            })
         }
 
-        if let Some(v) = fields.get(&KEY_L) {
-            self.l = Some(v.parse().map_err(|_| {
-                rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
-                    format: "header",
-                    message: "Parse field l error".to_string(),
+        #[inline(always)]
+        fn parse_optional<T: FromStr>(
+            value: Option<&CheetahString>,
+            field: &'static str,
+        ) -> rocketmq_error::RocketMQResult<Option<T>> {
+            value
+                .map(|value| {
+                    value.parse().map_err(|_| {
+                        rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
+                            format: "header",
+                            message: format!("Parse field {field} error"),
+                        })
+                    })
                 })
-            })?);
+                .transpose()
         }
 
-        if let Some(v) = fields.get(&KEY_M) {
-            self.m = Some(v.parse().map_err(|_| {
-                rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
-                    format: "header",
-                    message: "Parse field m error".to_string(),
-                })
-            })?);
+        let mut slots = BorrowedFields::default();
+        for (key, value) in fields {
+            match key.as_str() {
+                FIELD_A => slots.a = Some(value),
+                FIELD_B => slots.b = Some(value),
+                FIELD_C => slots.c = Some(value),
+                FIELD_D => slots.d = Some(value),
+                FIELD_E => slots.e = Some(value),
+                FIELD_F => slots.f = Some(value),
+                FIELD_G => slots.g = Some(value),
+                FIELD_H => slots.h = Some(value),
+                FIELD_I => slots.i = Some(value),
+                FIELD_J => slots.j = Some(value),
+                FIELD_K => slots.k = Some(value),
+                FIELD_L => slots.l = Some(value),
+                FIELD_M => slots.m = Some(value),
+                FIELD_N => slots.n = Some(value),
+                FIELD_BROKER_NAME => slots.broker_name = Some(value),
+                "brokerName" => slots.broker_name_alias = Some(value),
+                FIELD_NAMESPACE => slots.namespace = Some(value),
+                "namespace" => slots.namespace_alias = Some(value),
+                FIELD_NAMESPACED => slots.namespaced = Some(value),
+                "namespaced" => slots.namespaced_alias = Some(value),
+                FIELD_ONEWAY => slots.oneway = Some(value),
+                "oneway" => slots.oneway_alias = Some(value),
+                FIELD_LO => slots.lo = Some(value),
+                _ => {}
+            }
         }
 
-        if let Some(v) = fields.get(&KEY_N) {
-            self.n = Some(v.clone());
-        }
-        self.topic_request_header = Some(<TopicRequestHeader as FromMap>::from(fields)?);
+        self.a = required(slots.a, FIELD_A)?.clone();
+        self.b = required(slots.b, FIELD_B)?.clone();
+        self.c = required(slots.c, FIELD_C)?.clone();
+        self.d = parse_required(slots.d, FIELD_D)?;
+        self.e = parse_required(slots.e, FIELD_E)?;
+        self.f = parse_required(slots.f, FIELD_F)?;
+        self.g = parse_required(slots.g, FIELD_G)?;
+        self.h = parse_required(slots.h, FIELD_H)?;
+        self.i = slots.i.cloned();
+        self.j = parse_optional(slots.j, FIELD_J)?;
+        self.k = parse_optional(slots.k, FIELD_K)?;
+        self.l = parse_optional(slots.l, FIELD_L)?;
+        self.m = parse_optional(slots.m, FIELD_M)?;
+        self.n = slots.n.cloned();
+
+        let namespace = slots.namespace.or(slots.namespace_alias).cloned();
+        let namespaced = parse_optional(slots.namespaced.or(slots.namespaced_alias), FIELD_NAMESPACED)?;
+        let broker_name = slots.broker_name.or(slots.broker_name_alias).cloned();
+        let oneway = parse_optional(slots.oneway.or(slots.oneway_alias), FIELD_ONEWAY)?;
+        self.topic_request_header = Some(TopicRequestHeader {
+            rpc_request_header: Some(RpcRequestHeader {
+                namespace,
+                namespaced,
+                broker_name,
+                oneway,
+            }),
+            lo: parse_optional(slots.lo, FIELD_LO)?,
+        });
         Ok(())
     }
 
@@ -538,6 +586,43 @@ mod tests {
         }
     }
 
+    fn required_fast_fields() -> HashMap<CheetahString, CheetahString> {
+        HashMap::from([
+            (
+                CheetahString::from_static_str(FIELD_A),
+                CheetahString::from_static_str("producer"),
+            ),
+            (
+                CheetahString::from_static_str(FIELD_B),
+                CheetahString::from_static_str("topic"),
+            ),
+            (
+                CheetahString::from_static_str(FIELD_C),
+                CheetahString::from_static_str("TBW102"),
+            ),
+            (
+                CheetahString::from_static_str(FIELD_D),
+                CheetahString::from_static_str("4"),
+            ),
+            (
+                CheetahString::from_static_str(FIELD_E),
+                CheetahString::from_static_str("0"),
+            ),
+            (
+                CheetahString::from_static_str(FIELD_F),
+                CheetahString::from_static_str("0"),
+            ),
+            (
+                CheetahString::from_static_str(FIELD_G),
+                CheetahString::from_static_str("1"),
+            ),
+            (
+                CheetahString::from_static_str(FIELD_H),
+                CheetahString::from_static_str("0"),
+            ),
+        ])
+    }
+
     #[test]
     fn send_message_request_header_v2_serializes_correctly() {
         let header = SendMessageRequestHeaderV2 {
@@ -805,6 +890,95 @@ mod tests {
         let result = header.decode_fast(&fields);
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn decode_fast_single_scan_preserves_alias_precedence_and_clears_absent_optionals() {
+        let mut fields = required_fast_fields();
+        fields.extend([
+            (
+                CheetahString::from_static_str(FIELD_I),
+                CheetahString::from_static_str("properties"),
+            ),
+            (
+                CheetahString::from_static_str(FIELD_J),
+                CheetahString::from_static_str("3"),
+            ),
+            (
+                CheetahString::from_static_str(FIELD_K),
+                CheetahString::from_static_str("true"),
+            ),
+            (
+                CheetahString::from_static_str(FIELD_L),
+                CheetahString::from_static_str("5"),
+            ),
+            (
+                CheetahString::from_static_str(FIELD_M),
+                CheetahString::from_static_str("false"),
+            ),
+            (
+                CheetahString::from_static_str(FIELD_N),
+                CheetahString::from_static_str("legacy-broker"),
+            ),
+            (
+                CheetahString::from_static_str(FIELD_NAMESPACE),
+                CheetahString::from_static_str("canonical-namespace"),
+            ),
+            (
+                CheetahString::from_static_str("namespace"),
+                CheetahString::from_static_str("alias-namespace"),
+            ),
+            (
+                CheetahString::from_static_str(FIELD_BROKER_NAME),
+                CheetahString::from_static_str("canonical-broker"),
+            ),
+            (
+                CheetahString::from_static_str("brokerName"),
+                CheetahString::from_static_str("alias-broker"),
+            ),
+            (
+                CheetahString::from_static_str(FIELD_NAMESPACED),
+                CheetahString::from_static_str("true"),
+            ),
+            (
+                CheetahString::from_static_str(FIELD_ONEWAY),
+                CheetahString::from_static_str("false"),
+            ),
+            (
+                CheetahString::from_static_str(FIELD_LO),
+                CheetahString::from_static_str("true"),
+            ),
+        ]);
+
+        let mut header = SendMessageRequestHeaderV2::default();
+        header.decode_fast(&fields).expect("dense fast fields");
+        let topic = header.topic_request_header.as_ref().expect("topic header");
+        let rpc = topic.rpc_request_header.as_ref().expect("rpc header");
+        assert_eq!(rpc.namespace.as_deref(), Some("canonical-namespace"));
+        assert_eq!(rpc.broker_name.as_deref(), Some("canonical-broker"));
+        assert_eq!(rpc.namespaced, Some(true));
+        assert_eq!(rpc.oneway, Some(false));
+        assert_eq!(topic.lo, Some(true));
+        assert_eq!(header.i.as_deref(), Some("properties"));
+
+        header
+            .decode_fast(&required_fast_fields())
+            .expect("required-only fast fields");
+        assert!(header.i.is_none());
+        assert!(header.j.is_none());
+        assert!(header.k.is_none());
+        assert!(header.l.is_none());
+        assert!(header.m.is_none());
+        assert!(header.n.is_none());
+        let rpc = header
+            .topic_request_header
+            .as_ref()
+            .and_then(|topic| topic.rpc_request_header.as_ref())
+            .expect("rpc header remains structurally present");
+        assert_eq!(rpc.namespace, None);
+        assert_eq!(rpc.broker_name, None);
+        assert_eq!(rpc.namespaced, None);
+        assert_eq!(rpc.oneway, None);
     }
 
     #[test]
