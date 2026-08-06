@@ -12,6 +12,7 @@ import {
   SearchCheck,
   Send,
   ShieldCheck,
+  Square,
 } from "lucide-react";
 import {
   type FormEvent,
@@ -24,6 +25,7 @@ import {
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import type {
+  ConversationTurnStatus,
   InspectionReport,
   InspectionTemplate,
   InvestigationStatus,
@@ -307,14 +309,72 @@ export function AskSrePage() {
 export function ConversationDetailPage() {
   const { conversationId = "" } = useParams();
   const { api } = useSreData();
-  const load = useCallback(
+  const loadConversation = useCallback(
     (signal: AbortSignal) => api.getConversation(conversationId, signal),
     [api, conversationId],
   );
-  const resource = useAsyncResource(load);
+  const loadTurns = useCallback(
+    (signal: AbortSignal) => api.listConversationTurns(conversationId, signal),
+    [api, conversationId],
+  );
+  const conversation = useAsyncResource(loadConversation);
+  const turns = useAsyncResource(loadTurns);
+  const [question, setQuestion] = useState("");
+  const [resourcePath, setResourcePath] = useState("");
+  const [windowSeconds, setWindowSeconds] = useState(900);
+  const [submitting, setSubmitting] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const [submitError, setSubmitError] = useState<string>();
+
+  useEffect(() => {
+    if (!conversation.data || question || resourcePath) {
+      return;
+    }
+    setQuestion(conversation.data.conversation.question);
+    setResourcePath(conversation.data.conversation.resource ?? "");
+  }, [conversation.data, question, resourcePath]);
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!question.trim() || submitting) {
+      return;
+    }
+    setSubmitting(true);
+    setSubmitError(undefined);
+    try {
+      await api.submitConversationTurn(
+        conversationId,
+        {
+          question: question.trim(),
+          resource: resourcePath.trim() || undefined,
+          window_seconds: windowSeconds,
+        },
+      );
+      setQuestion("");
+      turns.reload();
+    } catch {
+      setSubmitError(
+        "只读查询未完成。请检查 Connector、数据源范围和模型配置。",
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const cancel = async () => {
+    setCancelling(true);
+    setSubmitError(undefined);
+    try {
+      await api.cancelConversationQuery(conversationId);
+    } catch {
+      setSubmitError("无法确认取消状态；服务端查询仍受固定超时约束。");
+    } finally {
+      setCancelling(false);
+    }
+  };
 
   return (
-    <div className="page">
+    <div className="page conversation-page">
       <Button asChild className="back-link" variant="ghost">
         <Link to="/ask">
           <ArrowLeft size={15} />
@@ -323,47 +383,214 @@ export function ConversationDetailPage() {
       </Button>
       <PageHeader
         eyebrow="CONVERSATION"
-        title="SRE 会话"
-        description="问题、资源范围与后续调查使用同一 correlation timeline。"
+        title="对话式指标诊断"
+        description="自然语言只会映射到已注册的只读工具；回答必须引用真实 Evidence。"
+        actions={
+          <Badge variant="success">
+            <ShieldCheck size={13} />
+            read-only
+          </Badge>
+        }
       />
+      <ReadOnlyBoundary />
       <DataState
-        loading={resource.loading}
-        error={resource.error}
-        empty={!resource.loading && !resource.data}
-        onRetry={resource.reload}
+        loading={conversation.loading}
+        error={conversation.error}
+        empty={!conversation.loading && !conversation.data}
+        onRetry={conversation.reload}
       />
-      {resource.data && (
-        <div className="phase1-two-column">
+      {conversation.data && (
+        <div className="conversation-workspace">
+          <div className="conversation-main">
+            <DataSurface
+              title="询问当前集群"
+              description="支持集群概览、Topic、Consumer Lag、Broker runtime 和白名单指标。"
+              className="conversation-composer"
+              meta={
+                submitting ? (
+                  <Badge variant="info">
+                    <Activity size={13} />
+                    正在采集证据
+                  </Badge>
+                ) : (
+                  <span>数据源 15 秒超时 · 模型阶段可取消</span>
+                )
+              }
+            >
+              <form onSubmit={(event) => void submit(event)}>
+                <label className="form-field">
+                  <span>运维问题</span>
+                  <textarea
+                    disabled={submitting}
+                    maxLength={8192}
+                    onChange={(event) => setQuestion(event.target.value)}
+                    placeholder="例如：当前 rocketmq_broker_up 是否异常？"
+                    required
+                    rows={4}
+                    value={question}
+                  />
+                </label>
+                <div className="conversation-query-options">
+                  <label className="form-field">
+                    <span>资源范围（可选）</span>
+                    <input
+                      className="text-input"
+                      disabled={submitting}
+                      onChange={(event) => setResourcePath(event.target.value)}
+                      placeholder="consumer-groups/order-worker/lag/orders 或 metrics/instant/rocketmq_broker_up"
+                      value={resourcePath}
+                    />
+                  </label>
+                  <label className="form-field">
+                    <span>查询窗口</span>
+                    <select
+                      className="native-select"
+                      disabled={submitting}
+                      onChange={(event) => setWindowSeconds(Number(event.target.value))}
+                      value={windowSeconds}
+                    >
+                      <option value={300}>5 分钟</option>
+                      <option value={900}>15 分钟</option>
+                      <option value={1800}>30 分钟</option>
+                      <option value={3600}>1 小时</option>
+                    </select>
+                  </label>
+                </div>
+                {submitError && (
+                  <div className="inline-alert warning" role="alert">
+                    {submitError}
+                  </div>
+                )}
+                <div className="composer-footer">
+                  <span>{question.length}/8192 · 禁止任意 PromQL 和集群变更</span>
+                  <div className="conversation-actions">
+                    {submitting && (
+                      <Button
+                        disabled={cancelling}
+                        onClick={() => void cancel()}
+                        type="button"
+                        variant="outline"
+                      >
+                        <Square size={13} />
+                        {cancelling ? "正在取消…" : "取消查询"}
+                      </Button>
+                    )}
+                    <Button disabled={submitting || !question.trim()} type="submit">
+                      <Send size={15} />
+                      {submitting ? "正在查询…" : "运行只读查询"}
+                    </Button>
+                  </div>
+                </div>
+              </form>
+            </DataSurface>
+
+            <DataSurface
+              title="对话记录"
+              description="每个回答均保留查询意图、correlation ID、模型模式和 Evidence 引用。"
+              className="conversation-history"
+              meta={<span>{turns.data?.items.length ?? 0} 轮</span>}
+            >
+              <DataState
+                loading={turns.loading}
+                error={turns.error}
+                empty={!turns.loading && (turns.data?.items.length ?? 0) === 0}
+                onRetry={turns.reload}
+                emptyTitle="尚未运行只读查询"
+                emptyDescription="提交上方问题后，指标证据和 AI 回答会显示在这里。"
+              />
+              {turns.data && turns.data.items.length > 0 && (
+                <ol className="conversation-turn-list" aria-live="polite">
+                  {turns.data.items.map(({ turn, answer }) => (
+                    <li className="conversation-turn" key={turn.id}>
+                      <div className="conversation-question-row">
+                        <MessageSquareText size={16} />
+                        <div>
+                          <strong>{turn.question}</strong>
+                          <span>
+                            #{turn.sequence} · {formatTime(turn.created_at)} · {turn.correlation_id}
+                          </span>
+                        </div>
+                        <ConversationTurnBadge status={turn.status} />
+                      </div>
+                      {turn.query_intent && (
+                        <div className="conversation-intent">
+                          <code>{turn.query_intent.kind}</code>
+                          <span>{turn.query_intent.source}</span>
+                          <span>{turn.query_intent.resource}</span>
+                          <span>{turn.query_intent.window_seconds}s</span>
+                        </div>
+                      )}
+                      {answer && (
+                        <div className="conversation-answer">
+                          <div className="conversation-answer-heading">
+                            <Bot size={17} />
+                            <strong>AI SRE</strong>
+                            <Badge variant={answer.mode === "model_assisted" ? "info" : "outline"}>
+                              {answer.mode}
+                            </Badge>
+                            {answer.partial && <Badge variant="warning">partial</Badge>}
+                          </div>
+                          <p>{answer.answer}</p>
+                          {answer.citations.length > 0 && (
+                            <div className="conversation-citations">
+                              {answer.citations.map((citation) => (
+                                <article key={citation.evidence_id}>
+                                  <SearchCheck size={14} />
+                                  <div>
+                                    <strong>{citation.source}</strong>
+                                    <span>{citation.resource}</span>
+                                    <code>{citation.evidence_id}</code>
+                                    <code>{citation.content_hash}</code>
+                                  </div>
+                                  <small>
+                                    {formatTime(citation.observed_at)} · freshness {citation.freshness_seconds}s · {citation.partial ? "partial" : "complete"}
+                                  </small>
+                                </article>
+                              ))}
+                            </div>
+                          )}
+                          {answer.warnings.length > 0 && (
+                            <div className="conversation-warnings">
+                              {answer.warnings.join(" · ")}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </DataSurface>
+          </div>
+
+          <aside className="conversation-context">
           <DataSurface
-            title="问题"
-            description="原始问题仅用于只读诊断。"
+            title="会话范围"
+            description="创建时的集群和资源范围不可由模型扩大。"
           >
             <blockquote className="question-block">
               <MessageSquareText size={18} />
-              <p>{resource.data.conversation.question}</p>
+              <p>{conversation.data.conversation.question}</p>
             </blockquote>
             <DefinitionGrid
               items={[
                 {
                   label: "状态",
-                  value: resource.data.conversation.status,
+                  value: conversation.data.conversation.status,
                 },
                 {
                   label: "资源",
-                  value:
-                    resource.data.conversation.resource ?? "cluster",
+                  value: conversation.data.conversation.resource ?? "cluster",
                 },
                 {
                   label: "发起人",
                   value:
-                    resource.data.conversation.created_by.display_name ??
-                    resource.data.conversation.created_by.subject,
+                    conversation.data.conversation.created_by.display_name ??
+                    conversation.data.conversation.created_by.subject,
                 },
                 {
                   label: "创建时间",
-                  value: formatTime(
-                    resource.data.conversation.created_at,
-                  ),
+                  value: formatTime(conversation.data.conversation.created_at),
                 },
               ]}
             />
@@ -372,22 +599,22 @@ export function ConversationDetailPage() {
             title="持久调查"
             description="Evidence 缺失会进入 needs_evidence，不会由模型猜测。"
           >
-            {resource.data.investigation ? (
+            {conversation.data.investigation ? (
               <div className="linked-record">
                 <SearchCheck size={20} />
                 <div>
-                  <strong>{resource.data.investigation.title}</strong>
+                  <strong>{conversation.data.investigation.title}</strong>
                   <span>
                     {
                       investigationLabels[
-                        resource.data.investigation.status
+                        conversation.data.investigation.status
                       ]
                     }
                   </span>
                 </div>
                 <Button asChild variant="outline">
                   <Link
-                    to={`/investigations/${resource.data.investigation.id}`}
+                    to={`/investigations/${conversation.data.investigation.id}`}
                   >
                     查看调查
                   </Link>
@@ -397,10 +624,36 @@ export function ConversationDetailPage() {
               <div className="state-message">此会话未持久化为调查。</div>
             )}
           </DataSurface>
+          <DataSurface
+            title="安全边界"
+            description="Evidence 内容视为不可信输入。"
+          >
+            <ul className="conversation-safety-list">
+              <li><ShieldCheck size={14} />固定只读工具注册表</li>
+              <li><ShieldCheck size={14} />指标名称和时间窗口白名单</li>
+              <li><ShieldCheck size={14} />未知证据引用直接拒绝</li>
+              <li><ShieldCheck size={14} />不支持 Apply、Delete、Reset</li>
+            </ul>
+          </DataSurface>
+          </aside>
         </div>
       )}
     </div>
   );
+}
+
+function ConversationTurnBadge({ status }: { status: ConversationTurnStatus }) {
+  const variant =
+    status === "answered"
+      ? "success"
+      : status === "collecting"
+        ? "info"
+        : status === "needs_scope" || status === "needs_evidence"
+          ? "warning"
+          : status === "failed"
+            ? "destructive"
+            : "outline";
+  return <Badge variant={variant}>{status}</Badge>;
 }
 
 export function InvestigationDetailPage() {

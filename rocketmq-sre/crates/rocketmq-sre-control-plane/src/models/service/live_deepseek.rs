@@ -21,6 +21,7 @@ use std::time::Duration;
 use chrono::Utc;
 use rocketmq_runtime::RuntimeContext;
 use rocketmq_sre_contracts::ClusterId;
+use rocketmq_sre_contracts::ConversationId;
 use rocketmq_sre_contracts::CorrelationId;
 use rocketmq_sre_contracts::EvidenceContent;
 use rocketmq_sre_contracts::EvidenceQuery;
@@ -321,6 +322,7 @@ async fn deepseek_responses_produces_persisted_read_only_sre_diagnosis() {
             &ModelInvocationListQuery {
                 cluster_id,
                 incident_id: Some(incident_id),
+                conversation_id: None,
                 limit: Some(10),
             },
         )
@@ -390,6 +392,169 @@ async fn deepseek_responses_produces_persisted_read_only_sre_diagnosis() {
         "sensitive_payloads_recorded": false,
     });
     eprintln!("DEEPSEEK_DIAGNOSIS_QUALIFICATION_OK {report}");
+
+    drop(service);
+    drop(service_context);
+    let shutdown = runtime.shutdown_tasks(Duration::from_secs(5)).await;
+    assert!(shutdown.is_healthy(), "qualification runtime must shut down cleanly");
+}
+
+/// Focused qualification for the conversational operations path. This keeps
+/// the credential process-local and proves that the model may only select a
+/// registered read tool before producing an Evidence-bound answer.
+#[tokio::test]
+#[ignore = "requires an explicit DeepSeek credential and disposable PostgreSQL database"]
+async fn deepseek_answers_one_evidence_cited_conversational_metric_query() {
+    let database_url = std::env::var(LIVE_DATABASE_URL_ENV).expect("live test database URL must be explicit");
+    assert!(
+        std::env::var(LIVE_API_KEY_ENV).is_ok_and(|value| !value.trim().is_empty()),
+        "live DeepSeek credential must be injected explicitly"
+    );
+
+    let repository = PostgresRepository::connect(&database_url, 2)
+        .await
+        .expect("disposable database and migrations");
+    let tenant_id = TenantId::new();
+    let cluster_id = ClusterId::new();
+    let conversation_id = ConversationId::new();
+    seed_conversation_scope(&repository, tenant_id, cluster_id, conversation_id).await;
+
+    let credential_ref = Some(
+        SecretReference::parse(&format!("env://{LIVE_API_KEY_ENV}"))
+            .expect("qualification environment secret reference"),
+    );
+    let mut answer_profile = rocketmq_sre_model_gateway::builtin_provider_profiles()
+        .into_iter()
+        .find(|profile| profile.id == "deepseek-responses")
+        .expect("DeepSeek Responses profile fixture");
+    answer_profile.credential_ref = credential_ref.clone();
+    answer_profile
+        .capabilities
+        .supported
+        .remove(&rocketmq_sre_model_gateway::ProviderCapability::ToolCalling);
+    answer_profile.validate().expect("DeepSeek answer profile");
+    let mut tool_profile = rocketmq_sre_model_gateway::builtin_provider_profiles()
+        .into_iter()
+        .find(|profile| profile.id == "deepseek")
+        .expect("DeepSeek tool profile fixture");
+    tool_profile.model = "deepseek-v4-flash".to_owned();
+    tool_profile.credential_ref = credential_ref;
+    tool_profile
+        .capabilities
+        .supported
+        .remove(&rocketmq_sre_model_gateway::ProviderCapability::JsonSchema);
+    tool_profile.validate().expect("DeepSeek tool profile");
+
+    let transport = Arc::new(InspectingTransport::new(
+        HttpModelTransport::new(
+            HttpTransportConfig::default()
+                .with_timeouts(Duration::from_secs(5), Duration::from_secs(45))
+                .with_body_limits(256 * 1024, 256 * 1024),
+        )
+        .expect("DeepSeek HTTPS transport"),
+    ));
+    let profiles = vec![answer_profile, tool_profile];
+    let mut service = ModelGatewayService::for_tests(repository.clone(), profiles.clone(), transport.clone());
+    service.config = Arc::new(ModelRuntimeConfig {
+        enabled: true,
+        profiles: profiles.clone(),
+        max_fallbacks: 0,
+        request_timeout: Duration::from_secs(45),
+        max_request_bytes: 256 * 1024,
+        max_response_bytes: 256 * 1024,
+        allow_insecure_non_loopback_http: false,
+        secret_provider: ModelSecretProviderConfig::Development {
+            env_prefix: "ROCKETMQ_SRE_LIVE_DEEPSEEK_".to_owned(),
+            file_root: None,
+        },
+    });
+    service.secret_provider = Arc::new(DevSecretProvider::new(true, "ROCKETMQ_SRE_LIVE_DEEPSEEK_", None));
+    let runtime = RuntimeContext::from_current("sre-live-deepseek-conversation-qualification");
+    let service_context = runtime.service_context("model-secret-resolution");
+    service.metadata_io = Some(service_context.metadata_io().clone());
+
+    let auth = AuthContext {
+        tenant_id,
+        subject: "deepseek-conversation-qualification".to_owned(),
+        clusters: BTreeSet::from([cluster_id]),
+        roles: BTreeSet::from(["model-governance".to_owned()]),
+    };
+    for profile in &profiles {
+        service
+            .certify_profile_for_tests(&auth, &profile.id, CorrelationId::new())
+            .await
+            .expect("fixture-backed operator certification");
+    }
+
+    let correlation_id = CorrelationId::new();
+    let tool = ModelTool::read_only(
+        "query_consumer_lag",
+        "Read the current lag for one authorized consumer group.",
+        json!({
+            "type": "object",
+            "properties": {"consumer_group": {"type": "string"}},
+            "required": ["consumer_group"],
+            "additionalProperties": false
+        }),
+    );
+    let selection = service
+        .select_conversation_tool(
+            &auth,
+            conversation_id,
+            None,
+            cluster_id,
+            "What is the current consumer lag for qualification-group?",
+            &[tool],
+            correlation_id,
+        )
+        .await
+        .expect("real DeepSeek conversational tool selection")
+        .expect("registered read-only tool selection");
+    assert_eq!(selection.tool_call.name, "query_consumer_lag");
+    assert_eq!(selection.tool_call.arguments["consumer_group"], "qualification-group");
+
+    let evidence = synthetic_lag_evidence(tenant_id, cluster_id, correlation_id);
+    let evidence_id = evidence.evidence_id;
+    let answer = service
+        .answer_conversation(
+            &auth,
+            conversation_id,
+            None,
+            cluster_id,
+            "What is the current consumer lag for qualification-group?",
+            "Consumer lag is 42 messages and increasing.",
+            &[evidence],
+            correlation_id,
+        )
+        .await
+        .expect("real DeepSeek conversational answer")
+        .expect("model-assisted Evidence-cited answer");
+    assert_eq!(answer.cited_evidence_ids, vec![evidence_id]);
+    assert!(!answer.answer.trim().is_empty());
+    assert_eq!(transport.calls(), 2);
+    assert_eq!(transport.read_only_tool_requests(), 1);
+
+    let purposes = sqlx::query_scalar::<_, String>(
+        "SELECT purpose FROM model_invocations
+         WHERE tenant_id = $1 AND cluster_id = $2 AND conversation_id = $3
+         ORDER BY started_at",
+    )
+    .bind(tenant_id.as_uuid())
+    .bind(cluster_id.as_uuid())
+    .bind(conversation_id.as_uuid())
+    .fetch_all(&repository.pool)
+    .await
+    .expect("conversation model provenance");
+    assert_eq!(
+        purposes,
+        vec![
+            "conversation_tool_selection".to_owned(),
+            "conversation_answer".to_owned(),
+        ]
+    );
+    eprintln!(
+        "DEEPSEEK_CONVERSATION_QUALIFICATION_OK model=deepseek-v4-flash tool_calls=1 evidence_citations=1 mutation_calls=0"
+    );
 
     drop(service);
     drop(service_context);
@@ -549,6 +714,46 @@ async fn seed_diagnosis_scope(
     .execute(&repository.pool)
     .await
     .expect("qualification incident");
+}
+
+async fn seed_conversation_scope(
+    repository: &PostgresRepository,
+    tenant_id: TenantId,
+    cluster_id: ClusterId,
+    conversation_id: ConversationId,
+) {
+    sqlx::query(
+        "INSERT INTO clusters (
+            id, tenant_id, external_cluster_key, environment, region,
+            rocketmq_version, deployment_mode, owner_name,
+            requested_access_profile, effective_access_profile, onboarding_state
+         ) VALUES (
+            $1, $2, $3, 'qualification', 'local', '5.3.0', 'test',
+            'deepseek-conversation-qualification', 'read_only', 'read_only', 'ready_read_only'
+         )",
+    )
+    .bind(cluster_id.as_uuid())
+    .bind(tenant_id.to_string())
+    .bind(format!("deepseek-conversation-{cluster_id}"))
+    .execute(&repository.pool)
+    .await
+    .expect("qualification cluster");
+    sqlx::query(
+        "INSERT INTO conversations (
+            id, tenant_id, cluster_id, question, resource, status,
+            created_by_subject, created_at, updated_at
+         ) VALUES (
+            $1, $2, $3, 'What is the current consumer lag?',
+            'consumer-groups/qualification-group/lag/sre-qualification',
+            'active', 'deepseek-conversation-qualification', NOW(), NOW()
+         )",
+    )
+    .bind(conversation_id.as_uuid())
+    .bind(tenant_id.as_uuid())
+    .bind(cluster_id.as_uuid())
+    .execute(&repository.pool)
+    .await
+    .expect("qualification conversation");
 }
 
 fn synthetic_lag_evidence(

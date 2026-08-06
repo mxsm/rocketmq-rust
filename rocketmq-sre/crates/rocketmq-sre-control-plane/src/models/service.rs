@@ -109,6 +109,7 @@ const MAX_REPAIR_OUTPUT_CHARS: usize = 16 * 1_024;
 const PRIMARY_DIAGNOSIS_PURPOSE: &str = "primary_diagnosis";
 const SCHEMA_REPAIR_PURPOSE: &str = "schema_repair";
 
+mod conversation;
 mod critic;
 mod lifecycle;
 #[cfg(test)]
@@ -859,7 +860,9 @@ impl ModelGatewayService {
                     id: invocation_id,
                     tenant_id: auth.tenant_id,
                     cluster_id,
-                    incident_id,
+                    incident_id: Some(incident_id),
+                    conversation_id: None,
+                    investigation_id: None,
                     diagnosis_revision_id: None,
                     parent_invocation_id,
                     purpose,
@@ -1034,7 +1037,9 @@ impl ModelGatewayService {
                 id: invocation_id,
                 tenant_id: auth.tenant_id,
                 cluster_id,
-                incident_id,
+                incident_id: Some(incident_id),
+                conversation_id: None,
+                investigation_id: None,
                 diagnosis_revision_id: None,
                 parent_invocation_id,
                 purpose,
@@ -1168,7 +1173,9 @@ impl ModelGatewayService {
                 id: ModelInvocationId::new(),
                 tenant_id: auth.tenant_id,
                 cluster_id,
-                incident_id,
+                incident_id: Some(incident_id),
+                conversation_id: None,
+                investigation_id: None,
                 diagnosis_revision_id: None,
                 parent_invocation_id,
                 purpose,

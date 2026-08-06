@@ -21,7 +21,9 @@ use serde_json::Value;
 
 use crate::AssetSnapshotId;
 use crate::ClusterId;
+use crate::ConversationAnswerRevisionId;
 use crate::ConversationId;
+use crate::ConversationTurnId;
 use crate::CorrelationId;
 use crate::DiagnosisRevisionId;
 use crate::EvidenceId;
@@ -66,6 +68,95 @@ pub struct Conversation {
     pub created_by: WorkflowActor,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+/// Lifecycle of one bounded conversational read operation.
+#[derive(Clone, Copy, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationTurnStatus {
+    Collecting,
+    Answered,
+    NeedsScope,
+    NeedsEvidence,
+    Cancelled,
+    Failed,
+}
+
+/// Closed set of read-only query intents available to a conversation.
+#[derive(Clone, Copy, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationQueryKind {
+    ClusterOverview,
+    TopicList,
+    TopicDescribe,
+    ConsumerLag,
+    BrokerRuntime,
+    MetricInstant,
+    MetricRange,
+}
+
+/// Server-validated query selected for one conversation turn.
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+pub struct ConversationQueryIntent {
+    pub schema_version: String,
+    pub kind: ConversationQueryKind,
+    pub source: String,
+    pub resource: String,
+    pub window_seconds: u32,
+}
+
+/// Evidence projection exposed alongside a factual answer.
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+pub struct ConversationCitation {
+    pub evidence_id: EvidenceId,
+    pub source: String,
+    pub resource: String,
+    pub content_hash: String,
+    pub observed_at: DateTime<Utc>,
+    pub freshness_seconds: u64,
+    pub partial: bool,
+}
+
+/// One immutable operator question within a conversation.
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+pub struct ConversationTurn {
+    pub id: ConversationTurnId,
+    pub conversation_id: ConversationId,
+    pub tenant_id: TenantId,
+    pub cluster_id: ClusterId,
+    pub sequence: u32,
+    pub question: String,
+    pub resource: Option<String>,
+    pub status: ConversationTurnStatus,
+    pub query_intent: Option<ConversationQueryIntent>,
+    pub correlation_id: CorrelationId,
+    pub created_at: DateTime<Utc>,
+    pub completed_at: Option<DateTime<Utc>>,
+}
+
+/// Whether a persisted answer used a model or deterministic rules only.
+#[derive(Clone, Copy, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationAnswerMode {
+    ModelAssisted,
+    RulesOnly,
+}
+
+/// Immutable, evidence-cited answer for one conversation turn.
+#[derive(Clone, Debug, JsonSchema, PartialEq, Serialize, Deserialize)]
+pub struct ConversationAnswerRevision {
+    pub id: ConversationAnswerRevisionId,
+    pub conversation_id: ConversationId,
+    pub turn_id: ConversationTurnId,
+    pub revision: u32,
+    pub answer: String,
+    pub mode: ConversationAnswerMode,
+    pub citations: Vec<ConversationCitation>,
+    pub evidence_ids: Vec<EvidenceId>,
+    pub model_invocation_id: Option<ModelInvocationId>,
+    pub partial: bool,
+    pub warnings: Vec<String>,
+    pub created_at: DateTime<Utc>,
 }
 
 /// Multi-step read-only investigation lifecycle.
@@ -329,6 +420,8 @@ pub enum ModelInvocationPurpose {
     Planner,
     Summary,
     Eval,
+    ConversationToolSelection,
+    ConversationAnswer,
 }
 
 /// Persisted model identity, usage and fallback record. Hidden reasoning and
@@ -339,6 +432,8 @@ pub struct ModelInvocationRecord {
     pub tenant_id: TenantId,
     pub cluster_id: ClusterId,
     pub incident_id: Option<IncidentId>,
+    pub conversation_id: Option<ConversationId>,
+    pub investigation_id: Option<InvestigationId>,
     pub diagnosis_revision_id: Option<DiagnosisRevisionId>,
     pub parent_invocation_id: Option<ModelInvocationId>,
     pub purpose: ModelInvocationPurpose,

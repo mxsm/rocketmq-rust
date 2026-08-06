@@ -20,6 +20,42 @@ describe("stateLabel", () => {
     expect(stateLabel("offboarded")).toBe("已下线");
   });
 
+  it("uses bounded conversational metric query routes", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () =>
+        new Response(JSON.stringify({}), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        }),
+      );
+    const api = createHttpSreApi({
+      token: "bounded-test-token",
+      tenantId: "tenant-1",
+      clusterIds: ["cluster-1"],
+      subject: "test-operator",
+      roles: ["rocketmq:read"],
+    });
+
+    await api.listConversationTurns("conversation/id");
+    await api.submitConversationTurn("conversation/id", {
+      question: "Show current rocketmq_broker_up",
+      resource: "metrics/instant/rocketmq_broker_up",
+      window_seconds: 300,
+    });
+    await api.cancelConversationQuery("conversation/id");
+
+    expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([
+      "/v1/conversations/conversation%2Fid/turns",
+      "/v1/conversations/conversation%2Fid/turns",
+      "/v1/conversations/conversation%2Fid/cancel",
+    ]);
+    expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("GET");
+    expect(fetchMock.mock.calls[1]?.[1]?.method).toBe("POST");
+    expect(fetchMock.mock.calls[2]?.[1]?.method).toBe("POST");
+    expect(fetchMock.mock.calls[2]?.[1]?.body).toBeUndefined();
+  });
+
   it("uses the versioned workflow, evidence and Phase 2 contract routes", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")

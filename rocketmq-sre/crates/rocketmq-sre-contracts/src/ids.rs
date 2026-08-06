@@ -145,6 +145,14 @@ uuid_id!(
     "Stable identifier for a showback or confirmed chargeback allocation policy."
 );
 uuid_id!(ConversationId, "Stable identifier for an operator conversation.");
+uuid_id!(
+    ConversationTurnId,
+    "Stable identifier for an operator conversation turn."
+);
+uuid_id!(
+    ConversationAnswerRevisionId,
+    "Stable identifier for an immutable conversation answer revision."
+);
 uuid_id!(InvestigationId, "Stable identifier for a multi-step investigation.");
 uuid_id!(TimelineEventId, "Stable identifier for a workflow timeline event.");
 uuid_id!(

@@ -13296,6 +13296,311 @@
           }
         }
       }
+    },
+    "/v1/conversations/{id}/turns": {
+      "get": {
+        "operationId": "listConversationTurns",
+        "summary": "List bounded evidence-cited conversation turns",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationTurnPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Conversations"
+        ],
+        "security": [
+          {
+            "oidc": [
+              "rocketmq:diagnose"
+            ]
+          }
+        ]
+      },
+      "post": {
+        "operationId": "submitConversationTurn",
+        "summary": "Run one bounded read-only conversational metric query",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConversationTurnRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationTurnView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Conversations"
+        ],
+        "security": [
+          {
+            "oidc": [
+              "rocketmq:diagnose"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/conversations/{id}/cancel": {
+      "post": {
+        "operationId": "cancelConversationQuery",
+        "summary": "Request cancellation of an in-flight read-only query",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationCancelResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Conversations"
+        ],
+        "security": [
+          {
+            "oidc": [
+              "rocketmq:diagnose"
+            ]
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -29428,6 +29733,381 @@
             "pattern": "^sha256:[0-9A-Fa-f]{64}$"
           }
         }
+      },
+      "ConversationQueryIntent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "kind",
+          "source",
+          "resource",
+          "window_seconds"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "rocketmq-sre.conversation-query-intent.v1"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "cluster_overview",
+              "topic_list",
+              "topic_describe",
+              "consumer_lag",
+              "broker_runtime",
+              "metric_instant",
+              "metric_range"
+            ]
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "rocketmq-mcp",
+              "prometheus"
+            ]
+          },
+          "resource": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "window_seconds": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 60,
+            "maximum": 86400
+          }
+        }
+      },
+      "ConversationCitation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "evidence_id",
+          "source",
+          "resource",
+          "content_hash",
+          "observed_at",
+          "freshness_seconds",
+          "partial"
+        ],
+        "properties": {
+          "evidence_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "source": {
+            "type": "string",
+            "minLength": 1
+          },
+          "resource": {
+            "type": "string",
+            "minLength": 1
+          },
+          "content_hash": {
+            "type": "string",
+            "pattern": "^sha256:[0-9A-Fa-f]{64}$"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "freshness_seconds": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "partial": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ConversationTurn": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "conversation_id",
+          "tenant_id",
+          "cluster_id",
+          "sequence",
+          "question",
+          "resource",
+          "status",
+          "query_intent",
+          "correlation_id",
+          "created_at",
+          "completed_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "conversation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sequence": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 1
+          },
+          "question": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          },
+          "resource": {
+            "oneOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "collecting",
+              "answered",
+              "needs_scope",
+              "needs_evidence",
+              "cancelled",
+              "failed"
+            ]
+          },
+          "query_intent": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ConversationQueryIntent"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "correlation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "completed_at": {
+            "oneOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "ConversationAnswerRevision": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "conversation_id",
+          "turn_id",
+          "revision",
+          "answer",
+          "mode",
+          "citations",
+          "evidence_ids",
+          "model_invocation_id",
+          "partial",
+          "warnings",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "conversation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "turn_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "revision": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 1
+          },
+          "answer": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 12000
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "model_assisted",
+              "rules_only"
+            ]
+          },
+          "citations": {
+            "type": "array",
+            "maxItems": 32,
+            "items": {
+              "$ref": "#/components/schemas/ConversationCitation"
+            }
+          },
+          "evidence_ids": {
+            "type": "array",
+            "maxItems": 32,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "model_invocation_id": {
+            "oneOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "warnings": {
+            "type": "array",
+            "maxItems": 16,
+            "items": {
+              "type": "string",
+              "maxLength": 128
+            }
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ConversationTurnView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "turn",
+          "answer"
+        ],
+        "properties": {
+          "turn": {
+            "$ref": "#/components/schemas/ConversationTurn"
+          },
+          "answer": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ConversationAnswerRevision"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "ConversationTurnPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "items",
+          "observed_at"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "rocketmq-sre.conversation-turn-page.v1"
+          },
+          "items": {
+            "type": "array",
+            "maxItems": 200,
+            "items": {
+              "$ref": "#/components/schemas/ConversationTurnView"
+            }
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ConversationTurnRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "question"
+        ],
+        "properties": {
+          "question": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          },
+          "resource": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "window_seconds": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 60,
+            "maximum": 86400
+          }
+        }
+      },
+      "ConversationCancelResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "cancellation_requested",
+          "observed_at"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "rocketmq-sre.conversation-cancel.v1"
+          },
+          "cancellation_requested": {
+            "type": "boolean"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
       }
     }
   },
@@ -29506,6 +30186,10 @@
     {
       "name": "FinOps",
       "description": "Append-only cost ledger, budgets, forecasts, coverage, and showback or explicitly confirmed chargeback."
+    },
+    {
+      "name": "Conversations",
+      "description": "Evidence-cited natural-language queries over a fixed read-only RocketMQ and metric registry."
     }
   ],
   "x-rocketmq-bounded-r1-autonomy-supported": true,

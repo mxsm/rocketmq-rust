@@ -13,9 +13,11 @@
 // limitations under the License.
 
 use chrono::Utc;
+use rocketmq_sre_contracts::ConversationId;
 use rocketmq_sre_contracts::CorrelationId;
 use rocketmq_sre_contracts::DiagnosisRevisionId;
 use rocketmq_sre_contracts::IncidentId;
+use rocketmq_sre_contracts::InvestigationId;
 use rocketmq_sre_contracts::ModelInvocationId;
 use rocketmq_sre_contracts::ModelInvocationPurpose;
 use rocketmq_sre_contracts::ModelInvocationRecord;
@@ -215,8 +217,8 @@ impl PostgresRepository {
             .collect::<Vec<_>>();
         sqlx::query(
             "INSERT INTO model_invocations (
-                id, tenant_id, cluster_id, incident_id, diagnosis_revision_id,
-                parent_invocation_id, purpose, requested_profile_id,
+                id, tenant_id, cluster_id, incident_id, conversation_id,
+                investigation_id, diagnosis_revision_id, parent_invocation_id, purpose, requested_profile_id,
                 actual_profile_id, provider_family, model_family, actual_model,
                 model_revision, endpoint_instance, fallback_chain,
                 prompt_version, schema_version, input_tokens, output_tokens,
@@ -225,13 +227,15 @@ impl PostgresRepository {
              ) VALUES (
                 $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
                 $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24,
-                $25
+                $25, $26, $27
              )",
         )
         .bind(invocation.id.as_uuid())
         .bind(invocation.tenant_id.as_uuid())
         .bind(invocation.cluster_id.as_uuid())
-        .bind(invocation.incident_id.as_uuid())
+        .bind(invocation.incident_id.map(IncidentId::as_uuid))
+        .bind(invocation.conversation_id.map(ConversationId::as_uuid))
+        .bind(invocation.investigation_id.map(InvestigationId::as_uuid))
         .bind(invocation.diagnosis_revision_id.map(DiagnosisRevisionId::as_uuid))
         .bind(invocation.parent_invocation_id.map(ModelInvocationId::as_uuid))
         .bind(invocation.purpose)
@@ -346,7 +350,8 @@ impl PostgresRepository {
         }
         let limit = query.bounded_limit();
         let rows = sqlx::query(
-            "SELECT id, tenant_id, cluster_id, incident_id, diagnosis_revision_id,
+            "SELECT id, tenant_id, cluster_id, incident_id, conversation_id,
+                    investigation_id, diagnosis_revision_id,
                     parent_invocation_id, purpose, requested_profile_id, actual_profile_id,
                     provider_family, model_family, actual_model, model_revision,
                     endpoint_instance, fallback_chain, prompt_version,
@@ -355,12 +360,14 @@ impl PostgresRepository {
              FROM model_invocations
              WHERE tenant_id = $1 AND cluster_id = $2
                AND ($3::UUID IS NULL OR incident_id = $3)
+               AND ($4::UUID IS NULL OR conversation_id = $4)
              ORDER BY started_at DESC, id DESC
-             LIMIT $4",
+             LIMIT $5",
         )
         .bind(auth.tenant_id.as_uuid())
         .bind(query.cluster_id.as_uuid())
         .bind(query.incident_id.map(IncidentId::as_uuid))
+        .bind(query.conversation_id.map(ConversationId::as_uuid))
         .bind(i64::from(limit) + 1)
         .fetch_all(&self.pool)
         .await?;
@@ -385,6 +392,7 @@ impl PostgresRepository {
     ) -> Result<ModelInvocationRecord, ControlPlaneError> {
         let row = sqlx::query(
             "SELECT m.id, m.tenant_id, m.cluster_id, m.incident_id,
+                    m.conversation_id, m.investigation_id,
                     m.diagnosis_revision_id, m.parent_invocation_id,
                     m.requested_profile_id, m.actual_profile_id,
                     m.provider_family, m.model_family, m.model_revision,
@@ -532,6 +540,12 @@ fn model_invocation_from_row(row: &PgRow) -> Result<ModelInvocationView, Control
         incident_id: row
             .try_get::<Option<Uuid>, _>("incident_id")?
             .map(IncidentId::from_uuid),
+        conversation_id: row
+            .try_get::<Option<Uuid>, _>("conversation_id")?
+            .map(ConversationId::from_uuid),
+        investigation_id: row
+            .try_get::<Option<Uuid>, _>("investigation_id")?
+            .map(InvestigationId::from_uuid),
         diagnosis_revision_id: row
             .try_get::<Option<Uuid>, _>("diagnosis_revision_id")?
             .map(DiagnosisRevisionId::from_uuid),
@@ -582,6 +596,12 @@ fn contract_model_invocation_from_row(row: &PgRow) -> Result<ModelInvocationReco
         incident_id: row
             .try_get::<Option<Uuid>, _>("incident_id")?
             .map(IncidentId::from_uuid),
+        conversation_id: row
+            .try_get::<Option<Uuid>, _>("conversation_id")?
+            .map(ConversationId::from_uuid),
+        investigation_id: row
+            .try_get::<Option<Uuid>, _>("investigation_id")?
+            .map(InvestigationId::from_uuid),
         diagnosis_revision_id: row
             .try_get::<Option<Uuid>, _>("diagnosis_revision_id")?
             .map(DiagnosisRevisionId::from_uuid),
@@ -697,7 +717,9 @@ mod tests {
                 id: invocation_id,
                 tenant_id,
                 cluster_id,
-                incident_id,
+                incident_id: Some(incident_id),
+                conversation_id: None,
+                investigation_id: None,
                 diagnosis_revision_id: None,
                 parent_invocation_id: None,
                 purpose: "primary_diagnosis",
@@ -749,6 +771,7 @@ mod tests {
                 &ModelInvocationListQuery {
                     cluster_id,
                     incident_id: Some(incident_id),
+                    conversation_id: None,
                     limit: Some(10),
                 },
             )
@@ -792,7 +815,9 @@ mod tests {
                 id: failed_invocation_id,
                 tenant_id,
                 cluster_id,
-                incident_id: failed_incident_id,
+                incident_id: Some(failed_incident_id),
+                conversation_id: None,
+                investigation_id: None,
                 diagnosis_revision_id: None,
                 parent_invocation_id: None,
                 purpose: "primary_diagnosis",
@@ -823,7 +848,9 @@ mod tests {
                 id: repair_invocation_id,
                 tenant_id,
                 cluster_id,
-                incident_id: failed_incident_id,
+                incident_id: Some(failed_incident_id),
+                conversation_id: None,
+                investigation_id: None,
                 diagnosis_revision_id: None,
                 parent_invocation_id: Some(failed_invocation_id),
                 purpose: "schema_repair",
@@ -869,6 +896,7 @@ mod tests {
                 &ModelInvocationListQuery {
                     cluster_id,
                     incident_id: Some(failed_incident_id),
+                    conversation_id: None,
                     limit: Some(10),
                 },
             )

@@ -74,6 +74,30 @@ describe("mock SRE API", () => {
     expect(content).toMatchObject({ lag: 1284 });
   });
 
+  it("supports evidence-cited conversational metric queries without mutation", async () => {
+    const api = createMockSreApi(auth);
+    const conversation = (await api.listConversations(DEMO_CLUSTER_ID)).items[0];
+    expect(conversation).toBeDefined();
+
+    const result = await api.submitConversationTurn(
+      conversation!.conversation.id,
+      {
+        question: "当前 rocketmq_broker_up 是否异常？",
+        resource: "metrics/instant/rocketmq_broker_up",
+        window_seconds: 300,
+      },
+    );
+    const page = await api.listConversationTurns(conversation!.conversation.id);
+
+    expect(result.turn.query_intent).toMatchObject({
+      source: "prometheus",
+      resource: "instant/rocketmq_broker_up",
+    });
+    expect(result.answer?.citations).toHaveLength(1);
+    expect(page.items).toEqual([result]);
+    expect(JSON.stringify(result)).not.toContain("apply");
+  });
+
   it("keeps deterministic cluster and fleet health read-only and explainable", async () => {
     const api = createMockSreApi(auth);
 

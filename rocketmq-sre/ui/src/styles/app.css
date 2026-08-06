@@ -3251,6 +3251,234 @@ td small {
   white-space: pre-wrap;
 }
 
+.conversation-page {
+  max-width: none;
+}
+
+.conversation-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1.7fr) minmax(300px, 0.72fr);
+  align-items: start;
+  gap: 14px;
+}
+
+.conversation-main,
+.conversation-context {
+  display: grid;
+  min-width: 0;
+  gap: 14px;
+}
+
+.conversation-composer form {
+  display: grid;
+  gap: 14px;
+  padding: 17px;
+}
+
+.conversation-composer textarea {
+  width: 100%;
+  min-height: 112px;
+  padding: 11px;
+  color: var(--foreground);
+  border: 1px solid var(--input);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--background);
+  outline: none;
+  resize: vertical;
+}
+
+.conversation-composer textarea:focus {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 1px var(--ring);
+}
+
+.conversation-composer textarea::placeholder {
+  color: #666666;
+}
+
+.conversation-query-options {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 148px;
+  gap: 12px;
+}
+
+.conversation-query-options .native-select {
+  width: 100%;
+}
+
+.conversation-actions,
+.conversation-answer-heading,
+.conversation-intent {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.conversation-turn-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.conversation-turn {
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.conversation-turn:last-child {
+  border-bottom: 0;
+}
+
+.conversation-question-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+}
+
+.conversation-question-row > svg {
+  margin-top: 2px;
+  color: var(--muted-foreground);
+}
+
+.conversation-question-row > div {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.conversation-question-row strong {
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.conversation-question-row span {
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-intent {
+  flex-wrap: wrap;
+  padding: 9px 11px;
+  color: var(--muted-foreground);
+  border: 1px solid var(--border-subtle);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--muted);
+  font-size: 9px;
+}
+
+.conversation-intent code {
+  color: var(--primary);
+}
+
+.conversation-answer {
+  display: grid;
+  gap: 12px;
+  margin-left: 26px;
+  padding: 15px;
+  border: 1px solid color-mix(in srgb, var(--info) 25%, var(--border));
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--info) 4%, var(--card));
+}
+
+.conversation-answer-heading > svg {
+  color: var(--info);
+}
+
+.conversation-answer-heading strong {
+  margin-right: auto;
+  font-size: 11px;
+}
+
+.conversation-answer > p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+
+.conversation-citations {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.conversation-citations article {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--background);
+}
+
+.conversation-citations article > svg {
+  color: var(--success);
+}
+
+.conversation-citations article > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.conversation-citations strong,
+.conversation-citations span,
+.conversation-citations code,
+.conversation-citations small {
+  overflow: hidden;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-citations span,
+.conversation-citations code,
+.conversation-citations small,
+.conversation-warnings {
+  color: var(--muted-foreground);
+}
+
+.conversation-warnings {
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+  font-size: 9px;
+}
+
+.conversation-safety-list {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.conversation-safety-list li {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 11px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 10px;
+}
+
+.conversation-safety-list li:last-child {
+  border-bottom: 0;
+}
+
+.conversation-safety-list svg {
+  color: var(--success);
+}
+
 .linked-record {
   display: grid;
   grid-template-columns: auto 1fr auto;

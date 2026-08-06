@@ -21,7 +21,7 @@ mutation surfaces.
 | Cluster access | Tenant-scoped onboarding, capability negotiation, topology and asset inventory, bounded synthetic probes, and read-only RocketMQ evidence collection through MCP |
 | Evidence | Versioned Evidence contracts, canonical JSON and content hashes, freshness and partial-result semantics, PostgreSQL metadata, and private object storage for large payloads |
 | Diagnostics | Deterministic Diagnostic Packs, hypothesis and counter-evidence tracking, inspections, health and SLO analysis, alert correlation, and Incident timelines |
-| AI assistance | Provider-neutral model IR, capability-aware routing, streaming, fallback, budgets, redaction, RAG support, and heterogeneous primary/Critic model lineage |
+| AI assistance | Evidence-cited conversational metric queries through a fixed read-only tool registry, provider-neutral model IR, capability-aware routing, streaming, fallback, budgets, redaction, RAG support, and heterogeneous primary/Critic model lineage |
 | Prediction | Capacity and backlog forecasts, anomaly and change-point hints, What-if simulation, upgrade readiness, and disaster-recovery readiness |
 | Controlled automation | Typed Action Plans, policy evaluation, non-self human approval, immutable grants, supervised execution, verification, rollback, leases, fencing, and recovery |
 | Enterprise operations | Fleet and regional views, release escort, DR Center, compliance and governance indexes, integrations, notification delivery, postmortems, and FinOps views |
@@ -127,12 +127,16 @@ See [Model compatibility](docs/compatibility.md) and
 
 The DeepSeek Responses integration includes bounded semantic SSE, cooperative
 cancellation, stable provider-error mapping, structured output, and read-only
-tool selection. A credential-gated qualification exercises those protocol
-paths together with the persisted, evidence-cited diagnosis flow against a
-disposable Docker PostgreSQL instance. It does not execute the selected tool,
-grant model credentials to RocketMQ, or certify unattended mutation. API keys
-must be supplied from an explicit file outside the repository and are cleared
-from the qualification process before the machine-local report is written.
+tool selection. The conversational operations flow validates a selected tool
+against a fixed registry, executes the query through Connector, persists
+Canonical Evidence and an immutable answer revision, and returns a cited
+rules-only answer when no provider is available. A credential-gated,
+two-request qualification verifies real `deepseek-v4-flash` tool selection and
+Evidence-bound answer generation against disposable Docker PostgreSQL. It does
+not grant model credentials to RocketMQ or certify unattended mutation. API
+keys must be supplied from an explicit file outside the repository and are
+cleared from the qualification process before any machine-local report is
+written.
 
 ```powershell
 .\scripts\deepseek-diagnosis-qualification.ps1 -SecretFile <outside-repository-secret-file>

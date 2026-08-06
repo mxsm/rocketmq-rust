@@ -2688,6 +2688,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/conversations/{id}/turns": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List bounded evidence-cited conversation turns */
+        get: operations["listConversationTurns"];
+        put?: never;
+        /** Run one bounded read-only conversational metric query */
+        post: operations["submitConversationTurn"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/conversations/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Request cancellation of an in-flight read-only query */
+        post: operations["cancelConversationQuery"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -7382,6 +7417,95 @@ export interface components {
             diagnosis_revision_id: string;
             evidence: components["schemas"]["EvidenceSnapshot"];
             precondition_hash: string;
+        };
+        ConversationQueryIntent: {
+            /** @constant */
+            schema_version: "rocketmq-sre.conversation-query-intent.v1";
+            /** @enum {string} */
+            kind: "cluster_overview" | "topic_list" | "topic_describe" | "consumer_lag" | "broker_runtime" | "metric_instant" | "metric_range";
+            /** @enum {string} */
+            source: "rocketmq-mcp" | "prometheus";
+            resource: string;
+            /** Format: uint32 */
+            window_seconds: number;
+        };
+        ConversationCitation: {
+            /** Format: uuid */
+            evidence_id: string;
+            source: string;
+            resource: string;
+            content_hash: string;
+            /** Format: date-time */
+            observed_at: string;
+            /** Format: uint64 */
+            freshness_seconds: number;
+            partial: boolean;
+        };
+        ConversationTurn: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            conversation_id: string;
+            /** Format: uuid */
+            tenant_id: string;
+            /** Format: uuid */
+            cluster_id: string;
+            /** Format: uint32 */
+            sequence: number;
+            question: string;
+            resource: string | null;
+            /** @enum {string} */
+            status: "collecting" | "answered" | "needs_scope" | "needs_evidence" | "cancelled" | "failed";
+            query_intent: components["schemas"]["ConversationQueryIntent"] | null;
+            /** Format: uuid */
+            correlation_id: string;
+            /** Format: date-time */
+            created_at: string;
+            completed_at: string | null;
+        };
+        ConversationAnswerRevision: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            conversation_id: string;
+            /** Format: uuid */
+            turn_id: string;
+            /** Format: uint32 */
+            revision: number;
+            answer: string;
+            /** @enum {string} */
+            mode: "model_assisted" | "rules_only";
+            citations: components["schemas"]["ConversationCitation"][];
+            evidence_ids: string[];
+            model_invocation_id: string | null;
+            partial: boolean;
+            warnings: string[];
+            /** Format: date-time */
+            created_at: string;
+        };
+        ConversationTurnView: {
+            turn: components["schemas"]["ConversationTurn"];
+            answer: components["schemas"]["ConversationAnswerRevision"] | null;
+        };
+        ConversationTurnPage: {
+            /** @constant */
+            schema_version: "rocketmq-sre.conversation-turn-page.v1";
+            items: components["schemas"]["ConversationTurnView"][];
+            /** Format: date-time */
+            observed_at: string;
+        };
+        ConversationTurnRequest: {
+            question: string;
+            resource?: string;
+            /** Format: uint32 */
+            window_seconds?: number;
+        };
+        ConversationCancelResult: {
+            /** @constant */
+            schema_version: "rocketmq-sre.conversation-cancel.v1";
+            cancellation_requested: boolean;
+            /** Format: date-time */
+            observed_at: string;
         };
     };
     responses: {
@@ -17458,6 +17582,238 @@ export interface operations {
                 };
             };
             /** @description Stable sanitized error */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listConversationTurns: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationTurnPage"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    submitConversationTurn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConversationTurnRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationTurnView"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    cancelConversationQuery: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationCancelResult"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
             503: {
                 headers: {
                     [name: string]: unknown;
