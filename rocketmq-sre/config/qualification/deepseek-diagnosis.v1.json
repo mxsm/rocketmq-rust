@@ -21,6 +21,7 @@
     "stream_terminal_verified": true,
     "stream_cancellation_verified": true,
     "read_only_tool_selections": 1,
+    "tool_selection_protocol": "openai_chat_completions",
     "tool_execution_calls": 0,
     "mutation_calls": 0,
     "execution_eligible": false

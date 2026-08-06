@@ -220,6 +220,7 @@ $report = [ordered]@{
         stream_terminal_verified = [bool]$marker.stream_terminal_verified
         stream_cancellation_verified = [bool]$marker.stream_cancellation_verified
         read_only_tool_selections = [int]$marker.read_only_tool_selections
+        tool_selection_protocol = [string]$marker.tool_selection_protocol
         tool_execution_calls = [int]$marker.tool_execution_calls
         mutation_calls = [int]$marker.mutation_calls
         execution_eligible = [bool]$marker.execution_eligible

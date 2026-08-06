@@ -416,6 +416,7 @@ pub fn builtin_provider_profiles() -> Vec<ProviderProfile> {
         .with([ProviderCapability::Reasoning, ProviderCapability::Embeddings]);
     let deepseek_responses =
         ProviderCapabilities::chat_default().with([ProviderCapability::JsonSchema, ProviderCapability::Reasoning]);
+    let deepseek_openai = deepseek_responses.clone();
     let mut profiles = vec![
         profile(
             "openai",
@@ -505,7 +506,7 @@ pub fn builtin_provider_profiles() -> Vec<ProviderProfile> {
             "configured",
             "cn",
             15,
-            full.clone().with([ProviderCapability::Reasoning]),
+            deepseek_openai,
             credential("rocketmq-sre/models/deepseek"),
         ),
         profile(

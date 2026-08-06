@@ -104,14 +104,25 @@ impl InspectingTransport {
             !tools.is_empty()
                 && tools.iter().all(|tool| {
                     tool.get("type").and_then(serde_json::Value::as_str) == Some("function")
-                        && tool.get("name").and_then(serde_json::Value::as_str) == Some("query_consumer_lag")
+                        && tool
+                            .get("name")
+                            .or_else(|| tool.get("function").and_then(|function| function.get("name")))
+                            .and_then(serde_json::Value::as_str)
+                            == Some("query_consumer_lag")
                 })
         });
-        request.dialect == ProviderDialect::DeepSeekResponses
-            && request.path == "/responses"
+        let protocol_shape_is_allowed = match request.dialect {
+            ProviderDialect::DeepSeekResponses => {
+                request.path == "/responses" && request.body.get("messages").is_none()
+            }
+            ProviderDialect::DeepSeekOpenAi => {
+                request.path == "/chat/completions" && request.body.get("messages").is_some() && tools.is_some()
+            }
+            _ => false,
+        };
+        protocol_shape_is_allowed
             && request.endpoint == "https://api.deepseek.com"
             && request.credential.is_some()
-            && request.body.get("messages").is_none()
             && !serialized.contains(FORBIDDEN_EVIDENCE_MARKER)
             && !serialized.contains("message_body")
             && !serialized.contains("access_token")
@@ -189,6 +200,13 @@ async fn deepseek_responses_produces_persisted_read_only_sre_diagnosis() {
             .expect("qualification environment secret reference"),
     );
     profile.validate().expect("DeepSeek Responses profile");
+    let mut tool_profile = rocketmq_sre_model_gateway::builtin_provider_profiles()
+        .into_iter()
+        .find(|candidate| candidate.id == "deepseek")
+        .expect("DeepSeek OpenAI-compatible profile fixture");
+    tool_profile.model = "deepseek-v4-flash".to_owned();
+    tool_profile.credential_ref = profile.credential_ref.clone();
+    tool_profile.validate().expect("DeepSeek OpenAI-compatible profile");
 
     let inner = HttpModelTransport::new(
         HttpTransportConfig::default()
@@ -295,8 +313,10 @@ async fn deepseek_responses_produces_persisted_read_only_sre_diagnosis() {
     );
     let direct_client = AsyncBuiltinProviderClient::new(direct_profile, transport.clone())
         .expect("direct DeepSeek Responses qualification client");
+    let tool_client = AsyncBuiltinProviderClient::new(tool_profile, transport.clone())
+        .expect("direct DeepSeek tool qualification client");
     let stream_proof = qualify_streaming(&direct_client, credential.clone()).await;
-    qualify_read_only_tool_selection(&direct_client, credential).await;
+    qualify_read_only_tool_selection(&tool_client, credential).await;
     assert!((4..=5).contains(&transport.calls()));
     assert_eq!(transport.stream_calls(), 2);
     assert_eq!(transport.read_only_tool_requests(), 1);
@@ -329,6 +349,7 @@ async fn deepseek_responses_produces_persisted_read_only_sre_diagnosis() {
         "stream_terminal_verified": stream_proof.terminal_verified,
         "stream_cancellation_verified": stream_proof.cancellation_verified,
         "read_only_tool_selections": transport.read_only_tool_requests(),
+        "tool_selection_protocol": "openai_chat_completions",
         "tool_execution_calls": 0,
         "mutation_calls": 0,
         "execution_eligible": false,
@@ -427,7 +448,7 @@ async fn qualify_read_only_tool_selection(client: &AsyncBuiltinProviderClient, c
         "deepseek-v4-flash",
         vec![ModelMessage::text(
             ModelRole::User,
-            "Select the declared read-only tool for consumer group qualification-group. Do not invent an answer.",
+            "What is the current consumer lag for qualification-group? Use the available function because no lag value is present in this request.",
         )],
     );
     request.tools.push(ModelTool::read_only(
@@ -441,7 +462,8 @@ async fn qualify_read_only_tool_selection(client: &AsyncBuiltinProviderClient, c
         }),
     ));
     request.tool_choice = ToolChoice::Auto;
-    request.max_output_tokens = Some(64);
+    request.temperature_milli = Some(0);
+    request.max_output_tokens = Some(128);
     let response = client
         .invoke(&InvocationContext::new(correlation_id), &request, Some(credential))
         .await

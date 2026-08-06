@@ -36,7 +36,7 @@ SENSITIVE = re.compile(
     r"(?:-----BEGIN [A-Z ]*PRIVATE KEY-----|\bBearer\s+[A-Za-z0-9._~-]+|\bsk-[A-Za-z0-9_-]{12,})",
     re.IGNORECASE,
 )
-EXPECTED_ASSERTIONS: dict[str, bool | int] = {
+EXPECTED_ASSERTIONS: dict[str, bool | int | str] = {
     "model_assisted_diagnosis": True,
     "authorized_evidence_citations": True,
     "input_tokens_present": True,
@@ -49,6 +49,7 @@ EXPECTED_ASSERTIONS: dict[str, bool | int] = {
     "stream_terminal_verified": True,
     "stream_cancellation_verified": True,
     "read_only_tool_selections": 1,
+    "tool_selection_protocol": "openai_chat_completions",
     "tool_execution_calls": 0,
     "mutation_calls": 0,
     "execution_eligible": False,
@@ -204,6 +205,7 @@ def validate_report(report: dict[str, Any]) -> list[str]:
             "stream_terminal_verified": True,
             "stream_cancellation_verified": True,
             "read_only_tool_selections": 1,
+            "tool_selection_protocol": "openai_chat_completions",
             "tool_execution_calls": 0,
             "mutation_calls": 0,
             "execution_eligible": False,

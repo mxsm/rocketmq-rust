@@ -57,6 +57,7 @@ def valid_report() -> dict:
             "stream_terminal_verified": True,
             "stream_cancellation_verified": True,
             "read_only_tool_selections": 1,
+            "tool_selection_protocol": "openai_chat_completions",
             "tool_execution_calls": 0,
             "mutation_calls": 0,
             "execution_eligible": False,
