@@ -446,9 +446,9 @@ dependencies = [
 
 [[package]]
 name = "cheetah-string"
-version = "2.1.0"
+version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34617d68520087a27a373f84fa30b683ef46c83603143e861a22fdcd65daab55"
+checksum = "352256e2fe5dedcda13ebaefb12a6a7d7012ce0706f874bc469bd131c0b0f2ef"
 dependencies = [
  "bytes",
  "memchr",
@@ -1875,9 +1875,9 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "lz4_flex"
-version = "0.13.1"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ef0d4ed8669f8f8826eb00dc878084aa8f253506c4fd5e8f58f5bce72ddb97e"
+checksum = "ecbdfe44b1bd960b68170b417450a628c43f7cf56bb3c5317e61cb230ee7f226"
 
 [[package]]
 name = "maplit"
