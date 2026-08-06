@@ -15,11 +15,43 @@
 use bytes::Bytes;
 use cheetah_string::CheetahString;
 
+use super::private::FieldSourceSealed;
 use crate::HeaderMap;
 
 const KEY_LENGTH_BYTES: usize = 2;
 const VALUE_LENGTH_BYTES: usize = 4;
 const MAX_INITIAL_MAP_CAPACITY: usize = 1024;
+
+/// A validated, borrowed view of remoting command extension fields.
+///
+/// This trait is sealed because source implementations must guarantee that
+/// every visited key and value is valid immutable UTF-8 for the full source
+/// borrow. Returning `false` from the visitor stops the scan early.
+pub trait HeaderFieldSource: FieldSourceSealed {
+    /// Visits fields without allocating owned key/value strings.
+    fn visit_fields_while<'a>(&'a self, visitor: &mut dyn FnMut(&'a str, &'a str) -> bool);
+
+    /// Produces the owned compatibility representation.
+    fn to_header_map(&self) -> HeaderMap;
+}
+
+impl FieldSourceSealed for HeaderMap {}
+
+impl HeaderFieldSource for HeaderMap {
+    #[inline]
+    fn visit_fields_while<'a>(&'a self, visitor: &mut dyn FnMut(&'a str, &'a str) -> bool) {
+        for (key, value) in self {
+            if !visitor(key.as_str(), value.as_str()) {
+                break;
+            }
+        }
+    }
+
+    #[inline]
+    fn to_header_map(&self) -> HeaderMap {
+        self.clone()
+    }
+}
 
 fn malformed_binary_fields(reason: &'static str) -> rocketmq_error::RocketMQError {
     rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
@@ -50,27 +82,22 @@ impl BinaryHeaderFields {
         Ok(Self { payload, entry_count })
     }
 
-    /// Visits the logical non-empty entries without allocating field strings.
-    pub(crate) fn try_for_each<'a>(
-        &'a self,
-        visitor: &mut dyn FnMut(&'a str, &'a str) -> rocketmq_error::RocketMQResult<()>,
-    ) -> rocketmq_error::RocketMQResult<()> {
-        Self::parse(&self.payload, visitor)
-    }
-
     /// Materializes the compatibility map. The payload has already been
-    /// validated, so a second parse can fail only if this module's immutable
-    /// representation invariant is broken.
+    /// validated, so iteration uses its immutable representation invariant.
     pub(crate) fn materialize(&self) -> HeaderMap {
         let mut map = HeaderMap::with_capacity(self.entry_count.min(MAX_INITIAL_MAP_CAPACITY));
-        let result = self.try_for_each(&mut |key, value| {
+        for (key, value) in self.iter() {
             map.insert(CheetahString::from_slice(key), CheetahString::from_slice(value));
-            Ok(())
-        });
-        if result.is_err() {
-            map.clear();
         }
         map
+    }
+
+    #[inline]
+    fn iter(&self) -> BinaryHeaderFieldIter<'_> {
+        BinaryHeaderFieldIter {
+            payload: &self.payload,
+            cursor: 0,
+        }
     }
 
     fn parse<'a>(
@@ -144,6 +171,86 @@ impl BinaryHeaderFields {
             .ok_or_else(|| malformed_binary_fields(reason))?;
         *cursor = end;
         Ok(bytes)
+    }
+}
+
+impl FieldSourceSealed for BinaryHeaderFields {}
+
+impl HeaderFieldSource for BinaryHeaderFields {
+    #[inline]
+    fn visit_fields_while<'a>(&'a self, visitor: &mut dyn FnMut(&'a str, &'a str) -> bool) {
+        for (key, value) in self.iter() {
+            if !visitor(key, value) {
+                break;
+            }
+        }
+    }
+
+    #[inline]
+    fn to_header_map(&self) -> HeaderMap {
+        self.materialize()
+    }
+}
+
+struct BinaryHeaderFieldIter<'a> {
+    payload: &'a [u8],
+    cursor: usize,
+}
+
+impl<'a> BinaryHeaderFieldIter<'a> {
+    #[inline]
+    fn take(&mut self, length: usize) -> &'a [u8] {
+        // The only constructor validates every boundary before retaining the
+        // immutable Bytes payload, so failure here would be an internal bug.
+        let end = self
+            .cursor
+            .checked_add(length)
+            .expect("validated binary header field offset overflowed");
+        let bytes = self
+            .payload
+            .get(self.cursor..end)
+            .expect("validated binary header field boundary changed");
+        self.cursor = end;
+        bytes
+    }
+
+    #[inline]
+    fn read_u16(&mut self) -> usize {
+        let bytes = self.take(KEY_LENGTH_BYTES);
+        u16::from_be_bytes([bytes[0], bytes[1]]) as usize
+    }
+
+    #[inline]
+    fn read_i32(&mut self) -> i32 {
+        let bytes = self.take(VALUE_LENGTH_BYTES);
+        i32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+    }
+
+    #[inline]
+    fn read_utf8(&mut self, length: usize) -> &'a str {
+        // UTF-8 validity is established together with the immutable boundary
+        // invariant in BinaryHeaderFields::new.
+        std::str::from_utf8(self.take(length)).expect("validated binary header field UTF-8 changed")
+    }
+}
+
+impl<'a> Iterator for BinaryHeaderFieldIter<'a> {
+    type Item = (&'a str, &'a str);
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.cursor < self.payload.len() {
+            let key_length = self.read_u16();
+            let key = self.read_utf8(key_length);
+            let value_length = self.read_i32();
+            let value_length =
+                usize::try_from(value_length).expect("validated binary header field value length became negative");
+            let value = self.read_utf8(value_length);
+            if !value.is_empty() {
+                return Some((key, value));
+            }
+        }
+        None
     }
 }
 

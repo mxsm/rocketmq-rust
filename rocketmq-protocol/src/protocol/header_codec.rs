@@ -27,11 +27,13 @@ mod value;
 
 mod private {
     pub trait Sealed {}
+    pub trait FieldSourceSealed {}
 }
 
 pub use codec::HeaderCodec;
 pub use error::HeaderCodecError;
 pub(crate) use field_source::BinaryHeaderFields;
+pub use field_source::HeaderFieldSource;
 pub use schema::AliasConflictPolicy;
 pub use schema::DynamicCollisionPolicy;
 pub use schema::FlattenPresenceSpec;
