@@ -34,6 +34,7 @@ pub struct PromotionQualification {
     pub autonomous_qualified: bool,
     pub critic_ready: bool,
     pub owner_confirmed: bool,
+    pub owner_approval_ref_valid: bool,
 }
 
 /// Fail-closed lifecycle transition error.
@@ -45,6 +46,7 @@ pub enum AutonomyTransitionError {
     QualificationMissing,
     CriticNotReady,
     OwnerConfirmationRequired,
+    OwnerApprovalReferenceRequired,
     PauseReasonRequired,
     RevisionExhausted,
 }
@@ -61,6 +63,9 @@ impl fmt::Display for AutonomyTransitionError {
             Self::CriticNotReady => formatter.write_str("autonomous promotion requires a valid heterogeneous critic"),
             Self::OwnerConfirmationRequired => {
                 formatter.write_str("autonomous promotion requires action owner confirmation")
+            }
+            Self::OwnerApprovalReferenceRequired => {
+                formatter.write_str("autonomous promotion requires an auditable owner approval reference")
             }
             Self::PauseReasonRequired => formatter.write_str("paused autonomy requires a bounded reason"),
             Self::RevisionExhausted => formatter.write_str("autonomy lifecycle revision is exhausted"),
@@ -121,6 +126,9 @@ impl AutonomyStateMachine {
                 }
                 if !qualification.owner_confirmed {
                     return Err(AutonomyTransitionError::OwnerConfirmationRequired);
+                }
+                if !qualification.owner_approval_ref_valid {
+                    return Err(AutonomyTransitionError::OwnerApprovalReferenceRequired);
                 }
             }
             (AutonomyMode::Shadow | AutonomyMode::Supervised | AutonomyMode::Autonomous, AutonomyMode::Paused)
@@ -201,6 +209,7 @@ mod tests {
             autonomous_qualified: true,
             critic_ready: true,
             owner_confirmed: true,
+            owner_approval_ref_valid: true,
         };
         let shadow = AutonomyStateMachine::transition(
             &state(AutonomyMode::Disabled),
@@ -224,6 +233,27 @@ mod tests {
         .expect("supervised");
         assert_eq!(supervised.mode, AutonomyMode::Supervised);
         assert_eq!(supervised.lifecycle_revision, 3);
+    }
+
+    #[test]
+    fn autonomous_promotion_requires_an_owner_approval_reference() {
+        let result = AutonomyStateMachine::transition(
+            &state(AutonomyMode::Supervised),
+            AutonomyMode::Autonomous,
+            AutonomyActor::HumanOperator,
+            "operator",
+            None,
+            PromotionQualification {
+                autonomous_qualified: true,
+                critic_ready: true,
+                owner_confirmed: true,
+                owner_approval_ref_valid: false,
+                ..PromotionQualification::default()
+            },
+            chrono::Utc::now(),
+        );
+
+        assert_eq!(result, Err(AutonomyTransitionError::OwnerApprovalReferenceRequired));
     }
 
     #[test]

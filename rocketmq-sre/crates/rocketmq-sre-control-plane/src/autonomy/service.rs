@@ -241,6 +241,7 @@ impl AutonomyService {
         request: &AutonomyTransitionRequest,
     ) -> Result<AutonomyScopeView, ControlPlaneError> {
         require_human_operator(auth)?;
+        let owner_approval_ref = transition_owner_approval_ref(request)?;
         let current = self.scope(auth, scope).await?;
         let qualification = PromotionQualification {
             shadow_qualified: current.qualification.shadow_observation_window_met
@@ -251,6 +252,7 @@ impl AutonomyService {
                 && current.qualification.recent_rollbacks <= current.policy.max_recent_rollbacks,
             critic_ready: current.qualification.autonomous_cohort.is_some(),
             owner_confirmed: request.owner_confirmed,
+            owner_approval_ref_valid: owner_approval_ref.is_some(),
         };
         let next = AutonomyStateMachine::transition(
             &current.lifecycle,
@@ -268,6 +270,7 @@ impl AutonomyService {
                 &next,
                 &current.policy.action_version,
                 request.owner_confirmed,
+                owner_approval_ref,
                 transition_reason(request.target_mode),
             )
             .await?;
@@ -1494,5 +1497,25 @@ const fn transition_reason(mode: AutonomyMode) -> &'static str {
         AutonomyMode::Supervised => "operator_enabled_supervised",
         AutonomyMode::Autonomous => "owner_confirmed_autonomous",
         AutonomyMode::Paused => "operator_paused",
+    }
+}
+
+fn transition_owner_approval_ref(request: &AutonomyTransitionRequest) -> Result<Option<&str>, ControlPlaneError> {
+    match (request.target_mode, request.owner_approval_ref.as_deref()) {
+        (AutonomyMode::Autonomous, None) => Err(ControlPlaneError::validation(
+            "owner_approval_ref_required",
+            "Autonomous promotion requires an opaque action-owner approval reference",
+        )),
+        (AutonomyMode::Autonomous, Some(_)) => request.validated_owner_approval_ref().map(Some).ok_or_else(|| {
+            ControlPlaneError::validation(
+                "invalid_owner_approval_ref",
+                "owner approval reference must use the bounded approval:// format",
+            )
+        }),
+        (_, Some(_)) => Err(ControlPlaneError::validation(
+            "owner_approval_ref_not_applicable",
+            "owner approval reference is accepted only for Autonomous promotion",
+        )),
+        (_, None) => Ok(None),
     }
 }

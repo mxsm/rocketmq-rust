@@ -290,6 +290,7 @@ async fn qualify_r1_action(
                 target_mode: AutonomyMode::Shadow,
                 reason: Some("start bounded logger qualification".to_owned()),
                 owner_confirmed: false,
+                owner_approval_ref: None,
             },
         )
         .await
@@ -341,6 +342,7 @@ async fn qualify_r1_action(
                     target_mode: AutonomyMode::Supervised,
                     reason: Some("window must not be bypassed".to_owned()),
                     owner_confirmed: true,
+                    owner_approval_ref: None,
                 },
             )
             .await
@@ -359,6 +361,7 @@ async fn qualify_r1_action(
                 target_mode: AutonomyMode::Supervised,
                 reason: Some("Shadow sample and window targets met".to_owned()),
                 owner_confirmed: true,
+                owner_approval_ref: None,
             },
         )
         .await
@@ -461,6 +464,7 @@ async fn qualify_r1_action(
                     target_mode: AutonomyMode::Autonomous,
                     reason: Some("autonomous window must not be bypassed".to_owned()),
                     owner_confirmed: true,
+                    owner_approval_ref: Some("approval://qualification/autonomy-window".to_owned()),
                 },
             )
             .await
@@ -548,6 +552,7 @@ async fn qualify_r1_action(
                     target_mode: AutonomyMode::Supervised,
                     reason: Some("owner reviewed bounded qualification failure".to_owned()),
                     owner_confirmed: true,
+                    owner_approval_ref: None,
                 },
             )
             .await
@@ -580,6 +585,7 @@ async fn qualify_r1_action(
                 target_mode: AutonomyMode::Autonomous,
                 reason: Some("Supervised target and observation window met".to_owned()),
                 owner_confirmed: true,
+                owner_approval_ref: Some("approval://qualification/autonomy-promotion".to_owned()),
             },
         )
         .await

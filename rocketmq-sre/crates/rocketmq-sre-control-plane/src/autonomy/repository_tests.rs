@@ -85,6 +85,7 @@ async fn postgres_autonomy_state_cohorts_and_controls_are_durable_and_idempotent
             &shadow,
             &stored.action_version,
             false,
+            None,
             "repository_test_shadow",
         )
         .await
@@ -179,6 +180,7 @@ async fn postgres_autonomy_state_cohorts_and_controls_are_durable_and_idempotent
             &supervised,
             &stored.action_version,
             true,
+            None,
             "repository_test_supervised",
         )
         .await
@@ -271,6 +273,7 @@ async fn postgres_autonomy_state_cohorts_and_controls_are_durable_and_idempotent
             autonomous_qualified: true,
             critic_ready: true,
             owner_confirmed: true,
+            owner_approval_ref_valid: true,
             ..PromotionQualification::default()
         },
         now + Duration::seconds(9),
@@ -282,10 +285,31 @@ async fn postgres_autonomy_state_cohorts_and_controls_are_durable_and_idempotent
             &autonomous,
             &stored.action_version,
             true,
+            Some("approval://qualification/repository-autonomous"),
             "repository_test_autonomous",
         )
         .await
         .expect("persist Autonomous");
+    let owner_approval_ref: Option<String> = sqlx::query_scalar(
+        "SELECT owner_approval_ref
+         FROM autonomy_lifecycle_events
+         WHERE tenant_id = $1 AND cluster_id = $2
+           AND action_id = $3 AND action_version = $4
+           AND to_mode = 'autonomous'
+         ORDER BY sequence_id DESC
+         LIMIT 1",
+    )
+    .bind(fixture.tenant_id.as_uuid())
+    .bind(fixture.cluster_id.as_uuid())
+    .bind(ExecutionAction::ObservabilityLoggerLevelTtl.id())
+    .bind(&stored.action_version)
+    .fetch_one(&repository.pool)
+    .await
+    .expect("persisted Autonomous owner approval reference");
+    assert_eq!(
+        owner_approval_ref.as_deref(),
+        Some("approval://qualification/repository-autonomous")
+    );
     let grant = AutonomyGrant {
         issuer: "rocketmq-sre-control-plane".to_owned(),
         audience: "rocketmq-sre-executor".to_owned(),
