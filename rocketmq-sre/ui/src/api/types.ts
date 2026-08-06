@@ -720,35 +720,9 @@ export interface KnowledgeItem {
   updated_at: string;
 }
 
-export interface ModelProfile {
-  id: string;
-  profile_name: string;
-  provider_family: string;
-  protocol_family: string;
-  model_family: string;
-  model_name: string;
-  model_revision: string;
-  endpoint_instance: string;
-  region: string;
-  capabilities: string[] | Record<string, boolean>;
-  priority: number;
-  credential_configured: boolean;
-  credential_owner: string;
-  health: "unknown" | "healthy" | "degraded" | "quarantined" | "disabled";
-  last_health_observed_at: string | null;
-}
-
-export interface ModelCapabilitiesResponse {
-  schema_version: string;
-  network_calls_supported: boolean;
-  network_calls_enabled: boolean;
-  rules_only_available: boolean;
-  max_fallbacks: number;
-  fallback_order: string[];
-  providers: CapabilityCatalogResponse["providers"];
-  profiles: ModelProfile[];
-  observed_at: string;
-}
+export type ModelProfile = ApiSchemas["ModelProfileStatus"];
+export type ModelCapabilitiesResponse =
+  ApiSchemas["ModelCapabilitiesResponse"];
 
 export type ModelProfileLifecycleState =
   | "draft"

@@ -5,9 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 3004",
+    "generate:openapi:models": "node ../scripts/extend_model_capabilities_openapi.mjs",
     "generate:openapi:autonomy": "node ../scripts/extend_bounded_autonomy_openapi.mjs",
     "generate:openapi:conversation": "node ../scripts/extend_conversation_openapi.mjs",
-    "generate:api": "npm run generate:openapi:autonomy && npm run generate:openapi:conversation && openapi-typescript ../openapi/rocketmq-sre-phase05.openapi.json -o ./src/api/generated.d.ts",
+    "generate:api": "npm run generate:openapi:models && npm run generate:openapi:autonomy && npm run generate:openapi:conversation && openapi-typescript ../openapi/rocketmq-sre-phase05.openapi.json -o ./src/api/generated.d.ts",
     "check:api": "openapi-typescript ../openapi/rocketmq-sre-phase05.openapi.json -o ./src/api/generated.d.ts --check",
     "lint": "eslint . --max-warnings=0",
     "test": "vitest",
