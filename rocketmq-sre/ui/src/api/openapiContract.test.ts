@@ -248,6 +248,83 @@ describe("checked-in Phase 5 OpenAPI", () => {
     ).toBe(false);
   });
 
+  it("publishes typed and sanitized model capability status", () => {
+    const operation =
+      specification.paths["/v1/models/capabilities"].get;
+    const schemas = specification.components.schemas;
+
+    expect(
+      operation.responses["200"].content["application/json"].schema.$ref,
+    ).toBe("#/components/schemas/ModelCapabilitiesResponse");
+    expect(
+      specification.paths["/v1/models/status"].get.responses["200"].content[
+        "application/json"
+      ].schema.$ref,
+    ).toBe("#/components/schemas/ModelCapabilitiesResponse");
+    expect(operation.security).toEqual([
+      { oidc: ["rocketmq:read"] },
+      { oidc: ["rocketmq:diagnose"] },
+    ]);
+    expect(schemas.ModelCapabilitiesResponse.required).toEqual(
+      expect.arrayContaining([
+        "schema_version",
+        "network_calls_supported",
+        "network_calls_enabled",
+        "rules_only_available",
+        "max_fallbacks",
+        "profiles",
+        "fallback_order",
+        "providers",
+        "observed_at",
+      ]),
+    );
+    expect(
+      schemas.ModelCapabilitiesResponse.properties.schema_version.const,
+    ).toBe("rocketmq-sre.model-capabilities.v1");
+    expect(
+      schemas.ModelCapabilitiesResponse.properties.profiles.items.$ref,
+    ).toBe("#/components/schemas/ModelProfileStatus");
+
+    const profile = schemas.ModelProfileStatus;
+    expect(profile.additionalProperties).toBe(false);
+    expect(profile.required).toEqual(
+      expect.arrayContaining([
+        "id",
+        "profile_name",
+        "protocol_family",
+        "capabilities",
+        "priority",
+        "credential_configured",
+        "credential_owner",
+        "health",
+        "last_health_observed_at",
+      ]),
+    );
+    expect(profile.properties.capabilities.$ref).toBe(
+      "#/components/schemas/ModelProviderCapabilities",
+    );
+    expect(profile.properties).not.toHaveProperty("credential_ref");
+    expect(profile.properties).not.toHaveProperty("credential");
+    expect(profile.properties).not.toHaveProperty("token");
+    expect(profile.properties).not.toHaveProperty("secret");
+    expect(profile.properties).not.toHaveProperty("endpoint");
+    expect(profile.properties).not.toHaveProperty("endpoint_url");
+
+    expect(
+      schemas.ModelProviderCapability.enum,
+    ).toEqual(
+      expect.arrayContaining([
+        "chat",
+        "json_schema",
+        "tool_calling",
+        "streaming",
+      ]),
+    );
+    expect(schemas.ModelProviderDescriptor.properties).not.toHaveProperty(
+      "credential_ref",
+    );
+  });
+
   it("publishes read-only bounded autonomy outcome and report queries", () => {
     const outcomes =
       specification.paths["/v1/autonomy/outcomes"];

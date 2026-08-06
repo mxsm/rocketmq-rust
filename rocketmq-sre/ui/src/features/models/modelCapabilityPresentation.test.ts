@@ -64,7 +64,11 @@ function capabilities({
         model_revision: "v4-flash",
         endpoint_instance: "deepseek:cn",
         region: "cn",
-        capabilities: ["chat", "json_schema"],
+        capabilities: {
+          supported: ["chat", "json_schema"],
+          max_input_tokens: null,
+          max_output_tokens: null,
+        },
         priority: 10,
         credential_configured,
         credential_owner: "gateway",

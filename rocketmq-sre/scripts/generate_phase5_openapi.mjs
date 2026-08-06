@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { extendBoundedAutonomySettings } from "./openapi/bounded_autonomy_settings.mjs";
+import { extendModelCapabilities } from "./openapi/model_capabilities.mjs";
 import { extendOperationsAnalytics } from "./openapi/operations_analytics.mjs";
 import { extendPhase5FleetAndDr } from "./openapi/phase5_fleet_dr.mjs";
 import { extendPhase5GovernanceAndFinOps } from "./openapi/phase5_governance_finops.mjs";
@@ -109,6 +110,7 @@ extendBoundedAutonomySettings({
   uuid,
   digest,
 });
+extendModelCapabilities({ document, schemas });
 
 const phase5Prefixes = [
   ["/v1/fleet/", "Fleet"],

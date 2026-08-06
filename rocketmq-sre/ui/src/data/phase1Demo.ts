@@ -654,31 +654,30 @@ export const phase1Models: ModelCapabilitiesResponse = {
   fallback_order: [
     "70000000-0000-4000-8000-000000000001",
   ],
-  providers: [
-    "openai-compatible",
-    "anthropic",
-    "gemini",
-    "bedrock",
-    "deepseek",
-    "zhipu-glm",
-    "kimi-moonshot",
-    "local-openai-compatible",
-  ].map((id) => ({
+  providers: ([
+    ["openai", "openai-compatible", true, true, true],
+    ["anthropic", "anthropic-messages", true, true, false],
+    ["google-gemini", "gemini-generate-content", true, true, true],
+    ["aws-bedrock", "bedrock-converse", true, true, true],
+    ["deepseek", "openai-compatible", true, true, false],
+    ["zhipu-glm", "openai-compatible", true, true, true],
+    ["kimi-moonshot", "openai-compatible", true, true, false],
+    ["local-openai-compatible", "openai-compatible", true, false, false],
+  ] as const).map(([id, protocol, supportsTools, structuredOutput, embeddings]) => ({
     id,
-    protocols:
-      id === "anthropic"
-        ? ["anthropic-messages"]
-        : id === "gemini"
-          ? ["gemini-generate-content"]
-          : id === "bedrock"
-            ? ["aws-bedrock-converse"]
-            : ["openai-compatible"],
+    version: "1.0.0",
+    owner: "rocketmq-sre",
+    supported_versions: [
+      { family: "rocketmq-sre.model", major: 1, minor: 0 },
+    ],
+    config_schema: { type: "object" },
+    status: "active" as const,
+    deprecation: null,
+    protocols: [protocol],
     supports_streaming: true,
-    supports_tools: id !== "local-openai-compatible",
-    supports_structured_output: true,
-    supports_embeddings: ["openai-compatible", "local-openai-compatible"].includes(
-      id,
-    ),
+    supports_tools: supportsTools,
+    supports_structured_output: structuredOutput,
+    supports_embeddings: embeddings,
   })),
   profiles: [
     {
@@ -691,7 +690,11 @@ export const phase1Models: ModelCapabilitiesResponse = {
       model_revision: "v1",
       endpoint_instance: "control-plane",
       region: "local",
-      capabilities: ["structured_output"],
+      capabilities: {
+        supported: ["chat", "text", "json_schema"],
+        max_input_tokens: null,
+        max_output_tokens: null,
+      },
       priority: 0,
       credential_configured: false,
       credential_owner: "gateway",
@@ -708,7 +711,11 @@ export const phase1Models: ModelCapabilitiesResponse = {
       model_revision: "configured-not-verified",
       endpoint_instance: "cn-primary",
       region: "cn",
-      capabilities: ["structured_output", "tools"],
+      capabilities: {
+        supported: ["chat", "text", "json_schema", "tool_calling"],
+        max_input_tokens: null,
+        max_output_tokens: null,
+      },
       priority: 10,
       credential_configured: false,
       credential_owner: "gateway",
@@ -725,7 +732,11 @@ export const phase1Models: ModelCapabilitiesResponse = {
       model_revision: "configured-not-verified",
       endpoint_instance: "cn-primary",
       region: "cn",
-      capabilities: ["structured_output", "tools"],
+      capabilities: {
+        supported: ["chat", "text", "json_schema", "tool_calling"],
+        max_input_tokens: null,
+        max_output_tokens: null,
+      },
       priority: 20,
       credential_configured: false,
       credential_owner: "gateway",
@@ -742,7 +753,11 @@ export const phase1Models: ModelCapabilitiesResponse = {
       model_revision: "configured-not-verified",
       endpoint_instance: "cn-primary",
       region: "cn",
-      capabilities: ["structured_output", "tools"],
+      capabilities: {
+        supported: ["chat", "text", "json_schema", "tool_calling"],
+        max_input_tokens: null,
+        max_output_tokens: null,
+      },
       priority: 30,
       credential_configured: false,
       credential_owner: "gateway",

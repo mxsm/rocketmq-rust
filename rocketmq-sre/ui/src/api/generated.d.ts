@@ -752,6 +752,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** Get sanitized Model Gateway capabilities */
         get: operations["getModelCapabilities"];
         put?: never;
         post?: never;
@@ -768,6 +769,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** Get sanitized Model Gateway runtime status */
         get: operations["getModelStatus"];
         put?: never;
         post?: never;
@@ -7838,6 +7840,67 @@ export interface components {
             active: boolean;
             reason: string;
         };
+        /** @enum {string} */
+        ModelProviderCapability: "chat" | "text" | "json_object" | "json_schema" | "tool_calling" | "tool_choice_required" | "tool_choice_specific" | "strict_tools" | "vision" | "reasoning" | "streaming" | "embeddings" | "rerank" | "kimi_mfjs";
+        ModelProviderCapabilities: {
+            supported: components["schemas"]["ModelProviderCapability"][];
+            max_input_tokens: number | null;
+            max_output_tokens: number | null;
+        };
+        ModelProviderDescriptor: {
+            id: string;
+            version: string;
+            owner: string;
+            supported_versions: components["schemas"]["SchemaVersion"][];
+            required_capabilities?: string[];
+            config_schema: {
+                [key: string]: unknown;
+            };
+            status: components["schemas"]["DescriptorStatus"];
+            deprecation: components["schemas"]["Deprecation"] | null;
+            protocols: string[];
+            supports_streaming: boolean;
+            supports_tools: boolean;
+            supports_structured_output: boolean;
+            supports_embeddings: boolean;
+        };
+        ModelProfileStatus: {
+            /** Format: uuid */
+            id: string;
+            profile_name: string;
+            provider_family: string;
+            protocol_family: string;
+            model_family: string;
+            model_name: string;
+            model_revision: string;
+            /** @description Opaque endpoint instance identifier, never an endpoint URL. */
+            endpoint_instance: string;
+            region: string;
+            capabilities: components["schemas"]["ModelProviderCapabilities"];
+            /** Format: uint16 */
+            priority: number;
+            credential_configured: boolean;
+            /** @enum {string} */
+            credential_owner: "gateway" | "adapter";
+            /** @enum {string} */
+            health: "unknown" | "healthy" | "degraded" | "quarantined" | "disabled";
+            last_health_observed_at: string | null;
+        };
+        ModelCapabilitiesResponse: {
+            /** @constant */
+            schema_version: "rocketmq-sre.model-capabilities.v1";
+            /** @constant */
+            network_calls_supported: true;
+            network_calls_enabled: boolean;
+            /** @constant */
+            rules_only_available: true;
+            max_fallbacks: number;
+            profiles: components["schemas"]["ModelProfileStatus"][];
+            fallback_order: string[];
+            providers: components["schemas"]["ModelProviderDescriptor"][];
+            /** Format: date-time */
+            observed_at: string;
+        };
     };
     responses: {
         /** @description Successful scoped response */
@@ -9042,7 +9105,15 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            200: components["responses"]["JsonObject"];
+            /** @description Sanitized Model Gateway capability status */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelCapabilitiesResponse"];
+                };
+            };
         };
     };
     getModelStatus: {
@@ -9054,7 +9125,15 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            200: components["responses"]["JsonObject"];
+            /** @description Sanitized Model Gateway capability status */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelCapabilitiesResponse"];
+                };
+            };
         };
     };
     listModelInvocations: {
