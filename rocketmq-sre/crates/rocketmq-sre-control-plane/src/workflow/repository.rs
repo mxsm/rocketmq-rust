@@ -33,6 +33,8 @@ use rocketmq_sre_contracts::InspectionRunId;
 use rocketmq_sre_contracts::InspectionStatus;
 use rocketmq_sre_contracts::InspectionTemplate;
 use rocketmq_sre_contracts::Investigation;
+use rocketmq_sre_contracts::InvestigationDiagnosisRevision;
+use rocketmq_sre_contracts::InvestigationDiagnosisStatus;
 use rocketmq_sre_contracts::InvestigationId;
 use rocketmq_sre_contracts::InvestigationStatus;
 use rocketmq_sre_contracts::ModelInvocationId;
@@ -283,6 +285,7 @@ impl PostgresRepository {
         Ok(InvestigationView {
             investigation,
             timeline: Vec::new(),
+            diagnosis_revisions: Vec::new(),
         })
     }
 
@@ -293,9 +296,11 @@ impl PostgresRepository {
     ) -> Result<InvestigationView, ControlPlaneError> {
         let investigation = self.investigation_record(auth, id).await?;
         let timeline = self.timeline(auth, Some(id), investigation.incident_id).await?;
+        let diagnosis_revisions = self.investigation_diagnosis_revisions(auth, id).await?;
         Ok(InvestigationView {
             investigation,
             timeline,
+            diagnosis_revisions,
         })
     }
 
@@ -335,6 +340,7 @@ impl PostgresRepository {
             WorkflowPage::from_window(items, limit, |item| item.id.as_uuid()).map(|investigation| InvestigationView {
                 investigation,
                 timeline: Vec::new(),
+                diagnosis_revisions: Vec::new(),
             }),
         )
     }
@@ -1524,6 +1530,27 @@ impl PostgresRepository {
         .await?;
         rows.iter().map(diagnosis_revision_from_row).collect()
     }
+
+    async fn investigation_diagnosis_revisions(
+        &self,
+        auth: &AuthContext,
+        investigation_id: InvestigationId,
+    ) -> Result<Vec<InvestigationDiagnosisRevision>, ControlPlaneError> {
+        let rows = sqlx::query(
+            "SELECT id, investigation_id, conversation_id, turn_id, answer_revision_id,
+                    revision, pack_id, pack_version, status, rule_result, hypotheses,
+                    evidence_ids, primary_model_invocation_id, execution_eligible,
+                    partial, correlation_id, created_at
+             FROM investigation_diagnosis_revisions
+             WHERE investigation_id = $1 AND tenant_id = $2
+             ORDER BY revision",
+        )
+        .bind(investigation_id.as_uuid())
+        .bind(auth.tenant_id.as_uuid())
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(investigation_diagnosis_from_row).collect()
+    }
 }
 
 async fn attach_previous_pack_diff(
@@ -1984,6 +2011,39 @@ fn diagnosis_revision_from_row(row: &PgRow) -> Result<DiagnosisRevision, Control
     })
 }
 
+pub(super) fn investigation_diagnosis_from_row(
+    row: &PgRow,
+) -> Result<InvestigationDiagnosisRevision, ControlPlaneError> {
+    Ok(InvestigationDiagnosisRevision {
+        id: DiagnosisRevisionId::from_uuid(row.try_get("id")?),
+        investigation_id: InvestigationId::from_uuid(row.try_get("investigation_id")?),
+        conversation_id: ConversationId::from_uuid(row.try_get("conversation_id")?),
+        turn_id: rocketmq_sre_contracts::ConversationTurnId::from_uuid(row.try_get("turn_id")?),
+        answer_revision_id: rocketmq_sre_contracts::ConversationAnswerRevisionId::from_uuid(
+            row.try_get("answer_revision_id")?,
+        ),
+        revision: u32::try_from(row.try_get::<i32, _>("revision")?)
+            .map_err(|_| ControlPlaneError::configuration("stored investigation diagnosis revision is invalid"))?,
+        pack_id: row.try_get("pack_id")?,
+        pack_version: row.try_get("pack_version")?,
+        status: parse_investigation_diagnosis_status(row.try_get("status")?)?,
+        rule_result: row.try_get("rule_result")?,
+        hypotheses: row.try_get("hypotheses")?,
+        evidence_ids: row
+            .try_get::<Vec<Uuid>, _>("evidence_ids")?
+            .into_iter()
+            .map(EvidenceId::from_uuid)
+            .collect(),
+        primary_model_invocation_id: row
+            .try_get::<Option<Uuid>, _>("primary_model_invocation_id")?
+            .map(ModelInvocationId::from_uuid),
+        execution_eligible: row.try_get("execution_eligible")?,
+        partial: row.try_get("partial")?,
+        correlation_id: CorrelationId::from_uuid(row.try_get("correlation_id")?),
+        created_at: row.try_get("created_at")?,
+    })
+}
+
 fn parse_conversation_status(value: &str) -> Result<ConversationStatus, ControlPlaneError> {
     match value {
         "active" => Ok(ConversationStatus::Active),
@@ -2026,6 +2086,18 @@ fn parse_diagnosis_revision_status(value: &str) -> Result<IncidentStatus, Contro
         Ok(IncidentStatus::Monitoring)
     } else {
         parse_incident_status(value)
+    }
+}
+
+pub(super) fn parse_investigation_diagnosis_status(
+    value: &str,
+) -> Result<InvestigationDiagnosisStatus, ControlPlaneError> {
+    match value {
+        "healthy" => Ok(InvestigationDiagnosisStatus::Healthy),
+        "fault" => Ok(InvestigationDiagnosisStatus::Fault),
+        "inconclusive" => Ok(InvestigationDiagnosisStatus::Inconclusive),
+        "unsupported" => Ok(InvestigationDiagnosisStatus::Unsupported),
+        _ => Err(invalid_database_enum("investigation diagnosis status")),
     }
 }
 

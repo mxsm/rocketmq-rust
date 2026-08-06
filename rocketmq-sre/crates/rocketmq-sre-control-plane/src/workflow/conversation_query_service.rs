@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod diagnosis;
+
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
@@ -31,6 +33,8 @@ use rocketmq_sre_contracts::EvidenceQuery;
 use rocketmq_sre_contracts::EvidenceSnapshot;
 use rocketmq_sre_contracts::QueryId;
 use rocketmq_sre_contracts::TimeRange;
+use rocketmq_sre_core::diagnostics::DiagnosticEngine;
+use rocketmq_sre_core::diagnostics::full_registry;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
 
@@ -40,6 +44,7 @@ use super::ConversationTurnRequest;
 use super::ConversationTurnView;
 use super::conversation_query::conversation_tools;
 use super::conversation_query::deterministic_intent;
+use super::conversation_query::diagnostic_pack_for_intent;
 use super::conversation_query::model_intent;
 use super::conversation_repository::ConversationCompletion;
 use crate::ControlPlaneError;
@@ -47,7 +52,11 @@ use crate::PostgresRepository;
 use crate::auth::AuthContext;
 use crate::connector_channel::PostgresConnectorChannelService;
 use crate::evidence::EvidenceService;
+use crate::evidence::PersistEvidenceRequest;
 use crate::models::ModelGatewayService;
+use diagnosis::diagnosis_is_partial;
+use diagnosis::diagnostic_evidence_answer;
+use diagnosis::investigation_diagnosis_draft;
 
 const QUERY_TIMEOUT: Duration = Duration::from_secs(15);
 const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(250);
@@ -60,6 +69,7 @@ pub(crate) struct ConversationQueryService {
     connector: PostgresConnectorChannelService,
     evidence: EvidenceService,
     models: ModelGatewayService,
+    diagnostics: Arc<DiagnosticEngine>,
     active: Arc<Mutex<HashMap<ConversationId, watch::Sender<bool>>>>,
 }
 
@@ -69,14 +79,18 @@ impl ConversationQueryService {
         connector: PostgresConnectorChannelService,
         evidence: EvidenceService,
         models: ModelGatewayService,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, ControlPlaneError> {
+        let registry = full_registry().map_err(|error| {
+            ControlPlaneError::configuration(format!("diagnostic pack registry is invalid: {error}"))
+        })?;
+        Ok(Self {
             repository,
             connector,
             evidence,
             models,
+            diagnostics: Arc::new(DiagnosticEngine::new(registry)),
             active: Arc::new(Mutex::new(HashMap::new())),
-        }
+        })
     }
 
     pub(crate) async fn submit_turn(
@@ -154,6 +168,7 @@ impl ConversationQueryService {
                             model_invocation_id: None,
                             partial: true,
                             warnings: vec!["conversation_query_failed".to_owned()],
+                            diagnosis: None,
                         },
                     )
                     .await
@@ -270,6 +285,7 @@ impl ConversationQueryService {
                         model_invocation_id: None,
                         partial: true,
                         warnings: bounded_warnings(warnings),
+                        diagnosis: None,
                     },
                 )
                 .await;
@@ -322,7 +338,21 @@ impl ConversationQueryService {
         let Some(evidence) = response.evidence else {
             return self.complete_missing(auth, turn, intent, warnings).await;
         };
-        let evidence = match self.evidence.persist_cluster(auth, evidence).await {
+        let persisted = if let Some(investigation_id) = conversation.investigation_id {
+            self.evidence
+                .persist(
+                    auth,
+                    PersistEvidenceRequest {
+                        investigation_id: Some(investigation_id),
+                        incident_id: None,
+                        evidence,
+                    },
+                )
+                .await
+        } else {
+            self.evidence.persist_cluster(auth, evidence).await
+        };
+        let evidence = match persisted {
             Ok(evidence) => evidence,
             Err(_) => {
                 warnings.push("evidence_persistence_failed".to_owned());
@@ -333,7 +363,17 @@ impl ConversationQueryService {
             .link_conversation_evidence(auth, turn, evidence.evidence_id)
             .await?;
         warnings.extend(evidence.warnings.iter().map(|warning| stable_warning(warning)));
-        let deterministic_answer = evidence_answer(&intent, &evidence);
+        let pack_reference = diagnostic_pack_for_intent(&intent);
+        let report = self
+            .diagnostics
+            .evaluate(pack_reference, std::slice::from_ref(&evidence))
+            .map_err(|error| {
+                ControlPlaneError::validation(
+                    "diagnostic_evaluation_failed",
+                    format!("conversation evidence could not be evaluated safely: {error}"),
+                )
+            })?;
+        let deterministic_answer = diagnostic_evidence_answer(&intent, &evidence, &report);
         if cancellation_requested(&cancel) || self.repository.conversation_cancel_requested(auth, turn).await? {
             return self.complete_cancelled(auth, turn, Some(intent), warnings).await;
         }
@@ -376,6 +416,16 @@ impl ConversationQueryService {
             .filter(|id| **id == evidence.evidence_id)
             .map(|_| citation.clone())
             .collect::<Vec<_>>();
+        let diagnosis_partial = diagnosis_is_partial(&report, evidence.partial);
+        let diagnosis = conversation.investigation_id.map(|investigation_id| {
+            investigation_diagnosis_draft(
+                investigation_id,
+                &report,
+                evidence.evidence_id,
+                model_invocation_id,
+                diagnosis_partial,
+            )
+        });
         self.repository
             .complete_conversation_turn(
                 auth,
@@ -388,8 +438,9 @@ impl ConversationQueryService {
                     citations,
                     evidence_ids,
                     model_invocation_id,
-                    partial: evidence.partial,
+                    partial: diagnosis_partial,
                     warnings: bounded_warnings(warnings),
+                    diagnosis,
                 },
             )
             .await
@@ -441,6 +492,7 @@ impl ConversationQueryService {
                     model_invocation_id: None,
                     partial: true,
                     warnings: bounded_warnings(warnings),
+                    diagnosis: None,
                 },
             )
             .await
@@ -468,6 +520,7 @@ impl ConversationQueryService {
                     model_invocation_id: None,
                     partial: true,
                     warnings: bounded_warnings(warnings),
+                    diagnosis: None,
                 },
             )
             .await

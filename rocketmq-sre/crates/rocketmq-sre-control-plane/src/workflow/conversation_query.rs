@@ -18,6 +18,7 @@ use rocketmq_sre_contracts::ConversationAnswerRevision;
 use rocketmq_sre_contracts::ConversationQueryIntent;
 use rocketmq_sre_contracts::ConversationQueryKind;
 use rocketmq_sre_contracts::ConversationTurn;
+use rocketmq_sre_contracts::InvestigationDiagnosisRevision;
 use rocketmq_sre_model_gateway::ModelTool;
 use rocketmq_sre_model_gateway::ModelToolCall;
 use serde::Deserialize;
@@ -81,6 +82,7 @@ impl ConversationTurnRequest {
 pub(crate) struct ConversationTurnView {
     pub turn: ConversationTurn,
     pub answer: Option<ConversationAnswerRevision>,
+    pub diagnosis_revision: Option<InvestigationDiagnosisRevision>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -225,7 +227,7 @@ pub(super) fn model_intent(
             intent(
                 ConversationQueryKind::TopicDescribe,
                 "rocketmq-mcp",
-                format!("topics/{topic}"),
+                format!("namesrv-route/{topic}"),
                 window,
             )
         }
@@ -236,7 +238,7 @@ pub(super) fn model_intent(
             intent(
                 ConversationQueryKind::ConsumerLag,
                 "rocketmq-mcp",
-                format!("consumer-groups/{consumer_group}/lag/{topic}"),
+                format!("consumer-lag/{consumer_group}/{topic}"),
                 window,
             )
         }
@@ -246,7 +248,7 @@ pub(super) fn model_intent(
             intent(
                 ConversationQueryKind::BrokerRuntime,
                 "rocketmq-mcp",
-                format!("brokers/{broker}"),
+                format!("broker-runtime/{broker}"),
                 window,
             )
         }
@@ -301,11 +303,29 @@ fn resource_intent(resource: &str, window: u32) -> Result<ConversationQueryInten
         return Ok(intent(
             ConversationQueryKind::TopicDescribe,
             "rocketmq-mcp",
+            format!("namesrv-route/{topic}"),
+            window,
+        ));
+    }
+    if let Some(topic) = resource.strip_prefix("namesrv-route/") {
+        validate_identifier(topic)?;
+        return Ok(intent(
+            ConversationQueryKind::TopicDescribe,
+            "rocketmq-mcp",
             resource.to_owned(),
             window,
         ));
     }
     if let Some(broker) = resource.strip_prefix("brokers/") {
+        validate_identifier(broker)?;
+        return Ok(intent(
+            ConversationQueryKind::BrokerRuntime,
+            "rocketmq-mcp",
+            format!("broker-runtime/{broker}"),
+            window,
+        ));
+    }
+    if let Some(broker) = resource.strip_prefix("broker-runtime/") {
         validate_identifier(broker)?;
         return Ok(intent(
             ConversationQueryKind::BrokerRuntime,
@@ -317,6 +337,19 @@ fn resource_intent(resource: &str, window: u32) -> Result<ConversationQueryInten
     if let Some(value) = resource.strip_prefix("consumer-groups/") {
         let parts = value.split('/').collect::<Vec<_>>();
         if let [consumer_group, "lag", topic] = parts.as_slice() {
+            validate_identifier(consumer_group)?;
+            validate_identifier(topic)?;
+            return Ok(intent(
+                ConversationQueryKind::ConsumerLag,
+                "rocketmq-mcp",
+                format!("consumer-lag/{consumer_group}/{topic}"),
+                window,
+            ));
+        }
+    }
+    if let Some(value) = resource.strip_prefix("consumer-lag/") {
+        let parts = value.split('/').collect::<Vec<_>>();
+        if let [consumer_group, topic] = parts.as_slice() {
             validate_identifier(consumer_group)?;
             validate_identifier(topic)?;
             return Ok(intent(
@@ -344,6 +377,26 @@ fn resource_intent(resource: &str, window: u32) -> Result<ConversationQueryInten
     Err(policy_rejection(
         "conversation resource is not represented by a registered read-only query",
     ))
+}
+
+pub(super) fn diagnostic_pack_for_intent(intent: &ConversationQueryIntent) -> &'static str {
+    match intent.kind {
+        ConversationQueryKind::ConsumerLag => "consumer-lag.v2",
+        ConversationQueryKind::BrokerRuntime => "broker-health.v1",
+        ConversationQueryKind::TopicDescribe => "namesrv-route.v1",
+        ConversationQueryKind::ClusterOverview | ConversationQueryKind::TopicList => "cluster-topology.v1",
+        ConversationQueryKind::MetricInstant | ConversationQueryKind::MetricRange => {
+            if intent.resource.ends_with("rocketmq_store_flush_latency") {
+                "store-pressure.v1"
+            } else if intent.resource.ends_with("rocketmq_store_ha_replication_lag_bytes") {
+                "broker-ha.v1"
+            } else if intent.resource.contains("consumer_lag") {
+                "consumer-lag.v2"
+            } else {
+                "broker-health.v1"
+            }
+        }
+    }
 }
 
 fn intent(kind: ConversationQueryKind, source: &str, resource: String, window_seconds: u32) -> ConversationQueryIntent {
@@ -469,7 +522,40 @@ mod tests {
         .expect("mapped intent");
         assert_eq!(intent.kind, ConversationQueryKind::ConsumerLag);
         assert_eq!(intent.source, "rocketmq-mcp");
+        assert_eq!(intent.resource, "consumer-lag/orders/order-topic");
+        assert_eq!(diagnostic_pack_for_intent(&intent), "consumer-lag.v2");
         assert!(deterministic_intent("run arbitrary query", Some("promql/up"), None).is_err());
+    }
+
+    #[test]
+    fn legacy_resource_aliases_normalize_to_diagnostic_pack_resources() {
+        let broker = deterministic_intent("broker state", Some("brokers/broker-a"), Some(300))
+            .expect("valid broker resource")
+            .expect("broker intent");
+        assert_eq!(broker.resource, "broker-runtime/broker-a");
+        assert_eq!(diagnostic_pack_for_intent(&broker), "broker-health.v1");
+
+        let topic = deterministic_intent("topic route", Some("topics/orders"), Some(300))
+            .expect("valid topic resource")
+            .expect("topic intent");
+        assert_eq!(topic.resource, "namesrv-route/orders");
+        assert_eq!(diagnostic_pack_for_intent(&topic), "namesrv-route.v1");
+    }
+
+    #[test]
+    fn approved_metrics_select_versioned_diagnostic_packs() {
+        let cases = [
+            ("metrics/range/rocketmq_store_flush_latency", "store-pressure.v1"),
+            ("metrics/range/rocketmq_store_ha_replication_lag_bytes", "broker-ha.v1"),
+            ("metrics/range/rocketmq_consumer_lag_messages", "consumer-lag.v2"),
+            ("metrics/instant/rocketmq_broker_up", "broker-health.v1"),
+        ];
+        for (resource, expected) in cases {
+            let intent = deterministic_intent("inspect metric", Some(resource), Some(300))
+                .expect("approved metric")
+                .expect("metric intent");
+            assert_eq!(diagnostic_pack_for_intent(&intent), expected);
+        }
     }
 
     #[test]

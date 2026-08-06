@@ -19,6 +19,7 @@ use rocketmq_sre_contracts::Incident;
 use rocketmq_sre_contracts::InspectionRun;
 use rocketmq_sre_contracts::InspectionTemplate;
 use rocketmq_sre_contracts::Investigation;
+use rocketmq_sre_contracts::InvestigationDiagnosisRevision;
 use rocketmq_sre_contracts::Recommendation;
 use rocketmq_sre_contracts::RecommendationStatus;
 use rocketmq_sre_contracts::TimelineEvent;
@@ -258,6 +259,7 @@ pub(crate) struct ConversationView {
 pub(crate) struct InvestigationView {
     pub investigation: Investigation,
     pub timeline: Vec<TimelineEvent>,
+    pub diagnosis_revisions: Vec<InvestigationDiagnosisRevision>,
 }
 
 #[derive(Clone, Debug, Serialize)]

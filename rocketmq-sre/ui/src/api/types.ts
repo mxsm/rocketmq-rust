@@ -382,9 +382,36 @@ export interface ConversationAnswerRevision {
   created_at: string;
 }
 
+export type InvestigationDiagnosisStatus =
+  | "healthy"
+  | "fault"
+  | "inconclusive"
+  | "unsupported";
+
+export interface InvestigationDiagnosisRevision {
+  id: string;
+  investigation_id: string;
+  conversation_id: string;
+  turn_id: string;
+  answer_revision_id: string;
+  revision: number;
+  pack_id: string;
+  pack_version: string;
+  status: InvestigationDiagnosisStatus;
+  rule_result: Record<string, unknown>;
+  hypotheses: Array<Record<string, unknown>>;
+  evidence_ids: string[];
+  primary_model_invocation_id: string | null;
+  execution_eligible: false;
+  partial: boolean;
+  correlation_id: string;
+  created_at: string;
+}
+
 export interface ConversationTurnView {
   turn: ConversationTurn;
   answer: ConversationAnswerRevision | null;
+  diagnosis_revision: InvestigationDiagnosisRevision | null;
 }
 
 export interface ConversationTurnPage {
@@ -447,6 +474,7 @@ export interface TimelineEvent {
 export interface InvestigationView {
   investigation: Investigation;
   timeline: TimelineEvent[];
+  diagnosis_revisions: InvestigationDiagnosisRevision[];
 }
 
 export type IncidentStatus =

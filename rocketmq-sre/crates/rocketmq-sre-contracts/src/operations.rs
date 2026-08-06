@@ -222,6 +222,41 @@ pub struct DiagnosisRevision {
     pub created_at: DateTime<Utc>,
 }
 
+/// Outcome of a deterministic diagnostic pack evaluated for an investigation.
+#[derive(Clone, Copy, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InvestigationDiagnosisStatus {
+    Healthy,
+    Fault,
+    Inconclusive,
+    Unsupported,
+}
+
+/// Immutable, evidence-bound diagnostic result created by a conversation turn.
+///
+/// Conversation diagnostics are advisory. They can be promoted to an incident,
+/// but never grant execution authority by themselves.
+#[derive(Clone, Debug, JsonSchema, PartialEq, Serialize, Deserialize)]
+pub struct InvestigationDiagnosisRevision {
+    pub id: DiagnosisRevisionId,
+    pub investigation_id: InvestigationId,
+    pub conversation_id: ConversationId,
+    pub turn_id: ConversationTurnId,
+    pub answer_revision_id: ConversationAnswerRevisionId,
+    pub revision: u32,
+    pub pack_id: String,
+    pub pack_version: String,
+    pub status: InvestigationDiagnosisStatus,
+    pub rule_result: Value,
+    pub hypotheses: Value,
+    pub evidence_ids: Vec<EvidenceId>,
+    pub primary_model_invocation_id: Option<ModelInvocationId>,
+    pub execution_eligible: bool,
+    pub partial: bool,
+    pub correlation_id: CorrelationId,
+    pub created_at: DateTime<Utc>,
+}
+
 /// Supported read-only inspection templates.
 ///
 /// The original Phase 1 variants remain wire-compatible. Phase 2 adds
@@ -475,5 +510,33 @@ mod tests {
         };
         assert!(revision.primary_model_invocation_id.is_none());
         assert!(!revision.execution_eligible);
+    }
+
+    #[test]
+    fn investigation_diagnosis_is_read_only_and_round_trips() {
+        let revision = InvestigationDiagnosisRevision {
+            id: DiagnosisRevisionId::new(),
+            investigation_id: InvestigationId::new(),
+            conversation_id: ConversationId::new(),
+            turn_id: ConversationTurnId::new(),
+            answer_revision_id: ConversationAnswerRevisionId::new(),
+            revision: 1,
+            pack_id: "consumer-lag.v2".to_owned(),
+            pack_version: "2.0.0".to_owned(),
+            status: InvestigationDiagnosisStatus::Inconclusive,
+            rule_result: serde_json::json!({"missing_required_evidence": ["consumer-lag"]}),
+            hypotheses: Value::Array(Vec::new()),
+            evidence_ids: vec![EvidenceId::new()],
+            primary_model_invocation_id: None,
+            execution_eligible: false,
+            partial: true,
+            correlation_id: CorrelationId::new(),
+            created_at: Utc::now(),
+        };
+        let encoded = serde_json::to_value(&revision).expect("revision should serialize");
+        let decoded: InvestigationDiagnosisRevision =
+            serde_json::from_value(encoded).expect("revision should deserialize");
+        assert_eq!(decoded, revision);
+        assert!(!decoded.execution_eligible);
     }
 }

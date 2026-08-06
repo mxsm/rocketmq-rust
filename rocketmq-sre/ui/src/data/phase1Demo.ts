@@ -208,7 +208,11 @@ export const phase1Conversations = envelope<ConversationView>([
 ]);
 
 export const phase1Investigations = envelope<InvestigationView>([
-  { investigation, timeline: investigationTimeline },
+  {
+    investigation,
+    timeline: investigationTimeline,
+    diagnosis_revisions: [],
+  },
   {
     investigation: {
       id: "30000000-0000-4000-8000-000000000002",
@@ -236,6 +240,7 @@ export const phase1Investigations = envelope<InvestigationView>([
         "2026-07-27T07:42:00Z",
       ),
     ],
+    diagnosis_revisions: [],
   },
 ]);
 

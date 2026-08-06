@@ -39,6 +39,28 @@ describe("checked-in Phase 5 OpenAPI", () => {
     ).toBe(false);
   });
 
+  it("binds conversational diagnosis revisions without execution authority", () => {
+    const turn = specification.components.schemas.ConversationTurnView;
+    const diagnosis =
+      specification.components.schemas.InvestigationDiagnosisRevision;
+
+    expect(turn.required).toContain("diagnosis_revision");
+    expect(
+      turn.properties.diagnosis_revision.oneOf[0].$ref,
+    ).toBe("#/components/schemas/InvestigationDiagnosisRevision");
+    expect(diagnosis.properties.execution_eligible.const).toBe(false);
+    expect(diagnosis.required).toEqual(
+      expect.arrayContaining([
+        "investigation_id",
+        "conversation_id",
+        "turn_id",
+        "answer_revision_id",
+        "evidence_ids",
+        "correlation_id",
+      ]),
+    );
+  });
+
   it("publishes typed Phase 2 and supervised Phase 3 contracts", () => {
     expect(specification["x-rocketmq-sre-phase"]).toBe(5);
     expect(specification["x-rocketmq-phase2-contracts"]).toContain(

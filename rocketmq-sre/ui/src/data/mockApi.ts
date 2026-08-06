@@ -12,6 +12,7 @@ import type {
   IncidentOperationResult,
   IncidentView,
   InspectionView,
+  InvestigationDiagnosisRevision,
   InvestigationView,
   PostmortemPatchRequest,
   PostmortemPublishRequest,
@@ -94,6 +95,22 @@ function clone<T>(value: T): T {
 
 function unavailable(resource: string): never {
   throw new ApiError(404, "source_unavailable", `${resource} is unavailable`);
+}
+
+function mockDiagnosticPack(resource: string) {
+  if (resource.includes("consumer") || resource.includes("lag")) {
+    return "consumer-lag.v2";
+  }
+  if (resource.includes("flush")) {
+    return "store-pressure.v1";
+  }
+  if (resource.includes("ha_replication")) {
+    return "broker-ha.v1";
+  }
+  if (resource.includes("topic")) {
+    return "namesrv-route.v1";
+  }
+  return "broker-health.v1";
 }
 
 export function createMockSreApi(auth?: ApiRequestContext): SreApi {
@@ -362,6 +379,7 @@ export function createMockSreApi(auth?: ApiRequestContext): SreApi {
         investigations.unshift({
           investigation,
           timeline: [],
+          diagnosis_revisions: [],
         });
       }
       return clone(result);
@@ -394,6 +412,43 @@ export function createMockSreApi(auth?: ApiRequestContext): SreApi {
       const queryResource =
         source === "prometheus" ? resource.slice("metrics/".length) : resource;
       const turnId = crypto.randomUUID();
+      const answerId = crypto.randomUUID();
+      const correlationId = crypto.randomUUID();
+      const modelInvocationId = crypto.randomUUID();
+      const diagnosticPack = mockDiagnosticPack(resource);
+      const investigationView = conversation.conversation.investigation_id
+        ? investigations.find(
+            (item) =>
+              item.investigation.id ===
+              conversation.conversation.investigation_id,
+          )
+        : undefined;
+      const diagnosisRevision: InvestigationDiagnosisRevision | null =
+        investigationView
+          ? {
+              id: crypto.randomUUID(),
+              investigation_id: investigationView.investigation.id,
+              conversation_id: id,
+              turn_id: turnId,
+              answer_revision_id: answerId,
+              revision: investigationView.diagnosis_revisions.length + 1,
+              pack_id: diagnosticPack,
+              pack_version:
+                diagnosticPack === "consumer-lag.v2" ? "2.0.0" : "1.0.0",
+              status: "inconclusive",
+              rule_result: {
+                status: "inconclusive",
+                missing_required_evidence: [],
+              },
+              hypotheses: [],
+              evidence_ids: [evidenceId],
+              primary_model_invocation_id: modelInvocationId,
+              execution_eligible: false,
+              partial: false,
+              correlation_id: correlationId,
+              created_at: now,
+            }
+          : null;
       const result: ConversationTurnView = {
         turn: {
           id: turnId,
@@ -416,12 +471,12 @@ export function createMockSreApi(auth?: ApiRequestContext): SreApi {
             resource: queryResource,
             window_seconds: input.window_seconds ?? 900,
           },
-          correlation_id: crypto.randomUUID(),
+          correlation_id: correlationId,
           created_at: now,
           completed_at: now,
         },
         answer: {
-          id: crypto.randomUUID(),
+          id: answerId,
           conversation_id: id,
           turn_id: turnId,
           revision: 1,
@@ -440,15 +495,35 @@ export function createMockSreApi(auth?: ApiRequestContext): SreApi {
             },
           ],
           evidence_ids: [evidenceId],
-          model_invocation_id: crypto.randomUUID(),
+          model_invocation_id: modelInvocationId,
           partial: false,
           warnings: [],
           created_at: now,
         },
+        diagnosis_revision: diagnosisRevision,
       };
       const turns = conversationTurns.get(id) ?? [];
       turns.push(result);
       conversationTurns.set(id, turns);
+      if (investigationView && diagnosisRevision) {
+        investigationView.diagnosis_revisions.push(diagnosisRevision);
+        investigationView.timeline.push({
+          id: crypto.randomUUID(),
+          tenant_id: investigationView.investigation.tenant_id,
+          cluster_id: investigationView.investigation.cluster_id,
+          investigation_id: investigationView.investigation.id,
+          event_type: "conversation_diagnosis_revision_created",
+          summary: "Conversation evidence evaluated by a diagnostic pack",
+          details: {
+            answer_revision_id: answerId,
+            diagnosis_revision_id: diagnosisRevision.id,
+            execution_eligible: false,
+          },
+          correlation_id: correlationId,
+          actor: { subject: auth?.subject ?? "rocketmq-sre-development" },
+          occurred_at: now,
+        });
+      }
       return clone(result);
     },
     cancelConversationQuery: async (id, signal) => {

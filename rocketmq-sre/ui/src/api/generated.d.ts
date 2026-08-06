@@ -7483,9 +7483,43 @@ export interface components {
             /** Format: date-time */
             created_at: string;
         };
+        InvestigationDiagnosisRevision: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            investigation_id: string;
+            /** Format: uuid */
+            conversation_id: string;
+            /** Format: uuid */
+            turn_id: string;
+            /** Format: uuid */
+            answer_revision_id: string;
+            /** Format: uint32 */
+            revision: number;
+            pack_id: string;
+            pack_version: string;
+            /** @enum {string} */
+            status: "healthy" | "fault" | "inconclusive" | "unsupported";
+            rule_result: {
+                [key: string]: unknown;
+            };
+            hypotheses: {
+                [key: string]: unknown;
+            }[];
+            evidence_ids: string[];
+            primary_model_invocation_id: string | null;
+            /** @constant */
+            execution_eligible: false;
+            partial: boolean;
+            /** Format: uuid */
+            correlation_id: string;
+            /** Format: date-time */
+            created_at: string;
+        };
         ConversationTurnView: {
             turn: components["schemas"]["ConversationTurn"];
             answer: components["schemas"]["ConversationAnswerRevision"] | null;
+            diagnosis_revision: components["schemas"]["InvestigationDiagnosisRevision"] | null;
         };
         ConversationTurnPage: {
             /** @constant */

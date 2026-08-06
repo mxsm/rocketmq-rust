@@ -94,7 +94,21 @@ describe("mock SRE API", () => {
       resource: "instant/rocketmq_broker_up",
     });
     expect(result.answer?.citations).toHaveLength(1);
+    expect(result.diagnosis_revision).toMatchObject({
+      pack_id: "broker-health.v1",
+      execution_eligible: false,
+      evidence_ids: [result.answer?.evidence_ids[0]],
+    });
     expect(page.items).toEqual([result]);
+    const investigation = await api.getInvestigation(
+      conversation!.conversation.investigation_id!,
+    );
+    expect(investigation.diagnosis_revisions).toEqual([
+      result.diagnosis_revision,
+    ]);
+    expect(investigation.timeline.at(-1)?.event_type).toBe(
+      "conversation_diagnosis_revision_created",
+    );
     expect(JSON.stringify(result)).not.toContain("apply");
   });
 

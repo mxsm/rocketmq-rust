@@ -12,7 +12,7 @@ const path = join(root, "openapi", "rocketmq-sre-phase05.openapi.json");
 const raw = readFileSync(path, "utf8");
 const eol = raw.includes("\r\n") ? "\r\n" : "\n";
 
-if (raw.includes('"/v1/conversations/{id}/turns"')) {
+if (raw.includes('"InvestigationDiagnosisRevision"')) {
   process.exit(0);
 }
 

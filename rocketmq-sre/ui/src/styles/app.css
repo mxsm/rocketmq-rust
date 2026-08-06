@@ -3404,6 +3404,27 @@ td small {
   white-space: pre-wrap;
 }
 
+.conversation-diagnosis-provenance {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+
+.conversation-diagnosis-provenance code {
+  color: var(--text-primary);
+}
+
+.investigation-diagnosis-list {
+  max-height: 560px;
+  overflow: auto;
+}
+
 .conversation-citations {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

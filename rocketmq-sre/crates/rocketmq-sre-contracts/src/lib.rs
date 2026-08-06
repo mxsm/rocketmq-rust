@@ -385,6 +385,8 @@ pub use operations::InspectionRun;
 pub use operations::InspectionStatus;
 pub use operations::InspectionTemplate;
 pub use operations::Investigation;
+pub use operations::InvestigationDiagnosisRevision;
+pub use operations::InvestigationDiagnosisStatus;
 pub use operations::InvestigationStatus;
 pub use operations::KnowledgeFeedbackKind;
 pub use operations::KnowledgeItem;

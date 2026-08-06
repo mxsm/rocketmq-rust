@@ -500,7 +500,8 @@ export function ConversationDetailPage() {
               />
               {turns.data && turns.data.items.length > 0 && (
                 <ol className="conversation-turn-list" aria-live="polite">
-                  {turns.data.items.map(({ turn, answer }) => (
+                  {turns.data.items.map(
+                    ({ turn, answer, diagnosis_revision }) => (
                     <li className="conversation-turn" key={turn.id}>
                       <div className="conversation-question-row">
                         <MessageSquareText size={16} />
@@ -529,6 +530,20 @@ export function ConversationDetailPage() {
                               {answer.mode}
                             </Badge>
                             {answer.partial && <Badge variant="warning">partial</Badge>}
+                            {diagnosis_revision && (
+                              <Badge
+                                variant={
+                                  diagnosis_revision.status === "fault"
+                                    ? "destructive"
+                                    : diagnosis_revision.status === "healthy"
+                                      ? "success"
+                                      : "warning"
+                                }
+                              >
+                                {diagnosis_revision.pack_id}@
+                                {diagnosis_revision.pack_version} · {diagnosis_revision.status}
+                              </Badge>
+                            )}
                           </div>
                           <p>{answer.answer}</p>
                           {answer.citations.length > 0 && (
@@ -549,6 +564,21 @@ export function ConversationDetailPage() {
                               ))}
                             </div>
                           )}
+                          {diagnosis_revision && (
+                            <div className="conversation-diagnosis-provenance">
+                              <span>
+                                Diagnosis revision #{diagnosis_revision.revision}
+                              </span>
+                              <code>{diagnosis_revision.id}</code>
+                              <span>
+                                execution_eligible=
+                                {String(diagnosis_revision.execution_eligible)}
+                              </span>
+                              <span>
+                                Evidence {diagnosis_revision.evidence_ids.length}
+                              </span>
+                            </div>
+                          )}
                           {answer.warnings.length > 0 && (
                             <div className="conversation-warnings">
                               {answer.warnings.join(" · ")}
@@ -557,7 +587,8 @@ export function ConversationDetailPage() {
                         </div>
                       )}
                     </li>
-                  ))}
+                    ),
+                  )}
                 </ol>
               )}
             </DataSurface>
@@ -733,7 +764,82 @@ export function InvestigationDetailPage() {
               label="Fingerprint"
               value={resource.data.investigation.fingerprint}
             />
+            <Summary
+              label="Diagnosis revisions"
+              value={String(resource.data.diagnosis_revisions.length)}
+            />
           </section>
+          <DataSurface
+            title="Conversation diagnosis revisions"
+            description="Each immutable revision binds the conversation turn, answer, diagnostic pack, and Evidence. Conversation revisions never grant execution authority."
+          >
+            {resource.data.diagnosis_revisions.length === 0 ? (
+              <div className="empty-state compact">
+                <h3>No diagnostic revision yet</h3>
+                <p>Run a bounded read-only query from the linked conversation.</p>
+              </div>
+            ) : (
+              <div className="diagnosis-list investigation-diagnosis-list">
+                {resource.data.diagnosis_revisions.map((revision) => (
+                  <article key={revision.id}>
+                    <header>
+                      <div>
+                        <strong>
+                          Revision {revision.revision} · {revision.pack_id}@
+                          {revision.pack_version}
+                        </strong>
+                        <span>{formatTime(revision.created_at)}</span>
+                      </div>
+                      <Badge
+                        variant={
+                          revision.status === "fault"
+                            ? "destructive"
+                            : revision.status === "healthy"
+                              ? "success"
+                              : "warning"
+                        }
+                      >
+                        {revision.status}
+                      </Badge>
+                    </header>
+                    <DefinitionGrid
+                      items={[
+                        {
+                          label: "Conversation turn",
+                          value: revision.turn_id,
+                          mono: true,
+                        },
+                        {
+                          label: "Answer revision",
+                          value: revision.answer_revision_id,
+                          mono: true,
+                        },
+                        {
+                          label: "Evidence",
+                          value: revision.evidence_ids.length,
+                        },
+                        {
+                          label: "Execution eligible",
+                          value: String(revision.execution_eligible),
+                        },
+                      ]}
+                    />
+                    <footer>
+                      <code>{revision.correlation_id}</code>
+                      {revision.partial && <Badge variant="warning">partial</Badge>}
+                      {revision.conversation_id && (
+                        <Button asChild size="sm" variant="outline">
+                          <Link to={`/conversations/${revision.conversation_id}`}>
+                            Open conversation
+                          </Link>
+                        </Button>
+                      )}
+                    </footer>
+                  </article>
+                ))}
+              </div>
+            )}
+          </DataSurface>
           <div className="phase1-two-column detail-balance">
             <DataSurface
               title="调查时间线"

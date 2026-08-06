@@ -676,7 +676,7 @@ fn build_routers_with_auth(
         connector_channel.clone(),
         evidence.clone(),
         model_gateway.clone(),
-    );
+    )?;
     let dr = crate::dr::DrService::new(repository.clone());
     let governance = crate::governance::GovernanceService::new(repository.clone(), grant_signing_key.as_bytes())?;
     let slo = SloService::new(
