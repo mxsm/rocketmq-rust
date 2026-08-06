@@ -232,21 +232,25 @@ impl RocketMQSerializable {
 
     /// Estimate the size needed for encoding to reduce reallocations
     #[inline]
-    fn estimate_encode_size(cmd: &RemotingCommand) -> usize {
-        let mut size = 17; // Fixed header fields (13) plus the ext-map length (4).
+    pub(crate) fn estimate_encode_size(cmd: &RemotingCommand) -> usize {
+        let mut size = 17usize; // Fixed header fields (13) plus the ext-map length (4).
 
         // Remark size
         if let Some(remark) = cmd.remark() {
-            size += 4 + remark.len(); // length prefix + data
+            size = size.saturating_add(4usize.saturating_add(remark.len())); // length prefix + data
         } else {
-            size += 4; // just the length prefix (0)
+            size = size.saturating_add(4); // just the length prefix (0)
         }
 
         // Ext fields size (approximate)
         if let Some(ext) = cmd.ext_fields() {
             for (k, v) in ext.iter() {
                 if !k.is_empty() {
-                    size += 2 + k.len() + 4 + v.len();
+                    size = size
+                        .saturating_add(2)
+                        .saturating_add(k.len())
+                        .saturating_add(4)
+                        .saturating_add(v.len());
                 }
             }
         }

@@ -121,7 +121,10 @@ pub trait CommandCustomHeader: AsAny {
     ///
     /// Implementations must require only shared access so cloned remoting
     /// commands can encode the same immutable header. Callers must check
-    /// [`Self::encode_capability`] before invoking this method.
+    /// [`Self::encode_capability`] before invoking this method. Implementations
+    /// are responsible for validating the header before the first write; the
+    /// frame entrypoint does not pre-validate because map and binary encoders
+    /// already own the authoritative validation boundary.
     ///
     /// # Errors
     ///

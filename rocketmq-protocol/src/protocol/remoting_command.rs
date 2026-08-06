@@ -547,9 +547,6 @@ impl RemotingCommand {
 
     #[inline]
     fn try_fast_header_encode_inner(&mut self, dst: &mut BytesMut) -> rocketmq_error::RocketMQResult<()> {
-        if let Some(header) = self.command_custom_header_ref() {
-            header.check_fields()?;
-        }
         match self.serialize_type {
             SerializeType::JSON => self.fast_encode_json(dst),
             SerializeType::ROCKETMQ => self.fast_encode_rocketmq(dst),
@@ -562,30 +559,29 @@ impl RemotingCommand {
         self.try_make_custom_header_to_net()
             .map_err(|error| rocketmq_error::RocketMQError::request_header_error(error.to_string()))?;
 
-        // Pre-calculate approximate header size to reduce reallocations
         let estimated_header_size = self.estimate_json_header_size();
         let body_length = self.body.as_ref().map_or(0, |b| b.len());
+        let begin_index = dst.len();
 
-        // Reserve only prefix + header. The body remains an independent `Bytes` segment for
-        // plaintext vectored writes and is coalesced later only by the TLS writer.
         dst.reserve(8 + estimated_header_size);
+        dst.put_i64(0);
+        let header_index = dst.len();
 
-        // Encode header using simd-json for better performance when available
         #[cfg(feature = "simd")]
-        let encode_result = simd_json::to_vec(self);
+        let encode_result = simd_json::to_writer((&mut *dst).writer(), self);
 
         #[cfg(not(feature = "simd"))]
-        let encode_result = serde_json::to_vec(self);
+        let encode_result = serde_json::to_writer((&mut *dst).writer(), self);
 
-        let header_bytes = encode_result.map_err(|error| {
+        encode_result.map_err(|error| {
             rocketmq_error::SerializationError::encode_failed("remoting-command", error.to_string())
         })?;
+        let header_length = dst.len() - header_index;
         let (total_length, marked_header_length) =
-            Self::checked_frame_lengths(header_bytes.len(), body_length, SerializeType::JSON)?;
+            Self::checked_frame_lengths(header_length, body_length, SerializeType::JSON)?;
 
-        dst.put_i32(total_length);
-        dst.put_i32(marked_header_length);
-        dst.put_slice(&header_bytes);
+        dst[begin_index..begin_index + 4].copy_from_slice(&total_length.to_be_bytes());
+        dst[begin_index + 4..begin_index + 8].copy_from_slice(&marked_header_length.to_be_bytes());
         Ok(())
     }
 
@@ -593,9 +589,9 @@ impl RemotingCommand {
     #[inline]
     fn fast_encode_rocketmq(&mut self, dst: &mut BytesMut) -> rocketmq_error::RocketMQResult<()> {
         let begin_index = dst.len();
+        let estimated_header_size = RocketMQSerializable::estimate_encode_size(self);
 
-        // Reserve space for total_length (4 bytes) and serialize_type (4 bytes)
-        dst.reserve(8);
+        dst.reserve(8usize.saturating_add(estimated_header_size));
         dst.put_i64(0); // Placeholder for total_length + serialize_type
 
         let capability = self.custom_header_encode_capability();

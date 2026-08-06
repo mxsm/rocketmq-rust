@@ -13,9 +13,11 @@
 // limitations under the License.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
+use rocketmq_macros::RequestHeaderCodecV3;
 use rocketmq_model::boundary_type::BoundaryType;
 use rocketmq_protocol::protocol::header::get_lite_client_info_request_header::GetLiteClientInfoRequestHeader;
 use rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2;
@@ -31,9 +33,10 @@ use rocketmq_protocol::protocol::header_codec::{
 };
 #[allow(deprecated, reason = "verifies the source-compatible legacy adapter delegates to V3")]
 use rocketmq_protocol::protocol::FastCodesHeader;
+use rocketmq_protocol::protocol::SerializeType;
 use rocketmq_protocol::rpc::rpc_request_header::RpcRequestHeader;
 use rocketmq_protocol::rpc::topic_request_header::TopicRequestHeader;
-use rocketmq_protocol::{CommandCustomHeader, FromMap, HeaderEncodeCapability, HeaderMap};
+use rocketmq_protocol::{CommandCustomHeader, FromMap, HeaderEncodeCapability, HeaderMap, RemotingCommand};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -93,6 +96,27 @@ struct RegisteredSchema {
     local_fields: &'static [HeaderFieldSpec],
     fields: Vec<HeaderFieldSpec>,
     flattens: Vec<HeaderFlattenSpec>,
+}
+
+static VALIDATION_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+#[derive(Default, RequestHeaderCodecV3)]
+#[header(
+    type_id = "fixtures::SingleValidationHeader",
+    crate = "rocketmq_protocol",
+    validate = "Self::count_validation",
+    fast
+)]
+struct SingleValidationHeader {
+    #[header(required)]
+    value: CheetahString,
+}
+
+impl SingleValidationHeader {
+    fn count_validation(&self) -> Result<(), HeaderCodecError> {
+        VALIDATION_CALLS.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
 }
 
 fn register<T: HeaderCodec + CommandCustomHeader + Default>() -> RegisteredSchema {
@@ -353,6 +377,25 @@ fn typed_validation_errors_remain_classified_and_redacted() {
         })
     ));
     assert!(map.is_empty());
+}
+
+#[test]
+fn frame_encoding_validates_each_typed_header_once() {
+    for serialize_type in [SerializeType::JSON, SerializeType::ROCKETMQ] {
+        VALIDATION_CALLS.store(0, Ordering::Relaxed);
+        let header = SingleValidationHeader { value: "value".into() };
+        let mut command = RemotingCommand::create_request_command(100, header).set_serialize_type(serialize_type);
+        let mut encoded = BytesMut::new();
+
+        command.try_fast_header_encode(&mut encoded).unwrap();
+
+        assert!(!encoded.is_empty());
+        assert_eq!(
+            VALIDATION_CALLS.load(Ordering::Relaxed),
+            1,
+            "{serialize_type:?} must validate through its authoritative encoder exactly once"
+        );
+    }
 }
 
 fn decode_fast_fields(encoded: &[u8]) -> HeaderMap {
