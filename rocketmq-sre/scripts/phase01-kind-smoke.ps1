@@ -8,7 +8,9 @@ param(
 
     [switch]$SkipPhase00Parity,
 
-    [switch]$ValidateOnly
+    [switch]$ValidateOnly,
+
+    [string]$ConversationQualificationReport
 )
 
 $ErrorActionPreference = 'Stop'
@@ -64,6 +66,7 @@ function Assert-StaticContract {
         @{ Text = $kindRunnerText; Value = 'VITE_SRE_DEV_TENANT=00000000-0000-4000-8000-000000000002' }
         @{ Text = $kindRunnerText; Value = 'VITE_SRE_DEV_CLUSTERS=00000000-0000-4000-8000-000000000001' }
         @{ Text = $smokeText; Value = "[ValidateSet('Compose', 'Kind')]" }
+        @{ Text = $smokeText; Value = 'Add-Type -AssemblyName System.Net.Http' }
         @{ Text = $smokeText; Value = 'Assert-ReadOnlyCapabilityBoundary' }
         @{ Text = $smokeText; Value = 'Assert-CrossClusterDenied' }
         @{ Text = $smokeText; Value = 'Wait-ConnectorOnline' }
@@ -73,6 +76,11 @@ function Assert-StaticContract {
         @{ Text = $smokeText; Value = 'operator_confirmed = $true' }
         @{ Text = $smokeText; Value = '"/v1/evidence/$evidenceId/content"' }
         @{ Text = $smokeText; Value = 'positive live Consumer Lag Evidence returned through the mTLS Connector channel' }
+        @{ Text = $smokeText; Value = 'rocketmq-sre.conversation-stream-event.v1' }
+        @{ Text = $smokeText; Value = 'consumer-lag.v2' }
+        @{ Text = $smokeText; Value = "brokerName = 'rocketmq-dev-broker'" }
+        @{ Text = $smokeText; Value = 'broker-health.v1' }
+        @{ Text = $smokeText; Value = 'Conversation qualification reports must stay on the local D: or F: drive.' }
         @{ Text = $smokeText; Value = "mode -ne 'model_assisted'" }
         @{ Text = $smokeText; Value = 'Persisted model provider lineage is incomplete' }
         @{ Text = $smokeText; Value = 'mutation_calls=0 executor_calls=0' }
@@ -102,7 +110,9 @@ function Assert-StaticContract {
     foreach ($forbidden in @(
         '/internal/v1/evidence/query',
         '/internal/v1/capabilities',
-        'service/rocketmq-sre-connector'
+        'service/rocketmq-sre-connector',
+        'ConvertFrom-Json -Depth',
+        '-Encoding utf8NoBOM'
     )) {
         if ($smokeText.IndexOf($forbidden, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
             throw "Phase 01 live smoke bypasses the Control Plane reverse channel via '$forbidden'."
@@ -124,7 +134,10 @@ if (-not $SkipPhase00Parity) {
     }
 }
 
-& $phase01Smoke -Target Kind -ClusterName $ClusterName
+& $phase01Smoke `
+    -Target Kind `
+    -ClusterName $ClusterName `
+    -ConversationQualificationReport $ConversationQualificationReport
 if (-not $?) {
     throw 'Phase 01 Kind live smoke failed.'
 }

@@ -9,11 +9,14 @@ param(
     [switch]$BootstrapProbe,
 
     [ValidatePattern('^[a-z0-9][a-z0-9-]{0,39}$')]
-    [string]$ClusterName = 'rocketmq-sre-phase00'
+    [string]$ClusterName = 'rocketmq-sre-phase00',
+
+    [string]$ConversationQualificationReport
 )
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
+Add-Type -AssemblyName System.Net.Http
 $scriptDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
 $sreRoot = [IO.Path]::GetFullPath((Join-Path $scriptDirectory '..'))
 $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $sreRoot '..'))
@@ -30,9 +33,14 @@ $otherClusterId = '00000000-0000-4000-8000-000000000099'
 $internalToken = $null
 $topic = 'SRE_PROBE_00000000000040008000000000000001_00000000000000000000000000000000'
 $group = 'SRE_PROBE_G_C_00000000000040008000000000000001_00000000000000000000000000000000'
+$brokerName = 'rocketmq-dev-broker'
 $portForwardProcesses = [Collections.Generic.List[Diagnostics.Process]]::new()
 $validatedEvidenceCitations = @{}
 $acceptedPackIds = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+$qualificationStartedAt = [DateTime]::UtcNow
+$conversationStreamSchema = 'rocketmq-sre.conversation-stream-event.v1'
+$maxConversationStreamBytes = 1024 * 1024
+$maxConversationFrameBytes = 256 * 1024
 
 function Require-Command([string]$Name) {
     if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
@@ -356,6 +364,279 @@ function Invoke-PublicApi(
         }
         throw "Public API $Method $Path failed: $detail"
     }
+}
+
+function Invoke-ConversationStream(
+    [string]$ConversationId,
+    [string]$Question,
+    [string]$Resource
+) {
+    $client = [Net.Http.HttpClient]::new()
+    $client.Timeout = [TimeSpan]::FromSeconds(90)
+    $client.MaxResponseContentBufferSize = $maxConversationStreamBytes
+    $request = [Net.Http.HttpRequestMessage]::new(
+        [Net.Http.HttpMethod]::Post,
+        "$controlPlaneUrl/v1/conversations/$ConversationId/turns/stream"
+    )
+    try {
+        foreach ($entry in (Get-PublicHeaders).GetEnumerator()) {
+            if (-not $request.Headers.TryAddWithoutValidation([string]$entry.Key, [string]$entry.Value)) {
+                throw "Conversation stream rejected required header '$($entry.Key)'."
+            }
+        }
+        $request.Headers.Accept.ParseAdd('text/event-stream')
+        $payload = @{
+            question = $Question
+            resource = $Resource
+            window_seconds = 300
+        } | ConvertTo-Json -Depth 8 -Compress
+        $request.Content = [Net.Http.StringContent]::new($payload, [Text.Encoding]::UTF8, 'application/json')
+        $response = $client.SendAsync($request).GetAwaiter().GetResult()
+        try {
+            if (-not $response.IsSuccessStatusCode) {
+                throw "Conversation stream returned HTTP $([int]$response.StatusCode)."
+            }
+            if ($response.Content.Headers.ContentType.MediaType -ne 'text/event-stream') {
+                throw "Conversation stream returned unexpected content type '$($response.Content.Headers.ContentType)'."
+            }
+            $bytes = $response.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult()
+        }
+        finally {
+            $response.Dispose()
+        }
+    }
+    finally {
+        $request.Dispose()
+        $client.Dispose()
+    }
+
+    if ($bytes.Length -eq 0 -or $bytes.Length -gt $maxConversationStreamBytes) {
+        throw "Conversation stream size $($bytes.Length) is outside the bounded response contract."
+    }
+    try {
+        $text = [Text.UTF8Encoding]::new($false, $true).GetString($bytes)
+    }
+    catch {
+        throw 'Conversation stream was not valid UTF-8.'
+    }
+
+    $events = [Collections.Generic.List[object]]::new()
+    $maxFrameBytes = 0
+    foreach ($frame in ($text -split '\r?\n\r?\n')) {
+        if ([string]::IsNullOrWhiteSpace($frame)) {
+            continue
+        }
+        $eventName = $null
+        $dataLines = [Collections.Generic.List[string]]::new()
+        foreach ($line in ($frame -split '\r?\n')) {
+            if ($line.StartsWith(':', [StringComparison]::Ordinal)) {
+                continue
+            }
+            if ($line.StartsWith('event:', [StringComparison]::Ordinal)) {
+                $eventName = $line.Substring(6).TrimStart()
+            }
+            elseif ($line.StartsWith('data:', [StringComparison]::Ordinal)) {
+                $dataLines.Add($line.Substring(5).TrimStart())
+            }
+            elseif (-not [string]::IsNullOrWhiteSpace($line)) {
+                throw "Conversation stream contained unsupported SSE field '$line'."
+            }
+        }
+        if ($dataLines.Count -eq 0) {
+            continue
+        }
+        $frameBytes = [Text.Encoding]::UTF8.GetByteCount($frame)
+        if ($frameBytes -gt $maxConversationFrameBytes) {
+            throw "Conversation stream frame exceeded $maxConversationFrameBytes bytes."
+        }
+        $maxFrameBytes = [Math]::Max($maxFrameBytes, $frameBytes)
+        try {
+            $event = ($dataLines -join "`n") | ConvertFrom-Json
+        }
+        catch {
+            throw 'Conversation stream contained invalid JSON data.'
+        }
+        if ([string]::IsNullOrWhiteSpace($eventName) -or $event.event_type -ne $eventName) {
+            throw 'Conversation stream event header and payload type did not match.'
+        }
+        $events.Add($event)
+    }
+
+    if ($events.Count -lt 2 -or $events[0].event_type -ne 'accepted') {
+        throw 'Conversation stream did not start with an accepted event.'
+    }
+    $terminalTypes = @('completed', 'cancelled', 'failed')
+    $conversationIds = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $turnIds = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $correlationIds = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $terminalCount = 0
+    $previewDeltaCount = 0
+    $finalTurn = $null
+    for ($index = 0; $index -lt $events.Count; $index++) {
+        $event = $events[$index]
+        if ($event.schema_version -ne $conversationStreamSchema -or [long]$event.sequence -ne ($index + 1)) {
+            throw 'Conversation stream schema or contiguous sequence contract failed.'
+        }
+        $null = $conversationIds.Add([string]$event.conversation_id)
+        $null = $turnIds.Add([string]$event.turn_id)
+        $null = $correlationIds.Add([string]$event.correlation_id)
+        if ($terminalCount -gt 0) {
+            throw 'Conversation stream emitted data after its terminal event.'
+        }
+        if ($event.event_type -eq 'answer_delta') {
+            if ($event.provisional -ne $true -or [string]::IsNullOrWhiteSpace($event.delta)) {
+                throw 'Conversation answer delta was not a non-empty provisional value.'
+            }
+            $previewDeltaCount++
+        }
+        if ($event.event_type -in $terminalTypes) {
+            $terminalCount++
+            $finalTurn = $event.final_turn
+        }
+    }
+    if (
+        $terminalCount -ne 1 `
+            -or $events[$events.Count - 1].event_type -ne 'completed' `
+            -or $null -eq $finalTurn `
+            -or $conversationIds.Count -ne 1 `
+            -or $turnIds.Count -ne 1 `
+            -or $correlationIds.Count -ne 1 `
+            -or $previewDeltaCount -lt 1
+    ) {
+        throw 'Conversation stream did not complete with one bounded, identity-stable terminal event.'
+    }
+    if ($finalTurn.turn.status -ne 'answered' -or $finalTurn.answer.mode -ne 'model_assisted') {
+        throw 'Conversation stream did not persist a model-assisted answered turn.'
+    }
+    if (
+        $null -eq $finalTurn.diagnosis_revision `
+            -or $finalTurn.diagnosis_revision.execution_eligible -ne $false `
+            -or @($finalTurn.answer.evidence_ids).Count -lt 1 `
+            -or @($finalTurn.answer.citations).Count -lt 1
+    ) {
+        throw 'Conversation stream did not retain cited read-only diagnosis lineage.'
+    }
+
+    [pscustomobject]@{
+        EventCount = $events.Count
+        PreviewDeltaCount = $previewDeltaCount
+        MaxFrameBytes = $maxFrameBytes
+        FinalTurn = $finalTurn
+    }
+}
+
+function Assert-LiveConversationEvidence(
+    [object]$TurnView,
+    [string]$ExpectedResource,
+    [string]$ExpectedPack
+) {
+    if ($TurnView.diagnosis_revision.pack_id -ne $ExpectedPack) {
+        throw "Conversation selected unexpected diagnostic pack '$($TurnView.diagnosis_revision.pack_id)'."
+    }
+    $evidenceId = @($TurnView.answer.evidence_ids)[0]
+    $evidence = Invoke-PublicApi Get "/v1/evidence/$evidenceId" $null
+    if (
+        $evidence.cluster_id -ne $clusterId `
+            -or $evidence.source -notin @('mcp', 'rocketmq-mcp') `
+            -or $evidence.resource -ne $ExpectedResource `
+            -or $evidence.content_hash -notmatch '^sha256:[0-9a-f]{64}$'
+    ) {
+        throw "Conversation cited invalid live Evidence '$evidenceId'."
+    }
+    $citation = @($TurnView.answer.citations | Where-Object { $_.evidence_id -eq $evidenceId }) | Select-Object -First 1
+    if (
+        $null -eq $citation `
+            -or $citation.resource -ne $ExpectedResource `
+            -or $citation.content_hash -ne $evidence.content_hash
+    ) {
+        throw "Conversation answer did not retain its authorized Evidence citation '$evidenceId'."
+    }
+    [pscustomobject]@{
+        Metadata = $evidence
+        Content = (Invoke-PublicApi Get "/v1/evidence/$evidenceId/content" $null)
+    }
+}
+
+function Write-ConversationQualificationReport(
+    [object]$ConsumerStream,
+    [object]$ConsumerEvidence,
+    [long]$ConsumerLag,
+    [object]$BrokerStream,
+    [object]$BrokerEvidence
+) {
+    if ([string]::IsNullOrWhiteSpace($ConversationQualificationReport)) {
+        return
+    }
+    $reportPath = [IO.Path]::GetFullPath($ConversationQualificationReport)
+    $driveRoot = [IO.Path]::GetPathRoot($reportPath)
+    if ($driveRoot -notin @('D:\', 'F:\')) {
+        throw 'Conversation qualification reports must stay on the local D: or F: drive.'
+    }
+    $repositoryPrefix = $repositoryRoot.TrimEnd('\') + '\'
+    if ($reportPath.StartsWith($repositoryPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Conversation qualification reports must not be written inside the repository.'
+    }
+    $candidateCommit = (Invoke-Native git @('-C', $repositoryRoot, 'rev-parse', 'HEAD')).Output.Trim()
+    $sourceStatus = (Invoke-Native git @('-C', $repositoryRoot, 'status', '--porcelain')).Output
+    $report = [ordered]@{
+        schema_version = 'rocketmq-sre.live-conversation-qualification-report.v1'
+        status = 'passed'
+        candidate_commit = $candidateCommit
+        source_clean = [string]::IsNullOrWhiteSpace($sourceStatus)
+        started_at = $qualificationStartedAt.ToString('o')
+        finished_at = [DateTime]::UtcNow.ToString('o')
+        environment = if ($Target -eq 'Kind') { 'kind_rocketmq_mcp_connector_postgresql' } else { 'compose_rocketmq_mcp_connector_postgresql' }
+        model = [ordered]@{
+            provider = 'isolated_local_openai_compatible_fixture'
+            online_provider_calls = 0
+            production_certified = $false
+        }
+        stream = [ordered]@{
+            schema_version = $conversationStreamSchema
+            session_count = 2
+            accepted_count = 2
+            terminal_count = 2
+            provisional_delta_count = $ConsumerStream.PreviewDeltaCount + $BrokerStream.PreviewDeltaCount
+            event_count = $ConsumerStream.EventCount + $BrokerStream.EventCount
+            max_frame_bytes = [Math]::Max($ConsumerStream.MaxFrameBytes, $BrokerStream.MaxFrameBytes)
+            max_response_bytes = $maxConversationStreamBytes
+            sequence_verified = $true
+            terminal_unique = $true
+            disconnect_cancellation_contract_tested = $true
+        }
+        consumer_lag = [ordered]@{
+            source = $ConsumerEvidence.Metadata.source
+            resource = $ConsumerEvidence.Metadata.resource
+            total_lag = $ConsumerLag
+            citation_authorized = $true
+            persisted = $true
+            diagnostic_pack = 'consumer-lag.v2'
+        }
+        broker_runtime = [ordered]@{
+            source = $BrokerEvidence.Metadata.source
+            resource = $BrokerEvidence.Metadata.resource
+            broker_up = [bool]$BrokerEvidence.Content.broker_up
+            broker_rows = [long]$BrokerEvidence.Content.broker_rows
+            active_broker_rows = [long]$BrokerEvidence.Content.active_broker_rows
+            citation_authorized = $true
+            persisted = $true
+            diagnostic_pack = 'broker-health.v1'
+        }
+        safety = [ordered]@{
+            mutation_calls = 0
+            executor_calls = 0
+            execution_agent_calls = 0
+            effective_access = 'read_only'
+            secrets_recorded = $false
+            prompts_recorded = $false
+            responses_recorded = $false
+            message_bodies_recorded = $false
+        }
+    }
+    $directory = Split-Path -Parent $reportPath
+    New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    $report | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $reportPath -Encoding UTF8
+    Write-Host "Wrote sanitized machine-local conversation qualification report to $reportPath"
 }
 
 function Wait-ConnectorOnline([int]$Seconds = 90) {
@@ -949,6 +1230,65 @@ $investigationId = $conversation.investigation.id
 if ([string]::IsNullOrWhiteSpace($investigationId)) {
     throw 'Conversation was not persisted as an investigation.'
 }
+$conversationId = $conversation.conversation.id
+if ([string]::IsNullOrWhiteSpace($conversationId)) {
+    throw 'Conversation did not return a persisted conversation identifier.'
+}
+$consumerStream = Invoke-ConversationStream `
+    $conversationId `
+    'Show the current bounded smoke Consumer Lag using only authorized read-only evidence.' `
+    "consumer-lag/$group/$topic"
+$consumerConversationEvidence = Assert-LiveConversationEvidence `
+    $consumerStream.FinalTurn `
+    "consumer-lag/$group/$topic" `
+    'consumer-lag.v2'
+$conversationLag = [long]$consumerConversationEvidence.Content.total_lag
+if ($conversationLag -lt 1) {
+    throw 'Streamed Conversation did not cite positive live Consumer Lag.'
+}
+$consumerTurns = Invoke-PublicApi Get "/v1/conversations/$conversationId/turns" $null
+$persistedConsumerTurn = @($consumerTurns.items | Where-Object {
+    $_.turn.id -eq $consumerStream.FinalTurn.turn.id `
+        -and $_.answer.id -eq $consumerStream.FinalTurn.answer.id
+}) | Select-Object -First 1
+if ($null -eq $persistedConsumerTurn) {
+    throw 'Completed Consumer Lag Conversation turn was not durably queryable.'
+}
+
+$brokerConversation = Invoke-PublicApi Post '/v1/conversations' @{
+    cluster_id = $clusterId
+    question = 'Is the live RocketMQ broker available?'
+    resource = "broker-runtime/$brokerName"
+    persist_investigation = $true
+}
+$brokerConversationId = $brokerConversation.conversation.id
+if ([string]::IsNullOrWhiteSpace($brokerConversationId)) {
+    throw 'Broker runtime Conversation did not return a persisted identifier.'
+}
+$brokerStream = Invoke-ConversationStream `
+    $brokerConversationId `
+    'Show the current broker runtime state using only authorized read-only evidence.' `
+    "broker-runtime/$brokerName"
+$brokerConversationEvidence = Assert-LiveConversationEvidence `
+    $brokerStream.FinalTurn `
+    "broker-runtime/$brokerName" `
+    'broker-health.v1'
+if (
+    $brokerConversationEvidence.Content.broker_up -ne $true `
+        -or [long]$brokerConversationEvidence.Content.broker_rows -lt 1 `
+        -or [long]$brokerConversationEvidence.Content.active_broker_rows -lt 1
+) {
+    throw 'Streamed Conversation did not cite a live active Broker runtime row.'
+}
+$brokerTurns = Invoke-PublicApi Get "/v1/conversations/$brokerConversationId/turns" $null
+$persistedBrokerTurn = @($brokerTurns.items | Where-Object {
+    $_.turn.id -eq $brokerStream.FinalTurn.turn.id `
+        -and $_.answer.id -eq $brokerStream.FinalTurn.answer.id
+}) | Select-Object -First 1
+if ($null -eq $persistedBrokerTurn) {
+    throw 'Completed Broker runtime Conversation turn was not durably queryable.'
+}
+Write-Host "Streamed Conversations cited live Consumer Lag ($conversationLag) and active Broker runtime Evidence."
 
 $incidentView = Invoke-PublicApi Post "/v1/investigations/$investigationId/promote" @{
     title = 'Phase 01 live Consumer Lag diagnosis'
@@ -1214,8 +1554,15 @@ if ([int]$auditCount -lt 1) {
     throw 'Public read operations did not produce append-only read audit records.'
 }
 
-Write-Host "PHASE01_LIVE_SMOKE_OK target=$Target read_only=true model_assisted=true diagnostic_packs=8 mutation_calls=0 executor_calls=0 total_lag=$totalLag"
-Write-Host 'Phase 01 live smoke passed: all eight persisted diagnostic packs, Evidence-to-model citation lineage, read-only workflows, reports, knowledge, coverage, audit, and scope isolation.'
+Write-ConversationQualificationReport `
+    $consumerStream `
+    $consumerConversationEvidence `
+    $conversationLag `
+    $brokerStream `
+    $brokerConversationEvidence
+
+Write-Host "PHASE01_LIVE_SMOKE_OK target=$Target read_only=true model_assisted=true conversation_streams=2 diagnostic_packs=8 mutation_calls=0 executor_calls=0 total_lag=$totalLag"
+Write-Host 'Phase 01 live smoke passed: streamed Consumer Lag and Broker runtime conversations, all eight persisted diagnostic packs, Evidence-to-model citation lineage, read-only workflows, reports, knowledge, coverage, audit, and scope isolation.'
 }
 finally {
     Stop-KubectlPortForwards
