@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "corpusVersion": "request-header-codec-perf-v1",
   "javaCommit": "2daf0e2ca91a1592d18235d43e5d709d1c35d15f",
-  "fixtureManifestSha256": "58c0906471da30880049580162688f3ba963bc99a6377b0b9402668b1b7f4747",
+  "fixtureManifestSha256": "48fe766fbc557536cdace017fff244fafa93565ca0d4d7fb19e582183e695669",
   "weightProfile": {
     "kind": "reviewed-equal-stratified",
     "productionTelemetry": false,

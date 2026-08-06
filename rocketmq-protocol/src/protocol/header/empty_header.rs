@@ -10,7 +10,7 @@ pub struct EmptyHeader {}
 
 impl CommandCustomHeader for EmptyHeader {
     fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
-        None
+        Some(HashMap::new())
     }
 }
 
@@ -30,7 +30,7 @@ mod tests {
         assert_eq!(json, "{}");
         let de: EmptyHeader = serde_json::from_str(&json).unwrap();
         assert_eq!(header, de);
-        assert!(header.to_map().is_none());
+        assert_eq!(header.to_map(), Some(HashMap::new()));
 
         assert!(format!("{:?}", header).contains("EmptyHeader"));
     }

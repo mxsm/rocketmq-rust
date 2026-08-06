@@ -23,6 +23,8 @@ use cheetah_string::CheetahString;
 
 use crate::protocol::command_custom_header::HeaderEncodeCapability;
 use crate::protocol::header_codec::HeaderCodecError;
+use crate::protocol::header_field_merge::has_custom_ext_collision;
+use crate::protocol::header_field_merge::merge_header_and_dynamic;
 use crate::protocol::remoting_command::RemotingCommand;
 use crate::protocol::LanguageCode;
 
@@ -34,10 +36,7 @@ fn decoding_error(required: usize, available: usize) -> rocketmq_error::RocketMQ
 }
 
 fn sorted_ext_fields(map: &HashMap<CheetahString, CheetahString>) -> Vec<(&CheetahString, &CheetahString)> {
-    let mut entries = map
-        .iter()
-        .filter(|(key, value)| !key.is_empty() && !value.is_empty())
-        .collect::<Vec<_>>();
+    let mut entries = map.iter().filter(|(key, _)| !key.is_empty()).collect::<Vec<_>>();
     entries.sort_unstable_by(|(left, _), (right, _)| left.as_str().cmp(right.as_str()));
     entries
 }
@@ -132,6 +131,19 @@ impl RocketMQSerializable {
         buf: &mut BytesMut,
         capability: HeaderEncodeCapability,
     ) -> Result<usize, HeaderCodecError> {
+        let checkpoint = buf.len();
+        let result = Self::try_rocketmq_protocol_encode_inner(cmd, buf, capability);
+        if result.is_err() {
+            buf.truncate(checkpoint);
+        }
+        result
+    }
+
+    fn try_rocketmq_protocol_encode_inner(
+        cmd: &RemotingCommand,
+        buf: &mut BytesMut,
+        capability: HeaderEncodeCapability,
+    ) -> Result<usize, HeaderCodecError> {
         let begin_index = buf.len();
 
         // Estimate required capacity and reserve upfront to reduce reallocations
@@ -156,34 +168,72 @@ impl RocketMQSerializable {
         let map_len_index = buf.len();
         buf.put_i32(0);
 
-        // Encode the custom header through shared access so cloned commands
-        // do not depend on Arc uniqueness.
-        if let Some(header) = cmd.command_custom_header_ref() {
-            if capability == HeaderEncodeCapability::DirectBinary {
+        // Keep the common direct path map-free. Semantic overlaps use the
+        // single authoritative typed/dynamic merge contract.
+        match cmd.command_custom_header_ref() {
+            Some(header)
+                if capability == HeaderEncodeCapability::DirectBinary
+                    && !has_custom_ext_collision(header, cmd.ext_fields()) =>
+            {
                 header.encode_direct_binary(buf)?;
+                if let Some(ext_fields) = cmd.ext_fields() {
+                    Self::write_ext_fields(buf, ext_fields)?;
+                }
             }
-        }
-
-        // Encode ext_fields map
-        if let Some(ext_fields) = cmd.ext_fields() {
-            for (key, value) in sorted_ext_fields(ext_fields) {
-                Self::write_str(buf, true, key.as_str());
-                Self::write_str(buf, false, value.as_str());
+            Some(header) => {
+                let merged = merge_header_and_dynamic(header, cmd.ext_fields())?;
+                Self::write_ext_fields(buf, &merged)?;
+            }
+            None => {
+                if let Some(ext_fields) = cmd.ext_fields() {
+                    Self::write_ext_fields(buf, ext_fields)?;
+                }
             }
         }
 
         // Update ext_fields length in-place
         let current_length = buf.len();
-        let ext_fields_length = (current_length - map_len_index - 4) as i32;
+        let ext_fields_length = Self::checked_ext_fields_length(current_length - map_len_index - 4)?;
         buf[map_len_index..map_len_index + 4].copy_from_slice(&ext_fields_length.to_be_bytes());
 
         Ok(buf.len() - begin_index)
     }
 
+    #[inline]
+    fn write_ext_fields(
+        buf: &mut BytesMut,
+        fields: &HashMap<CheetahString, CheetahString>,
+    ) -> Result<(), HeaderCodecError> {
+        for (key, value) in sorted_ext_fields(fields) {
+            let key_length = Self::checked_dynamic_key_length(key.len())?;
+            let value_length = Self::checked_dynamic_value_length(value.len())?;
+            buf.put_u16(key_length);
+            buf.put_slice(key.as_bytes());
+            buf.put_i32(value_length);
+            buf.put_slice(value.as_bytes());
+        }
+        Ok(())
+    }
+
+    #[inline]
+    fn checked_ext_fields_length(length: usize) -> Result<i32, HeaderCodecError> {
+        i32::try_from(length).map_err(|_| HeaderCodecError::ExtensionFieldsLengthOverflow)
+    }
+
+    #[inline]
+    fn checked_dynamic_key_length(length: usize) -> Result<u16, HeaderCodecError> {
+        u16::try_from(length).map_err(|_| HeaderCodecError::DynamicKeyLengthOverflow)
+    }
+
+    #[inline]
+    fn checked_dynamic_value_length(length: usize) -> Result<i32, HeaderCodecError> {
+        i32::try_from(length).map_err(|_| HeaderCodecError::DynamicValueLengthOverflow)
+    }
+
     /// Estimate the size needed for encoding to reduce reallocations
     #[inline]
     fn estimate_encode_size(cmd: &RemotingCommand) -> usize {
-        let mut size = 15; // Fixed header: code(2) + language(1) + version(2) + opaque(4) + flag(4) + map_len(4)
+        let mut size = 17; // Fixed header fields (13) plus the ext-map length (4).
 
         // Remark size
         if let Some(remark) = cmd.remark() {
@@ -195,10 +245,14 @@ impl RocketMQSerializable {
         // Ext fields size (approximate)
         if let Some(ext) = cmd.ext_fields() {
             for (k, v) in ext.iter() {
-                if !k.is_empty() && !v.is_empty() {
+                if !k.is_empty() {
                     size += 2 + k.len() + 4 + v.len();
                 }
             }
+        }
+
+        if let Some(header) = cmd.command_custom_header_ref() {
+            size = size.saturating_add(header.encoded_len_hint());
         }
 
         size
@@ -264,7 +318,7 @@ impl RocketMQSerializable {
         let mut valid_entries = 0;
 
         for (key, value) in map.iter() {
-            if !key.is_empty() && !value.is_empty() {
+            if !key.is_empty() {
                 total_length += 2 + key.len() + 4 + value.len();
                 valid_entries += 1;
             }
@@ -375,9 +429,9 @@ impl RocketMQSerializable {
             let key = Self::read_str(buffer, true, len)?.ok_or_else(|| decoding_error(0, 0))?;
 
             // Read value (long length prefix)
-            let value = Self::read_str(buffer, false, len)?.ok_or_else(|| decoding_error(0, 0))?;
-
-            map.insert(key, value);
+            if let Some(value) = Self::read_str(buffer, false, len)? {
+                map.insert(key, value);
+            }
         }
 
         Ok(map)
@@ -465,6 +519,15 @@ mod tests {
     }
 
     #[test]
+    fn map_serialize_preserves_present_empty_value() {
+        let map = HashMap::from([("key".into(), CheetahString::new())]);
+
+        let serialized = RocketMQSerializable::map_serialize(&map).unwrap();
+
+        assert_eq!(serialized, BytesMut::from(&[0, 3, 107, 101, 121, 0, 0, 0, 0][..]));
+    }
+
+    #[test]
     fn map_deserialize_empty() {
         let mut buf = BytesMut::new();
         let deserialized = RocketMQSerializable::map_deserialize(&mut buf, 0).unwrap();
@@ -476,6 +539,44 @@ mod tests {
         let mut buf = BytesMut::from(&[0, 3, 107, 101, 121, 0, 0, 0, 5, 118, 97, 108, 117, 101][..]);
         let deserialized = RocketMQSerializable::map_deserialize(&mut buf, 14).unwrap();
         assert_eq!(deserialized, [("key".into(), "value".into())].iter().cloned().collect());
+    }
+
+    #[test]
+    fn map_deserialize_normalizes_zero_length_value_to_absent() {
+        let mut buf = BytesMut::from(&[0, 3, 107, 101, 121, 0, 0, 0, 0][..]);
+
+        let deserialized = RocketMQSerializable::map_deserialize(&mut buf, 9).unwrap();
+
+        assert!(deserialized.is_empty());
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn extension_field_length_checks_limit_and_limit_plus_one() {
+        assert_eq!(
+            RocketMQSerializable::checked_ext_fields_length(i32::MAX as usize).unwrap(),
+            i32::MAX
+        );
+        assert!(matches!(
+            RocketMQSerializable::checked_ext_fields_length(i32::MAX as usize + 1),
+            Err(HeaderCodecError::ExtensionFieldsLengthOverflow)
+        ));
+        assert_eq!(
+            RocketMQSerializable::checked_dynamic_key_length(u16::MAX as usize).unwrap(),
+            u16::MAX
+        );
+        assert!(matches!(
+            RocketMQSerializable::checked_dynamic_key_length(u16::MAX as usize + 1),
+            Err(HeaderCodecError::DynamicKeyLengthOverflow)
+        ));
+        assert_eq!(
+            RocketMQSerializable::checked_dynamic_value_length(i32::MAX as usize).unwrap(),
+            i32::MAX
+        );
+        assert!(matches!(
+            RocketMQSerializable::checked_dynamic_value_length(i32::MAX as usize + 1),
+            Err(HeaderCodecError::DynamicValueLengthOverflow)
+        ));
     }
 
     #[test]

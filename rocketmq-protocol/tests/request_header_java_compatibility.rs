@@ -290,9 +290,9 @@ fn intentional_empty_headers_are_explicit_contract_entries() {
     )
     .expect("valid empty-header fixture JSON");
     assert_eq!(fixture["classification"], "intentional-empty-header");
-    assert!(fixture["logicalMap"].is_null());
+    assert_eq!(fixture["logicalMap"], serde_json::json!({}));
     assert_eq!(fixture["jsonObject"], serde_json::json!({}));
-    assert!(EmptyHeader::default().to_map().is_none());
+    assert_eq!(EmptyHeader::default().to_map(), Some(HashMap::new()));
 }
 
 #[test]

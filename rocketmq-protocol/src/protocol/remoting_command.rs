@@ -36,6 +36,8 @@ use crate::code::response_code::RemotingSysResponseCode;
 use crate::protocol::command_custom_header::CommandCustomHeader;
 use crate::protocol::command_custom_header::FromMap;
 use crate::protocol::command_custom_header::HeaderEncodeCapability;
+use crate::protocol::header_codec::HeaderCodecError;
+use crate::protocol::header_field_merge::merge_header_and_dynamic;
 use crate::protocol::LanguageCode;
 use crate::rocketmq_serializable::RocketMQSerializable;
 
@@ -96,15 +98,6 @@ pub struct RemotingCommand {
 
 impl Clone for RemotingCommand {
     fn clone(&self) -> Self {
-        let mut ext_fields = self.ext_fields.clone().unwrap_or_default();
-        if let Some(header) = self.command_custom_header.as_ref() {
-            if header.encode_capability() == HeaderEncodeCapability::MapOnly {
-                if let Some(header_fields) = header.to_map() {
-                    ext_fields.extend(header_fields);
-                }
-            }
-        }
-        let ext_fields = (!ext_fields.is_empty()).then_some(ext_fields);
         Self {
             code: self.code,
             language: self.language,
@@ -112,7 +105,7 @@ impl Clone for RemotingCommand {
             opaque: self.opaque,
             flag: self.flag,
             remark: self.remark.clone(),
-            ext_fields,
+            ext_fields: self.ext_fields.clone(),
             body: self.body.clone(),
             suspended: self.suspended,
             command_custom_header: self.command_custom_header.clone(),
@@ -244,6 +237,7 @@ impl RemotingCommand {
     where
         T: CommandCustomHeader + Sync + Send + 'static,
     {
+        self.invalidate_materialized_custom_header();
         self.command_custom_header = Some(Arc::new(Box::new(command_custom_header)));
         self.custom_header_to_net = false;
         self
@@ -253,6 +247,7 @@ impl RemotingCommand {
         mut self,
         command_custom_header: Box<dyn CommandCustomHeader + Send + Sync + 'static>,
     ) -> Self {
+        self.invalidate_materialized_custom_header();
         self.command_custom_header = Some(Arc::new(command_custom_header));
         self.custom_header_to_net = false;
         self
@@ -262,6 +257,7 @@ impl RemotingCommand {
     where
         T: std::ops::Deref<Target = Box<dyn CommandCustomHeader + Send + Sync + 'static>>,
     {
+        self.invalidate_materialized_custom_header();
         if let Some(header_fields) = command_custom_header.as_ref().and_then(|header| header.to_map()) {
             self.ext_fields.get_or_insert_with(HashMap::new).extend(header_fields);
         }
@@ -274,6 +270,7 @@ impl RemotingCommand {
     where
         T: CommandCustomHeader + Sync + Send + 'static,
     {
+        self.invalidate_materialized_custom_header();
         self.command_custom_header = Some(Arc::new(Box::new(command_custom_header)));
         self.custom_header_to_net = false;
     }
@@ -414,16 +411,14 @@ impl RemotingCommand {
     /// Encode header with optimized path selection
     #[inline]
     pub fn header_encode(&mut self) -> Option<Bytes> {
-        if self
-            .command_custom_header_ref()
-            .is_some_and(|header| header.check_fields().is_err())
-        {
-            return None;
-        }
-        self.make_custom_header_to_net();
         match self.serialize_type {
-            SerializeType::ROCKETMQ => Some(RocketMQSerializable::rocket_mq_protocol_encode_bytes(self)),
+            SerializeType::ROCKETMQ => {
+                let mut encoded = BytesMut::new();
+                RocketMQSerializable::try_rocketmq_protocol_encode(self, &mut encoded).ok()?;
+                Some(encoded.freeze())
+            }
             SerializeType::JSON => {
+                self.try_make_custom_header_to_net().ok()?;
                 #[cfg(feature = "simd")]
                 {
                     match simd_json::to_vec(self) {
@@ -455,19 +450,17 @@ impl RemotingCommand {
         // Encode header data
         let header_data = self.header_encode()?;
         let header_len = header_data.len();
-
-        // Calculate frame size: 4 (total_length) + 4 (serialize_type) + header_len
-        let frame_header_size = 8;
-        let total_length = 4 + header_len + body_length; // 4 is for serialize_type field
+        let (total_length, marked_header_length) =
+            Self::checked_frame_lengths(header_len, body_length, self.serialize_type).ok()?;
 
         // Allocate exact capacity
-        let mut result = BytesMut::with_capacity(frame_header_size + header_len);
+        let mut result = BytesMut::with_capacity(8 + header_len);
 
         // Write total length
-        result.put_i32(total_length as i32);
+        result.put_i32(total_length);
 
         // Write serialize type with embedded header length
-        result.put_i32(mark_protocol_type(header_len as i32, self.serialize_type));
+        result.put_i32(marked_header_length);
 
         // Write header data
         result.put(header_data);
@@ -478,31 +471,58 @@ impl RemotingCommand {
     /// Convert custom header to network format (merge into ext_fields)
     #[inline]
     pub fn make_custom_header_to_net(&mut self) {
+        let _ = self.try_make_custom_header_to_net();
+    }
+
+    /// Fallibly merges the custom header into dynamic extension fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed validation, conversion, alias, or dynamic-field
+    /// collision error without mutating this command.
+    pub fn try_make_custom_header_to_net(&mut self) -> Result<(), HeaderCodecError> {
         if self.custom_header_to_net {
-            return;
+            return Ok(());
         }
 
-        if let Some(header) = &self.command_custom_header {
-            if let Some(header_map) = header.to_map() {
-                match &mut self.ext_fields {
-                    None => {
-                        self.ext_fields = Some(header_map);
-                    }
-                    Some(ext) => {
-                        // Merge header map into existing ext_fields
-                        for (key, value) in header_map {
-                            ext.insert(key, value);
-                        }
-                    }
-                }
-            }
+        if let Some(header) = self.command_custom_header_ref() {
+            let merged = merge_header_and_dynamic(header, self.ext_fields.as_ref())?;
+            self.ext_fields = Some(merged);
         }
         self.custom_header_to_net = true;
+        Ok(())
     }
 
     #[inline]
     pub fn materialize_custom_header_to_ext_fields(&mut self) {
         self.make_custom_header_to_net();
+    }
+
+    fn invalidate_materialized_custom_header(&mut self) {
+        if !self.custom_header_to_net {
+            return;
+        }
+
+        let owned_keys = match (self.command_custom_header_ref(), self.ext_fields.as_ref()) {
+            (Some(header), Some(fields)) => {
+                let mut keys = fields
+                    .keys()
+                    .filter(|key| header.contains_wire_key(key.as_str()))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                if let Some(legacy_fields) = header.to_map() {
+                    keys.extend(legacy_fields.into_keys());
+                }
+                keys
+            }
+            _ => Vec::new(),
+        };
+        if let Some(fields) = self.ext_fields.as_mut() {
+            for key in owned_keys {
+                fields.remove(&key);
+            }
+        }
+        self.custom_header_to_net = false;
     }
 
     #[inline]
@@ -531,18 +551,16 @@ impl RemotingCommand {
             header.check_fields()?;
         }
         match self.serialize_type {
-            SerializeType::JSON => {
-                self.fast_encode_json(dst);
-                Ok(())
-            }
+            SerializeType::JSON => self.fast_encode_json(dst),
             SerializeType::ROCKETMQ => self.fast_encode_rocketmq(dst),
         }
     }
 
     /// Optimized JSON encoding with pre-calculated capacity and zero-copy optimizations
     #[inline]
-    fn fast_encode_json(&mut self, dst: &mut BytesMut) {
-        self.make_custom_header_to_net();
+    fn fast_encode_json(&mut self, dst: &mut BytesMut) -> rocketmq_error::RocketMQResult<()> {
+        self.try_make_custom_header_to_net()
+            .map_err(|error| rocketmq_error::RocketMQError::request_header_error(error.to_string()))?;
 
         // Pre-calculate approximate header size to reduce reallocations
         let estimated_header_size = self.estimate_json_header_size();
@@ -559,25 +577,16 @@ impl RemotingCommand {
         #[cfg(not(feature = "simd"))]
         let encode_result = serde_json::to_vec(self);
 
-        match encode_result {
-            Ok(header_bytes) => {
-                let header_length = header_bytes.len() as i32;
-                let body_length = body_length as i32;
-                let total_length = 4 + header_length + body_length;
+        let header_bytes = encode_result.map_err(|error| {
+            rocketmq_error::SerializationError::encode_failed("remoting-command", error.to_string())
+        })?;
+        let (total_length, marked_header_length) =
+            Self::checked_frame_lengths(header_bytes.len(), body_length, SerializeType::JSON)?;
 
-                // Write frame header
-                dst.put_i32(total_length);
-                dst.put_i32(RemotingCommand::mark_serialize_type(header_length, SerializeType::JSON));
-
-                // Write header bytes (zero-copy from Vec)
-                dst.put_slice(&header_bytes);
-            }
-            Err(_) => {
-                // Write minimal error frame
-                dst.put_i32(4); // total_length: just the serialize_type field
-                dst.put_i32(RemotingCommand::mark_serialize_type(0, SerializeType::JSON));
-            }
-        }
+        dst.put_i32(total_length);
+        dst.put_i32(marked_header_length);
+        dst.put_slice(&header_bytes);
+        Ok(())
     }
 
     /// Optimized ROCKETMQ binary encoding with minimal allocations
@@ -590,25 +599,55 @@ impl RemotingCommand {
         dst.put_i64(0); // Placeholder for total_length + serialize_type
 
         let capability = self.custom_header_encode_capability();
-        if capability == HeaderEncodeCapability::MapOnly {
-            self.make_custom_header_to_net();
-        }
 
         // Encode header directly to buffer
         let header_size = RocketMQSerializable::try_rocketmq_protocol_encode_with_capability(self, dst, capability)
             .map_err(|error| rocketmq_error::RocketMQError::request_header_error(error.to_string()))?;
-        let body_length = self.body.as_ref().map_or(0, |b| b.len()) as i32;
-
-        // Calculate serialize type with header length embedded
-        let serialize_type = RemotingCommand::mark_serialize_type(header_size as i32, SerializeType::ROCKETMQ);
+        let body_length = self.body.as_ref().map_or(0, |b| b.len());
+        let (total_length, serialize_type) =
+            Self::checked_frame_lengths(header_size, body_length, SerializeType::ROCKETMQ)?;
 
         // Write total_length and serialize_type at the beginning (in-place update)
-        let total_length = (4 + header_size as i32 + body_length).to_be_bytes();
+        let total_length = total_length.to_be_bytes();
         let serialize_type_bytes = serialize_type.to_be_bytes();
 
         dst[begin_index..begin_index + 4].copy_from_slice(&total_length);
         dst[begin_index + 4..begin_index + 8].copy_from_slice(&serialize_type_bytes);
         Ok(())
+    }
+
+    fn checked_frame_lengths(
+        header_length: usize,
+        body_length: usize,
+        serialize_type: SerializeType,
+    ) -> rocketmq_error::RocketMQResult<(i32, i32)> {
+        const MAX_HEADER_LENGTH: usize = 0x00ff_ffff;
+        if header_length > MAX_HEADER_LENGTH {
+            return Err(rocketmq_error::SerializationError::encode_failed(
+                "remoting-command",
+                format!("encoded header is {header_length} bytes, exceeding the 24-bit wire limit"),
+            )
+            .into());
+        }
+        let payload_length = 4usize
+            .checked_add(header_length)
+            .and_then(|length| length.checked_add(body_length))
+            .ok_or_else(|| {
+                rocketmq_error::SerializationError::encode_failed("remoting-command", "encoded frame length overflow")
+            })?;
+        let total_length = i32::try_from(payload_length).map_err(|_| {
+            rocketmq_error::SerializationError::encode_failed(
+                "remoting-command",
+                format!("encoded payload is {payload_length} bytes, exceeding the signed 32-bit wire limit"),
+            )
+        })?;
+        let header_length = i32::try_from(header_length).map_err(|_| {
+            rocketmq_error::SerializationError::encode_failed("remoting-command", "encoded header length overflow")
+        })?;
+        Ok((
+            total_length,
+            RemotingCommand::mark_serialize_type(header_length, serialize_type),
+        ))
     }
 
     /// Estimate JSON header size to reduce buffer reallocations
@@ -1017,11 +1056,15 @@ impl RemotingCommand {
     where
         T: CommandCustomHeader + Sync + Send + 'static,
     {
-        self.custom_header_to_net = false;
-        match self.command_custom_header.as_mut() {
-            None => None,
-            Some(value) => Arc::get_mut(value)?.as_mut().as_any_mut().downcast_mut::<T>(),
+        let header = self.command_custom_header.as_ref()?;
+        if Arc::strong_count(header) != 1 || !header.as_ref().as_any().is::<T>() {
+            return None;
         }
+        self.invalidate_materialized_custom_header();
+        Arc::get_mut(self.command_custom_header.as_mut()?)?
+            .as_mut()
+            .as_any_mut()
+            .downcast_mut::<T>()
     }
 
     /// Compatibility name for the former shared-reference mutation escape.
@@ -1040,16 +1083,25 @@ impl RemotingCommand {
     where
         T: CommandCustomHeader + Sync + Send + 'static,
     {
-        self.custom_header_to_net = false;
-        match self.command_custom_header.as_mut() {
-            None => Err(Self::custom_header_missing_error::<T>()),
-            Some(value) => Arc::get_mut(value)
-                .ok_or_else(Self::custom_header_shared_error)?
-                .as_mut()
-                .as_any_mut()
-                .downcast_mut::<T>()
-                .ok_or_else(Self::custom_header_type_mismatch_error::<T>),
+        match self.command_custom_header.as_ref() {
+            None => return Err(Self::custom_header_missing_error::<T>()),
+            Some(value) if Arc::strong_count(value) != 1 => return Err(Self::custom_header_shared_error()),
+            Some(value) if !value.as_ref().as_any().is::<T>() => {
+                return Err(Self::custom_header_type_mismatch_error::<T>());
+            }
+            Some(_) => {}
         }
+        self.invalidate_materialized_custom_header();
+        Arc::get_mut(
+            self.command_custom_header
+                .as_mut()
+                .ok_or_else(Self::custom_header_missing_error::<T>)?,
+        )
+        .ok_or_else(Self::custom_header_shared_error)?
+        .as_mut()
+        .as_any_mut()
+        .downcast_mut::<T>()
+        .ok_or_else(Self::custom_header_type_mismatch_error::<T>)
     }
 
     pub fn read_custom_header_mut_unchecked<T>(&mut self) -> rocketmq_error::RocketMQResult<&mut T>
@@ -1076,7 +1128,14 @@ impl RemotingCommand {
     }
 
     pub fn command_custom_header_mut(&mut self) -> Option<&mut dyn CommandCustomHeader> {
-        self.custom_header_to_net = false;
+        if self
+            .command_custom_header
+            .as_ref()
+            .is_none_or(|header| Arc::strong_count(header) != 1)
+        {
+            return None;
+        }
+        self.invalidate_materialized_custom_header();
         match self.command_custom_header.as_mut() {
             None => None,
             Some(value) => Arc::get_mut(value).map(|header| header.as_mut() as &mut dyn CommandCustomHeader),
@@ -1263,6 +1322,21 @@ mod tests {
     }
 
     #[test]
+    fn frame_length_checks_each_wire_boundary_and_limit_plus_one() {
+        const MAX_HEADER_LENGTH: usize = 0x00ff_ffff;
+        let (total, marked) =
+            RemotingCommand::checked_frame_lengths(MAX_HEADER_LENGTH, 0, SerializeType::ROCKETMQ).unwrap();
+        assert_eq!(total, 4 + MAX_HEADER_LENGTH as i32);
+        assert_eq!(parse_header_length(marked), MAX_HEADER_LENGTH);
+        assert!(RemotingCommand::checked_frame_lengths(MAX_HEADER_LENGTH + 1, 0, SerializeType::ROCKETMQ).is_err());
+
+        let max_body = i32::MAX as usize - 4;
+        let (total, _) = RemotingCommand::checked_frame_lengths(0, max_body, SerializeType::JSON).unwrap();
+        assert_eq!(total, i32::MAX);
+        assert!(RemotingCommand::checked_frame_lengths(0, max_body + 1, SerializeType::JSON).is_err());
+    }
+
+    #[test]
     fn try_read_custom_header_ref_reports_missing_header() {
         let command = RemotingCommand::create_remoting_command(1);
 
@@ -1294,12 +1368,12 @@ mod tests {
     }
 
     #[test]
-    fn clone_preserves_concrete_header_and_merges_all_extension_fields() {
+    fn clone_preserves_concrete_header_without_eagerly_hiding_dynamic_collisions() {
         let original =
             RemotingCommand::create_request_command(1, TestCustomHeader { value: 7 }).set_ext_fields(HashMap::from([
                 (CheetahString::from("hook-field"), CheetahString::from("preserved")),
             ]));
-        let cloned = original.clone();
+        let mut cloned = original.clone();
 
         assert_eq!(
             cloned.try_read_custom_header_ref::<TestCustomHeader>().unwrap().value,
@@ -1312,6 +1386,8 @@ mod tests {
                 .map(CheetahString::as_str),
             Some("preserved")
         );
+        assert!(cloned.ext_fields().is_none_or(|fields| !fields.contains_key("value")));
+        cloned.try_make_custom_header_to_net().unwrap();
         assert_eq!(
             cloned
                 .ext_fields()
@@ -1319,6 +1395,58 @@ mod tests {
                 .map(CheetahString::as_str),
             Some("7")
         );
+    }
+
+    #[test]
+    fn typed_dynamic_conflict_fails_json_and_rocketmq_with_full_rollback() {
+        use crate::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
+
+        for serialize_type in [SerializeType::JSON, SerializeType::ROCKETMQ] {
+            let header = SendMessageResponseHeader::new("typed".into(), 1, 2, None, None, None);
+            let mut command = RemotingCommand::create_response_command_with_header(header)
+                .set_serialize_type(serialize_type)
+                .set_ext_fields(HashMap::from([("msgId".into(), "dynamic".into())]));
+            let mut destination = BytesMut::from(&b"prefix"[..]);
+
+            let error = command.try_fast_header_encode(&mut destination).unwrap_err();
+
+            assert_eq!(error.kind(), rocketmq_error::ErrorKind::RequestHeaderError);
+            assert_eq!(destination.as_ref(), b"prefix");
+            assert_eq!(
+                command
+                    .ext_fields()
+                    .and_then(|fields| fields.get("msgId"))
+                    .map(CheetahString::as_str),
+                Some("dynamic")
+            );
+        }
+    }
+
+    #[test]
+    fn present_empty_is_preserved_in_map_and_normalized_after_rocketmq_decode() {
+        use crate::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
+
+        let header = SendMessageResponseHeader::new("msg".into(), 1, 2, Some(CheetahString::new()), None, None);
+        let mut materialized = RemotingCommand::create_response_command_with_header(header);
+        materialized.try_make_custom_header_to_net().unwrap();
+        assert_eq!(
+            materialized
+                .ext_fields()
+                .and_then(|fields| fields.get("transactionId"))
+                .map(CheetahString::as_str),
+            Some("")
+        );
+
+        let header = SendMessageResponseHeader::new("msg".into(), 1, 2, Some(CheetahString::new()), None, None);
+        let mut command =
+            RemotingCommand::create_response_command_with_header(header).set_serialize_type(SerializeType::ROCKETMQ);
+        let mut encoded = BytesMut::new();
+        command.try_fast_header_encode(&mut encoded).unwrap();
+        let decoded = RemotingCommand::decode(&mut encoded).unwrap().unwrap();
+
+        assert!(decoded
+            .ext_fields()
+            .is_some_and(|fields| !fields.contains_key("transactionId")));
     }
 
     #[test]
@@ -1416,6 +1544,24 @@ mod tests {
         );
         let decoded = command.decode_command_custom_header::<TestCustomHeader>().unwrap();
         assert_eq!(decoded.value, 9);
+    }
+
+    #[test]
+    fn failed_shared_header_mutation_keeps_materialized_fields_intact() {
+        let mut command = RemotingCommand::create_request_command(1, TestCustomHeader { value: 7 });
+        command.try_make_custom_header_to_net().unwrap();
+        let _clone = command.clone();
+
+        assert!(command.try_read_custom_header_mut::<TestCustomHeader>().is_err());
+
+        assert!(command.custom_header_to_net);
+        assert_eq!(
+            command
+                .ext_fields()
+                .and_then(|fields| fields.get("value"))
+                .map(CheetahString::as_str),
+            Some("7")
+        );
     }
 
     #[test]
