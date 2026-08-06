@@ -535,11 +535,20 @@
           "kind": "smoke",
           "path": "rocketmq-sre/scripts/production-readiness-qualification.ps1",
           "qualification": "production-readiness"
+        },
+        {
+          "kind": "configuration",
+          "path": "rocketmq-sre/config/qualification/independent-operator-handoff.v1.json"
+        },
+        {
+          "kind": "test",
+          "path": "rocketmq-sre/scripts/check_independent_operator_handoff_qualification.py"
         }
       ],
       "limitations": [
         "Current/N-1 native binaries, two independent Kubernetes regions, the sixteen-scenario Kubernetes fault matrix, synchronous PostgreSQL failover, object recovery, Control Plane backup/restore, and stale-epoch fencing under an asymmetric Executor partition have passed disposable-environment qualification.",
         "A six-hour soak with seven injected faults, 100 logical clusters, 10,000 topic assets, 10,000 consumer-group assets, and bounded P95/P99 measurements passed in a disposable environment without model-provider or unattended-autonomous calls.",
+        "A fail-closed independent-operator handoff report contract now binds eight critical exercises to the current checklist, but no target-organization operator has supplied a machine-local report.",
         "Deployment-specific production certification, target-organization owners and run windows, and independent operator handoff evidence remain incomplete."
       ]
     },
