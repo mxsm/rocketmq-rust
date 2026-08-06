@@ -10,6 +10,7 @@
     "check:api": "openapi-typescript ../openapi/rocketmq-sre-phase05.openapi.json -o ./src/api/generated.d.ts --check",
     "lint": "eslint . --max-warnings=0",
     "test": "vitest",
+    "test:e2e:security": "playwright test e2e/conversation-security.spec.ts",
     "build": "tsc && vite build",
     "preview": "vite preview --host 0.0.0.0 --port 3004"
   },
@@ -28,6 +29,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.62.1",
     "@testing-library/jest-dom": "^7.0.0",
     "@testing-library/react": "^16.3.0",
     "@testing-library/user-event": "^14.6.1",

@@ -256,6 +256,29 @@ committed contract is checked independently with:
 python scripts/check_diagnostic_pack_qualification.py
 ```
 
+### Conversation security qualification
+
+The Conversation security suite combines an eight-case prompt-injection
+matrix, the deterministic replay citation-quality dataset, and a real Chromium
+desktop test. It proves that untrusted instructions cannot widen the fixed
+read-only query surface, provisional model text is discarded after
+`preview_reset`, and every conclusion above the configured confidence
+threshold retains an authorized Evidence citation. Mutation, Executor, and
+Execution Agent calls must remain zero.
+
+Run the static contract check or the complete qualification from
+`rocketmq-sre/`. The complete run requires a clean committed revision and
+writes only a sanitized machine-local report outside the repository on `D:` or
+`F:`:
+
+```powershell
+.\scripts\conversation-security-qualification.ps1 -ValidateOnly
+.\scripts\conversation-security-qualification.ps1
+```
+
+The suite uses an isolated model fixture and is not a production Provider or
+target-environment certificate.
+
 ### Bounded R1 action qualification
 
 The R1 qualification contract covers the four registered low-risk actions

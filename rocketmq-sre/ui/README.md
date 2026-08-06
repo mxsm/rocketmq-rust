@@ -42,8 +42,14 @@ npm ci
 npm run check:api
 npm run lint
 npm run test -- --run
+npm run test:e2e:security
 npm run build
 ```
+
+`test:e2e:security` 使用真实 Chromium 和开发态 mock API 验证 Conversation
+的 provisional、`preview_reset`、安全终态、Evidence 引用和只读执行资格。
+完整脱敏报告由上层 `scripts/conversation-security-qualification.ps1` 生成，
+不写入 UI 项目目录。
 
 桌面端验收视口为 `1280×720`、`1440×900` 和 `1920×1080`。当前阶段不做
 移动端专项适配，只保证窄屏不会破坏基础导航和内容访问。
