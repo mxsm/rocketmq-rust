@@ -153,6 +153,11 @@ fn registered_typed_schemas_match_the_pinned_java_contract() {
     let by_type_id: HashMap<_, _> = registered.iter().map(|schema| (schema.type_id, schema)).collect();
 
     for schema in &registered {
+        assert!(
+            schema.local_fields.iter().all(|field| field.java_type.is_none()),
+            "{} must infer Java-compatible value kinds instead of repeating java_type metadata",
+            schema.type_id
+        );
         let java_header = java
             .headers
             .iter()

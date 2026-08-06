@@ -28,19 +28,18 @@ use crate::rpc::topic_request_header::TopicRequestHeader;
 )]
 #[serde(rename_all = "camelCase")]
 pub struct SearchOffsetRequestHeader {
-    #[header(required, java_type = "String")]
+    #[header(required)]
     pub topic: CheetahString,
 
-    #[header(java_type = "String")]
     pub lite_topic: Option<CheetahString>,
 
-    #[header(required, java_type = "Integer")]
+    #[header(required)]
     pub queue_id: i32,
 
-    #[header(required, java_type = "Long")]
+    #[header(required)]
     pub timestamp: i64,
 
-    #[header(default, default_semantic = "literal:LOWER", java_type = "BoundaryType")]
+    #[header(default, default_semantic = "literal:LOWER")]
     pub boundary_type: BoundaryType,
 
     #[serde(flatten)]
