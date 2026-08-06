@@ -23,6 +23,7 @@ use rocketmq_protocol::protocol::header::get_lite_client_info_request_header::Ge
 use rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2;
 use rocketmq_protocol::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
 use rocketmq_protocol::protocol::header::namesrv::topic_operation_header::TopicRequestHeader as NamesrvTopicRequestHeader;
+use rocketmq_protocol::protocol::header::notification_request_header::NotificationRequestHeader;
 use rocketmq_protocol::protocol::header::pull_message_request_header::PullMessageRequestHeader;
 use rocketmq_protocol::protocol::header::pull_message_response_header::PullMessageResponseHeader;
 use rocketmq_protocol::protocol::header::search_offset_request_header::SearchOffsetRequestHeader;
@@ -92,7 +93,7 @@ struct AliasOverride {
 struct RegisteredSchema {
     type_id: &'static str,
     java_class: &'static str,
-    fast: bool,
+    direct_binary: bool,
     local_fields: &'static [HeaderFieldSpec],
     fields: Vec<HeaderFieldSpec>,
     flattens: Vec<HeaderFlattenSpec>,
@@ -133,7 +134,7 @@ fn register<T: HeaderCodec + CommandCustomHeader + Default>() -> RegisteredSchem
     RegisteredSchema {
         type_id: T::TYPE_ID,
         java_class: T::JAVA_CLASS.expect("registered production headers declare a Java peer"),
-        fast: T::FAST_ENABLED,
+        direct_binary: T::FAST_ENABLED,
         local_fields: T::LOCAL_FIELD_SPECS,
         fields,
         flattens,
@@ -152,6 +153,7 @@ fn registry() -> Vec<RegisteredSchema> {
         register::<PullMessageResponseHeader>(),
         register::<SendMessageRequestHeaderV2>(),
         register::<SendMessageResponseHeader>(),
+        register::<NotificationRequestHeader>(),
     ]
 }
 
@@ -207,7 +209,11 @@ fn registered_typed_schemas_match_the_pinned_java_contract() {
             .find(|header| header.rust_type_id == schema.type_id)
             .unwrap_or_else(|| panic!("missing pinned Java schema for {}", schema.type_id));
         assert_eq!(schema.java_class, java_header.java_class);
-        assert_eq!(schema.fast, java_header.java_fast);
+        assert!(
+            !java_header.java_fast || schema.direct_binary,
+            "{} must preserve Java fast encoding through generated direct binary",
+            schema.type_id
+        );
         assert_eq!(
             schema.fields.len(),
             java_header.fields.len(),
@@ -536,6 +542,50 @@ fn generated_fast_headers_write_canonical_binary_pairs_in_schema_order() {
             "transactionId",
             "batchUniqId",
             "recallHandle",
+        ],
+    );
+
+    let notification = NotificationRequestHeader {
+        consumer_group: "group-a".into(),
+        topic: "topic-a".into(),
+        queue_id: 3,
+        poll_time: 15_000,
+        born_time: 1_720_000_000_000,
+        order: false,
+        attempt_id: Some("attempt-a".into()),
+        exp_type: Some("TAG".into()),
+        exp: Some("*".into()),
+        is_lite_consumer: false,
+        client_id: Some("client-a".into()),
+        topic_request_header: Some(NamesrvTopicRequestHeader {
+            lo: Some(false),
+            rpc: Some(RpcRequestHeader {
+                namespace: Some("tenant-a".into()),
+                namespaced: Some(true),
+                broker_name: Some("broker-a".into()),
+                oneway: Some(false),
+            }),
+        }),
+    };
+    assert_direct_binary_matches_typed_map(
+        &notification,
+        &[
+            "consumerGroup",
+            "topic",
+            "queueId",
+            "pollTime",
+            "bornTime",
+            "order",
+            "attemptId",
+            "expType",
+            "exp",
+            "isLiteConsumer",
+            "clientId",
+            "lo",
+            "ns",
+            "nsd",
+            "bname",
+            "oway",
         ],
     );
 }
