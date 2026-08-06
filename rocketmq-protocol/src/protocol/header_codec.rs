@@ -18,6 +18,7 @@
 //! protocol-owned sinks. Both extension traits are sealed so adding a Rust type
 //! or sink cannot silently expand RocketMQ wire semantics in another crate.
 
+mod codec;
 mod error;
 mod schema;
 mod sink;
@@ -27,6 +28,7 @@ mod private {
     pub trait Sealed {}
 }
 
+pub use codec::HeaderCodec;
 pub use error::HeaderCodecError;
 pub use schema::AliasConflictPolicy;
 pub use schema::DynamicCollisionPolicy;

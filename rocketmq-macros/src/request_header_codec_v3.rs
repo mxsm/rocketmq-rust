@@ -13,6 +13,10 @@
 // limitations under the License.
 
 mod attr;
+mod codegen;
+mod codegen_map;
+mod codegen_schema;
+mod codegen_shim;
 mod model;
 mod validate;
 
@@ -38,11 +42,9 @@ fn expand(input: proc_macro::TokenStream) -> syn::Result<proc_macro2::TokenStrea
         return Err(error);
     }
 
-    // This change deliberately freezes parsing and validation before any
-    // production implementation is generated. Only migration diagnostics are
-    // emitted; map/schema/shim code generation consumes the validated model in
-    // the next isolated change.
-    Ok(migration_diagnostics(&model))
+    let implementation = codegen::generate(&model);
+    let diagnostics = migration_diagnostics(&model);
+    Ok(quote::quote!(#implementation #diagnostics))
 }
 
 fn migration_diagnostics(model: &model::HeaderModel) -> proc_macro2::TokenStream {

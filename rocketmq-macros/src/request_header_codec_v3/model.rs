@@ -48,6 +48,7 @@ pub(super) struct FieldModel {
     pub(super) java_type: Option<SpannedString>,
     pub(super) range: Option<HeaderRange>,
     pub(super) binary_order: Option<(u16, Span)>,
+    pub(super) source_order: u16,
     pub(super) kind: ValueKind,
     pub(super) legacy_required: bool,
     pub(super) span: Span,
@@ -206,8 +207,15 @@ impl HeaderModel {
         let valid_shape = named.is_some();
         let mut fields = Vec::with_capacity(named.as_ref().map_or(0, syn::punctuated::Punctuated::len));
         if let Some(named) = named {
-            for field in named {
-                match FieldModel::parse(field, &generic_types) {
+            for (source_order, field) in named.into_iter().enumerate() {
+                let Ok(source_order) = u16::try_from(source_order) else {
+                    combine_error(
+                        &mut errors,
+                        syn::Error::new(field.span(), "RequestHeaderCodecV3 supports at most 65536 fields"),
+                    );
+                    continue;
+                };
+                match FieldModel::parse(field, &generic_types, source_order) {
                     Ok(field) => fields.push(field),
                     Err(error) => combine_error(&mut errors, error),
                 }
@@ -230,7 +238,7 @@ impl HeaderModel {
 }
 
 impl FieldModel {
-    fn parse(field: syn::Field, generic_types: &HashSet<String>) -> syn::Result<Self> {
+    fn parse(field: syn::Field, generic_types: &HashSet<String>, source_order: u16) -> syn::Result<Self> {
         let span = field.span();
         let ident = field
             .ident
@@ -303,10 +311,15 @@ impl FieldModel {
             java_type,
             range,
             binary_order: attrs.binary_order,
+            source_order,
             kind,
             legacy_required: attrs.legacy_required.is_some(),
             span,
         })
+    }
+
+    pub(super) fn stable_order(&self) -> u16 {
+        self.binary_order.map_or(self.source_order, |(order, _)| order)
     }
 }
 

@@ -17,6 +17,8 @@ use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
 
+use crate::protocol::header_codec::HeaderCodecError;
+use crate::protocol::header_codec::ResolvedHeaderKey;
 use crate::rocketmq_serializable::RocketMQSerializable;
 
 /// Wire-format extension fields carried by a RocketMQ remoting command.
@@ -50,6 +52,48 @@ pub trait CommandCustomHeader: AsAny {
         if let Some(fields) = self.to_map() {
             out.extend(fields);
         }
+    }
+
+    /// Validates and appends this header's fields to an existing map.
+    ///
+    /// Typed codecs override this method to preserve classified failures. The
+    /// default adapts legacy implementations without changing their object-safe
+    /// trait surface or silently treating `None` as a successful conversion.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeaderCodecError::LegacyValidation`] when `check_fields`
+    /// fails, or [`HeaderCodecError::LegacyMapConversionFailed`] when a legacy
+    /// `to_map` implementation returns `None`.
+    fn try_encode_into_map(&self, out: &mut HeaderMap) -> Result<(), HeaderCodecError> {
+        self.check_fields().map_err(|_| HeaderCodecError::LegacyValidation {
+            header: std::any::type_name::<Self>(),
+        })?;
+        let fields = self.to_map().ok_or(HeaderCodecError::LegacyMapConversionFailed {
+            header: std::any::type_name::<Self>(),
+        })?;
+        out.extend(fields);
+        Ok(())
+    }
+
+    /// Resolves a canonical key or decode alias for typed headers.
+    fn resolve_wire_key(&self, _key: &str) -> Option<ResolvedHeaderKey> {
+        None
+    }
+
+    /// Resolves a key and returns its canonical wire key.
+    fn canonical_wire_key(&self, key: &str) -> Option<&'static str> {
+        self.resolve_wire_key(key).map(|resolved| resolved.canonical)
+    }
+
+    /// Returns whether a canonical key or alias belongs to this header schema.
+    fn contains_wire_key(&self, key: &str) -> bool {
+        self.resolve_wire_key(key).is_some()
+    }
+
+    /// Returns a saturating extension-field payload capacity hint.
+    fn encoded_len_hint(&self) -> usize {
+        0
     }
 
     /// Writes the provided `key` to the `out` buffer if the `value` is not empty.
