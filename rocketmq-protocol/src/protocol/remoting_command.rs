@@ -26,6 +26,7 @@ use cheetah_string::CheetahString;
 use rocketmq_model::version::RocketMqVersion;
 use serde::ser::SerializeMap;
 use serde::Deserialize;
+use serde::Deserializer;
 use serde::Serialize;
 use serde::Serializer;
 
@@ -36,6 +37,7 @@ use crate::code::response_code::RemotingSysResponseCode;
 use crate::protocol::command_custom_header::CommandCustomHeader;
 use crate::protocol::command_custom_header::FromMap;
 use crate::protocol::command_custom_header::HeaderEncodeCapability;
+use crate::protocol::header_codec::BinaryHeaderFields;
 use crate::protocol::header_codec::HeaderCodecError;
 use crate::protocol::header_field_merge::merge_header_and_dynamic;
 use crate::protocol::LanguageCode;
@@ -47,14 +49,15 @@ pub const REMOTING_VERSION_KEY: &str = "rocketmq.remoting.version";
 
 static REQUEST_ID: std::sync::LazyLock<Arc<AtomicI32>> = std::sync::LazyLock::new(|| Arc::new(AtomicI32::new(0)));
 
-fn serialize_ext_fields<S>(
-    ext_fields: &Option<HashMap<CheetahString, CheetahString>>,
-    serializer: S,
-) -> Result<S::Ok, S::Error>
+mod extension_fields;
+
+use extension_fields::ExtensionFields;
+
+fn serialize_ext_fields<S>(ext_fields: &ExtensionFields, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
 {
-    let Some(ext_fields) = ext_fields else {
+    let Some(ext_fields) = ext_fields.as_map() else {
         return serializer.serialize_none();
     };
     let mut entries = ext_fields.iter().collect::<Vec<_>>();
@@ -64,6 +67,13 @@ where
         map.serialize_entry(key, value)?;
     }
     map.end()
+}
+
+fn deserialize_ext_fields<'de, D>(deserializer: D) -> Result<ExtensionFields, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<HashMap<CheetahString, CheetahString>>::deserialize(deserializer).map(ExtensionFields::from_option)
 }
 
 #[derive(Serialize, Deserialize)]
@@ -81,8 +91,13 @@ pub struct RemotingCommand {
     flag: i32,
     remark: Option<CheetahString>,
 
-    #[serde(rename = "extFields", serialize_with = "serialize_ext_fields")]
-    ext_fields: Option<HashMap<CheetahString, CheetahString>>,
+    #[serde(
+        rename = "extFields",
+        default,
+        serialize_with = "serialize_ext_fields",
+        deserialize_with = "deserialize_ext_fields"
+    )]
+    ext_fields: ExtensionFields,
 
     #[serde(skip)]
     body: Option<Bytes>,
@@ -127,7 +142,7 @@ impl fmt::Display for RemotingCommand {
             self.opaque,
             self.flag,
             self.remark.as_ref().unwrap_or(&CheetahString::default()),
-            self.ext_fields,
+            self.ext_fields.as_map(),
             self.serialize_type
         )
     }
@@ -153,7 +168,7 @@ impl RemotingCommand {
             opaque,
             flag: 0,
             remark: None,
-            ext_fields: None,
+            ext_fields: ExtensionFields::default(),
             body: None,
             suspended: false,
             command_custom_header: None,
@@ -259,7 +274,7 @@ impl RemotingCommand {
     {
         self.invalidate_materialized_custom_header();
         if let Some(header_fields) = command_custom_header.as_ref().and_then(|header| header.to_map()) {
-            self.ext_fields.get_or_insert_with(HashMap::new).extend(header_fields);
+            self.ext_fields.get_or_insert_map().extend(header_fields);
         }
         self.command_custom_header = None;
         self.custom_header_to_net = true;
@@ -344,7 +359,14 @@ impl RemotingCommand {
 
     #[inline]
     pub fn set_ext_fields(mut self, ext_fields: HashMap<CheetahString, CheetahString>) -> Self {
-        self.ext_fields = Some(ext_fields);
+        self.ext_fields.replace_map(ext_fields);
+        self.custom_header_to_net = false;
+        self
+    }
+
+    #[inline]
+    pub(crate) fn set_binary_ext_fields(mut self, ext_fields: BinaryHeaderFields) -> Self {
+        self.ext_fields = ExtensionFields::from_rocketmq_raw(ext_fields);
         self.custom_header_to_net = false;
         self
     }
@@ -486,8 +508,8 @@ impl RemotingCommand {
         }
 
         if let Some(header) = self.command_custom_header_ref() {
-            let merged = merge_header_and_dynamic(header, self.ext_fields.as_ref())?;
-            self.ext_fields = Some(merged);
+            let merged = merge_header_and_dynamic(header, self.ext_fields.as_map())?;
+            self.ext_fields.replace_map(merged);
         }
         self.custom_header_to_net = true;
         Ok(())
@@ -503,7 +525,7 @@ impl RemotingCommand {
             return;
         }
 
-        let owned_keys = match (self.command_custom_header_ref(), self.ext_fields.as_ref()) {
+        let owned_keys = match (self.command_custom_header_ref(), self.ext_fields.as_map()) {
             (Some(header), Some(fields)) => {
                 let mut keys = fields
                     .keys()
@@ -517,7 +539,7 @@ impl RemotingCommand {
             }
             _ => Vec::new(),
         };
-        if let Some(fields) = self.ext_fields.as_mut() {
+        if let Some(fields) = self.ext_fields.as_map_mut() {
             for key in owned_keys {
                 fields.remove(&key);
             }
@@ -656,7 +678,7 @@ impl RemotingCommand {
             size += remark.len() + 20; // "remark":"..." + quotes
         }
 
-        if let Some(ref ext) = self.ext_fields {
+        if let Some(ext) = self.ext_fields.as_map() {
             // Approximate: each entry adds ~30 bytes overhead + key/value lengths
             size += ext.iter().map(|(k, v)| k.len() + v.len() + 30).sum::<usize>();
         }
@@ -866,7 +888,7 @@ impl RemotingCommand {
 
     #[inline]
     pub fn ext_fields(&self) -> Option<&HashMap<CheetahString, CheetahString>> {
-        self.ext_fields.as_ref()
+        self.ext_fields.as_map()
     }
 
     #[inline]
@@ -893,14 +915,14 @@ impl RemotingCommand {
     where
         T: FromMap<Target = T, Error = rocketmq_error::RocketMQError>,
     {
-        match self.ext_fields {
+        match self.ext_fields.as_map() {
             None => Err(rocketmq_error::RocketMQError::Serialization(
                 rocketmq_error::SerializationError::DecodeFailed {
                     format: "header",
                     message: "ExtFields is None".to_string(),
                 },
             )),
-            Some(ref header) => T::from(header),
+            Some(header) => T::from(header),
         }
     }
 
@@ -909,14 +931,14 @@ impl RemotingCommand {
         T: FromMap<Target = T, Error = rocketmq_error::RocketMQError>,
         T: Default + CommandCustomHeader,
     {
-        match self.ext_fields {
+        match self.ext_fields.as_map() {
             None => Err(rocketmq_error::RocketMQError::Serialization(
                 rocketmq_error::SerializationError::DecodeFailed {
                     format: "header",
                     message: "ExtFields is None".to_string(),
                 },
             )),
-            Some(ref header) => {
+            Some(header) => {
                 let mut target = T::default();
                 if target.support_fast_codec() {
                     target.decode_fast(header)?;
@@ -994,7 +1016,7 @@ impl RemotingCommand {
     }
 
     pub fn add_ext_field(&mut self, key: impl Into<CheetahString>, value: impl Into<CheetahString>) -> &mut Self {
-        if let Some(ref mut ext) = self.ext_fields {
+        if let Some(ext) = self.ext_fields.as_map_mut() {
             ext.insert(key.into(), value.into());
         }
         self
@@ -1014,7 +1036,7 @@ impl RemotingCommand {
 
     #[inline]
     pub fn get_ext_fields(&self) -> Option<&HashMap<CheetahString, CheetahString>> {
-        self.ext_fields.as_ref()
+        self.ext_fields.as_map()
     }
 
     pub fn read_custom_header_ref<T>(&self) -> Option<&T>
@@ -1144,7 +1166,7 @@ impl RemotingCommand {
 
     #[inline]
     pub fn add_ext_field_if_not_exist(&mut self, key: impl Into<CheetahString>, value: impl Into<CheetahString>) {
-        if let Some(ref mut ext) = self.ext_fields {
+        if let Some(ext) = self.ext_fields.as_map_mut() {
             ext.entry(key.into()).or_insert(value.into());
         }
     }
@@ -1155,8 +1177,8 @@ impl RemotingCommand {
     /// This method is idempotent and safe to call multiple times.
     #[inline]
     pub fn ensure_ext_fields_initialized(&mut self) {
-        if self.ext_fields.is_none() {
-            self.ext_fields = Some(std::collections::HashMap::new());
+        if self.ext_fields.is_absent() {
+            let _ = self.ext_fields.get_or_insert_map();
         }
     }
 
@@ -1443,6 +1465,92 @@ mod tests {
         assert!(decoded
             .ext_fields()
             .is_some_and(|fields| !fields.contains_key("transactionId")));
+    }
+
+    #[test]
+    fn rocketmq_decode_keeps_extension_fields_raw_until_compatibility_map_access() {
+        let mut command = RemotingCommand::create_remoting_command(1)
+            .set_serialize_type(SerializeType::ROCKETMQ)
+            .set_ext_fields(HashMap::from([
+                (
+                    CheetahString::from_static_str("alpha"),
+                    CheetahString::from_static_str("first"),
+                ),
+                (
+                    CheetahString::from_static_str("beta"),
+                    CheetahString::from_static_str("second"),
+                ),
+            ]));
+        let mut encoded = BytesMut::new();
+        command.try_fast_header_encode(&mut encoded).unwrap();
+
+        let decoded = RemotingCommand::decode(&mut encoded).unwrap().unwrap();
+
+        assert!(decoded.ext_fields.is_rocketmq_raw());
+        assert!(!decoded.ext_fields.has_materialized_map());
+        let cloned = decoded.clone();
+        assert!(cloned.ext_fields.is_rocketmq_raw());
+        assert!(!cloned.ext_fields.has_materialized_map());
+
+        let fields = decoded.ext_fields().unwrap();
+        assert_eq!(fields.get("alpha").map(CheetahString::as_str), Some("first"));
+        assert_eq!(fields.get("beta").map(CheetahString::as_str), Some("second"));
+        assert!(decoded.ext_fields.is_rocketmq_raw());
+        assert!(decoded.ext_fields.has_materialized_map());
+        assert!(!cloned.ext_fields.has_materialized_map());
+
+        let json = serde_json::to_value(&cloned).unwrap();
+        assert_eq!(json["extFields"]["alpha"], "first");
+        assert_eq!(json["extFields"]["beta"], "second");
+        assert!(cloned.ext_fields.has_materialized_map());
+    }
+
+    #[test]
+    fn mutating_raw_extension_fields_materializes_and_invalidates_the_raw_view() {
+        let mut command = RemotingCommand::create_remoting_command(1)
+            .set_serialize_type(SerializeType::ROCKETMQ)
+            .set_ext_fields(HashMap::from([(
+                CheetahString::from_static_str("alpha"),
+                CheetahString::from_static_str("first"),
+            )]));
+        let mut encoded = BytesMut::new();
+        command.try_fast_header_encode(&mut encoded).unwrap();
+        let mut decoded = RemotingCommand::decode(&mut encoded).unwrap().unwrap();
+        assert!(decoded.ext_fields.is_rocketmq_raw());
+
+        decoded.add_ext_field("beta", "second");
+
+        assert!(!decoded.ext_fields.is_rocketmq_raw());
+        assert_eq!(
+            decoded
+                .ext_fields()
+                .and_then(|fields| fields.get("alpha"))
+                .map(CheetahString::as_str),
+            Some("first")
+        );
+        assert_eq!(
+            decoded
+                .ext_fields()
+                .and_then(|fields| fields.get("beta"))
+                .map(CheetahString::as_str),
+            Some("second")
+        );
+    }
+
+    #[test]
+    fn rocketmq_envelope_rejects_invalid_utf8_before_returning_a_command() {
+        let mut command = RemotingCommand::create_remoting_command(1)
+            .set_serialize_type(SerializeType::ROCKETMQ)
+            .set_ext_fields(HashMap::from([(
+                CheetahString::from_static_str("key"),
+                CheetahString::from_static_str("v"),
+            )]));
+        let mut encoded = BytesMut::new();
+        command.try_fast_header_encode(&mut encoded).unwrap();
+        let last = encoded.len() - 1;
+        encoded[last] = 0xff;
+
+        assert!(RemotingCommand::decode(&mut encoded).is_err());
     }
 
     #[test]
