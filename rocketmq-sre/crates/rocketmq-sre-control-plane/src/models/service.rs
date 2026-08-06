@@ -371,6 +371,10 @@ impl ModelGatewayService {
             return Ok(ModelDiagnosisDecision::rules_only());
         }
         let profiles = self.routable_profiles(auth).await?;
+        let evidence_ids = evidence.iter().map(|snapshot| snapshot.evidence_id).collect::<Vec<_>>();
+        if evidence_ids.is_empty() {
+            return Ok(ModelDiagnosisDecision::rules_only());
+        }
         let (evidence_prompt, evidence_class) = summarize_evidence(evidence);
         let (knowledge_prompt, knowledge_class) = self
             .validated_knowledge(auth, cluster_id, incident_title, pack_id)
@@ -394,7 +398,7 @@ impl ModelGatewayService {
             tracing::warn!("bounded diagnosis prompt exceeded the configured model request limit");
             return Ok(ModelDiagnosisDecision::rules_only());
         }
-        let response_schema = diagnosis_output_schema();
+        let response_schema = diagnosis_output_schema(&evidence_ids);
         let requested_profile = profiles
             .iter()
             .filter(|profile| eligible(profile, data_class))
@@ -1556,7 +1560,7 @@ impl ChatModelProvider for PrecomputedProvider {
     }
 }
 
-fn diagnosis_output_schema() -> Value {
+fn diagnosis_output_schema(allowed_evidence_ids: &[EvidenceId]) -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
@@ -1574,9 +1578,13 @@ fn diagnosis_output_schema() -> Value {
             "confidence_percent": {"type": "integer", "minimum": 0, "maximum": 100},
             "cited_evidence_ids": {
                 "type": "array",
+                "minItems": 1,
                 "maxItems": 32,
                 "uniqueItems": true,
-                "items": {"type": "string"}
+                "items": {
+                    "type": "string",
+                    "enum": allowed_evidence_ids
+                }
             },
             "recommended_read_only_queries": {
                 "type": "array",
@@ -2002,10 +2010,15 @@ mod tests {
 
     #[test]
     fn output_schema_forbids_unexpected_execution_fields() {
-        let schema = diagnosis_output_schema();
+        let evidence_id = EvidenceId::new();
+        let schema = diagnosis_output_schema(&[evidence_id]);
         assert_eq!(schema["additionalProperties"], false);
         assert!(schema["properties"].get("action").is_none());
         assert!(schema["properties"].get("tool").is_none());
+        assert_eq!(
+            schema["properties"]["cited_evidence_ids"]["items"]["enum"],
+            json!([evidence_id])
+        );
     }
 
     #[test]
@@ -2015,7 +2028,7 @@ mod tests {
             CorrelationId::new(),
             "mock-model",
             &"x".repeat(MAX_REPAIR_OUTPUT_CHARS + 100),
-            &diagnosis_output_schema(),
+            &diagnosis_output_schema(&[evidence_id]),
             &[evidence_id],
         );
 

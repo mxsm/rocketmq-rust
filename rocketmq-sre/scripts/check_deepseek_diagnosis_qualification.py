@@ -36,15 +36,23 @@ SENSITIVE = re.compile(
     r"(?:-----BEGIN [A-Z ]*PRIVATE KEY-----|\bBearer\s+[A-Za-z0-9._~-]+|\bsk-[A-Za-z0-9_-]{12,})",
     re.IGNORECASE,
 )
-EXPECTED_ASSERTIONS: dict[str, bool | int] = {
+EXPECTED_ASSERTIONS: dict[str, bool | int | str] = {
     "model_assisted_diagnosis": True,
     "authorized_evidence_citations": True,
     "input_tokens_present": True,
     "output_tokens_present": True,
     "invocation_persisted": True,
     "maximum_schema_repairs": 1,
-    "maximum_model_network_calls": 2,
-    "tool_calls": 0,
+    "maximum_model_network_calls": 7,
+    "maximum_diagnosis_attempts": 2,
+    "maximum_rules_only_fallbacks": 1,
+    "stream_sessions": 2,
+    "completed_semantic_streams": 1,
+    "stream_terminal_verified": True,
+    "stream_cancellation_verified": True,
+    "read_only_tool_selections": 1,
+    "tool_selection_protocol": "openai_chat_completions",
+    "tool_execution_calls": 0,
     "mutation_calls": 0,
     "execution_eligible": False,
 }
@@ -194,7 +202,13 @@ def validate_report(report: dict[str, Any]) -> list[str]:
             "input_tokens_present": True,
             "output_tokens_present": True,
             "invocation_persisted": True,
-            "tool_calls": 0,
+            "stream_sessions": 2,
+            "completed_semantic_streams": 1,
+            "stream_terminal_verified": True,
+            "stream_cancellation_verified": True,
+            "read_only_tool_selections": 1,
+            "tool_selection_protocol": "openai_chat_completions",
+            "tool_execution_calls": 0,
             "mutation_calls": 0,
             "execution_eligible": False,
         }
@@ -208,8 +222,17 @@ def validate_report(report: dict[str, Any]) -> list[str]:
         if not isinstance(repairs, int) or isinstance(repairs, bool) or not 0 <= repairs <= 1:
             findings.append("diagnosis.schema_repairs must be between zero and one")
         calls = diagnosis.get("model_network_calls")
-        if not isinstance(calls, int) or isinstance(calls, bool) or not 1 <= calls <= 2:
-            findings.append("diagnosis.model_network_calls must be between one and two")
+        if not isinstance(calls, int) or isinstance(calls, bool) or not 4 <= calls <= 7:
+            findings.append("diagnosis.model_network_calls must be between four and seven")
+        attempts = diagnosis.get("diagnosis_attempts")
+        if not isinstance(attempts, int) or isinstance(attempts, bool) or not 1 <= attempts <= 2:
+            findings.append("diagnosis.diagnosis_attempts must be one or two")
+        fallbacks = diagnosis.get("rules_only_fallbacks")
+        if not isinstance(fallbacks, int) or isinstance(fallbacks, bool) or not 0 <= fallbacks <= 1:
+            findings.append("diagnosis.rules_only_fallbacks must be zero or one")
+        event_count = diagnosis.get("stream_event_count")
+        if not isinstance(event_count, int) or isinstance(event_count, bool) or event_count < 4 or event_count > 128:
+            findings.append("diagnosis.stream_event_count must be between four and 128")
 
     safety = report.get("safety")
     expected_safety = {

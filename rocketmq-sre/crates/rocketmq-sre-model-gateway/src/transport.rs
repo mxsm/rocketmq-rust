@@ -23,6 +23,7 @@ use serde_json::Value;
 use crate::error::ProviderError;
 use crate::profile::ProviderDialect;
 use crate::secret::SecretMaterial;
+use crate::stream::AsyncBoundedModelStream;
 use crate::stream::BoundedModelStream;
 use crate::stream::CancellationToken;
 use crate::stream::StreamBounds;
@@ -109,6 +110,10 @@ pub trait ModelTransport: Send + Sync {
 /// Heap-owned future returned by the object-safe asynchronous transport.
 pub type TransportFuture<'a> = Pin<Box<dyn Future<Output = Result<TransportResponse, ProviderError>> + Send + 'a>>;
 
+/// Heap-owned future returned by an object-safe asynchronous stream transport.
+pub type TransportStreamFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<AsyncBoundedModelStream, ProviderError>> + Send + 'a>>;
+
 /// Non-blocking model-provider transport used by production HTTP integrations.
 ///
 /// This is additive to [`ModelTransport`], whose synchronous shape is retained
@@ -118,4 +123,19 @@ pub type TransportFuture<'a> = Pin<Box<dyn Future<Output = Result<TransportRespo
 pub trait AsyncModelTransport: Send + Sync {
     /// Sends one bounded request without blocking the async runtime.
     fn invoke(&self, request: TransportRequest) -> TransportFuture<'_>;
+
+    /// Starts a bounded, cancellation-aware stream without blocking the async
+    /// runtime or spawning an unowned producer task.
+    fn invoke_stream(
+        &self,
+        _request: TransportRequest,
+        _bounds: StreamBounds,
+        _cancellation: CancellationToken,
+    ) -> TransportStreamFuture<'_> {
+        Box::pin(async {
+            Err(ProviderError::capability_unsupported(
+                "asynchronous transport does not implement streaming",
+            ))
+        })
+    }
 }

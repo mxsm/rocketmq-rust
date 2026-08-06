@@ -724,13 +724,16 @@ fn deepseek_responses_request(request: &CanonicalModelRequest) -> Value {
                 .tools
                 .iter()
                 .map(|tool| {
-                    json!({
+                    let mut value = json!({
                         "type": "function",
                         "name": tool.name,
                         "description": tool.description,
                         "parameters": tool.input_schema,
-                        "strict": tool.strict,
-                    })
+                    });
+                    if tool.strict {
+                        value["strict"] = Value::Bool(true);
+                    }
+                    value
                 })
                 .collect(),
         );
@@ -1157,7 +1160,7 @@ fn parse_deepseek_responses_response(
     })
 }
 
-fn parse_responses_usage(body: &Value) -> ModelUsage {
+pub(crate) fn parse_responses_usage(body: &Value) -> ModelUsage {
     let usage = body.get("usage").unwrap_or(&Value::Null);
     ModelUsage {
         input_tokens: u32_field(usage, "input_tokens"),

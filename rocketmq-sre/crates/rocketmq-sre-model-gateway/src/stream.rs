@@ -12,10 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::fmt::Debug;
+use std::fmt::Formatter;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 use std::sync::mpsc::Receiver;
 use std::sync::mpsc::RecvTimeoutError;
 use std::sync::mpsc::SyncSender;
@@ -23,26 +25,47 @@ use std::sync::mpsc::TrySendError;
 use std::sync::mpsc::sync_channel;
 use std::time::Duration;
 
+use tokio::sync::watch;
+
 use crate::error::ProviderError;
 use crate::error::ProviderErrorCode;
 use crate::ir::ModelStreamEvent;
 
 /// Cooperative cancellation shared by an invocation and its stream.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct CancellationToken {
-    cancelled: Arc<AtomicBool>,
+    cancelled: watch::Sender<bool>,
+}
+
+impl Default for CancellationToken {
+    fn default() -> Self {
+        let (cancelled, _) = watch::channel(false);
+        Self { cancelled }
+    }
 }
 
 impl CancellationToken {
     /// Cancels the operation.
     pub fn cancel(&self) {
-        self.cancelled.store(true, Ordering::Release);
+        self.cancelled.send_replace(true);
     }
 
     /// Whether cancellation has been requested.
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::Acquire)
+        *self.cancelled.borrow()
+    }
+
+    async fn cancelled(&self) {
+        let mut receiver = self.cancelled.subscribe();
+        if *receiver.borrow() {
+            return;
+        }
+        while receiver.changed().await.is_ok() {
+            if *receiver.borrow() {
+                return;
+            }
+        }
     }
 }
 
@@ -138,6 +161,111 @@ pub struct BoundedModelStream {
     cancellation: CancellationToken,
 }
 
+pub(crate) type StreamEventFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Option<ModelStreamEvent>, ProviderError>> + Send + 'a>>;
+
+pub(crate) trait AsyncModelStreamSource: Send {
+    fn next_event(&mut self) -> StreamEventFuture<'_>;
+}
+
+/// Pull-based, bounded asynchronous model stream.
+///
+/// The stream owns the provider response and reads it only when [`Self::recv`]
+/// is called. It therefore needs no detached producer task and cannot build an
+/// unbounded delta backlog behind a slow consumer.
+pub struct AsyncBoundedModelStream {
+    source: Box<dyn AsyncModelStreamSource>,
+    bounds: StreamBounds,
+    usage: StreamUsage,
+    cancellation: CancellationToken,
+    terminated: bool,
+}
+
+impl AsyncBoundedModelStream {
+    pub(crate) fn new(
+        source: Box<dyn AsyncModelStreamSource>,
+        bounds: StreamBounds,
+        cancellation: CancellationToken,
+    ) -> Result<Self, ProviderError> {
+        validate_bounds(bounds)?;
+        Ok(Self {
+            source,
+            bounds,
+            usage: StreamUsage::default(),
+            cancellation,
+            terminated: false,
+        })
+    }
+
+    /// Receives the next normalized provider event.
+    ///
+    /// `Ok(None)` is returned only after a terminal `finish` or `error` event.
+    /// Provider EOF before a terminal event fails closed.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable cancellation, protocol, transport, or output-bound
+    /// error without retaining the rejected event.
+    pub async fn recv(&mut self) -> Result<Option<ModelStreamEvent>, ProviderError> {
+        if self.cancellation.is_cancelled() {
+            return Err(cancelled_error());
+        }
+        if self.terminated {
+            return Ok(None);
+        }
+        let cancellation = self.cancellation.clone();
+        let event = tokio::select! {
+            () = cancellation.cancelled() => return Err(cancelled_error()),
+            event = self.source.next_event() => event?,
+        };
+        let Some(event) = event else {
+            self.cancellation.cancel();
+            return Err(ProviderError::new(
+                ProviderErrorCode::ProtocolError,
+                "model provider stream ended without a terminal event",
+            ));
+        };
+        let event_bytes = serde_json::to_vec(&event).map_err(|_| {
+            ProviderError::new(
+                ProviderErrorCode::ProtocolError,
+                "model stream event could not be encoded",
+            )
+        })?;
+        if self.usage.events.saturating_add(1) > self.bounds.max_events
+            || self.usage.bytes.saturating_add(event_bytes.len()) > self.bounds.max_bytes
+        {
+            self.cancellation.cancel();
+            return Err(ProviderError::new(
+                ProviderErrorCode::OutputTooLarge,
+                "model stream exceeded configured bounds",
+            ));
+        }
+        self.usage.events += 1;
+        self.usage.bytes += event_bytes.len();
+        self.terminated = matches!(event, ModelStreamEvent::Finish { .. } | ModelStreamEvent::Error { .. });
+        Ok(Some(event))
+    }
+
+    /// Cancels the stream and releases the provider response after the current
+    /// caller regains control.
+    pub fn cancel(&self) {
+        self.cancellation.cancel();
+    }
+}
+
+impl Debug for AsyncBoundedModelStream {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AsyncBoundedModelStream")
+            .field("bounds", &self.bounds)
+            .field("events", &self.usage.events)
+            .field("bytes", &self.usage.bytes)
+            .field("cancelled", &self.cancellation.is_cancelled())
+            .field("terminated", &self.terminated)
+            .finish_non_exhaustive()
+    }
+}
+
 impl BoundedModelStream {
     /// Creates a bounded channel and cancellation-aware stream.
     ///
@@ -145,12 +273,7 @@ impl BoundedModelStream {
     ///
     /// Returns [`ProviderErrorCode::InvalidRequest`] when any bound is zero.
     pub fn channel(bounds: StreamBounds, cancellation: CancellationToken) -> Result<(StreamSink, Self), ProviderError> {
-        if bounds.channel_capacity == 0 || bounds.max_events == 0 || bounds.max_bytes == 0 {
-            return Err(ProviderError::new(
-                ProviderErrorCode::InvalidRequest,
-                "model stream bounds must be non-zero",
-            ));
-        }
+        validate_bounds(bounds)?;
         let (sender, receiver) = sync_channel(bounds.channel_capacity);
         Ok((
             StreamSink {
@@ -189,6 +312,20 @@ impl BoundedModelStream {
     pub fn cancel(&self) {
         self.cancellation.cancel();
     }
+}
+
+fn validate_bounds(bounds: StreamBounds) -> Result<(), ProviderError> {
+    if bounds.channel_capacity == 0 || bounds.max_events == 0 || bounds.max_bytes == 0 {
+        return Err(ProviderError::new(
+            ProviderErrorCode::InvalidRequest,
+            "model stream bounds must be non-zero",
+        ));
+    }
+    Ok(())
+}
+
+fn cancelled_error() -> ProviderError {
+    ProviderError::new(ProviderErrorCode::Cancelled, "model stream was cancelled")
 }
 
 #[cfg(test)]

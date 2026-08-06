@@ -31,15 +31,28 @@ use rocketmq_sre_contracts::Sensitivity;
 use rocketmq_sre_contracts::TenantId;
 use rocketmq_sre_contracts::TimeRange;
 use rocketmq_sre_contracts::current_evidence_schema;
+use rocketmq_sre_model_gateway::AsyncBuiltinProviderClient;
 use rocketmq_sre_model_gateway::AsyncModelTransport;
+use rocketmq_sre_model_gateway::CanonicalModelRequest;
 use rocketmq_sre_model_gateway::DevSecretProvider;
+use rocketmq_sre_model_gateway::FinishReason;
 use rocketmq_sre_model_gateway::HttpModelTransport;
 use rocketmq_sre_model_gateway::HttpTransportConfig;
+use rocketmq_sre_model_gateway::InvocationContext;
+use rocketmq_sre_model_gateway::ModelMessage;
+use rocketmq_sre_model_gateway::ModelRole;
+use rocketmq_sre_model_gateway::ModelStreamEvent;
+use rocketmq_sre_model_gateway::ModelTool;
 use rocketmq_sre_model_gateway::ProviderDialect;
 use rocketmq_sre_model_gateway::ProviderError;
+use rocketmq_sre_model_gateway::ProviderErrorCode;
+use rocketmq_sre_model_gateway::SecretMaterial;
 use rocketmq_sre_model_gateway::SecretReference;
+use rocketmq_sre_model_gateway::StreamBounds;
+use rocketmq_sre_model_gateway::ToolChoice;
 use rocketmq_sre_model_gateway::TransportFuture;
 use rocketmq_sre_model_gateway::TransportRequest;
+use rocketmq_sre_model_gateway::TransportStreamFuture;
 use serde_json::json;
 
 use super::MODEL_ADOPTED_REASON;
@@ -58,6 +71,8 @@ const FORBIDDEN_EVIDENCE_MARKER: &str = "qualification-body-must-not-leave";
 struct InspectingTransport {
     inner: HttpModelTransport,
     calls: AtomicUsize,
+    stream_calls: AtomicUsize,
+    read_only_tool_requests: AtomicUsize,
 }
 
 impl InspectingTransport {
@@ -65,35 +80,93 @@ impl InspectingTransport {
         Self {
             inner,
             calls: AtomicUsize::new(0),
+            stream_calls: AtomicUsize::new(0),
+            read_only_tool_requests: AtomicUsize::new(0),
         }
     }
 
     fn calls(&self) -> usize {
         self.calls.load(Ordering::SeqCst)
     }
+
+    fn stream_calls(&self) -> usize {
+        self.stream_calls.load(Ordering::SeqCst)
+    }
+
+    fn read_only_tool_requests(&self) -> usize {
+        self.read_only_tool_requests.load(Ordering::SeqCst)
+    }
+
+    fn request_is_allowed(request: &TransportRequest, allow_tools: bool) -> bool {
+        let serialized = serde_json::to_string(&request.body).unwrap_or_default();
+        let tools = request.body.get("tools").and_then(serde_json::Value::as_array);
+        let tools_are_read_only = tools.is_some_and(|tools| {
+            !tools.is_empty()
+                && tools.iter().all(|tool| {
+                    tool.get("type").and_then(serde_json::Value::as_str) == Some("function")
+                        && tool
+                            .get("name")
+                            .or_else(|| tool.get("function").and_then(|function| function.get("name")))
+                            .and_then(serde_json::Value::as_str)
+                            == Some("query_consumer_lag")
+                })
+        });
+        let protocol_shape_is_allowed = match request.dialect {
+            ProviderDialect::DeepSeekResponses => {
+                request.path == "/responses" && request.body.get("messages").is_none()
+            }
+            ProviderDialect::DeepSeekOpenAi => {
+                request.path == "/chat/completions" && request.body.get("messages").is_some() && tools.is_some()
+            }
+            _ => false,
+        };
+        protocol_shape_is_allowed
+            && request.endpoint == "https://api.deepseek.com"
+            && request.credential.is_some()
+            && !serialized.contains(FORBIDDEN_EVIDENCE_MARKER)
+            && !serialized.contains("message_body")
+            && !serialized.contains("access_token")
+            && match tools {
+                None => true,
+                Some(_) => allow_tools && tools_are_read_only,
+            }
+    }
 }
 
 impl AsyncModelTransport for InspectingTransport {
     fn invoke(&self, request: TransportRequest) -> TransportFuture<'_> {
-        let serialized = serde_json::to_string(&request.body).unwrap_or_default();
-        if request.dialect != ProviderDialect::DeepSeekResponses
-            || request.path != "/responses"
-            || request.endpoint != "https://api.deepseek.com"
-            || request.credential.is_none()
-            || request.body.get("tools").is_some()
-            || request.body.get("messages").is_some()
-            || serialized.contains(FORBIDDEN_EVIDENCE_MARKER)
-            || serialized.contains("message_body")
-            || serialized.contains("access_token")
-        {
+        if !Self::request_is_allowed(&request, true) {
             return Box::pin(async {
                 Err(ProviderError::policy_denied(
                     "live diagnosis request violated the read-only qualification boundary",
                 ))
             });
         }
+        if request.body.get("tools").is_some() {
+            self.read_only_tool_requests.fetch_add(1, Ordering::SeqCst);
+        }
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.inner.invoke(request)
+    }
+
+    fn invoke_stream(
+        &self,
+        request: TransportRequest,
+        bounds: StreamBounds,
+        cancellation: rocketmq_sre_model_gateway::CancellationToken,
+    ) -> TransportStreamFuture<'_> {
+        if !Self::request_is_allowed(&request, false)
+            || request.body.get("stream").and_then(serde_json::Value::as_bool) != Some(true)
+        {
+            return Box::pin(async {
+                Err(ProviderError::policy_denied(
+                    "live stream request violated the read-only qualification boundary",
+                ))
+            });
+        }
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.stream_calls.fetch_add(1, Ordering::SeqCst);
+        self.inner.invoke_stream(request, bounds, cancellation)
     }
 }
 
@@ -127,6 +200,13 @@ async fn deepseek_responses_produces_persisted_read_only_sre_diagnosis() {
             .expect("qualification environment secret reference"),
     );
     profile.validate().expect("DeepSeek Responses profile");
+    let mut tool_profile = rocketmq_sre_model_gateway::builtin_provider_profiles()
+        .into_iter()
+        .find(|candidate| candidate.id == "deepseek")
+        .expect("DeepSeek OpenAI-compatible profile fixture");
+    tool_profile.model = "deepseek-v4-flash".to_owned();
+    tool_profile.credential_ref = profile.credential_ref.clone();
+    tool_profile.validate().expect("DeepSeek OpenAI-compatible profile");
 
     let inner = HttpModelTransport::new(
         HttpTransportConfig::default()
@@ -135,6 +215,7 @@ async fn deepseek_responses_produces_persisted_read_only_sre_diagnosis() {
     )
     .expect("DeepSeek HTTPS transport");
     let transport = Arc::new(InspectingTransport::new(inner));
+    let direct_profile = profile.clone();
     let mut service = ModelGatewayService::for_tests(repository.clone(), vec![profile.clone()], transport.clone());
     service.config = Arc::new(ModelRuntimeConfig {
         enabled: true,
@@ -165,10 +246,11 @@ async fn deepseek_responses_produces_persisted_read_only_sre_diagnosis() {
         .await
         .expect("fixture-backed operator certification");
 
-    let correlation_id = CorrelationId::new();
-    let evidence = synthetic_lag_evidence(tenant_id, cluster_id, correlation_id);
-    let evidence_id = evidence.evidence_id;
-    let decision = service
+    let mut correlation_id = CorrelationId::new();
+    let evidence = vec![synthetic_lag_evidence(tenant_id, cluster_id, correlation_id)];
+    let evidence_id = evidence[0].evidence_id;
+    let mut diagnosis_attempts = 1;
+    let mut decision = service
         .diagnose(
             &auth,
             incident_id,
@@ -180,13 +262,44 @@ async fn deepseek_responses_produces_persisted_read_only_sre_diagnosis() {
                 "lag": 42,
                 "mutation_allowed": false,
             }),
-            &[evidence],
+            &evidence,
             correlation_id,
         )
         .await
         .expect("real DeepSeek AI SRE diagnosis");
+    let mut rules_only_fallbacks = usize::from(decision.mode != "model_assisted");
+    if decision.mode != "model_assisted" {
+        diagnosis_attempts += 1;
+        correlation_id = CorrelationId::new();
+        decision = service
+            .diagnose(
+                &auth,
+                incident_id,
+                cluster_id,
+                "Consumer lag is increasing on the qualification group",
+                "consumer-lag.v1",
+                &json!({
+                    "finding": "consumer_lag_positive",
+                    "lag": 42,
+                    "mutation_allowed": false,
+                }),
+                &evidence,
+                correlation_id,
+            )
+            .await
+            .expect("bounded DeepSeek diagnosis qualification retry");
+        rules_only_fallbacks += usize::from(decision.mode != "model_assisted");
+    }
 
-    assert_eq!(decision.mode, "model_assisted");
+    assert!(
+        decision.mode == "model_assisted",
+        "sanitized diagnosis outcome mode={} reason={} input_tokens={} output_tokens={} schema_repairs={}",
+        decision.mode,
+        decision.reason,
+        decision.input_tokens,
+        decision.output_tokens,
+        decision.schema_repairs_used
+    );
     assert_eq!(decision.reason, MODEL_ADOPTED_REASON);
     assert!(decision.input_tokens > 0);
     assert!(decision.output_tokens > 0);
@@ -223,8 +336,22 @@ async fn deepseek_responses_produces_persisted_read_only_sre_diagnosis() {
     assert_eq!(successful.error_code, None);
     assert!(successful.input_tokens.is_some_and(|tokens| tokens > 0));
     assert!(successful.output_tokens.is_some_and(|tokens| tokens > 0));
-    assert!(invocations.items.len() <= 2);
-    assert!((1..=2).contains(&transport.calls()));
+    assert!(invocations.items.len() <= 4);
+
+    let credential = SecretMaterial::new(
+        std::env::var(LIVE_API_KEY_ENV).expect("live DeepSeek credential remains process-local"),
+        "qualification-process-secret",
+        None,
+    );
+    let direct_client = AsyncBuiltinProviderClient::new(direct_profile, transport.clone())
+        .expect("direct DeepSeek Responses qualification client");
+    let tool_client = AsyncBuiltinProviderClient::new(tool_profile, transport.clone())
+        .expect("direct DeepSeek tool qualification client");
+    let stream_proof = qualify_streaming(&direct_client, credential.clone()).await;
+    qualify_read_only_tool_selection(&tool_client, credential).await;
+    assert!((4..=7).contains(&transport.calls()));
+    assert_eq!(transport.stream_calls(), 2);
+    assert_eq!(transport.read_only_tool_requests(), 1);
 
     let credential_reference: String = sqlx::query_scalar(
         "SELECT credential_ref FROM model_profiles WHERE tenant_id = $1 AND profile_name = 'deepseek-responses'",
@@ -246,9 +373,18 @@ async fn deepseek_responses_produces_persisted_read_only_sre_diagnosis() {
         "input_tokens_present": decision.input_tokens > 0,
         "output_tokens_present": decision.output_tokens > 0,
         "schema_repairs": decision.schema_repairs_used,
+        "diagnosis_attempts": diagnosis_attempts,
+        "rules_only_fallbacks": rules_only_fallbacks,
         "model_network_calls": transport.calls(),
         "invocation_persisted": true,
-        "tool_calls": 0,
+        "stream_sessions": transport.stream_calls(),
+        "completed_semantic_streams": 1,
+        "stream_event_count": stream_proof.event_count,
+        "stream_terminal_verified": stream_proof.terminal_verified,
+        "stream_cancellation_verified": stream_proof.cancellation_verified,
+        "read_only_tool_selections": transport.read_only_tool_requests(),
+        "tool_selection_protocol": "openai_chat_completions",
+        "tool_execution_calls": 0,
         "mutation_calls": 0,
         "execution_eligible": false,
         "sensitive_payloads_recorded": false,
@@ -259,6 +395,120 @@ async fn deepseek_responses_produces_persisted_read_only_sre_diagnosis() {
     drop(service_context);
     let shutdown = runtime.shutdown_tasks(Duration::from_secs(5)).await;
     assert!(shutdown.is_healthy(), "qualification runtime must shut down cleanly");
+}
+
+struct StreamProof {
+    event_count: usize,
+    terminal_verified: bool,
+    cancellation_verified: bool,
+}
+
+async fn qualify_streaming(client: &AsyncBuiltinProviderClient, credential: SecretMaterial) -> StreamProof {
+    let correlation_id = CorrelationId::new();
+    let mut request = CanonicalModelRequest::new(
+        correlation_id,
+        "deepseek-v4-flash",
+        vec![ModelMessage::text(
+            ModelRole::User,
+            "Return one short operational status sentence without using a tool.",
+        )],
+    );
+    request.max_output_tokens = Some(64);
+    let mut context = InvocationContext::new(correlation_id);
+    context.max_response_bytes = 128 * 1024;
+    context.stream_bounds = StreamBounds {
+        channel_capacity: 8,
+        max_events: 128,
+        max_bytes: 128 * 1024,
+    };
+    let mut stream = client
+        .invoke_stream(&context, &request, Some(credential.clone()))
+        .await
+        .expect("real DeepSeek semantic stream");
+    let mut event_count = 0;
+    let mut saw_start = false;
+    let mut saw_text = false;
+    let mut saw_usage = false;
+    let mut terminal_verified = false;
+    while let Some(event) = stream.recv().await.expect("bounded DeepSeek stream event") {
+        event_count += 1;
+        match event {
+            ModelStreamEvent::Start { .. } => saw_start = true,
+            ModelStreamEvent::TextDelta { ref delta } if !delta.is_empty() => saw_text = true,
+            ModelStreamEvent::Usage { usage } => saw_usage = usage.total_tokens.is_some_and(|tokens| tokens > 0),
+            ModelStreamEvent::Finish {
+                reason: FinishReason::Stop,
+            } => terminal_verified = true,
+            ModelStreamEvent::Error { .. } => panic!("DeepSeek stream returned a terminal error"),
+            _ => {}
+        }
+    }
+    assert!(saw_start && saw_text && saw_usage && terminal_verified);
+
+    let cancellation_id = CorrelationId::new();
+    let cancellation_request = CanonicalModelRequest::new(
+        cancellation_id,
+        "deepseek-v4-flash",
+        vec![ModelMessage::text(ModelRole::User, "Return a short status sentence.")],
+    );
+    let cancellation_context = InvocationContext::new(cancellation_id);
+    let mut cancelled_stream = client
+        .invoke_stream(&cancellation_context, &cancellation_request, Some(credential))
+        .await
+        .expect("cancellable DeepSeek stream");
+    assert!(matches!(
+        cancelled_stream.recv().await.expect("stream start"),
+        Some(ModelStreamEvent::Start { .. })
+    ));
+    cancelled_stream.cancel();
+    let cancellation_verified = cancelled_stream
+        .recv()
+        .await
+        .expect_err("cancelled stream must stop")
+        .code
+        == ProviderErrorCode::Cancelled;
+    assert!(cancellation_verified);
+    StreamProof {
+        event_count,
+        terminal_verified,
+        cancellation_verified,
+    }
+}
+
+async fn qualify_read_only_tool_selection(client: &AsyncBuiltinProviderClient, credential: SecretMaterial) {
+    let correlation_id = CorrelationId::new();
+    let mut request = CanonicalModelRequest::new(
+        correlation_id,
+        "deepseek-v4-flash",
+        vec![ModelMessage::text(
+            ModelRole::User,
+            "What is the current consumer lag for qualification-group? Use the available function because no lag value is present in this request.",
+        )],
+    );
+    request.tools.push(ModelTool::read_only(
+        "query_consumer_lag",
+        "Read the current lag for one authorized consumer group.",
+        json!({
+            "type": "object",
+            "properties": {"consumer_group": {"type": "string"}},
+            "required": ["consumer_group"],
+            "additionalProperties": false
+        }),
+    ));
+    request.tool_choice = ToolChoice::Auto;
+    request.temperature_milli = Some(0);
+    request.max_output_tokens = Some(128);
+    let response = client
+        .invoke(&InvocationContext::new(correlation_id), &request, Some(credential))
+        .await
+        .expect("real DeepSeek read-only tool selection");
+    assert_eq!(response.finish_reason, FinishReason::ToolCalls);
+    assert_eq!(response.tool_calls.len(), 1);
+    assert_eq!(response.tool_calls[0].name, "query_consumer_lag");
+    assert_eq!(
+        response.tool_calls[0].arguments["consumer_group"],
+        "qualification-group"
+    );
 }
 
 async fn seed_diagnosis_scope(

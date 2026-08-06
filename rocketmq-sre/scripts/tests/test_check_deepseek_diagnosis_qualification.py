@@ -49,9 +49,18 @@ def valid_report() -> dict:
             "input_tokens_present": True,
             "output_tokens_present": True,
             "schema_repairs": 0,
-            "model_network_calls": 1,
+            "model_network_calls": 4,
+            "diagnosis_attempts": 1,
+            "rules_only_fallbacks": 0,
             "invocation_persisted": True,
-            "tool_calls": 0,
+            "stream_sessions": 2,
+            "completed_semantic_streams": 1,
+            "stream_event_count": 4,
+            "stream_terminal_verified": True,
+            "stream_cancellation_verified": True,
+            "read_only_tool_selections": 1,
+            "tool_selection_protocol": "openai_chat_completions",
+            "tool_execution_calls": 0,
             "mutation_calls": 0,
             "execution_eligible": False,
         },
@@ -85,13 +94,13 @@ class DeepSeekDiagnosisQualificationTest(unittest.TestCase):
     def test_rejects_unbounded_or_non_model_assisted_run(self) -> None:
         report = valid_report()
         report["diagnosis"]["mode"] = "rules_only"
-        report["diagnosis"]["model_network_calls"] = 3
+        report["diagnosis"]["model_network_calls"] = 8
         report["diagnosis"]["schema_repairs"] = 2
 
         findings = MODULE.validate_report(report)
 
         self.assertIn("diagnosis.mode must be 'model_assisted'", findings)
-        self.assertIn("diagnosis.model_network_calls must be between one and two", findings)
+        self.assertIn("diagnosis.model_network_calls must be between four and seven", findings)
         self.assertIn("diagnosis.schema_repairs must be between zero and one", findings)
 
     def test_rejects_mutation_or_unauthorized_citation(self) -> None:
@@ -117,7 +126,7 @@ class DeepSeekDiagnosisQualificationTest(unittest.TestCase):
 
     def test_manifest_rejects_weakened_read_only_assertion(self) -> None:
         manifest = copy.deepcopy(self.manifest)
-        manifest["required_assertions"]["tool_calls"] = 1
+        manifest["required_assertions"]["tool_execution_calls"] = 1
 
         self.assertIn("required DeepSeek diagnosis assertions drifted", MODULE.validate_manifest(manifest))
 
