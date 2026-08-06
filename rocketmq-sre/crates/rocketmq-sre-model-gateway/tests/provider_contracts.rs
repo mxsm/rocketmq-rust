@@ -239,14 +239,11 @@ fn deepseek_responses_maps_instructions_structured_output_tools_and_usage() {
         }),
         strict: true,
     };
-    request.tools.push(
-        ModelTool::read_only(
-            "query_consumer_lag",
-            "Read current lag",
-            serde_json::json!({"type":"object"}),
-        )
-        .with_strict(),
-    );
+    request.tools.push(ModelTool::read_only(
+        "query_consumer_lag",
+        "Read current lag",
+        serde_json::json!({"type":"object"}),
+    ));
     request.tool_choice = ToolChoice::Specific {
         name: "query_consumer_lag".to_owned(),
     };
@@ -264,6 +261,7 @@ fn deepseek_responses_maps_instructions_structured_output_tools_and_usage() {
     assert_eq!(sent.body["text"]["format"]["type"], "json_schema");
     assert_eq!(sent.body["text"]["format"]["name"], "rocketmq_sre_diagnosis");
     assert_eq!(sent.body["tools"][0]["name"], "query_consumer_lag");
+    assert!(sent.body["tools"][0].get("strict").is_none());
     assert!(sent.body["tools"][0].get("function").is_none());
     assert_eq!(
         sent.body["tool_choice"],
@@ -273,6 +271,13 @@ fn deepseek_responses_maps_instructions_structured_output_tools_and_usage() {
         })
     );
     assert!(sent.body.get("messages").is_none());
+
+    let mut strict_request = request;
+    strict_request.tools[0] = strict_request.tools[0].clone().with_strict();
+    let error = provider
+        .invoke(&InvocationContext::new(CorrelationId::new()), &strict_request)
+        .expect_err("standard DeepSeek Responses endpoint does not advertise strict tools");
+    assert_eq!(error.code, ProviderErrorCode::CapabilityUnsupported);
     assert!(sent.body.get("response_format").is_none());
     assert_eq!(response.model, "deepseek-v4-flash");
     assert_eq!(response.usage.input_tokens, Some(11));

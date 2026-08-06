@@ -418,7 +418,6 @@ pub fn builtin_provider_profiles() -> Vec<ProviderProfile> {
         ProviderCapability::JsonSchema,
         ProviderCapability::ToolChoiceRequired,
         ProviderCapability::ToolChoiceSpecific,
-        ProviderCapability::StrictTools,
         ProviderCapability::Reasoning,
     ]);
     let mut profiles = vec![

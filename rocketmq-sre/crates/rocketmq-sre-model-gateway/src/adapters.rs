@@ -724,13 +724,16 @@ fn deepseek_responses_request(request: &CanonicalModelRequest) -> Value {
                 .tools
                 .iter()
                 .map(|tool| {
-                    json!({
+                    let mut value = json!({
                         "type": "function",
                         "name": tool.name,
                         "description": tool.description,
                         "parameters": tool.input_schema,
-                        "strict": tool.strict,
-                    })
+                    });
+                    if tool.strict {
+                        value["strict"] = Value::Bool(true);
+                    }
+                    value
                 })
                 .collect(),
         );

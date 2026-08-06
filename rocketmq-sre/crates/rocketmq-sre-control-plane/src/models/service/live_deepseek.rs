@@ -430,19 +430,16 @@ async fn qualify_read_only_tool_selection(client: &AsyncBuiltinProviderClient, c
             "Select the declared read-only tool for consumer group qualification-group. Do not invent an answer.",
         )],
     );
-    request.tools.push(
-        ModelTool::read_only(
-            "query_consumer_lag",
-            "Read the current lag for one authorized consumer group.",
-            json!({
-                "type": "object",
-                "properties": {"consumer_group": {"type": "string"}},
-                "required": ["consumer_group"],
-                "additionalProperties": false
-            }),
-        )
-        .with_strict(),
-    );
+    request.tools.push(ModelTool::read_only(
+        "query_consumer_lag",
+        "Read the current lag for one authorized consumer group.",
+        json!({
+            "type": "object",
+            "properties": {"consumer_group": {"type": "string"}},
+            "required": ["consumer_group"],
+            "additionalProperties": false
+        }),
+    ));
     request.tool_choice = ToolChoice::Specific {
         name: "query_consumer_lag".to_owned(),
     };
