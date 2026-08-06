@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "javaCommit": "2daf0e2ca91a1592d18235d43e5d709d1c35d15f",
-  "fixtureCount": 22,
+  "fixtureCount": 24,
   "fixtures": [
     {
       "id": "clean-controller-canonical-json",
@@ -114,6 +114,22 @@
       "serializeType": "ROCKETMQ",
       "frameLength": 423,
       "fnv1a64": "8cd6d4885da4e11e"
+    },
+    {
+      "id": "pull-response-fast-json",
+      "file": "pull-response-fast-json.json",
+      "rustTypeId": "rocketmq_protocol::protocol::header::pull_message_response_header::PullMessageResponseHeader",
+      "serializeType": "JSON",
+      "frameLength": 279,
+      "fnv1a64": "68d2e82d5aa34e01"
+    },
+    {
+      "id": "pull-response-fast-rocketmq",
+      "file": "pull-response-fast-rocketmq.json",
+      "rustTypeId": "rocketmq_protocol::protocol::header::pull_message_response_header::PullMessageResponseHeader",
+      "serializeType": "ROCKETMQ",
+      "frameLength": 190,
+      "fnv1a64": "087ad30b64622877"
     },
     {
       "id": "query-consume-queue-sparse-json",

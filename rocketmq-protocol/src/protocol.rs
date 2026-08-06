@@ -244,6 +244,12 @@ impl<T: serde::de::DeserializeOwned> RemotingDeserializable for T {
     }
 }
 
+/// Legacy handwritten fast-header codec surface.
+///
+/// Production encoding uses
+/// [`command_custom_header::CommandCustomHeader::encode_capability`] and
+/// [`command_custom_header::CommandCustomHeader::encode_direct_binary`].
+#[deprecated(note = "use CommandCustomHeader typed map/direct-binary APIs")]
 pub trait FastCodesHeader {
     fn write_if_not_null(out: &mut BytesMut, key: &str, value: &str) {
         if !value.is_empty() {

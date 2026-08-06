@@ -31,6 +31,7 @@ use rocketmq_protocol::protocol::header::message_operation_header::send_message_
 use rocketmq_protocol::protocol::header::namesrv::topic_operation_header::DeleteTopicFromNamesrvRequestHeader;
 use rocketmq_protocol::protocol::header::notification_request_header::NotificationRequestHeader;
 use rocketmq_protocol::protocol::header::pull_message_request_header::PullMessageRequestHeader;
+use rocketmq_protocol::protocol::header::pull_message_response_header::PullMessageResponseHeader;
 use rocketmq_protocol::protocol::header::query_consume_queue_request_header::QueryConsumeQueueRequestHeader;
 use rocketmq_protocol::protocol::LanguageCode;
 use rocketmq_protocol::protocol::SerializeType;
@@ -144,6 +145,9 @@ fn encode_registered_header(
         "rocketmq_protocol::protocol::header::pull_message_request_header::PullMessageRequestHeader" => {
             encode_rust_header::<PullMessageRequestHeader>(code, serialize_type, expected)
         }
+        "rocketmq_protocol::protocol::header::pull_message_response_header::PullMessageResponseHeader" => {
+            encode_rust_header::<PullMessageResponseHeader>(code, serialize_type, expected)
+        }
         "rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader" => {
             encode_rust_header::<SendMessageRequestHeader>(code, serialize_type, expected)
         }
@@ -212,6 +216,10 @@ fn pinned_java_frames_decode_and_reencode_to_the_canonical_logical_map() {
                 assert_header_map::<PullMessageRequestHeader>(&command, &expected);
                 assert_fast_header_map::<PullMessageRequestHeader>(&command, &expected);
             }
+            "rocketmq_protocol::protocol::header::pull_message_response_header::PullMessageResponseHeader" => {
+                assert_header_map::<PullMessageResponseHeader>(&command, &expected);
+                assert_fast_header_map::<PullMessageResponseHeader>(&command, &expected);
+            }
             "rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader" => {
                 assert_header_map::<SendMessageRequestHeader>(&command, &expected);
                 assert_fast_header_map::<SendMessageRequestHeader>(&command, &expected);
@@ -258,7 +266,7 @@ fn fixture_manifest_pins_schema_and_empty_value_policy() {
     .expect("valid fixture manifest JSON");
 
     assert_eq!(manifest["schema"]["mappedHeaderCount"], 143);
-    assert_eq!(manifest["goldenIndex"]["fixtureCount"], 22);
+    assert_eq!(manifest["goldenIndex"]["fixtureCount"], 24);
     assert_eq!(manifest["legacyEmptyHeaders"].as_array().unwrap().len(), 1);
     assert_eq!(manifest["wirePolicies"]["logicalMapEmpty"], "preserve");
     assert_eq!(manifest["wirePolicies"]["jsonEmpty"], "preserve");

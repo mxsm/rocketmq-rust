@@ -2,11 +2,11 @@
   "schemaVersion": 1,
   "corpusVersion": "request-header-codec-perf-v1",
   "javaCommit": "2daf0e2ca91a1592d18235d43e5d709d1c35d15f",
-  "fixtureManifestSha256": "a10703c65c49754e81ee8f0c262a96bc3ed64a4288c03b089081dff0c269f24f",
+  "fixtureManifestSha256": "58c0906471da30880049580162688f3ba963bc99a6377b0b9402668b1b7f4747",
   "weightProfile": {
     "kind": "reviewed-equal-stratified",
     "productionTelemetry": false,
-    "operationCount": 44,
+    "operationCount": 48,
     "weightSum": 1.0,
     "fastSubsetWeightSum": 1.0
   },
@@ -14,7 +14,7 @@
     {
       "id": "clean-controller-canonical-rocketmq-encode",
       "tier": 2,
-      "gateWeight": 0.022727272727272728,
+      "gateWeight": 0.020833333333333332,
       "fastGateWeight": 0.0,
       "operation": "encode",
       "header": "rocketmq_protocol::protocol::header::controller::clean_broker_data_request_header::CleanBrokerDataRequestHeader",
@@ -38,7 +38,7 @@
     {
       "id": "clean-controller-canonical-rocketmq-decode",
       "tier": 2,
-      "gateWeight": 0.022727272727272728,
+      "gateWeight": 0.020833333333333332,
       "fastGateWeight": 0.0,
       "operation": "decode",
       "header": "rocketmq_protocol::protocol::header::controller::clean_broker_data_request_header::CleanBrokerDataRequestHeader",
@@ -62,7 +62,7 @@
     {
       "id": "clean-controller-canonical-json-encode",
       "tier": 2,
-      "gateWeight": 0.022727272727272728,
+      "gateWeight": 0.020833333333333332,
       "fastGateWeight": 0.0,
       "operation": "encode",
       "header": "rocketmq_protocol::protocol::header::controller::clean_broker_data_request_header::CleanBrokerDataRequestHeader",
@@ -86,7 +86,7 @@
     {
       "id": "clean-controller-canonical-json-decode",
       "tier": 2,
-      "gateWeight": 0.022727272727272728,
+      "gateWeight": 0.020833333333333332,
       "fastGateWeight": 0.0,
       "operation": "decode",
       "header": "rocketmq_protocol::protocol::header::controller::clean_broker_data_request_header::CleanBrokerDataRequestHeader",
@@ -110,7 +110,7 @@
     {
       "id": "consume-direct-collision-rocketmq-encode",
       "tier": 2,
-      "gateWeight": 0.022727272727272728,
+      "gateWeight": 0.020833333333333332,
       "fastGateWeight": 0.0,
       "operation": "encode",
       "header": "rocketmq_protocol::protocol::header::consume_message_directly_result_request_header::ConsumeMessageDirectlyResultRequestHeader",
@@ -141,7 +141,7 @@
     {
       "id": "consume-direct-collision-rocketmq-decode",
       "tier": 2,
-      "gateWeight": 0.022727272727272728,
+      "gateWeight": 0.020833333333333332,
       "fastGateWeight": 0.0,
       "operation": "decode",
       "header": "rocketmq_protocol::protocol::header::consume_message_directly_result_request_header::ConsumeMessageDirectlyResultRequestHeader",
@@ -172,7 +172,7 @@
     {
       "id": "consume-direct-collision-json-encode",
       "tier": 2,
-      "gateWeight": 0.022727272727272728,
+      "gateWeight": 0.020833333333333332,
       "fastGateWeight": 0.0,
       "operation": "encode",
       "header": "rocketmq_protocol::protocol::header::consume_message_directly_result_request_header::ConsumeMessageDirectlyResultRequestHeader",
@@ -203,7 +203,7 @@
     {
       "id": "consume-direct-collision-json-decode",
       "tier": 2,
-      "gateWeight": 0.022727272727272728,
+      "gateWeight": 0.020833333333333332,
       "fastGateWeight": 0.0,
       "operation": "decode",
       "header": "rocketmq_protocol::protocol::header::consume_message_directly_result_request_header::ConsumeMessageDirectlyResultRequestHeader",
@@ -234,7 +234,7 @@
     {
       "id": "consumer-status-inherited-rocketmq-encode",
       "tier": 2,
-      "gateWeight": 0.022727272727272728,
+      "gateWeight": 0.020833333333333332,
       "fastGateWeight": 0.0,
       "operation": "encode",
       "header": "rocketmq_protocol::protocol::header::get_consumer_status_request_header::GetConsumerStatusRequestHeader",
@@ -261,7 +261,7 @@
     {
       "id": "consumer-status-inherited-rocketmq-decode",
       "tier": 2,
-      "gateWeight": 0.022727272727272728,
+      "gateWeight": 0.020833333333333332,
       "fastGateWeight": 0.0,
       "operation": "decode",
       "header": "rocketmq_protocol::protocol::header::get_consumer_status_request_header::GetConsumerStatusRequestHeader",
@@ -288,7 +288,7 @@
     {
       "id": "consumer-status-inherited-json-encode",
       "tier": 2,
-      "gateWeight": 0.022727272727272728,
+      "gateWeight": 0.020833333333333332,
       "fastGateWeight": 0.0,
       "operation": "encode",
       "header": "rocketmq_protocol::protocol::header::get_consumer_status_request_header::GetConsumerStatusRequestHeader",
@@ -315,7 +315,7 @@
     {
       "id": "consumer-status-inherited-json-decode",
       "tier": 2,
-      "gateWeight": 0.022727272727272728,
+      "gateWeight": 0.020833333333333332,
       "fastGateWeight": 0.0,
       "operation": "decode",
       "header": "rocketmq_protocol::protocol::header::get_consumer_status_request_header::GetConsumerStatusRequestHeader",
@@ -342,7 +342,7 @@
     {
       "id": "delete-topic-inherited-rocketmq-encode",
       "tier": 2,
-      "gateWeight": 0.022727272727272728,
+      "gateWeight": 0.020833333333333332,
       "fastGateWeight": 0.0,
       "operation": "encode",
       "header": "rocketmq_protocol::protocol::header::namesrv::topic_operation_header::DeleteTopicFromNamesrvRequestHeader",
@@ -368,7 +368,7 @@
     {
       "id": "delete-topic-inherited-rocketmq-decode",
       "tier": 2,
-      "gateWeight": 0.022727272727272728,
+      "gateWeight": 0.020833333333333332,
       "fastGateWeight": 0.0,
       "operation": "decode",
       "header": "rocketmq_protocol::protocol::header::namesrv::topic_operation_header::DeleteTopicFromNamesrvRequestHeader",
@@ -394,7 +394,7 @@
     {
       "id": "delete-topic-inherited-json-encode",
       "tier": 2,
-      "gateWeight": 0.022727272727272728,
+      "gateWeight": 0.020833333333333332,
       "fastGateWeight": 0.0,
       "operation": "encode",
       "header": "rocketmq_protocol::protocol::header::namesrv::topic_operation_header::DeleteTopicFromNamesrvRequestHeader",
@@ -420,7 +420,7 @@
     {
       "id": "delete-topic-inherited-json-decode",
       "tier": 2,
-      "gateWeight": 0.022727272727272728,
+      "gateWeight": 0.020833333333333332,
       "fastGateWeight": 0.0,
       "operation": "decode",
       "header": "rocketmq_protocol::protocol::header::namesrv::topic_operation_header::DeleteTopicFromNamesrvRequestHeader",
@@ -446,7 +446,7 @@
     {
       "id": "get-lite-explicit-default-rocketmq-encode",
       "tier": 2,
-      "gateWeight": 0.022727272727272728,
+      "gateWeight": 0.020833333333333332,
       "fastGateWeight": 0.0,
       "operation": "encode",
       "header": "rocketmq_protocol::protocol::header::get_lite_client_info_request_header::GetLiteClientInfoRequestHeader",
@@ -469,7 +469,7 @@
     {
       "id": "get-lite-explicit-default-rocketmq-decode",
       "tier": 2,
-      "gateWeight": 0.022727272727272728,
+      "gateWeight": 0.020833333333333332,
       "fastGateWeight": 0.0,
       "operation": "decode",
       "header": "rocketmq_protocol::protocol::header::get_lite_client_info_request_header::GetLiteClientInfoRequestHeader",
@@ -492,7 +492,7 @@
     {
       "id": "get-lite-explicit-default-json-encode",
       "tier": 2,
-      "gateWeight": 0.022727272727272728,
+      "gateWeight": 0.020833333333333332,
       "fastGateWeight": 0.0,
       "operation": "encode",
       "header": "rocketmq_protocol::protocol::header::get_lite_client_info_request_header::GetLiteClientInfoRequestHeader",
@@ -515,7 +515,7 @@
     {
       "id": "get-lite-explicit-default-json-decode",
       "tier": 2,
-      "gateWeight": 0.022727272727272728,
+      "gateWeight": 0.020833333333333332,
       "fastGateWeight": 0.0,
       "operation": "decode",
       "header": "rocketmq_protocol::protocol::header::get_lite_client_info_request_header::GetLiteClientInfoRequestHeader",
@@ -538,7 +538,7 @@
     {
       "id": "notification-defaults-rocketmq-encode",
       "tier": 2,
-      "gateWeight": 0.022727272727272728,
+      "gateWeight": 0.020833333333333332,
       "fastGateWeight": 0.0,
       "operation": "encode",
       "header": "rocketmq_protocol::protocol::header::notification_request_header::NotificationRequestHeader",
@@ -573,7 +573,7 @@
     {
       "id": "notification-defaults-rocketmq-decode",
       "tier": 2,
-      "gateWeight": 0.022727272727272728,
+      "gateWeight": 0.020833333333333332,
       "fastGateWeight": 0.0,
       "operation": "decode",
       "header": "rocketmq_protocol::protocol::header::notification_request_header::NotificationRequestHeader",
@@ -608,7 +608,7 @@
     {
       "id": "notification-defaults-json-encode",
       "tier": 2,
-      "gateWeight": 0.022727272727272728,
+      "gateWeight": 0.020833333333333332,
       "fastGateWeight": 0.0,
       "operation": "encode",
       "header": "rocketmq_protocol::protocol::header::notification_request_header::NotificationRequestHeader",
@@ -643,7 +643,7 @@
     {
       "id": "notification-defaults-json-decode",
       "tier": 2,
-      "gateWeight": 0.022727272727272728,
+      "gateWeight": 0.020833333333333332,
       "fastGateWeight": 0.0,
       "operation": "decode",
       "header": "rocketmq_protocol::protocol::header::notification_request_header::NotificationRequestHeader",
@@ -678,7 +678,7 @@
     {
       "id": "pull-fast-inherited-rocketmq-encode",
       "tier": 1,
-      "gateWeight": 0.022727272727272728,
+      "gateWeight": 0.020833333333333332,
       "fastGateWeight": 0.08333333333333333,
       "operation": "encode",
       "header": "rocketmq_protocol::protocol::header::pull_message_request_header::PullMessageRequestHeader",
@@ -716,7 +716,7 @@
     {
       "id": "pull-fast-inherited-rocketmq-decode",
       "tier": 1,
-      "gateWeight": 0.022727272727272728,
+      "gateWeight": 0.020833333333333332,
       "fastGateWeight": 0.08333333333333333,
       "operation": "decode",
       "header": "rocketmq_protocol::protocol::header::pull_message_request_header::PullMessageRequestHeader",
@@ -754,7 +754,7 @@
     {
       "id": "pull-fast-inherited-json-encode",
       "tier": 1,
-      "gateWeight": 0.022727272727272728,
+      "gateWeight": 0.020833333333333332,
       "fastGateWeight": 0.0,
       "operation": "encode",
       "header": "rocketmq_protocol::protocol::header::pull_message_request_header::PullMessageRequestHeader",
@@ -792,7 +792,7 @@
     {
       "id": "pull-fast-inherited-json-decode",
       "tier": 1,
-      "gateWeight": 0.022727272727272728,
+      "gateWeight": 0.020833333333333332,
       "fastGateWeight": 0.08333333333333333,
       "operation": "decode",
       "header": "rocketmq_protocol::protocol::header::pull_message_request_header::PullMessageRequestHeader",
@@ -828,9 +828,117 @@
       "weightSource": "reviewed-equal-stratified-no-production-telemetry"
     },
     {
+      "id": "pull-response-fast-rocketmq-encode",
+      "tier": 1,
+      "gateWeight": 0.020833333333333332,
+      "fastGateWeight": 0.08333333333333333,
+      "operation": "encode",
+      "header": "rocketmq_protocol::protocol::header::pull_message_response_header::PullMessageResponseHeader",
+      "fixtureId": "pull-response-fast-rocketmq",
+      "requestCode": 11,
+      "fields": {
+        "forbiddenType": "8",
+        "groupSysFlag": "7",
+        "maxOffset": "99",
+        "minOffset": "-3",
+        "nextBeginOffset": "-2",
+        "offsetDelta": "-5",
+        "suggestWhichBrokerId": "1",
+        "topicSysFlag": "6"
+      },
+      "unknownCount": 0,
+      "flattenDepth": 0,
+      "optionDensity": 0.0,
+      "serializeType": "ROCKETMQ",
+      "expectedSemanticSha256": "75ad15d11ce36c9db13aafee40a279eba8ea60c10170d2ed91cdcfb18047a00a",
+      "expectedFrameFnv1a64": "087ad30b64622877",
+      "weightSource": "reviewed-equal-stratified-no-production-telemetry"
+    },
+    {
+      "id": "pull-response-fast-rocketmq-decode",
+      "tier": 1,
+      "gateWeight": 0.020833333333333332,
+      "fastGateWeight": 0.08333333333333333,
+      "operation": "decode",
+      "header": "rocketmq_protocol::protocol::header::pull_message_response_header::PullMessageResponseHeader",
+      "fixtureId": "pull-response-fast-rocketmq",
+      "requestCode": 11,
+      "fields": {
+        "forbiddenType": "8",
+        "groupSysFlag": "7",
+        "maxOffset": "99",
+        "minOffset": "-3",
+        "nextBeginOffset": "-2",
+        "offsetDelta": "-5",
+        "suggestWhichBrokerId": "1",
+        "topicSysFlag": "6"
+      },
+      "unknownCount": 0,
+      "flattenDepth": 0,
+      "optionDensity": 0.0,
+      "serializeType": "ROCKETMQ",
+      "expectedSemanticSha256": "75ad15d11ce36c9db13aafee40a279eba8ea60c10170d2ed91cdcfb18047a00a",
+      "expectedFrameFnv1a64": "087ad30b64622877",
+      "weightSource": "reviewed-equal-stratified-no-production-telemetry"
+    },
+    {
+      "id": "pull-response-fast-json-encode",
+      "tier": 1,
+      "gateWeight": 0.020833333333333332,
+      "fastGateWeight": 0.0,
+      "operation": "encode",
+      "header": "rocketmq_protocol::protocol::header::pull_message_response_header::PullMessageResponseHeader",
+      "fixtureId": "pull-response-fast-json",
+      "requestCode": 11,
+      "fields": {
+        "forbiddenType": "8",
+        "groupSysFlag": "7",
+        "maxOffset": "99",
+        "minOffset": "-3",
+        "nextBeginOffset": "-2",
+        "offsetDelta": "-5",
+        "suggestWhichBrokerId": "1",
+        "topicSysFlag": "6"
+      },
+      "unknownCount": 0,
+      "flattenDepth": 0,
+      "optionDensity": 0.0,
+      "serializeType": "JSON",
+      "expectedSemanticSha256": "75ad15d11ce36c9db13aafee40a279eba8ea60c10170d2ed91cdcfb18047a00a",
+      "expectedFrameFnv1a64": "68d2e82d5aa34e01",
+      "weightSource": "reviewed-equal-stratified-no-production-telemetry"
+    },
+    {
+      "id": "pull-response-fast-json-decode",
+      "tier": 1,
+      "gateWeight": 0.020833333333333332,
+      "fastGateWeight": 0.08333333333333333,
+      "operation": "decode",
+      "header": "rocketmq_protocol::protocol::header::pull_message_response_header::PullMessageResponseHeader",
+      "fixtureId": "pull-response-fast-json",
+      "requestCode": 11,
+      "fields": {
+        "forbiddenType": "8",
+        "groupSysFlag": "7",
+        "maxOffset": "99",
+        "minOffset": "-3",
+        "nextBeginOffset": "-2",
+        "offsetDelta": "-5",
+        "suggestWhichBrokerId": "1",
+        "topicSysFlag": "6"
+      },
+      "unknownCount": 0,
+      "flattenDepth": 0,
+      "optionDensity": 0.0,
+      "serializeType": "JSON",
+      "expectedSemanticSha256": "75ad15d11ce36c9db13aafee40a279eba8ea60c10170d2ed91cdcfb18047a00a",
+      "expectedFrameFnv1a64": "68d2e82d5aa34e01",
+      "weightSource": "reviewed-equal-stratified-no-production-telemetry"
+    },
+    {
       "id": "query-consume-queue-sparse-rocketmq-encode",
       "tier": 2,
-      "gateWeight": 0.022727272727272728,
+      "gateWeight": 0.020833333333333332,
       "fastGateWeight": 0.0,
       "operation": "encode",
       "header": "rocketmq_protocol::protocol::header::query_consume_queue_request_header::QueryConsumeQueueRequestHeader",
@@ -859,7 +967,7 @@
     {
       "id": "query-consume-queue-sparse-rocketmq-decode",
       "tier": 2,
-      "gateWeight": 0.022727272727272728,
+      "gateWeight": 0.020833333333333332,
       "fastGateWeight": 0.0,
       "operation": "decode",
       "header": "rocketmq_protocol::protocol::header::query_consume_queue_request_header::QueryConsumeQueueRequestHeader",
@@ -888,7 +996,7 @@
     {
       "id": "query-consume-queue-sparse-json-encode",
       "tier": 2,
-      "gateWeight": 0.022727272727272728,
+      "gateWeight": 0.020833333333333332,
       "fastGateWeight": 0.0,
       "operation": "encode",
       "header": "rocketmq_protocol::protocol::header::query_consume_queue_request_header::QueryConsumeQueueRequestHeader",
@@ -917,7 +1025,7 @@
     {
       "id": "query-consume-queue-sparse-json-decode",
       "tier": 2,
-      "gateWeight": 0.022727272727272728,
+      "gateWeight": 0.020833333333333332,
       "fastGateWeight": 0.0,
       "operation": "decode",
       "header": "rocketmq_protocol::protocol::header::query_consume_queue_request_header::QueryConsumeQueueRequestHeader",
@@ -946,7 +1054,7 @@
     {
       "id": "send-response-fast-rocketmq-encode",
       "tier": 1,
-      "gateWeight": 0.022727272727272728,
+      "gateWeight": 0.020833333333333332,
       "fastGateWeight": 0.08333333333333333,
       "operation": "encode",
       "header": "rocketmq_protocol::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader",
@@ -971,7 +1079,7 @@
     {
       "id": "send-response-fast-rocketmq-decode",
       "tier": 1,
-      "gateWeight": 0.022727272727272728,
+      "gateWeight": 0.020833333333333332,
       "fastGateWeight": 0.08333333333333333,
       "operation": "decode",
       "header": "rocketmq_protocol::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader",
@@ -996,7 +1104,7 @@
     {
       "id": "send-response-fast-json-encode",
       "tier": 1,
-      "gateWeight": 0.022727272727272728,
+      "gateWeight": 0.020833333333333332,
       "fastGateWeight": 0.0,
       "operation": "encode",
       "header": "rocketmq_protocol::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader",
@@ -1021,7 +1129,7 @@
     {
       "id": "send-response-fast-json-decode",
       "tier": 1,
-      "gateWeight": 0.022727272727272728,
+      "gateWeight": 0.020833333333333332,
       "fastGateWeight": 0.08333333333333333,
       "operation": "decode",
       "header": "rocketmq_protocol::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader",
@@ -1045,9 +1153,9 @@
     },
     {
       "id": "send-v1-fast-rocketmq-encode",
-      "tier": 1,
-      "gateWeight": 0.022727272727272728,
-      "fastGateWeight": 0.08333333333333333,
+      "tier": 2,
+      "gateWeight": 0.020833333333333332,
+      "fastGateWeight": 0.0,
       "operation": "encode",
       "header": "rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader",
       "fixtureId": "send-v1-fast-rocketmq",
@@ -1082,9 +1190,9 @@
     },
     {
       "id": "send-v1-fast-rocketmq-decode",
-      "tier": 1,
-      "gateWeight": 0.022727272727272728,
-      "fastGateWeight": 0.08333333333333333,
+      "tier": 2,
+      "gateWeight": 0.020833333333333332,
+      "fastGateWeight": 0.0,
       "operation": "decode",
       "header": "rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader",
       "fixtureId": "send-v1-fast-rocketmq",
@@ -1119,8 +1227,8 @@
     },
     {
       "id": "send-v1-fast-json-encode",
-      "tier": 1,
-      "gateWeight": 0.022727272727272728,
+      "tier": 2,
+      "gateWeight": 0.020833333333333332,
       "fastGateWeight": 0.0,
       "operation": "encode",
       "header": "rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader",
@@ -1156,9 +1264,9 @@
     },
     {
       "id": "send-v1-fast-json-decode",
-      "tier": 1,
-      "gateWeight": 0.022727272727272728,
-      "fastGateWeight": 0.08333333333333333,
+      "tier": 2,
+      "gateWeight": 0.020833333333333332,
+      "fastGateWeight": 0.0,
       "operation": "decode",
       "header": "rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader",
       "fixtureId": "send-v1-fast-json",
@@ -1194,7 +1302,7 @@
     {
       "id": "send-v2-fast-rocketmq-encode",
       "tier": 1,
-      "gateWeight": 0.022727272727272728,
+      "gateWeight": 0.020833333333333332,
       "fastGateWeight": 0.08333333333333333,
       "operation": "encode",
       "header": "rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2",
@@ -1227,7 +1335,7 @@
     {
       "id": "send-v2-fast-rocketmq-decode",
       "tier": 1,
-      "gateWeight": 0.022727272727272728,
+      "gateWeight": 0.020833333333333332,
       "fastGateWeight": 0.08333333333333333,
       "operation": "decode",
       "header": "rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2",
@@ -1260,7 +1368,7 @@
     {
       "id": "send-v2-fast-json-encode",
       "tier": 1,
-      "gateWeight": 0.022727272727272728,
+      "gateWeight": 0.020833333333333332,
       "fastGateWeight": 0.0,
       "operation": "encode",
       "header": "rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2",
@@ -1298,7 +1406,7 @@
     {
       "id": "send-v2-fast-json-decode",
       "tier": 1,
-      "gateWeight": 0.022727272727272728,
+      "gateWeight": 0.020833333333333332,
       "fastGateWeight": 0.08333333333333333,
       "operation": "decode",
       "header": "rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2",

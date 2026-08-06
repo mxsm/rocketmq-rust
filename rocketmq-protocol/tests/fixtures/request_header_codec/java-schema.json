@@ -7162,7 +7162,7 @@
           "key": "boundaryType",
           "javaType": "org.apache.rocketmq.common.BoundaryType",
           "presence": "optional",
-          "defaultSemantic": "null",
+          "defaultSemantic": "literal:LOWER",
           "declaredIn": "org.apache.rocketmq.remoting.protocol.header.SearchOffsetRequestHeader",
           "inheritanceDepth": 0
         },

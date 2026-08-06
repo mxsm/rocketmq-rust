@@ -29,6 +29,7 @@ use rocketmq_protocol::protocol::header_codec::{
     AliasConflictPolicy, HeaderCodec, HeaderCodecError, HeaderFieldSpec, HeaderFlattenSpec, HeaderPresence,
     HeaderRange, HeaderValueKind,
 };
+#[allow(deprecated, reason = "verifies the source-compatible legacy adapter delegates to V3")]
 use rocketmq_protocol::protocol::FastCodesHeader;
 use rocketmq_protocol::rpc::rpc_request_header::RpcRequestHeader;
 use rocketmq_protocol::rpc::topic_request_header::TopicRequestHeader;
@@ -497,6 +498,7 @@ fn generated_fast_headers_write_canonical_binary_pairs_in_schema_order() {
 }
 
 #[test]
+#[allow(deprecated, reason = "verifies the source-compatible legacy adapter delegates to V3")]
 fn typed_schemas_preserve_java_send_fast_contracts() {
     let rpc = RpcRequestHeader {
         namespace: Some("namespace-a".into()),

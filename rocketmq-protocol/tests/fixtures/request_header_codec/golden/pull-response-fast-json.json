@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "id": "pull-response-fast-json",
+  "javaCommit": "2daf0e2ca91a1592d18235d43e5d709d1c35d15f",
+  "rustTypeId": "rocketmq_protocol::protocol::header::pull_message_response_header::PullMessageResponseHeader",
+  "javaClass": "org.apache.rocketmq.remoting.protocol.header.PullMessageResponseHeader",
+  "requestCode": "PULL_MESSAGE",
+  "requestCodeValue": 11,
+  "wireCodeValue": 11,
+  "direction": "response",
+  "serializeType": "JSON",
+  "actualPath": "normal",
+  "inputFields": {
+    "suggestWhichBrokerId": 1,
+    "nextBeginOffset": -2,
+    "minOffset": -3,
+    "maxOffset": 99,
+    "offsetDelta": -5,
+    "topicSysFlag": 6,
+    "groupSysFlag": 7,
+    "forbiddenType": 8
+  },
+  "declaredLogicalFields": {
+    "forbiddenType": "8",
+    "groupSysFlag": "7",
+    "maxOffset": "99",
+    "minOffset": "-3",
+    "nextBeginOffset": "-2",
+    "offsetDelta": "-5",
+    "suggestWhichBrokerId": "1",
+    "topicSysFlag": "6"
+  },
+  "canonicalExtFields": {
+    "forbiddenType": "8",
+    "groupSysFlag": "7",
+    "maxOffset": "99",
+    "minOffset": "-3",
+    "nextBeginOffset": "-2",
+    "offsetDelta": "-5",
+    "suggestWhichBrokerId": "1",
+    "topicSysFlag": "6"
+  },
+  "frameBase64": "AAABEwAAAQ97ImNvZGUiOjExLCJleHRGaWVsZHMiOnsic3VnZ2VzdFdoaWNoQnJva2VySWQiOiIxIiwiZ3JvdXBTeXNGbGFnIjoiNyIsIm5leHRCZWdpbk9mZnNldCI6Ii0yIiwiZm9yYmlkZGVuVHlwZSI6IjgiLCJvZmZzZXREZWx0YSI6Ii01IiwibWF4T2Zmc2V0IjoiOTkiLCJtaW5PZmZzZXQiOiItMyIsInRvcGljU3lzRmxhZyI6IjYifSwiZmxhZyI6MCwibGFuZ3VhZ2UiOiJSVVNUIiwib3BhcXVlIjo3LCJzZXJpYWxpemVUeXBlQ3VycmVudFJQQyI6IkpTT04iLCJ2ZXJzaW9uIjo1MDF9",
+  "frameLength": 279,
+  "fnv1a64": "68d2e82d5aa34e01",
+  "opaque": 7,
+  "version": 501,
+  "language": "RUST"
+}

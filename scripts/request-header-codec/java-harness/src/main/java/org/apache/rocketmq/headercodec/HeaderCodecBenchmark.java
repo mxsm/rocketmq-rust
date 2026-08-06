@@ -59,6 +59,8 @@ public class HeaderCodecBenchmark {
         "notification-defaults-rocketmq",
         "pull-fast-inherited-json",
         "pull-fast-inherited-rocketmq",
+        "pull-response-fast-json",
+        "pull-response-fast-rocketmq",
         "query-consume-queue-sparse-json",
         "query-consume-queue-sparse-rocketmq",
         "send-response-fast-json",

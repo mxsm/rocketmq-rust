@@ -12,13 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
-
 use cheetah_string::CheetahString;
 use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::protocol::command_custom_header::CommandCustomHeader;
+use crate::protocol::command_custom_header::FromMap;
+use crate::protocol::command_custom_header::HeaderMap;
+#[allow(
+    deprecated,
+    reason = "imports the legacy trait only to provide its compatibility adapter"
+)]
 use crate::protocol::FastCodesHeader;
 
 #[derive(Debug, Serialize, Deserialize, Default, RequestHeaderCodecV3)]
@@ -107,70 +112,17 @@ impl SendMessageResponseHeader {
     pub fn set_recall_handle(&mut self, recall_handle: Option<CheetahString>) {
         self.recall_handle = recall_handle;
     }
-
-    fn write_i64(out: &mut bytes::BytesMut, key: &str, value: i64) {
-        let mut buffer = [0_u8; 20];
-        let mut cursor = buffer.len();
-        let mut number = value.unsigned_abs();
-
-        loop {
-            cursor -= 1;
-            buffer[cursor] = b'0' + (number % 10) as u8;
-            number /= 10;
-            if number == 0 {
-                break;
-            }
-        }
-
-        if value.is_negative() {
-            cursor -= 1;
-            buffer[cursor] = b'-';
-        }
-
-        let value = std::str::from_utf8(&buffer[cursor..]).expect("decimal integer bytes are valid UTF-8");
-        Self::write_if_not_null(out, key, value);
-    }
 }
 
+#[allow(deprecated, reason = "source-compatible adapter for the legacy public trait")]
 impl FastCodesHeader for SendMessageResponseHeader {
     fn encode_fast(&mut self, out: &mut bytes::BytesMut) {
-        Self::write_if_not_null(out, "msgId", self.msg_id.as_str());
-        Self::write_i64(out, "queueId", i64::from(self.queue_id));
-        Self::write_i64(out, "queueOffset", self.queue_offset);
-        if let Some(ref transaction_id) = self.transaction_id {
-            Self::write_if_not_null(out, "transactionId", transaction_id.as_str());
-        }
-        if let Some(ref batch_uniq_id) = self.batch_uniq_id {
-            Self::write_if_not_null(out, "batchUniqId", batch_uniq_id.as_str());
-        }
-        if let Some(ref recall_handle) = self.recall_handle {
-            Self::write_if_not_null(out, "recallHandle", recall_handle.as_str());
-        }
+        let _ = CommandCustomHeader::encode_direct_binary(self, out);
     }
 
-    fn decode_fast(&mut self, fields: &HashMap<CheetahString, CheetahString>) {
-        if let Some(str) = fields.get(&CheetahString::from_slice("msgId")) {
-            self.msg_id = str.clone();
-        }
-
-        if let Some(str) = fields.get(&CheetahString::from_slice("queueId")) {
-            self.queue_id = str.parse::<i32>().unwrap_or_default();
-        }
-
-        if let Some(str) = fields.get(&CheetahString::from_slice("queueOffset")) {
-            self.queue_offset = str.parse::<i64>().unwrap_or_default();
-        }
-
-        if let Some(str) = fields.get(&CheetahString::from_slice("transactionId")) {
-            self.transaction_id = Some(str.clone());
-        }
-
-        if let Some(str) = fields.get(&CheetahString::from_slice("batchUniqId")) {
-            self.batch_uniq_id = Some(str.clone());
-        }
-
-        if let Some(str) = fields.get(&CheetahString::from_slice("recallHandle")) {
-            self.recall_handle = Some(str.clone());
+    fn decode_fast(&mut self, fields: &HeaderMap) {
+        if let Ok(decoded) = <Self as FromMap>::from(fields) {
+            *self = decoded;
         }
     }
 }
@@ -252,6 +204,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated, reason = "verifies the source-compatible legacy adapter delegates to V3")]
     fn send_message_response_header_encode_decode_fast() {
         let mut header = SendMessageResponseHeader::new(
             CheetahString::from("msg123"),
@@ -263,7 +216,7 @@ mod tests {
         );
 
         let mut out = bytes::BytesMut::new();
-        header.encode_fast(&mut out);
+        FastCodesHeader::encode_fast(&mut header, &mut out);
         assert!(!out.is_empty());
 
         let mut fields = std::collections::HashMap::new();
@@ -278,7 +231,7 @@ mod tests {
         );
 
         let mut header = SendMessageResponseHeader::default();
-        header.decode_fast(&fields);
+        FastCodesHeader::decode_fast(&mut header, &fields);
 
         assert_eq!(header.msg_id(), "msg123");
         assert_eq!(header.queue_id(), 1);
@@ -289,11 +242,12 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated, reason = "verifies the source-compatible legacy adapter delegates to V3")]
     fn send_message_response_header_fast_encode_writes_signed_numeric_fields() {
         let mut header = SendMessageResponseHeader::new(CheetahString::from("msg123"), -1, -42, None, None, None);
         let mut out = bytes::BytesMut::new();
 
-        header.encode_fast(&mut out);
+        FastCodesHeader::encode_fast(&mut header, &mut out);
 
         let encoded = String::from_utf8(out.to_vec()).unwrap();
         assert!(encoded.contains("queueId"));
