@@ -57,6 +57,7 @@ pub mod topic;
 
 pub use command_custom_header::CommandCustomHeader;
 pub use command_custom_header::FromMap;
+pub use command_custom_header::HeaderEncodeCapability;
 pub use data_version_compat as data_version_facade;
 pub use encoded_frame::EncodedFrame;
 pub use remoting_command::RemotingCommand;

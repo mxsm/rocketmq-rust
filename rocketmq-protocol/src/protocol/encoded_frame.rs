@@ -46,7 +46,7 @@ impl EncodedFrame {
     /// length field.
     pub fn from_command(mut command: RemotingCommand) -> RocketMQResult<Self> {
         let mut encoded_header = BytesMut::new();
-        command.fast_header_encode(&mut encoded_header);
+        command.try_fast_header_encode(&mut encoded_header)?;
         let body = command.take_body().unwrap_or_default();
         if encoded_header.len() < FRAME_PREFIX_BYTES {
             return Err(SerializationError::encode_failed(
@@ -138,9 +138,31 @@ mod tests {
     use cheetah_string::CheetahString;
 
     use super::EncodedFrame;
+    use crate::protocol::command_custom_header::CommandCustomHeader;
+    use crate::protocol::command_custom_header::HeaderEncodeCapability;
     use crate::protocol::header::client_request_header::GetRouteInfoRequestHeader;
+    use crate::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2;
+    use crate::protocol::header_codec::HeaderCodecError;
     use crate::protocol::remoting_command::RemotingCommand;
     use crate::protocol::SerializeType;
+
+    struct FailingDirectHeader;
+
+    impl CommandCustomHeader for FailingDirectHeader {
+        fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
+            Some(HashMap::new())
+        }
+
+        fn encode_capability(&self) -> HeaderEncodeCapability {
+            HeaderEncodeCapability::DirectBinary
+        }
+
+        fn encode_direct_binary(&self, _out: &mut BytesMut) -> Result<(), HeaderCodecError> {
+            Err(HeaderCodecError::FastCodecUnavailable {
+                header: "FailingDirectHeader",
+            })
+        }
+    }
 
     fn legacy_contiguous(mut command: RemotingCommand) -> Bytes {
         let mut bytes = BytesMut::new();
@@ -232,5 +254,81 @@ mod tests {
 
             assert_eq!(encode(first), encode(second));
         }
+    }
+
+    #[test]
+    fn direct_header_encoding_is_identical_after_multiple_command_clones() {
+        let header = SendMessageRequestHeaderV2 {
+            a: "producer-a".into(),
+            b: "topic-a".into(),
+            c: "TBW102".into(),
+            d: 4,
+            e: 2,
+            f: 0,
+            g: 42,
+            h: 1,
+            ..Default::default()
+        };
+        let original = RemotingCommand::create_remoting_command(310)
+            .set_serialize_type(SerializeType::ROCKETMQ)
+            .set_command_custom_header(header);
+        let first_clone = original.clone();
+        let second_clone = first_clone.clone();
+
+        let frames = [original, first_clone, second_clone].map(|command| {
+            EncodedFrame::from_command(command)
+                .expect("shared direct header should encode")
+                .into_bytes()
+        });
+        assert_eq!(frames[0], frames[1]);
+        assert_eq!(frames[1], frames[2]);
+
+        for frame in frames {
+            let mut input = BytesMut::from(frame.as_ref());
+            let decoded = RemotingCommand::decode(&mut input)
+                .expect("frame should decode")
+                .expect("frame should be complete");
+            let decoded_header = decoded
+                .decode_command_custom_header::<SendMessageRequestHeaderV2>()
+                .expect("direct fields should remain present");
+            assert_eq!(decoded_header.a.as_str(), "producer-a");
+            assert_eq!(decoded_header.b.as_str(), "topic-a");
+            assert_eq!(decoded_header.g, 42);
+        }
+    }
+
+    #[test]
+    fn fallible_direct_header_encoding_rolls_back_the_destination() {
+        let mut command = RemotingCommand::create_remoting_command(311)
+            .set_serialize_type(SerializeType::ROCKETMQ)
+            .set_command_custom_header(FailingDirectHeader);
+        let mut destination = BytesMut::from(&b"existing"[..]);
+
+        assert!(command.try_fast_header_encode(&mut destination).is_err());
+        assert_eq!(destination.as_ref(), b"existing");
+    }
+
+    #[test]
+    fn materialized_direct_header_is_not_encoded_twice_after_clone() {
+        let header = SendMessageRequestHeaderV2 {
+            a: "producer-b".into(),
+            b: "topic-b".into(),
+            c: "TBW102".into(),
+            d: 4,
+            e: 3,
+            f: 0,
+            g: 43,
+            h: 1,
+            ..Default::default()
+        };
+        let mut original = RemotingCommand::create_remoting_command(312)
+            .set_serialize_type(SerializeType::ROCKETMQ)
+            .set_command_custom_header(header);
+        original.materialize_custom_header_to_ext_fields();
+        let cloned = original.clone();
+
+        let original_frame = EncodedFrame::from_command(original).unwrap().into_bytes();
+        let cloned_frame = EncodedFrame::from_command(cloned).unwrap().into_bytes();
+        assert_eq!(original_frame, cloned_frame);
     }
 }

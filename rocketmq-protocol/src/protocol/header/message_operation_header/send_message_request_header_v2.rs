@@ -23,6 +23,7 @@ use serde::Serialize;
 
 use crate::protocol::command_custom_header::CommandCustomHeader;
 use crate::protocol::command_custom_header::FromMap;
+use crate::protocol::command_custom_header::HeaderEncodeCapability;
 use crate::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
 use crate::protocol::header::message_operation_header::TopicRequestHeaderTrait;
 use crate::protocol::header_codec::HeaderCodec;
@@ -128,7 +129,11 @@ impl CommandCustomHeader for SendMessageRequestHeaderV2 {
         <Self as HeaderCodec>::encoded_len_hint(self)
     }
 
-    fn encode_fast(&mut self, out: &mut BytesMut) {
+    fn encode_capability(&self) -> HeaderEncodeCapability {
+        HeaderEncodeCapability::DirectBinary
+    }
+
+    fn encode_direct_binary(&self, out: &mut BytesMut) -> Result<(), HeaderCodecError> {
         self.write_if_not_null(out, FIELD_A, self.a.as_str());
         self.write_if_not_null(out, FIELD_B, self.b.as_str());
         self.write_if_not_null(out, FIELD_C, self.c.as_str());
@@ -184,6 +189,7 @@ impl CommandCustomHeader for SendMessageRequestHeaderV2 {
                 self.write_if_not_null(out, FIELD_LO, if value { "true" } else { "false" });
             }
         }
+        Ok(())
     }
 
     fn decode_fast(&mut self, fields: &HashMap<CheetahString, CheetahString>) -> rocketmq_error::RocketMQResult<()> {

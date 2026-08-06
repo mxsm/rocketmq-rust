@@ -26,6 +26,7 @@ pub use code::request_code::RequestCode;
 pub use code::response_code::RemotingSysResponseCode;
 pub use protocol::command_custom_header::CommandCustomHeader;
 pub use protocol::command_custom_header::FromMap;
+pub use protocol::command_custom_header::HeaderEncodeCapability;
 pub use protocol::command_custom_header::HeaderMap;
 pub use protocol::encoded_frame::EncodedFrame;
 pub use protocol::header_codec::HeaderCodec;

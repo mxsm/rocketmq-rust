@@ -35,6 +35,7 @@ use crate::code::request_code::RequestCode;
 use crate::code::response_code::RemotingSysResponseCode;
 use crate::protocol::command_custom_header::CommandCustomHeader;
 use crate::protocol::command_custom_header::FromMap;
+use crate::protocol::command_custom_header::HeaderEncodeCapability;
 use crate::protocol::LanguageCode;
 use crate::rocketmq_serializable::RocketMQSerializable;
 
@@ -96,8 +97,12 @@ pub struct RemotingCommand {
 impl Clone for RemotingCommand {
     fn clone(&self) -> Self {
         let mut ext_fields = self.ext_fields.clone().unwrap_or_default();
-        if let Some(header_fields) = self.command_custom_header.as_ref().and_then(|header| header.to_map()) {
-            ext_fields.extend(header_fields);
+        if let Some(header) = self.command_custom_header.as_ref() {
+            if header.encode_capability() == HeaderEncodeCapability::MapOnly {
+                if let Some(header_fields) = header.to_map() {
+                    ext_fields.extend(header_fields);
+                }
+            }
         }
         let ext_fields = (!ext_fields.is_empty()).then_some(ext_fields);
         Self {
@@ -502,19 +507,35 @@ impl RemotingCommand {
 
     #[inline]
     pub fn fast_header_encode(&mut self, dst: &mut BytesMut) {
-        if self
-            .command_custom_header_ref()
-            .is_some_and(|header| header.check_fields().is_err())
-        {
-            return;
+        let _ = self.try_fast_header_encode(dst);
+    }
+
+    /// Encodes the frame header and rolls the destination back on failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns the custom-header validation or direct-binary encoding failure.
+    #[inline]
+    pub fn try_fast_header_encode(&mut self, dst: &mut BytesMut) -> rocketmq_error::RocketMQResult<()> {
+        let checkpoint = dst.len();
+        let result = self.try_fast_header_encode_inner(dst);
+        if result.is_err() {
+            dst.truncate(checkpoint);
+        }
+        result
+    }
+
+    #[inline]
+    fn try_fast_header_encode_inner(&mut self, dst: &mut BytesMut) -> rocketmq_error::RocketMQResult<()> {
+        if let Some(header) = self.command_custom_header_ref() {
+            header.check_fields()?;
         }
         match self.serialize_type {
             SerializeType::JSON => {
                 self.fast_encode_json(dst);
+                Ok(())
             }
-            SerializeType::ROCKETMQ => {
-                self.fast_encode_rocketmq(dst);
-            }
+            SerializeType::ROCKETMQ => self.fast_encode_rocketmq(dst),
         }
     }
 
@@ -561,22 +582,21 @@ impl RemotingCommand {
 
     /// Optimized ROCKETMQ binary encoding with minimal allocations
     #[inline]
-    fn fast_encode_rocketmq(&mut self, dst: &mut BytesMut) {
+    fn fast_encode_rocketmq(&mut self, dst: &mut BytesMut) -> rocketmq_error::RocketMQResult<()> {
         let begin_index = dst.len();
 
         // Reserve space for total_length (4 bytes) and serialize_type (4 bytes)
         dst.reserve(8);
         dst.put_i64(0); // Placeholder for total_length + serialize_type
 
-        // Check if custom header supports fast codec
-        if let Some(header) = self.command_custom_header_ref() {
-            if !header.support_fast_codec() {
-                self.make_custom_header_to_net();
-            }
+        let capability = self.custom_header_encode_capability();
+        if capability == HeaderEncodeCapability::MapOnly {
+            self.make_custom_header_to_net();
         }
 
         // Encode header directly to buffer
-        let header_size = RocketMQSerializable::rocketmq_protocol_encode(self, dst);
+        let header_size = RocketMQSerializable::try_rocketmq_protocol_encode_with_capability(self, dst, capability)
+            .map_err(|error| rocketmq_error::RocketMQError::request_header_error(error.to_string()))?;
         let body_length = self.body.as_ref().map_or(0, |b| b.len()) as i32;
 
         // Calculate serialize type with header length embedded
@@ -588,6 +608,7 @@ impl RemotingCommand {
 
         dst[begin_index..begin_index + 4].copy_from_slice(&total_length);
         dst[begin_index + 4..begin_index + 8].copy_from_slice(&serialize_type_bytes);
+        Ok(())
     }
 
     /// Estimate JSON header size to reduce buffer reallocations
@@ -1042,6 +1063,15 @@ impl RemotingCommand {
         match self.command_custom_header.as_ref() {
             None => None,
             Some(value) => Some(value.as_ref().as_ref()),
+        }
+    }
+
+    pub(crate) fn custom_header_encode_capability(&self) -> HeaderEncodeCapability {
+        if self.custom_header_to_net {
+            HeaderEncodeCapability::MapOnly
+        } else {
+            self.command_custom_header_ref()
+                .map_or(HeaderEncodeCapability::MapOnly, CommandCustomHeader::encode_capability)
         }
     }
 
