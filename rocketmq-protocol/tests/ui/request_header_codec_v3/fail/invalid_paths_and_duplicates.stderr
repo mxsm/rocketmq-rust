@@ -1,0 +1,47 @@
+error: duplicate type_id
+ --> tests/ui/request_header_codec_v3/fail/invalid_paths_and_duplicates.rs:5:10
+  |
+5 | #[header(type_id = "fixtures::DuplicatePaths")]
+  |          ^^^^^^^
+
+error: invalid validate path: unexpected token
+ --> tests/ui/request_header_codec_v3/fail/invalid_paths_and_duplicates.rs:7:21
+  |
+7 | #[header(validate = "not a path!")]
+  |                     ^^^^^^^^^^^^^
+
+error: invalid protocol crate path: unexpected token
+ --> tests/ui/request_header_codec_v3/fail/invalid_paths_and_duplicates.rs:8:18
+  |
+8 | #[header(crate = "not a path!")]
+  |                  ^^^^^^^^^^^^^
+
+error: duplicate fast
+  --> tests/ui/request_header_codec_v3/fail/invalid_paths_and_duplicates.rs:10:10
+   |
+10 | #[header(fast)]
+   |          ^^^^
+
+error: invalid default_with path: unexpected token
+  --> tests/ui/request_header_codec_v3/fail/invalid_paths_and_duplicates.rs:12:29
+   |
+12 |     #[header(default_with = "not a path!", default_semantic = "dynamic:provider")]
+   |                             ^^^^^^^^^^^^^
+
+error: binary_order must fit in u16
+  --> tests/ui/request_header_codec_v3/fail/invalid_paths_and_duplicates.rs:14:39
+   |
+14 |     #[header(required, binary_order = 65536)]
+   |                                       ^^^^^
+
+error: java_class must be a fully qualified Java class name
+ --> tests/ui/request_header_codec_v3/fail/invalid_paths_and_duplicates.rs:6:23
+  |
+6 | #[header(java_class = "not a java class")]
+  |                       ^^^^^^^^^^^^^^^^^^
+
+error: unsupported RequestHeaderCodecV3 field type `Vec < T >`
+  --> tests/ui/request_header_codec_v3/fail/invalid_paths_and_duplicates.rs:17:36
+   |
+17 |     unsupported_generic_container: Vec<T>,
+   |                                    ^^^
