@@ -37,6 +37,7 @@ use crate::ConnectorErrorCode;
 
 const PROMETHEUS_EVIDENCE_SCHEMA: &str = "rocketmq.prometheus-evidence.v1";
 const TELEMETRY_CLUSTER_LABEL: &str = "rocketmq_cluster";
+const ROCKETMQ_SERVICE_NAMESPACE_PREFIX: &str = "rocketmq_";
 const SEVEN_DAYS: Duration = Duration::days(7);
 const THIRTY_DAYS: Duration = Duration::days(30);
 
@@ -174,7 +175,7 @@ impl PrometheusSource {
         let endpoint = base_url
             .join(kind.endpoint())
             .map_err(|_| ConnectorError::configuration("Prometheus query URL cannot be constructed"))?;
-        let expression = format!("{metric}{{{}}}", selector.join(","));
+        let expression = metric_expression(metric, &selector.join(","));
         let (start, end) = kind.effective_range(requested_start, requested_end);
         if end
             .signed_duration_since(start)
@@ -406,6 +407,15 @@ fn validate_metric(metric: &str) -> Result<(), ConnectorError> {
     Ok(())
 }
 
+fn metric_expression(metric: &str, selector: &str) -> String {
+    let canonical = format!("{metric}{{{selector}}}");
+    if metric.starts_with(ROCKETMQ_SERVICE_NAMESPACE_PREFIX) && !metric.starts_with("rocketmq_rocketmq_") {
+        format!("{canonical} or {ROCKETMQ_SERVICE_NAMESPACE_PREFIX}{metric}{{{selector}}}")
+    } else {
+        canonical
+    }
+}
+
 fn validate_label(label: &str) -> Result<(), ConnectorError> {
     if label.is_empty()
         || label.len() > 255
@@ -465,6 +475,15 @@ mod tests {
         let thirty_day = parse_resource("prometheus/trend/30d/rocketmq_store_size").expect("thirty-day trend resource");
         assert_eq!(thirty_day, (PrometheusQueryKind::Trend30d, "rocketmq_store_size"));
         assert!(parse_resource("query/up or vector(1)").is_err());
+    }
+
+    #[test]
+    fn metric_expression_preserves_non_rocketmq_and_explicit_namespaced_metrics() {
+        assert_eq!(metric_expression("up", "job=\"prometheus\""), "up{job=\"prometheus\"}");
+        assert_eq!(
+            metric_expression("rocketmq_rocketmq_broker_up", "rocketmq_cluster=\"local\""),
+            "rocketmq_rocketmq_broker_up{rocketmq_cluster=\"local\"}"
+        );
     }
 
     #[test]
@@ -623,7 +642,9 @@ mod tests {
         assert_eq!(requests[0].0, "/api/v1/query_range");
         assert_eq!(
             requests[0].1.get("query").map(String::as_str),
-            Some("rocketmq_broker_up{rocketmq_cluster=\"local\"}")
+            Some(
+                "rocketmq_broker_up{rocketmq_cluster=\"local\"} or rocketmq_rocketmq_broker_up{rocketmq_cluster=\"local\"}"
+            )
         );
         let start = requests[0].1["start"].parse::<i64>().expect("start");
         let end = requests[0].1["end"].parse::<i64>().expect("end");

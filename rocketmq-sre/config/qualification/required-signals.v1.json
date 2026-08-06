@@ -1,0 +1,56 @@
+{
+  "schema_version": "rocketmq-sre.required-signals-qualification.v1",
+  "environment": "disposable_compose_otlp_backends",
+  "operating_mode": "read_only",
+  "production_certified": false,
+  "limits": {
+    "query_window_minutes": 10,
+    "retry_seconds": 120,
+    "maximum_components": 5
+  },
+  "components": [
+    {
+      "query_component": "broker",
+      "evidence_component": "broker",
+      "representative_requirement_id": "broker.availability",
+      "canonical_metric": "rocketmq_broker_up_ratio",
+      "collector_metric": "rocketmq_rocketmq_broker_up_ratio"
+    },
+    {
+      "query_component": "nameserver",
+      "evidence_component": "name_server",
+      "representative_requirement_id": "nameserver.active_brokers",
+      "canonical_metric": "rocketmq_namesrv_active_brokers",
+      "collector_metric": "rocketmq_rocketmq_namesrv_active_brokers"
+    },
+    {
+      "query_component": "controller",
+      "evidence_component": "controller",
+      "representative_requirement_id": "controller.quorum_health",
+      "canonical_metric": "rocketmq_controller_quorum_health_ratio",
+      "collector_metric": "rocketmq_rocketmq_controller_quorum_health_ratio"
+    },
+    {
+      "query_component": "proxy",
+      "evidence_component": "proxy",
+      "representative_requirement_id": "proxy.availability",
+      "canonical_metric": "rocketmq_proxy_up_ratio",
+      "collector_metric": "rocketmq_rocketmq_proxy_up_ratio"
+    },
+    {
+      "query_component": "mcp",
+      "evidence_component": "mcp",
+      "representative_requirement_id": "mcp.operation_requests",
+      "canonical_metric": "rocketmq_mcp_requests_total",
+      "collector_metric": "rocketmq_rocketmq_mcp_requests_total"
+    }
+  ],
+  "safety": {
+    "caller_promql": false,
+    "target_mutations": 0,
+    "executor_calls": 0,
+    "execution_agent_calls": 0,
+    "message_bodies_recorded": false,
+    "credentials_recorded": false
+  }
+}

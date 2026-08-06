@@ -73,6 +73,7 @@ impl McpShutdownReport {
 pub struct McpApp {
     config: McpConfig,
     guard: Guard,
+    metrics: rocketmq_observability::metrics::mcp::McpMetricsRecorder,
     query: Arc<QueryFacade<AdminCoreSessionFactory>>,
     client_runtime: Arc<ClientRuntime>,
     service_context: rocketmq_runtime::ChildServiceContext,
@@ -107,6 +108,7 @@ impl McpApp {
     ) -> Result<Self, crate::error::McpError> {
         let guard = Guard::new(config.security.clone(), config.audit.clone(), &config.clusters)
             .map_err(|error| crate::error::McpError::InvalidConfig(error.to_string()))?;
+        let metrics = rocketmq_observability::metrics::mcp::McpMetricsRecorder::from_handle(&telemetry_handle);
         let client_runtime = ClientRuntime::try_new(
             service_context.component("rocketmq-mcp-client"),
             ClientRuntimeConfig::default(),
@@ -117,6 +119,7 @@ impl McpApp {
         Ok(Self {
             config,
             guard,
+            metrics,
             query,
             client_runtime,
             service_context,
@@ -195,6 +198,10 @@ impl McpApp {
 
     pub fn guard(&self) -> &Guard {
         &self.guard
+    }
+
+    pub(crate) fn metrics(&self) -> &rocketmq_observability::metrics::mcp::McpMetricsRecorder {
+        &self.metrics
     }
 
     pub(crate) fn query(&self) -> &Arc<QueryFacade<AdminCoreSessionFactory>> {
