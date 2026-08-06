@@ -188,7 +188,7 @@
       "id": "empty-header",
       "rustTypeId": "rocketmq_protocol::protocol::header::empty_header::EmptyHeader",
       "file": "rust-only/empty-header.json",
-      "sha256": "dbc04184b62c3f4b49a47ce8a44547ab507291135334b1761d419df30fe2b05e"
+      "sha256": "4e27bfce2b6b35abd52c7ad6b1bed7b9be43d75cc8c254706049c18289831b65"
     }
   ],
   "wirePolicies": {

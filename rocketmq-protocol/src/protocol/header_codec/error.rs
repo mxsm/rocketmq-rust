@@ -109,6 +109,18 @@ pub enum HeaderCodecError {
         key: &'static str,
     },
 
+    /// The complete extension-field payload exceeded its signed length field.
+    #[error("ROCKETMQ extension-field payload exceeds the signed 32-bit wire limit")]
+    ExtensionFieldsLengthOverflow,
+
+    /// A dynamic extension-field key exceeded its unsigned 16-bit length.
+    #[error("dynamic header key length exceeds the ROCKETMQ wire limit")]
+    DynamicKeyLengthOverflow,
+
+    /// A dynamic extension-field value exceeded its signed 32-bit length.
+    #[error("dynamic header value length exceeds the ROCKETMQ wire limit")]
+    DynamicValueLengthOverflow,
+
     /// Direct binary encoding was requested for a header without that capability.
     #[error("direct binary codec is unavailable for {header}")]
     FastCodecUnavailable {

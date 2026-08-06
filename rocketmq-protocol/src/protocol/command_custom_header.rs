@@ -55,8 +55,9 @@ pub trait CommandCustomHeader: AsAny {
     ///  
     /// Returns an `Option` that contains a `HashMap` of string keys and string values,  
     /// representing the implementing type's fields.  
-    /// If the conversion is successful, a non-empty map is returned.  
-    /// If the conversion fails, `None` is returned.  
+    /// If the conversion is successful, a map is returned; explicitly audited
+    /// fieldless headers return an empty map. If conversion fails, `None` is
+    /// returned.
     fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>>;
 
     /// Appends this header's extension fields to an existing map.

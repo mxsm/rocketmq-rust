@@ -39,6 +39,7 @@ pub mod forbidden_type;
 pub mod header;
 pub mod header_codec;
 pub mod header_facade;
+pub(crate) mod header_field_merge;
 pub mod headers;
 pub mod heartbeat;
 pub mod heartbeat_facade;

@@ -37,6 +37,10 @@ def canonical_json(document: object) -> bytes:
     return (json.dumps(document, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
 
 
+def normalized_newlines(payload: bytes) -> bytes:
+    return payload.replace(b"\r\n", b"\n")
+
+
 def build_fixture_tree(source: Path, destination: Path) -> dict[Path, bytes]:
     schema_path = source / "java-schema.json"
     index_path = source / "golden" / "index.json"
@@ -81,7 +85,7 @@ def build_fixture_tree(source: Path, destination: Path) -> dict[Path, bytes]:
             "id": header["golden"],
             "rustTypeId": header["rustTypeId"],
             "classification": "intentional-empty-header",
-            "logicalMap": None,
+            "logicalMap": {},
             "jsonObject": {},
             "owner": header["owner"],
             "reason": header["reason"],
@@ -149,7 +153,11 @@ def main() -> int:
         destination = args.output.resolve()
         expected = build_fixture_tree(source, destination)
         if args.check:
-            stale = [path for path, payload in expected.items() if not path.is_file() or path.read_bytes() != payload]
+            stale = [
+                path
+                for path, payload in expected.items()
+                if not path.is_file() or normalized_newlines(path.read_bytes()) != normalized_newlines(payload)
+            ]
             extra = []
             if destination.is_dir():
                 expected_paths = set(expected)

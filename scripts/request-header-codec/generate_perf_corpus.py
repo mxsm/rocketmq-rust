@@ -37,6 +37,10 @@ def digest_map(fields: dict[str, str]) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def digest_json_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true")
@@ -91,7 +95,7 @@ def main() -> None:
         "schemaVersion": 1,
         "corpusVersion": "request-header-codec-perf-v1",
         "javaCommit": inputs["javaCommit"],
-        "fixtureManifestSha256": hashlib.sha256((fixture_root / "manifest.json").read_bytes()).hexdigest(),
+        "fixtureManifestSha256": digest_json_file(fixture_root / "manifest.json"),
         "weightProfile": {
             "kind": "reviewed-equal-stratified",
             "productionTelemetry": False,
