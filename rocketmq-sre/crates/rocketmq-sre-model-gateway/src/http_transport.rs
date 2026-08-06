@@ -530,6 +530,7 @@ fn apply_provider_auth(
         ProviderDialect::Gemini => Ok(builder.header("x-goog-api-key", secret_header(secret)?)),
         ProviderDialect::Bedrock => sign_bedrock_request(builder, url, body, credential, Utc::now()),
         ProviderDialect::OpenAi
+        | ProviderDialect::DeepSeekResponses
         | ProviderDialect::DeepSeekOpenAi
         | ProviderDialect::ZhipuGlm
         | ProviderDialect::Kimi
@@ -556,6 +557,7 @@ fn credential_required(dialect: ProviderDialect) -> bool {
             | ProviderDialect::Anthropic
             | ProviderDialect::Gemini
             | ProviderDialect::Bedrock
+            | ProviderDialect::DeepSeekResponses
             | ProviderDialect::DeepSeekOpenAi
             | ProviderDialect::DeepSeekAnthropic
             | ProviderDialect::ZhipuGlm

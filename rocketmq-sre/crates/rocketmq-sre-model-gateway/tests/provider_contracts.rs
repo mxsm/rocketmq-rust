@@ -104,6 +104,15 @@ impl MockTransport {
             .body
             .clone()
     }
+
+    fn last_request(&self) -> TransportRequest {
+        self.requests
+            .lock()
+            .expect("request lock")
+            .last()
+            .expect("transport request")
+            .clone()
+    }
 }
 
 impl ModelTransport for MockTransport {
@@ -130,6 +139,9 @@ fn fixture(file: &str, case: &str) -> TransportResponse {
         }
         "bedrock-converse.contract.json" => {
             include_str!("fixtures/providers/bedrock-converse.contract.json")
+        }
+        "deepseek-responses.contract.json" => {
+            include_str!("fixtures/providers/deepseek-responses.contract.json")
         }
         unexpected => panic!("unknown fixture: {unexpected}"),
     };
@@ -162,6 +174,7 @@ fn every_protocol_maps_text_json_tool_and_retryable_errors() {
         ("anthropic", "anthropic-messages.contract.json"),
         ("google-gemini", "gemini-native.contract.json"),
         ("aws-bedrock", "bedrock-converse.contract.json"),
+        ("deepseek-responses", "deepseek-responses.contract.json"),
     ];
 
     for (profile_id, fixture_file) in protocols {
@@ -197,6 +210,76 @@ fn every_protocol_maps_text_json_tool_and_retryable_errors() {
         assert!(error.retryable);
         assert!(error.fallback_allowed());
     }
+}
+
+#[test]
+fn deepseek_responses_maps_instructions_structured_output_tools_and_usage() {
+    let transport = Arc::new(MockTransport::returning(vec![Ok(fixture(
+        "deepseek-responses.contract.json",
+        "text",
+    ))]));
+    let provider = adapter_for_profile(profile("deepseek-responses"), transport.clone(), Arc::new(TestSecrets))
+        .expect("DeepSeek Responses adapter");
+    let mut request = CanonicalModelRequest::new(
+        CorrelationId::new(),
+        "deepseek-v4-flash",
+        vec![
+            ModelMessage::text(ModelRole::System, "Return only a bounded read-only diagnosis."),
+            ModelMessage::text(ModelRole::User, "Assess the supplied evidence."),
+        ],
+    );
+    request.max_output_tokens = Some(256);
+    request.response_format = ResponseFormat::JsonSchema {
+        name: "rocketmq_sre_diagnosis".to_owned(),
+        schema: serde_json::json!({
+            "type": "object",
+            "properties": {"status": {"type": "string"}},
+            "required": ["status"],
+            "additionalProperties": false
+        }),
+        strict: true,
+    };
+    request.tools.push(
+        ModelTool::read_only(
+            "query_consumer_lag",
+            "Read current lag",
+            serde_json::json!({"type":"object"}),
+        )
+        .with_strict(),
+    );
+    request.tool_choice = ToolChoice::Specific {
+        name: "query_consumer_lag".to_owned(),
+    };
+
+    let response = provider
+        .invoke(&InvocationContext::new(CorrelationId::new()), &request)
+        .expect("DeepSeek Responses result");
+    let sent = transport.last_request();
+
+    assert_eq!(sent.path, "/responses");
+    assert_eq!(sent.body["model"], "deepseek-v4-flash");
+    assert_eq!(sent.body["instructions"], "Return only a bounded read-only diagnosis.");
+    assert_eq!(sent.body["input"][0]["type"], "message");
+    assert_eq!(sent.body["max_output_tokens"], 256);
+    assert_eq!(sent.body["text"]["format"]["type"], "json_schema");
+    assert_eq!(sent.body["text"]["format"]["name"], "rocketmq_sre_diagnosis");
+    assert_eq!(sent.body["tools"][0]["name"], "query_consumer_lag");
+    assert!(sent.body["tools"][0].get("function").is_none());
+    assert_eq!(
+        sent.body["tool_choice"],
+        serde_json::json!({
+            "type": "function",
+            "name": "query_consumer_lag"
+        })
+    );
+    assert!(sent.body.get("messages").is_none());
+    assert!(sent.body.get("response_format").is_none());
+    assert_eq!(response.model, "deepseek-v4-flash");
+    assert_eq!(response.usage.input_tokens, Some(11));
+    assert_eq!(response.usage.output_tokens, Some(8));
+    assert_eq!(response.usage.reasoning_tokens, Some(4));
+    assert_eq!(response.usage.cached_input_tokens, Some(3));
+    assert!(response.reasoning_content.is_none());
 }
 
 #[test]

@@ -99,6 +99,11 @@ async fn mock_handler(State(state): State<Arc<MockState>>, uri: Uri, headers: He
                 .get("authorization")
                 .is_some_and(|value| value.as_bytes() == b"Bearer test-secret"),
         ),
+        "/auth/deepseek-responses" => auth_response(
+            headers
+                .get("authorization")
+                .is_some_and(|value| value.as_bytes() == b"Bearer test-secret"),
+        ),
         "/auth/azure" => auth_response(
             headers
                 .get("api-key")
@@ -400,6 +405,11 @@ async fn provider_specific_auth_headers_are_applied_without_exposing_secrets() {
     let transport = transport(HttpTransportConfig::default());
     let cases = [
         ("/auth/openai", ProviderDialect::OpenAi, "test-secret"),
+        (
+            "/auth/deepseek-responses",
+            ProviderDialect::DeepSeekResponses,
+            "test-secret",
+        ),
         ("/auth/azure", ProviderDialect::AzureOpenAi, "test-secret"),
         ("/auth/anthropic", ProviderDialect::Anthropic, "test-secret"),
         ("/auth/gemini", ProviderDialect::Gemini, "test-secret"),

@@ -335,11 +335,19 @@
         {
           "kind": "test",
           "path": "rocketmq-sre/crates/rocketmq-sre-model-gateway/tests/live_provider_smoke.rs"
+        },
+        {
+          "kind": "configuration",
+          "path": "rocketmq-sre/config/qualification/deepseek-diagnosis.v1.json"
+        },
+        {
+          "kind": "test",
+          "path": "rocketmq-sre/crates/rocketmq-sre-control-plane/src/models/service/live_deepseek.rs"
         }
       ],
       "limitations": [
-        "Protocol adapters are contract tested without a real provider credential.",
-        "DeepSeek live qualification is intentionally deferred until all non-model readiness work is complete."
+        "DeepSeek Responses API diagnosis passed one credential-gated disposable-environment qualification; other provider profiles remain contract-tested or deployment-qualified independently.",
+        "Production credentials, deployment-specific networking, sustained load, provider failover, and operator handoff still require environment-specific certification."
       ]
     },
     {
@@ -393,18 +401,39 @@
     },
     {
       "id": "ai-assisted-diagnosis",
-      "status": "deferred",
+      "status": "partial",
       "target_outcome": "model-diagnosis",
       "maturity": {
-        "implemented": false,
-        "contract_tested": false,
-        "live_smoke_passed": false,
+        "implemented": true,
+        "contract_tested": true,
+        "live_smoke_passed": true,
         "production_certified": false
       },
-      "evidence": [],
-      "reason": "DeepSeek credential intake and AI-assisted diagnosis are intentionally last, after Evidence, enterprise integration, execution-boundary, and production-readiness qualification; the user will provide the API key at that time.",
+      "evidence": [
+        {
+          "kind": "source",
+          "path": "rocketmq-sre/crates/rocketmq-sre-control-plane/src/models/service.rs"
+        },
+        {
+          "kind": "source",
+          "path": "rocketmq-sre/crates/rocketmq-sre-model-gateway/src/adapters.rs"
+        },
+        {
+          "kind": "test",
+          "path": "rocketmq-sre/crates/rocketmq-sre-control-plane/src/models/service/live_deepseek.rs"
+        },
+        {
+          "kind": "configuration",
+          "path": "rocketmq-sre/config/qualification/deepseek-diagnosis.v1.json"
+        },
+        {
+          "kind": "test",
+          "path": "rocketmq-sre/scripts/check_deepseek_diagnosis_qualification.py"
+        }
+      ],
       "limitations": [
-        "No real provider credential has been supplied and no model network call has been performed."
+        "The credential-gated DeepSeek qualification uses sanitized synthetic Evidence and a disposable PostgreSQL database; it is not a production-cluster certification.",
+        "AI output remains advisory, read-only, schema-validated, evidence-cited, and ineligible for direct execution; no autonomous production mutation is enabled."
       ]
     }
   ]

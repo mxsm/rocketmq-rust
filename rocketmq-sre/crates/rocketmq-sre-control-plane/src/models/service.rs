@@ -111,6 +111,8 @@ const SCHEMA_REPAIR_PURPOSE: &str = "schema_repair";
 
 mod critic;
 mod lifecycle;
+#[cfg(test)]
+mod live_deepseek;
 mod smoke;
 
 #[derive(Clone, Copy, Debug)]
@@ -1752,7 +1754,9 @@ fn provider_family_label(profile: &ProviderProfile) -> ProviderFamilyLabel {
         ProviderDialect::Anthropic => ProviderFamilyLabel::Anthropic,
         ProviderDialect::Gemini => ProviderFamilyLabel::Gemini,
         ProviderDialect::Bedrock => ProviderFamilyLabel::Bedrock,
-        ProviderDialect::DeepSeekOpenAi | ProviderDialect::DeepSeekAnthropic => ProviderFamilyLabel::DeepSeek,
+        ProviderDialect::DeepSeekResponses | ProviderDialect::DeepSeekOpenAi | ProviderDialect::DeepSeekAnthropic => {
+            ProviderFamilyLabel::DeepSeek
+        }
         ProviderDialect::ZhipuGlm => ProviderFamilyLabel::ZhipuGlm,
         ProviderDialect::Kimi => ProviderFamilyLabel::MoonshotKimi,
         ProviderDialect::Vllm | ProviderDialect::Ollama | ProviderDialect::LlamaCpp | ProviderDialect::Sglang => {

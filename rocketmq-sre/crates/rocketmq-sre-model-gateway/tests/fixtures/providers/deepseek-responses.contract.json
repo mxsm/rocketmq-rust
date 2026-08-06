@@ -1,0 +1,86 @@
+{
+  "text": {
+    "status": 200,
+    "body": {
+      "id": "resp_deepseek_text",
+      "object": "response",
+      "status": "completed",
+      "model": "deepseek-v4-flash",
+      "output": [
+        {
+          "id": "msg_deepseek_text",
+          "type": "message",
+          "status": "completed",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "output_text",
+              "text": "broker is healthy",
+              "annotations": []
+            }
+          ]
+        }
+      ],
+      "usage": {
+        "input_tokens": 11,
+        "input_tokens_details": {"cached_tokens": 3},
+        "output_tokens": 8,
+        "output_tokens_details": {"reasoning_tokens": 4},
+        "total_tokens": 19
+      }
+    }
+  },
+  "json": {
+    "status": 200,
+    "body": {
+      "id": "resp_deepseek_json",
+      "object": "response",
+      "status": "completed",
+      "model": "deepseek-v4-flash",
+      "output": [
+        {
+          "id": "reasoning_deepseek_json",
+          "type": "reasoning",
+          "content": [
+            {"type": "reasoning_text", "text": "private reasoning must not be exposed"}
+          ]
+        },
+        {
+          "id": "msg_deepseek_json",
+          "type": "message",
+          "status": "completed",
+          "role": "assistant",
+          "content": [
+            {"type": "output_text", "text": "{\"status\":\"healthy\"}", "annotations": []}
+          ]
+        }
+      ],
+      "usage": {"input_tokens": 12, "output_tokens": 7, "total_tokens": 19}
+    }
+  },
+  "tool": {
+    "status": 200,
+    "body": {
+      "id": "resp_deepseek_tool",
+      "object": "response",
+      "status": "completed",
+      "model": "deepseek-v4-flash",
+      "output": [
+        {
+          "id": "fc_deepseek_tool",
+          "type": "function_call",
+          "status": "completed",
+          "call_id": "call-1",
+          "name": "query_consumer_lag",
+          "arguments": "{\"group\":\"synthetic-group\"}"
+        }
+      ]
+    }
+  },
+  "error": {
+    "status": 429,
+    "body": {
+      "error": {"message": "rate limit", "type": "rate_limit_error"}
+    }
+  }
+}
