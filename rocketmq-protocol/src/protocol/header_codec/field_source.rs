@@ -1,0 +1,195 @@
+// Copyright 2026 The RocketMQ Rust Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use bytes::Bytes;
+use cheetah_string::CheetahString;
+
+use crate::HeaderMap;
+
+const KEY_LENGTH_BYTES: usize = 2;
+const VALUE_LENGTH_BYTES: usize = 4;
+const MAX_INITIAL_MAP_CAPACITY: usize = 1024;
+
+fn malformed_binary_fields(reason: &'static str) -> rocketmq_error::RocketMQError {
+    rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
+        format: "binary-header-fields",
+        message: reason.to_string(),
+    })
+}
+
+/// A validated, immutable ROCKETMQ extension-field payload.
+///
+/// Construction validates the complete payload before it is retained by a
+/// remoting command. Subsequent scans therefore need no allocation and cannot
+/// observe mutable bytes.
+#[derive(Clone)]
+pub(crate) struct BinaryHeaderFields {
+    payload: Bytes,
+    entry_count: usize,
+}
+
+impl BinaryHeaderFields {
+    /// Validates and retains one complete extension-field payload.
+    pub(crate) fn new(payload: Bytes) -> rocketmq_error::RocketMQResult<Self> {
+        let mut entry_count = 0usize;
+        Self::parse(&payload, &mut |_key, _value| {
+            entry_count = entry_count.saturating_add(1);
+            Ok(())
+        })?;
+        Ok(Self { payload, entry_count })
+    }
+
+    /// Visits the logical non-empty entries without allocating field strings.
+    pub(crate) fn try_for_each<'a>(
+        &'a self,
+        visitor: &mut dyn FnMut(&'a str, &'a str) -> rocketmq_error::RocketMQResult<()>,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        Self::parse(&self.payload, visitor)
+    }
+
+    /// Materializes the compatibility map. The payload has already been
+    /// validated, so a second parse can fail only if this module's immutable
+    /// representation invariant is broken.
+    pub(crate) fn materialize(&self) -> HeaderMap {
+        let mut map = HeaderMap::with_capacity(self.entry_count.min(MAX_INITIAL_MAP_CAPACITY));
+        let result = self.try_for_each(&mut |key, value| {
+            map.insert(CheetahString::from_slice(key), CheetahString::from_slice(value));
+            Ok(())
+        });
+        if result.is_err() {
+            map.clear();
+        }
+        map
+    }
+
+    fn parse<'a>(
+        payload: &'a [u8],
+        visitor: &mut dyn FnMut(&'a str, &'a str) -> rocketmq_error::RocketMQResult<()>,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        let mut cursor = 0usize;
+        while cursor < payload.len() {
+            let key_length = Self::read_u16(payload, &mut cursor)?;
+            if key_length == 0 {
+                return Err(malformed_binary_fields("extension-field key is empty"));
+            }
+            let key = Self::read_utf8(payload, &mut cursor, key_length, "truncated extension-field key")?;
+
+            let value_length = Self::read_i32(payload, &mut cursor)?;
+            if value_length < 0 {
+                return Err(malformed_binary_fields("extension-field value length is negative"));
+            }
+            let value = Self::read_utf8(
+                payload,
+                &mut cursor,
+                value_length as usize,
+                "truncated extension-field value",
+            )?;
+
+            // Java-compatible ROCKETMQ map decoding treats zero-length values
+            // as absent rather than storing an empty string.
+            if !value.is_empty() {
+                visitor(key, value)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn read_u16(payload: &[u8], cursor: &mut usize) -> rocketmq_error::RocketMQResult<usize> {
+        let bytes = Self::take(payload, cursor, KEY_LENGTH_BYTES, "missing extension-field key length")?;
+        Ok(u16::from_be_bytes([bytes[0], bytes[1]]) as usize)
+    }
+
+    fn read_i32(payload: &[u8], cursor: &mut usize) -> rocketmq_error::RocketMQResult<i32> {
+        let bytes = Self::take(
+            payload,
+            cursor,
+            VALUE_LENGTH_BYTES,
+            "missing extension-field value length",
+        )?;
+        Ok(i32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+    }
+
+    fn read_utf8<'a>(
+        payload: &'a [u8],
+        cursor: &mut usize,
+        length: usize,
+        truncated_reason: &'static str,
+    ) -> rocketmq_error::RocketMQResult<&'a str> {
+        let bytes = Self::take(payload, cursor, length, truncated_reason)?;
+        std::str::from_utf8(bytes).map_err(|_| malformed_binary_fields("extension-field text is not valid UTF-8"))
+    }
+
+    fn take<'a>(
+        payload: &'a [u8],
+        cursor: &mut usize,
+        length: usize,
+        reason: &'static str,
+    ) -> rocketmq_error::RocketMQResult<&'a [u8]> {
+        let end = cursor
+            .checked_add(length)
+            .ok_or_else(|| malformed_binary_fields(reason))?;
+        let bytes = payload
+            .get(*cursor..end)
+            .ok_or_else(|| malformed_binary_fields(reason))?;
+        *cursor = end;
+        Ok(bytes)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bytes::BufMut;
+    use bytes::BytesMut;
+
+    use super::*;
+
+    fn entry(out: &mut BytesMut, key: &[u8], value: &[u8]) {
+        out.put_u16(key.len() as u16);
+        out.extend_from_slice(key);
+        out.put_i32(value.len() as i32);
+        out.extend_from_slice(value);
+    }
+
+    #[test]
+    fn validates_and_materializes_duplicate_and_empty_values() {
+        let mut payload = BytesMut::new();
+        entry(&mut payload, b"key", b"first");
+        entry(&mut payload, b"empty", b"");
+        entry(&mut payload, b"key", b"last");
+
+        let fields = BinaryHeaderFields::new(payload.freeze()).unwrap();
+        let map = fields.materialize();
+
+        assert_eq!(map.len(), 1);
+        assert_eq!(map.get("key").map(CheetahString::as_str), Some("last"));
+        assert!(!map.contains_key("empty"));
+    }
+
+    #[test]
+    fn rejects_truncated_negative_empty_key_and_invalid_utf8_payloads() {
+        let invalid_payloads = [
+            Bytes::from_static(&[0]),
+            Bytes::from_static(&[0, 1]),
+            Bytes::from_static(&[0, 1, b'k', 0, 0, 0]),
+            Bytes::from_static(&[0, 1, b'k', 0xff, 0xff, 0xff, 0xff]),
+            Bytes::from_static(&[0, 0, 0, 0, 0, 1, b'v']),
+            Bytes::from_static(&[0, 1, 0xff, 0, 0, 0, 1, b'v']),
+            Bytes::from_static(&[0, 1, b'k', 0, 0, 0, 1, 0xff]),
+        ];
+
+        for payload in invalid_payloads {
+            assert!(BinaryHeaderFields::new(payload).is_err());
+        }
+    }
+}

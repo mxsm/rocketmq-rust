@@ -22,6 +22,7 @@ use bytes::BytesMut;
 use cheetah_string::CheetahString;
 
 use crate::protocol::command_custom_header::HeaderEncodeCapability;
+use crate::protocol::header_codec::BinaryHeaderFields;
 use crate::protocol::header_codec::HeaderCodecError;
 use crate::protocol::header_field_merge::has_custom_ext_collision;
 use crate::protocol::header_field_merge::merge_header_and_dynamic;
@@ -36,6 +37,13 @@ fn decoding_error(required: usize, available: usize) -> rocketmq_error::RocketMQ
     rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
         format: "binary",
         message: format!("required {required} bytes, got {available}"),
+    })
+}
+
+fn trailing_header_error(remaining: usize) -> rocketmq_error::RocketMQError {
+    rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
+        format: "binary",
+        message: format!("ROCKETMQ header has {remaining} trailing bytes after extension fields"),
     })
 }
 
@@ -402,7 +410,7 @@ impl RocketMQSerializable {
         }
 
         let ext_fields_length = header_buffer.get_i32();
-        let ext = if ext_fields_length > 0 {
+        let payload = if ext_fields_length > 0 {
             let ext_fields_length = ext_fields_length as usize;
             if ext_fields_length > header_len {
                 return Err(decoding_error(ext_fields_length, header_len));
@@ -410,12 +418,16 @@ impl RocketMQSerializable {
             if ext_fields_length > header_buffer.remaining() {
                 return Err(decoding_error(ext_fields_length, header_buffer.remaining()));
             }
-            Self::map_deserialize(header_buffer, ext_fields_length)?
+            header_buffer.split_to(ext_fields_length).freeze()
         } else {
-            HashMap::new()
+            Bytes::new()
         };
+        if header_buffer.has_remaining() {
+            return Err(trailing_header_error(header_buffer.remaining()));
+        }
+        let ext = BinaryHeaderFields::new(payload)?;
 
-        Ok(cmd.set_remark_option(remark).set_ext_fields(ext))
+        Ok(cmd.set_remark_option(remark).set_binary_ext_fields(ext))
     }
 
     /// Optimized map deserialization with capacity hint and better error handling
@@ -626,5 +638,15 @@ mod tests {
         if RocketMQSerializable::rocket_mq_protocol_decode(&mut buf, header_len).is_ok() {
             panic!("truncated ext fields should decode to error");
         }
+    }
+
+    #[test]
+    fn rocketmq_protocol_decode_rejects_bytes_after_declared_ext_fields() {
+        let mut buf = minimal_header_without_ext_len();
+        buf.put_i32(0);
+        buf.put_u8(1);
+        let header_len = buf.len();
+
+        assert!(RocketMQSerializable::rocket_mq_protocol_decode(&mut buf, header_len).is_err());
     }
 }

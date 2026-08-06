@@ -20,6 +20,7 @@
 
 mod codec;
 mod error;
+mod field_source;
 mod schema;
 mod sink;
 mod value;
@@ -30,6 +31,7 @@ mod private {
 
 pub use codec::HeaderCodec;
 pub use error::HeaderCodecError;
+pub(crate) use field_source::BinaryHeaderFields;
 pub use schema::AliasConflictPolicy;
 pub use schema::DynamicCollisionPolicy;
 pub use schema::FlattenPresenceSpec;
