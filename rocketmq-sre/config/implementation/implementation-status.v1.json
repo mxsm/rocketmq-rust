@@ -108,7 +108,8 @@
         },
         {
           "kind": "configuration",
-          "path": "rocketmq-sre/config/qualification/diagnostic-packs.v1.json"
+          "path": "rocketmq-sre/config/qualification/diagnostic-packs.v1.json",
+          "qualification": "diagnostic-packs"
         },
         {
           "kind": "source",
@@ -116,11 +117,13 @@
         },
         {
           "kind": "test",
-          "path": "rocketmq-sre/scripts/check_diagnostic_pack_qualification.py"
+          "path": "rocketmq-sre/scripts/check_diagnostic_pack_qualification.py",
+          "qualification": "diagnostic-packs"
         },
         {
           "kind": "smoke",
-          "path": "rocketmq-sre/scripts/diagnostic-pack-live-qualification.ps1"
+          "path": "rocketmq-sre/scripts/diagnostic-pack-live-qualification.ps1",
+          "qualification": "diagnostic-packs"
         }
       ],
       "limitations": [
@@ -135,7 +138,7 @@
       "maturity": {
         "implemented": true,
         "contract_tested": true,
-        "live_smoke_passed": false,
+        "live_smoke_passed": true,
         "production_certified": false
       },
       "evidence": [
@@ -154,10 +157,40 @@
         {
           "kind": "source",
           "path": "rocketmq-sre/crates/rocketmq-sre-control-plane/src/conversation_stream.rs"
+        },
+        {
+          "kind": "configuration",
+          "path": "rocketmq-sre/config/qualification/live-conversations.v1.json",
+          "qualification": "live-conversations"
+        },
+        {
+          "kind": "test",
+          "path": "rocketmq-sre/scripts/check_live_conversation_qualification.py",
+          "qualification": "live-conversations"
+        },
+        {
+          "kind": "smoke",
+          "path": "rocketmq-sre/scripts/conversation-live-qualification.ps1",
+          "qualification": "live-conversations"
+        },
+        {
+          "kind": "configuration",
+          "path": "rocketmq-sre/config/qualification/conversation-security.v1.json",
+          "qualification": "conversation-security"
+        },
+        {
+          "kind": "test",
+          "path": "rocketmq-sre/scripts/check_conversation_security_qualification.py",
+          "qualification": "conversation-security"
+        },
+        {
+          "kind": "smoke",
+          "path": "rocketmq-sre/scripts/conversation-security-qualification.ps1",
+          "qualification": "conversation-security"
         }
       ],
       "limitations": [
-        "Desktop operator flows include bounded Server-Sent Event progress, provisional answer rendering, cancellation, and final persisted evidence-cited answers.",
+        "Desktop operator flows include bounded Server-Sent Event progress, provisional answer rendering, cancellation, and final persisted evidence-cited answers; real Chromium conversation-security and real RocketMQ evidence conversation qualifications have passed in disposable environments.",
         "Production identity, scale, and independent operator handoff qualification remain incomplete."
       ]
     },
@@ -190,19 +223,22 @@
         },
         {
           "kind": "configuration",
-          "path": "rocketmq-sre/config/qualification/asymmetric-executor-partition.v1.json"
+          "path": "rocketmq-sre/config/qualification/asymmetric-executor-partition.v1.json",
+          "qualification": "asymmetric-executor-partition"
         },
         {
           "kind": "test",
           "path": "rocketmq-sre/crates/rocketmq-sre-executor/tests/asymmetric_partition.rs"
         },
         {
-          "kind": "test",
-          "path": "rocketmq-sre/scripts/asymmetric-executor-partition-qualification.ps1"
+          "kind": "smoke",
+          "path": "rocketmq-sre/scripts/asymmetric-executor-partition-qualification.ps1",
+          "qualification": "asymmetric-executor-partition"
         },
         {
           "kind": "test",
-          "path": "rocketmq-sre/scripts/check_asymmetric_executor_partition_qualification.py"
+          "path": "rocketmq-sre/scripts/check_asymmetric_executor_partition_qualification.py",
+          "qualification": "asymmetric-executor-partition"
         },
         {
           "kind": "test",
@@ -210,27 +246,33 @@
         },
         {
           "kind": "configuration",
-          "path": "rocketmq-sre/config/qualification/r1-actions.v1.json"
+          "path": "rocketmq-sre/config/qualification/r1-actions.v1.json",
+          "qualification": "r1-actions"
         },
         {
           "kind": "test",
-          "path": "rocketmq-sre/scripts/check_r1_action_qualification.py"
+          "path": "rocketmq-sre/scripts/check_r1_action_qualification.py",
+          "qualification": "r1-actions"
         },
         {
-          "kind": "test",
-          "path": "rocketmq-sre/scripts/r1-action-live-qualification.ps1"
+          "kind": "smoke",
+          "path": "rocketmq-sre/scripts/r1-action-live-qualification.ps1",
+          "qualification": "r1-actions"
         },
         {
           "kind": "configuration",
-          "path": "rocketmq-sre/config/qualification/r2-actions.v1.json"
+          "path": "rocketmq-sre/config/qualification/r2-actions.v1.json",
+          "qualification": "r2-actions"
         },
         {
           "kind": "test",
-          "path": "rocketmq-sre/scripts/check_r2_action_qualification.py"
+          "path": "rocketmq-sre/scripts/check_r2_action_qualification.py",
+          "qualification": "r2-actions"
         },
         {
-          "kind": "test",
-          "path": "rocketmq-sre/scripts/r2-action-live-qualification.ps1"
+          "kind": "smoke",
+          "path": "rocketmq-sre/scripts/r2-action-live-qualification.ps1",
+          "qualification": "r2-actions"
         }
       ],
       "limitations": [
@@ -274,15 +316,18 @@
         },
         {
           "kind": "configuration",
-          "path": "rocketmq-sre/config/qualification/autonomy-actions.v1.json"
+          "path": "rocketmq-sre/config/qualification/autonomy-actions.v1.json",
+          "qualification": "autonomy-actions"
         },
         {
           "kind": "test",
-          "path": "rocketmq-sre/scripts/check_autonomy_action_qualification.py"
+          "path": "rocketmq-sre/scripts/check_autonomy_action_qualification.py",
+          "qualification": "autonomy-actions"
         },
         {
           "kind": "smoke",
-          "path": "rocketmq-sre/scripts/autonomy-action-live-qualification.ps1"
+          "path": "rocketmq-sre/scripts/autonomy-action-live-qualification.ps1",
+          "qualification": "autonomy-actions"
         }
       ],
       "limitations": [
@@ -314,7 +359,7 @@
           "path": "rocketmq-sre/crates/rocketmq-sre-control-plane/src/evidence/blob.rs"
         },
         {
-          "kind": "test",
+          "kind": "smoke",
           "path": "rocketmq-sre/scripts/enterprise-integrations-smoke.ps1"
         }
       ],
@@ -351,16 +396,46 @@
         },
         {
           "kind": "configuration",
-          "path": "rocketmq-sre/config/qualification/deepseek-diagnosis.v1.json"
+          "path": "rocketmq-sre/config/qualification/deepseek-diagnosis.v1.json",
+          "qualification": "deepseek-diagnosis"
         },
         {
           "kind": "test",
           "path": "rocketmq-sre/crates/rocketmq-sre-control-plane/src/models/service/live_deepseek.rs"
+        },
+        {
+          "kind": "test",
+          "path": "rocketmq-sre/scripts/check_deepseek_diagnosis_qualification.py",
+          "qualification": "deepseek-diagnosis"
+        },
+        {
+          "kind": "smoke",
+          "path": "rocketmq-sre/scripts/deepseek-diagnosis-qualification.ps1",
+          "qualification": "deepseek-diagnosis"
+        },
+        {
+          "kind": "source",
+          "path": "rocketmq-sre/crates/rocketmq-sre-control-plane/src/models/service/live_provider_failover.rs"
+        },
+        {
+          "kind": "configuration",
+          "path": "rocketmq-sre/config/qualification/provider-failover.v1.json",
+          "qualification": "provider-failover"
+        },
+        {
+          "kind": "test",
+          "path": "rocketmq-sre/scripts/check_provider_failover_qualification.py",
+          "qualification": "provider-failover"
+        },
+        {
+          "kind": "smoke",
+          "path": "rocketmq-sre/scripts/provider-failover-qualification.ps1",
+          "qualification": "provider-failover"
         }
       ],
       "limitations": [
-        "DeepSeek Responses API diagnosis, bounded semantic streaming, cancellation, and read-only tool selection passed one credential-gated disposable-environment qualification; the selected tool was not executed and other provider profiles remain contract-tested or deployment-qualified independently.",
-        "Production credentials, deployment-specific networking, sustained load, provider failover, and operator handoff still require environment-specific certification."
+        "DeepSeek Responses API diagnosis, bounded semantic streaming, cancellation, read-only tool selection, evidence-cited answers, and fallback from a failed primary passed credential-gated disposable-environment qualifications; selected tools were not executed and every result remained read-only.",
+        "Zhipu GLM and Kimi/Moonshot remain descriptor, profile, transport, and contract tested rather than live-endpoint certified; production credentials, deployment-specific networking, sustained provider load, and operator handoff remain environment-specific."
       ]
     },
     {
@@ -370,7 +445,7 @@
       "maturity": {
         "implemented": true,
         "contract_tested": true,
-        "live_smoke_passed": false,
+        "live_smoke_passed": true,
         "production_certified": false
       },
       "evidence": [
@@ -405,11 +480,27 @@
         {
           "kind": "test",
           "path": "scripts/service-image-contract.ps1"
+        },
+        {
+          "kind": "configuration",
+          "path": "rocketmq-sre/config/qualification/production-readiness.v1.json",
+          "qualification": "production-readiness"
+        },
+        {
+          "kind": "test",
+          "path": "rocketmq-sre/scripts/check_production_readiness_qualification.py",
+          "qualification": "production-readiness"
+        },
+        {
+          "kind": "smoke",
+          "path": "rocketmq-sre/scripts/production-readiness-qualification.ps1",
+          "qualification": "production-readiness"
         }
       ],
       "limitations": [
         "Current/N-1 native binaries, two independent Kubernetes regions, the sixteen-scenario Kubernetes fault matrix, synchronous PostgreSQL failover, object recovery, Control Plane backup/restore, and stale-epoch fencing under an asymmetric Executor partition have passed disposable-environment qualification.",
-        "Deployment-specific production certification, sustained load, soak, and independent operator handoff evidence remain incomplete."
+        "A six-hour soak with seven injected faults, 100 logical clusters, 10,000 topic assets, 10,000 consumer-group assets, and bounded P95/P99 measurements passed in a disposable environment without model-provider or unattended-autonomous calls.",
+        "Deployment-specific production certification, target-organization owners and run windows, and independent operator handoff evidence remain incomplete."
       ]
     },
     {
@@ -437,11 +528,18 @@
         },
         {
           "kind": "configuration",
-          "path": "rocketmq-sre/config/qualification/deepseek-diagnosis.v1.json"
+          "path": "rocketmq-sre/config/qualification/deepseek-diagnosis.v1.json",
+          "qualification": "deepseek-diagnosis"
         },
         {
           "kind": "test",
-          "path": "rocketmq-sre/scripts/check_deepseek_diagnosis_qualification.py"
+          "path": "rocketmq-sre/scripts/check_deepseek_diagnosis_qualification.py",
+          "qualification": "deepseek-diagnosis"
+        },
+        {
+          "kind": "smoke",
+          "path": "rocketmq-sre/scripts/deepseek-diagnosis-qualification.ps1",
+          "qualification": "deepseek-diagnosis"
         },
         {
           "kind": "source",
@@ -450,11 +548,60 @@
         {
           "kind": "test",
           "path": "rocketmq-sre/ui/src/api/client.test.ts"
+        },
+        {
+          "kind": "configuration",
+          "path": "rocketmq-sre/config/qualification/live-conversations.v1.json",
+          "qualification": "live-conversations"
+        },
+        {
+          "kind": "test",
+          "path": "rocketmq-sre/scripts/check_live_conversation_qualification.py",
+          "qualification": "live-conversations"
+        },
+        {
+          "kind": "smoke",
+          "path": "rocketmq-sre/scripts/conversation-live-qualification.ps1",
+          "qualification": "live-conversations"
+        },
+        {
+          "kind": "configuration",
+          "path": "rocketmq-sre/config/qualification/conversation-security.v1.json",
+          "qualification": "conversation-security"
+        },
+        {
+          "kind": "test",
+          "path": "rocketmq-sre/scripts/check_conversation_security_qualification.py",
+          "qualification": "conversation-security"
+        },
+        {
+          "kind": "smoke",
+          "path": "rocketmq-sre/scripts/conversation-security-qualification.ps1",
+          "qualification": "conversation-security"
+        },
+        {
+          "kind": "source",
+          "path": "rocketmq-sre/crates/rocketmq-sre-control-plane/src/models/service/live_provider_failover.rs"
+        },
+        {
+          "kind": "configuration",
+          "path": "rocketmq-sre/config/qualification/provider-failover.v1.json",
+          "qualification": "provider-failover"
+        },
+        {
+          "kind": "test",
+          "path": "rocketmq-sre/scripts/check_provider_failover_qualification.py",
+          "qualification": "provider-failover"
+        },
+        {
+          "kind": "smoke",
+          "path": "rocketmq-sre/scripts/provider-failover-qualification.ps1",
+          "qualification": "provider-failover"
         }
       ],
       "limitations": [
-        "The credential-gated DeepSeek qualification uses sanitized synthetic Evidence and a disposable PostgreSQL database, verifies bounded semantic streaming and read-only tool selection without tool execution, and is not a production-cluster certification.",
-        "The conversational API and desktop workspace stream only bounded provisional text; the final turn is persisted and emitted only after schema, citation, and sensitive-output validation.",
+        "Credential-gated DeepSeek qualifications use sanitized synthetic Evidence and disposable PostgreSQL, verify bounded semantic streaming, read-only tool selection without execution, primary-to-secondary fallback, and rules-only degradation, and are not production-cluster certification.",
+        "Real RocketMQ Consumer Lag and Broker runtime conversations plus a real Chromium prompt-injection matrix passed disposable-environment qualification; the conversational API and desktop workspace stream only bounded provisional text, and the final turn is persisted and emitted only after schema, citation, and sensitive-output validation.",
         "AI output remains advisory, read-only, schema-validated, evidence-cited, and ineligible for direct execution; no autonomous production mutation is enabled."
       ]
     }

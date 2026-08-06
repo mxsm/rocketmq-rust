@@ -88,6 +88,48 @@ class ImplementationStatusTest(unittest.TestCase):
 
         self.assertTrue(any("query does not match query_count" in finding for finding in findings))
 
+    def test_rejects_incomplete_qualification_evidence(self) -> None:
+        manifest = copy.deepcopy(self.manifest)
+        manifest["capability_areas"][0]["evidence"].append(
+            {
+                "kind": "configuration",
+                "path": "rocketmq-sre/config/qualification/provider-failover.v1.json",
+                "qualification": "provider-failover",
+            }
+        )
+
+        findings = MODULE.validate_manifest(manifest, MODULE.REPOSITORY_ROOT)
+
+        self.assertIn(
+            "capability_areas[0] qualification provider-failover is missing evidence kinds: smoke, test",
+            findings,
+        )
+
+    def test_rejects_live_smoke_claim_without_smoke_evidence(self) -> None:
+        manifest = copy.deepcopy(self.manifest)
+        diagnostic_packs = manifest["capability_areas"][2]
+        diagnostic_packs["evidence"] = [
+            evidence for evidence in diagnostic_packs["evidence"] if evidence["kind"] != "smoke"
+        ]
+
+        findings = MODULE.validate_manifest(manifest, MODULE.REPOSITORY_ROOT)
+
+        self.assertIn(
+            "capability_areas[2] claims live_smoke_passed without smoke evidence",
+            findings,
+        )
+
+    def test_rejects_invalid_qualification_identifier(self) -> None:
+        manifest = copy.deepcopy(self.manifest)
+        manifest["capability_areas"][0]["evidence"][0]["qualification"] = "Phase 6"
+
+        findings = MODULE.validate_manifest(manifest, MODULE.REPOSITORY_ROOT)
+
+        self.assertIn(
+            "capability_areas[0].evidence[0].qualification must be a stable kebab-case identifier",
+            findings,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
