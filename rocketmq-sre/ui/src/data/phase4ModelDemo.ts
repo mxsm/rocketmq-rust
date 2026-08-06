@@ -112,16 +112,35 @@ export const phase4ModelLifecycle: ModelProfileLifecyclePage = {
 export const phase4ModelCapabilities: ModelCapabilitiesResponse = {
   ...structuredClone(phase1Models),
   network_calls_enabled: true,
-  profiles: phase1Models.profiles?.map((profile) => {
+  fallback_order: [
+    "70000000-0000-4000-8000-000000000002",
+    "70000000-0000-4000-8000-000000000003",
+  ],
+  profiles: phase1Models.profiles.map((profile) => {
     switch (profile.id) {
       case "70000000-0000-4000-8000-000000000002":
-        return { ...profile, enabled: true, health: "healthy" };
+        return {
+          ...profile,
+          credential_configured: true,
+          health: "healthy",
+          last_health_observed_at: OBSERVED_AT,
+        };
       case "70000000-0000-4000-8000-000000000003":
-        return { ...profile, enabled: true, health: "healthy" };
+        return {
+          ...profile,
+          credential_configured: true,
+          health: "healthy",
+          last_health_observed_at: OBSERVED_AT,
+        };
       case "70000000-0000-4000-8000-000000000004":
-        return { ...profile, enabled: false, health: "quarantined" };
+        return {
+          ...profile,
+          health: "quarantined",
+          last_health_observed_at: OBSERVED_AT,
+        };
       default:
         return profile;
     }
   }),
+  observed_at: OBSERVED_AT,
 };

@@ -7,37 +7,58 @@ import {
   Network,
   ShieldCheck,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback } from "react";
 
-import type { CapabilityCatalogResponse } from "@/api/types";
+import type { ModelProfile } from "@/api/types";
 import { PageHeader } from "@/components/PageHeader";
+import { formatTime } from "@/components/Phase1Primitives";
 import { Badge } from "@/components/ui/badge";
 import { useSreData } from "@/data/SreDataContext";
+import {
+  modelGatewayPresentation,
+  modelProfileHealthLabel,
+  modelProfileHealthVariant,
+} from "@/features/models/modelCapabilityPresentation";
+import { useAsyncResource } from "@/hooks/useAsyncResource";
 
 export function SystemStatusPage() {
-  const { health, readiness, catalog } = useSreData();
-  const [capabilities, setCapabilities] =
-    useState<CapabilityCatalogResponse>();
-  const [error, setError] = useState<string>();
-
-  useEffect(() => {
-    const controller = new AbortController();
-    void catalog(controller.signal)
-      .then(setCapabilities)
-      .catch((cause: unknown) =>
-        setError(cause instanceof Error ? cause.message : "能力目录不可用"),
-      );
-    return () => controller.abort();
-  }, [catalog]);
+  const { health, readiness, catalog, api } = useSreData();
+  const loadCatalog = useCallback(
+    (signal: AbortSignal) => catalog(signal),
+    [catalog],
+  );
+  const loadModelCapabilities = useCallback(
+    (signal: AbortSignal) => api.getModelCapabilities(signal),
+    [api],
+  );
+  const catalogResource = useAsyncResource(loadCatalog);
+  const modelResource = useAsyncResource(loadModelCapabilities);
+  const capabilities = catalogResource.data;
+  const modelCapabilities = modelResource.data;
+  const modelGateway = modelGatewayPresentation(
+    modelCapabilities,
+    Boolean(modelResource.error),
+  );
+  const providers =
+    modelCapabilities?.providers ?? capabilities?.providers ?? [];
 
   return (
     <div className="page">
       <PageHeader
         eyebrow="SYSTEM STATUS"
         title="系统状态"
-        description="查看 Control Plane、持久化、协议边界和离线 Provider 能力描述。"
+        description="查看 Control Plane、持久化、协议边界，以及 Model Gateway 的真实运行配置和健康状态。"
       />
-      {error && <div className="inline-alert warning">{error}</div>}
+      {Boolean(catalogResource.error) && (
+        <div className="inline-alert warning">
+          能力目录不可用；未返回的执行边界不会按已认证处理。
+        </div>
+      )}
+      {Boolean(modelResource.error) && (
+        <div className="inline-alert warning">
+          Model Gateway 运行状态不可用；不会回退为 descriptor-only 或 healthy。
+        </div>
+      )}
 
       <section className="system-status-grid">
         <SystemItem
@@ -77,9 +98,88 @@ export function SystemStatusPage() {
         <SystemItem
           icon={Box}
           label="Model Gateway"
-          state="descriptor / fixture only"
-          success
+          state={modelGateway.label}
+          success={modelGateway.success}
         />
+      </section>
+
+      <section className="data-surface provider-surface">
+        <div className="surface-heading">
+          <div>
+            <h2>运行时 Provider Profiles</h2>
+            <p>
+              仅展示脱敏 Profile 身份、健康和凭据是否已配置；不返回 token、secret 或 endpoint。
+            </p>
+          </div>
+          <Badge
+            variant={modelCapabilities?.network_calls_enabled ? "success" : "outline"}
+          >
+            {modelResource.loading
+              ? "loading"
+              : modelResource.error
+                ? "unavailable"
+                : modelCapabilities?.network_calls_enabled
+                  ? "network enabled"
+                  : "rules-only"}
+          </Badge>
+        </div>
+        {modelCapabilities && modelCapabilities.profiles.length > 0 ? (
+          <div className="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Profile</th>
+                  <th>Provider / Model</th>
+                  <th>协议</th>
+                  <th>健康</th>
+                  <th>凭据</th>
+                  <th>最近观测</th>
+                </tr>
+              </thead>
+              <tbody>
+                {modelCapabilities.profiles.map((profile) => (
+                  <tr key={profile.id}>
+                    <td>
+                      <div className="provider-profile-identity">
+                        <strong>{profile.profile_name}</strong>
+                        <span>{profile.region}</span>
+                      </div>
+                    </td>
+                    <td>
+                      <div className="provider-profile-identity">
+                        <strong>{profile.provider_family}</strong>
+                        <span>
+                          {profile.model_family} · {profile.model_revision}
+                        </span>
+                      </div>
+                    </td>
+                    <td>{profile.protocol_family}</td>
+                    <td>
+                      <Badge variant={modelProfileHealthVariant(profile.health)}>
+                        {modelProfileHealthLabel(profile.health)}
+                      </Badge>
+                    </td>
+                    <td>
+                      <CredentialStatus profile={profile} />
+                    </td>
+                    <td>{formatTime(profile.last_health_observed_at ?? undefined)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="empty-state compact">
+            <strong>没有可用的运行时 Profile</strong>
+            <span>
+              {modelResource.loading
+                ? "正在读取脱敏的运行时配置和健康状态。"
+                : modelResource.error
+                ? "运行状态查询失败；保持 fail closed。"
+                : "Rules-only 仍可用；配置并认证 Profile 后才会启用模型网络调用。"}
+            </span>
+          </div>
+        )}
       </section>
 
       <section className="data-surface provider-surface">
@@ -87,11 +187,11 @@ export function SystemStatusPage() {
           <div>
             <h2>协议适配矩阵</h2>
             <p>
-              Phase 00 仅提供 ProviderDescriptor，不发起真实模型网络调用。
+              描述已实现的协议适配能力；是否已配置、健康或进入路由以上方运行时 Profile 为准。
             </p>
           </div>
           <Badge variant="outline">
-            {capabilities?.providers.length ?? 0} providers
+            {providers.length} providers
           </Badge>
         </div>
         <div className="table-scroll">
@@ -104,11 +204,11 @@ export function SystemStatusPage() {
                 <th>Tools</th>
                 <th>Structured Output</th>
                 <th>Embeddings</th>
-                <th>Phase 00</th>
+                <th>适配状态</th>
               </tr>
             </thead>
             <tbody>
-              {capabilities?.providers.map((provider) => (
+              {providers.map((provider) => (
                 <tr key={provider.id}>
                   <td>
                     <strong>{providerName(provider.id)}</strong>
@@ -121,7 +221,7 @@ export function SystemStatusPage() {
                   </td>
                   <td>{booleanLabel(provider.supports_embeddings)}</td>
                   <td>
-                    <Badge variant="secondary">descriptor only</Badge>
+                    <Badge variant="secondary">adapter available</Badge>
                   </td>
                 </tr>
               ))}
@@ -130,6 +230,14 @@ export function SystemStatusPage() {
         </div>
       </section>
     </div>
+  );
+}
+
+function CredentialStatus({ profile }: { profile: ModelProfile }) {
+  return profile.credential_configured ? (
+    <Badge variant="success">凭据已配置</Badge>
+  ) : (
+    <Badge variant="outline">未配置凭据</Badge>
   );
 }
 
