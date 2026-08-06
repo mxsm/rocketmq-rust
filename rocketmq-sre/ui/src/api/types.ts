@@ -848,6 +848,153 @@ export interface AutonomyOutcomePage {
   observed_at: string;
 }
 
+export type AutonomyMode =
+  | "disabled"
+  | "shadow"
+  | "supervised"
+  | "autonomous"
+  | "paused";
+
+export interface AutonomyPolicyDefinition {
+  id: string;
+  definition_version: number;
+  tenant_id: string;
+  cluster_id: string;
+  action: string;
+  action_version: string;
+  descriptor_digest: string;
+  diagnostic_pack_id: string;
+  diagnostic_pack_version: string;
+  owner: string;
+  minimum_evidence_freshness_seconds: number;
+  required_evidence_sources: string[];
+  min_shadow_samples: number;
+  min_supervised_successes: number;
+  observation_window_days: number;
+  max_unresolved_unknown: number;
+  max_recent_rollbacks: number;
+  max_executions_per_hour: number;
+  cooldown_seconds: number;
+  max_concurrent_executions: number;
+  stable_window_seconds: number;
+  created_at: string;
+}
+
+export interface AutonomyLifecycleState {
+  tenant_id: string;
+  cluster_id: string;
+  action: string;
+  mode: AutonomyMode;
+  previous_mode: AutonomyMode | null;
+  owner: string;
+  pause_reason: string | null;
+  lifecycle_revision: number;
+  updated_by: string;
+  updated_at: string;
+}
+
+export interface AutonomyQualificationCohort {
+  id: string;
+  level: "shadow" | "autonomous";
+  tenant_id: string;
+  cluster_id: string;
+  action: string;
+  action_version: string;
+  policy_definition_version: number;
+  descriptor_digest: string;
+  diagnostic_pack_id: string;
+  diagnostic_pack_version: string;
+  primary_actual_model_identity_hash: string;
+  critic_actual_model_identity_hash: string | null;
+  cohort_hash: string;
+  created_at: string;
+}
+
+export interface AutonomyQualificationView {
+  shadow_cohort: AutonomyQualificationCohort | null;
+  autonomous_cohort: AutonomyQualificationCohort | null;
+  qualified_shadow_samples: number;
+  unqualified_shadow_samples: number;
+  qualified_supervised_successes: number;
+  unresolved_unknown: number;
+  recent_rollbacks: number;
+  shadow_observation_window_met: boolean;
+  autonomous_observation_window_met: boolean;
+}
+
+export interface AutonomyFreezeView {
+  id: string;
+  cluster_id: string | null;
+  action: string | null;
+  action_version: string | null;
+  revision: number;
+  active: boolean;
+  reason: string;
+  starts_at: string;
+  expires_at: string | null;
+  updated_by: string;
+  updated_at: string;
+}
+
+export interface AutonomyKillSwitchView {
+  cluster_id: string;
+  action: string;
+  action_version: string;
+  revision: number;
+  active: boolean;
+  reason: string;
+  updated_by: string;
+  updated_at: string;
+}
+
+export interface AutonomyScopeView {
+  schema_version: string;
+  policy: AutonomyPolicyDefinition;
+  lifecycle: AutonomyLifecycleState;
+  qualification: AutonomyQualificationView;
+  active_freezes: AutonomyFreezeView[];
+  kill_switch: AutonomyKillSwitchView | null;
+  recent_outcomes: AutonomyOutcome[];
+  reason_codes: string[];
+}
+
+export interface AutonomyScopePage {
+  schema_version: string;
+  items: AutonomyScopeView[];
+  truncated: boolean;
+}
+
+export interface AutonomyScopeKey {
+  clusterId: string;
+  action: string;
+  actionVersion: string;
+}
+
+export interface AutonomyTransitionRequest {
+  target_mode: AutonomyMode;
+  reason?: string;
+  owner_confirmed?: boolean;
+  owner_approval_ref?: string;
+}
+
+export interface SetAutonomyFreezeRequest {
+  cluster_id?: string;
+  action?: string;
+  action_version?: string;
+  active: boolean;
+  reason: string;
+  starts_at: string;
+  expires_at?: string;
+}
+
+export interface SetAutonomyKillSwitchRequest {
+  cluster_id: string;
+  action: string;
+  action_version: string;
+  active: boolean;
+  reason: string;
+}
+
 export interface AutonomyOutcomeQuery {
   clusterId?: string;
   action?: string;

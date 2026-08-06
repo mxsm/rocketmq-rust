@@ -52,6 +52,7 @@ import {
   OperationsAnalyticsPanel,
   type OperationsAnalyticsDraft,
 } from "@/pages/autonomy-operations/OperationsAnalyticsPanel";
+import { AutonomySettingsPanel } from "@/pages/autonomy-operations/AutonomySettingsPanel";
 
 const ALL_CLUSTERS = "all-clusters";
 const ALL_OUTCOMES = "all-outcomes";
@@ -199,24 +200,31 @@ export function AutonomyOperationsPage() {
           <strong>运营观察面与生产发布面严格分离</strong>
           <p>
             报表、预算告警和优化候选均为只读结果；模型和周期任务不能修改
-            Policy、ActionDescriptor、Provider 路由或自治状态。
+            Policy、ActionDescriptor、Provider 路由或自治状态。模式治理只接受人工
+            Operator 的类型化请求，且不绕过服务端资格与安全校验。
           </p>
         </div>
         <Badge variant="success">cluster mutation = false</Badge>
         <Badge variant="outline">人工评审后发布</Badge>
       </section>
 
-      <DataState
-        empty={!resource.loading && !resource.error && !report}
-        emptyDescription="当前授权范围没有可展示的自治运营报告。"
-        emptyTitle="暂无自治运营数据"
-        error={resource.error}
-        loading={resource.loading && !report}
-        onRetry={resource.reload}
-      />
+      <Tabs className="autonomy-workspace-tabs" defaultValue="operations">
+        <TabsList aria-label="自治运营工作区">
+          <TabsTrigger value="operations">运营报告</TabsTrigger>
+          <TabsTrigger value="settings">模式治理</TabsTrigger>
+        </TabsList>
+        <TabsContent value="operations">
+          <DataState
+            empty={!resource.loading && !resource.error && !report}
+            emptyDescription="当前授权范围没有可展示的自治运营报告。"
+            emptyTitle="暂无自治运营数据"
+            error={resource.error}
+            loading={resource.loading && !report}
+            onRetry={resource.reload}
+          />
 
-      {report && (
-        <>
+          {report && (
+            <>
           <ReportWindow report={report} />
           <OperationsAnalyticsPanel
             draft={analyticsDraft}
@@ -350,8 +358,16 @@ export function AutonomyOperationsPage() {
               <CandidateView report={report} />
             </TabsContent>
           </Tabs>
-        </>
-      )}
+            </>
+          )}
+        </TabsContent>
+        <TabsContent value="settings">
+          <AutonomySettingsPanel
+            api={api}
+            clusterId={effectiveClusterId}
+          />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

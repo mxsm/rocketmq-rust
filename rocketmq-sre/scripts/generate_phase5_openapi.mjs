@@ -5,6 +5,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { extendBoundedAutonomySettings } from "./openapi/bounded_autonomy_settings.mjs";
 import { extendOperationsAnalytics } from "./openapi/operations_analytics.mjs";
 import { extendPhase5FleetAndDr } from "./openapi/phase5_fleet_dr.mjs";
 import { extendPhase5GovernanceAndFinOps } from "./openapi/phase5_governance_finops.mjs";
@@ -101,6 +102,13 @@ extendOperationsAnalytics({
   operation,
   uuid,
 });
+extendBoundedAutonomySettings({
+  document,
+  schemas,
+  operation,
+  uuid,
+  digest,
+});
 
 const phase5Prefixes = [
   ["/v1/fleet/", "Fleet"],
@@ -145,6 +153,11 @@ document.info = {
 };
 document.tags = [
   ...(document.tags ?? []),
+  {
+    name: "Bounded Autonomy",
+    description:
+      "Operator-only action and cluster lifecycle controls, qualification, freezes, and kill switches. Autonomous promotion requires an owner-confirmed approval reference.",
+  },
   {
     name: "Fleet",
     description:

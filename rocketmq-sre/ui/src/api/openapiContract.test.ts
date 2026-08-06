@@ -303,4 +303,49 @@ describe("checked-in Phase 5 OpenAPI", () => {
         .properties.schema_version.const,
     ).toBe("rocketmq-sre.operations-analytics.v1");
   });
+
+  it("publishes operator-only autonomy lifecycle controls with bounded approval references", () => {
+    const scopes = specification.paths["/v1/autonomy/scopes"];
+    const transitions =
+      specification.paths["/v1/autonomy/transitions"];
+    const freezes = specification.paths["/v1/autonomy/freezes"];
+    const killSwitches =
+      specification.paths["/v1/autonomy/kill-switches"];
+
+    expect(scopes?.get).toBeDefined();
+    expect(transitions?.post).toBeDefined();
+    expect(freezes?.post).toBeDefined();
+    expect(killSwitches?.post).toBeDefined();
+    expect(transitions.post.security).toEqual([
+      { oidc: ["rocketmq:autonomy:manage"] },
+    ]);
+    expect(freezes.post.security).toEqual([
+      { oidc: ["rocketmq:autonomy:manage"] },
+    ]);
+    expect(killSwitches.post.security).toEqual([
+      { oidc: ["rocketmq:autonomy:manage"] },
+    ]);
+
+    const transitionRequest =
+      specification.components.schemas.AutonomyTransitionRequest;
+    expect(transitionRequest.additionalProperties).toBe(false);
+    expect(transitionRequest.required).toEqual(["target_mode"]);
+    expect(
+      transitionRequest.properties.owner_approval_ref.pattern,
+    ).toBe(
+      "^approval://(?!.*(?:\\.\\.|//))[a-z0-9](?:[a-z0-9._/-]*[a-z0-9])$",
+    );
+    expect(
+      transitionRequest.properties.owner_approval_ref.maxLength,
+    ).toBe(160);
+    expect(
+      specification.components.schemas.AutonomyMode.enum,
+    ).toEqual([
+      "disabled",
+      "shadow",
+      "supervised",
+      "autonomous",
+      "paused",
+    ]);
+  });
 });
