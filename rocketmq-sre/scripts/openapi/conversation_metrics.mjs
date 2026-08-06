@@ -8,6 +8,7 @@ export function extendConversationMetrics({
   pathParameter,
   uuid,
   digest,
+  errorResponse,
 }) {
   const nullable = (schema) => ({
     oneOf: [schema, { type: "null" }],
@@ -282,6 +283,54 @@ export function extendConversationMetrics({
       observed_at: timestamp,
     },
   };
+  schemas.ConversationStreamEvent = {
+    type: "object",
+    additionalProperties: true,
+    required: [
+      "schema_version",
+      "sequence",
+      "event_type",
+      "conversation_id",
+      "turn_id",
+      "correlation_id",
+      "provisional",
+      "evidence_ids",
+    ],
+    properties: {
+      schema_version: {
+        type: "string",
+        const: "rocketmq-sre.conversation-stream-event.v1",
+      },
+      sequence: { type: "integer", format: "uint64", minimum: 1 },
+      event_type: {
+        type: "string",
+        enum: [
+          "accepted",
+          "evidence_ready",
+          "diagnosis_ready",
+          "answer_delta",
+          "preview_reset",
+          "completed",
+          "cancelled",
+          "failed",
+        ],
+      },
+      conversation_id: uuid,
+      turn_id: uuid,
+      correlation_id: uuid,
+      provisional: { type: "boolean" },
+      evidence_ids: {
+        type: "array",
+        maxItems: 32,
+        uniqueItems: true,
+        items: uuid,
+      },
+      delta: { type: "string", maxLength: 8000 },
+      diagnostic_pack: { type: "string", maxLength: 128 },
+      final_turn: { $ref: "#/components/schemas/ConversationTurnView" },
+      warning: { type: "string", maxLength: 128 },
+    },
+  };
 
   const conversationId = pathParameter("id");
   document.paths["/v1/conversations/{id}/turns"] = {
@@ -307,8 +356,43 @@ export function extendConversationMetrics({
       parameters: [pathParameter("id")],
     }),
   };
+  document.paths["/v1/conversations/{id}/turns/stream"] = {
+    post: {
+      operationId: "streamConversationTurn",
+      summary: "Stream one bounded read-only conversational diagnosis",
+      parameters: [pathParameter("id")],
+      requestBody: {
+        required: true,
+        content: {
+          "application/json": {
+            schema: { $ref: "#/components/schemas/ConversationTurnRequest" },
+          },
+        },
+      },
+      responses: {
+        200: {
+          description: "Ordered bounded Server-Sent Events",
+          content: {
+            "text/event-stream": {
+              schema: { type: "string" },
+              "x-event-schema": {
+                $ref: "#/components/schemas/ConversationStreamEvent",
+              },
+            },
+          },
+        },
+        400: errorResponse,
+        401: errorResponse,
+        403: errorResponse,
+        404: errorResponse,
+        409: errorResponse,
+        503: errorResponse,
+      },
+    },
+  };
   for (const path of [
     "/v1/conversations/{id}/turns",
+    "/v1/conversations/{id}/turns/stream",
     "/v1/conversations/{id}/cancel",
   ]) {
     for (const value of Object.values(document.paths[path])) {

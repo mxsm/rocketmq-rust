@@ -29,6 +29,7 @@ mod autonomy;
 mod change_management;
 mod config;
 mod connector_channel;
+mod conversation_stream;
 mod coverage;
 mod dr;
 mod error;

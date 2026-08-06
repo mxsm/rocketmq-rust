@@ -12,9 +12,12 @@ const path = join(root, "openapi", "rocketmq-sre-phase05.openapi.json");
 const raw = readFileSync(path, "utf8");
 const eol = raw.includes("\r\n") ? "\r\n" : "\n";
 
-if (raw.includes('"InvestigationDiagnosisRevision"')) {
+if (raw.includes('"ConversationStreamEvent"')) {
   process.exit(0);
 }
+const extendingExistingConversationContract = raw.includes(
+  '"InvestigationDiagnosisRevision"',
+);
 
 const uuid = { type: "string", format: "uuid" };
 const digest = { type: "string", pattern: "^sha256:[0-9A-Fa-f]{64}$" };
@@ -80,7 +83,18 @@ extendConversationMetrics({
   pathParameter,
   uuid,
   digest,
+  errorResponse,
 });
+if (extendingExistingConversationContract) {
+  extension.paths = {
+    "/v1/conversations/{id}/turns/stream":
+      extension.paths["/v1/conversations/{id}/turns/stream"],
+  };
+  extension.components.schemas = {
+    ConversationStreamEvent: extension.components.schemas.ConversationStreamEvent,
+  };
+  extension.tags = [];
+}
 
 function findContainer(source, property, depth) {
   let nesting = 0;
@@ -167,10 +181,14 @@ const edits = [
     findContainer(raw, "schemas", 2),
     objectEntries(extension.components.schemas, 4),
   ),
-  insertion(
-    findContainer(raw, "tags", 1),
-    arrayEntry(extension.tags[0], 4),
-  ),
+  ...(extension.tags.length > 0
+    ? [
+        insertion(
+          findContainer(raw, "tags", 1),
+          arrayEntry(extension.tags[0], 4),
+        ),
+      ]
+    : []),
 ].sort((left, right) => right.index - left.index);
 
 let output = raw;

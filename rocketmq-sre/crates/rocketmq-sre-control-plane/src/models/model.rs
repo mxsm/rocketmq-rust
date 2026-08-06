@@ -149,7 +149,7 @@ impl StructuredConversationAnswer {
     }
 }
 
-fn contains_sensitive_answer(value: &str) -> bool {
+pub(super) fn contains_sensitive_answer(value: &str) -> bool {
     let normalized = value.to_ascii_lowercase();
     [
         "token=",

@@ -25,6 +25,7 @@ import {
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import type {
+  ConversationStreamEvent,
   ConversationTurnStatus,
   InspectionReport,
   InspectionTemplate,
@@ -325,6 +326,11 @@ export function ConversationDetailPage() {
   const [submitting, setSubmitting] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [submitError, setSubmitError] = useState<string>();
+  const [streamEvents, setStreamEvents] = useState<ConversationStreamEvent[]>([]);
+  const [provisionalAnswer, setProvisionalAnswer] = useState("");
+  const streamAbort = useRef<AbortController>();
+
+  useEffect(() => () => streamAbort.current?.abort(), []);
 
   useEffect(() => {
     if (!conversation.data || question || resourcePath) {
@@ -341,22 +347,43 @@ export function ConversationDetailPage() {
     }
     setSubmitting(true);
     setSubmitError(undefined);
+    setStreamEvents([]);
+    setProvisionalAnswer("");
+    const controller = new AbortController();
+    streamAbort.current = controller;
     try {
-      await api.submitConversationTurn(
+      await api.streamConversationTurn(
         conversationId,
         {
           question: question.trim(),
           resource: resourcePath.trim() || undefined,
           window_seconds: windowSeconds,
         },
+        (streamEvent) => {
+          setStreamEvents((current) => [...current, streamEvent].slice(-16));
+          if (streamEvent.event_type === "answer_delta") {
+            setProvisionalAnswer((current) => current + (streamEvent.delta ?? ""));
+          } else if (streamEvent.event_type === "preview_reset") {
+            setProvisionalAnswer("");
+          } else if (streamEvent.final_turn) {
+            setProvisionalAnswer("");
+          }
+        },
+        controller.signal,
       );
       setQuestion("");
       turns.reload();
-    } catch {
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        return;
+      }
       setSubmitError(
         "只读查询未完成。请检查 Connector、数据源范围和模型配置。",
       );
     } finally {
+      if (streamAbort.current === controller) {
+        streamAbort.current = undefined;
+      }
       setSubmitting(false);
     }
   };
@@ -364,6 +391,7 @@ export function ConversationDetailPage() {
   const cancel = async () => {
     setCancelling(true);
     setSubmitError(undefined);
+    streamAbort.current?.abort();
     try {
       await api.cancelConversationQuery(conversationId);
     } catch {
@@ -483,6 +511,42 @@ export function ConversationDetailPage() {
                 </div>
               </form>
             </DataSurface>
+
+            {submitting && streamEvents.length > 0 && (
+              <DataSurface
+                title="Live diagnostic progress"
+                description="Provisional text is held behind local schema, citation, and sensitive-data checks. Only the completed revision is authoritative."
+                className="conversation-live-progress"
+                meta={
+                  <Badge variant="info">
+                    <Activity size={13} />
+                    {streamEventLabel(streamEvents.at(-1)?.event_type)}
+                  </Badge>
+                }
+              >
+                <div className="conversation-progress-rail" aria-label="Diagnostic progress">
+                  {streamEvents
+                    .filter((item) => item.event_type !== "answer_delta")
+                    .map((item) => (
+                      <span className="conversation-progress-step" key={item.sequence}>
+                        <CircleDot size={12} />
+                        {streamEventLabel(item.event_type)}
+                      </span>
+                    ))}
+                </div>
+                <div className="conversation-provisional-answer" aria-live="polite">
+                  <div>
+                    <Bot size={16} />
+                    <strong>AI SRE provisional answer</strong>
+                    <Badge variant="outline">not persisted</Badge>
+                  </div>
+                  <p>
+                    {provisionalAnswer ||
+                      "Collecting bounded Evidence and evaluating the selected diagnostic pack…"}
+                  </p>
+                </div>
+              </DataSurface>
+            )}
 
             <DataSurface
               title="对话记录"
@@ -685,6 +749,29 @@ function ConversationTurnBadge({ status }: { status: ConversationTurnStatus }) {
             ? "destructive"
             : "outline";
   return <Badge variant={variant}>{status}</Badge>;
+}
+
+function streamEventLabel(eventType?: ConversationStreamEvent["event_type"]): string {
+  switch (eventType) {
+    case "accepted":
+      return "Accepted";
+    case "evidence_ready":
+      return "Evidence ready";
+    case "diagnosis_ready":
+      return "Diagnosis ready";
+    case "answer_delta":
+      return "Answer streaming";
+    case "preview_reset":
+      return "Preview reset";
+    case "completed":
+      return "Revision committed";
+    case "cancelled":
+      return "Cancelled";
+    case "failed":
+      return "Failed safely";
+    default:
+      return "Starting";
+  }
 }
 
 export function InvestigationDetailPage() {

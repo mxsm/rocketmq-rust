@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  ConversationSseDecoder,
   createHttpSreApi,
   parseWorkflowSseFrame,
   stateLabel,
@@ -233,5 +234,89 @@ describe("stateLabel", () => {
         `id: stream-42\nevent: inspection_created\ndata: ${JSON.stringify(data)}`,
       ),
     ).toMatchObject({ event_id: "stream-42", payload: data.payload });
+  });
+
+  it("decodes bounded conversational events across UTF-8 transport chunks", () => {
+    const decoder = new ConversationSseDecoder();
+    const accepted = {
+      schema_version: "rocketmq-sre.conversation-stream-event.v1",
+      sequence: 1,
+      event_type: "accepted",
+      conversation_id: "conversation",
+      turn_id: "turn",
+      correlation_id: "correlation",
+      provisional: false,
+      evidence_ids: [],
+    };
+    const delta = {
+      ...accepted,
+      sequence: 2,
+      event_type: "answer_delta",
+      provisional: true,
+      delta: "Broker 正常",
+    };
+    const payload = [accepted, delta]
+      .map(
+        (event) =>
+          `event: ${event.event_type}\ndata: ${JSON.stringify(event)}\n\n`,
+      )
+      .join("");
+
+    expect(decoder.push(payload.slice(0, 37))).toEqual([]);
+    expect(decoder.push(payload.slice(37))).toEqual([accepted, delta]);
+  });
+
+  it("rejects out-of-order, unknown-major and duplicate terminal conversation events", () => {
+    const event = {
+      schema_version: "rocketmq-sre.conversation-stream-event.v1",
+      sequence: 2,
+      event_type: "accepted",
+      conversation_id: "conversation",
+      turn_id: "turn",
+      correlation_id: "correlation",
+      provisional: false,
+      evidence_ids: [],
+    };
+
+    expect(() =>
+      new ConversationSseDecoder().push(
+        `event: accepted\ndata: ${JSON.stringify(event)}\n\n`,
+      ),
+    ).toThrow("sequence");
+    expect(() =>
+      new ConversationSseDecoder().push(
+        `event: accepted\ndata: ${JSON.stringify({
+          ...event,
+          sequence: 1,
+          schema_version: "rocketmq-sre.conversation-stream-event.v2",
+        })}\n\n`,
+      ),
+    ).toThrow("schema");
+
+    const accepted = { ...event, sequence: 1 };
+    const terminal = { ...event, event_type: "cancelled" };
+    const decoder = new ConversationSseDecoder();
+    decoder.push(
+      `event: accepted\ndata: ${JSON.stringify(accepted)}\n\n`,
+    );
+    decoder.push(
+      `event: cancelled\ndata: ${JSON.stringify(terminal)}\n\n`,
+    );
+    expect(() =>
+      decoder.push(
+        `event: cancelled\ndata: ${JSON.stringify({
+          ...terminal,
+          sequence: 3,
+        })}\n\n`,
+      ),
+    ).toThrow("terminal");
+  });
+
+  it("rejects oversized conversational SSE frames", () => {
+    const decoder = new ConversationSseDecoder();
+
+    expect(() => decoder.push(`data: ${"x".repeat(256 * 1024)}`)).toThrow(
+      "bound",
+    );
   });
 });

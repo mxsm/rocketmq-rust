@@ -3321,6 +3321,61 @@ td small {
   list-style: none;
 }
 
+.conversation-live-progress {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--accent) 8%, transparent), transparent 48%),
+    var(--surface);
+}
+
+.conversation-progress-rail {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 2px 0 10px;
+}
+
+.conversation-progress-step {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 88%, var(--accent));
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 650;
+  padding: 6px 9px;
+}
+
+.conversation-progress-step:last-child {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  color: var(--foreground);
+}
+
+.conversation-provisional-answer {
+  border: 1px dashed color-mix(in srgb, var(--accent) 55%, var(--border));
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--surface-elevated) 88%, var(--accent));
+  padding: 14px 16px;
+}
+
+.conversation-provisional-answer > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.conversation-provisional-answer p {
+  margin: 10px 0 0;
+  color: var(--foreground);
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+
 .conversation-turn {
   display: grid;
   gap: 12px;

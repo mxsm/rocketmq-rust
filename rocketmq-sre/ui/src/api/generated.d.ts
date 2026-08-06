@@ -2723,6 +2723,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/conversations/{id}/turns/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Stream one bounded read-only conversational diagnosis */
+        post: operations["streamConversationTurn"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -7540,6 +7557,28 @@ export interface components {
             cancellation_requested: boolean;
             /** Format: date-time */
             observed_at: string;
+        };
+        ConversationStreamEvent: {
+            /** @constant */
+            schema_version: "rocketmq-sre.conversation-stream-event.v1";
+            /** Format: uint64 */
+            sequence: number;
+            /** @enum {string} */
+            event_type: "accepted" | "evidence_ready" | "diagnosis_ready" | "answer_delta" | "preview_reset" | "completed" | "cancelled" | "failed";
+            /** Format: uuid */
+            conversation_id: string;
+            /** Format: uuid */
+            turn_id: string;
+            /** Format: uuid */
+            correlation_id: string;
+            provisional: boolean;
+            evidence_ids: string[];
+            delta?: string;
+            diagnostic_pack?: string;
+            final_turn?: components["schemas"]["ConversationTurnView"];
+            warning?: string;
+        } & {
+            [key: string]: unknown;
         };
     };
     responses: {
@@ -17800,6 +17839,86 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ConversationCancelResult"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    streamConversationTurn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConversationTurnRequest"];
+            };
+        };
+        responses: {
+            /** @description Ordered bounded Server-Sent Events */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": string;
                 };
             };
             /** @description Sanitized stable error envelope */

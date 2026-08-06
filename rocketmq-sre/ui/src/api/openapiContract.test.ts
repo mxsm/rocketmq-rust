@@ -43,6 +43,10 @@ describe("checked-in Phase 5 OpenAPI", () => {
     const turn = specification.components.schemas.ConversationTurnView;
     const diagnosis =
       specification.components.schemas.InvestigationDiagnosisRevision;
+    const streamEvent =
+      specification.components.schemas.ConversationStreamEvent;
+    const streamOperation =
+      specification.paths["/v1/conversations/{id}/turns/stream"].post;
 
     expect(turn.required).toContain("diagnosis_revision");
     expect(
@@ -59,6 +63,26 @@ describe("checked-in Phase 5 OpenAPI", () => {
         "correlation_id",
       ]),
     );
+    expect(streamEvent.properties.provisional.type).toBe("boolean");
+    expect(streamEvent.properties.event_type.enum).toEqual(
+      expect.arrayContaining([
+        "accepted",
+        "evidence_ready",
+        "diagnosis_ready",
+        "answer_delta",
+        "preview_reset",
+        "completed",
+        "failed",
+        "cancelled",
+      ]),
+    );
+    expect(streamEvent.properties).not.toHaveProperty("execution_request");
+    expect(streamOperation.security).toEqual([
+      { oidc: ["rocketmq:diagnose"] },
+    ]);
+    expect(
+      streamOperation.responses["200"].content["text/event-stream"],
+    ).toBeDefined();
   });
 
   it("publishes typed Phase 2 and supervised Phase 3 contracts", () => {
