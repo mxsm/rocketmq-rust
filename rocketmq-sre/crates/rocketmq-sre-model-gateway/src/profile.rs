@@ -48,6 +48,7 @@ pub enum ProviderDialect {
     Anthropic,
     Gemini,
     Bedrock,
+    DeepSeekResponses,
     DeepSeekOpenAi,
     DeepSeekAnthropic,
     ZhipuGlm,
@@ -413,6 +414,13 @@ pub fn builtin_provider_profiles() -> Vec<ProviderProfile> {
     let reasoning = full
         .clone()
         .with([ProviderCapability::Reasoning, ProviderCapability::Embeddings]);
+    let deepseek_responses = ProviderCapabilities::chat_default().with([
+        ProviderCapability::JsonSchema,
+        ProviderCapability::ToolChoiceRequired,
+        ProviderCapability::ToolChoiceSpecific,
+        ProviderCapability::StrictTools,
+        ProviderCapability::Reasoning,
+    ]);
     let mut profiles = vec![
         profile(
             "openai",
@@ -478,6 +486,19 @@ pub fn builtin_provider_profiles() -> Vec<ProviderProfile> {
             50,
             full.clone().with([ProviderCapability::Embeddings]),
             credential("rocketmq-sre/models/bedrock"),
+        ),
+        profile(
+            "deepseek-responses",
+            "https://api.deepseek.com",
+            ProviderFamily::OpenAiCompatible,
+            ProviderDialect::DeepSeekResponses,
+            "deepseek",
+            "deepseek-v4-flash",
+            "v4-flash",
+            "cn",
+            14,
+            deepseek_responses,
+            credential("rocketmq-sre/models/deepseek"),
         ),
         profile(
             "deepseek",

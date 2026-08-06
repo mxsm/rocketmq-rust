@@ -444,6 +444,9 @@ pub(crate) fn parse_chat_transport_response(
         return Err(map_provider_status(response.status));
     }
     match profile.provider_family {
+        ProviderFamily::OpenAiCompatible if profile.dialect == ProviderDialect::DeepSeekResponses => {
+            parse_deepseek_responses_response(profile, response.body)
+        }
         ProviderFamily::OpenAiCompatible => parse_openai_response(profile, response.body),
         ProviderFamily::Anthropic => parse_anthropic_response(profile, response.body),
         ProviderFamily::Gemini => parse_gemini_response(profile, response.body),
@@ -455,7 +458,9 @@ pub(crate) fn parse_chat_transport_response(
 }
 
 fn openai_path(profile: &ProviderProfile) -> String {
-    if profile.dialect == ProviderDialect::AzureOpenAi {
+    if profile.dialect == ProviderDialect::DeepSeekResponses {
+        "/responses".to_owned()
+    } else if profile.dialect == ProviderDialect::AzureOpenAi {
         format!(
             "/openai/deployments/{}/chat/completions?api-version=2024-10-21",
             encode_path_segment(&profile.model)
@@ -579,6 +584,9 @@ fn source_reference(source: &crate::ir::ModelImageSource) -> &str {
 }
 
 fn openai_request(profile: &ProviderProfile, request: &CanonicalModelRequest) -> Value {
+    if profile.dialect == ProviderDialect::DeepSeekResponses {
+        return deepseek_responses_request(request);
+    }
     let mut body = json!({
         "model": request.model,
         "messages": request.messages.iter().map(|message| openai_message(profile, message)).collect::<Vec<_>>(),
@@ -622,6 +630,155 @@ fn openai_request(profile: &ProviderProfile, request: &CanonicalModelRequest) ->
         body["moonshot_json_mode"] = Value::String("mfjs".to_owned());
     }
     body
+}
+
+fn deepseek_responses_request(request: &CanonicalModelRequest) -> Value {
+    let instructions = request
+        .messages
+        .iter()
+        .filter(|message| message.role == ModelRole::System)
+        .map(responses_message_text)
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let mut input = Vec::new();
+    for message in request
+        .messages
+        .iter()
+        .filter(|message| message.role != ModelRole::System)
+    {
+        if message.role == ModelRole::Tool {
+            if let Some(call_id) = &message.tool_call_id {
+                input.push(json!({
+                    "type": "function_call_output",
+                    "call_id": call_id,
+                    "output": responses_message_text(message),
+                }));
+            }
+            continue;
+        }
+        if let Some(reasoning) = &message.reasoning_content {
+            input.push(json!({
+                "type": "reasoning",
+                "content": [{"type": "reasoning_text", "text": reasoning}],
+            }));
+        }
+        let content = responses_message_text(message);
+        if !content.is_empty() {
+            input.push(json!({
+                "type": "message",
+                "role": role(message.role),
+                "content": content,
+            }));
+        }
+        input.extend(message.tool_calls.iter().map(|call| {
+            json!({
+                "type": "function_call",
+                "call_id": call.id,
+                "name": call.name,
+                "arguments": call.arguments.to_string(),
+            })
+        }));
+        for part in &message.parts {
+            match part {
+                ModelContentPart::ToolCall { call } => input.push(json!({
+                    "type": "function_call",
+                    "call_id": call.id,
+                    "name": call.name,
+                    "arguments": call.arguments.to_string(),
+                })),
+                ModelContentPart::ToolResult {
+                    tool_call_id, content, ..
+                } => input.push(json!({
+                    "type": "function_call_output",
+                    "call_id": tool_call_id,
+                    "output": content.to_string(),
+                })),
+                ModelContentPart::Text { .. }
+                | ModelContentPart::Json { .. }
+                | ModelContentPart::Image { .. }
+                | ModelContentPart::Reasoning { .. } => {}
+            }
+        }
+    }
+    let mut body = json!({
+        "model": request.model,
+        "input": input,
+        "stream": request.stream,
+    });
+    if !instructions.is_empty() {
+        body["instructions"] = Value::String(instructions);
+    }
+    if let Some(temperature) = request.temperature_milli {
+        body["temperature"] = json!(f64::from(temperature) / 1_000.0);
+    }
+    if let Some(max_output_tokens) = request.max_output_tokens {
+        body["max_output_tokens"] = json!(max_output_tokens);
+    }
+    if request.reasoning {
+        body["reasoning"] = json!({"effort": "medium"});
+    }
+    if !request.tools.is_empty() {
+        body["tools"] = Value::Array(
+            request
+                .tools
+                .iter()
+                .map(|tool| {
+                    json!({
+                        "type": "function",
+                        "name": tool.name,
+                        "description": tool.description,
+                        "parameters": tool.input_schema,
+                        "strict": tool.strict,
+                    })
+                })
+                .collect(),
+        );
+        body["tool_choice"] = responses_tool_choice(&request.tool_choice);
+    }
+    match &request.response_format {
+        ResponseFormat::Text => {}
+        ResponseFormat::JsonObject => {
+            body["text"] = json!({"format": {"type": "json_object"}});
+        }
+        ResponseFormat::JsonSchema { name, schema, strict } => {
+            body["text"] = json!({
+                "format": {
+                    "type": "json_schema",
+                    "name": name,
+                    "schema": schema,
+                    "strict": strict,
+                }
+            });
+        }
+    }
+    body
+}
+
+fn responses_message_text(message: &ModelMessage) -> String {
+    let mut content = Vec::new();
+    if !message.content.is_empty() {
+        content.push(message.content.clone());
+    }
+    for part in &message.parts {
+        match part {
+            ModelContentPart::Text { text } | ModelContentPart::Reasoning { text } => content.push(text.clone()),
+            ModelContentPart::Json { value } => content.push(value.to_string()),
+            ModelContentPart::Image { .. }
+            | ModelContentPart::ToolCall { .. }
+            | ModelContentPart::ToolResult { .. } => {}
+        }
+    }
+    content.join("\n")
+}
+
+fn responses_tool_choice(choice: &ToolChoice) -> Value {
+    match choice {
+        ToolChoice::Auto => Value::String("auto".to_owned()),
+        ToolChoice::None => Value::String("none".to_owned()),
+        ToolChoice::Required => Value::String("required".to_owned()),
+        ToolChoice::Specific { name } => json!({"type": "function", "name": name}),
+    }
 }
 
 fn openai_tool_choice(choice: &ToolChoice) -> Value {
@@ -904,6 +1061,115 @@ fn parse_openai_response(profile: &ProviderProfile, body: Value) -> Result<Canon
         usage,
         provider_request_id: body.get("id").and_then(Value::as_str).map(ToOwned::to_owned),
     })
+}
+
+fn parse_deepseek_responses_response(
+    profile: &ProviderProfile,
+    body: Value,
+) -> Result<CanonicalModelResponse, ProviderError> {
+    let status = body.get("status").and_then(Value::as_str).ok_or_else(protocol_error)?;
+    if status == "failed" {
+        return Err(ProviderError::service_unavailable(
+            "DeepSeek Responses API reported a failed response",
+        ));
+    }
+    if !matches!(status, "completed" | "incomplete") {
+        return Err(protocol_error());
+    }
+    let output = body
+        .get("output")
+        .and_then(Value::as_array)
+        .ok_or_else(protocol_error)?;
+    let mut content = String::new();
+    let mut reasoning = String::new();
+    let mut tool_calls = Vec::new();
+    let mut refusal = false;
+    for item in output {
+        match item.get("type").and_then(Value::as_str) {
+            Some("message") => {
+                let parts = item
+                    .get("content")
+                    .and_then(Value::as_array)
+                    .ok_or_else(protocol_error)?;
+                for part in parts {
+                    match part.get("type").and_then(Value::as_str) {
+                        Some("output_text") => {
+                            if let Some(text) = part.get("text").and_then(Value::as_str) {
+                                content.push_str(text);
+                            }
+                        }
+                        Some("refusal") => refusal = true,
+                        _ => {}
+                    }
+                }
+            }
+            Some("reasoning") if profile.preserve_reasoning_content => {
+                if let Some(parts) = item.get("content").and_then(Value::as_array) {
+                    for part in parts {
+                        if let Some(text) = part.get("text").and_then(Value::as_str) {
+                            reasoning.push_str(text);
+                        }
+                    }
+                }
+            }
+            Some("function_call") => {
+                let arguments = item
+                    .get("arguments")
+                    .and_then(Value::as_str)
+                    .map(|value| serde_json::from_str(value).unwrap_or_else(|_| Value::String(value.to_owned())))
+                    .unwrap_or(Value::Null);
+                tool_calls.push(ModelToolCall {
+                    id: string_field(item, "call_id")?,
+                    name: string_field(item, "name")?,
+                    arguments,
+                });
+            }
+            _ => {}
+        }
+    }
+    let finish_reason = if refusal {
+        FinishReason::Safety
+    } else if status == "incomplete" {
+        FinishReason::Length
+    } else if tool_calls.is_empty() {
+        FinishReason::Stop
+    } else {
+        FinishReason::ToolCalls
+    };
+    let usage = parse_responses_usage(&body);
+    Ok(CanonicalModelResponse {
+        schema: SchemaVersion::new("rocketmq-sre.model-response", 1, 0),
+        provider: profile.id.clone(),
+        model: body
+            .get("model")
+            .and_then(Value::as_str)
+            .unwrap_or(&profile.model)
+            .to_owned(),
+        content,
+        parts: Vec::new(),
+        reasoning_content: (!reasoning.is_empty()).then_some(reasoning),
+        tool_calls,
+        finish_reason,
+        input_tokens: usage.input_tokens,
+        output_tokens: usage.output_tokens,
+        usage,
+        provider_request_id: body.get("id").and_then(Value::as_str).map(ToOwned::to_owned),
+    })
+}
+
+fn parse_responses_usage(body: &Value) -> ModelUsage {
+    let usage = body.get("usage").unwrap_or(&Value::Null);
+    ModelUsage {
+        input_tokens: u32_field(usage, "input_tokens"),
+        output_tokens: u32_field(usage, "output_tokens"),
+        total_tokens: u32_field(usage, "total_tokens"),
+        reasoning_tokens: usage
+            .get("output_tokens_details")
+            .and_then(|details| u32_field(details, "reasoning_tokens")),
+        cached_input_tokens: usage
+            .get("input_tokens_details")
+            .and_then(|details| u32_field(details, "cached_tokens")),
+    }
 }
 
 fn parse_openai_usage(body: &Value) -> ModelUsage {
