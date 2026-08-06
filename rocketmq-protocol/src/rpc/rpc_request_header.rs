@@ -13,23 +13,51 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::rpc::rpc_request_header::RpcRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.rpc.RpcRequestHeader"
+)]
 pub struct RpcRequestHeader {
     // the namespace name
     #[serde(rename = "ns", alias = "namespace")]
+    #[header(
+        key = "ns",
+        alias = "namespace",
+        alias_conflict = "prefer_canonical",
+        java_type = "String"
+    )]
     pub namespace: Option<CheetahString>,
     // if the data has been namespaced
     #[serde(rename = "nsd", alias = "namespaced")]
+    #[header(
+        key = "nsd",
+        alias = "namespaced",
+        alias_conflict = "prefer_canonical",
+        java_type = "Boolean"
+    )]
     pub namespaced: Option<bool>,
     // the abstract remote addr name, usually the physical broker name
     #[serde(rename = "bname", alias = "brokerName")]
+    #[header(
+        key = "bname",
+        alias = "brokerName",
+        alias_conflict = "prefer_canonical",
+        java_type = "String"
+    )]
     pub broker_name: Option<CheetahString>,
     // oneway
     #[serde(rename = "oway", alias = "oneway")]
+    #[header(
+        key = "oway",
+        alias = "oneway",
+        alias_conflict = "prefer_canonical",
+        java_type = "Boolean"
+    )]
     pub oneway: Option<bool>,
 }
 
