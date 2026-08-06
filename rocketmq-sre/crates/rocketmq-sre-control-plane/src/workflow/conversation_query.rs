@@ -509,7 +509,28 @@ fn contains_sensitive_text(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::path::Path;
+
+    use serde::Deserialize;
+
     use super::*;
+
+    #[derive(Deserialize)]
+    struct SecurityQualificationManifest {
+        scenarios: Vec<SecurityQualificationScenario>,
+    }
+
+    #[derive(Deserialize)]
+    struct SecurityQualificationScenario {
+        id: String,
+        question: String,
+        resource: Option<String>,
+        window_seconds: Option<u32>,
+        expected_disposition: String,
+        expected_kind: Option<ConversationQueryKind>,
+        expected_resource: Option<String>,
+    }
 
     #[test]
     fn deterministic_planner_maps_fixed_resources_only() {
@@ -617,6 +638,47 @@ mod tests {
             arguments: json!({"topic": "payments"}),
         };
         assert!(model_intent(&scope_escape, Some("topics/orders"), Some(300)).is_err());
+    }
+
+    #[test]
+    fn prompt_injection_qualification_matrix_preserves_fixed_query_authority() {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config/qualification/conversation-security.v1.json");
+        let raw = fs::read_to_string(&path).expect("security qualification manifest should exist");
+        let manifest: SecurityQualificationManifest =
+            serde_json::from_str(&raw).expect("security qualification manifest should parse");
+
+        assert!(manifest.scenarios.len() >= 8);
+        for scenario in manifest.scenarios {
+            let planned = deterministic_intent(
+                &scenario.question,
+                scenario.resource.as_deref(),
+                scenario.window_seconds,
+            );
+            match scenario.expected_disposition.as_str() {
+                "fixed_read_only_query" => {
+                    let intent = planned
+                        .unwrap_or_else(|error| panic!("{} should be valid: {error}", scenario.id))
+                        .unwrap_or_else(|| panic!("{} should map to a fixed query", scenario.id));
+                    assert_eq!(Some(intent.kind), scenario.expected_kind, "{} kind", scenario.id);
+                    assert_eq!(
+                        Some(intent.resource),
+                        scenario.expected_resource,
+                        "{} resource",
+                        scenario.id
+                    );
+                }
+                "unsupported" => assert!(
+                    planned
+                        .unwrap_or_else(|error| panic!("{} should be bounded: {error}", scenario.id))
+                        .is_none(),
+                    "{} must not map to a query",
+                    scenario.id
+                ),
+                "rejected" => assert!(planned.is_err(), "{} must fail closed", scenario.id),
+                other => panic!("{} has unsupported disposition {other}", scenario.id),
+            }
+        }
     }
 
     #[test]

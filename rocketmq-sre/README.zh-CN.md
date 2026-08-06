@@ -223,6 +223,19 @@ PostgreSQL 使用有界的 Docker `tmpfs`，运行结束后自动删除。可独
 python scripts/check_diagnostic_pack_qualification.py
 ```
 
+### 对话安全资格验证
+
+Conversation 安全套件组合了 8 个 Prompt Injection 固定场景、确定性回放引用质量数据集和真实 Chromium 桌面测试。它证明不可信指令不能扩大固定只读查询面，`preview_reset` 后临时模型文本会被丢弃，并且超过配置置信度阈值的每个结论都保留授权 Evidence 引用。Mutation、Executor 和 Execution Agent 调用必须始终为 0。
+
+从 `rocketmq-sre/` 运行静态契约检查或完整资格验证。完整运行要求候选 revision 已提交且工作区干净，脱敏报告只写入仓库外本机 `D:` 或 `F:`：
+
+```powershell
+.\scripts\conversation-security-qualification.ps1 -ValidateOnly
+.\scripts\conversation-security-qualification.ps1
+```
+
+该套件使用隔离模型 fixture，不代表真实 Provider 或目标生产环境认证。
+
 ### 有界 R1 动作资格验证
 
 R1 资格契约覆盖四个已注册的低风险动作，同时不开放通用 Admin、Shell 或 Kubernetes

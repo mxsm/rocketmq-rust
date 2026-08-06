@@ -68,6 +68,8 @@ import {
 } from "./phase2OperationsDemo";
 
 const WAIT_MS = 90;
+const SECURITY_QUALIFICATION_MARKER = "[qualification:prompt-injection]";
+const SECURITY_QUALIFICATION_PREVIEW = "UNTRUSTED_PREVIEW_MUST_BE_DISCARDED";
 const mockPostmortems: PostmortemView[] = [];
 const mockActionItems: ActionItem[] = [];
 
@@ -528,6 +530,9 @@ export function createMockSreApi(auth?: ApiRequestContext): SreApi {
     },
     async streamConversationTurn(id, input, onEvent, signal) {
       const result = await this.submitConversationTurn(id, input, signal);
+      const resetsUnsafePreview = input.question.includes(
+        SECURITY_QUALIFICATION_MARKER,
+      );
       const base = {
         schema_version: "rocketmq-sre.conversation-stream-event.v1" as const,
         conversation_id: id,
@@ -550,11 +555,22 @@ export function createMockSreApi(auth?: ApiRequestContext): SreApi {
           sequence: 4,
           event_type: "answer_delta",
           provisional: true,
-          delta: result.answer.answer,
+          delta: resetsUnsafePreview
+            ? SECURITY_QUALIFICATION_PREVIEW
+            : result.answer.answer,
         });
+        await wait(signal);
+        if (resetsUnsafePreview) {
+          onEvent({
+            ...base,
+            sequence: 5,
+            event_type: "preview_reset",
+          });
+          await wait(signal);
+        }
         onEvent({
           ...base,
-          sequence: 5,
+          sequence: resetsUnsafePreview ? 6 : 5,
           event_type: "completed",
           final_turn: result,
         });
