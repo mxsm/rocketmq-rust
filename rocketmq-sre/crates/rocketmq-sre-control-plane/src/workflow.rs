@@ -12,6 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod conversation_query;
+mod conversation_query_service;
+mod conversation_repository;
+#[cfg(test)]
+mod conversation_repository_tests;
 mod diagnosis_confirmation;
 mod event_entry_model;
 mod event_entry_repository;
@@ -23,6 +28,11 @@ mod model;
 mod repository;
 mod service;
 
+pub(crate) use conversation_query::ConversationCancelResult;
+pub(crate) use conversation_query::ConversationTurnPage;
+pub(crate) use conversation_query::ConversationTurnRequest;
+pub(crate) use conversation_query::ConversationTurnView;
+pub(crate) use conversation_query_service::ConversationQueryService;
 pub(crate) use diagnosis_confirmation::ConfirmDiagnosisExecutionRequest;
 pub(crate) use diagnosis_confirmation::DiagnosisExecutionConfirmation;
 pub(crate) use event_entry_model::EventEntrySourceKind;

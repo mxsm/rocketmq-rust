@@ -317,6 +317,94 @@ export interface ConversationView {
   investigation?: Investigation;
 }
 
+export type ConversationTurnStatus =
+  | "collecting"
+  | "answered"
+  | "needs_scope"
+  | "needs_evidence"
+  | "cancelled"
+  | "failed";
+
+export type ConversationQueryKind =
+  | "cluster_overview"
+  | "topic_list"
+  | "topic_describe"
+  | "consumer_lag"
+  | "broker_runtime"
+  | "metric_instant"
+  | "metric_range";
+
+export interface ConversationQueryIntent {
+  schema_version: "rocketmq-sre.conversation-query-intent.v1";
+  kind: ConversationQueryKind;
+  source: "rocketmq-mcp" | "prometheus";
+  resource: string;
+  window_seconds: number;
+}
+
+export interface ConversationCitation {
+  evidence_id: string;
+  source: string;
+  resource: string;
+  content_hash: string;
+  observed_at: string;
+  freshness_seconds: number;
+  partial: boolean;
+}
+
+export interface ConversationTurn {
+  id: string;
+  conversation_id: string;
+  tenant_id: string;
+  cluster_id: string;
+  sequence: number;
+  question: string;
+  resource: string | null;
+  status: ConversationTurnStatus;
+  query_intent: ConversationQueryIntent | null;
+  correlation_id: string;
+  created_at: string;
+  completed_at: string | null;
+}
+
+export interface ConversationAnswerRevision {
+  id: string;
+  conversation_id: string;
+  turn_id: string;
+  revision: number;
+  answer: string;
+  mode: "model_assisted" | "rules_only";
+  citations: ConversationCitation[];
+  evidence_ids: string[];
+  model_invocation_id: string | null;
+  partial: boolean;
+  warnings: string[];
+  created_at: string;
+}
+
+export interface ConversationTurnView {
+  turn: ConversationTurn;
+  answer: ConversationAnswerRevision | null;
+}
+
+export interface ConversationTurnPage {
+  schema_version: "rocketmq-sre.conversation-turn-page.v1";
+  items: ConversationTurnView[];
+  observed_at: string;
+}
+
+export interface ConversationTurnRequest {
+  question: string;
+  resource?: string;
+  window_seconds?: number;
+}
+
+export interface ConversationCancelResult {
+  schema_version: "rocketmq-sre.conversation-cancel.v1";
+  cancellation_requested: boolean;
+  observed_at: string;
+}
+
 export type InvestigationStatus =
   | "open"
   | "collecting"

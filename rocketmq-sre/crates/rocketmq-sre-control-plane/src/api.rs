@@ -80,6 +80,7 @@ use crate::release_management::IntegrationOutboxWorker;
 use crate::release_management::ReleaseManagementService;
 use crate::repository::ClusterRepository;
 use crate::slo::SloService;
+use crate::workflow::ConversationQueryService;
 use crate::workflow::WorkflowEventBus;
 use crate::workflow::WorkflowService;
 
@@ -584,6 +585,7 @@ pub(crate) struct AppState {
     pub(crate) automation: crate::automation::AutomationService,
     pub(crate) change_management: crate::change_management::ChangeManagementService,
     pub(crate) connector_channel: PostgresConnectorChannelService,
+    pub(crate) conversation_queries: ConversationQueryService,
     pub(crate) dr: crate::dr::DrService,
     pub(crate) evidence: EvidenceService,
     pub(crate) finops: crate::finops::FinOpsService,
@@ -669,6 +671,12 @@ fn build_routers_with_auth(
     );
     let operations = crate::operator_workbench::OperatorWorkbenchService::new(repository.clone());
     let connector_channel = PostgresConnectorChannelService::postgres(repository.clone(), internal_token.clone())?;
+    let conversation_queries = ConversationQueryService::new(
+        repository.clone(),
+        connector_channel.clone(),
+        evidence.clone(),
+        model_gateway.clone(),
+    );
     let dr = crate::dr::DrService::new(repository.clone());
     let governance = crate::governance::GovernanceService::new(repository.clone(), grant_signing_key.as_bytes())?;
     let slo = SloService::new(
@@ -732,6 +740,7 @@ fn build_routers_with_auth(
         automation,
         change_management: change_management.clone(),
         connector_channel,
+        conversation_queries,
         dr,
         evidence,
         finops,

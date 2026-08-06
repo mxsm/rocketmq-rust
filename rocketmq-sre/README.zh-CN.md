@@ -18,7 +18,7 @@ server DTO，也不复用普通 RocketMQ Dashboard 的 session 和 mutation 接�
 | 集群接入 | 租户范围内的集群接入、能力协商、拓扑与资产清单、受限合成探针，以及通过 MCP 只读采集 RocketMQ Evidence |
 | Evidence | 版本化 Evidence 契约、Canonical JSON 与内容哈希、freshness 和部分结果语义、PostgreSQL 元数据，以及用于大载荷的私有对象存储 |
 | 诊断 | 确定性 Diagnostic Pack、假设与反证跟踪、巡检、健康与 SLO 分析、告警关联，以及 Incident 时间线 |
-| AI 辅助 | Provider 无关的 Model IR、基于能力的路由、流式响应、fallback、预算、脱敏、RAG，以及异构主模型/Critic 调用链 |
+| AI 辅助 | 通过固定只读 Tool registry 实现带 Evidence 引用的对话式指标查询，以及 Provider 无关的 Model IR、基于能力的路由、流式响应、fallback、预算、脱敏、RAG 和异构主模型/Critic 调用链 |
 | 预测 | 容量与积压预测、异常与变点提示、What-if 仿真、升级就绪度和容灾就绪度 |
 | 受控自动化 | 类型化 Action Plan、策略评估、禁止自审批的人工审批、不可变授权、受监督执行、验证、回滚、lease、fencing 和恢复 |
 | 企业运维 | Fleet 与区域视图、发布护航、DR Center、合规与治理索引、企业集成、通知投递、复盘和 FinOps 视图 |
@@ -105,6 +105,15 @@ embedding、reranking、数据分类、区域、成本和上下文能力。路�
 
 参见[模型兼容性](docs/compatibility.md)和
 [扩展指南](docs/phase05-extension-guide.md)。
+
+DeepSeek Responses 接入支持有界语义 SSE、协作式取消、稳定的 Provider 错误映射、
+结构化输出和只读 Tool selection。对话式运维链路会根据固定 registry 校验模型选择
+的 Tool，通过 Connector 执行查询，持久化 Canonical Evidence 和不可变的回答 revision；
+当没有可用 Provider 时，系统仍会返回带引用的 rules-only 回答。凭据门控的两请求
+资格验证已使用 disposable Docker PostgreSQL，验证真实 `deepseek-v4-flash` Tool
+selection 和 Evidence 绑定回答。该能力不会向模型授予 RocketMQ 凭据，也不代表无人
+值守 mutation 已通过认证。API key 必须通过仓库外的显式文件提供，并会在写入任何
+本机报告前从资格验证进程中清除。
 
 ## Workspace crate
 

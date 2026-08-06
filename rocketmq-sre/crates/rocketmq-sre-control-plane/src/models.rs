@@ -25,6 +25,8 @@ pub(crate) use lifecycle::ModelProfileLifecycleTransitionRequest;
 pub(crate) use lifecycle::ModelProfileLifecycleView;
 pub(crate) use lifecycle::ModelProfileRollbackRequest;
 pub(crate) use lifecycle::ProviderSmokeResultView;
+pub(crate) use model::ConversationAnswerDecision;
+pub(crate) use model::ConversationToolDecision;
 pub(crate) use model::ModelCapabilitiesStatus;
 pub(crate) use model::ModelCriticDecision;
 pub(crate) use model::ModelDiagnosisDecision;

@@ -15,6 +15,10 @@ import type {
   ClusterForecastReport,
   CollectionEnvelope,
   ConversationView,
+  ConversationCancelResult,
+  ConversationTurnPage,
+  ConversationTurnRequest,
+  ConversationTurnView,
   CoverageMatrix,
   CreateConversationRequest,
   CreatePostmortemRequest,
@@ -249,6 +253,19 @@ export interface SreApi {
     input: CreateConversationRequest,
     signal?: AbortSignal,
   ) => Promise<ConversationView>;
+  listConversationTurns: (
+    id: string,
+    signal?: AbortSignal,
+  ) => Promise<ConversationTurnPage>;
+  submitConversationTurn: (
+    id: string,
+    input: ConversationTurnRequest,
+    signal?: AbortSignal,
+  ) => Promise<ConversationTurnView>;
+  cancelConversationQuery: (
+    id: string,
+    signal?: AbortSignal,
+  ) => Promise<ConversationCancelResult>;
   listInvestigations: (
     clusterId: string,
     signal?: AbortSignal,
@@ -516,6 +533,23 @@ export function createHttpSreApi(auth?: ApiRequestContext): SreApi {
       ),
     createConversation: (input, signal) =>
       post<ConversationView>("/v1/conversations", input, signal),
+    listConversationTurns: (id, signal) =>
+      get<ConversationTurnPage>(
+        `/v1/conversations/${encodeURIComponent(id)}/turns`,
+        signal,
+      ),
+    submitConversationTurn: (id, input, signal) =>
+      post<ConversationTurnView>(
+        `/v1/conversations/${encodeURIComponent(id)}/turns`,
+        input,
+        signal,
+      ),
+    cancelConversationQuery: (id, signal) =>
+      post<ConversationCancelResult>(
+        `/v1/conversations/${encodeURIComponent(id)}/cancel`,
+        undefined,
+        signal,
+      ),
     listInvestigations: async (clusterId, signal) =>
       collection(
         await get<CollectionEnvelope<InvestigationView> | InvestigationView[]>(

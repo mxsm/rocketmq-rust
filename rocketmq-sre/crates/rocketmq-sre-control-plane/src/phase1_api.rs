@@ -96,7 +96,11 @@ use crate::observability::CORRELATION_ID_HEADER;
 use crate::observability::CorrelationContext;
 use crate::orchestrator::DiagnosisResponse;
 use crate::orchestrator::OrchestratorService;
+use crate::workflow::ConversationCancelResult;
 use crate::workflow::ConversationCreateRequest;
+use crate::workflow::ConversationTurnPage;
+use crate::workflow::ConversationTurnRequest;
+use crate::workflow::ConversationTurnView;
 use crate::workflow::ConversationView;
 use crate::workflow::IncidentCreateRequest;
 use crate::workflow::IncidentView;
@@ -116,6 +120,13 @@ pub(crate) fn public_routes() -> Router<AppState> {
     Router::new()
         .route("/v1/conversations", get(list_conversations).post(create_conversation))
         .route("/v1/conversations/{id}", get(get_conversation))
+        .route(
+            "/v1/conversations/{id}/turns",
+            get(list_conversation_turns)
+                .post(submit_conversation_turn)
+                .layer(DefaultBodyLimit::max(16 * 1024)),
+        )
+        .route("/v1/conversations/{id}/cancel", post(cancel_conversation_query))
         .route(
             "/v1/investigations",
             get(list_investigations).post(create_investigation),
@@ -332,6 +343,46 @@ async fn get_conversation(
     state
         .workflow
         .conversation(&auth, parse_conversation_id(&id)?)
+        .await
+        .map(Json)
+}
+
+async fn submit_conversation_turn(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<ConversationTurnRequest>,
+) -> Result<Json<ConversationTurnView>, ControlPlaneError> {
+    let auth = state.auth.authorize(&headers, None).await?;
+    state
+        .conversation_queries
+        .submit_turn(&auth, parse_conversation_id(&id)?, &request, correlation_id(&headers))
+        .await
+        .map(Json)
+}
+
+async fn list_conversation_turns(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<ConversationTurnPage>, ControlPlaneError> {
+    let auth = state.auth.authorize(&headers, None).await?;
+    state
+        .conversation_queries
+        .turns(&auth, parse_conversation_id(&id)?)
+        .await
+        .map(Json)
+}
+
+async fn cancel_conversation_query(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<ConversationCancelResult>, ControlPlaneError> {
+    let auth = state.auth.authorize(&headers, None).await?;
+    state
+        .conversation_queries
+        .cancel(&auth, parse_conversation_id(&id)?)
         .await
         .map(Json)
 }

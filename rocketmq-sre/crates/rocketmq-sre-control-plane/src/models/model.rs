@@ -15,6 +15,7 @@
 use chrono::DateTime;
 use chrono::Utc;
 use rocketmq_sre_contracts::ClusterId;
+use rocketmq_sre_contracts::ConversationId;
 use rocketmq_sre_contracts::CorrelationId;
 use rocketmq_sre_contracts::CriticAssessment;
 use rocketmq_sre_contracts::CriticConclusion;
@@ -22,10 +23,12 @@ use rocketmq_sre_contracts::CriticReviewStatus;
 use rocketmq_sre_contracts::DiagnosisRevisionId;
 use rocketmq_sre_contracts::EvidenceId;
 use rocketmq_sre_contracts::IncidentId;
+use rocketmq_sre_contracts::InvestigationId;
 use rocketmq_sre_contracts::ModelInvocationId;
 use rocketmq_sre_contracts::ModelProfileId;
 use rocketmq_sre_contracts::TenantId;
 use rocketmq_sre_core::postmortem::PostmortemAssembly;
+use rocketmq_sre_model_gateway::ModelToolCall;
 use rocketmq_sre_model_gateway::ProviderProfile;
 use serde::Deserialize;
 use serde::Serialize;
@@ -48,7 +51,9 @@ pub(super) struct PersistInvocation {
     pub(super) id: ModelInvocationId,
     pub(super) tenant_id: TenantId,
     pub(super) cluster_id: ClusterId,
-    pub(super) incident_id: IncidentId,
+    pub(super) incident_id: Option<IncidentId>,
+    pub(super) conversation_id: Option<ConversationId>,
+    pub(super) investigation_id: Option<InvestigationId>,
     pub(super) diagnosis_revision_id: Option<DiagnosisRevisionId>,
     pub(super) parent_invocation_id: Option<ModelInvocationId>,
     pub(super) purpose: &'static str,
@@ -104,6 +109,63 @@ pub(crate) struct ModelDiagnosisDecision {
     pub(crate) input_tokens: u32,
     pub(crate) output_tokens: u32,
     pub(crate) schema_repairs_used: u8,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ConversationToolDecision {
+    pub(crate) tool_call: ModelToolCall,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ConversationAnswerDecision {
+    pub(crate) answer: String,
+    pub(crate) cited_evidence_ids: Vec<EvidenceId>,
+    pub(crate) invocation_id: ModelInvocationId,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct StructuredConversationAnswer {
+    pub(super) answer: String,
+    pub(super) cited_evidence_ids: Vec<EvidenceId>,
+}
+
+impl StructuredConversationAnswer {
+    pub(super) fn validate(&self, allowed_evidence_ids: &[EvidenceId]) -> bool {
+        !self.answer.trim().is_empty()
+            && self.answer.chars().count() <= 8_000
+            && !contains_sensitive_answer(&self.answer)
+            && !self.cited_evidence_ids.is_empty()
+            && self.cited_evidence_ids.len() <= 32
+            && self
+                .cited_evidence_ids
+                .iter()
+                .enumerate()
+                .all(|(index, evidence_id)| !self.cited_evidence_ids[..index].contains(evidence_id))
+            && self
+                .cited_evidence_ids
+                .iter()
+                .all(|evidence_id| allowed_evidence_ids.contains(evidence_id))
+    }
+}
+
+fn contains_sensitive_answer(value: &str) -> bool {
+    let normalized = value.to_ascii_lowercase();
+    [
+        "token=",
+        "secret=",
+        "password=",
+        "api_key=",
+        "apikey=",
+        "authorization:",
+        "-----begin private key-----",
+        "-----begin rsa private key-----",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker))
+        || value
+            .split(|character: char| !character.is_ascii_alphanumeric() && !matches!(character, '-' | '_'))
+            .any(|word| word.starts_with("sk-") && word.len() >= 20)
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -209,6 +271,7 @@ pub(crate) struct ModelProfileStatus {
 pub(crate) struct ModelInvocationListQuery {
     pub(crate) cluster_id: ClusterId,
     pub(crate) incident_id: Option<IncidentId>,
+    pub(crate) conversation_id: Option<ConversationId>,
     pub(crate) limit: Option<u32>,
 }
 
@@ -232,6 +295,8 @@ pub(crate) struct ModelInvocationView {
     pub(crate) tenant_id: TenantId,
     pub(crate) cluster_id: ClusterId,
     pub(crate) incident_id: Option<IncidentId>,
+    pub(crate) conversation_id: Option<ConversationId>,
+    pub(crate) investigation_id: Option<InvestigationId>,
     pub(crate) diagnosis_revision_id: Option<DiagnosisRevisionId>,
     pub(crate) parent_invocation_id: Option<ModelInvocationId>,
     pub(crate) purpose: String,
@@ -272,6 +337,28 @@ mod tests {
         };
 
         assert!(!diagnosis.validate(&[allowed]));
+    }
+
+    #[test]
+    fn conversation_answer_rejects_duplicate_evidence_citations() {
+        let evidence_id = EvidenceId::new();
+        let answer = StructuredConversationAnswer {
+            answer: "Broker health is available.".to_owned(),
+            cited_evidence_ids: vec![evidence_id, evidence_id],
+        };
+
+        assert!(!answer.validate(&[evidence_id]));
+    }
+
+    #[test]
+    fn conversation_answer_rejects_sensitive_material() {
+        let evidence_id = EvidenceId::new();
+        let answer = StructuredConversationAnswer {
+            answer: "The source returned authorization: bearer redacted-value".to_owned(),
+            cited_evidence_ids: vec![evidence_id],
+        };
+
+        assert!(!answer.validate(&[evidence_id]));
     }
 
     #[test]

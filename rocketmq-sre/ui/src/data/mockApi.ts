@@ -3,6 +3,9 @@ import type {
   ActionItem,
   ActionItemPatchRequest,
   CollectionEnvelope,
+  ConversationCancelResult,
+  ConversationTurnPage,
+  ConversationTurnView,
   ConversationView,
   IncidentTopologyView,
   IncidentOperationRequest,
@@ -96,6 +99,7 @@ function unavailable(resource: string): never {
 export function createMockSreApi(auth?: ApiRequestContext): SreApi {
   const clusters = clone(demoClusters);
   const conversations = clone(phase1Conversations.items);
+  const conversationTurns = new Map<string, ConversationTurnView[]>();
   const investigations = clone(phase1Investigations.items);
   const incidents = clone(phase1Incidents.items);
   const inspections = clone(phase1Inspections.items);
@@ -361,6 +365,103 @@ export function createMockSreApi(auth?: ApiRequestContext): SreApi {
         });
       }
       return clone(result);
+    },
+    listConversationTurns: async (id, signal) => {
+      await wait(signal);
+      const conversation =
+        conversations.find((item) => item.conversation.id === id) ??
+        unavailable("conversation");
+      scope(conversation.conversation.cluster_id);
+      return {
+        schema_version: "rocketmq-sre.conversation-turn-page.v1",
+        items: clone(conversationTurns.get(id) ?? []),
+        observed_at: new Date().toISOString(),
+      } satisfies ConversationTurnPage;
+    },
+    submitConversationTurn: async (id, input, signal) => {
+      await wait(signal);
+      const conversation =
+        conversations.find((item) => item.conversation.id === id) ??
+        unavailable("conversation");
+      scope(conversation.conversation.cluster_id);
+      const now = new Date().toISOString();
+      const evidenceId = crypto.randomUUID();
+      const resource =
+        input.resource ?? conversation.conversation.resource ?? "cluster/overview";
+      const source = resource.startsWith("metrics/")
+        ? "prometheus"
+        : "rocketmq-mcp";
+      const queryResource =
+        source === "prometheus" ? resource.slice("metrics/".length) : resource;
+      const turnId = crypto.randomUUID();
+      const result: ConversationTurnView = {
+        turn: {
+          id: turnId,
+          conversation_id: id,
+          tenant_id: conversation.conversation.tenant_id,
+          cluster_id: conversation.conversation.cluster_id,
+          sequence: (conversationTurns.get(id)?.length ?? 0) + 1,
+          question: input.question,
+          resource,
+          status: "answered",
+          query_intent: {
+            schema_version: "rocketmq-sre.conversation-query-intent.v1",
+            kind:
+              source === "prometheus"
+                ? resource.startsWith("metrics/instant/")
+                  ? "metric_instant"
+                  : "metric_range"
+                : "cluster_overview",
+            source,
+            resource: queryResource,
+            window_seconds: input.window_seconds ?? 900,
+          },
+          correlation_id: crypto.randomUUID(),
+          created_at: now,
+          completed_at: now,
+        },
+        answer: {
+          id: crypto.randomUUID(),
+          conversation_id: id,
+          turn_id: turnId,
+          revision: 1,
+          answer:
+            "只读数据源已返回可用证据。当前结果用于辅助诊断；模型没有执行任何集群变更。",
+          mode: "model_assisted",
+          citations: [
+            {
+              evidence_id: evidenceId,
+              source,
+              resource: queryResource,
+              content_hash: `sha256:${"a".repeat(64)}`,
+              observed_at: now,
+              freshness_seconds: 2,
+              partial: false,
+            },
+          ],
+          evidence_ids: [evidenceId],
+          model_invocation_id: crypto.randomUUID(),
+          partial: false,
+          warnings: [],
+          created_at: now,
+        },
+      };
+      const turns = conversationTurns.get(id) ?? [];
+      turns.push(result);
+      conversationTurns.set(id, turns);
+      return clone(result);
+    },
+    cancelConversationQuery: async (id, signal) => {
+      await wait(signal);
+      const conversation =
+        conversations.find((item) => item.conversation.id === id) ??
+        unavailable("conversation");
+      scope(conversation.conversation.cluster_id);
+      return {
+        schema_version: "rocketmq-sre.conversation-cancel.v1",
+        cancellation_requested: false,
+        observed_at: new Date().toISOString(),
+      } satisfies ConversationCancelResult;
     },
     listInvestigations: async (clusterId, signal) => {
       await wait(signal);

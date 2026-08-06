@@ -180,7 +180,7 @@ export const phase1Conversations = envelope<ConversationView>([
       cluster_id: DEMO_CLUSTER_ID,
       question:
         "orders Topic 的 order-worker 消费组为什么在过去 30 分钟持续积压？",
-      resource: "consumer-groups/order-worker",
+      resource: "consumer-groups/order-worker/lag/orders",
       status: "promoted",
       investigation_id: investigationId,
       created_by: ACTOR,
