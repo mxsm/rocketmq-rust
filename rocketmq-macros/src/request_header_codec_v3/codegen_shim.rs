@@ -40,7 +40,6 @@ pub(super) fn generate(model: &HeaderModel, generics: &Generics, codec_trait: &T
 
             fn encode_direct_binary(&self, out: &mut #bytes_mut) -> Result<(), #codec_error> {
                 let checkpoint = out.len();
-                out.reserve(<Self as #codec_trait>::encoded_len_hint(self));
                 let result = {
                     let mut sink = #binary_sink::new(out);
                     <Self as #codec_trait>::encode_into(self, &mut sink)

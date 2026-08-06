@@ -46,7 +46,6 @@ pub(super) fn manual_fast_helpers(model: &HeaderModel, codec_trait: &TokenStream
     let error_type = quote!(#protocol_path::protocol::header_codec::HeaderCodecError);
     let sink_trait = quote!(#protocol_path::protocol::header_codec::EncodeSink);
     let encode = local_encode_body(model, codec_trait, protocol_path);
-    let len_hint = local_len_hint_body(model, protocol_path);
 
     quote! {
         #[inline]
@@ -55,11 +54,6 @@ pub(super) fn manual_fast_helpers(model: &HeaderModel, codec_trait: &TokenStream
             sink: &mut __RequestHeaderSink,
         ) -> Result<(), #error_type> {
             #encode
-        }
-
-        #[inline]
-        fn __request_header_codec_v3_local_encoded_len_hint(&self) -> usize {
-            #len_hint
         }
     }
 }
@@ -202,30 +196,6 @@ fn encode_selected_body<'a>(
         <Self as #codec_trait>::validate_for_wire(self)?;
         #(#writes)*
         Ok(())
-    }
-}
-
-fn local_len_hint_body(model: &HeaderModel, protocol_path: &syn::Path) -> TokenStream {
-    let value_trait = quote!(#protocol_path::protocol::header_codec::HeaderValue);
-    let adds = model.fields.iter().filter(|field| !field.flattened).map(|field| {
-        let ident = &field.ident;
-        let overhead = 6_usize.saturating_add(field.key.value.len());
-        if field.option_inner.is_some() {
-            quote! {
-                if let Some(value) = &self.#ident {
-                    len = len.saturating_add(#overhead).saturating_add(#value_trait::encoded_len(value));
-                }
-            }
-        } else {
-            quote! {
-                len = len.saturating_add(#overhead).saturating_add(#value_trait::encoded_len(&self.#ident));
-            }
-        }
-    });
-    quote! {
-        let mut len = 0usize;
-        #(#adds)*
-        len
     }
 }
 

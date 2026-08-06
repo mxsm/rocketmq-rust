@@ -56,6 +56,8 @@ fn sorted_ext_fields(map: &HashMap<CheetahString, CheetahString>) -> Vec<(&Cheet
 pub struct RocketMQSerializable;
 
 impl RocketMQSerializable {
+    pub(crate) const INITIAL_ENCODE_CAPACITY: usize = 512;
+
     #[inline]
     fn estimated_map_capacity(encoded_len: usize) -> usize {
         (encoded_len / MAP_ENTRY_ENCODED_BYTES_ESTIMATE).clamp(MIN_MAP_CAPACITY, MAX_MAP_CAPACITY)
@@ -148,6 +150,10 @@ impl RocketMQSerializable {
         buf: &mut BytesMut,
         capability: HeaderEncodeCapability,
     ) -> Result<usize, HeaderCodecError> {
+        // A bounded initial allocation is cheaper than walking every typed and
+        // dynamic field before immediately walking them again to encode. Large
+        // headers retain BytesMut's normal growth behavior.
+        buf.reserve(Self::INITIAL_ENCODE_CAPACITY);
         let checkpoint = buf.len();
         let result = Self::try_rocketmq_protocol_encode_inner(cmd, buf, capability);
         if result.is_err() {
@@ -162,10 +168,6 @@ impl RocketMQSerializable {
         capability: HeaderEncodeCapability,
     ) -> Result<usize, HeaderCodecError> {
         let begin_index = buf.len();
-
-        // Estimate required capacity and reserve upfront to reduce reallocations
-        let estimated_size = Self::estimate_encode_size(cmd);
-        buf.reserve(estimated_size);
 
         // Write fixed-size header fields (total: 15 bytes)
         buf.put_u16(cmd.code() as u16); // 2 bytes
@@ -245,38 +247,6 @@ impl RocketMQSerializable {
     #[inline]
     fn checked_dynamic_value_length(length: usize) -> Result<i32, HeaderCodecError> {
         i32::try_from(length).map_err(|_| HeaderCodecError::DynamicValueLengthOverflow)
-    }
-
-    /// Estimate the size needed for encoding to reduce reallocations
-    #[inline]
-    pub(crate) fn estimate_encode_size(cmd: &RemotingCommand) -> usize {
-        let mut size = 17usize; // Fixed header fields (13) plus the ext-map length (4).
-
-        // Remark size
-        if let Some(remark) = cmd.remark() {
-            size = size.saturating_add(4usize.saturating_add(remark.len())); // length prefix + data
-        } else {
-            size = size.saturating_add(4); // just the length prefix (0)
-        }
-
-        // Ext fields size (approximate)
-        if let Some(ext) = cmd.ext_fields() {
-            for (k, v) in ext.iter() {
-                if !k.is_empty() {
-                    size = size
-                        .saturating_add(2)
-                        .saturating_add(k.len())
-                        .saturating_add(4)
-                        .saturating_add(v.len());
-                }
-            }
-        }
-
-        if let Some(header) = cmd.command_custom_header_ref() {
-            size = size.saturating_add(header.encoded_len_hint());
-        }
-
-        size
     }
 
     pub fn rocket_mq_protocol_encode_bytes(cmd: &RemotingCommand) -> Bytes {

@@ -696,9 +696,7 @@ impl RemotingCommand {
     #[inline]
     fn fast_encode_rocketmq(&mut self, dst: &mut BytesMut) -> rocketmq_error::RocketMQResult<()> {
         let begin_index = dst.len();
-        let estimated_header_size = RocketMQSerializable::estimate_encode_size(self);
-
-        dst.reserve(8usize.saturating_add(estimated_header_size));
+        dst.reserve(8 + RocketMQSerializable::INITIAL_ENCODE_CAPACITY);
         dst.put_i64(0); // Placeholder for total_length + serialize_type
 
         let capability = self.custom_header_encode_capability();
@@ -1419,6 +1417,19 @@ mod tests {
         }
     }
 
+    #[derive(Debug)]
+    struct NoPreflightLengthHeader;
+
+    impl CommandCustomHeader for NoPreflightLengthHeader {
+        fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
+            Some(HashMap::from([("field".into(), "value".into())]))
+        }
+
+        fn encoded_len_hint(&self) -> usize {
+            panic!("ROCKETMQ frame encoding must not preflight custom-header lengths")
+        }
+    }
+
     #[test]
     fn test_remoting_command() {
         let command = RemotingCommand::create_remoting_command(1)
@@ -1463,6 +1474,24 @@ mod tests {
         let (total, _) = RemotingCommand::checked_frame_lengths(0, max_body, SerializeType::JSON).unwrap();
         assert_eq!(total, i32::MAX);
         assert!(RemotingCommand::checked_frame_lengths(0, max_body + 1, SerializeType::JSON).is_err());
+    }
+
+    #[test]
+    fn rocketmq_frame_encoding_does_not_preflight_custom_header_lengths() {
+        let mut command = RemotingCommand::create_request_command(1, NoPreflightLengthHeader)
+            .set_serialize_type(SerializeType::ROCKETMQ);
+        let mut encoded = BytesMut::new();
+
+        command.try_fast_header_encode(&mut encoded).unwrap();
+
+        let decoded = RemotingCommand::decode(&mut encoded).unwrap().unwrap();
+        assert_eq!(
+            decoded
+                .ext_fields()
+                .and_then(|fields| fields.get("field"))
+                .map(CheetahString::as_str),
+            Some("value")
+        );
     }
 
     #[test]
