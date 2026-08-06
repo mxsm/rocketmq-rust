@@ -771,9 +771,7 @@ async fn deepseek_http_tool_selection_and_error_matrix_are_stable() {
             "additionalProperties": false
         }),
     ));
-    tool_request.tool_choice = ToolChoice::Specific {
-        name: "query_consumer_lag".to_owned(),
-    };
+    tool_request.tool_choice = ToolChoice::Auto;
     let response = client
         .invoke(
             &InvocationContext::new(tool_request.correlation_id),
