@@ -2,6 +2,9 @@ import { ApiError, type SreApi } from "@/api/client";
 import type {
   ActionItem,
   ActionItemPatchRequest,
+  AutonomyMode,
+  AutonomyScopeView,
+  AutonomyTransitionRequest,
   CollectionEnvelope,
   ConversationCancelResult,
   ConversationTurnPage,
@@ -59,6 +62,7 @@ import {
   phase4OperationsAnalytics,
   phase4AutonomyReports,
 } from "./phase4AutonomyDemo";
+import { phase4AutonomyScopes } from "./phase4AutonomySettingsDemo";
 import { createModelLifecycleMock } from "./modelLifecycleMock";
 import { phase4ModelCapabilities } from "./phase4ModelDemo";
 import {
@@ -95,6 +99,111 @@ function clone<T>(value: T): T {
   return structuredClone(value);
 }
 
+function requireOperator(auth?: ApiRequestContext) {
+  if (auth && !auth.roles.includes("operator")) {
+    throw new ApiError(
+      403,
+      "autonomy_authority_required",
+      "autonomy operation requires operator authority",
+    );
+  }
+}
+
+function validateBoundedReason(reason: string) {
+  if (!reason.trim() || reason.length > 512) {
+    throw new ApiError(
+      400,
+      "invalid_autonomy_reason",
+      "autonomy reason must be non-empty and bounded",
+    );
+  }
+}
+
+function validateAutonomyTransition(
+  scope: AutonomyScopeView,
+  input: AutonomyTransitionRequest,
+) {
+  const current = scope.lifecycle.mode;
+  const target = input.target_mode;
+  const validTargets: Record<AutonomyMode, AutonomyMode[]> = {
+    disabled: ["shadow"],
+    shadow: ["supervised", "paused", "disabled"],
+    supervised: ["autonomous", "paused", "disabled"],
+    autonomous: ["paused", "disabled"],
+    paused: ["shadow", "supervised", "disabled"],
+  };
+  if (!validTargets[current].includes(target)) {
+    throw new ApiError(
+      409,
+      "invalid_autonomy_transition",
+      "autonomy lifecycle transition is not allowed",
+    );
+  }
+  validateBoundedReason(input.reason ?? "");
+  if (
+    (target === "supervised" || target === "autonomous") &&
+    !input.owner_confirmed
+  ) {
+    throw new ApiError(
+      409,
+      "owner_confirmation_required",
+      "autonomy promotion requires action owner confirmation",
+    );
+  }
+  if (target === "autonomous") {
+    const reference = input.owner_approval_ref;
+    if (!reference) {
+      throw new ApiError(
+        400,
+        "owner_approval_ref_required",
+        "Autonomous promotion requires an owner approval reference",
+      );
+    }
+    if (!isBoundedApprovalReference(reference)) {
+      throw new ApiError(
+        400,
+        "invalid_owner_approval_ref",
+        "owner approval reference must use the bounded approval format",
+      );
+    }
+    const qualification = scope.qualification;
+    if (
+      !qualification.autonomous_cohort ||
+      !qualification.autonomous_observation_window_met ||
+      qualification.qualified_supervised_successes <
+        scope.policy.min_supervised_successes ||
+      qualification.unresolved_unknown >
+        scope.policy.max_unresolved_unknown ||
+      qualification.recent_rollbacks > scope.policy.max_recent_rollbacks
+    ) {
+      throw new ApiError(
+        409,
+        "invalid_autonomy_transition",
+        "autonomous promotion qualification is incomplete",
+      );
+    }
+  } else if (input.owner_approval_ref) {
+    throw new ApiError(
+      400,
+      "owner_approval_ref_not_applicable",
+      "owner approval reference is accepted only for Autonomous promotion",
+    );
+  }
+}
+
+function isBoundedApprovalReference(reference: string) {
+  const suffix = reference.startsWith("approval://")
+    ? reference.slice("approval://".length)
+    : "";
+  return (
+    reference.length <= 160 &&
+    suffix.length >= 3 &&
+    !suffix.includes("..") &&
+    !suffix.includes("//") &&
+    /^[a-z0-9](?:[a-z0-9._/-]*[a-z0-9])$/u.test(suffix)
+  );
+}
+
 function unavailable(resource: string): never {
   throw new ApiError(404, "source_unavailable", `${resource} is unavailable`);
 }
@@ -128,6 +237,7 @@ export function createMockSreApi(auth?: ApiRequestContext): SreApi {
   const actionItems = mockActionItems;
   const incidentOperations = clone(demoIncidentOperations);
   const modelLifecycle = createModelLifecycleMock();
+  const autonomyScopes = clone(phase4AutonomyScopes.items);
 
   const scope = (clusterId: string) => {
     if (auth && !auth.clusterIds.includes(clusterId)) {
@@ -1347,6 +1457,117 @@ export function createMockSreApi(auth?: ApiRequestContext): SreApi {
         items: clone(matching.slice(0, limit)),
         truncated: matching.length > limit,
       };
+    },
+    listAutonomyScopes: async (clusterId, limit = 100, signal) => {
+      await wait(signal);
+      scope(clusterId);
+      const matching = autonomyScopes.filter(
+        (item) => item.policy.cluster_id === clusterId,
+      );
+      const boundedLimit = Math.max(1, Math.min(limit, 200));
+      return {
+        schema_version: "rocketmq-sre.autonomy.v1",
+        items: clone(matching.slice(0, boundedLimit)),
+        truncated: matching.length > boundedLimit,
+      };
+    },
+    transitionAutonomyScope: async (scopeKey, input, signal) => {
+      await wait(signal);
+      scope(scopeKey.clusterId);
+      requireOperator(auth);
+      const autonomyScope = autonomyScopes.find(
+        (item) =>
+          item.policy.cluster_id === scopeKey.clusterId &&
+          item.policy.action === scopeKey.action &&
+          item.policy.action_version === scopeKey.actionVersion,
+      );
+      if (!autonomyScope) {
+        throw unavailable("autonomy scope");
+      }
+      validateAutonomyTransition(autonomyScope, input);
+      const previousMode = autonomyScope.lifecycle.mode;
+      autonomyScope.lifecycle = {
+        ...autonomyScope.lifecycle,
+        mode: input.target_mode,
+        previous_mode:
+          input.target_mode === "paused" ? previousMode : null,
+        pause_reason:
+          input.target_mode === "paused"
+            ? input.reason?.trim() ?? null
+            : null,
+        lifecycle_revision:
+          autonomyScope.lifecycle.lifecycle_revision + 1,
+        updated_by: auth?.subject ?? "demo-operator",
+        updated_at: new Date().toISOString(),
+      };
+      autonomyScope.reason_codes = [
+        input.target_mode === "autonomous"
+          ? "owner_confirmed_autonomous"
+          : `operator_enabled_${input.target_mode}`,
+      ];
+      return clone(autonomyScope);
+    },
+    setAutonomyFreeze: async (input, signal) => {
+      await wait(signal);
+      if (input.cluster_id) {
+        scope(input.cluster_id);
+      }
+      requireOperator(auth);
+      validateBoundedReason(input.reason);
+      const autonomyScope = autonomyScopes.find(
+        (item) =>
+          item.policy.cluster_id === input.cluster_id &&
+          item.policy.action === input.action &&
+          item.policy.action_version === input.action_version,
+      );
+      if (!autonomyScope) {
+        throw unavailable("autonomy scope");
+      }
+      const current = autonomyScope.active_freezes[0];
+      const view = {
+        id:
+          current?.id ??
+          "7c000000-0000-4000-8000-000000000099",
+        cluster_id: input.cluster_id ?? null,
+        action: input.action ?? null,
+        action_version: input.action_version ?? null,
+        revision: (current?.revision ?? 0) + 1,
+        active: input.active,
+        reason: input.reason.trim(),
+        starts_at: input.starts_at,
+        expires_at: input.expires_at ?? null,
+        updated_by: auth?.subject ?? "demo-operator",
+        updated_at: new Date().toISOString(),
+      };
+      autonomyScope.active_freezes = input.active ? [view] : [];
+      return clone(view);
+    },
+    setAutonomyKillSwitch: async (input, signal) => {
+      await wait(signal);
+      scope(input.cluster_id);
+      requireOperator(auth);
+      validateBoundedReason(input.reason);
+      const autonomyScope = autonomyScopes.find(
+        (item) =>
+          item.policy.cluster_id === input.cluster_id &&
+          item.policy.action === input.action &&
+          item.policy.action_version === input.action_version,
+      );
+      if (!autonomyScope) {
+        throw unavailable("autonomy scope");
+      }
+      const view = {
+        cluster_id: input.cluster_id,
+        action: input.action,
+        action_version: input.action_version,
+        revision: (autonomyScope.kill_switch?.revision ?? 0) + 1,
+        active: input.active,
+        reason: input.reason.trim(),
+        updated_by: auth?.subject ?? "demo-operator",
+        updated_at: new Date().toISOString(),
+      };
+      autonomyScope.kill_switch = view;
+      return clone(view);
     },
     getAutonomyOperationalReport: async (query, signal) => {
       await wait(signal);

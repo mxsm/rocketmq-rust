@@ -7,7 +7,7 @@ const auth: ApiRequestContext = {
   tenantId: DEMO_TENANT_ID,
   clusterIds: [DEMO_CLUSTER_ID],
   subject: "test-sre",
-  roles: ["rocketmq:read", "rocketmq:diagnose"],
+  roles: ["rocketmq:read", "rocketmq:diagnose", "operator"],
 };
 
 describe("mock SRE API", () => {
@@ -278,5 +278,56 @@ describe("mock SRE API", () => {
       code: "cluster_not_allowed",
       status: 403,
     });
+  });
+
+  it("keeps demo autonomy lifecycle changes typed and human-controlled", async () => {
+    const api = createMockSreApi(auth);
+    const page = await api.listAutonomyScopes(DEMO_CLUSTER_ID, 10);
+    const scope = page.items[0];
+
+    expect(scope?.lifecycle.mode).toBe("supervised");
+    await expect(
+      api.transitionAutonomyScope(
+        {
+          clusterId: DEMO_CLUSTER_ID,
+          action: scope!.policy.action,
+          actionVersion: scope!.policy.action_version,
+        },
+        {
+          target_mode: "autonomous",
+          reason: "owner accepted",
+          owner_confirmed: true,
+        },
+      ),
+    ).rejects.toMatchObject({
+      code: "owner_approval_ref_required",
+      status: 400,
+    });
+
+    const updated = await api.transitionAutonomyScope(
+      {
+        clusterId: DEMO_CLUSTER_ID,
+        action: scope!.policy.action,
+        actionVersion: scope!.policy.action_version,
+      },
+      {
+        target_mode: "autonomous",
+        reason: "owner accepted",
+        owner_confirmed: true,
+        owner_approval_ref: "approval://change/cab-2042",
+      },
+    );
+    expect(updated.lifecycle.mode).toBe("autonomous");
+    expect(updated.lifecycle.lifecycle_revision).toBe(8);
+
+    const killSwitch = await api.setAutonomyKillSwitch({
+      cluster_id: DEMO_CLUSTER_ID,
+      action: scope!.policy.action,
+      action_version: scope!.policy.action_version,
+      active: true,
+      reason: "operator emergency stop",
+    });
+    expect(killSwitch.active).toBe(true);
+    expect(killSwitch.revision).toBe(1);
   });
 });

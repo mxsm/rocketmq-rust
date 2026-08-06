@@ -7,8 +7,14 @@ import type {
   ActionItemPatchRequest,
   AutonomyOperationalReport,
   AutonomyOperationalReportQuery,
+  AutonomyFreezeView,
+  AutonomyKillSwitchView,
   AutonomyOutcomePage,
   AutonomyOutcomeQuery,
+  AutonomyScopeKey,
+  AutonomyScopePage,
+  AutonomyScopeView,
+  AutonomyTransitionRequest,
   CapabilityCatalogResponse,
   CapabilitySnapshot,
   ClusterSummary,
@@ -59,6 +65,8 @@ import type {
   RecommendationDispositionRequest,
   ProviderSmokeResult,
   ServiceStatus,
+  SetAutonomyFreezeRequest,
+  SetAutonomyKillSwitchRequest,
   ShiftHandoffSummary,
   TopologySnapshot,
   UpgradeReadinessReport,
@@ -609,6 +617,24 @@ export interface SreApi {
     query: AutonomyOutcomeQuery,
     signal?: AbortSignal,
   ) => Promise<AutonomyOutcomePage>;
+  listAutonomyScopes: (
+    clusterId: string,
+    limit?: number,
+    signal?: AbortSignal,
+  ) => Promise<AutonomyScopePage>;
+  transitionAutonomyScope: (
+    scope: AutonomyScopeKey,
+    input: AutonomyTransitionRequest,
+    signal?: AbortSignal,
+  ) => Promise<AutonomyScopeView>;
+  setAutonomyFreeze: (
+    input: SetAutonomyFreezeRequest,
+    signal?: AbortSignal,
+  ) => Promise<AutonomyFreezeView>;
+  setAutonomyKillSwitch: (
+    input: SetAutonomyKillSwitchRequest,
+    signal?: AbortSignal,
+  ) => Promise<AutonomyKillSwitchView>;
   getAutonomyOperationalReport: (
     query: AutonomyOperationalReportQuery,
     signal?: AbortSignal,
@@ -962,6 +988,36 @@ export function createHttpSreApi(auth?: ApiRequestContext): SreApi {
           limit:
             query.limit === undefined ? undefined : String(query.limit),
         }),
+        signal,
+      ),
+    listAutonomyScopes: (clusterId, limit = 100, signal) =>
+      get<AutonomyScopePage>(
+        apiQuery("/v1/autonomy/scopes", {
+          cluster_id: clusterId,
+          limit: String(limit),
+        }),
+        signal,
+      ),
+    transitionAutonomyScope: (scope, input, signal) =>
+      post<AutonomyScopeView>(
+        apiQuery("/v1/autonomy/transitions", {
+          cluster_id: scope.clusterId,
+          action: scope.action,
+          action_version: scope.actionVersion,
+        }),
+        input,
+        signal,
+      ),
+    setAutonomyFreeze: (input, signal) =>
+      post<AutonomyFreezeView>(
+        "/v1/autonomy/freezes",
+        input,
+        signal,
+      ),
+    setAutonomyKillSwitch: (input, signal) =>
+      post<AutonomyKillSwitchView>(
+        "/v1/autonomy/kill-switches",
+        input,
         signal,
       ),
     getAutonomyOperationalReport: (query, signal) =>

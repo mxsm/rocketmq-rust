@@ -214,6 +214,76 @@ describe("stateLabel", () => {
     expect(fetchMock.mock.calls[20]?.[1]?.body).toBeUndefined();
   });
 
+  it("uses fixed operator routes for scoped autonomy lifecycle controls", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () =>
+        new Response(JSON.stringify({}), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        }),
+      );
+    const api = createHttpSreApi({
+      token: "bounded-test-token",
+      tenantId: "tenant-1",
+      clusterIds: ["cluster/id"],
+      subject: "test-operator",
+      roles: ["operator"],
+    });
+
+    await api.listAutonomyScopes("cluster/id", 25);
+    await api.transitionAutonomyScope(
+      {
+        clusterId: "cluster/id",
+        action: "observability.logger_level_ttl.v1",
+        actionVersion: "1.0.0",
+      },
+      {
+        target_mode: "autonomous",
+        reason: "production owner accepted bounded promotion",
+        owner_confirmed: true,
+        owner_approval_ref: "approval://change/cab-2042",
+      },
+    );
+    await api.setAutonomyFreeze({
+      cluster_id: "cluster/id",
+      action: "observability.logger_level_ttl.v1",
+      action_version: "1.0.0",
+      active: true,
+      reason: "maintenance window",
+      starts_at: "2026-08-07T08:00:00Z",
+      expires_at: "2026-08-07T10:00:00Z",
+    });
+    await api.setAutonomyKillSwitch({
+      cluster_id: "cluster/id",
+      action: "observability.logger_level_ttl.v1",
+      action_version: "1.0.0",
+      active: true,
+      reason: "operator emergency stop",
+    });
+
+    expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([
+      "/v1/autonomy/scopes?cluster_id=cluster%2Fid&limit=25",
+      "/v1/autonomy/transitions?cluster_id=cluster%2Fid&action=observability.logger_level_ttl.v1&action_version=1.0.0",
+      "/v1/autonomy/freezes",
+      "/v1/autonomy/kill-switches",
+    ]);
+    expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual([
+      "GET",
+      "POST",
+      "POST",
+      "POST",
+    ]);
+    expect(
+      JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body)),
+    ).toEqual({
+      target_mode: "autonomous",
+      reason: "production owner accepted bounded promotion",
+      owner_confirmed: true,
+      owner_approval_ref: "approval://change/cab-2042",
+    });
+  });
+
   it("parses backend SSE payloads with an optional transport event id", () => {
     const data = {
       tenant_id: "tenant",

@@ -18,6 +18,559 @@
     }
   ],
   "paths": {
+    "/v1/autonomy/scopes": {
+      "get": {
+        "operationId": "listAutonomyScopes",
+        "summary": "List bounded autonomy scopes for one authorized cluster",
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "uint16",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutonomyScopePage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Bounded Autonomy"
+        ],
+        "security": [
+          {
+            "oidc": [
+              "rocketmq:read"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/autonomy/scope": {
+      "get": {
+        "operationId": "getAutonomyScope",
+        "summary": "Read one exact action and cluster autonomy scope",
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "action",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/AutonomyExecutionAction"
+            }
+          },
+          {
+            "name": "action_version",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "const": "1.0.0",
+              "default": "1.0.0"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutonomyScopeView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Bounded Autonomy"
+        ],
+        "security": [
+          {
+            "oidc": [
+              "rocketmq:read"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/autonomy/transitions": {
+      "post": {
+        "operationId": "transitionAutonomyScope",
+        "summary": "Apply a human-authorized autonomy lifecycle transition",
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "action",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/AutonomyExecutionAction"
+            }
+          },
+          {
+            "name": "action_version",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "const": "1.0.0",
+              "default": "1.0.0"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutonomyTransitionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutonomyScopeView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Bounded Autonomy"
+        ],
+        "security": [
+          {
+            "oidc": [
+              "rocketmq:autonomy:manage"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/autonomy/freezes": {
+      "post": {
+        "operationId": "setAutonomyFreeze",
+        "summary": "Activate or release a bounded autonomy freeze",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetAutonomyFreezeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutonomyFreezeView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Bounded Autonomy"
+        ],
+        "security": [
+          {
+            "oidc": [
+              "rocketmq:autonomy:manage"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/autonomy/kill-switches": {
+      "post": {
+        "operationId": "setAutonomyKillSwitch",
+        "summary": "Activate or release one action-scoped kill switch",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetAutonomyKillSwitchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutonomyKillSwitchView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Bounded Autonomy"
+        ],
+        "security": [
+          {
+            "oidc": [
+              "rocketmq:autonomy:manage"
+            ]
+          }
+        ]
+      }
+    },
     "/healthz": {
       "get": {
         "operationId": "getHealth",
@@ -1866,7 +2419,17 @@
               }
             }
           }
-        }
+        },
+        "tags": [
+          "Bounded Autonomy"
+        ],
+        "security": [
+          {
+            "oidc": [
+              "rocketmq:read"
+            ]
+          }
+        ]
       }
     },
     "/v1/autonomy/reports": {
@@ -1916,7 +2479,17 @@
               }
             }
           }
-        }
+        },
+        "tags": [
+          "Bounded Autonomy"
+        ],
+        "security": [
+          {
+            "oidc": [
+              "rocketmq:read"
+            ]
+          }
+        ]
       }
     },
     "/v1/operations/shift-handoff": {
@@ -30424,6 +30997,771 @@
             "maxLength": 128
           }
         }
+      },
+      "AutonomyMode": {
+        "type": "string",
+        "enum": [
+          "disabled",
+          "shadow",
+          "supervised",
+          "autonomous",
+          "paused"
+        ]
+      },
+      "AutonomyExecutionAction": {
+        "type": "string",
+        "enum": [
+          "observability.logger_level_ttl.v1",
+          "proxy.scale_out_one.v1",
+          "proxy.restart_one.v1",
+          "broker.config.patch_allowlisted.v1",
+          "topic.config.patch_allowlisted.v1",
+          "subscription_group.patch_allowlisted.v1",
+          "consumer.request_mode.patch_allowlisted.v1",
+          "consumer.offset.reset_bounded.v1",
+          "topic.queue.expand_only.v1",
+          "namesrv.config.patch_allowlisted.v1",
+          "controller.config.patch_allowlisted.v1",
+          "proxy.rollout_image_canary.v1",
+          "broker.restart_one.v1",
+          "static_topic.patch_non_remap.v1",
+          "tiered.cold_data_flow.patch_allowlisted.v1",
+          "store.readahead.patch_allowlisted.v1",
+          "security.credential_rotate_overlap.v1",
+          "telemetry.collector.restart_one.v1",
+          "consumer.offset.clone_or_reset_broad.v1",
+          "message.direct_consume.v1",
+          "message.dlq.resend.v1",
+          "timer.switch.v1",
+          "controller.elect.v1",
+          "static_topic.remap.v1",
+          "broker.container.add_remove.v1"
+        ]
+      },
+      "AutonomyPolicyDefinition": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "definition_version",
+          "tenant_id",
+          "cluster_id",
+          "action",
+          "action_version",
+          "descriptor_digest",
+          "diagnostic_pack_id",
+          "diagnostic_pack_version",
+          "owner",
+          "minimum_evidence_freshness_seconds",
+          "required_evidence_sources",
+          "min_shadow_samples",
+          "min_supervised_successes",
+          "observation_window_days",
+          "max_unresolved_unknown",
+          "max_recent_rollbacks",
+          "max_executions_per_hour",
+          "cooldown_seconds",
+          "max_concurrent_executions",
+          "stable_window_seconds",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "definition_version": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          },
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "action": {
+            "$ref": "#/components/schemas/AutonomyExecutionAction"
+          },
+          "action_version": {
+            "const": "1.0.0"
+          },
+          "descriptor_digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9A-Fa-f]{64}$"
+          },
+          "diagnostic_pack_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "diagnostic_pack_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "owner": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "minimum_evidence_freshness_seconds": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          },
+          "required_evidence_sources": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 32,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "min_shadow_samples": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          },
+          "min_supervised_successes": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          },
+          "observation_window_days": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1,
+            "maximum": 65535
+          },
+          "max_unresolved_unknown": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "max_recent_rollbacks": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "max_executions_per_hour": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1,
+            "maximum": 65535
+          },
+          "cooldown_seconds": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          },
+          "max_concurrent_executions": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1,
+            "maximum": 65535
+          },
+          "stable_window_seconds": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "AutonomyLifecycleState": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tenant_id",
+          "cluster_id",
+          "action",
+          "mode",
+          "previous_mode",
+          "owner",
+          "pause_reason",
+          "lifecycle_revision",
+          "updated_by",
+          "updated_at"
+        ],
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "action": {
+            "$ref": "#/components/schemas/AutonomyExecutionAction"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/AutonomyMode"
+          },
+          "previous_mode": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AutonomyMode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "owner": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "pause_reason": {
+            "oneOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lifecycle_revision": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          },
+          "updated_by": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "AutonomyQualificationCohort": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "level",
+          "tenant_id",
+          "cluster_id",
+          "action",
+          "action_version",
+          "policy_definition_version",
+          "descriptor_digest",
+          "diagnostic_pack_id",
+          "diagnostic_pack_version",
+          "primary_actual_model_identity_hash",
+          "critic_actual_model_identity_hash",
+          "cohort_hash",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "level": {
+            "type": "string",
+            "enum": [
+              "shadow",
+              "autonomous"
+            ]
+          },
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "action": {
+            "$ref": "#/components/schemas/AutonomyExecutionAction"
+          },
+          "action_version": {
+            "const": "1.0.0"
+          },
+          "policy_definition_version": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          },
+          "descriptor_digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9A-Fa-f]{64}$"
+          },
+          "diagnostic_pack_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "diagnostic_pack_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "primary_actual_model_identity_hash": {
+            "type": "string",
+            "pattern": "^sha256:[0-9A-Fa-f]{64}$"
+          },
+          "critic_actual_model_identity_hash": {
+            "oneOf": [
+              {
+                "type": "string",
+                "pattern": "^sha256:[0-9A-Fa-f]{64}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cohort_hash": {
+            "type": "string",
+            "pattern": "^sha256:[0-9A-Fa-f]{64}$"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "AutonomyQualificationView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "shadow_cohort",
+          "autonomous_cohort",
+          "qualified_shadow_samples",
+          "unqualified_shadow_samples",
+          "qualified_supervised_successes",
+          "unresolved_unknown",
+          "recent_rollbacks",
+          "shadow_observation_window_met",
+          "autonomous_observation_window_met"
+        ],
+        "properties": {
+          "shadow_cohort": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AutonomyQualificationCohort"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "autonomous_cohort": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AutonomyQualificationCohort"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "qualified_shadow_samples": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "unqualified_shadow_samples": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "qualified_supervised_successes": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "unresolved_unknown": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "recent_rollbacks": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "shadow_observation_window_met": {
+            "type": "boolean"
+          },
+          "autonomous_observation_window_met": {
+            "type": "boolean"
+          }
+        }
+      },
+      "AutonomyFreezeView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "cluster_id",
+          "action",
+          "action_version",
+          "revision",
+          "active",
+          "reason",
+          "starts_at",
+          "expires_at",
+          "updated_by",
+          "updated_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "cluster_id": {
+            "oneOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "action": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AutonomyExecutionAction"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "action_version": {
+            "oneOf": [
+              {
+                "const": "1.0.0"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revision": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "starts_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_at": {
+            "oneOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "updated_by": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "AutonomyKillSwitchView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "cluster_id",
+          "action",
+          "action_version",
+          "revision",
+          "active",
+          "reason",
+          "updated_by",
+          "updated_at"
+        ],
+        "properties": {
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "action": {
+            "$ref": "#/components/schemas/AutonomyExecutionAction"
+          },
+          "action_version": {
+            "const": "1.0.0"
+          },
+          "revision": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "updated_by": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "AutonomyScopeView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "policy",
+          "lifecycle",
+          "qualification",
+          "active_freezes",
+          "kill_switch",
+          "recent_outcomes",
+          "reason_codes"
+        ],
+        "properties": {
+          "schema_version": {
+            "const": "rocketmq-sre.autonomy.v1"
+          },
+          "policy": {
+            "$ref": "#/components/schemas/AutonomyPolicyDefinition"
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/AutonomyLifecycleState"
+          },
+          "qualification": {
+            "$ref": "#/components/schemas/AutonomyQualificationView"
+          },
+          "active_freezes": {
+            "type": "array",
+            "maxItems": 200,
+            "items": {
+              "$ref": "#/components/schemas/AutonomyFreezeView"
+            }
+          },
+          "kill_switch": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AutonomyKillSwitchView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "recent_outcomes": {
+            "type": "array",
+            "maxItems": 200,
+            "items": {
+              "$ref": "#/components/schemas/JsonObject"
+            }
+          },
+          "reason_codes": {
+            "type": "array",
+            "maxItems": 64,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          }
+        }
+      },
+      "AutonomyScopePage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "items",
+          "truncated"
+        ],
+        "properties": {
+          "schema_version": {
+            "const": "rocketmq-sre.autonomy.v1"
+          },
+          "items": {
+            "type": "array",
+            "maxItems": 200,
+            "items": {
+              "$ref": "#/components/schemas/AutonomyScopeView"
+            }
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        }
+      },
+      "AutonomyTransitionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "target_mode"
+        ],
+        "properties": {
+          "target_mode": {
+            "$ref": "#/components/schemas/AutonomyMode"
+          },
+          "reason": {
+            "oneOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "owner_confirmed": {
+            "type": "boolean",
+            "default": false
+          },
+          "owner_approval_ref": {
+            "type": "string",
+            "minLength": 14,
+            "maxLength": 160,
+            "pattern": "^approval://(?!.*(?:\\.\\.|//))[a-z0-9](?:[a-z0-9._/-]*[a-z0-9])$"
+          }
+        }
+      },
+      "SetAutonomyFreezeRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "active",
+          "reason",
+          "starts_at"
+        ],
+        "properties": {
+          "cluster_id": {
+            "oneOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "action": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AutonomyExecutionAction"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "action_version": {
+            "oneOf": [
+              {
+                "const": "1.0.0"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "starts_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_at": {
+            "oneOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "SetAutonomyKillSwitchRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "cluster_id",
+          "action",
+          "action_version",
+          "active",
+          "reason"
+        ],
+        "properties": {
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "action": {
+            "$ref": "#/components/schemas/AutonomyExecutionAction"
+          },
+          "action_version": {
+            "const": "1.0.0"
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        }
       }
     }
   },
@@ -30506,6 +31844,10 @@
     {
       "name": "Conversations",
       "description": "Evidence-cited natural-language queries over a fixed read-only RocketMQ and metric registry."
+    },
+    {
+      "name": "Bounded Autonomy",
+      "description": "Operator-only action and cluster lifecycle controls, qualification, freezes, and kill switches. Autonomous promotion requires an owner-confirmed approval reference."
     }
   ],
   "x-rocketmq-bounded-r1-autonomy-supported": true,

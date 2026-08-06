@@ -156,6 +156,112 @@ describe("AutonomyOperationsPage", () => {
       ),
     ).toBeInTheDocument();
   });
+
+  it("requires one cluster and explicit owner approval for autonomous promotion", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await screen.findByText("自治运营与成本");
+    await user.click(
+      screen.getByRole("tab", { name: "模式治理" }),
+    );
+    expect(
+      screen.getByText("请选择单个授权集群"),
+    ).toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("combobox", { name: "集群范围" }),
+    );
+    await user.click(
+      await screen.findByRole("option", { name: "rmq-prod-cn" }),
+    );
+
+    expect(
+      await screen.findByText("observability.logger_level_ttl.v1"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("当前模式：Supervised")).toBeInTheDocument();
+    expect(screen.getByText("资格已满足")).toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", {
+        name: "变更 observability.logger_level_ttl.v1 模式",
+      }),
+    );
+    await user.click(
+      screen.getByRole("combobox", { name: "目标模式" }),
+    );
+    await user.click(
+      screen.getByRole("option", { name: "Autonomous" }),
+    );
+    await user.type(
+      screen.getByRole("textbox", { name: "变更原因" }),
+      "production owner accepted bounded promotion",
+    );
+    await user.type(
+      screen.getByRole("textbox", { name: "审批引用" }),
+      "approval://change/cab-2042",
+    );
+    await user.click(
+      screen.getByRole("checkbox", { name: "生产 Owner 已确认" }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "确认模式变更" }),
+    );
+
+    expect(
+      await screen.findByText("当前模式：Autonomous"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("生命周期变更已由服务端校验并记录"),
+    ).toBeInTheDocument();
+  });
+
+  it("applies action-scoped freeze and kill switch controls", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await screen.findByText("83.9%");
+    await user.click(
+      screen.getByRole("tab", { name: "模式治理" }),
+    );
+    await user.click(
+      screen.getByRole("combobox", { name: "集群范围" }),
+    );
+    await user.click(
+      await screen.findByRole("option", { name: "rmq-prod-cn" }),
+    );
+    await screen.findByText("observability.logger_level_ttl.v1");
+
+    await user.click(
+      screen.getByRole("button", { name: "设置 Freeze" }),
+    );
+    await user.type(
+      screen.getByRole("textbox", { name: "变更原因" }),
+      "bounded maintenance window",
+    );
+    await user.click(
+      screen.getByRole("button", { name: "确认启用" }),
+    );
+    expect(await screen.findByText("动作 Freeze 已生效")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getAllByText("Freeze active")).toHaveLength(2);
+    });
+
+    await user.click(
+      screen.getAllByRole("button", { name: "启用 Kill Switch" })[0]!,
+    );
+    await user.type(
+      screen.getByRole("textbox", { name: "变更原因" }),
+      "operator emergency stop",
+    );
+    await user.click(
+      screen.getByRole("button", { name: "确认启用" }),
+    );
+    expect(await screen.findByText("Kill Switch 已启用")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText("Kill Switch active")).toBeInTheDocument();
+    });
+  });
 });
 
 function renderPage() {

@@ -4,6 +4,91 @@
  */
 
 export interface paths {
+    "/v1/autonomy/scopes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List bounded autonomy scopes for one authorized cluster */
+        get: operations["listAutonomyScopes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/autonomy/scope": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read one exact action and cluster autonomy scope */
+        get: operations["getAutonomyScope"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/autonomy/transitions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Apply a human-authorized autonomy lifecycle transition */
+        post: operations["transitionAutonomyScope"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/autonomy/freezes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Activate or release a bounded autonomy freeze */
+        post: operations["setAutonomyFreeze"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/autonomy/kill-switches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Activate or release one action-scoped kill switch */
+        post: operations["setAutonomyKillSwitch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/healthz": {
         parameters: {
             query?: never;
@@ -7580,6 +7665,179 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** @enum {string} */
+        AutonomyMode: "disabled" | "shadow" | "supervised" | "autonomous" | "paused";
+        /** @enum {string} */
+        AutonomyExecutionAction: "observability.logger_level_ttl.v1" | "proxy.scale_out_one.v1" | "proxy.restart_one.v1" | "broker.config.patch_allowlisted.v1" | "topic.config.patch_allowlisted.v1" | "subscription_group.patch_allowlisted.v1" | "consumer.request_mode.patch_allowlisted.v1" | "consumer.offset.reset_bounded.v1" | "topic.queue.expand_only.v1" | "namesrv.config.patch_allowlisted.v1" | "controller.config.patch_allowlisted.v1" | "proxy.rollout_image_canary.v1" | "broker.restart_one.v1" | "static_topic.patch_non_remap.v1" | "tiered.cold_data_flow.patch_allowlisted.v1" | "store.readahead.patch_allowlisted.v1" | "security.credential_rotate_overlap.v1" | "telemetry.collector.restart_one.v1" | "consumer.offset.clone_or_reset_broad.v1" | "message.direct_consume.v1" | "message.dlq.resend.v1" | "timer.switch.v1" | "controller.elect.v1" | "static_topic.remap.v1" | "broker.container.add_remove.v1";
+        AutonomyPolicyDefinition: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uint64 */
+            definition_version: number;
+            /** Format: uuid */
+            tenant_id: string;
+            /** Format: uuid */
+            cluster_id: string;
+            action: components["schemas"]["AutonomyExecutionAction"];
+            /** @constant */
+            action_version: "1.0.0";
+            descriptor_digest: string;
+            diagnostic_pack_id: string;
+            diagnostic_pack_version: string;
+            owner: string;
+            /** Format: uint64 */
+            minimum_evidence_freshness_seconds: number;
+            required_evidence_sources: string[];
+            /** Format: uint64 */
+            min_shadow_samples: number;
+            /** Format: uint64 */
+            min_supervised_successes: number;
+            /** Format: uint64 */
+            observation_window_days: number;
+            /** Format: uint64 */
+            max_unresolved_unknown: number;
+            /** Format: uint64 */
+            max_recent_rollbacks: number;
+            /** Format: uint64 */
+            max_executions_per_hour: number;
+            /** Format: uint64 */
+            cooldown_seconds: number;
+            /** Format: uint64 */
+            max_concurrent_executions: number;
+            /** Format: uint64 */
+            stable_window_seconds: number;
+            /** Format: date-time */
+            created_at: string;
+        };
+        AutonomyLifecycleState: {
+            /** Format: uuid */
+            tenant_id: string;
+            /** Format: uuid */
+            cluster_id: string;
+            action: components["schemas"]["AutonomyExecutionAction"];
+            mode: components["schemas"]["AutonomyMode"];
+            previous_mode: components["schemas"]["AutonomyMode"] | null;
+            owner: string;
+            pause_reason: string | null;
+            /** Format: uint64 */
+            lifecycle_revision: number;
+            updated_by: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        AutonomyQualificationCohort: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            level: "shadow" | "autonomous";
+            /** Format: uuid */
+            tenant_id: string;
+            /** Format: uuid */
+            cluster_id: string;
+            action: components["schemas"]["AutonomyExecutionAction"];
+            /** @constant */
+            action_version: "1.0.0";
+            /** Format: uint64 */
+            policy_definition_version: number;
+            descriptor_digest: string;
+            diagnostic_pack_id: string;
+            diagnostic_pack_version: string;
+            primary_actual_model_identity_hash: string;
+            critic_actual_model_identity_hash: string | null;
+            cohort_hash: string;
+            /** Format: date-time */
+            created_at: string;
+        };
+        AutonomyQualificationView: {
+            shadow_cohort: components["schemas"]["AutonomyQualificationCohort"] | null;
+            autonomous_cohort: components["schemas"]["AutonomyQualificationCohort"] | null;
+            /** Format: uint64 */
+            qualified_shadow_samples: number;
+            /** Format: uint64 */
+            unqualified_shadow_samples: number;
+            /** Format: uint64 */
+            qualified_supervised_successes: number;
+            /** Format: uint64 */
+            unresolved_unknown: number;
+            /** Format: uint64 */
+            recent_rollbacks: number;
+            shadow_observation_window_met: boolean;
+            autonomous_observation_window_met: boolean;
+        };
+        AutonomyFreezeView: {
+            /** Format: uuid */
+            id: string;
+            cluster_id: string | null;
+            action: components["schemas"]["AutonomyExecutionAction"] | null;
+            action_version: "1.0.0" | null;
+            /** Format: uint64 */
+            revision: number;
+            active: boolean;
+            reason: string;
+            /** Format: date-time */
+            starts_at: string;
+            expires_at: string | null;
+            updated_by: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        AutonomyKillSwitchView: {
+            /** Format: uuid */
+            cluster_id: string;
+            action: components["schemas"]["AutonomyExecutionAction"];
+            /** @constant */
+            action_version: "1.0.0";
+            /** Format: uint64 */
+            revision: number;
+            active: boolean;
+            reason: string;
+            updated_by: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        AutonomyScopeView: {
+            /** @constant */
+            schema_version: "rocketmq-sre.autonomy.v1";
+            policy: components["schemas"]["AutonomyPolicyDefinition"];
+            lifecycle: components["schemas"]["AutonomyLifecycleState"];
+            qualification: components["schemas"]["AutonomyQualificationView"];
+            active_freezes: components["schemas"]["AutonomyFreezeView"][];
+            kill_switch: components["schemas"]["AutonomyKillSwitchView"] | null;
+            recent_outcomes: components["schemas"]["JsonObject"][];
+            reason_codes: string[];
+        };
+        AutonomyScopePage: {
+            /** @constant */
+            schema_version: "rocketmq-sre.autonomy.v1";
+            items: components["schemas"]["AutonomyScopeView"][];
+            truncated: boolean;
+        };
+        AutonomyTransitionRequest: {
+            target_mode: components["schemas"]["AutonomyMode"];
+            reason?: string | null;
+            /** @default false */
+            owner_confirmed: boolean;
+            owner_approval_ref?: string;
+        };
+        SetAutonomyFreezeRequest: {
+            cluster_id?: string | null;
+            action?: components["schemas"]["AutonomyExecutionAction"] | null;
+            action_version?: "1.0.0" | null;
+            active: boolean;
+            reason: string;
+            /** Format: date-time */
+            starts_at: string;
+            expires_at?: string | null;
+        };
+        SetAutonomyKillSwitchRequest: {
+            /** Format: uuid */
+            cluster_id: string;
+            action: components["schemas"]["AutonomyExecutionAction"];
+            /** @constant */
+            action_version: "1.0.0";
+            active: boolean;
+            reason: string;
+        };
     };
     responses: {
         /** @description Successful scoped response */
@@ -7611,6 +7869,399 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    listAutonomyScopes: {
+        parameters: {
+            query: {
+                cluster_id: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutonomyScopePage"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getAutonomyScope: {
+        parameters: {
+            query: {
+                cluster_id: string;
+                action: components["schemas"]["AutonomyExecutionAction"];
+                action_version?: "1.0.0";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutonomyScopeView"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    transitionAutonomyScope: {
+        parameters: {
+            query: {
+                cluster_id: string;
+                action: components["schemas"]["AutonomyExecutionAction"];
+                action_version?: "1.0.0";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AutonomyTransitionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutonomyScopeView"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    setAutonomyFreeze: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetAutonomyFreezeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutonomyFreezeView"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    setAutonomyKillSwitch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetAutonomyKillSwitchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutonomyKillSwitchView"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     getHealth: {
         parameters: {
             query?: never;
