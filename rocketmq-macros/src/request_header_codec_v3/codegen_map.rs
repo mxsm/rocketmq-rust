@@ -40,6 +40,29 @@ pub(super) fn context_declarations(model: &HeaderModel) -> TokenStream {
     quote!(#(#declarations)*)
 }
 
+pub(super) fn manual_fast_helpers(model: &HeaderModel, codec_trait: &TokenStream) -> TokenStream {
+    let protocol_path = &model.protocol_path;
+    let error_type = quote!(#protocol_path::protocol::header_codec::HeaderCodecError);
+    let sink_trait = quote!(#protocol_path::protocol::header_codec::EncodeSink);
+    let encode = local_encode_body(model, codec_trait, protocol_path);
+    let len_hint = local_len_hint_body(model, protocol_path);
+
+    quote! {
+        #[inline]
+        fn __request_header_codec_v3_encode_local<__RequestHeaderSink: #sink_trait>(
+            &self,
+            sink: &mut __RequestHeaderSink,
+        ) -> Result<(), #error_type> {
+            #encode
+        }
+
+        #[inline]
+        fn __request_header_codec_v3_local_encoded_len_hint(&self) -> usize {
+            #len_hint
+        }
+    }
+}
+
 pub(super) fn codec_items(model: &HeaderModel, codec_trait: &TokenStream) -> TokenStream {
     let protocol_path = &model.protocol_path;
     let error_type = quote!(#protocol_path::protocol::header_codec::HeaderCodecError);
@@ -111,7 +134,23 @@ fn validation_body(model: &HeaderModel, error_type: &TokenStream) -> TokenStream
 }
 
 fn encode_body(model: &HeaderModel, codec_trait: &TokenStream, protocol_path: &syn::Path) -> TokenStream {
-    let mut fields: Vec<_> = model.fields.iter().collect();
+    encode_selected_body(model.fields.iter(), codec_trait, protocol_path)
+}
+
+fn local_encode_body(model: &HeaderModel, codec_trait: &TokenStream, protocol_path: &syn::Path) -> TokenStream {
+    encode_selected_body(
+        model.fields.iter().filter(|field| !field.flattened),
+        codec_trait,
+        protocol_path,
+    )
+}
+
+fn encode_selected_body<'a>(
+    fields: impl Iterator<Item = &'a FieldModel>,
+    codec_trait: &TokenStream,
+    protocol_path: &syn::Path,
+) -> TokenStream {
+    let mut fields: Vec<_> = fields.collect();
     fields.sort_by_key(|field| field.stable_order());
     let writes = fields.into_iter().map(|field| {
         let ident = &field.ident;
@@ -149,6 +188,30 @@ fn encode_body(model: &HeaderModel, codec_trait: &TokenStream, protocol_path: &s
         <Self as #codec_trait>::validate_for_wire(self)?;
         #(#writes)*
         Ok(())
+    }
+}
+
+fn local_len_hint_body(model: &HeaderModel, protocol_path: &syn::Path) -> TokenStream {
+    let value_trait = quote!(#protocol_path::protocol::header_codec::HeaderValue);
+    let adds = model.fields.iter().filter(|field| !field.flattened).map(|field| {
+        let ident = &field.ident;
+        let overhead = 6_usize.saturating_add(field.key.value.len());
+        if field.option_inner.is_some() {
+            quote! {
+                if let Some(value) = &self.#ident {
+                    len = len.saturating_add(#overhead).saturating_add(#value_trait::encoded_len(value));
+                }
+            }
+        } else {
+            quote! {
+                len = len.saturating_add(#overhead).saturating_add(#value_trait::encoded_len(&self.#ident));
+            }
+        }
+    });
+    quote! {
+        let mut len = 0usize;
+        #(#adds)*
+        len
     }
 }
 

@@ -176,10 +176,12 @@ pub trait CommandCustomHeader: AsAny {
     ///
     /// # Returns
     ///
-    /// This function returns `false` by default, indicating that the implementing type does not
-    /// support fast codec. This can be overridden by implementing types.
+    /// This legacy capability is limited to hand-written fast decoding. Direct
+    /// binary encoding is reported independently by [`Self::encode_capability`].
+    /// The default remains `false` so enabling generated direct encoding cannot
+    /// route decoding through an unimplemented legacy hook.
     fn support_fast_codec(&self) -> bool {
-        self.encode_capability() == HeaderEncodeCapability::DirectBinary
+        false
     }
 
     /// Retrieves the value associated with the specified field from the provided map.

@@ -54,9 +54,11 @@ pub struct PullMessageRequestHeader {
     #[header(required, range = "i64")]
     pub suspend_timeout_millis: u64,
 
-    #[header(required)]
+    // The Java fast codec writes subscription before subVersion.
+    #[header(required, binary_order = 10)]
     pub sub_version: i64,
 
+    #[header(binary_order = 9)]
     pub subscription: Option<CheetahString>,
     pub expression_type: Option<CheetahString>,
     pub max_msg_bytes: Option<i32>,

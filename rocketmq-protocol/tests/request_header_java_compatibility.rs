@@ -317,6 +317,15 @@ fn rust_production_frames_preserve_the_java_canonical_maps() {
             &expected,
         );
 
+        if fixture["actualPath"] == "fast" && serialize_type == SerializeType::ROCKETMQ {
+            assert_eq!(
+                frame,
+                decode_base64(fixture["frameBase64"].as_str().expect("Java fast frame")),
+                "{} Rust direct frame differs from Java fast encoding",
+                fixture_path.display()
+            );
+        }
+
         let mut input = BytesMut::from(frame.as_slice());
         let decoded = RemotingCommand::decode(&mut input)
             .expect("Rust frame decode")

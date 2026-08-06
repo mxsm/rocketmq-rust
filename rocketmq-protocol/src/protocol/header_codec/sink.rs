@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use bytes::BufMut;
+use bytes::BytesMut;
 use cheetah_string::CheetahString;
 
 use super::private::Sealed;
@@ -78,6 +80,83 @@ impl EncodeSink for MapSink<'_> {
     }
 }
 
+/// An [`EncodeSink`] that writes canonical extension fields directly to a
+/// ROCKETMQ binary payload.
+///
+/// Each field uses a big-endian `u16` key length followed by a big-endian
+/// signed Java `int` value length. Scalar values are appended through
+/// [`HeaderValue::write_ascii`] without allocating an intermediate string.
+pub struct BinarySink<'a> {
+    out: &'a mut BytesMut,
+}
+
+impl<'a> BinarySink<'a> {
+    /// Creates a binary sink over an existing destination.
+    #[inline]
+    pub fn new(out: &'a mut BytesMut) -> Self {
+        Self { out }
+    }
+
+    /// Returns the borrowed destination after the sink is no longer needed.
+    #[inline]
+    pub fn into_inner(self) -> &'a mut BytesMut {
+        self.out
+    }
+}
+
+impl Sealed for BinarySink<'_> {}
+
+impl EncodeSink for BinarySink<'_> {
+    #[inline]
+    fn write<V: HeaderValue>(
+        &mut self,
+        key: &'static str,
+        value: &V,
+        context: HeaderFieldContext,
+    ) -> Result<(), HeaderCodecError> {
+        let key_len = u16::try_from(key.len()).map_err(|_| HeaderCodecError::KeyLengthOverflow {
+            header: context.header,
+            key: context.key,
+        })?;
+        let value_len_hint = value.encoded_len();
+        if value_len_hint > i32::MAX as usize {
+            return Err(HeaderCodecError::ValueLengthOverflow {
+                header: context.header,
+                key: context.key,
+            });
+        }
+
+        let pair_len = 2usize
+            .checked_add(key.len())
+            .and_then(|len| len.checked_add(4))
+            .and_then(|len| len.checked_add(value_len_hint))
+            .ok_or(HeaderCodecError::ValueLengthOverflow {
+                header: context.header,
+                key: context.key,
+            })?;
+        let pair_start = self.out.len();
+        self.out.reserve(pair_len);
+        self.out.put_u16(key_len);
+        self.out.extend_from_slice(key.as_bytes());
+
+        let value_len_offset = self.out.len();
+        self.out.put_i32(0);
+        let value_offset = self.out.len();
+        value.write_ascii(self.out);
+        let actual_value_len = self.out.len() - value_offset;
+        debug_assert_eq!(actual_value_len, value_len_hint);
+        let actual_value_len = i32::try_from(actual_value_len).map_err(|_| {
+            self.out.truncate(pair_start);
+            HeaderCodecError::ValueLengthOverflow {
+                header: context.header,
+                key: context.key,
+            }
+        })?;
+        self.out[value_len_offset..value_len_offset + 4].copy_from_slice(&actual_value_len.to_be_bytes());
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,5 +214,30 @@ mod tests {
             fields.get("queueOffset").map(CheetahString::as_str),
             Some("18446744073709551615")
         );
+    }
+
+    #[test]
+    fn binary_sink_appends_canonical_pairs_without_replacing_existing_bytes() {
+        let mut out = BytesMut::from(&b"prefix"[..]);
+        let mut sink = BinarySink::new(&mut out);
+        sink.write("queueOffset", &-42_i64, CONTEXT).unwrap();
+        let out = sink.into_inner();
+
+        assert_eq!(out.len() - 6, 2 + 11 + 4 + 3);
+        assert_eq!(&out[..6], b"prefix");
+        assert_eq!(u16::from_be_bytes(out[6..8].try_into().unwrap()), 11);
+        assert_eq!(&out[8..19], b"queueOffset");
+        assert_eq!(i32::from_be_bytes(out[19..23].try_into().unwrap()), 3);
+        assert_eq!(&out[23..], b"-42");
+    }
+
+    #[test]
+    fn binary_sink_rejects_an_oversized_key_without_mutating_the_destination() {
+        let key = Box::leak("k".repeat(u16::MAX as usize + 1).into_boxed_str());
+        let mut out = BytesMut::from(&b"prefix"[..]);
+        let error = BinarySink::new(&mut out).write(key, &true, CONTEXT).unwrap_err();
+
+        assert!(matches!(error, HeaderCodecError::KeyLengthOverflow { .. }));
+        assert_eq!(out.as_ref(), b"prefix");
     }
 }

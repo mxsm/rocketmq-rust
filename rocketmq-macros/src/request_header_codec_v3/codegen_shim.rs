@@ -27,6 +27,31 @@ pub(super) fn generate(model: &HeaderModel, generics: &Generics, codec_trait: &T
     let codec_error = quote!(#protocol_path::protocol::header_codec::HeaderCodecError);
     let rocketmq_error = quote!(#protocol_path::__request_header_codec::RocketMQError);
     let map_sink = quote!(#protocol_path::protocol::header_codec::MapSink);
+    let fast_methods = if model.fast {
+        let binary_sink = quote!(#protocol_path::protocol::header_codec::BinarySink);
+        let encode_capability = quote!(#protocol_path::protocol::command_custom_header::HeaderEncodeCapability);
+        let bytes_mut = quote!(#protocol_path::__request_header_codec::BytesMut);
+        quote! {
+            fn encode_capability(&self) -> #encode_capability {
+                #encode_capability::DirectBinary
+            }
+
+            fn encode_direct_binary(&self, out: &mut #bytes_mut) -> Result<(), #codec_error> {
+                let checkpoint = out.len();
+                out.reserve(<Self as #codec_trait>::encoded_len_hint(self));
+                let result = {
+                    let mut sink = #binary_sink::new(out);
+                    <Self as #codec_trait>::encode_into(self, &mut sink)
+                };
+                if result.is_err() {
+                    out.truncate(checkpoint);
+                }
+                result
+            }
+        }
+    } else {
+        TokenStream::new()
+    };
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
     quote! {
@@ -70,6 +95,8 @@ pub(super) fn generate(model: &HeaderModel, generics: &Generics, codec_trait: &T
             fn encoded_len_hint(&self) -> usize {
                 <Self as #codec_trait>::encoded_len_hint(self)
             }
+
+            #fast_methods
         }
 
         impl #impl_generics #from_map_trait for #ident #ty_generics #where_clause {
