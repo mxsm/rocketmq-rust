@@ -14,9 +14,7 @@
 
 use std::fmt;
 
-use bytes::BufMut;
 use bytes::Bytes;
-use bytes::BytesMut;
 use cheetah_string::CheetahString;
 use serde::de::DeserializeSeed;
 use serde::de::MapAccess;
@@ -88,8 +86,9 @@ impl<'de> Visitor<'de> for JsonHeaderFieldsVisitor {
             .size_hint()
             .unwrap_or_default()
             .min(MAX_INITIAL_MAP_CAPACITY)
-            .saturating_mul(ESTIMATED_FIELD_BYTES);
-        let mut payload = BytesMut::with_capacity(initial_capacity);
+            .saturating_mul(ESTIMATED_FIELD_BYTES)
+            .max(MIN_INITIAL_PAYLOAD_CAPACITY);
+        let mut payload = Vec::with_capacity(initial_capacity);
         let mut entry_count = 0usize;
 
         while map
@@ -101,14 +100,14 @@ impl<'de> Visitor<'de> for JsonHeaderFieldsVisitor {
         }
 
         Ok(JsonHeaderFields {
-            payload: payload.freeze(),
+            payload: Bytes::from(payload),
             entry_count,
         })
     }
 }
 
 struct JsonFieldTextSeed<'a> {
-    payload: &'a mut BytesMut,
+    payload: &'a mut Vec<u8>,
 }
 
 impl<'de> DeserializeSeed<'de> for JsonFieldTextSeed<'_> {
@@ -123,7 +122,7 @@ impl<'de> DeserializeSeed<'de> for JsonFieldTextSeed<'_> {
 }
 
 struct JsonFieldTextVisitor<'a> {
-    payload: &'a mut BytesMut,
+    payload: &'a mut Vec<u8>,
 }
 
 impl JsonFieldTextVisitor<'_> {
@@ -135,13 +134,8 @@ impl JsonFieldTextVisitor<'_> {
         let additional = FIELD_LENGTH_BYTES
             .checked_add(value.len())
             .ok_or_else(|| E::custom("JSON extension-field length overflow"))?;
-        let reserve = if self.payload.capacity() == 0 {
-            additional.max(MIN_INITIAL_PAYLOAD_CAPACITY)
-        } else {
-            additional
-        };
-        self.payload.reserve(reserve);
-        self.payload.put_u32(length);
+        self.payload.reserve(additional);
+        self.payload.extend_from_slice(&length.to_be_bytes());
         self.payload.extend_from_slice(value.as_bytes());
         Ok(())
     }
@@ -225,7 +219,10 @@ impl<'a> JsonHeaderFieldIter<'a> {
 
     #[inline]
     fn read_utf8(&mut self, length: usize) -> &'a str {
-        std::str::from_utf8(self.take(length)).expect("validated JSON header field UTF-8 changed")
+        let bytes = self.take(length);
+        // SAFETY: `JsonHeaderFields` is private and its payload is populated only
+        // from strings accepted by Serde. The iterator preserves byte boundaries.
+        unsafe { std::str::from_utf8_unchecked(bytes) }
     }
 }
 
