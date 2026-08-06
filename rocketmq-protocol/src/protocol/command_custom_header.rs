@@ -24,6 +24,21 @@ use crate::rocketmq_serializable::RocketMQSerializable;
 /// Wire-format extension fields carried by a RocketMQ remoting command.
 pub type HeaderMap = HashMap<CheetahString, CheetahString>;
 
+/// Encoding paths available for a custom header.
+///
+/// This capability is intentionally limited to encoding. Legacy fast decode
+/// remains a separate compatibility concern until all handwritten decoders
+/// have migrated to the typed [`crate::HeaderCodec`] path.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum HeaderEncodeCapability {
+    /// Materialize the header into extension fields before serialization.
+    #[default]
+    MapOnly,
+    /// Encode the header directly into the ROCKETMQ extension-field payload.
+    DirectBinary,
+}
+
 pub trait CommandCustomHeader: AsAny {
     /// Checks the fields of the implementing type.  
     ///  
@@ -96,6 +111,28 @@ pub trait CommandCustomHeader: AsAny {
         0
     }
 
+    /// Returns the authoritative encoding path for this header.
+    fn encode_capability(&self) -> HeaderEncodeCapability {
+        HeaderEncodeCapability::MapOnly
+    }
+
+    /// Appends this header directly to a ROCKETMQ extension-field payload.
+    ///
+    /// Implementations must require only shared access so cloned remoting
+    /// commands can encode the same immutable header. Callers must check
+    /// [`Self::encode_capability`] before invoking this method.
+    ///
+    /// # Errors
+    ///
+    /// Returns a classified header codec error when validation or binary
+    /// representation fails. The default reports that direct encoding is
+    /// unavailable.
+    fn encode_direct_binary(&self, _out: &mut bytes::BytesMut) -> Result<(), HeaderCodecError> {
+        Err(HeaderCodecError::FastCodecUnavailable {
+            header: std::any::type_name::<Self>(),
+        })
+    }
+
     /// Writes the provided `key` to the `out` buffer if the `value` is not empty.
     ///
     /// # Arguments
@@ -115,10 +152,14 @@ pub trait CommandCustomHeader: AsAny {
         }
     }
 
-    /// A placeholder function for fast encoding.
+    /// Compatibility adapter for the legacy mutable fast-encoding API.
     ///
-    /// This function currently does nothing and can be overridden by implementing types.
-    fn encode_fast(&mut self, _out: &mut bytes::BytesMut) {}
+    /// Production serialization uses [`Self::encode_capability`] and
+    /// [`Self::encode_direct_binary`] directly. This adapter cannot propagate
+    /// errors and remains only for existing callers during migration.
+    fn encode_fast(&mut self, out: &mut bytes::BytesMut) {
+        let _ = self.encode_direct_binary(out);
+    }
 
     /// A placeholder function for fast decoding.
     ///
@@ -138,7 +179,7 @@ pub trait CommandCustomHeader: AsAny {
     /// This function returns `false` by default, indicating that the implementing type does not
     /// support fast codec. This can be overridden by implementing types.
     fn support_fast_codec(&self) -> bool {
-        false
+        self.encode_capability() == HeaderEncodeCapability::DirectBinary
     }
 
     /// Retrieves the value associated with the specified field from the provided map.

@@ -21,6 +21,8 @@ use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
 
+use crate::protocol::command_custom_header::HeaderEncodeCapability;
+use crate::protocol::header_codec::HeaderCodecError;
 use crate::protocol::remoting_command::RemotingCommand;
 use crate::protocol::LanguageCode;
 
@@ -104,6 +106,32 @@ impl RocketMQSerializable {
     /// Optimized ROCKETMQ protocol encoding with reduced allocations
     #[inline]
     pub fn rocketmq_protocol_encode(cmd: &mut RemotingCommand, buf: &mut BytesMut) -> usize {
+        let checkpoint = buf.len();
+        match Self::try_rocketmq_protocol_encode(cmd, buf) {
+            Ok(encoded) => encoded,
+            Err(_) => {
+                buf.truncate(checkpoint);
+                0
+            }
+        }
+    }
+
+    /// Fallible ROCKETMQ protocol encoding with reduced allocations.
+    ///
+    /// # Errors
+    ///
+    /// Returns the direct custom-header encoding failure when the selected
+    /// header cannot be represented in the ROCKETMQ extension-field payload.
+    #[inline]
+    pub fn try_rocketmq_protocol_encode(cmd: &RemotingCommand, buf: &mut BytesMut) -> Result<usize, HeaderCodecError> {
+        Self::try_rocketmq_protocol_encode_with_capability(cmd, buf, cmd.custom_header_encode_capability())
+    }
+
+    pub(crate) fn try_rocketmq_protocol_encode_with_capability(
+        cmd: &RemotingCommand,
+        buf: &mut BytesMut,
+        capability: HeaderEncodeCapability,
+    ) -> Result<usize, HeaderCodecError> {
         let begin_index = buf.len();
 
         // Estimate required capacity and reserve upfront to reduce reallocations
@@ -128,10 +156,11 @@ impl RocketMQSerializable {
         let map_len_index = buf.len();
         buf.put_i32(0);
 
-        // Encode custom header if it supports fast codec
-        if let Some(header) = cmd.command_custom_header_mut() {
-            if header.support_fast_codec() {
-                header.encode_fast(buf);
+        // Encode the custom header through shared access so cloned commands
+        // do not depend on Arc uniqueness.
+        if let Some(header) = cmd.command_custom_header_ref() {
+            if capability == HeaderEncodeCapability::DirectBinary {
+                header.encode_direct_binary(buf)?;
             }
         }
 
@@ -148,7 +177,7 @@ impl RocketMQSerializable {
         let ext_fields_length = (current_length - map_len_index - 4) as i32;
         buf[map_len_index..map_len_index + 4].copy_from_slice(&ext_fields_length.to_be_bytes());
 
-        buf.len() - begin_index
+        Ok(buf.len() - begin_index)
     }
 
     /// Estimate the size needed for encoding to reduce reallocations
