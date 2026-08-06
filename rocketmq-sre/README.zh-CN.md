@@ -106,6 +106,18 @@ embedding、reranking、数据分类、区域、成本和上下文能力。路�
 参见[模型兼容性](docs/compatibility.md)和
 [扩展指南](docs/phase05-extension-guide.md)。
 
+无凭据本地运行时资格验证使用一次性、仅绑定 loopback 的 Ollama 容器和固定的
+`qwen2.5:0.5b` 模型，通过生产 Model Gateway adapter 只发起一次有界的
+OpenAI-compatible chat 请求。报告仅记录 digest、大小、token 计数、安全断言和清理状态，
+不会记录 endpoint、prompt、response、凭据或本机路径。容器、专用模型卷、进程环境以及
+本次运行新引入的运行时镜像会在报告被接受前清除。拉取固定运行时与模型时会访问其公共
+制品仓库，但不会调用任何外部模型 Provider 推理端点。
+
+```powershell
+.\scripts\local-model-qualification.ps1 -Mode Check
+.\scripts\local-model-qualification.ps1
+```
+
 DeepSeek Responses 接入支持有界语义 SSE、协作式取消、稳定的 Provider 错误映射、
 结构化输出和只读 Tool selection。对话式运维链路会根据固定 registry 校验模型选择
 的 Tool，通过 Connector 执行查询，持久化 Canonical Evidence 和不可变的回答 revision；
@@ -313,8 +325,8 @@ python scripts/check_r2_action_qualification.py
 
 真实目标执行的上限固定为 `Supervised`。资格验证可以计算 Autonomous 晋级条件是否满足，但不会
 执行该实时状态转换，也不会下发无人值守的目标变更。脚本化的主模型与 Critic 身份仅用于契约夹具；
-模型凭据和模型网络调用均被禁止。使用 DeepSeek 的真实 AI 诊断会在其余非模型就绪工作完成后最后
-接入，届时再提供 API key。
+模型凭据和模型网络调用均被禁止。DeepSeek 真实诊断通过本地提供的 secret 单独完成资格验证，
+继续保持建议性、只读，并且不参与 Autonomous 晋级决策。
 
 在 `rocketmq-sre/` 中运行；工具会自行创建并销毁集群，构建产物保留在 `D:` 和 `F:`，脱敏报告
 写入仓库外：

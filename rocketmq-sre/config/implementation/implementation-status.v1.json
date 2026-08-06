@@ -396,6 +396,21 @@
         },
         {
           "kind": "configuration",
+          "path": "rocketmq-sre/config/qualification/local-model.v1.json",
+          "qualification": "local-model"
+        },
+        {
+          "kind": "test",
+          "path": "rocketmq-sre/scripts/check_local_model_qualification.py",
+          "qualification": "local-model"
+        },
+        {
+          "kind": "smoke",
+          "path": "rocketmq-sre/scripts/local-model-qualification.ps1",
+          "qualification": "local-model"
+        },
+        {
+          "kind": "configuration",
           "path": "rocketmq-sre/config/qualification/deepseek-diagnosis.v1.json",
           "qualification": "deepseek-diagnosis"
         },
@@ -435,6 +450,7 @@
       ],
       "limitations": [
         "DeepSeek Responses API diagnosis, bounded semantic streaming, cancellation, read-only tool selection, evidence-cited answers, and fallback from a failed primary passed credential-gated disposable-environment qualifications; selected tools were not executed and every result remained read-only.",
+        "The credential-free Ollama profile passed a single bounded OpenAI-compatible chat request against a qualification-owned loopback container using qwen2.5:0.5b; the model volume, container, process environment, and newly pulled runtime image were removed before the sanitized report was accepted.",
         "Zhipu GLM and Kimi/Moonshot remain descriptor, profile, transport, and contract tested rather than live-endpoint certified; production credentials, deployment-specific networking, sustained provider load, and operator handoff remain environment-specific."
       ]
     },

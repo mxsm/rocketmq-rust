@@ -125,6 +125,22 @@ instead of silently degrading the contract.
 See [Model compatibility](docs/compatibility.md) and
 [Extension guide](docs/phase05-extension-guide.md).
 
+The credential-free local-runtime qualification uses a disposable, loopback-
+only Ollama container and the pinned `qwen2.5:0.5b` model. It makes exactly one
+bounded OpenAI-compatible chat request through the production Model Gateway
+adapter. The run records only digests, sizes, token counts, safety assertions,
+and cleanup state; it never records the endpoint, prompt, response, credential,
+or machine-local path. The container, dedicated model volume, process
+environment, and any runtime image introduced by the run are removed before
+the report is accepted. Pulling the pinned runtime and model uses their public
+artifact registries, but no external model-provider inference endpoint is
+called.
+
+```powershell
+.\scripts\local-model-qualification.ps1 -Mode Check
+.\scripts\local-model-qualification.ps1
+```
+
 The DeepSeek Responses integration includes bounded semantic SSE, cooperative
 cancellation, stable provider-error mapping, structured output, and read-only
 tool selection. The conversational operations flow validates a selected tool
@@ -383,8 +399,8 @@ that Autonomous promotion prerequisites are satisfied, but it never performs
 that live transition and never dispatches an unattended target mutation. The
 scripted primary and Critic identities are contract fixtures only; provider
 credentials and model network calls are forbidden. DeepSeek-backed diagnosis
-is intentionally integrated last, after the remaining non-model readiness
-work, when an API key is supplied.
+is qualified separately with a locally supplied secret and remains advisory,
+read-only, and outside the autonomy promotion decision.
 
 Run from `rocketmq-sre/`; the harness creates and destroys its own cluster,
 keeps build output on `D:` and `F:`, and writes the redacted report outside the
