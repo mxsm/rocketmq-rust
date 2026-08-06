@@ -66,6 +66,17 @@
         "rust": "rocketmq-protocol/src/protocol/header/notification_request_header.rs",
         "java": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/NotificationRequestHeader.java"
       }
+    },
+    {
+      "rustType": "QueryConsumeQueueRequestHeader",
+      "field": "topic",
+      "semantic": "literal:",
+      "owner": "rocketmq-rust protocol maintainers",
+      "reason": "Preserves the public non-optional Rust field while accepting a Java frame that omits the nullable topic",
+      "referenceSource": {
+        "rust": "rocketmq-protocol/src/protocol/header/query_consume_queue_request_header.rs",
+        "java": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/QueryConsumeQueueRequestHeader.java"
+      }
     }
   ],
   "nameMappings": [

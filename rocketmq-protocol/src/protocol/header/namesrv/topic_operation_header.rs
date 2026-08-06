@@ -20,13 +20,19 @@ use serde::Serialize;
 
 use crate::rpc::rpc_request_header::RpcRequestHeader;
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::namesrv::topic_operation_header::DeleteTopicFromNamesrvRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.namesrv.DeleteTopicFromNamesrvRequestHeader",
+    fast
+)]
 #[serde(rename_all = "camelCase")]
 pub struct DeleteTopicFromNamesrvRequestHeader {
-    #[required]
+    #[header(required)]
     pub topic: CheetahString,
     pub cluster_name: Option<CheetahString>,
     #[serde(flatten)]
+    #[header(flatten, presence = "always")]
     pub topic_request: Option<TopicRequestHeader>,
 }
 

@@ -31,6 +31,7 @@ FIELD_PATTERN = re.compile(
 RENAME_PATTERN = re.compile(r'\brename\s*=\s*"([^"]+)"')
 ALIAS_PATTERN = re.compile(r'\balias\s*=\s*"([^"]+)"')
 DEFAULT_PATTERN = re.compile(r'\bdefault\s*=\s*"([^"]+)"')
+HEADER_REQUIRED_PATTERN = re.compile(r"#\[\s*header\s*\([\s\S]*?\brequired\b[\s\S]*?\)\s*\]")
 
 
 @dataclass(frozen=True)
@@ -177,7 +178,7 @@ def parse_direct_fields(entry: dict[str, object], repo_root: Path) -> list[tuple
         key = key_match.group(1) if key_match else snake_to_camel(name)
         aliases = tuple(ALIAS_PATTERN.findall(attrs))
         default_match = DEFAULT_PATTERN.search(attrs)
-        required = "#[required]" in attrs
+        required = "#[required]" in attrs or HEADER_REQUIRED_PATTERN.search(attrs) is not None
         flatten = bool(re.search(r"#\[serde\([^]]*\bflatten\b", attrs))
         wire_type = normalize_type(rust_type)
         if (

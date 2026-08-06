@@ -13,16 +13,22 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::rpc::topic_request_header::TopicRequestHeader;
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::consume_message_directly_result_request_header::ConsumeMessageDirectlyResultRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.ConsumeMessageDirectlyResultRequestHeader",
+    lookup = "scan",
+    fast
+)]
 #[serde(rename_all = "camelCase")]
 pub struct ConsumeMessageDirectlyResultRequestHeader {
-    #[required]
+    #[header(required)]
     pub consumer_group: CheetahString,
     pub client_id: Option<CheetahString>,
     pub msg_id: Option<CheetahString>,
@@ -31,6 +37,7 @@ pub struct ConsumeMessageDirectlyResultRequestHeader {
     pub topic_sys_flag: Option<i32>,
     pub group_sys_flag: Option<i32>,
     #[serde(flatten)]
+    #[header(flatten, presence = "always")]
     pub topic_request_header: Option<TopicRequestHeader>,
 }
 
