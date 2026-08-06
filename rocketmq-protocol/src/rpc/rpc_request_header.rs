@@ -25,39 +25,19 @@ use serde::Serialize;
 pub struct RpcRequestHeader {
     // the namespace name
     #[serde(rename = "ns", alias = "namespace")]
-    #[header(
-        key = "ns",
-        alias = "namespace",
-        alias_conflict = "prefer_canonical",
-        java_type = "String"
-    )]
+    #[header(key = "ns", alias = "namespace", alias_conflict = "prefer_canonical")]
     pub namespace: Option<CheetahString>,
     // if the data has been namespaced
     #[serde(rename = "nsd", alias = "namespaced")]
-    #[header(
-        key = "nsd",
-        alias = "namespaced",
-        alias_conflict = "prefer_canonical",
-        java_type = "Boolean"
-    )]
+    #[header(key = "nsd", alias = "namespaced", alias_conflict = "prefer_canonical")]
     pub namespaced: Option<bool>,
     // the abstract remote addr name, usually the physical broker name
     #[serde(rename = "bname", alias = "brokerName")]
-    #[header(
-        key = "bname",
-        alias = "brokerName",
-        alias_conflict = "prefer_canonical",
-        java_type = "String"
-    )]
+    #[header(key = "bname", alias = "brokerName", alias_conflict = "prefer_canonical")]
     pub broker_name: Option<CheetahString>,
     // oneway
     #[serde(rename = "oway", alias = "oneway")]
-    #[header(
-        key = "oway",
-        alias = "oneway",
-        alias_conflict = "prefer_canonical",
-        java_type = "Boolean"
-    )]
+    #[header(key = "oway", alias = "oneway", alias_conflict = "prefer_canonical")]
     pub oneway: Option<bool>,
 }
 

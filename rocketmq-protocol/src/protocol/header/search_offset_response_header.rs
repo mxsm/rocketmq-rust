@@ -22,7 +22,7 @@ use serde::Serialize;
     java_class = "org.apache.rocketmq.remoting.protocol.header.SearchOffsetResponseHeader"
 )]
 pub struct SearchOffsetResponseHeader {
-    #[header(required, java_type = "Long")]
+    #[header(required)]
     pub offset: i64,
 }
 

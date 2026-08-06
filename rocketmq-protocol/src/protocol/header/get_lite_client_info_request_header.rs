@@ -30,19 +30,12 @@ fn default_max_count() -> i32 {
 )]
 #[serde(rename_all = "camelCase")]
 pub struct GetLiteClientInfoRequestHeader {
-    #[header(java_type = "String")]
     pub parent_topic: Option<CheetahString>,
-    #[header(java_type = "String")]
     pub group: Option<CheetahString>,
-    #[header(java_type = "String")]
     pub client_id: Option<CheetahString>,
 
     #[serde(default = "default_max_count")]
-    #[header(
-        default_with = "default_max_count",
-        default_semantic = "literal:1000",
-        java_type = "int"
-    )]
+    #[header(default_with = "default_max_count", default_semantic = "literal:1000")]
     pub max_count: i32,
 }
 

@@ -70,7 +70,11 @@ pub struct HeaderFieldSpec {
     pub presence: HeaderPresence,
     /// Stable literal or dynamic default semantic identifier.
     pub default_semantic: Option<&'static str>,
-    /// Java field type used by compatibility tooling.
+    /// Optional Java type override for compatibility tooling.
+    ///
+    /// Tooling should infer the normal wire category from [`Self::kind`] when
+    /// this is `None`. Production headers only set this for exceptional
+    /// mappings that cannot be inferred from the Rust value type.
     pub java_type: Option<&'static str>,
     /// Signed Java range imposed on an unsigned Rust value.
     pub java_range: Option<HeaderRange>,

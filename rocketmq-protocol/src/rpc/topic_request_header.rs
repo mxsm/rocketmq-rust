@@ -28,7 +28,6 @@ pub struct TopicRequestHeader {
     #[serde(flatten)]
     #[header(flatten, presence = "any")]
     pub rpc_request_header: Option<RpcRequestHeader>,
-    #[header(java_type = "Boolean")]
     pub lo: Option<bool>,
 }
 
