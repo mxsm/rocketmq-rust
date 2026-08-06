@@ -41,6 +41,7 @@ EXPECTED_MATURITY = (
     "production_certified",
 )
 EXPECTED_EVIDENCE_KINDS = {"configuration", "source", "test", "smoke"}
+REQUIRED_QUALIFICATION_EVIDENCE_KINDS = {"configuration", "test", "smoke"}
 BASELINE_ASSERTIONS = {
     "total": "requirement_count",
     "required": "required_count",
@@ -57,6 +58,7 @@ SENSITIVE_VALUE = re.compile(
     r"(?:-----BEGIN [A-Z ]*PRIVATE KEY-----|\bBearer\s+[A-Za-z0-9._~-]+|\bsk-[A-Za-z0-9_-]{12,})",
     re.IGNORECASE,
 )
+QUALIFICATION_ID = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 
 
 def load_manifest(path: Path) -> dict[str, Any]:
@@ -194,14 +196,42 @@ def validate_manifest(manifest: dict[str, Any], repository_root: Path) -> list[s
         if not isinstance(evidence, list):
             findings.append(f"{location}.evidence must be an array")
             evidence = []
+        qualification_evidence: dict[str, set[str]] = {}
+        has_smoke_evidence = False
         for evidence_index, item in enumerate(evidence):
             evidence_location = f"{location}.evidence[{evidence_index}]"
             if not isinstance(item, dict):
                 findings.append(f"{evidence_location} must be an object")
                 continue
-            if item.get("kind") not in EXPECTED_EVIDENCE_KINDS:
+            kind = item.get("kind")
+            if kind not in EXPECTED_EVIDENCE_KINDS:
                 findings.append(f"{evidence_location}.kind is not recognized")
+            elif kind == "smoke":
+                has_smoke_evidence = True
             findings.extend(_validate_evidence_path(item.get("path"), repository_root))
+
+            qualification = item.get("qualification")
+            if qualification is None:
+                continue
+            if not isinstance(qualification, str) or not QUALIFICATION_ID.fullmatch(qualification):
+                findings.append(f"{evidence_location}.qualification must be a stable kebab-case identifier")
+            elif kind in EXPECTED_EVIDENCE_KINDS:
+                qualification_evidence.setdefault(qualification, set()).add(kind)
+
+        for qualification, kinds in sorted(qualification_evidence.items()):
+            missing = REQUIRED_QUALIFICATION_EVIDENCE_KINDS - kinds
+            if missing:
+                findings.append(
+                    f"{location} qualification {qualification} is missing evidence kinds: "
+                    f"{', '.join(sorted(missing))}"
+                )
+
+        if (
+            isinstance(maturity, dict)
+            and maturity.get("live_smoke_passed") is True
+            and not has_smoke_evidence
+        ):
+            findings.append(f"{location} claims live_smoke_passed without smoke evidence")
 
         if status in {"completed", "partial"} and not evidence:
             findings.append(f"{location} requires implementation evidence")
