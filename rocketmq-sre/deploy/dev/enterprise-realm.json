@@ -8,6 +8,8 @@
     "realm": [
       { "name": "operator" },
       { "name": "approver" },
+      { "name": "executor-service" },
+      { "name": "execution-agent" },
       { "name": "model-governance" }
     ]
   },

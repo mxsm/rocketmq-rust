@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -63,9 +64,19 @@ struct OidcClaims {
     scope: String,
     #[serde(default)]
     roles: Vec<String>,
+    #[serde(default)]
+    realm_access: OidcRoleAccess,
+    #[serde(default)]
+    resource_access: BTreeMap<String, OidcRoleAccess>,
     rocketmq_tenant: String,
     #[serde(default)]
     rocketmq_clusters: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+struct OidcRoleAccess {
+    #[serde(default)]
+    roles: Vec<String>,
 }
 
 impl AuthService {
@@ -239,7 +250,7 @@ async fn authorize_oidc(
         })
         .collect::<Result<BTreeSet<_>, _>>()?;
     enforce_cluster_scope(&clusters, cluster)?;
-    let mut roles = claims.roles.into_iter().collect::<BTreeSet<_>>();
+    let mut roles = oidc_roles(&claims, audience);
     for scope in claims.scope.split_ascii_whitespace() {
         match scope {
             "rocketmq:diagnose" | "rocketmq:sre" => {
@@ -269,6 +280,39 @@ async fn authorize_oidc(
         clusters,
         roles,
     })
+}
+
+fn oidc_roles(claims: &OidcClaims, audience: &str) -> BTreeSet<String> {
+    let audience_roles = claims
+        .resource_access
+        .get(audience)
+        .into_iter()
+        .flat_map(|access| access.roles.iter());
+    let mut roles = BTreeSet::new();
+    for role in claims
+        .roles
+        .iter()
+        .chain(claims.realm_access.roles.iter())
+        .chain(audience_roles)
+    {
+        if role.is_empty() {
+            continue;
+        }
+        roles.insert(role.clone());
+        match role.as_str() {
+            "executor" | "executor-service" => {
+                roles.insert("executor_service".to_owned());
+            }
+            "execution-agent" => {
+                roles.insert("execution_agent".to_owned());
+            }
+            "model_governance" => {
+                roles.insert("model-governance".to_owned());
+            }
+            _ => {}
+        }
+    }
+    roles
 }
 
 async fn fetch_jwks(client: &reqwest::Client, url: &url::Url) -> Result<JwkSet, ControlPlaneError> {
@@ -325,6 +369,8 @@ fn header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
 
     #[tokio::test]
@@ -358,5 +404,57 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn oidc_roles_accept_standard_realm_and_audience_client_claims() {
+        let claims: OidcClaims = serde_json::from_value(json!({
+            "sub": "sre-operator",
+            "scope": "rocketmq:read",
+            "roles": ["top-level-role"],
+            "realm_access": {
+                "roles": ["operator", "approver", "executor-service"]
+            },
+            "resource_access": {
+                "rocketmq-sre-control-plane": {
+                    "roles": ["execution-agent"]
+                },
+                "unrelated-client": {
+                    "roles": ["admin"]
+                }
+            },
+            "rocketmq_tenant": TenantId::new().to_string(),
+            "rocketmq_clusters": [ClusterId::new().to_string()]
+        }))
+        .expect("standard OIDC claims");
+
+        let roles = oidc_roles(&claims, "rocketmq-sre-control-plane");
+        assert!(roles.contains("top-level-role"));
+        assert!(roles.contains("operator"));
+        assert!(roles.contains("approver"));
+        assert!(roles.contains("executor_service"));
+        assert!(roles.contains("execution_agent"));
+        assert!(!roles.contains("admin"));
+    }
+
+    #[test]
+    fn oidc_role_aliases_are_narrow_and_empty_roles_are_ignored() {
+        let claims: OidcClaims = serde_json::from_value(json!({
+            "sub": "service-identity",
+            "scope": "rocketmq:read",
+            "realm_access": {
+                "roles": ["", "executor", "model_governance", "unknown-role"]
+            },
+            "rocketmq_tenant": TenantId::new().to_string(),
+            "rocketmq_clusters": []
+        }))
+        .expect("OIDC service claims");
+
+        let roles = oidc_roles(&claims, "rocketmq-sre-control-plane");
+        assert!(!roles.contains(""));
+        assert!(roles.contains("executor_service"));
+        assert!(roles.contains("model-governance"));
+        assert!(roles.contains("unknown-role"));
+        assert!(!roles.contains("execution_agent"));
     }
 }
