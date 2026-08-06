@@ -58,6 +58,92 @@ function Compose-Arguments([string[]]$Arguments) {
     ) + $Arguments
 }
 
+function Get-IdentityFixtureToken(
+    [ValidateSet('wrong_audience', 'missing_read_scope', 'different_cluster')]
+    [string]$Profile
+) {
+    $document = Invoke-Docker (Compose-Arguments @(
+        'exec', '-T', 'sre-connector',
+        'curl', '--fail', '--silent', '--show-error',
+        '--cacert', '/etc/rocketmq/tls/ca-cert.pem',
+        '--header', 'Authorization: Bearer phase00-issuer-admin',
+        '--data-urlencode', "profile=$Profile",
+        'https://dev-issuer-tls:8443/admin/fixture-token'
+    )) -Capture
+    $token = ($document | ConvertFrom-Json).access_token
+    if ([string]::IsNullOrWhiteSpace($token)) {
+        throw "Development issuer did not return the '$Profile' identity fixture token."
+    }
+    return $token
+}
+
+function Invoke-McpIdentityProbe([string]$Token, [string]$Payload) {
+    $response = Invoke-Docker (Compose-Arguments @(
+        'exec', '-T', 'sre-connector',
+        'curl', '--silent', '--show-error', '--include',
+        '--write-out', "`nPHASE00_HTTP_STATUS:%{http_code}",
+        '--cacert', '/etc/rocketmq/tls/ca-cert.pem',
+        '--header', "Authorization: Bearer $Token",
+        '--header', 'Content-Type: application/json',
+        '--header', 'Accept: application/json, text/event-stream',
+        '--header', 'MCP-Protocol-Version: 2025-11-25',
+        '--data', $Payload,
+        'https://127.0.0.1:8089/mcp'
+    )) -Capture
+    $statusMatch = [regex]::Match($response, '(?m)^PHASE00_HTTP_STATUS:(\d{3})\s*$')
+    if (-not $statusMatch.Success) {
+        throw 'MCP identity probe did not return an HTTP status marker.'
+    }
+    $challengeMatch = [regex]::Match($response, '(?im)^www-authenticate:\s*([^\r\n]+)')
+    $withoutStatus = [regex]::Replace($response, '(?m)\r?\nPHASE00_HTTP_STATUS:\d{3}\s*$', '')
+    $sections = @([regex]::Split($withoutStatus, '\r?\n\r?\n'))
+    [PSCustomObject]@{
+        Status = $statusMatch.Groups[1].Value
+        Challenge = if ($challengeMatch.Success) { $challengeMatch.Groups[1].Value.Trim() } else { '' }
+        Body = $sections[-1].Trim()
+        Raw = $response
+    }
+}
+
+function Assert-McpIdentityFailClosed {
+    $initializePayload = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"phase00-identity-smoke","version":"1.0.0"}}}'
+
+    $wrongAudienceToken = Get-IdentityFixtureToken 'wrong_audience'
+    $wrongAudience = Invoke-McpIdentityProbe $wrongAudienceToken $initializePayload
+    if ($wrongAudience.Status -ne '401' -or $wrongAudience.Challenge -notmatch 'error="invalid_token"') {
+        throw "Wrong-audience token was not rejected as invalid_token (HTTP $($wrongAudience.Status))."
+    }
+    if ($wrongAudience.Raw.Contains($wrongAudienceToken) -or $wrongAudience.Body -match 'eyJ[A-Za-z0-9_-]+\.') {
+        throw 'Wrong-audience rejection leaked an access token.'
+    }
+
+    $missingScopeToken = Get-IdentityFixtureToken 'missing_read_scope'
+    $missingScope = Invoke-McpIdentityProbe $missingScopeToken $initializePayload
+    if ($missingScope.Status -ne '403' -or $missingScope.Challenge -notmatch 'error="insufficient_scope"') {
+        throw "Missing-read-scope token was not rejected as insufficient_scope (HTTP $($missingScope.Status))."
+    }
+    if ($missingScope.Raw.Contains($missingScopeToken) -or $missingScope.Body -match 'eyJ[A-Za-z0-9_-]+\.') {
+        throw 'Missing-scope rejection leaked an access token.'
+    }
+
+    $differentClusterToken = Get-IdentityFixtureToken 'different_cluster'
+    $toolPayload = '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"rocketmq_get_cluster_overview","arguments":{"cluster":"sre-dev"}}}'
+    $differentCluster = Invoke-McpIdentityProbe $differentClusterToken $toolPayload
+    if ($differentCluster.Status -ne '200') {
+        throw "Different-cluster token did not reach the MCP authorization guard (HTTP $($differentCluster.Status))."
+    }
+    $toolResponse = $differentCluster.Body | ConvertFrom-Json
+    $toolError = $toolResponse.result.content[0].text | ConvertFrom-Json
+    if (-not $toolResponse.result.isError -or $toolError.code -ne 'cluster_not_allowed' -or $toolError.retryable) {
+        throw 'Different-cluster token was not rejected with stable cluster_not_allowed semantics.'
+    }
+    if ($differentCluster.Raw.Contains($differentClusterToken) -or $differentCluster.Body -match 'eyJ[A-Za-z0-9_-]+\.') {
+        throw 'Different-cluster rejection leaked an access token.'
+    }
+
+    Write-Host 'MCP rejected wrong audience, missing read scope, and different cluster identity fixtures.'
+}
+
 function Wait-Http([string]$Uri, [int]$Seconds = 90) {
     $deadline = [DateTime]::UtcNow.AddSeconds($Seconds)
     do {
@@ -652,6 +738,8 @@ Assert-ObservabilityQueries
 Wait-Http 'http://127.0.0.1:8091/readyz' | Out-Null
 $finalLagSnapshot = Drain-ProbeLag
 Write-Host "Post-outage Consumer Lag recovered to $($finalLagSnapshot.TotalLag)."
+
+Assert-McpIdentityFailClosed
 
 $oldJwksDocument = Invoke-Docker (Compose-Arguments @(
     'exec', '-T', 'sre-connector',
