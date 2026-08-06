@@ -1,0 +1,73 @@
+{
+  "schema_version": "rocketmq-sre.provider-failover-qualification.v1",
+  "environment": "docker_postgresql_local_primary_deepseek_secondary",
+  "operating_mode": "supervised_read_only",
+  "production_certified": false,
+  "unattended_autonomous_execution": false,
+  "providers": {
+    "primary": {
+      "kind": "loopback_fault_fixture",
+      "network": "loopback_only",
+      "credential": "ephemeral_process_fixture"
+    },
+    "secondary": {
+      "provider": "deepseek",
+      "protocol": "responses_api",
+      "model": "deepseek-v4-flash",
+      "network": "real_https"
+    },
+    "descriptors_only": [
+      "zhipu-glm",
+      "kimi-moonshot"
+    ]
+  },
+  "required_scenarios": {
+    "transient_primary_to_live_secondary": {
+      "primary_error": "service_unavailable",
+      "secondary_result": "model_assisted",
+      "authorized_evidence_citations": true,
+      "minimum_secondary_attempts": 1,
+      "maximum_secondary_attempts": 2,
+      "maximum_schema_repairs": 1,
+      "maximum_diagnosis_attempts": 1
+    },
+    "policy_denial_stops_fallback": {
+      "secondary_calls": 0,
+      "result": "rules_only"
+    },
+    "unsupported_capability_stops_fallback": {
+      "secondary_calls": 0,
+      "result": "rules_only"
+    },
+    "invalid_schema_stops_fallback": {
+      "secondary_calls": 0,
+      "result": "rules_only"
+    },
+    "invalid_citation_stops_fallback": {
+      "secondary_calls": 0,
+      "result": "rules_only"
+    },
+    "all_unavailable_rules_only": {
+      "result": "rules_only",
+      "execution_eligible": false
+    }
+  },
+  "repository_evidence": {
+    "live_test_path": "rocketmq-sre/crates/rocketmq-sre-control-plane/src/models/service/live_provider_failover.rs",
+    "live_test": "transient_primary_falls_back_to_live_deepseek_and_failures_remain_rules_only",
+    "runner": "rocketmq-sre/scripts/provider-failover-qualification.ps1",
+    "checker": "rocketmq-sre/scripts/check_provider_failover_qualification.py"
+  },
+  "live_report": {
+    "schema_version": "rocketmq-sre.provider-failover-qualification-report.v1",
+    "machine_local_only": true,
+    "allowed_roots": [
+      "D:\\rocketmq-sre-evidence",
+      "F:\\rocketmq-sre-evidence"
+    ],
+    "secrets_recorded": false,
+    "prompts_recorded": false,
+    "responses_recorded": false,
+    "message_bodies_recorded": false
+  }
+}
