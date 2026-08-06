@@ -16,6 +16,7 @@ use std::sync::OnceLock;
 
 use super::BinaryHeaderFields;
 use crate::protocol::header_codec::HeaderFieldSource;
+use crate::protocol::header_codec::JsonHeaderFields;
 use crate::HeaderMap;
 
 #[derive(Default)]
@@ -25,6 +26,10 @@ pub(super) enum ExtensionFields {
     Materialized(HeaderMap),
     RocketMqRaw {
         fields: BinaryHeaderFields,
+        materialized: OnceLock<HeaderMap>,
+    },
+    JsonRaw {
+        fields: JsonHeaderFields,
         materialized: OnceLock<HeaderMap>,
     },
 }
@@ -44,17 +49,30 @@ impl Clone for ExtensionFields {
                     materialized: cloned_cache,
                 }
             }
+            Self::JsonRaw { fields, materialized } => {
+                let cloned_cache = OnceLock::new();
+                if let Some(map) = materialized.get() {
+                    let _ = cloned_cache.set(map.clone());
+                }
+                Self::JsonRaw {
+                    fields: fields.clone(),
+                    materialized: cloned_cache,
+                }
+            }
         }
     }
 }
 
 impl ExtensionFields {
-    pub(super) fn from_option(fields: Option<HeaderMap>) -> Self {
-        fields.map_or(Self::Absent, Self::Materialized)
-    }
-
     pub(super) fn from_rocketmq_raw(fields: BinaryHeaderFields) -> Self {
         Self::RocketMqRaw {
+            fields,
+            materialized: OnceLock::new(),
+        }
+    }
+
+    pub(super) fn from_json_raw(fields: JsonHeaderFields) -> Self {
+        Self::JsonRaw {
             fields,
             materialized: OnceLock::new(),
         }
@@ -69,12 +87,14 @@ impl ExtensionFields {
             Self::Absent => None,
             Self::Materialized(fields) => Some(fields),
             Self::RocketMqRaw { fields, materialized } => Some(materialized.get_or_init(|| fields.materialize())),
+            Self::JsonRaw { fields, materialized } => Some(materialized.get_or_init(|| fields.materialize())),
         }
     }
 
     pub(super) fn as_field_source(&self) -> Option<&dyn HeaderFieldSource> {
         match self {
             Self::RocketMqRaw { fields, .. } => Some(fields),
+            Self::JsonRaw { fields, .. } => Some(fields),
             Self::Absent | Self::Materialized(_) => None,
         }
     }
@@ -84,6 +104,11 @@ impl ExtensionFields {
             Self::Absent => None,
             Self::Materialized(fields) => Some(fields),
             Self::RocketMqRaw { fields, .. } => {
+                let fields = fields.materialize();
+                *self = Self::Materialized(fields);
+                self.as_map_mut()
+            }
+            Self::JsonRaw { fields, .. } => {
                 let fields = fields.materialize();
                 *self = Self::Materialized(fields);
                 self.as_map_mut()
@@ -103,6 +128,11 @@ impl ExtensionFields {
                 *self = Self::Materialized(fields);
                 self.get_or_insert_map()
             }
+            Self::JsonRaw { fields, .. } => {
+                let fields = fields.materialize();
+                *self = Self::Materialized(fields);
+                self.get_or_insert_map()
+            }
         }
     }
 
@@ -116,11 +146,17 @@ impl ExtensionFields {
     }
 
     #[cfg(test)]
+    pub(super) fn is_json_raw(&self) -> bool {
+        matches!(self, Self::JsonRaw { .. })
+    }
+
+    #[cfg(test)]
     pub(super) fn has_materialized_map(&self) -> bool {
         match self {
             Self::Absent => false,
             Self::Materialized(_) => true,
             Self::RocketMqRaw { materialized, .. } => materialized.get().is_some(),
+            Self::JsonRaw { materialized, .. } => materialized.get().is_some(),
         }
     }
 }

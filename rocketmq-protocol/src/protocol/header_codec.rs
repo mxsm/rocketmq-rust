@@ -21,6 +21,7 @@
 mod codec;
 mod error;
 mod field_source;
+mod json_field_source;
 mod schema;
 mod sink;
 mod value;
@@ -34,6 +35,7 @@ pub use codec::HeaderCodec;
 pub use error::HeaderCodecError;
 pub(crate) use field_source::BinaryHeaderFields;
 pub use field_source::HeaderFieldSource;
+pub(crate) use json_field_source::JsonHeaderFields;
 pub use schema::AliasConflictPolicy;
 pub use schema::DynamicCollisionPolicy;
 pub use schema::FlattenPresenceSpec;
