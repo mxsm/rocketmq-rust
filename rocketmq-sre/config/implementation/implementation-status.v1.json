@@ -91,10 +91,19 @@
           "kind": "smoke",
           "path": "rocketmq-sre/scripts/phase00-smoke.ps1",
           "qualification": "required-signals"
+        },
+        {
+          "kind": "configuration",
+          "path": "rocketmq-sre/config/qualification/target-evidence-sources.v1.json"
+        },
+        {
+          "kind": "test",
+          "path": "rocketmq-sre/scripts/check_target_evidence_source_qualification.py"
         }
       ],
       "limitations": [
         "Broker, NameServer, Controller, Proxy, and MCP Required Signals are qualified through bounded Canonical Evidence in the disposable Compose environment; production backend certification remains environment-specific.",
+        "A fail-closed target-environment report contract now covers all 32 production-required Evidence routes and all six source types, but no organization-specific machine-local report has been supplied, so production certification remains false.",
         "Twenty-one optional Evidence requirements retain explicit stable not-production-verified routes."
       ]
     },
