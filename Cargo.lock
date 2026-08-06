@@ -4497,6 +4497,7 @@ dependencies = [
  "chrono",
  "criterion",
  "flate2",
+ "itoa",
  "lz4_flex",
  "memchr",
  "rand 0.10.2",
@@ -4507,6 +4508,7 @@ dependencies = [
  "serde_json",
  "serde_json_any_key",
  "simd-json",
+ "thiserror 2.0.19",
  "trybuild",
  "zstd",
 ]
