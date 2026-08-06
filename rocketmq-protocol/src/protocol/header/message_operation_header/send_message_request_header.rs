@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -24,31 +24,37 @@ use crate::protocol::remoting_command::RemotingCommand;
 use crate::rpc::rpc_request_header::RpcRequestHeader;
 use crate::rpc::topic_request_header::TopicRequestHeader;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.SendMessageRequestHeader",
+    lookup = "scan",
+    fast
+)]
 #[serde(rename_all = "camelCase")]
 pub struct SendMessageRequestHeader {
-    #[required]
+    #[header(required)]
     pub producer_group: CheetahString,
 
-    #[required]
+    #[header(required)]
     pub topic: CheetahString,
 
-    #[required]
+    #[header(required)]
     pub default_topic: CheetahString,
 
-    #[required]
+    #[header(required)]
     pub default_topic_queue_nums: i32,
 
-    #[required]
+    #[header(required)]
     pub queue_id: i32,
 
-    #[required]
+    #[header(required)]
     pub sys_flag: i32,
 
-    #[required]
+    #[header(required)]
     pub born_timestamp: i64,
 
-    #[required]
+    #[header(required)]
     pub flag: i32,
 
     pub properties: Option<CheetahString>,
@@ -57,6 +63,7 @@ pub struct SendMessageRequestHeader {
     pub batch: Option<bool>,
     pub max_reconsume_times: Option<i32>,
     #[serde(flatten)]
+    #[header(flatten, presence = "always")]
     pub topic_request_header: Option<TopicRequestHeader>,
 }
 

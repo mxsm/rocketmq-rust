@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -21,16 +21,33 @@ fn default_invoke_time() -> u64 {
     rocketmq_model::time::current_millis()
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, RequestHeaderCodecV2)]
+#[derive(Clone, Debug, Serialize, Deserialize, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::controller::clean_broker_data_request_header::CleanBrokerDataRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.controller.admin.CleanControllerBrokerDataRequestHeader",
+    fast
+)]
 #[serde(rename_all = "camelCase")]
 pub struct CleanBrokerDataRequestHeader {
     pub cluster_name: Option<CheetahString>,
-    #[required]
+    #[header(required)]
     pub broker_name: CheetahString,
     pub broker_controller_ids_to_clean: Option<CheetahString>,
     #[serde(rename = "isCleanLivingBroker", alias = "cleanLivingBroker")]
+    #[header(
+        key = "isCleanLivingBroker",
+        alias = "cleanLivingBroker",
+        alias_conflict = "prefer_canonical",
+        default,
+        default_semantic = "literal:false"
+    )]
     pub clean_living_broker: bool,
     #[serde(default = "default_invoke_time")]
+    #[header(
+        default_with = "default_invoke_time",
+        default_semantic = "dynamic:current_time_millis",
+        range = "i64"
+    )]
     pub invoke_time: u64,
 }
 

@@ -13,25 +13,36 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::rpc::topic_request_header::TopicRequestHeader;
 
-#[derive(Clone, Debug, Serialize, Deserialize, RequestHeaderCodecV2)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::query_consume_queue_request_header::QueryConsumeQueueRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.QueryConsumeQueueRequestHeader",
+    lookup = "scan",
+    fast
+)]
 #[serde(rename_all = "camelCase")]
 pub struct QueryConsumeQueueRequestHeader {
+    #[header(default, default_semantic = "literal:")]
     pub topic: CheetahString,
 
+    #[header(default, default_semantic = "literal:0")]
     pub queue_id: i32,
 
+    #[header(default, default_semantic = "literal:0")]
     pub index: i64,
 
+    #[header(default, default_semantic = "literal:0")]
     pub count: i32,
 
     pub consumer_group: Option<CheetahString>,
 
     #[serde(flatten)]
+    #[header(flatten, presence = "always")]
     pub topic_request_header: Option<TopicRequestHeader>,
 }

@@ -19,13 +19,19 @@ use bytes::BytesMut;
 use cheetah_string::CheetahString;
 use rocketmq_macros::RequestHeaderCodecV3;
 use rocketmq_model::boundary_type::BoundaryType;
+use rocketmq_protocol::protocol::header::consume_message_directly_result_request_header::ConsumeMessageDirectlyResultRequestHeader;
+use rocketmq_protocol::protocol::header::controller::clean_broker_data_request_header::CleanBrokerDataRequestHeader;
+use rocketmq_protocol::protocol::header::get_consumer_status_request_header::GetConsumerStatusRequestHeader;
 use rocketmq_protocol::protocol::header::get_lite_client_info_request_header::GetLiteClientInfoRequestHeader;
+use rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
 use rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2;
 use rocketmq_protocol::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
+use rocketmq_protocol::protocol::header::namesrv::topic_operation_header::DeleteTopicFromNamesrvRequestHeader;
 use rocketmq_protocol::protocol::header::namesrv::topic_operation_header::TopicRequestHeader as NamesrvTopicRequestHeader;
 use rocketmq_protocol::protocol::header::notification_request_header::NotificationRequestHeader;
 use rocketmq_protocol::protocol::header::pull_message_request_header::PullMessageRequestHeader;
 use rocketmq_protocol::protocol::header::pull_message_response_header::PullMessageResponseHeader;
+use rocketmq_protocol::protocol::header::query_consume_queue_request_header::QueryConsumeQueueRequestHeader;
 use rocketmq_protocol::protocol::header::search_offset_request_header::SearchOffsetRequestHeader;
 use rocketmq_protocol::protocol::header::search_offset_response_header::SearchOffsetResponseHeader;
 use rocketmq_protocol::protocol::header_codec::{
@@ -146,7 +152,13 @@ fn registry() -> Vec<RegisteredSchema> {
         register::<RpcRequestHeader>(),
         register::<TopicRequestHeader>(),
         register::<NamesrvTopicRequestHeader>(),
+        register::<ConsumeMessageDirectlyResultRequestHeader>(),
+        register::<CleanBrokerDataRequestHeader>(),
+        register::<GetConsumerStatusRequestHeader>(),
         register::<GetLiteClientInfoRequestHeader>(),
+        register::<SendMessageRequestHeader>(),
+        register::<DeleteTopicFromNamesrvRequestHeader>(),
+        register::<QueryConsumeQueueRequestHeader>(),
         register::<SearchOffsetRequestHeader>(),
         register::<SearchOffsetResponseHeader>(),
         register::<PullMessageRequestHeader>(),
@@ -155,6 +167,55 @@ fn registry() -> Vec<RegisteredSchema> {
         register::<SendMessageResponseHeader>(),
         register::<NotificationRequestHeader>(),
     ]
+}
+
+#[test]
+fn performance_corpus_headers_use_generated_direct_codecs() {
+    const {
+        assert!(<ConsumeMessageDirectlyResultRequestHeader as FromMap>::SUPPORTS_HEADER_FIELD_SOURCE);
+        assert!(<CleanBrokerDataRequestHeader as FromMap>::SUPPORTS_HEADER_FIELD_SOURCE);
+        assert!(<GetConsumerStatusRequestHeader as FromMap>::SUPPORTS_HEADER_FIELD_SOURCE);
+        assert!(<SendMessageRequestHeader as FromMap>::SUPPORTS_HEADER_FIELD_SOURCE);
+        assert!(<DeleteTopicFromNamesrvRequestHeader as FromMap>::SUPPORTS_HEADER_FIELD_SOURCE);
+        assert!(<QueryConsumeQueueRequestHeader as FromMap>::SUPPORTS_HEADER_FIELD_SOURCE);
+        assert!(<GetLiteClientInfoRequestHeader as FromMap>::SUPPORTS_HEADER_FIELD_SOURCE);
+        assert!(<SendMessageRequestHeaderV2 as FromMap>::SUPPORTS_HEADER_FIELD_SOURCE);
+        assert!(<SendMessageResponseHeader as FromMap>::SUPPORTS_HEADER_FIELD_SOURCE);
+        assert!(<NotificationRequestHeader as FromMap>::SUPPORTS_HEADER_FIELD_SOURCE);
+        assert!(<PullMessageRequestHeader as FromMap>::SUPPORTS_HEADER_FIELD_SOURCE);
+        assert!(<PullMessageResponseHeader as FromMap>::SUPPORTS_HEADER_FIELD_SOURCE);
+    }
+
+    let corpus: serde_json::Value =
+        serde_json::from_str(include_str!("../../scripts/request-header-codec/perf-corpus-v1.json"))
+            .expect("checked-in performance corpus");
+    let registered: HashMap<_, _> = registry()
+        .into_iter()
+        .map(|schema| (schema.type_id, schema.direct_binary))
+        .collect();
+
+    for case in corpus["cases"].as_array().expect("corpus cases") {
+        let type_id = case["header"].as_str().expect("corpus header type ID");
+        assert!(
+            registered.contains_key(type_id),
+            "{type_id} must use a generated direct source codec"
+        );
+    }
+
+    for type_id in [
+        ConsumeMessageDirectlyResultRequestHeader::TYPE_ID,
+        CleanBrokerDataRequestHeader::TYPE_ID,
+        GetConsumerStatusRequestHeader::TYPE_ID,
+        SendMessageRequestHeader::TYPE_ID,
+        DeleteTopicFromNamesrvRequestHeader::TYPE_ID,
+        QueryConsumeQueueRequestHeader::TYPE_ID,
+    ] {
+        assert_eq!(
+            registered.get(type_id),
+            Some(&true),
+            "{type_id} must use direct binary encoding"
+        );
+    }
 }
 
 fn rust_kind(kind: HeaderValueKind) -> &'static str {
