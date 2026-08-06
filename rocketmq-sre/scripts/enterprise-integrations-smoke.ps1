@@ -190,6 +190,12 @@ try {
             throw "OIDC token is missing $scope."
         }
     }
+    $realmRoles = @($claims.realm_access.roles)
+    foreach ($role in @('operator', 'approver', 'model-governance')) {
+        if ($realmRoles -notcontains $role) {
+            throw "OIDC token is missing the standard realm role $role."
+        }
+    }
 
     $beforeKeys = @((Invoke-BoundedGet `
         'https://localhost:8445/realms/rocketmq-sre/protocol/openid-connect/certs' `
@@ -246,6 +252,7 @@ try {
             issuer = $discovery.issuer
             audience_verified = $true
             tenant_cluster_scope_verified = $true
+            standard_realm_role_mapping_verified = $true
             signing_key_rotation_verified = $true
         }
         secrets = [ordered]@{
