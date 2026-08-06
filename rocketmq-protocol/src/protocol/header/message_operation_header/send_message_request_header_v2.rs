@@ -29,6 +29,7 @@ use crate::protocol::header::message_operation_header::TopicRequestHeaderTrait;
 use crate::protocol::header_codec::BinarySink;
 use crate::protocol::header_codec::HeaderCodec;
 use crate::protocol::header_codec::HeaderCodecError;
+use crate::protocol::header_codec::HeaderFieldSource;
 use crate::protocol::header_codec::MapSink;
 use crate::protocol::header_codec::ResolvedHeaderKey;
 use crate::rpc::rpc_request_header::RpcRequestHeader;
@@ -290,9 +291,15 @@ impl FromMap for SendMessageRequestHeaderV2 {
     type Error = rocketmq_error::RocketMQError;
 
     type Target = Self;
+    const SUPPORTS_HEADER_FIELD_SOURCE: bool = true;
 
     fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
         <Self as HeaderCodec>::decode_from_map(map)
+            .map_err(|error| rocketmq_error::RocketMQError::request_header_error(error.to_string()))
+    }
+
+    fn from_field_source(source: &dyn HeaderFieldSource) -> Result<Self::Target, Self::Error> {
+        <Self as HeaderCodec>::decode_from_source(source)
             .map_err(|error| rocketmq_error::RocketMQError::request_header_error(error.to_string()))
     }
 }
@@ -593,6 +600,21 @@ mod tests {
             map.get(&CheetahString::from_static_str("n")).unwrap(),
             "test_broker_name"
         );
+    }
+
+    #[test]
+    fn manual_v3_shim_opts_into_direct_field_source_decode() {
+        let header = minimal_header_v2();
+        let fields = header.to_map().unwrap();
+
+        const { assert!(<SendMessageRequestHeaderV2 as FromMap>::SUPPORTS_HEADER_FIELD_SOURCE) };
+        let decoded = <SendMessageRequestHeaderV2 as FromMap>::from_field_source(&fields).unwrap();
+
+        assert_eq!(decoded.a, header.a);
+        assert_eq!(decoded.b, header.b);
+        assert_eq!(decoded.c, header.c);
+        assert_eq!(decoded.d, header.d);
+        assert_eq!(decoded.g, header.g);
     }
 
     #[test]

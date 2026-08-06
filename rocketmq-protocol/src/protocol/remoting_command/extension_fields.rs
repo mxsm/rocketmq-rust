@@ -15,6 +15,7 @@
 use std::sync::OnceLock;
 
 use super::BinaryHeaderFields;
+use crate::protocol::header_codec::HeaderFieldSource;
 use crate::HeaderMap;
 
 #[derive(Default)]
@@ -68,6 +69,13 @@ impl ExtensionFields {
             Self::Absent => None,
             Self::Materialized(fields) => Some(fields),
             Self::RocketMqRaw { fields, materialized } => Some(materialized.get_or_init(|| fields.materialize())),
+        }
+    }
+
+    pub(super) fn as_field_source(&self) -> Option<&dyn HeaderFieldSource> {
+        match self {
+            Self::RocketMqRaw { fields, .. } => Some(fields),
+            Self::Absent | Self::Materialized(_) => None,
         }
     }
 

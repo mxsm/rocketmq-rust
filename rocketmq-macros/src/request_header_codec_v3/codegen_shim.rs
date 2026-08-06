@@ -24,6 +24,7 @@ pub(super) fn generate(model: &HeaderModel, generics: &Generics, codec_trait: &T
     let command_trait = quote!(#protocol_path::protocol::command_custom_header::CommandCustomHeader);
     let from_map_trait = quote!(#protocol_path::protocol::command_custom_header::FromMap);
     let map_type = quote!(#protocol_path::HeaderMap);
+    let field_source = quote!(#protocol_path::protocol::header_codec::HeaderFieldSource);
     let codec_error = quote!(#protocol_path::protocol::header_codec::HeaderCodecError);
     let rocketmq_error = quote!(#protocol_path::__request_header_codec::RocketMQError);
     let map_sink = quote!(#protocol_path::protocol::header_codec::MapSink);
@@ -102,9 +103,15 @@ pub(super) fn generate(model: &HeaderModel, generics: &Generics, codec_trait: &T
         impl #impl_generics #from_map_trait for #ident #ty_generics #where_clause {
             type Error = #rocketmq_error;
             type Target = Self;
+            const SUPPORTS_HEADER_FIELD_SOURCE: bool = true;
 
             fn from(map: &#map_type) -> Result<Self::Target, Self::Error> {
                 <Self as #codec_trait>::decode_from_map(map)
+                    .map_err(|error| #rocketmq_error::request_header_error(error.to_string()))
+            }
+
+            fn from_field_source(source: &dyn #field_source) -> Result<Self::Target, Self::Error> {
+                <Self as #codec_trait>::decode_from_source(source)
                     .map_err(|error| #rocketmq_error::request_header_error(error.to_string()))
             }
         }

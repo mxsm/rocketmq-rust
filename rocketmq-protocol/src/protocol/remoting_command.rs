@@ -915,6 +915,11 @@ impl RemotingCommand {
     where
         T: FromMap<Target = T, Error = rocketmq_error::RocketMQError>,
     {
+        if T::SUPPORTS_HEADER_FIELD_SOURCE {
+            if let Some(source) = self.ext_fields.as_field_source() {
+                return T::from_field_source(source);
+            }
+        }
         match self.ext_fields.as_map() {
             None => Err(rocketmq_error::RocketMQError::Serialization(
                 rocketmq_error::SerializationError::DecodeFailed {
@@ -931,6 +936,11 @@ impl RemotingCommand {
         T: FromMap<Target = T, Error = rocketmq_error::RocketMQError>,
         T: Default + CommandCustomHeader,
     {
+        if T::SUPPORTS_HEADER_FIELD_SOURCE {
+            if let Some(source) = self.ext_fields.as_field_source() {
+                return T::from_field_source(source);
+            }
+        }
         match self.ext_fields.as_map() {
             None => Err(rocketmq_error::RocketMQError::Serialization(
                 rocketmq_error::SerializationError::DecodeFailed {
@@ -1270,6 +1280,13 @@ mod tests {
         value: i32,
     }
 
+    #[derive(Debug, Default, rocketmq_macros::RequestHeaderCodecV3)]
+    #[header(type_id = "rocketmq_protocol::tests::RawStrictAliasHeader")]
+    struct RawStrictAliasHeader {
+        #[header(key = "canonical", alias = "legacy")]
+        value: Option<CheetahString>,
+    }
+
     impl CommandCustomHeader for TestCustomHeader {
         fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
             Some(HashMap::from([(
@@ -1503,6 +1520,86 @@ mod tests {
         assert_eq!(json["extFields"]["alpha"], "first");
         assert_eq!(json["extFields"]["beta"], "second");
         assert!(cloned.ext_fields.has_materialized_map());
+    }
+
+    #[test]
+    fn v3_production_decode_uses_raw_fields_without_materializing_the_map() {
+        use crate::protocol::header::notification_request_header::NotificationRequestHeader;
+
+        let header = NotificationRequestHeader {
+            consumer_group: "group-a".into(),
+            topic: "topic-a".into(),
+            queue_id: 3,
+            poll_time: 15_000,
+            born_time: 1_720_000_000_000,
+            ..Default::default()
+        };
+        let mut encoded = BytesMut::new();
+        RemotingCommand::create_request_command(1, header)
+            .set_serialize_type(SerializeType::ROCKETMQ)
+            .try_fast_header_encode(&mut encoded)
+            .unwrap();
+        let command = RemotingCommand::decode(&mut encoded).unwrap().unwrap();
+        assert!(command.ext_fields.is_rocketmq_raw());
+        assert!(!command.ext_fields.has_materialized_map());
+
+        let standard = command
+            .decode_command_custom_header::<NotificationRequestHeader>()
+            .unwrap();
+        assert_eq!(standard.queue_id, 3);
+        assert!(!command.ext_fields.has_materialized_map());
+
+        let fast = command
+            .decode_command_custom_header_fast::<NotificationRequestHeader>()
+            .unwrap();
+        assert_eq!(fast.queue_id, 3);
+        assert!(!command.ext_fields.has_materialized_map());
+    }
+
+    #[test]
+    fn raw_direct_decode_preserves_duplicate_and_alias_precedence_without_a_map() {
+        use crate::rpc::rpc_request_header::RpcRequestHeader;
+
+        fn append_field(out: &mut BytesMut, key: &str, value: &str) {
+            out.put_u16(key.len() as u16);
+            out.extend_from_slice(key.as_bytes());
+            out.put_i32(value.len() as i32);
+            out.extend_from_slice(value.as_bytes());
+        }
+
+        let mut payload = BytesMut::new();
+        append_field(&mut payload, "ns", "first-canonical");
+        append_field(&mut payload, "namespace", "legacy");
+        append_field(&mut payload, "ns", "last-canonical");
+        append_field(&mut payload, "nsd", "true");
+        append_field(&mut payload, "nsd", "false");
+        let command = RemotingCommand::create_remoting_command(1)
+            .set_binary_ext_fields(BinaryHeaderFields::new(payload.freeze()).unwrap());
+
+        let decoded = command.decode_command_custom_header::<RpcRequestHeader>().unwrap();
+
+        assert_eq!(decoded.namespace.as_deref(), Some("last-canonical"));
+        assert_eq!(decoded.namespaced, Some(false));
+        assert!(command.ext_fields.is_rocketmq_raw());
+        assert!(!command.ext_fields.has_materialized_map());
+
+        let mut converged = BytesMut::new();
+        append_field(&mut converged, "canonical", "superseded");
+        append_field(&mut converged, "legacy", "final");
+        append_field(&mut converged, "canonical", "final");
+        let command = RemotingCommand::create_remoting_command(1)
+            .set_binary_ext_fields(BinaryHeaderFields::new(converged.freeze()).unwrap());
+        let decoded = command.decode_command_custom_header::<RawStrictAliasHeader>().unwrap();
+        assert_eq!(decoded.value.as_deref(), Some("final"));
+        assert!(!command.ext_fields.has_materialized_map());
+
+        let mut conflicting = BytesMut::new();
+        append_field(&mut conflicting, "canonical", "canonical-value");
+        append_field(&mut conflicting, "legacy", "legacy-value");
+        let command = RemotingCommand::create_remoting_command(1)
+            .set_binary_ext_fields(BinaryHeaderFields::new(conflicting.freeze()).unwrap());
+        assert!(command.decode_command_custom_header::<RawStrictAliasHeader>().is_err());
+        assert!(!command.ext_fields.has_materialized_map());
     }
 
     #[test]

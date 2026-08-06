@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use cheetah_string::CheetahString;
 
 use crate::protocol::header_codec::HeaderCodecError;
+use crate::protocol::header_codec::HeaderFieldSource;
 use crate::protocol::header_codec::ResolvedHeaderKey;
 use crate::rocketmq_serializable::RocketMQSerializable;
 
@@ -261,8 +262,23 @@ pub trait FromMap {
     type Error: From<rocketmq_error::RocketMQError>;
 
     type Target;
+
+    /// Whether production decode may call [`Self::from_field_source`] without
+    /// first materializing the compatibility map.
+    const SUPPORTS_HEADER_FIELD_SOURCE: bool = false;
+
     /// Converts the implementing type from a map.
     ///
     /// Returns an instance of `Self::Target` that is created from the provided map.
     fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error>;
+
+    /// Converts the implementing type from a borrowed field source.
+    ///
+    /// Generated V3 implementations override this method. The default is an
+    /// additive compatibility fallback for existing implementations and is not
+    /// selected by production dispatch while the capability remains `false`.
+    fn from_field_source(source: &dyn HeaderFieldSource) -> Result<Self::Target, Self::Error> {
+        let map = source.to_header_map();
+        Self::from(&map)
+    }
 }

@@ -14,6 +14,7 @@
 
 use super::EncodeSink;
 use super::HeaderCodecError;
+use super::HeaderFieldSource;
 use super::HeaderFieldSpec;
 use super::HeaderFlattenSpec;
 use super::ResolvedHeaderKey;
@@ -61,8 +62,29 @@ pub trait HeaderCodec: Sized {
     /// Returns a typed missing, conflict, conversion, range, or validation error.
     fn decode_from_map(map: &HeaderMap) -> Result<Self, HeaderCodecError>;
 
+    /// Decodes this header directly from a borrowed field source.
+    ///
+    /// Generated V3 codecs override this method with a zero-materialization
+    /// scan. The default keeps manually implemented codecs source-compatible.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same classified failures as [`Self::decode_from_map`].
+    #[inline]
+    fn decode_from_source(source: &dyn HeaderFieldSource) -> Result<Self, HeaderCodecError> {
+        let map = source.to_header_map();
+        Self::decode_from_map(&map)
+    }
+
     /// Returns whether this header or any flattened child owns a present key.
     fn contains_any_field(map: &HeaderMap) -> bool;
+
+    /// Returns whether this header or a flattened child owns a source field.
+    #[inline]
+    fn contains_any_field_source(source: &dyn HeaderFieldSource) -> bool {
+        let map = source.to_header_map();
+        Self::contains_any_field(&map)
+    }
 
     /// Estimates the encoded ROCKETMQ extension-field payload length.
     ///

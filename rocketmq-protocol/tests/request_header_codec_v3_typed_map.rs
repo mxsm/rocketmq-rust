@@ -15,7 +15,7 @@
 use cheetah_string::CheetahString;
 use rocketmq_macros::{RequestHeaderCodecV2, RequestHeaderCodecV3};
 use rocketmq_protocol::protocol::header_codec::{
-    AliasConflictPolicy, FlattenPresenceSpec, HeaderCodec, HeaderCodecError, HeaderPresence,
+    AliasConflictPolicy, FlattenPresenceSpec, HeaderCodec, HeaderCodecError, HeaderFieldSource, HeaderPresence,
 };
 use rocketmq_protocol::{CommandCustomHeader, FromMap, HeaderMap};
 
@@ -143,6 +143,63 @@ fn typed_map_round_trip_uses_one_shared_destination_and_exact_hint() {
         header
     );
     assert_eq!(<TypedMapHeaderV3 as FromMap>::from(&map).unwrap(), header);
+}
+
+#[test]
+fn direct_field_source_matches_map_decode_for_values_and_errors() {
+    let map = sample_header().to_map().unwrap();
+    let map_decoded = <TypedMapHeaderV3 as HeaderCodec>::decode_from_map(&map).unwrap();
+    let source: &dyn HeaderFieldSource = &map;
+
+    assert_eq!(
+        <TypedMapHeaderV3 as HeaderCodec>::decode_from_source(source).unwrap(),
+        map_decoded
+    );
+    assert!(<TypedMapHeaderV3 as HeaderCodec>::contains_any_field_source(source));
+    const { assert!(<TypedMapHeaderV3 as FromMap>::SUPPORTS_HEADER_FIELD_SOURCE) };
+    assert_eq!(
+        <TypedMapHeaderV3 as FromMap>::from_field_source(source).unwrap(),
+        map_decoded
+    );
+
+    let mut conflicting = map;
+    conflicting.insert("legacyTraceId".into(), "different".into());
+    let map_error = <TypedMapHeaderV3 as HeaderCodec>::decode_from_map(&conflicting).unwrap_err();
+    let source_error = <TypedMapHeaderV3 as HeaderCodec>::decode_from_source(&conflicting).unwrap_err();
+    assert!(matches!(map_error, HeaderCodecError::Conflict { .. }));
+    assert!(matches!(source_error, HeaderCodecError::Conflict { .. }));
+    assert_eq!(map_error.to_string(), source_error.to_string());
+
+    for (key, value) in [
+        ("queueId", "not-an-integer"),
+        ("queueId", "2147483648"),
+        ("attempts", "-1"),
+    ] {
+        let mut invalid = sample_header().to_map().unwrap();
+        invalid.insert(key.into(), value.into());
+        let map_error = <TypedMapHeaderV3 as HeaderCodec>::decode_from_map(&invalid).unwrap_err();
+        let source_error = <TypedMapHeaderV3 as HeaderCodec>::decode_from_source(&invalid).unwrap_err();
+        assert_eq!(map_error.to_string(), source_error.to_string(), "{key}={value}");
+    }
+
+    let mut missing = sample_header().to_map().unwrap();
+    missing.remove("requestId");
+    assert!(matches!(
+        <TypedMapHeaderV3 as HeaderCodec>::decode_from_source(&missing),
+        Err(HeaderCodecError::Missing {
+            header: "fixtures::TypedMapHeaderV3",
+            key: "requestId"
+        })
+    ));
+
+    for key in ["topic", "routingQueueId"] {
+        missing.remove(key);
+    }
+    missing.insert("requestId".into(), "request-7".into());
+    assert!(<TypedMapHeaderV3 as HeaderCodec>::decode_from_source(&missing)
+        .unwrap()
+        .routing
+        .is_none());
 }
 
 #[test]
