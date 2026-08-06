@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use rocketmq_model::boundary_type::BoundaryType;
 use serde::Deserialize;
 use serde::Serialize;
@@ -21,23 +21,30 @@ use serde::Serialize;
 use crate::protocol::header::message_operation_header::TopicRequestHeaderTrait;
 use crate::rpc::topic_request_header::TopicRequestHeader;
 
-#[derive(Default, Debug, Serialize, Deserialize, RequestHeaderCodecV2)]
+#[derive(Default, Debug, Serialize, Deserialize, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::search_offset_request_header::SearchOffsetRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.SearchOffsetRequestHeader"
+)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchOffsetRequestHeader {
-    #[required]
+    #[header(required, java_type = "String")]
     pub topic: CheetahString,
 
+    #[header(java_type = "String")]
     pub lite_topic: Option<CheetahString>,
 
-    #[required]
+    #[header(required, java_type = "Integer")]
     pub queue_id: i32,
 
-    #[required]
+    #[header(required, java_type = "Long")]
     pub timestamp: i64,
 
+    #[header(default, default_semantic = "literal:LOWER", java_type = "BoundaryType")]
     pub boundary_type: BoundaryType,
 
     #[serde(flatten)]
+    #[header(flatten, presence = "any")]
     pub topic_request_header: Option<TopicRequestHeader>,
 }
 

@@ -13,6 +13,17 @@
       }
     },
     {
+      "rustType": "SearchOffsetRequestHeader",
+      "field": "boundaryType",
+      "semantic": "literal:LOWER",
+      "owner": "rocketmq-rust maintainers",
+      "reason": "Matches SearchOffsetRequestHeader.getBoundaryType(), which returns LOWER when the Java field is null",
+      "referenceSource": {
+        "rust": "rocketmq-protocol/src/protocol/header/search_offset_request_header.rs",
+        "java": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/SearchOffsetRequestHeader.java"
+      }
+    },
+    {
       "rustType": "AlterSyncStateSetRequestHeader",
       "field": "invokeTime",
       "semantic": "dynamic:current_time_millis",
