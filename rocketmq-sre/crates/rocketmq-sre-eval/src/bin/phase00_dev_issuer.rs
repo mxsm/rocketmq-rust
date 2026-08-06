@@ -57,6 +57,9 @@ const DEFAULT_CLIENT_SECRET: &str = "phase00-client-secret";
 const DEFAULT_ADMIN_TOKEN: &str = "phase00-issuer-admin";
 const DEFAULT_TENANT: &str = "00000000-0000-4000-8000-000000000002";
 const DEFAULT_CLUSTER: &str = "sre-dev";
+const FIXTURE_AUDIENCE: &str = "rocketmq-mcp-invalid";
+const FIXTURE_CLUSTER: &str = "sre-other";
+const FIXTURE_SCOPE: &str = "rocketmq:diagnose";
 const RSA_MODULUS: &str = "yRE6rHuNR0QbHO3H3Kt2pOKGVhQqGZXInOduQNxXzuKlvQTLUTv4l4sggh5_CYYi_cvI-SXVT9kPWSKXxJXBXd_4LkvcPuUakBoAkfh-eiFVMh2VrUyWyj3MFl0HTVF9KwRXLAcwkREiS3npThHRyIxuy0ZMeZfxVL5arMhw1SRELB8HoGfG_AtH89BIE9jDBHZ9dLelK9a184zAf8LwoPLxvJb3Il5nncqPcSfKDDodMFBIMc4lQzDKL5gvmiXLXB1AGLm8KBjfE8s3L5xqi-yUod-j8MtvIj812dkS4QMiRVN_by2h3ZY8LYVGrqZXZTcgn2ujn8uKjXLZVD5TdQ";
 const ROTATED_RSA_MODULUS: &str = "wgSHA3m657nyyP1uhnE5NH9J28hGl08yFfMT0IK4bnFar8rCTJEhusCj-wXGVyX2OkcAv1cGnkxd7vRiZ5YJdlmgp66oaQrLLuOvZqhFFaa494_eGo8nwZxRtyAZQBsg8JgtPBnGss-EqtrZMXdfOQ4S8-kQwepaAl8nV7szW_fhwSa85-FqTkQ_B3lGtFc_2Os_1IRNuIKTNqqMVEvG-vyim09YWLp-bMm-Ii0ymTrG3My1qLIPVf0-ZoJ6TCVJYdQFd2BrG40zkkF6Ln6lGuAjZDtun_yRH4z_-aiqAObF86TwMTD3kCYjgsQdc0FWf11Tax3VPogyvUN19iAfIQ";
 
@@ -125,6 +128,28 @@ struct TokenRequest {
     audience: String,
 }
 
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum IdentityFixtureProfile {
+    WrongAudience,
+    MissingReadScope,
+    DifferentCluster,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct IdentityFixtureRequest {
+    profile: IdentityFixtureProfile,
+}
+
+#[derive(Serialize)]
+struct TokenResponse {
+    access_token: String,
+    token_type: &'static str,
+    expires_in: usize,
+    scope: String,
+}
+
 #[derive(Serialize)]
 struct TokenClaims<'a> {
     sub: &'a str,
@@ -178,6 +203,7 @@ async fn run(bind_addr: SocketAddr, state: IssuerState) -> Result<(), IssuerErro
         .route("/readyz", get(health))
         .route("/.well-known/jwks.json", get(jwks))
         .route("/oauth/token", post(token))
+        .route("/admin/fixture-token", post(identity_fixture_token))
         .route("/admin/rotate", post(rotate))
         .with_state(state);
     let listener = tokio::net::TcpListener::bind(bind_addr).await?;
@@ -228,37 +254,8 @@ async fn token(
         return (StatusCode::UNAUTHORIZED, Json(json!({"error": "invalid_client"})));
     }
 
-    let now = Utc::now().timestamp().max(0) as usize;
-    let claims = TokenClaims {
-        sub: "rocketmq-sre-connector",
-        iss: &state.config.issuer,
-        aud: &state.config.audience,
-        exp: now + 120,
-        iat: now,
-        nbf: now,
-        scope: &request.scope,
-        roles: ["diagnose"],
-        client_id: &state.config.client_id,
-        rocketmq_tenant: &state.config.tenant,
-        rocketmq_clusters: [&state.config.cluster],
-    };
-    let mut header = Header::new(Algorithm::RS256);
-    let generation = state.generation.load(Ordering::SeqCst);
-    header.kid = Some(key_id(generation));
-    match encode(
-        &header,
-        &claims,
-        &signing_key_for_generation(&state, generation).encoding_key,
-    ) {
-        Ok(access_token) => (
-            StatusCode::OK,
-            Json(json!({
-                "access_token": access_token,
-                "token_type": "Bearer",
-                "expires_in": 120,
-                "scope": request.scope
-            })),
-        ),
+    match issue_token(&state, &state.config.audience, &request.scope, &state.config.cluster) {
+        Ok(response) => (StatusCode::OK, Json(json!(response))),
         Err(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"error": "server_error"})),
@@ -266,9 +263,80 @@ async fn token(
     }
 }
 
+async fn identity_fixture_token(
+    State(state): State<IssuerState>,
+    headers: HeaderMap,
+    Form(request): Form<IdentityFixtureRequest>,
+) -> impl IntoResponse {
+    if !valid_admin_bearer(&headers, &state.config) {
+        return (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauthorized"})));
+    }
+
+    let (audience, scope, cluster) = identity_fixture_claims(&state.config, request.profile);
+
+    match issue_token(&state, audience, scope, cluster) {
+        Ok(response) => (StatusCode::OK, Json(json!(response))),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": "server_error"})),
+        ),
+    }
+}
+
+fn identity_fixture_claims(config: &IssuerConfig, profile: IdentityFixtureProfile) -> (&str, &str, &str) {
+    match profile {
+        IdentityFixtureProfile::WrongAudience => (
+            FIXTURE_AUDIENCE,
+            "rocketmq:read rocketmq:diagnose",
+            config.cluster.as_str(),
+        ),
+        IdentityFixtureProfile::MissingReadScope => (config.audience.as_str(), FIXTURE_SCOPE, config.cluster.as_str()),
+        IdentityFixtureProfile::DifferentCluster => (
+            config.audience.as_str(),
+            "rocketmq:read rocketmq:diagnose",
+            FIXTURE_CLUSTER,
+        ),
+    }
+}
+
+fn issue_token(
+    state: &IssuerState,
+    audience: &str,
+    scope: &str,
+    cluster: &str,
+) -> Result<TokenResponse, jsonwebtoken::errors::Error> {
+    let now = Utc::now().timestamp().max(0) as usize;
+    let claims = TokenClaims {
+        sub: "rocketmq-sre-connector",
+        iss: &state.config.issuer,
+        aud: audience,
+        exp: now + 120,
+        iat: now,
+        nbf: now,
+        scope,
+        roles: ["diagnose"],
+        client_id: &state.config.client_id,
+        rocketmq_tenant: &state.config.tenant,
+        rocketmq_clusters: [cluster],
+    };
+    let mut header = Header::new(Algorithm::RS256);
+    let generation = state.generation.load(Ordering::SeqCst);
+    header.kid = Some(key_id(generation));
+    let access_token = encode(
+        &header,
+        &claims,
+        &signing_key_for_generation(state, generation).encoding_key,
+    )?;
+    Ok(TokenResponse {
+        access_token,
+        token_type: "Bearer",
+        expires_in: 120,
+        scope: scope.to_owned(),
+    })
+}
+
 async fn rotate(State(state): State<IssuerState>, headers: HeaderMap) -> impl IntoResponse {
-    let expected = format!("Bearer {}", state.config.admin_token);
-    if headers.get(AUTHORIZATION).and_then(|value| value.to_str().ok()) != Some(expected.as_str()) {
+    if !valid_admin_bearer(&headers, &state.config) {
         return (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauthorized"})));
     }
     let generation = state.generation.fetch_add(1, Ordering::SeqCst).wrapping_add(1);
@@ -308,6 +376,11 @@ fn valid_basic_credentials(headers: &HeaderMap, config: &IssuerConfig) -> bool {
     decoded == format!("{}:{}", config.client_id, config.client_secret).as_bytes()
 }
 
+fn valid_admin_bearer(headers: &HeaderMap, config: &IssuerConfig) -> bool {
+    let expected = format!("Bearer {}", config.admin_token);
+    headers.get(AUTHORIZATION).and_then(|value| value.to_str().ok()) == Some(expected.as_str())
+}
+
 fn env_or(name: &str, default: &str) -> String {
     env::var(name)
         .ok()
@@ -325,6 +398,7 @@ fn required(name: &str) -> Result<String, IssuerError> {
 #[cfg(test)]
 mod tests {
     use axum::http::HeaderValue;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
     use super::*;
 
@@ -384,5 +458,58 @@ mod tests {
         assert_eq!(current_kid(&state), "phase00-key-2");
         assert_eq!(current_signing_key(&state).modulus, ROTATED_RSA_MODULUS);
         assert_ne!(RSA_MODULUS, ROTATED_RSA_MODULUS);
+    }
+
+    #[test]
+    fn admin_bearer_is_exact() {
+        let state = test_state();
+        let mut headers = HeaderMap::new();
+        headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer phase00-issuer-admin"));
+        assert!(valid_admin_bearer(&headers, &state.config));
+
+        headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer different-token"));
+        assert!(!valid_admin_bearer(&headers, &state.config));
+    }
+
+    #[test]
+    fn identity_fixture_profiles_are_bounded_to_expected_claim_differences() {
+        let state = test_state();
+        let cases = [
+            (
+                IdentityFixtureProfile::WrongAudience,
+                FIXTURE_AUDIENCE,
+                "rocketmq:read rocketmq:diagnose",
+                DEFAULT_CLUSTER,
+            ),
+            (
+                IdentityFixtureProfile::MissingReadScope,
+                DEFAULT_AUDIENCE,
+                FIXTURE_SCOPE,
+                DEFAULT_CLUSTER,
+            ),
+            (
+                IdentityFixtureProfile::DifferentCluster,
+                DEFAULT_AUDIENCE,
+                "rocketmq:read rocketmq:diagnose",
+                FIXTURE_CLUSTER,
+            ),
+        ];
+
+        for (profile, audience, scope, cluster) in cases {
+            let (issued_audience, issued_scope, issued_cluster) = identity_fixture_claims(&state.config, profile);
+            let response = issue_token(&state, issued_audience, issued_scope, issued_cluster)
+                .expect("fixture token should be signed");
+            let claims = decode_claims(&response.access_token);
+            assert_eq!(claims["aud"], audience);
+            assert_eq!(claims["scope"], scope);
+            assert_eq!(claims["rocketmq_tenant"], DEFAULT_TENANT);
+            assert_eq!(claims["rocketmq_clusters"], json!([cluster]));
+        }
+    }
+
+    fn decode_claims(token: &str) -> serde_json::Value {
+        let payload = token.split('.').nth(1).expect("JWT payload");
+        let decoded = URL_SAFE_NO_PAD.decode(payload).expect("base64url JWT payload");
+        serde_json::from_slice(&decoded).expect("JSON JWT claims")
     }
 }

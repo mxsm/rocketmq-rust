@@ -68,6 +68,25 @@ class Phase00ComposeContractTest(unittest.TestCase):
         self.assertNotIn("127.0.0.1:8091/internal/v1/evidence/query", smoke)
         self.assertNotIn("127.0.0.1:8091/internal/v1/capabilities", smoke)
 
+    def test_smoke_covers_identity_fail_closed_boundaries(self) -> None:
+        smoke = (SRE_ROOT / "scripts" / "phase00-smoke.ps1").read_text(encoding="utf-8")
+        issuer = (
+            SRE_ROOT
+            / "crates"
+            / "rocketmq-sre-eval"
+            / "src"
+            / "bin"
+            / "phase00_dev_issuer.rs"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('/admin/fixture-token', issuer)
+        for profile in ("wrong_audience", "missing_read_scope", "different_cluster"):
+            self.assertIn(profile, smoke)
+        self.assertIn("error=\"invalid_token\"", smoke)
+        self.assertIn("error=\"insufficient_scope\"", smoke)
+        self.assertIn("cluster_not_allowed", smoke)
+        self.assertIn("leaked an access token", smoke)
+
 
 if __name__ == "__main__":
     unittest.main()
