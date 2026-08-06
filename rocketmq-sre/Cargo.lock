@@ -3581,7 +3581,7 @@ name = "rocketmq-sre-control-plane"
 version = "0.1.0"
 dependencies = [
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "bytes",
  "chrono",
  "chrono-tz",
@@ -3627,7 +3627,7 @@ name = "rocketmq-sre-eval"
 version = "0.1.0"
 dependencies = [
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "jsonwebtoken",
  "reqwest",
@@ -3651,7 +3651,7 @@ name = "rocketmq-sre-execution-agent"
 version = "0.1.0"
 dependencies = [
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "hmac 0.12.1",
  "k8s-openapi",

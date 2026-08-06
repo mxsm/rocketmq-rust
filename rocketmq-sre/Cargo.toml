@@ -39,7 +39,7 @@ rust-version = "1.95.0"
 
 [workspace.dependencies]
 axum = "0.8.4"
-base64 = "0.22.1"
+base64 = "0.23.0"
 bytes = "1.10.1"
 chrono = { version = "0.4.41", features = ["serde"] }
 chrono-tz = "0.10.4"
