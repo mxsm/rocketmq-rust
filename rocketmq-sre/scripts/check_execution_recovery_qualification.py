@@ -260,6 +260,29 @@ def validate(manifest: dict[str, Any]) -> list[str]:
             if path and (not isinstance(test_name, str) or test_name not in path.read_text(encoding="utf-8")):
                 findings.append(f"common evidence test is absent: {name}")
 
+    asymmetric = manifest.get("asymmetric_partition_live_qualification")
+    if not isinstance(asymmetric, dict):
+        findings.append("asymmetric Executor partition qualification is missing")
+    else:
+        expected_asymmetric = {
+            "stale_effect_rows": 0,
+            "stale_target_writes": 0,
+            "fresh_target_writes": 1,
+            "model_provider_network_calls": False,
+            "production_certified": False,
+        }
+        for field, expected in expected_asymmetric.items():
+            if asymmetric.get(field) != expected:
+                findings.append(f"asymmetric partition {field} must remain {expected!r}")
+        for field in ("manifest", "script", "checker"):
+            _repository_path(asymmetric.get(field), findings, f"asymmetric partition {field}")
+        test_path = _repository_path(asymmetric.get("test_path"), findings, "asymmetric partition test_path")
+        test_name = asymmetric.get("test")
+        if test_path and (
+            not isinstance(test_name, str) or test_name not in test_path.read_text(encoding="utf-8")
+        ):
+            findings.append("asymmetric partition test is absent from test_path")
+
     r2 = manifest.get("r2_authorization")
     if not isinstance(r2, dict) or any(
         r2.get(field) is not True
@@ -369,7 +392,7 @@ def main() -> int:
     print(
         "EXECUTION_RECOVERY_QUALIFICATION_OK "
         f"controlled_actions={len(EXPECTED_ACTIONS)} autonomous_actions={len(EXPECTED_AUTONOMY)} "
-        "regions=2 dr_exercises=6 model_network_calls=false"
+        "regions=2 dr_exercises=6 asymmetric_partition=true model_network_calls=false"
     )
     return 0
 

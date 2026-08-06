@@ -180,6 +180,22 @@
           "path": "rocketmq-sre/config/qualification/execution-recovery.v1.json"
         },
         {
+          "kind": "configuration",
+          "path": "rocketmq-sre/config/qualification/asymmetric-executor-partition.v1.json"
+        },
+        {
+          "kind": "test",
+          "path": "rocketmq-sre/crates/rocketmq-sre-executor/tests/asymmetric_partition.rs"
+        },
+        {
+          "kind": "test",
+          "path": "rocketmq-sre/scripts/asymmetric-executor-partition-qualification.ps1"
+        },
+        {
+          "kind": "test",
+          "path": "rocketmq-sre/scripts/check_asymmetric_executor_partition_qualification.py"
+        },
+        {
           "kind": "test",
           "path": "rocketmq-sre/scripts/check_execution_recovery_qualification.py"
         },
@@ -371,7 +387,7 @@
         }
       ],
       "limitations": [
-        "Current/N-1 native binaries, two independent Kubernetes regions, the sixteen-scenario Kubernetes fault matrix, synchronous PostgreSQL failover, object recovery, and Control Plane backup/restore have passed disposable-environment qualification.",
+        "Current/N-1 native binaries, two independent Kubernetes regions, the sixteen-scenario Kubernetes fault matrix, synchronous PostgreSQL failover, object recovery, Control Plane backup/restore, and stale-epoch fencing under an asymmetric Executor partition have passed disposable-environment qualification.",
         "Deployment-specific production certification, sustained load, soak, and independent operator handoff evidence remain incomplete."
       ]
     },

@@ -38,6 +38,18 @@
       "test": "rollback_failure_atomically_escalates_quarantines_and_notifies"
     }
   },
+  "asymmetric_partition_live_qualification": {
+    "manifest": "rocketmq-sre/config/qualification/asymmetric-executor-partition.v1.json",
+    "script": "rocketmq-sre/scripts/asymmetric-executor-partition-qualification.ps1",
+    "checker": "rocketmq-sre/scripts/check_asymmetric_executor_partition_qualification.py",
+    "test_path": "rocketmq-sre/crates/rocketmq-sre-executor/tests/asymmetric_partition.rs",
+    "test": "old_executor_cannot_write_after_asymmetric_authority_partition_and_epoch_takeover",
+    "stale_effect_rows": 0,
+    "stale_target_writes": 0,
+    "fresh_target_writes": 1,
+    "model_provider_network_calls": false,
+    "production_certified": false
+  },
   "r1_live_qualification": {
     "manifest": "rocketmq-sre/config/qualification/r1-actions.v1.json",
     "script": "rocketmq-sre/scripts/r1-action-live-qualification.ps1",
