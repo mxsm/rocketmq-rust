@@ -39,6 +39,7 @@ use crate::protocol::command_custom_header::FromMap;
 use crate::protocol::command_custom_header::HeaderEncodeCapability;
 use crate::protocol::header_codec::BinaryHeaderFields;
 use crate::protocol::header_codec::HeaderCodecError;
+use crate::protocol::header_codec::JsonHeaderFields;
 use crate::protocol::header_field_merge::merge_header_and_dynamic;
 use crate::protocol::LanguageCode;
 use crate::rocketmq_serializable::RocketMQSerializable;
@@ -73,7 +74,8 @@ fn deserialize_ext_fields<'de, D>(deserializer: D) -> Result<ExtensionFields, D:
 where
     D: Deserializer<'de>,
 {
-    Option::<HashMap<CheetahString, CheetahString>>::deserialize(deserializer).map(ExtensionFields::from_option)
+    Option::<JsonHeaderFields>::deserialize(deserializer)
+        .map(|fields| fields.map_or_else(ExtensionFields::default, ExtensionFields::from_json_raw))
 }
 
 #[derive(Serialize, Deserialize)]
@@ -1275,6 +1277,15 @@ impl AsMut<RemotingCommand> for RemotingCommand {
 mod tests {
     use super::*;
 
+    fn json_header_with_ext_fields(ext_fields: &str) -> BytesMut {
+        BytesMut::from(
+            format!(
+                r#"{{"code":1,"language":"RUST","version":0,"opaque":7,"flag":0,"remark":null,"extFields":{ext_fields},"serializeTypeCurrentRPC":"JSON"}}"#
+            )
+            .as_bytes(),
+        )
+    }
+
     #[derive(Debug, Default, PartialEq, Eq)]
     struct TestCustomHeader {
         value: i32,
@@ -1520,6 +1531,156 @@ mod tests {
         assert_eq!(json["extFields"]["alpha"], "first");
         assert_eq!(json["extFields"]["beta"], "second");
         assert!(cloned.ext_fields.has_materialized_map());
+    }
+
+    #[test]
+    fn json_decode_keeps_extension_fields_raw_until_compatibility_map_access() {
+        use crate::rpc::rpc_request_header::RpcRequestHeader;
+
+        let mut header = json_header_with_ext_fields(
+            r#"{"ns":"first","namespace":"legacy","ns":"last","nsd":"false","empty":"","escaped":"line\n\"quoted\"\\tail","unicode":"火箭"}"#,
+        );
+        let header_length = header.len();
+        let command = RemotingCommand::header_decode(&mut header, header_length, SerializeType::JSON)
+            .unwrap()
+            .unwrap();
+
+        assert!(command.ext_fields.is_json_raw());
+        assert!(!command.ext_fields.has_materialized_map());
+        let cloned = command.clone();
+        assert!(cloned.ext_fields.is_json_raw());
+        assert!(!cloned.ext_fields.has_materialized_map());
+
+        let decoded = command.decode_command_custom_header::<RpcRequestHeader>().unwrap();
+        assert_eq!(decoded.namespace.as_deref(), Some("last"));
+        assert_eq!(decoded.namespaced, Some(false));
+        assert!(!command.ext_fields.has_materialized_map());
+
+        let fields = command.ext_fields().unwrap();
+        assert_eq!(fields.get("ns").map(CheetahString::as_str), Some("last"));
+        assert_eq!(fields.get("empty").map(CheetahString::as_str), Some(""));
+        assert_eq!(
+            fields.get("escaped").map(CheetahString::as_str),
+            Some("line\n\"quoted\"\\tail")
+        );
+        assert_eq!(fields.get("unicode").map(CheetahString::as_str), Some("火箭"));
+        assert!(command.ext_fields.is_json_raw());
+        assert!(command.ext_fields.has_materialized_map());
+        assert!(!cloned.ext_fields.has_materialized_map());
+
+        let json = serde_json::to_value(&cloned).unwrap();
+        assert_eq!(json["extFields"]["ns"], "last");
+        assert_eq!(json["extFields"]["empty"], "");
+        assert_eq!(json["extFields"]["unicode"], "火箭");
+        assert!(cloned.ext_fields.is_json_raw());
+        assert!(cloned.ext_fields.has_materialized_map());
+    }
+
+    #[test]
+    fn json_decode_preserves_absent_null_and_empty_extension_fields() {
+        let mut missing = BytesMut::from(
+            r#"{"code":1,"language":"RUST","version":0,"opaque":7,"flag":0,"remark":null,"serializeTypeCurrentRPC":"JSON"}"#
+                .as_bytes(),
+        );
+        let missing_length = missing.len();
+        let missing_command = RemotingCommand::header_decode(&mut missing, missing_length, SerializeType::JSON)
+            .unwrap()
+            .unwrap();
+        assert!(missing_command.ext_fields().is_none());
+
+        let mut null = json_header_with_ext_fields("null");
+        let null_length = null.len();
+        let null_command = RemotingCommand::header_decode(&mut null, null_length, SerializeType::JSON)
+            .unwrap()
+            .unwrap();
+        assert!(null_command.ext_fields().is_none());
+
+        let mut empty = json_header_with_ext_fields("{}");
+        let empty_length = empty.len();
+        let empty_command = RemotingCommand::header_decode(&mut empty, empty_length, SerializeType::JSON)
+            .unwrap()
+            .unwrap();
+        assert!(empty_command.ext_fields.is_json_raw());
+        assert!(!empty_command.ext_fields.has_materialized_map());
+        assert!(empty_command.ext_fields().unwrap().is_empty());
+        assert!(empty_command.ext_fields.has_materialized_map());
+    }
+
+    #[test]
+    fn v3_production_json_decode_uses_raw_fields_without_materializing_the_map() {
+        use crate::protocol::header::notification_request_header::NotificationRequestHeader;
+
+        let header = NotificationRequestHeader {
+            consumer_group: "group-a".into(),
+            topic: "topic-a".into(),
+            queue_id: 3,
+            poll_time: 15_000,
+            born_time: 1_720_000_000_000,
+            ..Default::default()
+        };
+        let mut encoded = BytesMut::new();
+        RemotingCommand::create_request_command(1, header)
+            .set_serialize_type(SerializeType::JSON)
+            .try_fast_header_encode(&mut encoded)
+            .unwrap();
+        let command = RemotingCommand::decode(&mut encoded).unwrap().unwrap();
+        assert!(command.ext_fields.is_json_raw());
+        assert!(!command.ext_fields.has_materialized_map());
+
+        let standard = command
+            .decode_command_custom_header::<NotificationRequestHeader>()
+            .unwrap();
+        assert_eq!(standard.queue_id, 3);
+        assert!(!command.ext_fields.has_materialized_map());
+
+        let fast = command
+            .decode_command_custom_header_fast::<NotificationRequestHeader>()
+            .unwrap();
+        assert_eq!(fast.queue_id, 3);
+        assert!(!command.ext_fields.has_materialized_map());
+    }
+
+    #[test]
+    fn json_raw_fallback_and_mutation_materialize_the_compatibility_map() {
+        let mut header = json_header_with_ext_fields(r#"{"value":"7"}"#);
+        let header_length = header.len();
+        let mut command = RemotingCommand::header_decode(&mut header, header_length, SerializeType::JSON)
+            .unwrap()
+            .unwrap();
+        assert!(command.ext_fields.is_json_raw());
+        assert!(!command.ext_fields.has_materialized_map());
+
+        let decoded = command.decode_command_custom_header::<TestCustomHeader>().unwrap();
+        assert_eq!(decoded.value, 7);
+        assert!(command.ext_fields.is_json_raw());
+        assert!(command.ext_fields.has_materialized_map());
+
+        command.add_ext_field("added", "field");
+        assert!(!command.ext_fields.is_json_raw());
+        assert_eq!(
+            command
+                .ext_fields()
+                .and_then(|fields| fields.get("value"))
+                .map(CheetahString::as_str),
+            Some("7")
+        );
+        assert_eq!(
+            command
+                .ext_fields()
+                .and_then(|fields| fields.get("added"))
+                .map(CheetahString::as_str),
+            Some("field")
+        );
+    }
+
+    #[test]
+    fn json_envelope_rejects_non_string_extension_field_values() {
+        for value in ["7", "true", "null", "{}", "[]"] {
+            let mut header = json_header_with_ext_fields(&format!(r#"{{"value":{value}}}"#));
+            let header_length = header.len();
+
+            assert!(RemotingCommand::header_decode(&mut header, header_length, SerializeType::JSON).is_err());
+        }
     }
 
     #[test]
