@@ -37,6 +37,7 @@ pub mod encoded_frame;
 pub mod filter;
 pub mod forbidden_type;
 pub mod header;
+pub mod header_codec;
 pub mod header_facade;
 pub mod headers;
 pub mod heartbeat;

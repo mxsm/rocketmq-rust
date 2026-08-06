@@ -754,6 +754,7 @@ dependencies = [
  "cheetah-string",
  "chrono",
  "flate2",
+ "itoa",
  "lz4_flex",
  "memchr",
  "rand",
@@ -763,6 +764,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_json_any_key",
+ "thiserror",
  "zstd",
 ]
 

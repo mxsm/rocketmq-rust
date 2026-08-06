@@ -16,6 +16,7 @@
 |---|---|---|
 | `rocketmq-dashboard/rocketmq-dashboard-common/` | Root workspace member and shared dashboard crate | This file |
 | `rocketmq-example/` | Standalone Cargo project | `rocketmq-example/AGENTS.md` |
+| `rocketmq-macros/tests/fixtures/renamed-consumer/` | Standalone compile fixture for renamed codec dependencies | Its local `AGENTS.md` |
 | `rocketmq-tools/rocketmq-mcp/` | Standalone Rust MCP server | Its local `AGENTS.md` |
 | `rocketmq-sre/` | Standalone AI SRE Rust workspace and UI | Its local `AGENTS.md` |
 | `rocketmq-sre/ui/` | Standalone React/TypeScript/Vite AI SRE frontend | Its local `AGENTS.md` |
