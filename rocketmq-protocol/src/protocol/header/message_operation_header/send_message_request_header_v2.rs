@@ -29,7 +29,9 @@ use crate::protocol::header::message_operation_header::TopicRequestHeaderTrait;
 use crate::protocol::header_codec::BinarySink;
 use crate::protocol::header_codec::HeaderCodec;
 use crate::protocol::header_codec::HeaderCodecError;
+use crate::protocol::header_codec::HeaderFieldContext;
 use crate::protocol::header_codec::HeaderFieldSource;
+use crate::protocol::header_codec::HeaderValue;
 use crate::protocol::header_codec::JsonSink;
 use crate::protocol::header_codec::MapSink;
 use crate::protocol::header_codec::ResolvedHeaderKey;
@@ -140,7 +142,6 @@ impl CommandCustomHeader for SendMessageRequestHeaderV2 {
         let checkpoint = out.len();
         // Java's V2 fast codec writes only the compact a..n fields. Inherited
         // topic/RPC fields remain available through the compatibility map.
-        out.reserve(self.__request_header_codec_v3_local_encoded_len_hint());
         let result = {
             let mut sink = BinarySink::new(out);
             self.__request_header_codec_v3_encode_local(&mut sink)
@@ -320,12 +321,152 @@ impl FromMap for SendMessageRequestHeaderV2 {
     }
 
     fn from_field_source(source: &dyn HeaderFieldSource) -> Result<Self::Target, Self::Error> {
-        <Self as HeaderCodec>::decode_from_source(source)
+        Self::decode_from_field_source(source)
             .map_err(|error| rocketmq_error::RocketMQError::request_header_error(error.to_string()))
     }
 }
 
 impl SendMessageRequestHeaderV2 {
+    fn decode_from_field_source(source: &dyn HeaderFieldSource) -> Result<Self, HeaderCodecError> {
+        #[derive(Default)]
+        struct SourceFields<'a> {
+            a: Option<&'a str>,
+            b: Option<&'a str>,
+            c: Option<&'a str>,
+            d: Option<&'a str>,
+            e: Option<&'a str>,
+            f: Option<&'a str>,
+            g: Option<&'a str>,
+            h: Option<&'a str>,
+            i: Option<&'a str>,
+            j: Option<&'a str>,
+            k: Option<&'a str>,
+            l: Option<&'a str>,
+            m: Option<&'a str>,
+            n: Option<&'a str>,
+            broker_name: Option<&'a str>,
+            broker_name_alias: Option<&'a str>,
+            namespace: Option<&'a str>,
+            namespace_alias: Option<&'a str>,
+            namespaced: Option<&'a str>,
+            namespaced_alias: Option<&'a str>,
+            oneway: Option<&'a str>,
+            oneway_alias: Option<&'a str>,
+            lo: Option<&'a str>,
+        }
+
+        #[inline(always)]
+        fn required<T: HeaderValue>(
+            raw: Option<&str>,
+            header: &'static str,
+            key: &'static str,
+        ) -> Result<T, HeaderCodecError> {
+            let context = HeaderFieldContext::new(header, key, T::KIND, None);
+            T::decode(raw.ok_or(HeaderCodecError::Missing { header, key })?, context)
+        }
+
+        #[inline(always)]
+        fn optional<T: HeaderValue>(
+            raw: Option<&str>,
+            header: &'static str,
+            key: &'static str,
+        ) -> Result<Option<T>, HeaderCodecError> {
+            let context = HeaderFieldContext::new(header, key, T::KIND, None);
+            raw.map(|value| T::decode(value, context)).transpose()
+        }
+
+        let mut fields = SourceFields::default();
+        source.visit_fields_while(&mut |key, value| {
+            match key {
+                FIELD_A => fields.a = Some(value),
+                FIELD_B => fields.b = Some(value),
+                FIELD_C => fields.c = Some(value),
+                FIELD_D => fields.d = Some(value),
+                FIELD_E => fields.e = Some(value),
+                FIELD_F => fields.f = Some(value),
+                FIELD_G => fields.g = Some(value),
+                FIELD_H => fields.h = Some(value),
+                FIELD_I => fields.i = Some(value),
+                FIELD_J => fields.j = Some(value),
+                FIELD_K => fields.k = Some(value),
+                FIELD_L => fields.l = Some(value),
+                FIELD_M => fields.m = Some(value),
+                FIELD_N => fields.n = Some(value),
+                FIELD_BROKER_NAME => fields.broker_name = Some(value),
+                "brokerName" => fields.broker_name_alias = Some(value),
+                FIELD_NAMESPACE => fields.namespace = Some(value),
+                "namespace" => fields.namespace_alias = Some(value),
+                FIELD_NAMESPACED => fields.namespaced = Some(value),
+                "namespaced" => fields.namespaced_alias = Some(value),
+                FIELD_ONEWAY => fields.oneway = Some(value),
+                "oneway" => fields.oneway_alias = Some(value),
+                FIELD_LO => fields.lo = Some(value),
+                _ => {}
+            }
+            true
+        });
+
+        let header_type = <Self as HeaderCodec>::TYPE_ID;
+        let a = required(fields.a, header_type, FIELD_A)?;
+        let b = required(fields.b, header_type, FIELD_B)?;
+        let c = required(fields.c, header_type, FIELD_C)?;
+        let d = required(fields.d, header_type, FIELD_D)?;
+        let e = required(fields.e, header_type, FIELD_E)?;
+        let f = required(fields.f, header_type, FIELD_F)?;
+        let g = required(fields.g, header_type, FIELD_G)?;
+        let h = required(fields.h, header_type, FIELD_H)?;
+        let i = optional(fields.i, header_type, FIELD_I)?;
+        let j = optional(fields.j, header_type, FIELD_J)?;
+        let k = optional(fields.k, header_type, FIELD_K)?;
+        let l = optional(fields.l, header_type, FIELD_L)?;
+        let m = optional(fields.m, header_type, FIELD_M)?;
+        let n = optional(fields.n, header_type, FIELD_N)?;
+
+        let rpc_type = <RpcRequestHeader as HeaderCodec>::TYPE_ID;
+        let rpc_request_header = RpcRequestHeader {
+            namespace: optional(fields.namespace.or(fields.namespace_alias), rpc_type, FIELD_NAMESPACE)?,
+            namespaced: optional(
+                fields.namespaced.or(fields.namespaced_alias),
+                rpc_type,
+                FIELD_NAMESPACED,
+            )?,
+            broker_name: optional(
+                fields.broker_name.or(fields.broker_name_alias),
+                rpc_type,
+                FIELD_BROKER_NAME,
+            )?,
+            oneway: optional(fields.oneway.or(fields.oneway_alias), rpc_type, FIELD_ONEWAY)?,
+        };
+        <RpcRequestHeader as HeaderCodec>::validate_for_wire(&rpc_request_header)?;
+
+        let topic_type = <TopicRequestHeader as HeaderCodec>::TYPE_ID;
+        let topic_request_header = TopicRequestHeader {
+            rpc_request_header: Some(rpc_request_header),
+            lo: optional(fields.lo, topic_type, FIELD_LO)?,
+        };
+        <TopicRequestHeader as HeaderCodec>::validate_for_wire(&topic_request_header)?;
+
+        let header = Self {
+            a,
+            b,
+            c,
+            d,
+            e,
+            f,
+            g,
+            h,
+            i,
+            j,
+            k,
+            l,
+            m,
+            n,
+            topic_request_header: Some(topic_request_header),
+        };
+        <Self as HeaderCodec>::validate_for_wire(&header)?;
+        Ok(header)
+    }
+
     pub fn create_send_message_request_header_v1(this: &Self) -> SendMessageRequestHeader {
         let topic_request_header = this.n.as_ref().map(|broker_name| TopicRequestHeader {
             rpc_request_header: Some(RpcRequestHeader {
@@ -636,6 +777,50 @@ mod tests {
         assert_eq!(decoded.c, header.c);
         assert_eq!(decoded.d, header.d);
         assert_eq!(decoded.g, header.g);
+    }
+
+    #[test]
+    fn single_scan_field_source_decode_matches_generated_v3_semantics() {
+        let mut fields = required_fast_fields();
+        fields.extend([
+            (FIELD_I.into(), "properties".into()),
+            (FIELD_J.into(), "3".into()),
+            (FIELD_K.into(), "true".into()),
+            (FIELD_L.into(), "5".into()),
+            (FIELD_M.into(), "false".into()),
+            (FIELD_N.into(), "v2-broker".into()),
+            (FIELD_NAMESPACE.into(), "canonical-namespace".into()),
+            ("namespace".into(), "alias-namespace".into()),
+            (FIELD_NAMESPACED.into(), "true".into()),
+            ("namespaced".into(), "false".into()),
+            (FIELD_BROKER_NAME.into(), "canonical-broker".into()),
+            ("brokerName".into(), "alias-broker".into()),
+            (FIELD_ONEWAY.into(), "false".into()),
+            ("oneway".into(), "true".into()),
+            (FIELD_LO.into(), "true".into()),
+        ]);
+
+        let expected = <SendMessageRequestHeaderV2 as HeaderCodec>::decode_from_source(&fields).unwrap();
+        let actual = SendMessageRequestHeaderV2::decode_from_field_source(&fields).unwrap();
+
+        assert_eq!(actual.to_map(), expected.to_map());
+    }
+
+    #[test]
+    fn single_scan_field_source_decode_preserves_v3_error_classification() {
+        for (key, value) in [(FIELD_J, "invalid-i32"), (FIELD_NAMESPACED, "invalid-bool")] {
+            let mut fields = required_fast_fields();
+            fields.insert(key.into(), value.into());
+
+            let expected = <SendMessageRequestHeaderV2 as HeaderCodec>::decode_from_source(&fields)
+                .unwrap_err()
+                .to_string();
+            let actual = SendMessageRequestHeaderV2::decode_from_field_source(&fields)
+                .unwrap_err()
+                .to_string();
+
+            assert_eq!(actual, expected, "classification drifted for {key}");
+        }
     }
 
     #[test]
