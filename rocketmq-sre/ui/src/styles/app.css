@@ -2409,6 +2409,24 @@ td small {
   min-width: 900px;
 }
 
+.provider-profile-identity {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.provider-profile-identity strong,
+.provider-profile-identity span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider-profile-identity span {
+  color: var(--muted-foreground);
+  font-size: 9px;
+}
+
 /* Phase 01 read-only workflows */
 .sr-only {
   position: absolute;

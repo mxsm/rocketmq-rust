@@ -730,19 +730,24 @@ export interface ModelProfile {
   model_revision: string;
   endpoint_instance: string;
   region: string;
-  data_residency: string;
-  capabilities: string[];
-  enabled: boolean;
+  capabilities: string[] | Record<string, boolean>;
+  priority: number;
+  credential_configured: boolean;
+  credential_owner: string;
   health: "unknown" | "healthy" | "degraded" | "quarantined" | "disabled";
-  credential_present: boolean;
+  last_health_observed_at: string | null;
 }
 
 export interface ModelCapabilitiesResponse {
   schema_version: string;
+  network_calls_supported: boolean;
   network_calls_enabled: boolean;
   rules_only_available: boolean;
+  max_fallbacks: number;
+  fallback_order: string[];
   providers: CapabilityCatalogResponse["providers"];
-  profiles?: ModelProfile[];
+  profiles: ModelProfile[];
+  observed_at: string;
 }
 
 export type ModelProfileLifecycleState =
