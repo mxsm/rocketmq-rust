@@ -38,7 +38,7 @@ crc = "3.4.0"
 dashmap.workspace = true
 flate2 = { version = "1.1.9", features = ["zlib"], default-features = false }
 local-ip-address = "0.6.13"
-lz4_flex = { version = "0.14", default-features = false }
+lz4_flex = { version = "0.14", features = ["alloc"], default-features = false }
 rocketmq-error = { workspace = true, features = ["with_serde"] }
 serde.workspace = true
 serde_json.workspace = true
