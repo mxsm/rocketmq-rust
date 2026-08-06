@@ -24,6 +24,9 @@ use rocketmq_sre_contracts::ConversationTurnId;
 use rocketmq_sre_contracts::ConversationTurnStatus;
 use rocketmq_sre_contracts::CorrelationId;
 use rocketmq_sre_contracts::EvidenceId;
+use rocketmq_sre_contracts::InvestigationDiagnosisRevision;
+use rocketmq_sre_contracts::InvestigationDiagnosisStatus;
+use rocketmq_sre_contracts::InvestigationId;
 use rocketmq_sre_contracts::ModelInvocationId;
 use rocketmq_sre_contracts::TenantId;
 use sqlx::Postgres;
@@ -35,6 +38,7 @@ use uuid::Uuid;
 use super::ConversationTurnPage;
 use super::ConversationTurnRequest;
 use super::ConversationTurnView;
+use super::repository::append_timeline;
 use crate::ControlPlaneError;
 use crate::PostgresRepository;
 use crate::auth::AuthContext;
@@ -49,6 +53,19 @@ pub(super) struct ConversationCompletion {
     pub(super) model_invocation_id: Option<ModelInvocationId>,
     pub(super) partial: bool,
     pub(super) warnings: Vec<String>,
+    pub(super) diagnosis: Option<InvestigationDiagnosisDraft>,
+}
+
+pub(super) struct InvestigationDiagnosisDraft {
+    pub(super) investigation_id: InvestigationId,
+    pub(super) pack_id: String,
+    pub(super) pack_version: String,
+    pub(super) status: InvestigationDiagnosisStatus,
+    pub(super) rule_result: serde_json::Value,
+    pub(super) hypotheses: serde_json::Value,
+    pub(super) evidence_ids: Vec<EvidenceId>,
+    pub(super) primary_model_invocation_id: Option<ModelInvocationId>,
+    pub(super) partial: bool,
 }
 
 impl PostgresRepository {
@@ -140,7 +157,8 @@ impl PostgresRepository {
             ));
         }
         let mut transaction = self.pool.begin().await?;
-        let completed_at = Utc::now();
+        let completed_at = chrono::DateTime::<Utc>::from_timestamp_micros(Utc::now().timestamp_micros())
+            .ok_or_else(|| ControlPlaneError::configuration("conversation completion timestamp is invalid"))?;
         let query_intent = completion
             .intent
             .as_ref()
@@ -197,6 +215,126 @@ impl PostgresRepository {
         .bind(completed_at)
         .execute(&mut *transaction)
         .await?;
+        let diagnosis_revision = if let Some(diagnosis) = completion.diagnosis {
+            if diagnosis.evidence_ids.is_empty() {
+                return Err(ControlPlaneError::configuration(
+                    "investigation diagnosis requires at least one evidence reference",
+                ));
+            }
+            if diagnosis
+                .evidence_ids
+                .iter()
+                .any(|id| !completion.evidence_ids.contains(id))
+                || diagnosis.primary_model_invocation_id != completion.model_invocation_id
+            {
+                return Err(ControlPlaneError::configuration(
+                    "investigation diagnosis must bind the persisted answer evidence and model invocation",
+                ));
+            }
+            let investigation_found = sqlx::query_scalar::<_, Uuid>(
+                "SELECT id
+                 FROM investigations
+                 WHERE id = $1 AND tenant_id = $2 AND cluster_id = $3
+                   AND conversation_id = $4
+                 FOR UPDATE",
+            )
+            .bind(diagnosis.investigation_id.as_uuid())
+            .bind(auth.tenant_id.as_uuid())
+            .bind(turn.cluster_id.as_uuid())
+            .bind(turn.conversation_id.as_uuid())
+            .fetch_optional(&mut *transaction)
+            .await?;
+            if investigation_found.is_none() {
+                return Err(ControlPlaneError::conflict_code(
+                    "investigation_scope_mismatch",
+                    "conversation investigation no longer matches the authenticated turn scope",
+                ));
+            }
+            let revision = sqlx::query_scalar::<_, i32>(
+                "SELECT COALESCE(MAX(revision), 0) + 1
+                 FROM investigation_diagnosis_revisions
+                 WHERE investigation_id = $1",
+            )
+            .bind(diagnosis.investigation_id.as_uuid())
+            .fetch_one(&mut *transaction)
+            .await?;
+            let id = rocketmq_sre_contracts::DiagnosisRevisionId::new();
+            let diagnosis_evidence_ids = diagnosis.evidence_ids.iter().map(|id| id.as_uuid()).collect::<Vec<_>>();
+            sqlx::query(
+                "INSERT INTO investigation_diagnosis_revisions (
+                    id, tenant_id, cluster_id, investigation_id, conversation_id,
+                    turn_id, answer_revision_id, revision, pack_id, pack_version,
+                    status, rule_result, hypotheses, evidence_ids,
+                    primary_model_invocation_id, execution_eligible, partial,
+                    correlation_id, created_at
+                 ) VALUES (
+                    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                    $11, $12, $13, $14, $15, FALSE, $16, $17, $18
+                 )",
+            )
+            .bind(id.as_uuid())
+            .bind(auth.tenant_id.as_uuid())
+            .bind(turn.cluster_id.as_uuid())
+            .bind(diagnosis.investigation_id.as_uuid())
+            .bind(turn.conversation_id.as_uuid())
+            .bind(turn.id.as_uuid())
+            .bind(revision_id.as_uuid())
+            .bind(revision)
+            .bind(&diagnosis.pack_id)
+            .bind(&diagnosis.pack_version)
+            .bind(investigation_diagnosis_status_name(diagnosis.status))
+            .bind(&diagnosis.rule_result)
+            .bind(&diagnosis.hypotheses)
+            .bind(diagnosis_evidence_ids)
+            .bind(diagnosis.primary_model_invocation_id.map(ModelInvocationId::as_uuid))
+            .bind(diagnosis.partial)
+            .bind(turn.correlation_id.as_uuid())
+            .bind(completed_at)
+            .execute(&mut *transaction)
+            .await?;
+            append_timeline(
+                &mut transaction,
+                auth,
+                turn.cluster_id,
+                Some(diagnosis.investigation_id),
+                None,
+                "conversation_diagnosis_revision_created",
+                "Conversation evidence evaluated by a diagnostic pack",
+                serde_json::json!({
+                    "answer_revision_id": revision_id,
+                    "diagnosis_revision_id": id,
+                    "pack_id": diagnosis.pack_id,
+                    "pack_version": diagnosis.pack_version,
+                    "status": investigation_diagnosis_status_name(diagnosis.status),
+                    "execution_eligible": false
+                }),
+                turn.correlation_id,
+                completed_at,
+            )
+            .await?;
+            Some(InvestigationDiagnosisRevision {
+                id,
+                investigation_id: diagnosis.investigation_id,
+                conversation_id: turn.conversation_id,
+                turn_id: turn.id,
+                answer_revision_id: revision_id,
+                revision: u32::try_from(revision)
+                    .map_err(|_| ControlPlaneError::configuration("investigation diagnosis revision is invalid"))?,
+                pack_id: diagnosis.pack_id,
+                pack_version: diagnosis.pack_version,
+                status: diagnosis.status,
+                rule_result: diagnosis.rule_result,
+                hypotheses: diagnosis.hypotheses,
+                evidence_ids: diagnosis.evidence_ids,
+                primary_model_invocation_id: diagnosis.primary_model_invocation_id,
+                execution_eligible: false,
+                partial: diagnosis.partial,
+                correlation_id: turn.correlation_id,
+                created_at: completed_at,
+            })
+        } else {
+            None
+        };
         transaction.commit().await?;
         Ok(ConversationTurnView {
             turn: ConversationTurn {
@@ -219,6 +357,7 @@ impl PostgresRepository {
                 warnings: completion.warnings,
                 created_at: completed_at,
             }),
+            diagnosis_revision,
         })
     }
 
@@ -266,7 +405,18 @@ impl PostgresRepository {
                     a.id AS answer_id, a.revision AS answer_revision,
                     a.answer, a.mode, a.citations, a.evidence_ids,
                     a.model_invocation_id, a.partial AS answer_partial,
-                    a.warnings AS answer_warnings, a.created_at AS answer_created_at
+                    a.warnings AS answer_warnings, a.created_at AS answer_created_at,
+                    d.id AS diagnosis_id, d.investigation_id AS diagnosis_investigation_id,
+                    d.conversation_id AS diagnosis_conversation_id, d.turn_id AS diagnosis_turn_id,
+                    d.answer_revision_id AS diagnosis_answer_revision_id,
+                    d.revision AS diagnosis_revision, d.pack_id AS diagnosis_pack_id,
+                    d.pack_version AS diagnosis_pack_version, d.status AS diagnosis_status,
+                    d.rule_result AS diagnosis_rule_result, d.hypotheses AS diagnosis_hypotheses,
+                    d.evidence_ids AS diagnosis_evidence_ids,
+                    d.primary_model_invocation_id AS diagnosis_model_invocation_id,
+                    d.execution_eligible AS diagnosis_execution_eligible,
+                    d.partial AS diagnosis_partial, d.correlation_id AS diagnosis_correlation_id,
+                    d.created_at AS diagnosis_created_at
              FROM conversation_turns t
              LEFT JOIN LATERAL (
                 SELECT * FROM conversation_answer_revisions
@@ -274,6 +424,7 @@ impl PostgresRepository {
                 ORDER BY revision DESC
                 LIMIT 1
              ) a ON TRUE
+             LEFT JOIN investigation_diagnosis_revisions d ON d.answer_revision_id = a.id
              WHERE t.conversation_id = $1 AND t.tenant_id = $2 AND t.cluster_id = $3
              ORDER BY t.sequence ASC
              LIMIT 200",
@@ -396,6 +547,10 @@ fn conversation_turn_view_from_row(row: &PgRow) -> Result<ConversationTurnView, 
             })
         })
         .transpose()?;
+    let diagnosis_revision = row
+        .try_get::<Option<Uuid>, _>("diagnosis_id")?
+        .map(|_| investigation_diagnosis_from_aliased_row(row))
+        .transpose()?;
     Ok(ConversationTurnView {
         turn: ConversationTurn {
             id: turn_id,
@@ -417,6 +572,39 @@ fn conversation_turn_view_from_row(row: &PgRow) -> Result<ConversationTurnView, 
             completed_at: row.try_get("completed_at")?,
         },
         answer,
+        diagnosis_revision,
+    })
+}
+
+fn investigation_diagnosis_from_aliased_row(row: &PgRow) -> Result<InvestigationDiagnosisRevision, ControlPlaneError> {
+    let alias = |name: &str| format!("diagnosis_{name}");
+    Ok(InvestigationDiagnosisRevision {
+        id: rocketmq_sre_contracts::DiagnosisRevisionId::from_uuid(row.try_get(alias("id").as_str())?),
+        investigation_id: InvestigationId::from_uuid(row.try_get(alias("investigation_id").as_str())?),
+        conversation_id: rocketmq_sre_contracts::ConversationId::from_uuid(
+            row.try_get(alias("conversation_id").as_str())?,
+        ),
+        turn_id: ConversationTurnId::from_uuid(row.try_get(alias("turn_id").as_str())?),
+        answer_revision_id: ConversationAnswerRevisionId::from_uuid(row.try_get(alias("answer_revision_id").as_str())?),
+        revision: u32::try_from(row.try_get::<i32, _>(alias("revision").as_str())?)
+            .map_err(|_| ControlPlaneError::configuration("stored investigation diagnosis revision is invalid"))?,
+        pack_id: row.try_get(alias("pack_id").as_str())?,
+        pack_version: row.try_get(alias("pack_version").as_str())?,
+        status: super::repository::parse_investigation_diagnosis_status(row.try_get(alias("status").as_str())?)?,
+        rule_result: row.try_get(alias("rule_result").as_str())?,
+        hypotheses: row.try_get(alias("hypotheses").as_str())?,
+        evidence_ids: row
+            .try_get::<Vec<Uuid>, _>(alias("evidence_ids").as_str())?
+            .into_iter()
+            .map(EvidenceId::from_uuid)
+            .collect(),
+        primary_model_invocation_id: row
+            .try_get::<Option<Uuid>, _>(alias("model_invocation_id").as_str())?
+            .map(ModelInvocationId::from_uuid),
+        execution_eligible: row.try_get(alias("execution_eligible").as_str())?,
+        partial: row.try_get(alias("partial").as_str())?,
+        correlation_id: CorrelationId::from_uuid(row.try_get(alias("correlation_id").as_str())?),
+        created_at: row.try_get(alias("created_at").as_str())?,
     })
 }
 
@@ -428,6 +616,15 @@ fn turn_status_name(value: ConversationTurnStatus) -> &'static str {
         ConversationTurnStatus::NeedsEvidence => "needs_evidence",
         ConversationTurnStatus::Cancelled => "cancelled",
         ConversationTurnStatus::Failed => "failed",
+    }
+}
+
+const fn investigation_diagnosis_status_name(value: InvestigationDiagnosisStatus) -> &'static str {
+    match value {
+        InvestigationDiagnosisStatus::Healthy => "healthy",
+        InvestigationDiagnosisStatus::Fault => "fault",
+        InvestigationDiagnosisStatus::Inconclusive => "inconclusive",
+        InvestigationDiagnosisStatus::Unsupported => "unsupported",
     }
 }
 

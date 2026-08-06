@@ -30013,12 +30013,129 @@
           }
         }
       },
+      "InvestigationDiagnosisRevision": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "investigation_id",
+          "conversation_id",
+          "turn_id",
+          "answer_revision_id",
+          "revision",
+          "pack_id",
+          "pack_version",
+          "status",
+          "rule_result",
+          "hypotheses",
+          "evidence_ids",
+          "primary_model_invocation_id",
+          "execution_eligible",
+          "partial",
+          "correlation_id",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "investigation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "conversation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "turn_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "answer_revision_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "revision": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 1
+          },
+          "pack_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "pack_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "healthy",
+              "fault",
+              "inconclusive",
+              "unsupported"
+            ]
+          },
+          "rule_result": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "hypotheses": {
+            "type": "array",
+            "maxItems": 32,
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "evidence_ids": {
+            "type": "array",
+            "maxItems": 32,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "primary_model_invocation_id": {
+            "oneOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "execution_eligible": {
+            "type": "boolean",
+            "const": false
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "correlation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
       "ConversationTurnView": {
         "type": "object",
         "additionalProperties": false,
         "required": [
           "turn",
-          "answer"
+          "answer",
+          "diagnosis_revision"
         ],
         "properties": {
           "turn": {
@@ -30028,6 +30145,16 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/ConversationAnswerRevision"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "diagnosis_revision": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/InvestigationDiagnosisRevision"
               },
               {
                 "type": "null"

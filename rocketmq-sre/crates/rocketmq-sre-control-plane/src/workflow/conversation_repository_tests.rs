@@ -20,11 +20,14 @@ use rocketmq_sre_contracts::ConversationQueryIntent;
 use rocketmq_sre_contracts::ConversationQueryKind;
 use rocketmq_sre_contracts::ConversationTurnStatus;
 use rocketmq_sre_contracts::CorrelationId;
+use rocketmq_sre_contracts::EvidenceId;
+use rocketmq_sre_contracts::InvestigationDiagnosisStatus;
 use rocketmq_sre_contracts::TenantId;
 
 use super::ConversationCreateRequest;
 use super::ConversationTurnRequest;
 use super::conversation_repository::ConversationCompletion;
+use super::conversation_repository::InvestigationDiagnosisDraft;
 use crate::ControlPlaneError;
 use crate::PostgresRepository;
 use crate::auth::AuthContext;
@@ -45,20 +48,25 @@ async fn postgres_conversation_turns_are_scoped_terminal_and_single_flight() {
         clusters: BTreeSet::from([cluster_id]),
         roles: BTreeSet::from(["diagnose".to_owned()]),
     };
-    let conversation = repository
+    let conversation_view = repository
         .create_conversation(
             &auth,
             &ConversationCreateRequest {
                 cluster_id,
                 question: "Show the current broker health".to_owned(),
                 resource: Some("metrics/instant/rocketmq_broker_up".to_owned()),
-                persist_investigation: false,
+                persist_investigation: true,
             },
             CorrelationId::new(),
         )
         .await
-        .expect("conversation")
-        .conversation;
+        .expect("conversation");
+    let investigation_id = conversation_view
+        .investigation
+        .as_ref()
+        .expect("persisted investigation")
+        .id;
+    let conversation = conversation_view.conversation;
     let intent = ConversationQueryIntent {
         schema_version: "rocketmq-sre.conversation-query-intent.v1".to_owned(),
         kind: ConversationQueryKind::MetricInstant,
@@ -101,31 +109,51 @@ async fn postgres_conversation_turns_are_scoped_terminal_and_single_flight() {
                 model_invocation_id: None,
                 partial: true,
                 warnings: Vec::new(),
+                diagnosis: None,
             },
         )
         .await;
     assert!(non_terminal.is_err());
 
+    let evidence_id = EvidenceId::new();
     let completed = repository
         .complete_conversation_turn(
             &auth,
             &turn,
             ConversationCompletion {
-                status: ConversationTurnStatus::NeedsEvidence,
+                status: ConversationTurnStatus::Answered,
                 intent: Some(intent),
-                answer: "The source returned no usable Evidence; no value was fabricated.".to_owned(),
+                answer: "The bounded evidence was evaluated by broker-health.v1.".to_owned(),
                 mode: ConversationAnswerMode::RulesOnly,
                 citations: Vec::new(),
-                evidence_ids: Vec::new(),
+                evidence_ids: vec![evidence_id],
                 model_invocation_id: None,
                 partial: true,
-                warnings: vec!["missing_evidence".to_owned()],
+                warnings: vec!["missing_optional_evidence".to_owned()],
+                diagnosis: Some(InvestigationDiagnosisDraft {
+                    investigation_id,
+                    pack_id: "broker-health.v1".to_owned(),
+                    pack_version: "1.0.0".to_owned(),
+                    status: InvestigationDiagnosisStatus::Inconclusive,
+                    rule_result: serde_json::json!({"status": "inconclusive"}),
+                    hypotheses: serde_json::json!([]),
+                    evidence_ids: vec![evidence_id],
+                    primary_model_invocation_id: None,
+                    partial: true,
+                }),
             },
         )
         .await
         .expect("terminal answer revision");
-    assert_eq!(completed.turn.status, ConversationTurnStatus::NeedsEvidence);
+    assert_eq!(completed.turn.status, ConversationTurnStatus::Answered);
     assert_eq!(completed.answer.as_ref().map(|answer| answer.revision), Some(1));
+    let diagnosis = completed
+        .diagnosis_revision
+        .as_ref()
+        .expect("investigation diagnosis revision");
+    assert_eq!(diagnosis.investigation_id, investigation_id);
+    assert_eq!(diagnosis.pack_id, "broker-health.v1");
+    assert!(!diagnosis.execution_eligible);
 
     let page = repository
         .conversation_turns(&auth, &conversation)
@@ -135,6 +163,7 @@ async fn postgres_conversation_turns_are_scoped_terminal_and_single_flight() {
     assert_eq!(page.items[0].turn.id, completed.turn.id);
     assert_eq!(page.items[0].turn.status, completed.turn.status);
     assert_eq!(page.items[0].turn.query_intent, completed.turn.query_intent);
+    assert_eq!(page.items[0].diagnosis_revision, completed.diagnosis_revision);
     assert_eq!(
         page.items[0]
             .answer
@@ -144,6 +173,18 @@ async fn postgres_conversation_turns_are_scoped_terminal_and_single_flight() {
             .answer
             .as_ref()
             .map(|answer| (&answer.answer, answer.revision, &answer.citations)),
+    );
+    let investigation = repository
+        .investigation(&auth, investigation_id)
+        .await
+        .expect("investigation detail");
+    assert_eq!(investigation.diagnosis_revisions.len(), 1);
+    assert!(!investigation.diagnosis_revisions[0].execution_eligible);
+    assert!(
+        investigation
+            .timeline
+            .iter()
+            .any(|event| event.event_type == "conversation_diagnosis_revision_created")
     );
 }
 

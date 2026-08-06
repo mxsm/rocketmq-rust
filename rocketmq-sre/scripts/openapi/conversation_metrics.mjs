@@ -169,14 +169,71 @@ export function extendConversationMetrics({
       created_at: timestamp,
     },
   };
+  schemas.InvestigationDiagnosisRevision = {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "id",
+      "investigation_id",
+      "conversation_id",
+      "turn_id",
+      "answer_revision_id",
+      "revision",
+      "pack_id",
+      "pack_version",
+      "status",
+      "rule_result",
+      "hypotheses",
+      "evidence_ids",
+      "primary_model_invocation_id",
+      "execution_eligible",
+      "partial",
+      "correlation_id",
+      "created_at",
+    ],
+    properties: {
+      id: uuid,
+      investigation_id: uuid,
+      conversation_id: uuid,
+      turn_id: uuid,
+      answer_revision_id: uuid,
+      revision: { type: "integer", format: "uint32", minimum: 1 },
+      pack_id: { type: "string", minLength: 1, maxLength: 128 },
+      pack_version: { type: "string", minLength: 1, maxLength: 64 },
+      status: {
+        type: "string",
+        enum: ["healthy", "fault", "inconclusive", "unsupported"],
+      },
+      rule_result: { type: "object", additionalProperties: true },
+      hypotheses: {
+        type: "array",
+        maxItems: 32,
+        items: { type: "object", additionalProperties: true },
+      },
+      evidence_ids: {
+        type: "array",
+        maxItems: 32,
+        uniqueItems: true,
+        items: uuid,
+      },
+      primary_model_invocation_id: nullable(uuid),
+      execution_eligible: { type: "boolean", const: false },
+      partial: { type: "boolean" },
+      correlation_id: uuid,
+      created_at: timestamp,
+    },
+  };
   schemas.ConversationTurnView = {
     type: "object",
     additionalProperties: false,
-    required: ["turn", "answer"],
+    required: ["turn", "answer", "diagnosis_revision"],
     properties: {
       turn: { $ref: "#/components/schemas/ConversationTurn" },
       answer: nullable({
         $ref: "#/components/schemas/ConversationAnswerRevision",
+      }),
+      diagnosis_revision: nullable({
+        $ref: "#/components/schemas/InvestigationDiagnosisRevision",
       }),
     },
   };
