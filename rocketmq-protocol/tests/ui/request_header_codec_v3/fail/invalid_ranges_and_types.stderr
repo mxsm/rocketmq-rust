@@ -1,0 +1,41 @@
+error: range must be i32 or i64
+  --> tests/ui/request_header_codec_v3/fail/invalid_ranges_and_types.rs:16:32
+   |
+16 |     #[header(required, range = "u64")]
+   |                                ^^^^^
+
+error: u32 range requires java_type = "int" and range = "i32"
+ --> tests/ui/request_header_codec_v3/fail/invalid_ranges_and_types.rs:6:5
+  |
+6 |     #[header(required, java_type = "long", range = "i32")]
+  |     ^
+
+error: java_type is incompatible with the Rust header value type
+ --> tests/ui/request_header_codec_v3/fail/invalid_ranges_and_types.rs:6:36
+  |
+6 |     #[header(required, java_type = "long", range = "i32")]
+  |                                    ^^^^^^
+
+error: unsigned Java long fields require range = "i64"
+ --> tests/ui/request_header_codec_v3/fail/invalid_ranges_and_types.rs:8:5
+  |
+8 |     #[header(required, java_type = "long")]
+  |     ^
+
+error: range is supported only for unsigned Rust fields mapped to signed Java integers
+  --> tests/ui/request_header_codec_v3/fail/invalid_ranges_and_types.rs:10:5
+   |
+10 |     #[header(required, java_type = "long", range = "i64")]
+   |     ^
+
+error: java_type is incompatible with the Rust header value type
+  --> tests/ui/request_header_codec_v3/fail/invalid_ranges_and_types.rs:12:36
+   |
+12 |     #[header(required, java_type = "boolean")]
+   |                                    ^^^^^^^^^
+
+error: unsupported RequestHeaderCodecV3 field type `usize`
+  --> tests/ui/request_header_codec_v3/fail/invalid_ranges_and_types.rs:15:18
+   |
+15 |     unsupported: usize,
+   |                  ^^^^^

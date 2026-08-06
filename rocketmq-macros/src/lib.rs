@@ -20,10 +20,12 @@ use syn::TypePath;
 
 use crate::remoting_serializable::remoting_serializable_inner;
 use crate::request_header_codec_v2::request_header_codec_inner_v2;
+use crate::request_header_codec_v3::request_header_codec_inner_v3;
 use crate::request_header_custom::request_header_codec_inner;
 
 mod remoting_serializable;
 mod request_header_codec_v2;
+mod request_header_codec_v3;
 mod request_header_custom;
 
 #[proc_macro_derive(RequestHeaderCodec, attributes(required))]
@@ -34,6 +36,15 @@ pub fn request_header_codec(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(RequestHeaderCodecV2, attributes(required, request_header, request_header_codec_v2))]
 pub fn request_header_codec_v2(input: TokenStream) -> TokenStream {
     request_header_codec_inner_v2(input)
+}
+
+/// Validates the explicit typed request-header wire model.
+///
+/// Map, schema, and compatibility implementations are added separately after
+/// the attribute grammar and diagnostics are frozen.
+#[proc_macro_derive(RequestHeaderCodecV3, attributes(header, required))]
+pub fn request_header_codec_v3(input: TokenStream) -> TokenStream {
+    request_header_codec_inner_v3(input)
 }
 
 #[proc_macro_derive(RemotingSerializable)]

@@ -13,10 +13,17 @@
 // limitations under the License.
 
 use protocol_api::CommandCustomHeader;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::{RequestHeaderCodecV2, RequestHeaderCodecV3};
 
 #[derive(RequestHeaderCodecV2)]
 struct RenamedConsumerHeader {
+    queue_id: i32,
+}
+
+#[derive(RequestHeaderCodecV3)]
+#[header(type_id = "fixtures::RenamedV3Header")]
+struct RenamedV3Header {
+    #[header(required)]
     queue_id: i32,
 }
 
@@ -24,4 +31,7 @@ fn main() {
     let header = RenamedConsumerHeader { queue_id: 7 };
     let fields = header.to_map().expect("header map");
     assert_eq!(fields.get("queueId").map(|value| value.as_str()), Some("7"));
+
+    let v3_header = RenamedV3Header { queue_id: 7 };
+    assert_eq!(v3_header.queue_id, 7);
 }

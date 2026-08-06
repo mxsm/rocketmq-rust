@@ -1,0 +1,35 @@
+error: required cannot be used on Option<T>
+ --> tests/ui/request_header_codec_v3/fail/invalid_missing_and_default.rs:6:5
+  |
+6 |     #[header(required)]
+  |     ^
+
+error: non-Option fields require required, default, or default_with
+ --> tests/ui/request_header_codec_v3/fail/invalid_missing_and_default.rs:8:5
+  |
+8 |     implicit_default: bool,
+  |     ^^^^^^^^^^^^^^^^
+
+error: required, default, and default_with are mutually exclusive
+ --> tests/ui/request_header_codec_v3/fail/invalid_missing_and_default.rs:9:5
+  |
+9 |     #[header(required, default, default_semantic = "literal:false")]
+  |     ^
+
+error: default and default_with require default_semantic
+  --> tests/ui/request_header_codec_v3/fail/invalid_missing_and_default.rs:11:5
+   |
+11 |     #[header(default)]
+   |     ^
+
+error: default_semantic requires default or default_with
+  --> tests/ui/request_header_codec_v3/fail/invalid_missing_and_default.rs:13:43
+   |
+13 |     #[header(required, default_semantic = "literal:0")]
+   |                                           ^^^^^^^^^^^
+
+error: default_semantic must be literal:<wire-text> or dynamic:<semantic-id>
+  --> tests/ui/request_header_codec_v3/fail/invalid_missing_and_default.rs:15:42
+   |
+15 |     #[header(default, default_semantic = "unstable")]
+   |                                          ^^^^^^^^^^

@@ -1,0 +1,35 @@
+error: Option<Flattened> requires presence = "any" or "always"
+ --> tests/ui/request_header_codec_v3/fail/invalid_flatten.rs:8:5
+  |
+8 |     #[header(flatten)]
+  |     ^
+
+error: presence = "any" is valid only for Option<Flattened>
+  --> tests/ui/request_header_codec_v3/fail/invalid_flatten.rs:10:5
+   |
+10 |     #[header(flatten, presence = "any")]
+   |     ^
+
+error: flatten cannot be combined with key, alias, missing policy, default, alias_conflict, java_type, or range
+  --> tests/ui/request_header_codec_v3/fail/invalid_flatten.rs:12:5
+   |
+12 |     #[header(flatten, key = "nested", required, java_type = "Nested")]
+   |     ^
+
+error: presence is valid only for flatten fields
+  --> tests/ui/request_header_codec_v3/fail/invalid_flatten.rs:14:5
+   |
+14 |     #[header(presence = "always", required)]
+   |     ^
+
+error: presence must be always or any
+  --> tests/ui/request_header_codec_v3/fail/invalid_flatten.rs:16:34
+   |
+16 |     #[header(flatten, presence = "sometimes")]
+   |                                  ^^^^^^^^^^^
+
+error: flatten requires a nested header type
+  --> tests/ui/request_header_codec_v3/fail/invalid_flatten.rs:18:5
+   |
+18 |     #[header(flatten)]
+   |     ^
