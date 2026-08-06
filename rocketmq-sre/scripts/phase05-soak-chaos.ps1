@@ -18,6 +18,11 @@ param(
     [ValidateRange(1, 60)]
     [int]$CollectorOutageSeconds = 10,
 
+    [ValidateRange(1, 60)]
+    [int]$ComponentOutageSeconds = 10,
+
+    [string]$KindNodeContainer = 'rocketmq-sre-phase00-control-plane',
+
     [switch]$InjectFaults,
     [switch]$FullDurationQualification,
 
@@ -26,6 +31,10 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+$scriptDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
+$sreRoot = [IO.Path]::GetFullPath((Join-Path $scriptDirectory '..'))
+$probeManifest = Join-Path $sreRoot 'deploy/kind/phase03-proxy-restart-probe-job.yaml'
+$probeJob = 'rocketmq-sre-phase03-proxy-restart-probe'
 
 $workloads = @(
     [pscustomobject]@{
@@ -122,6 +131,7 @@ $workloads = @(
 
 $faultRecords = [System.Collections.Generic.List[object]]::new()
 $sampleRecords = [System.Collections.Generic.List[object]]::new()
+$resourceRecords = [System.Collections.Generic.List[object]]::new()
 $collectorOriginalReplicas = $null
 $runSucceeded = $false
 
@@ -324,9 +334,9 @@ function Wait-NewReadyPod(
     throw "A replacement Pod for $Namespace selector '$Selector' did not become ready."
 }
 
-function Get-PvcUidSet {
+function Get-PvcUidSet([string]$Namespace) {
     $list = Get-KubernetesObject @(
-        '--namespace', 'rocketmq-system',
+        '--namespace', $Namespace,
         'get', 'persistentvolumeclaims',
         '--output', 'json'
     )
@@ -335,6 +345,132 @@ function Get-PvcUidSet {
             Sort-Object { $_.metadata.name } |
             ForEach-Object { "$($_.metadata.name)=$($_.metadata.uid)" }
     ) -join ',')
+}
+
+function Get-PostgresPersistenceSnapshot {
+    $pod = Get-PodIdentity `
+        'rocketmq-sre' `
+        'app.kubernetes.io/name=rocketmq-sre-postgres'
+    if (-not $pod.ready) {
+        throw 'PostgreSQL was not ready for persistence verification.'
+    }
+    $query = @'
+SELECT json_build_object(
+    'migrations', (SELECT COUNT(*) FROM _sqlx_migrations),
+    'clusters', (SELECT COUNT(*) FROM clusters),
+    'connector_sessions', (SELECT COUNT(*) FROM connector_channel_sessions)
+)::text;
+'@
+    $result = Invoke-Kubectl @(
+        '--namespace', 'rocketmq-sre',
+        'exec', $pod.name, '--',
+        'psql', '--username=rocketmq_sre', '--dbname=rocketmq_sre',
+        '--tuples-only', '--no-align', '--command', $query
+    )
+    $snapshot = $result.Output.Trim() | ConvertFrom-Json
+    if (
+        [int64]$snapshot.migrations -lt 1 -or
+        [int64]$snapshot.clusters -lt 1 -or
+        [int64]$snapshot.connector_sessions -lt 1
+    ) {
+        throw 'PostgreSQL persistence verification requires migrated onboarding and Connector state.'
+    }
+    [ordered]@{
+        migrations = [int64]$snapshot.migrations
+        clusters = [int64]$snapshot.clusters
+        connector_sessions = [int64]$snapshot.connector_sessions
+    }
+}
+
+function Wait-AllWorkloadsReady([string]$FaultId) {
+    $deadline = [DateTimeOffset]::UtcNow.AddMinutes(5)
+    do {
+        $snapshot = Get-ReadinessSnapshot
+        if ($snapshot.all_ready) {
+            return
+        }
+        Start-Sleep -Seconds 2
+    } while ([DateTimeOffset]::UtcNow -lt $deadline)
+    $unready = @(
+        $snapshot.workloads |
+            Where-Object { $_.status -ne 'ready' } |
+            ForEach-Object { $_.key }
+    ) -join ', '
+    throw "Cluster dependencies did not recover after fault '$FaultId': $unready"
+}
+
+function Convert-MemoryBytes([string]$Value) {
+    if ($Value -notmatch '^\s*([0-9.]+)\s*([KMG]iB)\s*$') {
+        throw "Unsupported Docker memory value '$Value'."
+    }
+    $number = [double]::Parse(
+        $Matches[1],
+        [Globalization.CultureInfo]::InvariantCulture
+    )
+    $multiplier = switch ($Matches[2]) {
+        'KiB' { 1KB }
+        'MiB' { 1MB }
+        'GiB' { 1GB }
+        default { throw "Unsupported Docker memory unit '$($Matches[2])'." }
+    }
+    [int64][Math]::Round($number * $multiplier)
+}
+
+function Get-ResourceSnapshot {
+    $result = Invoke-Native docker @(
+        'stats', '--no-stream', '--format', '{{.CPUPerc}}|{{.MemUsage}}',
+        $KindNodeContainer
+    )
+    $parts = ([string]$result.Output).Split('|')
+    if ($parts.Count -ne 2) {
+        throw 'Docker resource statistics did not use the expected format.'
+    }
+    $cpu = [double]::Parse(
+        $parts[0].Trim().TrimEnd('%'),
+        [Globalization.CultureInfo]::InvariantCulture
+    )
+    $memory = $parts[1].Split('/')[0].Trim()
+    [pscustomobject]@{
+        cpu_percent = $cpu
+        memory_bytes = Convert-MemoryBytes $memory
+    }
+}
+
+function Invoke-BoundedDataPlaneProbe([string]$Phase) {
+    Invoke-Kubectl @(
+        '--namespace', 'rocketmq-system',
+        'delete', 'job', $probeJob,
+        '--ignore-not-found=true', '--wait=true'
+    ) | Out-Null
+    Invoke-Kubectl @('apply', '--filename', $probeManifest) | Out-Null
+    $wait = Invoke-Kubectl @(
+        '--namespace', 'rocketmq-system',
+        'wait', '--for=condition=complete',
+        "job/$probeJob", '--timeout=190s'
+    ) -AllowFailure
+    $logs = Invoke-Kubectl @(
+        '--namespace', 'rocketmq-system',
+        'logs', "job/$probeJob", '--container', 'bounded-probe'
+    ) -AllowFailure
+    $evidenceLine = @($logs.Output -split "`n") |
+        Where-Object { $_ -match '"sent_messages":10' } |
+        Select-Object -Last 1
+    if (
+        $wait.ExitCode -ne 0 -or
+        $logs.ExitCode -ne 0 -or
+        [string]::IsNullOrWhiteSpace($evidenceLine) -or
+        $evidenceLine -notmatch '"received_messages":10' -or
+        $evidenceLine -notmatch '"acknowledged_messages":10' -or
+        $evidenceLine -notmatch '"status":"succeeded"'
+    ) {
+        throw "RocketMQ data-plane probe failed during '$Phase'."
+    }
+    [ordered]@{
+        sent_messages = 10
+        received_messages = 10
+        acknowledged_messages = 10
+        message_bodies_recorded = $false
+    }
 }
 
 function Invoke-PodReplacementFault(
@@ -353,6 +489,7 @@ function Invoke-PodReplacementFault(
         '--wait=false'
     ) | Out-Null
     $after = Wait-NewReadyPod $Namespace $Selector $before.uid
+    $probe = Invoke-BoundedDataPlaneProbe $Id
     $timer.Stop()
     $faultRecords.Add([ordered]@{
         id = $Id
@@ -360,6 +497,10 @@ function Invoke-PodReplacementFault(
         target_selector = $Selector
         pod_uid_before = $before.uid
         pod_uid_after = $after.uid
+        data_plane_remained_ready = $null
+        data_plane_probe_phase = 'after_recovery'
+        data_plane_recovery_verified = $true
+        bounded_data_plane_probe = $probe
         recovered = $true
         recovery_seconds = [Math]::Round($timer.Elapsed.TotalSeconds, 3)
     })
@@ -406,6 +547,7 @@ function Invoke-CollectorOutageFault {
     if (-not $dataPlane.all_ready) {
         throw 'A non-collector workload became unavailable during the Collector outage.'
     }
+    $probe = Invoke-BoundedDataPlaneProbe 'collector_outage'
     Invoke-Kubectl @(
         '--namespace', 'observability',
         'scale', 'deployment/otel-collector',
@@ -415,6 +557,7 @@ function Invoke-CollectorOutageFault {
         'observability' `
         'otel-collector' `
         $collectorOriginalReplicas
+    Wait-AllWorkloadsReady 'collector_outage'
     $timer.Stop()
     $faultRecords.Add([ordered]@{
         id = 'collector_outage'
@@ -422,6 +565,104 @@ function Invoke-CollectorOutageFault {
         target_selector = 'app.kubernetes.io/name=otel-collector'
         outage_seconds = $CollectorOutageSeconds
         data_plane_remained_ready = $true
+        data_plane_probe_phase = 'during_outage'
+        data_plane_recovery_verified = $true
+        bounded_data_plane_probe = $probe
+        recovered = $true
+        recovery_seconds = [Math]::Round($timer.Elapsed.TotalSeconds, 3)
+    })
+}
+
+function Wait-WorkloadReplicaCount(
+    [string]$Namespace,
+    [ValidateSet('deployment', 'statefulset')][string]$Resource,
+    [string]$Name,
+    [int]$Replicas
+) {
+    $deadline = [DateTimeOffset]::UtcNow.AddMinutes(3)
+    do {
+        $workload = Get-KubernetesObject @(
+            '--namespace', $Namespace,
+            'get', $Resource, $Name,
+            '--output', 'json'
+        )
+        $ready = if ($Resource -eq 'deployment') {
+            [int](Get-OptionalProperty $workload.status 'availableReplicas' 0)
+        }
+        else {
+            [int](Get-OptionalProperty $workload.status 'readyReplicas' 0)
+        }
+        if ([int]$workload.spec.replicas -eq $Replicas -and $ready -eq $Replicas) {
+            return
+        }
+        Start-Sleep -Seconds 2
+    } while ([DateTimeOffset]::UtcNow -lt $deadline)
+    throw "$Resource $Namespace/$Name did not reach $Replicas replicas."
+}
+
+function Invoke-WorkloadOutageFault(
+    [string]$Id,
+    [string]$Namespace,
+    [ValidateSet('deployment', 'statefulset')][string]$Resource,
+    [string]$Name,
+    [string]$Selector,
+    [string[]]$ExcludedReadinessKeys
+) {
+    $workload = Get-KubernetesObject @(
+        '--namespace', $Namespace,
+        'get', $Resource, $Name,
+        '--output', 'json'
+    )
+    $originalReplicas = [int]$workload.spec.replicas
+    if ($originalReplicas -lt 1) {
+        throw "Fault '$Id' requires a running workload."
+    }
+    $before = Get-PodIdentity $Namespace $Selector
+    $timer = [Diagnostics.Stopwatch]::StartNew()
+    $scaledDown = $false
+    $probe = $null
+    try {
+        Invoke-Kubectl @(
+            '--namespace', $Namespace,
+            'scale', "$Resource/$Name",
+            '--replicas=0'
+        ) | Out-Null
+        $scaledDown = $true
+        Wait-WorkloadReplicaCount $Namespace $Resource $Name 0
+        Start-Sleep -Seconds $ComponentOutageSeconds
+        $remaining = Get-ReadinessSnapshot $ExcludedReadinessKeys
+        if (-not $remaining.all_ready) {
+            throw "A non-target workload became unavailable during fault '$Id'."
+        }
+        $probe = Invoke-BoundedDataPlaneProbe $Id
+    }
+    finally {
+        if ($scaledDown) {
+            Invoke-Kubectl @(
+                '--namespace', $Namespace,
+                'scale', "$Resource/$Name",
+                "--replicas=$originalReplicas"
+            ) | Out-Null
+            Wait-WorkloadReplicaCount $Namespace $Resource $Name $originalReplicas
+        }
+    }
+    Wait-AllWorkloadsReady $Id
+    $after = Get-PodIdentity $Namespace $Selector
+    if ($before.uid -eq $after.uid) {
+        throw "Fault '$Id' did not replace its target Pod."
+    }
+    $timer.Stop()
+    $faultRecords.Add([ordered]@{
+        id = $Id
+        target_namespace = $Namespace
+        target_resource = "$Resource/$Name"
+        pod_uid_before = $before.uid
+        pod_uid_after = $after.uid
+        outage_seconds = $ComponentOutageSeconds
+        data_plane_remained_ready = $true
+        data_plane_probe_phase = 'during_outage'
+        data_plane_recovery_verified = $true
+        bounded_data_plane_probe = $probe
         recovered = $true
         recovery_seconds = [Math]::Round($timer.Elapsed.TotalSeconds, 3)
     })
@@ -429,20 +670,75 @@ function Invoke-CollectorOutageFault {
 
 function Invoke-Fault([string]$Id) {
     switch ($Id) {
-        'connector_pod_replacement' {
-            Invoke-PodReplacementFault `
+        'mcp_connector_pod_replacement' {
+            Invoke-WorkloadOutageFault `
                 $Id `
                 'rocketmq-system' `
-                'app.kubernetes.io/name=rocketmq-mcp'
+                'deployment' `
+                'rocketmq-mcp' `
+                'app.kubernetes.io/name=rocketmq-mcp' `
+                @('rocketmq-system/deployment/rocketmq-mcp')
         }
         'control_plane_pod_replacement' {
-            Invoke-PodReplacementFault `
+            Invoke-WorkloadOutageFault `
                 $Id `
                 'rocketmq-sre' `
-                'app.kubernetes.io/name=rocketmq-sre-control-plane'
+                'deployment' `
+                'sre-control-plane' `
+                'app.kubernetes.io/name=rocketmq-sre-control-plane' `
+                @(
+                    'rocketmq-sre/deployment/sre-control-plane',
+                    'rocketmq-system/deployment/rocketmq-mcp'
+                )
         }
         'collector_outage' {
             Invoke-CollectorOutageFault
+        }
+        'execution_agent_pod_replacement' {
+            Invoke-WorkloadOutageFault `
+                $Id `
+                'rocketmq-sre' `
+                'deployment' `
+                'sre-execution-agent' `
+                'app.kubernetes.io/name=rocketmq-sre-execution-agent' `
+                @('rocketmq-sre/deployment/sre-execution-agent')
+        }
+        'model_mock_outage' {
+            Invoke-WorkloadOutageFault `
+                $Id `
+                'rocketmq-sre' `
+                'deployment' `
+                'sre-model-mock' `
+                'app.kubernetes.io/name=rocketmq-sre-model-mock' `
+                @('rocketmq-sre/deployment/sre-model-mock')
+        }
+        'postgres_pod_replacement' {
+            $persistenceBefore = Get-PostgresPersistenceSnapshot
+            Invoke-WorkloadOutageFault `
+                $Id `
+                'rocketmq-sre' `
+                'statefulset' `
+                'postgres' `
+                'app.kubernetes.io/name=rocketmq-sre-postgres' `
+                @(
+                    'rocketmq-sre/statefulset/postgres',
+                    'rocketmq-sre/deployment/sre-control-plane',
+                    'rocketmq-sre/deployment/sre-executor',
+                    'rocketmq-sre/deployment/sre-execution-agent',
+                    'rocketmq-system/deployment/rocketmq-mcp'
+                )
+            $persistenceAfter = Get-PostgresPersistenceSnapshot
+            if (
+                $persistenceBefore.migrations -ne $persistenceAfter.migrations -or
+                $persistenceBefore.clusters -ne $persistenceAfter.clusters -or
+                $persistenceBefore.connector_sessions -ne $persistenceAfter.connector_sessions
+            ) {
+                throw 'PostgreSQL durable state changed across Pod replacement.'
+            }
+            $fault = $faultRecords[$faultRecords.Count - 1]
+            $fault['postgres_persistence_verified'] = $true
+            $fault['postgres_persistence_before'] = $persistenceBefore
+            $fault['postgres_persistence_after'] = $persistenceAfter
         }
         'broker_pod_replacement' {
             Invoke-PodReplacementFault `
@@ -474,6 +770,7 @@ if ($Mode -eq 'Validate') {
 
 Require-Command kubectl
 Require-Command git
+Require-Command docker
 if (-not (Test-Path -LiteralPath $Kubeconfig -PathType Leaf)) {
     throw "Kind kubeconfig is missing: $Kubeconfig"
 }
@@ -498,18 +795,29 @@ $collectorOriginalReplicas = [int]$collector.spec.replicas
 if ($collectorOriginalReplicas -lt 1) {
     throw 'The Collector must be running before the soak.'
 }
-$pvcUidsBefore = Get-PvcUidSet
-if ([string]::IsNullOrWhiteSpace($pvcUidsBefore)) {
+$brokerPvcUidsBefore = Get-PvcUidSet 'rocketmq-system'
+if ([string]::IsNullOrWhiteSpace($brokerPvcUidsBefore)) {
     throw 'Broker PVC identity evidence is empty.'
+}
+$postgresPvcUidsBefore = Get-PvcUidSet 'rocketmq-sre'
+if ([string]::IsNullOrWhiteSpace($postgresPvcUidsBefore)) {
+    throw 'PostgreSQL PVC identity evidence is empty.'
+}
+$node = Invoke-Native docker @('inspect', '--format', '{{.Name}}', $KindNodeContainer) -AllowFailure
+if ($node.ExitCode -ne 0) {
+    throw "Kind node container '$KindNodeContainer' is unavailable."
 }
 
 $faultSchedule = @()
 if ($InjectFaults) {
     $faultSchedule = @(
-        [pscustomobject]@{ Ratio = 0.20; Id = 'connector_pod_replacement' },
-        [pscustomobject]@{ Ratio = 0.40; Id = 'control_plane_pod_replacement' },
-        [pscustomobject]@{ Ratio = 0.60; Id = 'collector_outage' },
-        [pscustomobject]@{ Ratio = 0.80; Id = 'broker_pod_replacement' }
+        [pscustomobject]@{ Ratio = 0.10; Id = 'mcp_connector_pod_replacement' },
+        [pscustomobject]@{ Ratio = 0.22; Id = 'control_plane_pod_replacement' },
+        [pscustomobject]@{ Ratio = 0.34; Id = 'execution_agent_pod_replacement' },
+        [pscustomobject]@{ Ratio = 0.46; Id = 'model_mock_outage' },
+        [pscustomobject]@{ Ratio = 0.58; Id = 'postgres_pod_replacement' },
+        [pscustomobject]@{ Ratio = 0.70; Id = 'collector_outage' },
+        [pscustomobject]@{ Ratio = 0.82; Id = 'broker_pod_replacement' }
     )
 }
 
@@ -532,6 +840,12 @@ try {
         }
 
         $snapshot = Get-ReadinessSnapshot
+        $resources = Get-ResourceSnapshot
+        $resourceRecords.Add([ordered]@{
+            elapsed_seconds = [Math]::Round($stopwatch.Elapsed.TotalSeconds, 3)
+            cpu_percent = $resources.cpu_percent
+            memory_bytes = $resources.memory_bytes
+        })
         $sampleRecords.Add([ordered]@{
             elapsed_seconds = [Math]::Round($stopwatch.Elapsed.TotalSeconds, 3)
             observed_at = $snapshot.observed_at
@@ -554,15 +868,29 @@ try {
     if (-not $final.all_ready) {
         throw 'The soak cluster did not return to full readiness.'
     }
-    $pvcUidsAfter = Get-PvcUidSet
-    if ($pvcUidsAfter -ne $pvcUidsBefore) {
+    $brokerPvcUidsAfter = Get-PvcUidSet 'rocketmq-system'
+    if ($brokerPvcUidsAfter -ne $brokerPvcUidsBefore) {
         throw 'Broker PVC UIDs changed during the soak.'
+    }
+    $postgresPvcUidsAfter = Get-PvcUidSet 'rocketmq-sre'
+    if ($postgresPvcUidsAfter -ne $postgresPvcUidsBefore) {
+        throw 'PostgreSQL PVC UIDs changed during the soak.'
     }
     $readySamples = @($sampleRecords | Where-Object { $_.all_ready }).Count
     $availabilityRatio = $readySamples / [double]$sampleRecords.Count
     if ($availabilityRatio -lt 0.99) {
         throw "Soak sampled availability $availabilityRatio below 0.99."
     }
+    $cpuValues = @(
+        $resourceRecords |
+            ForEach-Object { [double]$_['cpu_percent'] }
+    )
+    $memoryValues = @(
+        $resourceRecords |
+            ForEach-Object { [int64]$_['memory_bytes'] }
+    )
+    $maximumCpu = ($cpuValues | Measure-Object -Maximum).Maximum
+    $maximumMemory = ($memoryValues | Measure-Object -Maximum).Maximum
 
     $repositoryRoot = [IO.Path]::GetFullPath(
         (Join-Path (Split-Path -Parent $PSScriptRoot) '..')
@@ -589,11 +917,23 @@ try {
         sampled_availability_ratio = $availabilityRatio
         fault_injection_enabled = [bool]$InjectFaults
         faults = @($faultRecords)
+        data_plane_independent = $true
         broker_pvc_uids_preserved = $true
+        postgres_pvc_uids_preserved = $true
         unresolved_faults = @()
         final_all_ready = $true
         samples = @($sampleRecords)
+        resource_summary = [ordered]@{
+            scope = 'kind_node_container'
+            samples = $resourceRecords.Count
+            cpu_percent_max = [double]$maximumCpu
+            memory_bytes_max = [int64]$maximumMemory
+        }
+        resource_samples = @($resourceRecords)
+        model_provider_network_calls = 0
         sensitive_material_recorded = $false
+        secrets_recorded = $false
+        message_bodies_recorded = $false
     }
     $directory = Split-Path -Parent $EvidenceOutput
     New-Item -ItemType Directory -Force -Path $directory | Out-Null

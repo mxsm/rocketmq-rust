@@ -30,6 +30,7 @@ use rocketmq_client_rust::MQPushConsumer;
 use rocketmq_client_rust::MessageListenerConcurrently;
 use rocketmq_client_rust::TelemetryHandle;
 use rocketmq_error::RocketMQResult;
+use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_model::common::message::MessageTrait;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_single::Message;
@@ -151,8 +152,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             }
         })
     };
-    let client_shutdown =
-        runtime_owner.block_on(async { tokio::time::timeout(PROBE_SHUTDOWN_TIMEOUT, client_runtime.shutdown()).await });
+    let client_shutdown = runtime_owner.block_on(client_runtime.shutdown());
     let runtime_shutdown = runtime_owner.shutdown_runtime_blocking();
 
     let operation_result = operation_result?;
@@ -161,19 +161,10 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if let Some(evidence) = operation_result.evidence {
         println!("{}", serde_json::to_string(&evidence)?);
     }
-    cleanup_partial |= match client_shutdown {
-        Ok(report) => {
-            let unhealthy = !report.is_healthy();
-            if unhealthy {
-                eprintln!("level=warn stage=client_runtime_shutdown cleanup_partial=true reason=unhealthy");
-            }
-            unhealthy
-        }
-        Err(_) => {
-            eprintln!("level=warn stage=client_runtime_shutdown cleanup_partial=true reason=timeout");
-            true
-        }
-    };
+    if !client_shutdown.is_healthy() {
+        eprintln!("level=warn stage=client_runtime_shutdown cleanup_partial=true reason=unhealthy");
+        cleanup_partial = true;
+    }
     let runtime_shutdown = runtime_shutdown?;
     if !runtime_shutdown.is_healthy() {
         eprintln!("level=warn stage=runtime_owner_shutdown cleanup_partial=true reason=unhealthy");
@@ -357,12 +348,15 @@ async fn register(
     println!("probe_stage command=register stage=consumer_start status=begin");
     consumer.start().await?;
     println!("probe_stage command=register stage=consumer_start status=end");
-    let cancellation = client_runtime.service_context().task_group().cancellation_token();
     tokio::time::sleep(Duration::from_secs(1)).await;
-    cancellation.cancel();
     let cleanup_partial = tokio::time::timeout(PROBE_SHUTDOWN_TIMEOUT, consumer.shutdown())
         .await
         .is_err();
+    client_runtime
+        .service_context()
+        .task_group()
+        .cancellation_token()
+        .cancel();
     if cleanup_partial {
         eprintln!("level=warn stage=consumer_shutdown cleanup_partial=true reason=timeout");
     }
@@ -436,7 +430,8 @@ async fn consume(
     let notification = Arc::clone(&listener.notification);
     let builder = DefaultMQPushConsumer::builder(Arc::clone(&client_runtime))
         .consumer_group(plan.identity.consumer_group.clone())
-        .name_server_addr(namesrv_addr.to_owned());
+        .name_server_addr(namesrv_addr.to_owned())
+        .consume_from_where(history_consume_from_where());
     let builder = match acl_config {
         Some(config) => builder.rpc_hook(Some(Arc::new(config.rpc_hook()))),
         None => builder,
@@ -454,14 +449,14 @@ async fn consume(
         }
     };
     let result = tokio::time::timeout(Duration::from_secs(u64::from(plan.max_duration_seconds)), wait).await;
+    let cleanup_partial = tokio::time::timeout(PROBE_SHUTDOWN_TIMEOUT, consumer.shutdown())
+        .await
+        .is_err();
     client_runtime
         .service_context()
         .task_group()
         .cancellation_token()
         .cancel();
-    let cleanup_partial = tokio::time::timeout(PROBE_SHUTDOWN_TIMEOUT, consumer.shutdown())
-        .await
-        .is_err();
     if cleanup_partial {
         eprintln!("level=warn stage=consumer_shutdown cleanup_partial=true reason=timeout");
     }
@@ -521,13 +516,20 @@ fn legacy_message_key_prefix(run_id: Uuid) -> String {
     format!("probe-{}", run_id.simple())
 }
 
+const fn history_consume_from_where() -> ConsumeFromWhere {
+    ConsumeFromWhere::ConsumeFromFirstOffset
+}
+
 fn contains_expected_key(keys: &str, expected_prefix: &str) -> bool {
     keys.split_whitespace().any(|key| key.starts_with(expected_prefix))
 }
 
 #[cfg(test)]
 mod tests {
+    use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
+
     use super::contains_expected_key;
+    use super::history_consume_from_where;
     use super::legacy_message_key_prefix;
     use uuid::Uuid;
 
@@ -544,5 +546,10 @@ mod tests {
             "probe-00000000000000000000000000000000-9",
             &prefix
         ));
+    }
+
+    #[test]
+    fn history_consume_reads_messages_sent_before_consumer_start() {
+        assert_eq!(history_consume_from_where(), ConsumeFromWhere::ConsumeFromFirstOffset);
     }
 }

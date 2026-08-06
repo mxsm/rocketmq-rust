@@ -34,6 +34,9 @@ $drScript = Join-Path $scriptDirectory 'phase05-test-cluster-dr.ps1'
 $runDirectory = Join-Path $TemporaryRoot "phase05-enterprise-$([Guid]::NewGuid().ToString('N').Substring(0, 12))"
 $restoreEvidence = Join-Path $runDirectory 'control-plane-restore.json'
 $drEvidence = Join-Path $runDirectory 'test-cluster-dr.json'
+$scaleEvidence = Join-Path $runDirectory 'production-readiness-scale.json'
+$policyEvidence = Join-Path $runDirectory 'production-readiness-policy.json'
+$precheckEvidence = Join-Path $runDirectory 'production-readiness-precheck.json'
 
 function Invoke-Native {
     param(
@@ -74,19 +77,32 @@ function Invoke-SpaceGuard {
     }
 }
 
-function Invoke-ExactPostgresTest([string]$TestName, [string]$Capability) {
+function Invoke-ExactCargoTest(
+    [string]$Package,
+    [string]$TestName,
+    [string]$Capability
+) {
     Invoke-SpaceGuard
     $stopwatch = [Diagnostics.Stopwatch]::StartNew()
-    Invoke-Native cargo @(
+    $arguments = @(
         'test',
         '--manifest-path', $manifestPath,
         '--locked',
-        '-p', 'rocketmq-sre-control-plane',
+        '-p', $Package,
         $TestName,
         '--',
         '--ignored',
         '--exact'
-    ) $Capability | Out-Host
+    )
+    $output = & cargo @arguments 2>&1
+    $exitCode = $LASTEXITCODE
+    $output | Out-Host
+    if ($exitCode -ne 0) {
+        throw "$Capability failed with exit code $exitCode."
+    }
+    if (($output -join "`n") -notmatch 'test result: ok\. 1 passed;') {
+        throw "$Capability did not execute exactly one test."
+    }
     $stopwatch.Stop()
     [ordered]@{
         test = $TestName
@@ -113,7 +129,10 @@ foreach ($name in @(
     'TEMP',
     'TMP',
     'KUBECONFIG',
-    'ROCKETMQ_SRE_TEST_DATABASE_URL'
+    'ROCKETMQ_SRE_TEST_DATABASE_URL',
+    'ROCKETMQ_SRE_PRODUCTION_READINESS_SCALE_REPORT',
+    'ROCKETMQ_SRE_PRODUCTION_READINESS_POLICY_REPORT',
+    'ROCKETMQ_SRE_PRODUCTION_READINESS_PRECHECK_REPORT'
 )) {
     $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
 }
@@ -126,29 +145,71 @@ try {
     $env:TMP = $env:TEMP
     $env:KUBECONFIG = [IO.Path]::GetFullPath($Kubeconfig)
     $env:ROCKETMQ_SRE_TEST_DATABASE_URL = $DatabaseUrl
+    $env:ROCKETMQ_SRE_PRODUCTION_READINESS_SCALE_REPORT = $scaleEvidence
+    $env:ROCKETMQ_SRE_PRODUCTION_READINESS_POLICY_REPORT = $policyEvidence
+    $env:ROCKETMQ_SRE_PRODUCTION_READINESS_PRECHECK_REPORT = $precheckEvidence
 
     $tests = @()
-    $tests += Invoke-ExactPostgresTest `
+    $tests += Invoke-ExactCargoTest `
+        'rocketmq-sre-control-plane' `
         'fleet::repository_scale_tests::postgres_fleet_scale_demo_pages_100_clusters_and_applies_backpressure' `
         '100-cluster pagination, quota, backpressure, and worst-health visibility'
-    $tests += Invoke-ExactPostgresTest `
+    $tests += Invoke-ExactCargoTest `
+        'rocketmq-sre-control-plane' `
+        'assets::scale_tests::postgres_inventory_profiles_twenty_thousand_assets_and_evidence_queries' `
+        '20,000-asset inventory pagination and Evidence query latency'
+    $tests += Invoke-ExactCargoTest `
+        'rocketmq-sre-control-plane' `
+        'supervised_execution::policy::tests::policy_evaluation_latency_profile_is_bounded' `
+        'deterministic supervised policy P99 latency'
+    $tests += Invoke-ExactCargoTest `
+        'rocketmq-sre-execution-agent' `
+        'drivers::telemetry_collector_restart_one::tests::execution_precheck_latency_profile_is_bounded' `
+        'typed read-only execution precheck P95 latency'
+    $tests += Invoke-ExactCargoTest `
+        'rocketmq-sre-control-plane' `
         'fleet::repository_tests::postgres_fleet_scope_routing_compliance_and_inspection_are_bounded' `
         'two-region scope, residency, disconnection degradation, and inspection'
-    $tests += Invoke-ExactPostgresTest `
+    $tests += Invoke-ExactCargoTest `
+        'rocketmq-sre-control-plane' `
         'fleet::repository_tests::postgres_current_n_minus_one_and_incompatible_runtime_handshakes_fail_closed' `
         'Connector, Execution Agent, and MCP current/N-1 compatibility'
-    $tests += Invoke-ExactPostgresTest `
+    $tests += Invoke-ExactCargoTest `
+        'rocketmq-sre-control-plane' `
         'release_management::repository_tests::postgres_release_and_integration_records_are_durable_idempotent_and_append_only' `
         'ITSM, ChatOps, Pager outbox idempotency and stale-claim recovery'
-    $tests += Invoke-ExactPostgresTest `
+    $tests += Invoke-ExactCargoTest `
+        'rocketmq-sre-control-plane' `
         'release_management::repository_tests::postgres_enterprise_integration_events_are_signed_scoped_and_idempotent' `
         'CMDB, GitOps, and CI/CD signed event idempotency'
-    $tests += Invoke-ExactPostgresTest `
+    $tests += Invoke-ExactCargoTest `
+        'rocketmq-sre-control-plane' `
         'fleet::releases::repository_tests::postgres_two_region_release_denies_unready_target_and_pauses_on_canary_regression' `
         'two-region canary readiness deny, regression pause, and rollback'
 
+    foreach ($fragment in @($scaleEvidence, $policyEvidence, $precheckEvidence)) {
+        if (-not (Test-Path -LiteralPath $fragment -PathType Leaf)) {
+            throw "A required production-readiness fragment is missing: $fragment"
+        }
+    }
+    $scaleProfile = Get-Content -Raw -LiteralPath $scaleEvidence | ConvertFrom-Json
+    $policyProfile = Get-Content -Raw -LiteralPath $policyEvidence | ConvertFrom-Json
+    $precheckProfile = Get-Content -Raw -LiteralPath $precheckEvidence | ConvertFrom-Json
+    if (
+        $scaleProfile.schema_version -ne 'rocketmq-sre.production-readiness-scale-fragment.v1' -or
+        $policyProfile.schema_version -ne 'rocketmq-sre.production-readiness-policy-fragment.v1' -or
+        $precheckProfile.schema_version -ne 'rocketmq-sre.production-readiness-precheck-fragment.v1' -or
+        [int]$scaleProfile.model_provider_network_calls -ne 0 -or
+        [int]$policyProfile.model_provider_network_calls -ne 0 -or
+        [int]$precheckProfile.model_provider_network_calls -ne 0 -or
+        [int]$precheckProfile.target_mutations -ne 0
+    ) {
+        throw 'Production-readiness performance fragments failed closed.'
+    }
+
     & $restoreScript `
         -PostgresContainer $PostgresContainer `
+        -DatabaseUrl $DatabaseUrl `
         -CargoTargetDir $CargoTargetDir `
         -CargoHome $CargoHome `
         -TemporaryRoot $TemporaryRoot `
@@ -183,10 +244,38 @@ try {
         scenarios = $tests
         scale = [ordered]@{
             clusters = 100
+            logical_clusters = 100
             logical_regions = 2
             page_size = 25
             inspection_max_concurrency = 8
             quota_backpressure_verified = $true
+            topic_assets = [int]$scaleProfile.topic_assets
+            consumer_group_assets = [int]$scaleProfile.consumer_group_assets
+            total_assets = [int]$scaleProfile.total_assets
+            inventory_payload_bytes = [int64]$scaleProfile.inventory_payload_bytes
+            inventory_ingest_millis = [double]$scaleProfile.inventory_ingest_millis
+            page_limit = [int]$scaleProfile.page_limit
+            page_samples = [int]$scaleProfile.page_samples
+            asset_page_p95_millis = [double]$scaleProfile.asset_page_p95_millis
+            oversized_page_rejected = [bool]$scaleProfile.oversized_page_rejected
+            cleanup_verified = [bool]$scaleProfile.cleanup_verified
+        }
+        measurements = [ordered]@{
+            evidence_query = $scaleProfile.evidence_query
+            policy_evaluation = [ordered]@{
+                samples = [int]$policyProfile.samples
+                p99_millis = [double]$policyProfile.p99_millis
+                unit = [string]$policyProfile.unit
+            }
+            execution_precheck = [ordered]@{
+                samples = [int]$precheckProfile.samples
+                p95_millis = [double]$precheckProfile.p95_millis
+                unit = [string]$precheckProfile.unit
+                error_count = [int]$precheckProfile.error_count
+                error_rate = [double]$precheckProfile.error_rate
+                execution_queue_depth_samples = [int]$precheckProfile.execution_queue_depth_samples
+                execution_queue_depth_max = [int]$precheckProfile.execution_queue_depth_max
+            }
         }
         integrations = @('itsm', 'chatops', 'pager', 'cmdb', 'gitops', 'ci-cd')
         fleet_release = [ordered]@{
@@ -204,7 +293,10 @@ try {
         control_plane_restore = $restore
         test_cluster_dr = $dr
         message_history_restore_claimed = [bool]$dr.message_history_restore_claimed
+        repository_commit = (& git -C (Join-Path $sreRoot '..') rev-parse HEAD).Trim()
+        model_provider_network_calls = 0
         secrets_recorded = $false
+        message_bodies_recorded = $false
     }
     $evidenceDirectory = Split-Path -Parent ([IO.Path]::GetFullPath($EvidenceOutput))
     New-Item -ItemType Directory -Force -Path $evidenceDirectory | Out-Null

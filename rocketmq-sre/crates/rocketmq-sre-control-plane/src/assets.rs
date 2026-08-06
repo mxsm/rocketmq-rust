@@ -17,6 +17,9 @@ mod model;
 mod repository;
 mod service;
 
+#[cfg(test)]
+mod scale_tests;
+
 pub(crate) use hash::calculate_diff;
 pub(crate) use hash::materialize_snapshot;
 pub(crate) use hash::verify_diff;
