@@ -1574,6 +1574,7 @@ fn diagnosis_output_schema() -> Value {
             "confidence_percent": {"type": "integer", "minimum": 0, "maximum": 100},
             "cited_evidence_ids": {
                 "type": "array",
+                "minItems": 1,
                 "maxItems": 32,
                 "uniqueItems": true,
                 "items": {"type": "string"}

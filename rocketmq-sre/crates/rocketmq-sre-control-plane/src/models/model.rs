@@ -157,6 +157,7 @@ impl StructuredModelDiagnosis {
             && !self.assessment.trim().is_empty()
             && self.assessment.chars().count() <= 4_000
             && self.confidence_percent <= 100
+            && !self.cited_evidence_ids.is_empty()
             && self.cited_evidence_ids.len() <= 32
             && self
                 .cited_evidence_ids
@@ -271,5 +272,19 @@ mod tests {
         };
 
         assert!(!diagnosis.validate(&[allowed]));
+    }
+
+    #[test]
+    fn structured_diagnosis_rejects_missing_evidence_citations() {
+        let diagnosis = StructuredModelDiagnosis {
+            summary: "Lag is increasing".to_owned(),
+            assessment: "The consumer is not keeping up".to_owned(),
+            confidence_percent: 80,
+            cited_evidence_ids: Vec::new(),
+            recommended_read_only_queries: Vec::new(),
+            rationale: "Observed lag supports the assessment".to_owned(),
+        };
+
+        assert!(!diagnosis.validate(&[EvidenceId::new()]));
     }
 }
