@@ -41,6 +41,9 @@ use rocketmq_protocol::protocol::header::get_min_offset_request_header::GetMinOf
 use rocketmq_protocol::protocol::header::get_parent_topic_info_request_header::GetParentTopicInfoRequestHeader;
 use rocketmq_protocol::protocol::header::get_producer_connection_list_request_header::GetProducerConnectionListRequestHeader;
 use rocketmq_protocol::protocol::header::get_subscription_group_config_request_header::GetSubscriptionGroupConfigRequestHeader;
+use rocketmq_protocol::protocol::header::get_topic_config_request_header::GetTopicConfigRequestHeader;
+use rocketmq_protocol::protocol::header::get_topic_stats_info_request_header::GetTopicStatsInfoRequestHeader;
+use rocketmq_protocol::protocol::header::get_topic_stats_request_header::GetTopicStatsRequestHeader;
 use rocketmq_protocol::protocol::header::heartbeat_request_header::HeartbeatRequestHeader;
 use rocketmq_protocol::protocol::header::lite_subscription_ctl_request_header::LiteSubscriptionCtlRequestHeader;
 use rocketmq_protocol::protocol::header::lock_batch_mq_request_header::LockBatchMqRequestHeader;
@@ -294,6 +297,18 @@ fn registry() -> Vec<RegisteredSchema> {
         }),
         register::<GetProducerConnectionListRequestHeader>(),
         register::<GetSubscriptionGroupConfigRequestHeader>(),
+        register_value(&GetTopicConfigRequestHeader {
+            topic: CheetahString::from_static_str("registry"),
+            topic_request_header: None,
+        }),
+        register_value(&GetTopicStatsInfoRequestHeader {
+            topic: CheetahString::from_static_str("registry"),
+            topic_request_header: None,
+        }),
+        register_value(&GetTopicStatsRequestHeader {
+            topic: CheetahString::from_static_str("registry"),
+            topic_request_header: None,
+        }),
         register::<HeartbeatRequestHeader>(),
         register::<LiteSubscriptionCtlRequestHeader>(),
         register::<LockBatchMqRequestHeader>(),
@@ -656,10 +671,15 @@ fn assert_rpc_envelope_contract<T>(
     assert_eq!(empty.encode_capability(), HeaderEncodeCapability::MapOnly);
 }
 
-fn assert_topic_queue_envelope_contract<T>(
+struct TopicEnvelopeRef<'a> {
+    lo: Option<bool>,
+    rpc: &'a Option<RpcRequestHeader>,
+}
+
+fn assert_topic_envelope_contract<T>(
     local_fields: &[(&'static str, &'static str)],
     required_keys: &[&'static str],
-    topic: fn(&T) -> &Option<TopicRequestHeader>,
+    topic: for<'a> fn(&'a T) -> Option<TopicEnvelopeRef<'a>>,
 ) where
     T: CommandCustomHeader + FromMap<Target = T> + HeaderCodec,
     <T as FromMap>::Error: std::fmt::Debug,
@@ -679,15 +699,13 @@ fn assert_topic_queue_envelope_contract<T>(
         input.insert(key.into(), value.into());
     }
 
-    let typed = <T as HeaderCodec>::decode_from_map(&input).expect("typed TopicQueue envelope decode");
-    let legacy = <T as FromMap>::from(&input).expect("legacy TopicQueue envelope adapter");
+    let typed = <T as HeaderCodec>::decode_from_map(&input).expect("typed Topic envelope decode");
+    let legacy = <T as FromMap>::from(&input).expect("legacy Topic envelope adapter");
     for decoded in [&typed, &legacy] {
-        let topic = topic(decoded)
-            .as_ref()
-            .expect("Java Topic parent is always present after decode");
+        let topic = topic(decoded).expect("Java Topic parent is always present after decode");
         assert_eq!(topic.lo, Some(true));
         let rpc = topic
-            .rpc_request_header
+            .rpc
             .as_ref()
             .expect("Java RPC parent is always present after decode");
         assert_eq!(rpc.namespace.as_deref(), Some("canonical-ns"));
@@ -727,36 +745,71 @@ fn assert_topic_queue_envelope_contract<T>(
         assert!(<T as FromMap>::from(&missing).is_err());
     }
 
-    let empty = <T as HeaderCodec>::decode_from_map(&parent_only).expect("TopicQueue header without parent fields");
-    let empty_topic = topic(&empty)
-        .as_ref()
-        .expect("Java Topic parent exists even when inherited fields are absent");
+    let empty = <T as HeaderCodec>::decode_from_map(&parent_only).expect("Topic header without parent fields");
+    let empty_topic = topic(&empty).expect("Java Topic parent exists even when inherited fields are absent");
     assert!(empty_topic.lo.is_none());
-    assert!(empty_topic.rpc_request_header.is_some());
+    assert!(empty_topic.rpc.is_some());
     assert_eq!(empty.encode_capability(), HeaderEncodeCapability::MapOnly);
 }
 
 #[test]
-fn topic_queue_headers_preserve_nested_java_inheritance_and_defaults() {
-    assert_topic_queue_envelope_contract::<GetMaxOffsetRequestHeader>(
+fn topic_headers_preserve_nested_java_inheritance_and_defaults() {
+    assert_topic_envelope_contract::<GetMaxOffsetRequestHeader>(
         &[
             ("topic", "topic-max"),
             ("queueId", "2147483647"),
             ("committed", "false"),
         ],
         &["topic", "queueId"],
-        |header| &header.topic_request_header,
+        |header| {
+            header.topic_request_header.as_ref().map(|topic| TopicEnvelopeRef {
+                lo: topic.lo,
+                rpc: &topic.rpc_request_header,
+            })
+        },
     );
-    assert_topic_queue_envelope_contract::<GetMinOffsetRequestHeader>(
+    assert_topic_envelope_contract::<GetMinOffsetRequestHeader>(
         &[("topic", "topic-min"), ("queueId", "-2147483648")],
         &["topic", "queueId"],
-        |header| &header.topic_request_header,
+        |header| {
+            header.topic_request_header.as_ref().map(|topic| TopicEnvelopeRef {
+                lo: topic.lo,
+                rpc: &topic.rpc_request_header,
+            })
+        },
     );
-    assert_topic_queue_envelope_contract::<GetEarliestMsgStoretimeRequestHeader>(
+    assert_topic_envelope_contract::<GetEarliestMsgStoretimeRequestHeader>(
         &[("topic", "topic-earliest"), ("queueId", "0")],
         &["topic", "queueId"],
-        |header| &header.topic_request_header,
+        |header| {
+            header.topic_request_header.as_ref().map(|topic| TopicEnvelopeRef {
+                lo: topic.lo,
+                rpc: &topic.rpc_request_header,
+            })
+        },
     );
+    assert_topic_envelope_contract::<GetTopicConfigRequestHeader>(&[("topic", "topic-config")], &["topic"], |header| {
+        header.topic_request_header.as_ref().map(|topic| TopicEnvelopeRef {
+            lo: topic.lo,
+            rpc: &topic.rpc_request_header,
+        })
+    });
+    assert_topic_envelope_contract::<GetTopicStatsInfoRequestHeader>(
+        &[("topic", "topic-stats-info")],
+        &["topic"],
+        |header| {
+            header.topic_request_header.as_ref().map(|topic| TopicEnvelopeRef {
+                lo: topic.lo,
+                rpc: &topic.rpc,
+            })
+        },
+    );
+    assert_topic_envelope_contract::<GetTopicStatsRequestHeader>(&[("topic", "topic-stats")], &["topic"], |header| {
+        header.topic_request_header.as_ref().map(|topic| TopicEnvelopeRef {
+            lo: topic.lo,
+            rpc: &topic.rpc_request_header,
+        })
+    });
 
     let max_without_committed = HeaderMap::from([("topic".into(), "topic-max".into()), ("queueId".into(), "0".into())]);
     let typed = <GetMaxOffsetRequestHeader as HeaderCodec>::decode_from_map(&max_without_committed)
