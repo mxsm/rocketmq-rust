@@ -23,6 +23,7 @@ use rocketmq_model::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_protocol::protocol::header::check_transaction_state_request_header::CheckTransactionStateRequestHeader;
 use rocketmq_protocol::protocol::header::clone_group_offset_request_header::CloneGroupOffsetRequestHeader;
 use rocketmq_protocol::protocol::header::consume_message_directly_result_request_header::ConsumeMessageDirectlyResultRequestHeader;
+use rocketmq_protocol::protocol::header::consumer_send_msg_back_request_header::ConsumerSendMsgBackRequestHeader;
 use rocketmq_protocol::protocol::header::controller::clean_broker_data_request_header::CleanBrokerDataRequestHeader;
 use rocketmq_protocol::protocol::header::create_topic_list_request_header::CreateTopicListRequestHeader;
 use rocketmq_protocol::protocol::header::delete_subscription_group_request_header::DeleteSubscriptionGroupRequestHeader;
@@ -205,6 +206,16 @@ fn registry() -> Vec<RegisteredSchema> {
         }),
         register::<CloneGroupOffsetRequestHeader>(),
         register::<ConsumeMessageDirectlyResultRequestHeader>(),
+        register_value(&ConsumerSendMsgBackRequestHeader {
+            offset: 0,
+            group: CheetahString::from_static_str("registry"),
+            delay_level: 0,
+            origin_msg_id: None,
+            origin_topic: None,
+            unit_mode: false,
+            max_reconsume_times: None,
+            rpc_request_header: None,
+        }),
         register::<CleanBrokerDataRequestHeader>(),
         register::<CreateTopicListRequestHeader>(),
         register::<DeleteSubscriptionGroupRequestHeader>(),
@@ -564,6 +575,18 @@ fn rpc_envelope_headers_preserve_java_inheritance_and_legacy_aliases() {
         &["srcGroup", "destGroup"],
         |header| &header.rpc_request_header,
     );
+    assert_rpc_envelope_contract::<ConsumerSendMsgBackRequestHeader>(
+        &[
+            ("offset", "9223372036854775807"),
+            ("group", "cg"),
+            ("delayLevel", "2147483647"),
+            ("originMsgId", "msg-a"),
+            ("originTopic", "topic-a"),
+            ("maxReconsumeTimes", "2147483647"),
+        ],
+        &["offset", "group", "delayLevel"],
+        |header| &header.rpc_request_header,
+    );
     assert_rpc_envelope_contract::<CreateTopicListRequestHeader>(&[], &[], |header| &header.rpc_request_header);
     assert_rpc_envelope_contract::<DeleteSubscriptionGroupRequestHeader>(
         &[("groupName", "dg")],
@@ -730,6 +753,30 @@ fn rpc_envelope_headers_preserve_java_inheritance_and_legacy_aliases() {
     assert!(checked.transaction_id.is_none());
     assert!(checked.offset_msg_id.is_none());
     assert!(checked.rpc_request_header.is_some());
+
+    let send_back = <ConsumerSendMsgBackRequestHeader as HeaderCodec>::decode_from_map(&HeaderMap::from([
+        ("offset".into(), i64::MIN.to_string().into()),
+        ("group".into(), "cg".into()),
+        ("delayLevel".into(), i32::MIN.to_string().into()),
+        ("maxReconsumeTimes".into(), i32::MIN.to_string().into()),
+    ]))
+    .expect("Java signed minima and missing unitMode remain valid");
+    assert_eq!(send_back.offset, i64::MIN);
+    assert_eq!(send_back.delay_level, i32::MIN);
+    assert_eq!(send_back.max_reconsume_times, Some(i32::MIN));
+    assert!(send_back.origin_msg_id.is_none());
+    assert!(send_back.origin_topic.is_none());
+    assert!(!send_back.unit_mode);
+    assert!(send_back.rpc_request_header.is_some());
+
+    let invalid_unit_mode = HeaderMap::from([
+        ("offset".into(), "0".into()),
+        ("group".into(), "cg".into()),
+        ("delayLevel".into(), "0".into()),
+        ("unitMode".into(), "invalid".into()),
+    ]);
+    assert!(<ConsumerSendMsgBackRequestHeader as HeaderCodec>::decode_from_map(&invalid_unit_mode).is_err());
+    assert!(<ConsumerSendMsgBackRequestHeader as FromMap>::from(&invalid_unit_mode).is_err());
 
     let unregister_input = HeaderMap::from([
         ("clientID".into(), "canonical-client".into()),

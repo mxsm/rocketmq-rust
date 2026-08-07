@@ -315,7 +315,7 @@
         "CONSUMER_SEND_MSG_BACK"
       ],
       "owner": "rocketmq-rust protocol maintainers",
-      "reason": "Preserve the public optional Rust API while V3 enforces Java strict presence",
+      "reason": "Preserve the public non-optional Rust boolean while accepting the Java primitive false default",
       "referenceSource": {
         "rust": "rocketmq-protocol/src/protocol/header/consumer_send_msg_back_request_header.rs",
         "java": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/ConsumerSendMsgBackRequestHeader.java"
