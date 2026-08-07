@@ -13,24 +13,29 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::rpc::rpc_request_header::RpcRequestHeader;
 
-#[derive(Serialize, Deserialize, Debug, Default, RequestHeaderCodecV2)]
+#[derive(Serialize, Deserialize, Debug, Default, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::check_transaction_state_request_header::CheckTransactionStateRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.CheckTransactionStateRequestHeader"
+)]
 #[serde(rename_all = "camelCase")]
 pub struct CheckTransactionStateRequestHeader {
     pub topic: Option<CheetahString>,
-    #[required]
+    #[header(required)]
     pub tran_state_table_offset: i64,
-    #[required]
+    #[header(required)]
     pub commit_log_offset: i64,
     pub msg_id: Option<CheetahString>,
     pub transaction_id: Option<CheetahString>,
     pub offset_msg_id: Option<CheetahString>,
     #[serde(flatten)]
+    #[header(flatten, presence = "always")]
     pub rpc_request_header: Option<RpcRequestHeader>,
 }
 

@@ -13,58 +13,81 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::rpc::rpc_request_header::RpcRequestHeader;
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
-#[request_header(validate = "validate")]
+#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::end_transaction_request_header::EndTransactionRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.EndTransactionRequestHeader",
+    validate = "Self::validate"
+)]
 #[serde(rename_all = "camelCase")]
 pub struct EndTransactionRequestHeader {
+    #[serde(default)]
+    #[header(default, default_semantic = "literal:")]
     pub topic: CheetahString,
 
-    #[required]
+    #[header(required)]
     pub producer_group: CheetahString,
 
     //ConsumeQueue Offset
-    #[required]
+    #[header(required)]
     pub tran_state_table_offset: i64,
 
     // Offset of the message in the CommitLog
-    #[required]
+    #[header(required)]
     pub commit_log_offset: i64,
 
     //TRANSACTION_COMMIT_TYPE,TRANSACTION_ROLLBACK_TYPE,TRANSACTION_NOT_TYPE
-    #[required]
+    #[header(required)]
     pub commit_or_rollback: i32,
 
     //Whether the check-back is initiated by the Broker
+    #[serde(default)]
+    #[header(default, default_semantic = "literal:false")]
     pub from_transaction_check: bool,
 
-    #[required]
+    #[header(required)]
     pub msg_id: CheetahString,
 
     pub transaction_id: Option<CheetahString>,
 
     #[serde(flatten)]
+    #[header(flatten, presence = "always")]
     pub rpc_request_header: RpcRequestHeader,
 }
 
 impl EndTransactionRequestHeader {
-    fn validate(&self) -> rocketmq_error::RocketMQResult<()> {
+    fn validate(&self) -> Result<(), crate::protocol::header_codec::HeaderCodecError> {
         use rocketmq_model::common::sys_flag::message_sys_flag::MessageSysFlag;
 
         match self.commit_or_rollback {
             MessageSysFlag::TRANSACTION_NOT_TYPE
             | MessageSysFlag::TRANSACTION_COMMIT_TYPE
             | MessageSysFlag::TRANSACTION_ROLLBACK_TYPE => Ok(()),
-            _ => Err(rocketmq_error::RocketMQError::request_header_error(
-                "EndTransactionRequestHeader.commitOrRollback: unsupported transaction state",
-            )),
+            _ => Err(crate::protocol::header_codec::HeaderCodecError::Validation {
+                header:
+                    "rocketmq_protocol::protocol::header::end_transaction_request_header::EndTransactionRequestHeader",
+                rule: "supported_transaction_state",
+            }),
         }
     }
+}
+
+#[cfg(test)]
+impl EndTransactionRequestHeader {
+    const TOPIC: &'static str = "topic";
+    const PRODUCER_GROUP: &'static str = "producerGroup";
+    const TRAN_STATE_TABLE_OFFSET: &'static str = "tranStateTableOffset";
+    const COMMIT_LOG_OFFSET: &'static str = "commitLogOffset";
+    const COMMIT_OR_ROLLBACK: &'static str = "commitOrRollback";
+    const FROM_TRANSACTION_CHECK: &'static str = "fromTransactionCheck";
+    const MSG_ID: &'static str = "msgId";
+    const TRANSACTION_ID: &'static str = "transactionId";
 }
 
 #[cfg(test)]

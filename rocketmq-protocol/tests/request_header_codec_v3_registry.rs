@@ -19,11 +19,14 @@ use bytes::BytesMut;
 use cheetah_string::CheetahString;
 use rocketmq_macros::RequestHeaderCodecV3;
 use rocketmq_model::boundary_type::BoundaryType;
+use rocketmq_model::common::sys_flag::message_sys_flag::MessageSysFlag;
+use rocketmq_protocol::protocol::header::check_transaction_state_request_header::CheckTransactionStateRequestHeader;
 use rocketmq_protocol::protocol::header::clone_group_offset_request_header::CloneGroupOffsetRequestHeader;
 use rocketmq_protocol::protocol::header::consume_message_directly_result_request_header::ConsumeMessageDirectlyResultRequestHeader;
 use rocketmq_protocol::protocol::header::controller::clean_broker_data_request_header::CleanBrokerDataRequestHeader;
 use rocketmq_protocol::protocol::header::create_topic_list_request_header::CreateTopicListRequestHeader;
 use rocketmq_protocol::protocol::header::delete_subscription_group_request_header::DeleteSubscriptionGroupRequestHeader;
+use rocketmq_protocol::protocol::header::end_transaction_request_header::EndTransactionRequestHeader;
 use rocketmq_protocol::protocol::header::get_consumer_connection_list_request_header::GetConsumerConnectionListRequestHeader;
 use rocketmq_protocol::protocol::header::get_consumer_listby_group_request_header::GetConsumerListByGroupRequestHeader;
 use rocketmq_protocol::protocol::header::get_consumer_running_info_request_header::GetConsumerRunningInfoRequestHeader;
@@ -191,11 +194,31 @@ fn registry() -> Vec<RegisteredSchema> {
         register::<RpcRequestHeader>(),
         register::<TopicRequestHeader>(),
         register::<NamesrvTopicRequestHeader>(),
+        register_value(&CheckTransactionStateRequestHeader {
+            topic: None,
+            tran_state_table_offset: 0,
+            commit_log_offset: 0,
+            msg_id: None,
+            transaction_id: None,
+            offset_msg_id: None,
+            rpc_request_header: None,
+        }),
         register::<CloneGroupOffsetRequestHeader>(),
         register::<ConsumeMessageDirectlyResultRequestHeader>(),
         register::<CleanBrokerDataRequestHeader>(),
         register::<CreateTopicListRequestHeader>(),
         register::<DeleteSubscriptionGroupRequestHeader>(),
+        register_value(&EndTransactionRequestHeader {
+            topic: CheetahString::new(),
+            producer_group: CheetahString::from_static_str("registry"),
+            tran_state_table_offset: 0,
+            commit_log_offset: 0,
+            commit_or_rollback: MessageSysFlag::TRANSACTION_NOT_TYPE,
+            from_transaction_check: false,
+            msg_id: CheetahString::from_static_str("registry"),
+            transaction_id: None,
+            rpc_request_header: RpcRequestHeader::default(),
+        }),
         register_value(&GetConsumerConnectionListRequestHeader {
             consumer_group: CheetahString::from_static_str("registry"),
             rpc_request_header: None,
@@ -531,6 +554,11 @@ fn assert_rpc_envelope_contract<T>(
 
 #[test]
 fn rpc_envelope_headers_preserve_java_inheritance_and_legacy_aliases() {
+    assert_rpc_envelope_contract::<CheckTransactionStateRequestHeader>(
+        &[("tranStateTableOffset", "-1"), ("commitLogOffset", "-2")],
+        &["tranStateTableOffset", "commitLogOffset"],
+        |header| &header.rpc_request_header,
+    );
     assert_rpc_envelope_contract::<CloneGroupOffsetRequestHeader>(
         &[("srcGroup", "src"), ("destGroup", "dest"), ("topic", "topic-a")],
         &["srcGroup", "destGroup"],
@@ -592,6 +620,81 @@ fn rpc_envelope_headers_preserve_java_inheritance_and_legacy_aliases() {
         |header| &header.rpc_request_header,
     );
 
+    let end_input = HeaderMap::from([
+        ("producerGroup".into(), "pg".into()),
+        ("tranStateTableOffset".into(), "-1".into()),
+        ("commitLogOffset".into(), "-2".into()),
+        (
+            "commitOrRollback".into(),
+            MessageSysFlag::TRANSACTION_COMMIT_TYPE.to_string().into(),
+        ),
+        ("msgId".into(), "msg-a".into()),
+        ("ns".into(), "canonical-ns".into()),
+        ("namespace".into(), "legacy-ns".into()),
+        ("nsd".into(), "true".into()),
+        ("namespaced".into(), "false".into()),
+        ("bname".into(), "canonical-broker".into()),
+        ("brokerName".into(), "legacy-broker".into()),
+        ("oway".into(), "false".into()),
+        ("oneway".into(), "true".into()),
+    ]);
+    let end_typed = <EndTransactionRequestHeader as HeaderCodec>::decode_from_map(&end_input)
+        .expect("typed end transaction decode");
+    let end_legacy =
+        <EndTransactionRequestHeader as FromMap>::from(&end_input).expect("legacy end transaction adapter");
+    for decoded in [&end_typed, &end_legacy] {
+        assert_eq!(decoded.topic, "");
+        assert_eq!(decoded.producer_group, "pg");
+        assert_eq!(decoded.tran_state_table_offset, -1);
+        assert_eq!(decoded.commit_log_offset, -2);
+        assert!(!decoded.from_transaction_check);
+        assert!(decoded.transaction_id.is_none());
+        assert_eq!(decoded.rpc_request_header.namespace.as_deref(), Some("canonical-ns"));
+        assert_eq!(decoded.rpc_request_header.namespaced, Some(true));
+        assert_eq!(
+            decoded.rpc_request_header.broker_name.as_deref(),
+            Some("canonical-broker")
+        );
+        assert_eq!(decoded.rpc_request_header.oneway, Some(false));
+    }
+    let end_encoded = end_typed.to_map().expect("end transaction encode");
+    assert_eq!(end_encoded.get("topic").map(CheetahString::as_str), Some(""));
+    assert_eq!(
+        end_encoded.get("fromTransactionCheck").map(CheetahString::as_str),
+        Some("false")
+    );
+    for alias in ["namespace", "namespaced", "brokerName", "oneway"] {
+        assert!(!end_encoded.contains_key(alias));
+    }
+    assert_eq!(end_typed.encode_capability(), HeaderEncodeCapability::MapOnly);
+
+    for required in [
+        "producerGroup",
+        "tranStateTableOffset",
+        "commitLogOffset",
+        "commitOrRollback",
+        "msgId",
+    ] {
+        let mut missing = end_input.clone();
+        missing.remove(required);
+        assert!(matches!(
+            <EndTransactionRequestHeader as HeaderCodec>::decode_from_map(&missing),
+            Err(HeaderCodecError::Missing { key, .. }) if key == required
+        ));
+        assert!(<EndTransactionRequestHeader as FromMap>::from(&missing).is_err());
+    }
+
+    let mut unsupported_state = end_input;
+    unsupported_state.insert("commitOrRollback".into(), "999".into());
+    assert!(matches!(
+        <EndTransactionRequestHeader as HeaderCodec>::decode_from_map(&unsupported_state),
+        Err(HeaderCodecError::Validation {
+            rule: "supported_transaction_state",
+            ..
+        })
+    ));
+    assert!(<EndTransactionRequestHeader as FromMap>::from(&unsupported_state).is_err());
+
     let running = <GetConsumerRunningInfoRequestHeader as HeaderCodec>::decode_from_map(&HeaderMap::from([
         ("consumerGroup".into(), "cg".into()),
         ("clientId".into(), "ci".into()),
@@ -614,6 +717,19 @@ fn rpc_envelope_headers_preserve_java_inheritance_and_legacy_aliases() {
     assert!(cloned.topic.is_none());
     assert!(!cloned.offline);
     assert!(cloned.rpc_request_header.is_some());
+
+    let checked = <CheckTransactionStateRequestHeader as HeaderCodec>::decode_from_map(&HeaderMap::from([
+        ("tranStateTableOffset".into(), i64::MIN.to_string().into()),
+        ("commitLogOffset".into(), i64::MAX.to_string().into()),
+    ]))
+    .expect("Java signed long extrema remain valid");
+    assert_eq!(checked.tran_state_table_offset, i64::MIN);
+    assert_eq!(checked.commit_log_offset, i64::MAX);
+    assert!(checked.topic.is_none());
+    assert!(checked.msg_id.is_none());
+    assert!(checked.transaction_id.is_none());
+    assert!(checked.offset_msg_id.is_none());
+    assert!(checked.rpc_request_header.is_some());
 
     let unregister_input = HeaderMap::from([
         ("clientID".into(), "canonical-client".into()),
