@@ -8,10 +8,10 @@
     "entryCount": 152,
     "mappedCount": 143,
     "rustOnlyExtensionCount": 9,
-    "v2Count": 132,
-    "v3Count": 20,
-    "pendingCount": 132,
-    "migratedCount": 20
+    "v2Count": 130,
+    "v3Count": 22,
+    "pendingCount": 130,
+    "migratedCount": 22
   },
   "baseline": {
     "v2TypeIds": [
@@ -179,6 +179,8 @@
       "rocketmq_protocol::protocol::header::create_topic_list_request_header::CreateTopicListRequestHeader",
       "rocketmq_protocol::protocol::header::get_consumer_status_request_header::GetConsumerStatusRequestHeader",
       "rocketmq_protocol::protocol::header::get_lite_client_info_request_header::GetLiteClientInfoRequestHeader",
+      "rocketmq_protocol::protocol::header::heartbeat_request_header::HeartbeatRequestHeader",
+      "rocketmq_protocol::protocol::header::lite_subscription_ctl_request_header::LiteSubscriptionCtlRequestHeader",
       "rocketmq_protocol::protocol::header::lock_batch_mq_request_header::LockBatchMqRequestHeader",
       "rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader",
       "rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2",
@@ -1862,16 +1864,16 @@
       "baselineCodec": "v2",
       "v2AtBaseline": true,
       "legacyV2Exception": null,
-      "currentCodec": "v2",
+      "currentCodec": "v3",
       "flattenDepth": 1,
       "flattenTypeIds": [
         "rocketmq_protocol::rpc::rpc_request_header::RpcRequestHeader"
       ],
       "fastCodec": false,
       "risk": "tier2",
-      "wave": "B",
+      "wave": "A",
       "owner": "remoting",
-      "status": "pending",
+      "status": "migrated",
       "extensionDecision": null
     },
     {
@@ -1925,16 +1927,16 @@
       "baselineCodec": "v2",
       "v2AtBaseline": true,
       "legacyV2Exception": null,
-      "currentCodec": "v2",
+      "currentCodec": "v3",
       "flattenDepth": 1,
       "flattenTypeIds": [
         "rocketmq_protocol::rpc::rpc_request_header::RpcRequestHeader"
       ],
       "fastCodec": false,
       "risk": "tier2",
-      "wave": "B",
+      "wave": "A",
       "owner": "remoting",
-      "status": "pending",
+      "status": "migrated",
       "extensionDecision": null
     },
     {
