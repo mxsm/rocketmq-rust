@@ -46,12 +46,17 @@ impl DeleteTopicFromNamesrvRequestHeader {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::namesrv::topic_operation_header::RegisterTopicRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.namesrv.RegisterTopicRequestHeader"
+)]
 #[serde(rename_all = "camelCase")]
 pub struct RegisterTopicRequestHeader {
-    #[required]
+    #[header(required)]
     pub topic: CheetahString,
     #[serde(flatten)]
+    #[header(flatten, presence = "always")]
     pub topic_request: Option<TopicRequestHeader>,
 }
 
