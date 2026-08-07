@@ -13,21 +13,26 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::rpc::topic_request_header::TopicRequestHeader;
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize, RequestHeaderCodecV2)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::query_correction_offset_header::QueryCorrectionOffsetHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.QueryCorrectionOffsetHeader"
+)]
 #[serde(rename_all = "camelCase")]
 pub struct QueryCorrectionOffsetHeader {
     pub filter_groups: Option<CheetahString>,
-    #[required]
+    #[header(required)]
     pub compare_group: CheetahString,
-    #[required]
+    #[header(required)]
     pub topic: CheetahString,
     #[serde(flatten)]
+    #[header(flatten, presence = "always")]
     pub topic_request_header: Option<TopicRequestHeader>,
 }
 

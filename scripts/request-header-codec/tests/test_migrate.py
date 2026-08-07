@@ -55,7 +55,7 @@ class MigrationGuardTests(unittest.TestCase):
         )
         self.assertEqual(migrate.serialize(expected), migrate.serialize(self.manifest))
         self.assertEqual(len(self.headers), 152)
-        self.assertEqual(sum(header.codec == "v3" for header in self.headers.values()), 49)
+        self.assertEqual(sum(header.codec == "v3" for header in self.headers.values()), 54)
 
     def test_duplicate_simple_names_keep_distinct_stable_paths(self) -> None:
         graph, depths = migrate.flatten_graph(self.headers, self.repo_root)

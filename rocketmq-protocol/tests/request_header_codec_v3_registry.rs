@@ -30,6 +30,7 @@ use rocketmq_protocol::protocol::header::create_topic_list_request_header::Creat
 use rocketmq_protocol::protocol::header::delete_subscription_group_request_header::DeleteSubscriptionGroupRequestHeader;
 use rocketmq_protocol::protocol::header::delete_topic_request_header::DeleteTopicRequestHeader;
 use rocketmq_protocol::protocol::header::end_transaction_request_header::EndTransactionRequestHeader;
+use rocketmq_protocol::protocol::header::get_consume_stats_request_header::GetConsumeStatsRequestHeader;
 use rocketmq_protocol::protocol::header::get_consumer_connection_list_request_header::GetConsumerConnectionListRequestHeader;
 use rocketmq_protocol::protocol::header::get_consumer_listby_group_request_header::GetConsumerListByGroupRequestHeader;
 use rocketmq_protocol::protocol::header::get_consumer_running_info_request_header::GetConsumerRunningInfoRequestHeader;
@@ -61,12 +62,16 @@ use rocketmq_protocol::protocol::header::pop_lite_message_request_header::PopLit
 use rocketmq_protocol::protocol::header::pull_message_request_header::PullMessageRequestHeader;
 use rocketmq_protocol::protocol::header::pull_message_response_header::PullMessageResponseHeader;
 use rocketmq_protocol::protocol::header::query_consume_queue_request_header::QueryConsumeQueueRequestHeader;
+use rocketmq_protocol::protocol::header::query_consume_time_span_request_header::QueryConsumeTimeSpanRequestHeader;
+use rocketmq_protocol::protocol::header::query_correction_offset_header::QueryCorrectionOffsetHeader;
+use rocketmq_protocol::protocol::header::query_subscription_by_consumer_request_header::QuerySubscriptionByConsumerRequestHeader;
 use rocketmq_protocol::protocol::header::query_topic_consume_by_who_request_header::QueryTopicConsumeByWhoRequestHeader;
 use rocketmq_protocol::protocol::header::query_topics_by_consumer_request_header::QueryTopicsByConsumerRequestHeader;
 use rocketmq_protocol::protocol::header::search_offset_request_header::SearchOffsetRequestHeader;
 use rocketmq_protocol::protocol::header::search_offset_response_header::SearchOffsetResponseHeader;
 use rocketmq_protocol::protocol::header::unlock_batch_mq_request_header::UnlockBatchMqRequestHeader;
 use rocketmq_protocol::protocol::header::unregister_client_request_header::UnregisterClientRequestHeader;
+use rocketmq_protocol::protocol::header::update_group_forbidden_request_header::UpdateGroupForbiddenRequestHeader;
 use rocketmq_protocol::protocol::header_codec::{
     AliasConflictPolicy, HeaderCodec, HeaderCodecError, HeaderFieldSpec, HeaderFlattenSpec, HeaderPresence,
     HeaderRange, HeaderValueKind,
@@ -275,6 +280,12 @@ fn registry() -> Vec<RegisteredSchema> {
         }),
         register::<GetConsumerRunningInfoRequestHeader>(),
         register::<GetConsumerStatusRequestHeader>(),
+        register_value(&GetConsumeStatsRequestHeader {
+            consumer_group: CheetahString::from_static_str("registry"),
+            topic: CheetahString::new(),
+            topic_list: None,
+            topic_request_header: None,
+        }),
         register_value(&GetEarliestMsgStoretimeRequestHeader {
             topic: CheetahString::from_static_str("registry"),
             queue_id: 0,
@@ -323,6 +334,22 @@ fn registry() -> Vec<RegisteredSchema> {
         register::<DeleteTopicFromNamesrvRequestHeader>(),
         register::<RegisterTopicRequestHeader>(),
         register::<QueryConsumeQueueRequestHeader>(),
+        register_value(&QueryConsumeTimeSpanRequestHeader {
+            topic: CheetahString::from_static_str("registry"),
+            group: CheetahString::from_static_str("registry"),
+            topic_request_header: None,
+        }),
+        register_value(&QueryCorrectionOffsetHeader {
+            filter_groups: None,
+            compare_group: CheetahString::from_static_str("registry"),
+            topic: CheetahString::from_static_str("registry"),
+            topic_request_header: None,
+        }),
+        register_value(&QuerySubscriptionByConsumerRequestHeader {
+            group: CheetahString::from_static_str("registry"),
+            topic: CheetahString::new(),
+            topic_request_header: None,
+        }),
         register_value(&QueryTopicConsumeByWhoRequestHeader {
             topic: CheetahString::from_static_str("registry"),
             topic_request_header: None,
@@ -358,6 +385,12 @@ fn registry() -> Vec<RegisteredSchema> {
         register::<QueryTopicsByConsumerRequestHeader>(),
         register::<UnlockBatchMqRequestHeader>(),
         register::<UnregisterClientRequestHeader>(),
+        register_value(&UpdateGroupForbiddenRequestHeader {
+            group: CheetahString::from_static_str("registry"),
+            topic: CheetahString::from_static_str("registry"),
+            readable: None,
+            topic_request_header: None,
+        }),
     ]
 }
 
@@ -848,6 +881,97 @@ fn topic_headers_preserve_nested_java_inheritance_and_defaults() {
             })
         },
     );
+    assert_topic_envelope_contract::<GetConsumeStatsRequestHeader>(
+        &[
+            ("consumerGroup", "consumer-a"),
+            ("topic", "topic-stats"),
+            ("topicList", "topic-a;topic-b"),
+        ],
+        &["consumerGroup"],
+        |header| {
+            header.topic_request_header.as_ref().map(|topic| TopicEnvelopeRef {
+                lo: topic.lo,
+                rpc: &topic.rpc_request_header,
+            })
+        },
+    );
+    assert_topic_envelope_contract::<QueryConsumeTimeSpanRequestHeader>(
+        &[("topic", "topic-span"), ("group", "group-span")],
+        &["topic", "group"],
+        |header| {
+            header.topic_request_header.as_ref().map(|topic| TopicEnvelopeRef {
+                lo: topic.lo,
+                rpc: &topic.rpc,
+            })
+        },
+    );
+    assert_topic_envelope_contract::<QueryCorrectionOffsetHeader>(
+        &[
+            ("filterGroups", "group-a,group-b"),
+            ("compareGroup", "group-c"),
+            ("topic", "topic-correction"),
+        ],
+        &["compareGroup", "topic"],
+        |header| {
+            header.topic_request_header.as_ref().map(|topic| TopicEnvelopeRef {
+                lo: topic.lo,
+                rpc: &topic.rpc_request_header,
+            })
+        },
+    );
+    assert_topic_envelope_contract::<QuerySubscriptionByConsumerRequestHeader>(
+        &[("group", "group-subscription"), ("topic", "topic-subscription")],
+        &["group"],
+        |header| {
+            header.topic_request_header.as_ref().map(|topic| TopicEnvelopeRef {
+                lo: topic.lo,
+                rpc: &topic.rpc_request_header,
+            })
+        },
+    );
+    assert_topic_envelope_contract::<UpdateGroupForbiddenRequestHeader>(
+        &[
+            ("group", "group-forbidden"),
+            ("topic", "topic-forbidden"),
+            ("readable", "false"),
+        ],
+        &["group", "topic"],
+        |header| {
+            header.topic_request_header.as_ref().map(|topic| TopicEnvelopeRef {
+                lo: topic.lo,
+                rpc: &topic.rpc_request_header,
+            })
+        },
+    );
+
+    let consume_stats_minimum = HeaderMap::from([("consumerGroup".into(), "consumer-min".into())]);
+    let typed = <GetConsumeStatsRequestHeader as HeaderCodec>::decode_from_map(&consume_stats_minimum)
+        .expect("nullable Java topic decodes to the reviewed Rust empty-string default");
+    let legacy = <GetConsumeStatsRequestHeader as FromMap>::from(&consume_stats_minimum)
+        .expect("legacy adapter preserves the reviewed Rust empty-string default");
+    assert!(typed.topic.is_empty());
+    assert!(legacy.topic.is_empty());
+    assert!(typed.topic_list.is_none());
+    assert!(legacy.topic_list.is_none());
+
+    let subscription_minimum = HeaderMap::from([("group".into(), "group-min".into())]);
+    let typed = <QuerySubscriptionByConsumerRequestHeader as HeaderCodec>::decode_from_map(&subscription_minimum)
+        .expect("nullable Java topic decodes to the reviewed Rust empty-string default");
+    let legacy = <QuerySubscriptionByConsumerRequestHeader as FromMap>::from(&subscription_minimum)
+        .expect("legacy adapter preserves the reviewed Rust empty-string default");
+    assert!(typed.topic.is_empty());
+    assert!(legacy.topic.is_empty());
+
+    let malformed_readable = HeaderMap::from([
+        ("group".into(), "group-forbidden".into()),
+        ("topic".into(), "topic-forbidden".into()),
+        ("readable".into(), "not-a-bool".into()),
+    ]);
+    assert!(matches!(
+        <UpdateGroupForbiddenRequestHeader as HeaderCodec>::decode_from_map(&malformed_readable),
+        Err(HeaderCodecError::InvalidValue { key: "readable", .. })
+    ));
+    assert!(<UpdateGroupForbiddenRequestHeader as FromMap>::from(&malformed_readable).is_err());
 
     let max_without_committed = HeaderMap::from([("topic".into(), "topic-max".into()), ("queueId".into(), "0".into())]);
     let typed = <GetMaxOffsetRequestHeader as HeaderCodec>::decode_from_map(&max_without_committed)
