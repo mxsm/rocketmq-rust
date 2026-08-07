@@ -33,6 +33,8 @@ mod private {
 }
 
 pub use codec::HeaderCodec;
+#[doc(hidden)]
+pub use error::into_rocketmq_error;
 pub use error::HeaderCodecError;
 pub(crate) use field_source::BinaryHeaderFields;
 pub use field_source::HeaderFieldSource;

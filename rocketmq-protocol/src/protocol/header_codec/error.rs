@@ -128,3 +128,11 @@ pub enum HeaderCodecError {
         header: &'static str,
     },
 }
+
+/// Adapts a classified codec error to the legacy remoting error boundary.
+#[doc(hidden)]
+#[cold]
+#[inline(never)]
+pub fn into_rocketmq_error(error: HeaderCodecError) -> rocketmq_error::RocketMQError {
+    rocketmq_error::RocketMQError::request_header_error(error.to_string())
+}
