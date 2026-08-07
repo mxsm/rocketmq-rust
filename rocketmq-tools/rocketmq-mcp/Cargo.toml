@@ -87,7 +87,7 @@ tokio-rustls       = { version = "0.26", optional = true }
 tokio-util         = { version = "0.7.18", features = ["full"] }
 tower-http         = { version = "0.7", features = ["cors", "limit", "timeout", "trace"], optional = true }
 tracing            = "0.1.44"
-validator          = { version = "0.20", features = ["derive"] }
+validator          = { version = "0.21", features = ["derive"] }
 url                = "2.5"
 
 [dev-dependencies]
