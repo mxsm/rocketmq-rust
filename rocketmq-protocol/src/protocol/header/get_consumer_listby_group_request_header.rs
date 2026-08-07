@@ -13,19 +13,24 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::rpc::rpc_request_header::RpcRequestHeader;
 
-#[derive(Clone, Debug, Serialize, Deserialize, RequestHeaderCodecV2)]
+#[derive(Clone, Debug, Serialize, Deserialize, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::get_consumer_listby_group_request_header::GetConsumerListByGroupRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.GetConsumerListByGroupRequestHeader"
+)]
 #[serde(rename_all = "camelCase")]
 pub struct GetConsumerListByGroupRequestHeader {
-    #[required]
+    #[header(required)]
     pub consumer_group: CheetahString,
 
     #[serde(flatten)]
+    #[header(flatten, presence = "always")]
     pub rpc: Option<RpcRequestHeader>,
 }
 
@@ -45,19 +50,13 @@ mod tests {
         };
 
         let map: HashMap<CheetahString, CheetahString> = header.to_map().unwrap();
-        assert_eq!(
-            map.get(GetConsumerListByGroupRequestHeader::CONSUMER_GROUP),
-            Some(&"test_group".into())
-        );
+        assert_eq!(map.get("consumerGroup"), Some(&"test_group".into()));
     }
 
     #[test]
     fn get_consumer_list_by_group_request_header_from_map() {
         let mut map = HashMap::new();
-        map.insert(
-            GetConsumerListByGroupRequestHeader::CONSUMER_GROUP.into(),
-            "test_group".into(),
-        );
+        map.insert("consumerGroup".into(), "test_group".into());
 
         let header = <GetConsumerListByGroupRequestHeader as FromMap>::from(&map).unwrap();
         assert_eq!(header.consumer_group, "test_group");

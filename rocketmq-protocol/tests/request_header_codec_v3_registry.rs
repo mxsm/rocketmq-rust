@@ -19,11 +19,13 @@ use bytes::BytesMut;
 use cheetah_string::CheetahString;
 use rocketmq_macros::RequestHeaderCodecV3;
 use rocketmq_model::boundary_type::BoundaryType;
+use rocketmq_protocol::protocol::header::clone_group_offset_request_header::CloneGroupOffsetRequestHeader;
 use rocketmq_protocol::protocol::header::consume_message_directly_result_request_header::ConsumeMessageDirectlyResultRequestHeader;
 use rocketmq_protocol::protocol::header::controller::clean_broker_data_request_header::CleanBrokerDataRequestHeader;
 use rocketmq_protocol::protocol::header::create_topic_list_request_header::CreateTopicListRequestHeader;
 use rocketmq_protocol::protocol::header::delete_subscription_group_request_header::DeleteSubscriptionGroupRequestHeader;
 use rocketmq_protocol::protocol::header::get_consumer_connection_list_request_header::GetConsumerConnectionListRequestHeader;
+use rocketmq_protocol::protocol::header::get_consumer_listby_group_request_header::GetConsumerListByGroupRequestHeader;
 use rocketmq_protocol::protocol::header::get_consumer_running_info_request_header::GetConsumerRunningInfoRequestHeader;
 use rocketmq_protocol::protocol::header::get_consumer_status_request_header::GetConsumerStatusRequestHeader;
 use rocketmq_protocol::protocol::header::get_lite_client_info_request_header::GetLiteClientInfoRequestHeader;
@@ -189,6 +191,7 @@ fn registry() -> Vec<RegisteredSchema> {
         register::<RpcRequestHeader>(),
         register::<TopicRequestHeader>(),
         register::<NamesrvTopicRequestHeader>(),
+        register::<CloneGroupOffsetRequestHeader>(),
         register::<ConsumeMessageDirectlyResultRequestHeader>(),
         register::<CleanBrokerDataRequestHeader>(),
         register::<CreateTopicListRequestHeader>(),
@@ -196,6 +199,10 @@ fn registry() -> Vec<RegisteredSchema> {
         register_value(&GetConsumerConnectionListRequestHeader {
             consumer_group: CheetahString::from_static_str("registry"),
             rpc_request_header: None,
+        }),
+        register_value(&GetConsumerListByGroupRequestHeader {
+            consumer_group: CheetahString::from_static_str("registry"),
+            rpc: None,
         }),
         register::<GetConsumerRunningInfoRequestHeader>(),
         register::<GetConsumerStatusRequestHeader>(),
@@ -524,6 +531,11 @@ fn assert_rpc_envelope_contract<T>(
 
 #[test]
 fn rpc_envelope_headers_preserve_java_inheritance_and_legacy_aliases() {
+    assert_rpc_envelope_contract::<CloneGroupOffsetRequestHeader>(
+        &[("srcGroup", "src"), ("destGroup", "dest"), ("topic", "topic-a")],
+        &["srcGroup", "destGroup"],
+        |header| &header.rpc_request_header,
+    );
     assert_rpc_envelope_contract::<CreateTopicListRequestHeader>(&[], &[], |header| &header.rpc_request_header);
     assert_rpc_envelope_contract::<DeleteSubscriptionGroupRequestHeader>(
         &[("groupName", "dg")],
@@ -534,6 +546,11 @@ fn rpc_envelope_headers_preserve_java_inheritance_and_legacy_aliases() {
         &[("consumerGroup", "cg")],
         &["consumerGroup"],
         |header| &header.rpc_request_header,
+    );
+    assert_rpc_envelope_contract::<GetConsumerListByGroupRequestHeader>(
+        &[("consumerGroup", "cg")],
+        &["consumerGroup"],
+        |header| &header.rpc,
     );
     assert_rpc_envelope_contract::<GetConsumerRunningInfoRequestHeader>(
         &[("consumerGroup", "cg"), ("clientId", "ci")],
@@ -588,6 +605,15 @@ fn rpc_envelope_headers_preserve_java_inheritance_and_legacy_aliases() {
     )]))
     .expect("missing Java primitive boolean uses false");
     assert!(!deleted.clean_offset);
+
+    let cloned = <CloneGroupOffsetRequestHeader as HeaderCodec>::decode_from_map(&HeaderMap::from([
+        ("srcGroup".into(), "src".into()),
+        ("destGroup".into(), "dest".into()),
+    ]))
+    .expect("optional topic and primitive offline may be absent");
+    assert!(cloned.topic.is_none());
+    assert!(!cloned.offline);
+    assert!(cloned.rpc_request_header.is_some());
 
     let unregister_input = HeaderMap::from([
         ("clientID".into(), "canonical-client".into()),

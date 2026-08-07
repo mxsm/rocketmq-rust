@@ -13,26 +13,33 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::rpc::rpc_request_header::RpcRequestHeader;
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize, RequestHeaderCodecV2)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::clone_group_offset_request_header::CloneGroupOffsetRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.CloneGroupOffsetRequestHeader"
+)]
 #[serde(rename_all = "camelCase")]
 pub struct CloneGroupOffsetRequestHeader {
-    #[required]
+    #[header(required)]
     pub src_group: CheetahString,
 
-    #[required]
+    #[header(required)]
     pub dest_group: CheetahString,
 
     pub topic: Option<CheetahString>,
 
+    #[serde(default)]
+    #[header(default, default_semantic = "literal:false")]
     pub offline: bool,
 
     #[serde(flatten)]
+    #[header(flatten, presence = "always")]
     pub rpc_request_header: Option<RpcRequestHeader>,
 }
 
