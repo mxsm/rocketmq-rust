@@ -13,21 +13,28 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::rpc::rpc_request_header::RpcRequestHeader;
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::delete_subscription_group_request_header::DeleteSubscriptionGroupRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.DeleteSubscriptionGroupRequestHeader"
+)]
 #[serde(rename_all = "camelCase")]
 pub struct DeleteSubscriptionGroupRequestHeader {
-    #[required]
+    #[header(required)]
     pub group_name: CheetahString,
 
+    #[serde(default)]
+    #[header(default, default_semantic = "literal:false")]
     pub clean_offset: bool,
 
     #[serde(flatten)]
+    #[header(flatten, presence = "always")]
     pub rpc_request_header: Option<RpcRequestHeader>,
 }
 

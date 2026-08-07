@@ -176,6 +176,20 @@
         "rust": "rocketmq-protocol/src/protocol/header/controller/clean_broker_data_request_header.rs",
         "java": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/controller/admin/CleanControllerBrokerDataRequestHeader.java"
       }
+    },
+    {
+      "rustType": "UnregisterClientRequestHeader",
+      "canonical": "clientID",
+      "aliases": [
+        "clientId"
+      ],
+      "policy": "prefer_canonical",
+      "owner": "rocketmq-rust maintainers",
+      "reason": "Preserve the legacy Rust clientId spelling as decode-only input while Java clientID remains canonical",
+      "referenceSource": {
+        "rust": "rocketmq-protocol/src/protocol/header/unregister_client_request_header.rs",
+        "java": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/UnregisterClientRequestHeader.java"
+      }
     }
   ],
   "requiredDrift": [

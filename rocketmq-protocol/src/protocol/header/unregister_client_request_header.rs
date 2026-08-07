@@ -13,20 +13,25 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::rpc::rpc_request_header::RpcRequestHeader;
 
-#[derive(Debug, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
+#[derive(Debug, Serialize, Deserialize, Default, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::unregister_client_request_header::UnregisterClientRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.UnregisterClientRequestHeader"
+)]
 pub struct UnregisterClientRequestHeader {
-    #[required]
     #[serde(rename = "clientID", alias = "clientId")]
+    #[header(key = "clientID", alias = "clientId", alias_conflict = "prefer_canonical", required)]
     pub client_id: CheetahString,
     pub producer_group: Option<CheetahString>,
     pub consumer_group: Option<CheetahString>,
     #[serde(flatten)]
+    #[header(flatten, presence = "always")]
     pub rpc_request_header: Option<RpcRequestHeader>,
 }
 

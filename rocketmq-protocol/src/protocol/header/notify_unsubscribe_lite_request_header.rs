@@ -13,25 +13,30 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::rpc::rpc_request_header::RpcRequestHeader;
 
-#[derive(Clone, Debug, Serialize, Deserialize, RequestHeaderCodecV2)]
+#[derive(Clone, Debug, Serialize, Deserialize, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::notify_unsubscribe_lite_request_header::NotifyUnsubscribeLiteRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.NotifyUnsubscribeLiteRequestHeader"
+)]
 #[serde(rename_all = "camelCase")]
 pub struct NotifyUnsubscribeLiteRequestHeader {
-    #[required]
+    #[header(required)]
     pub lite_topic: CheetahString,
 
-    #[required]
+    #[header(required)]
     pub consumer_group: CheetahString,
 
-    #[required]
+    #[header(required)]
     pub client_id: CheetahString,
 
     #[serde(flatten)]
+    #[header(flatten, presence = "always")]
     pub rpc_request_header: Option<RpcRequestHeader>,
 }
 

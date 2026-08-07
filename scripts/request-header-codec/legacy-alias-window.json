@@ -72,6 +72,18 @@
       "owner": "rocketmq-rust protocol maintainers",
       "rationale": "Preserve decode compatibility for the legacy Rust RPC long key",
       "evidence": "scripts/request-header-codec/schema-overrides.json"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::unregister_client_request_header::UnregisterClientRequestHeader",
+      "canonical": "clientID",
+      "alias": "clientId",
+      "firstSupportedVersion": "1.0.0",
+      "lastEncodeVersion": "0.9.0",
+      "lastDecodeVersion": null,
+      "reviewBy": "2027-08-01",
+      "owner": "rocketmq-rust protocol maintainers",
+      "rationale": "Preserve decode compatibility for the legacy Rust clientId spelling while Java clientID remains canonical",
+      "evidence": "scripts/request-header-codec/schema-overrides.json"
     }
   ]
 }

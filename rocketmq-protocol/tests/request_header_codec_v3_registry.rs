@@ -22,7 +22,9 @@ use rocketmq_model::boundary_type::BoundaryType;
 use rocketmq_protocol::protocol::header::consume_message_directly_result_request_header::ConsumeMessageDirectlyResultRequestHeader;
 use rocketmq_protocol::protocol::header::controller::clean_broker_data_request_header::CleanBrokerDataRequestHeader;
 use rocketmq_protocol::protocol::header::create_topic_list_request_header::CreateTopicListRequestHeader;
+use rocketmq_protocol::protocol::header::delete_subscription_group_request_header::DeleteSubscriptionGroupRequestHeader;
 use rocketmq_protocol::protocol::header::get_consumer_connection_list_request_header::GetConsumerConnectionListRequestHeader;
+use rocketmq_protocol::protocol::header::get_consumer_running_info_request_header::GetConsumerRunningInfoRequestHeader;
 use rocketmq_protocol::protocol::header::get_consumer_status_request_header::GetConsumerStatusRequestHeader;
 use rocketmq_protocol::protocol::header::get_lite_client_info_request_header::GetLiteClientInfoRequestHeader;
 use rocketmq_protocol::protocol::header::get_producer_connection_list_request_header::GetProducerConnectionListRequestHeader;
@@ -37,6 +39,7 @@ use rocketmq_protocol::protocol::header::namesrv::topic_operation_header::Delete
 use rocketmq_protocol::protocol::header::namesrv::topic_operation_header::TopicRequestHeader as NamesrvTopicRequestHeader;
 use rocketmq_protocol::protocol::header::notification_request_header::NotificationRequestHeader;
 use rocketmq_protocol::protocol::header::notify_consumer_ids_changed_request_header::NotifyConsumerIdsChangedRequestHeader;
+use rocketmq_protocol::protocol::header::notify_unsubscribe_lite_request_header::NotifyUnsubscribeLiteRequestHeader;
 use rocketmq_protocol::protocol::header::pull_message_request_header::PullMessageRequestHeader;
 use rocketmq_protocol::protocol::header::pull_message_response_header::PullMessageResponseHeader;
 use rocketmq_protocol::protocol::header::query_consume_queue_request_header::QueryConsumeQueueRequestHeader;
@@ -44,6 +47,7 @@ use rocketmq_protocol::protocol::header::query_topics_by_consumer_request_header
 use rocketmq_protocol::protocol::header::search_offset_request_header::SearchOffsetRequestHeader;
 use rocketmq_protocol::protocol::header::search_offset_response_header::SearchOffsetResponseHeader;
 use rocketmq_protocol::protocol::header::unlock_batch_mq_request_header::UnlockBatchMqRequestHeader;
+use rocketmq_protocol::protocol::header::unregister_client_request_header::UnregisterClientRequestHeader;
 use rocketmq_protocol::protocol::header_codec::{
     AliasConflictPolicy, HeaderCodec, HeaderCodecError, HeaderFieldSpec, HeaderFlattenSpec, HeaderPresence,
     HeaderRange, HeaderValueKind,
@@ -188,10 +192,12 @@ fn registry() -> Vec<RegisteredSchema> {
         register::<ConsumeMessageDirectlyResultRequestHeader>(),
         register::<CleanBrokerDataRequestHeader>(),
         register::<CreateTopicListRequestHeader>(),
+        register::<DeleteSubscriptionGroupRequestHeader>(),
         register_value(&GetConsumerConnectionListRequestHeader {
             consumer_group: CheetahString::from_static_str("registry"),
             rpc_request_header: None,
         }),
+        register::<GetConsumerRunningInfoRequestHeader>(),
         register::<GetConsumerStatusRequestHeader>(),
         register::<GetLiteClientInfoRequestHeader>(),
         register::<GetProducerConnectionListRequestHeader>(),
@@ -213,8 +219,15 @@ fn registry() -> Vec<RegisteredSchema> {
             consumer_group: CheetahString::from_static_str("registry"),
             rpc_request_header: None,
         }),
+        register_value(&NotifyUnsubscribeLiteRequestHeader {
+            lite_topic: CheetahString::from_static_str("registry"),
+            consumer_group: CheetahString::from_static_str("registry"),
+            client_id: CheetahString::from_static_str("registry"),
+            rpc_request_header: None,
+        }),
         register::<QueryTopicsByConsumerRequestHeader>(),
         register::<UnlockBatchMqRequestHeader>(),
+        register::<UnregisterClientRequestHeader>(),
     ]
 }
 
@@ -429,7 +442,8 @@ fn registered_typed_schemas_match_the_pinned_java_contract() {
 }
 
 fn assert_rpc_envelope_contract<T>(
-    local_field: Option<(&'static str, &'static str)>,
+    local_fields: &[(&'static str, &'static str)],
+    required_keys: &[&'static str],
     rpc: fn(&T) -> &Option<RpcRequestHeader>,
 ) where
     T: CommandCustomHeader + FromMap<Target = T> + HeaderCodec,
@@ -445,7 +459,7 @@ fn assert_rpc_envelope_contract<T>(
         ("oway".into(), "false".into()),
         ("oneway".into(), "true".into()),
     ]);
-    if let Some((key, value)) = local_field {
+    for &(key, value) in local_fields {
         input.insert(key.into(), value.into());
     }
     let typed = <T as HeaderCodec>::decode_from_map(&input).expect("typed RPC envelope decode");
@@ -462,7 +476,7 @@ fn assert_rpc_envelope_contract<T>(
 
     let encoded = typed.to_map().expect("typed RPC envelope encode");
     let legacy_encoded = legacy.to_map().expect("legacy RPC envelope encode");
-    if let Some((key, value)) = local_field {
+    for &(key, value) in local_fields {
         assert_eq!(encoded.get(key).map(CheetahString::as_str), Some(value));
         assert_eq!(legacy_encoded.get(key).map(CheetahString::as_str), Some(value));
     }
@@ -481,15 +495,19 @@ fn assert_rpc_envelope_contract<T>(
     }
 
     let mut parent_only = HeaderMap::new();
-    if let Some((key, value)) = local_field {
+    for &(key, value) in local_fields {
         parent_only.insert(key.into(), value.into());
-        let typed_missing = <T as HeaderCodec>::decode_from_map(&HeaderMap::new());
+    }
+    for &key in required_keys {
+        let mut missing = parent_only.clone();
+        missing.remove(key);
+        let typed_missing = <T as HeaderCodec>::decode_from_map(&missing);
         assert!(
             matches!(typed_missing, Err(HeaderCodecError::Missing { key: actual, .. }) if actual == key),
             "typed decode must reject missing required field {key}"
         );
         assert!(
-            <T as FromMap>::from(&HeaderMap::new()).is_err(),
+            <T as FromMap>::from(&missing).is_err(),
             "legacy adapter must reject missing required field {key}"
         );
     }
@@ -506,26 +524,89 @@ fn assert_rpc_envelope_contract<T>(
 
 #[test]
 fn rpc_envelope_headers_preserve_java_inheritance_and_legacy_aliases() {
-    assert_rpc_envelope_contract::<CreateTopicListRequestHeader>(None, |header| &header.rpc_request_header);
-    assert_rpc_envelope_contract::<GetConsumerConnectionListRequestHeader>(Some(("consumerGroup", "cg")), |header| {
+    assert_rpc_envelope_contract::<CreateTopicListRequestHeader>(&[], &[], |header| &header.rpc_request_header);
+    assert_rpc_envelope_contract::<DeleteSubscriptionGroupRequestHeader>(
+        &[("groupName", "dg")],
+        &["groupName"],
+        |header| &header.rpc_request_header,
+    );
+    assert_rpc_envelope_contract::<GetConsumerConnectionListRequestHeader>(
+        &[("consumerGroup", "cg")],
+        &["consumerGroup"],
+        |header| &header.rpc_request_header,
+    );
+    assert_rpc_envelope_contract::<GetConsumerRunningInfoRequestHeader>(
+        &[("consumerGroup", "cg"), ("clientId", "ci")],
+        &["consumerGroup", "clientId"],
+        |header| &header.rpc_request_header,
+    );
+    assert_rpc_envelope_contract::<GetProducerConnectionListRequestHeader>(
+        &[("producerGroup", "pg")],
+        &["producerGroup"],
+        |header| &header.rpc_request_header,
+    );
+    assert_rpc_envelope_contract::<GetSubscriptionGroupConfigRequestHeader>(&[("group", "sg")], &["group"], |header| {
         &header.rpc_request_header
     });
-    assert_rpc_envelope_contract::<GetProducerConnectionListRequestHeader>(Some(("producerGroup", "pg")), |header| {
+    assert_rpc_envelope_contract::<HeartbeatRequestHeader>(&[], &[], |header| &header.rpc_request);
+    assert_rpc_envelope_contract::<LiteSubscriptionCtlRequestHeader>(&[], &[], |header| &header.rpc_request_header);
+    assert_rpc_envelope_contract::<LockBatchMqRequestHeader>(&[], &[], |header| &header.rpc_request_header);
+    assert_rpc_envelope_contract::<NotifyConsumerIdsChangedRequestHeader>(
+        &[("consumerGroup", "ng")],
+        &["consumerGroup"],
+        |header| &header.rpc_request_header,
+    );
+    assert_rpc_envelope_contract::<NotifyUnsubscribeLiteRequestHeader>(
+        &[("liteTopic", "lt"), ("consumerGroup", "ng"), ("clientId", "ci")],
+        &["liteTopic", "consumerGroup", "clientId"],
+        |header| &header.rpc_request_header,
+    );
+    assert_rpc_envelope_contract::<QueryTopicsByConsumerRequestHeader>(&[("group", "qg")], &["group"], |header| {
         &header.rpc_request_header
     });
-    assert_rpc_envelope_contract::<GetSubscriptionGroupConfigRequestHeader>(Some(("group", "sg")), |header| {
-        &header.rpc_request_header
-    });
-    assert_rpc_envelope_contract::<HeartbeatRequestHeader>(None, |header| &header.rpc_request);
-    assert_rpc_envelope_contract::<LiteSubscriptionCtlRequestHeader>(None, |header| &header.rpc_request_header);
-    assert_rpc_envelope_contract::<LockBatchMqRequestHeader>(None, |header| &header.rpc_request_header);
-    assert_rpc_envelope_contract::<NotifyConsumerIdsChangedRequestHeader>(Some(("consumerGroup", "ng")), |header| {
-        &header.rpc_request_header
-    });
-    assert_rpc_envelope_contract::<QueryTopicsByConsumerRequestHeader>(Some(("group", "qg")), |header| {
-        &header.rpc_request_header
-    });
-    assert_rpc_envelope_contract::<UnlockBatchMqRequestHeader>(None, |header| &header.rpc_request_header);
+    assert_rpc_envelope_contract::<UnlockBatchMqRequestHeader>(&[], &[], |header| &header.rpc_request_header);
+    assert_rpc_envelope_contract::<UnregisterClientRequestHeader>(
+        &[
+            ("clientID", "canonical-client"),
+            ("producerGroup", "pg"),
+            ("consumerGroup", "cg"),
+        ],
+        &["clientID"],
+        |header| &header.rpc_request_header,
+    );
+
+    let running = <GetConsumerRunningInfoRequestHeader as HeaderCodec>::decode_from_map(&HeaderMap::from([
+        ("consumerGroup".into(), "cg".into()),
+        ("clientId".into(), "ci".into()),
+    ]))
+    .expect("missing Java primitive boolean uses false");
+    assert!(!running.jstack_enable);
+
+    let deleted = <DeleteSubscriptionGroupRequestHeader as HeaderCodec>::decode_from_map(&HeaderMap::from([(
+        "groupName".into(),
+        "dg".into(),
+    )]))
+    .expect("missing Java primitive boolean uses false");
+    assert!(!deleted.clean_offset);
+
+    let unregister_input = HeaderMap::from([
+        ("clientID".into(), "canonical-client".into()),
+        ("clientId".into(), "legacy-client".into()),
+    ]);
+    let unregister = <UnregisterClientRequestHeader as HeaderCodec>::decode_from_map(&unregister_input)
+        .expect("reviewed alias conflict uses canonical input");
+    let legacy_unregister = <UnregisterClientRequestHeader as FromMap>::from(&unregister_input)
+        .expect("legacy adapter uses the same reviewed alias policy");
+    assert_eq!(unregister.client_id, "canonical-client");
+    assert_eq!(legacy_unregister.client_id, "canonical-client");
+    assert!(unregister.producer_group.is_none());
+    assert!(unregister.consumer_group.is_none());
+    let encoded = unregister.to_map().expect("unregister header encodes");
+    assert_eq!(
+        encoded.get("clientID").map(CheetahString::as_str),
+        Some("canonical-client")
+    );
+    assert!(!encoded.contains_key("clientId"));
 }
 
 #[test]
