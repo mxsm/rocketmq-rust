@@ -209,23 +209,47 @@ def parse_direct_fields(entry: dict[str, object], repo_root: Path) -> list[tuple
 
 
 def build_inventory(mapping: dict[str, object], repo_root: Path) -> dict[str, list[RustField]]:
-    entries = {str(entry["rustType"]): entry for entry in mapping["entries"]}
+    entries = {str(entry["rustTypeId"]): entry for entry in mapping["entries"]}
+    entries_by_name: dict[str, list[dict[str, object]]] = {}
+    for entry in mapping["entries"]:
+        entries_by_name.setdefault(str(entry["rustType"]), []).append(entry)
     cache: dict[str, list[RustField]] = {}
     active: set[str] = set()
 
-    def expand(name: str) -> list[RustField]:
-        if name in cache:
-            return cache[name]
-        if name in active:
-            raise ValueError(f"flatten cycle involving {name}")
-        entry = entries.get(name)
+    def resolve_nested(entry: dict[str, object], name: str) -> str:
+        candidates = entries_by_name.get(name, [])
+        if len(candidates) == 1:
+            return str(candidates[0]["rustTypeId"])
+        local = [candidate for candidate in candidates if candidate["rustSource"] == entry["rustSource"]]
+        if len(local) == 1:
+            return str(local[0]["rustTypeId"])
+
+        source = (repo_root / str(entry["rustSource"])).read_text(encoding="utf-8")
+        imported: set[str] = set()
+        for use_path in re.findall(rf"\buse\s+([^;{{}}]*\b{re.escape(name)})\s*;", source):
+            normalized = use_path.strip().replace("crate::", "rocketmq_protocol::", 1)
+            imported.update(
+                str(candidate["rustTypeId"])
+                for candidate in candidates
+                if candidate["rustTypeId"] == normalized
+            )
+        if len(imported) == 1:
+            return next(iter(imported))
+        raise ValueError(f"flattened header type is not mapped unambiguously: {entry['rustTypeId']} -> {name}")
+
+    def expand(type_id: str) -> list[RustField]:
+        if type_id in cache:
+            return cache[type_id]
+        if type_id in active:
+            raise ValueError(f"flatten cycle involving {type_id}")
+        entry = entries.get(type_id)
         if entry is None:
-            raise ValueError(f"flattened header type is not mapped: {name}")
-        active.add(name)
+            raise ValueError(f"flattened header type is not mapped: {type_id}")
+        active.add(type_id)
         result: list[RustField] = []
         seen: set[str] = set()
         for field, flatten, nested_name in parse_direct_fields(entry, repo_root):
-            nested = expand(nested_name) if flatten and nested_name else [field]
+            nested = expand(resolve_nested(entry, nested_name)) if flatten and nested_name else [field]
             for child in nested:
                 expanded = RustField(
                     key=child.key,
@@ -241,13 +265,13 @@ def build_inventory(mapping: dict[str, object], repo_root: Path) -> dict[str, li
                     raise ValueError(f"duplicate canonical key {expanded.key} in {entry['rustTypeId']}")
                 seen.add(expanded.key)
                 result.append(expanded)
-        active.remove(name)
-        cache[name] = result
+        active.remove(type_id)
+        cache[type_id] = result
         return result
 
-    for name in entries:
-        expand(name)
-    return {str(entry["rustTypeId"]): cache[str(entry["rustType"])] for entry in mapping["entries"]}
+    for type_id in entries:
+        expand(type_id)
+    return cache
 
 
 def validate_review_metadata(overrides: dict[str, object]) -> list[str]:

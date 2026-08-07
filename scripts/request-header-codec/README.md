@@ -21,6 +21,28 @@ Release evidence requires a clean Java worktree at the pinned commit. `--allow-d
 - Canonical and alias values must not depend on hash-map iteration order.
 - Unknown fields are ignored only after envelope size and entry-count limits have been enforced.
 
+## Migration governance
+
+`migration.json` is the complete registry for the 152 stable Rust request-header type IDs in the pinned contract. It records the current V2/V3 codec, full Rust path, Java peer, request-code mapping, flatten depth, fast-codec decision, risk, migration wave, and reviewed extension decision. Production field types remain authoritative; the registry does not duplicate `java_type` metadata.
+
+The migration tool is read-only with respect to Rust source:
+
+```powershell
+# Rebuild the deterministic inventory after an intentional migration.
+python scripts/request-header-codec/migrate.py inventory `
+  --output scripts/request-header-codec/migration.json
+
+# Print pending work grouped by migration wave and risk.
+python scripts/request-header-codec/migrate.py plan
+
+# Fail on unregistered headers, stale inventory, new V1/V2 derives,
+# V3-to-V2 regressions, new legacy required fields, new standalone fast
+# implementations, schema/allowlist drift, expired decisions, or stale hashes.
+python scripts/request-header-codec/migrate.py check
+```
+
+`legacy-alias-window.json` owns the expiry and release window for decode-only compatibility aliases. The checked-in Java schema, mapping, migration registry, extension allowlist, alias window, overrides, and golden fixture manifest are validated as one offline contract. Normal CI never reads a local Java checkout or rewrites a production header.
+
 ## Updating the Java baseline
 
 1. Create a clean Java worktree at the candidate commit.
