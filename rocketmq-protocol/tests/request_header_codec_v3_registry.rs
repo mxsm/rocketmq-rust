@@ -21,8 +21,10 @@ use rocketmq_macros::RequestHeaderCodecV3;
 use rocketmq_model::boundary_type::BoundaryType;
 use rocketmq_protocol::protocol::header::consume_message_directly_result_request_header::ConsumeMessageDirectlyResultRequestHeader;
 use rocketmq_protocol::protocol::header::controller::clean_broker_data_request_header::CleanBrokerDataRequestHeader;
+use rocketmq_protocol::protocol::header::create_topic_list_request_header::CreateTopicListRequestHeader;
 use rocketmq_protocol::protocol::header::get_consumer_status_request_header::GetConsumerStatusRequestHeader;
 use rocketmq_protocol::protocol::header::get_lite_client_info_request_header::GetLiteClientInfoRequestHeader;
+use rocketmq_protocol::protocol::header::lock_batch_mq_request_header::LockBatchMqRequestHeader;
 use rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
 use rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2;
 use rocketmq_protocol::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
@@ -34,6 +36,7 @@ use rocketmq_protocol::protocol::header::pull_message_response_header::PullMessa
 use rocketmq_protocol::protocol::header::query_consume_queue_request_header::QueryConsumeQueueRequestHeader;
 use rocketmq_protocol::protocol::header::search_offset_request_header::SearchOffsetRequestHeader;
 use rocketmq_protocol::protocol::header::search_offset_response_header::SearchOffsetResponseHeader;
+use rocketmq_protocol::protocol::header::unlock_batch_mq_request_header::UnlockBatchMqRequestHeader;
 use rocketmq_protocol::protocol::header_codec::{
     AliasConflictPolicy, HeaderCodec, HeaderCodecError, HeaderFieldSpec, HeaderFlattenSpec, HeaderPresence,
     HeaderRange, HeaderValueKind,
@@ -173,8 +176,10 @@ fn registry() -> Vec<RegisteredSchema> {
         register::<NamesrvTopicRequestHeader>(),
         register::<ConsumeMessageDirectlyResultRequestHeader>(),
         register::<CleanBrokerDataRequestHeader>(),
+        register::<CreateTopicListRequestHeader>(),
         register::<GetConsumerStatusRequestHeader>(),
         register::<GetLiteClientInfoRequestHeader>(),
+        register::<LockBatchMqRequestHeader>(),
         register::<SendMessageRequestHeader>(),
         register::<DeleteTopicFromNamesrvRequestHeader>(),
         register::<QueryConsumeQueueRequestHeader>(),
@@ -185,6 +190,7 @@ fn registry() -> Vec<RegisteredSchema> {
         register::<SendMessageRequestHeaderV2>(),
         register::<SendMessageResponseHeader>(),
         register::<NotificationRequestHeader>(),
+        register::<UnlockBatchMqRequestHeader>(),
     ]
 }
 
@@ -396,6 +402,66 @@ fn registered_typed_schemas_match_the_pinned_java_contract() {
             );
         }
     }
+}
+
+fn assert_rpc_envelope_contract<T>(rpc: fn(&T) -> &Option<RpcRequestHeader>)
+where
+    T: CommandCustomHeader + FromMap<Target = T> + HeaderCodec,
+    <T as FromMap>::Error: std::fmt::Debug,
+{
+    let input = HeaderMap::from([
+        ("ns".into(), "canonical-ns".into()),
+        ("namespace".into(), "legacy-ns".into()),
+        ("nsd".into(), "true".into()),
+        ("namespaced".into(), "false".into()),
+        ("bname".into(), "canonical-broker".into()),
+        ("brokerName".into(), "legacy-broker".into()),
+        ("oway".into(), "false".into()),
+        ("oneway".into(), "true".into()),
+    ]);
+    let typed = <T as HeaderCodec>::decode_from_map(&input).expect("typed RPC envelope decode");
+    let legacy = <T as FromMap>::from(&input).expect("legacy RPC envelope adapter");
+    for decoded in [rpc(&typed), rpc(&legacy)] {
+        let decoded = decoded
+            .as_ref()
+            .expect("Java inheritance is always present after decode");
+        assert_eq!(decoded.namespace.as_deref(), Some("canonical-ns"));
+        assert_eq!(decoded.namespaced, Some(true));
+        assert_eq!(decoded.broker_name.as_deref(), Some("canonical-broker"));
+        assert_eq!(decoded.oneway, Some(false));
+    }
+
+    let encoded = typed.to_map().expect("typed RPC envelope encode");
+    assert_eq!(encoded.get("ns").map(CheetahString::as_str), Some("canonical-ns"));
+    assert_eq!(encoded.get("nsd").map(CheetahString::as_str), Some("true"));
+    assert_eq!(
+        encoded.get("bname").map(CheetahString::as_str),
+        Some("canonical-broker")
+    );
+    assert_eq!(encoded.get("oway").map(CheetahString::as_str), Some("false"));
+    for alias in ["namespace", "namespaced", "brokerName", "oneway"] {
+        assert!(
+            !encoded.contains_key(alias),
+            "legacy alias {alias} must remain decode-only"
+        );
+    }
+
+    let empty = <T as HeaderCodec>::decode_from_map(&HeaderMap::new()).expect("empty inherited header");
+    let empty_rpc = rpc(&empty)
+        .as_ref()
+        .expect("Java parent exists even when all fields are absent");
+    assert_eq!(empty_rpc.namespace, None);
+    assert_eq!(empty_rpc.namespaced, None);
+    assert_eq!(empty_rpc.broker_name, None);
+    assert_eq!(empty_rpc.oneway, None);
+    assert_eq!(empty.encode_capability(), HeaderEncodeCapability::MapOnly);
+}
+
+#[test]
+fn rpc_envelope_headers_preserve_java_inheritance_and_legacy_aliases() {
+    assert_rpc_envelope_contract::<CreateTopicListRequestHeader>(|header| &header.rpc_request_header);
+    assert_rpc_envelope_contract::<LockBatchMqRequestHeader>(|header| &header.rpc_request_header);
+    assert_rpc_envelope_contract::<UnlockBatchMqRequestHeader>(|header| &header.rpc_request_header);
 }
 
 #[test]
