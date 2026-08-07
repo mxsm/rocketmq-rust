@@ -1,0 +1,77 @@
+{
+  "schemaVersion": 1,
+  "aliases": [
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::controller::clean_broker_data_request_header::CleanBrokerDataRequestHeader",
+      "canonical": "isCleanLivingBroker",
+      "alias": "cleanLivingBroker",
+      "firstSupportedVersion": "1.0.0",
+      "lastEncodeVersion": "0.9.0",
+      "lastDecodeVersion": null,
+      "reviewBy": "2027-08-01",
+      "owner": "rocketmq-rust protocol maintainers",
+      "rationale": "Preserve decode compatibility for the pre-V3 Rust field spelling",
+      "evidence": "scripts/request-header-codec/schema-overrides.json"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::pull_message_request_header::PullMessageRequestHeader",
+      "canonical": "proxyFrowardClientId",
+      "alias": "proxyForwardClientId",
+      "firstSupportedVersion": "1.0.0",
+      "lastEncodeVersion": "0.9.0",
+      "lastDecodeVersion": null,
+      "reviewBy": "2027-08-01",
+      "owner": "rocketmq-rust protocol maintainers",
+      "rationale": "Preserve decode compatibility while Java's historical spelling remains canonical",
+      "evidence": "scripts/request-header-codec/schema-overrides.json"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::rpc::rpc_request_header::RpcRequestHeader",
+      "canonical": "bname",
+      "alias": "brokerName",
+      "firstSupportedVersion": "1.0.0",
+      "lastEncodeVersion": "0.9.0",
+      "lastDecodeVersion": null,
+      "reviewBy": "2027-08-01",
+      "owner": "rocketmq-rust protocol maintainers",
+      "rationale": "Preserve decode compatibility for the legacy Rust RPC long key",
+      "evidence": "scripts/request-header-codec/schema-overrides.json"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::rpc::rpc_request_header::RpcRequestHeader",
+      "canonical": "ns",
+      "alias": "namespace",
+      "firstSupportedVersion": "1.0.0",
+      "lastEncodeVersion": "0.9.0",
+      "lastDecodeVersion": null,
+      "reviewBy": "2027-08-01",
+      "owner": "rocketmq-rust protocol maintainers",
+      "rationale": "Preserve decode compatibility for the legacy Rust RPC long key",
+      "evidence": "scripts/request-header-codec/schema-overrides.json"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::rpc::rpc_request_header::RpcRequestHeader",
+      "canonical": "nsd",
+      "alias": "namespaced",
+      "firstSupportedVersion": "1.0.0",
+      "lastEncodeVersion": "0.9.0",
+      "lastDecodeVersion": null,
+      "reviewBy": "2027-08-01",
+      "owner": "rocketmq-rust protocol maintainers",
+      "rationale": "Preserve decode compatibility for the legacy Rust RPC long key",
+      "evidence": "scripts/request-header-codec/schema-overrides.json"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::rpc::rpc_request_header::RpcRequestHeader",
+      "canonical": "oway",
+      "alias": "oneway",
+      "firstSupportedVersion": "1.0.0",
+      "lastEncodeVersion": "0.9.0",
+      "lastDecodeVersion": null,
+      "reviewBy": "2027-08-01",
+      "owner": "rocketmq-rust protocol maintainers",
+      "rationale": "Preserve decode compatibility for the legacy Rust RPC long key",
+      "evidence": "scripts/request-header-codec/schema-overrides.json"
+    }
+  ]
+}

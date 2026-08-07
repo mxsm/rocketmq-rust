@@ -81,6 +81,19 @@ struct SchemaOverrides {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct MigrationManifest {
+    entries: Vec<MigrationEntry>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MigrationEntry {
+    rust_type_id: String,
+    current_codec: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct DefaultOverride {
     rust_type: String,
     field: String,
@@ -173,6 +186,31 @@ fn registry() -> Vec<RegisteredSchema> {
         register::<SendMessageResponseHeader>(),
         register::<NotificationRequestHeader>(),
     ]
+}
+
+#[test]
+fn typed_registry_contains_every_migrated_v3_header_exactly_once() {
+    let migration: MigrationManifest =
+        serde_json::from_str(include_str!("../../scripts/request-header-codec/migration.json"))
+            .expect("checked-in migration manifest");
+    let expected = migration
+        .entries
+        .iter()
+        .filter(|entry| entry.current_codec == "v3")
+        .map(|entry| entry.rust_type_id.as_str())
+        .collect::<HashSet<_>>();
+    let registered = registry();
+    let actual = registered.iter().map(|schema| schema.type_id).collect::<HashSet<_>>();
+
+    assert_eq!(
+        actual.len(),
+        registered.len(),
+        "typed registry contains duplicate type IDs"
+    );
+    assert_eq!(
+        actual, expected,
+        "typed registry and migration manifest must cover the same V3 headers"
+    );
 }
 
 #[test]

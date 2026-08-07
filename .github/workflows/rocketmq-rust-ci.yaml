@@ -44,6 +44,36 @@ env:
   ROCKSDB_DISABLE_JEMALLOC: 1
 
 jobs:
+  request-header-codec-contract:
+    name: Request Header Codec Contract
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Use repository Rust 1.95 toolchain
+        run: rustup show active-toolchain
+
+      - name: Test migration guard
+        run: python -m unittest discover -s scripts/request-header-codec/tests -p 'test_*.py'
+
+      - name: Check migration inventory and frozen legacy surface
+        run: python scripts/request-header-codec/migrate.py check
+
+      - name: Check pinned Java schema compatibility
+        run: python scripts/request-header-codec/compare_header_schema.py
+
+      - name: Check complete V3 typed registry
+        run: cargo test --locked -p rocketmq-protocol --test request_header_codec_v3_registry
+
   error-architecture:
     name: Error Architecture
     runs-on: ubuntu-latest
