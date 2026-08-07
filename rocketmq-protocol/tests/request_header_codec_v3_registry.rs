@@ -28,6 +28,7 @@ use rocketmq_protocol::protocol::header::consumer_send_msg_back_request_header::
 use rocketmq_protocol::protocol::header::controller::clean_broker_data_request_header::CleanBrokerDataRequestHeader;
 use rocketmq_protocol::protocol::header::create_topic_list_request_header::CreateTopicListRequestHeader;
 use rocketmq_protocol::protocol::header::delete_subscription_group_request_header::DeleteSubscriptionGroupRequestHeader;
+use rocketmq_protocol::protocol::header::delete_topic_request_header::DeleteTopicRequestHeader;
 use rocketmq_protocol::protocol::header::end_transaction_request_header::EndTransactionRequestHeader;
 use rocketmq_protocol::protocol::header::get_consumer_connection_list_request_header::GetConsumerConnectionListRequestHeader;
 use rocketmq_protocol::protocol::header::get_consumer_listby_group_request_header::GetConsumerListByGroupRequestHeader;
@@ -51,6 +52,7 @@ use rocketmq_protocol::protocol::header::message_operation_header::send_message_
 use rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2;
 use rocketmq_protocol::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
 use rocketmq_protocol::protocol::header::namesrv::topic_operation_header::DeleteTopicFromNamesrvRequestHeader;
+use rocketmq_protocol::protocol::header::namesrv::topic_operation_header::RegisterTopicRequestHeader;
 use rocketmq_protocol::protocol::header::namesrv::topic_operation_header::TopicRequestHeader as NamesrvTopicRequestHeader;
 use rocketmq_protocol::protocol::header::notification_request_header::NotificationRequestHeader;
 use rocketmq_protocol::protocol::header::notify_consumer_ids_changed_request_header::NotifyConsumerIdsChangedRequestHeader;
@@ -59,6 +61,7 @@ use rocketmq_protocol::protocol::header::pop_lite_message_request_header::PopLit
 use rocketmq_protocol::protocol::header::pull_message_request_header::PullMessageRequestHeader;
 use rocketmq_protocol::protocol::header::pull_message_response_header::PullMessageResponseHeader;
 use rocketmq_protocol::protocol::header::query_consume_queue_request_header::QueryConsumeQueueRequestHeader;
+use rocketmq_protocol::protocol::header::query_topic_consume_by_who_request_header::QueryTopicConsumeByWhoRequestHeader;
 use rocketmq_protocol::protocol::header::query_topics_by_consumer_request_header::QueryTopicsByConsumerRequestHeader;
 use rocketmq_protocol::protocol::header::search_offset_request_header::SearchOffsetRequestHeader;
 use rocketmq_protocol::protocol::header::search_offset_response_header::SearchOffsetResponseHeader;
@@ -247,6 +250,10 @@ fn registry() -> Vec<RegisteredSchema> {
         register::<CleanBrokerDataRequestHeader>(),
         register::<CreateTopicListRequestHeader>(),
         register::<DeleteSubscriptionGroupRequestHeader>(),
+        register_value(&DeleteTopicRequestHeader {
+            topic: CheetahString::from_static_str("registry"),
+            topic_request_header: None,
+        }),
         register_value(&EndTransactionRequestHeader {
             topic: CheetahString::new(),
             producer_group: CheetahString::from_static_str("registry"),
@@ -314,7 +321,12 @@ fn registry() -> Vec<RegisteredSchema> {
         register::<LockBatchMqRequestHeader>(),
         register::<SendMessageRequestHeader>(),
         register::<DeleteTopicFromNamesrvRequestHeader>(),
+        register::<RegisterTopicRequestHeader>(),
         register::<QueryConsumeQueueRequestHeader>(),
+        register_value(&QueryTopicConsumeByWhoRequestHeader {
+            topic: CheetahString::from_static_str("registry"),
+            topic_request_header: None,
+        }),
         register::<SearchOffsetRequestHeader>(),
         register::<SearchOffsetResponseHeader>(),
         register::<PullMessageRequestHeader>(),
@@ -810,6 +822,32 @@ fn topic_headers_preserve_nested_java_inheritance_and_defaults() {
             rpc: &topic.rpc_request_header,
         })
     });
+    assert_topic_envelope_contract::<DeleteTopicRequestHeader>(&[("topic", "topic-delete")], &["topic"], |header| {
+        header.topic_request_header.as_ref().map(|topic| TopicEnvelopeRef {
+            lo: topic.lo,
+            rpc: &topic.rpc_request_header,
+        })
+    });
+    assert_topic_envelope_contract::<RegisterTopicRequestHeader>(
+        &[("topic", "topic-register")],
+        &["topic"],
+        |header| {
+            header.topic_request.as_ref().map(|topic| TopicEnvelopeRef {
+                lo: topic.lo,
+                rpc: &topic.rpc,
+            })
+        },
+    );
+    assert_topic_envelope_contract::<QueryTopicConsumeByWhoRequestHeader>(
+        &[("topic", "topic-consumers")],
+        &["topic"],
+        |header| {
+            header.topic_request_header.as_ref().map(|topic| TopicEnvelopeRef {
+                lo: topic.lo,
+                rpc: &topic.rpc_request_header,
+            })
+        },
+    );
 
     let max_without_committed = HeaderMap::from([("topic".into(), "topic-max".into()), ("queueId".into(), "0".into())]);
     let typed = <GetMaxOffsetRequestHeader as HeaderCodec>::decode_from_map(&max_without_committed)
