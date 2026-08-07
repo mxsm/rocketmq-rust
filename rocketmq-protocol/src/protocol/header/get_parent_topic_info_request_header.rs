@@ -13,18 +13,23 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::rpc::rpc_request_header::RpcRequestHeader;
 
-#[derive(Clone, Debug, Serialize, Deserialize, RequestHeaderCodecV2)]
+#[derive(Clone, Debug, Serialize, Deserialize, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::get_parent_topic_info_request_header::GetParentTopicInfoRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.GetParentTopicInfoRequestHeader"
+)]
 #[serde(rename_all = "camelCase")]
 pub struct GetParentTopicInfoRequestHeader {
-    #[required]
+    #[header(required)]
     pub topic: CheetahString,
 
     #[serde(flatten)]
+    #[header(flatten, presence = "always")]
     pub rpc: Option<RpcRequestHeader>,
 }

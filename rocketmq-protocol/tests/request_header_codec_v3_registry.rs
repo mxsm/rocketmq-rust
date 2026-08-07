@@ -20,6 +20,7 @@ use cheetah_string::CheetahString;
 use rocketmq_macros::RequestHeaderCodecV3;
 use rocketmq_model::boundary_type::BoundaryType;
 use rocketmq_model::common::sys_flag::message_sys_flag::MessageSysFlag;
+use rocketmq_protocol::protocol::header::check_rocksdb_cq_write_progress_request_header::CheckRocksdbCqWriteProgressRequestHeader;
 use rocketmq_protocol::protocol::header::check_transaction_state_request_header::CheckTransactionStateRequestHeader;
 use rocketmq_protocol::protocol::header::clone_group_offset_request_header::CloneGroupOffsetRequestHeader;
 use rocketmq_protocol::protocol::header::consume_message_directly_result_request_header::ConsumeMessageDirectlyResultRequestHeader;
@@ -33,6 +34,8 @@ use rocketmq_protocol::protocol::header::get_consumer_listby_group_request_heade
 use rocketmq_protocol::protocol::header::get_consumer_running_info_request_header::GetConsumerRunningInfoRequestHeader;
 use rocketmq_protocol::protocol::header::get_consumer_status_request_header::GetConsumerStatusRequestHeader;
 use rocketmq_protocol::protocol::header::get_lite_client_info_request_header::GetLiteClientInfoRequestHeader;
+use rocketmq_protocol::protocol::header::get_lite_group_info_request_header::GetLiteGroupInfoRequestHeader;
+use rocketmq_protocol::protocol::header::get_parent_topic_info_request_header::GetParentTopicInfoRequestHeader;
 use rocketmq_protocol::protocol::header::get_producer_connection_list_request_header::GetProducerConnectionListRequestHeader;
 use rocketmq_protocol::protocol::header::get_subscription_group_config_request_header::GetSubscriptionGroupConfigRequestHeader;
 use rocketmq_protocol::protocol::header::heartbeat_request_header::HeartbeatRequestHeader;
@@ -46,6 +49,7 @@ use rocketmq_protocol::protocol::header::namesrv::topic_operation_header::TopicR
 use rocketmq_protocol::protocol::header::notification_request_header::NotificationRequestHeader;
 use rocketmq_protocol::protocol::header::notify_consumer_ids_changed_request_header::NotifyConsumerIdsChangedRequestHeader;
 use rocketmq_protocol::protocol::header::notify_unsubscribe_lite_request_header::NotifyUnsubscribeLiteRequestHeader;
+use rocketmq_protocol::protocol::header::pop_lite_message_request_header::PopLiteMessageRequestHeader;
 use rocketmq_protocol::protocol::header::pull_message_request_header::PullMessageRequestHeader;
 use rocketmq_protocol::protocol::header::pull_message_response_header::PullMessageResponseHeader;
 use rocketmq_protocol::protocol::header::query_consume_queue_request_header::QueryConsumeQueueRequestHeader;
@@ -97,6 +101,19 @@ struct JavaField {
 struct SchemaOverrides {
     defaults: Vec<DefaultOverride>,
     alias_conflict_policies: Vec<AliasOverride>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExtensionAllowlist {
+    extensions: Vec<ExtensionOverride>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExtensionOverride {
+    rust_type_id: String,
+    fields: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -204,6 +221,11 @@ fn registry() -> Vec<RegisteredSchema> {
             offset_msg_id: None,
             rpc_request_header: None,
         }),
+        register_value(&CheckRocksdbCqWriteProgressRequestHeader {
+            topic: CheetahString::from_static_str("registry"),
+            check_store_time: 0,
+            rpc: None,
+        }),
         register::<CloneGroupOffsetRequestHeader>(),
         register::<ConsumeMessageDirectlyResultRequestHeader>(),
         register_value(&ConsumerSendMsgBackRequestHeader {
@@ -241,6 +263,16 @@ fn registry() -> Vec<RegisteredSchema> {
         register::<GetConsumerRunningInfoRequestHeader>(),
         register::<GetConsumerStatusRequestHeader>(),
         register::<GetLiteClientInfoRequestHeader>(),
+        register_value(&GetLiteGroupInfoRequestHeader {
+            group: CheetahString::from_static_str("registry"),
+            lite_topic: CheetahString::new(),
+            top_k: 0,
+            rpc: None,
+        }),
+        register_value(&GetParentTopicInfoRequestHeader {
+            topic: CheetahString::from_static_str("registry"),
+            rpc: None,
+        }),
         register::<GetProducerConnectionListRequestHeader>(),
         register::<GetSubscriptionGroupConfigRequestHeader>(),
         register::<HeartbeatRequestHeader>(),
@@ -253,6 +285,17 @@ fn registry() -> Vec<RegisteredSchema> {
         register::<SearchOffsetResponseHeader>(),
         register::<PullMessageRequestHeader>(),
         register::<PullMessageResponseHeader>(),
+        register_value(&PopLiteMessageRequestHeader {
+            client_id: CheetahString::from_static_str("registry"),
+            consumer_group: CheetahString::from_static_str("registry"),
+            topic: CheetahString::from_static_str("registry"),
+            max_msg_num: 0,
+            invisible_time: 0,
+            poll_time: 0,
+            born_time: 0,
+            attempt_id: None,
+            rpc: None,
+        }),
         register::<SendMessageRequestHeaderV2>(),
         register::<SendMessageResponseHeader>(),
         register::<NotificationRequestHeader>(),
@@ -374,6 +417,10 @@ fn registered_typed_schemas_match_the_pinned_java_contract() {
     let overrides: SchemaOverrides =
         serde_json::from_str(include_str!("../../scripts/request-header-codec/schema-overrides.json"))
             .expect("schema overrides");
+    let extensions: ExtensionAllowlist = serde_json::from_str(include_str!(
+        "../../scripts/request-header-codec/extension-allowlist.json"
+    ))
+    .expect("extension allowlist");
     let registered = registry();
 
     let mut type_ids = HashSet::new();
@@ -403,19 +450,44 @@ fn registered_typed_schemas_match_the_pinned_java_contract() {
             "{} must preserve Java fast encoding through generated direct binary",
             schema.type_id
         );
+        let allowed_extension_fields = extensions
+            .extensions
+            .iter()
+            .find(|entry| entry.rust_type_id == schema.type_id)
+            .map(|entry| entry.fields.iter().map(String::as_str).collect::<HashSet<_>>())
+            .unwrap_or_default();
         assert_eq!(
             schema.fields.len(),
-            java_header.fields.len(),
+            java_header.fields.len() + allowed_extension_fields.len(),
             "{} field count",
             schema.type_id
         );
 
+        let mut seen_extension_fields = HashSet::new();
         for field in &schema.fields {
-            let java_field = java_header
-                .fields
-                .iter()
-                .find(|candidate| candidate.key == field.key)
-                .unwrap_or_else(|| panic!("missing Java field {}.{}", schema.type_id, field.key));
+            let owner = by_type_id
+                .get(field.declared_in)
+                .unwrap_or_else(|| panic!("unregistered field owner {}", field.declared_in));
+            let Some(java_field) = java_header.fields.iter().find(|candidate| candidate.key == field.key) else {
+                assert!(
+                    allowed_extension_fields.contains(field.key),
+                    "unreviewed Rust extension field {}.{}",
+                    schema.type_id,
+                    field.key
+                );
+                assert!(
+                    seen_extension_fields.insert(field.key),
+                    "duplicate Rust extension field {}.{}",
+                    schema.type_id,
+                    field.key
+                );
+                assert_ne!(
+                    owner.type_id, schema.type_id,
+                    "extension field {}.{} must come from a registered flattened owner",
+                    schema.type_id, field.key
+                );
+                continue;
+            };
             assert_eq!(rust_kind(field.kind), java_kind(&java_field.java_type));
             match field.kind {
                 HeaderValueKind::U32 => assert_eq!(field.java_range, Some(HeaderRange::I32)),
@@ -423,9 +495,6 @@ fn registered_typed_schemas_match_the_pinned_java_contract() {
                 _ => assert_eq!(field.java_range, None),
             }
 
-            let owner = by_type_id
-                .get(field.declared_in)
-                .unwrap_or_else(|| panic!("unregistered field owner {}", field.declared_in));
             assert_eq!(owner.java_class, java_field.declared_in);
 
             match field.presence {
@@ -448,6 +517,11 @@ fn registered_typed_schemas_match_the_pinned_java_contract() {
                 }
             }
         }
+        assert_eq!(
+            seen_extension_fields, allowed_extension_fields,
+            "{} reviewed extension fields must be present exactly once",
+            schema.type_id
+        );
 
         for flatten in &schema.flattens {
             assert!(
@@ -565,6 +639,11 @@ fn assert_rpc_envelope_contract<T>(
 
 #[test]
 fn rpc_envelope_headers_preserve_java_inheritance_and_legacy_aliases() {
+    assert_rpc_envelope_contract::<CheckRocksdbCqWriteProgressRequestHeader>(
+        &[("topic", "topic-a"), ("checkStoreTime", "9223372036854775807")],
+        &["topic"],
+        |header| &header.rpc,
+    );
     assert_rpc_envelope_contract::<CheckTransactionStateRequestHeader>(
         &[("tranStateTableOffset", "-1"), ("commitLogOffset", "-2")],
         &["tranStateTableOffset", "commitLogOffset"],
@@ -608,6 +687,14 @@ fn rpc_envelope_headers_preserve_java_inheritance_and_legacy_aliases() {
         &["consumerGroup", "clientId"],
         |header| &header.rpc_request_header,
     );
+    assert_rpc_envelope_contract::<GetLiteGroupInfoRequestHeader>(
+        &[("group", "lg"), ("liteTopic", "lite-a"), ("topK", "2147483647")],
+        &["group"],
+        |header| &header.rpc,
+    );
+    assert_rpc_envelope_contract::<GetParentTopicInfoRequestHeader>(&[("topic", "parent-a")], &["topic"], |header| {
+        &header.rpc
+    });
     assert_rpc_envelope_contract::<GetProducerConnectionListRequestHeader>(
         &[("producerGroup", "pg")],
         &["producerGroup"],
@@ -628,6 +715,28 @@ fn rpc_envelope_headers_preserve_java_inheritance_and_legacy_aliases() {
         &[("liteTopic", "lt"), ("consumerGroup", "ng"), ("clientId", "ci")],
         &["liteTopic", "consumerGroup", "clientId"],
         |header| &header.rpc_request_header,
+    );
+    assert_rpc_envelope_contract::<PopLiteMessageRequestHeader>(
+        &[
+            ("clientId", "client-a"),
+            ("consumerGroup", "cg"),
+            ("topic", "topic-a"),
+            ("maxMsgNum", "2147483647"),
+            ("invisibleTime", "9223372036854775807"),
+            ("pollTime", "9223372036854775807"),
+            ("bornTime", "9223372036854775807"),
+            ("attemptId", "attempt-a"),
+        ],
+        &[
+            "clientId",
+            "consumerGroup",
+            "topic",
+            "maxMsgNum",
+            "invisibleTime",
+            "pollTime",
+            "bornTime",
+        ],
+        |header| &header.rpc,
     );
     assert_rpc_envelope_contract::<QueryTopicsByConsumerRequestHeader>(&[("group", "qg")], &["group"], |header| {
         &header.rpc_request_header
@@ -753,6 +862,40 @@ fn rpc_envelope_headers_preserve_java_inheritance_and_legacy_aliases() {
     assert!(checked.transaction_id.is_none());
     assert!(checked.offset_msg_id.is_none());
     assert!(checked.rpc_request_header.is_some());
+
+    let rocksdb = <CheckRocksdbCqWriteProgressRequestHeader as HeaderCodec>::decode_from_map(&HeaderMap::from([(
+        "topic".into(),
+        "topic-a".into(),
+    )]))
+    .expect("missing Java primitive checkStoreTime uses zero");
+    assert_eq!(rocksdb.check_store_time, 0);
+    assert!(rocksdb.rpc.is_some());
+
+    let lite_group = <GetLiteGroupInfoRequestHeader as HeaderCodec>::decode_from_map(&HeaderMap::from([(
+        "group".into(),
+        "lg".into(),
+    )]))
+    .expect("missing nullable liteTopic and primitive topK use reviewed defaults");
+    assert_eq!(lite_group.lite_topic, "");
+    assert_eq!(lite_group.top_k, 0);
+    assert!(lite_group.rpc.is_some());
+
+    let pop_lite = <PopLiteMessageRequestHeader as HeaderCodec>::decode_from_map(&HeaderMap::from([
+        ("clientId".into(), "client-a".into()),
+        ("consumerGroup".into(), "cg".into()),
+        ("topic".into(), "topic-a".into()),
+        ("maxMsgNum".into(), i32::MIN.to_string().into()),
+        ("invisibleTime".into(), i64::MIN.to_string().into()),
+        ("pollTime".into(), i64::MIN.to_string().into()),
+        ("bornTime".into(), i64::MIN.to_string().into()),
+    ]))
+    .expect("Java signed minima and optional attemptId remain valid");
+    assert_eq!(pop_lite.max_msg_num, i32::MIN);
+    assert_eq!(pop_lite.invisible_time, i64::MIN);
+    assert_eq!(pop_lite.poll_time, i64::MIN);
+    assert_eq!(pop_lite.born_time, i64::MIN);
+    assert!(pop_lite.attempt_id.is_none());
+    assert!(pop_lite.rpc.is_some());
 
     let send_back = <ConsumerSendMsgBackRequestHeader as HeaderCodec>::decode_from_map(&HeaderMap::from([
         ("offset".into(), i64::MIN.to_string().into()),

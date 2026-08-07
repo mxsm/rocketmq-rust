@@ -88,6 +88,17 @@
         "rust": "rocketmq-protocol/src/protocol/header/end_transaction_request_header.rs",
         "java": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/EndTransactionRequestHeader.java"
       }
+    },
+    {
+      "rustType": "GetLiteGroupInfoRequestHeader",
+      "field": "liteTopic",
+      "semantic": "literal:",
+      "owner": "rocketmq-rust protocol maintainers",
+      "reason": "Preserves the public non-optional Rust field while accepting a Java frame that omits the nullable lite topic",
+      "referenceSource": {
+        "rust": "rocketmq-protocol/src/protocol/header/get_lite_group_info_request_header.rs",
+        "java": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/GetLiteGroupInfoRequestHeader.java"
+      }
     }
   ],
   "nameMappings": [

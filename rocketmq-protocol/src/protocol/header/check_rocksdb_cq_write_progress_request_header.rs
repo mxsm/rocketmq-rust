@@ -13,20 +13,27 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::rpc::rpc_request_header::RpcRequestHeader;
 
-#[derive(Clone, Debug, Serialize, Deserialize, RequestHeaderCodecV2)]
+#[derive(Clone, Debug, Serialize, Deserialize, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::check_rocksdb_cq_write_progress_request_header::CheckRocksdbCqWriteProgressRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.CheckRocksdbCqWriteProgressRequestHeader"
+)]
 #[serde(rename_all = "camelCase")]
 pub struct CheckRocksdbCqWriteProgressRequestHeader {
-    #[required]
+    #[header(required)]
     pub topic: CheetahString,
 
+    #[serde(default)]
+    #[header(default, default_semantic = "literal:0")]
     pub check_store_time: i64,
 
     #[serde(flatten)]
+    #[header(flatten, presence = "always")]
     pub rpc: Option<RpcRequestHeader>,
 }
