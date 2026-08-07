@@ -315,8 +315,34 @@ impl ProcessQueue {
         drop(lock);
     }
 
-    pub(crate) fn fill_process_queue_info(&self, info: ProcessQueueInfo) {
-        unimplemented!("fill_process_queue_info")
+    /// Snapshot the current queue state into a [`ProcessQueueInfo`] for admin/running-info.
+    pub(crate) fn fill_process_queue_info(&self, commit_offset: u64) -> ProcessQueueInfo {
+        let msg_count = self.msg_count.load(Ordering::Acquire);
+        let queue_offset_max = self.queue_offset_max.load(Ordering::Acquire);
+        // cached_msg_min_offset: 0 when queue is empty (consistent with Java client).
+        let cached_min = if msg_count == 0 {
+            0
+        } else {
+            // Approximate: min known offset is commit_offset when draining.
+            commit_offset
+        };
+        ProcessQueueInfo {
+            commit_offset,
+            cached_msg_min_offset: cached_min,
+            cached_msg_max_offset: queue_offset_max,
+            cached_msg_count: msg_count as u32,
+            cached_msg_size_in_mib: (self.msg_size.load(Ordering::Acquire) / (1024 * 1024)) as u32,
+            locked: self.locked.load(Ordering::Acquire),
+            try_unlock_times: self.try_unlock_times.load(Ordering::Acquire) as u64,
+            last_lock_timestamp: self.last_lock_timestamp.load(Ordering::Acquire),
+            droped: self.dropped.load(Ordering::Acquire),
+            last_pull_timestamp: self.last_pull_timestamp.load(Ordering::Acquire),
+            last_consume_timestamp: self.last_consume_timestamp.load(Ordering::Acquire),
+            // Transaction queue fields: not used in CLUSTERING push consumer.
+            transaction_msg_min_offset: 0,
+            transaction_msg_max_offset: 0,
+            transaction_msg_count: 0,
+        }
     }
 
     pub(crate) fn set_last_pull_timestamp(&self, last_pull_timestamp: u64) {

@@ -431,6 +431,11 @@ impl ConsumeRequest {
                     has_exception = true;
                 }
             }
+            // Update last_consume_timestamp after the listener returns so that
+            // admin/running-info reflects real callback progress, not flow-control entries.
+            self.process_queue
+                .last_consume_timestamp
+                .store(get_current_millis(), std::sync::atomic::Ordering::Release);
         }
 
         let consume_rt = begin_timestamp.elapsed().as_millis() as u64;

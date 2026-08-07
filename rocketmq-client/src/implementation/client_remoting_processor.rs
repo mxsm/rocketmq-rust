@@ -29,6 +29,7 @@ use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::header::check_transaction_state_request_header::CheckTransactionStateRequestHeader;
 use rocketmq_remoting::protocol::header::consume_message_directly_result_request_header::ConsumeMessageDirectlyResultRequestHeader;
+use rocketmq_remoting::protocol::header::get_consumer_running_info_request_header::GetConsumerRunningInfoRequestHeader;
 use rocketmq_remoting::protocol::header::notify_consumer_ids_changed_request_header::NotifyConsumerIdsChangedRequestHeader;
 use rocketmq_remoting::protocol::header::reply_message_request_header::ReplyMessageRequestHeader;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
@@ -41,6 +42,7 @@ use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
+use crate::consumer::mq_consumer_inner::MQConsumerInner;
 use crate::factory::mq_client_instance::MQClientInstance;
 use crate::producer::request_future_holder::REQUEST_FUTURE_HOLDER;
 
@@ -73,8 +75,8 @@ impl RequestProcessor for ClientRemotingProcessor {
         match request_code {
             RequestCode::CheckTransactionState => self.check_transaction_state(channel, ctx, request).await,
             RequestCode::ResetConsumerClientOffset
-            | RequestCode::GetConsumerStatusFromClient
-            | RequestCode::GetConsumerRunningInfo => Ok(Some(unsupported_request_response())),
+            | RequestCode::GetConsumerStatusFromClient => Ok(Some(unsupported_request_response())),
+            RequestCode::GetConsumerRunningInfo => self.get_consumer_running_info(channel, ctx, request).await,
             RequestCode::ConsumeMessageDirectly => self.consume_message_directly(channel, ctx, request).await,
             //RPC message handle code
             RequestCode::PushReplyMessageToClient => self.receive_reply_message(ctx, request).await,
@@ -282,6 +284,40 @@ impl ClientRemotingProcessor {
                 )),
             ))
         }
+    }
+    async fn get_consumer_running_info(
+        &mut self,
+        _channel: Channel,
+        _ctx: ConnectionHandlerContext,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let request_header = request
+            .decode_command_custom_header::<GetConsumerRunningInfoRequestHeader>()
+            .map_err(|e| rocketmq_error::RocketMQError::IllegalArgument(format!("decode header: {e}")))?;
+
+        let consumer = self
+            .client_instance
+            .select_consumer(request_header.consumer_group.as_str())
+            .await;
+
+        let Some(consumer) = consumer else {
+            return Ok(Some(
+                RemotingCommand::create_response_command_with_code(ResponseCode::ConsumerNotOnline)
+                    .set_remark(format!(
+                        "The Consumer Group <{}> not exist in this consumer",
+                        request_header.consumer_group
+                    )),
+            ));
+        };
+
+        let running_info = consumer.consumer_running_info();
+        let body = running_info
+            .encode()
+            .map_err(|e| rocketmq_error::RocketMQError::IllegalArgument(format!("encode running info: {e}")))?;
+
+        Ok(Some(
+            RemotingCommand::create_response_command().set_body(body),
+        ))
     }
 }
 
