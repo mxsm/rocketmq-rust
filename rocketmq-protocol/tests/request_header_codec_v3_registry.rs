@@ -22,8 +22,11 @@ use rocketmq_model::boundary_type::BoundaryType;
 use rocketmq_protocol::protocol::header::consume_message_directly_result_request_header::ConsumeMessageDirectlyResultRequestHeader;
 use rocketmq_protocol::protocol::header::controller::clean_broker_data_request_header::CleanBrokerDataRequestHeader;
 use rocketmq_protocol::protocol::header::create_topic_list_request_header::CreateTopicListRequestHeader;
+use rocketmq_protocol::protocol::header::get_consumer_connection_list_request_header::GetConsumerConnectionListRequestHeader;
 use rocketmq_protocol::protocol::header::get_consumer_status_request_header::GetConsumerStatusRequestHeader;
 use rocketmq_protocol::protocol::header::get_lite_client_info_request_header::GetLiteClientInfoRequestHeader;
+use rocketmq_protocol::protocol::header::get_producer_connection_list_request_header::GetProducerConnectionListRequestHeader;
+use rocketmq_protocol::protocol::header::get_subscription_group_config_request_header::GetSubscriptionGroupConfigRequestHeader;
 use rocketmq_protocol::protocol::header::heartbeat_request_header::HeartbeatRequestHeader;
 use rocketmq_protocol::protocol::header::lite_subscription_ctl_request_header::LiteSubscriptionCtlRequestHeader;
 use rocketmq_protocol::protocol::header::lock_batch_mq_request_header::LockBatchMqRequestHeader;
@@ -33,9 +36,11 @@ use rocketmq_protocol::protocol::header::message_operation_header::send_message_
 use rocketmq_protocol::protocol::header::namesrv::topic_operation_header::DeleteTopicFromNamesrvRequestHeader;
 use rocketmq_protocol::protocol::header::namesrv::topic_operation_header::TopicRequestHeader as NamesrvTopicRequestHeader;
 use rocketmq_protocol::protocol::header::notification_request_header::NotificationRequestHeader;
+use rocketmq_protocol::protocol::header::notify_consumer_ids_changed_request_header::NotifyConsumerIdsChangedRequestHeader;
 use rocketmq_protocol::protocol::header::pull_message_request_header::PullMessageRequestHeader;
 use rocketmq_protocol::protocol::header::pull_message_response_header::PullMessageResponseHeader;
 use rocketmq_protocol::protocol::header::query_consume_queue_request_header::QueryConsumeQueueRequestHeader;
+use rocketmq_protocol::protocol::header::query_topics_by_consumer_request_header::QueryTopicsByConsumerRequestHeader;
 use rocketmq_protocol::protocol::header::search_offset_request_header::SearchOffsetRequestHeader;
 use rocketmq_protocol::protocol::header::search_offset_response_header::SearchOffsetResponseHeader;
 use rocketmq_protocol::protocol::header::unlock_batch_mq_request_header::UnlockBatchMqRequestHeader;
@@ -144,15 +149,15 @@ impl SingleValidationHeader {
     }
 }
 
-fn register<T: HeaderCodec + CommandCustomHeader + Default>() -> RegisteredSchema {
+fn register_value<T: HeaderCodec + CommandCustomHeader>(header: &T) -> RegisteredSchema {
     assert_eq!(
-        T::default().encode_capability() == HeaderEncodeCapability::DirectBinary,
+        header.encode_capability() == HeaderEncodeCapability::DirectBinary,
         T::FAST_ENABLED,
         "{} encode capability must follow its fast schema flag",
         T::TYPE_ID
     );
     assert_eq!(
-        T::default().supports_direct_json_fields(),
+        header.supports_direct_json_fields(),
         T::FAST_ENABLED,
         "{} direct JSON capability must follow its fast schema flag",
         T::TYPE_ID
@@ -171,6 +176,10 @@ fn register<T: HeaderCodec + CommandCustomHeader + Default>() -> RegisteredSchem
     }
 }
 
+fn register<T: HeaderCodec + CommandCustomHeader + Default>() -> RegisteredSchema {
+    register_value(&T::default())
+}
+
 fn registry() -> Vec<RegisteredSchema> {
     vec![
         register::<RpcRequestHeader>(),
@@ -179,8 +188,14 @@ fn registry() -> Vec<RegisteredSchema> {
         register::<ConsumeMessageDirectlyResultRequestHeader>(),
         register::<CleanBrokerDataRequestHeader>(),
         register::<CreateTopicListRequestHeader>(),
+        register_value(&GetConsumerConnectionListRequestHeader {
+            consumer_group: CheetahString::from_static_str("registry"),
+            rpc_request_header: None,
+        }),
         register::<GetConsumerStatusRequestHeader>(),
         register::<GetLiteClientInfoRequestHeader>(),
+        register::<GetProducerConnectionListRequestHeader>(),
+        register::<GetSubscriptionGroupConfigRequestHeader>(),
         register::<HeartbeatRequestHeader>(),
         register::<LiteSubscriptionCtlRequestHeader>(),
         register::<LockBatchMqRequestHeader>(),
@@ -194,6 +209,11 @@ fn registry() -> Vec<RegisteredSchema> {
         register::<SendMessageRequestHeaderV2>(),
         register::<SendMessageResponseHeader>(),
         register::<NotificationRequestHeader>(),
+        register_value(&NotifyConsumerIdsChangedRequestHeader {
+            consumer_group: CheetahString::from_static_str("registry"),
+            rpc_request_header: None,
+        }),
+        register::<QueryTopicsByConsumerRequestHeader>(),
         register::<UnlockBatchMqRequestHeader>(),
     ]
 }
@@ -408,12 +428,14 @@ fn registered_typed_schemas_match_the_pinned_java_contract() {
     }
 }
 
-fn assert_rpc_envelope_contract<T>(rpc: fn(&T) -> &Option<RpcRequestHeader>)
-where
+fn assert_rpc_envelope_contract<T>(
+    local_field: Option<(&'static str, &'static str)>,
+    rpc: fn(&T) -> &Option<RpcRequestHeader>,
+) where
     T: CommandCustomHeader + FromMap<Target = T> + HeaderCodec,
     <T as FromMap>::Error: std::fmt::Debug,
 {
-    let input = HeaderMap::from([
+    let mut input = HeaderMap::from([
         ("ns".into(), "canonical-ns".into()),
         ("namespace".into(), "legacy-ns".into()),
         ("nsd".into(), "true".into()),
@@ -423,6 +445,9 @@ where
         ("oway".into(), "false".into()),
         ("oneway".into(), "true".into()),
     ]);
+    if let Some((key, value)) = local_field {
+        input.insert(key.into(), value.into());
+    }
     let typed = <T as HeaderCodec>::decode_from_map(&input).expect("typed RPC envelope decode");
     let legacy = <T as FromMap>::from(&input).expect("legacy RPC envelope adapter");
     for decoded in [rpc(&typed), rpc(&legacy)] {
@@ -436,6 +461,11 @@ where
     }
 
     let encoded = typed.to_map().expect("typed RPC envelope encode");
+    let legacy_encoded = legacy.to_map().expect("legacy RPC envelope encode");
+    if let Some((key, value)) = local_field {
+        assert_eq!(encoded.get(key).map(CheetahString::as_str), Some(value));
+        assert_eq!(legacy_encoded.get(key).map(CheetahString::as_str), Some(value));
+    }
     assert_eq!(encoded.get("ns").map(CheetahString::as_str), Some("canonical-ns"));
     assert_eq!(encoded.get("nsd").map(CheetahString::as_str), Some("true"));
     assert_eq!(
@@ -450,7 +480,20 @@ where
         );
     }
 
-    let empty = <T as HeaderCodec>::decode_from_map(&HeaderMap::new()).expect("empty inherited header");
+    let mut parent_only = HeaderMap::new();
+    if let Some((key, value)) = local_field {
+        parent_only.insert(key.into(), value.into());
+        let typed_missing = <T as HeaderCodec>::decode_from_map(&HeaderMap::new());
+        assert!(
+            matches!(typed_missing, Err(HeaderCodecError::Missing { key: actual, .. }) if actual == key),
+            "typed decode must reject missing required field {key}"
+        );
+        assert!(
+            <T as FromMap>::from(&HeaderMap::new()).is_err(),
+            "legacy adapter must reject missing required field {key}"
+        );
+    }
+    let empty = <T as HeaderCodec>::decode_from_map(&parent_only).expect("inherited header without RPC fields");
     let empty_rpc = rpc(&empty)
         .as_ref()
         .expect("Java parent exists even when all fields are absent");
@@ -463,11 +506,26 @@ where
 
 #[test]
 fn rpc_envelope_headers_preserve_java_inheritance_and_legacy_aliases() {
-    assert_rpc_envelope_contract::<CreateTopicListRequestHeader>(|header| &header.rpc_request_header);
-    assert_rpc_envelope_contract::<HeartbeatRequestHeader>(|header| &header.rpc_request);
-    assert_rpc_envelope_contract::<LiteSubscriptionCtlRequestHeader>(|header| &header.rpc_request_header);
-    assert_rpc_envelope_contract::<LockBatchMqRequestHeader>(|header| &header.rpc_request_header);
-    assert_rpc_envelope_contract::<UnlockBatchMqRequestHeader>(|header| &header.rpc_request_header);
+    assert_rpc_envelope_contract::<CreateTopicListRequestHeader>(None, |header| &header.rpc_request_header);
+    assert_rpc_envelope_contract::<GetConsumerConnectionListRequestHeader>(Some(("consumerGroup", "cg")), |header| {
+        &header.rpc_request_header
+    });
+    assert_rpc_envelope_contract::<GetProducerConnectionListRequestHeader>(Some(("producerGroup", "pg")), |header| {
+        &header.rpc_request_header
+    });
+    assert_rpc_envelope_contract::<GetSubscriptionGroupConfigRequestHeader>(Some(("group", "sg")), |header| {
+        &header.rpc_request_header
+    });
+    assert_rpc_envelope_contract::<HeartbeatRequestHeader>(None, |header| &header.rpc_request);
+    assert_rpc_envelope_contract::<LiteSubscriptionCtlRequestHeader>(None, |header| &header.rpc_request_header);
+    assert_rpc_envelope_contract::<LockBatchMqRequestHeader>(None, |header| &header.rpc_request_header);
+    assert_rpc_envelope_contract::<NotifyConsumerIdsChangedRequestHeader>(Some(("consumerGroup", "ng")), |header| {
+        &header.rpc_request_header
+    });
+    assert_rpc_envelope_contract::<QueryTopicsByConsumerRequestHeader>(Some(("group", "qg")), |header| {
+        &header.rpc_request_header
+    });
+    assert_rpc_envelope_contract::<UnlockBatchMqRequestHeader>(None, |header| &header.rpc_request_header);
 }
 
 #[test]
