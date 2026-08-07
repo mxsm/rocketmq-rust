@@ -863,6 +863,17 @@ impl DefaultMQPushConsumerImpl {
                     self.queue_flow_control_times
                 );
             }
+            pull_request.process_queue.mark_flow_control();
+            let stall_ms = pull_request.process_queue.flow_control_stall_ms();
+            if stall_ms > *crate::consumer::consumer_impl::PULL_MAX_IDLE_TIME / 2 {
+                warn!(
+                    "[STALL] queue flow-controlled by cached-count for {}ms, topic={}, queueId={}, count={}",
+                    stall_ms,
+                    pull_request.get_message_queue().get_topic(),
+                    pull_request.get_message_queue().get_queue_id(),
+                    cached_message_count,
+                );
+            }
             self.execute_pull_request_later(pull_request, PULL_TIME_DELAY_MILLS_WHEN_CACHE_FLOW_CONTROL);
 
             self.queue_flow_control_times += 1;
@@ -884,6 +895,17 @@ impl DefaultMQPushConsumerImpl {
                     cached_message_size_in_mib,
                     pull_request.to_string(),
                     self.queue_flow_control_times
+                );
+            }
+            pull_request.process_queue.mark_flow_control();
+            let stall_ms = pull_request.process_queue.flow_control_stall_ms();
+            if stall_ms > *crate::consumer::consumer_impl::PULL_MAX_IDLE_TIME / 2 {
+                warn!(
+                    "[STALL] queue flow-controlled by cached-size for {}ms, topic={}, queueId={}, size_mib={}",
+                    stall_ms,
+                    pull_request.get_message_queue().get_topic(),
+                    pull_request.get_message_queue().get_queue_id(),
+                    cached_message_size_in_mib,
                 );
             }
             self.execute_pull_request_later(pull_request, PULL_TIME_DELAY_MILLS_WHEN_CACHE_FLOW_CONTROL);
@@ -909,6 +931,17 @@ impl DefaultMQPushConsumerImpl {
                     );
                 }
                 self.queue_max_span_flow_control_times += 1;
+                pull_request.process_queue.mark_flow_control();
+                let stall_ms = pull_request.process_queue.flow_control_stall_ms();
+                if stall_ms > *crate::consumer::consumer_impl::PULL_MAX_IDLE_TIME / 2 {
+                    warn!(
+                        "[STALL] queue flow-controlled by max-span for {}ms, topic={}, queueId={}, span={}",
+                        stall_ms,
+                        pull_request.get_message_queue().get_topic(),
+                        pull_request.get_message_queue().get_queue_id(),
+                        max_span,
+                    );
+                }
                 self.execute_pull_request_later(pull_request, PULL_TIME_DELAY_MILLS_WHEN_CACHE_FLOW_CONTROL);
                 return;
             }

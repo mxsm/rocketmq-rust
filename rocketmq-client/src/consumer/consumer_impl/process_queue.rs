@@ -66,6 +66,9 @@ pub(crate) struct ProcessQueue {
     pub(crate) last_lock_timestamp: Arc<AtomicU64>,
     pub(crate) consuming: Arc<AtomicBool>,
     pub(crate) msg_acc_cnt: Arc<AtomicI64>,
+    /// Millisecond wall-clock timestamp when the queue first entered flow-control in the current
+    /// stall window, or 0 when not flow-controlled. Used by the stall detector only.
+    pub(crate) flow_control_since: Arc<AtomicU64>,
     /// Serializes per-queue commit operations so that concurrent chunk tasks
     /// cannot interleave offset advancement or ProcessQueue removal.
     pub(crate) commit_lock: Arc<Mutex<()>>,
@@ -89,6 +92,7 @@ impl ProcessQueue {
             last_lock_timestamp: Arc::new(AtomicU64::new(get_current_millis())),
             consuming: Arc::new(AtomicBool::new(false)),
             msg_acc_cnt: Arc::new(AtomicI64::new(0)),
+            flow_control_since: Arc::new(AtomicU64::new(0)),
             commit_lock: Arc::new(Mutex::new(())),
         }
     }
@@ -348,11 +352,35 @@ impl ProcessQueue {
     pub(crate) fn set_last_pull_timestamp(&self, last_pull_timestamp: u64) {
         self.last_pull_timestamp
             .store(last_pull_timestamp, std::sync::atomic::Ordering::Release);
+        // Clear the flow-control start marker when a real broker pull is issued.
+        self.flow_control_since.store(0, std::sync::atomic::Ordering::Release);
     }
 
     pub(crate) fn set_last_lock_timestamp(&self, last_lock_timestamp: u64) {
         self.last_lock_timestamp
             .store(last_lock_timestamp, std::sync::atomic::Ordering::Release);
+    }
+
+    /// Mark that this queue entered flow-control.  Idempotent: only records the
+    /// first entry so the stall duration accumulates from that point.
+    pub(crate) fn mark_flow_control(&self) {
+        // Use compare-and-swap so that concurrent callers don't reset an existing start time.
+        let _ = self.flow_control_since.compare_exchange(
+            0,
+            get_current_millis(),
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+    }
+
+    /// How many milliseconds this queue has been continuously flow-controlled,
+    /// or 0 if it is not currently in flow-control.
+    pub(crate) fn flow_control_stall_ms(&self) -> u64 {
+        let since = self.flow_control_since.load(Ordering::Acquire);
+        if since == 0 {
+            return 0;
+        }
+        get_current_millis().saturating_sub(since)
     }
 
     pub fn msg_count(&self) -> u64 {
@@ -375,6 +403,7 @@ mod tests {
     use rocketmq_rust::ArcMut;
 
     use super::ProcessQueue;
+    use rocketmq_common::TimeUtils::get_current_millis;
 
     fn make_msg(offset: i64, body_size: usize) -> ArcMut<MessageExt> {
         let mut msg = MessageExt {
@@ -517,6 +546,34 @@ mod tests {
         let _o2 = r2.unwrap();
 
         assert_eq!(pq.msg_count(), 0, "all messages must be removed");
+    }
+
+    #[test]
+    fn flow_control_stall_ms_is_zero_before_mark() {
+        let pq = ProcessQueue::new();
+        // Immediately after construction, no flow-control has been recorded.
+        // We reset to 0 explicitly to avoid the constructor timestamp.
+        pq.flow_control_since.store(0, std::sync::atomic::Ordering::Release);
+        assert_eq!(pq.flow_control_stall_ms(), 0);
+    }
+
+    #[test]
+    fn flow_control_stall_ms_is_nonzero_after_mark() {
+        let pq = ProcessQueue::new();
+        pq.flow_control_since.store(0, std::sync::atomic::Ordering::Release);
+        pq.mark_flow_control();
+        // Give the timer at least 1 ms to advance.
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        assert!(pq.flow_control_stall_ms() > 0);
+    }
+
+    #[test]
+    fn set_last_pull_timestamp_clears_flow_control_marker() {
+        let pq = ProcessQueue::new();
+        pq.mark_flow_control();
+        assert!(pq.flow_control_since.load(std::sync::atomic::Ordering::Acquire) > 0);
+        pq.set_last_pull_timestamp(get_current_millis());
+        assert_eq!(pq.flow_control_since.load(std::sync::atomic::Ordering::Acquire), 0);
     }
 
     #[test]
