@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -21,13 +21,18 @@ use crate::protocol::header::message_operation_header::TopicRequestHeaderTrait;
 use crate::rpc::rpc_request_header::RpcRequestHeader;
 use crate::rpc::topic_request_header::TopicRequestHeader;
 
-#[derive(Serialize, Deserialize, Debug, RequestHeaderCodecV2)]
+#[derive(Serialize, Deserialize, Debug, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::get_topic_config_request_header::GetTopicConfigRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.GetTopicConfigRequestHeader"
+)]
 pub struct GetTopicConfigRequestHeader {
-    #[required]
+    #[header(required)]
     #[serde(rename = "topic")]
     pub topic: CheetahString,
 
     #[serde(flatten)]
+    #[header(flatten, presence = "always")]
     pub topic_request_header: Option<TopicRequestHeader>,
 }
 
