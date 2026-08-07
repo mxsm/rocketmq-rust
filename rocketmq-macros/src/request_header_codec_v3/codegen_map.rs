@@ -76,7 +76,7 @@ pub(super) fn codec_items(model: &HeaderModel, codec_trait: &TokenStream) -> Tok
     {
         quote!(#[inline(always)])
     } else {
-        quote!(#[inline])
+        quote!(#[inline(never)])
     };
     let len_hint = len_hint_body(model, codec_trait, protocol_path);
 
