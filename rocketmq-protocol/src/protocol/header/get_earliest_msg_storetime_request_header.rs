@@ -13,23 +13,28 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::protocol::header::message_operation_header::TopicRequestHeaderTrait;
 use crate::rpc::topic_request_header::TopicRequestHeader;
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, RequestHeaderCodecV2)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::get_earliest_msg_storetime_request_header::GetEarliestMsgStoretimeRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.GetEarliestMsgStoretimeRequestHeader"
+)]
 #[serde(rename_all = "camelCase")]
 pub struct GetEarliestMsgStoretimeRequestHeader {
-    #[required]
+    #[header(required)]
     pub topic: CheetahString,
 
-    #[required]
+    #[header(required)]
     pub queue_id: i32,
 
     #[serde(flatten)]
+    #[header(flatten, presence = "always")]
     pub topic_request_header: Option<TopicRequestHeader>,
 }
 

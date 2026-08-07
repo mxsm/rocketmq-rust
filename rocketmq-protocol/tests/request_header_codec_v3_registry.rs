@@ -33,8 +33,11 @@ use rocketmq_protocol::protocol::header::get_consumer_connection_list_request_he
 use rocketmq_protocol::protocol::header::get_consumer_listby_group_request_header::GetConsumerListByGroupRequestHeader;
 use rocketmq_protocol::protocol::header::get_consumer_running_info_request_header::GetConsumerRunningInfoRequestHeader;
 use rocketmq_protocol::protocol::header::get_consumer_status_request_header::GetConsumerStatusRequestHeader;
+use rocketmq_protocol::protocol::header::get_earliest_msg_storetime_request_header::GetEarliestMsgStoretimeRequestHeader;
 use rocketmq_protocol::protocol::header::get_lite_client_info_request_header::GetLiteClientInfoRequestHeader;
 use rocketmq_protocol::protocol::header::get_lite_group_info_request_header::GetLiteGroupInfoRequestHeader;
+use rocketmq_protocol::protocol::header::get_max_offset_request_header::GetMaxOffsetRequestHeader;
+use rocketmq_protocol::protocol::header::get_min_offset_request_header::GetMinOffsetRequestHeader;
 use rocketmq_protocol::protocol::header::get_parent_topic_info_request_header::GetParentTopicInfoRequestHeader;
 use rocketmq_protocol::protocol::header::get_producer_connection_list_request_header::GetProducerConnectionListRequestHeader;
 use rocketmq_protocol::protocol::header::get_subscription_group_config_request_header::GetSubscriptionGroupConfigRequestHeader;
@@ -262,6 +265,11 @@ fn registry() -> Vec<RegisteredSchema> {
         }),
         register::<GetConsumerRunningInfoRequestHeader>(),
         register::<GetConsumerStatusRequestHeader>(),
+        register_value(&GetEarliestMsgStoretimeRequestHeader {
+            topic: CheetahString::from_static_str("registry"),
+            queue_id: 0,
+            topic_request_header: None,
+        }),
         register::<GetLiteClientInfoRequestHeader>(),
         register_value(&GetLiteGroupInfoRequestHeader {
             group: CheetahString::from_static_str("registry"),
@@ -272,6 +280,17 @@ fn registry() -> Vec<RegisteredSchema> {
         register_value(&GetParentTopicInfoRequestHeader {
             topic: CheetahString::from_static_str("registry"),
             rpc: None,
+        }),
+        register_value(&GetMaxOffsetRequestHeader {
+            topic: CheetahString::from_static_str("registry"),
+            queue_id: 0,
+            committed: true,
+            topic_request_header: None,
+        }),
+        register_value(&GetMinOffsetRequestHeader {
+            topic: CheetahString::from_static_str("registry"),
+            queue_id: 0,
+            topic_request_header: None,
         }),
         register::<GetProducerConnectionListRequestHeader>(),
         register::<GetSubscriptionGroupConfigRequestHeader>(),
@@ -635,6 +654,125 @@ fn assert_rpc_envelope_contract<T>(
     assert_eq!(empty_rpc.broker_name, None);
     assert_eq!(empty_rpc.oneway, None);
     assert_eq!(empty.encode_capability(), HeaderEncodeCapability::MapOnly);
+}
+
+fn assert_topic_queue_envelope_contract<T>(
+    local_fields: &[(&'static str, &'static str)],
+    required_keys: &[&'static str],
+    topic: fn(&T) -> &Option<TopicRequestHeader>,
+) where
+    T: CommandCustomHeader + FromMap<Target = T> + HeaderCodec,
+    <T as FromMap>::Error: std::fmt::Debug,
+{
+    let mut input = HeaderMap::from([
+        ("lo".into(), "true".into()),
+        ("ns".into(), "canonical-ns".into()),
+        ("namespace".into(), "legacy-ns".into()),
+        ("nsd".into(), "true".into()),
+        ("namespaced".into(), "false".into()),
+        ("bname".into(), "canonical-broker".into()),
+        ("brokerName".into(), "legacy-broker".into()),
+        ("oway".into(), "false".into()),
+        ("oneway".into(), "true".into()),
+    ]);
+    for &(key, value) in local_fields {
+        input.insert(key.into(), value.into());
+    }
+
+    let typed = <T as HeaderCodec>::decode_from_map(&input).expect("typed TopicQueue envelope decode");
+    let legacy = <T as FromMap>::from(&input).expect("legacy TopicQueue envelope adapter");
+    for decoded in [&typed, &legacy] {
+        let topic = topic(decoded)
+            .as_ref()
+            .expect("Java Topic parent is always present after decode");
+        assert_eq!(topic.lo, Some(true));
+        let rpc = topic
+            .rpc_request_header
+            .as_ref()
+            .expect("Java RPC parent is always present after decode");
+        assert_eq!(rpc.namespace.as_deref(), Some("canonical-ns"));
+        assert_eq!(rpc.namespaced, Some(true));
+        assert_eq!(rpc.broker_name.as_deref(), Some("canonical-broker"));
+        assert_eq!(rpc.oneway, Some(false));
+    }
+
+    for encoded in [typed.to_map().unwrap(), legacy.to_map().unwrap()] {
+        for &(key, value) in local_fields {
+            assert_eq!(encoded.get(key).map(CheetahString::as_str), Some(value));
+        }
+        assert_eq!(encoded.get("lo").map(CheetahString::as_str), Some("true"));
+        assert_eq!(encoded.get("ns").map(CheetahString::as_str), Some("canonical-ns"));
+        assert_eq!(encoded.get("nsd").map(CheetahString::as_str), Some("true"));
+        assert_eq!(
+            encoded.get("bname").map(CheetahString::as_str),
+            Some("canonical-broker")
+        );
+        assert_eq!(encoded.get("oway").map(CheetahString::as_str), Some("false"));
+        for alias in ["namespace", "namespaced", "brokerName", "oneway"] {
+            assert!(
+                !encoded.contains_key(alias),
+                "legacy alias {alias} must remain decode-only"
+            );
+        }
+    }
+
+    let parent_only = HeaderMap::from_iter(local_fields.iter().map(|&(key, value)| (key.into(), value.into())));
+    for &key in required_keys {
+        let mut missing = parent_only.clone();
+        missing.remove(key);
+        assert!(matches!(
+            <T as HeaderCodec>::decode_from_map(&missing),
+            Err(HeaderCodecError::Missing { key: actual, .. }) if actual == key
+        ));
+        assert!(<T as FromMap>::from(&missing).is_err());
+    }
+
+    let empty = <T as HeaderCodec>::decode_from_map(&parent_only).expect("TopicQueue header without parent fields");
+    let empty_topic = topic(&empty)
+        .as_ref()
+        .expect("Java Topic parent exists even when inherited fields are absent");
+    assert!(empty_topic.lo.is_none());
+    assert!(empty_topic.rpc_request_header.is_some());
+    assert_eq!(empty.encode_capability(), HeaderEncodeCapability::MapOnly);
+}
+
+#[test]
+fn topic_queue_headers_preserve_nested_java_inheritance_and_defaults() {
+    assert_topic_queue_envelope_contract::<GetMaxOffsetRequestHeader>(
+        &[
+            ("topic", "topic-max"),
+            ("queueId", "2147483647"),
+            ("committed", "false"),
+        ],
+        &["topic", "queueId"],
+        |header| &header.topic_request_header,
+    );
+    assert_topic_queue_envelope_contract::<GetMinOffsetRequestHeader>(
+        &[("topic", "topic-min"), ("queueId", "-2147483648")],
+        &["topic", "queueId"],
+        |header| &header.topic_request_header,
+    );
+    assert_topic_queue_envelope_contract::<GetEarliestMsgStoretimeRequestHeader>(
+        &[("topic", "topic-earliest"), ("queueId", "0")],
+        &["topic", "queueId"],
+        |header| &header.topic_request_header,
+    );
+
+    let max_without_committed = HeaderMap::from([("topic".into(), "topic-max".into()), ("queueId".into(), "0".into())]);
+    let typed = <GetMaxOffsetRequestHeader as HeaderCodec>::decode_from_map(&max_without_committed)
+        .expect("missing committed uses the Java true default");
+    let legacy = <GetMaxOffsetRequestHeader as FromMap>::from(&max_without_committed)
+        .expect("legacy adapter uses the Java true default");
+    assert!(typed.committed);
+    assert!(legacy.committed);
+
+    let mut malformed = max_without_committed;
+    malformed.insert("committed".into(), "not-a-bool".into());
+    assert!(matches!(
+        <GetMaxOffsetRequestHeader as HeaderCodec>::decode_from_map(&malformed),
+        Err(HeaderCodecError::InvalidValue { key: "committed", .. })
+    ));
+    assert!(<GetMaxOffsetRequestHeader as FromMap>::from(&malformed).is_err());
 }
 
 #[test]
