@@ -82,8 +82,16 @@ pub trait HeaderCodec: Sized {
     /// Returns whether this header or a flattened child owns a source field.
     #[inline]
     fn contains_any_field_source(source: &dyn HeaderFieldSource) -> bool {
-        let map = source.to_header_map();
-        Self::contains_any_field(&map)
+        let mut contains = false;
+        source.visit_fields_while(&mut |key, _value| {
+            if Self::contains_wire_key(key) {
+                contains = true;
+                false
+            } else {
+                true
+            }
+        });
+        contains
     }
 
     /// Estimates the encoded ROCKETMQ extension-field payload length.

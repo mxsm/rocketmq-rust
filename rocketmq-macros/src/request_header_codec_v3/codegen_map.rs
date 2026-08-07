@@ -16,9 +16,12 @@ use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote};
 
 use super::model::{
-    AliasConflict, FieldModel, FlattenPresence, HeaderModel, HeaderRange, LookupPlan, MissingPolicy, ValueKind,
-    WireName,
+    AliasConflict, FieldModel, FlattenPresence, HeaderModel, HeaderRange, MissingPolicy, ValueKind, WireName,
 };
+
+// Keep small flat decoders at the production call site without duplicating
+// larger or recursively flattened state machines in every compatibility shim.
+const MAX_ALWAYS_INLINE_SOURCE_FIELDS: usize = 6;
 
 pub(super) fn context_declarations(model: &HeaderModel) -> TokenStream {
     let protocol_path = &model.protocol_path;
@@ -66,10 +69,15 @@ pub(super) fn codec_items(model: &HeaderModel, codec_trait: &TokenStream) -> Tok
     let source_type = quote!(#protocol_path::protocol::header_codec::HeaderFieldSource);
     let validate = validation_body(model, &error_type);
     let encode = encode_body(model, codec_trait, protocol_path);
-    let decode = decode_body(model, codec_trait, &error_type, protocol_path);
     let decode_source = decode_source_body(model, codec_trait, &error_type, protocol_path);
-    let contains = contains_body(model, codec_trait);
-    let contains_source = contains_source_body(codec_trait);
+    let decode_source_inline = if model.fast
+        && !model.fields.iter().any(|field| field.flattened)
+        && model.fields.len() <= MAX_ALWAYS_INLINE_SOURCE_FIELDS
+    {
+        quote!(#[inline(always)])
+    } else {
+        quote!(#[inline])
+    };
     let len_hint = len_hint_body(model, codec_trait, protocol_path);
 
     quote! {
@@ -88,22 +96,17 @@ pub(super) fn codec_items(model: &HeaderModel, codec_trait: &TokenStream) -> Tok
 
         #[inline]
         fn decode_from_map(map: &#map_type) -> Result<Self, #error_type> {
-            #decode
+            <Self as #codec_trait>::decode_from_source(map)
         }
 
-        #[inline]
+        #decode_source_inline
         fn decode_from_source(source: &dyn #source_type) -> Result<Self, #error_type> {
             #decode_source
         }
 
         #[inline]
         fn contains_any_field(map: &#map_type) -> bool {
-            #contains
-        }
-
-        #[inline]
-        fn contains_any_field_source(source: &dyn #source_type) -> bool {
-            #contains_source
+            <Self as #codec_trait>::contains_any_field_source(map)
         }
 
         #[inline]
@@ -212,65 +215,6 @@ fn range_check(field: &FieldModel, protocol_path: &syn::Path, value: TokenStream
     }
 }
 
-fn decode_body(
-    model: &HeaderModel,
-    codec_trait: &TokenStream,
-    error_type: &TokenStream,
-    protocol_path: &syn::Path,
-) -> TokenStream {
-    let scalar_count = model.fields.iter().filter(|field| !field.flattened).count();
-    let has_flatten = model.fields.iter().any(|field| field.flattened);
-    let scan = match model.lookup {
-        LookupPlan::Scan => true,
-        LookupPlan::Get => false,
-        LookupPlan::Auto => !has_flatten && scalar_count >= 4,
-    };
-
-    let scalar_fields: Vec<_> = model.fields.iter().filter(|field| !field.flattened).collect();
-    let local_declarations = scalar_fields.iter().map(|field| {
-        let local = raw_ident(field);
-        quote!(let mut #local = None;)
-    });
-    let lookup = if scan {
-        let arms = scalar_fields
-            .iter()
-            .flat_map(|field| candidate_arms(field, error_type, codec_trait));
-        quote! {
-            for (key, value) in map {
-                let value = value.as_str();
-                match key.as_str() {
-                    #(#arms)*
-                    _ => {}
-                }
-            }
-        }
-    } else {
-        let lookups = scalar_fields
-            .iter()
-            .flat_map(|field| candidate_lookups(field, error_type, codec_trait));
-        quote!(#(#lookups)*)
-    };
-    let normalize_locals = scalar_fields.iter().map(|field| {
-        let local = raw_ident(field);
-        quote!(let #local = #local.map(|(value, _precedence)| value);)
-    });
-    let construct_fields = model
-        .fields
-        .iter()
-        .map(|field| construct_field(field, codec_trait, error_type, protocol_path, DecodeInput::Map));
-
-    quote! {
-        #(#local_declarations)*
-        #lookup
-        #(#normalize_locals)*
-        let header = Self {
-            #(#construct_fields)*
-        };
-        <Self as #codec_trait>::validate_for_wire(&header)?;
-        Ok(header)
-    }
-}
-
 fn decode_source_body(
     model: &HeaderModel,
     codec_trait: &TokenStream,
@@ -291,7 +235,7 @@ fn decode_source_body(
     let construct_fields = model
         .fields
         .iter()
-        .map(|field| construct_field(field, codec_trait, error_type, protocol_path, DecodeInput::Source));
+        .map(|field| construct_field(field, codec_trait, error_type, protocol_path));
 
     quote! {
         #(#candidate_declarations)*
@@ -309,37 +253,6 @@ fn decode_source_body(
         <Self as #codec_trait>::validate_for_wire(&header)?;
         Ok(header)
     }
-}
-
-#[derive(Clone, Copy)]
-enum DecodeInput {
-    Map,
-    Source,
-}
-
-fn candidate_arms(field: &FieldModel, error_type: &TokenStream, codec_trait: &TokenStream) -> Vec<TokenStream> {
-    field_candidates(field)
-        .map(|(name, precedence)| {
-            let name = literal(&name.value, name.span);
-            let update = candidate_update(field, error_type, codec_trait, precedence);
-            quote!(#name => { #update })
-        })
-        .collect()
-}
-
-fn candidate_lookups(field: &FieldModel, error_type: &TokenStream, codec_trait: &TokenStream) -> Vec<TokenStream> {
-    field_candidates(field)
-        .map(|(name, precedence)| {
-            let name = literal(&name.value, name.span);
-            let update = candidate_update(field, error_type, codec_trait, precedence);
-            quote! {
-                if let Some(value) = map.get(#name) {
-                    let value = value.as_str();
-                    #update
-                }
-            }
-        })
-        .collect()
 }
 
 fn source_candidate_arms(field: &FieldModel) -> Vec<TokenStream> {
@@ -404,68 +317,17 @@ fn field_candidates(field: &FieldModel) -> impl Iterator<Item = (&WireName, u16)
     )
 }
 
-fn candidate_update(
-    field: &FieldModel,
-    error_type: &TokenStream,
-    codec_trait: &TokenStream,
-    precedence: u16,
-) -> TokenStream {
-    let local = raw_ident(field);
-    let key = literal(&field.key.value, field.key.span);
-    let conflict_header = quote!(<Self as #codec_trait>::TYPE_ID);
-    let conflict = quote! {
-        return Err(#error_type::Conflict {
-                header: #conflict_header,
-                key: #key,
-        });
-    };
-    match field.alias_conflict {
-        AliasConflict::Error => quote! {
-            match #local {
-                None => #local = Some((value, #precedence)),
-                Some((_selected, selected_precedence)) if #precedence == selected_precedence => {
-                    #local = Some((value, #precedence));
-                }
-                Some((selected, selected_precedence)) => {
-                    if selected != value {
-                        #conflict
-                    }
-                    if #precedence < selected_precedence {
-                        #local = Some((value, #precedence));
-                    }
-                }
-            }
-        },
-        AliasConflict::PreferCanonical => quote! {
-            match #local {
-                None => #local = Some((value, #precedence)),
-                Some((_selected, selected_precedence)) if #precedence <= selected_precedence => {
-                    #local = Some((value, #precedence));
-                }
-                Some(_) => {}
-            }
-        },
-    }
-}
-
 fn construct_field(
     field: &FieldModel,
     codec_trait: &TokenStream,
     error_type: &TokenStream,
     protocol_path: &syn::Path,
-    input: DecodeInput,
 ) -> TokenStream {
     let ident = &field.ident;
     if field.flattened {
         let base_type = field.option_inner.as_ref().unwrap_or(&field.ty);
-        let decode = match input {
-            DecodeInput::Map => quote!(<#base_type as #codec_trait>::decode_from_map(map)),
-            DecodeInput::Source => quote!(<#base_type as #codec_trait>::decode_from_source(source)),
-        };
-        let contains = match input {
-            DecodeInput::Map => quote!(<#base_type as #codec_trait>::contains_any_field(map)),
-            DecodeInput::Source => quote!(<#base_type as #codec_trait>::contains_any_field_source(source)),
-        };
+        let decode = quote!(<#base_type as #codec_trait>::decode_from_source(source));
+        let contains = quote!(<#base_type as #codec_trait>::contains_any_field_source(source));
         return if field.option_inner.is_some() {
             match field.flatten_presence.unwrap_or(FlattenPresence::Always) {
                 FlattenPresence::Always => quote!(#ident: Some(#decode?),),
@@ -516,36 +378,6 @@ fn construct_field(
                 None => #path(),
             },
         },
-    }
-}
-
-fn contains_body(model: &HeaderModel, codec_trait: &TokenStream) -> TokenStream {
-    let checks = model.fields.iter().map(|field| {
-        if field.flattened {
-            let base_type = field.option_inner.as_ref().unwrap_or(&field.ty);
-            quote!(<#base_type as #codec_trait>::contains_any_field(map))
-        } else {
-            let names = std::iter::once(&field.key)
-                .chain(field.aliases.iter())
-                .map(|name| literal(&name.value, name.span));
-            quote!(false #(|| map.contains_key(#names))*)
-        }
-    });
-    quote!(false #(|| #checks)*)
-}
-
-fn contains_source_body(codec_trait: &TokenStream) -> TokenStream {
-    quote! {
-        let mut contains = false;
-        source.visit_fields_while(&mut |key, _value| {
-            if <Self as #codec_trait>::contains_wire_key(key) {
-                contains = true;
-                false
-            } else {
-                true
-            }
-        });
-        contains
     }
 }
 
