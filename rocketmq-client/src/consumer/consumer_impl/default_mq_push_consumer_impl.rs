@@ -830,9 +830,7 @@ impl DefaultMQPushConsumerImpl {
             info!("the pull request[{}] is dropped.", pull_request);
             return;
         }
-        pull_request.process_queue.set_last_pull_timestamp(get_current_millis());
         if let Err(e) = self.make_sure_state_ok() {
-            warn!("pullMessage exception, consumer state not ok {}", e);
             if !self.is_terminal_state() {
                 self.execute_pull_request_later(pull_request, self.pull_time_delay_mills_when_exception);
             }
@@ -974,6 +972,11 @@ impl DefaultMQPushConsumerImpl {
             self.execute_pull_request_later(pull_request, self.pull_time_delay_mills_when_exception);
             return;
         }
+        // Update liveness timestamp only after passing all flow-control checks and just before
+        // issuing the actual broker pull.  Updating it on entry (as it was before) caused every
+        // 50 ms flow-control retry to refresh the timestamp, preventing is_pull_expired() from
+        // ever triggering rebalance recovery (F1 in plan/29).
+        pull_request.process_queue.set_last_pull_timestamp(get_current_millis());
         let begin_timestamp = Instant::now();
         let topic = message_queue.get_topic().to_string();
 

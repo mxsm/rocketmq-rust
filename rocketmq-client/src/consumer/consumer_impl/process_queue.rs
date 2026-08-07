@@ -518,4 +518,26 @@ mod tests {
 
         assert_eq!(pq.msg_count(), 0, "all messages must be removed");
     }
+
+    #[test]
+    fn fill_process_queue_info_reflects_queue_state() {
+        let pq = ProcessQueue::new();
+        pq.msg_count.store(5, std::sync::atomic::Ordering::Release);
+        pq.msg_size.store(1024 * 1024 * 3, std::sync::atomic::Ordering::Release);
+        pq.queue_offset_max.store(20, std::sync::atomic::Ordering::Release);
+        pq.locked.store(true, std::sync::atomic::Ordering::Release);
+        pq.dropped.store(false, std::sync::atomic::Ordering::Release);
+        pq.last_pull_timestamp.store(1_000, std::sync::atomic::Ordering::Release);
+        pq.last_consume_timestamp.store(900, std::sync::atomic::Ordering::Release);
+
+        let info = pq.fill_process_queue_info(10);
+        assert_eq!(info.commit_offset, 10);
+        assert_eq!(info.cached_msg_count, 5);
+        assert_eq!(info.cached_msg_size_in_mib, 3);
+        assert_eq!(info.cached_msg_max_offset, 20);
+        assert!(info.locked);
+        assert!(!info.droped);
+        assert_eq!(info.last_pull_timestamp, 1_000);
+        assert_eq!(info.last_consume_timestamp, 900);
+    }
 }
