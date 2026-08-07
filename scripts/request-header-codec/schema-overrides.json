@@ -99,6 +99,28 @@
         "rust": "rocketmq-protocol/src/protocol/header/get_lite_group_info_request_header.rs",
         "java": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/GetLiteGroupInfoRequestHeader.java"
       }
+    },
+    {
+      "rustType": "GetConsumeStatsRequestHeader",
+      "field": "topic",
+      "semantic": "literal:",
+      "owner": "rocketmq-rust protocol maintainers",
+      "reason": "Preserves the public non-optional Rust field while accepting a Java frame that omits the nullable topic",
+      "referenceSource": {
+        "rust": "rocketmq-protocol/src/protocol/header/get_consume_stats_request_header.rs",
+        "java": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/GetConsumeStatsRequestHeader.java"
+      }
+    },
+    {
+      "rustType": "QuerySubscriptionByConsumerRequestHeader",
+      "field": "topic",
+      "semantic": "literal:",
+      "owner": "rocketmq-rust protocol maintainers",
+      "reason": "Preserves the public non-optional Rust field while accepting a Java frame that omits the nullable topic",
+      "referenceSource": {
+        "rust": "rocketmq-protocol/src/protocol/header/query_subscription_by_consumer_request_header.rs",
+        "java": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/QuerySubscriptionByConsumerRequestHeader.java"
+      }
     }
   ],
   "nameMappings": [
