@@ -8,10 +8,10 @@
     "entryCount": 152,
     "mappedCount": 143,
     "rustOnlyExtensionCount": 9,
-    "v2Count": 116,
-    "v3Count": 36,
-    "pendingCount": 116,
-    "migratedCount": 36
+    "v2Count": 112,
+    "v3Count": 40,
+    "pendingCount": 112,
+    "migratedCount": 40
   },
   "baseline": {
     "v2TypeIds": [
@@ -174,6 +174,7 @@
       }
     },
     "acceptedV3TypeIds": [
+      "rocketmq_protocol::protocol::header::check_rocksdb_cq_write_progress_request_header::CheckRocksdbCqWriteProgressRequestHeader",
       "rocketmq_protocol::protocol::header::check_transaction_state_request_header::CheckTransactionStateRequestHeader",
       "rocketmq_protocol::protocol::header::clone_group_offset_request_header::CloneGroupOffsetRequestHeader",
       "rocketmq_protocol::protocol::header::consume_message_directly_result_request_header::ConsumeMessageDirectlyResultRequestHeader",
@@ -187,6 +188,8 @@
       "rocketmq_protocol::protocol::header::get_consumer_running_info_request_header::GetConsumerRunningInfoRequestHeader",
       "rocketmq_protocol::protocol::header::get_consumer_status_request_header::GetConsumerStatusRequestHeader",
       "rocketmq_protocol::protocol::header::get_lite_client_info_request_header::GetLiteClientInfoRequestHeader",
+      "rocketmq_protocol::protocol::header::get_lite_group_info_request_header::GetLiteGroupInfoRequestHeader",
+      "rocketmq_protocol::protocol::header::get_parent_topic_info_request_header::GetParentTopicInfoRequestHeader",
       "rocketmq_protocol::protocol::header::get_producer_connection_list_request_header::GetProducerConnectionListRequestHeader",
       "rocketmq_protocol::protocol::header::get_subscription_group_config_request_header::GetSubscriptionGroupConfigRequestHeader",
       "rocketmq_protocol::protocol::header::heartbeat_request_header::HeartbeatRequestHeader",
@@ -200,6 +203,7 @@
       "rocketmq_protocol::protocol::header::notification_request_header::NotificationRequestHeader",
       "rocketmq_protocol::protocol::header::notify_consumer_ids_changed_request_header::NotifyConsumerIdsChangedRequestHeader",
       "rocketmq_protocol::protocol::header::notify_unsubscribe_lite_request_header::NotifyUnsubscribeLiteRequestHeader",
+      "rocketmq_protocol::protocol::header::pop_lite_message_request_header::PopLiteMessageRequestHeader",
       "rocketmq_protocol::protocol::header::pull_message_request_header::PullMessageRequestHeader",
       "rocketmq_protocol::protocol::header::pull_message_response_header::PullMessageResponseHeader",
       "rocketmq_protocol::protocol::header::query_consume_queue_request_header::QueryConsumeQueueRequestHeader",
@@ -535,16 +539,16 @@
       "baselineCodec": "v2",
       "v2AtBaseline": true,
       "legacyV2Exception": null,
-      "currentCodec": "v2",
+      "currentCodec": "v3",
       "flattenDepth": 1,
       "flattenTypeIds": [
         "rocketmq_protocol::rpc::rpc_request_header::RpcRequestHeader"
       ],
       "fastCodec": false,
       "risk": "tier2",
-      "wave": "B",
+      "wave": "A",
       "owner": "remoting",
-      "status": "pending",
+      "status": "migrated",
       "extensionDecision": null
     },
     {
@@ -1576,16 +1580,16 @@
       "baselineCodec": "v2",
       "v2AtBaseline": true,
       "legacyV2Exception": null,
-      "currentCodec": "v2",
+      "currentCodec": "v3",
       "flattenDepth": 1,
       "flattenTypeIds": [
         "rocketmq_protocol::rpc::rpc_request_header::RpcRequestHeader"
       ],
       "fastCodec": false,
       "risk": "tier2",
-      "wave": "B",
+      "wave": "A",
       "owner": "remoting",
-      "status": "pending",
+      "status": "migrated",
       "extensionDecision": null
     },
     {
@@ -1719,16 +1723,16 @@
       "baselineCodec": "v2",
       "v2AtBaseline": true,
       "legacyV2Exception": null,
-      "currentCodec": "v2",
+      "currentCodec": "v3",
       "flattenDepth": 1,
       "flattenTypeIds": [
         "rocketmq_protocol::rpc::rpc_request_header::RpcRequestHeader"
       ],
       "fastCodec": false,
       "risk": "tier2",
-      "wave": "B",
+      "wave": "A",
       "owner": "remoting",
-      "status": "pending",
+      "status": "migrated",
       "extensionDecision": null
     },
     {
@@ -2714,16 +2718,16 @@
       "baselineCodec": "v2",
       "v2AtBaseline": true,
       "legacyV2Exception": null,
-      "currentCodec": "v2",
+      "currentCodec": "v3",
       "flattenDepth": 1,
       "flattenTypeIds": [
         "rocketmq_protocol::rpc::rpc_request_header::RpcRequestHeader"
       ],
       "fastCodec": false,
       "risk": "tier2",
-      "wave": "B",
+      "wave": "A",
       "owner": "remoting",
-      "status": "pending",
+      "status": "migrated",
       "extensionDecision": null
     },
     {

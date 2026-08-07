@@ -15,32 +15,37 @@
 use std::fmt::Display;
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::rpc::rpc_request_header::RpcRequestHeader;
 
-#[derive(Clone, Debug, Serialize, Deserialize, RequestHeaderCodecV2)]
+#[derive(Clone, Debug, Serialize, Deserialize, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::pop_lite_message_request_header::PopLiteMessageRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.PopLiteMessageRequestHeader"
+)]
 #[serde(rename_all = "camelCase")]
 pub struct PopLiteMessageRequestHeader {
-    #[required]
+    #[header(required)]
     pub client_id: CheetahString,
-    #[required]
+    #[header(required)]
     pub consumer_group: CheetahString,
-    #[required]
+    #[header(required)]
     pub topic: CheetahString,
-    #[required]
+    #[header(required)]
     pub max_msg_num: i32,
-    #[required]
+    #[header(required)]
     pub invisible_time: i64,
-    #[required]
+    #[header(required)]
     pub poll_time: i64,
-    #[required]
+    #[header(required)]
     pub born_time: i64,
     pub attempt_id: Option<CheetahString>,
 
     #[serde(flatten)]
+    #[header(flatten, presence = "always")]
     pub rpc: Option<RpcRequestHeader>,
 }
 
