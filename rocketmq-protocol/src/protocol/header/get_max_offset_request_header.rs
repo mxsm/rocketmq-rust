@@ -13,25 +13,36 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::protocol::header::message_operation_header::TopicRequestHeaderTrait;
 use crate::rpc::topic_request_header::TopicRequestHeader;
 
-#[derive(Debug, Clone, Serialize, Deserialize, RequestHeaderCodecV2)]
+const fn default_committed() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::get_max_offset_request_header::GetMaxOffsetRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.GetMaxOffsetRequestHeader"
+)]
 #[serde(rename_all = "camelCase")]
 pub struct GetMaxOffsetRequestHeader {
-    #[required]
+    #[header(required)]
     pub topic: CheetahString,
 
-    #[required]
+    #[header(required)]
     pub queue_id: i32,
 
+    #[serde(default = "default_committed")]
+    #[header(default_with = "default_committed", default_semantic = "literal:true")]
     pub committed: bool,
 
     #[serde(flatten)]
+    #[header(flatten, presence = "always")]
     pub topic_request_header: Option<TopicRequestHeader>,
 }
 
