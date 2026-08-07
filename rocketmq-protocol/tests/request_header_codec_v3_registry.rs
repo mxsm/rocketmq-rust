@@ -24,6 +24,8 @@ use rocketmq_protocol::protocol::header::controller::clean_broker_data_request_h
 use rocketmq_protocol::protocol::header::create_topic_list_request_header::CreateTopicListRequestHeader;
 use rocketmq_protocol::protocol::header::get_consumer_status_request_header::GetConsumerStatusRequestHeader;
 use rocketmq_protocol::protocol::header::get_lite_client_info_request_header::GetLiteClientInfoRequestHeader;
+use rocketmq_protocol::protocol::header::heartbeat_request_header::HeartbeatRequestHeader;
+use rocketmq_protocol::protocol::header::lite_subscription_ctl_request_header::LiteSubscriptionCtlRequestHeader;
 use rocketmq_protocol::protocol::header::lock_batch_mq_request_header::LockBatchMqRequestHeader;
 use rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
 use rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2;
@@ -179,6 +181,8 @@ fn registry() -> Vec<RegisteredSchema> {
         register::<CreateTopicListRequestHeader>(),
         register::<GetConsumerStatusRequestHeader>(),
         register::<GetLiteClientInfoRequestHeader>(),
+        register::<HeartbeatRequestHeader>(),
+        register::<LiteSubscriptionCtlRequestHeader>(),
         register::<LockBatchMqRequestHeader>(),
         register::<SendMessageRequestHeader>(),
         register::<DeleteTopicFromNamesrvRequestHeader>(),
@@ -460,6 +464,8 @@ where
 #[test]
 fn rpc_envelope_headers_preserve_java_inheritance_and_legacy_aliases() {
     assert_rpc_envelope_contract::<CreateTopicListRequestHeader>(|header| &header.rpc_request_header);
+    assert_rpc_envelope_contract::<HeartbeatRequestHeader>(|header| &header.rpc_request);
+    assert_rpc_envelope_contract::<LiteSubscriptionCtlRequestHeader>(|header| &header.rpc_request_header);
     assert_rpc_envelope_contract::<LockBatchMqRequestHeader>(|header| &header.rpc_request_header);
     assert_rpc_envelope_contract::<UnlockBatchMqRequestHeader>(|header| &header.rpc_request_header);
 }
