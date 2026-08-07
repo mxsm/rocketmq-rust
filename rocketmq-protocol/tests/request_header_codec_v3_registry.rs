@@ -731,6 +731,100 @@ fn typed_schemas_preserve_java_send_fast_contracts() {
     assert_eq!(fast_response.to_map(), Some(typed_response_map));
 }
 
+fn assert_send_numeric_overflow_is_rejected<T>(base: &HeaderMap, cases: &[(&'static str, &'static str)])
+where
+    T: HeaderCodec + FromMap + std::fmt::Debug,
+{
+    for &(key, value) in cases {
+        let mut overflow = base.clone();
+        overflow.insert(key.into(), value.into());
+
+        let error = <T as HeaderCodec>::decode_from_map(&overflow).unwrap_err();
+        assert!(
+            matches!(error, HeaderCodecError::InvalidValue { key: actual, .. } if actual == key),
+            "{key} must reject a value above its Java/Rust signed limit: {error}"
+        );
+        assert!(
+            <T as FromMap>::from(&overflow).is_err(),
+            "the legacy adapter must reject the same overflow for {key}"
+        );
+    }
+}
+
+#[test]
+fn send_headers_accept_signed_maxima_and_reject_limit_plus_one() {
+    let v1 = SendMessageRequestHeader {
+        producer_group: "producer-a".into(),
+        topic: "topic-a".into(),
+        default_topic: "TBW102".into(),
+        default_topic_queue_nums: i32::MAX,
+        queue_id: i32::MAX,
+        sys_flag: i32::MAX,
+        born_timestamp: i64::MAX,
+        flag: i32::MAX,
+        properties: None,
+        reconsume_times: Some(i32::MAX),
+        unit_mode: None,
+        batch: None,
+        max_reconsume_times: Some(i32::MAX),
+        topic_request_header: None,
+    };
+    let v1_map = v1.to_map().unwrap();
+    let decoded_v1 = <SendMessageRequestHeader as HeaderCodec>::decode_from_map(&v1_map).unwrap();
+    assert_eq!(decoded_v1.to_map(), Some(v1_map.clone()));
+    let mut v1_binary = BytesMut::new();
+    CommandCustomHeader::encode_direct_binary(&v1, &mut v1_binary).unwrap();
+    assert!(!v1_binary.is_empty());
+    assert_send_numeric_overflow_is_rejected::<SendMessageRequestHeader>(
+        &v1_map,
+        &[
+            ("defaultTopicQueueNums", "2147483648"),
+            ("queueId", "2147483648"),
+            ("sysFlag", "2147483648"),
+            ("bornTimestamp", "9223372036854775808"),
+            ("flag", "2147483648"),
+            ("reconsumeTimes", "2147483648"),
+            ("maxReconsumeTimes", "2147483648"),
+        ],
+    );
+
+    let v2 = SendMessageRequestHeaderV2 {
+        a: "producer-a".into(),
+        b: "topic-a".into(),
+        c: "TBW102".into(),
+        d: i32::MAX,
+        e: i32::MAX,
+        f: i32::MAX,
+        g: i64::MAX,
+        h: i32::MAX,
+        i: None,
+        j: Some(i32::MAX),
+        k: None,
+        l: Some(i32::MAX),
+        m: None,
+        n: None,
+        topic_request_header: None,
+    };
+    let v2_map = v2.to_map().unwrap();
+    let decoded_v2 = <SendMessageRequestHeaderV2 as HeaderCodec>::decode_from_map(&v2_map).unwrap();
+    assert_eq!(decoded_v2.to_map(), Some(v2_map.clone()));
+    let mut v2_binary = BytesMut::new();
+    CommandCustomHeader::encode_direct_binary(&v2, &mut v2_binary).unwrap();
+    assert!(!v2_binary.is_empty());
+    assert_send_numeric_overflow_is_rejected::<SendMessageRequestHeaderV2>(
+        &v2_map,
+        &[
+            ("d", "2147483648"),
+            ("e", "2147483648"),
+            ("f", "2147483648"),
+            ("g", "9223372036854775808"),
+            ("h", "2147483648"),
+            ("j", "2147483648"),
+            ("l", "2147483648"),
+        ],
+    );
+}
+
 #[test]
 fn unsigned_fast_header_fields_enforce_inferred_java_ranges() {
     let request = PullMessageRequestHeader {

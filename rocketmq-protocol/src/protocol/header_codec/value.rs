@@ -90,6 +90,9 @@ pub trait HeaderValue: Sealed + Sized {
     /// Static value category used by generated schemas and diagnostics.
     const KIND: HeaderValueKind;
 
+    /// Whether every value of this type fits Java's signed 32-bit wire length.
+    const ALWAYS_FITS_WIRE_LENGTH: bool = false;
+
     /// Produces the owned value required by a [`crate::HeaderMap`].
     fn to_map_value(&self) -> CheetahString;
 
@@ -176,6 +179,7 @@ impl Sealed for CheetahString {}
 
 impl HeaderValue for CheetahString {
     const KIND: HeaderValueKind = HeaderValueKind::String;
+    const ALWAYS_FITS_WIRE_LENGTH: bool = false;
 
     #[inline]
     fn to_map_value(&self) -> CheetahString {
@@ -207,6 +211,7 @@ impl Sealed for String {}
 
 impl HeaderValue for String {
     const KIND: HeaderValueKind = HeaderValueKind::String;
+    const ALWAYS_FITS_WIRE_LENGTH: bool = false;
 
     #[inline]
     fn to_map_value(&self) -> CheetahString {
@@ -238,6 +243,7 @@ impl Sealed for bool {}
 
 impl HeaderValue for bool {
     const KIND: HeaderValueKind = HeaderValueKind::Bool;
+    const ALWAYS_FITS_WIRE_LENGTH: bool = true;
 
     #[inline]
     fn to_map_value(&self) -> CheetahString {
@@ -276,6 +282,7 @@ macro_rules! impl_signed_header_value {
 
         impl HeaderValue for $ty {
             const KIND: HeaderValueKind = HeaderValueKind::$kind;
+            const ALWAYS_FITS_WIRE_LENGTH: bool = true;
 
             #[inline]
             fn to_map_value(&self) -> CheetahString {
@@ -308,6 +315,7 @@ macro_rules! impl_unsigned_header_value {
 
         impl HeaderValue for $ty {
             const KIND: HeaderValueKind = HeaderValueKind::$kind;
+            const ALWAYS_FITS_WIRE_LENGTH: bool = true;
 
             #[inline]
             fn to_map_value(&self) -> CheetahString {
@@ -345,6 +353,7 @@ impl Sealed for BoundaryType {}
 
 impl HeaderValue for BoundaryType {
     const KIND: HeaderValueKind = HeaderValueKind::BoundaryType;
+    const ALWAYS_FITS_WIRE_LENGTH: bool = true;
 
     #[inline]
     fn to_map_value(&self) -> CheetahString {

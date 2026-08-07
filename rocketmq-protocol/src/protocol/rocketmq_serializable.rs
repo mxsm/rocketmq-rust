@@ -21,6 +21,7 @@ use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
 
+use crate::protocol::command_custom_header::CommandCustomHeader;
 use crate::protocol::command_custom_header::HeaderEncodeCapability;
 use crate::protocol::header_codec::BinaryHeaderFields;
 use crate::protocol::header_codec::HeaderCodecError;
@@ -56,7 +57,7 @@ fn sorted_ext_fields(map: &HashMap<CheetahString, CheetahString>) -> Vec<(&Cheet
 pub struct RocketMQSerializable;
 
 impl RocketMQSerializable {
-    pub(crate) const INITIAL_ENCODE_CAPACITY: usize = 512;
+    pub(crate) const INITIAL_ENCODE_CAPACITY: usize = 256;
 
     #[inline]
     fn estimated_map_capacity(encoded_len: usize) -> usize {
@@ -218,6 +219,34 @@ impl RocketMQSerializable {
         Ok(buf.len() - begin_index)
     }
 
+    /// Encodes the common direct-header shape without map materialization or
+    /// collision checks. Callers must establish that no remark or dynamic
+    /// extension fields are present.
+    pub(crate) fn try_rocketmq_protocol_encode_direct(
+        cmd: &RemotingCommand,
+        header: &dyn CommandCustomHeader,
+        buf: &mut BytesMut,
+    ) -> Result<usize, HeaderCodecError> {
+        const FIXED_HEADER_LENGTH: usize = 21;
+        const EXT_FIELDS_LENGTH_OFFSET: usize = 17;
+
+        let begin_index = buf.len();
+        let mut fixed = [0u8; FIXED_HEADER_LENGTH];
+        fixed[..2].copy_from_slice(&(cmd.code() as u16).to_be_bytes());
+        fixed[2] = cmd.language().get_code();
+        fixed[3..5].copy_from_slice(&(cmd.version() as u16).to_be_bytes());
+        fixed[5..9].copy_from_slice(&cmd.opaque().to_be_bytes());
+        fixed[9..13].copy_from_slice(&cmd.flag().to_be_bytes());
+        buf.extend_from_slice(&fixed);
+
+        header.encode_direct_binary(buf)?;
+
+        let ext_fields_length = Self::checked_ext_fields_length(buf.len() - begin_index - FIXED_HEADER_LENGTH)?;
+        let map_len_index = begin_index + EXT_FIELDS_LENGTH_OFFSET;
+        buf[map_len_index..map_len_index + 4].copy_from_slice(&ext_fields_length.to_be_bytes());
+        Ok(buf.len() - begin_index)
+    }
+
     #[inline]
     fn write_ext_fields(
         buf: &mut BytesMut,
@@ -358,46 +387,86 @@ impl RocketMQSerializable {
         header_buffer: &mut BytesMut,
         header_len: usize,
     ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
+        let available = header_buffer.remaining();
+        if available < header_len {
+            return Err(decoding_error(header_len, available));
+        }
+        if available > header_len {
+            return Err(trailing_header_error(available - header_len));
+        }
+        Self::rocket_mq_protocol_decode_bytes(header_buffer.split().freeze())
+    }
+
+    /// Decodes an immutable ROCKETMQ header without intermediate buffer splits.
+    pub(crate) fn rocket_mq_protocol_decode_bytes(header: Bytes) -> rocketmq_error::RocketMQResult<RemotingCommand> {
         const FIXED_HEADER_LEN: usize = 13;
         const LENGTH_FIELD_LEN: usize = 4;
 
-        if header_buffer.remaining() < FIXED_HEADER_LEN {
-            return Err(decoding_error(FIXED_HEADER_LEN, header_buffer.remaining()));
+        if header.len() < FIXED_HEADER_LEN {
+            return Err(decoding_error(FIXED_HEADER_LEN, header.len()));
         }
 
-        let cmd = RemotingCommand::default()
-            .set_code(header_buffer.get_i16())
-            .set_language(LanguageCode::from(header_buffer.get_u8()))
-            .set_version(header_buffer.get_i16() as i32)
-            .set_opaque(header_buffer.get_i32())
-            .set_flag(header_buffer.get_i32());
+        let mut cmd = RemotingCommand::default();
+        cmd.set_code_ref(i16::from_be_bytes([header[0], header[1]]));
+        cmd.set_language_ref(LanguageCode::from(header[2]));
+        cmd.set_version_ref(i16::from_be_bytes([header[3], header[4]]) as i32);
+        cmd.set_opaque_mut(i32::from_be_bytes([header[5], header[6], header[7], header[8]]));
+        cmd.set_flag_ref(i32::from_be_bytes([header[9], header[10], header[11], header[12]]));
 
-        let remark = Self::read_str(header_buffer, false, header_len)?;
-
-        // HashMap<String, String> extFields
-        if header_buffer.remaining() < LENGTH_FIELD_LEN {
-            return Err(decoding_error(LENGTH_FIELD_LEN, header_buffer.remaining()));
+        let mut cursor = FIXED_HEADER_LEN;
+        if header.len() - cursor < LENGTH_FIELD_LEN {
+            return Err(decoding_error(LENGTH_FIELD_LEN, header.len() - cursor));
         }
+        let remark_length = u32::from_be_bytes([
+            header[cursor],
+            header[cursor + 1],
+            header[cursor + 2],
+            header[cursor + 3],
+        ]) as usize;
+        cursor += LENGTH_FIELD_LEN;
+        if remark_length > header.len() - cursor {
+            return Err(decoding_error(remark_length, header.len() - cursor));
+        }
+        let remark = if remark_length == 0 {
+            None
+        } else {
+            let end = cursor + remark_length;
+            let value =
+                CheetahString::try_copy_from_bytes(header.slice(cursor..end)).map_err(|error| error.into_parts().1)?;
+            cursor = end;
+            Some(value)
+        };
 
-        let ext_fields_length = header_buffer.get_i32();
+        if header.len() - cursor < LENGTH_FIELD_LEN {
+            return Err(decoding_error(LENGTH_FIELD_LEN, header.len() - cursor));
+        }
+        let ext_fields_length = i32::from_be_bytes([
+            header[cursor],
+            header[cursor + 1],
+            header[cursor + 2],
+            header[cursor + 3],
+        ]);
+        cursor += LENGTH_FIELD_LEN;
         let payload = if ext_fields_length > 0 {
             let ext_fields_length = ext_fields_length as usize;
-            if ext_fields_length > header_len {
-                return Err(decoding_error(ext_fields_length, header_len));
+            if ext_fields_length > header.len() - cursor {
+                return Err(decoding_error(ext_fields_length, header.len() - cursor));
             }
-            if ext_fields_length > header_buffer.remaining() {
-                return Err(decoding_error(ext_fields_length, header_buffer.remaining()));
-            }
-            header_buffer.split_to(ext_fields_length).freeze()
+            let end = cursor + ext_fields_length;
+            let payload = header.slice(cursor..end);
+            cursor = end;
+            payload
         } else {
             Bytes::new()
         };
-        if header_buffer.has_remaining() {
-            return Err(trailing_header_error(header_buffer.remaining()));
+        if cursor != header.len() {
+            return Err(trailing_header_error(header.len() - cursor));
         }
-        let ext = BinaryHeaderFields::new(payload)?;
 
-        Ok(cmd.set_remark_option(remark).set_binary_ext_fields(ext))
+        let ext = BinaryHeaderFields::new(payload)?;
+        cmd.set_remark_option_mut(remark);
+        cmd.set_binary_ext_fields_ref(ext);
+        Ok(cmd)
     }
 
     /// Optimized map deserialization with capacity hint and better error handling
@@ -618,5 +687,35 @@ mod tests {
         let header_len = buf.len();
 
         assert!(RocketMQSerializable::rocket_mq_protocol_decode(&mut buf, header_len).is_err());
+    }
+
+    #[test]
+    fn bytes_decoder_preserves_remark_and_extension_fields() {
+        let mut buf = BytesMut::new();
+        buf.put_i16(10);
+        buf.put_u8(LanguageCode::RUST.get_code());
+        buf.put_i16(501);
+        buf.put_i32(7);
+        buf.put_i32(1);
+        RocketMQSerializable::write_str(&mut buf, false, "remark");
+        let ext_length_offset = buf.len();
+        buf.put_i32(0);
+        let ext_start = buf.len();
+        buf.put_u16(3);
+        buf.extend_from_slice(b"key");
+        buf.put_i32(5);
+        buf.extend_from_slice(b"value");
+        let ext_length = (buf.len() - ext_start) as i32;
+        buf[ext_length_offset..ext_length_offset + 4].copy_from_slice(&ext_length.to_be_bytes());
+
+        let command = RocketMQSerializable::rocket_mq_protocol_decode_bytes(buf.freeze()).unwrap();
+
+        assert_eq!(command.code(), 10);
+        assert_eq!(command.language(), LanguageCode::RUST);
+        assert_eq!(command.version(), 501);
+        assert_eq!(command.opaque(), 7);
+        assert_eq!(command.flag(), 1);
+        assert_eq!(command.remark().map(CheetahString::as_str), Some("remark"));
+        assert_eq!(command.ext_fields().unwrap().get("key").unwrap(), "value");
     }
 }

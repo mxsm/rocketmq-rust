@@ -53,6 +53,8 @@ impl HeaderFieldSource for HeaderMap {
     }
 }
 
+#[cold]
+#[inline(never)]
 fn malformed_binary_fields(reason: &'static str) -> rocketmq_error::RocketMQError {
     rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
         format: "binary-header-fields",
@@ -74,11 +76,7 @@ pub(crate) struct BinaryHeaderFields {
 impl BinaryHeaderFields {
     /// Validates and retains one complete extension-field payload.
     pub(crate) fn new(payload: Bytes) -> rocketmq_error::RocketMQResult<Self> {
-        let mut entry_count = 0usize;
-        Self::parse(&payload, &mut |_key, _value| {
-            entry_count = entry_count.saturating_add(1);
-            Ok(())
-        })?;
+        let entry_count = Self::validate(&payload)?;
         Ok(Self { payload, entry_count })
     }
 
@@ -100,17 +98,15 @@ impl BinaryHeaderFields {
         }
     }
 
-    fn parse<'a>(
-        payload: &'a [u8],
-        visitor: &mut dyn FnMut(&'a str, &'a str) -> rocketmq_error::RocketMQResult<()>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    fn validate(payload: &[u8]) -> rocketmq_error::RocketMQResult<usize> {
         let mut cursor = 0usize;
+        let mut entry_count = 0usize;
         while cursor < payload.len() {
             let key_length = Self::read_u16(payload, &mut cursor)?;
             if key_length == 0 {
                 return Err(malformed_binary_fields("extension-field key is empty"));
             }
-            let key = Self::read_utf8(payload, &mut cursor, key_length, "truncated extension-field key")?;
+            Self::read_utf8(payload, &mut cursor, key_length, "truncated extension-field key")?;
 
             let value_length = Self::read_i32(payload, &mut cursor)?;
             if value_length < 0 {
@@ -126,10 +122,10 @@ impl BinaryHeaderFields {
             // Java-compatible ROCKETMQ map decoding treats zero-length values
             // as absent rather than storing an empty string.
             if !value.is_empty() {
-                visitor(key, value)?;
+                entry_count = entry_count.saturating_add(1);
             }
         }
-        Ok(())
+        Ok(entry_count)
     }
 
     fn read_u16(payload: &[u8], cursor: &mut usize) -> rocketmq_error::RocketMQResult<usize> {
@@ -147,6 +143,7 @@ impl BinaryHeaderFields {
         Ok(i32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
     }
 
+    #[inline(never)]
     fn read_utf8<'a>(
         payload: &'a [u8],
         cursor: &mut usize,
@@ -154,6 +151,10 @@ impl BinaryHeaderFields {
         truncated_reason: &'static str,
     ) -> rocketmq_error::RocketMQResult<&'a str> {
         let bytes = Self::take(payload, cursor, length, truncated_reason)?;
+        if bytes.is_ascii() {
+            // SAFETY: ASCII is valid UTF-8.
+            return Ok(unsafe { std::str::from_utf8_unchecked(bytes) });
+        }
         std::str::from_utf8(bytes).map_err(|_| malformed_binary_fields("extension-field text is not valid UTF-8"))
     }
 
@@ -200,18 +201,13 @@ struct BinaryHeaderFieldIter<'a> {
 impl<'a> BinaryHeaderFieldIter<'a> {
     #[inline]
     fn take(&mut self, length: usize) -> &'a [u8] {
-        // The only constructor validates every boundary before retaining the
-        // immutable Bytes payload, so failure here would be an internal bug.
-        let end = self
-            .cursor
-            .checked_add(length)
-            .expect("validated binary header field offset overflowed");
-        let bytes = self
-            .payload
-            .get(self.cursor..end)
-            .expect("validated binary header field boundary changed");
+        let start = self.cursor;
+        let end = start + length;
         self.cursor = end;
-        bytes
+        // SAFETY: BinaryHeaderFields::new validates every length and boundary
+        // before retaining this immutable payload. The iterator advances using
+        // exactly the same wire lengths and never exposes mutable access.
+        unsafe { self.payload.get_unchecked(start..end) }
     }
 
     #[inline]
@@ -228,9 +224,10 @@ impl<'a> BinaryHeaderFieldIter<'a> {
 
     #[inline]
     fn read_utf8(&mut self, length: usize) -> &'a str {
-        // UTF-8 validity is established together with the immutable boundary
-        // invariant in BinaryHeaderFields::new.
-        std::str::from_utf8(self.take(length)).expect("validated binary header field UTF-8 changed")
+        let bytes = self.take(length);
+        // SAFETY: BinaryHeaderFields::new validates UTF-8 for every key and
+        // value, and the immutable payload boundaries are preserved by take.
+        unsafe { std::str::from_utf8_unchecked(bytes) }
     }
 }
 
@@ -242,9 +239,7 @@ impl<'a> Iterator for BinaryHeaderFieldIter<'a> {
         while self.cursor < self.payload.len() {
             let key_length = self.read_u16();
             let key = self.read_utf8(key_length);
-            let value_length = self.read_i32();
-            let value_length =
-                usize::try_from(value_length).expect("validated binary header field value length became negative");
+            let value_length = self.read_i32() as usize;
             let value = self.read_utf8(value_length);
             if !value.is_empty() {
                 return Some((key, value));

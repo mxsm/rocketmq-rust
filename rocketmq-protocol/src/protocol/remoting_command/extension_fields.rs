@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
 use std::sync::OnceLock;
 
 use super::BinaryHeaderFields;
@@ -19,48 +20,19 @@ use crate::protocol::header_codec::HeaderFieldSource;
 use crate::protocol::header_codec::JsonHeaderFields;
 use crate::HeaderMap;
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(super) enum ExtensionFields {
     #[default]
     Absent,
     Materialized(HeaderMap),
     RocketMqRaw {
         fields: BinaryHeaderFields,
-        materialized: OnceLock<HeaderMap>,
+        materialized: OnceLock<Arc<HeaderMap>>,
     },
     JsonRaw {
         fields: JsonHeaderFields,
-        materialized: OnceLock<HeaderMap>,
+        materialized: OnceLock<Arc<HeaderMap>>,
     },
-}
-
-impl Clone for ExtensionFields {
-    fn clone(&self) -> Self {
-        match self {
-            Self::Absent => Self::Absent,
-            Self::Materialized(map) => Self::Materialized(map.clone()),
-            Self::RocketMqRaw { fields, materialized } => {
-                let cloned_cache = OnceLock::new();
-                if let Some(map) = materialized.get() {
-                    let _ = cloned_cache.set(map.clone());
-                }
-                Self::RocketMqRaw {
-                    fields: fields.clone(),
-                    materialized: cloned_cache,
-                }
-            }
-            Self::JsonRaw { fields, materialized } => {
-                let cloned_cache = OnceLock::new();
-                if let Some(map) = materialized.get() {
-                    let _ = cloned_cache.set(map.clone());
-                }
-                Self::JsonRaw {
-                    fields: fields.clone(),
-                    materialized: cloned_cache,
-                }
-            }
-        }
-    }
 }
 
 impl ExtensionFields {
@@ -86,8 +58,10 @@ impl ExtensionFields {
         match self {
             Self::Absent => None,
             Self::Materialized(fields) => Some(fields),
-            Self::RocketMqRaw { fields, materialized } => Some(materialized.get_or_init(|| fields.materialize())),
-            Self::JsonRaw { fields, materialized } => Some(materialized.get_or_init(|| fields.materialize())),
+            Self::RocketMqRaw { fields, materialized } => {
+                Some(materialized.get_or_init(|| Arc::new(fields.materialize())))
+            }
+            Self::JsonRaw { fields, materialized } => Some(materialized.get_or_init(|| Arc::new(fields.materialize()))),
         }
     }
 

@@ -199,9 +199,9 @@ where
     match case.operation {
         Operation::Encode => {
             criterion.bench_function(&case.id, |bencher| {
-                bencher.iter_batched(
+                bencher.iter_batched_ref(
                     || fresh_command::<T>(case, &canonical_fields),
-                    |mut command| {
+                    |command| {
                         let mut output = BytesMut::new();
                         command.fast_header_encode(&mut output);
                         black_box(output)
@@ -239,14 +239,14 @@ where
         }
         Operation::Decode => {
             criterion.bench_function(&case.id, |bencher| {
-                bencher.iter_batched(
+                bencher.iter_batched_ref(
                     || BytesMut::from(reference_frame.as_slice()),
-                    |mut input| {
-                        let command = RemotingCommand::decode(&mut input)
+                    |input| {
+                        let command = RemotingCommand::decode(input)
                             .expect("benchmark frame envelope must decode")
                             .expect("benchmark frame must be complete");
                         let header = decode(&command).expect("benchmark typed header must decode");
-                        black_box(header)
+                        black_box((command, header))
                     },
                     BatchSize::SmallInput,
                 );

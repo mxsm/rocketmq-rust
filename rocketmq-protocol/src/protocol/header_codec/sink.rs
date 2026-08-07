@@ -166,24 +166,14 @@ impl EncodeSink for BinarySink<'_> {
             header: context.header,
             key: context.key,
         })?;
-        let value_len_hint = value.encoded_len();
-        if value_len_hint > i32::MAX as usize {
+        if !V::ALWAYS_FITS_WIRE_LENGTH && value.encoded_len() > i32::MAX as usize {
             return Err(HeaderCodecError::ValueLengthOverflow {
                 header: context.header,
                 key: context.key,
             });
         }
 
-        let pair_len = 2usize
-            .checked_add(key.len())
-            .and_then(|len| len.checked_add(4))
-            .and_then(|len| len.checked_add(value_len_hint))
-            .ok_or(HeaderCodecError::ValueLengthOverflow {
-                header: context.header,
-                key: context.key,
-            })?;
         let pair_start = self.out.len();
-        self.out.reserve(pair_len);
         self.out.put_u16(key_len);
         self.out.extend_from_slice(key.as_bytes());
 
@@ -192,7 +182,6 @@ impl EncodeSink for BinarySink<'_> {
         let value_offset = self.out.len();
         value.write_ascii(self.out);
         let actual_value_len = self.out.len() - value_offset;
-        debug_assert_eq!(actual_value_len, value_len_hint);
         let actual_value_len = i32::try_from(actual_value_len).map_err(|_| {
             self.out.truncate(pair_start);
             HeaderCodecError::ValueLengthOverflow {
