@@ -13,26 +13,33 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::rpc::rpc_request_header::RpcRequestHeader;
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::consumer_send_msg_back_request_header::ConsumerSendMsgBackRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.ConsumerSendMsgBackRequestHeader"
+)]
 #[serde(rename_all = "camelCase")]
 pub struct ConsumerSendMsgBackRequestHeader {
-    #[required]
+    #[header(required)]
     pub offset: i64,
-    #[required]
+    #[header(required)]
     pub group: CheetahString, //consumer group
-    #[required]
+    #[header(required)]
     pub delay_level: i32,
     pub origin_msg_id: Option<CheetahString>,
     pub origin_topic: Option<CheetahString>,
+    #[serde(default)]
+    #[header(default, default_semantic = "literal:false")]
     pub unit_mode: bool,
     pub max_reconsume_times: Option<i32>,
     #[serde(flatten)]
+    #[header(flatten, presence = "always")]
     pub rpc_request_header: Option<RpcRequestHeader>,
 }
 
