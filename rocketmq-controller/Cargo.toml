@@ -42,7 +42,7 @@ tokio      = { workspace = true }
 tokio-util = { workspace = true }
 
 # Raft consensus algorithm
-openraft = { version = "=0.10.0-alpha.21", features = [
+openraft = { version = "=0.10.0-alpha.21", default-features = false, features = [
   "serde",
   "tokio-rt",
 ] }
