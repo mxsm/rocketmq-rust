@@ -13,44 +13,49 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::rpc::topic_request_header::TopicRequestHeader;
 
 /// Represents the request header for acknowledging a message.
-#[derive(Debug, Serialize, Deserialize, Clone, RequestHeaderCodecV2)]
+#[derive(Debug, Serialize, Deserialize, Clone, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::ack_message_request_header::AckMessageRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.AckMessageRequestHeader"
+)]
 pub struct AckMessageRequestHeader {
     /// Consumer group name (required)
     #[serde(rename = "consumerGroup")]
-    #[required]
+    #[header(required)]
     pub consumer_group: CheetahString,
 
     /// Topic name (required)
     #[serde(rename = "topic")]
-    #[required]
+    #[header(required)]
     pub topic: CheetahString,
 
     /// Queue ID (required)
     #[serde(rename = "queueId")]
-    #[required]
+    #[header(required)]
     pub queue_id: i32,
 
     /// Extra information (required)
     #[serde(rename = "extraInfo")]
-    #[required]
+    #[header(required)]
     pub extra_info: CheetahString,
 
     /// Offset (required)
     #[serde(rename = "offset")]
-    #[required]
+    #[header(required)]
     pub offset: i64,
 
     #[serde(rename = "liteTopic", skip_serializing_if = "Option::is_none")]
     pub lite_topic: Option<CheetahString>,
 
     #[serde(flatten)]
+    #[header(flatten, presence = "always")]
     pub topic_request_header: Option<TopicRequestHeader>,
 }
 

@@ -15,40 +15,47 @@
 use std::fmt::Display;
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::rpc::topic_request_header::TopicRequestHeader;
 
-#[derive(Serialize, Deserialize, Debug, Default, RequestHeaderCodecV2)]
+#[derive(Serialize, Deserialize, Debug, Default, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::change_invisible_time_request_header::ChangeInvisibleTimeRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.ChangeInvisibleTimeRequestHeader"
+)]
 #[serde(rename_all = "camelCase")]
 pub struct ChangeInvisibleTimeRequestHeader {
-    #[required]
+    #[header(required)]
     pub consumer_group: CheetahString,
 
-    #[required]
+    #[header(required)]
     pub topic: CheetahString,
 
-    #[required]
+    #[header(required)]
     pub queue_id: i32,
 
     //startOffset popTime invisibleTime queueId
-    #[required]
+    #[header(required)]
     pub extra_info: CheetahString,
 
-    #[required]
+    #[header(required)]
     pub offset: i64,
 
-    #[required]
+    #[header(required)]
     pub invisible_time: i64,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lite_topic: Option<CheetahString>,
 
+    #[serde(default)]
+    #[header(default, default_semantic = "literal:false")]
     pub suspend: bool,
 
     #[serde(flatten)]
+    #[header(flatten, presence = "always")]
     pub topic_request_header: Option<TopicRequestHeader>,
 }
 

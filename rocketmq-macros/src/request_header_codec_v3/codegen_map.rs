@@ -366,18 +366,40 @@ fn construct_field(
                 )?,
             }
         }
-        MissingPolicy::Default => quote! {
-            #ident: match #local {
-                Some(raw) => <#base_type as #value_trait>::decode(raw, Self::#context)?,
-                None => <#base_type as ::core::default::Default>::default(),
-            },
-        },
-        MissingPolicy::DefaultWith(path) => quote! {
-            #ident: match #local {
-                Some(raw) => <#base_type as #value_trait>::decode(raw, Self::#context)?,
-                None => #path(),
-            },
-        },
+        MissingPolicy::Default => {
+            if field.option_inner.is_some() {
+                quote! {
+                    #ident: match #local {
+                        Some(raw) => Some(<#base_type as #value_trait>::decode(raw, Self::#context)?),
+                        None => Some(<#base_type as ::core::default::Default>::default()),
+                    },
+                }
+            } else {
+                quote! {
+                    #ident: match #local {
+                        Some(raw) => <#base_type as #value_trait>::decode(raw, Self::#context)?,
+                        None => <#base_type as ::core::default::Default>::default(),
+                    },
+                }
+            }
+        }
+        MissingPolicy::DefaultWith(path) => {
+            if field.option_inner.is_some() {
+                quote! {
+                    #ident: match #local {
+                        Some(raw) => Some(<#base_type as #value_trait>::decode(raw, Self::#context)?),
+                        None => #path(),
+                    },
+                }
+            } else {
+                quote! {
+                    #ident: match #local {
+                        Some(raw) => <#base_type as #value_trait>::decode(raw, Self::#context)?,
+                        None => #path(),
+                    },
+                }
+            }
+        }
     }
 }
 
