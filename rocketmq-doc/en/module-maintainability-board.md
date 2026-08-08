@@ -20,8 +20,8 @@ A high rank is a review priority, not evidence that line count alone is a defect
 | 10 | `rocketmq-store/src/config/message_store_config.rs` | 354.040 | 1982 | 32 | 2 | 1 | 126 | 0 | 0 | 5 |
 | 11 | `rocketmq-broker/src/config/broker_config.rs` | 353.333 | 1794 | 5 | 1 | 1 | 181 | 0 | 0 | 4 |
 | 12 | `rocketmq-client/src/implementation/mq_client_api_impl.rs` | 346.275 | 401 | 104 | 10 | 0 | 6 | 3 | 1 | 13 |
-| 13 | `rocketmq-client/src/consumer/consumer_impl/default_mq_push_consumer_impl.rs` | 320.825 | 2143 | 54 | 2 | 1 | 41 | 19 | 0 | 12 |
-| 14 | `rocketmq-broker/src/out_api/broker_outer_api.rs` | 313.457 | 1492 | 62 | 6 | 2 | 45 | 0 | 0 | 7 |
+| 13 | `rocketmq-broker/src/out_api/broker_outer_api.rs` | 321.582 | 1537 | 63 | 6 | 2 | 48 | 0 | 0 | 7 |
+| 14 | `rocketmq-client/src/consumer/consumer_impl/default_mq_push_consumer_impl.rs` | 320.825 | 2143 | 54 | 2 | 1 | 41 | 19 | 0 | 12 |
 | 15 | `rocketmq-client/src/consumer/default_lite_pull_consumer.rs` | 302.462 | 1252 | 18 | 1 | 0 | 125 | 4 | 0 | 9 |
 | 16 | `rocketmq-broker/src/processor/send_message_processor.rs` | 290.968 | 1710 | 65 | 6 | 3 | 8 | 0 | 0 | 13 |
 | 17 | `rocketmq-client/src/producer/producer_impl/default_mq_producer_impl.rs` | 290.850 | 334 | 81 | 5 | 1 | 1 | 10 | 3 | 13 |
@@ -127,20 +127,20 @@ A high rank is a review priority, not evidence that line count alone is a defect
 - Tests: Run focused `rocketmq-client` behavior tests, strict Clippy, stable-surface checks, and affected standalone consumers.
 - Exit: Remove from the ranked board after production LOC is at most 800, public surface does not grow, and independent child fixtures cover each extracted use case.
 
-### `rocketmq-client/src/consumer/consumer_impl/default_mq_push_consumer_impl.rs`
-
-- Owner: rocketmq-client maintainers.
-- Use-case boundaries: `lifecycle`, `assignment and routing`, `message flow`, `offset and shutdown`.
-- State ownership: `default_mq_push_consumer_impl` remains the single composition owner; child use-case modules may receive narrow references but must not expose lock guards.
-- Tests: Run focused `rocketmq-client` behavior tests, strict Clippy, stable-surface checks, and affected standalone consumers.
-- Exit: Remove from the ranked board after production LOC is at most 800, public surface does not grow, and independent child fixtures cover each extracted use case.
-
 ### `rocketmq-broker/src/out_api/broker_outer_api.rs`
 
 - Owner: rocketmq-broker maintainers.
 - Use-case boundaries: `broker outer api`, `lifecycle`, `request execution`, `result projection`.
 - State ownership: `broker_outer_api` remains the single composition owner; child use-case modules may receive narrow references but must not expose lock guards.
 - Tests: Run focused `rocketmq-broker` behavior tests, strict Clippy, stable-surface checks, and affected standalone consumers.
+- Exit: Remove from the ranked board after production LOC is at most 800, public surface does not grow, and independent child fixtures cover each extracted use case.
+
+### `rocketmq-client/src/consumer/consumer_impl/default_mq_push_consumer_impl.rs`
+
+- Owner: rocketmq-client maintainers.
+- Use-case boundaries: `lifecycle`, `assignment and routing`, `message flow`, `offset and shutdown`.
+- State ownership: `default_mq_push_consumer_impl` remains the single composition owner; child use-case modules may receive narrow references but must not expose lock guards.
+- Tests: Run focused `rocketmq-client` behavior tests, strict Clippy, stable-surface checks, and affected standalone consumers.
 - Exit: Remove from the ranked board after production LOC is at most 800, public surface does not grow, and independent child fixtures cover each extracted use case.
 
 ### `rocketmq-client/src/consumer/default_lite_pull_consumer.rs`

@@ -5718,6 +5718,15 @@
         },
         {
           "category": "stable",
+          "declaration": "pub use admission::ResourceSnapshot",
+          "identity": "rocketmq-transport/src/lib.rs:pub use admission::ResourceSnapshot",
+          "owner": "transport",
+          "path": "rocketmq-transport/src/lib.rs",
+          "rationale": "deliberate root entry point",
+          "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
           "declaration": "pub use base::channel_event_listener::ChannelEventListener",
           "identity": "rocketmq-transport/src/lib.rs:pub use base::channel_event_listener::ChannelEventListener",
           "owner": "transport",
@@ -6690,6 +6699,15 @@
         },
         {
           "category": "stable",
+          "declaration": "pub use server::SessionIoPolicy",
+          "identity": "rocketmq-transport/src/lib.rs:pub use server::SessionIoPolicy",
+          "owner": "transport",
+          "path": "rocketmq-transport/src/lib.rs",
+          "rationale": "deliberate root entry point",
+          "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
           "declaration": "pub use server::TransportListener",
           "identity": "rocketmq-transport/src/lib.rs:pub use server::TransportListener",
           "owner": "transport",
@@ -6710,6 +6728,15 @@
           "category": "stable",
           "declaration": "pub use server::run_connected_session",
           "identity": "rocketmq-transport/src/lib.rs:pub use server::run_connected_session",
+          "owner": "transport",
+          "path": "rocketmq-transport/src/lib.rs",
+          "rationale": "deliberate root entry point",
+          "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use server::run_connected_session_with_io_policy",
+          "identity": "rocketmq-transport/src/lib.rs:pub use server::run_connected_session_with_io_policy",
           "owner": "transport",
           "path": "rocketmq-transport/src/lib.rs",
           "rationale": "deliberate root entry point",
@@ -6959,7 +6986,7 @@
           "removal_condition": "retain while the stable entry point remains supported"
         }
       ],
-      "maximum_exports": 149
+      "maximum_exports": 152
     }
   },
   "policy": "Every deliberate export is classified; additions and count growth fail closed.",

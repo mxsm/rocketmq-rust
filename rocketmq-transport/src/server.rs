@@ -753,7 +753,6 @@ pub async fn run_connected_session<H>(
 }
 
 /// Runs an already-connected stream with explicit bounded I/O policy.
-#[allow(clippy::too_many_arguments)]
 pub async fn run_connected_session_with_io_policy<H>(
     connection: Connection,
     local_addr: SocketAddr,

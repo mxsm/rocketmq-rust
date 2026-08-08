@@ -249,11 +249,17 @@ impl SessionCommandDecoder {
     }
 
     fn reserve_announced_frame(&mut self, src: &BytesMut) -> Result<(), rocketmq_error::RocketMQError> {
-        if self.partial_frame_permit.is_some() || src.len() < 4 {
+        if self.partial_frame_permit.is_some() {
             return Ok(());
         }
+        let Some(length_prefix) = src.get(..4) else {
+            return Ok(());
+        };
         self.inner.validate_announced_frame(src)?;
-        let total = i32::from_be_bytes(src[..4].try_into().expect("four bytes checked"));
+        let Ok(length_prefix) = <[u8; 4]>::try_from(length_prefix) else {
+            return Ok(());
+        };
+        let total = i32::from_be_bytes(length_prefix);
         if total <= 0 {
             return Ok(());
         }
