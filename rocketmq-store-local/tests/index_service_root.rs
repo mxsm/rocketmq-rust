@@ -17,6 +17,7 @@ use rocketmq_store_local::index::service::build_index_key;
 use rocketmq_store_local::index::service::build_index_key_into;
 use rocketmq_store_local::index::service::build_index_key_with_type;
 use rocketmq_store_local::index::service::destroy_index_files;
+use rocketmq_store_local::index::service::destroy_index_files_with_outcome;
 use rocketmq_store_local::index::service::drive_index_build_keys;
 use rocketmq_store_local::index::service::drive_index_service_put;
 use rocketmq_store_local::index::service::expired_index_file_count;
@@ -116,7 +117,7 @@ fn query_driver_walks_newest_first_and_reports_newest_metadata() {
 
 #[test]
 fn load_and_expiration_plans_keep_safe_offset_and_newest_file_rules() {
-    let mut files = vec![fake_file(1, 10, 20, 100, vec![]), fake_file(2, 20, 30, 200, vec![])];
+    let files = vec![fake_file(1, 10, 20, 100, vec![]), fake_file(2, 20, 30, 200, vec![])];
     assert_eq!(expired_index_file_count(&files, 150), 1);
     assert_eq!(restore_index_safe_offset(&files, 250, false), 250);
     assert_eq!(restore_index_safe_offset(&files, 250, true), 200);
@@ -124,15 +125,24 @@ fn load_and_expiration_plans_keep_safe_offset_and_newest_file_rules() {
     assert!(!should_remove_unsafe_index_file(true, 31, 30));
 
     let mut shutdown_ids = Vec::new();
-    shutdown_index_files(&mut files, |file| shutdown_ids.push(file.id));
+    shutdown_index_files(&files, |file| shutdown_ids.push(file.id));
     assert_eq!(shutdown_ids, [1, 2]);
-    assert!(files.is_empty());
+    assert_eq!(files.iter().map(|file| file.id).collect::<Vec<_>>(), [1, 2]);
 
     let mut files = vec![fake_file(3, 30, 40, 300, vec![])];
     let mut destroy_ids = Vec::new();
     destroy_index_files(&mut files, |file| destroy_ids.push(file.id));
     assert_eq!(destroy_ids, [3]);
     assert!(files.is_empty());
+
+    let mut files = vec![fake_file(4, 40, 50, 400, vec![]), fake_file(5, 50, 60, 500, vec![])];
+    let mut attempts = Vec::new();
+    assert!(!destroy_index_files_with_outcome(&mut files, |file| {
+        attempts.push(file.id);
+        file.id != 4
+    }));
+    assert_eq!(attempts, [4]);
+    assert_eq!(files.iter().map(|file| file.id).collect::<Vec<_>>(), [4, 5]);
 }
 
 #[test]

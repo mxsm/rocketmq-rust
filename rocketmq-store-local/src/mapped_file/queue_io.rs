@@ -15,6 +15,7 @@
 //! Local mapped-file queue discovery, loading, and creation I/O.
 
 use std::fs;
+use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -55,36 +56,99 @@ impl MappedFileQueueLoadOutcome {
 /// Discovers and loads the files in a mapped-file queue directory.
 #[doc(hidden)]
 pub fn load_mapped_file_queue_path(store_path: &str, mapped_file_size: u64) -> MappedFileQueueLoadOutcome {
-    let Ok(entries) = fs::read_dir(Path::new(store_path)) else {
-        return MappedFileQueueLoadOutcome::new(true, Vec::new());
+    let entries = match fs::read_dir(Path::new(store_path)) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return MappedFileQueueLoadOutcome::new(true, Vec::new());
+        }
+        Err(error) => {
+            error!(store_path, %error, "Failed to enumerate mapped-file queue directory");
+            return MappedFileQueueLoadOutcome::new(false, Vec::new());
+        }
     };
-    let files = entries.filter_map(Result::ok).map(|entry| entry.path()).collect();
+
+    load_mapped_file_queue_entries(
+        store_path,
+        entries.map(|entry| entry.map(|entry| entry.path())),
+        mapped_file_size,
+    )
+}
+
+fn load_mapped_file_queue_entries<I>(store_path: &str, entries: I, mapped_file_size: u64) -> MappedFileQueueLoadOutcome
+where
+    I: IntoIterator<Item = io::Result<PathBuf>>,
+{
+    let mut files = Vec::new();
+    for entry in entries {
+        match entry {
+            Ok(path) => files.push(path),
+            Err(error) => {
+                error!(store_path, %error, "Failed to enumerate an entry in mapped-file queue directory");
+                return MappedFileQueueLoadOutcome::new(false, Vec::new());
+            }
+        }
+    }
     load_mapped_file_queue_files(files, mapped_file_size)
 }
 
 /// Loads an explicit mapped-file queue candidate list in ascending file-name order.
 #[doc(hidden)]
-pub fn load_mapped_file_queue_files(mut files: Vec<PathBuf>, mapped_file_size: u64) -> MappedFileQueueLoadOutcome {
+pub fn load_mapped_file_queue_files(files: Vec<PathBuf>, mapped_file_size: u64) -> MappedFileQueueLoadOutcome {
+    load_mapped_file_queue_files_with_remover(files, mapped_file_size, |path| fs::remove_file(path))
+}
+
+fn load_mapped_file_queue_files_with_remover<R>(
+    mut files: Vec<PathBuf>,
+    mapped_file_size: u64,
+    mut remove_file: R,
+) -> MappedFileQueueLoadOutcome
+where
+    R: FnMut(&Path) -> io::Result<()>,
+{
     files.sort_by(|left, right| left.file_name().cmp(&right.file_name()));
 
-    let mut mapped_files = Vec::new();
-    for (index, file) in files.iter().enumerate() {
-        let metadata = match file.metadata() {
+    // Validate the complete namespace before opening or deleting any segment. Unknown entries are
+    // retained, but they block loading so callers cannot mistake an incomplete view for success.
+    let mut candidates = Vec::with_capacity(files.len());
+    for file in files {
+        let metadata = match fs::symlink_metadata(&file) {
             Ok(metadata) => metadata,
             Err(error) => {
-                error!("Failed to get metadata for file {:?}: {}", file, error);
-                return MappedFileQueueLoadOutcome::new(false, mapped_files);
+                error!(path = %file.display(), %error, "Failed to get mapped-file queue entry metadata");
+                return MappedFileQueueLoadOutcome::new(false, Vec::new());
             }
         };
-
-        if metadata.is_dir() {
-            continue;
+        if !metadata.file_type().is_file() {
+            warn!(
+                path = %file.display(),
+                "Unknown non-file entry blocks mapped-file queue loading and was retained"
+            );
+            return MappedFileQueueLoadOutcome::new(false, Vec::new());
         }
+        if let Err(error) = crate::mapped_file::file::try_parse_file_from_offset(&file) {
+            warn!(
+                path = %file.display(),
+                %error,
+                "Unknown file identity blocks mapped-file queue loading and was retained"
+            );
+            return MappedFileQueueLoadOutcome::new(false, Vec::new());
+        }
+        candidates.push((file, metadata));
+    }
 
-        if metadata.len() == 0 && index == files.len() - 1 {
-            match fs::remove_file(file) {
+    let mut mapped_files = Vec::new();
+    for (index, (file, metadata)) in candidates.iter().enumerate() {
+        if metadata.len() == 0 && index == candidates.len() - 1 {
+            match remove_file(file) {
                 Ok(()) => warn!("{} size is 0, auto deleted.", file.display()),
-                Err(error) => warn!("Failed to delete file {}: {}", file.display(), error),
+                Err(error) => {
+                    warn!(
+                        path = %file.display(),
+                        %error,
+                        "Failed to delete zero-length mapped-file queue tail"
+                    );
+                    return MappedFileQueueLoadOutcome::new(false, mapped_files);
+                }
             }
             continue;
         }
@@ -116,7 +180,11 @@ pub fn load_mapped_file_queue_files(mut files: Vec<PathBuf>, mapped_file_size: u
     MappedFileQueueLoadOutcome::new(true, mapped_files)
 }
 
-/// Creates one queue segment through the allocation service or the synchronous fallback.
+/// Creates one queue segment through the configured allocation service.
+///
+/// Synchronous creation is used when no allocation service is configured, or for a never-started
+/// service that has no path fence. Falling back from a live, stopped, or retiring service would
+/// bypass its in-flight path ownership and can let an old request delete a newly published segment.
 #[doc(hidden)]
 pub fn create_mapped_file_for_queue(
     allocate_service: Option<&AllocateMappedFileService>,
@@ -127,18 +195,27 @@ pub fn create_mapped_file_for_queue(
 ) -> Option<Arc<DefaultMappedFile>> {
     let file_path_text = file_path.to_string_lossy().into_owned();
     let mut mapped_file = if let Some(service) = allocate_service.filter(|service| service.is_started()) {
-        match service.allocate_mapped_file_blocking(file_path_text.clone(), mapped_file_size) {
+        match service.allocate_mapped_file_blocking(file_path_text, mapped_file_size) {
             Ok(pre_allocated) => {
                 service.submit_request_in_background(next_file_path.to_string_lossy().into_owned(), mapped_file_size);
                 pre_allocated
             }
             Err(error) => {
-                warn!("Pre-allocation failed: {}, using sync creation", error);
-                create_mapped_file_synchronously(file_path_text, mapped_file_size)?
+                warn!(
+                    "Pre-allocation failed: {}; synchronous same-path fallback is disabled",
+                    error
+                );
+                return None;
             }
         }
-    } else {
+    } else if allocate_service.is_none_or(|service| service.allows_synchronous_fallback(file_path)) {
         create_mapped_file_synchronously(file_path_text, mapped_file_size)?
+    } else {
+        warn!(
+            file_path = %file_path.display(),
+            "Mapped-file synchronous fallback is fenced by a started, stopped, or retiring allocation service"
+        );
+        return None;
     };
 
     if first_in_queue {
@@ -156,5 +233,52 @@ fn create_mapped_file_synchronously(file_path: String, mapped_file_size: u64) ->
             error!("Failed to create mapped file {}: {}", file_path, error);
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs::File;
+
+    use tempfile::tempdir;
+
+    use super::*;
+
+    #[test]
+    fn queue_entry_enumeration_failure_fails_closed() {
+        let outcome = load_mapped_file_queue_entries(
+            "queue",
+            [Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "injected enumeration failure",
+            ))],
+            16,
+        );
+
+        assert!(!outcome.is_success());
+        assert!(outcome.into_mapped_files().is_empty());
+    }
+
+    #[test]
+    fn zero_length_tail_delete_failure_fails_closed_and_retains_file() {
+        let temp_dir = tempdir().expect("temp dir");
+        let first = temp_dir.path().join("00000000000000000000");
+        let empty_tail = temp_dir.path().join("00000000000000000016");
+        File::create(&first)
+            .expect("create first segment")
+            .set_len(16)
+            .expect("size first segment");
+        File::create(&empty_tail).expect("create empty tail");
+
+        let outcome = load_mapped_file_queue_files_with_remover(vec![empty_tail.clone(), first], 16, |_| {
+            Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "injected delete failure",
+            ))
+        });
+
+        assert!(!outcome.is_success());
+        assert_eq!(outcome.into_mapped_files().len(), 1);
+        assert!(empty_tail.exists());
     }
 }

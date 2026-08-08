@@ -77,6 +77,10 @@ use crate::transfer::batch::TransferKind;
 use crate::transfer::segment::SegmentLease;
 use crate::transfer::segment::TransferCacheState;
 
+/// Mapped-file queue surface exposed only to lifecycle integration tests.
+#[doc(hidden)]
+pub use crate::consume_queue::mapped_file_queue::MappedFileQueue as MappedFileQueueTestHarness;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct StoreBlockingIoProbe {
     pub task_count: usize,

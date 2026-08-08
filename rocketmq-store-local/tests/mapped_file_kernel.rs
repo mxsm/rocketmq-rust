@@ -15,6 +15,7 @@
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::Barrier;
 use std::thread;
 
 use rocketmq_store_local::mapped_file::kernel::plan_mapped_file_cache_residency;
@@ -395,4 +396,73 @@ fn concurrent_final_releases_cleanup_exactly_once() {
 
     assert_eq!(resource.cleanup_count.load(Ordering::SeqCst), 1);
     assert!(resource.is_cleanup_over());
+}
+
+#[test]
+fn concurrent_first_shutdown_releases_base_reference_once() {
+    const WORKERS: usize = 16;
+    const ROUNDS: usize = 64;
+
+    for _ in 0..ROUNDS {
+        let resource = Arc::new(CountingResource {
+            base: ReferenceResourceBase::new(),
+            cleanup_count: AtomicUsize::new(0),
+        });
+        assert!(resource.hold());
+        let barrier = Arc::new(Barrier::new(WORKERS + 1));
+        let handles = (0..WORKERS)
+            .map(|_| {
+                let resource = Arc::clone(&resource);
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    barrier.wait();
+                    resource.shutdown(u64::MAX);
+                })
+            })
+            .collect::<Vec<_>>();
+
+        barrier.wait();
+        for handle in handles {
+            handle.join().expect("shutdown worker must finish");
+        }
+
+        assert_eq!(resource.get_ref_count(), 1);
+        assert_eq!(resource.cleanup_count.load(Ordering::SeqCst), 0);
+        assert!(!resource.is_available());
+        assert_ne!(resource.base.first_shutdown_timestamp.load(Ordering::Acquire), 0);
+
+        resource.release();
+        assert_eq!(resource.cleanup_count.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[test]
+fn concurrent_forced_shutdown_claims_the_legacy_transition_once() {
+    const WORKERS: usize = 16;
+    let resource = Arc::new(CountingResource {
+        base: ReferenceResourceBase::new(),
+        cleanup_count: AtomicUsize::new(0),
+    });
+    assert!(resource.hold());
+    resource.shutdown(u64::MAX);
+    assert_eq!(resource.get_ref_count(), 1);
+
+    let barrier = Arc::new(Barrier::new(WORKERS + 1));
+    let handles = (0..WORKERS)
+        .map(|_| {
+            let resource = Arc::clone(&resource);
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || {
+                barrier.wait();
+                resource.shutdown(0);
+            })
+        })
+        .collect::<Vec<_>>();
+    barrier.wait();
+    for handle in handles {
+        handle.join().expect("force worker must finish");
+    }
+
+    assert_eq!(resource.get_ref_count(), -1002);
+    assert_eq!(resource.cleanup_count.load(Ordering::SeqCst), 1);
 }

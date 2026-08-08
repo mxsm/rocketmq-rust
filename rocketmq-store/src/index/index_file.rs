@@ -28,6 +28,7 @@ use rocketmq_store_local::index::file::query_index_offsets;
 use rocketmq_store_local::index::file::IndexFileSnapshot;
 use rocketmq_store_local::index::file::IndexHeaderUpdate;
 use rocketmq_store_local::index::file::IndexPutOutcome;
+use rocketmq_store_local::mapped_file::MappedFileDestroyOutcome;
 use tracing::info;
 use tracing::warn;
 
@@ -184,7 +185,22 @@ impl IndexFile {
 
     #[inline]
     pub fn destroy(&self, interval_forcibly: u64) -> bool {
-        self.mapped_file.destroy(interval_forcibly)
+        self.try_destroy(interval_forcibly).is_namespace_removed()
+    }
+
+    #[inline]
+    pub fn try_destroy(&self, interval_forcibly: u64) -> MappedFileDestroyOutcome {
+        self.mapped_file.try_destroy(interval_forcibly)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn hold_for_testing(&self) -> bool {
+        self.mapped_file.hold()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn release_for_testing(&self) {
+        self.mapped_file.release();
     }
 
     pub fn put_key(&self, key: &str, phy_offset: i64, store_timestamp: i64) -> bool {

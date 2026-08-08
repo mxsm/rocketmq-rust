@@ -14,6 +14,9 @@
 
 use std::fs::File;
 use std::io;
+use std::time::Duration;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use crate::base::transient_store_pool::TransientStorePool;
 use crate::config::FlushDiskType;
@@ -297,6 +300,21 @@ pub trait MappedFile {
     /// A `i64` representing the timestamp of the last modification.
     fn get_last_modified_timestamp(&self) -> u64;
 
+    /// Returns the filesystem modification time without collapsing metadata errors.
+    ///
+    /// The default adapter preserves compatibility for external implementations that only expose
+    /// Unix epoch milliseconds through [`Self::get_last_modified_timestamp`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`io::ErrorKind::InvalidData`] if the compatibility timestamp cannot be represented
+    /// as a [`SystemTime`]. Implementations backed by a file should return their metadata error.
+    fn try_last_modified_time(&self) -> io::Result<SystemTime> {
+        UNIX_EPOCH
+            .checked_add(Duration::from_millis(self.get_last_modified_timestamp()))
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "last-modified timestamp is out of range"))
+    }
+
     /// Retrieves data from the store starting at the specified position and of the specified size.
     ///
     /// # Arguments
@@ -323,14 +341,15 @@ pub trait MappedFile {
     /// requested slice goes beyond the file boundaries or the file is not available.
     fn get_slice(&self, pos: usize, size: usize) -> Option<bytes::Bytes>;
 
-    /// Destroys the store after a specified interval.
+    /// Requests logical shutdown and mapped-file namespace removal.
     ///
     /// # Arguments
     /// * `interval_forcibly` - The time interval after which the store should be forcibly
     ///   destroyed.
     ///
     /// # Returns
-    /// `true` if the store was successfully destroyed, `false` otherwise.
+    /// `true` only when this call removed the mapped-file path from the filesystem namespace.
+    /// Existing mmap and file owners may remain alive until their Rust owners are dropped.
     fn destroy(&self, interval_forcibly: u64) -> bool;
 
     /// Initiates a shutdown of the store after a specified interval.
@@ -430,16 +449,18 @@ pub trait MappedFile {
     /// * `pages` - The number of pages to access for warming up the file.
     fn warm_mapped_file(&self, flush_disk_type: FlushDiskType, pages: usize);
 
-    /// Attempts to swap the current mapped file with a new one.
+    /// Records one compatibility swap attempt.
+    ///
+    /// The legacy method does not guarantee that a mapping was replaced or unmapped.
     ///
     /// # Returns
     /// `true` if the swap was successful, `false` otherwise.
     fn swap_map(&self) -> bool;
 
-    /// Cleans up the swapped map files.
+    /// Records compatibility cleanup for a previously selected swap candidate.
     ///
-    /// This method is responsible for cleaning up the swapped map files. It can be forced to clean
-    /// up even if certain conditions (like time since last swap) are not met.
+    /// The legacy method does not guarantee physical mmap release. `force` only controls
+    /// bookkeeping reset behavior.
     ///
     /// # Arguments
     /// * `force` - A boolean indicating whether the cleanup should be forced regardless of

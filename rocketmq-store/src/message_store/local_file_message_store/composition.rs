@@ -136,12 +136,13 @@ impl LocalFileMessageStore {
         let transient_store_pool_enable = message_store_config.transient_store_pool_enable
             && (broker_config.enable_controller_mode || message_store_config.broker_role != BrokerRole::Slave);
         let allocate_transient_store_pool = transient_store_pool_enable.then(|| Arc::new(transient_store_pool.clone()));
-        let allocate_mapped_file_service = AllocateMappedFileService::new_with_message_store_config(
+        let allocate_mapped_file_service = AllocateMappedFileService::new_with_message_store_config_and_storage_io(
             allocate_transient_store_pool,
             transient_store_pool_enable,
             message_store_config.fast_fail_if_no_buffer_in_store_pool,
             message_store_config.as_ref(),
             runtime_scope.mapped_file_allocation_budget(),
+            runtime_scope.storage_io(),
         );
         #[cfg(feature = "observability")]
         let allocate_mapped_file_service = allocate_mapped_file_service.with_store_metrics(telemetry.store().clone());

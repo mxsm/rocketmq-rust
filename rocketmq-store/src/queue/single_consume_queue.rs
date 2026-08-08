@@ -138,17 +138,13 @@ impl ConsumeQueue {
     }
 
     #[inline]
-    pub fn truncate_dirty_logic_files_handler(&mut self, phy_offset: i64, delete_file: bool) {
-        self.set_max_physic_offset(phy_offset);
-        let mut should_delete_file = false;
+    #[must_use]
+    pub fn truncate_dirty_logic_files_handler(&mut self, phy_offset: i64, delete_file: bool) -> bool {
         let mapped_file_size = self.mapped_file_size;
         loop {
             let Some(mapped_file) = self.mapped_file_queue.get_last_mapped_file() else {
                 break;
             };
-            mapped_file.set_wrote_position(0);
-            mapped_file.set_committed_position(0);
-            mapped_file.set_flushed_position(0);
 
             let plan = plan_truncate_records(
                 mapped_file_size,
@@ -162,37 +158,61 @@ impl ConsumeQueue {
             );
             match plan {
                 ConsumeQueueTruncatePlan::RetryFile => {
-                    if !should_delete_file {
-                        continue;
+                    warn!(
+                        topic = %self.topic,
+                        queue_id = self.queue_id,
+                        file_name = %mapped_file.get_file_name(),
+                        "consume-queue truncation could not read a complete record; retaining the retry identity"
+                    );
+                    return false;
+                }
+                ConsumeQueueTruncatePlan::DeleteFile => {
+                    if delete_file {
+                        if !self.mapped_file_queue.try_delete_last_mapped_file() {
+                            warn!(
+                                topic = %self.topic,
+                                queue_id = self.queue_id,
+                                file_name = %mapped_file.get_file_name(),
+                                "consume-queue tail cleanup remains pending"
+                            );
+                            return false;
+                        }
+                    } else {
+                        self.mapped_file_queue
+                            .delete_expired_file(vec![self.mapped_file_queue.get_last_mapped_file().unwrap()]);
                     }
                 }
-                ConsumeQueueTruncatePlan::DeleteFile => should_delete_file = true,
                 ConsumeQueueTruncatePlan::Retain {
                     valid_bytes,
                     max_physical_offset,
-                    max_extension_address: _,
+                    max_extension_address,
                 } => {
+                    if self.is_ext_read_enable()
+                        && !self
+                            .consume_queue_ext
+                            .as_ref()
+                            .unwrap()
+                            .try_truncate_by_max_address(max_extension_address.unwrap_or(1))
+                    {
+                        return false;
+                    }
                     mapped_file.set_wrote_position(valid_bytes);
                     mapped_file.set_committed_position(valid_bytes);
                     mapped_file.set_flushed_position(valid_bytes);
                     if let Some(max_physical_offset) = max_physical_offset {
                         self.set_max_physic_offset(max_physical_offset);
+                    } else {
+                        self.set_max_physic_offset(phy_offset);
                     }
-                    return;
-                }
-            }
-            if should_delete_file {
-                if delete_file {
-                    self.mapped_file_queue.delete_last_mapped_file();
-                } else {
-                    self.mapped_file_queue
-                        .delete_expired_file(vec![self.mapped_file_queue.get_last_mapped_file().unwrap()]);
+                    return true;
                 }
             }
         }
-        if self.is_ext_read_enable() {
-            self.consume_queue_ext.as_ref().unwrap().truncate_by_max_address(1);
+        if self.is_ext_read_enable() && !self.consume_queue_ext.as_ref().unwrap().try_truncate_by_max_address(1) {
+            return false;
         }
+        self.set_max_physic_offset(phy_offset);
+        true
     }
 
     #[inline]
@@ -342,26 +362,21 @@ impl ConsumeQueue {
                 request.queue_id
             };
 
-            let Some(consume_queue) = self
-                .queue_lookup
-                .find_or_create_consume_queue(&CheetahString::from(queue_name), queue_id)
-            else {
-                warn!(
-                    "Skip multi-dispatch queue because consume queue lookup failed, topic={}, queueName={}, queueId={}",
-                    request.topic, queue_name, queue_id
-                );
-                continue;
-            };
-
             let mut lmq_dispatch_request = request.clone();
             lmq_dispatch_request.topic = CheetahString::from(queue_name);
             lmq_dispatch_request.queue_id = queue_id;
             lmq_dispatch_request.consume_queue_offset = queue_offset;
             lmq_dispatch_request.properties_map = None;
 
-            consume_queue
-                .write()
-                .put_message_position_info_wrapper(&lmq_dispatch_request);
+            if !self
+                .queue_lookup
+                .put_message_position_info_wrapper(&lmq_dispatch_request)
+            {
+                warn!(
+                    "Skip multi-dispatch queue because consume queue lookup failed, topic={}, queueName={}, queueId={}",
+                    request.topic, queue_name, queue_id
+                );
+            }
         }
     }
 
@@ -444,10 +459,14 @@ impl FileQueueLifeCycle for ConsumeQueue {
     }
 
     fn recover(&mut self) {
+        let _ = self.recover_with_outcome();
+    }
+
+    fn recover_with_outcome(&mut self) -> bool {
         let binding = self.mapped_file_queue.get_mapped_files();
         let mapped_files = binding.load();
         if mapped_files.is_empty() {
-            return;
+            return true;
         }
         let mut index = mapped_files.len() as i32 - 3;
         if index < 0 {
@@ -458,6 +477,7 @@ impl FileQueueLifeCycle for ConsumeQueue {
         let mut mapped_file = mapped_files.get(index).unwrap();
         let mut process_offset = mapped_file.get_file_from_offset();
         let mut max_ext_addr = 1i64;
+        let mut recovered_max_physic_offset = None;
         let mapped_file_offset = loop {
             let scan = scan_recovery_records(
                 mapped_file_size_logics,
@@ -470,7 +490,7 @@ impl FileQueueLifeCycle for ConsumeQueue {
             );
             let mapped_file_offset = i64::from(scan.valid_bytes);
             if let Some(max_physical_offset) = scan.max_physical_offset {
-                self.set_max_physic_offset(max_physical_offset);
+                recovered_max_physic_offset = Some(max_physical_offset);
             }
             if let Some(max_extension_address) = scan.max_extension_address {
                 max_ext_addr = max_extension_address;
@@ -507,16 +527,32 @@ impl FileQueueLifeCycle for ConsumeQueue {
             }
         };
         process_offset += mapped_file_offset as u64;
-        self.mapped_file_queue.set_flushed_where(process_offset as i64);
-        self.mapped_file_queue.set_committed_where(process_offset as i64);
-        self.mapped_file_queue.truncate_dirty_files(process_offset as i64);
+        if !self.mapped_file_queue.try_truncate_dirty_files(process_offset as i64) {
+            warn!(
+                topic = %self.topic,
+                queue_id = self.queue_id,
+                process_offset,
+                "consume-queue recovery tail cleanup remains pending"
+            );
+            return false;
+        }
 
         if self.is_ext_read_enable() {
             let consume_queue_ext = self.consume_queue_ext.as_mut().unwrap();
-            consume_queue_ext.recover();
+            if !consume_queue_ext.recover_with_outcome() {
+                return false;
+            }
             info!("Truncate consume queue extend file by max {}", max_ext_addr);
-            consume_queue_ext.truncate_by_max_address(max_ext_addr);
+            if !consume_queue_ext.try_truncate_by_max_address(max_ext_addr) {
+                return false;
+            }
         }
+        if let Some(max_physical_offset) = recovered_max_physic_offset {
+            self.set_max_physic_offset(max_physical_offset);
+        }
+        self.mapped_file_queue.set_flushed_where(process_offset as i64);
+        self.mapped_file_queue.set_committed_where(process_offset as i64);
+        true
     }
 
     #[inline]
@@ -538,17 +574,31 @@ impl FileQueueLifeCycle for ConsumeQueue {
 
     #[inline]
     fn destroy(&mut self) {
-        self.set_max_physic_offset(-1);
-        self.min_logic_offset.store(0, Ordering::SeqCst);
-        self.mapped_file_queue.destroy();
-        if self.is_ext_read_enable() {
-            self.consume_queue_ext.as_mut().unwrap().destroy();
+        let _ = self.destroy_with_outcome();
+    }
+
+    fn destroy_with_outcome(&mut self) -> bool {
+        let mapped_files_removed = self.mapped_file_queue.destroy_with_outcome();
+        let extension_removed = !self.is_ext_read_enable()
+            || self
+                .consume_queue_ext
+                .as_mut()
+                .is_some_and(ConsumeQueueExt::destroy_with_outcome);
+        let destroyed = mapped_files_removed && extension_removed;
+        if destroyed {
+            self.set_max_physic_offset(-1);
+            self.min_logic_offset.store(0, Ordering::SeqCst);
         }
+        destroyed
     }
 
     #[inline]
     fn truncate_dirty_logic_files(&mut self, max_commit_log_pos: i64) {
-        self.truncate_dirty_logic_files_handler(max_commit_log_pos, true);
+        let _ = self.truncate_dirty_logic_files_with_outcome(max_commit_log_pos);
+    }
+
+    fn truncate_dirty_logic_files_with_outcome(&mut self, max_commit_log_pos: i64) -> bool {
+        self.truncate_dirty_logic_files_handler(max_commit_log_pos, true)
     }
 
     #[inline]
@@ -1125,6 +1175,13 @@ mod tests {
         }
     }
 
+    fn create_empty_mapped_file(path: &std::path::Path, mapped_file_size: usize) {
+        drop(DefaultMappedFile::new(
+            CheetahString::from_string(path.to_string_lossy().into_owned()),
+            mapped_file_size as u64,
+        ));
+    }
+
     #[test]
     fn delete_expired_file_removes_shutdown_rolled_file() {
         let temp_dir = tempdir().unwrap();
@@ -1316,7 +1373,7 @@ mod tests {
             });
         }
 
-        consume_queue.truncate_dirty_logic_files_handler(64, true);
+        assert!(consume_queue.truncate_dirty_logic_files_handler(64, true));
 
         let mapped_file = consume_queue
             .mapped_file_queue
@@ -1326,6 +1383,155 @@ mod tests {
         assert_eq!(mapped_file.get_committed_position(), 2 * CQ_STORE_UNIT_SIZE);
         assert_eq!(mapped_file.get_flushed_position(), 2 * CQ_STORE_UNIT_SIZE);
         assert_eq!(consume_queue.get_max_physic_offset(), 64);
+    }
+
+    #[test]
+    fn truncate_dirty_logic_files_returns_pending_when_the_last_file_is_held() {
+        let temp_dir = tempdir().unwrap();
+        let topic = CheetahString::from_static_str("single-cq-held-tail-topic");
+        let mut consume_queue = new_test_consume_queue(&temp_dir, &topic, (2 * CQ_STORE_UNIT_SIZE) as usize);
+        consume_queue.put_message_position_info_wrapper(&DispatchRequest {
+            topic: topic.clone(),
+            queue_id: 0,
+            commit_log_offset: 64,
+            msg_size: 32,
+            consume_queue_offset: 0,
+            success: true,
+            ..DispatchRequest::default()
+        });
+        let mapped_file = consume_queue
+            .mapped_file_queue
+            .get_last_mapped_file()
+            .expect("mapped file");
+        assert!(mapped_file.hold());
+
+        assert!(!consume_queue.truncate_dirty_logic_files_handler(64, true));
+        assert_eq!(consume_queue.mapped_file_queue.get_mapped_file_count(), 1);
+
+        mapped_file.release();
+        assert!(consume_queue.mapped_file_queue.try_delete_last_mapped_file());
+    }
+
+    #[test]
+    fn truncate_dirty_logic_files_retains_retry_identity_after_deleting_newer_tail() {
+        let temp_dir = tempdir().unwrap();
+        let topic = CheetahString::from_static_str("single-cq-retry-identity-topic");
+        let mut consume_queue = new_test_consume_queue(&temp_dir, &topic, (2 * CQ_STORE_UNIT_SIZE) as usize);
+
+        for (queue_offset, commit_log_offset) in [(0_i64, 0_i64), (1, 32), (2, 64)] {
+            consume_queue.put_message_position_info_wrapper(&DispatchRequest {
+                topic: topic.clone(),
+                queue_id: 0,
+                commit_log_offset,
+                msg_size: 32,
+                consume_queue_offset: queue_offset,
+                success: true,
+                ..DispatchRequest::default()
+            });
+        }
+
+        let retry_identity = consume_queue
+            .mapped_file_queue
+            .get_first_mapped_file()
+            .expect("retry identity");
+        // Model a short older identity discovered only after the valid newer tail is removed.
+        consume_queue.mapped_file_size = 3 * CQ_STORE_UNIT_SIZE;
+        assert_eq!(consume_queue.get_max_physic_offset(), 96);
+
+        assert!(!consume_queue.truncate_dirty_logic_files_handler(64, true));
+        let retained = consume_queue
+            .mapped_file_queue
+            .get_last_mapped_file()
+            .expect("retry identity must remain tracked");
+        assert!(Arc::ptr_eq(&retry_identity, &retained));
+        assert_eq!(consume_queue.mapped_file_queue.get_mapped_file_count(), 1);
+        assert_eq!(consume_queue.get_max_physic_offset(), 96);
+
+        assert!(consume_queue.destroy_with_outcome());
+    }
+
+    #[test]
+    fn truncate_dirty_logic_files_defers_base_progress_until_cqext_cleanup_completes() {
+        let temp_dir = tempdir().unwrap();
+        let topic = CheetahString::from_static_str("single-cq-cqext-pending-topic");
+        let mut consume_queue = new_configured_test_consume_queue(
+            &temp_dir,
+            &topic,
+            MessageStoreConfig {
+                enable_consume_queue_ext: true,
+                mapped_file_size_consume_queue: (2 * CQ_STORE_UNIT_SIZE) as usize,
+                mapped_file_size_consume_queue_ext: 64,
+                ..MessageStoreConfig::default()
+            },
+        );
+        let unavailable_ext_address = rocketmq_store_local::consume_queue::extension::decorate_cq_ext_offset(64);
+        assert!(consume_queue.put_message_position_info(100, 32, unavailable_ext_address, 0));
+
+        let base_file = consume_queue
+            .mapped_file_queue
+            .get_last_mapped_file()
+            .expect("base mapped file");
+        base_file.set_wrote_position(2 * CQ_STORE_UNIT_SIZE);
+        base_file.set_committed_position(2 * CQ_STORE_UNIT_SIZE);
+        base_file.set_flushed_position(2 * CQ_STORE_UNIT_SIZE);
+        consume_queue.set_max_physic_offset(999);
+        assert!(!consume_queue.truncate_dirty_logic_files_handler(200, true));
+        assert_eq!(base_file.get_wrote_position(), 2 * CQ_STORE_UNIT_SIZE);
+        assert_eq!(base_file.get_committed_position(), 2 * CQ_STORE_UNIT_SIZE);
+        assert_eq!(base_file.get_flushed_position(), 2 * CQ_STORE_UNIT_SIZE);
+        assert_eq!(consume_queue.get_max_physic_offset(), 999);
+
+        assert!(consume_queue.destroy_with_outcome());
+    }
+
+    #[test]
+    fn recover_defers_progress_until_dirty_tail_cleanup_completes() {
+        let temp_dir = tempdir().unwrap();
+        let topic = CheetahString::from_static_str("single-cq-recover-pending-topic");
+        let mapped_file_size = (2 * CQ_STORE_UNIT_SIZE) as usize;
+        let mut consume_queue = new_test_consume_queue(&temp_dir, &topic, mapped_file_size);
+        for (queue_offset, commit_log_offset) in [(0_i64, 0_i64), (1, 32)] {
+            consume_queue.put_message_position_info_wrapper(&DispatchRequest {
+                topic: topic.clone(),
+                queue_id: 0,
+                commit_log_offset,
+                msg_size: 32,
+                consume_queue_offset: queue_offset,
+                success: true,
+                ..DispatchRequest::default()
+            });
+        }
+        let first_file = consume_queue
+            .mapped_file_queue
+            .get_first_mapped_file()
+            .expect("first mapped file");
+        let queue_dir = std::path::Path::new(first_file.get_file_name().as_str())
+            .parent()
+            .expect("queue directory")
+            .to_path_buf();
+        let _ = consume_queue.flush(0);
+        drop(consume_queue);
+        create_empty_mapped_file(&queue_dir.join(format!("{:020}", mapped_file_size)), mapped_file_size);
+        create_empty_mapped_file(
+            &queue_dir.join(format!("{:020}", mapped_file_size * 2)),
+            mapped_file_size,
+        );
+
+        let mut recovered = new_test_consume_queue(&temp_dir, &topic, mapped_file_size);
+        assert!(recovered.load());
+        recovered.set_max_physic_offset(777);
+        recovered.mapped_file_queue.set_flushed_where(777);
+        recovered.mapped_file_queue.set_committed_where(777);
+        let tail = recovered.mapped_file_queue.get_last_mapped_file().expect("dirty tail");
+        assert!(tail.hold());
+
+        assert!(!recovered.recover_with_outcome());
+        assert_eq!(recovered.get_max_physic_offset(), 777);
+        assert_eq!(recovered.mapped_file_queue.get_flushed_where(), 777);
+        assert_eq!(recovered.mapped_file_queue.get_committed_where(), 777);
+
+        tail.release();
+        assert!(recovered.destroy_with_outcome());
     }
 
     #[test]

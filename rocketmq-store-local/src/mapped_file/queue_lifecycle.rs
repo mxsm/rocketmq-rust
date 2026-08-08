@@ -19,12 +19,23 @@ use std::path::Path;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use tracing::info;
 use tracing::warn;
 
 use crate::mapped_file::DefaultMappedFile;
 use crate::mapped_file::MappedFile;
+use crate::mapped_file::MappedFileDestroyOutcome;
+
+/// Returns whether `modified` is at least `retention` older than `now`.
+///
+/// Future modification times are treated as fresh so wall-clock rollback cannot trigger deletion.
+#[doc(hidden)]
+pub fn is_expired(modified: SystemTime, now: SystemTime, retention: Duration) -> bool {
+    now.duration_since(modified).is_ok_and(|age| age >= retention)
+}
 
 /// Files deleted by one queue maintenance operation.
 #[doc(hidden)]
@@ -41,13 +52,13 @@ impl MappedFileQueueDeletion {
         }
     }
 
-    /// Returns the number of successfully destroyed files.
+    /// Returns the number of paths removed from the filesystem namespace.
     #[doc(hidden)]
     pub fn deleted_count(&self) -> i32 {
         self.deleted_count
     }
 
-    /// Returns the destroyed files that the collection owner must remove.
+    /// Returns files whose paths were removed and that the collection owner may now untrack.
     #[doc(hidden)]
     pub fn into_mapped_files(self) -> Vec<Arc<DefaultMappedFile>> {
         self.mapped_files
@@ -58,12 +69,19 @@ impl MappedFileQueueDeletion {
 #[doc(hidden)]
 pub fn destroy_last_mapped_file(files: &[Arc<DefaultMappedFile>]) -> Option<Arc<DefaultMappedFile>> {
     let last_mapped_file = files.last()?.clone();
-    last_mapped_file.destroy(1000);
-    info!(
-        "on recover, destroy a logic mapped file {}",
-        last_mapped_file.get_file_name()
-    );
-    Some(last_mapped_file)
+    if last_mapped_file.try_destroy(1000).is_namespace_removed() {
+        info!(
+            "on recover, removed a logic mapped file {}",
+            last_mapped_file.get_file_name()
+        );
+        Some(last_mapped_file)
+    } else {
+        warn!(
+            "on recover, mapped file remains tracked for deletion retry: {}",
+            last_mapped_file.get_file_name()
+        );
+        None
+    }
 }
 
 /// Produces a collection snapshot with existing removal candidates excluded.
@@ -130,20 +148,76 @@ where
 {
     let candidate_count = files.len().saturating_sub(1);
     let mut deleted_files = Vec::new();
+    let Ok(retention_millis) = u64::try_from(expired_time) else {
+        warn!(
+            expired_time,
+            "negative mapped-file retention is invalid; skipping cleanup"
+        );
+        return MappedFileQueueDeletion::new(0, deleted_files);
+    };
+    let Ok(interval_forcibly) = u64::try_from(interval_forcibly) else {
+        warn!(
+            interval_forcibly,
+            "negative force-clean interval is invalid; skipping cleanup"
+        );
+        return MappedFileQueueDeletion::new(0, deleted_files);
+    };
+    let Ok(delete_files_interval) = u64::try_from(delete_files_interval) else {
+        warn!(
+            delete_files_interval,
+            "negative mapped-file delete interval is invalid; skipping cleanup"
+        );
+        return MappedFileQueueDeletion::new(0, deleted_files);
+    };
+    if delete_file_batch_max <= 0 {
+        warn!(delete_file_batch_max, "mapped-file delete batch limit must be positive");
+        return MappedFileQueueDeletion::new(0, deleted_files);
+    }
+    let retention = Duration::from_millis(retention_millis);
 
     for (index, mapped_file) in files.iter().enumerate().take(candidate_count) {
         if pinned_file_offset.is_some_and(|pinned| mapped_file.get_file_from_offset() >= pinned) {
             break;
         }
-        let live_max_timestamp = mapped_file.get_last_modified_timestamp() as i64 + expired_time;
-        if now_millis() >= live_max_timestamp || clean_immediately {
-            if mapped_file.destroy(interval_forcibly as u64) {
+        let expired = if clean_immediately {
+            true
+        } else {
+            let now_millis = now_millis();
+            let Ok(now_millis) = u64::try_from(now_millis) else {
+                warn!(
+                    now_millis,
+                    "negative cleanup clock value; stopping oldest-first cleanup"
+                );
+                break;
+            };
+            let Some(now) = UNIX_EPOCH.checked_add(Duration::from_millis(now_millis)) else {
+                warn!(
+                    now_millis,
+                    "cleanup clock value is out of range; stopping oldest-first cleanup"
+                );
+                break;
+            };
+            let modified = match mapped_file.try_last_modified_time() {
+                Ok(modified) => modified,
+                Err(error) => {
+                    warn!(
+                        file_name = %mapped_file.get_file_name(),
+                        error = ?error,
+                        "failed to read modification time; stopping oldest-first cleanup"
+                    );
+                    break;
+                }
+            };
+            is_expired(modified, now, retention)
+        };
+        if expired {
+            if mapped_file.try_destroy(interval_forcibly).is_namespace_removed() {
                 deleted_files.push(mapped_file.clone());
                 if deleted_files.len() >= delete_file_batch_max as usize {
                     break;
                 }
                 if delete_files_interval > 0 && index + 1 < candidate_count {
-                    thread::sleep(Duration::from_millis(delete_files_interval as u64));
+                    thread::sleep(Duration::from_millis(delete_files_interval));
                 }
             } else {
                 break;
@@ -191,7 +265,7 @@ pub fn delete_expired_mapped_files_by_offset(
             break;
         }
 
-        if destroy && mapped_file.destroy(1000 * 60) {
+        if destroy && mapped_file.try_destroy(1000 * 60).is_namespace_removed() {
             deleted_files.push(mapped_file.clone());
         } else {
             break;
@@ -214,7 +288,14 @@ pub fn retry_delete_first_mapped_file(
         "The mappedFile was destroyed once, but still alive: {}",
         first.get_file_name()
     );
-    if first.destroy(interval_forcibly as u64) {
+    let Ok(interval_forcibly) = u64::try_from(interval_forcibly) else {
+        warn!(
+            interval_forcibly,
+            "negative force-clean interval is invalid; skipping retry"
+        );
+        return MappedFileQueueDeletion::new(0, Vec::new());
+    };
+    if first.try_destroy(interval_forcibly).is_namespace_removed() {
         info!("The mappedFile re-delete OK: {}", first.get_file_name());
         MappedFileQueueDeletion::new(1, vec![first.clone()])
     } else {
@@ -237,6 +318,13 @@ pub fn swap_mapped_file_queue<N>(
     if files.is_empty() {
         return;
     }
+    if force_swap_interval_ms < 0 || normal_swap_interval_ms < 0 {
+        warn!(
+            force_swap_interval_ms,
+            normal_swap_interval_ms, "negative mapped-file swap intervals are invalid; skipping swap"
+        );
+        return;
+    }
     let reserve_num = reserve_num.max(3);
     let files_len = files.len() as i32;
     for index in (0..=(files_len - reserve_num - 1)).rev() {
@@ -244,7 +332,7 @@ pub fn swap_mapped_file_queue<N>(
             break;
         }
         let mapped_file = &files[index as usize];
-        let elapsed = now_millis() - mapped_file.get_recent_swap_map_time();
+        let elapsed = now_millis().saturating_sub(mapped_file.get_recent_swap_map_time());
         if elapsed > force_swap_interval_ms {
             mapped_file.swap_map();
             continue;
@@ -267,6 +355,13 @@ pub fn clean_swapped_mapped_file_queue<N>(
     if files.is_empty() {
         return;
     }
+    if force_clean_swap_interval_ms < 0 {
+        warn!(
+            force_clean_swap_interval_ms,
+            "negative mapped-file clean-swap interval is invalid; skipping cleanup"
+        );
+        return;
+    }
     let reserve_num = 3;
     let files_len = files.len() as i32;
     for index in (0..=(files_len - reserve_num - 1)).rev() {
@@ -274,8 +369,9 @@ pub fn clean_swapped_mapped_file_queue<N>(
             break;
         }
         let mapped_file = &files[index as usize];
-        if now_millis() - mapped_file.get_recent_swap_map_time() > force_clean_swap_interval_ms {
-            let _ = mapped_file.swap_map();
+        let snapshot = mapped_file.swap_generation_snapshot();
+        if now_millis().saturating_sub(snapshot.time_millis()) > force_clean_swap_interval_ms {
+            let _ = mapped_file.try_clean_swapped_generation(snapshot, true);
         }
     }
 }
@@ -288,14 +384,48 @@ pub fn shutdown_mapped_file_queue(files: &[Arc<DefaultMappedFile>], interval_for
     }
 }
 
-/// Destroys every mapped file and removes the queue directory when it exists.
+/// Destroys mapped files in oldest-first order and removes an empty queue directory.
+///
+/// The first deferred or failed file stops the operation so callers retain a contiguous retry
+/// identity. Unknown directory entries are never removed recursively.
 #[doc(hidden)]
-pub fn destroy_mapped_file_queue(files: &[Arc<DefaultMappedFile>], store_path: &str) {
+pub fn destroy_mapped_file_queue(files: &[Arc<DefaultMappedFile>], store_path: &str) -> MappedFileQueueDeletion {
+    // Close the complete generation before the first destructive attempt. If one file remains
+    // leased, later files must not stay writable while the queue waits for a retry.
+    shutdown_mapped_file_queue(files, 1000 * 3);
+    let mut deleted_files = Vec::new();
     for mapped_file in files {
-        mapped_file.destroy(1000 * 3);
+        match mapped_file.try_destroy(1000 * 3) {
+            MappedFileDestroyOutcome::NamespaceRemoved => deleted_files.push(mapped_file.clone()),
+            MappedFileDestroyOutcome::CleanupPending { ref_count } => {
+                warn!(
+                    file_name = %mapped_file.get_file_name(),
+                    ref_count,
+                    "mapped-file queue destroy deferred; retaining this and later identities"
+                );
+                break;
+            }
+            MappedFileDestroyOutcome::DeleteFailed { kind, raw_os_error } => {
+                warn!(
+                    file_name = %mapped_file.get_file_name(),
+                    ?kind,
+                    ?raw_os_error,
+                    "mapped-file queue destroy failed; retaining this and later identities"
+                );
+                break;
+            }
+        }
     }
     let path = Path::new(store_path);
-    if path.is_dir() {
-        let _ = fs::remove_dir_all(path);
+    if deleted_files.len() == files.len() && path.is_dir() {
+        match fs::remove_dir(path) {
+            Ok(()) => info!(path = %path.display(), "removed empty mapped-file queue directory"),
+            Err(error) => warn!(
+                path = %path.display(),
+                error = ?error,
+                "mapped-file queue directory remains non-empty or unavailable"
+            ),
+        }
     }
+    MappedFileQueueDeletion::new(deleted_files.len() as i32, deleted_files)
 }

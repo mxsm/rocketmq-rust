@@ -14,8 +14,11 @@
 
 use std::collections::BinaryHeap;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fmt::Display;
 use std::fmt::Formatter;
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -27,12 +30,15 @@ use std::time::Duration;
 use std::time::Instant;
 
 use cheetah_string::CheetahString;
+use parking_lot::Mutex;
 use parking_lot::RwLock;
 use rocketmq_error::RocketMQError;
+use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::BudgetClass;
 use rocketmq_runtime::BudgetSnapshot;
 use rocketmq_runtime::ResourceBudget;
 use rocketmq_runtime::ResourcePermit;
+use rocketmq_runtime::ShutdownDeadline;
 use tokio::sync::Notify;
 use tracing::error;
 use tracing::info;
@@ -48,13 +54,16 @@ use crate::mapped_file::MappedFile;
 
 /// Timeout for waiting on file allocation (matches Java: 5 seconds)
 const WAIT_TIMEOUT: Duration = Duration::from_secs(5);
+const SHUTDOWN_CLEANUP_TIMEOUT: Duration = Duration::from_millis(1_100);
+const SHUTDOWN_CLEANUP_RETRY_INTERVAL: Duration = Duration::from_millis(100);
+const CLEANUP_RETRY_BATCH_MAX: usize = 16;
 
 /// Bounded mapped-file allocation queue diagnostics.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MappedFileAllocationQueueSnapshot {
-    /// Requests currently holding mapped-file allocation budget.
+    /// Requests and retained physical cleanup owners holding mapped-file allocation budget.
     pub current_count: usize,
-    /// File bytes charged to accepted requests.
+    /// File bytes charged to accepted requests or retained physical cleanup owners.
     pub charged_bytes: usize,
     /// Requests waiting in the priority heap, including harmless stale keys.
     pub queued_count: usize,
@@ -64,6 +73,8 @@ pub struct MappedFileAllocationQueueSnapshot {
     pub rejected_count: u64,
     /// Accepted requests explicitly abandoned by timeout or shutdown.
     pub abandoned_count: u64,
+    /// Abandoned mapped files whose namespace cleanup is still pending.
+    pub pending_cleanup_count: usize,
 }
 
 struct WorkerCompletion {
@@ -75,6 +86,62 @@ impl Drop for WorkerCompletion {
     fn drop(&mut self) {
         self.completed.store(true, Ordering::Release);
         self.notification.notify_one();
+    }
+}
+
+type PendingCleanupKey = (String, u64);
+type PendingCleanupRegistry = HashMap<PendingCleanupKey, PendingAllocationCleanup>;
+
+enum PendingAllocationCleanup {
+    AwaitingWorker(Option<ResourcePermit>),
+    Retained(Arc<PendingMappedFileCleanup>),
+    Cleaning(Arc<PendingMappedFileCleanup>),
+}
+
+struct PendingMappedFileCleanup {
+    mapped_file: Arc<DefaultMappedFile>,
+    _permit: Option<ResourcePermit>,
+    attempts: AtomicU64,
+}
+
+struct PendingCleanupAttempt {
+    registry: Arc<Mutex<PendingCleanupRegistry>>,
+    key: PendingCleanupKey,
+    owner: Arc<PendingMappedFileCleanup>,
+    completed: bool,
+}
+
+impl PendingCleanupAttempt {
+    fn finish(mut self, namespace_removed: bool) {
+        let mut pending = self.registry.lock();
+        let same_attempt = matches!(
+            pending.get(&self.key),
+            Some(PendingAllocationCleanup::Cleaning(current)) if Arc::ptr_eq(current, &self.owner)
+        );
+        if same_attempt {
+            if namespace_removed {
+                pending.remove(&self.key);
+            } else {
+                pending.insert(self.key.clone(), PendingAllocationCleanup::Retained(self.owner.clone()));
+            }
+        }
+        self.completed = true;
+    }
+}
+
+impl Drop for PendingCleanupAttempt {
+    fn drop(&mut self) {
+        if self.completed {
+            return;
+        }
+        let mut pending = self.registry.lock();
+        let same_attempt = matches!(
+            pending.get(&self.key),
+            Some(PendingAllocationCleanup::Cleaning(current)) if Arc::ptr_eq(current, &self.owner)
+        );
+        if same_attempt {
+            pending.insert(self.key.clone(), PendingAllocationCleanup::Retained(self.owner.clone()));
+        }
     }
 }
 
@@ -104,11 +171,26 @@ pub struct AllocateMappedFileService {
     /// Accepted requests removed before normal completion.
     abandoned_count: Arc<AtomicU64>,
 
+    /// Process-local identity assigned to each admitted request.
+    next_request_id: Arc<AtomicU64>,
+
+    /// Path fences and retained owners for abandoned allocation requests.
+    pending_cleanup: Arc<Mutex<PendingCleanupRegistry>>,
+
+    /// Queue directories closed to new preallocation requests until retirement completes.
+    retired_directories: Arc<RwLock<HashSet<PathBuf>>>,
+
+    /// Runtime-owner-derived executor for bounded shutdown cleanup I/O.
+    cleanup_executor: Option<BlockingExecutor>,
+
     /// Exception flag (set when allocation fails)
     has_exception: Arc<AtomicBool>,
 
     /// Shutdown flag
     stopped: Arc<AtomicBool>,
+
+    /// Records whether this service ever crossed into managed worker mode.
+    ever_started: Arc<AtomicBool>,
 
     /// Notification for new requests
     notify: Arc<Notify>,
@@ -148,8 +230,13 @@ impl Clone for AllocateMappedFileService {
             request_queue: self.request_queue.clone(),
             allocation_budget: self.allocation_budget.clone(),
             abandoned_count: self.abandoned_count.clone(),
+            next_request_id: self.next_request_id.clone(),
+            pending_cleanup: self.pending_cleanup.clone(),
+            retired_directories: self.retired_directories.clone(),
+            cleanup_executor: self.cleanup_executor.clone(),
             has_exception: self.has_exception.clone(),
             stopped: self.stopped.clone(),
+            ever_started: self.ever_started.clone(),
             notify: self.notify.clone(),
             worker_wakeup: self.worker_wakeup.clone(),
             worker_handle: self.worker_handle.clone(),
@@ -178,6 +265,40 @@ impl AllocateMappedFileService {
         fast_fail_if_no_buffer: bool,
         allocation_budget: ResourceBudget,
     ) -> Self {
+        Self::new_with_config_inner(
+            transient_store_pool,
+            transient_store_pool_enable,
+            fast_fail_if_no_buffer,
+            allocation_budget,
+            None,
+        )
+    }
+
+    /// Creates a service whose shutdown cleanup is owned by the Store runtime.
+    #[doc(hidden)]
+    pub fn new_with_config_and_storage_io(
+        transient_store_pool: Option<Arc<TransientStorePool>>,
+        transient_store_pool_enable: bool,
+        fast_fail_if_no_buffer: bool,
+        allocation_budget: ResourceBudget,
+        storage_io: BlockingExecutor,
+    ) -> Self {
+        Self::new_with_config_inner(
+            transient_store_pool,
+            transient_store_pool_enable,
+            fast_fail_if_no_buffer,
+            allocation_budget,
+            Some(storage_io),
+        )
+    }
+
+    fn new_with_config_inner(
+        transient_store_pool: Option<Arc<TransientStorePool>>,
+        transient_store_pool_enable: bool,
+        fast_fail_if_no_buffer: bool,
+        allocation_budget: ResourceBudget,
+        cleanup_executor: Option<BlockingExecutor>,
+    ) -> Self {
         let request_table = Arc::new(RwLock::new(HashMap::new()));
         let request_queue = Arc::new(RwLock::new(BinaryHeap::new()));
         let has_exception = Arc::new(AtomicBool::new(false));
@@ -190,8 +311,13 @@ impl AllocateMappedFileService {
             request_queue,
             allocation_budget,
             abandoned_count: Arc::new(AtomicU64::new(0)),
+            next_request_id: Arc::new(AtomicU64::new(1)),
+            pending_cleanup: Arc::new(Mutex::new(HashMap::new())),
+            retired_directories: Arc::new(RwLock::new(HashSet::new())),
+            cleanup_executor,
             has_exception,
             stopped,
+            ever_started: Arc::new(AtomicBool::new(false)),
             notify,
             worker_wakeup,
             worker_handle: Arc::new(parking_lot::Mutex::new(None)),
@@ -237,6 +363,29 @@ impl AllocateMappedFileService {
         service
     }
 
+    #[doc(hidden)]
+    pub fn new_with_message_store_config_and_storage_io<C>(
+        transient_store_pool: Option<Arc<TransientStorePool>>,
+        transient_store_pool_enable: bool,
+        fast_fail_if_no_buffer: bool,
+        message_store_config: &C,
+        allocation_budget: ResourceBudget,
+        storage_io: BlockingExecutor,
+    ) -> Self
+    where
+        C: AllocateMappedFileServiceConfig,
+    {
+        let mut service = Self::new_with_config_and_storage_io(
+            transient_store_pool,
+            transient_store_pool_enable,
+            fast_fail_if_no_buffer,
+            allocation_budget,
+            storage_io,
+        );
+        service.warm_mapped_file_config = message_store_config.mapped_file_warmup_config();
+        service
+    }
+
     pub fn is_started(&self) -> bool {
         self.worker_handle.lock().is_some() && !self.stopped.load(Ordering::Acquire)
     }
@@ -256,11 +405,13 @@ impl AllocateMappedFileService {
             }
         }
 
+        self.ever_started.store(true, Ordering::Release);
         self.stopped.store(false, Ordering::Relaxed);
         self.worker_completed.store(false, Ordering::Release);
 
         let request_table = self.request_table.clone();
         let request_queue = self.request_queue.clone();
+        let pending_cleanup = self.pending_cleanup.clone();
         let has_exception = self.has_exception.clone();
         let stopped = self.stopped.clone();
         let transient_store_pool = self.transient_store_pool.clone();
@@ -281,6 +432,7 @@ impl AllocateMappedFileService {
                 Self::run_worker(
                     request_table,
                     request_queue,
+                    pending_cleanup,
                     has_exception,
                     stopped,
                     transient_store_pool,
@@ -306,6 +458,7 @@ impl AllocateMappedFileService {
     fn run_worker(
         request_table: Arc<RwLock<HashMap<String, Arc<AllocateRequest>>>>,
         request_queue: Arc<RwLock<BinaryHeap<AllocationQueueEntry>>>,
+        pending_cleanup: Arc<Mutex<PendingCleanupRegistry>>,
         has_exception: Arc<AtomicBool>,
         stopped: Arc<AtomicBool>,
         transient_store_pool: Option<Arc<TransientStorePool>>,
@@ -320,6 +473,7 @@ impl AllocateMappedFileService {
                 && Self::mmap_operation(
                     &request_table,
                     &request_queue,
+                    &pending_cleanup,
                     &has_exception,
                     &transient_store_pool,
                     warm_mapped_file_config,
@@ -353,11 +507,13 @@ impl AllocateMappedFileService {
     fn mmap_operation(
         request_table: &Arc<RwLock<HashMap<String, Arc<AllocateRequest>>>>,
         request_queue: &Arc<RwLock<BinaryHeap<AllocationQueueEntry>>>,
+        pending_cleanup: &Arc<Mutex<PendingCleanupRegistry>>,
         has_exception: &Arc<AtomicBool>,
         transient_store_pool: &Option<Arc<TransientStorePool>>,
         warm_mapped_file_config: MappedFileWarmupConfig,
         #[cfg(feature = "observability")] store_metrics: &rocketmq_observability::metrics::store::StoreMetricsRecorder,
     ) -> bool {
+        Self::retry_pending_cleanup_list(pending_cleanup);
         // Pop request from priority queue
         let req = {
             let mut queue = request_queue.write();
@@ -372,12 +528,16 @@ impl AllocateMappedFileService {
         // Check if request still valid in table
         let expected_request = {
             let table = request_table.read();
-            table.get(entry.file_path()).cloned()
+            table
+                .get(entry.file_path())
+                .filter(|request| request.id() == entry.request_id())
+                .cloned()
         };
 
         let req = match expected_request {
             Some(request) if request.file_size() == entry.file_size() => request,
             None => {
+                Self::clear_waiting_cleanup_fence(pending_cleanup, entry.file_path(), entry.request_id());
                 warn!(
                     "this mmap request expired, maybe cause timeout {} {}",
                     entry.file_path(),
@@ -407,9 +567,15 @@ impl AllocateMappedFileService {
                 let request_is_owned = request_table
                     .read()
                     .get(req.file_path())
-                    .is_some_and(|request| Arc::ptr_eq(request, &req));
+                    .is_some_and(|request| request.id() == req.id() && Arc::ptr_eq(request, &req));
                 if !request_is_owned {
-                    mapped_file.destroy(1000);
+                    Self::retain_for_cleanup(
+                        pending_cleanup,
+                        req.file_path(),
+                        req.id(),
+                        mapped_file,
+                        req.take_permit(),
+                    );
                     req.complete();
                     return true;
                 }
@@ -417,10 +583,16 @@ impl AllocateMappedFileService {
                 let request_is_still_owned = request_table
                     .read()
                     .get(req.file_path())
-                    .is_some_and(|request| Arc::ptr_eq(request, &req));
+                    .is_some_and(|request| request.id() == req.id() && Arc::ptr_eq(request, &req));
                 if !request_is_still_owned {
                     if let Some(mapped_file) = req.mapped_file.write().take() {
-                        mapped_file.destroy(1000);
+                        Self::retain_for_cleanup(
+                            pending_cleanup,
+                            req.file_path(),
+                            req.id(),
+                            mapped_file,
+                            req.take_permit(),
+                        );
                     }
                     req.complete();
                     return true;
@@ -440,8 +612,11 @@ impl AllocateMappedFileService {
                 );
                 has_exception.store(true, Ordering::Relaxed);
 
-                // Re-queue the request for retry
-                request_queue.write().push(entry);
+                if !Self::requeue_failed_request_if_owned(request_table, request_queue, &req, entry) {
+                    Self::clear_waiting_cleanup_fence(pending_cleanup, req.file_path(), req.id());
+                    req.complete();
+                    return true;
+                }
 
                 // Small delay before retry
                 thread::sleep(Duration::from_millis(1));
@@ -449,6 +624,41 @@ impl AllocateMappedFileService {
                 false
             }
         }
+    }
+
+    fn requeue_failed_request_if_owned(
+        request_table: &Arc<RwLock<HashMap<String, Arc<AllocateRequest>>>>,
+        request_queue: &Arc<RwLock<BinaryHeap<AllocationQueueEntry>>>,
+        request: &Arc<AllocateRequest>,
+        entry: AllocationQueueEntry,
+    ) -> bool {
+        Self::requeue_failed_request_if_owned_with_hook(request_table, request_queue, request, entry, || {})
+    }
+
+    fn requeue_failed_request_if_owned_with_hook<F>(
+        request_table: &Arc<RwLock<HashMap<String, Arc<AllocateRequest>>>>,
+        request_queue: &Arc<RwLock<BinaryHeap<AllocationQueueEntry>>>,
+        request: &Arc<AllocateRequest>,
+        entry: AllocationQueueEntry,
+        before_heap_publication: F,
+    ) -> bool
+    where
+        F: FnOnce(),
+    {
+        let table = request_table.read();
+        let request_is_owned = table
+            .get(request.file_path())
+            .is_some_and(|current| current.id() == request.id() && Arc::ptr_eq(current, request));
+        if !request_is_owned {
+            return false;
+        }
+
+        // Publish the retry while the table identity remains read-locked. Shutdown and directory
+        // retirement use the inverse side of the same table -> heap order, so they either drain
+        // this entry or make the ownership check fail.
+        before_heap_publication();
+        request_queue.write().push(entry);
+        true
     }
 
     /// Create a MappedFile with optional TransientStorePool
@@ -505,6 +715,310 @@ impl AllocateMappedFileService {
         Ok(Arc::new(mapped_file))
     }
 
+    fn cleanup_key(file_path: &str, request_id: u64) -> PendingCleanupKey {
+        (file_path.to_owned(), request_id)
+    }
+
+    fn has_pending_cleanup_for_path(pending: &PendingCleanupRegistry, file_path: &str) -> bool {
+        pending.keys().any(|(candidate, _)| candidate == file_path)
+    }
+
+    fn path_belongs_to_directory(file_path: &str, directory: &Path) -> bool {
+        Path::new(file_path).parent().is_some_and(|parent| parent == directory)
+    }
+
+    fn path_is_retired(&self, file_path: &str) -> bool {
+        let retired = self.retired_directories.read();
+        retired
+            .iter()
+            .any(|directory| Self::path_belongs_to_directory(file_path, directory))
+    }
+
+    /// Returns whether legacy synchronous creation is safe for a service that was never started.
+    #[doc(hidden)]
+    pub fn allows_synchronous_fallback(&self, file_path: &Path) -> bool {
+        if self.ever_started.load(Ordering::Acquire)
+            || self.stopped.load(Ordering::Acquire)
+            || self.worker_handle.lock().is_some()
+        {
+            return false;
+        }
+        let file_path = file_path.to_string_lossy();
+        !self.path_is_retired(file_path.as_ref())
+            && !Self::has_pending_cleanup_for_path(&self.pending_cleanup.lock(), file_path.as_ref())
+    }
+
+    /// Closes one mapped-file queue directory to allocator admission and transfers every
+    /// matching request to cleanup ownership.
+    #[doc(hidden)]
+    pub fn retire_directory(&self, directory: &Path) -> bool {
+        let directory = directory.to_path_buf();
+        let (requests, removed_queue_entries) = {
+            let mut table = self.request_table.write();
+            self.retired_directories.write().insert(directory.clone());
+            let paths = table
+                .iter()
+                .filter(|(path, _)| Self::path_belongs_to_directory(path, &directory))
+                .map(|(path, _)| path.clone())
+                .collect::<Vec<_>>();
+            for path in &paths {
+                if let Some(request) = table.get(path) {
+                    Self::register_waiting_cleanup_fence(
+                        &self.pending_cleanup,
+                        request.file_path(),
+                        request.id(),
+                        request.take_permit(),
+                    );
+                }
+            }
+            let requests = paths
+                .into_iter()
+                .filter_map(|path| table.remove(&path).map(|request| (path, request)))
+                .collect::<Vec<_>>();
+            let mut removed_queue_entries = Vec::new();
+            self.request_queue.write().retain(|entry| {
+                let retain = !Self::path_belongs_to_directory(entry.file_path(), &directory);
+                if !retain {
+                    removed_queue_entries.push((entry.file_path().to_owned(), entry.request_id()));
+                }
+                retain
+            });
+            (requests, removed_queue_entries)
+        };
+
+        self.abandoned_count.fetch_add(requests.len() as u64, Ordering::Relaxed);
+        for (_, request) in requests {
+            if let Some(mapped_file) = request.mapped_file.write().take() {
+                Self::retain_for_cleanup(
+                    &self.pending_cleanup,
+                    request.file_path(),
+                    request.id(),
+                    mapped_file,
+                    request.take_permit(),
+                );
+            }
+            request.complete();
+        }
+        for (file_path, request_id) in removed_queue_entries {
+            Self::clear_waiting_cleanup_fence(&self.pending_cleanup, &file_path, request_id);
+        }
+        self.notify_worker();
+        if self.stopped.load(Ordering::Acquire) {
+            self.retry_retired_directory_cleanup_once(&directory)
+        } else {
+            self.is_directory_retirement_complete(&directory)
+        }
+    }
+
+    /// Retries a bounded batch of retained cleanup owners for one retired directory.
+    ///
+    /// This foreground path keeps queue destruction retryable after the allocation worker has
+    /// stopped. It never scans or deletes owners outside `directory` and refuses directories that
+    /// have not first crossed the retirement fence.
+    #[doc(hidden)]
+    pub fn retry_retired_directory_cleanup_once(&self, directory: &Path) -> bool {
+        if !self.stopped.load(Ordering::Acquire) || !self.retired_directories.read().contains(directory) {
+            return false;
+        }
+        let _ = Self::retry_pending_cleanup_list_until(
+            &self.pending_cleanup,
+            None,
+            CLEANUP_RETRY_BATCH_MAX,
+            Some(directory),
+        );
+        self.is_directory_retirement_complete(directory)
+    }
+
+    /// Returns whether a retired directory has no allocator request or cleanup owner remaining.
+    #[doc(hidden)]
+    pub fn is_directory_retirement_complete(&self, directory: &Path) -> bool {
+        let has_request = self
+            .request_table
+            .read()
+            .keys()
+            .any(|path| Self::path_belongs_to_directory(path, directory));
+        let has_cleanup = self
+            .pending_cleanup
+            .lock()
+            .keys()
+            .any(|(path, _)| Self::path_belongs_to_directory(path, directory));
+        !has_request && !has_cleanup
+    }
+
+    /// Reopens allocator admission after the caller has proved the retired namespace absent.
+    #[doc(hidden)]
+    pub fn complete_directory_retirement(&self, directory: &Path) -> bool {
+        let table = self.request_table.read();
+        let mut retired = self.retired_directories.write();
+        if !retired.contains(directory)
+            || table
+                .keys()
+                .any(|path| Self::path_belongs_to_directory(path, directory))
+            || self
+                .pending_cleanup
+                .lock()
+                .keys()
+                .any(|(path, _)| Self::path_belongs_to_directory(path, directory))
+        {
+            return false;
+        }
+        retired.remove(directory)
+    }
+
+    fn register_waiting_cleanup_fence(
+        pending_cleanup: &Arc<Mutex<PendingCleanupRegistry>>,
+        file_path: &str,
+        request_id: u64,
+        permit: Option<ResourcePermit>,
+    ) {
+        let mut permit = permit;
+        let mut pending = pending_cleanup.lock();
+        match pending.entry(Self::cleanup_key(file_path, request_id)) {
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(PendingAllocationCleanup::AwaitingWorker(permit.take()));
+            }
+            std::collections::hash_map::Entry::Occupied(mut entry) => {
+                if let PendingAllocationCleanup::AwaitingWorker(current) = entry.get_mut() {
+                    if current.is_none() {
+                        *current = permit.take();
+                    }
+                }
+            }
+        }
+    }
+
+    fn clear_waiting_cleanup_fence(
+        pending_cleanup: &Arc<Mutex<PendingCleanupRegistry>>,
+        file_path: &str,
+        request_id: u64,
+    ) {
+        let key = Self::cleanup_key(file_path, request_id);
+        let mut pending = pending_cleanup.lock();
+        if matches!(pending.get(&key), Some(PendingAllocationCleanup::AwaitingWorker(_))) {
+            pending.remove(&key);
+        }
+    }
+
+    fn retain_for_cleanup(
+        pending_cleanup: &Arc<Mutex<PendingCleanupRegistry>>,
+        file_path: &str,
+        request_id: u64,
+        mapped_file: Arc<DefaultMappedFile>,
+        permit: Option<ResourcePermit>,
+    ) {
+        let key = Self::cleanup_key(file_path, request_id);
+        let mut pending = pending_cleanup.lock();
+        let permit = match pending.remove(&key) {
+            Some(PendingAllocationCleanup::AwaitingWorker(existing)) => existing.or(permit),
+            Some(existing @ (PendingAllocationCleanup::Retained(_) | PendingAllocationCleanup::Cleaning(_))) => {
+                pending.insert(key, existing);
+                return;
+            }
+            None => permit,
+        };
+        pending.insert(
+            key,
+            PendingAllocationCleanup::Retained(Arc::new(PendingMappedFileCleanup {
+                mapped_file,
+                _permit: permit,
+                attempts: AtomicU64::new(0),
+            })),
+        );
+    }
+
+    fn retry_pending_cleanup_list(pending_cleanup: &Arc<Mutex<PendingCleanupRegistry>>) {
+        let _ = Self::retry_pending_cleanup_list_until(pending_cleanup, None, CLEANUP_RETRY_BATCH_MAX, None);
+    }
+
+    fn retry_pending_cleanup_list_until(
+        pending_cleanup: &Arc<Mutex<PendingCleanupRegistry>>,
+        deadline: Option<ShutdownDeadline>,
+        max_attempts: usize,
+        directory: Option<&Path>,
+    ) -> usize {
+        let attempts = {
+            let mut pending = pending_cleanup.lock();
+            let mut candidates = pending
+                .iter()
+                .filter_map(|(key, cleanup)| match cleanup {
+                    PendingAllocationCleanup::Retained(owner)
+                        if directory.is_none_or(|directory| Self::path_belongs_to_directory(&key.0, directory)) =>
+                    {
+                        Some((key.clone(), owner.clone()))
+                    }
+                    PendingAllocationCleanup::AwaitingWorker(_) | PendingAllocationCleanup::Cleaning(_) => None,
+                    PendingAllocationCleanup::Retained(_) => None,
+                })
+                .collect::<Vec<_>>();
+            candidates.sort_by_key(|(key, owner)| (owner.attempts.load(Ordering::Acquire), key.1));
+            candidates.truncate(max_attempts);
+            for (key, owner) in &candidates {
+                pending.insert(key.clone(), PendingAllocationCleanup::Cleaning(owner.clone()));
+            }
+            candidates
+                .into_iter()
+                .map(|(key, owner)| PendingCleanupAttempt {
+                    registry: pending_cleanup.clone(),
+                    key,
+                    owner,
+                    completed: false,
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let mut completed = 0;
+        for attempt in attempts {
+            if deadline.is_some_and(ShutdownDeadline::is_expired) {
+                break;
+            }
+            attempt.owner.attempts.fetch_add(1, Ordering::AcqRel);
+            let namespace_removed = attempt.owner.mapped_file.try_destroy(1000).is_namespace_removed();
+            attempt.finish(namespace_removed);
+            completed += 1;
+        }
+        completed
+    }
+
+    #[cfg(test)]
+    fn retry_pending_cleanup(&self) {
+        Self::retry_pending_cleanup_list(&self.pending_cleanup);
+    }
+
+    async fn drain_pending_cleanup_for_shutdown(&self, deadline: ShutdownDeadline) {
+        let Some(executor) = self.cleanup_executor.clone() else {
+            warn!(
+                pending_cleanup_count = self.pending_cleanup.lock().len(),
+                "mapped-file shutdown cleanup retained because no Store blocking executor was supplied"
+            );
+            return;
+        };
+        let pending_cleanup = self.pending_cleanup.clone();
+        let result = executor
+            .spawn_io_until("store.allocate-mapped-file-shutdown-cleanup", deadline, move || loop {
+                if deadline.is_expired() || pending_cleanup.lock().is_empty() {
+                    return pending_cleanup.lock().len();
+                }
+                let _ = Self::retry_pending_cleanup_list_until(
+                    &pending_cleanup,
+                    Some(deadline),
+                    CLEANUP_RETRY_BATCH_MAX,
+                    None,
+                );
+                if pending_cleanup.lock().is_empty() {
+                    return 0;
+                }
+                let remaining = deadline.remaining();
+                if remaining.is_zero() {
+                    return pending_cleanup.lock().len();
+                }
+                thread::sleep(SHUTDOWN_CLEANUP_RETRY_INTERVAL.min(remaining));
+            })
+            .await;
+        if let Err(error) = result {
+            warn!(%error, "bounded mapped-file shutdown cleanup did not finish before its runtime deadline");
+        }
+    }
+
     fn notify_worker(&self) {
         self.notify.notify_one();
         let (_, condvar) = &*self.worker_wakeup;
@@ -512,8 +1026,28 @@ impl AllocateMappedFileService {
     }
 
     fn admit_request(&self, file_path: String, file_size: i32) -> AllocationAdmission {
-        if let Some(existing) = self.request_table.read().get(&file_path) {
-            return AllocationAdmission::Existing(existing.clone());
+        if file_size <= 0 {
+            warn!(
+                file_path,
+                file_size, "mapped-file allocation rejected because its size is not positive"
+            );
+            return AllocationAdmission::Rejected;
+        }
+        if self.stopped.load(Ordering::Acquire) || self.path_is_retired(&file_path) {
+            return AllocationAdmission::Rejected;
+        }
+        {
+            let table = self.request_table.read();
+            if let Some(existing) = table.get(&file_path) {
+                return AllocationAdmission::Existing(existing.clone());
+            }
+            if Self::has_pending_cleanup_for_path(&self.pending_cleanup.lock(), &file_path) {
+                warn!(
+                    file_path,
+                    "mapped-file allocation rejected while prior cleanup remains pending"
+                );
+                return AllocationAdmission::Rejected;
+            }
         }
         let charged_bytes = usize::try_from(file_size).unwrap_or_default().max(1);
         let permit = match self.allocation_budget.try_acquire(charged_bytes, BudgetClass::Data) {
@@ -529,15 +1063,30 @@ impl AllocateMappedFileService {
             }
         };
         let mut table = self.request_table.write();
+        if self.stopped.load(Ordering::Acquire) || self.path_is_retired(&file_path) {
+            warn!(
+                file_path,
+                "mapped-file allocation rejected because its queue directory is retired"
+            );
+            return AllocationAdmission::Rejected;
+        }
         if let Some(existing) = table.get(&file_path) {
             return AllocationAdmission::Existing(existing.clone());
         }
-        let request = Arc::new(AllocateRequest::new(file_path.clone(), file_size, permit));
+        if Self::has_pending_cleanup_for_path(&self.pending_cleanup.lock(), &file_path) {
+            warn!(
+                file_path,
+                "mapped-file allocation rejected while prior cleanup remains pending"
+            );
+            return AllocationAdmission::Rejected;
+        }
+        let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
+        let request = Arc::new(AllocateRequest::new(request_id, file_path.clone(), file_size, permit));
         table.insert(file_path, request.clone());
-        drop(table);
         self.request_queue
             .write()
             .push(AllocationQueueEntry::from_request(&request));
+        drop(table);
         self.notify_worker();
         AllocationAdmission::Inserted(request)
     }
@@ -546,8 +1095,16 @@ impl AllocateMappedFileService {
         let mut table = self.request_table.write();
         let removed = if table
             .get(request.file_path())
-            .is_some_and(|current| Arc::ptr_eq(current, request))
+            .is_some_and(|current| current.id() == request.id() && Arc::ptr_eq(current, request))
         {
+            if abandoned {
+                Self::register_waiting_cleanup_fence(
+                    &self.pending_cleanup,
+                    request.file_path(),
+                    request.id(),
+                    request.take_permit(),
+                );
+            }
             table.remove(request.file_path());
             if abandoned {
                 self.abandoned_count.fetch_add(1, Ordering::Relaxed);
@@ -560,7 +1117,14 @@ impl AllocateMappedFileService {
 
         if removed && abandoned {
             if let Some(mapped_file) = request.mapped_file.write().take() {
-                mapped_file.destroy(1000);
+                Self::retain_for_cleanup(
+                    &self.pending_cleanup,
+                    request.file_path(),
+                    request.id(),
+                    mapped_file,
+                    request.take_permit(),
+                );
+                self.notify_worker();
             }
         }
     }
@@ -579,6 +1143,7 @@ impl AllocateMappedFileService {
             oldest_age,
             rejected_count: budget.rejected_count,
             abandoned_count: self.abandoned_count.load(Ordering::Relaxed),
+            pending_cleanup_count: self.pending_cleanup.lock().len(),
         }
     }
 
@@ -601,6 +1166,13 @@ impl AllocateMappedFileService {
         next_next_file_path: String,
         file_size: i32,
     ) -> Result<Option<Arc<DefaultMappedFile>>, RocketMQError> {
+        if file_size <= 0 {
+            warn!(
+                file_path = next_file_path,
+                file_size, "mapped-file allocation rejected because its size is not positive"
+            );
+            return Ok(None);
+        }
         // Check available buffer capacity if using TransientStorePool
         let mut can_submit_requests = self.allocation_capacity(2);
         let existing_request = self.request_table.read().get(&next_file_path).cloned();
@@ -648,6 +1220,7 @@ impl AllocateMappedFileService {
         // Check for exceptions
         if self.has_exception.load(Ordering::Relaxed) {
             warn!("AllocateMappedFileService has exception, so return null");
+            self.remove_request_if_owned(&next_req, true);
             return Ok(None);
         }
 
@@ -678,12 +1251,13 @@ impl AllocateMappedFileService {
         file_path: String,
         file_size: u64,
     ) -> Result<Arc<DefaultMappedFile>, RocketMQError> {
+        let file_size = Self::checked_public_file_size(&file_path, file_size)?;
         // Use empty string for next-next file (won't be allocated)
         let result = self
             .put_request_and_return_mapped_file(
                 file_path.clone(),
                 String::new(), // No pre-allocation
-                file_size as i32,
+                file_size,
             )
             .await?;
 
@@ -707,8 +1281,8 @@ impl AllocateMappedFileService {
         file_path: String,
         file_size: u64,
     ) -> Result<Arc<DefaultMappedFile>, RocketMQError> {
-        let result =
-            self.put_request_and_return_mapped_file_blocking(file_path.clone(), String::new(), file_size as i32)?;
+        let file_size = Self::checked_public_file_size(&file_path, file_size)?;
+        let result = self.put_request_and_return_mapped_file_blocking(file_path.clone(), String::new(), file_size)?;
 
         result.ok_or_else(|| RocketMQError::StorageWriteFailed {
             path: file_path,
@@ -735,6 +1309,7 @@ impl AllocateMappedFileService {
 
         if self.has_exception.load(Ordering::Relaxed) {
             warn!("AllocateMappedFileService has exception, so return null");
+            self.remove_request_if_owned(&next_req, true);
             return Ok(None);
         }
 
@@ -749,6 +1324,13 @@ impl AllocateMappedFileService {
     }
 
     pub fn submit_request_in_background(&self, file_path: String, file_size: u64) {
+        let file_size = match Self::checked_public_file_size(&file_path, file_size) {
+            Ok(file_size) => file_size,
+            Err(error) => {
+                warn!(%error, "background mapped-file allocation rejected before admission");
+                return;
+            }
+        };
         let can_submit_request = self.allocation_capacity(1) > 0;
 
         if !can_submit_request {
@@ -763,9 +1345,19 @@ impl AllocateMappedFileService {
             return;
         }
 
-        if let AllocationAdmission::Rejected = self.admit_request(file_path, file_size as i32) {
+        if let AllocationAdmission::Rejected = self.admit_request(file_path, file_size) {
             warn!("background mapped-file allocation rejected by Store budget");
         }
+    }
+
+    fn checked_public_file_size(file_path: &str, file_size: u64) -> Result<i32, RocketMQError> {
+        i32::try_from(file_size)
+            .ok()
+            .filter(|file_size| *file_size > 0)
+            .ok_or_else(|| RocketMQError::StorageWriteFailed {
+                path: file_path.to_owned(),
+                reason: format!("mapped-file size must be in 1..={} bytes, got {file_size}", i32::MAX),
+            })
     }
 
     fn allocation_capacity(&self, default_capacity: usize) -> usize {
@@ -790,42 +1382,120 @@ impl AllocateMappedFileService {
     /// Shutdown the service - corresponds to Java's shutdown()
     pub async fn shutdown(&self) {
         info!("AllocateMappedFileService: shutting down");
+        let deadline = ShutdownDeadline::after(SHUTDOWN_CLEANUP_TIMEOUT);
 
         self.stopped.store(true, Ordering::Relaxed);
         self.notify_worker();
         let (_, condvar) = &*self.worker_wakeup;
         condvar.notify_all();
 
-        // Wait for worker to complete
-        let handle = self.worker_handle.lock().take();
-        if let Some(handle) = handle {
-            let completion = self.worker_completion.notified();
-            if !self.worker_completed.load(Ordering::Acquire) {
-                completion.await;
-            }
-            while !handle.is_finished() {
-                tokio::task::yield_now().await;
-            }
-            if handle.join().is_err() {
-                error!("AllocateMappedFileService worker panicked during shutdown");
-            }
-        }
-
-        // Clean up pre-allocated files and release every request permit.
-        let requests = {
+        // Revoke table and heap ownership before waiting for the worker. A request already
+        // claimed by the worker keeps its AwaitingWorker fence; a late mapping therefore enters
+        // the cleanup registry before the managed join task performs its final cleanup pass.
+        let (requests, removed_queue_entries) = {
             let mut table = self.request_table.write();
-            std::mem::take(&mut *table)
+            for request in table.values() {
+                Self::register_waiting_cleanup_fence(
+                    &self.pending_cleanup,
+                    request.file_path(),
+                    request.id(),
+                    request.take_permit(),
+                );
+            }
+            let requests = std::mem::take(&mut *table);
+            let removed_queue_entries = self
+                .request_queue
+                .write()
+                .drain()
+                .map(|entry| (entry.file_path().to_owned(), entry.request_id()))
+                .collect::<Vec<_>>();
+            (requests, removed_queue_entries)
         };
-        self.request_queue.write().clear();
         self.abandoned_count.fetch_add(requests.len() as u64, Ordering::Relaxed);
         for req in requests.values() {
-            if let Some(ref mapped_file) = *req.mapped_file.read() {
+            if let Some(mapped_file) = req.mapped_file.write().take() {
                 info!("delete pre allocated mapped file, {}", req.file_path());
-                mapped_file.destroy(1000);
+                Self::retain_for_cleanup(
+                    &self.pending_cleanup,
+                    req.file_path(),
+                    req.id(),
+                    mapped_file,
+                    req.take_permit(),
+                );
             }
+            req.complete();
+        }
+        for (file_path, request_id) in removed_queue_entries {
+            Self::clear_waiting_cleanup_fence(&self.pending_cleanup, &file_path, request_id);
         }
 
-        info!("AllocateMappedFileService: shutdown complete");
+        // Wait for the worker through the Store-owned blocking boundary. The same absolute
+        // deadline covers both join observation and the foreground cleanup drain.
+        let handle = self.worker_handle.lock().take();
+        if let Some(handle) = handle {
+            if let Some(executor) = self.cleanup_executor.clone() {
+                let join_owner = Arc::new(Mutex::new(Some(handle)));
+                let task_owner = join_owner.clone();
+                let pending_cleanup = self.pending_cleanup.clone();
+                match executor
+                    .spawn_io_until("store.allocate-mapped-file-worker-join", deadline, move || {
+                        let handle = task_owner.lock().take();
+                        let join_result = handle.map(thread::JoinHandle::join).unwrap_or(Ok(()));
+                        if join_result.is_ok() {
+                            let _ = Self::retry_pending_cleanup_list_until(
+                                &pending_cleanup,
+                                Some(deadline),
+                                CLEANUP_RETRY_BATCH_MAX,
+                                None,
+                            );
+                        }
+                        join_result
+                    })
+                    .await
+                {
+                    Ok(Ok(())) => {}
+                    Ok(Err(_)) => error!("AllocateMappedFileService worker panicked during shutdown"),
+                    Err(error) => {
+                        warn!(%error, "AllocateMappedFileService worker join exceeded the shutdown deadline");
+                        if let Some(handle) = join_owner.lock().take() {
+                            *self.worker_handle.lock() = Some(handle);
+                        }
+                    }
+                }
+            } else {
+                let completed = async {
+                    loop {
+                        let notified = self.worker_completion.notified();
+                        tokio::pin!(notified);
+                        let _ = notified.as_mut().enable();
+                        if self.worker_completed.load(Ordering::Acquire) {
+                            return;
+                        }
+                        notified.await;
+                    }
+                };
+                if tokio::time::timeout(deadline.remaining(), completed).await.is_err() {
+                    warn!("AllocateMappedFileService worker did not stop before the shutdown deadline");
+                    *self.worker_handle.lock() = Some(handle);
+                } else if !handle.is_finished() {
+                    warn!("AllocateMappedFileService worker completion was signalled before the thread fully exited");
+                    *self.worker_handle.lock() = Some(handle);
+                } else if handle.join().is_err() {
+                    error!("AllocateMappedFileService worker panicked during shutdown");
+                }
+            }
+        }
+        self.drain_pending_cleanup_for_shutdown(deadline).await;
+
+        let pending_cleanup_count = self.pending_cleanup.lock().len();
+        if pending_cleanup_count == 0 {
+            info!("AllocateMappedFileService: shutdown complete");
+        } else {
+            warn!(
+                pending_cleanup_count,
+                "AllocateMappedFileService: shutdown completed with mapped-file cleanup pending"
+            );
+        }
     }
 
     /// Get service name
@@ -877,12 +1547,14 @@ impl Drop for AllocationWaitGuard {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AllocationQueueEntry {
     key: MappedFileAllocationRequestKey,
+    request_id: u64,
 }
 
 impl AllocationQueueEntry {
     fn from_request(request: &AllocateRequest) -> Self {
         Self {
             key: request.key.clone(),
+            request_id: request.id(),
         }
     }
 
@@ -892,6 +1564,10 @@ impl AllocationQueueEntry {
 
     fn file_size(&self) -> i32 {
         self.key.file_size()
+    }
+
+    fn request_id(&self) -> u64 {
+        self.request_id
     }
 }
 
@@ -903,7 +1579,9 @@ impl PartialOrd for AllocationQueueEntry {
 
 impl Ord for AllocationQueueEntry {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.key.cmp(&other.key)
+        self.key
+            .cmp(&other.key)
+            .then_with(|| self.request_id.cmp(&other.request_id))
     }
 }
 
@@ -913,11 +1591,14 @@ impl Ord for AllocationQueueEntry {
 /// - Uses Notify + AtomicBool instead of CountDownLatch for async support
 /// - Delegates request identity and priority ordering to the Local boundary
 struct AllocateRequest {
+    /// Process-local identity used to fence stale queue entries.
+    request_id: u64,
+
     /// Runtime-neutral path, size, and ordering identity.
     key: MappedFileAllocationRequestKey,
 
     /// Count and charged-file-byte ownership for this canonical request.
-    _permit: ResourcePermit,
+    permit: Mutex<Option<ResourcePermit>>,
 
     /// Monotonic enqueue time used by queue saturation diagnostics.
     enqueued_at: Instant,
@@ -936,10 +1617,11 @@ struct AllocateRequest {
 }
 
 impl AllocateRequest {
-    fn new(file_path: String, file_size: i32, permit: ResourcePermit) -> Self {
+    fn new(request_id: u64, file_path: String, file_size: i32, permit: ResourcePermit) -> Self {
         Self {
+            request_id,
             key: MappedFileAllocationRequestKey::new(file_path, file_size),
-            _permit: permit,
+            permit: Mutex::new(Some(permit)),
             enqueued_at: Instant::now(),
             completion: Arc::new(Notify::new()),
             blocking_completion: Arc::new((StdMutex::new(()), Condvar::new())),
@@ -952,14 +1634,28 @@ impl AllocateRequest {
         self.key.file_path()
     }
 
+    fn id(&self) -> u64 {
+        self.request_id
+    }
+
     fn file_size(&self) -> i32 {
         self.key.file_size()
     }
 
+    fn take_permit(&self) -> Option<ResourcePermit> {
+        self.permit.lock().take()
+    }
+
     /// Wait for allocation to complete (like CountDownLatch.await())
     async fn wait(&self) {
-        if !self.completed.load(Ordering::Acquire) {
-            self.completion.notified().await;
+        loop {
+            let notified = self.completion.notified();
+            tokio::pin!(notified);
+            let _ = notified.as_mut().enable();
+            if self.completed.load(Ordering::Acquire) {
+                return;
+            }
+            notified.await;
         }
     }
 
@@ -981,10 +1677,12 @@ impl AllocateRequest {
 
     /// Signal completion (like CountDownLatch.countDown())
     fn complete(&self) {
-        self.completed.store(true, Ordering::Release);
-        self.completion.notify_waiters();
-        let (_, condvar) = &*self.blocking_completion;
-        condvar.notify_all();
+        let (lock, condvar) = &*self.blocking_completion;
+        let _guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !self.completed.swap(true, Ordering::AcqRel) {
+            self.completion.notify_waiters();
+            condvar.notify_all();
+        }
     }
 }
 
@@ -1019,22 +1717,30 @@ impl Ord for AllocateRequest {
 mod tests {
     use rocketmq_runtime::BudgetLimit;
     use rocketmq_runtime::FullPolicy;
+    use rocketmq_runtime::ProcessMemoryLimit;
     use rocketmq_runtime::ResourceBudget;
     use rocketmq_runtime::ResourceBudgetTree;
+    use rocketmq_runtime::RuntimeConfig;
+    use rocketmq_runtime::RuntimeOwner;
     use tempfile::tempdir;
 
     use super::*;
 
     fn test_allocation_budget() -> ResourceBudget {
+        test_allocation_budget_with_limit(16)
+    }
+
+    fn test_allocation_budget_with_limit(item_limit: usize) -> ResourceBudget {
         ResourceBudgetTree::new(
             "allocation-service-test",
-            BudgetLimit::new(16, 64 * 1024, FullPolicy::Reject),
+            BudgetLimit::new(item_limit, 64 * 1024, FullPolicy::Reject),
         )
         .expect("test allocation budget")
         .root()
     }
 
     fn test_request(file_path: String, file_size: i32) -> Arc<AllocateRequest> {
+        static NEXT_TEST_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
         let budget = ResourceBudgetTree::new(
             "allocation-request-test",
             BudgetLimit::new(4, 8_192, FullPolicy::Reject),
@@ -1044,7 +1750,12 @@ mod tests {
         let permit = budget
             .try_acquire_data(usize::try_from(file_size).expect("positive file size"))
             .expect("request budget");
-        Arc::new(AllocateRequest::new(file_path, file_size, permit))
+        Arc::new(AllocateRequest::new(
+            NEXT_TEST_REQUEST_ID.fetch_add(1, Ordering::Relaxed),
+            file_path,
+            file_size,
+            permit,
+        ))
     }
 
     struct TestAllocationServiceConfig;
@@ -1112,6 +1823,36 @@ mod tests {
         assert!(completed.load(Ordering::Acquire));
     }
 
+    #[tokio::test]
+    async fn allocate_request_completion_is_sticky_for_async_and_blocking_waiters() {
+        let request = test_request("completion-test".to_owned(), 1024);
+        request.complete();
+
+        tokio::time::timeout(Duration::from_millis(100), request.wait())
+            .await
+            .expect("completion before async registration must remain observable");
+        assert!(request.wait_blocking(Duration::from_millis(100)));
+    }
+
+    #[tokio::test]
+    async fn synchronous_fallback_is_limited_to_never_started_unfenced_service() {
+        let temp_dir = tempdir().expect("temp dir");
+        let queue_dir = temp_dir.path().join("queue");
+        let file_path = queue_dir.join("00000000000000000000");
+        let service = AllocateMappedFileService::new_with_config(None, false, false, test_allocation_budget());
+
+        assert!(service.allows_synchronous_fallback(&file_path));
+        assert!(service.retire_directory(&queue_dir));
+        assert!(!service.allows_synchronous_fallback(&file_path));
+        assert!(service.complete_directory_retirement(&queue_dir));
+        assert!(service.allows_synchronous_fallback(&file_path));
+
+        service.start();
+        assert!(!service.allows_synchronous_fallback(&file_path));
+        service.shutdown().await;
+        assert!(!service.allows_synchronous_fallback(&file_path));
+    }
+
     #[test]
     fn warm_mapped_file_config_follows_commitlog_file_size_threshold() {
         let config = TestAllocationServiceConfig;
@@ -1147,5 +1888,518 @@ mod tests {
             .write()
             .push(AllocationQueueEntry::from_request(&request));
         assert_eq!(service.allocation_capacity(2), 1);
+    }
+
+    #[test]
+    fn abandoned_ready_request_retains_cleanup_owner_until_retry() {
+        let temp_dir = tempdir().expect("temp dir");
+        let file_path = temp_dir.path().join("00000000000000000000");
+        let service = AllocateMappedFileService::new_with_config(None, false, false, test_allocation_budget());
+        let request = match service.admit_request(file_path.to_string_lossy().into_owned(), 1024) {
+            AllocationAdmission::Inserted(request) => request,
+            _ => panic!("new request must be inserted"),
+        };
+        let mapped_file = Arc::new(
+            DefaultMappedFile::try_new(
+                CheetahString::from_string(file_path.to_string_lossy().into_owned()),
+                1024,
+            )
+            .expect("mapped file"),
+        );
+        assert!(mapped_file.hold());
+        *request.mapped_file.write() = Some(mapped_file.clone());
+
+        service.remove_request_if_owned(&request, true);
+
+        let snapshot = service.queue_snapshot();
+        assert_eq!(snapshot.pending_cleanup_count, 1);
+        assert_eq!(
+            snapshot.current_count, 1,
+            "retained physical owner keeps its allocation permit"
+        );
+        assert!(file_path.exists());
+        assert!(matches!(
+            service.admit_request(file_path.to_string_lossy().into_owned(), 1024),
+            AllocationAdmission::Rejected
+        ));
+        let synchronous_fallback = crate::mapped_file::queue_io::create_mapped_file_for_queue(
+            Some(&service),
+            &file_path,
+            &temp_dir.path().join("00000000000000001024"),
+            1024,
+            false,
+        );
+        assert!(synchronous_fallback.is_none());
+
+        mapped_file.release();
+        service.retry_pending_cleanup();
+        let snapshot = service.queue_snapshot();
+        assert_eq!(snapshot.pending_cleanup_count, 0);
+        assert_eq!(snapshot.current_count, 0);
+        assert!(!file_path.exists());
+        assert!(matches!(
+            service.admit_request(file_path.to_string_lossy().into_owned(), 1024),
+            AllocationAdmission::Inserted(_)
+        ));
+    }
+
+    #[test]
+    fn abandoned_queued_request_fences_path_until_stale_entry_is_observed() {
+        let temp_dir = tempdir().expect("temp dir");
+        let file_path = temp_dir.path().join("00000000000000000000");
+        let file_path = file_path.to_string_lossy().into_owned();
+        let service = AllocateMappedFileService::new_with_config(None, false, false, test_allocation_budget());
+        let request = match service.admit_request(file_path.clone(), 1024) {
+            AllocationAdmission::Inserted(request) => request,
+            _ => panic!("new request must be inserted"),
+        };
+
+        service.remove_request_if_owned(&request, true);
+        drop(request);
+
+        let snapshot = service.queue_snapshot();
+        assert_eq!(
+            snapshot.current_count, 1,
+            "stale heap keys remain inside the bounded queue budget"
+        );
+        assert_eq!(snapshot.pending_cleanup_count, 1);
+        assert!(matches!(
+            service.admit_request(file_path.clone(), 1024),
+            AllocationAdmission::Rejected
+        ));
+
+        assert!(AllocateMappedFileService::mmap_operation(
+            &service.request_table,
+            &service.request_queue,
+            &service.pending_cleanup,
+            &service.has_exception,
+            &service.transient_store_pool,
+            service.warm_mapped_file_config,
+            #[cfg(feature = "observability")]
+            &service.store_metrics,
+        ));
+
+        assert_eq!(service.queue_snapshot().pending_cleanup_count, 0);
+        assert!(matches!(
+            service.admit_request(file_path, 1024),
+            AllocationAdmission::Inserted(_)
+        ));
+    }
+
+    #[test]
+    fn failed_request_requeue_keeps_table_identity_locked_until_heap_publication() {
+        let temp_dir = tempdir().expect("temp dir");
+        let file_path = temp_dir.path().join("00000000000000000000");
+        let service = AllocateMappedFileService::new_with_config(None, false, false, test_allocation_budget());
+        let request = match service.admit_request(file_path.to_string_lossy().into_owned(), 1024) {
+            AllocationAdmission::Inserted(request) => request,
+            _ => panic!("request must be inserted"),
+        };
+        let entry = service.request_queue.write().pop().expect("queued request");
+        let heap_guard = service.request_queue.write();
+        let request_table = service.request_table.clone();
+        let request_queue = service.request_queue.clone();
+        let request_for_worker = request.clone();
+        let (owned_tx, owned_rx) = std::sync::mpsc::sync_channel(1);
+        let worker = thread::spawn(move || {
+            AllocateMappedFileService::requeue_failed_request_if_owned_with_hook(
+                &request_table,
+                &request_queue,
+                &request_for_worker,
+                entry,
+                || owned_tx.send(()).expect("signal owned request"),
+            )
+        });
+
+        owned_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("worker must observe the owned table identity");
+        assert!(service.request_table.try_write().is_none());
+        drop(heap_guard);
+
+        assert!(worker.join().expect("requeue worker"));
+        assert_eq!(service.request_queue.read().len(), 1);
+        service.remove_request_if_owned(&request, false);
+        service.request_queue.write().clear();
+    }
+
+    #[test]
+    fn retained_cleanup_owner_holds_budget_until_namespace_is_removed() {
+        let temp_dir = tempdir().expect("temp dir");
+        let first_path = temp_dir.path().join("00000000000000000000");
+        let second_path = temp_dir.path().join("00000000000000001024");
+        let service =
+            AllocateMappedFileService::new_with_config(None, false, false, test_allocation_budget_with_limit(1));
+        let request = match service.admit_request(first_path.to_string_lossy().into_owned(), 1024) {
+            AllocationAdmission::Inserted(request) => request,
+            _ => panic!("first request must be inserted"),
+        };
+        let mapped_file = Arc::new(
+            DefaultMappedFile::try_new(CheetahString::from(first_path.to_string_lossy().into_owned()), 1024)
+                .expect("mapped file"),
+        );
+        assert!(mapped_file.hold());
+        *request.mapped_file.write() = Some(mapped_file.clone());
+        service.remove_request_if_owned(&request, true);
+
+        assert!(matches!(
+            service.admit_request(second_path.to_string_lossy().into_owned(), 1024),
+            AllocationAdmission::Rejected
+        ));
+        assert_eq!(service.queue_snapshot().current_count, 1);
+
+        mapped_file.release();
+        service.retry_pending_cleanup();
+        assert!(matches!(
+            service.admit_request(second_path.to_string_lossy().into_owned(), 1024),
+            AllocationAdmission::Inserted(_)
+        ));
+    }
+
+    #[test]
+    fn cleanup_batch_attempts_each_retained_owner_before_retrying_a_failure() {
+        let temp_dir = tempdir().expect("temp dir");
+        let first_path = temp_dir.path().join("00000000000000000000");
+        let second_path = temp_dir.path().join("00000000000000001024");
+        let service = AllocateMappedFileService::new_with_config(None, false, false, test_allocation_budget());
+
+        let mut retained = Vec::new();
+        for path in [&first_path, &second_path] {
+            let request = match service.admit_request(path.to_string_lossy().into_owned(), 1024) {
+                AllocationAdmission::Inserted(request) => request,
+                _ => panic!("request must be inserted"),
+            };
+            let mapped_file = Arc::new(
+                DefaultMappedFile::try_new(CheetahString::from(path.to_string_lossy().into_owned()), 1024)
+                    .expect("mapped file"),
+            );
+            *request.mapped_file.write() = Some(mapped_file.clone());
+            service.remove_request_if_owned(&request, true);
+            retained.push(mapped_file);
+        }
+        assert!(retained[0].hold());
+
+        service.retry_pending_cleanup();
+
+        assert!(first_path.exists(), "the held owner must remain retryable");
+        assert!(!second_path.exists(), "a prior failure must not starve the next owner");
+        assert_eq!(service.queue_snapshot().pending_cleanup_count, 1);
+
+        retained[0].release();
+        service.retry_pending_cleanup();
+        assert!(!first_path.exists());
+        assert_eq!(service.queue_snapshot().pending_cleanup_count, 0);
+    }
+
+    #[test]
+    fn dropped_cleanup_attempt_restores_retryable_owner() {
+        let temp_dir = tempdir().expect("temp dir");
+        let file_path = temp_dir.path().join("00000000000000000000");
+        let registry = Arc::new(Mutex::new(HashMap::new()));
+        let key = AllocateMappedFileService::cleanup_key(file_path.to_string_lossy().as_ref(), 7);
+        let owner = Arc::new(PendingMappedFileCleanup {
+            mapped_file: Arc::new(
+                DefaultMappedFile::try_new(CheetahString::from(file_path.to_string_lossy().into_owned()), 1024)
+                    .expect("mapped file"),
+            ),
+            _permit: None,
+            attempts: AtomicU64::new(0),
+        });
+        registry
+            .lock()
+            .insert(key.clone(), PendingAllocationCleanup::Cleaning(owner.clone()));
+
+        drop(PendingCleanupAttempt {
+            registry: registry.clone(),
+            key: key.clone(),
+            owner,
+            completed: false,
+        });
+
+        assert!(matches!(
+            registry.lock().get(&key),
+            Some(PendingAllocationCleanup::Retained(_))
+        ));
+    }
+
+    #[test]
+    fn directory_retirement_fences_late_allocation_and_keeps_inflight_identity() {
+        let temp_dir = tempdir().expect("temp dir");
+        let queue_dir = temp_dir.path().join("queue");
+        std::fs::create_dir(&queue_dir).expect("queue dir");
+        let file_path = queue_dir.join("00000000000000000000");
+        let file_path_text = file_path.to_string_lossy().into_owned();
+        let service = AllocateMappedFileService::new_with_config(None, false, false, test_allocation_budget());
+        let request = match service.admit_request(file_path_text.clone(), 1024) {
+            AllocationAdmission::Inserted(request) => request,
+            _ => panic!("request must be inserted"),
+        };
+        let claimed = service.request_queue.write().pop().expect("simulate claimed request");
+        assert_eq!(claimed.request_id(), request.id());
+
+        assert!(!service.retire_directory(&queue_dir));
+        assert!(matches!(
+            service.admit_request(file_path_text.clone(), 1024),
+            AllocationAdmission::Rejected
+        ));
+        assert_eq!(service.queue_snapshot().current_count, 1);
+
+        let late_mapping = Arc::new(
+            DefaultMappedFile::try_new(CheetahString::from(file_path_text.clone()), 1024).expect("late mapping"),
+        );
+        AllocateMappedFileService::retain_for_cleanup(
+            &service.pending_cleanup,
+            &file_path_text,
+            request.id(),
+            late_mapping,
+            request.take_permit(),
+        );
+        request.complete();
+        service.retry_pending_cleanup();
+
+        assert!(service.is_directory_retirement_complete(&queue_dir));
+        assert!(!file_path.exists());
+        assert_eq!(service.queue_snapshot().current_count, 0);
+        assert!(matches!(
+            service.admit_request(file_path_text.clone(), 1024),
+            AllocationAdmission::Rejected
+        ));
+        assert!(service.complete_directory_retirement(&queue_dir));
+        assert!(matches!(
+            service.admit_request(file_path_text, 1024),
+            AllocationAdmission::Inserted(_)
+        ));
+    }
+
+    #[test]
+    fn exception_after_admission_releases_request_ownership_and_fences_fallback() {
+        let temp_dir = tempdir().expect("temp dir");
+        let file_path = temp_dir.path().join("00000000000000000000");
+        let file_path = file_path.to_string_lossy().into_owned();
+        let service = AllocateMappedFileService::new_with_config(None, false, false, test_allocation_budget());
+        service.has_exception.store(true, Ordering::Release);
+
+        assert!(service.allocate_mapped_file_blocking(file_path.clone(), 1024).is_err());
+
+        let snapshot = service.queue_snapshot();
+        assert_eq!(
+            snapshot.current_count, 1,
+            "the queued cleanup fence must retain the original bounded permit"
+        );
+        assert_eq!(snapshot.pending_cleanup_count, 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn non_positive_file_size_is_rejected_without_admission_side_effects() {
+        let temp_dir = tempdir().expect("temp dir");
+        let service = AllocateMappedFileService::new_with_config(None, false, false, test_allocation_budget());
+        let existing_path = temp_dir.path().join("00000000000000000000");
+        assert!(matches!(
+            service.admit_request(existing_path.to_string_lossy().into_owned(), 1024),
+            AllocationAdmission::Inserted(_)
+        ));
+
+        for (index, file_size) in [0, -1].into_iter().enumerate() {
+            let file_path = temp_dir.path().join(format!("invalid-{index}"));
+            assert!(matches!(
+                service.admit_request(file_path.to_string_lossy().into_owned(), file_size),
+                AllocationAdmission::Rejected
+            ));
+            assert!(service
+                .put_request_and_return_mapped_file(
+                    existing_path.to_string_lossy().into_owned(),
+                    String::new(),
+                    file_size,
+                )
+                .await
+                .expect("invalid size is a rejected request")
+                .is_none());
+            assert!(!file_path.exists());
+        }
+
+        let snapshot = service.queue_snapshot();
+        assert_eq!(snapshot.current_count, 1);
+        assert_eq!(snapshot.charged_bytes, 1024);
+        assert_eq!(snapshot.queued_count, 1);
+        assert_eq!(snapshot.pending_cleanup_count, 0);
+        service.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn public_u64_file_sizes_are_checked_before_admission() {
+        let temp_dir = tempdir().expect("temp dir");
+        let service = AllocateMappedFileService::new_with_config(None, false, false, test_allocation_budget());
+        let invalid_size = i32::MAX as u64 + 1;
+        let async_path = temp_dir.path().join("00000000000000000000");
+        let blocking_path = temp_dir.path().join("00000000000000000001");
+        let background_path = temp_dir.path().join("00000000000000000002");
+
+        assert!(service
+            .submit_request(async_path.to_string_lossy().into_owned(), invalid_size)
+            .await
+            .is_err());
+        assert!(service
+            .allocate_mapped_file_blocking(blocking_path.to_string_lossy().into_owned(), invalid_size)
+            .is_err());
+        service.submit_request_in_background(background_path.to_string_lossy().into_owned(), invalid_size);
+
+        let snapshot = service.queue_snapshot();
+        assert_eq!(snapshot.current_count, 0);
+        assert_eq!(snapshot.charged_bytes, 0);
+        assert_eq!(snapshot.queued_count, 0);
+        assert_eq!(snapshot.pending_cleanup_count, 0);
+        assert!(!async_path.exists());
+        assert!(!blocking_path.exists());
+        assert!(!background_path.exists());
+    }
+
+    #[test]
+    fn stopped_service_retries_retained_cleanup_for_one_retired_directory() {
+        let temp_dir = tempdir().expect("temp dir");
+        let other_temp_dir = tempdir().expect("other temp dir");
+        let file_path = temp_dir.path().join("00000000000000000000");
+        let other_file_path = other_temp_dir.path().join("00000000000000000000");
+        let service = AllocateMappedFileService::new_with_config(None, false, false, test_allocation_budget());
+        let request = match service.admit_request(file_path.to_string_lossy().into_owned(), 1024) {
+            AllocationAdmission::Inserted(request) => request,
+            _ => panic!("request must be inserted"),
+        };
+        let other_request = match service.admit_request(other_file_path.to_string_lossy().into_owned(), 1024) {
+            AllocationAdmission::Inserted(request) => request,
+            _ => panic!("other request must be inserted"),
+        };
+        let mapped_file = Arc::new(
+            DefaultMappedFile::try_new(
+                CheetahString::from_string(file_path.to_string_lossy().into_owned()),
+                1024,
+            )
+            .expect("mapped file"),
+        );
+        let other_mapped_file = Arc::new(
+            DefaultMappedFile::try_new(
+                CheetahString::from_string(other_file_path.to_string_lossy().into_owned()),
+                1024,
+            )
+            .expect("other mapped file"),
+        );
+        assert!(mapped_file.hold());
+        *request.mapped_file.write() = Some(mapped_file.clone());
+        *other_request.mapped_file.write() = Some(other_mapped_file);
+        service.remove_request_if_owned(&request, true);
+        service.remove_request_if_owned(&other_request, true);
+        service.stopped.store(true, Ordering::Release);
+
+        assert!(!service.retire_directory(temp_dir.path()));
+        assert_eq!(service.queue_snapshot().pending_cleanup_count, 2);
+        assert_eq!(service.queue_snapshot().current_count, 2);
+        assert!(other_file_path.exists());
+
+        mapped_file.release();
+        assert!(service.retry_retired_directory_cleanup_once(temp_dir.path()));
+        assert_eq!(service.queue_snapshot().pending_cleanup_count, 1);
+        assert_eq!(service.queue_snapshot().current_count, 1);
+        assert!(!file_path.exists());
+        assert!(other_file_path.exists());
+
+        assert!(service.retire_directory(other_temp_dir.path()));
+        assert_eq!(service.queue_snapshot().pending_cleanup_count, 0);
+        assert_eq!(service.queue_snapshot().current_count, 0);
+        assert!(!other_file_path.exists());
+    }
+
+    #[test]
+    fn shutdown_drains_releasable_pending_cleanup() {
+        let temp_dir = tempdir().expect("temp dir");
+        let file_path = temp_dir.path().join("00000000000000000000");
+        let runtime_owner = RuntimeOwner::new_with_memory_limit(
+            RuntimeConfig::default(),
+            ProcessMemoryLimit::configured(64 * 1024 * 1024).expect("test memory limit"),
+        )
+        .expect("test runtime owner");
+        let runtime_context = runtime_owner.root_context().component("allocation-cleanup-test");
+        let service = AllocateMappedFileService::new_with_config_and_storage_io(
+            None,
+            false,
+            false,
+            test_allocation_budget(),
+            runtime_context.storage_io().clone(),
+        );
+        let request = match service.admit_request(file_path.to_string_lossy().into_owned(), 1024) {
+            AllocationAdmission::Inserted(request) => request,
+            _ => panic!("new request must be inserted"),
+        };
+        let mapped_file = Arc::new(
+            DefaultMappedFile::try_new(
+                CheetahString::from_string(file_path.to_string_lossy().into_owned()),
+                1024,
+            )
+            .expect("mapped file"),
+        );
+        assert!(mapped_file.hold());
+        *request.mapped_file.write() = Some(mapped_file.clone());
+        service.remove_request_if_owned(&request, true);
+        mapped_file.release();
+
+        runtime_owner.block_on(service.shutdown());
+
+        assert_eq!(service.queue_snapshot().pending_cleanup_count, 0);
+        assert!(!file_path.exists());
+        runtime_owner
+            .shutdown_runtime_blocking()
+            .expect("test runtime shutdown");
+    }
+
+    #[test]
+    fn shutdown_fences_claimed_request_before_managed_worker_join() {
+        let temp_dir = tempdir().expect("temp dir");
+        let file_path = temp_dir.path().join("00000000000000000000");
+        let file_path_text = file_path.to_string_lossy().into_owned();
+        let runtime_owner = RuntimeOwner::new_with_memory_limit(
+            RuntimeConfig::default(),
+            ProcessMemoryLimit::configured(64 * 1024 * 1024).expect("test memory limit"),
+        )
+        .expect("test runtime owner");
+        let runtime_context = runtime_owner
+            .root_context()
+            .component("allocation-claimed-shutdown-test");
+        let service = AllocateMappedFileService::new_with_config_and_storage_io(
+            None,
+            false,
+            false,
+            test_allocation_budget(),
+            runtime_context.storage_io().clone(),
+        );
+        let request = match service.admit_request(file_path_text.clone(), 1024) {
+            AllocationAdmission::Inserted(request) => request,
+            _ => panic!("request must be inserted"),
+        };
+        let claimed = service.request_queue.write().pop().expect("claimed request");
+        assert_eq!(claimed.request_id(), request.id());
+
+        let pending_cleanup = service.pending_cleanup.clone();
+        let request_for_worker = request.clone();
+        let worker = thread::spawn(move || {
+            assert!(request_for_worker.wait_blocking(Duration::from_secs(2)));
+            let mapped_file = Arc::new(
+                DefaultMappedFile::try_new(CheetahString::from(file_path_text), 1024).expect("late mapped file"),
+            );
+            AllocateMappedFileService::retain_for_cleanup(
+                &pending_cleanup,
+                request_for_worker.file_path(),
+                request_for_worker.id(),
+                mapped_file,
+                request_for_worker.take_permit(),
+            );
+        });
+        *service.worker_handle.lock() = Some(worker);
+
+        runtime_owner.block_on(service.shutdown());
+
+        assert_eq!(service.queue_snapshot().pending_cleanup_count, 0);
+        assert_eq!(service.queue_snapshot().current_count, 0);
+        assert!(!file_path.exists());
+        runtime_owner
+            .shutdown_runtime_blocking()
+            .expect("test runtime shutdown");
     }
 }

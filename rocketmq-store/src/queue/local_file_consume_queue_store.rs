@@ -159,6 +159,8 @@ struct Inner {
     pub(crate) broker_config: Arc<StoreRuntimeConfig>,
     pub(crate) queue_offset_operator: QueueOffsetOperator,
     pub(crate) consume_queue_table: Arc<ConsumeQueueTable>,
+    /// Serializes queue admission with destructive work for the same topic.
+    topic_lifecycle_locks: parking_lot::Mutex<HashMap<CheetahString, Arc<RwLock<()>>>>,
 }
 
 #[derive(Clone)]
@@ -223,6 +225,17 @@ impl ConsumeQueueLookupHandle {
             &store, topic, queue_id,
         ))
     }
+
+    pub(crate) fn put_message_position_info_wrapper(&self, request: &DispatchRequest) -> bool {
+        let Some(inner) = self.inner.upgrade() else {
+            return false;
+        };
+        let store = ConsumeQueueStore {
+            inner: ConsumeQueueStoreRoot::new(inner),
+        };
+        ConsumeQueueStoreTrait::put_message_position_info_wrapper(&store, request);
+        true
+    }
 }
 
 impl Inner {
@@ -232,6 +245,145 @@ impl Inner {
 }
 
 impl ConsumeQueueStore {
+    fn topic_lifecycle_lock(&self, topic: &CheetahString) -> Arc<RwLock<()>> {
+        self.inner
+            .topic_lifecycle_locks
+            .lock()
+            .entry(topic.clone())
+            .or_insert_with(|| Arc::new(RwLock::new(())))
+            .clone()
+    }
+
+    fn find_or_create_consume_queue_unfenced(&self, topic: &CheetahString, queue_id: i32) -> ArcConsumeQueue {
+        drive_find_or_create_consume_queue(
+            || {
+                self.inner
+                    .consume_queue_table
+                    .lock()
+                    .get(topic)
+                    .and_then(|topic_map| topic_map.get(&queue_id).cloned())
+            },
+            || {
+                let context = self
+                    .inner
+                    .context
+                    .read()
+                    .clone()
+                    .expect("consume queue context must be set before creating consume queues");
+                let topic_config = context.get_topic_config(topic);
+                let cq_type = QueueTypeUtils::get_cq_type_arc_mut(topic_config.as_ref());
+                match cq_type {
+                    CQType::SimpleCQ | CQType::RocksDBCQ => {
+                        let consume_queue = ConsumeQueue::new(
+                            topic.clone(),
+                            queue_id,
+                            CheetahString::from_string(get_store_path_consume_queue(
+                                self.inner.message_store_config.store_path_root_dir.as_str(),
+                            )),
+                            self.inner.message_store_config.get_mapped_file_size_consume_queue(),
+                            context,
+                            self.lookup_handle(),
+                        );
+                        ArcConsumeQueue::new(Box::new(consume_queue))
+                    }
+                    CQType::BatchCQ => {
+                        let consume_queue = BatchConsumeQueue::new(
+                            topic.clone(),
+                            queue_id,
+                            CheetahString::from_string(get_store_path_batch_consume_queue(
+                                self.inner.message_store_config.store_path_root_dir.as_str(),
+                            )),
+                            self.inner.message_store_config.mapper_file_size_batch_consume_queue,
+                            None,
+                            self.inner.message_store_config.clone(),
+                        );
+                        ArcConsumeQueue::new(Box::new(consume_queue))
+                    }
+                }
+            },
+            |new_queue| {
+                self.inner
+                    .consume_queue_table
+                    .lock()
+                    .entry(topic.clone())
+                    .or_default()
+                    .entry(queue_id)
+                    .or_insert(new_queue)
+                    .clone()
+            },
+        )
+    }
+
+    fn with_topic_queue_for_append<R>(
+        &self,
+        topic: &CheetahString,
+        queue_id: i32,
+        operation: impl FnOnce(&mut dyn ConsumeQueueTrait) -> R,
+    ) -> R {
+        let lifecycle = self.topic_lifecycle_lock(topic);
+        let _active = lifecycle.read();
+        let consume_queue = self.find_or_create_consume_queue_unfenced(topic, queue_id);
+        let mut consume_queue = consume_queue.write();
+        operation(consume_queue.as_mut())
+    }
+
+    /// Runs topic retirement while excluding queue lookup-and-publication for that topic.
+    pub(crate) fn with_topic_closing<R>(&mut self, topic: &CheetahString, operation: impl FnOnce(&mut Self) -> R) -> R {
+        let lifecycle = self.topic_lifecycle_lock(topic);
+        let _closing = lifecycle.write();
+        operation(self)
+    }
+
+    /// Untracks one successfully destroyed queue without removing a replacement generation.
+    pub(crate) fn remove_destroyed_topic_queue(
+        &self,
+        topic: &CheetahString,
+        queue_id: i32,
+        expected: &ArcConsumeQueue,
+    ) -> bool {
+        let mut table = self.inner.consume_queue_table.lock();
+        let Some(queues) = table.get_mut(topic) else {
+            return true;
+        };
+        match queues.get(&queue_id) {
+            Some(current) if current.ptr_eq(expected) => {
+                queues.remove(&queue_id);
+                true
+            }
+            None => true,
+            Some(_) => false,
+        }
+    }
+
+    /// Removes the topic entry only after every queue identity has been retired.
+    pub(crate) fn remove_topic_if_empty(&self, topic: &CheetahString) -> bool {
+        let mut table = self.inner.consume_queue_table.lock();
+        let empty = table.get(topic).is_none_or(HashMap::is_empty);
+        if empty {
+            table.remove(topic);
+        }
+        empty
+    }
+
+    /// Retires one topic snapshot, immediately untracking each successful queue.
+    ///
+    /// The caller must hold this topic's closing fence for the complete operation.
+    pub(crate) fn retire_topic_queue_snapshot(
+        &mut self,
+        topic: &CheetahString,
+        queues: &HashMap<i32, ArcConsumeQueue>,
+    ) -> Vec<i32> {
+        let mut failures = Vec::new();
+        for (queue_id, queue) in queues {
+            if queue.write().destroy_with_outcome() && self.remove_destroyed_topic_queue(topic, *queue_id, queue) {
+                self.remove_topic_queue_table(topic, *queue_id);
+            } else {
+                failures.push(*queue_id);
+            }
+        }
+        failures
+    }
+
     pub(crate) fn advance_topic_queue_offset(&self, topic: &str, queue_id: i32, next_offset: i64) {
         self.inner
             .queue_offset_operator
@@ -310,14 +462,22 @@ impl ConsumeQueueStore {
         let max_physic_offset_before = consume_queue.get_max_physic_offset();
 
         let started = Instant::now();
-        let recover_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| consume_queue.recover()));
+        let recover_result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| consume_queue.recover_with_outcome()));
         let elapsed_ms = started.elapsed().as_millis();
 
         let mapped_file_count_after = consume_queue.get_mapped_file_count();
         let min_logic_offset_after = consume_queue.get_min_logic_offset();
         let max_logic_offset_after = consume_queue.get_max_offset_in_queue();
         let max_physic_offset_after = consume_queue.get_max_physic_offset();
-        let error = recover_result.err().map(Self::panic_payload_to_string);
+        let (success, error) = match recover_result {
+            Ok(true) => (true, None),
+            Ok(false) => (
+                false,
+                Some("consume-queue recovery retained a pending cleanup identity".to_string()),
+            ),
+            Err(payload) => (false, Some(Self::panic_payload_to_string(payload))),
+        };
 
         ConsumeQueueRecoveryResult {
             topic,
@@ -332,7 +492,7 @@ impl ConsumeQueueStore {
             max_logic_offset_after,
             max_physic_offset_before,
             max_physic_offset_after,
-            success: error.is_none(),
+            success,
             error,
         }
     }
@@ -462,12 +622,15 @@ impl ConsumeQueueStore {
     }
 
     pub fn clean_expired_sync(&self, min_commit_log_offset: i64) {
-        // Collect queues to remove
+        self.clean_expired_sync_after_candidates(min_commit_log_offset, || {});
+    }
+
+    fn clean_expired_sync_after_candidates(&self, min_commit_log_offset: i64, after_candidates: impl FnOnce()) {
+        // Collect candidates without dropping their active-table retry identity.
         let mut queues_to_destroy = Vec::new();
-        let mut topics_to_remove = Vec::new();
 
         {
-            let mut consume_queue_table = self.inner.consume_queue_table.lock();
+            let consume_queue_table = self.inner.consume_queue_table.lock();
             let topics: Vec<CheetahString> = consume_queue_table.keys().cloned().collect();
 
             for topic in topics {
@@ -476,13 +639,12 @@ impl ConsumeQueueStore {
                     continue;
                 }
 
-                if let Some(queue_table) = consume_queue_table.get_mut(&topic) {
+                if let Some(queue_table) = consume_queue_table.get(&topic) {
                     let queue_ids: Vec<i32> = queue_table.keys().cloned().collect();
-                    let mut queues_to_remove = Vec::new();
 
                     for queue_id in queue_ids {
-                        if let Some(consume_queue) = queue_table.get(&queue_id) {
-                            let consume_queue = consume_queue.read();
+                        if let Some(consume_queue_handle) = queue_table.get(&queue_id) {
+                            let consume_queue = consume_queue_handle.read();
                             let max_cl_offset_in_queue = consume_queue.get_max_physic_offset();
                             let message_total_in_queue = consume_queue.get_message_total_in_queue();
                             let queue_trimmed_to_empty =
@@ -499,7 +661,7 @@ impl ConsumeQueueStore {
                                 );
                             } else if max_cl_offset_in_queue < min_commit_log_offset || queue_trimmed_to_empty {
                                 tracing::info!(
-                                    "cleanExpiredConsumerQueue: {} {} consumer queue destroyed, minCommitLogOffset: \
+                                    "cleanExpiredConsumerQueue: {} {} consumer queue eligible for destruction, minCommitLogOffset: \
                                      {} maxCLOffsetInConsumeQueue: {} messageTotalInQueue: {} minOffsetInQueue: {}",
                                     topic,
                                     queue_id,
@@ -509,36 +671,84 @@ impl ConsumeQueueStore {
                                     consume_queue.get_min_offset_in_queue()
                                 );
 
-                                queues_to_remove.push(queue_id);
+                                queues_to_destroy.push((topic.clone(), queue_id, consume_queue_handle.clone()));
                             }
                         }
                     }
-
-                    // Remove expired queues and collect for destruction
-                    for queue_id in queues_to_remove {
-                        if let Some(consume_queue) = queue_table.remove(&queue_id) {
-                            queues_to_destroy.push((topic.clone(), queue_id, consume_queue));
-                        }
-                    }
-
-                    // If all queues removed, mark topic for removal
-                    if queue_table.is_empty() {
-                        topics_to_remove.push(topic.clone());
-                    }
                 }
-            }
-
-            // Remove empty topics
-            for topic in &topics_to_remove {
-                consume_queue_table.remove(topic);
-                tracing::info!("cleanExpiredConsumerQueue: {},topic destroyed", topic);
             }
         }
 
-        // Now destroy queues and remove from offset table (outside the lock)
+        after_candidates();
+
+        // The topic closing fence waits for active appends before eligibility is rechecked.
         for (topic, queue_id, consume_queue) in queues_to_destroy {
-            self.inner.queue_offset_operator.remove(&topic, queue_id);
-            consume_queue.write().destroy();
+            let lifecycle = self.topic_lifecycle_lock(&topic);
+            let _closing = lifecycle.write();
+            let still_tracked = self
+                .inner
+                .consume_queue_table
+                .lock()
+                .get(&topic)
+                .and_then(|queues| queues.get(&queue_id))
+                .is_some_and(|current| current.ptr_eq(&consume_queue));
+            if !still_tracked {
+                continue;
+            }
+
+            let mut consume_queue_guard = consume_queue.write();
+            let max_cl_offset_in_queue = consume_queue_guard.get_max_physic_offset();
+            let message_total_in_queue = consume_queue_guard.get_message_total_in_queue();
+            let queue_trimmed_to_empty =
+                message_total_in_queue <= 0 && consume_queue_guard.get_min_offset_in_queue() > 0;
+            if max_cl_offset_in_queue == -1
+                || (max_cl_offset_in_queue >= min_commit_log_offset && !queue_trimmed_to_empty)
+            {
+                tracing::info!(
+                    "cleanExpiredConsumerQueue: {} {} eligibility changed before closing; skipping destruction",
+                    topic,
+                    queue_id
+                );
+                continue;
+            }
+            if !consume_queue_guard.destroy_with_outcome() {
+                tracing::warn!(
+                    "cleanExpiredConsumerQueue: {} {} cleanup deferred; retaining queue identity for retry",
+                    topic,
+                    queue_id
+                );
+                continue;
+            }
+            drop(consume_queue_guard);
+
+            let removed = {
+                let mut consume_queue_table = self.inner.consume_queue_table.lock();
+                let mut removed = false;
+                let mut remove_topic = false;
+                if let Some(queue_table) = consume_queue_table.get_mut(&topic) {
+                    if queue_table
+                        .get(&queue_id)
+                        .is_some_and(|current| current.ptr_eq(&consume_queue))
+                    {
+                        queue_table.remove(&queue_id);
+                        removed = true;
+                        remove_topic = queue_table.is_empty();
+                    }
+                }
+                if remove_topic {
+                    consume_queue_table.remove(&topic);
+                }
+                removed
+            };
+
+            if removed {
+                self.inner.queue_offset_operator.remove(&topic, queue_id);
+                tracing::info!(
+                    "cleanExpiredConsumerQueue: {} {} consumer queue destroyed",
+                    topic,
+                    queue_id
+                );
+            }
         }
     }
 
@@ -573,6 +783,7 @@ impl ConsumeQueueStore {
                 broker_config,
                 queue_offset_operator: Default::default(),
                 consume_queue_table: Arc::new(Default::default()),
+                topic_lifecycle_locks: parking_lot::Mutex::new(HashMap::new()),
             })),
         }
     }
@@ -608,12 +819,20 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
     }
 
     async fn recover(&self) {
+        let _ = self.recover_with_outcome().await;
+    }
+
+    async fn recover_with_outcome(&self) -> bool {
         let mutex = self.inner.consume_queue_table.lock().clone();
+        let mut complete = true;
         for consume_queue_table in mutex.values() {
             for consume_queue in consume_queue_table.values() {
-                consume_queue.write().recover();
+                if !consume_queue.write().recover_with_outcome() {
+                    complete = false;
+                }
             }
         }
+        complete
     }
 
     async fn recover_concurrently(&self) -> bool {
@@ -634,17 +853,55 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
     }
 
     fn destroy(&self) {
-        let mutex = self.inner.consume_queue_table.lock().clone();
-        for consume_queue_table in mutex.values() {
-            for consume_queue in consume_queue_table.values() {
-                consume_queue.write().destroy();
+        let _ = self.destroy_with_outcome();
+    }
+
+    fn destroy_with_outcome(&self) -> bool {
+        let topics = self
+            .inner
+            .consume_queue_table
+            .lock()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut retiring_store = self.clone();
+        for topic in topics {
+            let failed_queue_ids = retiring_store.with_topic_closing(&topic, |store| {
+                let Some(queues) = store.find_consume_queue_map(&topic) else {
+                    return Vec::new();
+                };
+                let failures = store.retire_topic_queue_snapshot(&topic, &queues);
+                if failures.is_empty() {
+                    let _ = store.remove_topic_if_empty(&topic);
+                }
+                failures
+            });
+            for queue_id in failed_queue_ids {
+                tracing::warn!(
+                    topic = %topic,
+                    queue_id,
+                    "consume-queue cleanup remains pending; retaining active-table identity for retry"
+                );
             }
         }
+        self.inner.consume_queue_table.lock().is_empty()
     }
 
     fn destroy_queue(&self, consume_queue: &dyn ConsumeQueueTrait) {
+        let _ = self.destroy_queue_with_outcome(consume_queue);
+    }
+
+    fn destroy_queue_with_outcome(&self, consume_queue: &dyn ConsumeQueueTrait) -> bool {
         let file_queue_life_cycle = self.get_life_cycle(consume_queue.get_topic(), consume_queue.get_queue_id());
-        file_queue_life_cycle.write().destroy();
+        let destroyed = file_queue_life_cycle.write().destroy_with_outcome();
+        if !destroyed {
+            tracing::warn!(
+                topic = %consume_queue.get_topic(),
+                queue_id = consume_queue.get_queue_id(),
+                "consume-queue cleanup remains pending; retaining active-table identity for retry"
+            );
+        }
+        destroyed
     }
 
     fn flush(&self, consume_queue: &dyn ConsumeQueueTrait, flush_least_pages: i32) -> bool {
@@ -682,16 +939,24 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
     }
 
     fn truncate_dirty(&self, offset_to_truncate: i64) {
+        let _ = self.truncate_dirty_with_outcome(offset_to_truncate);
+    }
+
+    fn truncate_dirty_with_outcome(&self, offset_to_truncate: i64) -> bool {
         let cloned = self.inner.consume_queue_table.lock().clone();
+        let mut complete = true;
         for consume_queue_table in cloned.values() {
             for logic in consume_queue_table.values() {
                 let (topic, queue_id) = {
                     let logic = logic.read();
                     (logic.get_topic().clone(), logic.get_queue_id())
                 };
-                self.truncate_dirty_logic_files(&topic, queue_id, offset_to_truncate);
+                if !self.truncate_dirty_logic_files_with_outcome(&topic, queue_id, offset_to_truncate) {
+                    complete = false;
+                }
             }
         }
+        complete
     }
 
     fn put_message_position_info_wrapper_with_cq(
@@ -703,8 +968,9 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
     }
 
     fn put_message_position_info_wrapper(&self, request: &DispatchRequest) {
-        let cq = self.find_or_create_consume_queue(request.topic.as_ref(), request.queue_id);
-        self.put_message_position_info_wrapper_with_cq(cq.write().as_mut(), request);
+        self.with_topic_queue_for_append(request.topic.as_ref(), request.queue_id, |consume_queue| {
+            self.put_message_position_info_wrapper_with_cq(consume_queue, request);
+        });
     }
 
     async fn range_query(&self, topic: &CheetahString, queue_id: i32, start_index: i64, num: i32) -> Vec<Bytes> {
@@ -886,64 +1152,9 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
     }
 
     fn find_or_create_consume_queue(&self, topic: &CheetahString, queue_id: i32) -> ArcConsumeQueue {
-        drive_find_or_create_consume_queue(
-            || {
-                self.inner
-                    .consume_queue_table
-                    .lock()
-                    .get(topic)
-                    .and_then(|topic_map| topic_map.get(&queue_id).cloned())
-            },
-            || {
-                let context = self
-                    .inner
-                    .context
-                    .read()
-                    .clone()
-                    .expect("consume queue context must be set before creating consume queues");
-                let topic_config = context.get_topic_config(topic);
-                let cq_type = QueueTypeUtils::get_cq_type_arc_mut(topic_config.as_ref());
-                let new_queue: ArcConsumeQueue = match cq_type {
-                    CQType::SimpleCQ | CQType::RocksDBCQ => {
-                        let consume_queue = ConsumeQueue::new(
-                            topic.clone(),
-                            queue_id,
-                            CheetahString::from_string(get_store_path_consume_queue(
-                                self.inner.message_store_config.store_path_root_dir.as_str(),
-                            )),
-                            self.inner.message_store_config.get_mapped_file_size_consume_queue(),
-                            context,
-                            self.lookup_handle(),
-                        );
-                        ArcConsumeQueue::new(Box::new(consume_queue))
-                    }
-                    CQType::BatchCQ => {
-                        let consume_queue = BatchConsumeQueue::new(
-                            topic.clone(),
-                            queue_id,
-                            CheetahString::from_string(get_store_path_batch_consume_queue(
-                                self.inner.message_store_config.store_path_root_dir.as_str(),
-                            )),
-                            self.inner.message_store_config.mapper_file_size_batch_consume_queue,
-                            None,
-                            self.inner.message_store_config.clone(),
-                        );
-                        ArcConsumeQueue::new(Box::new(consume_queue))
-                    }
-                };
-                new_queue
-            },
-            |new_queue| {
-                self.inner
-                    .consume_queue_table
-                    .lock()
-                    .entry(topic.clone())
-                    .or_default()
-                    .entry(queue_id)
-                    .or_insert(new_queue)
-                    .clone()
-            },
-        )
+        let lifecycle = self.topic_lifecycle_lock(topic);
+        let _admission = lifecycle.read();
+        self.find_or_create_consume_queue_unfenced(topic, queue_id)
     }
 
     fn find_consume_queue_map(&self, topic: &CheetahString) -> Option<HashMap<i32, ArcConsumeQueue>> {
@@ -1006,78 +1217,120 @@ impl ConsumeQueueStore {
     fn load_consume_queues(&mut self, store_path: &str, cq_type: CQType) -> bool {
         let dir_logic = Path::new(store_path);
 
-        // Check if directory exists
-        if !dir_logic.exists() || !dir_logic.is_dir() {
-            info!("Directory {} doesn't exist or is not a directory", store_path);
-            return true; // Return true as this is not an error case
+        let root_metadata = match fs::metadata(dir_logic) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                info!("Consume queue directory {store_path} does not exist");
+                return true;
+            }
+            Err(error) => {
+                error!("Failed to inspect consume queue directory {store_path}: {error}");
+                return false;
+            }
+        };
+        if !root_metadata.is_dir() {
+            error!("Consume queue path {store_path} is not a directory");
+            return false;
         }
 
-        // Iterate through topic directories
-        match fs::read_dir(dir_logic) {
-            Ok(topic_entries) => {
-                for topic_dir in topic_entries.flatten() {
-                    let topic_path = topic_dir.path();
-                    if !topic_path.is_dir() {
-                        continue;
-                    }
-
-                    // Get topic name from directory name
-                    let topic = match topic_path.file_name().and_then(|n| n.to_str()) {
-                        Some(name) => CheetahString::from_string(name.to_string()),
-                        None => continue,
-                    };
-
-                    // Iterate through queue ID directories
-                    match fs::read_dir(topic_path) {
-                        Ok(queue_id_entries) => {
-                            for queue_id_dir in queue_id_entries.flatten() {
-                                if !queue_id_dir.path().is_dir() {
-                                    continue;
-                                }
-
-                                // Parse queue ID from directory name
-                                let os_string = queue_id_dir.file_name();
-                                let queue_id_op = os_string.to_str();
-                                let queue_id_str = match queue_id_op {
-                                    Some(name) => name,
-                                    None => continue,
-                                };
-
-                                let queue_id = match i32::from_str(queue_id_str) {
-                                    Ok(id) => id,
-                                    Err(_) => {
-                                        // Skip non-numeric directory names
-                                        continue;
-                                    }
-                                };
-
-                                // Verify queue type matches expected type
-                                if !self.queue_type_should_be(&topic, cq_type) {
-                                    return false;
-                                }
-
-                                // Create consume queue based on type
-                                let logic =
-                                    self.create_consume_queue_by_type(&topic, queue_id, cq_type, store_path.into());
-
-                                // Store the queue in memory table
-                                self.put_consume_queue(topic.clone(), queue_id, logic);
-
-                                // Load the queue data
-                                if !self.load_logic(&topic, queue_id) {
-                                    return false;
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            error!("Failed to read queue ID directories for topic {}: {}", topic, e);
-                            return false;
-                        }
-                    }
-                }
+        let topic_entries = match fs::read_dir(dir_logic) {
+            Ok(entries) => entries,
+            Err(error) => {
+                error!("Failed to read topic directories: {error}");
+                return false;
             }
-            Err(e) => {
-                error!("Failed to read topic directories: {e}");
+        };
+        let mut queue_identities = Vec::new();
+        for topic_entry in topic_entries {
+            let topic_dir = match topic_entry {
+                Ok(entry) => entry,
+                Err(error) => {
+                    error!("Failed to enumerate a topic directory in {store_path}: {error}");
+                    return false;
+                }
+            };
+            let topic_path = topic_dir.path();
+            let topic_metadata = match fs::symlink_metadata(&topic_path) {
+                Ok(metadata) => metadata,
+                Err(error) => {
+                    error!("Failed to inspect topic path {}: {error}", topic_path.display());
+                    return false;
+                }
+            };
+            if !topic_metadata.file_type().is_dir() {
+                error!(
+                    "Unknown non-directory topic entry {} blocks consume queue loading and was retained",
+                    topic_path.display()
+                );
+                return false;
+            }
+
+            let topic = match topic_dir.file_name().into_string() {
+                Ok(name) => CheetahString::from_string(name),
+                Err(name) => {
+                    error!("Consume queue topic directory name is not valid UTF-8: {name:?}");
+                    return false;
+                }
+            };
+            let queue_id_entries = match fs::read_dir(&topic_path) {
+                Ok(entries) => entries,
+                Err(error) => {
+                    error!("Failed to read queue ID directories for topic {topic}: {error}");
+                    return false;
+                }
+            };
+            for queue_id_entry in queue_id_entries {
+                let queue_id_dir = match queue_id_entry {
+                    Ok(entry) => entry,
+                    Err(error) => {
+                        error!("Failed to enumerate a queue ID directory for topic {topic}: {error}");
+                        return false;
+                    }
+                };
+                let queue_id_path = queue_id_dir.path();
+                let queue_id_metadata = match fs::symlink_metadata(&queue_id_path) {
+                    Ok(metadata) => metadata,
+                    Err(error) => {
+                        error!("Failed to inspect queue ID path {}: {error}", queue_id_path.display());
+                        return false;
+                    }
+                };
+                if !queue_id_metadata.file_type().is_dir() {
+                    error!(
+                        "Unknown non-directory queue ID entry {} blocks consume queue loading and was retained",
+                        queue_id_path.display()
+                    );
+                    return false;
+                }
+
+                let queue_id_name = match queue_id_dir.file_name().into_string() {
+                    Ok(name) => name,
+                    Err(name) => {
+                        error!("Queue ID directory name for topic {topic} is not valid UTF-8: {name:?}");
+                        return false;
+                    }
+                };
+                let queue_id = match i32::from_str(queue_id_name.as_str()) {
+                    Ok(id) => id,
+                    Err(error) => {
+                        error!("Invalid queue ID directory {queue_id_name:?} for topic {topic}: {error}");
+                        return false;
+                    }
+                };
+
+                queue_identities.push((topic.clone(), queue_id));
+            }
+        }
+
+        for (topic, _) in &queue_identities {
+            if !self.queue_type_should_be(topic, cq_type) {
+                return false;
+            }
+        }
+        for (topic, queue_id) in queue_identities {
+            let logic = self.create_consume_queue_by_type(&topic, queue_id, cq_type, store_path.into());
+            self.put_consume_queue(topic.clone(), queue_id, logic);
+            if !self.load_logic(&topic, queue_id) {
                 return false;
             }
         }
@@ -1130,8 +1383,15 @@ impl ConsumeQueueStore {
 
     #[inline]
     fn truncate_dirty_logic_files(&self, topic: &CheetahString, queue_id: i32, phy_offset: i64) {
+        let _ = self.truncate_dirty_logic_files_with_outcome(topic, queue_id, phy_offset);
+    }
+
+    fn truncate_dirty_logic_files_with_outcome(&self, topic: &CheetahString, queue_id: i32, phy_offset: i64) -> bool {
         let file_queue_life_cycle = self.get_life_cycle(topic, queue_id);
-        file_queue_life_cycle.write().truncate_dirty_logic_files(phy_offset);
+        let complete = file_queue_life_cycle
+            .write()
+            .truncate_dirty_logic_files_with_outcome(phy_offset);
+        complete
     }
     #[inline]
     fn create_consume_queue_by_type(
@@ -1181,6 +1441,8 @@ impl ConsumeQueueStore {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::AtomicI64;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
@@ -1230,6 +1492,9 @@ mod tests {
         recovered_max_physic_offset: i64,
         recovered_max_offset_in_queue: i64,
         recovered_min_logic_offset: i64,
+        visible_max_physic_offset: AtomicI64,
+        destroy_attempts: AtomicUsize,
+        destroy_succeeds: AtomicBool,
     }
 
     impl TrackingQueueState {
@@ -1249,6 +1514,9 @@ mod tests {
                 recovered_max_physic_offset: 1_000 + i64::from(queue_id),
                 recovered_max_offset_in_queue: 100 + i64::from(queue_id),
                 recovered_min_logic_offset: i64::from(queue_id),
+                visible_max_physic_offset: AtomicI64::new(-1),
+                destroy_attempts: AtomicUsize::new(0),
+                destroy_succeeds: AtomicBool::new(true),
             }
         }
     }
@@ -1316,8 +1584,16 @@ mod tests {
                 panic!("tracking queue recovery failed");
             }
             self.max_physic_offset = self.state.recovered_max_physic_offset;
+            self.state
+                .visible_max_physic_offset
+                .store(self.max_physic_offset, Ordering::SeqCst);
             self.max_offset_in_queue = self.state.recovered_max_offset_in_queue;
             self.min_logic_offset = self.state.recovered_min_logic_offset;
+        }
+
+        fn recover_with_outcome(&mut self) -> bool {
+            self.recover();
+            true
         }
 
         fn check_self(&self) {}
@@ -1326,9 +1602,20 @@ mod tests {
             true
         }
 
-        fn destroy(&mut self) {}
+        fn destroy(&mut self) {
+            let _ = self.destroy_with_outcome();
+        }
+
+        fn destroy_with_outcome(&mut self) -> bool {
+            self.state.destroy_attempts.fetch_add(1, Ordering::SeqCst);
+            self.state.destroy_succeeds.load(Ordering::SeqCst)
+        }
 
         fn truncate_dirty_logic_files(&mut self, _max_commit_log_pos: i64) {}
+
+        fn truncate_dirty_logic_files_with_outcome(&mut self, _max_commit_log_pos: i64) -> bool {
+            true
+        }
 
         fn delete_expired_file(&self, _min_commit_log_pos: i64) -> i32 {
             0
@@ -1413,7 +1700,7 @@ mod tests {
         }
 
         fn get_max_physic_offset(&self) -> i64 {
-            self.max_physic_offset
+            self.state.visible_max_physic_offset.load(Ordering::SeqCst)
         }
 
         fn get_min_logic_offset(&self) -> i64 {
@@ -1531,6 +1818,165 @@ mod tests {
         assert!(max_active > 1, "recovery should run more than one queue concurrently");
     }
 
+    #[tokio::test]
+    async fn expired_queue_remains_tracked_until_destroy_retry_succeeds() {
+        let (store, states) = tracking_store(1, Duration::ZERO, None);
+        store.recover().await;
+        let topic = CheetahString::from_static_str("TrackingTopic0");
+        states[0].destroy_succeeds.store(false, Ordering::SeqCst);
+
+        store.clean_expired_sync(2_000);
+
+        assert!(store.find_consume_queue(&topic, 0).is_some());
+        assert_eq!(states[0].destroy_attempts.load(Ordering::SeqCst), 1);
+
+        states[0].destroy_succeeds.store(true, Ordering::SeqCst);
+        store.clean_expired_sync(2_000);
+
+        assert!(store.find_consume_queue(&topic, 0).is_none());
+        assert_eq!(states[0].destroy_attempts.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn destroy_outcome_reports_partial_failure_and_retries_only_failed_identity() {
+        let (store, states) = tracking_store(2, Duration::ZERO, None);
+        states[1].destroy_succeeds.store(false, Ordering::SeqCst);
+        let successful_topic = CheetahString::from_static_str("TrackingTopic0");
+        let failed_topic = CheetahString::from_static_str("TrackingTopic1");
+
+        assert!(!store.destroy_with_outcome());
+        assert_eq!(states[0].destroy_attempts.load(Ordering::SeqCst), 1);
+        assert_eq!(states[1].destroy_attempts.load(Ordering::SeqCst), 1);
+        assert!(store.find_consume_queue_map(&successful_topic).is_none());
+        assert!(store.find_consume_queue_map(&failed_topic).is_some());
+
+        states[1].destroy_succeeds.store(true, Ordering::SeqCst);
+        assert!(store.destroy_with_outcome());
+        assert_eq!(states[0].destroy_attempts.load(Ordering::SeqCst), 1);
+        assert_eq!(states[1].destroy_attempts.load(Ordering::SeqCst), 2);
+        assert!(store.find_consume_queue_map(&failed_topic).is_none());
+    }
+
+    #[tokio::test]
+    async fn expired_queue_is_revalidated_before_closing() {
+        let (store, states) = tracking_store(1, Duration::ZERO, None);
+        store.recover().await;
+        let topic = CheetahString::from_static_str("TrackingTopic0");
+
+        store.clean_expired_sync_after_candidates(2_000, || {
+            states[0].visible_max_physic_offset.store(3_000, Ordering::SeqCst);
+        });
+
+        assert!(store.find_consume_queue(&topic, 0).is_some());
+        assert_eq!(states[0].destroy_attempts.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn in_flight_append_finishes_before_expired_cleanup_revalidates() {
+        let (store, states) = tracking_store(1, Duration::ZERO, None);
+        store.recover().await;
+        let topic = CheetahString::from_static_str("TrackingTopic0");
+        let cleanup_store = store.clone();
+        let (candidate_ready_tx, candidate_ready_rx) = std::sync::mpsc::sync_channel(0);
+        let (release_cleanup_tx, release_cleanup_rx) = std::sync::mpsc::sync_channel(0);
+        let cleanup = std::thread::spawn(move || {
+            cleanup_store.clean_expired_sync_after_candidates(2_000, || {
+                candidate_ready_tx.send(()).expect("report expired candidate");
+                release_cleanup_rx
+                    .recv()
+                    .expect("release cleanup after append admission");
+            });
+        });
+
+        candidate_ready_rx.recv().expect("cleanup collected expired candidate");
+        let append_topic = topic.clone();
+        let append_store = store.clone();
+        let append_state = states[0].clone();
+        let (append_entered_tx, append_entered_rx) = std::sync::mpsc::sync_channel(0);
+        let (release_append_tx, release_append_rx) = std::sync::mpsc::sync_channel(0);
+        let append = std::thread::spawn(move || {
+            append_store.with_topic_queue_for_append(&append_topic, 0, |_| {
+                let lifecycle = append_store.topic_lifecycle_lock(&append_topic);
+                assert!(
+                    lifecycle.try_write().is_none(),
+                    "the topic read guard must remain held while the queue append executes"
+                );
+                append_entered_tx.send(()).expect("report append admission");
+                release_append_rx.recv().expect("release append");
+                append_state.visible_max_physic_offset.store(3_000, Ordering::SeqCst);
+            });
+        });
+
+        append_entered_rx.recv().expect("append reached queue operation");
+        release_cleanup_tx
+            .send(())
+            .expect("allow cleanup to wait on the topic closing fence");
+        assert_eq!(states[0].destroy_attempts.load(Ordering::SeqCst), 0);
+        release_append_tx.send(()).expect("finish append");
+        append.join().expect("append thread");
+        cleanup.join().expect("cleanup thread");
+
+        assert_eq!(states[0].destroy_attempts.load(Ordering::SeqCst), 0);
+        assert!(store.find_consume_queue(&topic, 0).is_some());
+    }
+
+    #[test]
+    fn topic_removal_requires_an_empty_queue_table() {
+        let (store, _) = tracking_store(1, Duration::ZERO, None);
+        let topic = CheetahString::from_static_str("TrackingTopic0");
+        let expected = store.find_consume_queue_map(&topic).expect("tracked topic");
+        let unexpected = expected.get(&0).expect("tracked queue").clone();
+        store
+            .inner
+            .consume_queue_table
+            .lock()
+            .get_mut(&topic)
+            .expect("tracked topic")
+            .insert(1, unexpected);
+
+        assert!(!store.remove_topic_if_empty(&topic));
+        assert_eq!(store.find_consume_queue_map(&topic).expect("topic retained").len(), 2);
+    }
+
+    #[test]
+    fn topic_partial_success_retry_does_not_destroy_a_removed_identity_twice() {
+        let (mut store, states) = tracking_store(3, Duration::ZERO, None);
+        let topic = CheetahString::from_static_str("TrackingTopic0");
+        states[2].destroy_succeeds.store(false, Ordering::SeqCst);
+
+        store.with_topic_closing(&topic, |store| {
+            let first_generation = store.find_consume_queue_map(&topic).expect("tracked topic");
+            assert_eq!(store.retire_topic_queue_snapshot(&topic, &first_generation), vec![2]);
+        });
+        let retained = store.find_consume_queue_map(&topic).expect("failed queue retained");
+        assert_eq!(retained.len(), 1);
+        assert!(retained.contains_key(&2));
+        assert_eq!(states[0].destroy_attempts.load(Ordering::SeqCst), 1);
+        assert_eq!(states[2].destroy_attempts.load(Ordering::SeqCst), 1);
+
+        states[2].destroy_succeeds.store(true, Ordering::SeqCst);
+        store.with_topic_closing(&topic, |store| {
+            let retry_generation = store.find_consume_queue_map(&topic).expect("retry identity");
+            assert!(store.retire_topic_queue_snapshot(&topic, &retry_generation).is_empty());
+            assert!(store.remove_topic_if_empty(&topic));
+        });
+
+        assert!(store.find_consume_queue_map(&topic).is_none());
+        assert_eq!(states[0].destroy_attempts.load(Ordering::SeqCst), 1);
+        assert_eq!(states[2].destroy_attempts.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn topic_closing_excludes_queue_admission() {
+        let (mut store, _) = tracking_store(1, Duration::ZERO, None);
+        let topic = CheetahString::from_static_str("TrackingTopic0");
+
+        store.with_topic_closing(&topic, |store| {
+            let lifecycle = store.topic_lifecycle_lock(&topic);
+            assert!(lifecycle.try_read().is_none());
+        });
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn recover_concurrently_with_summary_reports_successes() {
         let (store, _) = tracking_store(3, Duration::ZERO, None);
@@ -1583,6 +2029,77 @@ mod tests {
         assert_eq!(states[1].recover_count.load(Ordering::SeqCst), 1);
     }
 
+    fn consume_queue_load_store(root: &Path, topic: &CheetahString) -> (ConsumeQueueStore, String) {
+        let message_store_config = Arc::new(MessageStoreConfig {
+            store_path_root_dir: root.to_string_lossy().to_string().into(),
+            ..MessageStoreConfig::default()
+        });
+        let broker_config = Arc::new(StoreRuntimeConfig::default());
+        let topic_config_table = Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new());
+        topic_config_table.insert(topic.clone(), Arc::new(TopicConfig::new(topic.clone())));
+        let message_store = LocalFileMessageStore::new(
+            message_store_config.clone(),
+            broker_config.clone(),
+            topic_config_table,
+            None,
+            false,
+            crate::runtime::test_service_context("consume-queue-namespace-load-test"),
+        );
+        let simple_store_path = get_store_path_consume_queue(message_store_config.store_path_root_dir.as_str());
+        let store = ConsumeQueueStore::new(
+            crate::runtime::test_scope("consume-queue-namespace-load-test"),
+            message_store_config,
+            broker_config,
+        );
+        store.set_context(message_store.consume_queue_context());
+        (store, simple_store_path)
+    }
+
+    #[test]
+    fn load_consume_queues_rejects_a_root_that_is_a_file() {
+        let root = tempdir().expect("tempdir");
+        let store_path = root.path().join("consumequeue");
+        fs::write(&store_path, b"not a directory").expect("root file");
+        let mut store = ConsumeQueueStore::new(
+            crate::runtime::test_scope("consume-queue-root-file-load-test"),
+            Arc::new(MessageStoreConfig::default()),
+            Arc::new(StoreRuntimeConfig::default()),
+        );
+
+        assert!(!store.load_consume_queues(store_path.to_string_lossy().as_ref(), CQType::SimpleCQ));
+        assert!(store_path.is_file());
+        assert!(store.inner.consume_queue_table.lock().is_empty());
+    }
+
+    #[test]
+    fn load_consume_queues_retains_and_rejects_a_topic_level_unknown_file() {
+        let root = tempdir().expect("tempdir");
+        let topic = CheetahString::from_static_str("KnownTopic");
+        let (mut store, store_path) = consume_queue_load_store(root.path(), &topic);
+        fs::create_dir_all(Path::new(&store_path).join(topic.as_str()).join("0")).expect("known queue directory");
+        let unknown = Path::new(&store_path).join("unknown-topic-entry");
+        fs::write(&unknown, b"retained").expect("unknown topic entry");
+
+        assert!(!store.load_consume_queues(&store_path, CQType::SimpleCQ));
+        assert!(unknown.is_file());
+        assert!(store.find_consume_queue_map(&topic).is_none());
+    }
+
+    #[test]
+    fn load_consume_queues_retains_and_rejects_a_queue_level_unknown_file() {
+        let root = tempdir().expect("tempdir");
+        let topic = CheetahString::from_static_str("KnownTopic");
+        let (mut store, store_path) = consume_queue_load_store(root.path(), &topic);
+        let topic_path = Path::new(&store_path).join(topic.as_str());
+        fs::create_dir_all(topic_path.join("0")).expect("known queue directory");
+        let unknown = topic_path.join("unknown-queue-entry");
+        fs::write(&unknown, b"retained").expect("unknown queue entry");
+
+        assert!(!store.load_consume_queues(&store_path, CQType::SimpleCQ));
+        assert!(unknown.is_file());
+        assert!(store.find_consume_queue_map(&topic).is_none());
+    }
+
     #[test]
     fn load_consume_queues_returns_false_when_topic_queue_type_mismatches_directory() {
         let root = tempdir().expect("tempdir");
@@ -1614,6 +2131,32 @@ mod tests {
         store.set_context(message_store.consume_queue_context());
 
         assert!(!store.load_consume_queues(&batch_store_path, CQType::BatchCQ));
+    }
+
+    #[test]
+    fn load_consume_queues_returns_false_for_invalid_persisted_queue_id() {
+        let root = tempdir().expect("tempdir");
+        let topic = CheetahString::from_static_str("InvalidQueueIdTopic");
+        let message_store_config = Arc::new(MessageStoreConfig {
+            store_path_root_dir: root.path().to_string_lossy().to_string().into(),
+            ..MessageStoreConfig::default()
+        });
+        let broker_config = Arc::new(StoreRuntimeConfig::default());
+        let simple_store_path = get_store_path_consume_queue(message_store_config.store_path_root_dir.as_str());
+        fs::create_dir_all(
+            Path::new(&simple_store_path)
+                .join(topic.as_str())
+                .join("not-a-queue-id"),
+        )
+        .expect("invalid queue ID directory");
+        let mut store = ConsumeQueueStore::new(
+            crate::runtime::test_scope("consume-queue-invalid-id-load-test"),
+            message_store_config,
+            broker_config,
+        );
+
+        assert!(!store.load_consume_queues(&simple_store_path, CQType::SimpleCQ));
+        assert!(store.find_consume_queue_map(&topic).is_none());
     }
 
     #[test]

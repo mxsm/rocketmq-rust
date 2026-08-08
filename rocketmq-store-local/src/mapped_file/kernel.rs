@@ -365,6 +365,10 @@ impl MappedFileProgress {
 pub struct ReferenceResourceBase {
     pub ref_count: AtomicI64,
     pub available: AtomicBool,
+    /// Indicates that the compatibility cleanup callback completed.
+    ///
+    /// This flag does not prove that a mapped-file owner was unmapped or that its file handle was
+    /// closed. Physical ownership remains governed by the mapped-file owner lifetime.
     pub cleanup_over: AtomicBool,
     pub first_shutdown_timestamp: AtomicU64,
     pub hold_lock: Mutex<()>,
@@ -413,23 +417,44 @@ pub trait ReferenceResource: Send + Sync {
 
     #[inline]
     fn is_available(&self) -> bool {
-        self.base().available.load(Ordering::Relaxed)
+        self.base().available.load(Ordering::Acquire)
     }
 
     fn shutdown(&self, interval_forcibly: u64) {
-        if self.base().available.load(Ordering::Acquire) {
-            self.base().available.store(false, Ordering::Release);
-            self.base()
-                .first_shutdown_timestamp
-                .store(current_millis(), Ordering::Release);
-            self.release();
-        } else if self.get_ref_count() > 0 {
-            let elapsed = current_millis().saturating_sub(self.base().first_shutdown_timestamp.load(Ordering::Acquire));
-            if elapsed >= interval_forcibly {
-                let current_count = self.get_ref_count();
-                self.base().ref_count.store(-1000 - current_count, Ordering::Release);
-                self.release();
+        let should_release = {
+            let _guard = self.base().hold_lock.lock();
+            if self.base().available.load(Ordering::Acquire) {
+                self.base()
+                    .first_shutdown_timestamp
+                    .store(current_millis(), Ordering::Relaxed);
+                self.base().available.store(false, Ordering::Release);
+                true
+            } else {
+                let elapsed =
+                    current_millis().saturating_sub(self.base().first_shutdown_timestamp.load(Ordering::Acquire));
+                if elapsed < interval_forcibly {
+                    false
+                } else {
+                    let mut current_count = self.base().ref_count.load(Ordering::Acquire);
+                    loop {
+                        if current_count <= 0 {
+                            break false;
+                        }
+                        match self.base().ref_count.compare_exchange_weak(
+                            current_count,
+                            -1000 - current_count,
+                            Ordering::AcqRel,
+                            Ordering::Acquire,
+                        ) {
+                            Ok(_) => break true,
+                            Err(observed) => current_count = observed,
+                        }
+                    }
+                }
             }
+        };
+        if should_release {
+            self.release();
         }
     }
 
@@ -441,7 +466,7 @@ pub trait ReferenceResource: Send + Sync {
         }
         fence(Ordering::Acquire);
         let _guard = self.base().release_lock.lock();
-        if !self.base().cleanup_over.load(Ordering::Relaxed) {
+        if !self.base().cleanup_over.load(Ordering::Acquire) {
             let cleanup_result = self.cleanup(value);
             self.base().cleanup_over.store(cleanup_result, Ordering::Release);
         }
@@ -449,14 +474,24 @@ pub trait ReferenceResource: Send + Sync {
 
     #[inline]
     fn get_ref_count(&self) -> i64 {
-        self.base().ref_count.load(Ordering::Relaxed)
+        self.base().ref_count.load(Ordering::Acquire)
     }
 
     fn cleanup(&self, current_ref: i64) -> bool;
 
+    /// Returns whether the compatibility cleanup callback has completed.
+    ///
+    /// This is a logical lifecycle marker. It does not guarantee that an mmap or file owner has
+    /// been physically released.
+    #[inline]
+    fn is_logical_cleanup_marked(&self) -> bool {
+        self.base().cleanup_over.load(Ordering::Acquire) && self.base().ref_count.load(Ordering::Acquire) <= 0
+    }
+
+    /// Compatibility alias for [`Self::is_logical_cleanup_marked`].
     #[inline]
     fn is_cleanup_over(&self) -> bool {
-        self.base().cleanup_over.load(Ordering::Relaxed) && self.base().ref_count.load(Ordering::Relaxed) <= 0
+        self.is_logical_cleanup_marked()
     }
 }
 

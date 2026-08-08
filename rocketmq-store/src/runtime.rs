@@ -86,6 +86,10 @@ impl StoreRuntimeScope {
         self.mapped_file_allocation_budget.clone()
     }
 
+    pub(crate) fn storage_io(&self) -> BlockingExecutor {
+        self.blocking_executor.clone()
+    }
+
     pub(crate) fn group_commit_budget(&self) -> ResourceBudget {
         self.group_commit_budget.clone()
     }

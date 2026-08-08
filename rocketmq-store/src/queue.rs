@@ -60,6 +60,10 @@ impl ArcConsumeQueue {
     pub fn write(&self) -> RwLockWriteGuard<'_, Box<dyn ConsumeQueueTrait>> {
         self.inner.write()
     }
+
+    pub(crate) fn ptr_eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
 }
 
 pub type ConsumeQueueTable = parking_lot::Mutex<HashMap<CheetahString, HashMap<i32, ArcConsumeQueue>>>;

@@ -47,6 +47,17 @@ pub trait ConsumeQueueStoreInterface: Sync + Any {
     /// Recover from file
     async fn recover(&self);
 
+    /// Recovers all queues and reports whether destructive repair completed for every identity.
+    ///
+    /// The compatibility default invokes the legacy recovery hook but fails closed because an
+    /// implementation without an explicit outcome cannot prove that every repair completed.
+    fn recover_with_outcome(&self) -> impl std::future::Future<Output = bool> {
+        async {
+            self.recover().await;
+            false
+        }
+    }
+
     /// Recover concurrently from file
     ///
     /// # Returns
@@ -68,6 +79,18 @@ pub trait ConsumeQueueStoreInterface: Sync + Any {
     /// Destroy all consume queues
     fn destroy(&self);
 
+    /// Attempt to destroy every consume queue without forgetting failed identities.
+    ///
+    /// # Returns
+    /// `true` only when every tracked queue completed namespace removal. The compatibility
+    /// default invokes the legacy void method and returns `false` because it cannot prove that
+    /// outcome.
+    #[must_use]
+    fn destroy_with_outcome(&self) -> bool {
+        self.destroy();
+        false
+    }
+
     /// Destroy the specific consume queue
     ///
     /// # Parameters
@@ -76,6 +99,17 @@ pub trait ConsumeQueueStoreInterface: Sync + Any {
     /// # Returns
     /// Result indicating success or failure
     fn destroy_queue(&self, consume_queue: &dyn ConsumeQueueTrait);
+
+    /// Attempt to destroy one consume queue while preserving its retry identity on failure.
+    ///
+    /// # Returns
+    /// `true` only when the queue completed namespace removal. The compatibility default invokes
+    /// the legacy void method and returns `false` because it cannot prove that outcome.
+    #[must_use]
+    fn destroy_queue_with_outcome(&self, consume_queue: &dyn ConsumeQueueTrait) -> bool {
+        self.destroy_queue(consume_queue);
+        false
+    }
 
     /// Flush cache to file
     ///
@@ -142,6 +176,13 @@ pub trait ConsumeQueueStoreInterface: Sync + Any {
     /// # Returns
     /// Result indicating success or failure
     fn truncate_dirty(&self, offset_to_truncate: i64);
+
+    /// Truncates dirty data and reports whether every queue retained a retryable, contiguous
+    /// generation.
+    fn truncate_dirty_with_outcome(&self, offset_to_truncate: i64) -> bool {
+        self.truncate_dirty(offset_to_truncate);
+        false
+    }
 
     /// Apply the dispatched request and build the consume queue
     ///

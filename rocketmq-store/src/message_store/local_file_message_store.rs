@@ -2063,8 +2063,14 @@ impl BackendOps for LocalFileMessageStore {
             return Ok(false);
         }
 
-        self.consume_queue_store.truncate_dirty(offset_to_truncate);
-        self.commit_log.truncate_dirty_files(offset_to_truncate);
+        if !self.consume_queue_store.truncate_dirty_with_outcome(offset_to_truncate) {
+            warn!(offset_to_truncate, "consume-queue truncation remains pending");
+            return Ok(false);
+        }
+        if !self.commit_log.try_truncate_dirty_files(offset_to_truncate) {
+            warn!(offset_to_truncate, "CommitLog truncation remains pending");
+            return Ok(false);
+        }
         let mut consume_queue_store = self.consume_queue_store.clone();
         consume_queue_store.recover_offset_table(self.commit_log.get_min_offset());
         Ok(true)
