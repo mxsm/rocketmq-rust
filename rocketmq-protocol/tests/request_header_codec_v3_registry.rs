@@ -58,11 +58,14 @@ use rocketmq_protocol::protocol::header::namesrv::topic_operation_header::TopicR
 use rocketmq_protocol::protocol::header::notification_request_header::NotificationRequestHeader;
 use rocketmq_protocol::protocol::header::notify_consumer_ids_changed_request_header::NotifyConsumerIdsChangedRequestHeader;
 use rocketmq_protocol::protocol::header::notify_unsubscribe_lite_request_header::NotifyUnsubscribeLiteRequestHeader;
+use rocketmq_protocol::protocol::header::peek_message_request_header::PeekMessageRequestHeader;
+use rocketmq_protocol::protocol::header::polling_info_request_header::PollingInfoRequestHeader;
 use rocketmq_protocol::protocol::header::pop_lite_message_request_header::PopLiteMessageRequestHeader;
 use rocketmq_protocol::protocol::header::pull_message_request_header::PullMessageRequestHeader;
 use rocketmq_protocol::protocol::header::pull_message_response_header::PullMessageResponseHeader;
 use rocketmq_protocol::protocol::header::query_consume_queue_request_header::QueryConsumeQueueRequestHeader;
 use rocketmq_protocol::protocol::header::query_consume_time_span_request_header::QueryConsumeTimeSpanRequestHeader;
+use rocketmq_protocol::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
 use rocketmq_protocol::protocol::header::query_correction_offset_header::QueryCorrectionOffsetHeader;
 use rocketmq_protocol::protocol::header::query_subscription_by_consumer_request_header::QuerySubscriptionByConsumerRequestHeader;
 use rocketmq_protocol::protocol::header::query_topic_consume_by_who_request_header::QueryTopicConsumeByWhoRequestHeader;
@@ -71,6 +74,7 @@ use rocketmq_protocol::protocol::header::search_offset_request_header::SearchOff
 use rocketmq_protocol::protocol::header::search_offset_response_header::SearchOffsetResponseHeader;
 use rocketmq_protocol::protocol::header::unlock_batch_mq_request_header::UnlockBatchMqRequestHeader;
 use rocketmq_protocol::protocol::header::unregister_client_request_header::UnregisterClientRequestHeader;
+use rocketmq_protocol::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
 use rocketmq_protocol::protocol::header::update_group_forbidden_request_header::UpdateGroupForbiddenRequestHeader;
 use rocketmq_protocol::protocol::header_codec::{
     AliasConflictPolicy, HeaderCodec, HeaderCodecError, HeaderFieldSpec, HeaderFlattenSpec, HeaderPresence,
@@ -358,6 +362,19 @@ fn registry() -> Vec<RegisteredSchema> {
         register::<SearchOffsetResponseHeader>(),
         register::<PullMessageRequestHeader>(),
         register::<PullMessageResponseHeader>(),
+        register_value(&PeekMessageRequestHeader {
+            consumer_group: CheetahString::from_static_str("registry"),
+            topic: CheetahString::from_static_str("registry"),
+            queue_id: 0,
+            max_msg_nums: 0,
+            topic_request_header: None,
+        }),
+        register_value(&PollingInfoRequestHeader {
+            consumer_group: CheetahString::from_static_str("registry"),
+            topic: CheetahString::from_static_str("registry"),
+            queue_id: 0,
+            topic_request_header: None,
+        }),
         register_value(&PopLiteMessageRequestHeader {
             client_id: CheetahString::from_static_str("registry"),
             consumer_group: CheetahString::from_static_str("registry"),
@@ -383,8 +400,22 @@ fn registry() -> Vec<RegisteredSchema> {
             rpc_request_header: None,
         }),
         register::<QueryTopicsByConsumerRequestHeader>(),
+        register_value(&QueryConsumerOffsetRequestHeader {
+            consumer_group: CheetahString::from_static_str("registry"),
+            topic: CheetahString::from_static_str("registry"),
+            queue_id: 0,
+            set_zero_if_not_found: None,
+            topic_request_header: None,
+        }),
         register::<UnlockBatchMqRequestHeader>(),
         register::<UnregisterClientRequestHeader>(),
+        register_value(&UpdateConsumerOffsetRequestHeader {
+            consumer_group: CheetahString::from_static_str("registry"),
+            topic: CheetahString::from_static_str("registry"),
+            queue_id: 0,
+            commit_offset: 0,
+            topic_request_header: None,
+        }),
         register_value(&UpdateGroupForbiddenRequestHeader {
             group: CheetahString::from_static_str("registry"),
             topic: CheetahString::from_static_str("registry"),
@@ -943,6 +974,110 @@ fn topic_headers_preserve_nested_java_inheritance_and_defaults() {
             })
         },
     );
+    assert_topic_envelope_contract::<QueryConsumerOffsetRequestHeader>(
+        &[
+            ("consumerGroup", "consumer-query"),
+            ("topic", "topic-query"),
+            ("queueId", "2147483647"),
+            ("setZeroIfNotFound", "true"),
+        ],
+        &["consumerGroup", "topic", "queueId"],
+        |header| {
+            header.topic_request_header.as_ref().map(|topic| TopicEnvelopeRef {
+                lo: topic.lo,
+                rpc: &topic.rpc,
+            })
+        },
+    );
+    assert_topic_envelope_contract::<UpdateConsumerOffsetRequestHeader>(
+        &[
+            ("consumerGroup", "consumer-update"),
+            ("topic", "topic-update"),
+            ("queueId", "-2147483648"),
+            ("commitOffset", "9223372036854775807"),
+        ],
+        &["consumerGroup", "topic", "queueId", "commitOffset"],
+        |header| {
+            header.topic_request_header.as_ref().map(|topic| TopicEnvelopeRef {
+                lo: topic.lo,
+                rpc: &topic.rpc,
+            })
+        },
+    );
+    assert_topic_envelope_contract::<PollingInfoRequestHeader>(
+        &[
+            ("consumerGroup", "consumer-polling"),
+            ("topic", "topic-polling"),
+            ("queueId", "0"),
+        ],
+        &["consumerGroup", "topic", "queueId"],
+        |header| {
+            header.topic_request_header.as_ref().map(|topic| TopicEnvelopeRef {
+                lo: topic.lo,
+                rpc: &topic.rpc,
+            })
+        },
+    );
+    assert_topic_envelope_contract::<PeekMessageRequestHeader>(
+        &[
+            ("consumerGroup", "consumer-peek"),
+            ("topic", "topic-peek"),
+            ("queueId", "-1"),
+            ("maxMsgNums", "2147483647"),
+        ],
+        &["consumerGroup", "topic", "queueId", "maxMsgNums"],
+        |header| {
+            header.topic_request_header.as_ref().map(|topic| TopicEnvelopeRef {
+                lo: topic.lo,
+                rpc: &topic.rpc,
+            })
+        },
+    );
+
+    let update_signed_minimum = HeaderMap::from([
+        ("consumerGroup".into(), "consumer-update".into()),
+        ("topic".into(), "topic-update".into()),
+        ("queueId".into(), "2147483647".into()),
+        ("commitOffset".into(), "-9223372036854775808".into()),
+    ]);
+    let typed = <UpdateConsumerOffsetRequestHeader as HeaderCodec>::decode_from_map(&update_signed_minimum)
+        .expect("signed Java Long and Integer minima remain valid");
+    let legacy = <UpdateConsumerOffsetRequestHeader as FromMap>::from(&update_signed_minimum)
+        .expect("legacy adapter accepts signed Java extrema");
+    assert_eq!(typed.queue_id, i32::MAX);
+    assert_eq!(legacy.queue_id, i32::MAX);
+    assert_eq!(typed.commit_offset, i64::MIN);
+    assert_eq!(legacy.commit_offset, i64::MIN);
+
+    let peek_signed_minimum = HeaderMap::from([
+        ("consumerGroup".into(), "consumer-peek".into()),
+        ("topic".into(), "topic-peek".into()),
+        ("queueId".into(), "-2147483648".into()),
+        ("maxMsgNums".into(), "-2147483648".into()),
+    ]);
+    let typed = <PeekMessageRequestHeader as HeaderCodec>::decode_from_map(&peek_signed_minimum)
+        .expect("signed Java Integer minima remain valid");
+    let legacy = <PeekMessageRequestHeader as FromMap>::from(&peek_signed_minimum)
+        .expect("legacy adapter accepts signed Java Integer minima");
+    assert_eq!(typed.queue_id, i32::MIN);
+    assert_eq!(legacy.queue_id, i32::MIN);
+    assert_eq!(typed.max_msg_nums, i32::MIN);
+    assert_eq!(legacy.max_msg_nums, i32::MIN);
+
+    let malformed_set_zero = HeaderMap::from([
+        ("consumerGroup".into(), "consumer-query".into()),
+        ("topic".into(), "topic-query".into()),
+        ("queueId".into(), "0".into()),
+        ("setZeroIfNotFound".into(), "not-a-bool".into()),
+    ]);
+    assert!(matches!(
+        <QueryConsumerOffsetRequestHeader as HeaderCodec>::decode_from_map(&malformed_set_zero),
+        Err(HeaderCodecError::InvalidValue {
+            key: "setZeroIfNotFound",
+            ..
+        })
+    ));
+    assert!(<QueryConsumerOffsetRequestHeader as FromMap>::from(&malformed_set_zero).is_err());
 
     let consume_stats_minimum = HeaderMap::from([("consumerGroup".into(), "consumer-min".into())]);
     let typed = <GetConsumeStatsRequestHeader as HeaderCodec>::decode_from_map(&consume_stats_minimum)

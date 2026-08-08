@@ -14,6 +14,7 @@
 
 use cheetah_string::CheetahString;
 use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -23,18 +24,23 @@ use crate::protocol::header::namesrv::topic_operation_header::TopicRequestHeader
 #[derive(Debug, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
 pub struct UpdateConsumerOffsetResponseHeader {}
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.UpdateConsumerOffsetRequestHeader"
+)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateConsumerOffsetRequestHeader {
-    #[required]
+    #[header(required)]
     pub consumer_group: CheetahString,
-    #[required]
+    #[header(required)]
     pub topic: CheetahString,
-    #[required]
+    #[header(required)]
     pub queue_id: i32,
-    #[required]
+    #[header(required)]
     pub commit_offset: i64,
     #[serde(flatten)]
+    #[header(flatten, presence = "always")]
     pub topic_request_header: Option<TopicRequestHeader>,
 }
 
