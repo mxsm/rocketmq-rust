@@ -15,38 +15,49 @@
 use std::fmt::Display;
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::protocol::header::namesrv::topic_operation_header::TopicRequestHeader;
 
-#[derive(Clone, Debug, Serialize, Deserialize, RequestHeaderCodecV2)]
+#[derive(Clone, Debug, Serialize, Deserialize, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::pop_message_request_header::PopMessageRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.PopMessageRequestHeader"
+)]
 #[serde(rename_all = "camelCase")]
 pub struct PopMessageRequestHeader {
-    #[required]
+    #[header(required)]
     pub consumer_group: CheetahString,
-    #[required]
+    #[header(required)]
     pub topic: CheetahString,
-    #[required]
+    #[header(required)]
     pub queue_id: i32,
-    #[required]
+    #[header(required, range = "i32")]
     pub max_msg_nums: u32,
-    #[required]
+    #[header(required, range = "i64")]
     pub invisible_time: u64,
-    #[required]
+    #[header(required, range = "i64")]
     pub poll_time: u64,
-    #[required]
+    #[header(required, range = "i64")]
     pub born_time: u64,
-    #[required]
+    #[header(required)]
     pub init_mode: i32,
     pub exp_type: Option<CheetahString>,
     pub exp: Option<CheetahString>,
+    #[serde(default = "default_order")]
+    #[header(default_with = "default_order", default_semantic = "literal:false")]
     pub order: Option<bool>,
     pub attempt_id: Option<CheetahString>,
 
     #[serde(flatten)]
+    #[header(flatten, presence = "always")]
     pub topic_request_header: Option<TopicRequestHeader>,
+}
+
+fn default_order() -> Option<bool> {
+    Some(false)
 }
 
 impl PopMessageRequestHeader {

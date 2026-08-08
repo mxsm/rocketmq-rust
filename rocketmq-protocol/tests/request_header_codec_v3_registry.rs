@@ -20,6 +20,7 @@ use cheetah_string::CheetahString;
 use rocketmq_macros::RequestHeaderCodecV3;
 use rocketmq_model::boundary_type::BoundaryType;
 use rocketmq_model::common::sys_flag::message_sys_flag::MessageSysFlag;
+use rocketmq_protocol::protocol::header::change_invisible_time_request_header::ChangeInvisibleTimeRequestHeader;
 use rocketmq_protocol::protocol::header::check_rocksdb_cq_write_progress_request_header::CheckRocksdbCqWriteProgressRequestHeader;
 use rocketmq_protocol::protocol::header::check_transaction_state_request_header::CheckTransactionStateRequestHeader;
 use rocketmq_protocol::protocol::header::clone_group_offset_request_header::CloneGroupOffsetRequestHeader;
@@ -76,6 +77,9 @@ use rocketmq_protocol::protocol::header::unlock_batch_mq_request_header::UnlockB
 use rocketmq_protocol::protocol::header::unregister_client_request_header::UnregisterClientRequestHeader;
 use rocketmq_protocol::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
 use rocketmq_protocol::protocol::header::update_group_forbidden_request_header::UpdateGroupForbiddenRequestHeader;
+use rocketmq_protocol::protocol::header::{
+    ack_message_request_header::AckMessageRequestHeader, pop_message_request_header::PopMessageRequestHeader,
+};
 use rocketmq_protocol::protocol::header_codec::{
     AliasConflictPolicy, HeaderCodec, HeaderCodecError, HeaderFieldSpec, HeaderFlattenSpec, HeaderPresence,
     HeaderRange, HeaderValueKind,
@@ -230,6 +234,15 @@ fn registry() -> Vec<RegisteredSchema> {
         register::<RpcRequestHeader>(),
         register::<TopicRequestHeader>(),
         register::<NamesrvTopicRequestHeader>(),
+        register_value(&AckMessageRequestHeader {
+            consumer_group: CheetahString::from_static_str("registry"),
+            topic: CheetahString::from_static_str("registry"),
+            queue_id: 0,
+            extra_info: CheetahString::from_static_str("registry"),
+            offset: 0,
+            lite_topic: None,
+            topic_request_header: None,
+        }),
         register_value(&CheckTransactionStateRequestHeader {
             topic: None,
             tran_state_table_offset: 0,
@@ -244,6 +257,7 @@ fn registry() -> Vec<RegisteredSchema> {
             check_store_time: 0,
             rpc: None,
         }),
+        register::<ChangeInvisibleTimeRequestHeader>(),
         register::<CloneGroupOffsetRequestHeader>(),
         register::<ConsumeMessageDirectlyResultRequestHeader>(),
         register_value(&ConsumerSendMsgBackRequestHeader {
@@ -373,6 +387,21 @@ fn registry() -> Vec<RegisteredSchema> {
             consumer_group: CheetahString::from_static_str("registry"),
             topic: CheetahString::from_static_str("registry"),
             queue_id: 0,
+            topic_request_header: None,
+        }),
+        register_value(&PopMessageRequestHeader {
+            consumer_group: CheetahString::from_static_str("registry"),
+            topic: CheetahString::from_static_str("registry"),
+            queue_id: 0,
+            max_msg_nums: 0,
+            invisible_time: 0,
+            poll_time: 0,
+            born_time: 0,
+            init_mode: 0,
+            exp_type: None,
+            exp: None,
+            order: Some(false),
+            attempt_id: None,
             topic_request_header: None,
         }),
         register_value(&PopLiteMessageRequestHeader {
@@ -1033,6 +1062,179 @@ fn topic_headers_preserve_nested_java_inheritance_and_defaults() {
             })
         },
     );
+    assert_topic_envelope_contract::<AckMessageRequestHeader>(
+        &[
+            ("consumerGroup", "consumer-ack"),
+            ("topic", "topic-ack"),
+            ("queueId", "2147483647"),
+            ("extraInfo", "extra-ack"),
+            ("offset", "-9223372036854775808"),
+            ("liteTopic", "lite-ack"),
+        ],
+        &["consumerGroup", "topic", "queueId", "extraInfo", "offset"],
+        |header| {
+            header.topic_request_header.as_ref().map(|topic| TopicEnvelopeRef {
+                lo: topic.lo,
+                rpc: &topic.rpc_request_header,
+            })
+        },
+    );
+    assert_topic_envelope_contract::<ChangeInvisibleTimeRequestHeader>(
+        &[
+            ("consumerGroup", "consumer-change"),
+            ("topic", "topic-change"),
+            ("queueId", "-2147483648"),
+            ("extraInfo", "extra-change"),
+            ("offset", "9223372036854775807"),
+            ("invisibleTime", "-9223372036854775808"),
+            ("liteTopic", "lite-change"),
+            ("suspend", "true"),
+        ],
+        &[
+            "consumerGroup",
+            "topic",
+            "queueId",
+            "extraInfo",
+            "offset",
+            "invisibleTime",
+        ],
+        |header| {
+            header.topic_request_header.as_ref().map(|topic| TopicEnvelopeRef {
+                lo: topic.lo,
+                rpc: &topic.rpc_request_header,
+            })
+        },
+    );
+    assert_topic_envelope_contract::<PopMessageRequestHeader>(
+        &[
+            ("consumerGroup", "consumer-pop"),
+            ("topic", "topic-pop"),
+            ("queueId", "2147483647"),
+            ("maxMsgNums", "2147483647"),
+            ("invisibleTime", "9223372036854775807"),
+            ("pollTime", "9223372036854775807"),
+            ("bornTime", "9223372036854775807"),
+            ("initMode", "-2147483648"),
+            ("expType", "TAG"),
+            ("exp", "tag-a"),
+            ("order", "true"),
+            ("attemptId", "attempt-pop"),
+        ],
+        &[
+            "consumerGroup",
+            "topic",
+            "queueId",
+            "maxMsgNums",
+            "invisibleTime",
+            "pollTime",
+            "bornTime",
+            "initMode",
+        ],
+        |header| {
+            header.topic_request_header.as_ref().map(|topic| TopicEnvelopeRef {
+                lo: topic.lo,
+                rpc: &topic.rpc,
+            })
+        },
+    );
+
+    let pop_required_only = HeaderMap::from([
+        ("consumerGroup".into(), "consumer-pop".into()),
+        ("topic".into(), "topic-pop".into()),
+        ("queueId".into(), "0".into()),
+        ("maxMsgNums".into(), "32".into()),
+        ("invisibleTime".into(), "30000".into()),
+        ("pollTime".into(), "15000".into()),
+        ("bornTime".into(), "1720000000000".into()),
+        ("initMode".into(), "0".into()),
+    ]);
+    let typed = <PopMessageRequestHeader as HeaderCodec>::decode_from_map(&pop_required_only)
+        .expect("missing order uses the Java Boolean.FALSE initializer");
+    let legacy = <PopMessageRequestHeader as FromMap>::from(&pop_required_only)
+        .expect("legacy adapter uses the Java Boolean.FALSE initializer");
+    assert_eq!(typed.order, Some(false));
+    assert_eq!(legacy.order, Some(false));
+
+    let mut malformed_order = pop_required_only.clone();
+    malformed_order.insert("order".into(), "not-a-bool".into());
+    assert!(matches!(
+        <PopMessageRequestHeader as HeaderCodec>::decode_from_map(&malformed_order),
+        Err(HeaderCodecError::InvalidValue { key: "order", .. })
+    ));
+    assert!(<PopMessageRequestHeader as FromMap>::from(&malformed_order).is_err());
+
+    let mut malformed_suspend = HeaderMap::from([
+        ("consumerGroup".into(), "consumer-change".into()),
+        ("topic".into(), "topic-change".into()),
+        ("queueId".into(), "0".into()),
+        ("extraInfo".into(), "extra-change".into()),
+        ("offset".into(), "0".into()),
+        ("invisibleTime".into(), "1".into()),
+    ]);
+    let typed = <ChangeInvisibleTimeRequestHeader as HeaderCodec>::decode_from_map(&malformed_suspend)
+        .expect("missing suspend uses the Java false initializer");
+    let legacy = <ChangeInvisibleTimeRequestHeader as FromMap>::from(&malformed_suspend)
+        .expect("legacy adapter uses the Java false initializer");
+    assert!(!typed.suspend);
+    assert!(!legacy.suspend);
+    malformed_suspend.insert("suspend".into(), "not-a-bool".into());
+    assert!(matches!(
+        <ChangeInvisibleTimeRequestHeader as HeaderCodec>::decode_from_map(&malformed_suspend),
+        Err(HeaderCodecError::InvalidValue { key: "suspend", .. })
+    ));
+    assert!(<ChangeInvisibleTimeRequestHeader as FromMap>::from(&malformed_suspend).is_err());
+
+    let ack_signed_maximum = HeaderMap::from([
+        ("consumerGroup".into(), "consumer-ack".into()),
+        ("topic".into(), "topic-ack".into()),
+        ("queueId".into(), "-2147483648".into()),
+        ("extraInfo".into(), "extra-ack".into()),
+        ("offset".into(), "9223372036854775807".into()),
+    ]);
+    let typed = <AckMessageRequestHeader as HeaderCodec>::decode_from_map(&ack_signed_maximum)
+        .expect("signed Java extrema remain valid");
+    let legacy = <AckMessageRequestHeader as FromMap>::from(&ack_signed_maximum)
+        .expect("legacy adapter accepts signed Java extrema");
+    assert_eq!(typed.queue_id, i32::MIN);
+    assert_eq!(legacy.queue_id, i32::MIN);
+    assert_eq!(typed.offset, i64::MAX);
+    assert_eq!(legacy.offset, i64::MAX);
+
+    let valid_pop = PopMessageRequestHeader {
+        consumer_group: "consumer-pop".into(),
+        topic: "topic-pop".into(),
+        queue_id: 0,
+        max_msg_nums: 32,
+        invisible_time: 30_000,
+        poll_time: 15_000,
+        born_time: 1_720_000_000_000,
+        init_mode: 0,
+        exp_type: None,
+        exp: None,
+        order: Some(false),
+        attempt_id: None,
+        topic_request_header: None,
+    };
+    let mut overflow_cases = Vec::new();
+    let mut max_msg_nums = valid_pop.clone();
+    max_msg_nums.max_msg_nums = i32::MAX as u32 + 1;
+    overflow_cases.push(("maxMsgNums", max_msg_nums));
+    let mut invisible_time = valid_pop.clone();
+    invisible_time.invisible_time = i64::MAX as u64 + 1;
+    overflow_cases.push(("invisibleTime", invisible_time));
+    let mut poll_time = valid_pop.clone();
+    poll_time.poll_time = i64::MAX as u64 + 1;
+    overflow_cases.push(("pollTime", poll_time));
+    let mut born_time = valid_pop;
+    born_time.born_time = i64::MAX as u64 + 1;
+    overflow_cases.push(("bornTime", born_time));
+    for (key, header) in overflow_cases {
+        let mut map = HeaderMap::new();
+        assert!(matches!(
+            header.try_encode_into_map(&mut map),
+            Err(HeaderCodecError::JavaRange { key: actual, .. }) if actual == key
+        ));
+    }
 
     let update_signed_minimum = HeaderMap::from([
         ("consumerGroup".into(), "consumer-update".into()),
