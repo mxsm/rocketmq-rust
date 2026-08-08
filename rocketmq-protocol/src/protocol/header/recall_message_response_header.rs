@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -21,11 +21,15 @@ use serde::Serialize;
 ///
 /// This header is returned by the broker after processing a recall message request.
 /// It contains the message ID of the recalled message.
-#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodecV3)]
 #[serde(rename_all = "camelCase")]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::recall_message_response_header::RecallMessageResponseHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.RecallMessageResponseHeader"
+)]
 pub struct RecallMessageResponseHeader {
     /// Message ID of the recalled message (required).
-    #[required]
+    #[header(required)]
     pub msg_id: CheetahString,
 }
 

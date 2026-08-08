@@ -1,5 +1,5 @@
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 // Copyright 2023 The RocketMQ Rust Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -16,8 +16,12 @@ use rocketmq_macros::RequestHeaderCodecV2;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Debug, Clone, Serialize, Deserialize, RequestHeaderCodecV2)]
+#[derive(Debug, Clone, Serialize, Deserialize, RequestHeaderCodecV3)]
 #[serde(rename_all = "camelCase")]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::exchange_ha_info_response_header::ExchangeHaInfoResponseHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.ExchangeHAInfoResponseHeader"
+)]
 pub struct ExchangeHaInfoResponseHeader {
     pub master_ha_address: Option<CheetahString>,
     pub master_flush_offset: Option<i64>,

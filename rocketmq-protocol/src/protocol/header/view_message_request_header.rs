@@ -13,14 +13,18 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Debug, Clone, Serialize, Deserialize, RequestHeaderCodecV2, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, RequestHeaderCodecV3, Default)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::view_message_request_header::ViewMessageRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.ViewMessageRequestHeader"
+)]
 pub struct ViewMessageRequestHeader {
     pub topic: Option<CheetahString>,
-    #[required]
+    #[header(required)]
     pub offset: i64,
 }
 

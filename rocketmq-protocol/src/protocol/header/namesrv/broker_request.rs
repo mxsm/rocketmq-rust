@@ -12,26 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use rocketmq_macros::RequestHeaderCodecV3;
 use std::fmt::Display;
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV3)]
 #[serde(rename_all = "camelCase")]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::namesrv::broker_request::UnRegisterBrokerRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.namesrv.UnRegisterBrokerRequestHeader"
+)]
 pub struct UnRegisterBrokerRequestHeader {
-    #[required]
+    #[header(required)]
     pub broker_name: CheetahString,
 
-    #[required]
+    #[header(required)]
     pub broker_addr: CheetahString,
 
-    #[required]
+    #[header(required)]
     pub cluster_name: CheetahString,
 
-    #[required]
+    #[header(required, range = "i64")]
     pub broker_id: u64,
 }
 
@@ -61,16 +65,20 @@ impl Display for UnRegisterBrokerRequestHeader {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV3)]
 #[serde(rename_all = "camelCase")]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::namesrv::broker_request::BrokerHeartbeatRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.namesrv.BrokerHeartbeatRequestHeader"
+)]
 pub struct BrokerHeartbeatRequestHeader {
-    #[required]
+    #[header(required)]
     pub cluster_name: CheetahString,
 
-    #[required]
+    #[header(required)]
     pub broker_addr: CheetahString,
 
-    #[required]
+    #[header(required)]
     pub broker_name: CheetahString,
     pub broker_id: Option<i64>,
     pub epoch: Option<i32>,
@@ -80,12 +88,16 @@ pub struct BrokerHeartbeatRequestHeader {
     pub election_priority: Option<i32>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV3)]
 #[serde(rename_all = "camelCase")]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::namesrv::broker_request::GetBrokerMemberGroupRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.GetBrokerMemberGroupRequestHeader"
+)]
 pub struct GetBrokerMemberGroupRequestHeader {
-    #[required]
+    #[header(required)]
     pub cluster_name: CheetahString,
-    #[required]
+    #[header(required)]
     pub broker_name: CheetahString,
 }
 

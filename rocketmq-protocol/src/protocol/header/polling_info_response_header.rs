@@ -12,12 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_macros::RequestHeaderCodecV2;
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq, Default, RequestHeaderCodecV2)]
+use rocketmq_macros::RequestHeaderCodecV3;
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq, Default, RequestHeaderCodecV3)]
 #[serde(rename_all = "camelCase")]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::polling_info_response_header::PollingInfoResponseHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.PollingInfoResponseHeader"
+)]
 pub struct PollingInfoResponseHeader {
-    #[required]
+    #[header(required)]
     pub polling_num: i32,
 }
 

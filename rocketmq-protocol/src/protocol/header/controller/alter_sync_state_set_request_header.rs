@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -21,13 +21,25 @@ fn default_invoke_time() -> u64 {
     rocketmq_model::time::current_millis()
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, RequestHeaderCodecV2)]
+#[derive(Clone, Debug, Serialize, Deserialize, RequestHeaderCodecV3)]
 #[serde(rename_all = "camelCase")]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::controller::alter_sync_state_set_request_header::AlterSyncStateSetRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.controller.AlterSyncStateSetRequestHeader"
+)]
 pub struct AlterSyncStateSetRequestHeader {
+    #[header(default, default_semantic = "literal:")]
     pub broker_name: CheetahString,
+    #[header(default, default_semantic = "literal:0")]
     pub master_broker_id: i64,
+    #[header(default, default_semantic = "literal:0")]
     pub master_epoch: i32,
     #[serde(default = "default_invoke_time")]
+    #[header(
+        default_with = "default_invoke_time",
+        default_semantic = "dynamic:current_time_millis",
+        range = "i64"
+    )]
     pub invoke_time: u64,
 }
 

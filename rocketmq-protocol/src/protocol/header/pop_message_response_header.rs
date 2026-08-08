@@ -12,29 +12,33 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use rocketmq_macros::RequestHeaderCodecV3;
 use std::fmt::Display;
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Debug, Serialize, Deserialize, Default, RequestHeaderCodecV2, Clone)]
+#[derive(Debug, Serialize, Deserialize, Default, RequestHeaderCodecV3, Clone)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::pop_message_response_header::PopMessageResponseHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.PopMessageResponseHeader"
+)]
 pub struct PopMessageResponseHeader {
     #[serde(rename = "popTime")]
-    #[required]
+    #[header(required, range = "i64")]
     pub pop_time: u64,
 
     #[serde(rename = "invisibleTime")]
-    #[required]
+    #[header(required, range = "i64")]
     pub invisible_time: u64,
 
     #[serde(rename = "reviveQid")]
-    #[required]
+    #[header(required, range = "i32")]
     pub revive_qid: u32,
 
     #[serde(rename = "restNum")]
-    #[required]
+    #[header(required, range = "i64")]
     pub rest_num: u64,
 
     #[serde(rename = "startOffsetInfo", skip_serializing_if = "Option::is_none")]

@@ -12,15 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use rocketmq_macros::RequestHeaderCodecV3;
 use std::fmt::Display;
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Serialize, Deserialize, Debug, RequestHeaderCodecV2)]
+#[derive(Serialize, Deserialize, Debug, RequestHeaderCodecV3)]
 #[serde(rename_all = "camelCase")]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::notify_broker_role_change_request_header::NotifyBrokerRoleChangedRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.NotifyBrokerRoleChangedRequestHeader"
+)]
 pub struct NotifyBrokerRoleChangedRequestHeader {
     pub master_address: Option<CheetahString>,
 
@@ -28,6 +32,7 @@ pub struct NotifyBrokerRoleChangedRequestHeader {
 
     pub sync_state_set_epoch: Option<i32>,
 
+    #[header(range = "i64")]
     pub master_broker_id: Option<u64>,
 }
 

@@ -13,12 +13,16 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodecV3)]
 #[serde(rename_all = "camelCase")]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::exchange_ha_info_request_header::ExchangeHAInfoRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.ExchangeHAInfoRequestHeader"
+)]
 pub struct ExchangeHAInfoRequestHeader {
     pub master_ha_address: Option<CheetahString>,
     pub master_flush_offset: Option<i64>,

@@ -13,23 +13,27 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV3)]
 #[serde(rename_all = "camelCase")]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::namesrv::query_data_version_header::QueryDataVersionRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.namesrv.QueryDataVersionRequestHeader"
+)]
 pub struct QueryDataVersionRequestHeader {
-    #[required]
+    #[header(required)]
     pub broker_name: CheetahString,
 
-    #[required]
+    #[header(required)]
     pub broker_addr: CheetahString,
 
-    #[required]
+    #[header(required)]
     pub cluster_name: CheetahString,
 
-    #[required]
+    #[header(required, range = "i64")]
     pub broker_id: u64,
 }
 
@@ -49,9 +53,13 @@ impl QueryDataVersionRequestHeader {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::namesrv::query_data_version_header::QueryDataVersionResponseHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.namesrv.QueryDataVersionResponseHeader"
+)]
 pub struct QueryDataVersionResponseHeader {
-    #[required]
+    #[header(required)]
     changed: bool,
 }
 

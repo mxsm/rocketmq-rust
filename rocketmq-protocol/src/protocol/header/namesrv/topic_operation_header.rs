@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
 use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
@@ -69,9 +68,13 @@ impl RegisterTopicRequestHeader {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::namesrv::topic_operation_header::GetTopicsByClusterRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.GetTopicsByClusterRequestHeader"
+)]
 pub struct GetTopicsByClusterRequestHeader {
-    #[required]
+    #[header(required)]
     pub cluster: CheetahString,
 }
 

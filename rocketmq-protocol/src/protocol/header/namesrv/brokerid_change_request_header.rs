@@ -13,13 +13,18 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::namesrv::brokerid_change_request_header::NotifyMinBrokerIdChangeRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.NotifyMinBrokerIdChangeRequestHeader"
+)]
 pub struct NotifyMinBrokerIdChangeRequestHeader {
     #[serde(rename = "minBrokerId")]
+    #[header(range = "i64")]
     pub min_broker_id: Option<u64>,
 
     #[serde(rename = "brokerName")]

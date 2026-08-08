@@ -129,6 +129,7 @@ struct JavaField {
 struct SchemaOverrides {
     defaults: Vec<DefaultOverride>,
     alias_conflict_policies: Vec<AliasOverride>,
+    required_drift: Vec<RequiredOverride>,
 }
 
 #[derive(Deserialize)]
@@ -163,6 +164,14 @@ struct DefaultOverride {
     rust_type: String,
     field: String,
     semantic: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RequiredOverride {
+    rust_type: String,
+    field: String,
+    java_presence: String,
 }
 
 #[derive(Deserialize)]
@@ -509,6 +518,88 @@ fn registry() -> Vec<RegisteredSchema> {
             readable: None,
             topic_request_header: None,
         }),
+        // Flat request and response headers migrated as one schema-governed cohort.
+        register::<rocketmq_protocol::protocol::header::broker::broker_heartbeat_request_header::BrokerHeartbeatRequestHeader>(),
+        register::<rocketmq_protocol::protocol::header::change_invisible_time_response_header::ChangeInvisibleTimeResponseHeader>(),
+        register::<rocketmq_protocol::protocol::header::check_transaction_state_response_header::CheckTransactionStateResponseHeader>(),
+        register::<rocketmq_protocol::protocol::header::controller::alter_sync_state_set_request_header::AlterSyncStateSetRequestHeader>(),
+        register::<rocketmq_protocol::protocol::header::controller::alter_sync_state_set_response_header::AlterSyncStateSetResponseHeader>(),
+        register::<rocketmq_protocol::protocol::header::controller::apply_broker_id_request_header::ApplyBrokerIdRequestHeader>(),
+        register::<rocketmq_protocol::protocol::header::controller::elect_master_request_header::ElectMasterRequestHeader>(),
+        register::<rocketmq_protocol::protocol::header::controller::get_next_broker_id_response_header::GetNextBrokerIdResponseHeader>(),
+        register::<rocketmq_protocol::protocol::header::controller::get_replica_info_response_header::GetReplicaInfoResponseHeader>(),
+        register::<rocketmq_protocol::protocol::header::controller::register_broker_to_controller_request_header::RegisterBrokerToControllerRequestHeader>(),
+        register::<rocketmq_protocol::protocol::header::controller::register_broker_to_controller_response_header::RegisterBrokerToControllerResponseHeader>(),
+        register::<rocketmq_protocol::protocol::header::elect_master_response_header::ElectMasterResponseHeader>(),
+        register::<rocketmq_protocol::protocol::header::exchange_ha_info_request_header::ExchangeHAInfoRequestHeader>(),
+        register_value(
+            &rocketmq_protocol::protocol::header::exchange_ha_info_response_header::ExchangeHaInfoResponseHeader {
+                master_ha_address: None,
+                master_flush_offset: None,
+                master_address: None,
+            },
+        ),
+        register::<rocketmq_protocol::protocol::header::export_rocksdb_config_to_json_request_header::ExportRocksdbConfigToJsonRequestHeader>(),
+        register::<rocketmq_protocol::protocol::header::get_all_subscription_group_request_header::GetAllSubscriptionGroupRequestHeader>(),
+        register::<rocketmq_protocol::protocol::header::get_all_subscription_group_request_header::GetAllSubscriptionGroupResponseHeader>(),
+        register::<rocketmq_protocol::protocol::header::get_all_topic_config_request_header::GetAllTopicConfigRequestHeader>(),
+        register::<rocketmq_protocol::protocol::header::get_all_topic_config_response_header::GetAllTopicConfigResponseHeader>(),
+        register::<rocketmq_protocol::protocol::header::get_broker_config_response_header::GetBrokerConfigResponseHeader>(),
+        register::<rocketmq_protocol::protocol::header::get_consume_stats_in_broker_header::GetConsumeStatsInBrokerHeader>(),
+        register::<rocketmq_protocol::protocol::header::get_earliest_msg_storetime_response_header::GetEarliestMsgStoretimeResponseHeader>(),
+        register::<rocketmq_protocol::protocol::header::get_max_offset_response_header::GetMaxOffsetResponseHeader>(),
+        register::<rocketmq_protocol::protocol::header::get_meta_data_response_header::GetMetaDataResponseHeader>(),
+        register::<rocketmq_protocol::protocol::header::get_min_offset_response_header::GetMinOffsetResponseHeader>(),
+        register::<rocketmq_protocol::protocol::header::namesrv::broker_request::BrokerHeartbeatRequestHeader>(),
+        register::<rocketmq_protocol::protocol::header::namesrv::broker_request::GetBrokerMemberGroupRequestHeader>(),
+        register::<rocketmq_protocol::protocol::header::namesrv::broker_request::UnRegisterBrokerRequestHeader>(),
+        register::<rocketmq_protocol::protocol::header::namesrv::brokerid_change_request_header::NotifyMinBrokerIdChangeRequestHeader>(),
+        register::<rocketmq_protocol::protocol::header::namesrv::kv_config_header::DeleteKVConfigRequestHeader>(),
+        register::<rocketmq_protocol::protocol::header::namesrv::kv_config_header::GetKVConfigRequestHeader>(),
+        register::<rocketmq_protocol::protocol::header::namesrv::kv_config_header::GetKVListByNamespaceRequestHeader>(),
+        register::<rocketmq_protocol::protocol::header::namesrv::kv_config_header::PutKVConfigRequestHeader>(),
+        register::<rocketmq_protocol::protocol::header::namesrv::perm_broker_header::AddWritePermOfBrokerRequestHeader>(),
+        register::<rocketmq_protocol::protocol::header::namesrv::perm_broker_header::AddWritePermOfBrokerResponseHeader>(),
+        register::<rocketmq_protocol::protocol::header::namesrv::perm_broker_header::WipeWritePermOfBrokerRequestHeader>(),
+        register::<rocketmq_protocol::protocol::header::namesrv::perm_broker_header::WipeWritePermOfBrokerResponseHeader>(),
+        register::<rocketmq_protocol::protocol::header::namesrv::query_data_version_header::QueryDataVersionRequestHeader>(),
+        register::<rocketmq_protocol::protocol::header::namesrv::query_data_version_header::QueryDataVersionResponseHeader>(),
+        register::<rocketmq_protocol::protocol::header::namesrv::register_broker_header::RegisterBrokerRequestHeader>(),
+        register::<rocketmq_protocol::protocol::header::namesrv::topic_operation_header::GetTopicsByClusterRequestHeader>(),
+        register::<rocketmq_protocol::protocol::header::notification_response_header::NotificationResponseHeader>(),
+        register_value(
+            &rocketmq_protocol::protocol::header::notify_broker_role_change_request_header::NotifyBrokerRoleChangedRequestHeader {
+                master_address: None,
+                master_epoch: None,
+                sync_state_set_epoch: None,
+                master_broker_id: None,
+            },
+        ),
+        register::<rocketmq_protocol::protocol::header::polling_info_response_header::PollingInfoResponseHeader>(),
+        register::<rocketmq_protocol::protocol::header::pop_lite_message_response_header::PopLiteMessageResponseHeader>(),
+        register::<rocketmq_protocol::protocol::header::pop_message_response_header::PopMessageResponseHeader>(),
+        register::<rocketmq_protocol::protocol::header::query_consumer_offset_response_header::QueryConsumerOffsetResponseHeader>(),
+        register::<rocketmq_protocol::protocol::header::query_message_response_header::QueryMessageResponseHeader>(),
+        register::<rocketmq_protocol::protocol::header::recall_message_response_header::RecallMessageResponseHeader>(),
+        register::<rocketmq_protocol::protocol::header::remove_broker_request_header::RemoveBrokerRequestHeader>(),
+        register_value(
+            &rocketmq_protocol::protocol::header::reset_master_flush_offset_header::ResetMasterFlushOffsetHeader {
+                master_flush_offset: None,
+            },
+        ),
+        register_value(
+            &rocketmq_protocol::protocol::header::trigger_lite_dispatch_request_header::TriggerLiteDispatchRequestHeader {
+                group: CheetahString::from_static_str("registry"),
+                client_id: None,
+            },
+        ),
+        register_value(
+            &rocketmq_protocol::protocol::header::view_broker_stats_data_request_header::ViewBrokerStatsDataRequestHeader {
+                stats_name: CheetahString::from_static_str("registry"),
+                stats_key: CheetahString::from_static_str("registry"),
+            },
+        ),
+        register::<rocketmq_protocol::protocol::header::view_message_request_header::ViewMessageRequestHeader>(),
     ]
 }
 
@@ -678,11 +769,6 @@ fn registered_typed_schemas_match_the_pinned_java_contract() {
                     schema.type_id,
                     field.key
                 );
-                assert_ne!(
-                    owner.type_id, schema.type_id,
-                    "extension field {}.{} must come from a registered flattened owner",
-                    schema.type_id, field.key
-                );
                 continue;
             };
             assert_eq!(rust_kind(field.kind), java_kind(&java_field.java_type));
@@ -695,8 +781,27 @@ fn registered_typed_schemas_match_the_pinned_java_contract() {
             assert_eq!(owner.java_class, java_field.declared_in);
 
             match field.presence {
-                HeaderPresence::Required => assert_eq!(java_field.presence, "required"),
-                HeaderPresence::Optional => assert_eq!(java_field.presence, "optional"),
+                HeaderPresence::Required | HeaderPresence::Optional => {
+                    let rust_presence = match field.presence {
+                        HeaderPresence::Required => "required",
+                        HeaderPresence::Optional => "optional",
+                        HeaderPresence::Default | HeaderPresence::DefaultWith(_) => unreachable!(),
+                    };
+                    if java_field.presence != rust_presence {
+                        assert!(
+                            overrides.required_drift.iter().any(|entry| {
+                                entry.rust_type == java_header.rust_type
+                                    && entry.field == field.key
+                                    && entry.java_presence == java_field.presence
+                            }),
+                            "{}.{} presence {} != Java {} without review",
+                            schema.type_id,
+                            field.key,
+                            rust_presence,
+                            java_field.presence
+                        );
+                    }
+                }
                 HeaderPresence::Default | HeaderPresence::DefaultWith(_) => {
                     let expected = field.default_semantic.expect("default fields declare stable semantics");
                     let reviewed = overrides

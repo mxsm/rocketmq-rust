@@ -13,36 +13,40 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::{RequestHeaderCodecV2, RequestHeaderCodecV3};
 use serde::Deserialize;
 use serde::Serialize;
 
 /// Represents the header for a broker registration request.
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::namesrv::register_broker_header::RegisterBrokerRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.namesrv.RegisterBrokerRequestHeader"
+)]
 pub struct RegisterBrokerRequestHeader {
     /// The name of the broker.
     #[serde(rename = "brokerName")]
-    #[required]
+    #[header(required)]
     pub broker_name: CheetahString,
 
     /// The address of the broker.
     #[serde(rename = "brokerAddr")]
-    #[required]
+    #[header(required)]
     pub broker_addr: CheetahString,
 
     /// The name of the cluster to which the broker belongs.
     #[serde(rename = "clusterName")]
-    #[required]
+    #[header(required)]
     pub cluster_name: CheetahString,
 
     /// The address of the highly available (HA) remoting_server associated with the broker.
     #[serde(rename = "haServerAddr")]
-    #[required]
+    #[header(required)]
     pub ha_server_addr: CheetahString,
 
     /// The unique identifier for the broker.
     #[serde(rename = "brokerId")]
-    #[required]
+    #[header(required, range = "i64")]
     pub broker_id: u64,
 
     /// The optional heartbeat timeout in milliseconds.
@@ -54,10 +58,12 @@ pub struct RegisterBrokerRequestHeader {
     pub enable_acting_master: Option<bool>,
 
     /// Indicates whether the data is compressed.
+    #[header(default, default_semantic = "literal:false")]
     pub compressed: bool,
 
     /// The CRC32 checksum for the message body.
     #[serde(rename = "bodyCrc32")]
+    #[header(default, default_semantic = "literal:0", range = "i32")]
     pub body_crc32: u32,
 }
 

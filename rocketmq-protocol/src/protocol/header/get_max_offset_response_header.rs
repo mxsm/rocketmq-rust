@@ -12,13 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::get_max_offset_response_header::GetMaxOffsetResponseHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.GetMaxOffsetResponseHeader"
+)]
 pub struct GetMaxOffsetResponseHeader {
-    #[required]
+    #[header(required)]
     pub offset: i64,
 }
 

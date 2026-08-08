@@ -12,20 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Serialize, Deserialize, Debug, Default, RequestHeaderCodecV2)]
+#[derive(Serialize, Deserialize, Debug, Default, RequestHeaderCodecV3)]
 #[serde(rename_all = "camelCase")]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::change_invisible_time_response_header::ChangeInvisibleTimeResponseHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.ChangeInvisibleTimeResponseHeader"
+)]
 pub struct ChangeInvisibleTimeResponseHeader {
-    #[required]
+    #[header(required, range = "i64")]
     pub pop_time: u64,
 
-    #[required]
+    #[header(required)]
     pub revive_qid: i32,
 
-    #[required]
+    #[header(required)]
     pub invisible_time: i64,
 }
 

@@ -12,23 +12,42 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::protocol::CheetahString;
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodecV3)]
 #[serde(rename_all = "camelCase")]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::get_meta_data_response_header::GetMetaDataResponseHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.controller.GetMetaDataResponseHeader"
+)]
 pub struct GetMetaDataResponseHeader {
     pub group: Option<CheetahString>,
     pub controller_leader_id: Option<CheetahString>,
     pub controller_leader_address: Option<CheetahString>,
     pub is_leader: Option<bool>,
     pub peers: Option<CheetahString>,
+    #[header(range = "i64")]
     pub last_log_index: Option<u64>,
+    #[header(range = "i64")]
     pub committed_log_index: Option<u64>,
+    #[header(range = "i64")]
     pub applied_log_index: Option<u64>,
+}
+
+#[cfg(test)]
+impl GetMetaDataResponseHeader {
+    const GROUP: &'static str = "group";
+    const CONTROLLER_LEADER_ID: &'static str = "controllerLeaderId";
+    const CONTROLLER_LEADER_ADDRESS: &'static str = "controllerLeaderAddress";
+    const IS_LEADER: &'static str = "isLeader";
+    const PEERS: &'static str = "peers";
+    const LAST_LOG_INDEX: &'static str = "lastLogIndex";
+    const COMMITTED_LOG_INDEX: &'static str = "committedLogIndex";
+    const APPLIED_LOG_INDEX: &'static str = "appliedLogIndex";
 }
 
 #[cfg(test)]

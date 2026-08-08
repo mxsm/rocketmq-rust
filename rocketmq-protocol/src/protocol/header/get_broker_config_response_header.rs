@@ -13,15 +13,20 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
 /// Generation bound to the exact Broker configuration response body.
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize, RequestHeaderCodecV2)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize, RequestHeaderCodecV3)]
 #[serde(rename_all = "camelCase")]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::get_broker_config_response_header::GetBrokerConfigResponseHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.GetBrokerConfigResponseHeader"
+)]
 pub struct GetBrokerConfigResponseHeader {
     pub version: Option<CheetahString>,
+    #[header(default, default_semantic = "literal:0", range = "i64")]
     pub config_generation: u64,
 }
 

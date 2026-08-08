@@ -12,21 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use rocketmq_macros::RequestHeaderCodecV3;
 use std::fmt::Display;
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize, RequestHeaderCodecV2)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, RequestHeaderCodecV3)]
 #[serde(rename_all = "camelCase")]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::pop_lite_message_response_header::PopLiteMessageResponseHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.PopLiteMessageResponseHeader"
+)]
 pub struct PopLiteMessageResponseHeader {
-    #[required]
+    #[header(required)]
     pub pop_time: i64,
-    #[required]
+    #[header(required)]
     pub invisible_time: i64,
-    #[required]
+    #[header(required)]
     pub revive_qid: i32,
     pub start_offset_info: Option<CheetahString>,
     pub msg_offset_info: Option<CheetahString>,
