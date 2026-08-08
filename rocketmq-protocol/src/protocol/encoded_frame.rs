@@ -36,6 +36,18 @@ pub struct EncodedFrame {
     body: Bytes,
 }
 
+/// Immutable RocketMQ prefix and serialized header for a body stored outside memory.
+///
+/// The external body must contain exactly [`Self::body_len`] bytes and must be appended directly
+/// after [`Self::segments`]. This type lets transports send a leased file region without first
+/// materializing the body as [`Bytes`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EncodedFrameHead {
+    prefix: [u8; FRAME_PREFIX_BYTES],
+    header: Bytes,
+    body_len: usize,
+}
+
 impl EncodedFrame {
     /// Encodes a command into immutable wire segments.
     ///
@@ -45,44 +57,12 @@ impl EncodedFrame {
     /// RocketMQ's 24-bit header-length field, or the complete frame exceeds its signed 32-bit
     /// length field.
     pub fn from_command(mut command: RemotingCommand) -> RocketMQResult<Self> {
-        let mut encoded_header = BytesMut::new();
-        command.try_fast_header_encode(&mut encoded_header)?;
         let body = command.take_body().unwrap_or_default();
-        if encoded_header.len() < FRAME_PREFIX_BYTES {
-            return Err(SerializationError::encode_failed(
-                "remoting-command",
-                "encoded header omitted the RocketMQ frame prefix",
-            )
-            .into());
-        }
-        let prefix_bytes = encoded_header.split_to(FRAME_PREFIX_BYTES);
-        let header = encoded_header.freeze();
-        if header.len() > MAX_HEADER_BYTES {
-            return Err(SerializationError::encode_failed(
-                "remoting-command",
-                format!(
-                    "encoded header is {} bytes, exceeding the 24-bit wire limit",
-                    header.len()
-                ),
-            )
-            .into());
-        }
-        let payload_len = SERIALIZE_TYPE_BYTES
-            .checked_add(header.len())
-            .and_then(|length| length.checked_add(body.len()))
-            .ok_or_else(|| SerializationError::encode_failed("remoting-command", "encoded frame length overflow"))?;
-        let total_len = i32::try_from(payload_len).map_err(|_| {
-            SerializationError::encode_failed(
-                "remoting-command",
-                format!("encoded payload is {payload_len} bytes, exceeding the signed 32-bit wire limit"),
-            )
-        })?;
-        let mut prefix = [0_u8; FRAME_PREFIX_BYTES];
-        prefix.copy_from_slice(&prefix_bytes);
+        command.set_body_mut_ref(body.clone());
+        let (prefix, header) = encode_header_segments(&mut command)?;
+        let total_len = checked_payload_len(header.len(), body.len())?;
         let announced_total = i32::from_be_bytes([prefix[0], prefix[1], prefix[2], prefix[3]]);
-        let announced_header =
-            u32::from_be_bytes([prefix[4], prefix[5], prefix[6], prefix[7]]) & MAX_HEADER_BYTES as u32;
-        if announced_total != total_len || announced_header as usize != header.len() {
+        if announced_total != total_len {
             return Err(SerializationError::encode_failed(
                 "remoting-command",
                 "fast header encoder produced inconsistent wire lengths",
@@ -128,6 +108,102 @@ impl EncodedFrame {
     }
 }
 
+impl EncodedFrameHead {
+    /// Encodes a command prefix/header for an external body of `body_len` bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the command already has an in-memory body, header serialization
+    /// fails, or the complete frame exceeds RocketMQ's signed 32-bit wire-length limit.
+    pub fn from_command_and_body_len(mut command: RemotingCommand, body_len: usize) -> RocketMQResult<Self> {
+        if command.body().is_some() {
+            return Err(SerializationError::encode_failed(
+                "remoting-command-file-body",
+                "command must not contain an in-memory body when an external body length is supplied",
+            )
+            .into());
+        }
+        let (mut prefix, header) = encode_header_segments(&mut command)?;
+        let total_len = checked_payload_len(header.len(), body_len)?;
+        prefix[..4].copy_from_slice(&total_len.to_be_bytes());
+        Ok(Self {
+            prefix,
+            header,
+            body_len,
+        })
+    }
+
+    /// Returns the immutable prefix and serialized header slices in wire order.
+    #[inline]
+    #[must_use]
+    pub fn segments(&self) -> [&[u8]; 2] {
+        [&self.prefix, self.header.as_ref()]
+    }
+
+    /// Returns the exact number of external body bytes required by this frame.
+    #[inline]
+    #[must_use]
+    pub const fn body_len(&self) -> usize {
+        self.body_len
+    }
+
+    /// Returns the complete encoded frame size, including the external body.
+    #[inline]
+    #[must_use]
+    pub fn encoded_len(&self) -> usize {
+        FRAME_PREFIX_BYTES + self.header.len() + self.body_len
+    }
+}
+
+fn encode_header_segments(command: &mut RemotingCommand) -> RocketMQResult<([u8; FRAME_PREFIX_BYTES], Bytes)> {
+    let mut encoded_header = BytesMut::new();
+    command.try_fast_header_encode(&mut encoded_header)?;
+    if encoded_header.len() < FRAME_PREFIX_BYTES {
+        return Err(SerializationError::encode_failed(
+            "remoting-command",
+            "encoded header omitted the RocketMQ frame prefix",
+        )
+        .into());
+    }
+    let prefix_bytes = encoded_header.split_to(FRAME_PREFIX_BYTES);
+    let header = encoded_header.freeze();
+    if header.len() > MAX_HEADER_BYTES {
+        return Err(SerializationError::encode_failed(
+            "remoting-command",
+            format!(
+                "encoded header is {} bytes, exceeding the 24-bit wire limit",
+                header.len()
+            ),
+        )
+        .into());
+    }
+    let mut prefix = [0_u8; FRAME_PREFIX_BYTES];
+    prefix.copy_from_slice(&prefix_bytes);
+    let announced_header = u32::from_be_bytes([prefix[4], prefix[5], prefix[6], prefix[7]]) & MAX_HEADER_BYTES as u32;
+    if announced_header as usize != header.len() {
+        return Err(SerializationError::encode_failed(
+            "remoting-command",
+            "fast header encoder produced an inconsistent header length",
+        )
+        .into());
+    }
+    Ok((prefix, header))
+}
+
+fn checked_payload_len(header_len: usize, body_len: usize) -> RocketMQResult<i32> {
+    let payload_len = SERIALIZE_TYPE_BYTES
+        .checked_add(header_len)
+        .and_then(|length| length.checked_add(body_len))
+        .ok_or_else(|| SerializationError::encode_failed("remoting-command", "encoded frame length overflow"))?;
+    i32::try_from(payload_len).map_err(|_| {
+        SerializationError::encode_failed(
+            "remoting-command",
+            format!("encoded payload is {payload_len} bytes, exceeding the signed 32-bit wire limit"),
+        )
+        .into()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -138,6 +214,7 @@ mod tests {
     use cheetah_string::CheetahString;
 
     use super::EncodedFrame;
+    use super::EncodedFrameHead;
     use crate::protocol::command_custom_header::CommandCustomHeader;
     use crate::protocol::command_custom_header::HeaderEncodeCapability;
     use crate::protocol::header::client_request_header::GetRouteInfoRequestHeader;
@@ -216,6 +293,35 @@ mod tests {
         assert!(!header.is_empty());
         assert_eq!(encoded_body, body.as_ref());
         assert_eq!(frame.encoded_len(), prefix.len() + header.len() + encoded_body.len());
+    }
+
+    #[test]
+    fn encoded_frame_head_matches_the_complete_frame_byte_for_byte() {
+        let body = Bytes::from(vec![0x5a; 64 * 1024]);
+        let command = RemotingCommand::create_remoting_command(108)
+            .set_opaque(91)
+            .set_remark("external-file-body");
+        let head = EncodedFrameHead::from_command_and_body_len(command.clone(), body.len()).unwrap();
+        let complete = EncodedFrame::from_command(command.set_body(body.clone()))
+            .unwrap()
+            .into_bytes();
+        let [prefix, header] = head.segments();
+        let mut reconstructed = BytesMut::with_capacity(head.encoded_len());
+        reconstructed.put_slice(prefix);
+        reconstructed.put_slice(header);
+        reconstructed.put_slice(&body);
+
+        assert_eq!(reconstructed.freeze(), complete);
+        assert_eq!(head.body_len(), body.len());
+    }
+
+    #[test]
+    fn encoded_frame_head_rejects_ambiguous_or_oversized_bodies() {
+        let with_body = RemotingCommand::create_remoting_command(109).set_body(Bytes::from_static(b"ambiguous"));
+        assert!(EncodedFrameHead::from_command_and_body_len(with_body, 9).is_err());
+
+        let command = RemotingCommand::create_remoting_command(110);
+        assert!(EncodedFrameHead::from_command_and_body_len(command, i32::MAX as usize).is_err());
     }
 
     #[test]

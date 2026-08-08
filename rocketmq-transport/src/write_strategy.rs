@@ -23,15 +23,29 @@ use bytes::Bytes;
 use bytes::BytesMut;
 use rocketmq_error::SerializationError;
 use rocketmq_protocol::protocol::encoded_frame::EncodedFrame;
+use rocketmq_protocol::protocol::encoded_frame::EncodedFrameHead;
+use rocketmq_runtime::BlockingExecutor;
 use tokio::io::AsyncWrite;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::oneshot;
 
 use crate::admission::AdmissionPermit;
+use crate::backend::WriteBackend;
 use crate::deadline::RequestDeadline;
+use crate::file_region::FileRegion;
+use crate::file_region::FileTransferMode;
+use crate::file_region_writer::record_body_failure;
+use crate::file_region_writer::record_fallback_unsupported;
+use crate::file_region_writer::record_head_failure;
+use crate::file_region_writer::record_portable_bytes;
+use crate::file_region_writer::record_selection_failure;
+#[cfg(all(target_os = "linux", feature = "linux-sendfile"))]
+use crate::file_region_writer::record_sendfile_bytes;
+use crate::file_region_writer::write_portable_file_region;
 
 const QUEUED_WRITE_WAITING: u8 = 0;
 const QUEUED_WRITE_STARTED: u8 = 1;
+const AUTO_SENDFILE_MIN_BYTES: u64 = 64 * 1024;
 
 pub(crate) struct QueuedWriteProgress(AtomicU8);
 
@@ -93,6 +107,10 @@ pub(crate) enum WriterOperation {
 
 pub(crate) enum OutboundPayload {
     Frame(EncodedFrame),
+    FileFrame {
+        head: EncodedFrameHead,
+        body: FileRegion,
+    },
     Batch {
         frames: Vec<EncodedFrame>,
         encoded_len: usize,
@@ -113,16 +131,14 @@ impl OutboundPayload {
     pub(crate) fn encoded_len(&self) -> usize {
         match self {
             Self::Frame(frame) => frame.encoded_len(),
+            Self::FileFrame { head, .. } => head.encoded_len(),
             Self::Batch { encoded_len, .. } => *encoded_len,
             Self::Contiguous(bytes) => bytes.len(),
         }
     }
 
-    pub(crate) async fn write_to<W>(&self, writer: &mut FrameWriter<W>) -> io::Result<()>
-    where
-        W: AsyncWrite + Unpin,
-    {
-        writer.write_payloads(&[self], 64).await
+    pub(crate) async fn write_to(&self, writer: &mut FrameWriter<WriteBackend>) -> io::Result<()> {
+        writer.write_transport_payloads(&[self], 64).await
     }
 }
 
@@ -160,6 +176,8 @@ pub struct FrameWriter<W> {
     mode: FrameWriteMode,
     tls_buffer: BytesMut,
     poisoned: bool,
+    file_region_blocking: Option<BlockingExecutor>,
+    file_transfer_mode: FileTransferMode,
 }
 
 struct WriteCancellationGuard<'a> {
@@ -216,6 +234,8 @@ where
             mode,
             tls_buffer: BytesMut::new(),
             poisoned: false,
+            file_region_blocking: None,
+            file_transfer_mode: FileTransferMode::Auto,
         })
     }
 
@@ -227,6 +247,8 @@ where
             mode: FrameWriteMode::PlainVectored,
             tls_buffer: BytesMut::new(),
             poisoned: false,
+            file_region_blocking: None,
+            file_transfer_mode: FileTransferMode::Auto,
         }
     }
 
@@ -248,6 +270,19 @@ where
     #[must_use]
     pub fn into_inner(self) -> W {
         self.io
+    }
+
+    /// Configures the injected blocking I/O lane and file-transfer selection for external bodies.
+    #[must_use]
+    pub fn with_file_region_io(mut self, blocking: BlockingExecutor, mode: FileTransferMode) -> Self {
+        self.file_region_blocking = Some(blocking);
+        self.file_transfer_mode = mode;
+        self
+    }
+
+    pub(crate) fn configure_file_region_io(&mut self, blocking: BlockingExecutor, mode: FileTransferMode) {
+        self.file_region_blocking = Some(blocking);
+        self.file_transfer_mode = mode;
     }
 
     /// Writes and flushes one immutable RocketMQ frame.
@@ -308,13 +343,13 @@ where
         let mut cancellation = WriteCancellationGuard::new(&mut self.poisoned);
         match mode {
             FrameWriteMode::PlainVectored | FrameWriteMode::TlsVectored { .. } => {
-                let segments = payload_segments(payloads);
+                let segments = payload_segments(payloads)?;
                 write_vectored_segments(&mut self.io, &segments, max_iov.max(1)).await?;
             }
             FrameWriteMode::TlsAuto {
                 coalesce_below_bytes, ..
             } if payload_bytes > coalesce_below_bytes => {
-                let segments = payload_segments(payloads);
+                let segments = payload_segments(payloads)?;
                 write_vectored_segments(&mut self.io, &segments, max_iov.max(1)).await?;
             }
             FrameWriteMode::TlsCoalesced { .. } | FrameWriteMode::TlsAuto { .. } => {
@@ -389,6 +424,219 @@ where
     }
 }
 
+enum SelectedFileTransfer {
+    Portable {
+        blocking: BlockingExecutor,
+        fallback: bool,
+    },
+    #[cfg(all(target_os = "linux", feature = "linux-sendfile"))]
+    Sendfile,
+}
+
+impl FrameWriter<WriteBackend> {
+    pub(crate) async fn write_transport_payloads(
+        &mut self,
+        payloads: &[&OutboundPayload],
+        max_iov: usize,
+    ) -> io::Result<()> {
+        if !payloads
+            .iter()
+            .any(|payload| matches!(payload, OutboundPayload::FileFrame { .. }))
+        {
+            return self.write_payloads(payloads, max_iov).await;
+        }
+
+        let mut buffered = Vec::new();
+        for payload in payloads {
+            match payload {
+                OutboundPayload::FileFrame { head, body } => {
+                    if !buffered.is_empty() {
+                        self.write_payloads(&buffered, max_iov).await?;
+                        buffered.clear();
+                    }
+                    self.write_file_frame(head, body, max_iov).await?;
+                }
+                _ => buffered.push(*payload),
+            }
+        }
+        if !buffered.is_empty() {
+            self.write_payloads(&buffered, max_iov).await?;
+        }
+        Ok(())
+    }
+
+    async fn write_file_frame(&mut self, head: &EncodedFrameHead, body: &FileRegion, max_iov: usize) -> io::Result<()> {
+        self.ensure_healthy()?;
+        let body_len = usize::try_from(body.len())
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "file-region length exceeds usize"))?;
+        if head.body_len() != body_len {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "encoded frame head body length does not match the leased file region",
+            ));
+        }
+        if let Some(max_plaintext_frame_bytes) = tls_plaintext_bound(self.mode) {
+            if head.encoded_len() > max_plaintext_frame_bytes {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "file-backed frame exceeds TLS plaintext bound",
+                ));
+            }
+        }
+        let native_eligible = matches!(self.mode, FrameWriteMode::PlainVectored)
+            && matches!(&self.io, WriteBackend::Tcp(_))
+            && native_file_region_eligible(body);
+        let auto_native_eligible = native_eligible && body.len() >= AUTO_SENDFILE_MIN_BYTES;
+        let selected = select_file_transfer(
+            self.file_transfer_mode,
+            self.file_region_blocking.clone(),
+            native_eligible,
+            auto_native_eligible,
+            body,
+        )
+        .await;
+        let selected = match selected {
+            Ok(selected) => selected,
+            Err(error) => {
+                record_selection_failure();
+                return Err(error);
+            }
+        };
+        let mut cancellation = WriteCancellationGuard::new(&mut self.poisoned);
+        if let Err(error) = write_vectored_segments(&mut self.io, &head.segments(), max_iov.max(1)).await {
+            record_head_failure();
+            return Err(error);
+        }
+        let body_result = match selected {
+            SelectedFileTransfer::Portable { blocking, fallback } => {
+                if fallback {
+                    record_fallback_unsupported();
+                }
+                let written = write_portable_file_region(&mut self.io, body, &blocking).await;
+                if let Ok(written) = written {
+                    record_portable_bytes(written);
+                }
+                written
+            }
+            #[cfg(all(target_os = "linux", feature = "linux-sendfile"))]
+            SelectedFileTransfer::Sendfile => match &mut self.io {
+                WriteBackend::Tcp(writer) => {
+                    let written = crate::linux::sendfile::send_file_region(writer, body).await;
+                    if let Ok(written) = written {
+                        record_sendfile_bytes(written);
+                    }
+                    written
+                }
+                WriteBackend::Compat(_) => unreachable!("native selection requires a plaintext TCP backend"),
+            },
+        };
+        if let Err(error) = body_result {
+            record_body_failure();
+            return Err(error);
+        }
+        if let Err(error) = self.io.flush().await {
+            record_body_failure();
+            return Err(error);
+        }
+        cancellation.complete();
+        Ok(())
+    }
+}
+
+async fn select_file_transfer(
+    mode: FileTransferMode,
+    blocking: Option<BlockingExecutor>,
+    native_eligible: bool,
+    auto_native_eligible: bool,
+    body: &FileRegion,
+) -> io::Result<SelectedFileTransfer> {
+    #[cfg(not(all(target_os = "linux", feature = "linux-sendfile")))]
+    let _ = body;
+    match mode {
+        FileTransferMode::Portable => portable_selection(blocking, false),
+        FileTransferMode::Auto if auto_native_eligible => {
+            #[cfg(all(target_os = "linux", feature = "linux-sendfile"))]
+            {
+                if probe_native_file_region(blocking.clone(), body).await? {
+                    Ok(SelectedFileTransfer::Sendfile)
+                } else {
+                    portable_selection(blocking, true)
+                }
+            }
+            #[cfg(not(all(target_os = "linux", feature = "linux-sendfile")))]
+            {
+                portable_selection(blocking, true)
+            }
+        }
+        FileTransferMode::Auto if native_eligible => portable_selection(blocking, false),
+        FileTransferMode::Auto => portable_selection(blocking, true),
+        FileTransferMode::Sendfile if native_eligible => {
+            #[cfg(all(target_os = "linux", feature = "linux-sendfile"))]
+            {
+                if probe_native_file_region(blocking, body).await? {
+                    Ok(SelectedFileTransfer::Sendfile)
+                } else {
+                    Err(io::Error::new(
+                        io::ErrorKind::Unsupported,
+                        "the leased file does not support sendfile",
+                    ))
+                }
+            }
+            #[cfg(not(all(target_os = "linux", feature = "linux-sendfile")))]
+            {
+                Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "sendfile mode requires Linux and the linux-sendfile feature",
+                ))
+            }
+        }
+        FileTransferMode::Sendfile => Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "sendfile mode requires an eligible regular file and plaintext TCP backend",
+        )),
+    }
+}
+
+fn portable_selection(blocking: Option<BlockingExecutor>, fallback: bool) -> io::Result<SelectedFileTransfer> {
+    blocking
+        .map(|blocking| SelectedFileTransfer::Portable { blocking, fallback })
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::Unsupported,
+                "file-region writes require an injected storage BlockingExecutor",
+            )
+        })
+}
+
+#[cfg(all(target_os = "linux", feature = "linux-sendfile"))]
+async fn probe_native_file_region(blocking: Option<BlockingExecutor>, body: &FileRegion) -> io::Result<bool> {
+    let blocking = blocking.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::Unsupported,
+            "sendfile preflight requires an injected storage BlockingExecutor",
+        )
+    })?;
+    let region = body.clone();
+    blocking
+        .spawn_io("transport.file-region.sendfile-probe", move || {
+            crate::linux::sendfile::probe_file_region(&region)
+        })
+        .await
+        .map_err(|error| io::Error::other(error.to_string()))?
+}
+
+fn native_file_region_eligible(body: &FileRegion) -> bool {
+    #[cfg(all(target_os = "linux", feature = "linux-sendfile"))]
+    {
+        crate::linux::sendfile::is_eligible(body)
+    }
+    #[cfg(not(all(target_os = "linux", feature = "linux-sendfile")))]
+    {
+        let _ = body;
+        false
+    }
+}
+
 fn tls_plaintext_bound(mode: FrameWriteMode) -> Option<usize> {
     match mode {
         FrameWriteMode::PlainVectored => None,
@@ -409,6 +657,13 @@ fn validate_tls_payloads(payloads: &[&OutboundPayload], max_plaintext_frame_byte
     for payload in payloads {
         match payload {
             OutboundPayload::Frame(frame) => validate_tls_frame(frame, max_plaintext_frame_bytes)?,
+            OutboundPayload::FileFrame { head, .. } if head.encoded_len() > max_plaintext_frame_bytes => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "file-backed frame exceeds TLS plaintext bound",
+                ));
+            }
+            OutboundPayload::FileFrame { .. } => {}
             OutboundPayload::Batch { frames, .. } => {
                 for frame in frames {
                     validate_tls_frame(frame, max_plaintext_frame_bytes)?;
@@ -440,11 +695,17 @@ fn validate_tls_frame(frame: &EncodedFrame, max_plaintext_frame_bytes: usize) ->
     }
 }
 
-fn payload_segments<'a>(payloads: &'a [&'a OutboundPayload]) -> Vec<&'a [u8]> {
+fn payload_segments<'a>(payloads: &'a [&'a OutboundPayload]) -> io::Result<Vec<&'a [u8]>> {
     let mut segments = Vec::new();
     for payload in payloads {
         match payload {
             OutboundPayload::Frame(frame) => segments.extend(frame.segments()),
+            OutboundPayload::FileFrame { .. } => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "file-backed frames require the transport file writer",
+                ));
+            }
             OutboundPayload::Batch { frames, .. } => {
                 for frame in frames {
                     segments.extend(frame.segments());
@@ -453,7 +714,7 @@ fn payload_segments<'a>(payloads: &'a [&'a OutboundPayload]) -> Vec<&'a [u8]> {
             OutboundPayload::Contiguous(bytes) => segments.push(bytes.as_ref()),
         }
     }
-    segments
+    Ok(segments)
 }
 
 async fn write_coalesced_payload<W>(io: &mut W, buffer: &mut BytesMut, payload: &OutboundPayload) -> io::Result<()>
@@ -466,6 +727,10 @@ where
             frame.copy_to(buffer);
             write_contiguous(io, buffer.as_ref()).await
         }
+        OutboundPayload::FileFrame { .. } => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "file-backed frames require the transport file writer",
+        )),
         OutboundPayload::Batch { frames, .. } => {
             for frame in frames {
                 buffer.clear();
@@ -561,5 +826,67 @@ fn advance_segments(
             io::ErrorKind::InvalidData,
             "AsyncWrite reported more vectored bytes than supplied",
         ))
+    }
+}
+
+#[cfg(test)]
+mod file_frame_tests {
+    use std::io::Write;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+
+    use rocketmq_protocol::protocol::encoded_frame::EncodedFrameHead;
+    use rocketmq_protocol::protocol::RemotingCommand;
+
+    use super::OutboundPayload;
+    use crate::file_region::FileRegion;
+    use crate::file_region::FileRegionLease;
+
+    struct DropLease {
+        file: std::fs::File,
+        drops: Arc<AtomicUsize>,
+    }
+
+    impl FileRegionLease for DropLease {
+        fn file(&self) -> &std::fs::File {
+            &self.file
+        }
+    }
+
+    impl Drop for DropLease {
+        fn drop(&mut self) {
+            self.drops.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn queued_file_payload_counts_the_complete_wire_frame_and_retains_lease() {
+        let mut file = tempfile::tempfile().expect("temporary file");
+        file.write_all(&vec![0x33; 8192]).expect("write body");
+        let drops = Arc::new(AtomicUsize::new(0));
+        let lease = Arc::new(DropLease {
+            file,
+            drops: drops.clone(),
+        });
+        let region = FileRegion::try_new(lease.clone(), 0, 8192).expect("file region");
+        let head = EncodedFrameHead::from_command_and_body_len(
+            RemotingCommand::create_remoting_command(601),
+            region.len() as usize,
+        )
+        .expect("frame head");
+        let expected_wire_bytes = head.encoded_len();
+        let payload = OutboundPayload::FileFrame { head, body: region };
+
+        drop(lease);
+        assert_eq!(drops.load(Ordering::SeqCst), 0, "queued payload must retain the lease");
+        assert_eq!(payload.encoded_len(), expected_wire_bytes);
+
+        drop(payload);
+        assert_eq!(
+            drops.load(Ordering::SeqCst),
+            1,
+            "lease should release with the queue item"
+        );
     }
 }

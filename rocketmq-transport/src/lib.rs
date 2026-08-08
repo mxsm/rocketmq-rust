@@ -13,6 +13,17 @@
 // limitations under the License.
 
 //! Bounded TCP/TLS transport ownership boundary.
+//!
+//! File-backed frames use [`FileRegion`] to retain an immutable storage lease through writer
+//! completion. Portable transfers read one reusable 64 KiB buffer on the runtime-owned blocking
+//! I/O lane. With the default-off `linux-sendfile` feature, [`FileTransferMode::Auto`] selects
+//! Linux `sendfile` for plaintext TCP regions of at least 64 KiB after a cached capability
+//! preflight; unsupported filesystems fall back before any frame bytes are written. TLS always
+//! uses portable reads so that payload bytes still pass through the userspace rustls record layer.
+//!
+//! `Bytes` sharing and vectored writes are userspace less-copy techniques. Only the optional
+//! plaintext file-region backend avoids the file-to-userspace body copy; it does not imply NIC
+//! offload, remote acknowledgement, or support for `MSG_ZEROCOPY`.
 
 mod admission;
 mod backend;
@@ -32,7 +43,11 @@ mod discovery;
 mod dispatch;
 mod error_helpers;
 mod error_response;
+mod file_region;
+mod file_region_writer;
 mod hook_registry;
+#[cfg(all(target_os = "linux", feature = "linux-sendfile"))]
+mod linux;
 #[cfg(any(test, feature = "test-support"))]
 mod local;
 mod net;
@@ -187,3 +202,8 @@ pub use error_response::request_code_not_supported;
 pub use error_response::request_code_not_supported_with_opaque;
 pub use error_response::request_code_not_supported_with_remark;
 pub use error_response::request_code_not_supported_with_remark_and_opaque;
+pub use file_region::FileRegion;
+pub use file_region::FileRegionLease;
+pub use file_region::FileTransferMode;
+pub use file_region_writer::file_transfer_snapshot;
+pub use file_region_writer::FileTransferSnapshot;

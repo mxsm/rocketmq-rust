@@ -29,6 +29,7 @@ pub use protocol::command_custom_header::FromMap;
 pub use protocol::command_custom_header::HeaderEncodeCapability;
 pub use protocol::command_custom_header::HeaderMap;
 pub use protocol::encoded_frame::EncodedFrame;
+pub use protocol::encoded_frame::EncodedFrameHead;
 pub use protocol::header_codec::HeaderCodec;
 pub use protocol::remoting_command::RemotingCommand;
 pub use protocol::rocketmq_serializable;
