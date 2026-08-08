@@ -1,0 +1,11 @@
+error: use of deprecated macro `RequestHeaderCodecV2`: use RequestHeaderCodecV3; RequestHeaderCodecV2 will be removed in a future breaking release
+ --> tests/ui/request_header_codec_v2/fail/deprecated.rs:5:10
+  |
+5 | #[derive(RequestHeaderCodecV2)]
+  |          ^^^^^^^^^^^^^^^^^^^^
+  |
+note: the lint level is defined here
+ --> tests/ui/request_header_codec_v2/fail/deprecated.rs:1:9
+  |
+1 | #![deny(deprecated)]
+  |         ^^^^^^^^^^

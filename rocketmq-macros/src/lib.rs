@@ -28,18 +28,28 @@ mod request_header_codec_v2;
 mod request_header_codec_v3;
 mod request_header_custom;
 
+/// Legacy request-header derive retained for downstream compatibility.
+#[deprecated(
+    since = "1.0.0",
+    note = "use RequestHeaderCodecV3 with dedicated #[header(...)] wire metadata"
+)]
 #[proc_macro_derive(RequestHeaderCodec, attributes(required))]
 pub fn request_header_codec(input: TokenStream) -> TokenStream {
     request_header_codec_inner(input)
 }
 
+/// Hardened V2 request-header derive retained for one compatibility window.
+#[deprecated(
+    since = "1.0.0",
+    note = "use RequestHeaderCodecV3; RequestHeaderCodecV2 will be removed in a future breaking release"
+)]
 #[proc_macro_derive(RequestHeaderCodecV2, attributes(required, request_header, request_header_codec_v2))]
 pub fn request_header_codec_v2(input: TokenStream) -> TokenStream {
     request_header_codec_inner_v2(input)
 }
 
-/// Generates typed map codecs, schema metadata, and compatibility adapters for
-/// an explicit request-header wire model.
+/// Recommended request-header derive. Generates typed map codecs, schema
+/// metadata, and compatibility adapters for an explicit wire model.
 #[proc_macro_derive(RequestHeaderCodecV3, attributes(header, required))]
 pub fn request_header_codec_v3(input: TokenStream) -> TokenStream {
     request_header_codec_inner_v3(input)

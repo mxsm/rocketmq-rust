@@ -1,5 +1,5 @@
 error: serde(flatten) requires a nested header type
- --> tests/ui/request_header_codec_v2/fail/flatten_scalar.rs:6:5
+ --> tests/ui/request_header_codec_v2/fail/flatten_scalar.rs:8:5
   |
-6 |     #[serde(flatten)]
+8 |     #[serde(flatten)]
   |     ^

@@ -1,3 +1,5 @@
+#![allow(deprecated)]
+
 use rocketmq_macros::RequestHeaderCodecV2;
 
 #[derive(serde::Serialize, RequestHeaderCodecV2)]

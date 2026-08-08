@@ -1,5 +1,5 @@
 error: required and serde(default) are mutually exclusive
- --> tests/ui/request_header_codec_v2/fail/required_default.rs:6:5
+ --> tests/ui/request_header_codec_v2/fail/required_default.rs:8:5
   |
-6 |     #[required]
+8 |     #[required]
   |     ^
