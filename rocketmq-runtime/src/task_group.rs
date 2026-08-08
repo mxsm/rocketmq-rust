@@ -155,7 +155,11 @@ pub enum TaskGroupLifecycleState {
 }
 
 #[derive(Debug, Clone)]
-/// Represents task group.
+/// Represents a task-group owner.
+///
+/// Cloning a task group keeps the same owner and cancellation token. Use
+/// [`Self::try_child`] when work needs an independently cancellable owner whose
+/// lifetime remains bounded by this parent.
 pub struct TaskGroup {
     inner: Arc<TaskGroupInner>,
 }
@@ -341,11 +345,21 @@ impl TaskGroup {
 
     pub(crate) fn component(&self, name: impl Into<Arc<str>>) -> Self {
         let name = name.into();
-        self.try_component(name.clone())
+        self.try_child(name.clone())
             .unwrap_or_else(|_error| self.closed_component(name))
     }
 
-    fn try_component(&self, name: impl Into<Arc<str>>) -> RuntimeResult<Self> {
+    /// Creates an independently cancellable child owned by this task group.
+    ///
+    /// Parent cancellation propagates to the returned child. Cancelling the
+    /// child does not cancel this parent or any sibling child. In contrast,
+    /// [`Clone::clone`] keeps the same owner and cancellation token.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeError::TaskGroupClosing`] after this owner starts
+    /// shutting down or becomes poisoned.
+    pub fn try_child(&self, name: impl Into<Arc<str>>) -> RuntimeResult<Self> {
         let name = name.into();
         let _spawn_guard = self.inner.spawn_gate.lock();
         if self.inner.lifecycle_state() != TaskGroupLifecycleState::Open {
@@ -454,6 +468,35 @@ impl TaskGroup {
                 _ = owner_cancellation.cancelled() => {}
                 _ = operation.run(future) => {}
             }
+        })?;
+        registration.register(task_id);
+        Ok(task_id)
+    }
+
+    /// Spawns accepted operation work that must drain during owner shutdown.
+    ///
+    /// Unlike [`Self::spawn_operation`], owner cancellation does not drop the
+    /// supplied future. The operation context still enforces its own
+    /// cancellation and deadline, and [`OperationContext::wait`] aborts work
+    /// that outlives the caller's drain deadline. This is intended for work
+    /// that has already been accepted and whose ordered shutdown protocol is
+    /// owned by a tracked service.
+    pub fn spawn_draining_operation<F>(
+        &self,
+        context: &OperationContext,
+        name: impl Into<Arc<str>>,
+        future: F,
+    ) -> RuntimeResult<TaskId>
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        let _operation_spawn_guard = context.spawn_guard();
+        let registration = context.prepare_spawn(self.id())?;
+        let guard = registration.guard();
+        let operation = context.clone();
+        let task_id = self.spawn(name, context.task_kind(), async move {
+            let _guard = guard;
+            operation.run(future).await;
         })?;
         registration.register(task_id);
         Ok(task_id)

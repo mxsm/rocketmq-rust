@@ -364,6 +364,29 @@ impl ResourcePermit {
         self.class
     }
 
+    /// Promotes a data reservation to the control class without releasing capacity.
+    ///
+    /// The total count and byte ownership remain unchanged at every budget level. Data-only
+    /// counters and rate tokens are released before a same-tree rebind can use control reserve.
+    pub fn promote_to_control(&mut self) {
+        if self.class == BudgetClass::Control {
+            return;
+        }
+        for reservation in &mut self.reservations {
+            let mut state = reservation
+                .node
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            state.data_count = state.data_count.saturating_sub(1);
+            state.data_bytes = state.data_bytes.saturating_sub(reservation.bytes);
+            state.restore_data_rate(reservation.node.limit);
+            reservation.class = BudgetClass::Control;
+        }
+        self.class = BudgetClass::Control;
+        self.capacity_notify.notify_waiters();
+    }
+
     /// Moves this reservation to another budget in the same resource tree.
     ///
     /// Reservations for the common ancestor chain remain owned throughout the
@@ -688,6 +711,12 @@ impl BudgetState {
             if let (Some(bucket), Some(rate)) = (&mut self.data_tokens, data_rate_limit(limit)) {
                 bucket.restore(rate);
             }
+        }
+    }
+
+    fn restore_data_rate(&mut self, limit: BudgetLimit) {
+        if let (Some(bucket), Some(rate)) = (&mut self.data_tokens, data_rate_limit(limit)) {
+            bucket.restore(rate);
         }
     }
 }

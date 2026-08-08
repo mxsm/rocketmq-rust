@@ -155,7 +155,6 @@ impl MQClientAPIImpl {
     ) -> RocketMQResult<()> {
         self.remoting_client
             .invoke_request_oneway(broker_addr, request, timeout_millis)
-            .await;
-        Ok(())
+            .await
     }
 }

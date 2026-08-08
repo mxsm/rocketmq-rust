@@ -909,21 +909,32 @@ impl RouteInfoManager {
             warn!("skip min broker id notification because NameServer task group is unavailable");
             return;
         };
-        for broker_addr in broker_addrs_notify {
-            let remoting_client = self.name_server_runtime_inner.clone();
-            let request = request.clone();
-            let broker_addr = broker_addr.clone();
-
-            if let Err(error) = task_group.spawn_service("namesrv.notify-min-broker-id", async move {
-                if let Some(runtime) = remoting_client.upgrade() {
-                    let _ = runtime
-                        .remoting_client()
-                        .invoke_request_oneway(&broker_addr, request, 3000)
-                        .await;
+        let remoting_client = self.name_server_runtime_inner.clone();
+        if let Err(error) = task_group.spawn_service("namesrv.notify-min-broker-id", async move {
+            let Some(runtime) = remoting_client.upgrade() else {
+                return;
+            };
+            let client = runtime.remoting_client().clone();
+            let attempted = broker_addrs_notify.len();
+            let mut succeeded = 0_usize;
+            for broker_addr in broker_addrs_notify {
+                match client.invoke_request_oneway(&broker_addr, request.clone(), 3000).await {
+                    Ok(()) => succeeded = succeeded.saturating_add(1),
+                    Err(error) => warn!(
+                        remote_addr = %broker_addr,
+                        error_kind = ?error.kind(),
+                        "minimum broker id notification failed"
+                    ),
                 }
-            }) {
-                warn!("failed to spawn min broker id notification task: {error}");
             }
+            if succeeded != attempted {
+                warn!(
+                    attempted,
+                    succeeded, "minimum broker id notification broadcast was incomplete"
+                );
+            }
+        }) {
+            warn!("failed to spawn min broker id notification task: {error}");
         }
     }
 

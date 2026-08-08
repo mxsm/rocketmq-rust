@@ -370,7 +370,7 @@ impl ConnectionHandler for DeadlineResponseHandler {
 }
 
 #[tokio::test]
-async fn caller_deadline_drops_only_waiter_after_writer_owns_frame() {
+async fn caller_deadline_during_active_write_poisons_incomplete_frame_and_closes_session() {
     let runtime = RuntimeContext::from_current("frame-writer-caller-cancellation");
     let service = runtime.service_context("frame-writer-caller-cancellation");
     let (transport, peer_stream) = tokio::io::duplex(64);
@@ -404,17 +404,17 @@ async fn caller_deadline_drops_only_waiter_after_writer_owns_frame() {
 
     let response = tokio::time::timeout(Duration::from_secs(2), peer.receive_command())
         .await
-        .expect("writer should finish after peer resumes reading")
-        .expect("writer should keep the connection open")
-        .expect("complete response should decode");
-    assert_eq!(response.opaque(), 76);
-    assert_eq!(response.body().map(Bytes::len), Some(64 * 1024));
+        .expect("poisoned writer should close after the partial frame");
+    assert!(
+        matches!(response, None | Some(Err(_))),
+        "a frame interrupted by its deadline must never decode as a valid response"
+    );
 
-    drop(peer);
     tokio::time::timeout(Duration::from_secs(1), runner)
         .await
-        .expect("session should observe peer closure")
+        .expect("poisoned session should close without waiting for its peer")
         .expect("session task should finish");
+    drop(peer);
     drop(service);
     let report = runtime.shutdown_tasks(Duration::from_secs(1)).await;
     assert!(report.is_healthy(), "{}", report.to_json());

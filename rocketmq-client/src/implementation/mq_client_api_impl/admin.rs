@@ -1976,8 +1976,7 @@ impl MQClientAPIImpl {
         let request = RemotingCommand::create_request_command(RequestCode::NotifyMinBrokerIdChange, request_header);
         self.remoting_client
             .invoke_request_oneway(broker_addr, request, timeout_millis)
-            .await;
-        Ok(())
+            .await
     }
 
     #[cfg(feature = "admin-mutation")]

@@ -2,4 +2,10 @@ error[E0599]: no method named `try_child_lease` found for reference `&TaskGroup`
   --> tests/ui/service_context/task_group_try_child_lease_is_removed.rs:17:23
    |
 17 |         let _ = group.try_child_lease("request");
-   |                       ^^^^^^^^^^^^^^^ method not found in `&TaskGroup`
+   |                       ^^^^^^^^^^^^^^^
+   |
+help: there is a method `try_child` with a similar name
+   |
+17 -         let _ = group.try_child_lease("request");
+17 +         let _ = group.try_child("request");
+   |

@@ -53,6 +53,7 @@ pub struct ResourceLimit {
 pub struct AdmissionLimits {
     pub connections: ResourceLimit,
     pub handshakes: ResourceLimit,
+    pub partial_frames: ResourceLimit,
     pub inflight: ResourceLimit,
     pub queued: ResourceLimit,
     pub processors: ResourceLimit,
@@ -73,6 +74,10 @@ impl Default for AdmissionLimits {
             handshakes: ResourceLimit {
                 count: 1_024,
                 bytes: 64 * 1024 * 1024,
+            },
+            partial_frames: ResourceLimit {
+                count: 4_096,
+                bytes: 256 * 1024 * 1024,
             },
             inflight: ResourceLimit {
                 count: 65_536,
@@ -111,6 +116,7 @@ impl Default for AdmissionLimits {
 pub enum AdmissionResource {
     Connection,
     Handshake,
+    PartialFrame,
     Inflight,
     Queued,
     Processor,
@@ -174,6 +180,7 @@ pub struct ResourceSnapshot {
 pub struct AdmissionSnapshot {
     pub connections: ResourceSnapshot,
     pub handshakes: ResourceSnapshot,
+    pub partial_frames: ResourceSnapshot,
     pub inflight: ResourceSnapshot,
     pub queued: ResourceSnapshot,
     pub processors: ResourceSnapshot,
@@ -256,6 +263,7 @@ impl From<BudgetConfigError> for AdmissionConfigError {
 struct GlobalBudgets {
     connections: ResourceBudget,
     handshakes: ResourceBudget,
+    partial_frames: ResourceBudget,
     inflight: ResourceBudget,
     queued: ResourceBudget,
     processors: ResourceBudget,
@@ -266,6 +274,7 @@ impl GlobalBudgets {
         let resources = [
             limits.connections,
             limits.handshakes,
+            limits.partial_frames,
             limits.inflight,
             limits.queued,
             limits.processors,
@@ -279,13 +288,20 @@ impl GlobalBudgets {
         let process_capacity = process_budget.limit().capacity;
         let root_count = root_count.min(process_capacity.count).max(1);
         let root_bytes = requested_root_bytes.min(process_capacity.bytes).max(1);
-        let reserve_count = resources
+        let reservable_resources = [
+            limits.connections,
+            limits.handshakes,
+            limits.inflight,
+            limits.queued,
+            limits.processors,
+        ];
+        let reserve_count = reservable_resources
             .iter()
             .fold(0usize, |total, limit| {
                 total.saturating_add(effective_reserve(limits.control_reserve.count, limit.count))
             })
             .min(root_count);
-        let requested_reserve_bytes = resources.iter().fold(0usize, |total, limit| {
+        let requested_reserve_bytes = reservable_resources.iter().fold(0usize, |total, limit| {
             total.saturating_add(effective_reserve(limits.control_reserve.bytes, limit.bytes))
         });
         let reserve_bytes = effective_reserve(requested_reserve_bytes, root_bytes);
@@ -307,6 +323,13 @@ impl GlobalBudgets {
                 "handshakes",
                 limits.handshakes,
                 limits.control_reserve,
+                FullPolicy::CloseSlowConsumer,
+            )?,
+            partial_frames: global_budget(
+                &root,
+                "partial-frames",
+                limits.partial_frames,
+                ResourceLimit { count: 0, bytes: 0 },
                 FullPolicy::CloseSlowConsumer,
             )?,
             inflight: global_budget(
@@ -337,6 +360,7 @@ impl GlobalBudgets {
         match resource {
             AdmissionResource::Connection => self.connections.clone(),
             AdmissionResource::Handshake => self.handshakes.clone(),
+            AdmissionResource::PartialFrame => self.partial_frames.clone(),
             AdmissionResource::Inflight => self.inflight.clone(),
             AdmissionResource::Queued => self.queued.clone(),
             AdmissionResource::Processor => self.processors.clone(),
@@ -357,6 +381,62 @@ pub struct AdmissionPermit {
     observer: Option<tokio::sync::mpsc::Sender<AdmissionEvent>>,
     resource: AdmissionResource,
     bytes: usize,
+}
+
+/// Capacity retained from the moment a peer announces a frame until that frame enters execution.
+#[derive(Debug)]
+pub(crate) struct PartialFramePermit {
+    permit: AdmissionPermit,
+}
+
+impl PartialFramePermit {
+    pub(crate) fn new(permit: AdmissionPermit) -> Self {
+        Self { permit }
+    }
+
+    pub(crate) fn try_rebind(
+        mut self,
+        controller: &AdmissionController,
+        resource: AdmissionResource,
+        scope: AdmissionScope,
+        class: AdmissionClass,
+    ) -> Result<AdmissionPermit, (Box<Self>, AdmissionError)> {
+        if class == AdmissionClass::Control {
+            self.permit._permit.promote_to_control();
+        }
+        let budget = match controller.scoped_budget(resource, scope) {
+            Ok(budget) => budget,
+            Err(error) => return Err((Box::new(self), error)),
+        };
+        if self.permit._permit.try_rebind(&budget).is_err() {
+            let error = AdmissionError {
+                resource,
+                policy: policy_for(resource),
+            };
+            if let Some(observer) = &controller.observer {
+                let _ = observer.try_send(AdmissionEvent {
+                    resource,
+                    outcome: AdmissionOutcome::Rejected,
+                    bytes: self.permit.bytes,
+                });
+            }
+            return Err((Box::new(self), error));
+        }
+        if let Some(observer) = &self.permit.observer {
+            let _ = observer.try_send(AdmissionEvent {
+                resource: self.permit.resource,
+                outcome: AdmissionOutcome::Released,
+                bytes: self.permit.bytes,
+            });
+            let _ = observer.try_send(AdmissionEvent {
+                resource,
+                outcome: AdmissionOutcome::Acquired,
+                bytes: self.permit.bytes,
+            });
+        }
+        self.permit.resource = resource;
+        Ok(self.permit)
+    }
 }
 
 impl fmt::Debug for AdmissionPermit {
@@ -544,6 +624,7 @@ impl AdmissionController {
     ) -> Result<ResourceBudget, AdmissionError> {
         let mut scoped = self.scoped.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let global = self.global.get(resource);
+        let scoped_reserve = reserve_for(resource, self.limits.control_reserve);
         let ip_key = ScopeKey::Ip(resource, scope.ip);
         let tenant_key = scope.tenant.map(|tenant| ScopeKey::Tenant(resource, scope.ip, tenant));
         let session_key = scope
@@ -576,7 +657,7 @@ impl AdmissionController {
             &global,
             format!("ip-{}", scope.ip),
             self.limits.per_ip,
-            self.limits.control_reserve,
+            scoped_reserve,
             resource,
         )?;
         let tenant_budget = match (scope.tenant, tenant_key) {
@@ -587,7 +668,7 @@ impl AdmissionController {
                 &ip_budget,
                 format!("tenant-{tenant}"),
                 self.limits.per_tenant,
-                self.limits.control_reserve,
+                scoped_reserve,
                 resource,
             )?,
             (None, None) => ip_budget,
@@ -601,7 +682,7 @@ impl AdmissionController {
                 &tenant_budget,
                 format!("session-{session}"),
                 self.limits.per_session,
-                self.limits.control_reserve,
+                scoped_reserve,
                 resource,
             ),
             (None, None) => Ok(tenant_budget),
@@ -613,6 +694,7 @@ impl AdmissionController {
         AdmissionSnapshot {
             connections: resource_snapshot(&self.global.connections),
             handshakes: resource_snapshot(&self.global.handshakes),
+            partial_frames: resource_snapshot(&self.global.partial_frames),
             inflight: resource_snapshot(&self.global.inflight),
             queued: resource_snapshot(&self.global.queued),
             processors: resource_snapshot(&self.global.processors),
@@ -624,6 +706,7 @@ fn standalone_process_budget(limits: AdmissionLimits) -> Result<ResourceBudget, 
     let resources = [
         limits.connections,
         limits.handshakes,
+        limits.partial_frames,
         limits.inflight,
         limits.queued,
         limits.processors,
@@ -671,6 +754,14 @@ fn effective_reserve(requested: usize, capacity: usize) -> usize {
         requested
     } else {
         0
+    }
+}
+
+fn reserve_for(resource: AdmissionResource, configured: ResourceLimit) -> ResourceLimit {
+    if resource == AdmissionResource::PartialFrame {
+        ResourceLimit { count: 0, bytes: 0 }
+    } else {
+        configured
     }
 }
 
@@ -743,7 +834,9 @@ fn validate_scope_limits(limits: AdmissionLimits) -> Result<(), AdmissionConfigE
 
 fn policy_for(resource: AdmissionResource) -> FullPolicy {
     match resource {
-        AdmissionResource::Connection | AdmissionResource::Handshake => FullPolicy::CloseSlowConsumer,
+        AdmissionResource::Connection | AdmissionResource::Handshake | AdmissionResource::PartialFrame => {
+            FullPolicy::CloseSlowConsumer
+        }
         AdmissionResource::Inflight | AdmissionResource::Queued | AdmissionResource::Processor => FullPolicy::Reject,
     }
 }

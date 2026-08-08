@@ -85,7 +85,26 @@ pub trait RemotingClient: RemotingService {
     /// * `addr` - The address to invoke the command on.
     /// * `request` - The `RemotingCommand` to be sent.
     /// * `timeout_millis` - The timeout for the operation in milliseconds.
-    async fn invoke_request_oneway(&self, addr: &CheetahString, request: RemotingCommand, timeout_millis: u64);
+    ///
+    /// Sends a one-way command within an already-frozen end-to-end deadline.
+    ///
+    /// Success means the local transport writer completed write and flush; it does not mean the
+    /// remote broker processed or acknowledged the command.
+    async fn invoke_request_oneway_with_deadline(
+        &self,
+        addr: &CheetahString,
+        request: RemotingCommand,
+        deadline: RequestDeadline,
+    ) -> rocketmq_error::RocketMQResult<()>;
+
+    /// Sends a one-way command and propagates connection, hook, admission, deadline, and write
+    /// failures.
+    async fn invoke_request_oneway(
+        &self,
+        addr: &CheetahString,
+        request: RemotingCommand,
+        timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<()>;
 
     /// Checks if a specified address is reachable.
     ///

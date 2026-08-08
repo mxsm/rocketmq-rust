@@ -299,8 +299,7 @@ impl MQClientAPIImpl {
                 request,
                 timeout_millis,
             )
-            .await;
-        Ok(())
+            .await
     }
 
     pub async fn update_consumer_offset_one_way(
@@ -676,8 +675,7 @@ impl MQClientAPIImpl {
         if oneway {
             self.remoting_client
                 .invoke_request_oneway(addr, request, timeout_millis)
-                .await;
-            Ok(())
+                .await
         } else {
             let response = self
                 .remoting_client

@@ -615,7 +615,11 @@ impl Connection {
         self.enqueue_gate = Some((checked, resume));
     }
 
-    pub(crate) fn into_session_io(self) -> (ConnectionFrameWriter, SessionConnectionReadHalf) {
+    pub(crate) fn into_session_io(
+        self,
+        admission: Arc<AdmissionController>,
+        scope: AdmissionScope,
+    ) -> (ConnectionFrameWriter, SessionConnectionReadHalf) {
         let writer = match self.outbound {
             ConnectionWriter::Direct(writer) => writer,
             ConnectionWriter::Queued(_) => unreachable!("session runtime requires an owned transport writer"),
@@ -623,7 +627,7 @@ impl Connection {
         let reader = self
             .inbound
             .unwrap_or_else(|| unreachable!("session runtime requires an owned transport reader"))
-            .map_decoder(SessionCommandDecoder::from);
+            .map_decoder(|decoder| SessionCommandDecoder::new(decoder, admission, scope));
         (writer, reader)
     }
 

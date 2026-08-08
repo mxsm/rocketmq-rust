@@ -264,6 +264,24 @@ impl ChildServiceContext {
         }
     }
 
+    fn try_new(
+        scope: ScopeId,
+        parent_group: &TaskGroup,
+        blocking_lanes: BlockingLanes,
+        diagnostics: RuntimeDiagnostics,
+        resources: RuntimeResources,
+    ) -> RuntimeResult<Self> {
+        let name = scope.into_inner();
+        Ok(Self {
+            name: name.clone(),
+            task_group: parent_group.try_child(name)?,
+            blocking_lanes,
+            diagnostics,
+            resources,
+            _sealed: Arc::new(ChildContextSeal),
+        })
+    }
+
     /// Returns the name.
     pub fn name(&self) -> &str {
         &self.name
@@ -332,6 +350,25 @@ impl ChildServiceContext {
     /// Creates a long-lived component context owned by this service.
     pub fn component(&self, scope: impl Into<ScopeId>) -> Self {
         Self::new(
+            scope.into(),
+            &self.task_group,
+            self.blocking_lanes.clone(),
+            self.diagnostics.clone(),
+            self.resources.clone(),
+        )
+    }
+
+    /// Creates an independently cancellable child component owned by this service.
+    ///
+    /// Parent cancellation propagates to the returned component. Cancelling the
+    /// child does not cancel this service or sibling components.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeError::TaskGroupClosing`] after this service starts
+    /// shutting down or becomes poisoned.
+    pub fn try_component(&self, scope: impl Into<ScopeId>) -> RuntimeResult<Self> {
+        Self::try_new(
             scope.into(),
             &self.task_group,
             self.blocking_lanes.clone(),

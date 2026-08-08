@@ -10,6 +10,7 @@ use rocketmq_runtime::BlockingKind;
 use rocketmq_runtime::BlockingLane;
 use rocketmq_runtime::BlockingLanePolicies;
 use rocketmq_runtime::BlockingPoolPolicy;
+use rocketmq_runtime::OperationContext;
 use rocketmq_runtime::RuntimeComponent;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeContext;
@@ -397,6 +398,115 @@ async fn task_group_shutdown_waits_for_completed_tasks() {
     let report = group.shutdown(Duration::from_secs(1)).await;
     assert!(report.is_healthy(), "{}", report.to_json());
     assert_eq!(report.completed, 1);
+}
+
+#[tokio::test]
+async fn draining_operation_survives_owner_cancellation_until_release() {
+    let context = RuntimeContext::from_current("draining-operation-test");
+    let service = context.service_context("draining-operation-service");
+    let group = service.task_group().clone();
+    let operation = OperationContext::without_deadline(TaskKind::Worker);
+    let started = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let (completed_tx, completed_rx) = oneshot::channel();
+    let task_started = Arc::clone(&started);
+    let task_release = Arc::clone(&release);
+
+    group
+        .spawn_draining_operation(&operation, "accepted-work", async move {
+            task_started.notify_one();
+            task_release.notified().await;
+            let _ = completed_tx.send(());
+        })
+        .expect("accepted operation should spawn");
+    started.notified().await;
+
+    group.cancel();
+    tokio::task::yield_now().await;
+    assert_eq!(operation.active_task_count(), 1);
+
+    release.notify_one();
+    assert!(
+        operation.wait(&group, Duration::from_secs(1)).await.unwrap(),
+        "accepted work should drain before the shutdown deadline"
+    );
+    completed_rx.await.expect("draining operation should complete");
+
+    let report = context.shutdown_tasks(Duration::from_secs(1)).await;
+    assert!(report.is_healthy(), "{}", report.to_json());
+}
+
+#[tokio::test]
+async fn child_cancel_does_not_cancel_parent_or_sibling() {
+    let context = RuntimeContext::from_current("task-group-child-cancel-test");
+    let parent = context.service_context("service").task_group().clone();
+    let child = parent.try_child("child").expect("child task group");
+    let sibling = parent.try_child("sibling").expect("sibling task group");
+
+    child.cancel();
+
+    assert!(child.cancellation_token().is_cancelled());
+    assert!(!parent.cancellation_token().is_cancelled());
+    assert!(!sibling.cancellation_token().is_cancelled());
+
+    let report = parent.shutdown(Duration::from_secs(1)).await;
+    assert!(report.is_healthy(), "{}", report.to_json());
+}
+
+#[tokio::test]
+async fn parent_cancel_propagates_to_children() {
+    let context = RuntimeContext::from_current("task-group-parent-cancel-test");
+    let parent = context.service_context("service").task_group().clone();
+    let child = parent.try_child("child").expect("child task group");
+    let sibling = parent.try_child("sibling").expect("sibling task group");
+
+    parent.cancel();
+
+    assert!(parent.cancellation_token().is_cancelled());
+    assert!(child.cancellation_token().is_cancelled());
+    assert!(sibling.cancellation_token().is_cancelled());
+
+    let report = parent.shutdown(Duration::from_secs(1)).await;
+    assert!(report.is_healthy(), "{}", report.to_json());
+}
+
+#[tokio::test]
+async fn last_child_drop_unregisters_component() {
+    let context = RuntimeContext::from_current("task-group-child-drop-test");
+    let parent = context.service_context("service").task_group().clone();
+    let child = parent.try_child("child").expect("child task group");
+    let child_clone = child.clone();
+
+    assert_eq!(parent.component_count(), 1);
+    drop(child);
+    assert_eq!(parent.component_count(), 1);
+    drop(child_clone);
+    assert_eq!(parent.component_count(), 0);
+
+    let report = parent.shutdown(Duration::from_secs(1)).await;
+    assert!(report.is_healthy(), "{}", report.to_json());
+}
+
+#[tokio::test]
+async fn child_creation_fails_after_parent_closing() {
+    let context = RuntimeContext::from_current("task-group-child-closing-test");
+    let service = context.service_context("service");
+    let parent = service.task_group().clone();
+    let report = parent.shutdown(Duration::from_secs(1)).await;
+    assert!(report.is_healthy(), "{}", report.to_json());
+
+    assert!(matches!(
+        parent
+            .try_child("late-child")
+            .expect_err("closed task group must reject children"),
+        RuntimeError::TaskGroupClosing { .. }
+    ));
+    assert!(matches!(
+        service
+            .try_component("late-component")
+            .expect_err("closed service context must reject components"),
+        RuntimeError::TaskGroupClosing { .. }
+    ));
 }
 
 #[tokio::test]

@@ -112,6 +112,37 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OnewayBroadcastReport {
+    pub attempted: usize,
+    pub succeeded: usize,
+    pub failures: Vec<OnewayTargetFailure>,
+}
+
+impl OnewayBroadcastReport {
+    #[must_use]
+    pub fn is_healthy(&self) -> bool {
+        self.failures.is_empty()
+    }
+
+    fn record(&mut self, address: CheetahString, result: rocketmq_error::RocketMQResult<()>) {
+        self.attempted = self.attempted.saturating_add(1);
+        match result {
+            Ok(()) => self.succeeded = self.succeeded.saturating_add(1),
+            Err(error) => self.failures.push(OnewayTargetFailure {
+                address,
+                error: error.to_string(),
+            }),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OnewayTargetFailure {
+    pub address: CheetahString,
+    pub error: String,
+}
+
 #[derive(Clone)]
 pub struct BrokerOuterAPI {
     remoting_client: Arc<RocketmqDefaultClient<DefaultRemotingRequestProcessor>>,
@@ -265,10 +296,10 @@ impl BrokerOuterAPI {
                 }
             });
             for value in futures::future::join_all(futures).await {
-                if let Some(v) = value {
-                    register_broker_result_list.push(v);
-                } else {
-                    error!("Register broker to name remoting_server error");
+                match value {
+                    Ok(Some(result)) => register_broker_result_list.push(result),
+                    Ok(None) => {}
+                    Err(error) => error!(%error, "Register broker to name remoting_server failed"),
                 }
             }
         }
@@ -283,7 +314,7 @@ impl BrokerOuterAPI {
         timeout_mills: u64,
         request_header: RegisterBrokerRequestHeader,
         body: Vec<u8>,
-    ) -> Option<RegisterBrokerResult> {
+    ) -> rocketmq_error::RocketMQResult<Option<RegisterBrokerResult>> {
         debug!(
             "Register broker to name remoting_server, namesrv_addr={},request_code={:?}, request_header={:?}, \
              body_len={}",
@@ -297,8 +328,8 @@ impl BrokerOuterAPI {
         if oneway {
             self.remoting_client
                 .invoke_request_oneway(namesrv_addr, request, timeout_mills)
-                .await;
-            return None;
+                .await?;
+            return Ok(None);
         }
         match self
             .remoting_client
@@ -322,17 +353,11 @@ impl BrokerOuterAPI {
                     if let Some(body) = response.body() {
                         result.kv_table = SerdeJsonUtils::from_json_bytes::<KVTable>(body.as_ref()).unwrap();
                     }
-                    Some(result)
+                    Ok(Some(result))
                 }
-                _ => None,
+                _ => Ok(None),
             },
-            Err(err) => {
-                error!(
-                    "Register broker to name remoting_server error, namesrv_addr={}, error={}",
-                    namesrv_addr, err
-                );
-                None
-            }
+            Err(error) => Err(error),
         }
     }
 
@@ -382,11 +407,11 @@ impl BrokerOuterAPI {
         broker_id: i64,
         timeout_millis: u64,
         _is_in_broker_container: bool,
-    ) {
+    ) -> OnewayBroadcastReport {
         let name_server_address_list = self.remoting_client.get_available_name_srv_list();
         if name_server_address_list.is_empty() {
             warn!("No available name server for sending heartbeat");
-            return;
+            return OnewayBroadcastReport::default();
         }
 
         let request_header = BrokerHeartbeatRequestHeader {
@@ -409,13 +434,18 @@ impl BrokerOuterAPI {
 
             async move {
                 let request = RemotingCommand::create_request_command(RequestCode::BrokerHeartbeat, header);
-
-                client.invoke_request_oneway(&addr, request, timeout_millis).await;
-                debug!("Send heartbeat to name server {} success", addr);
+                let result = client.invoke_request_oneway(&addr, request, timeout_millis).await;
+                (addr, result)
             }
         });
-
-        futures::future::join_all(futures).await;
+        let mut report = OnewayBroadcastReport::default();
+        for (addr, result) in futures::future::join_all(futures).await {
+            if let Err(error) = &result {
+                warn!(remote_addr = %addr, error_kind = ?error.kind(), "name server heartbeat failed");
+            }
+            report.record(addr, result);
+        }
+        report
     }
 
     /// Send heartbeat with data version to name servers
@@ -431,10 +461,10 @@ impl BrokerOuterAPI {
         timeout_millis: u64,
         data_version: &DataVersion,
         _is_in_broker_container: bool,
-    ) {
+    ) -> OnewayBroadcastReport {
         let name_server_address_list = self.remoting_client.get_available_name_srv_list();
         if name_server_address_list.is_empty() {
-            return;
+            return OnewayBroadcastReport::default();
         }
 
         let request_header = QueryDataVersionRequestHeader {
@@ -445,10 +475,20 @@ impl BrokerOuterAPI {
         };
 
         let body = match data_version.encode() {
-            Ok(b) => b,
-            Err(e) => {
-                error!("Failed to encode data version: {}", e);
-                return;
+            Ok(body) => body,
+            Err(error) => {
+                let error = error.to_string();
+                return OnewayBroadcastReport {
+                    attempted: name_server_address_list.len(),
+                    succeeded: 0,
+                    failures: name_server_address_list
+                        .into_iter()
+                        .map(|address| OnewayTargetFailure {
+                            address,
+                            error: error.clone(),
+                        })
+                        .collect(),
+                };
             }
         };
 
@@ -462,12 +502,18 @@ impl BrokerOuterAPI {
                 let mut request = RemotingCommand::create_request_command(RequestCode::QueryDataVersion, header);
                 request.set_body_mut_ref(bytes::Bytes::from(body_clone));
 
-                client.invoke_request_oneway(&addr, request, timeout_millis).await;
-                debug!("Send heartbeat via data version to {} success", addr);
+                let result = client.invoke_request_oneway(&addr, request, timeout_millis).await;
+                (addr, result)
             }
         });
-
-        futures::future::join_all(futures).await;
+        let mut report = OnewayBroadcastReport::default();
+        for (addr, result) in futures::future::join_all(futures).await {
+            if let Err(error) = &result {
+                warn!(remote_addr = %addr, error_kind = ?error.kind(), "data-version heartbeat failed");
+            }
+            report.record(addr, result);
+        }
+        report
     }
 
     /// Check if broker needs to register to name servers
@@ -1183,9 +1229,9 @@ impl BrokerOuterAPI {
         confirm_offset: Option<i64>,
         heartbeat_timeout_millis: Option<i64>,
         election_priority: Option<i32>,
-    ) {
+    ) -> rocketmq_error::RocketMQResult<()> {
         if controller_address.is_empty() {
-            return;
+            return Ok(());
         }
         let request_header = BrokerHeartbeatRequestHeader {
             cluster_name,
@@ -1201,7 +1247,7 @@ impl BrokerOuterAPI {
         let request = RemotingCommand::create_request_command(RequestCode::BrokerHeartbeat, request_header);
         self.remoting_client
             .invoke_request_oneway(&controller_address, request, timeout_millis)
-            .await;
+            .await
     }
 
     pub async fn send_heartbeat_to_controller_sync(
