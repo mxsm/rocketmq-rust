@@ -13,13 +13,18 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, RequestHeaderCodecV3)]
 #[serde(rename_all = "camelCase")]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::get_user_request_headers::GetUserRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.GetUserRequestHeader"
+)]
 pub struct GetUserRequestHeader {
+    #[header(default, default_semantic = "literal:")]
     pub username: CheetahString,
 }
 

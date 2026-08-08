@@ -13,13 +13,18 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize, RequestHeaderCodecV2)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, RequestHeaderCodecV3)]
 #[serde(rename_all = "camelCase")]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::resume_check_half_message_request_header::ResumeCheckHalfMessageRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.ResumeCheckHalfMessageRequestHeader"
+)]
 pub struct ResumeCheckHalfMessageRequestHeader {
+    #[header(default, default_semantic = "literal:")]
     pub topic: CheetahString,
 
     pub msg_id: Option<CheetahString>,

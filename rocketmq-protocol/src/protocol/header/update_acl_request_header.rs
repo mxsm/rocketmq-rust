@@ -13,13 +13,18 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, RequestHeaderCodecV3)]
 #[serde(rename_all = "camelCase")]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::update_acl_request_header::UpdateAclRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.UpdateAclRequestHeader"
+)]
 pub struct UpdateAclRequestHeader {
+    #[header(default, default_semantic = "literal:")]
     pub subject: CheetahString,
 }
 

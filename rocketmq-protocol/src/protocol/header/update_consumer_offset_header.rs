@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
 use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
@@ -21,7 +20,11 @@ use serde::Serialize;
 use crate::protocol::header::message_operation_header::TopicRequestHeaderTrait;
 use crate::protocol::header::namesrv::topic_operation_header::TopicRequestHeader;
 
-#[derive(Debug, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
+#[derive(Debug, Serialize, Deserialize, Default, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetResponseHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.UpdateConsumerOffsetResponseHeader"
+)]
 pub struct UpdateConsumerOffsetResponseHeader {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, RequestHeaderCodecV3)]
