@@ -13,28 +13,32 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::rpc::topic_request_header::TopicRequestHeader;
 
-#[derive(Debug, Clone, Serialize, Deserialize, RequestHeaderCodecV2)]
+#[derive(Debug, Clone, Serialize, Deserialize, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::query_message_request_header::QueryMessageRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.QueryMessageRequestHeader"
+)]
 #[serde(rename_all = "camelCase")]
 pub struct QueryMessageRequestHeader {
-    #[required]
+    #[header(required)]
     pub topic: CheetahString,
 
-    #[required]
+    #[header(required)]
     pub key: CheetahString,
 
-    #[required]
+    #[header(required)]
     pub max_num: i32,
 
-    #[required]
+    #[header(required)]
     pub begin_timestamp: i64,
 
-    #[required]
+    #[header(required)]
     pub end_timestamp: i64,
 
     pub index_type: Option<CheetahString>,
@@ -42,6 +46,7 @@ pub struct QueryMessageRequestHeader {
     pub last_key: Option<CheetahString>,
 
     #[serde(flatten)]
+    #[header(flatten, presence = "always")]
     pub topic_request_header: Option<TopicRequestHeader>,
 }
 

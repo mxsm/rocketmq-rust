@@ -13,46 +13,50 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::protocol::header::namesrv::topic_operation_header::TopicRequestHeader;
 
 /// Represents the header of a reply message request.
-#[derive(Serialize, Deserialize, Debug, Default, RequestHeaderCodecV2)]
+#[derive(Serialize, Deserialize, Debug, Default, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::reply_message_request_header::ReplyMessageRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.ReplyMessageRequestHeader"
+)]
 #[serde(rename_all = "camelCase")]
 pub struct ReplyMessageRequestHeader {
     /// Producer group associated with the message.
-    #[required]
+    #[header(required)]
     pub producer_group: CheetahString,
 
     /// The topic of the message.
-    #[required]
+    #[header(required)]
     pub topic: CheetahString,
 
     /// Default topic used when the specified topic is not found.
-    #[required]
+    #[header(required)]
     pub default_topic: CheetahString,
 
     /// Number of queues in the default topic.
-    #[required]
+    #[header(required)]
     pub default_topic_queue_nums: i32,
 
     /// Queue ID of the message.
-    #[required]
+    #[header(required)]
     pub queue_id: i32,
 
     /// System flags associated with the message.
-    #[required]
+    #[header(required)]
     pub sys_flag: i32,
 
     /// Timestamp of when the message was born.
-    #[required]
+    #[header(required)]
     pub born_timestamp: i64,
 
     /// Flags associated with the message.
-    #[required]
+    #[header(required)]
     pub flag: i32,
 
     /// Properties of the message (nullable).
@@ -62,22 +66,29 @@ pub struct ReplyMessageRequestHeader {
     pub reconsume_times: Option<i32>,
 
     /// Whether the message processing is in unit mode (nullable).
+    #[serde(default = "default_unit_mode")]
+    #[header(default_with = "default_unit_mode", default_semantic = "literal:false")]
     pub unit_mode: Option<bool>,
 
     /// Host where the message was born.
-    #[required]
+    #[header(required)]
     pub born_host: CheetahString,
 
     /// Host where the message is stored.
-    #[required]
+    #[header(required)]
     pub store_host: CheetahString,
 
     /// Timestamp of when the message was stored.
-    #[required]
+    #[header(required)]
     pub store_timestamp: i64,
 
     #[serde(flatten)]
+    #[header(flatten, presence = "always")]
     pub topic_request: Option<TopicRequestHeader>,
+}
+
+fn default_unit_mode() -> Option<bool> {
+    Some(false)
 }
 
 #[cfg(test)]

@@ -23,11 +23,13 @@ use rocketmq_model::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_protocol::protocol::header::change_invisible_time_request_header::ChangeInvisibleTimeRequestHeader;
 use rocketmq_protocol::protocol::header::check_rocksdb_cq_write_progress_request_header::CheckRocksdbCqWriteProgressRequestHeader;
 use rocketmq_protocol::protocol::header::check_transaction_state_request_header::CheckTransactionStateRequestHeader;
+use rocketmq_protocol::protocol::header::client_request_header::GetRouteInfoRequestHeader;
 use rocketmq_protocol::protocol::header::clone_group_offset_request_header::CloneGroupOffsetRequestHeader;
 use rocketmq_protocol::protocol::header::consume_message_directly_result_request_header::ConsumeMessageDirectlyResultRequestHeader;
 use rocketmq_protocol::protocol::header::consumer_send_msg_back_request_header::ConsumerSendMsgBackRequestHeader;
 use rocketmq_protocol::protocol::header::controller::clean_broker_data_request_header::CleanBrokerDataRequestHeader;
 use rocketmq_protocol::protocol::header::create_topic_list_request_header::CreateTopicListRequestHeader;
+use rocketmq_protocol::protocol::header::create_topic_request_header::CreateTopicRequestHeader;
 use rocketmq_protocol::protocol::header::delete_subscription_group_request_header::DeleteSubscriptionGroupRequestHeader;
 use rocketmq_protocol::protocol::header::delete_topic_request_header::DeleteTopicRequestHeader;
 use rocketmq_protocol::protocol::header::end_transaction_request_header::EndTransactionRequestHeader;
@@ -68,9 +70,13 @@ use rocketmq_protocol::protocol::header::query_consume_queue_request_header::Que
 use rocketmq_protocol::protocol::header::query_consume_time_span_request_header::QueryConsumeTimeSpanRequestHeader;
 use rocketmq_protocol::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
 use rocketmq_protocol::protocol::header::query_correction_offset_header::QueryCorrectionOffsetHeader;
+use rocketmq_protocol::protocol::header::query_message_request_header::QueryMessageRequestHeader;
 use rocketmq_protocol::protocol::header::query_subscription_by_consumer_request_header::QuerySubscriptionByConsumerRequestHeader;
 use rocketmq_protocol::protocol::header::query_topic_consume_by_who_request_header::QueryTopicConsumeByWhoRequestHeader;
 use rocketmq_protocol::protocol::header::query_topics_by_consumer_request_header::QueryTopicsByConsumerRequestHeader;
+use rocketmq_protocol::protocol::header::recall_message_request_header::RecallMessageRequestHeader;
+use rocketmq_protocol::protocol::header::reply_message_request_header::ReplyMessageRequestHeader;
+use rocketmq_protocol::protocol::header::reset_offset_request_header::ResetOffsetRequestHeader;
 use rocketmq_protocol::protocol::header::search_offset_request_header::SearchOffsetRequestHeader;
 use rocketmq_protocol::protocol::header::search_offset_response_header::SearchOffsetResponseHeader;
 use rocketmq_protocol::protocol::header::unlock_batch_mq_request_header::UnlockBatchMqRequestHeader;
@@ -272,6 +278,19 @@ fn registry() -> Vec<RegisteredSchema> {
         }),
         register::<CleanBrokerDataRequestHeader>(),
         register::<CreateTopicListRequestHeader>(),
+        register_value(&CreateTopicRequestHeader {
+            topic: CheetahString::from_static_str("registry"),
+            default_topic: CheetahString::from_static_str("registry"),
+            read_queue_nums: 0,
+            write_queue_nums: 0,
+            perm: 0,
+            topic_filter_type: CheetahString::from_static_str("SINGLE_TAG"),
+            topic_sys_flag: None,
+            order: false,
+            attributes: None,
+            force: Some(false),
+            topic_request_header: None,
+        }),
         register::<DeleteSubscriptionGroupRequestHeader>(),
         register_value(&DeleteTopicRequestHeader {
             topic: CheetahString::from_static_str("registry"),
@@ -331,6 +350,11 @@ fn registry() -> Vec<RegisteredSchema> {
             queue_id: 0,
             topic_request_header: None,
         }),
+        register_value(&GetRouteInfoRequestHeader {
+            topic: CheetahString::from_static_str("registry"),
+            accept_standard_json_only: None,
+            topic_request_header: None,
+        }),
         register::<GetProducerConnectionListRequestHeader>(),
         register::<GetSubscriptionGroupConfigRequestHeader>(),
         register_value(&GetTopicConfigRequestHeader {
@@ -363,6 +387,16 @@ fn registry() -> Vec<RegisteredSchema> {
             topic: CheetahString::from_static_str("registry"),
             topic_request_header: None,
         }),
+        register_value(&QueryMessageRequestHeader {
+            topic: CheetahString::from_static_str("registry"),
+            key: CheetahString::from_static_str("registry"),
+            max_num: 0,
+            begin_timestamp: 0,
+            end_timestamp: 0,
+            index_type: None,
+            last_key: None,
+            topic_request_header: None,
+        }),
         register_value(&QuerySubscriptionByConsumerRequestHeader {
             group: CheetahString::from_static_str("registry"),
             topic: CheetahString::new(),
@@ -372,6 +406,30 @@ fn registry() -> Vec<RegisteredSchema> {
             topic: CheetahString::from_static_str("registry"),
             topic_request_header: None,
         }),
+        register_value(&RecallMessageRequestHeader {
+            producer_group: None,
+            topic: CheetahString::from_static_str("registry"),
+            recall_handle: CheetahString::from_static_str("registry"),
+            topic_request_header: None,
+        }),
+        register_value(&ReplyMessageRequestHeader {
+            producer_group: CheetahString::from_static_str("registry"),
+            topic: CheetahString::from_static_str("registry"),
+            default_topic: CheetahString::from_static_str("registry"),
+            default_topic_queue_nums: 0,
+            queue_id: 0,
+            sys_flag: 0,
+            born_timestamp: 0,
+            flag: 0,
+            properties: None,
+            reconsume_times: None,
+            unit_mode: Some(false),
+            born_host: CheetahString::from_static_str("registry"),
+            store_host: CheetahString::from_static_str("registry"),
+            store_timestamp: 0,
+            topic_request: None,
+        }),
+        register::<ResetOffsetRequestHeader>(),
         register::<SearchOffsetRequestHeader>(),
         register::<SearchOffsetResponseHeader>(),
         register::<PullMessageRequestHeader>(),
@@ -1137,6 +1195,131 @@ fn topic_headers_preserve_nested_java_inheritance_and_defaults() {
             })
         },
     );
+    assert_topic_envelope_contract::<GetRouteInfoRequestHeader>(
+        &[("topic", "topic-route"), ("acceptStandardJsonOnly", "true")],
+        &["topic"],
+        |header| {
+            header.topic_request_header.as_ref().map(|topic| TopicEnvelopeRef {
+                lo: topic.lo,
+                rpc: &topic.rpc_request_header,
+            })
+        },
+    );
+    assert_topic_envelope_contract::<CreateTopicRequestHeader>(
+        &[
+            ("topic", "topic-create"),
+            ("defaultTopic", "TBW102"),
+            ("readQueueNums", "-2147483648"),
+            ("writeQueueNums", "2147483647"),
+            ("perm", "-2147483648"),
+            ("topicFilterType", "MULTI_TAG"),
+            ("topicSysFlag", "2147483647"),
+            ("order", "true"),
+            ("attributes", "+message.type=NORMAL"),
+            ("force", "true"),
+        ],
+        &[
+            "topic",
+            "defaultTopic",
+            "readQueueNums",
+            "writeQueueNums",
+            "perm",
+            "topicFilterType",
+            "order",
+        ],
+        |header| {
+            header.topic_request_header.as_ref().map(|topic| TopicEnvelopeRef {
+                lo: topic.lo,
+                rpc: &topic.rpc_request_header,
+            })
+        },
+    );
+    assert_topic_envelope_contract::<QueryMessageRequestHeader>(
+        &[
+            ("topic", "topic-query-message"),
+            ("key", "key-a"),
+            ("maxNum", "2147483647"),
+            ("beginTimestamp", "-9223372036854775808"),
+            ("endTimestamp", "9223372036854775807"),
+            ("indexType", "U"),
+            ("lastKey", "last-a"),
+        ],
+        &["topic", "key", "maxNum", "beginTimestamp", "endTimestamp"],
+        |header| {
+            header.topic_request_header.as_ref().map(|topic| TopicEnvelopeRef {
+                lo: topic.lo,
+                rpc: &topic.rpc_request_header,
+            })
+        },
+    );
+    assert_topic_envelope_contract::<RecallMessageRequestHeader>(
+        &[
+            ("producerGroup", "producer-recall"),
+            ("topic", "topic-recall"),
+            ("recallHandle", "handle-a"),
+        ],
+        &["topic", "recallHandle"],
+        |header| {
+            header.topic_request_header.as_ref().map(|topic| TopicEnvelopeRef {
+                lo: topic.lo,
+                rpc: &topic.rpc_request_header,
+            })
+        },
+    );
+    assert_topic_envelope_contract::<ReplyMessageRequestHeader>(
+        &[
+            ("producerGroup", "producer-reply"),
+            ("topic", "topic-reply"),
+            ("defaultTopic", "TBW102"),
+            ("defaultTopicQueueNums", "-2147483648"),
+            ("queueId", "2147483647"),
+            ("sysFlag", "-2147483648"),
+            ("bornTimestamp", "-9223372036854775808"),
+            ("flag", "2147483647"),
+            ("properties", "KEYS=key-a"),
+            ("reconsumeTimes", "-2147483648"),
+            ("unitMode", "true"),
+            ("bornHost", "127.0.0.1:1000"),
+            ("storeHost", "127.0.0.1:2000"),
+            ("storeTimestamp", "9223372036854775807"),
+        ],
+        &[
+            "producerGroup",
+            "topic",
+            "defaultTopic",
+            "defaultTopicQueueNums",
+            "queueId",
+            "sysFlag",
+            "bornTimestamp",
+            "flag",
+            "bornHost",
+            "storeHost",
+            "storeTimestamp",
+        ],
+        |header| {
+            header.topic_request.as_ref().map(|topic| TopicEnvelopeRef {
+                lo: topic.lo,
+                rpc: &topic.rpc,
+            })
+        },
+    );
+    assert_topic_envelope_contract::<ResetOffsetRequestHeader>(
+        &[
+            ("topic", "topic-reset"),
+            ("group", "group-reset"),
+            ("queueId", "2147483647"),
+            ("offset", "-9223372036854775808"),
+            ("timestamp", "9223372036854775807"),
+            ("isForce", "true"),
+        ],
+        &["topic", "group", "timestamp", "isForce"],
+        |header| {
+            header.topic_request_header.as_ref().map(|topic| TopicEnvelopeRef {
+                lo: topic.lo,
+                rpc: &topic.rpc_request_header,
+            })
+        },
+    );
 
     let pop_required_only = HeaderMap::from([
         ("consumerGroup".into(), "consumer-pop".into()),
@@ -1235,6 +1418,105 @@ fn topic_headers_preserve_nested_java_inheritance_and_defaults() {
             Err(HeaderCodecError::JavaRange { key: actual, .. }) if actual == key
         ));
     }
+
+    let create_required_only = HeaderMap::from([
+        ("topic".into(), "topic-create".into()),
+        ("defaultTopic".into(), "TBW102".into()),
+        ("readQueueNums".into(), "4".into()),
+        ("writeQueueNums".into(), "4".into()),
+        ("perm".into(), "6".into()),
+        ("topicFilterType".into(), "SINGLE_TAG".into()),
+        ("order".into(), "false".into()),
+    ]);
+    let typed = <CreateTopicRequestHeader as HeaderCodec>::decode_from_map(&create_required_only)
+        .expect("missing force uses the Java Boolean.FALSE initializer");
+    let legacy = <CreateTopicRequestHeader as FromMap>::from(&create_required_only)
+        .expect("legacy adapter uses the Java Boolean.FALSE initializer");
+    assert_eq!(typed.force, Some(false));
+    assert_eq!(legacy.force, Some(false));
+
+    let reply_required_only = HeaderMap::from([
+        ("producerGroup".into(), "producer-reply".into()),
+        ("topic".into(), "topic-reply".into()),
+        ("defaultTopic".into(), "TBW102".into()),
+        ("defaultTopicQueueNums".into(), "4".into()),
+        ("queueId".into(), "0".into()),
+        ("sysFlag".into(), "0".into()),
+        ("bornTimestamp".into(), "1".into()),
+        ("flag".into(), "0".into()),
+        ("bornHost".into(), "127.0.0.1:1000".into()),
+        ("storeHost".into(), "127.0.0.1:2000".into()),
+        ("storeTimestamp".into(), "2".into()),
+    ]);
+    let typed = <ReplyMessageRequestHeader as HeaderCodec>::decode_from_map(&reply_required_only)
+        .expect("missing unitMode uses the Java false initializer");
+    let legacy = <ReplyMessageRequestHeader as FromMap>::from(&reply_required_only)
+        .expect("legacy adapter uses the Java false initializer");
+    assert_eq!(typed.unit_mode, Some(false));
+    assert_eq!(legacy.unit_mode, Some(false));
+
+    let reset_without_queue = HeaderMap::from([
+        ("topic".into(), "topic-reset".into()),
+        ("group".into(), "group-reset".into()),
+        ("timestamp".into(), "0".into()),
+        ("isForce".into(), "false".into()),
+    ]);
+    let typed = <ResetOffsetRequestHeader as HeaderCodec>::decode_from_map(&reset_without_queue)
+        .expect("missing queueId uses the Java -1 initializer");
+    let legacy = <ResetOffsetRequestHeader as FromMap>::from(&reset_without_queue)
+        .expect("legacy adapter uses the Java -1 initializer");
+    assert_eq!(typed.queue_id, -1);
+    assert_eq!(legacy.queue_id, -1);
+
+    let mut invalid_filter_type = create_required_only.clone();
+    invalid_filter_type.insert("topicFilterType".into(), "SQL92".into());
+    assert!(matches!(
+        <CreateTopicRequestHeader as HeaderCodec>::decode_from_map(&invalid_filter_type),
+        Err(HeaderCodecError::Validation {
+            rule: "supported_topic_filter_type",
+            ..
+        })
+    ));
+    assert!(<CreateTopicRequestHeader as FromMap>::from(&invalid_filter_type).is_err());
+
+    for (key, mut fields) in [
+        ("force", create_required_only.clone()),
+        ("order", create_required_only.clone()),
+        ("unitMode", reply_required_only.clone()),
+        ("isForce", reset_without_queue.clone()),
+    ] {
+        fields.insert(key.into(), "not-a-bool".into());
+        let (typed_is_error, legacy_is_error) = match key {
+            "force" | "order" => (
+                <CreateTopicRequestHeader as HeaderCodec>::decode_from_map(&fields).is_err(),
+                <CreateTopicRequestHeader as FromMap>::from(&fields).is_err(),
+            ),
+            "unitMode" => (
+                <ReplyMessageRequestHeader as HeaderCodec>::decode_from_map(&fields).is_err(),
+                <ReplyMessageRequestHeader as FromMap>::from(&fields).is_err(),
+            ),
+            "isForce" => (
+                <ResetOffsetRequestHeader as HeaderCodec>::decode_from_map(&fields).is_err(),
+                <ResetOffsetRequestHeader as FromMap>::from(&fields).is_err(),
+            ),
+            _ => unreachable!(),
+        };
+        assert!(typed_is_error, "typed decode must reject malformed {key}");
+        assert!(legacy_is_error, "legacy decode must reject malformed {key}");
+    }
+
+    let malformed_accept = HeaderMap::from([
+        ("topic".into(), "topic-route".into()),
+        ("acceptStandardJsonOnly".into(), "not-a-bool".into()),
+    ]);
+    assert!(matches!(
+        <GetRouteInfoRequestHeader as HeaderCodec>::decode_from_map(&malformed_accept),
+        Err(HeaderCodecError::InvalidValue {
+            key: "acceptStandardJsonOnly",
+            ..
+        })
+    ));
+    assert!(<GetRouteInfoRequestHeader as FromMap>::from(&malformed_accept).is_err());
 
     let update_signed_minimum = HeaderMap::from([
         ("consumerGroup".into(), "consumer-update".into()),

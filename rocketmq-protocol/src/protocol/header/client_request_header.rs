@@ -13,21 +13,26 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::rpc::topic_request_header::TopicRequestHeader;
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::client_request_header::GetRouteInfoRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.namesrv.GetRouteInfoRequestHeader"
+)]
 pub struct GetRouteInfoRequestHeader {
-    #[required]
+    #[header(required)]
     pub topic: CheetahString,
 
     #[serde(rename = "acceptStandardJsonOnly")]
     pub accept_standard_json_only: Option<bool>,
 
     #[serde(flatten)]
+    #[header(flatten, presence = "always")]
     pub topic_request_header: Option<TopicRequestHeader>,
 }
 
