@@ -211,7 +211,14 @@ fn conflict_tokens(field: &FieldModel, protocol_path: &syn::Path) -> TokenStream
 }
 
 fn presence_tokens(field: &FieldModel, protocol_path: &syn::Path) -> TokenStream {
-    match field.missing.as_ref().expect("validated scalar missing policy") {
+    let Some(missing) = field.missing.as_ref() else {
+        debug_assert!(
+            field.missing.is_some(),
+            "scalar field must have a validated missing policy"
+        );
+        return TokenStream::new();
+    };
+    match missing {
         MissingPolicy::Optional => quote!(#protocol_path::protocol::header_codec::HeaderPresence::Optional),
         MissingPolicy::Required => quote!(#protocol_path::protocol::header_codec::HeaderPresence::Required),
         MissingPolicy::Default => quote!(#protocol_path::protocol::header_codec::HeaderPresence::Default),

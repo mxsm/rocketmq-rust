@@ -4028,18 +4028,18 @@
       "public_items": 0,
       "reexports": 0
     },
+    "rocketmq-macros/src/request_header_codec_v2.rs": {
+      "production_lines": 14,
+      "public_items": 0,
+      "reexports": 0
+    },
     "rocketmq-macros/src/request_header_codec_v2/attr.rs": {
       "production_lines": 109,
       "public_items": 0,
       "reexports": 0
     },
     "rocketmq-macros/src/request_header_codec_v2/codegen.rs": {
-      "production_lines": 274,
-      "public_items": 0,
-      "reexports": 0
-    },
-    "rocketmq-macros/src/request_header_codec_v2/mod.rs": {
-      "production_lines": 14,
+      "production_lines": 280,
       "public_items": 0,
       "reexports": 0
     },
@@ -4069,12 +4069,12 @@
       "reexports": 0
     },
     "rocketmq-macros/src/request_header_codec_v3/codegen_map.rs": {
-      "production_lines": 429,
+      "production_lines": 435,
       "public_items": 0,
       "reexports": 0
     },
     "rocketmq-macros/src/request_header_codec_v3/codegen_schema.rs": {
-      "production_lines": 201,
+      "production_lines": 207,
       "public_items": 0,
       "reexports": 0
     },
@@ -6544,7 +6544,7 @@
       "reexports": 0
     },
     "rocketmq-protocol/src/protocol/header_codec/json_field_source.rs": {
-      "production_lines": 340,
+      "production_lines": 335,
       "public_items": 0,
       "reexports": 0
     },
