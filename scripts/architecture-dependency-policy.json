@@ -380,6 +380,7 @@
       "rocketmq-protocol",
       "rocketmq-transport",
       "rocketmq-security-api",
+      "rocketmq-auth",
       "rocketmq-store-api",
       "rocketmq-runtime",
       "rocketmq-error",
