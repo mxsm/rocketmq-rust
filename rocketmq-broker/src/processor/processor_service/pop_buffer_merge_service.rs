@@ -589,7 +589,7 @@ impl<MS: BrokerReadWriteStore> PopBufferMergeService<MS> {
         let timeout_threshold = self.minute5;
 
         self.commit_offsets.retain(|key, value| {
-            let key_array: Vec<&str> = key.split(PopAckConstants::SPLIT).collect();
+            let key_array: Vec<&str> = key.split_str(PopAckConstants::SPLIT).collect();
             if key_array.len() != 3 {
                 warn!("[PopBuffer]invalid lock key format: {}, removing", key);
                 return false;

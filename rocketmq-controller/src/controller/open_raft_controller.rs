@@ -1129,7 +1129,7 @@ impl Controller for OpenRaftController {
             broker_name: request.broker_name.to_string(),
             broker_address: request
                 .register_check_code
-                .split(';')
+                .split_char(';')
                 .next()
                 .unwrap_or_default()
                 .to_string(),

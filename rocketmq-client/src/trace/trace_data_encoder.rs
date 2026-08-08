@@ -140,7 +140,7 @@ impl TraceDataEncoder {
             transfer_bean.add_key(bean.msg_id.clone());
 
             if !bean.keys.is_empty() {
-                let keys: Vec<&str> = bean.keys.split(MessageConst::KEY_SEPARATOR).collect();
+                let keys: Vec<&str> = bean.keys.split_str(MessageConst::KEY_SEPARATOR).collect();
                 for key in keys {
                     if !key.is_empty() {
                         transfer_bean.add_key(CheetahString::from_slice(key));

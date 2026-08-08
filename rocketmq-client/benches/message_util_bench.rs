@@ -105,7 +105,7 @@ fn legacy_message_properties_to_string(properties: &HashMap<CheetahString, Cheet
         builder.push_str(value.as_str());
         builder.push(PROPERTY_SEPARATOR);
     }
-    builder.finish_string()
+    builder.finish()
 }
 
 // ============================================================================

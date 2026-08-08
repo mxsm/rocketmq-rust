@@ -690,7 +690,7 @@ impl TopicService {
         let ip_list = ip_list.into();
 
         let requested_ips = ip_list
-            .split(',')
+            .split_char(',')
             .map(str::trim)
             .filter(|ip| !ip.is_empty())
             .map(CheetahString::from)

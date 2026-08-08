@@ -1284,13 +1284,13 @@ impl MQClientAPIImpl {
                     let (queue_offset_key, queue_id_key) = if mix_all::is_lmq(Some(topic.as_str()))
                         && !dispatch.is_empty()
                     {
-                        let queues: Vec<&str> = dispatch.split(mix_all::MULTI_DISPATCH_QUEUE_SPLITTER).collect();
+                        let queues: Vec<&str> = dispatch.split_str(mix_all::MULTI_DISPATCH_QUEUE_SPLITTER).collect();
                         let data = message
                             .property(&CheetahString::from_static_str(
                                 MessageConst::PROPERTY_INNER_MULTI_QUEUE_OFFSET,
                             ))
                             .unwrap_or_default();
-                        let queue_offsets: Vec<&str> = data.split(mix_all::MULTI_DISPATCH_QUEUE_SPLITTER).collect();
+                        let queue_offsets: Vec<&str> = data.split_str(mix_all::MULTI_DISPATCH_QUEUE_SPLITTER).collect();
                         let Some(position) = queues.iter().position(|&q| q == topic.as_str()) else {
                             warn!(
                                 "LMQ dispatch queue does not contain topic={}, dispatch={}",

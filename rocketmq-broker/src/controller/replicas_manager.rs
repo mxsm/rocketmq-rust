@@ -796,7 +796,7 @@ fn parse_controller_addresses(controller_addr: &CheetahString) -> Vec<CheetahStr
     }
 
     controller_addr
-        .split(';')
+        .split_char(';')
         .map(str::trim)
         .filter(|item| !item.is_empty())
         .map(CheetahString::from)

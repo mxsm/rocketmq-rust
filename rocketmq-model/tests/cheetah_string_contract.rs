@@ -19,12 +19,11 @@ use std::collections::HashSet;
 
 use cheetah_string::CheetahBuilder;
 use cheetah_string::CheetahBytes;
-use cheetah_string::CheetahStr;
 use cheetah_string::CheetahString;
 
 #[test]
-fn cheetah_str_can_be_used_for_clone_cheap_keys() {
-    let topic = CheetahStr::from_static_str("topic-a");
+fn cheetah_string_can_be_used_for_clone_cheap_keys() {
+    let topic = CheetahString::from_static_str("topic-a");
     let cloned = topic.clone();
 
     assert_eq!(topic, cloned);
@@ -40,22 +39,22 @@ fn cheetah_string_lookup_by_str_still_works_for_hash_maps() {
 }
 
 #[test]
-fn cheetah_builder_finishes_into_string_for_append_heavy_paths() {
+fn cheetah_builder_finishes_into_clone_cheap_string() {
     let mut builder = CheetahBuilder::with_capacity("topic".len() + 1 + "group".len());
     builder.push_str("topic");
     builder.push('@');
     builder.push_str("group");
 
-    assert_eq!(builder.finish_string(), "topic@group");
+    assert_eq!(builder.finish(), "topic@group");
 }
 
 #[test]
-fn cheetah_builder_finish_string_preserves_owned_capacity_for_later_push() {
+fn cheetah_builder_into_string_preserves_owned_capacity_for_later_push() {
     let mut builder = CheetahBuilder::with_capacity(128);
     builder.push_str("topic");
     let before = builder.as_str().as_bytes().as_ptr();
 
-    let mut value = builder.finish_string();
+    let mut value = builder.into_string();
     value.push_str("@group");
 
     assert_eq!(value, "topic@group");
@@ -78,9 +77,9 @@ fn cheetah_bytes_keeps_byte_semantics_and_validates_before_string_conversion() {
 }
 
 #[test]
-fn cheetah_str_hash_set_keeps_str_semantics() {
-    let mut set = HashSet::<CheetahStr>::new();
-    set.insert(CheetahStr::from_static_str("group-a"));
+fn cheetah_string_hash_set_keeps_str_semantics() {
+    let mut set = HashSet::<CheetahString>::new();
+    set.insert(CheetahString::from_static_str("group-a"));
 
     assert!(set.contains("group-a"));
 }
@@ -88,7 +87,7 @@ fn cheetah_str_hash_set_keeps_str_semantics() {
 #[test]
 fn char_split_supports_reverse_iteration_for_single_char_separators() {
     let value = CheetahString::from_static_str("a@b@c");
-    let parts: Vec<&str> = value.split('@').rev().collect();
+    let parts: Vec<&str> = value.split_char('@').rev().collect();
 
     assert_eq!(parts, vec!["c", "b", "a"]);
 }

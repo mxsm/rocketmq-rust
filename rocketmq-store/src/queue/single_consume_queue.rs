@@ -313,8 +313,8 @@ impl ConsumeQueue {
             return;
         };
 
-        let queues: Vec<&str> = multi_dispatch_queue.split(MULTI_DISPATCH_QUEUE_SPLITTER).collect();
-        let queue_offsets: Vec<&str> = multi_queue_offset.split(MULTI_DISPATCH_QUEUE_SPLITTER).collect();
+        let queues: Vec<&str> = multi_dispatch_queue.split_str(MULTI_DISPATCH_QUEUE_SPLITTER).collect();
+        let queue_offsets: Vec<&str> = multi_queue_offset.split_str(MULTI_DISPATCH_QUEUE_SPLITTER).collect();
         if queues.len() != queue_offsets.len() {
             error!(
                 "[BUG] queues length mismatches queueOffsets length for topic {}",

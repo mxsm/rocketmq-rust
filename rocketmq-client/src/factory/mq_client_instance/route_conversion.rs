@@ -38,7 +38,7 @@ pub fn topic_route_data2topic_publish_info(topic: &str, route: &mut TopicRouteDa
         ..Default::default()
     };
     if let Some(order_topic_conf) = route.order_topic_conf.as_ref().filter(|conf| !conf.is_empty()) {
-        for broker in order_topic_conf.split(';') {
+        for broker in order_topic_conf.split_char(';') {
             let item = broker.split(':').collect::<Vec<&str>>();
             if item.len() != 2 {
                 continue;

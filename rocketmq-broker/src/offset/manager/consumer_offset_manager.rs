@@ -60,7 +60,7 @@ fn build_topic_group_key(topic: &CheetahString, group: &CheetahString) -> Cheeta
     builder.push_str(topic);
     builder.push_str(TOPIC_GROUP_SEPARATOR);
     builder.push_str(group);
-    builder.finish_string()
+    builder.finish()
 }
 
 fn build_topic_group_lookup_key(topic: &str, group: &str) -> String {
@@ -456,7 +456,7 @@ where
             .filter(|value| !value.is_empty())
             .map(|value| {
                 value
-                    .split(',')
+                    .split_char(',')
                     .map(str::trim)
                     .filter(|group| !group.is_empty())
                     .collect::<HashSet<_>>()

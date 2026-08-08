@@ -282,7 +282,7 @@ impl<RP: PopLongPollingRequestProcessor + Sync + 'static> PopLongPollingService<
                     continue;
                 }
 
-                let key_array: Vec<&str> = key.split(PopAckConstants::SPLIT).collect();
+                let key_array: Vec<&str> = key.split_str(PopAckConstants::SPLIT).collect();
                 if key_array.len() != 3 {
                     continue;
                 }

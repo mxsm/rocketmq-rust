@@ -197,7 +197,7 @@ impl BrokerOuterAPI {
 
     pub async fn update_name_server_address_list(&self, addrs: CheetahString) {
         let addr_vec = addrs
-            .split(";")
+            .split_str(";")
             .map(CheetahString::from_slice)
             .collect::<Vec<CheetahString>>();
         self.remoting_client.update_name_server_address_list(addr_vec).await

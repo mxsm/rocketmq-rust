@@ -122,7 +122,7 @@ fn property_value<'a>(properties: &'a [u8], name: &[u8]) -> Option<&'a [u8]> {
 fn cheetah_from_utf8_lossy(bytes: &[u8]) -> CheetahString {
     match String::from_utf8_lossy(bytes) {
         Cow::Borrowed(value) => CheetahString::from_slice(value),
-        Cow::Owned(value) => CheetahString::from_string_owned(value),
+        Cow::Owned(value) => CheetahString::from_string(value),
     }
 }
 

@@ -119,7 +119,8 @@ impl RocketMQSerializable {
 
         // Checked UTF-8 decode with CheetahString storage optimization
         let bytes = buf.split_to(len).freeze();
-        Ok(Some(CheetahString::try_from_bytes_buf(bytes)?))
+        let value = CheetahString::try_copy_from_bytes(bytes).map_err(|error| error.into_parts().1)?;
+        Ok(Some(value))
     }
 
     /// Optimized ROCKETMQ protocol encoding with reduced allocations

@@ -97,7 +97,7 @@ impl GetControllerMetadataSubCommand {
         println!("AppliedLogIndex\t{}", applied_log_index);
 
         if let Some(peers) = &meta_data.peers {
-            peers.split(";").for_each(|peer| println!("#Peer:\t{}", peer));
+            peers.split_str(";").for_each(|peer| println!("#Peer:\t{}", peer));
         } else {
             println!("No peers found");
         }

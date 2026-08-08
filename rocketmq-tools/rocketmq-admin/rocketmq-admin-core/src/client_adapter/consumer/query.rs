@@ -355,7 +355,7 @@ pub(super) async fn message_queue_allocation(
         else {
             continue;
         };
-        let client_ip = client_id.split('@').next().unwrap_or_default().to_string();
+        let client_ip = client_id.split_char('@').next().unwrap_or_default().to_string();
         for queue in running_info.mq_table.keys() {
             allocation.insert(queue.clone(), client_ip.clone());
         }

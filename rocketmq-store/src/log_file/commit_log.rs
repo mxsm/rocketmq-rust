@@ -2480,7 +2480,7 @@ pub fn check_message_and_return_size(
         if check_dup_info {
             let dup_info = properties_map.get(MessageConst::DUP_INFO).cloned();
             if let Some(content) = dup_info {
-                let vec = content.split('_').collect::<Vec<&str>>();
+                let vec = content.split_char('_').collect::<Vec<&str>>();
                 if vec.len() != 2 {
                     warn!("DupInfo in properties check failed. dupInfo={}", content);
                     return DispatchRequest {
