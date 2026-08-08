@@ -61,6 +61,7 @@ pub use command_custom_header::FromMap;
 pub use command_custom_header::HeaderEncodeCapability;
 pub use data_version_compat as data_version_facade;
 pub use encoded_frame::EncodedFrame;
+pub use encoded_frame::EncodedFrameHead;
 pub use remoting_command::RemotingCommand;
 pub use remoting_command_compat as remoting_command_facade;
 

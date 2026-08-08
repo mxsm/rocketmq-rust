@@ -32,6 +32,7 @@ tls = ["rcgen", "rustls-native-certs", "tokio-rustls"]
 observability = ["dep:rocketmq-observability", "rocketmq-observability/otel-metrics"]
 observability-traces = ["dep:rocketmq-observability"]
 test-support = []
+linux-sendfile = ["dep:libc"]
 
 [dependencies]
 rocketmq-error = { workspace = true }
@@ -73,6 +74,9 @@ rcgen = { version = "0.14", optional = true }
 rustls-native-certs = { version = "0.8", optional = true }
 tokio-rustls = { version = "0.26", optional = true }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = { version = "0.2.186", optional = true }
+
 [dev-dependencies]
 anyhow.workspace = true
 criterion = { version = "0.8.2", features = ["async_tokio"] }
@@ -83,6 +87,11 @@ tokio = { workspace = true, features = ["test-util"] }
 [[bench]]
 name = "frame_write"
 harness = false
+
+[[bench]]
+name = "linux_file_send"
+harness = false
+required-features = ["linux-sendfile"]
 
 [[bench]]
 name = "p0_overhead"

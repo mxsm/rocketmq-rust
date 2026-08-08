@@ -44,6 +44,7 @@ use crate::connection::Connection;
 use crate::connection::ConnectionStateHandle;
 use crate::deadline::RequestDeadline;
 use crate::dispatch::ResponseSink;
+use crate::file_region::FileRegion;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
 pub type ChannelId = CheetahString;
@@ -230,6 +231,22 @@ impl Channel {
     /// Sends a command through the serialized connection writer.
     pub async fn send_command(&self, command: RemotingCommand) -> rocketmq_error::RocketMQResult<()> {
         self.inner.send_command(command).await
+    }
+
+    /// Sends a command whose body is backed by a leased file region.
+    ///
+    /// # Errors
+    ///
+    /// Returns a deadline, frame-encoding, unsupported embedded-channel, or socket-write error.
+    pub async fn send_file_region_command(
+        &self,
+        command_without_body: RemotingCommand,
+        body: FileRegion,
+        deadline: RequestDeadline,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        self.inner
+            .send_file_region_command(command_without_body, body, deadline)
+            .await
     }
 
     /// Sends a borrowed command through the serialized connection writer.
@@ -732,6 +749,28 @@ impl ChannelInner {
         match &self.connection {
             ChannelIo::Network(connection) => connection.lock().await.send_command(command).await,
             ChannelIo::Local(response) => response.send(command).await.map_err(response_sink_error),
+        }
+    }
+
+    /// Sends one network command with a leased external file body.
+    pub async fn send_file_region_command(
+        &self,
+        command_without_body: RemotingCommand,
+        body: FileRegion,
+        deadline: RequestDeadline,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        match &self.connection {
+            ChannelIo::Network(connection) => {
+                connection
+                    .lock()
+                    .await
+                    .send_file_region_command(command_without_body, body, deadline)
+                    .await
+            }
+            ChannelIo::Local(_) => Err(RocketMQError::network_connection_failed(
+                "embedded-response",
+                "file-region transfer requires a network channel",
+            )),
         }
     }
 

@@ -19,18 +19,17 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rocketmq_error::RocketMQError;
-use tokio::io::AsyncWrite;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
 use crate::admission::AdmissionClass;
 use crate::connection::record_transport_write;
+use crate::connection::ConnectionFrameWriter;
 use crate::connection::ConnectionState;
 use crate::connection::SessionWriterDiagnostics;
 use crate::connection::SessionWriterSnapshot;
 use crate::deadline::RequestDeadline;
 use crate::telemetry::TransportTelemetry;
-use crate::write_strategy::FrameWriter;
 use crate::write_strategy::OutboundPayload;
 use crate::write_strategy::QueuedWrite;
 use crate::write_strategy::WriterOperation;
@@ -458,16 +457,14 @@ fn fail_envelope(envelope: LaneEnvelope, diagnostics: &SessionWriterDiagnostics,
 }
 
 /// Runs the sole socket writer owner until graceful close, cancellation, or a poisoned write.
-pub(crate) async fn run_session_writer<W>(
-    mut frame_writer: FrameWriter<W>,
+pub(crate) async fn run_session_writer(
+    mut frame_writer: ConnectionFrameWriter,
     mut receivers: WriterReceivers,
     diagnostics: Arc<SessionWriterDiagnostics>,
     state: tokio::sync::watch::Sender<ConnectionState>,
     reader_shutdown: tokio_util::sync::CancellationToken,
     telemetry: TransportTelemetry,
-) where
-    W: AsyncWrite + Unpin,
-{
+) {
     let mut closing: Option<CloseRequest> = None;
     loop {
         if closing.is_some() && receivers.is_drained() {
@@ -524,16 +521,13 @@ pub(crate) async fn run_session_writer<W>(
     }
 }
 
-async fn write_batch<W>(
-    frame_writer: &mut FrameWriter<W>,
+async fn write_batch(
+    frame_writer: &mut ConnectionFrameWriter,
     diagnostics: &SessionWriterDiagnostics,
     telemetry: &TransportTelemetry,
     config: WriterQueueConfig,
     batch: Vec<LaneEnvelope>,
-) -> bool
-where
-    W: AsyncWrite + Unpin,
-{
+) -> bool {
     let mut ready = Vec::with_capacity(batch.len());
     for envelope in batch {
         let write = envelope.into_write();
@@ -571,7 +565,7 @@ where
         })
         .collect::<Vec<&OutboundPayload>>();
     let result = match write_deadline
-        .timeout(frame_writer.write_payloads(&payloads, config.batch.max_iov.get()))
+        .timeout(frame_writer.write_transport_payloads(&payloads, config.batch.max_iov.get()))
         .await
     {
         Ok(result) => result.map_err(|error| error.to_string()),

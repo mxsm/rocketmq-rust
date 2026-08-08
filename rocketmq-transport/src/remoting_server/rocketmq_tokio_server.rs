@@ -21,9 +21,11 @@ use std::time::Instant;
 
 use crate::config::ServerConfig;
 use crate::dispatch::AuthorizedCommandDispatcher;
+use crate::file_region::FileTransferMode;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_runtime::wait_for_signal;
+use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::ShutdownReport;
@@ -343,6 +345,9 @@ struct ConnectionListener<RP> {
     /// Tracks remoting event and connection tasks for shutdown diagnostics.
     task_group: TaskGroup,
 
+    file_region_blocking: BlockingExecutor,
+    file_transfer_mode: FileTransferMode,
+
     transport_principal: Option<Principal>,
     command_interceptor: Arc<dyn SessionCommandInterceptor>,
     telemetry: TransportTelemetry,
@@ -423,6 +428,7 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
             DEFAULT_TLS_HANDSHAKE_TIMEOUT,
         )
         .with_authorized_dispatch(self.dispatcher.boundary(), self.transport_principal.clone())
+        .with_file_region_io(self.file_region_blocking.clone(), self.file_transfer_mode)
         .with_telemetry(self.telemetry.clone());
         transport
             .run(Arc::new(InterceptingConnectionHandler {
@@ -794,6 +800,8 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> TransportServer<RP> {
             RemotingServerRunCapabilities {
                 tls_runtime,
                 task_group: remoting_context.task_group().clone(),
+                file_region_blocking: remoting_context.storage_io().clone(),
+                file_transfer_mode: self.config.file_transfer_mode,
                 process_budget: self.service_context.process_budget(),
                 transport_security: self.transport_security.clone(),
                 transport_principal: self.transport_principal.clone(),
@@ -925,6 +933,8 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> TransportServer<RP> {
             RemotingServerRunCapabilities {
                 tls_runtime,
                 task_group,
+                file_region_blocking: remoting_context.storage_io().clone(),
+                file_transfer_mode: self.config.file_transfer_mode,
                 process_budget: self.service_context.process_budget(),
                 transport_security: self.transport_security.clone(),
                 transport_principal: self.transport_principal.clone(),
@@ -1029,6 +1039,8 @@ async fn run_with_report_with_service_context_and_telemetry<RP: RequestProcessor
         RemotingServerRunCapabilities {
             tls_runtime,
             task_group: remoting_context.task_group().clone(),
+            file_region_blocking: remoting_context.storage_io().clone(),
+            file_transfer_mode: FileTransferMode::Auto,
             process_budget: service_context.process_budget(),
             transport_security: None,
             transport_principal: None,
@@ -1044,6 +1056,8 @@ async fn run_with_report_with_service_context_and_telemetry<RP: RequestProcessor
 struct RemotingServerRunCapabilities {
     tls_runtime: TlsServerRuntime,
     task_group: TaskGroup,
+    file_region_blocking: BlockingExecutor,
+    file_transfer_mode: FileTransferMode,
     process_budget: rocketmq_runtime::ResourceBudget,
     transport_security: Option<Arc<TransportSecurity>>,
     transport_principal: Option<Principal>,
@@ -1066,6 +1080,8 @@ async fn run_with_tls_config_report<RP: RequestProcessor + Sync + 'static + Clon
     let RemotingServerRunCapabilities {
         tls_runtime,
         task_group,
+        file_region_blocking,
+        file_transfer_mode,
         process_budget,
         transport_security,
         transport_principal,
@@ -1127,6 +1143,8 @@ async fn run_with_tls_config_report<RP: RequestProcessor + Sync + 'static + Clon
         dispatcher,
         tls_runtime,
         task_group: task_group.clone(),
+        file_region_blocking,
+        file_transfer_mode,
         transport_principal,
         command_interceptor,
         telemetry,
@@ -2224,6 +2242,8 @@ mod tests {
             RemotingServerRunCapabilities {
                 tls_runtime,
                 task_group: service.component("remoting-server").task_group().clone(),
+                file_region_blocking: service.storage_io().clone(),
+                file_transfer_mode: FileTransferMode::Auto,
                 process_budget: service.process_budget(),
                 transport_security: None,
                 transport_principal: None,

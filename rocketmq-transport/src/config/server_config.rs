@@ -16,6 +16,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use super::tls_config::TlsConfig;
+use crate::file_region::FileTransferMode;
 
 /// Default value functions for Serde deserialization
 mod defaults {
@@ -39,6 +40,9 @@ pub struct ServerConfig {
 
     #[serde(default, alias = "tls")]
     pub tls_config: TlsConfig,
+
+    #[serde(default)]
+    pub file_transfer_mode: FileTransferMode,
 }
 
 impl Default for ServerConfig {
@@ -47,6 +51,7 @@ impl Default for ServerConfig {
             listen_port: defaults::listen_port(),
             bind_address: defaults::bind_address(),
             tls_config: TlsConfig::default(),
+            file_transfer_mode: FileTransferMode::Auto,
         }
     }
 }
@@ -62,6 +67,10 @@ impl ServerConfig {
 
     pub fn tls_config(&self) -> &TlsConfig {
         &self.tls_config
+    }
+
+    pub const fn file_transfer_mode(&self) -> FileTransferMode {
+        self.file_transfer_mode
     }
 }
 

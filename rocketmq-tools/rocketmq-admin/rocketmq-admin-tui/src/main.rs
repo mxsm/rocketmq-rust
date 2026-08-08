@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// The facade intentionally awaits the complete admin -> client -> transport call graph. Keep a
+// bounded compiler query budget above rustc's default as those typed async layers evolve.
+#![recursion_limit = "256"]
+
 mod action;
 mod admin_facade;
 mod commands;

@@ -41,6 +41,8 @@ use crate::codec::remoting_command_codec::FrameLimits;
 use crate::codec::remoting_command_codec::RemotingCommandCodec;
 use crate::codec::remoting_command_codec::SessionCommandDecoder;
 use crate::deadline::RequestDeadline;
+use crate::file_region::FileRegion;
+use crate::file_region::FileTransferMode;
 use crate::telemetry::TransportTelemetry;
 use crate::write_strategy::FrameWriteMode;
 use crate::write_strategy::FrameWriter;
@@ -49,7 +51,9 @@ use crate::write_strategy::QueuedWrite;
 use crate::write_strategy::QueuedWriteProgress;
 use crate::writer_runtime::WriterLanes;
 use rocketmq_protocol::protocol::encoded_frame::EncodedFrame;
+use rocketmq_protocol::protocol::encoded_frame::EncodedFrameHead;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::ResourcePermit;
 use std::sync::Arc;
 
@@ -585,6 +589,18 @@ impl Connection {
         self
     }
 
+    /// Injects the runtime-owned storage I/O lane used by portable file-region writes.
+    ///
+    /// Queued session capabilities already share the writer configured when the physical
+    /// connection was established, so calling this on a queued capability has no effect.
+    #[must_use]
+    pub fn with_file_region_io(mut self, blocking: BlockingExecutor, mode: FileTransferMode) -> Self {
+        if let ConnectionWriter::Direct(writer) = &mut self.outbound {
+            writer.configure_file_region_io(blocking, mode);
+        }
+        self
+    }
+
     pub(crate) fn new_queued(
         writer: WriterLanes,
         writer_diagnostics: Arc<SessionWriterDiagnostics>,
@@ -902,6 +918,43 @@ impl Connection {
 
         self.send_payload(OutboundPayload::Frame(frame), class, None, Some(deadline), target)
             .await
+    }
+
+    /// Sends a RocketMQ command whose body is a validated, leased file region.
+    ///
+    /// The command must not contain an in-memory body. The complete head plus file length is
+    /// admitted to the existing bounded writer queue, and the lease remains owned by the writer
+    /// payload until completion. Plaintext Linux TCP may use `sendfile`; TLS always uses bounded
+    /// portable reads so the bytes still pass through rustls encryption.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed encoding, admission, deadline, file-read, or socket-write error. After any
+    /// prefix/header progress, failure poisons and closes the current connection.
+    pub async fn send_file_region_command(
+        &mut self,
+        command_without_body: RemotingCommand,
+        body: FileRegion,
+        deadline: RequestDeadline,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        let target = "transport-file-region-writer".to_string();
+        deadline.ensure_before_send(target.clone())?;
+        let class = self
+            .response_class()
+            .unwrap_or_else(|| AdmissionClass::for_request_code(command_without_body.code()));
+        let body_len = usize::try_from(body.len()).map_err(|_| {
+            rocketmq_error::RocketMQError::illegal_argument("file region length exceeds this platform's usize")
+        })?;
+        let head = EncodedFrameHead::from_command_and_body_len(command_without_body, body_len)?;
+        deadline.ensure_before_send(target.clone())?;
+        self.send_payload(
+            OutboundPayload::FileFrame { head, body },
+            class,
+            None,
+            Some(deadline),
+            target,
+        )
+        .await
     }
 
     /// Sends one command while transferring an existing process-budget

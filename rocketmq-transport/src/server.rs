@@ -29,6 +29,7 @@ use futures_util::StreamExt;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::OperationContext;
 use rocketmq_runtime::RuntimeError;
@@ -59,6 +60,7 @@ use crate::connection::SessionWriterSnapshot;
 use crate::dispatch::AuthorizedDispatchBoundary;
 use crate::dispatch::RequestContext;
 use crate::dispatch::ResponseSink;
+use crate::file_region::FileTransferMode;
 use crate::request_ordering::RequestOrdering;
 use crate::security::TransportSecurity;
 use crate::telemetry::TransportTelemetry;
@@ -371,6 +373,8 @@ pub struct TransportListener {
     next_session: AtomicU64,
     telemetry: TransportTelemetry,
     socket_options: SocketOptions,
+    file_region_blocking: Option<BlockingExecutor>,
+    file_transfer_mode: FileTransferMode,
 }
 
 impl TransportListener {
@@ -396,6 +400,8 @@ impl TransportListener {
             next_session: AtomicU64::new(1),
             telemetry: TransportTelemetry::noop(),
             socket_options: SocketOptions::default(),
+            file_region_blocking: None,
+            file_transfer_mode: FileTransferMode::Auto,
         }
     }
 
@@ -440,6 +446,14 @@ impl TransportListener {
     #[must_use]
     pub fn with_socket_options(mut self, socket_options: SocketOptions) -> Self {
         self.socket_options = socket_options;
+        self
+    }
+
+    /// Injects the runtime-owned storage I/O lane and file-transfer mode for accepted sessions.
+    #[must_use]
+    pub fn with_file_region_io(mut self, blocking: BlockingExecutor, mode: FileTransferMode) -> Self {
+        self.file_region_blocking = Some(blocking);
+        self.file_transfer_mode = mode;
         self
     }
 
@@ -489,6 +503,8 @@ impl TransportListener {
             let principal = self.principal.clone();
             let handler = handler.clone();
             let telemetry = self.telemetry.clone();
+            let file_region_blocking = self.file_region_blocking.clone();
+            let file_transfer_mode = self.file_transfer_mode;
             let spawn_group = session_group.clone();
             if spawn_group
                 .spawn_service("rocketmq.transport.session", async move {
@@ -512,7 +528,10 @@ impl TransportListener {
                         return;
                     };
                     let (connection, peer_is_tls) = negotiated.into_parts();
-                    let connection = connection.with_telemetry(telemetry);
+                    let mut connection = connection.with_telemetry(telemetry);
+                    if let Some(blocking) = file_region_blocking {
+                        connection = connection.with_file_region_io(blocking, file_transfer_mode);
+                    }
                     run_framed_session(
                         connection,
                         local_addr,
@@ -754,6 +773,7 @@ pub struct SessionTransportServerConfig {
     pub io_policy: SessionIoPolicy,
     pub request_timeout: Duration,
     pub socket_options: SocketOptions,
+    pub file_transfer_mode: FileTransferMode,
 }
 
 impl SessionTransportServerConfig {
@@ -767,6 +787,7 @@ impl SessionTransportServerConfig {
             io_policy: SessionIoPolicy::default(),
             request_timeout: Duration::from_secs(30),
             socket_options: SocketOptions::default(),
+            file_transfer_mode: FileTransferMode::Auto,
         }
     }
 }
@@ -1043,7 +1064,10 @@ impl SessionTransportServer {
             return;
         };
         let (connection, peer_is_tls) = negotiated.into_parts();
-        let connection = connection.with_telemetry(self.telemetry.clone());
+        let connection = connection.with_telemetry(self.telemetry.clone()).with_file_region_io(
+            self.service_context.storage_io().clone(),
+            self.config.file_transfer_mode,
+        );
         run_framed_session(
             connection,
             self.local_addr,
