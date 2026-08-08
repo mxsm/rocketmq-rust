@@ -28,7 +28,7 @@ rust-version.workspace = true
 [features]
 default = ["tls"]
 simd = ["rocketmq-protocol/simd"]
-tls = ["arc-swap", "rcgen", "rustls-native-certs", "tokio-rustls"]
+tls = ["rcgen", "rustls-native-certs", "tokio-rustls"]
 observability = ["dep:rocketmq-observability", "rocketmq-observability/otel-metrics"]
 observability-traces = ["dep:rocketmq-observability"]
 test-support = []
@@ -60,6 +60,7 @@ reqwest = { version = "0.13", features = ["json"] }
 serde.workspace = true
 serde_json.workspace = true
 serde_json_any_key.workspace = true
+socket2 = "0.6"
 tokio.workspace = true
 tokio-util.workspace = true
 thiserror.workspace = true
@@ -67,7 +68,7 @@ tracing.workspace = true
 trait-variant.workspace = true
 uuid.workspace = true
 
-arc-swap = { version = "1.9", optional = true }
+arc-swap = { version = "1.9" }
 rcgen = { version = "0.14", optional = true }
 rustls-native-certs = { version = "0.8", optional = true }
 tokio-rustls = { version = "0.26", optional = true }
@@ -86,6 +87,24 @@ harness = false
 [[bench]]
 name = "p0_overhead"
 harness = false
+
+[[bench]]
+name = "write_pipeline"
+harness = false
+
+[[bench]]
+name = "admission_pending_hooks"
+harness = false
+required-features = ["test-support"]
+
+[[bench]]
+name = "session_client"
+harness = false
+
+[[bench]]
+name = "network_io"
+harness = false
+required-features = ["tls", "test-support"]
 
 [target.'cfg(unix)'.dev-dependencies]
 libc = "0.2.186"

@@ -16,7 +16,6 @@ use std::fmt;
 use std::future::Future;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
 use std::time::Instant;
 
 use rocketmq_runtime::OperationContext;
@@ -29,10 +28,9 @@ use rocketmq_runtime::TaskId;
 use rocketmq_runtime::TaskKind;
 
 use crate::admission::AdmissionClass;
-use crate::admission::AdmissionController;
 use crate::admission::AdmissionError;
 use crate::admission::AdmissionResource;
-use crate::admission::AdmissionScope;
+use crate::admission::AdmissionScopeHandle;
 use crate::admission::PartialFramePermit;
 use crate::request_ordering::RequestOrdering;
 use crate::request_ordering::RequestSequencer;
@@ -86,8 +84,7 @@ impl From<RuntimeError> for SessionDispatchError {
 /// for any declared ordering predecessor, converts queued capacity into a
 /// processor permit, and runs under the session's bounded operation context.
 pub(crate) struct SessionExecutor {
-    admission: Arc<AdmissionController>,
-    scope: AdmissionScope,
+    admission: AdmissionScopeHandle,
     request_group: TaskGroup,
     operation: OperationContext,
     sequencer: RequestSequencer,
@@ -95,14 +92,9 @@ pub(crate) struct SessionExecutor {
 }
 
 impl SessionExecutor {
-    pub(crate) fn try_new(
-        session_group: &TaskGroup,
-        admission: Arc<AdmissionController>,
-        scope: AdmissionScope,
-    ) -> RuntimeResult<Self> {
+    pub(crate) fn try_new(session_group: &TaskGroup, admission: AdmissionScopeHandle) -> RuntimeResult<Self> {
         Ok(Self {
             admission,
-            scope,
             request_group: session_group.clone(),
             operation: OperationContext::without_deadline(TaskKind::Worker),
             sequencer: RequestSequencer::default(),
@@ -133,7 +125,7 @@ impl SessionExecutor {
         }
         let queued = match self
             .admission
-            .try_acquire(AdmissionResource::Queued, self.scope, retained_bytes, class)
+            .try_acquire(AdmissionResource::Queued, retained_bytes, class)
         {
             Ok(queued) => queued,
             Err(error) => {
@@ -145,7 +137,7 @@ impl SessionExecutor {
         };
         let inflight = match partial_frame {
             Some(partial_frame) => {
-                match partial_frame.try_rebind(&self.admission, AdmissionResource::Inflight, self.scope, class) {
+                match partial_frame.try_rebind(&self.admission, AdmissionResource::Inflight, class) {
                     Ok(inflight) => inflight,
                     Err((retained_partial, error)) => {
                         return Err(SessionDispatchError::Admission {
@@ -157,10 +149,9 @@ impl SessionExecutor {
             }
             None => self
                 .admission
-                .try_acquire(AdmissionResource::Inflight, self.scope, retained_bytes, class)?,
+                .try_acquire(AdmissionResource::Inflight, retained_bytes, class)?,
         };
         let admission = self.admission.clone();
-        let scope = self.scope;
         let sequencer = self.sequencer.clone();
         let request_operation = self.operation.clone();
         let request_operation_for_task = request_operation.clone();
@@ -168,8 +159,7 @@ impl SessionExecutor {
         spawn_group
             .spawn_draining_operation(&request_operation, "rocketmq.transport.session.request", async move {
                 let ordering_guard = sequencer.acquire(ordering).await;
-                let processor = match admission.try_acquire(AdmissionResource::Processor, scope, retained_bytes, class)
-                {
+                let processor = match admission.try_acquire(AdmissionResource::Processor, retained_bytes, class) {
                     Ok(processor) => processor,
                     Err(error) => {
                         drop(ordering_guard);

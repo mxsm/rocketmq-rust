@@ -15,6 +15,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::net::IpAddr;
+use std::sync::Arc;
 use std::sync::Mutex;
 
 use rocketmq_protocol::code::request_code::RequestCode;
@@ -396,24 +397,20 @@ impl PartialFramePermit {
 
     pub(crate) fn try_rebind(
         mut self,
-        controller: &AdmissionController,
+        handle: &AdmissionScopeHandle,
         resource: AdmissionResource,
-        scope: AdmissionScope,
         class: AdmissionClass,
     ) -> Result<AdmissionPermit, (Box<Self>, AdmissionError)> {
         if class == AdmissionClass::Control {
             self.permit._permit.promote_to_control();
         }
-        let budget = match controller.scoped_budget(resource, scope) {
-            Ok(budget) => budget,
-            Err(error) => return Err((Box::new(self), error)),
-        };
+        let budget = handle.budget(resource);
         if self.permit._permit.try_rebind(&budget).is_err() {
             let error = AdmissionError {
                 resource,
                 policy: policy_for(resource),
             };
-            if let Some(observer) = &controller.observer {
+            if let Some(observer) = &handle.observer {
                 let _ = observer.try_send(AdmissionEvent {
                     resource,
                     outcome: AdmissionOutcome::Rejected,
@@ -436,6 +433,96 @@ impl PartialFramePermit {
         }
         self.permit.resource = resource;
         Ok(self.permit)
+    }
+}
+
+#[derive(Debug)]
+struct PreparedScopeBudgets {
+    connection: ResourceBudget,
+    handshake: ResourceBudget,
+    partial_frame: ResourceBudget,
+    inflight: ResourceBudget,
+    queued: ResourceBudget,
+    processor: ResourceBudget,
+}
+
+/// Prepared per-session admission capability used without registry lookup on the request path.
+#[derive(Clone, Debug)]
+pub(crate) struct AdmissionScopeHandle {
+    budgets: Arc<PreparedScopeBudgets>,
+    observer: Option<tokio::sync::mpsc::Sender<AdmissionEvent>>,
+}
+
+impl AdmissionScopeHandle {
+    fn budget(&self, resource: AdmissionResource) -> ResourceBudget {
+        match resource {
+            AdmissionResource::Connection => self.budgets.connection.clone(),
+            AdmissionResource::Handshake => self.budgets.handshake.clone(),
+            AdmissionResource::PartialFrame => self.budgets.partial_frame.clone(),
+            AdmissionResource::Inflight => self.budgets.inflight.clone(),
+            AdmissionResource::Queued => self.budgets.queued.clone(),
+            AdmissionResource::Processor => self.budgets.processor.clone(),
+        }
+    }
+
+    pub(crate) fn try_acquire(
+        &self,
+        resource: AdmissionResource,
+        bytes: usize,
+        class: AdmissionClass,
+    ) -> Result<AdmissionPermit, AdmissionError> {
+        let budget = self.budget(resource);
+        let budget_class = match class {
+            AdmissionClass::Data => BudgetClass::Data,
+            AdmissionClass::Control => BudgetClass::Control,
+        };
+        let permit = budget.try_acquire(bytes, budget_class).map_err(|_| {
+            self.observe(resource, AdmissionOutcome::Rejected, bytes);
+            AdmissionError {
+                resource,
+                policy: policy_for(resource),
+            }
+        })?;
+        self.observe(resource, AdmissionOutcome::Acquired, bytes);
+        Ok(AdmissionPermit {
+            _permit: permit,
+            observer: self.observer.clone(),
+            resource,
+            bytes,
+        })
+    }
+
+    pub(crate) fn rebind_permit(
+        &self,
+        resource: AdmissionResource,
+        mut permit: ResourcePermit,
+    ) -> Result<AdmissionPermit, AdmissionError> {
+        let budget = self.budget(resource);
+        permit.try_rebind(&budget).map_err(|_| {
+            self.observe(resource, AdmissionOutcome::Rejected, permit.bytes());
+            AdmissionError {
+                resource,
+                policy: policy_for(resource),
+            }
+        })?;
+        let bytes = permit.bytes();
+        self.observe(resource, AdmissionOutcome::Acquired, bytes);
+        Ok(AdmissionPermit {
+            _permit: permit,
+            observer: self.observer.clone(),
+            resource,
+            bytes,
+        })
+    }
+
+    fn observe(&self, resource: AdmissionResource, outcome: AdmissionOutcome, bytes: usize) {
+        if let Some(observer) = &self.observer {
+            let _ = observer.try_send(AdmissionEvent {
+                resource,
+                outcome,
+                bytes,
+            });
+        }
     }
 }
 
@@ -581,39 +668,17 @@ impl AdmissionController {
         })
     }
 
-    pub(crate) fn rebind_permit(
-        &self,
-        resource: AdmissionResource,
-        scope: AdmissionScope,
-        mut permit: ResourcePermit,
-    ) -> Result<AdmissionPermit, AdmissionError> {
-        let budget = self.scoped_budget(resource, scope)?;
-        permit.try_rebind(&budget).map_err(|_| {
-            if let Some(observer) = &self.observer {
-                let _ = observer.try_send(AdmissionEvent {
-                    resource,
-                    outcome: AdmissionOutcome::Rejected,
-                    bytes: permit.bytes(),
-                });
-            }
-            AdmissionError {
-                resource,
-                policy: policy_for(resource),
-            }
-        })?;
-        let bytes = permit.bytes();
-        if let Some(observer) = &self.observer {
-            let _ = observer.try_send(AdmissionEvent {
-                resource,
-                outcome: AdmissionOutcome::Acquired,
-                bytes,
-            });
-        }
-        Ok(AdmissionPermit {
-            _permit: permit,
+    pub(crate) fn prepare_scope(&self, scope: AdmissionScope) -> Result<AdmissionScopeHandle, AdmissionError> {
+        Ok(AdmissionScopeHandle {
+            budgets: Arc::new(PreparedScopeBudgets {
+                connection: self.scoped_budget(AdmissionResource::Connection, scope)?,
+                handshake: self.scoped_budget(AdmissionResource::Handshake, scope)?,
+                partial_frame: self.scoped_budget(AdmissionResource::PartialFrame, scope)?,
+                inflight: self.scoped_budget(AdmissionResource::Inflight, scope)?,
+                queued: self.scoped_budget(AdmissionResource::Queued, scope)?,
+                processor: self.scoped_budget(AdmissionResource::Processor, scope)?,
+            }),
             observer: self.observer.clone(),
-            resource,
-            bytes,
         })
     }
 
@@ -847,5 +912,47 @@ fn resource_snapshot(budget: &ResourceBudget) -> ResourceSnapshot {
         current_count: snapshot.current_count,
         current_bytes: snapshot.current_bytes,
         rejected_count: usize::try_from(snapshot.rejected_count).unwrap_or(usize::MAX),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::IpAddr;
+    use std::net::Ipv4Addr;
+
+    use super::AdmissionClass;
+    use super::AdmissionController;
+    use super::AdmissionLimits;
+    use super::AdmissionResource;
+    use super::AdmissionScope;
+
+    #[test]
+    fn prepared_scope_reuses_cached_budgets_on_request_path() {
+        let controller = AdmissionController::new(AdmissionLimits::default());
+        let scope = AdmissionScope::new(IpAddr::V4(Ipv4Addr::LOCALHOST))
+            .with_tenant(7)
+            .with_session(11);
+        let handle = controller
+            .prepare_scope(scope)
+            .expect("prepare session admission scope");
+        let prepared_keys = controller
+            .scoped
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len();
+
+        for _ in 0..1_000 {
+            let permit = handle
+                .try_acquire(AdmissionResource::Inflight, 128, AdmissionClass::Data)
+                .expect("cached session budget remains available");
+            drop(permit);
+        }
+
+        let final_keys = controller
+            .scoped
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len();
+        assert_eq!(final_keys, prepared_keys);
     }
 }

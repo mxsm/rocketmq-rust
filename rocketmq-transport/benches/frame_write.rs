@@ -18,6 +18,8 @@ use std::io;
 use std::io::IoSlice;
 use std::net::SocketAddr;
 use std::pin::Pin;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::task::Context;
 use std::task::Poll;
@@ -70,6 +72,49 @@ impl AsyncWrite for DiscardWriter {
     }
 }
 
+struct CountingWriter {
+    checksum: Arc<AtomicU64>,
+}
+
+impl CountingWriter {
+    fn touch(&self, bytes: &[u8]) {
+        let checksum = bytes.iter().fold(0_u64, |sum, byte| {
+            sum.wrapping_mul(16777619).wrapping_add(u64::from(*byte))
+        });
+        self.checksum.fetch_xor(black_box(checksum), Ordering::Relaxed);
+    }
+}
+
+impl AsyncWrite for CountingWriter {
+    fn poll_write(self: Pin<&mut Self>, _context: &mut Context<'_>, buffer: &[u8]) -> Poll<io::Result<usize>> {
+        self.touch(buffer);
+        Poll::Ready(Ok(buffer.len()))
+    }
+
+    fn poll_write_vectored(
+        self: Pin<&mut Self>,
+        _context: &mut Context<'_>,
+        buffers: &[IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        for buffer in buffers {
+            self.touch(buffer);
+        }
+        Poll::Ready(Ok(buffers.iter().map(|buffer| buffer.len()).sum()))
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        true
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+}
+
 fn frame_with_body(body_bytes: usize) -> EncodedFrame {
     EncodedFrame::from_command(
         RemotingCommand::create_remoting_command(10_100)
@@ -85,35 +130,60 @@ fn benchmark_frame_write(c: &mut Criterion) {
         .build()
         .expect("benchmark runtime");
     let mut group = c.benchmark_group("transport_frame_write");
-    for body_bytes in [128, 4 * 1024, 64 * 1024] {
+    for body_bytes in [
+        128,
+        4 * 1024,
+        16 * 1024,
+        64 * 1024,
+        256 * 1024,
+        1024 * 1024,
+        4 * 1024 * 1024,
+    ] {
         let frame = frame_with_body(body_bytes);
         group.throughput(Throughput::Bytes(frame.encoded_len() as u64));
+        let mut plain_writer = FrameWriter::plaintext(DiscardWriter);
         group.bench_with_input(
             BenchmarkId::new("plain_vectored", body_bytes),
             &frame,
             |benchmark, frame| {
-                benchmark.to_async(&runtime).iter(|| async {
-                    let mut writer = FrameWriter::plaintext(DiscardWriter);
-                    writer
-                        .write_frame(black_box(frame))
-                        .await
+                benchmark.iter(|| {
+                    runtime
+                        .block_on(plain_writer.write_frame(black_box(frame)))
                         .expect("discard plaintext write");
                 });
             },
         );
+        let checksum = Arc::new(AtomicU64::new(0));
+        let mut counting_writer = FrameWriter::plaintext(CountingWriter {
+            checksum: checksum.clone(),
+        });
+        group.bench_with_input(
+            BenchmarkId::new("plain_counting", body_bytes),
+            &frame,
+            |benchmark, frame| {
+                benchmark.iter(|| {
+                    runtime
+                        .block_on(counting_writer.write_frame(black_box(frame)))
+                        .expect("counting plaintext write");
+                });
+            },
+        );
+        black_box(checksum.load(Ordering::Relaxed));
+        let mut tls_writer = FrameWriter::new(
+            DiscardWriter,
+            FrameWriteMode::TlsCoalesced {
+                max_plaintext_frame_bytes: frame.encoded_len(),
+            },
+        )
+        .expect("bounded TLS writer");
         group.bench_with_input(
             BenchmarkId::new("tls_coalesced", body_bytes),
             &frame,
             |benchmark, frame| {
-                benchmark.to_async(&runtime).iter(|| async {
-                    let mut writer = FrameWriter::new(
-                        DiscardWriter,
-                        FrameWriteMode::TlsCoalesced {
-                            max_plaintext_frame_bytes: frame.encoded_len(),
-                        },
-                    )
-                    .expect("bounded TLS writer");
-                    writer.write_frame(black_box(frame)).await.expect("discard TLS write");
+                benchmark.iter(|| {
+                    runtime
+                        .block_on(tls_writer.write_frame(black_box(frame)))
+                        .expect("discard TLS write");
                 });
             },
         );

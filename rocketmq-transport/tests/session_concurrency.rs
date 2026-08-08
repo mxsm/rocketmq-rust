@@ -222,8 +222,15 @@ async fn session_writer_reports_bounded_queue_and_write_diagnostics() {
 
     let initial = session.writer_snapshot();
     assert!(initial.capacity > 0);
+    assert_eq!(initial.capacity, initial.control_capacity + initial.data_capacity);
+    assert!(initial.control_capacity > 0);
+    assert!(initial.data_capacity > 0);
     assert_eq!(initial.queued_items, 0);
     assert_eq!(initial.queued_bytes, 0);
+    assert_eq!(initial.control_queued_items, 0);
+    assert_eq!(initial.control_queued_bytes, 0);
+    assert_eq!(initial.data_queued_items, 0);
+    assert_eq!(initial.data_queued_bytes, 0);
 
     peer.send_command(RemotingCommand::create_remoting_command(RequestCode::HeartBeat).set_opaque(7))
         .await
@@ -241,6 +248,10 @@ async fn session_writer_reports_bounded_queue_and_write_diagnostics() {
     assert_eq!(completed.failed, 0);
     assert_eq!(completed.queued_items, 0);
     assert_eq!(completed.queued_bytes, 0);
+    assert_eq!(completed.control_queued_items, 0);
+    assert_eq!(completed.control_queued_bytes, 0);
+    assert_eq!(completed.data_queued_items, 0);
+    assert_eq!(completed.data_queued_bytes, 0);
     assert_eq!(completed.oldest_queue_age_millis, None);
 
     finish_session(runtime, service, peer, runner).await;

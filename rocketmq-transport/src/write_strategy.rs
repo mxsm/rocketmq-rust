@@ -17,6 +17,7 @@ use std::io::IoSlice;
 use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::Instant;
 
 use bytes::Bytes;
 use bytes::BytesMut;
@@ -55,7 +56,7 @@ pub(crate) struct QueuedWrite {
     pub(crate) deadline: Option<RequestDeadline>,
     pub(crate) target: String,
     pub(crate) progress: Option<Arc<QueuedWriteProgress>>,
-    pub(crate) queue_id: Option<u64>,
+    pub(crate) enqueued_at: Option<Instant>,
 }
 
 impl QueuedWrite {
@@ -66,7 +67,7 @@ impl QueuedWrite {
         deadline: Option<RequestDeadline>,
         target: String,
         progress: Option<Arc<QueuedWriteProgress>>,
-        queue_id: u64,
+        enqueued_at: Instant,
     ) -> Self {
         Self {
             operation: WriterOperation::Send(payload),
@@ -75,26 +76,19 @@ impl QueuedWrite {
             deadline,
             target,
             progress,
-            queue_id: Some(queue_id),
+            enqueued_at: Some(enqueued_at),
         }
     }
 
-    pub(crate) fn close(completion: oneshot::Sender<rocketmq_error::RocketMQResult<()>>) -> Self {
-        Self {
-            operation: WriterOperation::Close,
-            completion,
-            permit: None,
-            deadline: None,
-            target: String::new(),
-            progress: None,
-            queue_id: None,
+    pub(crate) fn encoded_len(&self) -> usize {
+        match &self.operation {
+            WriterOperation::Send(payload) => payload.encoded_len(),
         }
     }
 }
 
 pub(crate) enum WriterOperation {
     Send(OutboundPayload),
-    Close,
 }
 
 pub(crate) enum OutboundPayload {
@@ -128,16 +122,7 @@ impl OutboundPayload {
     where
         W: AsyncWrite + Unpin,
     {
-        match self {
-            Self::Frame(frame) => writer.write_frame(frame).await,
-            Self::Batch { frames, .. } => {
-                for frame in frames {
-                    writer.write_frame(frame).await?;
-                }
-                Ok(())
-            }
-            Self::Contiguous(bytes) => writer.write_bytes(bytes).await,
-        }
+        writer.write_payloads(&[self], 64).await
     }
 }
 
@@ -146,10 +131,22 @@ impl OutboundPayload {
 pub enum FrameWriteMode {
     /// Preserve prefix, header, and body through to vectored plaintext writes.
     PlainVectored,
+    /// Pass immutable frame segments to a TLS writer that supports vectored input.
+    TlsVectored {
+        /// Maximum encoded RocketMQ plaintext bytes accepted for one TLS record input.
+        max_plaintext_frame_bytes: usize,
+    },
     /// Coalesce one frame at a time for TLS, rejecting frames above the configured plaintext bound.
     TlsCoalesced {
         /// Maximum encoded RocketMQ plaintext bytes accepted for one TLS write.
         max_plaintext_frame_bytes: usize,
+    },
+    /// Coalesce small TLS plaintext and preserve vectored input above the measured crossover.
+    TlsAuto {
+        /// Maximum encoded RocketMQ plaintext bytes accepted for one TLS write.
+        max_plaintext_frame_bytes: usize,
+        /// Payloads at or below this size are coalesced before entering rustls.
+        coalesce_below_bytes: usize,
     },
 }
 
@@ -202,11 +199,16 @@ where
             mode,
             FrameWriteMode::TlsCoalesced {
                 max_plaintext_frame_bytes: 0
+            } | FrameWriteMode::TlsVectored {
+                max_plaintext_frame_bytes: 0
+            } | FrameWriteMode::TlsAuto {
+                max_plaintext_frame_bytes: 0,
+                ..
             }
         ) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "TLS coalescing requires a non-zero frame-byte bound",
+                "TLS writing requires a non-zero frame-byte bound",
             ));
         }
         Ok(Self {
@@ -257,34 +259,73 @@ where
     /// their configured coalescing bound.
     pub async fn write_frame(&mut self, frame: &EncodedFrame) -> io::Result<()> {
         self.ensure_healthy()?;
-        let mode = self.mode;
-        if let FrameWriteMode::TlsCoalesced {
-            max_plaintext_frame_bytes,
-        } = mode
-        {
-            if frame.encoded_len() > max_plaintext_frame_bytes {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!(
-                        "encoded frame is {} bytes, exceeding TLS plaintext coalescing limit \
-                         {max_plaintext_frame_bytes}",
-                        frame.encoded_len()
-                    ),
-                ));
-            }
+        if let Some(max_plaintext_frame_bytes) = tls_plaintext_bound(self.mode) {
+            validate_tls_frame(frame, max_plaintext_frame_bytes)?;
         }
+        let mode = self.mode;
         let mut cancellation = WriteCancellationGuard::new(&mut self.poisoned);
-        let result = match mode {
-            FrameWriteMode::PlainVectored => write_vectored_frame(&mut self.io, frame).await,
-            FrameWriteMode::TlsCoalesced { .. } => {
+        match mode {
+            FrameWriteMode::PlainVectored | FrameWriteMode::TlsVectored { .. } => {
+                write_vectored_segments(&mut self.io, &frame.segments(), 64).await?;
+            }
+            FrameWriteMode::TlsAuto {
+                coalesce_below_bytes, ..
+            } if frame.encoded_len() > coalesce_below_bytes => {
+                write_vectored_segments(&mut self.io, &frame.segments(), 64).await?;
+            }
+            FrameWriteMode::TlsCoalesced { .. } | FrameWriteMode::TlsAuto { .. } => {
                 self.tls_buffer.clear();
                 frame.copy_to(&mut self.tls_buffer);
-                let result = write_contiguous(&mut self.io, self.tls_buffer.as_ref()).await;
-                self.tls_buffer.clear();
-                result
+                write_contiguous(&mut self.io, self.tls_buffer.as_ref()).await?;
+                if self.tls_buffer.capacity() > 512 * 1024 {
+                    self.tls_buffer = BytesMut::new();
+                }
             }
-        };
-        result?;
+        }
+        self.io.flush().await?;
+        cancellation.complete();
+        Ok(())
+    }
+
+    /// Writes a bounded ordered payload batch and flushes exactly once.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first validation, write, or flush error and poisons the writer
+    /// when socket progress may have occurred.
+    pub(crate) async fn write_payloads(&mut self, payloads: &[&OutboundPayload], max_iov: usize) -> io::Result<()> {
+        self.ensure_healthy()?;
+        if payloads.is_empty() {
+            return Ok(());
+        }
+        let mode = self.mode;
+        if let Some(max_plaintext_frame_bytes) = tls_plaintext_bound(mode) {
+            validate_tls_payloads(payloads, max_plaintext_frame_bytes)?;
+        }
+        let payload_bytes = payloads
+            .iter()
+            .fold(0usize, |total, payload| total.saturating_add(payload.encoded_len()));
+        let mut cancellation = WriteCancellationGuard::new(&mut self.poisoned);
+        match mode {
+            FrameWriteMode::PlainVectored | FrameWriteMode::TlsVectored { .. } => {
+                let segments = payload_segments(payloads);
+                write_vectored_segments(&mut self.io, &segments, max_iov.max(1)).await?;
+            }
+            FrameWriteMode::TlsAuto {
+                coalesce_below_bytes, ..
+            } if payload_bytes > coalesce_below_bytes => {
+                let segments = payload_segments(payloads);
+                write_vectored_segments(&mut self.io, &segments, max_iov.max(1)).await?;
+            }
+            FrameWriteMode::TlsCoalesced { .. } | FrameWriteMode::TlsAuto { .. } => {
+                for payload in payloads {
+                    write_coalesced_payload(&mut self.io, &mut self.tls_buffer, payload).await?;
+                }
+                if self.tls_buffer.capacity() > 512 * 1024 {
+                    self.tls_buffer = BytesMut::new();
+                }
+            }
+        }
         self.io.flush().await?;
         cancellation.complete();
         Ok(())
@@ -300,6 +341,14 @@ where
     /// Returns the underlying socket or flush error and poisons the writer.
     pub async fn write_bytes(&mut self, bytes: &[u8]) -> io::Result<()> {
         self.ensure_healthy()?;
+        if let Some(max_plaintext_frame_bytes) = tls_plaintext_bound(self.mode) {
+            if bytes.len() > max_plaintext_frame_bytes {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "contiguous payload exceeds TLS plaintext bound",
+                ));
+            }
+        }
         let mut cancellation = WriteCancellationGuard::new(&mut self.poisoned);
         write_contiguous(&mut self.io, bytes).await?;
         self.io.flush().await?;
@@ -340,28 +389,119 @@ where
     }
 }
 
-async fn write_vectored_frame<W>(io: &mut W, frame: &EncodedFrame) -> io::Result<()>
+fn tls_plaintext_bound(mode: FrameWriteMode) -> Option<usize> {
+    match mode {
+        FrameWriteMode::PlainVectored => None,
+        FrameWriteMode::TlsVectored {
+            max_plaintext_frame_bytes,
+        }
+        | FrameWriteMode::TlsCoalesced {
+            max_plaintext_frame_bytes,
+        }
+        | FrameWriteMode::TlsAuto {
+            max_plaintext_frame_bytes,
+            ..
+        } => Some(max_plaintext_frame_bytes),
+    }
+}
+
+fn validate_tls_payloads(payloads: &[&OutboundPayload], max_plaintext_frame_bytes: usize) -> io::Result<()> {
+    for payload in payloads {
+        match payload {
+            OutboundPayload::Frame(frame) => validate_tls_frame(frame, max_plaintext_frame_bytes)?,
+            OutboundPayload::Batch { frames, .. } => {
+                for frame in frames {
+                    validate_tls_frame(frame, max_plaintext_frame_bytes)?;
+                }
+            }
+            OutboundPayload::Contiguous(bytes) if bytes.len() > max_plaintext_frame_bytes => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "contiguous payload exceeds TLS plaintext bound",
+                ));
+            }
+            OutboundPayload::Contiguous(_) => {}
+        }
+    }
+    Ok(())
+}
+
+fn validate_tls_frame(frame: &EncodedFrame, max_plaintext_frame_bytes: usize) -> io::Result<()> {
+    if frame.encoded_len() > max_plaintext_frame_bytes {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "encoded frame is {} bytes, exceeding TLS plaintext coalescing limit {max_plaintext_frame_bytes}",
+                frame.encoded_len()
+            ),
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn payload_segments<'a>(payloads: &'a [&'a OutboundPayload]) -> Vec<&'a [u8]> {
+    let mut segments = Vec::new();
+    for payload in payloads {
+        match payload {
+            OutboundPayload::Frame(frame) => segments.extend(frame.segments()),
+            OutboundPayload::Batch { frames, .. } => {
+                for frame in frames {
+                    segments.extend(frame.segments());
+                }
+            }
+            OutboundPayload::Contiguous(bytes) => segments.push(bytes.as_ref()),
+        }
+    }
+    segments
+}
+
+async fn write_coalesced_payload<W>(io: &mut W, buffer: &mut BytesMut, payload: &OutboundPayload) -> io::Result<()>
 where
     W: AsyncWrite + Unpin,
 {
-    let segments = frame.segments();
+    match payload {
+        OutboundPayload::Frame(frame) => {
+            buffer.clear();
+            frame.copy_to(buffer);
+            write_contiguous(io, buffer.as_ref()).await
+        }
+        OutboundPayload::Batch { frames, .. } => {
+            for frame in frames {
+                buffer.clear();
+                frame.copy_to(buffer);
+                write_contiguous(io, buffer.as_ref()).await?;
+            }
+            Ok(())
+        }
+        OutboundPayload::Contiguous(bytes) => write_contiguous(io, bytes).await,
+    }
+}
+
+async fn write_vectored_segments<W>(io: &mut W, segments: &[&[u8]], max_iov: usize) -> io::Result<()>
+where
+    W: AsyncWrite + Unpin,
+{
     let mut segment_index = 0;
     let mut segment_offset = 0;
-    skip_empty_segments(&segments, &mut segment_index, &mut segment_offset);
+    skip_empty_segments(segments, &mut segment_index, &mut segment_offset);
     while segment_index < segments.len() {
-        let current = &segments[segment_index][segment_offset..];
-        let second = segments.get(segment_index + 1).copied().unwrap_or_default();
-        let third = segments.get(segment_index + 2).copied().unwrap_or_default();
-        let slices = [IoSlice::new(current), IoSlice::new(second), IoSlice::new(third)];
-        let slice_count = segments.len() - segment_index;
-        let written = io.write_vectored(&slices[..slice_count]).await?;
+        let window_end = segment_index.saturating_add(max_iov).min(segments.len());
+        let mut slices = Vec::with_capacity(window_end - segment_index);
+        slices.push(IoSlice::new(&segments[segment_index][segment_offset..]));
+        slices.extend(
+            segments[segment_index + 1..window_end]
+                .iter()
+                .map(|segment| IoSlice::new(segment)),
+        );
+        let written = io.write_vectored(&slices).await?;
         if written == 0 {
             return Err(io::Error::new(
                 io::ErrorKind::WriteZero,
                 "vectored frame write made no progress",
             ));
         }
-        advance_segments(&segments, &mut segment_index, &mut segment_offset, written)?;
+        advance_segments(segments, &mut segment_index, &mut segment_offset, written)?;
     }
     Ok(())
 }

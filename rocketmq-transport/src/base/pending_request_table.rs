@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -91,12 +91,7 @@ pub struct PendingRequestToken {
 pub struct PendingRequestOwner {
     table_id: u64,
     id: u64,
-    state: Arc<Mutex<PendingOwnerState>>,
-}
-
-#[derive(Debug)]
-struct PendingOwnerState {
-    accepting: bool,
+    accepting: Arc<AtomicBool>,
 }
 
 impl PendingRequestOwner {
@@ -104,15 +99,12 @@ impl PendingRequestOwner {
         Self {
             table_id,
             id,
-            state: Arc::new(Mutex::new(PendingOwnerState { accepting: true })),
+            accepting: Arc::new(AtomicBool::new(true)),
         }
     }
 
     fn retire(&self) {
-        self.state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .accepting = false;
+        self.accepting.store(false, Ordering::Release);
     }
 }
 
@@ -123,26 +115,19 @@ struct PendingRequest {
     deadline: RequestDeadline,
     timeout_millis: u64,
     _permit: ResourcePermit,
-    completion: Box<dyn PendingCompletion>,
+    completion: PendingCompletion,
 }
 
-trait PendingCompletion: Send + Sync {
-    fn complete(&self, result: RocketMQResult<RemotingCommand>);
+enum PendingCompletion {
+    OneShot(tokio::sync::oneshot::Sender<RocketMQResult<RemotingCommand>>),
 }
 
-struct OneShotCompletion {
-    sender: Mutex<Option<tokio::sync::oneshot::Sender<RocketMQResult<RemotingCommand>>>>,
-}
-
-impl PendingCompletion for OneShotCompletion {
-    fn complete(&self, result: RocketMQResult<RemotingCommand>) {
-        let sender = self
-            .sender
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
-        if let Some(sender) = sender {
-            let _ = sender.send(result);
+impl PendingCompletion {
+    fn complete(self, result: RocketMQResult<RemotingCommand>) {
+        match self {
+            Self::OneShot(sender) => {
+                let _ = sender.send(result);
+            }
         }
     }
 }
@@ -344,8 +329,7 @@ impl PendingRequestTable {
         let deadline = deadline.capped(self.inner.max_request_age);
         deadline.ensure_before_send("pending_request")?;
         self.validate_owner(owner)?;
-        let owner_state = owner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if !owner_state.accepting {
+        if !owner.accepting.load(Ordering::Acquire) {
             return Err(RocketMQError::network_connection_failed(
                 "pending_request",
                 "connection owner is retired; reconnect before sending another request",
@@ -377,9 +361,7 @@ impl PendingRequestTable {
             deadline,
             timeout_millis,
             _permit: permit,
-            completion: Box::new(OneShotCompletion {
-                sender: Mutex::new(Some(sender)),
-            }),
+            completion: PendingCompletion::OneShot(sender),
         };
 
         let result = match self.inner.entries.entry(key) {
@@ -396,7 +378,20 @@ impl PendingRequestTable {
                 format!("opaque {opaque} is already reserved on this connection"),
             )),
         };
-        drop(owner_state);
+        if result.is_ok() && !owner.accepting.load(Ordering::Acquire) {
+            if let Some(pending) = self.take_token(token) {
+                pending
+                    .completion
+                    .complete(Err(RocketMQError::network_connection_failed(
+                        "pending_request",
+                        "connection owner retired while registering request",
+                    )));
+            }
+            return Err(RocketMQError::network_connection_failed(
+                "pending_request",
+                "connection owner is retired; reconnect before sending another request",
+            ));
+        }
         result
     }
 
@@ -454,8 +449,7 @@ impl PendingRequestTable {
         if owner.table_id != self.inner.table_id {
             return 0;
         }
-        let mut owner_state = owner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        owner_state.accepting = false;
+        owner.accepting.store(false, Ordering::Release);
         let tokens = self.tokens_for_owner(owner.id);
         let mut completed = 0;
         for token in tokens {
@@ -465,7 +459,6 @@ impl PendingRequestTable {
             pending.completion.complete(Err(cause()));
             completed += 1;
         }
-        drop(owner_state);
         completed
     }
 
@@ -642,7 +635,6 @@ impl PendingRequest {
 #[cfg(test)]
 mod owner_epoch_tests {
     use std::collections::HashMap;
-    use std::sync::mpsc;
 
     use cheetah_string::CheetahString;
 
@@ -665,36 +657,14 @@ mod owner_epoch_tests {
     }
 
     #[test]
-    fn registration_linearizes_behind_the_owner_close_gate() {
+    fn retired_owner_rejects_registration_without_leaking() {
         let table = PendingRequestTable::new();
         let owner = table.new_owner();
-        let mut closing = owner.state.lock().unwrap();
-        let (started_tx, started_rx) = mpsc::channel();
-        let (result_tx, result_rx) = mpsc::channel();
-        let registering_table = table.clone();
-        let registering_owner = owner.clone();
-        let registration = std::thread::spawn(move || {
-            let (sender, _receiver) = tokio::sync::oneshot::channel();
-            started_tx.send(()).unwrap();
-            let result = registering_table.register_for_owner(
-                &registering_owner,
-                7,
-                RequestDeadline::from_timeout_millis(30_000),
-                sender,
-            );
-            result_tx.send(result.is_ok()).unwrap();
-        });
+        owner.retire();
+        let (sender, _receiver) = tokio::sync::oneshot::channel();
+        let result = table.register_for_owner(&owner, 7, RequestDeadline::from_timeout_millis(30_000), sender);
 
-        started_rx.recv().unwrap();
-        assert!(
-            result_rx.recv_timeout(Duration::from_millis(20)).is_err(),
-            "registration must wait while close owns the epoch gate"
-        );
-        closing.accepting = false;
-        drop(closing);
-
-        assert!(!result_rx.recv_timeout(Duration::from_secs(1)).unwrap());
-        registration.join().unwrap();
+        assert!(result.is_err());
         assert!(table.is_empty());
     }
 }

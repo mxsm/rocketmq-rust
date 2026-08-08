@@ -13,9 +13,12 @@
 // limitations under the License.
 
 pub use crate::semantic::metrics::RPC_LATENCY;
+pub use crate::semantic::metrics::TRANSPORT_INBOUND_DECODED_PLAINTEXT_BYTES;
 pub use crate::semantic::metrics::TRANSPORT_LIFECYCLE_EVENTS_TOTAL;
 pub use crate::semantic::metrics::TRANSPORT_LIFECYCLE_LISTENER_LATENCY;
-pub use crate::semantic::metrics::TRANSPORT_NETWORK_BYTES;
+pub use crate::semantic::metrics::TRANSPORT_OUTBOUND_ACCEPTED_PLAINTEXT_BYTES;
+pub use crate::semantic::metrics::TRANSPORT_OUTBOUND_ATTEMPTED_PLAINTEXT_BYTES;
+pub use crate::semantic::metrics::TRANSPORT_OUTBOUND_WRITTEN_PLAINTEXT_BYTES;
 pub use crate::semantic::metrics::TRANSPORT_REQUESTS_TOTAL;
 pub use crate::semantic::metrics::TRANSPORT_REQUEST_LATENCY;
 
@@ -36,8 +39,9 @@ fn duration_millis_u64(duration: Duration) -> u64 {
 
 /// Records the metrics for one remoting request against one explicit telemetry runtime.
 ///
-/// The guard records request volume and inbound bytes when it starts. Dropping it records request
-/// latency and, unless a terminal outcome was selected explicitly, one cancellation outcome.
+/// The guard records request volume when it starts. The transport decoder records exact inbound
+/// frame bytes separately. Dropping the guard records request latency and, unless a terminal
+/// outcome was selected explicitly, one cancellation outcome.
 pub struct RequestMetricsGuard {
     metrics: RemotingMetrics,
     start: Instant,
@@ -48,9 +52,8 @@ pub struct RequestMetricsGuard {
 
 impl RequestMetricsGuard {
     #[inline]
-    pub fn start(metrics: RemotingMetrics, request_code: i32, request_bytes: u64, is_long_polling: bool) -> Self {
+    pub fn start(metrics: RemotingMetrics, request_code: i32, _request_bytes: u64, is_long_polling: bool) -> Self {
         metrics.record_requests_total(1);
-        metrics.record_network_bytes(request_bytes);
 
         Self {
             metrics,
@@ -137,7 +140,16 @@ impl RemotingMetrics {
     pub fn record_request_latency(&self, _latency_ms: u64) {}
 
     #[inline]
-    pub fn record_network_bytes(&self, _bytes: u64) {}
+    pub fn record_outbound_attempted_plaintext_bytes(&self, _bytes: u64) {}
+
+    #[inline]
+    pub fn record_outbound_accepted_plaintext_bytes(&self, _bytes: u64) {}
+
+    #[inline]
+    pub fn record_outbound_written_plaintext_bytes(&self, _bytes: u64) {}
+
+    #[inline]
+    pub fn record_inbound_decoded_plaintext_bytes(&self, _bytes: u64) {}
 
     #[inline]
     pub fn record_lifecycle_event(&self, _event: &'static str, _result: &'static str) {}
@@ -169,7 +181,10 @@ pub struct RemotingMetrics {
 struct RemotingMetricInstruments {
     requests_total: opentelemetry::metrics::Counter<u64>,
     request_latency: opentelemetry::metrics::Histogram<u64>,
-    network_bytes: opentelemetry::metrics::Counter<u64>,
+    outbound_attempted_plaintext_bytes: opentelemetry::metrics::Counter<u64>,
+    outbound_accepted_plaintext_bytes: opentelemetry::metrics::Counter<u64>,
+    outbound_written_plaintext_bytes: opentelemetry::metrics::Counter<u64>,
+    inbound_decoded_plaintext_bytes: opentelemetry::metrics::Counter<u64>,
     lifecycle_events: opentelemetry::metrics::Counter<u64>,
     lifecycle_listener_latency: opentelemetry::metrics::Histogram<u64>,
     rpc_latency: opentelemetry::metrics::Histogram<u64>,
@@ -232,10 +247,37 @@ impl RemotingMetrics {
     }
 
     #[inline]
-    pub fn record_network_bytes(&self, bytes: u64) {
+    pub fn record_outbound_attempted_plaintext_bytes(&self, bytes: u64) {
         if bytes != 0 && self.is_active() {
             if let Some(instruments) = &self.instruments {
-                instruments.network_bytes.add(bytes, &[]);
+                instruments.outbound_attempted_plaintext_bytes.add(bytes, &[]);
+            }
+        }
+    }
+
+    #[inline]
+    pub fn record_outbound_accepted_plaintext_bytes(&self, bytes: u64) {
+        if bytes != 0 && self.is_active() {
+            if let Some(instruments) = &self.instruments {
+                instruments.outbound_accepted_plaintext_bytes.add(bytes, &[]);
+            }
+        }
+    }
+
+    #[inline]
+    pub fn record_outbound_written_plaintext_bytes(&self, bytes: u64) {
+        if bytes != 0 && self.is_active() {
+            if let Some(instruments) = &self.instruments {
+                instruments.outbound_written_plaintext_bytes.add(bytes, &[]);
+            }
+        }
+    }
+
+    #[inline]
+    pub fn record_inbound_decoded_plaintext_bytes(&self, bytes: u64) {
+        if bytes != 0 && self.is_active() {
+            if let Some(instruments) = &self.instruments {
+                instruments.inbound_decoded_plaintext_bytes.add(bytes, &[]);
             }
         }
     }
@@ -310,9 +352,24 @@ impl RemotingMetricInstruments {
             .with_unit("ms")
             .build();
 
-        let network_bytes = meter
-            .u64_counter(TRANSPORT_NETWORK_BYTES)
-            .with_description("Total network bytes processed by remoting")
+        let outbound_attempted_plaintext_bytes = meter
+            .u64_counter(TRANSPORT_OUTBOUND_ATTEMPTED_PLAINTEXT_BYTES)
+            .with_description("Plaintext bytes offered to the transport writer")
+            .with_unit("By")
+            .build();
+        let outbound_accepted_plaintext_bytes = meter
+            .u64_counter(TRANSPORT_OUTBOUND_ACCEPTED_PLAINTEXT_BYTES)
+            .with_description("Plaintext bytes accepted by the transport writer")
+            .with_unit("By")
+            .build();
+        let outbound_written_plaintext_bytes = meter
+            .u64_counter(TRANSPORT_OUTBOUND_WRITTEN_PLAINTEXT_BYTES)
+            .with_description("Plaintext bytes completely written and flushed")
+            .with_unit("By")
+            .build();
+        let inbound_decoded_plaintext_bytes = meter
+            .u64_counter(TRANSPORT_INBOUND_DECODED_PLAINTEXT_BYTES)
+            .with_description("Plaintext bytes in successfully decoded frames")
             .with_unit("By")
             .build();
 
@@ -337,7 +394,10 @@ impl RemotingMetricInstruments {
         Self {
             requests_total,
             request_latency,
-            network_bytes,
+            outbound_attempted_plaintext_bytes,
+            outbound_accepted_plaintext_bytes,
+            outbound_written_plaintext_bytes,
+            inbound_decoded_plaintext_bytes,
             lifecycle_events,
             lifecycle_listener_latency,
             rpc_latency,
@@ -379,7 +439,10 @@ mod tests {
 
         metrics.record_requests_total(1);
         metrics.record_request_latency(3);
-        metrics.record_network_bytes(256);
+        metrics.record_outbound_attempted_plaintext_bytes(256);
+        metrics.record_outbound_accepted_plaintext_bytes(256);
+        metrics.record_outbound_written_plaintext_bytes(256);
+        metrics.record_inbound_decoded_plaintext_bytes(256);
         metrics.record_lifecycle_event("connected", "queued");
         metrics.record_lifecycle_listener_latency(2, "connected");
         metrics.record_rpc_latency(5, 10, 0, false, RESULT_SUCCESS);

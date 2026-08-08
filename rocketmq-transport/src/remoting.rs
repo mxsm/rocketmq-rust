@@ -79,7 +79,8 @@ pub(crate) mod inner {
     use tracing::Instrument;
 
     use crate::base::pending_request_table::PendingRequestTable;
-    use crate::net::channel::Channel;
+    use crate::hook_registry::HookRegistry;
+    use crate::hook_registry::HookSnapshot;
     use crate::runtime::connection_handler_context::ConnectionHandlerContext;
     use crate::runtime::processor::RequestProcessor;
     use crate::runtime::RPCHook;
@@ -91,7 +92,7 @@ pub(crate) mod inner {
 
     pub(crate) struct RemotingGeneralHandler<RP> {
         pub(crate) request_processor: RP,
-        rpc_hooks: parking_lot::RwLock<Vec<Arc<dyn RPCHook>>>,
+        rpc_hooks: HookRegistry,
         pub(crate) response_table: PendingRequestTable,
         telemetry: TransportTelemetry,
     }
@@ -117,7 +118,7 @@ pub(crate) mod inner {
         ) -> Self {
             Self {
                 request_processor,
-                rpc_hooks: parking_lot::RwLock::new(rpc_hooks),
+                rpc_hooks: HookRegistry::new(rpc_hooks),
                 response_table,
                 telemetry,
             }
@@ -177,8 +178,15 @@ pub(crate) mod inner {
                 return Ok(());
             }
             let oneway_rpc = cmd.is_oneway_rpc();
+            let hook_snapshot = self.rpc_hooks.snapshot();
             //before handle request hooks
-            let exception = self.do_before_rpc_hooks(ctx.channel(), Some(&mut cmd)).err();
+            let exception = self
+                .do_before_rpc_hooks_with_snapshot(
+                    hook_snapshot.as_deref(),
+                    ctx.channel().remote_address(),
+                    Some(&mut cmd),
+                )
+                .err();
             //handle error if return have
             match handle_error(ctx, oneway_rpc, opaque, exception).await {
                 HandleErrorResult::ReturnMethod => {
@@ -202,7 +210,14 @@ pub(crate) mod inner {
                 }
             };
 
-            let exception = self.do_after_rpc_hooks(ctx.channel(), &cmd, response.as_mut()).err();
+            let exception = self
+                .do_after_rpc_hooks_with_snapshot(
+                    hook_snapshot.as_deref(),
+                    ctx.channel().remote_address(),
+                    &cmd,
+                    response.as_mut(),
+                )
+                .err();
 
             match handle_error(ctx, oneway_rpc, opaque, exception).await {
                 HandleErrorResult::ReturnMethod => {
@@ -258,62 +273,45 @@ pub(crate) mod inner {
             }
         }
 
-        fn do_after_rpc_hooks(
-            &self,
-            channel: &Channel,
-            request: &RemotingCommand,
-            response: Option<&mut RemotingCommand>,
-        ) -> rocketmq_error::RocketMQResult<()> {
-            self.do_after_rpc_hooks_with_addr(channel.remote_address(), request, response)
+        pub(crate) fn hook_snapshot(&self) -> Option<Arc<HookSnapshot>> {
+            self.rpc_hooks.snapshot()
         }
 
-        pub fn do_before_rpc_hooks(
+        pub(crate) fn do_before_rpc_hooks_with_snapshot(
             &self,
-            channel: &Channel,
-            request: Option<&mut RemotingCommand>,
-        ) -> rocketmq_error::RocketMQResult<()> {
-            self.do_before_rpc_hooks_with_addr(channel.remote_address(), request)
-        }
-
-        pub fn do_before_rpc_hooks_with_addr(
-            &self,
+            snapshot: Option<&HookSnapshot>,
             remote_address: SocketAddr,
             request: Option<&mut RemotingCommand>,
         ) -> rocketmq_error::RocketMQResult<()> {
-            if let Some(request) = request {
-                let hooks = self.rpc_hooks.read().clone();
-                for hook in &hooks {
+            if let (Some(snapshot), Some(request)) = (snapshot, request) {
+                for hook in snapshot.hooks() {
                     hook.do_before_request(remote_address, request)?;
                 }
             }
             Ok(())
         }
 
-        pub fn do_after_rpc_hooks_with_addr(
+        pub(crate) fn do_after_rpc_hooks_with_snapshot(
             &self,
+            snapshot: Option<&HookSnapshot>,
             remote_address: SocketAddr,
             request: &RemotingCommand,
             response: Option<&mut RemotingCommand>,
         ) -> rocketmq_error::RocketMQResult<()> {
-            if let Some(response) = response {
-                let hooks = self.rpc_hooks.read().clone();
-                for hook in &hooks {
+            if let (Some(snapshot), Some(response)) = (snapshot, response) {
+                for hook in snapshot.hooks() {
                     hook.do_after_response(remote_address, request, response)?;
                 }
             }
             Ok(())
         }
 
-        pub fn has_rpc_hooks(&self) -> bool {
-            !self.rpc_hooks.read().is_empty()
-        }
-
         pub fn register_rpc_hook(&self, hook: Arc<dyn RPCHook>) {
-            self.rpc_hooks.write().push(hook);
+            self.rpc_hooks.register(hook);
         }
 
         pub fn clear_rpc_hook(&self) {
-            self.rpc_hooks.write().clear();
+            self.rpc_hooks.clear();
         }
     }
 

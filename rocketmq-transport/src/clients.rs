@@ -13,7 +13,8 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-pub use client::Client;
+pub(crate) use client::Client;
+pub use client::Client as TransportSession;
 use rocketmq_error::RocketMQError;
 
 use crate::base::response_future::ResponseFuture;
@@ -24,7 +25,6 @@ use crate::runtime::processor::RequestProcessor;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
 mod client;
-pub mod connection_pool;
 pub(crate) mod nameserver_selector;
 pub mod reconnect;
 pub mod rocketmq_tokio_client;

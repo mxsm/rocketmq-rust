@@ -13,9 +13,12 @@
 // limitations under the License.
 
 pub mod server_config;
+pub mod socket_options;
 pub mod tls_config;
 
 pub use server_config::ServerConfig;
+pub use socket_options::SocketOptions;
+pub use socket_options::TcpKeepaliveConfig;
 pub use tls_config::TlsClientAuth;
 pub use tls_config::TlsClientConfig;
 pub use tls_config::TlsConfig;

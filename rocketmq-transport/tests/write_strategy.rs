@@ -226,6 +226,38 @@ async fn tls_coalescing_enforces_its_plaintext_bound_and_uses_scalar_writes() {
 }
 
 #[tokio::test]
+async fn tls_auto_coalesces_small_frames_and_vectors_large_frames() {
+    let small = encoded_frame(10_020, b"small-auto-frame");
+    let large = EncodedFrame::from_command(
+        RemotingCommand::create_remoting_command(10_021)
+            .set_opaque(10_021)
+            .set_body(vec![0x5a; 64 * 1024]),
+    )
+    .expect("large auto frame");
+    let mode = FrameWriteMode::TlsAuto {
+        max_plaintext_frame_bytes: large.encoded_len(),
+        coalesce_below_bytes: 16 * 1024,
+    };
+
+    let (small_io, small_record) = ScriptedWriter::new(usize::MAX, StopBehavior::Never);
+    let mut small_writer = FrameWriter::new(small_io, mode).expect("small auto writer");
+    small_writer.write_frame(&small).await.expect("small auto frame");
+    {
+        let small_record = small_record.lock().expect("small auto record");
+        assert_eq!(small_record.scalar_calls, 1);
+        assert_eq!(small_record.vectored_calls, 0);
+    }
+
+    let (large_io, large_record) = ScriptedWriter::new(usize::MAX, StopBehavior::Never);
+    let mut large_writer = FrameWriter::new(large_io, mode).expect("large auto writer");
+    large_writer.write_frame(&large).await.expect("large auto frame");
+    let large_record = large_record.lock().expect("large auto record");
+    assert_eq!(large_record.scalar_calls, 0);
+    assert_eq!(large_record.vectored_calls, 1);
+    assert!(large_record.largest_vector >= 2);
+}
+
+#[tokio::test]
 async fn partial_io_error_poisons_writer_and_blocks_later_frames_without_socket_access() {
     let frame = encoded_frame(10_004, b"partial-error-body");
     let (io, record) = ScriptedWriter::new(4, StopBehavior::ErrorAfter(10));
@@ -618,10 +650,7 @@ async fn partial_failure_closes_session_and_fails_every_already_queued_frame() {
         first.1.expect_err("first queued frame should fail"),
         second.1.expect_err("second queued frame should fail"),
     ];
-    assert!(errors.iter().any(|error| error.contains("injected connection failure")));
-    assert!(errors
-        .iter()
-        .any(|error| error.contains("poisoned by a previous frame failure")));
+    assert!(errors.iter().all(|error| error.contains("injected connection failure")));
     assert!(control.failure_poll.load(Ordering::Acquire) >= 2);
     assert_eq!(
         control.write_polls.load(Ordering::Acquire),

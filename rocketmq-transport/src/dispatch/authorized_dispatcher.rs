@@ -44,6 +44,7 @@ use crate::admission::AdmissionClass;
 use crate::admission::AdmissionController;
 use crate::admission::AdmissionError;
 use crate::admission::AdmissionScope;
+use crate::admission::AdmissionScopeHandle;
 use crate::admission::FullPolicy;
 use crate::admission::PartialFramePermit;
 use crate::base::pending_request_table::materialize_and_estimate_remoting_command_retained_bytes;
@@ -113,11 +114,11 @@ impl AuthorizedDispatchBoundary {
     pub(crate) fn session(
         self: &Arc<Self>,
         task_group: &TaskGroup,
-        scope: AdmissionScope,
+        scope: AdmissionScopeHandle,
     ) -> Result<AuthorizedDispatchSession, RuntimeError> {
         Ok(AuthorizedDispatchSession {
             boundary: Arc::clone(self),
-            executor: SessionExecutor::try_new(task_group, Arc::clone(&self.admission), scope)?,
+            executor: SessionExecutor::try_new(task_group, scope)?,
         })
     }
 }
@@ -308,6 +309,11 @@ where
         let retained_bytes = materialize_and_estimate_remoting_command_retained_bytes(&mut command);
         let session_id = self.next_embedded_session.fetch_add(1, Ordering::Relaxed).max(1);
         let scope = AdmissionScope::new(IpAddr::V4(Ipv4Addr::LOCALHOST)).with_session(session_id);
+        let scope = self
+            .boundary
+            .admission
+            .prepare_scope(scope)
+            .map_err(DispatchError::Admission)?;
         let session = self.boundary.session(task_group, scope)?;
         let (response, receiver): (ResponseSink, LocalResponseReceiver) = ResponseSink::local();
         let local_address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);

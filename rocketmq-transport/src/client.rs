@@ -32,6 +32,7 @@ use crate::base::pending_request_table::PendingRequestLimits;
 use crate::base::pending_request_table::PendingRequestTable;
 use crate::base::pending_request_table::PendingRequestUsage;
 use crate::codec::remoting_command_codec::FrameLimits;
+use crate::config::SocketOptions;
 use crate::config::TlsConfig;
 use crate::connection::Connection;
 use crate::deadline::RequestDeadline;
@@ -48,6 +49,7 @@ pub struct ConnectedTransport {
     local_addr: SocketAddr,
     remote_addr: SocketAddr,
     negotiated_tls: bool,
+    socket_nodelay: bool,
 }
 
 impl ConnectedTransport {
@@ -57,6 +59,10 @@ impl ConnectedTransport {
 
     pub fn remote_addr(&self) -> SocketAddr {
         self.remote_addr
+    }
+
+    pub fn socket_nodelay(&self) -> bool {
+        self.socket_nodelay
     }
 
     pub fn into_parts(self) -> (Connection, SocketAddr, SocketAddr) {
@@ -88,10 +94,36 @@ pub async fn connect_with_config_and_telemetry(
     deadline: RequestDeadline,
     telemetry: TransportTelemetry,
 ) -> RocketMQResult<ConnectedTransport> {
+    connect_with_config_options_and_telemetry(
+        address,
+        tls_config,
+        frame_limits,
+        SocketOptions::default(),
+        deadline,
+        telemetry,
+    )
+    .await
+}
+
+/// Connects with explicit symmetric TCP socket policy applied before TLS negotiation.
+pub async fn connect_with_config_options_and_telemetry(
+    address: &str,
+    tls_config: &TlsConfig,
+    frame_limits: FrameLimits,
+    socket_options: SocketOptions,
+    deadline: RequestDeadline,
+    telemetry: TransportTelemetry,
+) -> RocketMQResult<ConnectedTransport> {
     let stream = deadline
         .timeout(tokio::net::TcpStream::connect(address))
         .await
         .map_err(|_| RocketMQError::network_connection_timeout(address, deadline.budget_millis()))??;
+    socket_options
+        .apply(&stream)
+        .map_err(|error| RocketMQError::network_connection_failed(address, error.to_string()))?;
+    let socket_nodelay = stream
+        .nodelay()
+        .map_err(|error| RocketMQError::network_connection_failed(address, error.to_string()))?;
     let local_addr = stream.local_addr()?;
     let remote_addr = stream.peer_addr()?;
     let negotiated_tls = tls_config.enable;
@@ -118,6 +150,7 @@ pub async fn connect_with_config_and_telemetry(
         local_addr,
         remote_addr,
         negotiated_tls,
+        socket_nodelay,
     })
 }
 
