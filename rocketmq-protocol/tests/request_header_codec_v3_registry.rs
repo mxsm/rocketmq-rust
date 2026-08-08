@@ -600,6 +600,34 @@ fn registry() -> Vec<RegisteredSchema> {
             },
         ),
         register::<rocketmq_protocol::protocol::header::view_message_request_header::ViewMessageRequestHeader>(),
+        // Compatibility-sensitive ACL, user, controller, nameserver, and response schemas.
+        register::<rocketmq_protocol::protocol::header::add_broker_request_header::AddBrokerRequestHeader>(),
+        register::<rocketmq_protocol::protocol::header::controller::apply_broker_id_response_header::ApplyBrokerIdResponseHeader>(),
+        register::<rocketmq_protocol::protocol::header::controller::get_next_broker_id_request_header::GetNextBrokerIdRequestHeader>(),
+        register::<rocketmq_protocol::protocol::header::controller::get_replica_info_request_header::GetReplicaInfoRequestHeader>(),
+        register::<rocketmq_protocol::protocol::header::create_acl_request_header::CreateAclRequestHeader>(),
+        register::<rocketmq_protocol::protocol::header::create_user_request_header::CreateUserRequestHeader>(),
+        register::<rocketmq_protocol::protocol::header::delete_acl_request_header::DeleteAclRequestHeader>(),
+        register::<rocketmq_protocol::protocol::header::delete_user_request_header::DeleteUserRequestHeader>(),
+        register::<rocketmq_protocol::protocol::header::get_acl_request_header::GetAclRequestHeader>(),
+        register::<rocketmq_protocol::protocol::header::get_all_producer_info_request_header::GetAllProducerInfoRequestHeader>(),
+        register::<rocketmq_protocol::protocol::header::get_consumer_listby_group_response_header::GetConsumerListByGroupResponseHeader>(),
+        register_value(
+            &rocketmq_protocol::protocol::header::get_lite_topic_info_request_header::GetLiteTopicInfoRequestHeader {
+                parent_topic: CheetahString::from_static_str("registry"),
+                lite_topic: CheetahString::from_static_str("registry"),
+            },
+        ),
+        register::<rocketmq_protocol::protocol::header::get_user_request_headers::GetUserRequestHeader>(),
+        register::<rocketmq_protocol::protocol::header::list_acl_request_header::ListAclRequestHeader>(),
+        register::<rocketmq_protocol::protocol::header::list_users_request_header::ListUsersRequestHeader>(),
+        register::<rocketmq_protocol::protocol::header::namesrv::kv_config_header::GetKVConfigResponseHeader>(),
+        register::<rocketmq_protocol::protocol::header::namesrv::register_broker_header::RegisterBrokerResponseHeader>(),
+        register::<rocketmq_protocol::protocol::header::resume_check_half_message_request_header::ResumeCheckHalfMessageRequestHeader>(),
+        register::<rocketmq_protocol::protocol::header::update_acl_request_header::UpdateAclRequestHeader>(),
+        register::<rocketmq_protocol::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetResponseHeader>(),
+        register::<rocketmq_protocol::protocol::header::update_user_request_header::UpdateUserRequestHeader>(),
+        register::<rocketmq_protocol::protocol::header::view_message_response_header::ViewMessageResponseHeader>(),
     ]
 }
 

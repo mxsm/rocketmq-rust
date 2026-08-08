@@ -198,6 +198,193 @@
         "rust": "rocketmq-protocol/src/protocol/header/controller/apply_broker_id_request_header.rs",
         "java": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/controller/register/ApplyBrokerIdRequestHeader.java"
       }
+    },
+    {
+      "rustType": "GetNextBrokerIdRequestHeader",
+      "field": "clusterName",
+      "semantic": "literal:",
+      "owner": "rocketmq-rust protocol maintainers",
+      "reason": "Preserves the public non-optional Rust field and legacy V2 missing-field behavior for the nullable Java value",
+      "referenceSource": {
+        "rust": "rocketmq-protocol/src/protocol/header/controller/get_next_broker_id_request_header.rs",
+        "java": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/controller/register/GetNextBrokerIdRequestHeader.java"
+      }
+    },
+    {
+      "rustType": "GetNextBrokerIdRequestHeader",
+      "field": "brokerName",
+      "semantic": "literal:",
+      "owner": "rocketmq-rust protocol maintainers",
+      "reason": "Preserves the public non-optional Rust field and legacy V2 missing-field behavior for the nullable Java value",
+      "referenceSource": {
+        "rust": "rocketmq-protocol/src/protocol/header/controller/get_next_broker_id_request_header.rs",
+        "java": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/controller/register/GetNextBrokerIdRequestHeader.java"
+      }
+    },
+    {
+      "rustType": "GetReplicaInfoRequestHeader",
+      "field": "brokerName",
+      "semantic": "literal:",
+      "owner": "rocketmq-rust protocol maintainers",
+      "reason": "Preserves the public non-optional Rust field and legacy V2 missing-field behavior for the nullable Java value",
+      "referenceSource": {
+        "rust": "rocketmq-protocol/src/protocol/header/controller/get_replica_info_request_header.rs",
+        "java": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/controller/GetReplicaInfoRequestHeader.java"
+      }
+    },
+    {
+      "rustType": "CreateAclRequestHeader",
+      "field": "subject",
+      "semantic": "literal:",
+      "owner": "rocketmq-rust protocol maintainers",
+      "reason": "Preserves the public non-optional Rust field and legacy V2 missing-field behavior for the nullable Java value",
+      "referenceSource": {
+        "rust": "rocketmq-protocol/src/protocol/header/create_acl_request_header.rs",
+        "java": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/CreateAclRequestHeader.java"
+      }
+    },
+    {
+      "rustType": "CreateUserRequestHeader",
+      "field": "username",
+      "semantic": "literal:",
+      "owner": "rocketmq-rust protocol maintainers",
+      "reason": "Preserves the public non-optional Rust field and legacy V2 missing-field behavior for the nullable Java value",
+      "referenceSource": {
+        "rust": "rocketmq-protocol/src/protocol/header/create_user_request_header.rs",
+        "java": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/CreateUserRequestHeader.java"
+      }
+    },
+    {
+      "rustType": "DeleteAclRequestHeader",
+      "field": "subject",
+      "semantic": "literal:",
+      "owner": "rocketmq-rust protocol maintainers",
+      "reason": "Preserves the public non-optional Rust field and legacy V2 missing-field behavior for the nullable Java value",
+      "referenceSource": {
+        "rust": "rocketmq-protocol/src/protocol/header/delete_acl_request_header.rs",
+        "java": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/DeleteAclRequestHeader.java"
+      }
+    },
+    {
+      "rustType": "DeleteUserRequestHeader",
+      "field": "username",
+      "semantic": "literal:",
+      "owner": "rocketmq-rust protocol maintainers",
+      "reason": "Preserves the public non-optional Rust field and legacy V2 missing-field behavior for the nullable Java value",
+      "referenceSource": {
+        "rust": "rocketmq-protocol/src/protocol/header/delete_user_request_header.rs",
+        "java": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/DeleteUserRequestHeader.java"
+      }
+    },
+    {
+      "rustType": "GetAclRequestHeader",
+      "field": "subject",
+      "semantic": "literal:",
+      "owner": "rocketmq-rust protocol maintainers",
+      "reason": "Preserves the public non-optional Rust field and legacy V2 missing-field behavior for the nullable Java value",
+      "referenceSource": {
+        "rust": "rocketmq-protocol/src/protocol/header/get_acl_request_header.rs",
+        "java": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/GetAclRequestHeader.java"
+      }
+    },
+    {
+      "rustType": "GetLiteTopicInfoRequestHeader",
+      "field": "parentTopic",
+      "semantic": "literal:",
+      "owner": "rocketmq-rust protocol maintainers",
+      "reason": "Preserves the public non-optional Rust field and legacy V2 missing-field behavior for the nullable Java value",
+      "referenceSource": {
+        "rust": "rocketmq-protocol/src/protocol/header/get_lite_topic_info_request_header.rs",
+        "java": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/GetLiteTopicInfoRequestHeader.java"
+      }
+    },
+    {
+      "rustType": "GetLiteTopicInfoRequestHeader",
+      "field": "liteTopic",
+      "semantic": "literal:",
+      "owner": "rocketmq-rust protocol maintainers",
+      "reason": "Preserves the public non-optional Rust field and legacy V2 missing-field behavior for the nullable Java value",
+      "referenceSource": {
+        "rust": "rocketmq-protocol/src/protocol/header/get_lite_topic_info_request_header.rs",
+        "java": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/GetLiteTopicInfoRequestHeader.java"
+      }
+    },
+    {
+      "rustType": "GetUserRequestHeader",
+      "field": "username",
+      "semantic": "literal:",
+      "owner": "rocketmq-rust protocol maintainers",
+      "reason": "Preserves the public non-optional Rust field and legacy V2 missing-field behavior for the nullable Java value",
+      "referenceSource": {
+        "rust": "rocketmq-protocol/src/protocol/header/get_user_request_headers.rs",
+        "java": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/GetUserRequestHeader.java"
+      }
+    },
+    {
+      "rustType": "ListAclRequestHeader",
+      "field": "subjectFilter",
+      "semantic": "literal:",
+      "owner": "rocketmq-rust protocol maintainers",
+      "reason": "Preserves the public non-optional Rust field and legacy V2 missing-field behavior for the nullable Java value",
+      "referenceSource": {
+        "rust": "rocketmq-protocol/src/protocol/header/list_acl_request_header.rs",
+        "java": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/ListAclsRequestHeader.java"
+      }
+    },
+    {
+      "rustType": "ListAclRequestHeader",
+      "field": "resourceFilter",
+      "semantic": "literal:",
+      "owner": "rocketmq-rust protocol maintainers",
+      "reason": "Preserves the public non-optional Rust field and legacy V2 missing-field behavior for the nullable Java value",
+      "referenceSource": {
+        "rust": "rocketmq-protocol/src/protocol/header/list_acl_request_header.rs",
+        "java": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/ListAclsRequestHeader.java"
+      }
+    },
+    {
+      "rustType": "ListUsersRequestHeader",
+      "field": "filter",
+      "semantic": "literal:",
+      "owner": "rocketmq-rust protocol maintainers",
+      "reason": "Preserves the public non-optional Rust field and legacy V2 missing-field behavior for the nullable Java value",
+      "referenceSource": {
+        "rust": "rocketmq-protocol/src/protocol/header/list_users_request_header.rs",
+        "java": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/ListUsersRequestHeader.java"
+      }
+    },
+    {
+      "rustType": "ResumeCheckHalfMessageRequestHeader",
+      "field": "topic",
+      "semantic": "literal:",
+      "owner": "rocketmq-rust protocol maintainers",
+      "reason": "Preserves the public non-optional Rust field and legacy V2 missing-field behavior for the nullable Java value",
+      "referenceSource": {
+        "rust": "rocketmq-protocol/src/protocol/header/resume_check_half_message_request_header.rs",
+        "java": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/ResumeCheckHalfMessageRequestHeader.java"
+      }
+    },
+    {
+      "rustType": "UpdateAclRequestHeader",
+      "field": "subject",
+      "semantic": "literal:",
+      "owner": "rocketmq-rust protocol maintainers",
+      "reason": "Preserves the public non-optional Rust field and legacy V2 missing-field behavior for the nullable Java value",
+      "referenceSource": {
+        "rust": "rocketmq-protocol/src/protocol/header/update_acl_request_header.rs",
+        "java": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/UpdateAclRequestHeader.java"
+      }
+    },
+    {
+      "rustType": "UpdateUserRequestHeader",
+      "field": "username",
+      "semantic": "literal:",
+      "owner": "rocketmq-rust protocol maintainers",
+      "reason": "Preserves the public non-optional Rust field and legacy V2 missing-field behavior for the nullable Java value",
+      "referenceSource": {
+        "rust": "rocketmq-protocol/src/protocol/header/update_user_request_header.rs",
+        "java": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/UpdateUserRequestHeader.java"
+      }
     }
   ],
   "nameMappings": [

@@ -12,11 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::get_all_producer_info_request_header::GetAllProducerInfoRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.GetAllProducerInfoRequestHeader"
+)]
 pub struct GetAllProducerInfoRequestHeader {}
 
 #[cfg(test)]

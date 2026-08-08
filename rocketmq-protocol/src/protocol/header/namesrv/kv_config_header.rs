@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::{RequestHeaderCodecV2, RequestHeaderCodecV3};
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -76,7 +76,11 @@ impl GetKVConfigRequestHeader {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::namesrv::kv_config_header::GetKVConfigResponseHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.namesrv.GetKVConfigResponseHeader"
+)]
 pub struct GetKVConfigResponseHeader {
     pub value: Option<CheetahString>,
 }
