@@ -182,7 +182,9 @@ impl Validators {
 mod tests {
     use std::collections::HashMap;
 
+    use bytes::Bytes;
     use rocketmq_model::common::config::TopicConfig;
+    use rocketmq_model::common::message::message_single::Message;
 
     use super::*;
 
@@ -190,6 +192,23 @@ mod tests {
     fn check_group_blank_group() {
         let result = Validators::check_group("");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn check_message_accepts_exact_body_limit_and_rejects_one_byte_over() {
+        let producer_config = ProducerConfig::default();
+        let max_message_size = producer_config.max_message_size() as usize;
+        let exact = Message::builder()
+            .topic("TopicTest")
+            .body(Bytes::from(vec![0_u8; max_message_size]))
+            .build_unchecked();
+        let oversized = Message::builder()
+            .topic("TopicTest")
+            .body(Bytes::from(vec![0_u8; max_message_size + 1]))
+            .build_unchecked();
+
+        assert!(Validators::check_message(Some(&exact), &producer_config).is_ok());
+        assert!(Validators::check_message(Some(&oversized), &producer_config).is_err());
     }
 
     #[test]

@@ -509,7 +509,23 @@ impl MessageExtEncoder {
 mod tests {
     use std::sync::Arc;
 
+    use bytes::Bytes;
+    use cheetah_string::CheetahString;
+
     use super::*;
+
+    fn message_with_body_size(body_size: usize) -> MessageExtBrokerInner {
+        let mut message = MessageExtBrokerInner::default();
+        message
+            .message_ext_inner
+            .message
+            .set_topic(CheetahString::from_static_str("TopicTest"));
+        message
+            .message_ext_inner
+            .message
+            .set_body(Some(Bytes::from(vec![0_u8; body_size])));
+        message
+    }
 
     #[test]
     fn message_ext_encoder_new_creates_encoder_with_correct_config() {
@@ -565,6 +581,31 @@ mod tests {
         let result = encoder.encode(&msg_inner);
 
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn encode_accepts_exact_configured_body_limit() {
+        let config = MessageStoreConfig {
+            max_message_size: 1024,
+            ..MessageStoreConfig::default()
+        };
+        let mut encoder = MessageExtEncoder::new(Arc::new(config));
+        let message = message_with_body_size(1024);
+
+        assert!(encoder.encode(&message).is_none());
+    }
+
+    #[test]
+    fn encode_rejects_body_one_byte_over_configured_limit() {
+        let config = MessageStoreConfig {
+            max_message_size: 1024,
+            ..MessageStoreConfig::default()
+        };
+        let mut encoder = MessageExtEncoder::new(Arc::new(config));
+        let message = message_with_body_size(1025);
+
+        let result = encoder.encode(&message).expect("oversized body must be rejected");
+        assert_eq!(result.put_message_status(), PutMessageStatus::MessageIllegal);
     }
 
     #[test]

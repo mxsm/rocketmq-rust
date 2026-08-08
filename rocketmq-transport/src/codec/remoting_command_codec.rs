@@ -65,7 +65,9 @@ pub struct FrameLimits {
 impl Default for FrameLimits {
     fn default() -> Self {
         Self {
-            max_frame_bytes: 4 * 1024 * 1024,
+            // Match RocketMQ Java's default frame envelope. The body remains capped at 4 MiB,
+            // while this headroom allows an exact-limit body to carry its remoting header.
+            max_frame_bytes: 16 * 1024 * 1024,
             max_header_bytes: 1024 * 1024,
             max_body_bytes: 4 * 1024 * 1024,
             initial_read_bytes: 8 * 1024,
