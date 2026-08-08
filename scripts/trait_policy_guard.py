@@ -37,6 +37,9 @@ EMPTY_PUBLIC_TRAIT = re.compile(
     r"\bpub(?:\s*\([^)]*\))?\s+trait\s+([A-Za-z_][A-Za-z0-9_]*)[^;{]*\{\s*\}",
     re.DOTALL,
 )
+MODULE_BLOCK = re.compile(
+    r"(?P<visibility>\bpub(?:\s*\([^)]*\))?\s+)?\bmod\s+[A-Za-z_][A-Za-z0-9_]*\s*\{"
+)
 
 
 def owner_for(path: str) -> str:
@@ -57,6 +60,24 @@ def in_ranges(offset: int, ranges: list[tuple[int, int]]) -> bool:
     return any(start <= offset < end for start, end in ranges)
 
 
+def private_module_ranges(masked: str) -> list[tuple[int, int]]:
+    ranges: list[tuple[int, int]] = []
+    for module in MODULE_BLOCK.finditer(masked):
+        if module.group("visibility") is not None:
+            continue
+        opening = masked.find("{", module.start(), module.end())
+        depth = 0
+        for index in range(opening, len(masked)):
+            if masked[index] == "{":
+                depth += 1
+            elif masked[index] == "}":
+                depth -= 1
+                if depth == 0:
+                    ranges.append((module.start(), index + 1))
+                    break
+    return ranges
+
+
 def following_item(masked: str, offset: int) -> str:
     match = re.search(
         r"\b(trait|impl)\s+(?:<[^>{}]*>\s*)?([A-Za-z_][A-Za-z0-9_]*)",
@@ -70,6 +91,7 @@ def following_item(masked: str, offset: int) -> str:
 def inventory_source(relative: str, source: str) -> list[dict[str, Any]]:
     masked = mask_comments_and_literals(source)
     tests = test_module_ranges(masked)
+    private_modules = private_module_ranges(masked)
     owner = owner_for(relative)
     entries: list[dict[str, Any]] = []
 
@@ -92,7 +114,7 @@ def inventory_source(relative: str, source: str) -> list[dict[str, Any]]:
             )
 
     for marker in EMPTY_PUBLIC_TRAIT.finditer(masked):
-        if in_ranges(marker.start(), tests):
+        if in_ranges(marker.start(), tests) or in_ranges(marker.start(), private_modules):
             continue
         name = marker.group(1)
         entries.append(

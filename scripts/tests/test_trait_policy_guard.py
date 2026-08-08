@@ -64,6 +64,31 @@ pub trait Capability: Send + Sync {
 
         self.assertEqual([], entries)
 
+    def test_empty_markers_inside_private_modules_are_not_public_debt(self) -> None:
+        entries = guard.inventory_source(
+            "rocketmq-protocol/src/sealed.rs",
+            """
+pub trait TopLevelMarker {}
+mod private {
+    pub trait Sealed {}
+    pub mod nested_public {
+        pub trait NestedSealed {}
+    }
+}
+pub mod public {
+    pub trait PublicMarker {}
+}
+pub(crate) mod crate_visible {
+    pub trait CrateMarker {}
+}
+""",
+        )
+
+        self.assertEqual(
+            ["trait TopLevelMarker", "trait PublicMarker", "trait CrateMarker"],
+            [entry["item"] for entry in entries],
+        )
+
     def test_mq_admin_marker_has_p2_4_owner_decision(self) -> None:
         entries = guard.inventory_source(
             "rocketmq-client/src/admin.rs",
