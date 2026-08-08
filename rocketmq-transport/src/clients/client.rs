@@ -823,7 +823,11 @@ mod lifecycle_tests {
         assert_eq!(task_group.parent_id(), service.task_group().parent_id());
         assert_eq!(task_group.lifecycle_state(), TaskGroupLifecycleState::Open);
         assert_eq!(operation.active_task_count(), 1);
-        assert_eq!(service.task_group().component_count(), baseline_components);
+        assert_eq!(
+            service.task_group().component_count(),
+            baseline_components + 1,
+            "an active connection must own one independently cancellable session child"
+        );
 
         let mut retained_client = client.clone();
         let mut retained_request = RemotingCommand::create_remoting_command(105).set_body(vec![7_u8; 4096]);

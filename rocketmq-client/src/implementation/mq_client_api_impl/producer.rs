@@ -140,7 +140,7 @@ impl MQClientAPIImpl {
             CommunicationMode::Oneway => {
                 self.remoting_client
                     .invoke_request_oneway(addr, request, timeout_millis)
-                    .await;
+                    .await?;
                 Ok(None)
             }
         }
@@ -759,8 +759,7 @@ impl MQClientAPIImpl {
         let request = heartbeat_request(heartbeat_data, self.client_config.language)?;
         self.remoting_client
             .invoke_request_oneway(addr, request, timeout_millis)
-            .await;
-        Ok(())
+            .await
     }
 
     pub async fn register_client(

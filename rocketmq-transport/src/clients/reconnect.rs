@@ -83,16 +83,6 @@ impl CircuitBreaker {
     /// * `failure_threshold` - Failures to trip circuit (e.g., 5)
     /// * `success_threshold` - Successes to close circuit (e.g., 2)
     /// * `timeout` - Wait before retrying after open (e.g., 30s)
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use std::time::Duration;
-    ///
-    /// use rocketmq_transport::CircuitBreaker;
-    ///
-    /// let breaker = CircuitBreaker::new(5, 2, Duration::from_secs(30));
-    /// ```
     pub fn new(failure_threshold: u32, success_threshold: u32, timeout: Duration) -> Self {
         Self {
             state: CircuitState::Closed,

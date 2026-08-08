@@ -33,20 +33,24 @@ use crate::admission::AdmissionController;
 use crate::admission::AdmissionError;
 use crate::admission::AdmissionResource;
 use crate::admission::AdmissionScope;
+use crate::admission::PartialFramePermit;
 use crate::request_ordering::RequestOrdering;
 use crate::request_ordering::RequestSequencer;
 
 /// Error returned before a request can enter its session-owned execution task.
 #[derive(Debug)]
 pub(crate) enum SessionDispatchError {
-    Admission(AdmissionError),
+    Admission {
+        error: AdmissionError,
+        retained_partial: Option<Box<PartialFramePermit>>,
+    },
     Closing(RuntimeError),
 }
 
 impl fmt::Display for SessionDispatchError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Admission(error) => error.fmt(formatter),
+            Self::Admission { error, .. } => error.fmt(formatter),
             Self::Closing(error) => error.fmt(formatter),
         }
     }
@@ -55,7 +59,7 @@ impl fmt::Display for SessionDispatchError {
 impl std::error::Error for SessionDispatchError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Admission(error) => Some(error),
+            Self::Admission { error, .. } => Some(error),
             Self::Closing(error) => Some(error),
         }
     }
@@ -63,7 +67,10 @@ impl std::error::Error for SessionDispatchError {
 
 impl From<AdmissionError> for SessionDispatchError {
     fn from(error: AdmissionError) -> Self {
-        Self::Admission(error)
+        Self::Admission {
+            error,
+            retained_partial: None,
+        }
     }
 }
 
@@ -107,6 +114,7 @@ impl SessionExecutor {
         &self,
         retained_bytes: usize,
         class: AdmissionClass,
+        partial_frame: Option<PartialFramePermit>,
         ordering: RequestOrdering,
         execute: F,
         reject: R,
@@ -123,12 +131,34 @@ impl SessionExecutor {
                 group_name: self.request_group.name().into(),
             }));
         }
-        let queued = self
+        let queued = match self
             .admission
-            .try_acquire(AdmissionResource::Queued, self.scope, retained_bytes, class)?;
-        let inflight = self
-            .admission
-            .try_acquire(AdmissionResource::Inflight, self.scope, retained_bytes, class)?;
+            .try_acquire(AdmissionResource::Queued, self.scope, retained_bytes, class)
+        {
+            Ok(queued) => queued,
+            Err(error) => {
+                return Err(SessionDispatchError::Admission {
+                    error,
+                    retained_partial: partial_frame.map(Box::new),
+                });
+            }
+        };
+        let inflight = match partial_frame {
+            Some(partial_frame) => {
+                match partial_frame.try_rebind(&self.admission, AdmissionResource::Inflight, self.scope, class) {
+                    Ok(inflight) => inflight,
+                    Err((retained_partial, error)) => {
+                        return Err(SessionDispatchError::Admission {
+                            error,
+                            retained_partial: Some(retained_partial),
+                        });
+                    }
+                }
+            }
+            None => self
+                .admission
+                .try_acquire(AdmissionResource::Inflight, self.scope, retained_bytes, class)?,
+        };
         let admission = self.admission.clone();
         let scope = self.scope;
         let sequencer = self.sequencer.clone();
@@ -136,7 +166,7 @@ impl SessionExecutor {
         let request_operation_for_task = request_operation.clone();
         let spawn_group = self.request_group.clone();
         spawn_group
-            .spawn_operation(&request_operation, "rocketmq.transport.session.request", async move {
+            .spawn_draining_operation(&request_operation, "rocketmq.transport.session.request", async move {
                 let ordering_guard = sequencer.acquire(ordering).await;
                 let processor = match admission.try_acquire(AdmissionResource::Processor, scope, retained_bytes, class)
                 {

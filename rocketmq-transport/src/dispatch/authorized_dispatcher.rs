@@ -45,6 +45,7 @@ use crate::admission::AdmissionController;
 use crate::admission::AdmissionError;
 use crate::admission::AdmissionScope;
 use crate::admission::FullPolicy;
+use crate::admission::PartialFramePermit;
 use crate::base::pending_request_table::materialize_and_estimate_remoting_command_retained_bytes;
 use crate::base::pending_request_table::PendingRequestLimits;
 use crate::base::pending_request_table::PendingRequestTable;
@@ -136,6 +137,7 @@ impl AuthorizedDispatchSession {
         context: RequestContext,
         command: RemotingCommand,
         retained_bytes: usize,
+        partial_frame_permit: Option<PartialFramePermit>,
         ordering: RequestOrdering,
         response: ResponseSink,
         execute: F,
@@ -174,6 +176,7 @@ impl AuthorizedDispatchSession {
         match self.executor.try_execute(
             retained_bytes,
             AdmissionClass::for_request_code(command.code()),
+            partial_frame_permit,
             ordering,
             move |operation| async move {
                 let execution = execute(operation, command);
@@ -190,11 +193,21 @@ impl AuthorizedDispatchSession {
             },
         ) {
             Ok(task_id) => Ok(DispatchOutcome::Accepted(task_id)),
-            Err(SessionDispatchError::Admission(error)) if error.policy() == FullPolicy::Reject => {
+            Err(SessionDispatchError::Admission {
+                error,
+                retained_partial,
+            }) if error.policy() == FullPolicy::Reject => {
+                let _retained_partial = retained_partial;
                 response.send(admission_response(opaque, &error)).await?;
                 Ok(DispatchOutcome::Rejected)
             }
-            Err(SessionDispatchError::Admission(error)) => Err(DispatchError::Admission(error)),
+            Err(SessionDispatchError::Admission {
+                error,
+                retained_partial,
+            }) => {
+                drop(retained_partial);
+                Err(DispatchError::Admission(error))
+            }
             Err(SessionDispatchError::Closing(error)) => Err(DispatchError::Closing(error.to_string())),
         }
     }
@@ -316,6 +329,7 @@ where
                 context,
                 command,
                 retained_bytes,
+                None,
                 ordering,
                 response,
                 move |_operation, command| async move {

@@ -12,12 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
+
 use bytes::BytesMut;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 
 use rocketmq_protocol::protocol::encoded_frame::EncodedFrame;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+
+use crate::admission::AdmissionClass;
+use crate::admission::AdmissionController;
+use crate::admission::AdmissionResource;
+use crate::admission::AdmissionScope;
+use crate::admission::PartialFramePermit;
 
 /// A decoded command together with the complete frame size retained while processing it.
 ///
@@ -26,6 +34,7 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 pub(crate) struct DecodedCommand {
     pub(crate) command: RemotingCommand,
     pub(crate) retained_frame_bytes: usize,
+    pub(crate) partial_frame_permit: Option<PartialFramePermit>,
 }
 
 /// Encodes a `RemotingCommand` into a `BytesMut` buffer.
@@ -116,6 +125,7 @@ impl RemotingCommandCodec {
         Ok(RemotingCommand::decode(src)?.map(|command| DecodedCommand {
             command,
             retained_frame_bytes: retained_frame_bytes.unwrap_or_default(),
+            partial_frame_permit: None,
         }))
     }
 }
@@ -221,14 +231,49 @@ impl Encoder<RemotingCommand> for RemotingCommandCodec {
     }
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Default)]
 pub(crate) struct SessionCommandDecoder {
     inner: RemotingCommandCodec,
+    admission: Arc<AdmissionController>,
+    scope: AdmissionScope,
+    partial_frame_permit: Option<PartialFramePermit>,
 }
 
-impl From<RemotingCommandCodec> for SessionCommandDecoder {
-    fn from(inner: RemotingCommandCodec) -> Self {
-        Self { inner }
+impl SessionCommandDecoder {
+    pub(crate) fn new(inner: RemotingCommandCodec, admission: Arc<AdmissionController>, scope: AdmissionScope) -> Self {
+        Self {
+            inner,
+            admission,
+            scope,
+            partial_frame_permit: None,
+        }
+    }
+
+    fn reserve_announced_frame(&mut self, src: &BytesMut) -> Result<(), rocketmq_error::RocketMQError> {
+        if self.partial_frame_permit.is_some() || src.len() < 4 {
+            return Ok(());
+        }
+        self.inner.validate_announced_frame(src)?;
+        let total = i32::from_be_bytes(src[..4].try_into().expect("four bytes checked"));
+        if total <= 0 {
+            return Ok(());
+        }
+        let retained_frame_bytes = usize::try_from(total)
+            .ok()
+            .and_then(|total| total.checked_add(4))
+            .ok_or_else(|| crate::error_helpers::decoding_error(usize::MAX, self.inner.limits.max_frame_bytes))?;
+        let permit = self
+            .admission
+            .try_acquire(
+                AdmissionResource::PartialFrame,
+                self.scope,
+                retained_frame_bytes,
+                AdmissionClass::Data,
+            )
+            .map_err(|error| {
+                rocketmq_error::RocketMQError::network_connection_failed("partial-frame-admission", error.to_string())
+            })?;
+        self.partial_frame_permit = Some(PartialFramePermit::new(permit));
+        Ok(())
     }
 }
 
@@ -237,7 +282,21 @@ impl Decoder for SessionCommandDecoder {
     type Item = DecodedCommand;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        self.inner.decode_with_metadata(src)
+        if let Err(error) = self.reserve_announced_frame(src) {
+            self.partial_frame_permit.take();
+            return Err(error);
+        }
+        match self.inner.decode_with_metadata(src) {
+            Ok(Some(mut decoded)) => {
+                decoded.partial_frame_permit = self.partial_frame_permit.take();
+                Ok(Some(decoded))
+            }
+            Ok(None) => Ok(None),
+            Err(error) => {
+                self.partial_frame_permit.take();
+                Err(error)
+            }
+        }
     }
 }
 

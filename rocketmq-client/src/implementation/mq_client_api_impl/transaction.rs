@@ -52,7 +52,6 @@ impl MQClientAPIImpl {
 
         self.remoting_client
             .invoke_request_oneway(addr, request, timeout_millis)
-            .await;
-        Ok(())
+            .await
     }
 }

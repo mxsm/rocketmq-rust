@@ -55,6 +55,7 @@ use crate::connection::ConnectionState;
 use crate::connection::SessionLifecycle;
 use crate::connection::SessionWriterDiagnostics;
 use crate::connection::SessionWriterSnapshot;
+use crate::deadline::RequestDeadline;
 use crate::dispatch::AuthorizedDispatchBoundary;
 use crate::dispatch::RequestContext;
 use crate::dispatch::ResponseSink;
@@ -68,6 +69,42 @@ use crate::write_strategy::WriterOperation;
 
 const SESSION_WRITER_QUEUE_CAPACITY: usize = 1024;
 const SESSION_RETIREMENT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Bounded I/O budgets applied to every transport session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SessionIoPolicy {
+    /// Maximum time a session may remain idle while waiting for the next frame.
+    pub idle_timeout: Duration,
+    /// Maximum time one socket write may remain stalled after leaving the queue.
+    pub max_write_stall: Duration,
+}
+
+impl Default for SessionIoPolicy {
+    fn default() -> Self {
+        Self {
+            idle_timeout: Duration::from_secs(120),
+            max_write_stall: Duration::from_secs(30),
+        }
+    }
+}
+
+impl SessionIoPolicy {
+    fn validate(self) -> RocketMQResult<Self> {
+        if self.idle_timeout.is_zero() {
+            return Err(RocketMQError::network_connection_failed(
+                "transport-session-policy",
+                "idle timeout must be greater than zero",
+            ));
+        }
+        if self.max_write_stall.is_zero() {
+            return Err(RocketMQError::network_connection_failed(
+                "transport-session-policy",
+                "maximum write stall must be greater than zero",
+            ));
+        }
+        Ok(self)
+    }
+}
 
 pub trait RequestProcessor: Send + Sync + 'static {
     fn process(
@@ -328,7 +365,7 @@ pub struct TransportListener {
     tls: TlsServerRuntime,
     dispatch: Arc<AuthorizedDispatchBoundary>,
     handshake_timeout: Duration,
-    idle_timeout: Duration,
+    io_policy: SessionIoPolicy,
     principal: Option<Principal>,
     next_session: AtomicU64,
     telemetry: TransportTelemetry,
@@ -352,7 +389,7 @@ impl TransportListener {
             tls,
             dispatch,
             handshake_timeout,
-            idle_timeout: Duration::from_secs(120),
+            io_policy: SessionIoPolicy::default(),
             principal: None,
             next_session: AtomicU64::new(1),
             telemetry: TransportTelemetry::noop(),
@@ -360,7 +397,14 @@ impl TransportListener {
     }
 
     pub fn with_idle_timeout(mut self, idle_timeout: Duration) -> Self {
-        self.idle_timeout = idle_timeout;
+        self.io_policy.idle_timeout = idle_timeout;
+        self
+    }
+
+    /// Applies explicit idle and write-stall budgets to accepted sessions.
+    #[must_use]
+    pub fn with_io_policy(mut self, io_policy: SessionIoPolicy) -> Self {
+        self.io_policy = io_policy;
         self
     }
 
@@ -394,6 +438,7 @@ impl TransportListener {
     where
         H: ConnectionHandler,
     {
+        let io_policy = self.io_policy.validate()?;
         let cancellation = self.task_group.cancellation_token();
         let admission = self.dispatch.admission_controller();
         loop {
@@ -416,12 +461,21 @@ impl TransportListener {
             ) else {
                 continue;
             };
-            let session_group = self.task_group.clone();
+            let session_group = match self
+                .task_group
+                .try_child(format!("rocketmq.transport.session.{session_id}"))
+            {
+                Ok(session_group) => session_group,
+                Err(_) => {
+                    drop(stream);
+                    return Ok(());
+                }
+            };
             let tls = self.tls.clone();
             let admission = admission.clone();
             let dispatch = self.dispatch.clone();
             let handshake_timeout = self.handshake_timeout;
-            let idle_timeout = self.idle_timeout;
+            let session_io_policy = io_policy;
             let principal = self.principal.clone();
             let handler = handler.clone();
             let telemetry = self.telemetry.clone();
@@ -439,7 +493,7 @@ impl TransportListener {
                             stream,
                             remote_addr,
                             NegotiationTimeouts {
-                                protocol_detection: idle_timeout,
+                                protocol_detection: io_policy.idle_timeout,
                                 tls_handshake: handshake_timeout,
                             },
                         ) => negotiated,
@@ -459,7 +513,7 @@ impl TransportListener {
                         dispatch,
                         principal,
                         peer_is_tls,
-                        idle_timeout,
+                        session_io_policy,
                         handler,
                     )
                     .await;
@@ -483,19 +537,19 @@ async fn run_framed_session<H>(
     dispatch: Arc<AuthorizedDispatchBoundary>,
     principal: Option<Principal>,
     peer_is_tls: bool,
-    idle_timeout: Duration,
+    io_policy: SessionIoPolicy,
     handler: Arc<H>,
 ) where
     H: ConnectionHandler,
 {
     let connection_id = connection.connection_id().clone();
     let telemetry = connection.telemetry();
-    let (mut frame_writer, mut stream) = connection.into_session_io();
+    let admission = dispatch.admission_controller();
+    let (mut frame_writer, mut stream) = connection.into_session_io(admission.clone(), scope);
     let executor = match dispatch.session(&task_group, scope) {
         Ok(executor) => executor,
         Err(_) => return,
     };
-    let admission = dispatch.admission_controller();
     let (state_tx, state_rx) = tokio::sync::watch::channel(ConnectionState::Healthy);
     let lifecycle = Arc::new(SessionLifecycle::new());
     let (writer, mut writes) = tokio::sync::mpsc::channel::<QueuedWrite>(SESSION_WRITER_QUEUE_CAPACITY);
@@ -520,22 +574,34 @@ async fn run_framed_session<H>(
                     let deadline = next.deadline;
                     let target = next.target;
                     let progress = next.progress;
-                    let deadline_expired = deadline.is_some_and(|deadline| deadline.is_expired());
+                    let deadline_expired = deadline.is_some_and(RequestDeadline::is_expired);
+                    let mut write_timed_out = deadline_expired;
                     let result = if deadline_expired {
                         Err(RocketMQError::network_deadline_exceeded_before_send(target))
                     } else {
                         if let Some(progress) = progress.as_ref() {
                             progress.start_write();
                         }
-                        payload
-                            .write_to(&mut frame_writer)
-                            .await
-                            .map_err(|error| RocketMQError::network_connection_failed(target, error.to_string()))
+                        let stall_deadline = RequestDeadline::after(io_policy.max_write_stall);
+                        let write_deadline = deadline
+                            .filter(|deadline| deadline.instant() <= stall_deadline.instant())
+                            .unwrap_or(stall_deadline);
+                        match write_deadline.timeout(payload.write_to(&mut frame_writer)).await {
+                            Ok(result) => result
+                                .map_err(|error| RocketMQError::network_connection_failed(target, error.to_string())),
+                            Err(_) => {
+                                write_timed_out = true;
+                                Err(RocketMQError::network_write_timeout(
+                                    target,
+                                    write_deadline.budget_millis(),
+                                ))
+                            }
+                        }
                     };
                     if result.is_ok() {
                         record_transport_write(payload.encoded_len());
                     }
-                    writer_task_diagnostics.finish_write(started_at, result.is_ok(), deadline_expired);
+                    writer_task_diagnostics.finish_write(started_at, result.is_ok(), write_timed_out);
                     let poisoned = frame_writer.is_poisoned();
                     if poisoned {
                         let _ = writer_state.send(ConnectionState::Degraded);
@@ -610,13 +676,14 @@ async fn run_framed_session<H>(
         let next = tokio::select! {
             () = cancellation.cancelled() => break,
             () = reader_cancellation.cancelled() => break,
-            next = tokio::time::timeout(idle_timeout, stream.next()) => next,
+            next = tokio::time::timeout(io_policy.idle_timeout, stream.next()) => next,
         };
         let decoded = match next {
             Ok(Some(Ok(decoded))) => decoded,
             Ok(Some(Err(_))) | Ok(None) | Err(_) => break,
         };
         let command = decoded.command;
+        let partial_frame_permit = decoded.partial_frame_permit;
         let class = AdmissionClass::for_request_code(command.code());
         let bytes = decoded.retained_frame_bytes;
         let context = RequestContext::network(PeerInfo::new(remote_addr, peer_is_tls), principal.clone(), None);
@@ -629,6 +696,7 @@ async fn run_framed_session<H>(
                 context,
                 command,
                 bytes,
+                partial_frame_permit,
                 ordering,
                 response,
                 move |request_operation, command| async move {
@@ -667,19 +735,57 @@ pub async fn run_connected_session<H>(
 ) where
     H: ConnectionHandler,
 {
+    run_connected_session_with_io_policy(
+        connection,
+        local_addr,
+        remote_addr,
+        task_group,
+        admission,
+        security,
+        principal,
+        SessionIoPolicy {
+            idle_timeout,
+            ..SessionIoPolicy::default()
+        },
+        handler,
+    )
+    .await;
+}
+
+/// Runs an already-connected stream with explicit bounded I/O policy.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_connected_session_with_io_policy<H>(
+    connection: Connection,
+    local_addr: SocketAddr,
+    remote_addr: SocketAddr,
+    task_group: TaskGroup,
+    admission: Arc<AdmissionController>,
+    security: Arc<TransportSecurity>,
+    principal: Option<Principal>,
+    io_policy: SessionIoPolicy,
+    handler: Arc<H>,
+) where
+    H: ConnectionHandler,
+{
+    let Ok(io_policy) = io_policy.validate() else {
+        return;
+    };
     let session_id = u64::from(remote_addr.port());
     let scope = AdmissionScope::new(remote_addr.ip()).with_session(session_id);
+    let Ok(session_group) = task_group.try_child(format!("rocketmq.transport.session.{session_id}")) else {
+        return;
+    };
     run_framed_session(
         connection,
         local_addr,
         remote_addr,
         session_id,
         scope,
-        task_group,
+        session_group,
         Arc::new(AuthorizedDispatchBoundary::new(security, admission)),
         principal,
         false,
-        idle_timeout,
+        io_policy,
         handler,
     )
     .await;
@@ -696,6 +802,7 @@ pub struct TransportServerConfig {
     pub bind_address: SocketAddr,
     pub tls: TlsConfig,
     pub handshake_timeout: Duration,
+    pub io_policy: SessionIoPolicy,
     pub request_timeout: Duration,
 }
 
@@ -707,6 +814,7 @@ impl TransportServerConfig {
             bind_address: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             tls,
             handshake_timeout: Duration::from_secs(10),
+            io_policy: SessionIoPolicy::default(),
             request_timeout: Duration::from_secs(30),
         }
     }
@@ -747,7 +855,6 @@ impl Drop for ActiveSessionGuard {
 struct ProcessorSessionHandler {
     processor: Arc<dyn RequestProcessor>,
     request_timeout: Duration,
-    session_group: TaskGroup,
 }
 
 impl ConnectionHandler for ProcessorSessionHandler {
@@ -766,12 +873,26 @@ impl ConnectionHandler for ProcessorSessionHandler {
     ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         let processor = self.processor.clone();
         let request_timeout = self.request_timeout;
-        let session_group = self.session_group.clone();
         Box::pin(async move {
             let response = match tokio::time::timeout(request_timeout, processor.process(request)).await {
                 Ok(Ok(response)) => response,
-                Ok(Err(_)) | Err(_) => {
-                    session_group.cancel();
+                Ok(Err(error)) => {
+                    tracing::warn!(
+                        session_id = session.session_id(),
+                        remote_addr = %session.remote_addr(),
+                        error_kind = ?error.kind(),
+                        "transport request processor failed; aborting session"
+                    );
+                    session.abort();
+                    return;
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        session_id = session.session_id(),
+                        remote_addr = %session.remote_addr(),
+                        "transport request processor timed out; aborting session"
+                    );
+                    session.abort();
                     return;
                 }
             };
@@ -849,6 +970,7 @@ impl TransportServer {
         principal: Option<Principal>,
         telemetry: TransportTelemetry,
     ) -> RocketMQResult<Arc<Self>> {
+        config.io_policy.validate()?;
         let listener = tokio::net::TcpListener::bind(config.bind_address).await?;
         let local_addr = listener.local_addr()?;
         let tls = TlsServerRuntime::initialize_with_service_context(config.tls.clone(), &service_context).await?;
@@ -907,7 +1029,17 @@ impl TransportServer {
                     drop(stream);
                     continue;
                 };
-                let session_group = server.service_context.task_group().clone();
+                let session_group = match server
+                    .service_context
+                    .task_group()
+                    .try_child(format!("rocketmq.transport.session.{session_id}"))
+                {
+                    Ok(session_group) => session_group,
+                    Err(_) => {
+                        drop(stream);
+                        break;
+                    }
+                };
                 let session = server.clone();
                 let active_session = ActiveSessionGuard::new(server.clone());
                 let spawn_group = session_group.clone();
@@ -947,7 +1079,7 @@ impl TransportServer {
                 stream,
                 remote_addr,
                 NegotiationTimeouts {
-                    protocol_detection: self.config.request_timeout,
+                    protocol_detection: self.config.io_policy.idle_timeout,
                     tls_handshake: self.config.handshake_timeout,
                 },
             ) => negotiated,
@@ -967,11 +1099,10 @@ impl TransportServer {
             self.dispatch.clone(),
             self.principal.clone(),
             peer_is_tls,
-            self.config.request_timeout,
+            self.config.io_policy,
             Arc::new(ProcessorSessionHandler {
                 processor: self.processor.clone(),
                 request_timeout: self.config.request_timeout,
-                session_group,
             }),
         )
         .await;

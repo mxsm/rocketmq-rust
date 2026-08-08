@@ -655,9 +655,11 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
             let broker_name = broker_name.clone();
             async move {
                 if self.shutdown.load(Ordering::Acquire) {
-                    return;
+                    return None;
                 }
-                self.broker_outer_api
+                let target = controller_address.clone();
+                let result = self
+                    .broker_outer_api
                     .send_heartbeat_to_controller(
                         controller_address,
                         cluster_name,
@@ -672,9 +674,19 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
                         Some(broker_election_priority),
                     )
                     .await;
+                Some((target, result))
             }
         });
-        futures::future::join_all(futures).await;
+        for outcome in futures::future::join_all(futures).await.into_iter().flatten() {
+            let (target, result) = outcome;
+            if let Err(error) = result {
+                warn!(
+                    remote_addr = %target,
+                    error_kind = ?error.kind(),
+                    "controller heartbeat failed"
+                );
+            }
+        }
     }
 
     pub(crate) async fn send_heartbeat_to_controller_leader(

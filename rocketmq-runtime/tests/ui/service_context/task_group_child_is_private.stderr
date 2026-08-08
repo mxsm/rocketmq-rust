@@ -2,4 +2,9 @@ error[E0599]: no method named `child` found for reference `&TaskGroup` in the cu
   --> tests/ui/service_context/task_group_child_is_private.rs:17:23
    |
 17 |         let _ = group.child("request");
-   |                       ^^^^^ method not found in `&TaskGroup`
+   |                       ^^^^^
+   |
+help: there is a method `try_child` with a similar name
+   |
+17 |         let _ = group.try_child("request");
+   |                       ++++

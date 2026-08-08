@@ -159,6 +159,27 @@ fn rebind_between_siblings_preserves_common_ancestor_accounting() {
 }
 
 #[test]
+fn promoting_a_permit_releases_data_reserve_without_releasing_total_capacity() {
+    let limit = limit(2, 20, FullPolicy::Reject).with_control_reserve(BudgetCapacity::new(1, 10));
+    let tree = ResourceBudgetTree::new("process", limit).expect("root budget");
+    let root = tree.root();
+    let mut promoted = root.try_acquire_data(10).expect("data permit");
+    assert!(root.try_acquire_data(1).is_err());
+
+    promoted.promote_to_control();
+
+    assert_eq!(promoted.class(), BudgetClass::Control);
+    let data = root
+        .try_acquire_data(10)
+        .expect("promoted permit should release data-only capacity");
+    assert_eq!(root.snapshot().current_count, 2);
+    assert_eq!(root.snapshot().current_bytes, 20);
+    drop((promoted, data));
+    assert_eq!(root.snapshot().current_count, 0);
+    assert_eq!(root.snapshot().current_bytes, 0);
+}
+
+#[test]
 fn failed_rebind_keeps_the_source_permit_valid() {
     let tree = ResourceBudgetTree::new("process", limit(3, 64, FullPolicy::Reject)).expect("root budget");
     let source = tree

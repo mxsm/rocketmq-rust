@@ -1118,6 +1118,69 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingService for Rocketmq
 }
 
 impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
+    async fn invoke_oneway_until(
+        &self,
+        addr: &CheetahString,
+        request: RemotingCommand,
+        deadline: RequestDeadline,
+        permit: Option<ResourcePermit>,
+    ) -> RocketMQResult<()> {
+        let started_at = time::Instant::now();
+        let result = self.invoke_oneway_until_inner(addr, request, deadline, permit).await;
+        let latency = started_at.elapsed();
+        match &result {
+            Ok(()) => {
+                self.latency_tracker.record_success(addr, latency);
+                if let Some(pool) = &self.connection_pool {
+                    pool.record_success(addr, latency.as_millis() as u64);
+                }
+            }
+            Err(_) => {
+                self.latency_tracker.record_error(addr);
+                if let Some(pool) = &self.connection_pool {
+                    pool.record_error(addr);
+                }
+            }
+        }
+        result
+    }
+
+    async fn invoke_oneway_until_inner(
+        &self,
+        addr: &CheetahString,
+        request: RemotingCommand,
+        deadline: RequestDeadline,
+        permit: Option<ResourcePermit>,
+    ) -> RocketMQResult<()> {
+        deadline.ensure_before_send(addr.to_string())?;
+        if self.shutdown_token.is_cancelled() {
+            return Err(RocketMQError::ClientNotStarted);
+        }
+        let Some(mut client) = self.get_and_create_client_until(Some(addr), deadline).await? else {
+            return Err(RocketMQError::network_connection_failed(
+                addr.to_string(),
+                "one-way client unavailable",
+            ));
+        };
+        if self.shutdown_token.is_cancelled() {
+            return Err(RocketMQError::ClientNotStarted);
+        }
+
+        let mut request = request;
+        let remote_address = client.remote_address();
+        if self.cmd_handler.has_rpc_hooks() {
+            request.make_custom_header_to_net();
+            self.cmd_handler
+                .do_before_rpc_hooks_with_addr(remote_address, Some(&mut request))?;
+        }
+        deadline.ensure_before_send(remote_address.to_string())?;
+        request.mark_oneway_rpc_ref();
+        match permit {
+            Some(permit) => client.send_until_with_permit(request, deadline, permit).await,
+            None => client.send_until(request, deadline).await,
+        }
+    }
+
     /// Sends a one-way command while transferring an existing process-budget
     /// reservation into the transport writer.
     pub async fn invoke_oneway_with_permit(
@@ -1127,23 +1190,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         deadline: RequestDeadline,
         permit: ResourcePermit,
     ) -> RocketMQResult<()> {
-        let Some(mut client) = self.get_and_create_client_until(Some(addr), deadline).await? else {
-            return Err(RocketMQError::network_connection_failed(
-                addr.to_string(),
-                "one-way client unavailable",
-            ));
-        };
-        let mut request = request;
-        request.mark_oneway_rpc_ref();
-        if self.cmd_handler.has_rpc_hooks() {
-            let remote_address = client.remote_address();
-            deadline.ensure_before_send(remote_address.to_string())?;
-            request.make_custom_header_to_net();
-            self.cmd_handler
-                .do_before_rpc_hooks_with_addr(remote_address, Some(&mut request))?;
-            deadline.ensure_before_send(remote_address.to_string())?;
-        }
-        client.send_until_with_permit(request, deadline, permit).await
+        self.invoke_oneway_until(addr, request, deadline, Some(permit)).await
     }
 }
 
@@ -1330,56 +1377,23 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
         }
     }
 
-    async fn invoke_request_oneway(&self, addr: &CheetahString, request: RemotingCommand, timeout_millis: u64) {
-        let deadline = RequestDeadline::from_timeout_millis(timeout_millis);
-        let client = self.get_and_create_client_until(Some(addr), deadline).await;
-        match client {
-            Ok(None) => {
-                error!(remote_addr = %addr, "invoke oneway client unavailable");
-            }
-            Err(error) => {
-                warn!(
-                    remote_addr = %addr,
-                    error = ?error,
-                    "invoke oneway connection failed"
-                );
-            }
-            Ok(Some(mut client)) => {
-                let mut request = request;
-                if self.cmd_handler.has_rpc_hooks() {
-                    let remote_address = client.remote_address();
-                    if let Err(error) = deadline.ensure_before_send(remote_address.to_string()) {
-                        warn!(remote_addr = %addr, error = ?error, "invoke oneway deadline expired");
-                        return;
-                    }
-                    request.make_custom_header_to_net();
-                    if let Err(error) = self
-                        .cmd_handler
-                        .do_before_rpc_hooks_with_addr(remote_address, Some(&mut request))
-                    {
-                        warn!(
-                            remote_addr = %addr,
-                            error = ?error,
-                            "invoke oneway before RPC hook failed"
-                        );
-                        return;
-                    }
-                    if let Err(error) = deadline.ensure_before_send(remote_address.to_string()) {
-                        warn!(remote_addr = %addr, error = ?error, "invoke oneway hook exceeded deadline");
-                        return;
-                    }
-                }
-                let mut request = request;
-                request.mark_oneway_rpc_ref();
-                if let Err(error) = client.send_until(request, deadline).await {
-                    warn!(
-                        remote_addr = %addr,
-                        error = ?error,
-                        "invoke oneway send failed"
-                    );
-                }
-            }
-        }
+    async fn invoke_request_oneway_with_deadline(
+        &self,
+        addr: &CheetahString,
+        request: RemotingCommand,
+        deadline: RequestDeadline,
+    ) -> RocketMQResult<()> {
+        self.invoke_oneway_until(addr, request, deadline, None).await
+    }
+
+    async fn invoke_request_oneway(
+        &self,
+        addr: &CheetahString,
+        request: RemotingCommand,
+        timeout_millis: u64,
+    ) -> RocketMQResult<()> {
+        self.invoke_request_oneway_with_deadline(addr, request, RequestDeadline::from_timeout_millis(timeout_millis))
+            .await
     }
 
     fn is_address_reachable(&self, addr: &CheetahString) {
@@ -1755,7 +1769,10 @@ mod tests {
 
         let target = CheetahString::from_string(addr.to_string());
         let request = RemotingCommand::create_remoting_command(RequestCode::GetBrokerClusterInfo);
-        client.invoke_request_oneway(&target, request, 3_000).await;
+        client
+            .invoke_request_oneway(&target, request, 3_000)
+            .await
+            .expect("one-way send should complete");
 
         let (code, is_oneway, hooked) = time::timeout(Duration::from_secs(3), received_rx)
             .await
