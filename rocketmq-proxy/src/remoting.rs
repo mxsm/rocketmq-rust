@@ -85,13 +85,14 @@ use rocketmq_proxy_core::ProxyDrainPhase;
 use rocketmq_proxy_core::ProxyDrainSnapshot;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ShutdownReport;
-use rocketmq_transport::run_remoting_server_with_report_with_service_context_and_telemetry;
+use rocketmq_transport::api::v1::TransportTelemetry;
 use rocketmq_transport::Channel;
 use rocketmq_transport::ConnectionHandlerContext;
 use rocketmq_transport::RejectRequestResponse;
 use rocketmq_transport::RemotingDeserializable;
-use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
-use rocketmq_transport::TransportTelemetry;
+use rocketmq_transport::RequestProcessor;
+use rocketmq_transport::ServerConfig;
+use rocketmq_transport::TransportServer;
 use tokio::net::TcpListener;
 use tracing::warn;
 
@@ -116,13 +117,13 @@ use crate::processor::SendMessageEntry;
 use crate::processor::SendMessageRequest;
 use crate::session::ClientSessionRegistry;
 
-pub struct ProxyRemotingRequestProcessor<P> {
+pub struct ProxyRequestProcessor<P> {
     dispatcher: Arc<ProxyRemotingDispatcher<P>>,
     auth_runtime: Option<ProxyAuthRuntime>,
     drain: ProxyDrainController,
 }
 
-impl<P> Clone for ProxyRemotingRequestProcessor<P> {
+impl<P> Clone for ProxyRequestProcessor<P> {
     fn clone(&self) -> Self {
         Self {
             dispatcher: Arc::clone(&self.dispatcher),
@@ -132,7 +133,7 @@ impl<P> Clone for ProxyRemotingRequestProcessor<P> {
     }
 }
 
-impl<P> ProxyRemotingRequestProcessor<P>
+impl<P> ProxyRequestProcessor<P>
 where
     P: MessagingProcessor + 'static,
 {
@@ -175,7 +176,7 @@ where
     }
 }
 
-impl<P> RequestProcessor for ProxyRemotingRequestProcessor<P>
+impl<P> RequestProcessor for ProxyRequestProcessor<P>
 where
     P: MessagingProcessor + 'static,
 {
@@ -353,7 +354,7 @@ where
     if let Some(ready) = ready {
         ready()?;
     }
-    let request_processor = ProxyRemotingRequestProcessor::new_with_drain_controller(
+    let request_processor = ProxyRequestProcessor::new_with_drain_controller(
         config,
         processor,
         sessions,
@@ -361,17 +362,10 @@ where
         remoting_backend,
         drain,
     );
-    let report = run_remoting_server_with_report_with_service_context_and_telemetry(
-        service_context,
-        listener,
-        shutdown,
-        request_processor,
-        None,
-        Vec::new(),
-        None,
-        telemetry,
-    )
-    .await;
+    let mut server = TransportServer::new(Arc::new(ServerConfig::default()), service_context).with_telemetry(telemetry);
+    let report = server
+        .serve_bound_listener_until(listener, request_processor, None, None, shutdown)
+        .await;
     match report.as_ref() {
         Some(report) if !report.is_healthy() => {
             warn!(
@@ -1700,13 +1694,13 @@ mod tests {
     use rocketmq_security_api::Action;
     use rocketmq_transport::test_support::LocalRequestHarness;
     use rocketmq_transport::RemotingDeserializable;
-    use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
     use rocketmq_transport::RemotingSerializable;
+    use rocketmq_transport::RequestProcessor;
     use tokio::time::timeout;
 
     use super::ProxyRemotingBackend;
     use super::ProxyRemotingDispatcher;
-    use super::ProxyRemotingRequestProcessor;
+    use super::ProxyRequestProcessor;
     use crate::auth::ProxyAuthRuntime;
     use crate::config::ProxyAuthConfig;
     use crate::config::ProxyConfig;
@@ -1942,7 +1936,7 @@ mod tests {
                 Arc::new(DefaultTransactionService),
             ),
         )));
-        let mut request_processor = ProxyRemotingRequestProcessor::new(
+        let mut request_processor = ProxyRequestProcessor::new(
             Arc::new(ProxyConfig {
                 mode: ProxyMode::Local,
                 ..ProxyConfig::default()
@@ -2266,7 +2260,7 @@ mod tests {
                 Arc::new(DefaultTransactionService),
             ),
         )));
-        let mut request_processor = ProxyRemotingRequestProcessor::new(
+        let mut request_processor = ProxyRequestProcessor::new(
             Arc::new(ProxyConfig {
                 mode: ProxyMode::Local,
                 ..ProxyConfig::default()

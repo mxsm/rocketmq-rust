@@ -167,7 +167,7 @@ fn server_name_from_address(address: &str) -> String {
 }
 
 /// Canonical low-level request client. Higher-level routing remains outside transport.
-pub struct TransportClient {
+pub struct OneShotTransportClient {
     _service_context: ChildServiceContext,
     admission: Arc<AdmissionController>,
     pending: PendingRequestTable,
@@ -176,7 +176,7 @@ pub struct TransportClient {
     telemetry: TransportTelemetry,
 }
 
-impl TransportClient {
+impl OneShotTransportClient {
     /// Builds a client with fail-closed pending-request budget validation.
     pub fn try_new(service_context: ChildServiceContext, admission: Arc<AdmissionController>) -> RocketMQResult<Self> {
         Self::try_new_with_security(

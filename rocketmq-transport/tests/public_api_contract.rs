@@ -12,14 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_transport::AdmissionLimits;
-use rocketmq_transport::Channel;
-use rocketmq_transport::RemotingCommandCodec;
-use rocketmq_transport::ServerConfig;
-use rocketmq_transport::TransportClient;
+use rocketmq_transport::api::v1::AdmissionLimits;
+use rocketmq_transport::api::v1::FrameLimits;
+use rocketmq_transport::api::v1::OneShotTransportClient;
+use rocketmq_transport::api::v1::ServerConfig;
 
 #[test]
-fn transport_consumers_use_only_root_capabilities_and_dtos() {
+fn transport_consumers_use_only_versioned_capabilities_and_dtos() {
     let source = include_str!("../src/lib.rs");
     for module in [
         "admission",
@@ -56,8 +55,7 @@ fn transport_consumers_use_only_root_capabilities_and_dtos() {
     }
 
     let _ = AdmissionLimits::default();
-    let _: Option<Channel> = None;
-    let _: Option<RemotingCommandCodec> = None;
+    let _ = FrameLimits::default();
     let _ = ServerConfig::default();
-    let _: Option<TransportClient> = None;
+    let _: Option<OneShotTransportClient> = None;
 }

@@ -70,7 +70,7 @@ use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ResourceBudget;
 use rocketmq_transport::ConnectionNetEvent;
 use rocketmq_transport::RPCHook;
-use rocketmq_transport::TokioClientConfig;
+use rocketmq_transport::TransportClientConfig;
 use serde::Serialize;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
@@ -414,7 +414,7 @@ impl MQClientInstance {
         let (tx, rx) = tokio::sync::broadcast::channel::<ConnectionNetEvent>(16);
 
         let mq_client_api_impl = Arc::new(MQClientAPIImpl::new(
-            Arc::new(TokioClientConfig::default()),
+            Arc::new(TransportClientConfig::default()),
             ClientRemotingProcessor::new(&instance),
             rpc_hook,
             Arc::new(client_config.clone()),

@@ -34,7 +34,7 @@ use rocketmq_store::GetMessageResult;
 use rocketmq_store::GetMessageStatus;
 use rocketmq_transport::Channel;
 use rocketmq_transport::ConnectionHandlerContext;
-use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
+use rocketmq_transport::RequestProcessor;
 use tokio::sync::Mutex as AsyncMutex;
 
 use crate::failover::escape_bridge::EscapeBridge;

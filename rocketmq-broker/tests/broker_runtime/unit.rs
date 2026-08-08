@@ -149,17 +149,13 @@ use rocketmq_store::TimerCheckpointSnapshot;
 use rocketmq_store::TimerMessageStore;
 use rocketmq_transport::test_support::LocalRequestHarness;
 use rocketmq_transport::Channel;
-use rocketmq_transport::ChannelInner;
 use rocketmq_transport::Connection;
 use rocketmq_transport::ConnectionHandlerContextWrapper;
-use rocketmq_transport::DefaultRemotingRequestProcessor;
-use rocketmq_transport::RemotingClient;
-use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
-use rocketmq_transport::RemotingService;
-use rocketmq_transport::ResponseFuture;
-use rocketmq_transport::RocketmqDefaultClient;
+use rocketmq_transport::DefaultRequestProcessor;
+use rocketmq_transport::RequestProcessor;
 use rocketmq_transport::ServerConfig;
-use rocketmq_transport::TokioClientConfig;
+use rocketmq_transport::TransportClient;
+use rocketmq_transport::TransportClientConfig;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
@@ -1422,13 +1418,10 @@ async fn create_test_channel() -> Channel {
     drop(listener);
     let tcp_stream = tokio::net::TcpStream::from_std(std_stream).expect("convert tcp stream");
     let connection = Connection::new(tcp_stream);
-    let response_table = std::sync::Arc::new(parking_lot::Mutex::new(HashMap::<i32, ResponseFuture>::new()));
-    let inner = std::sync::Arc::new(ChannelInner::new(
-        connection,
-        response_table,
-        crate::test_task_group("channel"),
-    ));
-    Channel::new(inner, local_addr, local_addr)
+    rocketmq_transport::test_support::TestChannelBuilder::new(connection, crate::test_task_group("channel"))
+        .addresses(local_addr, local_addr)
+        .build()
+        .expect("build test channel")
 }
 
 async fn process_broker_request(
@@ -1921,13 +1914,16 @@ async fn sync_namesrv_member_group(
     cluster_name: &CheetahString,
     broker_name: &CheetahString,
 ) -> BrokerMemberGroup {
-    let client = Arc::new(RocketmqDefaultClient::new(
-        Arc::new(TokioClientConfig::default()),
-        DefaultRemotingRequestProcessor,
-        crate::test_service_context("namesrv-client"),
-    ));
-    let weak_client = Arc::downgrade(&client);
-    client.start(weak_client).await;
+    let client = Arc::new(
+        TransportClient::builder(
+            Arc::new(TransportClientConfig::default()),
+            DefaultRequestProcessor,
+            crate::test_service_context("namesrv-client"),
+        )
+        .build()
+        .expect("valid transport client configuration"),
+    );
+    client.start().await.expect("start transport client");
     let request_header = GetBrokerMemberGroupRequestHeader::new(cluster_name.clone(), broker_name.clone());
     let request = RemotingCommand::create_request_command(RequestCode::GetBrokerMemberGroup, request_header);
     let mut response = client

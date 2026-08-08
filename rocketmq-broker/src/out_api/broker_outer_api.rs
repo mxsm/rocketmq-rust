@@ -93,20 +93,18 @@ use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_store::TimerCheckpointSnapshot;
 use rocketmq_store::TimerMetricsSerializeWrapper;
+use rocketmq_transport::api::v1::TransportTelemetry;
 use rocketmq_transport::ClientMetadata;
-use rocketmq_transport::DefaultRemotingRequestProcessor;
+use rocketmq_transport::ClientShutdownReport;
+use rocketmq_transport::DefaultRequestProcessor;
 use rocketmq_transport::RPCHook;
 use rocketmq_transport::RemotingClient;
-use rocketmq_transport::RemotingClientShutdownReport;
-use rocketmq_transport::RemotingService;
-use rocketmq_transport::RocketmqDefaultClient;
 use rocketmq_transport::RpcClient;
 use rocketmq_transport::RpcClientImpl;
 use rocketmq_transport::RpcRequest;
 use rocketmq_transport::RpcRequestHeader;
-use rocketmq_transport::TokioClientConfig;
 use rocketmq_transport::TopicRequestHeader as RpcTopicRequestHeader;
-use rocketmq_transport::TransportTelemetry;
+use rocketmq_transport::TransportClientConfig;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -145,7 +143,7 @@ pub struct OnewayTargetFailure {
 
 #[derive(Clone)]
 pub struct BrokerOuterAPI {
-    remoting_client: Arc<RocketmqDefaultClient<DefaultRemotingRequestProcessor>>,
+    remoting_client: Arc<RemotingClient<DefaultRequestProcessor>>,
     name_server_address: Option<String>,
     rpc_client: RpcClientImpl,
     client_metadata: Arc<ClientMetadata>,
@@ -153,37 +151,37 @@ pub struct BrokerOuterAPI {
 
 impl BrokerOuterAPI {
     pub fn new(
-        tokio_client_config: Arc<TokioClientConfig>,
+        tokio_client_config: Arc<TransportClientConfig>,
         service_context: ChildServiceContext,
         telemetry: TransportTelemetry,
     ) -> Self {
-        let client = Arc::new(RocketmqDefaultClient::new_with_telemetry(
-            tokio_client_config,
-            DefaultRemotingRequestProcessor,
-            service_context,
-            telemetry,
-        ));
+        let client = Arc::new(
+            RemotingClient::builder(tokio_client_config, DefaultRequestProcessor, service_context)
+                .telemetry(telemetry)
+                .build()
+                .expect("clamped broker remoting client budgets must be valid"),
+        );
         let client_metadata = Arc::new(ClientMetadata::new());
         Self {
             remoting_client: client.clone(),
             name_server_address: None,
-            rpc_client: RpcClientImpl::new(Arc::clone(&client_metadata), client),
+            rpc_client: RpcClientImpl::new(Arc::clone(&client_metadata), client.transport_client()),
             client_metadata,
         }
     }
 
     pub fn new_with_hook(
-        tokio_client_config: Arc<TokioClientConfig>,
+        tokio_client_config: Arc<TransportClientConfig>,
         rpc_hook: Option<Arc<dyn RPCHook>>,
         service_context: ChildServiceContext,
         telemetry: TransportTelemetry,
     ) -> Self {
-        let client = Arc::new(RocketmqDefaultClient::new_with_telemetry(
-            tokio_client_config,
-            DefaultRemotingRequestProcessor,
-            service_context,
-            telemetry,
-        ));
+        let client = Arc::new(
+            RemotingClient::builder(tokio_client_config, DefaultRequestProcessor, service_context)
+                .telemetry(telemetry)
+                .build()
+                .expect("clamped broker remoting client budgets must be valid"),
+        );
         let client_metadata = Arc::new(ClientMetadata::new());
         if let Some(rpc_hook) = rpc_hook {
             client.register_rpc_hook(rpc_hook);
@@ -191,7 +189,7 @@ impl BrokerOuterAPI {
         Self {
             remoting_client: client.clone(),
             name_server_address: None,
-            rpc_client: RpcClientImpl::new(Arc::clone(&client_metadata), client),
+            rpc_client: RpcClientImpl::new(Arc::clone(&client_metadata), client.transport_client()),
             client_metadata,
         }
     }
@@ -222,8 +220,9 @@ impl BrokerOuterAPI {
 
 impl BrokerOuterAPI {
     pub async fn start(&self) {
-        let wrapper = Arc::downgrade(&self.remoting_client);
-        self.remoting_client.start(wrapper).await;
+        if let Err(error) = self.remoting_client.start().await {
+            error!(?error, "failed to start broker remoting client");
+        }
     }
 
     pub async fn update_name_server_address_list(&self, addrs: CheetahString) {
@@ -384,7 +383,7 @@ impl BrokerOuterAPI {
         self.remoting_client.shutdown();
     }
 
-    pub async fn shutdown_with_report(&mut self, timeout: std::time::Duration) -> RemotingClientShutdownReport {
+    pub async fn shutdown_with_report(&mut self, timeout: std::time::Duration) -> ClientShutdownReport {
         self.remoting_client.shutdown_with_report(timeout).await
     }
 
@@ -1734,7 +1733,7 @@ mod tests {
     fn cloned_outer_api_shares_the_remoting_client() {
         let runtime = rocketmq_runtime::RuntimeOwner::new(Default::default()).expect("test runtime");
         let api = BrokerOuterAPI::new(
-            Arc::new(TokioClientConfig::default()),
+            Arc::new(TransportClientConfig::default()),
             runtime.root_context().component("broker-outer-api-test"),
             TransportTelemetry::noop(),
         );

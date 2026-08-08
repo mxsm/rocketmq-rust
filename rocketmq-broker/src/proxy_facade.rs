@@ -32,7 +32,7 @@ use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_security_api::Principal;
 use rocketmq_store::MessageStoreConfig;
-use rocketmq_transport::RequestContext;
+use rocketmq_transport::api::v1::RequestContext;
 use rocketmq_transport::RequestDeadline;
 
 use crate::broker_runtime::BrokerRuntime;
@@ -175,10 +175,12 @@ fn embedded_broker_request_processor_not_ready() -> rocketmq_error::RocketMQErro
     rocketmq_error::RocketMQError::not_initialized("embedded_broker_request_processor")
 }
 
-fn embedded_dispatch_error(error: rocketmq_transport::DispatchError) -> rocketmq_error::RocketMQError {
+fn embedded_dispatch_error(error: rocketmq_transport::api::v1::DispatchError) -> rocketmq_error::RocketMQError {
     if matches!(
         &error,
-        rocketmq_transport::DispatchError::Response(rocketmq_transport::ResponseSinkError::DeadlineExceeded)
+        rocketmq_transport::api::v1::DispatchError::Response(
+            rocketmq_transport::api::v1::ResponseSinkError::DeadlineExceeded,
+        )
     ) {
         return rocketmq_error::RocketMQError::Timeout {
             operation: "embedded_broker_response",

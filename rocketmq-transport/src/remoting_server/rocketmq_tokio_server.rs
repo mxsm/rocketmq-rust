@@ -631,7 +631,7 @@ impl<RP: RequestProcessor + Sync + Clone + 'static> TransportConnectionHandler f
     }
 }
 
-pub struct RocketMQServer<RP> {
+pub struct TransportServer<RP> {
     config: Arc<ServerConfig>,
     rpc_hooks: Option<Vec<Arc<dyn RPCHook>>>,
     service_context: ChildServiceContext,
@@ -646,7 +646,7 @@ pub struct RocketMQServer<RP> {
     _phantom_data: std::marker::PhantomData<RP>,
 }
 
-impl<RP> RocketMQServer<RP> {
+impl<RP> TransportServer<RP> {
     pub fn new(config: Arc<ServerConfig>, service_context: ChildServiceContext) -> Self {
         Self {
             config,
@@ -726,7 +726,7 @@ impl<RP> RocketMQServer<RP> {
     }
 }
 
-impl<RP: RequestProcessor + Sync + 'static + Clone> RocketMQServer<RP> {
+impl<RP: RequestProcessor + Sync + 'static + Clone> TransportServer<RP> {
     pub async fn run(&mut self, request_processor: RP, channel_event_listener: Option<Arc<dyn ChannelEventListener>>) {
         self.run_with_shutdown(request_processor, channel_event_listener, wait_for_signal())
             .await;
@@ -743,6 +743,67 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> RocketMQServer<RP> {
         let _ = self
             .run_with_shutdown_report(request_processor, channel_event_listener, shutdown)
             .await;
+    }
+
+    /// Serves an already-bound listener through the canonical server runtime.
+    ///
+    /// This entry point is intended for composition roots that must bind the
+    /// socket themselves in order to publish an exact readiness transition.
+    pub async fn serve_bound_listener_until<S>(
+        &mut self,
+        listener: TcpListener,
+        request_processor: RP,
+        conn_disconnect_notify: Option<broadcast::Sender<SocketAddr>>,
+        channel_event_listener: Option<Arc<dyn ChannelEventListener>>,
+        shutdown: S,
+    ) -> Option<ShutdownReport>
+    where
+        S: Future,
+    {
+        let lifecycle_event_config = match self.lifecycle_event_config.validate() {
+            Ok(config) => config,
+            Err(error) => {
+                error!(%error, "invalid remoting lifecycle event configuration");
+                return None;
+            }
+        };
+        let rpc_hooks = self.rpc_hooks.take().unwrap_or_default();
+        let remoting_context = new_remoting_server_context(&self.service_context);
+        let tls_runtime =
+            match TlsServerRuntime::initialize_with_service_context(self.config.tls_config.clone(), &remoting_context)
+                .await
+            {
+                Ok(runtime) => runtime,
+                Err(error) => {
+                    error!(%error, "failed to initialize remoting server TLS runtime");
+                    return None;
+                }
+            };
+        #[cfg(all(test, not(doctest)))]
+        let command_interceptor: Arc<dyn SessionCommandInterceptor> = Arc::new(self.test_request_hook.clone());
+        #[cfg(not(test))]
+        let command_interceptor: Arc<dyn SessionCommandInterceptor> = Arc::new(());
+        run_with_tls_config_report(
+            listener,
+            shutdown,
+            request_processor,
+            conn_disconnect_notify,
+            rpc_hooks,
+            channel_event_listener,
+            self.authorized_dispatcher.clone(),
+            RemotingServerRunCapabilities {
+                tls_runtime,
+                task_group: remoting_context.task_group().clone(),
+                process_budget: self.service_context.process_budget(),
+                transport_security: self.transport_security.clone(),
+                transport_principal: self.transport_principal.clone(),
+                admission: self.admission.clone(),
+                command_interceptor,
+                telemetry: self.telemetry.clone(),
+                lifecycle_event_config,
+            },
+        )
+        .await
     }
 
     #[doc(hidden)]
@@ -886,29 +947,8 @@ fn notify_server_startup(
     }
 }
 
-pub async fn run<RP: RequestProcessor + Sync + 'static + Clone>(
-    service_context: ChildServiceContext,
-    listener: TcpListener,
-    shutdown: impl Future,
-    request_processor: RP,
-    conn_disconnect_notify: Option<broadcast::Sender<SocketAddr>>,
-    rpc_hooks: Vec<Arc<dyn RPCHook>>,
-    channel_event_listener: Option<Arc<dyn ChannelEventListener>>,
-) {
-    let _ = run_with_report(
-        service_context,
-        listener,
-        shutdown,
-        request_processor,
-        conn_disconnect_notify,
-        rpc_hooks,
-        channel_event_listener,
-    )
-    .await;
-}
-
-#[doc(hidden)]
-pub async fn run_with_report<RP: RequestProcessor + Sync + 'static + Clone>(
+#[cfg(test)]
+async fn run_with_report<RP: RequestProcessor + Sync + 'static + Clone>(
     service_context: ChildServiceContext,
     listener: TcpListener,
     shutdown: impl Future,
@@ -929,8 +969,8 @@ pub async fn run_with_report<RP: RequestProcessor + Sync + 'static + Clone>(
     .await
 }
 
-#[doc(hidden)]
-pub async fn run_with_report_with_service_context<RP: RequestProcessor + Sync + 'static + Clone>(
+#[cfg(test)]
+async fn run_with_report_with_service_context<RP: RequestProcessor + Sync + 'static + Clone>(
     service_context: ChildServiceContext,
     listener: TcpListener,
     shutdown: impl Future,
@@ -958,7 +998,8 @@ pub async fn run_with_report_with_service_context<RP: RequestProcessor + Sync + 
 /// request metrics guards, and request tracing spans.
 // These arguments are independent composition capabilities owned by the remoting server runtime.
 #[allow(clippy::too_many_arguments)]
-pub async fn run_with_report_with_service_context_and_telemetry<RP: RequestProcessor + Sync + 'static + Clone>(
+#[cfg(test)]
+async fn run_with_report_with_service_context_and_telemetry<RP: RequestProcessor + Sync + 'static + Clone>(
     service_context: ChildServiceContext,
     listener: TcpListener,
     shutdown: impl Future,
@@ -1175,10 +1216,9 @@ mod tests {
     use tokio::sync::oneshot;
 
     use super::*;
-    use crate::clients::rocketmq_tokio_client::RocketmqDefaultClient;
-    use crate::clients::RemotingClient;
-    use crate::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
-    use crate::runtime::config::client_config::TokioClientConfig;
+    use crate::clients::rocketmq_tokio_client::TransportClient;
+    use crate::request_processor::default_request_processor::DefaultRequestProcessor;
+    use crate::runtime::config::client_config::TransportClientConfig;
 
     impl SessionCommandInterceptor for Option<TestRequestHook> {
         fn intercept(&self, code: i32, opaque: i32, channel: Channel, request_executor_group: TaskGroup) -> bool {
@@ -1461,7 +1501,7 @@ mod tests {
             async {
                 let _ = shutdown_rx.await;
             },
-            DefaultRemotingRequestProcessor,
+            DefaultRequestProcessor,
             None,
             Vec::new(),
             None,
@@ -1488,13 +1528,13 @@ mod tests {
             listen_port: 70000,
             ..ServerConfig::default()
         });
-        let mut server = RocketMQServer::<DefaultRemotingRequestProcessor>::new(
+        let mut server = TransportServer::<DefaultRequestProcessor>::new(
             config,
             test_service_context("remoting-server-bind-error-test"),
         );
 
         server
-            .run_with_shutdown(DefaultRemotingRequestProcessor, None, future::pending::<()>())
+            .run_with_shutdown(DefaultRequestProcessor, None, future::pending::<()>())
             .await;
     }
 
@@ -1505,7 +1545,7 @@ mod tests {
             listen_port: 0,
             ..ServerConfig::default()
         });
-        let mut server = RocketMQServer::<DefaultRemotingRequestProcessor>::new(
+        let mut server = TransportServer::<DefaultRequestProcessor>::new(
             config,
             test_service_context("remoting-server-invalid-event-config-test"),
         );
@@ -1513,12 +1553,7 @@ mod tests {
         let (startup_tx, startup_rx) = oneshot::channel();
 
         let report = server
-            .run_with_shutdown_report_and_startup(
-                DefaultRemotingRequestProcessor,
-                None,
-                future::pending::<()>(),
-                startup_tx,
-            )
+            .run_with_shutdown_report_and_startup(DefaultRequestProcessor, None, future::pending::<()>(), startup_tx)
             .await;
 
         assert!(report.is_none());
@@ -1542,13 +1577,13 @@ mod tests {
             listen_port: 70000,
             ..ServerConfig::default()
         });
-        let mut server = RocketMQServer::<DefaultRemotingRequestProcessor>::new(
+        let mut server = TransportServer::<DefaultRequestProcessor>::new(
             config,
             test_service_context("remoting-server-report-bind-error-test"),
         );
 
         let report = server
-            .run_with_shutdown_report(DefaultRemotingRequestProcessor, None, future::pending::<()>())
+            .run_with_shutdown_report(DefaultRequestProcessor, None, future::pending::<()>())
             .await;
 
         assert!(report.is_none());
@@ -1561,19 +1596,14 @@ mod tests {
             listen_port: 70000,
             ..ServerConfig::default()
         });
-        let mut server = RocketMQServer::<DefaultRemotingRequestProcessor>::new(
+        let mut server = TransportServer::<DefaultRequestProcessor>::new(
             config,
             test_service_context("remoting-server-startup-failure-test"),
         );
         let (startup_tx, startup_rx) = oneshot::channel();
 
         let report = server
-            .run_with_shutdown_report_and_startup(
-                DefaultRemotingRequestProcessor,
-                None,
-                future::pending::<()>(),
-                startup_tx,
-            )
+            .run_with_shutdown_report_and_startup(DefaultRequestProcessor, None, future::pending::<()>(), startup_tx)
             .await;
 
         assert!(report.is_none());
@@ -1591,7 +1621,7 @@ mod tests {
             listen_port: 0,
             ..ServerConfig::default()
         });
-        let mut server = RocketMQServer::<DefaultRemotingRequestProcessor>::new(
+        let mut server = TransportServer::<DefaultRequestProcessor>::new(
             config,
             test_service_context("remoting-server-startup-test"),
         );
@@ -1600,7 +1630,7 @@ mod tests {
         let server_task = tokio::spawn(async move {
             server
                 .run_with_shutdown_report_and_startup(
-                    DefaultRemotingRequestProcessor,
+                    DefaultRequestProcessor,
                     None,
                     async {
                         let _ = shutdown_rx.await;
@@ -1640,7 +1670,7 @@ mod tests {
             async {
                 let _ = shutdown_rx.await;
             },
-            DefaultRemotingRequestProcessor,
+            DefaultRequestProcessor,
             None,
             Vec::new(),
             None,
@@ -1675,14 +1705,14 @@ mod tests {
             async {
                 let _ = shutdown_rx.await;
             },
-            DefaultRemotingRequestProcessor,
+            DefaultRequestProcessor,
             None,
             Vec::new(),
             None,
         ));
-        let client = RocketmqDefaultClient::new(
-            Arc::new(TokioClientConfig::default()),
-            DefaultRemotingRequestProcessor,
+        let client = TransportClient::build_for_test(
+            Arc::new(TransportClientConfig::default()),
+            DefaultRequestProcessor,
             service.component("client"),
         );
         let remote_addr = cheetah_string::CheetahString::from_string(addr.to_string());
@@ -1732,7 +1762,7 @@ mod tests {
             listen_port: 0,
             ..ServerConfig::default()
         });
-        let mut server = RocketMQServer::<DefaultRemotingRequestProcessor>::new(
+        let mut server = TransportServer::<DefaultRequestProcessor>::new(
             config,
             test_service_context("remoting-server-control-reserve-test"),
         )
@@ -1742,7 +1772,7 @@ mod tests {
         let server_task = tokio::spawn(async move {
             server
                 .run_with_shutdown_report_and_startup(
-                    DefaultRemotingRequestProcessor,
+                    DefaultRequestProcessor,
                     None,
                     async {
                         let _ = shutdown_rx.await;
@@ -1799,7 +1829,7 @@ mod tests {
             listen_port: 0,
             ..ServerConfig::default()
         });
-        let mut server = RocketMQServer::<DefaultRemotingRequestProcessor>::new(
+        let mut server = TransportServer::<DefaultRequestProcessor>::new(
             config,
             test_service_context("remoting-server-snapshot-test"),
         )
@@ -1809,7 +1839,7 @@ mod tests {
         let server_task = tokio::spawn(async move {
             server
                 .run_with_shutdown_report_and_startup(
-                    DefaultRemotingRequestProcessor,
+                    DefaultRequestProcessor,
                     None,
                     async {
                         let _ = shutdown_rx.await;
@@ -1907,7 +1937,7 @@ mod tests {
             listen_port: 0,
             ..ServerConfig::default()
         });
-        let mut server = RocketMQServer::<DefaultRemotingRequestProcessor>::new(
+        let mut server = TransportServer::<DefaultRequestProcessor>::new(
             config,
             test_service_context("remoting-server-admission-snapshot-test"),
         )
@@ -1918,7 +1948,7 @@ mod tests {
         let server_task = tokio::spawn(async move {
             server
                 .run_with_shutdown_report_and_startup(
-                    DefaultRemotingRequestProcessor,
+                    DefaultRequestProcessor,
                     None,
                     async {
                         let _ = shutdown_rx.await;
@@ -2023,14 +2053,14 @@ mod tests {
             ..ServerConfig::default()
         });
         let service = test_service_context("remoting-server-security-test");
-        let mut server = RocketMQServer::<DefaultRemotingRequestProcessor>::new(config, service.clone())
+        let mut server = TransportServer::<DefaultRequestProcessor>::new(config, service.clone())
             .with_transport_security(security, Some(rocketmq_security_api::Principal::new("remoting-test")));
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let (startup_tx, startup_rx) = oneshot::channel();
         let server_task = tokio::spawn(async move {
             server
                 .run_with_shutdown_report_and_startup(
-                    DefaultRemotingRequestProcessor,
+                    DefaultRequestProcessor,
                     None,
                     async {
                         let _ = shutdown_rx.await;
@@ -2041,9 +2071,9 @@ mod tests {
         });
         let addr = await_server_startup(startup_rx).await;
 
-        let client = RocketmqDefaultClient::new(
-            Arc::new(TokioClientConfig::default()),
-            DefaultRemotingRequestProcessor,
+        let client = TransportClient::build_for_test(
+            Arc::new(TransportClientConfig::default()),
+            DefaultRequestProcessor,
             service.component("client"),
         )
         .with_transport_security(Arc::new(
@@ -2084,7 +2114,7 @@ mod tests {
             async {
                 let _ = shutdown_rx.await;
             },
-            DefaultRemotingRequestProcessor,
+            DefaultRequestProcessor,
             None,
             Vec::new(),
             None,
@@ -2125,7 +2155,7 @@ mod tests {
             async {
                 let _ = shutdown_rx.await;
             },
-            DefaultRemotingRequestProcessor,
+            DefaultRequestProcessor,
             None,
             Vec::new(),
             Some(channel_listener),
@@ -2186,7 +2216,7 @@ mod tests {
             async {
                 let _ = shutdown_rx.await;
             },
-            DefaultRemotingRequestProcessor,
+            DefaultRequestProcessor,
             None,
             Vec::new(),
             None,

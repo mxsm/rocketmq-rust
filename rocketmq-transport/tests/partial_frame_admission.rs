@@ -28,10 +28,10 @@ use rocketmq_transport::AdmissionLimits;
 use rocketmq_transport::FrameLimits;
 use rocketmq_transport::RequestDeadline;
 use rocketmq_transport::ResourceLimit;
-use rocketmq_transport::SessionRequestProcessor as RequestProcessor;
+use rocketmq_transport::SessionProcessor as RequestProcessor;
+use rocketmq_transport::SessionTransportServer;
+use rocketmq_transport::SessionTransportServerConfig;
 use rocketmq_transport::TlsConfig;
-use rocketmq_transport::TransportServer;
-use rocketmq_transport::TransportServerConfig;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 
@@ -89,9 +89,9 @@ async fn announced_frames_are_bounded_before_payload_arrives_and_capacity_is_rec
         ..AdmissionLimits::default()
     };
     let admission = Arc::new(AdmissionController::new(limits));
-    let server = TransportServer::bind(
+    let server = SessionTransportServer::bind(
         service,
-        TransportServerConfig::loopback(),
+        SessionTransportServerConfig::loopback(),
         Arc::new(EchoProcessor),
         admission.clone(),
     )

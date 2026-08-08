@@ -19,7 +19,7 @@ mod startup;
 pub(super) struct BrokerRequestPipeline {
     pub(super) proxy_request_processor: Option<DefaultServerProcessor>,
     pub(super) authorized_dispatcher:
-        Option<Arc<rocketmq_transport::AuthorizedCommandDispatcher<DefaultServerProcessor>>>,
+        Option<Arc<rocketmq_transport::api::v1::AuthorizedCommandDispatcher<DefaultServerProcessor>>>,
     pub(super) auth_runtime: Option<Arc<AuthRuntime>>,
     pub(super) maintenance_authorizer: Option<Arc<MaintenanceAuthorizer>>,
     pub(super) auth_admin_service: Option<Arc<AuthAdminService>>,
@@ -633,7 +633,7 @@ impl BrokerRuntime {
 
     pub(crate) fn authorized_dispatcher(
         &self,
-    ) -> Option<Arc<rocketmq_transport::AuthorizedCommandDispatcher<DefaultServerProcessor>>> {
+    ) -> Option<Arc<rocketmq_transport::api::v1::AuthorizedCommandDispatcher<DefaultServerProcessor>>> {
         self.composition.request_pipeline.authorized_dispatcher.clone()
     }
 }

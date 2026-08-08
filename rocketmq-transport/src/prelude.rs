@@ -14,8 +14,11 @@
 
 //! Minimal imports for Transport composition roots.
 
-pub use crate::RemotingService;
-pub use crate::RocketMQServer;
-pub use crate::ServerConfig;
-pub use crate::TokioClientConfig;
-pub use crate::TransportClient;
+pub use crate::api::v1::OneShotTransportClient;
+pub use crate::api::v1::RemotingClient;
+pub use crate::api::v1::RequestDeadline;
+pub use crate::api::v1::RequestProcessor;
+pub use crate::api::v1::ServerConfig;
+pub use crate::api::v1::TransportClient;
+pub use crate::api::v1::TransportClientConfig;
+pub use crate::api::v1::TransportServer;

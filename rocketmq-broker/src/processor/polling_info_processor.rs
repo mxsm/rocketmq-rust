@@ -24,7 +24,7 @@ use rocketmq_protocol::protocol::header::polling_info_response_header::PollingIn
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_transport::Channel;
 use rocketmq_transport::ConnectionHandlerContext;
-use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
+use rocketmq_transport::RequestProcessor;
 use tracing::error;
 use tracing::warn;
 

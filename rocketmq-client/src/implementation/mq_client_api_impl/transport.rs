@@ -21,7 +21,7 @@ impl NameServerUpdateCallback for MQClientAPIImpl {
 
 impl MQClientAPIImpl {
     pub fn new(
-        tokio_client_config: Arc<TokioClientConfig>,
+        tokio_client_config: Arc<TransportClientConfig>,
         client_remoting_processor: ClientRemotingProcessor,
         rpc_hook: Option<Arc<dyn RPCHook>>,
         client_config: Arc<ClientConfig>,
@@ -32,9 +32,8 @@ impl MQClientAPIImpl {
         Self::init_remoting_version();
 
         let mut remoting_config = (*tokio_client_config).clone();
-        remoting_config.use_tls = client_config.use_tls;
-        remoting_config.tls_config = client_config.tls_config.clone();
-        remoting_config.tls_config.enable = client_config.use_tls;
+        remoting_config.tls = client_config.tls_config.clone();
+        remoting_config.tls.enable = client_config.use_tls;
         #[cfg(any(feature = "observability", feature = "observability-metrics"))]
         let transport_telemetry = TransportTelemetry::from_handle(&telemetry_handle);
         #[cfg(not(any(feature = "observability", feature = "observability-metrics")))]
@@ -42,13 +41,16 @@ impl MQClientAPIImpl {
             let _ = telemetry_handle;
             TransportTelemetry::noop()
         };
-        let default_client = RocketmqDefaultClient::new_with_cl_and_telemetry(
+        let mut builder = RemotingClient::builder(
             Arc::new(remoting_config),
             client_remoting_processor,
-            tx,
             service_context.component("transport"),
-            transport_telemetry,
-        );
+        )
+        .telemetry(transport_telemetry);
+        if let Some(tx) = tx {
+            builder = builder.connection_events(tx);
+        }
+        let default_client = builder.build().expect("clamped transport client budgets must be valid");
         if let Some(hook) = rpc_hook {
             default_client.register_rpc_hook(hook);
         }
@@ -69,8 +71,9 @@ impl MQClientAPIImpl {
     }
 
     pub async fn start(&self) {
-        let client = Arc::downgrade(&self.remoting_client);
-        self.remoting_client.start(client).await;
+        if let Err(error) = self.remoting_client.start().await {
+            tracing::error!(?error, "failed to start transport client");
+        }
     }
 
     pub fn shutdown(&self) {
@@ -87,7 +90,7 @@ impl MQClientAPIImpl {
             .is_ok()
     }
 
-    pub fn get_remoting_client(&self) -> Arc<RocketmqDefaultClient<ClientRemotingProcessor>> {
+    pub fn get_remoting_client(&self) -> Arc<RemotingClient<ClientRemotingProcessor>> {
         self.remoting_client.clone()
     }
 

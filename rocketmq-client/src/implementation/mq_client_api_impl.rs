@@ -256,7 +256,6 @@ use rocketmq_transport::DefaultTopAddressing;
 use rocketmq_transport::HeartbeatV2Result;
 use rocketmq_transport::NameServerUpdateCallback;
 use rocketmq_transport::RemotingClient;
-use rocketmq_transport::RocketmqDefaultClient;
 use rocketmq_transport::TopAddressing;
 
 use rocketmq_model::common::boundary_type::BoundaryType;
@@ -296,12 +295,11 @@ use rocketmq_protocol::protocol::LanguageCode;
 use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::ChildServiceContext;
+use rocketmq_transport::api::v1::TransportTelemetry;
 use rocketmq_transport::RPCHook;
-use rocketmq_transport::RemotingService;
 use rocketmq_transport::RpcRequestHeader;
-use rocketmq_transport::TokioClientConfig;
 use rocketmq_transport::TopicRequestHeader;
-use rocketmq_transport::TransportTelemetry;
+use rocketmq_transport::TransportClientConfig;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -394,7 +392,7 @@ impl AsyncRetryRequest {
 
 pub struct MQClientAPIImpl {
     service_context: ChildServiceContext,
-    remoting_client: Arc<RocketmqDefaultClient<ClientRemotingProcessor>>,
+    remoting_client: Arc<RemotingClient<ClientRemotingProcessor>>,
     top_addressing: Arc<Box<dyn TopAddressing>>,
     name_srv_addr: RwLock<Option<String>>,
     client_config: Arc<ClientConfig>,

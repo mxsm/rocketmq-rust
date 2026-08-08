@@ -58,7 +58,7 @@ use crate::telemetry::TransportTelemetry;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
 #[derive(Clone)]
-pub struct Client<PR> {
+pub(crate) struct TransportSession<PR> {
     /// The TCP connection decorated with the rocketmq remoting protocol encoder / decoder
     /// implemented using a buffered `TcpStream`.
     ///
@@ -79,7 +79,6 @@ pub struct Client<PR> {
     _processor: PhantomData<fn() -> PR>,
 }
 
-const DEFAULT_CALLBACK_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
 type ConnectedClientSession = (Channel, PendingRequestOwner, SessionHandle, SocketAddr, bool);
 type ClientConnectFuture = Pin<Box<dyn Future<Output = RocketMQResult<ConnectedClientSession>> + Send>>;
 
@@ -156,7 +155,7 @@ fn new_client_connection_task_group_with_service_context(
     )
 }
 
-impl<PR> Drop for Client<PR> {
+impl<PR> Drop for TransportSession<PR> {
     fn drop(&mut self) {
         if Arc::strong_count(&self.task_lifecycle) != 1 {
             return;
@@ -236,7 +235,7 @@ where
     })
 }
 
-impl<PR> Client<PR>
+impl<PR> TransportSession<PR>
 where
     PR: RequestProcessor + Sync + Clone + 'static,
 {
@@ -248,7 +247,7 @@ where
         tx: Option<&tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
         tls_config: TlsConfig,
         deadline: RequestDeadline,
-    ) -> RocketMQResult<Client<PR>> {
+    ) -> RocketMQResult<TransportSession<PR>> {
         Self::connect_with_service_context_until_and_telemetry(
             context,
             addr,
@@ -269,7 +268,7 @@ where
         tls_config: TlsConfig,
         deadline: RequestDeadline,
         telemetry: TransportTelemetry,
-    ) -> RocketMQResult<Client<PR>> {
+    ) -> RocketMQResult<TransportSession<PR>> {
         let (task_group, operation) = new_client_connection_task_group_with_service_context(context);
         Self::connect_with_task_group(
             addr,
@@ -297,7 +296,7 @@ where
         process_budget: ResourceBudget,
         deadline: RequestDeadline,
         telemetry: TransportTelemetry,
-    ) -> RocketMQResult<Client<PR>> {
+    ) -> RocketMQResult<TransportSession<PR>> {
         let (notify_shutdown, _) = broadcast::channel(1);
         let receiver = notify_shutdown.subscribe();
         let send_receiver = notify_shutdown.subscribe();
@@ -320,7 +319,7 @@ where
             telemetry,
         )
         .await?;
-        Ok(Client {
+        Ok(TransportSession {
             channel,
             notify_shutdown,
             session,
@@ -416,21 +415,7 @@ where
         }
     }
 
-    /// Invokes a remote operation with the given `RemotingCommand` and provides a callback function
-    /// for handling the response.
-    ///
-    /// # Arguments
-    ///
-    /// * `request` - The `RemotingCommand` representing the request.
-    /// * `func` - The callback function to run after the response future completes.
-    pub async fn invoke_with_callback<F>(&self, request: RemotingCommand, mut func: F)
-    where
-        F: FnMut(),
-    {
-        self.invoke_with_callback_timeout(request, DEFAULT_CALLBACK_RESPONSE_TIMEOUT, &mut func)
-            .await;
-    }
-
+    #[cfg(test)]
     async fn invoke_with_callback_timeout<F>(&self, mut request: RemotingCommand, timeout: Duration, mut func: F)
     where
         F: FnMut(),
@@ -462,20 +447,6 @@ where
         func();
     }
 
-    /// Sends a request to the remote remoting_server.
-    ///
-    /// # Arguments
-    ///
-    /// * `request` - The `RemotingCommand` representing the request.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` indicating success or failure in sending the request.
-    pub async fn send(&mut self, request: RemotingCommand) -> RocketMQResult<()> {
-        self.send_transport(request, RequestDeadline::after(DEFAULT_CALLBACK_RESPONSE_TIMEOUT))
-            .await
-    }
-
     /// Sends a request using the caller's existing immutable deadline.
     pub async fn send_until(&mut self, request: RemotingCommand, deadline: RequestDeadline) -> RocketMQResult<()> {
         self.send_transport(request, deadline).await
@@ -489,49 +460,6 @@ where
         permit: ResourcePermit,
     ) -> RocketMQResult<()> {
         self.send_transport_with_permit(request, deadline, permit).await
-    }
-
-    /// Sends multiple requests in a batch (fire-and-forget, no response expected).
-    ///
-    /// # Performance
-    ///
-    /// Batching provides 2-4x throughput improvement for small messages:
-    /// - Single system call instead of N
-    /// - Better CPU cache locality during encoding
-    /// - Reduced Nagle algorithm delays
-    ///
-    /// # Use Cases
-    ///
-    /// - Log shipping (async, high volume)
-    /// - Metrics reporting
-    /// - Event publishing
-    ///
-    /// # Arguments
-    ///
-    /// * `requests` - Vector of commands to send (consumed)
-    ///
-    /// # Returns
-    ///
-    /// - `Ok(())`: All commands queued successfully
-    /// - `Err(e)`: Channel send error (client shutdown)
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let commands = vec![
-    ///     RemotingCommand::create_request_command(/*...*/),
-    ///     RemotingCommand::create_request_command(/*...*/),
-    /// ];
-    /// client.send_batch(commands).await?;
-    /// ```
-    pub async fn send_batch(&mut self, requests: Vec<RemotingCommand>) -> RocketMQResult<()> {
-        // Send all commands individually through the channel
-        // The underlying connection will buffer them efficiently
-        for request in requests {
-            self.send_transport(request, RequestDeadline::after(DEFAULT_CALLBACK_RESPONSE_TIMEOUT))
-                .await?;
-        }
-        Ok(())
     }
 
     /// Sends multiple requests and collects responses (request-response batch).
@@ -565,7 +493,8 @@ where
     ///     }
     /// }
     /// ```
-    pub async fn send_batch_read(
+    #[cfg(test)]
+    async fn send_batch_read(
         &mut self,
         requests: Vec<RemotingCommand>,
         timeout_millis: u64,
@@ -676,7 +605,7 @@ mod lifecycle_tests {
 
     use super::*;
     use crate::base::pending_request_table::PendingRequestTable;
-    use crate::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
+    use crate::request_processor::default_request_processor::DefaultRequestProcessor;
 
     #[tokio::test]
     async fn request_timeout_cancels_only_the_connection_operation() {
@@ -689,12 +618,12 @@ mod lifecycle_tests {
             time::sleep(Duration::from_secs(5)).await;
         });
         let cmd_handler = Arc::new(RemotingGeneralHandler::new(
-            DefaultRemotingRequestProcessor,
+            DefaultRequestProcessor,
             vec![],
             PendingRequestTable::new(),
         ));
 
-        let mut client = Client::connect_with_service_context_until(
+        let mut client = TransportSession::connect_with_service_context_until(
             &service,
             addr.to_string(),
             cmd_handler,
@@ -724,7 +653,13 @@ mod lifecycle_tests {
         assert!(!task_group.cancellation_token().is_cancelled());
         assert_eq!(task_group.lifecycle_state(), TaskGroupLifecycleState::Open);
         assert_eq!(client.connection().state(), crate::connection::ConnectionState::Closed);
-        assert!(client.send(RemotingCommand::create_remoting_command(6)).await.is_err());
+        assert!(client
+            .send_until(
+                RemotingCommand::create_remoting_command(6),
+                RequestDeadline::after(Duration::from_secs(1)),
+            )
+            .await
+            .is_err());
 
         drop(client);
 
@@ -743,12 +678,12 @@ mod lifecycle_tests {
             time::sleep(Duration::from_secs(5)).await;
         });
         let cmd_handler = Arc::new(RemotingGeneralHandler::new(
-            DefaultRemotingRequestProcessor,
+            DefaultRequestProcessor,
             vec![],
             PendingRequestTable::new(),
         ));
 
-        let mut client = Client::connect_with_service_context_until(
+        let mut client = TransportSession::connect_with_service_context_until(
             &service,
             addr.to_string(),
             cmd_handler,
@@ -794,7 +729,13 @@ mod lifecycle_tests {
         .expect("batch timeout must cancel the connection operation");
         assert!(!task_group.cancellation_token().is_cancelled());
         assert_eq!(client.connection().state(), crate::connection::ConnectionState::Closed);
-        assert!(client.send(RemotingCommand::create_remoting_command(4)).await.is_err());
+        assert!(client
+            .send_until(
+                RemotingCommand::create_remoting_command(4),
+                RequestDeadline::after(Duration::from_secs(1)),
+            )
+            .await
+            .is_err());
         let report = client.close_with_report(Duration::from_secs(1)).await;
 
         assert!(report.is_healthy(), "{}", report.to_json());
@@ -816,12 +757,12 @@ mod lifecycle_tests {
         });
         let response_table = PendingRequestTable::new();
         let cmd_handler = Arc::new(RemotingGeneralHandler::new(
-            DefaultRemotingRequestProcessor,
+            DefaultRequestProcessor,
             vec![],
             response_table.clone(),
         ));
 
-        let client = Client::connect_with_service_context_until(
+        let client = TransportSession::connect_with_service_context_until(
             &service,
             addr.to_string(),
             cmd_handler,

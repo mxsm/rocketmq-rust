@@ -817,14 +817,10 @@ impl ProducerManager {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use std::sync::Arc;
 
-    use parking_lot::Mutex;
     use rocketmq_protocol::protocol::LanguageCode;
-    use rocketmq_transport::ChannelInner;
     use rocketmq_transport::Connection;
-    use rocketmq_transport::ResponseFuture;
     use tokio::net::TcpStream;
 
     use super::*;
@@ -837,13 +833,10 @@ mod tests {
         drop(listener);
         let tcp_stream = TcpStream::from_std(std_stream).expect("convert tcp stream");
         let connection = Connection::new(tcp_stream);
-        let response_table = Arc::new(Mutex::new(HashMap::<i32, ResponseFuture>::new()));
-        let inner = Arc::new(ChannelInner::new(
-            connection,
-            response_table,
-            crate::test_task_group("channel"),
-        ));
-        Channel::new(inner, local_addr, local_addr)
+        rocketmq_transport::test_support::TestChannelBuilder::new(connection, crate::test_task_group("channel"))
+            .addresses(local_addr, local_addr)
+            .build()
+            .expect("build test channel")
     }
 
     #[tokio::test]

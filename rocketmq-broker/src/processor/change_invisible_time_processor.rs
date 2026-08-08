@@ -42,7 +42,7 @@ use rocketmq_store::PutMessageStatus;
 use rocketmq_transport::request_code_not_supported_with_remark_and_opaque;
 use rocketmq_transport::Channel;
 use rocketmq_transport::ConnectionHandlerContext;
-use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
+use rocketmq_transport::RequestProcessor;
 use tracing::error;
 use tracing::info;
 use tracing::warn;

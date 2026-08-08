@@ -22,8 +22,7 @@ use parking_lot::Mutex;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
-use rocketmq_transport::RemotingClient;
-use rocketmq_transport::RocketmqDefaultClient;
+use rocketmq_transport::TransportClient;
 use tokio::sync::mpsc;
 use tracing::info;
 use tracing::warn;
@@ -332,7 +331,7 @@ impl Mailbox {
 
 #[derive(Clone)]
 pub(crate) struct BrokerRoleNotifier {
-    client: Arc<RocketmqDefaultClient>,
+    client: Arc<TransportClient>,
     sender: mpsc::Sender<NotifyKey>,
     receiver: Arc<Mutex<Option<mpsc::Receiver<NotifyKey>>>>,
     mailbox: Arc<Mutex<Mailbox>>,
@@ -340,7 +339,7 @@ pub(crate) struct BrokerRoleNotifier {
 }
 
 impl BrokerRoleNotifier {
-    pub(crate) fn new(client: Arc<RocketmqDefaultClient>, retry_base_delay: Duration) -> Self {
+    pub(crate) fn new(client: Arc<TransportClient>, retry_base_delay: Duration) -> Self {
         let (sender, receiver) = mpsc::channel(DEFAULT_MAILBOX_CAPACITY);
         Self {
             client,

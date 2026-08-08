@@ -52,7 +52,7 @@ use rocketmq_transport::request_code_not_supported_with_remark_and_opaque;
 use rocketmq_transport::Channel;
 use rocketmq_transport::ConnectionHandlerContext;
 use rocketmq_transport::RejectRequestResponse;
-use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
+use rocketmq_transport::RequestProcessor;
 use rocketmq_transport::RpcClient;
 use rocketmq_transport::RpcClientUtils;
 use rocketmq_transport::RpcRequest;
@@ -1204,8 +1204,6 @@ mod tests {
     use rocketmq_store::BrokerReadStore;
     use rocketmq_store::MessageStoreConfig;
     use rocketmq_store::MAX_PULL_MSG_SIZE;
-    use rocketmq_transport::Channel;
-    use rocketmq_transport::ChannelInner;
     use rocketmq_transport::Connection;
 
     use super::consumer_compensation_for_request_source;
@@ -1551,13 +1549,13 @@ mod tests {
         let server_stream = accept.await.expect("join accept task");
         drop(server_stream);
 
-        let response_table = std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new()));
-        let channel_inner = std::sync::Arc::new(ChannelInner::new(
+        let channel = rocketmq_transport::test_support::TestChannelBuilder::new(
             Connection::new(stream),
-            response_table,
             crate::test_task_group("channel"),
-        ));
-        let channel = Channel::new(channel_inner, local_addr, remote_addr);
+        )
+        .addresses(local_addr, remote_addr)
+        .build()
+        .expect("build test channel");
         ClientChannelInfo::new(channel, client_id.into(), LanguageCode::JAVA, 1)
     }
 

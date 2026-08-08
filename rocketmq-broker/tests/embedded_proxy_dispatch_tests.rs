@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_transport::RequestContext;
-use rocketmq_transport::RequestContextError;
+use rocketmq_transport::api::v1::RequestContext;
+use rocketmq_transport::api::v1::RequestContextError;
 
 const PROXY_FACADE_SOURCE: &str = include_str!("../src/proxy_facade.rs");
 const PIPELINE_STARTUP_SOURCE: &str = include_str!("../src/broker_runtime/request_pipeline/startup.rs");

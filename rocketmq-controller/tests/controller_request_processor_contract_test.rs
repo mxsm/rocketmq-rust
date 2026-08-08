@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::collections::HashMap;
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -39,12 +38,10 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_transport::Channel;
-use rocketmq_transport::ChannelInner;
 use rocketmq_transport::Connection;
 use rocketmq_transport::ConnectionHandlerContext;
 use rocketmq_transport::ConnectionHandlerContextWrapper;
-use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
-use rocketmq_transport::ResponseFuture;
+use rocketmq_transport::RequestProcessor;
 use tokio::time::sleep;
 
 const CLUSTER_NAME: &str = "contract-cluster";
@@ -305,14 +302,14 @@ async fn create_test_channel() -> Channel {
     drop(listener);
     let tcp_stream = tokio::net::TcpStream::from_std(std_stream).expect("convert tcp stream");
     let connection = Connection::new(tcp_stream);
-    let response_table = Arc::new(parking_lot::Mutex::new(HashMap::<i32, ResponseFuture>::new()));
     let runtime = rocketmq_runtime::RuntimeContext::from_current("controller-processor-channel-test");
-    let inner = Arc::new(ChannelInner::new(
+    rocketmq_transport::test_support::TestChannelBuilder::new(
         connection,
-        response_table,
         runtime.service_context("controller-channel").task_group().clone(),
-    ));
-    Channel::new(inner, local_addr, local_addr)
+    )
+    .addresses(local_addr, local_addr)
+    .build()
+    .expect("build test channel")
 }
 
 async fn wait_for_leader(manager: &Arc<ControllerManager>) {

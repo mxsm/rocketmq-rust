@@ -52,18 +52,16 @@ use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::ShutdownReason;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
+use rocketmq_transport::api::v1::TransportTelemetry;
 use rocketmq_transport::ChannelEventListener;
-use rocketmq_transport::DefaultRemotingRequestProcessor;
+#[cfg(test)]
+use rocketmq_transport::ClientShutdownReport;
+use rocketmq_transport::DefaultRequestProcessor;
 use rocketmq_transport::NetworkUtil;
 use rocketmq_transport::RemotingClient;
-#[cfg(test)]
-use rocketmq_transport::RemotingClientShutdownReport;
-use rocketmq_transport::RemotingService;
-use rocketmq_transport::RocketMQServer;
-use rocketmq_transport::RocketmqDefaultClient;
 use rocketmq_transport::ServerConfig;
-use rocketmq_transport::TokioClientConfig;
-use rocketmq_transport::TransportTelemetry;
+use rocketmq_transport::TransportClientConfig;
+use rocketmq_transport::TransportServer;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
 use tracing::debug;
@@ -121,7 +119,7 @@ struct NameServerRuntime {
     scheduled_tasks: Option<ScheduledTaskGroup>,
     shutdown_tx: Option<watch::Sender<bool>>,
     shutdown_rx: Option<watch::Receiver<bool>>,
-    server_inner: Option<RocketMQServer<NameServerRequestProcessor>>,
+    server_inner: Option<TransportServer<NameServerRequestProcessor>>,
     /// Server task group for graceful shutdown
     server_task_group: Option<TaskGroup>,
     server_report_rx: Option<oneshot::Receiver<Option<ShutdownReport>>>,
@@ -539,7 +537,7 @@ impl NameServerRuntime {
             .service_context
             .as_ref()
             .expect("NameServerRuntime always has an injected ChildServiceContext");
-        let server = RocketMQServer::new_with_telemetry(
+        let server = TransportServer::new_with_telemetry(
             config,
             context.component("namesrv.remoting-server"),
             self.inner.transport_telemetry.clone(),
@@ -671,14 +669,17 @@ impl NameServerRuntime {
 
         debug!("NameServer address: {}", namesrv);
 
-        let weak_client = Arc::downgrade(&self.inner.remoting_client);
         self.inner
             .remoting_client
             .update_name_server_address_list(vec![namesrv])
             .await;
 
         // Start remoting client directly (no spawn needed as it's managed by self.inner)
-        self.inner.remoting_client.start(weak_client).await;
+        self.inner
+            .remoting_client
+            .start()
+            .await
+            .map_err(|error| namesrv_startup_failed("start remoting client", error))?;
 
         #[cfg(feature = "embedded-controller")]
         if let Some(controller_manager) = self.inner.controller_manager() {
@@ -1036,7 +1037,7 @@ impl Builder {
         #[cfg(not(any(feature = "observability", feature = "otel-traces")))]
         let transport_telemetry = TransportTelemetry::noop();
         let name_server_config = self.name_server_config.unwrap_or_default();
-        let tokio_client_config = TokioClientConfig::default();
+        let tokio_client_config = TransportClientConfig::default();
         let server_config = self.server_config.unwrap_or_default();
         #[cfg(feature = "embedded-controller")]
         let controller_config = if name_server_config.enable_controller_in_namesrv {
@@ -1071,12 +1072,16 @@ impl Builder {
         };
 
         // Create remoting client
-        let remoting_client = Arc::new(RocketmqDefaultClient::new_with_telemetry(
-            Arc::new(tokio_client_config.clone()),
-            DefaultRemotingRequestProcessor,
-            service_context.component("namesrv.remoting-client"),
-            transport_telemetry.clone(),
-        ));
+        let remoting_client = Arc::new(
+            RemotingClient::builder(
+                Arc::new(tokio_client_config.clone()),
+                DefaultRequestProcessor,
+                service_context.component("namesrv.remoting-client"),
+            )
+            .telemetry(transport_telemetry.clone())
+            .build()
+            .expect("clamped nameserver remoting client budgets must be valid"),
+        );
 
         let unregister_broker_queue_capacity = name_server_config.unregister_broker_queue_capacity as usize;
         let initial_config = Arc::new(NameServerRuntimeConfig {
@@ -1142,7 +1147,7 @@ pub(crate) struct NameServerRuntimeInner {
     config_update_lock: parking_lot::Mutex<()>,
     route_info_manager: Arc<RouteInfoManager>,
     kvconfig_manager: Arc<KVConfigManager>,
-    remoting_client: Arc<RocketmqDefaultClient>,
+    remoting_client: Arc<RemotingClient>,
     broker_housekeeping_service: Arc<BrokerHousekeepingService>,
     #[cfg(feature = "embedded-controller")]
     controller_manager: OnceLock<Arc<ControllerManager>>,
@@ -1157,7 +1162,7 @@ pub(crate) struct NameServerRuntimeInner {
 
 struct NameServerRuntimeConfig {
     name_server_config: Arc<NamesrvConfig>,
-    tokio_client_config: Arc<TokioClientConfig>,
+    tokio_client_config: Arc<TransportClientConfig>,
     server_config: Arc<ServerConfig>,
     #[cfg(feature = "embedded-controller")]
     controller_config: Option<Arc<ControllerConfig>>,
@@ -1279,7 +1284,7 @@ impl NameServerRuntimeInner {
     }
 
     #[inline]
-    pub fn tokio_client_config(&self) -> Arc<TokioClientConfig> {
+    pub fn tokio_client_config(&self) -> Arc<TransportClientConfig> {
         Arc::clone(&self.config.load().tokio_client_config)
     }
 
@@ -1414,98 +1419,16 @@ impl NameServerRuntimeInner {
 
         push_config_entry(
             &mut entries,
-            "clientWorkerThreads",
-            tokio_client_config.client_worker_threads,
-        );
-        push_config_entry(
-            &mut entries,
-            "clientCallbackExecutorThreads",
-            tokio_client_config.client_callback_executor_threads,
-        );
-        push_config_entry(
-            &mut entries,
-            "clientOnewaySemaphoreValue",
-            tokio_client_config.client_oneway_semaphore_value,
-        );
-        push_config_entry(
-            &mut entries,
-            "clientAsyncSemaphoreValue",
-            tokio_client_config.client_async_semaphore_value,
-        );
-        push_config_entry(
-            &mut entries,
             "connectTimeoutMillis",
-            tokio_client_config.connect_timeout_millis,
+            tokio_client_config.connect.timeout.as_millis(),
         );
         push_config_entry(
             &mut entries,
             "channelNotActiveInterval",
-            tokio_client_config.channel_not_active_interval,
-        );
-        push_config_entry(
-            &mut entries,
-            "clientChannelMaxIdleTimeSeconds",
-            tokio_client_config.client_channel_max_idle_time_seconds,
-        );
-        push_config_entry(
-            &mut entries,
-            "clientSocketSndBufSize",
-            tokio_client_config.client_socket_snd_buf_size,
-        );
-        push_config_entry(
-            &mut entries,
-            "clientSocketRcvBufSize",
-            tokio_client_config.client_socket_rcv_buf_size,
-        );
-        push_config_entry(
-            &mut entries,
-            "clientPooledByteBufAllocatorEnable",
-            tokio_client_config.client_pooled_byte_buf_allocator_enable,
-        );
-        push_config_entry(
-            &mut entries,
-            "clientCloseSocketIfTimeout",
-            tokio_client_config.client_close_socket_if_timeout,
-        );
-        push_config_entry(
-            &mut entries,
-            "socksProxyConfig",
-            &tokio_client_config.socks_proxy_config,
-        );
-        push_config_entry(
-            &mut entries,
-            "writeBufferHighWaterMark",
-            tokio_client_config.write_buffer_high_water_mark,
-        );
-        push_config_entry(
-            &mut entries,
-            "writeBufferLowWaterMark",
-            tokio_client_config.write_buffer_low_water_mark,
-        );
-        push_config_entry(
-            &mut entries,
-            "disableCallbackExecutor",
-            tokio_client_config.disable_callback_executor,
-        );
-        push_config_entry(
-            &mut entries,
-            "disableNettyWorkerGroup",
-            tokio_client_config.disable_netty_worker_group,
-        );
-        push_config_entry(
-            &mut entries,
-            "maxReconnectIntervalTimeSeconds",
-            tokio_client_config.max_reconnect_interval_time_seconds,
-        );
-        push_config_entry(
-            &mut entries,
-            "enableReconnectForGoAway",
-            tokio_client_config.enable_reconnect_for_go_away,
-        );
-        push_config_entry(
-            &mut entries,
-            "enableTransparentRetry",
-            tokio_client_config.enable_transparent_retry,
+            tokio_client_config
+                .maintenance
+                .idle_scan_interval
+                .map_or(0, |interval| interval.as_millis()),
         );
 
         entries.sort_by_key(|(key, _)| *key);
@@ -1539,6 +1462,7 @@ impl NameServerRuntimeInner {
 
         for (key, value) in updates {
             crate::config::reject_removed_route_manager_key(key.as_str())?;
+            crate::config::reject_removed_transport_client_key(key.as_str())?;
             match key.as_str() {
                 "rocketmqHome"
                 | "kvConfigPath"
@@ -1573,62 +1497,14 @@ impl NameServerRuntimeInner {
                 key if is_tls_config_key(key) => {
                     server_config.tls_config.apply_java_property(key, value.as_str());
                 }
-                "clientWorkerThreads" => {
-                    tokio_client_config.client_worker_threads = parse_config_value(&key, &value)?;
-                }
-                "clientCallbackExecutorThreads" => {
-                    tokio_client_config.client_callback_executor_threads = parse_config_value(&key, &value)?;
-                }
-                "clientOnewaySemaphoreValue" => {
-                    tokio_client_config.client_oneway_semaphore_value = parse_config_value(&key, &value)?;
-                }
-                "clientAsyncSemaphoreValue" => {
-                    tokio_client_config.client_async_semaphore_value = parse_config_value(&key, &value)?;
-                }
                 "connectTimeoutMillis" => {
-                    tokio_client_config.connect_timeout_millis = parse_config_value(&key, &value)?;
+                    let timeout_millis = parse_config_value::<u64>(&key, &value)?.max(1);
+                    tokio_client_config.connect.timeout = Duration::from_millis(timeout_millis);
                 }
                 "channelNotActiveInterval" => {
-                    tokio_client_config.channel_not_active_interval = parse_config_value(&key, &value)?;
-                }
-                "clientChannelMaxIdleTimeSeconds" => {
-                    tokio_client_config.client_channel_max_idle_time_seconds = parse_config_value(&key, &value)?;
-                }
-                "clientSocketSndBufSize" => {
-                    tokio_client_config.client_socket_snd_buf_size = parse_config_value(&key, &value)?;
-                }
-                "clientSocketRcvBufSize" => {
-                    tokio_client_config.client_socket_rcv_buf_size = parse_config_value(&key, &value)?;
-                }
-                "clientPooledByteBufAllocatorEnable" => {
-                    tokio_client_config.client_pooled_byte_buf_allocator_enable = parse_config_value(&key, &value)?;
-                }
-                "clientCloseSocketIfTimeout" => {
-                    tokio_client_config.client_close_socket_if_timeout = parse_config_value(&key, &value)?;
-                }
-                "socksProxyConfig" => {
-                    tokio_client_config.socks_proxy_config = value.to_string();
-                }
-                "writeBufferHighWaterMark" => {
-                    tokio_client_config.write_buffer_high_water_mark = parse_config_value(&key, &value)?;
-                }
-                "writeBufferLowWaterMark" => {
-                    tokio_client_config.write_buffer_low_water_mark = parse_config_value(&key, &value)?;
-                }
-                "disableCallbackExecutor" => {
-                    tokio_client_config.disable_callback_executor = parse_config_value(&key, &value)?;
-                }
-                "disableNettyWorkerGroup" => {
-                    tokio_client_config.disable_netty_worker_group = parse_config_value(&key, &value)?;
-                }
-                "maxReconnectIntervalTimeSeconds" => {
-                    tokio_client_config.max_reconnect_interval_time_seconds = parse_config_value(&key, &value)?;
-                }
-                "enableReconnectForGoAway" => {
-                    tokio_client_config.enable_reconnect_for_go_away = parse_config_value(&key, &value)?;
-                }
-                "enableTransparentRetry" => {
-                    tokio_client_config.enable_transparent_retry = parse_config_value(&key, &value)?;
+                    let interval_millis = parse_config_value::<u64>(&key, &value)?;
+                    tokio_client_config.maintenance.idle_scan_interval =
+                        (interval_millis > 0).then(|| Duration::from_millis(interval_millis));
                 }
                 _ => {}
             }
@@ -1662,7 +1538,7 @@ impl NameServerRuntimeInner {
     }
 
     #[inline]
-    pub fn remoting_client(&self) -> &RocketmqDefaultClient {
+    pub fn remoting_client(&self) -> &RemotingClient {
         &self.remoting_client
     }
 
@@ -1812,7 +1688,7 @@ mod tests {
     use rocketmq_runtime::RuntimeContext;
     use rocketmq_transport::test_support::LocalRequestHarness;
     use rocketmq_transport::ConnectionState;
-    use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
+    use rocketmq_transport::RequestProcessor;
     use rocketmq_transport::ServerConfig;
     use rocketmq_transport::TlsMode;
     use tokio::net::TcpStream as TokioTcpStream;
@@ -1912,7 +1788,7 @@ mod tests {
         let runtime = bootstrap.runtime_inner();
         let before = runtime.config_snapshot();
         let before_port = before.server_config.listen_port;
-        let before_workers = before.tokio_client_config.client_worker_threads;
+        let before_connect_timeout = before.tokio_client_config.connect.timeout;
 
         let result = runtime.update_runtime_config(HashMap::from([
             (
@@ -1920,7 +1796,7 @@ mod tests {
                 CheetahString::from_static_str("19876"),
             ),
             (
-                CheetahString::from_static_str("clientWorkerThreads"),
+                CheetahString::from_static_str("connectTimeoutMillis"),
                 CheetahString::from_static_str("not-a-number"),
             ),
         ]));
@@ -1929,7 +1805,7 @@ mod tests {
         let after = runtime.config_snapshot();
         assert!(Arc::ptr_eq(&before, &after));
         assert_eq!(after.server_config.listen_port, before_port);
-        assert_eq!(after.tokio_client_config.client_worker_threads, before_workers);
+        assert_eq!(after.tokio_client_config.connect.timeout, before_connect_timeout);
     }
 
     #[test]
@@ -2139,7 +2015,7 @@ mod tests {
             report
                 .remoting_client
                 .as_ref()
-                .is_some_and(RemotingClientShutdownReport::is_healthy),
+                .is_some_and(ClientShutdownReport::is_healthy),
             "remoting client shutdown report should be present and healthy: {report:?}"
         );
     }
@@ -4042,11 +3918,13 @@ mod tests {
         let body = response.body().expect("config response should include a body");
         let body = str::from_utf8(body).expect("config body should be utf-8");
         let properties = string_to_properties(body).expect("config body should use java properties format");
-        let client_worker_threads = bootstrap
+        let connect_timeout_millis = bootstrap
             .name_server_runtime
             .inner
             .tokio_client_config()
-            .client_worker_threads
+            .connect
+            .timeout
+            .as_millis()
             .to_string();
 
         assert_eq!(properties.get("listenPort").map(|value| value.as_str()), Some("19876"));
@@ -4061,8 +3939,8 @@ mod tests {
             Some("12")
         );
         assert_eq!(
-            properties.get("clientWorkerThreads").map(|value| value.as_str()),
-            Some(client_worker_threads.as_str())
+            properties.get("connectTimeoutMillis").map(|value| value.as_str()),
+            Some(connect_timeout_millis.as_str())
         );
         assert!(!properties.contains_key("useRouteInfoManagerV2"));
         assert_eq!(
@@ -4082,7 +3960,7 @@ mod tests {
             .await
             .unwrap();
         let mut request = RemotingCommand::create_remoting_command(RequestCode::UpdateNamesrvConfig).set_body(
-            b"listenPort=19876\nbindAddress=127.0.0.2\nclientWorkerThreads=9\nenableTopicList=false\ntls.server.mode=enforcing\ntls.server.certPath=/certs/server.pem\nunknownKey=42"
+            b"listenPort=19876\nbindAddress=127.0.0.2\nconnectTimeoutMillis=9\nenableTopicList=false\ntls.server.mode=enforcing\ntls.server.certPath=/certs/server.pem\nunknownKey=42"
                 .as_slice(),
         );
 
@@ -4099,8 +3977,9 @@ mod tests {
                 .name_server_runtime
                 .inner
                 .tokio_client_config()
-                .client_worker_threads,
-            9
+                .connect
+                .timeout,
+            Duration::from_millis(9)
         );
         assert!(
             !bootstrap

@@ -18,9 +18,9 @@ use crate::runtime::processor::RequestProcessor;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
 #[derive(Clone)]
-pub struct DefaultRemotingRequestProcessor;
+pub struct DefaultRequestProcessor;
 
-impl RequestProcessor for DefaultRemotingRequestProcessor {
+impl RequestProcessor for DefaultRequestProcessor {
     #[inline]
     async fn process_request(
         &mut self,

@@ -207,14 +207,13 @@ impl AsRef<ConnectionHandlerContextWrapper> for ConnectionHandlerContextWrapper 
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use std::time::Duration;
 
     use tokio::net::TcpListener;
     use tokio::net::TcpStream;
 
     use super::*;
-    use crate::base::response_future::ResponseFuture;
+    use crate::base::pending_request_table::PendingRequestTable;
     use crate::connection::Connection;
     use crate::net::channel::ChannelInner;
 
@@ -226,16 +225,15 @@ mod tests {
         let (server_stream, _) = listener.accept().await.unwrap();
         let local_address = server_stream.local_addr().unwrap();
         let remote_address = server_stream.peer_addr().unwrap();
-        let response_table = Arc::new(parking_lot::Mutex::new(HashMap::<i32, ResponseFuture>::new()));
+        let response_table = PendingRequestTable::new();
         let parent = rocketmq_runtime::RuntimeContext::from_current("connection-handler-context-test")
             .service_context("connection-handler-service")
             .task_group()
             .clone();
-        let inner = Arc::new(ChannelInner::new(
-            Connection::new(server_stream),
-            response_table,
-            parent,
-        ));
+        let inner = Arc::new(
+            ChannelInner::try_new_with_pending_requests(Connection::new(server_stream), response_table, parent)
+                .expect("build test channel inner"),
+        );
         let channel = Channel::new(inner, local_address, remote_address);
         let context = Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let context_clone = context.clone();

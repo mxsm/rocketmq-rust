@@ -62,15 +62,15 @@ use rocketmq_transport::transport_io_snapshot;
 use rocketmq_transport::AdmissionController;
 use rocketmq_transport::AdmissionLimits;
 use rocketmq_transport::AdmissionSnapshot;
+use rocketmq_transport::OneShotTransportClient;
 use rocketmq_transport::RequestDeadline;
 use rocketmq_transport::ResourceLimit;
-use rocketmq_transport::SessionRequestProcessor as RequestProcessor;
+use rocketmq_transport::SessionProcessor as RequestProcessor;
+use rocketmq_transport::SessionTransportServer;
+use rocketmq_transport::SessionTransportServerConfig;
 use rocketmq_transport::TlsClientConfig;
 use rocketmq_transport::TlsConfig;
 use rocketmq_transport::TlsMode;
-use rocketmq_transport::TransportClient;
-use rocketmq_transport::TransportServer;
-use rocketmq_transport::TransportServerConfig;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::runtime::Builder;
@@ -399,8 +399,8 @@ impl RequestProcessor for DelayedAckProcessor {
 
 struct TransportHarness {
     runtime: RuntimeContext,
-    server: Arc<TransportServer>,
-    client: Arc<TransportClient>,
+    server: Arc<SessionTransportServer>,
+    client: Arc<OneShotTransportClient>,
     server_admission: Arc<AdmissionController>,
     baseline_tasks: usize,
     baseline_child_groups: usize,
@@ -410,13 +410,13 @@ impl TransportHarness {
     async fn start(spec: RunSpec) -> Result<Self> {
         let runtime = RuntimeContext::try_from_current("architecture-network-collector")
             .context("create collector runtime context")?;
-        let mut server_config = TransportServerConfig::loopback();
+        let mut server_config = SessionTransportServerConfig::loopback();
         server_config.tls.test_mode_enable = true;
         server_config.tls.server.mode = TlsMode::Permissive;
         server_config.handshake_timeout = spec.request_timeout;
         server_config.request_timeout = spec.request_timeout;
         let server_admission = Arc::new(AdmissionController::new(server_admission_limits(spec)?));
-        let server = TransportServer::bind(
+        let server = SessionTransportServer::bind(
             runtime.service_context("architecture-network-server"),
             server_config,
             Arc::new(DelayedAckProcessor {
@@ -432,7 +432,7 @@ impl TransportHarness {
         let baseline_child_groups = server.owned_component_group_count();
         ensure!(baseline_tasks > 0, "transport accept task did not start");
 
-        let client = Arc::new(TransportClient::new(
+        let client = Arc::new(OneShotTransportClient::new(
             runtime.service_context("architecture-network-client"),
             Arc::new(AdmissionController::new(AdmissionLimits::default())),
         ));

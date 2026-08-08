@@ -28,7 +28,7 @@ use rocketmq_runtime::common::time_utils;
 use rocketmq_transport::command_from_error_with_remark;
 use rocketmq_transport::Channel;
 use rocketmq_transport::ConnectionHandlerContext;
-use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
+use rocketmq_transport::RequestProcessor;
 use tracing::debug;
 use tracing::warn;
 

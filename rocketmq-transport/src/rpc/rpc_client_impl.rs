@@ -58,10 +58,9 @@ use rocketmq_runtime::TaskId;
 use tracing::error;
 use tracing::trace;
 
-use crate::clients::rocketmq_tokio_client::RocketmqDefaultClient;
-use crate::clients::RemotingClient;
+use crate::clients::rocketmq_tokio_client::TransportClient;
 use crate::deadline::RequestDeadline;
-use crate::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
+use crate::request_processor::default_request_processor::DefaultRequestProcessor;
 use crate::rpc::client_metadata::ClientMetadata;
 use crate::rpc::rpc_client::RpcClient;
 use crate::rpc::rpc_client_hook::RpcClientHookFn;
@@ -123,7 +122,7 @@ pub struct RpcClientImpl {
     /// Client metadata for broker address resolution
     client_metadata: Arc<ClientMetadata>,
     /// Underlying remoting client for network communication
-    remoting_client: Arc<RocketmqDefaultClient<DefaultRemotingRequestProcessor>>,
+    remoting_client: Arc<TransportClient<DefaultRequestProcessor>>,
     /// Registered client hooks for request interception
     client_hook_list: Vec<RpcClientHookFn>,
 }
@@ -137,7 +136,7 @@ impl RpcClientImpl {
     /// * `remoting_client` - Network client for sending requests
     pub fn new(
         client_metadata: Arc<ClientMetadata>,
-        remoting_client: Arc<RocketmqDefaultClient<DefaultRemotingRequestProcessor>>,
+        remoting_client: Arc<TransportClient<DefaultRequestProcessor>>,
     ) -> Self {
         RpcClientImpl {
             client_metadata,
@@ -558,8 +557,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::remoting::RemotingService;
-    use crate::runtime::config::client_config::TokioClientConfig;
+    use crate::runtime::config::client_config::TransportClientConfig;
     use rocketmq_protocol::protocol::header::get_min_offset_request_header::GetMinOffsetRequestHeader;
 
     fn test_service_context(name: &'static str) -> rocketmq_runtime::ChildServiceContext {
@@ -583,9 +581,9 @@ mod tests {
     #[tokio::test]
     async fn invoke_without_broker_name_returns_typed_error_instead_of_panicking() {
         let client_metadata = Arc::new(ClientMetadata::new());
-        let remoting_client = Arc::new(RocketmqDefaultClient::new(
-            Arc::new(TokioClientConfig::default()),
-            DefaultRemotingRequestProcessor,
+        let remoting_client = Arc::new(TransportClient::build_for_test(
+            Arc::new(TransportClientConfig::default()),
+            DefaultRequestProcessor,
             test_service_context("rpc-client-error-test"),
         ));
         let rpc_client = RpcClientImpl::new(client_metadata, remoting_client);
@@ -612,9 +610,9 @@ mod tests {
     #[tokio::test]
     async fn invoke_with_callback_uses_remoting_worker_task_group() {
         let client_metadata = Arc::new(ClientMetadata::new());
-        let remoting_client = Arc::new(RocketmqDefaultClient::new(
-            Arc::new(TokioClientConfig::default()),
-            DefaultRemotingRequestProcessor,
+        let remoting_client = Arc::new(TransportClient::build_for_test(
+            Arc::new(TransportClientConfig::default()),
+            DefaultRequestProcessor,
             test_service_context("rpc-client-callback-test"),
         ));
         let rpc_client = RpcClientImpl::new(client_metadata, remoting_client.clone());

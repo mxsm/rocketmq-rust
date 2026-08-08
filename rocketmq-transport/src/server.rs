@@ -102,7 +102,7 @@ impl SessionIoPolicy {
     }
 }
 
-pub trait RequestProcessor: Send + Sync + 'static {
+pub trait SessionProcessor: Send + Sync + 'static {
     fn process(
         &self,
         request: RemotingCommand,
@@ -747,7 +747,7 @@ async fn accept_transport_connection(
 }
 
 #[derive(Debug, Clone)]
-pub struct TransportServerConfig {
+pub struct SessionTransportServerConfig {
     pub bind_address: SocketAddr,
     pub tls: TlsConfig,
     pub handshake_timeout: Duration,
@@ -756,7 +756,7 @@ pub struct TransportServerConfig {
     pub socket_options: SocketOptions,
 }
 
-impl TransportServerConfig {
+impl SessionTransportServerConfig {
     pub fn loopback() -> Self {
         let mut tls = TlsConfig::default();
         tls.server.mode = TlsMode::Disabled;
@@ -771,12 +771,12 @@ impl TransportServerConfig {
     }
 }
 
-pub struct TransportServer {
+pub struct SessionTransportServer {
     local_addr: SocketAddr,
     listener: Mutex<Option<tokio::net::TcpListener>>,
     service_context: ChildServiceContext,
-    config: TransportServerConfig,
-    processor: Arc<dyn RequestProcessor>,
+    config: SessionTransportServerConfig,
+    processor: Arc<dyn SessionProcessor>,
     dispatch: Arc<AuthorizedDispatchBoundary>,
     tls: TlsServerRuntime,
     started: AtomicBool,
@@ -787,11 +787,11 @@ pub struct TransportServer {
 }
 
 struct ActiveSessionGuard {
-    server: Arc<TransportServer>,
+    server: Arc<SessionTransportServer>,
 }
 
 impl ActiveSessionGuard {
-    fn new(server: Arc<TransportServer>) -> Self {
+    fn new(server: Arc<SessionTransportServer>) -> Self {
         server.active_sessions.fetch_add(1, Ordering::AcqRel);
         Self { server }
     }
@@ -804,7 +804,7 @@ impl Drop for ActiveSessionGuard {
 }
 
 struct ProcessorSessionHandler {
-    processor: Arc<dyn RequestProcessor>,
+    processor: Arc<dyn SessionProcessor>,
     request_timeout: Duration,
 }
 
@@ -853,11 +853,11 @@ impl ConnectionHandler for ProcessorSessionHandler {
     }
 }
 
-impl TransportServer {
+impl SessionTransportServer {
     pub async fn bind(
         service_context: ChildServiceContext,
-        config: TransportServerConfig,
-        processor: Arc<dyn RequestProcessor>,
+        config: SessionTransportServerConfig,
+        processor: Arc<dyn SessionProcessor>,
         admission: Arc<AdmissionController>,
     ) -> RocketMQResult<Arc<Self>> {
         Self::bind_with_security(
@@ -873,8 +873,8 @@ impl TransportServer {
 
     pub async fn bind_with_security(
         service_context: ChildServiceContext,
-        config: TransportServerConfig,
-        processor: Arc<dyn RequestProcessor>,
+        config: SessionTransportServerConfig,
+        processor: Arc<dyn SessionProcessor>,
         admission: Arc<AdmissionController>,
         security: Arc<TransportSecurity>,
         principal: Option<Principal>,
@@ -894,8 +894,8 @@ impl TransportServer {
     /// Binds a server whose accepted connections use one explicit telemetry instance.
     pub async fn bind_with_telemetry(
         service_context: ChildServiceContext,
-        config: TransportServerConfig,
-        processor: Arc<dyn RequestProcessor>,
+        config: SessionTransportServerConfig,
+        processor: Arc<dyn SessionProcessor>,
         admission: Arc<AdmissionController>,
         telemetry: TransportTelemetry,
     ) -> RocketMQResult<Arc<Self>> {
@@ -914,8 +914,8 @@ impl TransportServer {
     /// Binds a server with explicit security and telemetry capabilities.
     pub async fn bind_with_security_and_telemetry(
         service_context: ChildServiceContext,
-        config: TransportServerConfig,
-        processor: Arc<dyn RequestProcessor>,
+        config: SessionTransportServerConfig,
+        processor: Arc<dyn SessionProcessor>,
         admission: Arc<AdmissionController>,
         security: Arc<TransportSecurity>,
         principal: Option<Principal>,

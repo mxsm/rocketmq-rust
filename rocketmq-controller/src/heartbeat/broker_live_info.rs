@@ -161,9 +161,7 @@ impl fmt::Debug for BrokerLiveInfo {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use std::net::SocketAddr;
-    use std::sync::Arc;
 
     use rocketmq_transport::Connection;
 
@@ -178,16 +176,16 @@ mod tests {
         drop(listener);
         let tcp_stream = tokio::net::TcpStream::from_std(std_stream).unwrap();
         let connection = Connection::new(tcp_stream);
-        let response_table = Arc::new(parking_lot::Mutex::new(HashMap::new()));
-        let inner = Arc::new(rocketmq_transport::ChannelInner::new(
+        rocketmq_transport::test_support::TestChannelBuilder::new(
             connection,
-            response_table,
             rocketmq_runtime::RuntimeContext::from_current("broker-live-info-test")
                 .service_context("test-channel")
                 .task_group()
                 .clone(),
-        ));
-        Channel::new(inner, local_addr, local_addr)
+        )
+        .addresses(local_addr, local_addr)
+        .build()
+        .expect("build test channel")
     }
 
     #[tokio::test]

@@ -21,7 +21,7 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_transport::Channel;
 use rocketmq_transport::ConnectionHandlerContext;
-use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
+use rocketmq_transport::RequestProcessor;
 use tracing::debug;
 use tracing::info;
 
@@ -144,7 +144,7 @@ mod tests {
     use rocketmq_protocol::protocol::route::route_data_view::QueueData;
     use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
     use rocketmq_transport::test_support::LocalRequestHarness;
-    use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
+    use rocketmq_transport::RequestProcessor;
 
     use super::route_lookup::ClusterTestLookupFuture;
 

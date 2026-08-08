@@ -46,12 +46,10 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_protocol::protocol::RemotingSerializable;
-use rocketmq_transport::DefaultRemotingRequestProcessor;
-use rocketmq_transport::RemotingClient;
-use rocketmq_transport::RemotingService;
-use rocketmq_transport::RocketmqDefaultClient;
+use rocketmq_transport::DefaultRequestProcessor;
 use rocketmq_transport::ServerConfig;
-use rocketmq_transport::TokioClientConfig;
+use rocketmq_transport::TransportClient;
+use rocketmq_transport::TransportClientConfig;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
@@ -63,7 +61,7 @@ const STARTUP_RETRY_LIMIT: usize = 3;
 
 struct NamesrvHarness {
     addr: CheetahString,
-    client: Arc<RocketmqDefaultClient<DefaultRemotingRequestProcessor>>,
+    client: Arc<TransportClient<DefaultRequestProcessor>>,
     shutdown_tx: Option<oneshot::Sender<()>>,
     server_task: JoinHandle<RocketMQResult<()>>,
     runtime_context: rocketmq_runtime::RuntimeContext,
@@ -102,14 +100,17 @@ impl NamesrvHarness {
                     .await
             });
 
-            let client = Arc::new(RocketmqDefaultClient::new(
-                Arc::new(TokioClientConfig::default()),
-                DefaultRemotingRequestProcessor,
-                runtime_context.service_context("transport-client"),
-            ));
+            let client = Arc::new(
+                TransportClient::builder(
+                    Arc::new(TransportClientConfig::default()),
+                    DefaultRequestProcessor,
+                    runtime_context.service_context("transport-client"),
+                )
+                .build()
+                .expect("valid transport client configuration"),
+            );
             client.update_name_server_address_list(vec![addr.clone()]).await;
-            let weak_client = Arc::downgrade(&client);
-            client.start(weak_client).await;
+            client.start().await.expect("start transport client");
 
             match wait_until_ready(&addr, &client, &mut server_task).await {
                 Ok(()) => {
@@ -190,7 +191,7 @@ fn isolated_namesrv_data_dir(port: u16) -> PathBuf {
 
 async fn wait_until_ready(
     addr: &CheetahString,
-    client: &Arc<RocketmqDefaultClient<DefaultRemotingRequestProcessor>>,
+    client: &Arc<TransportClient<DefaultRequestProcessor>>,
     server_task: &mut JoinHandle<RocketMQResult<()>>,
 ) -> Result<(), String> {
     let deadline = Instant::now() + Duration::from_secs(10);

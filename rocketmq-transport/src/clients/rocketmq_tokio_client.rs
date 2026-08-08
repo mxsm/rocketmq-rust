@@ -14,10 +14,10 @@
 
 use std::collections::HashSet;
 use std::future::Future;
+use std::ops::Deref;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::sync::Weak;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
@@ -45,15 +45,19 @@ use tracing::warn;
 
 use crate::base::connection_net_event::ConnectionNetEvent;
 use crate::base::pending_request_table::PendingRequestTable;
+use crate::base::pending_request_table::PendingRequestUsage;
 use crate::clients::nameserver_selector::LatencyTracker;
 use crate::clients::reconnect::CircuitBreaker;
-use crate::clients::Client;
-use crate::clients::RemotingClient;
+use crate::clients::TransportSession;
 use crate::deadline::RequestDeadline;
+use crate::error_helpers::remote_error;
 use crate::remoting::inner::RemotingGeneralHandler;
-use crate::remoting::RemotingService;
-use crate::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
-use crate::runtime::config::client_config::TokioClientConfig;
+use crate::request_processor::default_request_processor::DefaultRequestProcessor;
+#[cfg(test)]
+use crate::runtime::config::client_config::ConnectConfig;
+#[cfg(test)]
+use crate::runtime::config::client_config::MaintenanceConfig;
+use crate::runtime::config::client_config::TransportClientConfig;
 use crate::runtime::processor::RequestProcessor;
 use crate::runtime::RPCHook;
 use crate::security::TransportSecurity;
@@ -67,7 +71,7 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 ///
 /// ```text
 /// ┌─────────────────────────────────────────────────────────┐
-/// │            RocketmqDefaultClient<PR>                    │
+/// │            TransportClient<PR>                    │
 /// ├─────────────────────────────────────────────────────────┤
 /// │                                                         │
 /// │  ┌────────────────┐      ┌──────────────────┐         │
@@ -100,20 +104,20 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 ///
 /// # Type Parameters
 ///
-/// * `PR` - Request processor type (default: `DefaultRemotingRequestProcessor`)
+/// * `PR` - Request processor type (default: `DefaultRequestProcessor`)
 ///
 /// # Example
 ///
 /// ```rust,ignore
 /// use std::sync::Arc;
 ///
-/// use crate::clients::RocketmqDefaultClient;
-/// use crate::runtime::config::client_config::TokioClientConfig;
+/// use crate::clients::TransportClient;
+/// use crate::runtime::config::client_config::TransportClientConfig;
 ///
 /// # async fn example() -> rocketmq_error::RocketMQResult<()> {
-/// let config = Arc::new(TokioClientConfig::default());
+/// let config = Arc::new(TransportClientConfig::default());
 /// let processor = Default::default();
-/// let client = RocketmqDefaultClient::new(config, processor);
+/// let client = TransportClient::builder(config, processor, service_context).build()?;
 ///
 /// // Update nameserver list
 /// client
@@ -130,11 +134,11 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 /// # Ok(())
 /// # }
 /// ```
-pub struct RocketmqDefaultClient<PR = DefaultRemotingRequestProcessor> {
+pub struct TransportClient<PR = DefaultRequestProcessor> {
     /// Client configuration (timeouts, buffer sizes, etc.)
     ///
     /// Shared across all connections to avoid duplication
-    tokio_client_config: Arc<TokioClientConfig>,
+    tokio_client_config: Arc<TransportClientConfig>,
 
     /// Persistent endpoint-session registry: `addr -> Client`.
     ///
@@ -144,7 +148,7 @@ pub struct RocketmqDefaultClient<PR = DefaultRemotingRequestProcessor> {
     /// - Concurrency: Scales linearly with CPU cores (typically 16-64 shards)
     ///
     /// Invariant: Only contains healthy connections (unhealthy removed on error)
-    connection_tables: Arc<DashMap<CheetahString /* ip:port */, Client<PR>>>,
+    connection_tables: Arc<DashMap<CheetahString /* ip:port */, TransportSession<PR>>>,
 
     /// One lifecycle-owned connection attempt per endpoint during cold bursts.
     connect_flights: Arc<DashMap<CheetahString, Arc<ConnectFlight<PR>>>>,
@@ -206,9 +210,127 @@ pub struct RocketmqDefaultClient<PR = DefaultRemotingRequestProcessor> {
     telemetry: TransportTelemetry,
 }
 
+/// Builds a persistent endpoint client without exposing positional optional capabilities.
+pub struct TransportClientBuilder<PR> {
+    config: Arc<TransportClientConfig>,
+    processor: PR,
+    service_context: ChildServiceContext,
+    connection_events: Option<tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
+    transport_security: Option<Arc<TransportSecurity>>,
+    telemetry: TransportTelemetry,
+}
+
+impl<PR> TransportClientBuilder<PR>
+where
+    PR: RequestProcessor + Sync + Clone + 'static,
+{
+    pub fn connection_events(mut self, events: tokio::sync::broadcast::Sender<ConnectionNetEvent>) -> Self {
+        self.connection_events = Some(events);
+        self
+    }
+
+    pub fn transport_security(mut self, transport_security: Arc<TransportSecurity>) -> Self {
+        self.transport_security = Some(transport_security);
+        self
+    }
+
+    pub fn telemetry(mut self, telemetry: TransportTelemetry) -> Self {
+        self.telemetry = telemetry;
+        self
+    }
+
+    pub fn build(self) -> RocketMQResult<TransportClient<PR>> {
+        let mut client = TransportClient::build_inner(
+            self.config,
+            self.processor,
+            self.connection_events,
+            self.service_context,
+            self.telemetry,
+        )?;
+        if let Some(transport_security) = self.transport_security {
+            client = client.with_transport_security(transport_security);
+        }
+        Ok(client)
+    }
+}
+
+/// Nameserver-aware remoting client.
+///
+/// This type composes the canonical persistent [`TransportClient`]. It never
+/// owns a second connection registry, writer queue, or pending-request table.
+#[derive(Clone)]
+pub struct RemotingClient<PR = DefaultRequestProcessor> {
+    transport: Arc<TransportClient<PR>>,
+}
+
+impl<PR> RemotingClient<PR>
+where
+    PR: RequestProcessor + Sync + Clone + 'static,
+{
+    pub fn builder(
+        config: Arc<TransportClientConfig>,
+        processor: PR,
+        service_context: ChildServiceContext,
+    ) -> RemotingClientBuilder<PR> {
+        RemotingClientBuilder {
+            transport: TransportClient::builder(config, processor, service_context),
+        }
+    }
+
+    pub fn transport_client(&self) -> Arc<TransportClient<PR>> {
+        Arc::clone(&self.transport)
+    }
+
+    pub async fn start(self: &Arc<Self>) -> RocketMQResult<ClientStartReport> {
+        self.transport.start().await
+    }
+
+    pub async fn shutdown_until(&self, deadline: ShutdownDeadline) -> RocketMQResult<ClientShutdownReport> {
+        Ok(self.transport.shutdown_with_report(deadline.remaining()).await)
+    }
+}
+
+impl<PR> Deref for RemotingClient<PR> {
+    type Target = TransportClient<PR>;
+
+    fn deref(&self) -> &Self::Target {
+        self.transport.as_ref()
+    }
+}
+
+pub struct RemotingClientBuilder<PR> {
+    transport: TransportClientBuilder<PR>,
+}
+
+impl<PR> RemotingClientBuilder<PR>
+where
+    PR: RequestProcessor + Sync + Clone + 'static,
+{
+    pub fn connection_events(mut self, events: tokio::sync::broadcast::Sender<ConnectionNetEvent>) -> Self {
+        self.transport = self.transport.connection_events(events);
+        self
+    }
+
+    pub fn transport_security(mut self, transport_security: Arc<TransportSecurity>) -> Self {
+        self.transport = self.transport.transport_security(transport_security);
+        self
+    }
+
+    pub fn telemetry(mut self, telemetry: TransportTelemetry) -> Self {
+        self.transport = self.transport.telemetry(telemetry);
+        self
+    }
+
+    pub fn build(self) -> RocketMQResult<RemotingClient<PR>> {
+        Ok(RemotingClient {
+            transport: Arc::new(self.transport.build()?),
+        })
+    }
+}
+
 enum ConnectFlightState<PR> {
     Connecting,
-    Complete(Box<Result<Option<Client<PR>>, Arc<str>>>),
+    Complete(Box<Result<Option<TransportSession<PR>>, Arc<str>>>),
 }
 
 struct ConnectFlight<PR> {
@@ -227,13 +349,17 @@ where
         }
     }
 
-    fn complete(&self, result: RocketMQResult<Option<Client<PR>>>) {
+    fn complete(&self, result: RocketMQResult<Option<TransportSession<PR>>>) {
         *self.state.lock() =
             ConnectFlightState::Complete(Box::new(result.map_err(|error| Arc::<str>::from(error.to_string()))));
         self.changed.notify_waiters();
     }
 
-    async fn wait(&self, deadline: RequestDeadline, target: &CheetahString) -> RocketMQResult<Option<Client<PR>>> {
+    async fn wait(
+        &self,
+        deadline: RequestDeadline,
+        target: &CheetahString,
+    ) -> RocketMQResult<Option<TransportSession<PR>>> {
         loop {
             let changed = self.changed.notified();
             tokio::pin!(changed);
@@ -251,20 +377,66 @@ where
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Serialize)]
+pub struct ClientStartReport {
+    pub background_tasks_started: usize,
+    pub already_running: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
-pub struct RemotingClientConnectionShutdownReport {
+pub struct ConnectionShutdownReport {
     pub addr: CheetahString,
     pub report: ShutdownReport,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
-pub struct RemotingClientShutdownReport {
+pub struct ClientShutdownReport {
     pub background: Option<ShutdownReport>,
     pub workers: Option<ShutdownReport>,
-    pub connections: Vec<RemotingClientConnectionShutdownReport>,
+    pub connections: Vec<ConnectionShutdownReport>,
 }
 
-impl RemotingClientShutdownReport {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub enum RequestTarget {
+    Endpoint(CheetahString),
+    NameServer,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SendReceipt {
+    pub endpoint: CheetahString,
+    pub written_at_millis: u64,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct PendingUsage {
+    pub count: usize,
+    pub retained_bytes: usize,
+    pub rejected_count: usize,
+    pub rejected_bytes: usize,
+}
+
+impl From<PendingRequestUsage> for PendingUsage {
+    fn from(usage: PendingRequestUsage) -> Self {
+        Self {
+            count: usage.count,
+            retained_bytes: usage.bytes,
+            rejected_count: usage.rejected_count,
+            rejected_bytes: usage.rejected_bytes,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct ClientSnapshot {
+    pub connection_count: usize,
+    pub connect_flight_count: usize,
+    pub configured_name_server_count: usize,
+    pub available_name_server_count: usize,
+    pub pending: PendingUsage,
+}
+
+impl ClientShutdownReport {
     pub fn is_healthy(&self) -> bool {
         self.background.as_ref().is_none_or(ShutdownReport::is_healthy)
             && self.workers.as_ref().is_none_or(ShutdownReport::is_healthy)
@@ -272,7 +444,7 @@ impl RemotingClientShutdownReport {
     }
 }
 
-impl<PR> Clone for RocketmqDefaultClient<PR> {
+impl<PR> Clone for TransportClient<PR> {
     fn clone(&self) -> Self {
         Self {
             tokio_client_config: self.tokio_client_config.clone(),
@@ -296,65 +468,40 @@ impl<PR> Clone for RocketmqDefaultClient<PR> {
     }
 }
 
-impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
-    pub fn new(
-        tokio_client_config: Arc<TokioClientConfig>,
+impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
+    pub fn builder(
+        tokio_client_config: Arc<TransportClientConfig>,
         processor: PR,
         service_context: ChildServiceContext,
-    ) -> Self {
-        Self::new_with_cl(tokio_client_config, processor, None, service_context)
-    }
-
-    pub fn new_with_service_context(
-        tokio_client_config: Arc<TokioClientConfig>,
-        processor: PR,
-        service_context: ChildServiceContext,
-    ) -> Self {
-        Self::new(tokio_client_config, processor, service_context)
-    }
-
-    pub fn new_with_cl(
-        tokio_client_config: Arc<TokioClientConfig>,
-        processor: PR,
-        tx: Option<tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
-        service_context: ChildServiceContext,
-    ) -> Self {
-        Self::new_with_cl_and_service_context(tokio_client_config, processor, tx, service_context)
-    }
-
-    pub fn new_with_cl_and_service_context(
-        tokio_client_config: Arc<TokioClientConfig>,
-        processor: PR,
-        tx: Option<tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
-        service_context: ChildServiceContext,
-    ) -> Self {
-        Self::new_with_cl_and_telemetry(
-            tokio_client_config,
+    ) -> TransportClientBuilder<PR> {
+        TransportClientBuilder {
+            config: tokio_client_config,
             processor,
-            tx,
             service_context,
-            TransportTelemetry::noop(),
-        )
+            connection_events: None,
+            transport_security: None,
+            telemetry: TransportTelemetry::noop(),
+        }
     }
 
-    /// Creates a remoting client bound to one explicit transport telemetry instance.
-    pub fn new_with_telemetry(
-        tokio_client_config: Arc<TokioClientConfig>,
+    #[cfg(test)]
+    pub(crate) fn build_for_test(
+        config: Arc<TransportClientConfig>,
         processor: PR,
         service_context: ChildServiceContext,
-        telemetry: TransportTelemetry,
     ) -> Self {
-        Self::new_with_cl_and_telemetry(tokio_client_config, processor, None, service_context, telemetry)
+        Self::builder(config, processor, service_context)
+            .build()
+            .expect("test transport client configuration must be valid")
     }
 
-    /// Creates a remoting client with connection events and explicit transport telemetry.
-    pub fn new_with_cl_and_telemetry(
-        tokio_client_config: Arc<TokioClientConfig>,
+    fn build_inner(
+        tokio_client_config: Arc<TransportClientConfig>,
         processor: PR,
         tx: Option<tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
         service_context: ChildServiceContext,
         telemetry: TransportTelemetry,
-    ) -> Self {
+    ) -> RocketMQResult<Self> {
         let process_budget = service_context.process_budget();
         let handler = RemotingGeneralHandler::new_with_telemetry(
             processor,
@@ -365,11 +512,10 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
                     ..Default::default()
                 },
                 &process_budget,
-            )
-            .expect("clamped remoting client pending-request budget must be valid"),
+            )?,
             telemetry.clone(),
         );
-        Self {
+        Ok(Self {
             tokio_client_config,
             connection_tables: Arc::new(DashMap::with_capacity(64)),
             connect_flights: Arc::new(DashMap::with_capacity(64)),
@@ -387,7 +533,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
             tx,
             transport_security: None,
             telemetry,
-        }
+        })
     }
 
     /// Installs an optional transport signer for newly created outbound sessions.
@@ -399,13 +545,24 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
     /// Returns whether newly created outbound connections use TLS.
     #[inline]
     pub fn is_use_tls(&self) -> bool {
-        self.tokio_client_config.use_tls
+        self.tokio_client_config.tls.enable
     }
 
     /// Returns the TLS configuration used when creating new outbound connections.
     #[inline]
     pub fn tls_config(&self) -> &TlsConfig {
-        &self.tokio_client_config.tls_config
+        &self.tokio_client_config.tls
+    }
+
+    #[must_use]
+    pub fn snapshot(&self) -> ClientSnapshot {
+        ClientSnapshot {
+            connection_count: self.connection_tables.len(),
+            connect_flight_count: self.connect_flights.len(),
+            configured_name_server_count: self.namesrv_addr_list.read().len(),
+            available_name_server_count: self.available_namesrv_addr_set.read().len(),
+            pending: self.cmd_handler.response_table.usage().into(),
+        }
     }
 
     pub fn update_name_server_address_list_sync(&self, addrs: Vec<CheetahString>) {
@@ -490,7 +647,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
     }
 }
 
-impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
+impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
     /// Get or create connection to a healthy nameserver using smart latency-based selection.
     ///
     /// # Selection Strategy
@@ -526,7 +683,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
     async fn get_and_create_nameserver_client_until(
         &self,
         deadline: RequestDeadline,
-    ) -> RocketMQResult<Option<Client<PR>>> {
+    ) -> RocketMQResult<Option<TransportSession<PR>>> {
         deadline.ensure_before_send("<nameserver>")?;
         let cached_addr = self.namesrv_addr_choosed.read().clone();
 
@@ -587,10 +744,8 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
     /// # Performance
     /// - **Fast path**: Single lock acquire + HashMap lookup + health check (< 100ns)
     /// - **Slow path**: Lock + TCP handshake + TLS (if enabled) (10-50ms)
-    async fn get_and_create_client(&self, addr: Option<&CheetahString>) -> Option<Client<PR>> {
-        let deadline = RequestDeadline::after(Duration::from_millis(
-            self.tokio_client_config.connect_timeout_millis as u64,
-        ));
+    async fn get_and_create_client(&self, addr: Option<&CheetahString>) -> Option<TransportSession<PR>> {
+        let deadline = RequestDeadline::after(self.tokio_client_config.connect.timeout);
         match self.get_and_create_client_until(addr, deadline).await {
             Ok(client) => client,
             Err(error) => {
@@ -604,7 +759,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         &self,
         addr: Option<&CheetahString>,
         deadline: RequestDeadline,
-    ) -> RocketMQResult<Option<Client<PR>>> {
+    ) -> RocketMQResult<Option<TransportSession<PR>>> {
         // Route empty addresses to nameserver
         let target_addr = match addr {
             None => return self.get_and_create_nameserver_client_until(deadline).await,
@@ -665,7 +820,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
     /// * `Some(client)` - Successfully connected (either new or cached)
     /// * `None` - Connection failed or timed out (or circuit breaker OPEN)
     #[cfg(test)]
-    async fn create_client(&self, addr: &CheetahString, duration: Duration) -> Option<Client<PR>> {
+    async fn create_client(&self, addr: &CheetahString, duration: Duration) -> Option<TransportSession<PR>> {
         match self.create_client_until(addr, RequestDeadline::after(duration)).await {
             Ok(client) => client,
             Err(error) => {
@@ -679,7 +834,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         &self,
         addr: &CheetahString,
         deadline: RequestDeadline,
-    ) -> RocketMQResult<Option<Client<PR>>> {
+    ) -> RocketMQResult<Option<TransportSession<PR>>> {
         deadline.ensure_before_send(addr.to_string())?;
         if let Some(client) = self.connection_tables.get(addr) {
             if client.connection().is_healthy() {
@@ -699,7 +854,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
             let client = self.clone();
             let flight_for_task = flight.clone();
             let target = addr.clone();
-            let connect_timeout = Duration::from_millis(self.tokio_client_config.connect_timeout_millis as u64);
+            let connect_timeout = self.tokio_client_config.connect.timeout;
             let target_for_task = target.clone();
             let spawned = self.spawn_worker_task(format!("rocketmq.transport.connect.{target}"), async move {
                 client.connect_attempts.fetch_add(1, Ordering::Relaxed);
@@ -721,7 +876,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         &self,
         addr: &CheetahString,
         deadline: RequestDeadline,
-    ) -> RocketMQResult<Option<Client<PR>>> {
+    ) -> RocketMQResult<Option<TransportSession<PR>>> {
         deadline.ensure_before_send(addr.to_string())?;
         // Check if healthy client already exists
         if let Some(client_ref) = self.connection_tables.get(addr) {
@@ -748,11 +903,10 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         }
 
         let addr_inner = addr.to_string();
-        let mut tls_config = self.tokio_client_config.tls_config.clone();
-        tls_config.enable = self.tokio_client_config.use_tls;
+        let tls_config = self.tokio_client_config.tls.clone();
 
         let transport_security = self.transport_security.clone();
-        let connect_result = Client::connect_with_service_context_until_and_telemetry(
+        let connect_result = TransportSession::connect_with_service_context_until_and_telemetry(
             &self.service_context,
             addr_inner,
             self.cmd_handler.clone(),
@@ -896,8 +1050,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
 
     /// Scans persistent sessions and removes those that are unhealthy or idle.
     fn scan_idle_connections(&self) {
-        let interval_ms = self.tokio_client_config.channel_not_active_interval;
-        let idle_threshold = (interval_ms > 0).then(|| Duration::from_millis(interval_ms as u64));
+        let idle_threshold = self.tokio_client_config.maintenance.idle_scan_interval;
         let now_millis = current_millis();
         let mut stale_addrs = Vec::new();
 
@@ -923,7 +1076,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         }
     }
 
-    pub async fn shutdown_with_report(&self, timeout: Duration) -> RemotingClientShutdownReport {
+    pub async fn shutdown_with_report(&self, timeout: Duration) -> ClientShutdownReport {
         let deadline = ShutdownDeadline::after(timeout);
         self.shutdown_token.cancel();
 
@@ -950,14 +1103,14 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         let mut connections = Vec::with_capacity(clients.len());
         for (addr, client) in clients {
             let report = client.close_with_report(deadline.remaining()).await;
-            connections.push(RemotingClientConnectionShutdownReport { addr, report });
+            connections.push(ConnectionShutdownReport { addr, report });
         }
 
         self.namesrv_addr_list.write().clear();
         self.namesrv_addr_choosed.write().take();
         self.available_namesrv_addr_set.write().clear();
 
-        RemotingClientShutdownReport {
+        ClientShutdownReport {
             background,
             workers,
             connections,
@@ -966,66 +1119,75 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
 }
 
 #[allow(unused_variables)]
-impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingService for RocketmqDefaultClient<PR> {
-    async fn start(&self, this: Weak<Self>) {
-        if let Some(client) = this.upgrade() {
-            let task_group = {
-                let mut task_group_guard = self.background_task_group.lock();
-                if let Some(task_group) = task_group_guard.as_ref() {
-                    if task_group.lifecycle_state() == TaskGroupLifecycleState::Open {
-                        debug!("RemotingClient background tasks are already running");
-                        return;
-                    }
+impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
+    pub async fn start(self: &Arc<Self>) -> RocketMQResult<ClientStartReport> {
+        let task_group = {
+            let mut task_group_guard = self.background_task_group.lock();
+            if let Some(task_group) = task_group_guard.as_ref() {
+                if task_group.lifecycle_state() == TaskGroupLifecycleState::Open {
+                    debug!("TransportClient background tasks are already running");
+                    return Ok(ClientStartReport {
+                        background_tasks_started: 0,
+                        already_running: true,
+                    });
                 }
+            }
 
-                let task_group = self
-                    .service_context
-                    .component("rocketmq-transport.client")
-                    .task_group()
-                    .clone();
-                *task_group_guard = Some(task_group.clone());
-                task_group
-            };
+            let task_group = self
+                .service_context
+                .component("rocketmq-transport.client")
+                .task_group()
+                .clone();
+            *task_group_guard = Some(task_group.clone());
+            task_group
+        };
 
-            let connect_timeout_millis = self.tokio_client_config.connect_timeout_millis as u64;
-            let token = self.shutdown_token.clone();
+        let connect_scan_interval = self.tokio_client_config.connect.timeout;
+        let token = self.shutdown_token.clone();
+        let mut background_tasks_started = 0;
 
-            let client_for_scan = client.clone();
-            let scan_token = token.clone();
-            if let Err(error) = task_group.spawn_service("remoting.client.namesrv-scan", async move {
+        let client_for_scan = Arc::clone(self);
+        let scan_token = token.clone();
+        task_group
+            .spawn_service("remoting.client.namesrv-scan", async move {
                 loop {
                     tokio::select! {
                         () = scan_token.cancelled() => break,
                         () = async {
                             client_for_scan.scan_available_name_srv().await;
-                            time::sleep(Duration::from_millis(connect_timeout_millis)).await;
+                            time::sleep(connect_scan_interval).await;
                         } => {}
                     }
                 }
-            }) {
-                error!(?error, "failed to spawn RemotingClient nameserver scan task");
-            }
+            })
+            .map_err(|error| remote_error(format!("failed to spawn nameserver scan task: {error}")))?;
+        background_tasks_started += 1;
 
-            let channel_not_active_interval = self.tokio_client_config.channel_not_active_interval as u64;
-            if channel_not_active_interval > 0 {
-                let idle_token = token.clone();
-                if let Err(error) = task_group.spawn_service("remoting.client.idle-scan", async move {
+        if let Some(idle_scan_interval) = self.tokio_client_config.maintenance.idle_scan_interval {
+            let idle_token = token.clone();
+            let client = Arc::clone(self);
+            task_group
+                .spawn_service("remoting.client.idle-scan", async move {
                     loop {
                         tokio::select! {
                             () = idle_token.cancelled() => break,
-                            () = time::sleep(Duration::from_millis(channel_not_active_interval)) => {
+                            () = time::sleep(idle_scan_interval) => {
                                 client.scan_idle_connections();
                             }
                         }
                     }
-                }) {
-                    error!(?error, "failed to spawn RemotingClient idle connection scan task");
-                }
-            }
+                })
+                .map_err(|error| remote_error(format!("failed to spawn idle connection scan task: {error}")))?;
+            background_tasks_started += 1;
         }
+
+        Ok(ClientStartReport {
+            background_tasks_started,
+            already_running: false,
+        })
     }
 
-    fn shutdown(&self) {
+    pub fn shutdown(&self) {
         self.shutdown_token.cancel();
         if let Some(task_group) = self.background_task_group.lock().take() {
             let report = task_group.shutdown_now();
@@ -1054,16 +1216,16 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingService for Rocketmq
         info!("RemotingClient shutdown complete");
     }
 
-    fn register_rpc_hook(&self, hook: Arc<dyn RPCHook>) {
+    pub fn register_rpc_hook(&self, hook: Arc<dyn RPCHook>) {
         self.cmd_handler.register_rpc_hook(hook);
     }
 
-    fn clear_rpc_hook(&self) {
+    pub fn clear_rpc_hook(&self) {
         self.cmd_handler.clear_rpc_hook();
     }
 }
 
-impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
+impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
     async fn invoke_oneway_until(
         &self,
         addr: &CheetahString,
@@ -1137,18 +1299,76 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
     }
 }
 
-#[allow(unused_variables)]
-impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqDefaultClient<PR> {
-    async fn update_name_server_address_list(&self, addrs: Vec<CheetahString>) {
+impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
+    pub async fn update_name_server_address_list(&self, addrs: Vec<CheetahString>) {
         self.update_name_server_address_list_sync(addrs);
     }
 
-    fn get_name_server_address_list(&self) -> Vec<CheetahString> {
+    pub fn get_name_server_address_list(&self) -> Vec<CheetahString> {
         self.namesrv_addr_list.read().clone()
     }
 
-    fn get_available_name_srv_list(&self) -> Vec<CheetahString> {
+    pub fn get_available_name_srv_list(&self) -> Vec<CheetahString> {
         self.available_namesrv_addr_set.read().iter().cloned().collect()
+    }
+
+    /// Sends one canonical request under an absolute deadline.
+    pub async fn request(
+        &self,
+        target: RequestTarget,
+        request: RemotingCommand,
+        deadline: RequestDeadline,
+    ) -> RocketMQResult<RemotingCommand> {
+        match target {
+            RequestTarget::Endpoint(endpoint) => {
+                self.invoke_request_with_deadline(Some(&endpoint), request, deadline)
+                    .await
+            }
+            RequestTarget::NameServer => self.invoke_request_with_deadline(None, request, deadline).await,
+        }
+    }
+
+    /// Sends one command and resolves only after the sole writer has completed it.
+    pub async fn send_oneway(
+        &self,
+        target: RequestTarget,
+        request: RemotingCommand,
+        deadline: RequestDeadline,
+    ) -> RocketMQResult<SendReceipt> {
+        match target {
+            RequestTarget::Endpoint(endpoint) => {
+                self.invoke_oneway_until(&endpoint, request, deadline, None).await?;
+                Ok(SendReceipt {
+                    endpoint,
+                    written_at_millis: current_millis(),
+                })
+            }
+            RequestTarget::NameServer => {
+                deadline.ensure_before_send("<nameserver>")?;
+                let Some(mut client) = self.get_and_create_client_until(None, deadline).await? else {
+                    return Err(RocketMQError::network_connection_failed(
+                        "<nameserver>",
+                        "one-way nameserver client unavailable",
+                    ));
+                };
+                let endpoint = CheetahString::from_string(client.remote_address().to_string());
+                let mut request = request;
+                if let Some(hooks) = self.cmd_handler.hook_snapshot() {
+                    request.make_custom_header_to_net();
+                    self.cmd_handler.do_before_rpc_hooks_with_snapshot(
+                        Some(hooks.as_ref()),
+                        client.remote_address(),
+                        Some(&mut request),
+                    )?;
+                }
+                request.mark_oneway_rpc_ref();
+                client.send_until(request, deadline).await?;
+                Ok(SendReceipt {
+                    endpoint,
+                    written_at_millis: current_millis(),
+                })
+            }
+        }
     }
 
     /// Send request and wait for response with timeout.
@@ -1176,9 +1396,9 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
     /// # Examples
     ///
     /// ```rust,ignore
-    /// # use crate::clients::RocketmqDefaultClient;
+    /// # use crate::clients::TransportClient;
     /// # use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-    /// # async fn example(client: &RocketmqDefaultClient) -> rocketmq_error::RocketMQResult<()> {
+    /// # async fn example(client: &TransportClient) -> rocketmq_error::RocketMQResult<()> {
     /// let request = RemotingCommand::create_request_command(/* ... */);
     /// let response = client.invoke_request(
     ///     Some(&"127.0.0.1:10911".into()),
@@ -1188,7 +1408,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
     /// # Ok(())
     /// # }
     /// ```
-    async fn invoke_request(
+    pub async fn invoke_request(
         &self,
         addr: Option<&CheetahString>,
         request: RemotingCommand,
@@ -1198,7 +1418,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
             .await
     }
 
-    async fn invoke_request_with_deadline(
+    pub async fn invoke_request_with_deadline(
         &self,
         addr: Option<&CheetahString>,
         request: RemotingCommand,
@@ -1316,7 +1536,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
         }
     }
 
-    async fn invoke_request_oneway_with_deadline(
+    pub async fn invoke_request_oneway_with_deadline(
         &self,
         addr: &CheetahString,
         request: RemotingCommand,
@@ -1325,7 +1545,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
         self.invoke_oneway_until(addr, request, deadline, None).await
     }
 
-    async fn invoke_request_oneway(
+    pub async fn invoke_request_oneway(
         &self,
         addr: &CheetahString,
         request: RemotingCommand,
@@ -1335,7 +1555,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
             .await
     }
 
-    fn is_address_reachable(&self, addr: &CheetahString) {
+    pub fn is_address_reachable(&self, addr: &CheetahString) {
         if let Some(client_ref) = self.connection_tables.get(addr) {
             if client_ref.value().connection().is_healthy() {
                 return;
@@ -1349,7 +1569,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
         }
     }
 
-    fn close_clients(&self, addrs: Vec<String>) {
+    pub fn close_clients(&self, addrs: Vec<String>) {
         for addr in &addrs {
             let key = CheetahString::from(addr.as_str());
             if let Some((_, _client)) = self.connection_tables.remove(&key) {
@@ -1358,9 +1578,9 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
         }
     }
 
-    fn register_processor(&self, processor: impl RequestProcessor + Sync) {
+    pub fn register_processor(&self, processor: impl RequestProcessor + Sync) {
         let _ = &processor;
-        warn!("dynamic request processor registration is not supported by RocketmqDefaultClient after construction");
+        warn!("dynamic request processor registration is not supported by TransportClient after construction");
     }
 }
 
@@ -1377,8 +1597,8 @@ mod tests {
 
     use super::*;
     use crate::connection::Connection;
-    use crate::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
-    use crate::runtime::config::client_config::TokioClientConfig;
+    use crate::request_processor::default_request_processor::DefaultRequestProcessor;
+    use crate::runtime::config::client_config::TransportClientConfig;
     use rocketmq_protocol::code::request_code::RequestCode;
     use rocketmq_protocol::code::response_code::ResponseCode;
 
@@ -1415,17 +1635,16 @@ mod tests {
 
     #[tokio::test]
     async fn is_use_tls_reflects_client_config() {
-        let config = TokioClientConfig {
-            use_tls: true,
-            tls_config: TlsConfig {
+        let config = TransportClientConfig {
+            tls: TlsConfig {
                 enable: true,
                 ..TlsConfig::default()
             },
             ..Default::default()
         };
-        let client = RocketmqDefaultClient::new(
+        let client = TransportClient::build_for_test(
             Arc::new(config),
-            DefaultRemotingRequestProcessor,
+            DefaultRequestProcessor,
             test_service_context("remoting-client-tls-test"),
         );
 
@@ -1435,19 +1654,21 @@ mod tests {
 
     #[tokio::test]
     async fn start_tracks_background_tasks_with_task_group() {
-        let config = TokioClientConfig {
-            connect_timeout_millis: 10,
-            channel_not_active_interval: 10,
+        let config = TransportClientConfig {
+            connect: ConnectConfig {
+                timeout: Duration::from_millis(10),
+            },
+            maintenance: MaintenanceConfig {
+                idle_scan_interval: Some(Duration::from_millis(10)),
+            },
             ..Default::default()
         };
-        let client = Arc::new(RocketmqDefaultClient::new(
+        let client = Arc::new(TransportClient::build_for_test(
             Arc::new(config),
-            DefaultRemotingRequestProcessor,
+            DefaultRequestProcessor,
             test_service_context("remoting-client-background-test"),
         ));
-        let weak_client = Arc::downgrade(&client);
-
-        client.start(weak_client).await;
+        client.start().await.expect("start client background tasks");
 
         let task_group = client
             .background_task_group
@@ -1458,7 +1679,8 @@ mod tests {
         assert_eq!(task_group.lifecycle_state(), TaskGroupLifecycleState::Open);
         assert_eq!(task_group.task_count(), 2);
 
-        client.start(Arc::downgrade(&client)).await;
+        let repeated = client.start().await.expect("repeat client start");
+        assert!(repeated.already_running);
         let repeated_start_group = client
             .background_task_group
             .lock()
@@ -1475,9 +1697,9 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn concurrent_nameserver_updates_publish_complete_owned_snapshots() {
-        let client = Arc::new(RocketmqDefaultClient::new(
-            Arc::new(TokioClientConfig::default()),
-            DefaultRemotingRequestProcessor,
+        let client = Arc::new(TransportClient::build_for_test(
+            Arc::new(TransportClientConfig::default()),
+            DefaultRequestProcessor,
             test_service_context("remoting-client-update-test"),
         ));
         let first = client.clone();
@@ -1523,19 +1745,21 @@ mod tests {
     async fn service_context_parents_background_and_worker_tasks() {
         let context = RuntimeContext::from_current("remoting-default-client-parent-test");
         let service = context.service_context("remoting-client-service");
-        let config = TokioClientConfig {
-            connect_timeout_millis: 10,
-            channel_not_active_interval: 10,
+        let config = TransportClientConfig {
+            connect: ConnectConfig {
+                timeout: Duration::from_millis(10),
+            },
+            maintenance: MaintenanceConfig {
+                idle_scan_interval: Some(Duration::from_millis(10)),
+            },
             ..Default::default()
         };
-        let client = Arc::new(RocketmqDefaultClient::new_with_service_context(
+        let client = Arc::new(TransportClient::build_for_test(
             Arc::new(config),
-            DefaultRemotingRequestProcessor,
+            DefaultRequestProcessor,
             service.clone(),
         ));
-        let weak_client = Arc::downgrade(&client);
-
-        client.start(weak_client).await;
+        client.start().await.expect("start client background tasks");
         client
             .spawn_worker_task("remoting.client.parent-test-worker", async {})
             .expect("worker task should spawn");
@@ -1586,9 +1810,9 @@ mod tests {
         });
 
         let hook = Arc::new(CountingHook::default());
-        let client = RocketmqDefaultClient::new(
-            Arc::new(TokioClientConfig::default()),
-            DefaultRemotingRequestProcessor,
+        let client = TransportClient::build_for_test(
+            Arc::new(TransportClientConfig::default()),
+            DefaultRequestProcessor,
             test_service_context("remoting-client-hook-test"),
         );
         client.register_rpc_hook(hook.clone());
@@ -1632,9 +1856,9 @@ mod tests {
                 connection.send_command(response).await.expect("send response");
             }
         });
-        let client = Arc::new(RocketmqDefaultClient::new(
-            Arc::new(TokioClientConfig::default()),
-            DefaultRemotingRequestProcessor,
+        let client = Arc::new(TransportClient::build_for_test(
+            Arc::new(TransportClientConfig::default()),
+            DefaultRequestProcessor,
             test_service_context("remoting-client-singleflight-test"),
         ));
         let target = CheetahString::from_string(addr.to_string());
@@ -1695,9 +1919,9 @@ mod tests {
                 .expect("send replacement response");
         });
 
-        let client = RocketmqDefaultClient::new(
-            Arc::new(TokioClientConfig::default()),
-            DefaultRemotingRequestProcessor,
+        let client = TransportClient::build_for_test(
+            Arc::new(TransportClientConfig::default()),
+            DefaultRequestProcessor,
             test_service_context("remoting-client-timeout-test"),
         );
         let target = CheetahString::from_string(addr.to_string());
@@ -1748,9 +1972,9 @@ mod tests {
         });
 
         let hook = Arc::new(CountingHook::default());
-        let client = RocketmqDefaultClient::new(
-            Arc::new(TokioClientConfig::default()),
-            DefaultRemotingRequestProcessor,
+        let client = TransportClient::build_for_test(
+            Arc::new(TransportClientConfig::default()),
+            DefaultRequestProcessor,
             test_service_context("remoting-client-oneway-test"),
         );
         client.register_rpc_hook(hook.clone());
@@ -1785,9 +2009,9 @@ mod tests {
             let (_socket, _) = listener.accept().await.expect("accept client");
             time::sleep(Duration::from_secs(5)).await;
         });
-        let client = RocketmqDefaultClient::new(
-            Arc::new(TokioClientConfig::default()),
-            DefaultRemotingRequestProcessor,
+        let client = TransportClient::build_for_test(
+            Arc::new(TransportClientConfig::default()),
+            DefaultRequestProcessor,
             test_service_context("remoting-client-shutdown-test"),
         );
 
@@ -1816,13 +2040,15 @@ mod tests {
             let (_socket, _) = listener.accept().await.expect("accept client");
             time::sleep(Duration::from_secs(5)).await;
         });
-        let config = TokioClientConfig {
-            channel_not_active_interval: 1,
-            ..TokioClientConfig::default()
+        let config = TransportClientConfig {
+            maintenance: MaintenanceConfig {
+                idle_scan_interval: Some(Duration::from_millis(1)),
+            },
+            ..TransportClientConfig::default()
         };
-        let client = RocketmqDefaultClient::new(
+        let client = TransportClient::build_for_test(
             Arc::new(config),
-            DefaultRemotingRequestProcessor,
+            DefaultRequestProcessor,
             test_service_context("remoting-client-idle-eviction-test"),
         );
         let target = CheetahString::from_string(addr.to_string());

@@ -44,7 +44,7 @@ use rocketmq_store::MessageStoreConfig;
 use rocketmq_transport::request_code_not_supported_with_remark_and_opaque;
 use rocketmq_transport::Channel;
 use rocketmq_transport::ConnectionHandlerContext;
-use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
+use rocketmq_transport::RequestProcessor;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;

@@ -91,6 +91,7 @@ tonic-prost-build   = "0.14.6"
 
 [dev-dependencies]
 criterion          = { version = "0.8", features = ["async_tokio"] }
+rocketmq-transport = { workspace = true, features = ["test-support"] }
 tempfile           = "3.27"
 tracing-subscriber = { workspace = true }
 

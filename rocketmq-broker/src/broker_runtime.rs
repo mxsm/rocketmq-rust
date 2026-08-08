@@ -79,9 +79,9 @@ use rocketmq_store::StorePorts;
 use rocketmq_store::StoreType;
 use rocketmq_store::TimerMessageStore;
 use rocketmq_transport::ChannelEventListener;
-use rocketmq_transport::RocketMQServer;
 use rocketmq_transport::ServerConfig;
-use rocketmq_transport::TokioClientConfig;
+use rocketmq_transport::TransportClientConfig;
+use rocketmq_transport::TransportServer;
 use tokio::sync::oneshot;
 use tokio::sync::Mutex;
 use tracing::error;
@@ -808,7 +808,7 @@ pub(crate) struct BrokerRuntimeState<MS: BrokerStorePort> {
     broker_fast_failure: BrokerFastFailure,
     log_filter_control: Option<Arc<crate::broker::log_filter_control::BrokerLogFilterControl>>,
     telemetry_handle: TelemetryHandle,
-    transport_telemetry: rocketmq_transport::TransportTelemetry,
+    transport_telemetry: rocketmq_transport::api::v1::TransportTelemetry,
     store_telemetry: rocketmq_store::StoreTelemetry,
     broker_metrics_manager: Option<Arc<crate::metrics::broker_metrics_manager::BrokerMetricsManager>>,
     pop_metrics_manager: Option<Arc<crate::metrics::pop_metrics_manager::PopMetricsManager>>,
