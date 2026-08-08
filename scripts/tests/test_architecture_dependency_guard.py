@@ -701,11 +701,11 @@ use rocketmq_client_rust::producer::Producer;
         policy["target_debt"]["entries"] = [
             {
                 "caller": "rocketmq-controller",
-                "target": "rocketmq-auth",
+                "target": "rocketmq-broker",
                 "kind": "normal",
                 "path": "rocketmq-controller/Cargo.toml",
-                "alias": "rocketmq_auth",
-                "owner": "controller-security",
+                "alias": "rocketmq_broker",
+                "owner": "controller-fixture",
                 "reason": "fixture debt",
                 "remove_phase": "P2.1",
                 "remove_by": "2099-12-31",
@@ -715,10 +715,10 @@ use rocketmq_client_rust::producer::Producer;
             [
                 package(
                     "rocketmq-controller",
-                    [dependency("rocketmq-auth")],
+                    [dependency("rocketmq-broker")],
                     manifest_path="rocketmq-controller/Cargo.toml",
                 ),
-                package("rocketmq-auth"),
+                package("rocketmq-broker"),
             ]
         )
 
@@ -737,18 +737,18 @@ use rocketmq_client_rust::producer::Producer;
         policy = json.loads(POLICY.read_text(encoding="utf-8"))
         entry = {
             "caller": "rocketmq-controller",
-            "target": "rocketmq-auth",
+            "target": "rocketmq-broker",
             "kind": "normal",
             "path": "rocketmq-controller/Cargo.toml",
-            "alias": "rocketmq_auth",
-            "owner": "controller-security",
+            "alias": "rocketmq_broker",
+            "owner": "controller-fixture",
             "reason": "fixture debt",
             "remove_phase": "P2.1",
             "remove_by": "2099-12-31",
         }
         policy["target_debt"]["entries"] = [entry]
         stale = self.run_guard(
-            metadata([package("rocketmq-controller"), package("rocketmq-auth")]),
+            metadata([package("rocketmq-controller"), package("rocketmq-broker")]),
             mode="transition",
             policy_override=policy,
         )
@@ -761,10 +761,10 @@ use rocketmq_client_rust::producer::Producer;
                 [
                     package(
                         "rocketmq-controller",
-                        [dependency("rocketmq-auth")],
+                        [dependency("rocketmq-broker")],
                         manifest_path="rocketmq-controller/Cargo.toml",
                     ),
-                    package("rocketmq-auth"),
+                    package("rocketmq-broker"),
                 ]
             ),
             mode="transition",
