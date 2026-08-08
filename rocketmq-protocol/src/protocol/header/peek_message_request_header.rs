@@ -13,30 +13,35 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::protocol::header::message_operation_header::TopicRequestHeaderTrait;
 use crate::protocol::header::namesrv::topic_operation_header::TopicRequestHeader;
 
-#[derive(Clone, Debug, Serialize, Deserialize, RequestHeaderCodecV2)]
+#[derive(Clone, Debug, Serialize, Deserialize, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::peek_message_request_header::PeekMessageRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.PeekMessageRequestHeader"
+)]
 #[serde(rename_all = "camelCase")]
 pub struct PeekMessageRequestHeader {
-    #[required]
+    #[header(required)]
     pub consumer_group: CheetahString,
 
-    #[required]
+    #[header(required)]
     pub topic: CheetahString,
 
     /// If negative, peek from all queues
-    #[required]
+    #[header(required)]
     pub queue_id: i32,
 
-    #[required]
+    #[header(required)]
     pub max_msg_nums: i32,
 
     #[serde(flatten)]
+    #[header(flatten, presence = "always")]
     pub topic_request_header: Option<TopicRequestHeader>,
 }
 

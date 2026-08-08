@@ -13,26 +13,31 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::protocol::header::message_operation_header::TopicRequestHeaderTrait;
 use crate::protocol::header::namesrv::topic_operation_header::TopicRequestHeader;
 
-#[derive(Debug, Clone, Serialize, Deserialize, RequestHeaderCodecV2)]
+#[derive(Debug, Clone, Serialize, Deserialize, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::polling_info_request_header::PollingInfoRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.PollingInfoRequestHeader"
+)]
 #[serde(rename_all = "camelCase")]
 pub struct PollingInfoRequestHeader {
-    #[required]
+    #[header(required)]
     pub consumer_group: CheetahString,
 
-    #[required]
+    #[header(required)]
     pub topic: CheetahString,
 
-    #[required]
+    #[header(required)]
     pub queue_id: i32,
 
     #[serde(flatten)]
+    #[header(flatten, presence = "always")]
     pub topic_request_header: Option<TopicRequestHeader>,
 }
 
