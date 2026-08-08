@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -24,12 +24,15 @@ use serde::Serialize;
 /// preserves those values from the current Topic configuration and rejects an
 /// empty patch. A distinct request code keeps the legacy generic Topic upsert
 /// behavior unchanged and makes older Brokers reject this operation.
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize, RequestHeaderCodecV2)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::update_topic_config_cas_request_header::UpdateTopicConfigCasRequestHeader"
+)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateTopicConfigCasRequestHeader {
-    #[required]
+    #[header(required)]
     pub topic: CheetahString,
-    #[required]
+    #[header(required)]
     pub expected_version: u64,
     pub read_queue_nums: Option<i32>,
     pub write_queue_nums: Option<i32>,

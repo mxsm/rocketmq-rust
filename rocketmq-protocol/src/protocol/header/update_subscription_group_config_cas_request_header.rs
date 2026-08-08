@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -22,12 +22,15 @@ use serde::Serialize;
 /// Only retry limits and consume timeout are accepted. The Broker preserves
 /// permissions, subscription policy, attributes, and every other field from
 /// the current group configuration.
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize, RequestHeaderCodecV2)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::update_subscription_group_config_cas_request_header::UpdateSubscriptionGroupConfigCasRequestHeader"
+)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateSubscriptionGroupConfigCasRequestHeader {
-    #[required]
+    #[header(required)]
     pub group: CheetahString,
-    #[required]
+    #[header(required)]
     pub expected_version: u64,
     pub retry_max_times: Option<i32>,
     pub retry_queue_nums: Option<i32>,

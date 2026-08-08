@@ -96,9 +96,10 @@ fn validate_container(model: &HeaderModel, errors: &mut Option<syn::Error>) {
 fn validate_fields(model: &HeaderModel, errors: &mut Option<syn::Error>) {
     let mut key_owners: HashMap<&str, &syn::Ident> = HashMap::new();
     let mut order_owners: HashMap<u16, &syn::Ident> = HashMap::new();
+    let has_java_contract = model.java_class.is_some();
 
     for field in &model.fields {
-        validate_field(field, errors);
+        validate_field(field, has_java_contract, errors);
 
         if !field.flattened {
             for name in std::iter::once(&field.key).chain(field.aliases.iter()) {
@@ -129,7 +130,7 @@ fn validate_fields(model: &HeaderModel, errors: &mut Option<syn::Error>) {
     }
 }
 
-fn validate_field(field: &FieldModel, errors: &mut Option<syn::Error>) {
+fn validate_field(field: &FieldModel, has_java_contract: bool, errors: &mut Option<syn::Error>) {
     if field.kind == ValueKind::Unsupported {
         combine_error(
             errors,
@@ -167,7 +168,7 @@ fn validate_field(field: &FieldModel, errors: &mut Option<syn::Error>) {
     let _ = field.option_inner.as_ref();
     let _ = field.default_semantic.as_ref();
     let _ = field.flatten_presence;
-    validate_java_range(field, errors);
+    validate_java_range(field, has_java_contract, errors);
 }
 
 fn validate_wire_name(name: &WireName, errors: &mut Option<syn::Error>) {
@@ -191,8 +192,9 @@ fn validate_wire_name(name: &WireName, errors: &mut Option<syn::Error>) {
     }
 }
 
-fn validate_java_range(field: &FieldModel, errors: &mut Option<syn::Error>) {
+fn validate_java_range(field: &FieldModel, has_java_contract: bool, errors: &mut Option<syn::Error>) {
     let java_type = field.java_type.as_ref().map(|value| value.value.as_str());
+    let requires_java_range = has_java_contract || java_type.is_some();
     match (field.kind, field.range, java_type) {
         (ValueKind::U32, Some(HeaderRange::I32), None | Some("int" | "Integer")) => {}
         (ValueKind::U64, Some(HeaderRange::I64), None | Some("long" | "Long")) => {}
@@ -210,11 +212,11 @@ fn validate_java_range(field: &FieldModel, errors: &mut Option<syn::Error>) {
                 "u64 fields require range = \"i64\"; java_type, when present, must be long or Long",
             ),
         ),
-        (ValueKind::U32, None, _) => combine_error(
+        (ValueKind::U32, None, _) if requires_java_range => combine_error(
             errors,
             syn::Error::new(field.span, "unsigned u32 fields require range = \"i32\""),
         ),
-        (ValueKind::U64, None, _) => combine_error(
+        (ValueKind::U64, None, _) if requires_java_range => combine_error(
             errors,
             syn::Error::new(field.span, "unsigned u64 fields require range = \"i64\""),
         ),

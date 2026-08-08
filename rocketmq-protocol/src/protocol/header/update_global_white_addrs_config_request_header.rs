@@ -13,13 +13,17 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::update_global_white_addrs_config_request_header::UpdateGlobalWhiteAddrsConfigRequestHeader"
+)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateGlobalWhiteAddrsConfigRequestHeader {
+    #[header(default, default_semantic = "literal:")]
     pub global_white_addrs: CheetahString,
 }
 

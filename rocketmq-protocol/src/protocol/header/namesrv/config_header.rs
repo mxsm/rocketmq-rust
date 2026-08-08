@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize, RequestHeaderCodecV2)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, RequestHeaderCodecV3)]
+#[header(type_id = "rocketmq_protocol::protocol::header::namesrv::config_header::GetNamesrvConfigRequestHeader")]
 #[serde(rename_all = "camelCase")]
 pub struct GetNamesrvConfigRequestHeader {
     pub probe_only: Option<bool>,

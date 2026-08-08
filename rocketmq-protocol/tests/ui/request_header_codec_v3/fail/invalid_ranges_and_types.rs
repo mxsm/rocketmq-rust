@@ -1,7 +1,7 @@
 use rocketmq_macros::RequestHeaderCodecV3;
 
 #[derive(RequestHeaderCodecV3)]
-#[header(type_id = "fixtures::Ranges", crate = "rocketmq_protocol")]
+#[header(type_id = "fixtures::Ranges", java_class = "org.example.Ranges", crate = "rocketmq_protocol")]
 struct InvalidRanges {
     #[header(required, java_type = "long", range = "i32")]
     wrong_u32_range: u32,

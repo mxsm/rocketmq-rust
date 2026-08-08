@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -21,9 +21,13 @@ use serde::Serialize;
 /// Legacy `UpdateBrokerConfig` requests do not use this header. Keeping CAS on
 /// a distinct request code ensures an older broker rejects the operation
 /// instead of ignoring an unknown header and applying it unconditionally.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize, RequestHeaderCodecV2)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::update_broker_config_request_header::UpdateBrokerConfigRequestHeader"
+)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateBrokerConfigRequestHeader {
+    #[header(default, default_semantic = "literal:0")]
     pub expected_generation: u64,
 }
 
