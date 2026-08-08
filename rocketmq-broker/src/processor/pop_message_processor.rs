@@ -65,9 +65,7 @@ use rocketmq_store::BrokerReadWriteStore;
 use rocketmq_store::GetMessageResult;
 use rocketmq_store::GetMessageStatus;
 use rocketmq_store::PopCheckPoint;
-use rocketmq_store::SelectMappedBufferCacheState;
 use rocketmq_store::SelectMappedBufferResult;
-use rocketmq_store::SelectMappedBufferSourceKind;
 use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use rocketmq_transport::api::v1::RequestProcessor;
@@ -75,6 +73,7 @@ use tokio::select;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::sync::Notify;
 use tokio::sync::RwLock;
+use tracing::error;
 use tracing::info;
 use tracing::warn;
 
@@ -729,7 +728,7 @@ where
                         channel.send_bytes(header_bytes).await?;
                     }
                     for select_result in get_message_result.message_mapped_list_mut() {
-                        if let Some(message) = select_result.bytes.take() {
+                        if let Some(message) = select_result.take() {
                             channel.send_bytes(message).await?;
                         }
                     }
@@ -1163,15 +1162,14 @@ where
                             message_ext.set_store_size(0);
 
                             let encode = MessageDecoder::encode(&message_ext, false).unwrap();
-                            let tmp_result = SelectMappedBufferResult {
-                                start_offset: maped_buffer.start_offset,
-                                size: encode.len() as i32,
-                                bytes: Some(encode),
-                                mapped_file: None,
-                                is_in_cache: true,
-                                source_kind: SelectMappedBufferSourceKind::Bytes,
-                                file_offset: 0,
-                                cache_state: SelectMappedBufferCacheState::Unknown,
+                            let Some(tmp_result) =
+                                SelectMappedBufferResult::from_bytes(maped_buffer.start_offset(), encode)
+                            else {
+                                error!(
+                                    start_offset = maped_buffer.start_offset(),
+                                    "encoded POP response message exceeds the supported selection size"
+                                );
+                                continue;
                             };
                             get_message_result.add_message_inner(tmp_result);
                         }

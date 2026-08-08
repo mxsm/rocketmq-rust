@@ -1453,8 +1453,8 @@ async fn seed_pull_store(collector_store: &mut CollectorStore, scenario: Scenari
         .iter()
         .map(|selection| {
             Ok(MessageLocation {
-                offset: i64::try_from(selection.start_offset).context("pull message offset exceeds i64")?,
-                size: selection.size,
+                offset: i64::try_from(selection.start_offset()).context("pull message offset exceeds i64")?,
+                size: selection.size(),
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -1500,7 +1500,7 @@ async fn run_pull_workload(
                 result
                     .message_mapped_list()
                     .iter()
-                    .filter(|selection| selection.source_kind != SelectMappedBufferSourceKind::MappedFile)
+                    .filter(|selection| selection.source_kind() != SelectMappedBufferSourceKind::MappedFile)
                     .count() as u64,
             )
             .ok_or_else(|| anyhow!("pull body-copy counter overflowed"))?;
@@ -1552,7 +1552,7 @@ async fn pull_batch(
             result
                 .message_mapped_list()
                 .iter()
-                .all(|selection| selection.cache_state == SelectMappedBufferCacheState::Hot),
+                .all(|selection| selection.cache_state() == SelectMappedBufferCacheState::Hot),
             "{profile} batch included a non-hot mapped buffer"
         );
     }
@@ -1620,7 +1620,7 @@ fn measure_direct_commit_log_allocation_calls(
                 .get_message(location.offset, location.size)
                 .ok_or_else(|| anyhow!("direct CommitLog control omitted a seeded message"))?;
             ensure!(
-                selection.cache_state == SelectMappedBufferCacheState::Hot,
+                selection.cache_state() == SelectMappedBufferCacheState::Hot,
                 "direct CommitLog control included a non-hot mapped buffer"
             );
         }

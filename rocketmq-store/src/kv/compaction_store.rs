@@ -27,7 +27,6 @@ use crate::base::get_message_result::GetMessageResult;
 use crate::base::message_status_enum::GetMessageStatus;
 use crate::base::select_result::SelectMappedBufferCacheState;
 use crate::base::select_result::SelectMappedBufferResult;
-use crate::base::select_result::SelectMappedBufferSourceKind;
 use crate::kv::compaction_generation;
 use crate::kv::compaction_generation::CompactionPayload;
 use crate::kv::compaction_generation::CompactionQueueKey;
@@ -635,25 +634,38 @@ impl CompactionStore {
                     ));
                 }
             };
-            let payload_size = payload.len() as i32;
+            let Ok(payload_size) = i32::try_from(payload.len()) else {
+                tracing::warn!(
+                    physical_offset = message.source_physical_offset,
+                    payload_size = payload.len(),
+                    "compaction payload exceeds the selected-buffer size limit"
+                );
+                return Some(status_result(
+                    GetMessageStatus::OffsetFoundNull,
+                    offset,
+                    min_offset,
+                    max_offset,
+                ));
+            };
             if result.buffer_total_size() > 0 && result.buffer_total_size() + payload_size > max_total_msg_size {
                 break;
             }
             let physical_offset = message.physical_offset();
-            result.add_message(
-                SelectMappedBufferResult {
-                    start_offset: physical_offset.max(0) as u64,
-                    bytes: Some(payload),
-                    size: payload_size,
-                    mapped_file: None,
-                    is_in_cache: true,
-                    source_kind: SelectMappedBufferSourceKind::Bytes,
-                    file_offset: physical_offset.max(0) as u64,
-                    cache_state: SelectMappedBufferCacheState::Unknown,
-                },
-                queue_offset as u64,
-                message.batch_num,
-            );
+            let Some(selected) = SelectMappedBufferResult::from_bytes_with_metadata(
+                physical_offset.max(0) as u64,
+                physical_offset.max(0) as u64,
+                payload,
+                true,
+                SelectMappedBufferCacheState::Unknown,
+            ) else {
+                return Some(status_result(
+                    GetMessageStatus::OffsetFoundNull,
+                    offset,
+                    min_offset,
+                    max_offset,
+                ));
+            };
+            result.add_message(selected, queue_offset as u64, message.batch_num);
             next_begin_offset = message.queue_offset + i64::from(message.batch_num);
         }
         if result.message_count() == 0 {

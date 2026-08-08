@@ -209,7 +209,7 @@ impl<MS: BrokerReadStore> PullMessageResultHandler for DefaultPullMessageResultH
                         let _ = channel.send_bytes(header_bytes).await;
                     }
                     for select_result in get_message_result.message_mapped_list_mut() {
-                        if let Some(message) = select_result.bytes.take() {
+                        if let Some(message) = select_result.take() {
                             let _ = channel.send_bytes(message).await;
                         }
                     }

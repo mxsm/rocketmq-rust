@@ -22,6 +22,7 @@ use std::time::Duration;
 
 use cheetah_string::CheetahString;
 use parking_lot::RwLock;
+use parking_lot::RwLockReadGuard;
 use rocketmq_model::common::message::MessageConst;
 use rocketmq_model::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_runtime::common::time_utils::current_millis;
@@ -80,6 +81,7 @@ pub struct IndexServiceAdapter {
     index_num: u32,
     store_path: String,
     index_file_list: Arc<RwLock<Vec<Arc<IndexFile>>>>,
+    operation_closing: Arc<RwLock<bool>>,
     message_store_config: Arc<MessageStoreConfig>,
     store_checkpoint: Arc<StoreCheckpoint>,
     running_flags: Arc<RunningFlags>,
@@ -130,6 +132,7 @@ impl IndexServiceAdapter {
             index_num: message_store_config.max_index_num,
             store_path: get_store_path_index(message_store_config.store_path_root_dir.as_str()),
             index_file_list: Arc::new(Default::default()),
+            operation_closing: Arc::new(RwLock::new(false)),
             message_store_config,
             store_checkpoint,
             running_flags,
@@ -142,11 +145,13 @@ impl IndexServiceAdapter {
     }
 
     pub fn shutdown(&self) {
-        let list = self.index_file_list.read();
-        shutdown_index_files(&list, |index_file| index_file.shutdown());
+        self.shutdown_with_callbacks(|| {}, || {});
     }
 
     pub fn load(&mut self, last_exit_ok: bool) -> bool {
+        let Some(_operation) = self.try_enter_operation() else {
+            return false;
+        };
         let dir = Path::new(&self.store_path);
         let Ok(read_dir) = fs::read_dir(dir) else {
             return true;
@@ -362,6 +367,22 @@ impl IndexServiceAdapter {
     }
 
     pub fn build_index(&self, dispatch_request: &DispatchRequest) {
+        let _ = self.build_index_with(dispatch_request, || {});
+    }
+
+    fn build_index_with<OnEntered>(&self, dispatch_request: &DispatchRequest, on_entered: OnEntered) -> bool
+    where
+        OnEntered: FnOnce(),
+    {
+        let Some(_operation) = self.try_enter_operation() else {
+            return false;
+        };
+        on_entered();
+        self.build_index_admitted(dispatch_request);
+        true
+    }
+
+    fn build_index_admitted(&self, dispatch_request: &DispatchRequest) {
         let tran_type = MessageSysFlag::get_transaction_value(dispatch_request.sys_flag);
         let topic = dispatch_request.topic.as_str();
         let keys = dispatch_request.keys.as_str();
@@ -478,7 +499,7 @@ impl IndexServiceAdapter {
     fn retry_get_and_create_index_file(&self) -> Option<Arc<IndexFile>> {
         let index_file = retry_index_file_create(
             MAX_TRY_INDEX_FILE_CREATE,
-            || self.get_and_create_last_index_file(),
+            || self.get_and_create_last_index_file_admitted(),
             |attempt, max_attempts| {
                 warn!("Failed to create index file, attempt {attempt}/{max_attempts}");
                 thread::sleep(Duration::from_secs(1));
@@ -495,6 +516,11 @@ impl IndexServiceAdapter {
     }
 
     pub fn get_and_create_last_index_file(&self) -> Option<Arc<IndexFile>> {
+        let _operation = self.try_enter_operation()?;
+        self.get_and_create_last_index_file_admitted()
+    }
+
+    fn get_and_create_last_index_file_admitted(&self) -> Option<Arc<IndexFile>> {
         let seed = plan_last_index_file(&self.index_file_list.read());
         if let Some(index_file) = seed.reusable {
             return Some(index_file);
@@ -535,6 +561,31 @@ impl IndexServiceAdapter {
             }
         }
         Some(new_index_file)
+    }
+
+    fn try_enter_operation(&self) -> Option<RwLockReadGuard<'_, bool>> {
+        let operation = self.operation_closing.read();
+        if *operation {
+            return None;
+        }
+        Some(operation)
+    }
+
+    fn shutdown_with_callbacks<BeforeWait, OnClosing>(&self, before_wait: BeforeWait, on_closing: OnClosing)
+    where
+        BeforeWait: FnOnce(),
+        OnClosing: FnOnce(),
+    {
+        before_wait();
+        let mut closing = self.operation_closing.write();
+        if *closing {
+            return;
+        }
+        *closing = true;
+        on_closing();
+
+        let files = self.index_file_list.read().clone();
+        shutdown_index_files(&files, |index_file| index_file.shutdown());
     }
 
     #[inline]
@@ -602,6 +653,10 @@ impl IndexServiceFile for IndexFile {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::mpsc;
+    use std::sync::Barrier;
+    use std::thread;
+    use std::time::Duration;
 
     use tempfile::tempdir;
 
@@ -819,6 +874,76 @@ mod tests {
     }
 
     #[test]
+    fn shutdown_waits_for_entered_build_and_rejects_late_build_and_create() {
+        let temp_dir = tempdir().unwrap();
+        let index_service = Arc::new(new_index_service_for_test(
+            &temp_dir,
+            "store_checkpoint_test_shutdown_build_fence",
+        ));
+        let entered = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        let build_service = Arc::clone(&index_service);
+        let build_entered = Arc::clone(&entered);
+        let build_release = Arc::clone(&release);
+        let build = thread::spawn(move || {
+            build_service.build_index_with(
+                &DispatchRequest {
+                    topic: CheetahString::from_slice("TestTopic"),
+                    commit_log_offset: 1000,
+                    msg_size: 100,
+                    store_timestamp: 1_000_000_000_000,
+                    keys: CheetahString::from_slice("entered-key"),
+                    ..DispatchRequest::default()
+                },
+                || {
+                    build_entered.wait();
+                    build_release.wait();
+                },
+            )
+        });
+        entered.wait();
+
+        let (waiting_tx, waiting_rx) = mpsc::channel();
+        let (closing_tx, closing_rx) = mpsc::channel();
+        let shutdown_service = Arc::clone(&index_service);
+        let shutdown = thread::spawn(move || {
+            shutdown_service.shutdown_with_callbacks(
+                || waiting_tx.send(()).expect("publish shutdown wait"),
+                || closing_tx.send(()).expect("publish service closing"),
+            );
+        });
+
+        waiting_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("shutdown reached the service operation fence");
+        assert!(matches!(closing_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+
+        release.wait();
+        assert!(build.join().expect("join entered index build"));
+        closing_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("shutdown entered closing after the build drained");
+        shutdown.join().expect("join index shutdown");
+
+        let file_count = index_service.index_file_list.read().len();
+        let safe_offset = index_service.index_safe_phy_offset();
+        assert!(!index_service.build_index_with(
+            &DispatchRequest {
+                topic: CheetahString::from_slice("TestTopic"),
+                commit_log_offset: 2000,
+                msg_size: 100,
+                store_timestamp: 1_000_000_001_000,
+                keys: CheetahString::from_slice("late-key"),
+                ..DispatchRequest::default()
+            },
+            || panic!("closed service must not enter a late build"),
+        ));
+        assert!(index_service.get_and_create_last_index_file().is_none());
+        assert_eq!(index_service.index_file_list.read().len(), file_count);
+        assert_eq!(index_service.index_safe_phy_offset(), safe_offset);
+    }
+
+    #[test]
     fn load_restores_index_safe_offset_from_loaded_index_files_for_legacy_checkpoint() {
         let temp_dir = tempdir().unwrap();
         let checkpoint_name = "store_checkpoint_test_index_safe_legacy_load";
@@ -994,7 +1119,7 @@ mod tests {
     }
 
     #[test]
-    fn shutdown_retains_index_identity_for_later_destroy() {
+    fn shutdown_retains_index_identity_and_destroy_retry_capability() {
         let temp_dir = tempdir().unwrap();
         let index_service = new_index_service_for_test(&temp_dir, "store_checkpoint_test_shutdown_destroy");
         index_service.build_index(&DispatchRequest {
@@ -1005,18 +1130,31 @@ mod tests {
             keys: CheetahString::from_slice("key1"),
             ..DispatchRequest::default()
         });
-        let file_name = index_service
+        let index_file = index_service
             .index_file_list
             .read()
             .last()
-            .map(|file| file.get_file_name().clone())
+            .cloned()
             .expect("index file");
+        let file_name = index_file.get_file_name().clone();
+        assert!(index_file.hold_for_testing());
 
         index_service.shutdown();
 
         assert_eq!(index_service.index_file_list.read().len(), 1);
         assert!(Path::new(file_name.as_str()).exists());
+        assert!(!index_file.put_key("late-key", 2000, 1_000_000_001_000));
+        assert!(!index_service.destroy_with_outcome());
+        assert!(index_service
+            .index_file_list
+            .read()
+            .last()
+            .is_some_and(|current| Arc::ptr_eq(current, &index_file)));
+        assert!(Path::new(file_name.as_str()).exists());
+
+        index_file.release_for_testing();
         assert!(index_service.destroy_with_outcome());
+        assert!(index_service.index_file_list.read().is_empty());
         assert!(!Path::new(file_name.as_str()).exists());
     }
 

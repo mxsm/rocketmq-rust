@@ -78,21 +78,23 @@ fn admitted_write_lease_defers_destroy_until_commit_finishes() {
 }
 
 #[test]
-fn forced_shutdown_may_remove_the_namespace_while_an_admitted_lease_finishes() {
+fn forced_shutdown_never_bypasses_an_admitted_lease() {
     let (temp_dir, file) = mapped_file(16);
     let path = temp_dir.path().join("00000000000000000000");
     let mut lease = file.reserve_write(4).expect("reservation wins before shutdown");
     lease.buffer_mut().copy_from_slice(b"data");
 
     assert!(!file.try_destroy(0).is_namespace_removed());
-    assert!(file.try_destroy(0).is_namespace_removed());
-    assert!(!path.exists());
+    assert!(!file.try_destroy(0).is_namespace_removed());
+    assert!(path.exists());
     assert_eq!(
         lease
             .commit(4, None)
-            .expect("forced shutdown keeps the Rust owner alive"),
+            .expect("admitted lease remains valid after force observation"),
         4
     );
+    assert!(file.try_destroy(0).is_namespace_removed());
+    assert!(!path.exists());
 }
 
 #[test]

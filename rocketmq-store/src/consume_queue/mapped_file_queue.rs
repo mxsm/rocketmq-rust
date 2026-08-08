@@ -189,15 +189,14 @@ impl MappedFileQueueReadHandle {
             let mut result = mapped_file.select_mapped_buffer_with_position(pos)?;
             result.try_attach_mapped_file(mapped_file);
 
-            let readable = result.size.max(0) as usize;
+            let readable = result.size().max(0) as usize;
             if readable == 0 {
                 return None;
             }
 
             let take = readable.min(remaining);
-            if take < readable {
-                result.bytes = result.bytes.as_ref().map(|bytes| bytes.slice(..take));
-                result.size = take as i32;
+            if take < readable && !result.try_truncate(take) {
+                return None;
             }
 
             results.push(result);
@@ -1442,7 +1441,7 @@ impl MappedFileQueue {
 
             if mapped_file.get_start_timestamp() < 0 {
                 if let Some(select_result) = mapped_file.select_mapped_buffer(0, CQ_STORE_UNIT_SIZE) {
-                    if let Some(ref buffer) = select_result.bytes {
+                    if let Some(buffer) = select_result.get_bytes_ref() {
                         if buffer.len() >= 12 {
                             let physical_offset = i64::from_be_bytes(buffer[0..8].try_into().unwrap());
                             let message_size = i32::from_be_bytes(buffer[8..12].try_into().unwrap());
@@ -1458,7 +1457,7 @@ impl MappedFileQueue {
             if i < mfs_len - 1 && mapped_file.get_stop_timestamp() < 0 {
                 let last_unit_offset = self.storage.mapped_file_size() as i32 - CQ_STORE_UNIT_SIZE;
                 if let Some(select_result) = mapped_file.select_mapped_buffer(last_unit_offset, CQ_STORE_UNIT_SIZE) {
-                    if let Some(ref buffer) = select_result.bytes {
+                    if let Some(buffer) = select_result.get_bytes_ref() {
                         if buffer.len() >= 12 {
                             let physical_offset = i64::from_be_bytes(buffer[0..8].try_into().unwrap());
                             let message_size = i32::from_be_bytes(buffer[8..12].try_into().unwrap());
@@ -1974,8 +1973,8 @@ mod tests {
         assert_eq!(read_handle.get_min_offset(), 0);
         assert_eq!(read_handle.get_max_offset(), 11);
         assert_eq!(read_handle.get_flushed_where(), 7);
-        assert_eq!(read_handle.get_data(0).expect("read mapped data").size, 11);
-        assert_eq!(read_handle.get_message(0, 4).expect("read message slice").size, 4);
+        assert_eq!(read_handle.get_data(0).expect("read mapped data").size(), 11);
+        assert_eq!(read_handle.get_message(0, 4).expect("read message slice").size(), 4);
         assert_eq!(read_handle.roll_next_file(12), 1024);
 
         drop(read_handle);

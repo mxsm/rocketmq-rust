@@ -139,6 +139,11 @@ pub trait MappedFile {
     /// if the specified range is not valid or the file is not available.
     fn select_mapped_buffer(&self, pos: i32, size: i32) -> Option<Self::SelectResult>;
 
+    /// Selects a range while preserving lifecycle admission errors.
+    fn try_select_mapped_buffer(&self, pos: i32, size: i32) -> MappedFileResult<Option<Self::SelectResult>> {
+        Ok(self.select_mapped_buffer(pos, size))
+    }
+
     /// Selects a buffer from the mapped file starting from the specified position.
     ///
     /// Similar to `select_mapped_buffer_size`, but selects the buffer starting from `pos` to the
@@ -152,6 +157,11 @@ pub trait MappedFile {
     /// An `Option<SelectMappedBufferResult>` containing the selected buffer if available, or `None`
     /// if the starting position is not valid or the file is not available.
     fn select_mapped_buffer_with_position(&self, pos: i32) -> Option<Self::SelectResult>;
+
+    /// Selects the readable tail while preserving lifecycle admission errors.
+    fn try_select_mapped_buffer_with_position(&self, pos: i32) -> MappedFileResult<Option<Self::SelectResult>> {
+        Ok(self.select_mapped_buffer_with_position(pos))
+    }
 
     /// Retrieves a byte slice from the mapped file.
     ///
@@ -167,6 +177,14 @@ pub trait MappedFile {
     /// An `Option<bytes::Bytes>` containing the requested byte slice if available, or `None` if the
     /// requested slice goes beyond the file boundaries or the file is not available.
     fn get_bytes(&self, pos: usize, size: usize) -> Option<bytes::Bytes>;
+
+    /// Retrieves bytes while preserving lifecycle admission errors.
+    ///
+    /// The compatibility default delegates to [`Self::get_bytes`]. Implementations with an
+    /// explicit lifecycle should return a typed unavailable error after close.
+    fn try_get_bytes(&self, pos: usize, size: usize) -> MappedFileResult<Option<bytes::Bytes>> {
+        Ok(self.get_bytes(pos, size))
+    }
 
     /// Retrieves a byte slice from the mapped file with readable bounds checking.
     ///
@@ -270,6 +288,11 @@ pub trait MappedFile {
     /// The number of pages actually committed.
     fn commit(&self, commit_least_pages: i32) -> i32;
 
+    /// Commits eligible bytes while preserving lifecycle admission errors.
+    fn try_commit(&self, commit_least_pages: i32) -> MappedFileResult<i32> {
+        Ok(self.commit(commit_least_pages))
+    }
+
     /// Copies the entire mapped byte buffer into an owned snapshot.
     ///
     /// This method provides access to the entire byte buffer of the mapped file. It is useful for
@@ -326,6 +349,11 @@ pub trait MappedFile {
     /// requested slice goes beyond the store boundaries or the store is not available.
     fn get_data(&self, pos: usize, size: usize) -> Option<bytes::Bytes>;
 
+    /// Retrieves readable data while preserving lifecycle admission errors.
+    fn try_get_data(&self, pos: usize, size: usize) -> MappedFileResult<Option<bytes::Bytes>> {
+        Ok(self.get_data(pos, size))
+    }
+
     /// Retrieves a slice of the mapped file.
     ///
     /// This method returns a byte slice starting from the specified position and of the specified
@@ -340,6 +368,11 @@ pub trait MappedFile {
     /// An owned `bytes::Bytes` snapshot containing the requested range, or `None` if the
     /// requested slice goes beyond the file boundaries or the file is not available.
     fn get_slice(&self, pos: usize, size: usize) -> Option<bytes::Bytes>;
+
+    /// Retrieves a slice while preserving lifecycle admission errors.
+    fn try_get_slice(&self, pos: usize, size: usize) -> MappedFileResult<Option<bytes::Bytes>> {
+        Ok(self.get_slice(pos, size))
+    }
 
     /// Requests logical shutdown and mapped-file namespace removal.
     ///
@@ -433,11 +466,23 @@ pub trait MappedFile {
     /// in physical memory.
     fn mlock(&self);
 
+    /// Locks the mapping into memory while preserving lifecycle admission errors.
+    fn try_mlock(&self) -> MappedFileResult<()> {
+        self.mlock();
+        Ok(())
+    }
+
     /// Unlocks the mapped file from memory.
     ///
     /// This method reverses the effect of `mlock`, allowing the mapped file to be paged out to swap
     /// space if necessary.
     fn munlock(&self);
+
+    /// Unlocks the mapping while preserving lifecycle admission errors.
+    fn try_munlock(&self) -> MappedFileResult<()> {
+        self.munlock();
+        Ok(())
+    }
 
     /// Warms up the mapped file by accessing a specified number of pages.
     ///
@@ -448,6 +493,12 @@ pub trait MappedFile {
     /// * `flush_disk_type` - The strategy used for flushing data to disk.
     /// * `pages` - The number of pages to access for warming up the file.
     fn warm_mapped_file(&self, flush_disk_type: FlushDiskType, pages: usize);
+
+    /// Warms the mapping while preserving lifecycle admission errors.
+    fn try_warm_mapped_file(&self, flush_disk_type: FlushDiskType, pages: usize) -> MappedFileResult<()> {
+        self.warm_mapped_file(flush_disk_type, pages);
+        Ok(())
+    }
 
     /// Records one compatibility swap attempt.
     ///

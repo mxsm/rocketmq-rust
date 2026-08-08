@@ -18,6 +18,47 @@ use loom::sync::Arc;
 use loom::sync::Mutex;
 use loom::thread;
 
+// The production model also contains projection helpers that these focused Loom scenarios do not
+// need. Including the source keeps every lifecycle decision on the production transition code.
+#[allow(
+    dead_code,
+    reason = "the included production model exposes transitions outside these focused Loom scenarios"
+)]
+#[path = "../src/mapped_file/lifecycle_model.rs"]
+mod lifecycle_model;
+
+use lifecycle_model::AcquireTransitionError;
+use lifecycle_model::BeginCloseTransition;
+use lifecycle_model::LifecycleAtomicUsize;
+use lifecycle_model::LifecycleTransitionState;
+use lifecycle_model::MappedFileAdmissionState;
+use lifecycle_model::MappedFileOperation;
+use lifecycle_model::ReleaseTransition;
+
+impl LifecycleAtomicUsize for AtomicUsize {
+    fn new(value: usize) -> Self {
+        Self::new(value)
+    }
+
+    fn load_acquire(&self) -> usize {
+        self.load(Ordering::Acquire)
+    }
+
+    fn compare_exchange_weak_acquire(&self, current: usize, new: usize) -> Result<usize, usize> {
+        self.compare_exchange_weak(current, new, Ordering::Acquire, Ordering::Acquire)
+    }
+
+    fn compare_exchange_weak_acq_rel(&self, current: usize, new: usize) -> Result<usize, usize> {
+        self.compare_exchange_weak(current, new, Ordering::AcqRel, Ordering::Acquire)
+    }
+
+    fn compare_exchange_weak_acq_rel_relaxed(&self, current: usize, new: usize) -> Result<usize, usize> {
+        self.compare_exchange_weak(current, new, Ordering::AcqRel, Ordering::Relaxed)
+    }
+}
+
+type LoomLifecycle = LifecycleTransitionState<AtomicUsize>;
+
 #[test]
 fn position_publication_never_exposes_partially_copied_bytes() {
     loom::model(|| {
@@ -87,47 +128,216 @@ fn concurrent_write_leases_publish_contiguous_non_overlapping_ranges() {
     });
 }
 
-struct ReadLease {
-    holds: Arc<AtomicUsize>,
+struct ModelLease {
+    lifecycle: Arc<LoomLifecycle>,
+    drain_transitions: Arc<AtomicUsize>,
 }
 
-impl ReadLease {
-    fn acquire(holds: Arc<AtomicUsize>) -> Self {
-        holds.fetch_add(1, Ordering::AcqRel);
-        Self { holds }
+impl ModelLease {
+    fn try_acquire(
+        lifecycle: Arc<LoomLifecycle>,
+        operation: MappedFileOperation,
+        drain_transitions: Arc<AtomicUsize>,
+    ) -> Result<Self, AcquireTransitionError> {
+        lifecycle.try_acquire(operation)?;
+        Ok(Self {
+            lifecycle,
+            drain_transitions,
+        })
     }
 }
 
-impl Drop for ReadLease {
+impl Drop for ModelLease {
     fn drop(&mut self) {
-        let previous = self.holds.fetch_sub(1, Ordering::AcqRel);
-        assert!(previous > 0, "a read lease must release exactly one hold");
+        let transition = self.lifecycle.release();
+        assert_ne!(transition, ReleaseTransition::Underflow);
+        if transition == ReleaseTransition::Drained {
+            self.drain_transitions.fetch_add(1, Ordering::SeqCst);
+        }
     }
 }
 
 #[test]
-fn destroy_observes_every_live_read_lease_before_recycle() {
+fn acquire_and_close_have_one_serialized_outcome() {
     loom::model(|| {
-        let holds = Arc::new(AtomicUsize::new(0));
-        let recycling = Arc::new(AtomicUsize::new(0));
-        let lease = ReadLease::acquire(Arc::clone(&holds));
+        let lifecycle = Arc::new(LoomLifecycle::new());
+        let admitted = Arc::new(Mutex::new(None));
+        let drain_transitions = Arc::new(AtomicUsize::new(0));
 
-        let destroy_holds = Arc::clone(&holds);
-        let destroy_recycling = Arc::clone(&recycling);
-        let destroy = thread::spawn(move || {
-            if destroy_holds.load(Ordering::Acquire) == 0 {
-                destroy_recycling.store(1, Ordering::Release);
+        let acquire_lifecycle = Arc::clone(&lifecycle);
+        let acquire_admitted = Arc::clone(&admitted);
+        let acquire_drains = Arc::clone(&drain_transitions);
+        let acquire = thread::spawn(move || {
+            match ModelLease::try_acquire(acquire_lifecycle, MappedFileOperation::Write, acquire_drains) {
+                Ok(lease) => *acquire_admitted.lock().expect("admitted slot") = Some(lease),
+                Err(AcquireTransitionError::Unavailable(MappedFileAdmissionState::Closing)) => {}
+                Err(error) => panic!("unexpected acquire error: {error:?}"),
             }
         });
 
-        assert_eq!(recycling.load(Ordering::Acquire), 0);
+        let close_lifecycle = Arc::clone(&lifecycle);
+        let close = thread::spawn(move || {
+            assert_eq!(close_lifecycle.begin_close(), BeginCloseTransition::Started);
+        });
+
+        acquire.join().expect("acquire");
+        close.join().expect("close");
+
+        let lease = admitted.lock().expect("admitted slot").take();
+        let expected_active = usize::from(lease.is_some());
+        assert_eq!(lifecycle.state(), MappedFileAdmissionState::Closing);
+        assert_eq!(lifecycle.active_leases(), expected_active);
+        assert_eq!(lifecycle.logical_cleanup_marked(), expected_active == 0);
+
         drop(lease);
-        destroy.join().expect("destroy");
-        if recycling.load(Ordering::Acquire) == 0 {
-            assert_eq!(holds.load(Ordering::Acquire), 0);
-            recycling.store(1, Ordering::Release);
+        assert_eq!(lifecycle.active_leases(), 0);
+        assert!(lifecycle.logical_cleanup_marked());
+        assert_eq!(drain_transitions.load(Ordering::SeqCst), expected_active);
+    });
+}
+
+#[test]
+fn seal_and_write_admission_have_one_serialized_outcome() {
+    loom::model(|| {
+        let lifecycle = Arc::new(LoomLifecycle::new());
+        let admitted_write = Arc::new(Mutex::new(None));
+        let drain_transitions = Arc::new(AtomicUsize::new(0));
+
+        let write_lifecycle = Arc::clone(&lifecycle);
+        let write_slot = Arc::clone(&admitted_write);
+        let write_drains = Arc::clone(&drain_transitions);
+        let write = thread::spawn(move || {
+            match ModelLease::try_acquire(write_lifecycle, MappedFileOperation::Write, write_drains) {
+                Ok(lease) => *write_slot.lock().expect("write slot") = Some(lease),
+                Err(AcquireTransitionError::Unavailable(MappedFileAdmissionState::SealedReadable)) => {}
+                Err(error) => panic!("unexpected write error: {error:?}"),
+            }
+        });
+
+        let seal_lifecycle = Arc::clone(&lifecycle);
+        let seal = thread::spawn(move || {
+            assert!(seal_lifecycle.seal_readable());
+        });
+
+        write.join().expect("write");
+        seal.join().expect("seal");
+
+        let write_lease = admitted_write.lock().expect("write slot").take();
+        let expected_write = usize::from(write_lease.is_some());
+        assert_eq!(lifecycle.state(), MappedFileAdmissionState::SealedReadable);
+        assert_eq!(lifecycle.active_leases(), expected_write);
+
+        let read_lease = ModelLease::try_acquire(
+            Arc::clone(&lifecycle),
+            MappedFileOperation::Read,
+            Arc::clone(&drain_transitions),
+        )
+        .expect("sealed segments remain readable");
+        let maintenance_lease = ModelLease::try_acquire(
+            Arc::clone(&lifecycle),
+            MappedFileOperation::Maintenance,
+            Arc::clone(&drain_transitions),
+        )
+        .expect("sealed segments permit maintenance");
+        assert_eq!(
+            lifecycle.try_acquire(MappedFileOperation::Write),
+            Err(AcquireTransitionError::Unavailable(
+                MappedFileAdmissionState::SealedReadable
+            ))
+        );
+
+        drop(read_lease);
+        drop(maintenance_lease);
+        drop(write_lease);
+        assert_eq!(lifecycle.active_leases(), 0);
+        assert_eq!(drain_transitions.load(Ordering::SeqCst), 0);
+    });
+}
+
+#[test]
+fn last_drop_and_close_converge_on_a_drained_closing_state() {
+    loom::model(|| {
+        let lifecycle = Arc::new(LoomLifecycle::new());
+        let drain_transitions = Arc::new(AtomicUsize::new(0));
+        let lease = ModelLease::try_acquire(
+            Arc::clone(&lifecycle),
+            MappedFileOperation::Read,
+            Arc::clone(&drain_transitions),
+        )
+        .expect("initial read lease");
+
+        let release = thread::spawn(move || drop(lease));
+        let close_lifecycle = Arc::clone(&lifecycle);
+        let close = thread::spawn(move || {
+            assert_eq!(close_lifecycle.begin_close(), BeginCloseTransition::Started);
+        });
+
+        release.join().expect("release");
+        close.join().expect("close");
+
+        assert_eq!(lifecycle.state(), MappedFileAdmissionState::Closing);
+        assert_eq!(lifecycle.active_leases(), 0);
+        assert!(lifecycle.logical_cleanup_marked());
+        assert!(drain_transitions.load(Ordering::SeqCst) <= 1);
+    });
+}
+
+#[test]
+fn concurrent_close_starts_one_generation() {
+    loom::model(|| {
+        let lifecycle = Arc::new(LoomLifecycle::new());
+        let started = Arc::new(AtomicUsize::new(0));
+        let mut closers = Vec::with_capacity(2);
+
+        for _ in 0..2 {
+            let lifecycle = Arc::clone(&lifecycle);
+            let started = Arc::clone(&started);
+            closers.push(thread::spawn(move || {
+                let transition = lifecycle.begin_close();
+                if transition == BeginCloseTransition::Started {
+                    started.fetch_add(1, Ordering::SeqCst);
+                }
+            }));
         }
-        assert_eq!(recycling.load(Ordering::Acquire), 1);
-        assert_eq!(holds.load(Ordering::Acquire), 0);
+
+        for closer in closers {
+            closer.join().expect("close");
+        }
+
+        assert_eq!(started.load(Ordering::SeqCst), 1);
+        assert_eq!(lifecycle.state(), MappedFileAdmissionState::Closing);
+        assert_eq!(lifecycle.active_leases(), 0);
+        assert!(lifecycle.logical_cleanup_marked());
+    });
+}
+
+#[test]
+fn repeated_close_does_not_change_active_leases() {
+    loom::model(|| {
+        let lifecycle = Arc::new(LoomLifecycle::new());
+        let drain_transitions = Arc::new(AtomicUsize::new(0));
+        let lease = ModelLease::try_acquire(
+            Arc::clone(&lifecycle),
+            MappedFileOperation::Read,
+            Arc::clone(&drain_transitions),
+        )
+        .expect("initial read lease");
+        assert_eq!(lifecycle.begin_close(), BeginCloseTransition::Started);
+
+        let repeat_lifecycle = Arc::clone(&lifecycle);
+        let repeat = thread::spawn(move || {
+            let active_before = repeat_lifecycle.active_leases();
+            assert_eq!(repeat_lifecycle.begin_close(), BeginCloseTransition::AlreadyClosing);
+            assert_eq!(repeat_lifecycle.active_leases(), active_before);
+        });
+        repeat.join().expect("repeat close");
+
+        assert_eq!(lifecycle.active_leases(), 1);
+        assert!(!lifecycle.logical_cleanup_marked());
+
+        drop(lease);
+        assert_eq!(lifecycle.active_leases(), 0);
+        assert!(lifecycle.logical_cleanup_marked());
+        assert_eq!(drain_transitions.load(Ordering::SeqCst), 1);
     });
 }

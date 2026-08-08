@@ -18,13 +18,8 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use rocketmq_store_local::index::codec::IndexHeaderRecord;
-use rocketmq_store_local::index::codec::BEGIN_PHY_OFFSET;
-use rocketmq_store_local::index::codec::BEGIN_TIMESTAMP_OFFSET;
-use rocketmq_store_local::index::codec::END_PHY_OFFSET;
-use rocketmq_store_local::index::codec::END_TIMESTAMP_OFFSET;
-use rocketmq_store_local::index::codec::HASH_SLOT_COUNT_OFFSET;
-use rocketmq_store_local::index::codec::INDEX_COUNT_OFFSET;
 pub use rocketmq_store_local::index::codec::INDEX_HEADER_SIZE;
+use rocketmq_store_local::index::file::IndexHeaderUpdate;
 
 use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::MappedFile;
@@ -68,16 +63,48 @@ impl IndexHeader {
     pub fn load(&self) {
         let buffer = self.mapped_file.get_bytes(0, INDEX_HEADER_SIZE).unwrap();
         let record = IndexHeaderRecord::decode(&buffer).expect("mapped index header must contain 40 bytes");
-        self.begin_timestamp.store(record.begin_timestamp, Ordering::Relaxed);
-        self.end_timestamp.store(record.end_timestamp, Ordering::Relaxed);
-        self.begin_phy_offset.store(record.begin_phy_offset, Ordering::Relaxed);
-        self.end_phy_offset.store(record.end_phy_offset, Ordering::Relaxed);
-        self.hash_slot_count.store(record.hash_slot_count, Ordering::Relaxed);
-        self.index_count.store(record.index_count, Ordering::Relaxed);
+        self.store_record(record);
     }
 
     pub fn update_byte_buffer(&self) {
-        let encoded = IndexHeaderRecord {
+        let _ = self.try_update_byte_buffer();
+    }
+
+    pub(crate) fn try_update_byte_buffer(&self) -> bool {
+        self.mapped_file.put_slice(&self.record().encode(), 0)
+    }
+
+    pub(crate) fn try_apply_updates(&self, updates: &[IndexHeaderUpdate]) -> bool {
+        let mut record = self.record();
+        for update in updates {
+            match *update {
+                IndexHeaderUpdate::SetBeginPhyOffset(offset) => record.begin_phy_offset = offset,
+                IndexHeaderUpdate::SetBeginTimestamp(timestamp) => record.begin_timestamp = timestamp,
+                IndexHeaderUpdate::IncrementHashSlotCount => {
+                    let Some(count) = record.hash_slot_count.checked_add(1) else {
+                        return false;
+                    };
+                    record.hash_slot_count = count;
+                }
+                IndexHeaderUpdate::IncrementIndexCount => {
+                    let Some(count) = record.index_count.checked_add(1) else {
+                        return false;
+                    };
+                    record.index_count = count;
+                }
+                IndexHeaderUpdate::SetEndPhyOffset(offset) => record.end_phy_offset = offset,
+                IndexHeaderUpdate::SetEndTimestamp(timestamp) => record.end_timestamp = timestamp,
+            }
+        }
+        if !self.mapped_file.put_slice(&record.encode(), 0) {
+            return false;
+        }
+        self.store_record(record);
+        true
+    }
+
+    fn record(&self) -> IndexHeaderRecord {
+        IndexHeaderRecord {
             begin_timestamp: self.begin_timestamp.load(Ordering::Acquire),
             end_timestamp: self.end_timestamp.load(Ordering::Acquire),
             begin_phy_offset: self.begin_phy_offset.load(Ordering::Acquire),
@@ -85,8 +112,15 @@ impl IndexHeader {
             hash_slot_count: self.hash_slot_count.load(Ordering::Acquire),
             index_count: self.index_count.load(Ordering::Acquire),
         }
-        .encode();
-        self.mapped_file.put_slice(&encoded, 0);
+    }
+
+    fn store_record(&self, record: IndexHeaderRecord) {
+        self.begin_timestamp.store(record.begin_timestamp, Ordering::Release);
+        self.end_timestamp.store(record.end_timestamp, Ordering::Release);
+        self.begin_phy_offset.store(record.begin_phy_offset, Ordering::Release);
+        self.end_phy_offset.store(record.end_phy_offset, Ordering::SeqCst);
+        self.hash_slot_count.store(record.hash_slot_count, Ordering::SeqCst);
+        self.index_count.store(record.index_count, Ordering::Release);
     }
 
     #[inline]
@@ -95,10 +129,7 @@ impl IndexHeader {
     }
 
     pub fn set_begin_timestamp(&self, begin_timestamp: i64) {
-        self.begin_timestamp.store(begin_timestamp, Ordering::Release);
-        let encoded = begin_timestamp.to_be_bytes();
-        self.mapped_file
-            .write_bytes_segment(&encoded, BEGIN_TIMESTAMP_OFFSET, 0, encoded.len());
+        let _ = self.try_apply_updates(&[IndexHeaderUpdate::SetBeginTimestamp(begin_timestamp)]);
     }
 
     #[inline]
@@ -107,10 +138,7 @@ impl IndexHeader {
     }
 
     pub fn set_end_timestamp(&self, end_timestamp: i64) {
-        self.end_timestamp.store(end_timestamp, Ordering::Release);
-        let encoded = end_timestamp.to_be_bytes();
-        self.mapped_file
-            .write_bytes_segment(&encoded, END_TIMESTAMP_OFFSET, 0, encoded.len());
+        let _ = self.try_apply_updates(&[IndexHeaderUpdate::SetEndTimestamp(end_timestamp)]);
     }
 
     #[inline]
@@ -119,10 +147,7 @@ impl IndexHeader {
     }
 
     pub fn set_begin_phy_offset(&self, begin_phy_offset: i64) {
-        self.begin_phy_offset.store(begin_phy_offset, Ordering::Release);
-        let encoded = begin_phy_offset.to_be_bytes();
-        self.mapped_file
-            .write_bytes_segment(&encoded, BEGIN_PHY_OFFSET, 0, encoded.len());
+        let _ = self.try_apply_updates(&[IndexHeaderUpdate::SetBeginPhyOffset(begin_phy_offset)]);
     }
 
     #[inline]
@@ -131,10 +156,7 @@ impl IndexHeader {
     }
 
     pub fn set_end_phy_offset(&self, end_phy_offset: i64) {
-        self.end_phy_offset.store(end_phy_offset, Ordering::SeqCst);
-        let encoded = end_phy_offset.to_be_bytes();
-        self.mapped_file
-            .write_bytes_segment(&encoded, END_PHY_OFFSET, 0, encoded.len());
+        let _ = self.try_apply_updates(&[IndexHeaderUpdate::SetEndPhyOffset(end_phy_offset)]);
     }
 
     #[inline]
@@ -143,10 +165,7 @@ impl IndexHeader {
     }
 
     pub fn inc_hash_slot_count(&self) {
-        let result = self.hash_slot_count.fetch_add(1, Ordering::AcqRel) + 1;
-        let encoded = result.to_be_bytes();
-        self.mapped_file
-            .write_bytes_segment(&encoded, HASH_SLOT_COUNT_OFFSET, 0, encoded.len());
+        let _ = self.try_apply_updates(&[IndexHeaderUpdate::IncrementHashSlotCount]);
     }
 
     #[inline]
@@ -155,9 +174,6 @@ impl IndexHeader {
     }
 
     pub fn inc_index_count(&self) {
-        let count = self.index_count.fetch_add(1, Ordering::AcqRel) + 1;
-        let encoded = count.to_be_bytes();
-        self.mapped_file
-            .write_bytes_segment(&encoded, INDEX_COUNT_OFFSET, 0, encoded.len());
+        let _ = self.try_apply_updates(&[IndexHeaderUpdate::IncrementIndexCount]);
     }
 }

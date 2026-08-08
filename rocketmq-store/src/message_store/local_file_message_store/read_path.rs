@@ -251,7 +251,7 @@ impl LocalFileMessageStore {
                             };
                             if self.message_store_config.cold_data_flow_control_enable
                                 && !is_sys_consumer_group_for_no_cold_read_limit(group)
-                                && !select_result.is_in_cache
+                                && !select_result.is_in_cache()
                             {
                                 get_result_ref.set_cold_data_sum(get_result_ref.cold_data_sum() + size_py as i64);
                             }

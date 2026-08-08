@@ -493,7 +493,7 @@ async fn ha_replica_handle_shares_transfer_and_replication_progress() {
         .select_segments(0, 4, false)
         .expect("select replica transfer segment");
     assert_eq!(segments.len(), 1);
-    assert_eq!(segments[0].segment().global_offset, 0);
+    assert_eq!(segments[0].segment().global_offset(), 0);
     assert_eq!(handle.get_confirm_offset(), 4);
     assert_eq!(handle.get_confirm_offset_directly(), 4);
     assert_eq!(handle.get_master_flushed_offset(), 3);
@@ -1529,7 +1529,10 @@ async fn compaction_topic_dispatches_and_reads_from_compaction_store() {
     assert_eq!(result.status(), Some(GetMessageStatus::Found));
     assert_eq!(result.message_count(), 1);
     assert_eq!(store.compaction_store.message_count(&topic, 0), 1);
-    assert!(result.message_mapped_list()[0].mapped_file.is_none());
+    assert_eq!(
+        result.message_mapped_list()[0].source_kind(),
+        rocketmq_store_local::mapped_file::SelectMappedBufferSourceKind::Bytes
+    );
     assert!(result.message_mapped_list()[0].get_bytes_ref().is_some());
 }
 

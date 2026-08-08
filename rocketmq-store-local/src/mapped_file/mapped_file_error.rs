@@ -16,6 +16,9 @@ use std::io;
 
 use thiserror::Error;
 
+use super::MappedFileAdmissionState;
+use super::MappedFileOperation;
+
 /// Errors that can occur during mapped file operations.
 ///
 /// This enum provides detailed error information for various failure scenarios
@@ -114,6 +117,19 @@ pub enum MappedFileError {
     #[error("Reference resource unavailable")]
     ReferenceUnavailable,
 
+    /// The mapped-file lifecycle rejected a new operation after admission changed state.
+    #[error("Mapped-file operation unavailable: operation={operation}, state={state}")]
+    Unavailable {
+        /// Lifecycle state observed by the rejected operation.
+        state: MappedFileAdmissionState,
+        /// Kind of operation that was rejected.
+        operation: MappedFileOperation,
+    },
+
+    /// The active lease counter cannot represent another admitted operation.
+    #[error("Mapped-file active lease count overflow")]
+    LeaseCountOverflow,
+
     /// Transient store pool exhausted.
     ///
     /// No buffers available in the transient store pool for write operations.
@@ -185,6 +201,7 @@ impl MappedFileError {
                 | Self::FileFull { .. }
                 | Self::InvalidWritePosition { .. }
                 | Self::InvalidWriteCommit { .. }
+                | Self::Unavailable { .. }
                 | Self::TransientStoreExhausted
         )
     }

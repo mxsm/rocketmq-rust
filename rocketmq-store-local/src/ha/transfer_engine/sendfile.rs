@@ -156,9 +156,9 @@ where
         let out_fd = self.writer.sendfile_out_fd();
 
         for range in file_ranges {
-            let in_fd = range.file.as_raw_fd();
-            let mut position = range.position;
-            let mut remaining = range.len;
+            let in_fd = range.file().as_raw_fd();
+            let mut position = range.position();
+            let mut remaining = range.len();
             while remaining > 0 {
                 let written = match self.operation.sendfile(out_fd, in_fd, position, remaining) {
                     Ok(0) => return Err(write_zero_error()),
@@ -208,9 +208,9 @@ fn batch_file_ranges(batch: &TransferBatch) -> Option<Vec<FileRange>> {
     let mut ranges = Vec::with_capacity(batch.segments.len());
     for segment in &batch.segments {
         let mut range = segment.as_file_range()?;
-        let len = range.len.min(remaining);
+        range.truncate_to(remaining);
+        let len = range.len();
         if len > 0 {
-            range.len = len;
             ranges.push(range);
             remaining -= len;
         }

@@ -1023,8 +1023,8 @@ pub struct MessageReadLease {
 
 /// Converts a backend selected buffer into neutral leased bytes.
 pub fn selected_result(selected: SelectMappedBufferResult) -> SelectResult<MessageReadLease> {
-    let start_offset = selected.start_offset;
-    let cache_state = match selected.cache_state {
+    let start_offset = selected.start_offset();
+    let cache_state = match selected.cache_state() {
         SelectMappedBufferCacheState::Unknown => ReadCacheState::Unknown,
         SelectMappedBufferCacheState::Hot => ReadCacheState::Hot,
         SelectMappedBufferCacheState::Cold => ReadCacheState::Cold,
