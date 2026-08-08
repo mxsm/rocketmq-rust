@@ -388,6 +388,10 @@ impl LocalFileMessageStore {
             self.master_flushed_offset = Arc::new(AtomicI64::new(checkpoint.master_flushed_offset() as i64));
             self.set_confirm_offset(checkpoint.confirm_phy_offset() as i64);
             result = self.index_service.load(last_exit_ok);
+            if !result {
+                error!("index service load failed; aborting message store recovery");
+                return false;
+            }
             #[cfg(feature = "tieredstore")]
             if result {
                 if let Some(tiered_store) = self.tiered_store.as_ref() {
@@ -399,7 +403,10 @@ impl LocalFileMessageStore {
             }
 
             //recover commit log and consume queue
-            self.recover(last_exit_ok).await;
+            if !self.recover(last_exit_ok).await {
+                error!("message store recovery cleanup failed; aborting load");
+                return false;
+            }
             if self.message_store_config.enable_compaction {
                 self.compaction_store.finish_recovery(self.get_max_phy_offset());
             }
@@ -692,13 +699,33 @@ impl LocalFileMessageStore {
     }
 
     pub(super) fn destroy_store(&mut self) {
+        if !self.destroy_store_with_outcome() {
+            warn!("message store cleanup remains pending; retaining metadata and queue progress for retry");
+        }
+    }
+
+    #[must_use]
+    pub(super) fn destroy_store_with_outcome(&mut self) -> bool {
         self.release_store_lock();
-        self.consume_queue_store.destroy();
-        self.commit_log.destroy();
-        self.index_service.destroy();
-        self.delete_file(get_abort_file(self.message_store_config.store_path_root_dir.as_str()));
-        self.delete_file(get_store_checkpoint(
-            self.message_store_config.store_path_root_dir.as_str(),
-        ));
+        let consume_queue_destroyed = self.consume_queue_store.destroy_with_outcome();
+        let commit_log_destroyed = self.commit_log.destroy_with_outcome();
+        let index_destroyed = self.index_service.destroy_with_outcome();
+        let storage_destroyed = consume_queue_destroyed && commit_log_destroyed && index_destroyed;
+
+        let metadata_destroyed = if storage_destroyed {
+            let store_root = self.message_store_config.store_path_root_dir.clone();
+            let abort_removed = self.delete_file_with_outcome(get_abort_file(store_root.as_str()));
+            let checkpoint_removed = self.delete_file_with_outcome(get_store_checkpoint(store_root.as_str()));
+            abort_removed && checkpoint_removed
+        } else {
+            warn!(
+                consume_queue_destroyed,
+                commit_log_destroyed,
+                index_destroyed,
+                "message store cleanup is incomplete; abort and checkpoint files are retained"
+            );
+            false
+        };
+        storage_destroyed && metadata_destroyed
     }
 }

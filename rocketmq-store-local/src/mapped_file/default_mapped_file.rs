@@ -16,9 +16,7 @@ use std::fs::File;
 use std::io;
 use std::path::Path;
 use std::ptr;
-use std::sync::atomic::AtomicI32;
 use std::sync::atomic::AtomicI64;
-use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 use std::time::SystemTime;
@@ -36,6 +34,7 @@ use tracing::warn;
 
 use super::FlushStrategy;
 use super::MappedFile;
+use super::MappedFileDestroyOutcome;
 use super::MappedFileError;
 use super::MappedFileMetrics;
 use super::MappedFileRawCore;
@@ -68,9 +67,6 @@ use crate::utils::ffi::lock_memory_region;
 use crate::utils::ffi::memory_residency;
 use crate::utils::ffi::unlock_memory_region;
 use crate::utils::ffi::MemoryAdvice;
-
-static TOTAL_MAPPED_VIRTUAL_MEMORY: AtomicI64 = AtomicI64::new(0);
-static TOTAL_MAPPED_FILES: AtomicI32 = AtomicI32::new(0);
 
 fn invalid_input_error(message: String) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message)
@@ -142,7 +138,7 @@ pub struct DefaultMappedFile<M: MappedMemory = NativeMappedMemory> {
     raw_core: MappedFileRawCore,
     write_state: Mutex<MappedWriteState>,
     first_create_in_queue: bool,
-    swap_map_time: AtomicU64,
+    swap_state: Mutex<SwapLifecycleState>,
     mapped_byte_buffer_access_count_since_last_swap: AtomicI64,
     metrics: Option<MappedFileMetrics>,
     flush_strategy: FlushStrategy,
@@ -155,6 +151,53 @@ struct MappedWriteState {
     staging: Vec<u8>,
 }
 
+struct SwapLifecycleState {
+    time_ms: u64,
+    generation: u64,
+    cleaned: bool,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct SwapGenerationSnapshot {
+    time_ms: u64,
+    generation: u64,
+}
+
+impl SwapGenerationSnapshot {
+    #[inline]
+    pub(crate) fn time_millis(self) -> i64 {
+        i64::try_from(self.time_ms).unwrap_or(i64::MAX)
+    }
+}
+
+/// A reference admission that remains live for the complete mapped-file operation.
+///
+/// Acquiring this guard is the linearization point against shutdown. Once acquired, the
+/// operation may finish even if shutdown starts concurrently. Graceful cleanup waits for the
+/// guard to drop. A later forced-shutdown attempt may remove the namespace first, while the Rust
+/// mapping owner still keeps the admitted operation's memory valid.
+struct ReferenceHoldGuard<'a> {
+    resource: &'a ReferenceResourceCounter,
+}
+
+impl<'a> ReferenceHoldGuard<'a> {
+    #[inline]
+    fn try_acquire(resource: &'a ReferenceResourceCounter) -> MappedFileResult<Self> {
+        if resource.hold() {
+            Ok(Self { resource })
+        } else {
+            Err(MappedFileError::ReferenceUnavailable)
+        }
+    }
+}
+
+impl Drop for ReferenceHoldGuard<'_> {
+    #[inline]
+    fn drop(&mut self) {
+        self.resource.release();
+    }
+}
+
 /// Single-writer reservation backed by an owned staging buffer.
 ///
 /// The lease holds the mapped file's writer sequencer for its complete lifetime. It never exposes
@@ -162,6 +205,7 @@ struct MappedWriteState {
 pub struct DefaultMappedWriteLease<'a, M: MappedMemory = NativeMappedMemory> {
     owner: &'a DefaultMappedFile<M>,
     state: MutexGuard<'a, MappedWriteState>,
+    _reference_hold: ReferenceHoldGuard<'a>,
     start_position: usize,
     capacity: usize,
 }
@@ -250,6 +294,32 @@ impl<M: MappedMemory> Default for DefaultMappedFile<M> {
 
 impl<M: MappedMemory> DefaultMappedFile<M> {
     #[inline]
+    pub(crate) fn swap_generation_snapshot(&self) -> SwapGenerationSnapshot {
+        let state = self.swap_state.lock();
+        SwapGenerationSnapshot {
+            time_ms: state.time_ms,
+            generation: state.generation,
+        }
+    }
+
+    #[inline]
+    pub(crate) fn try_clean_swapped_generation(&self, expected: SwapGenerationSnapshot, force: bool) -> bool {
+        let mut state = self.swap_state.lock();
+        if state.generation != expected.generation || state.time_ms != expected.time_ms || state.cleaned {
+            return false;
+        }
+        if force {
+            self.mapped_byte_buffer_access_count_since_last_swap
+                .store(0, Ordering::Release);
+        }
+        if let Some(metrics) = &self.metrics {
+            metrics.record_clean_swap();
+        }
+        state.cleaned = true;
+        true
+    }
+
+    #[inline]
     pub fn new(file_name: CheetahString, file_size: u64) -> Self {
         Self::try_new(file_name, file_size).expect("Create mapped file failed")
     }
@@ -303,7 +373,11 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
             raw_core: MappedFileRawCore::new(file_size),
             write_state: Mutex::new(MappedWriteState::default()),
             first_create_in_queue: false,
-            swap_map_time: AtomicU64::new(current_millis()),
+            swap_state: Mutex::new(SwapLifecycleState {
+                time_ms: current_millis(),
+                generation: 1,
+                cleaned: false,
+            }),
             mapped_byte_buffer_access_count_since_last_swap: Default::default(),
             transient_store_pool,
             metrics: Some(MappedFileMetrics::new()),
@@ -356,6 +430,9 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
     }
 
     fn write_at(&self, start: usize, data: &[u8]) -> bool {
+        let Ok(_reference_hold) = ReferenceHoldGuard::try_acquire(&self.reference_resource) else {
+            return false;
+        };
         let _writer = self.write_state.lock();
         self.copy_to_mapping(start, data).is_ok()
     }
@@ -389,6 +466,39 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
 
     pub fn lazy_mmap_stats(&self) -> LazyMmapStats {
         self.mapping.stats()
+    }
+
+    /// Attempts logical shutdown followed by namespace removal.
+    ///
+    /// A successful result only verifies path removal. Existing mmap and file owners remain alive
+    /// until their Rust owners are dropped.
+    pub fn try_destroy(&self, interval_forcibly: u64) -> MappedFileDestroyOutcome {
+        MappedFile::shutdown(self, interval_forcibly);
+        if !self.reference_resource.is_logical_cleanup_marked() {
+            return MappedFileDestroyOutcome::CleanupPending {
+                ref_count: self.reference_resource.get_ref_count(),
+            };
+        }
+
+        match self.storage.delete() {
+            Ok(()) => {
+                info!(file_name = %self.file_name, "mapped-file namespace removal succeeded");
+                MappedFileDestroyOutcome::NamespaceRemoved
+            }
+            Err(error) => {
+                // A bare NotFound is not an incarnation-safe absence proof. Until the durable
+                // retirement protocol lands, keep it retryable instead of authorizing untracking.
+                error!(
+                    file_name = %self.file_name,
+                    error = ?error,
+                    "mapped-file namespace removal failed"
+                );
+                MappedFileDestroyOutcome::DeleteFailed {
+                    kind: error.kind(),
+                    raw_os_error: error.raw_os_error(),
+                }
+            }
+        }
     }
 
     fn try_get_mapped_file_ref(&self) -> io::Result<&M> {
@@ -564,7 +674,7 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
         if required_space == 0 {
             return Err(MappedFileError::InvalidWriteCommit { reserved: 0, actual: 0 });
         }
-
+        let reference_hold = ReferenceHoldGuard::try_acquire(&self.reference_resource)?;
         let mut state = self.write_state.lock();
         let wrote_position = self.raw_core.wrote_position();
         let start_position = usize::try_from(wrote_position).map_err(|_| MappedFileError::InvalidWritePosition {
@@ -588,6 +698,7 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
         Ok(DefaultMappedWriteLease {
             owner: self,
             state,
+            _reference_hold: reference_hold,
             start_position,
             capacity,
         })
@@ -717,15 +828,21 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
 
     #[inline]
     fn get_last_modified_timestamp(&self) -> u64 {
-        self.storage
-            .file()
-            .metadata()
-            .unwrap()
-            .modified()
-            .unwrap()
-            .elapsed()
-            .unwrap()
-            .as_millis() as u64
+        match self.try_last_modified_time() {
+            Ok(modified) => modified
+                .duration_since(UNIX_EPOCH)
+                .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+                .unwrap_or_default(),
+            Err(error) => {
+                warn!(file_name = %self.file_name, error = ?error, "failed to read mapped-file modification time");
+                0
+            }
+        }
+    }
+
+    #[inline]
+    fn try_last_modified_time(&self) -> io::Result<SystemTime> {
+        self.storage.file().metadata()?.modified()
     }
 
     fn get_data(&self, pos: usize, size: usize) -> Option<bytes::Bytes> {
@@ -756,19 +873,7 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
 
     #[inline]
     fn destroy(&self, interval_forcibly: u64) -> bool {
-        MappedFile::shutdown(self, interval_forcibly);
-        if self.is_cleanup_over() {
-            if let Err(e) = self.storage.delete() {
-                error!(file_name = %self.file_name, error = ?e, "delete file failed");
-                false
-            } else {
-                info!(file_name = %self.file_name, "delete file success");
-                true
-            }
-        } else {
-            warn!("destroy mapped file failed, cleanup over failed");
-            false
-        }
+        self.try_destroy(interval_forcibly).is_namespace_removed()
     }
 
     #[inline]
@@ -869,7 +974,10 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
 
     #[inline]
     fn swap_map(&self) -> bool {
-        self.swap_map_time.store(current_millis(), Ordering::Release);
+        let mut state = self.swap_state.lock();
+        state.time_ms = current_millis();
+        state.generation = state.generation.wrapping_add(1).max(1);
+        state.cleaned = false;
         self.mapped_byte_buffer_access_count_since_last_swap
             .store(0, Ordering::Release);
         if let Some(metrics) = &self.metrics {
@@ -880,18 +988,13 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
 
     #[inline]
     fn clean_swaped_map(&self, force: bool) {
-        if let Some(metrics) = &self.metrics {
-            metrics.record_clean_swap();
-        }
-        if force {
-            self.mapped_byte_buffer_access_count_since_last_swap
-                .store(0, Ordering::Release);
-        }
+        let snapshot = self.swap_generation_snapshot();
+        let _ = self.try_clean_swapped_generation(snapshot, force);
     }
 
     #[inline]
     fn get_recent_swap_map_time(&self) -> i64 {
-        self.swap_map_time.load(Ordering::Acquire) as i64
+        self.swap_generation_snapshot().time_millis()
     }
 
     #[inline]
@@ -1337,22 +1440,23 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
     fn cleanup(&self, current_ref: i64) -> bool {
         if MappedFile::is_available(self) {
             error!(
-                "this file[REF:{}] {} have not shutdown, stop unmapping.",
-                self.file_name, current_ref
+                "logical cleanup rejected for available file[REF:{}] {}",
+                current_ref, self.file_name
             );
             return false;
         }
 
-        if self.reference_resource.is_cleanup_over() {
+        if self.reference_resource.is_logical_cleanup_marked() {
             error!(
-                "this file[REF:{}]  {} have cleanup, do not do it again.",
-                self.file_name, current_ref
+                "logical cleanup already marked for file[REF:{}] {}",
+                current_ref, self.file_name
             );
             return true;
         }
-        TOTAL_MAPPED_VIRTUAL_MEMORY.fetch_sub(self.raw_core.file_size() as i64, Ordering::Relaxed);
-        TOTAL_MAPPED_FILES.fetch_sub(1, Ordering::Relaxed);
-        info!("unmap file[REF:{}] {} OK", current_ref, self.file_name);
+        info!(
+            "logical cleanup marked for file[REF:{}] {}; physical mapping release remains owner-driven",
+            current_ref, self.file_name
+        );
         true
     }
 }
@@ -1926,6 +2030,60 @@ mod tests {
         assert_eq!(mapped_file.get_mapped_byte_buffer_access_count_since_last_swap(), 0);
         assert!(mapped_file.get_recent_swap_map_time() >= before);
         assert_eq!(mapped_file.get_metrics().unwrap().swap_operations(), 1);
+    }
+
+    #[test]
+    fn stale_swap_snapshot_cannot_clean_new_generation() {
+        let (_temp_dir, mapped_file) = create_test_file();
+        let stale = mapped_file.swap_generation_snapshot();
+        assert!(!mapped_file.swap_map());
+        mapped_file
+            .mapped_byte_buffer_access_count_since_last_swap
+            .store(7, Ordering::Release);
+
+        assert!(!mapped_file.try_clean_swapped_generation(stale, true));
+        assert_eq!(mapped_file.get_mapped_byte_buffer_access_count_since_last_swap(), 7);
+        assert_eq!(mapped_file.get_metrics().unwrap().clean_swap_operations(), 0);
+
+        let current = mapped_file.swap_generation_snapshot();
+        assert!(mapped_file.try_clean_swapped_generation(current, true));
+        assert_eq!(mapped_file.get_mapped_byte_buffer_access_count_since_last_swap(), 0);
+        assert_eq!(mapped_file.get_metrics().unwrap().clean_swap_operations(), 1);
+    }
+
+    #[test]
+    fn concurrent_cleanup_claim_is_exactly_once_per_generation() {
+        let (_temp_dir, mapped_file) = create_test_file();
+        assert!(!mapped_file.swap_map());
+        let mapped_file = Arc::new(mapped_file);
+        let snapshot = mapped_file.swap_generation_snapshot();
+        let workers = (0..8)
+            .map(|_| {
+                let mapped_file = Arc::clone(&mapped_file);
+                std::thread::spawn(move || mapped_file.try_clean_swapped_generation(snapshot, true))
+            })
+            .collect::<Vec<_>>();
+
+        let winners = workers
+            .into_iter()
+            .map(|worker| worker.join().expect("cleanup worker"))
+            .filter(|cleaned| *cleaned)
+            .count();
+        assert_eq!(winners, 1);
+        assert_eq!(mapped_file.get_metrics().unwrap().clean_swap_operations(), 1);
+    }
+
+    #[test]
+    fn new_swap_reopens_cleanup_after_prior_generation_was_cleaned() {
+        let (_temp_dir, mapped_file) = create_test_file();
+        let initial = mapped_file.swap_generation_snapshot();
+        assert!(mapped_file.try_clean_swapped_generation(initial, true));
+        assert!(!mapped_file.try_clean_swapped_generation(initial, true));
+
+        assert!(!mapped_file.swap_map());
+        let next = mapped_file.swap_generation_snapshot();
+        assert!(mapped_file.try_clean_swapped_generation(next, true));
+        assert_eq!(mapped_file.get_metrics().unwrap().clean_swap_operations(), 2);
     }
 
     #[test]

@@ -95,31 +95,50 @@ impl LocalFileMessageStore {
         let mut consume_queue_store = self.consume_queue_store.clone();
         let mut delete_count = 0;
         for topic in delete_topics {
-            let Some(queue_table) = consume_queue_store.find_consume_queue_map(topic) else {
-                continue;
-            };
-            for (queue_id, consume_queue) in queue_table {
-                consume_queue.write().destroy();
-                consume_queue_store.remove_topic_queue_table(topic, queue_id);
-            }
-            let consume_queue_table = consume_queue_store.get_consume_queue_table();
-            consume_queue_table.lock().remove(topic);
-
-            if self.broker_config.auto_delete_unused_stats {
-                if let Some(broker_stats_manager) = self.broker_stats_manager.as_ref() {
-                    broker_stats_manager.on_topic_deleted(topic);
+            let removed = consume_queue_store.with_topic_closing(topic, |consume_queue_store| {
+                let Some(queue_table) = consume_queue_store.find_consume_queue_map(topic) else {
+                    return false;
+                };
+                let failures = consume_queue_store.retire_topic_queue_snapshot(topic, &queue_table);
+                for queue_id in &failures {
+                    warn!(
+                        topic = %topic,
+                        queue_id,
+                        "DeleteTopic cleanup deferred or queue generation changed; retaining identity for retry"
+                    );
                 }
+                if !failures.is_empty() {
+                    return false;
+                }
+                if !consume_queue_store.remove_topic_if_empty(topic) {
+                    warn!(
+                        topic = %topic,
+                        "DeleteTopic observed additional consume queues; retaining topic for retry"
+                    );
+                    return false;
+                }
+
+                if self.broker_config.auto_delete_unused_stats {
+                    if let Some(broker_stats_manager) = self.broker_stats_manager.as_ref() {
+                        broker_stats_manager.on_topic_deleted(topic);
+                    }
+                }
+
+                let root_dir = self.message_store_config.store_path_root_dir.as_str();
+                let consume_queue_dir = PathBuf::from(get_store_path_consume_queue(root_dir)).join(topic.as_str());
+                let consume_queue_ext_dir =
+                    PathBuf::from(get_store_path_consume_queue_ext(root_dir)).join(topic.as_str());
+                let batch_consume_queue_dir =
+                    PathBuf::from(get_store_path_batch_consume_queue(root_dir)).join(topic.as_str());
+
+                util_all::delete_empty_directory(consume_queue_dir);
+                util_all::delete_empty_directory(consume_queue_ext_dir);
+                util_all::delete_empty_directory(batch_consume_queue_dir);
+                true
+            });
+            if !removed {
+                continue;
             }
-
-            let root_dir = self.message_store_config.store_path_root_dir.as_str();
-            let consume_queue_dir = PathBuf::from(get_store_path_consume_queue(root_dir)).join(topic.as_str());
-            let consume_queue_ext_dir = PathBuf::from(get_store_path_consume_queue_ext(root_dir)).join(topic.as_str());
-            let batch_consume_queue_dir =
-                PathBuf::from(get_store_path_batch_consume_queue(root_dir)).join(topic.as_str());
-
-            util_all::delete_empty_directory(consume_queue_dir);
-            util_all::delete_empty_directory(consume_queue_ext_dir);
-            util_all::delete_empty_directory(batch_consume_queue_dir);
             info!("DeleteTopic: Topic has been destroyed, topic={}", topic);
             delete_count += 1;
         }
@@ -232,12 +251,22 @@ impl LocalFileMessageStore {
     }
 
     pub(super) fn delete_file(&mut self, file_name: String) {
+        let _ = self.delete_file_with_outcome(file_name);
+    }
+
+    pub(super) fn delete_file_with_outcome(&mut self, file_name: String) -> bool {
         match fs::remove_file(PathBuf::from(file_name.as_str())) {
             Ok(_) => {
                 info!("delete OK, file:{}", file_name);
+                true
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                info!("delete skipped because file is already absent: {}", file_name);
+                true
             }
             Err(err) => {
                 error!("delete error, file:{}, {:?}", file_name, err);
+                false
             }
         }
     }

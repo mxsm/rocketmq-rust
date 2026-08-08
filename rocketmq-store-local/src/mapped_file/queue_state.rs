@@ -14,6 +14,7 @@
 
 //! Runtime-neutral progress state for a Local mapped-file queue.
 
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -27,6 +28,7 @@ pub struct MappedFileQueueRuntimeState {
     flushed_where: Arc<AtomicU64>,
     committed_where: Arc<AtomicU64>,
     store_timestamp: Arc<AtomicU64>,
+    closing: Arc<AtomicBool>,
     commit_lock: Arc<Mutex<()>>,
 }
 
@@ -36,12 +38,30 @@ impl Default for MappedFileQueueRuntimeState {
             flushed_where: Arc::new(AtomicU64::new(0)),
             committed_where: Arc::new(AtomicU64::new(0)),
             store_timestamp: Arc::new(AtomicU64::new(0)),
+            closing: Arc::new(AtomicBool::new(false)),
             commit_lock: Arc::new(Mutex::new(())),
         }
     }
 }
 
 impl MappedFileQueueRuntimeState {
+    /// Returns whether retirement has permanently closed this queue to new appends.
+    #[doc(hidden)]
+    pub fn is_closing(&self) -> bool {
+        self.closing.load(Ordering::Acquire)
+    }
+
+    /// Permanently closes this queue to new appends.
+    ///
+    /// Callers must hold [`Self::commit_lock`] while publishing this transition so creation and
+    /// retirement share one serialization boundary.
+    #[doc(hidden)]
+    pub fn begin_close(&self) -> bool {
+        self.closing
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
     /// Returns the last committed physical offset.
     #[doc(hidden)]
     pub fn committed_where(&self) -> i64 {

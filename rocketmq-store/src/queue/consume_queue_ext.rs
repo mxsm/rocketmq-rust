@@ -94,8 +94,13 @@ impl ConsumeQueueExt {
     }
 
     pub fn truncate_by_max_address(&self, max_address: i64) {
+        let _ = self.try_truncate_by_max_address(max_address);
+    }
+
+    #[must_use]
+    pub fn try_truncate_by_max_address(&self, max_address: i64) -> bool {
         if !Self::is_ext_addr(max_address) {
-            return;
+            return true;
         }
 
         info!("Truncate consume queue ext by max {}.", max_address);
@@ -103,13 +108,13 @@ impl ConsumeQueueExt {
         let mut cq_ext_unit = CqExtUnit::default();
         if !self.get(max_address, &mut cq_ext_unit) {
             error!("[BUG] address {} of consume queue extend not found!", max_address);
-            return;
+            return false;
         }
 
         let real_offset = Self::undecorate(max_address);
         self.mapped_file_queue
             .lock()
-            .truncate_dirty_files(real_offset + cq_ext_unit.size() as i64);
+            .try_truncate_dirty_files(real_offset + cq_ext_unit.size() as i64)
     }
 
     pub fn truncate_by_min_address(&self, min_address: i64) {
@@ -134,8 +139,14 @@ impl ConsumeQueueExt {
                     file_tail_offset,
                     real_offset
                 );
-                if mapped_file.destroy(1000) {
+                if mapped_file.try_destroy(1000).is_namespace_removed() {
                     will_remove_files.push(mapped_file.clone());
+                } else {
+                    warn!(
+                        file_name = %mapped_file.get_file_name(),
+                        "consume-queue extension cleanup deferred; retaining this and later identities"
+                    );
+                    break;
                 }
             }
         }
@@ -156,10 +167,15 @@ impl ConsumeQueueExt {
     }
 
     pub fn recover(&mut self) {
+        let _ = self.recover_with_outcome();
+    }
+
+    #[must_use]
+    pub fn recover_with_outcome(&mut self) -> bool {
         let mapped_file_queue = self.mapped_file_queue.lock();
         let mapped_files = mapped_file_queue.get_mapped_files().load().clone();
         if mapped_files.is_empty() {
-            return;
+            return true;
         }
 
         let mut process_offset = 0i64;
@@ -179,9 +195,12 @@ impl ConsumeQueueExt {
             }
         }
 
+        if !mapped_file_queue.try_truncate_dirty_files(process_offset) {
+            return false;
+        }
         mapped_file_queue.set_flushed_where(process_offset);
         mapped_file_queue.set_committed_where(process_offset);
-        mapped_file_queue.truncate_dirty_files(process_offset);
+        true
     }
 
     pub fn put(&self, cq_ext_unit: CqExtUnit) -> i64 {
@@ -240,7 +259,11 @@ impl ConsumeQueueExt {
     }
 
     pub fn destroy(&mut self) {
-        self.mapped_file_queue.lock().destroy();
+        let _ = self.destroy_with_outcome();
+    }
+
+    pub fn destroy_with_outcome(&mut self) -> bool {
+        self.mapped_file_queue.lock().destroy_with_outcome()
     }
 
     pub fn get(&self, address: i64, cq_ext_unit: &mut CqExtUnit) -> bool {

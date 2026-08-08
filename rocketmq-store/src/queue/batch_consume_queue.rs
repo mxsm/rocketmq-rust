@@ -279,10 +279,14 @@ impl FileQueueLifeCycle for BatchConsumeQueue {
 
     #[inline]
     fn recover(&mut self) {
+        let _ = self.recover_with_outcome();
+    }
+
+    fn recover_with_outcome(&mut self) -> bool {
         let mapped_files = self.mapped_file_queue.snapshot();
         if mapped_files.is_empty() {
             self.revise_max_and_min_offset_in_queue();
-            return;
+            return true;
         }
 
         let mut index = mapped_files.len().saturating_sub(3);
@@ -294,10 +298,6 @@ impl FileQueueLifeCycle for BatchConsumeQueue {
             let read_position = mapped_file.get_read_position();
             let scan = scan_batch_recovery(read_position, |position| Self::read_entry(&mapped_file, position));
             mapped_file_offset = scan.valid_bytes;
-            if let Some(max_physical_offset) = scan.max_physical_offset {
-                self.max_msg_phy_offset_in_commit_log
-                    .store(max_physical_offset, Ordering::Release);
-            }
             if mapped_file_offset < read_position {
                 info!(
                     "Recover current batch consume queue file over, file={} mappedFileOffset={}",
@@ -330,10 +330,19 @@ impl FileQueueLifeCycle for BatchConsumeQueue {
         }
 
         process_offset += mapped_file_offset as u64;
+        if !self.mapped_file_queue.try_truncate_dirty_files(process_offset as i64) {
+            warn!(
+                topic = %self.topic,
+                queue_id = self.queue_id,
+                process_offset,
+                "batch consume-queue recovery tail cleanup remains pending"
+            );
+            return false;
+        }
+        self.revise_max_and_min_offset_in_queue();
         self.mapped_file_queue.set_flushed_where(process_offset as i64);
         self.mapped_file_queue.set_committed_where(process_offset as i64);
-        self.mapped_file_queue.truncate_dirty_files(process_offset as i64);
-        self.revise_max_and_min_offset_in_queue();
+        true
     }
 
     #[inline]
@@ -348,32 +357,55 @@ impl FileQueueLifeCycle for BatchConsumeQueue {
 
     #[inline]
     fn destroy(&mut self) {
+        let _ = self.destroy_with_outcome();
+    }
+
+    fn destroy_with_outcome(&mut self) -> bool {
+        if !self.mapped_file_queue.destroy_with_outcome() {
+            return false;
+        }
         self.max_msg_phy_offset_in_commit_log.store(-1, Ordering::Release);
         self.min_logic_offset.store(-1, Ordering::Release);
         self.min_offset_in_queue.store(-1, Ordering::Release);
         self.max_offset_in_queue.store(0, Ordering::Release);
-        self.mapped_file_queue.destroy();
         self.offset_cache.write().clear();
         self.time_cache.write().clear();
+        true
     }
 
     #[inline]
     fn truncate_dirty_logic_files(&mut self, max_commit_log_pos: i64) {
+        let _ = self.truncate_dirty_logic_files_with_outcome(max_commit_log_pos);
+    }
+
+    fn truncate_dirty_logic_files_with_outcome(&mut self, max_commit_log_pos: i64) -> bool {
         loop {
             let Some(mapped_file) = self.mapped_file_queue.get_last_mapped_file() else {
                 break;
             };
 
-            mapped_file.set_wrote_position(0);
-            mapped_file.set_committed_position(0);
-            mapped_file.set_flushed_position(0);
-
             match plan_batch_truncate(self.mapped_file_size as i32, max_commit_log_pos, |position| {
                 Self::read_entry(&mapped_file, position)
             }) {
-                BatchTruncatePlan::RetryFile => continue,
+                BatchTruncatePlan::RetryFile => {
+                    warn!(
+                        topic = %self.topic,
+                        queue_id = self.queue_id,
+                        file_name = %mapped_file.get_file_name(),
+                        "batch consume-queue truncation could not read a complete record"
+                    );
+                    return false;
+                }
                 BatchTruncatePlan::DeleteFile => {
-                    self.mapped_file_queue.delete_last_mapped_file();
+                    if !self.mapped_file_queue.try_delete_last_mapped_file() {
+                        warn!(
+                            topic = %self.topic,
+                            queue_id = self.queue_id,
+                            file_name = %mapped_file.get_file_name(),
+                            "batch consume-queue tail cleanup remains pending"
+                        );
+                        return false;
+                    }
                 }
                 BatchTruncatePlan::Retain {
                     valid_bytes,
@@ -392,6 +424,7 @@ impl FileQueueLifeCycle for BatchConsumeQueue {
         }
 
         self.revise_max_and_min_offset_in_queue();
+        true
     }
 
     #[inline]
@@ -784,6 +817,13 @@ mod tests {
         }
     }
 
+    fn create_empty_mapped_file(path: &std::path::Path, mapped_file_size: usize) {
+        drop(DefaultMappedFile::new(
+            CheetahString::from_string(path.to_string_lossy().into_owned()),
+            mapped_file_size as u64,
+        ));
+    }
+
     fn encode_invalid_record(
         offset: i64,
         size: i32,
@@ -879,6 +919,61 @@ mod tests {
         assert_eq!(recovered.get_message_total_in_queue(), 5);
         assert_eq!(recovered.get_max_physic_offset(), 172);
         assert!(recovered.get(5).is_none());
+    }
+
+    #[test]
+    fn batch_truncate_returns_pending_when_the_last_file_is_held() {
+        let root = tempdir().expect("tempdir");
+        let store_path = CheetahString::from_string(root.path().join("batch-cq").to_string_lossy().to_string());
+        let mut consume_queue = create_batch_consume_queue(store_path, (CQ_STORE_UNIT_SIZE * 2) as usize);
+        consume_queue.put_message_position_info_wrapper(&dispatch_request(100, 40, 1_000, 0, 1));
+        let mapped_file = consume_queue
+            .mapped_file_queue
+            .get_last_mapped_file()
+            .expect("mapped file");
+        assert!(mapped_file.hold());
+
+        assert!(!consume_queue.truncate_dirty_logic_files_with_outcome(100));
+        assert_eq!(consume_queue.mapped_file_queue.get_mapped_file_count(), 1);
+
+        mapped_file.release();
+        assert!(consume_queue.mapped_file_queue.try_delete_last_mapped_file());
+    }
+
+    #[test]
+    fn batch_recover_defers_progress_until_dirty_tail_cleanup_completes() {
+        let root = tempdir().expect("tempdir");
+        let store_path = root.path().join("batch-cq");
+        let queue_dir = store_path.join("BatchTopic").join("1");
+        let mapped_file_size = (CQ_STORE_UNIT_SIZE * 2) as usize;
+        for offset in [0, mapped_file_size, mapped_file_size * 2] {
+            create_empty_mapped_file(&queue_dir.join(format!("{offset:020}")), mapped_file_size);
+        }
+
+        let mut recovered = create_batch_consume_queue(
+            CheetahString::from_string(store_path.to_string_lossy().into_owned()),
+            mapped_file_size,
+        );
+        assert!(recovered.load());
+        recovered.max_msg_phy_offset_in_commit_log.store(777, Ordering::Release);
+        recovered.max_offset_in_queue.store(42, Ordering::Release);
+        recovered.min_offset_in_queue.store(11, Ordering::Release);
+        recovered.min_logic_offset.store(22, Ordering::Release);
+        recovered.mapped_file_queue.set_flushed_where(777);
+        recovered.mapped_file_queue.set_committed_where(777);
+        let tail = recovered.mapped_file_queue.get_last_mapped_file().expect("dirty tail");
+        assert!(tail.hold());
+
+        assert!(!recovered.recover_with_outcome());
+        assert_eq!(recovered.get_max_physic_offset(), 777);
+        assert_eq!(recovered.get_max_offset_in_queue(), 42);
+        assert_eq!(recovered.get_min_offset_in_queue(), 11);
+        assert_eq!(recovered.min_logic_offset.load(Ordering::Acquire), 22);
+        assert_eq!(recovered.mapped_file_queue.get_flushed_where(), 777);
+        assert_eq!(recovered.mapped_file_queue.get_committed_where(), 777);
+
+        tail.release();
+        assert!(recovered.destroy_with_outcome());
     }
 
     #[test]

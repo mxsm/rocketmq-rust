@@ -31,7 +31,7 @@ use rocketmq_store_local::index::service::build_index_key;
 use rocketmq_store_local::index::service::build_index_key_into;
 #[cfg(test)]
 use rocketmq_store_local::index::service::build_index_key_with_type;
-use rocketmq_store_local::index::service::destroy_index_files;
+use rocketmq_store_local::index::service::destroy_index_files_with_outcome;
 use rocketmq_store_local::index::service::drive_index_build_keys;
 use rocketmq_store_local::index::service::drive_index_service_put;
 use rocketmq_store_local::index::service::expired_index_file_count;
@@ -54,6 +54,7 @@ use rocketmq_store_local::index::service::IndexBuildPreflight;
 use rocketmq_store_local::index::service::IndexServiceFile;
 use rocketmq_store_local::index::service::IndexServiceRoot;
 use rocketmq_store_local::index::service::MAX_TRY_INDEX_FILE_CREATE;
+use rocketmq_store_local::mapped_file::MappedFileDestroyOutcome;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -141,8 +142,8 @@ impl IndexServiceAdapter {
     }
 
     pub fn shutdown(&self) {
-        let mut list = self.index_file_list.write();
-        shutdown_index_files(&mut list, |index_file| index_file.shutdown());
+        let list = self.index_file_list.read();
+        shutdown_index_files(&list, |index_file| index_file.shutdown());
     }
 
     pub fn load(&mut self, last_exit_ok: bool) -> bool {
@@ -177,7 +178,13 @@ impl IndexServiceAdapter {
             index_file.load();
 
             if should_remove_unsafe_index_file(last_exit_ok, index_file.get_end_timestamp(), checkpoint_timestamp) {
-                index_file.destroy(0);
+                if !index_file.try_destroy(0).is_namespace_removed() {
+                    error!(
+                        file_path,
+                        "unsafe index file cleanup deferred; aborting load so the path remains retryable"
+                    );
+                    return false;
+                }
                 removed_unsafe_index_file = true;
                 continue;
             }
@@ -255,16 +262,31 @@ impl IndexServiceAdapter {
 
         info!("Delete expired index files, count: {}", files.len());
 
-        // Destroy files first and collect successful ones
         let mut destroyed_files = Vec::new();
         for file in files.iter() {
             let file_name = file.get_file_name();
-            if file.destroy(3000) {
-                destroyed_files.push(file_name.clone());
-                info!("Delete expired index file success: {}", file_name);
-            } else {
-                error!("Delete expired index file failed: {}", file_name);
-                break;
+            match file.try_destroy(3000) {
+                MappedFileDestroyOutcome::NamespaceRemoved => {
+                    destroyed_files.push(file_name.clone());
+                    info!(file_name = %file_name, "expired index-file namespace removal succeeded");
+                }
+                MappedFileDestroyOutcome::CleanupPending { ref_count } => {
+                    warn!(
+                        file_name = %file_name,
+                        ref_count,
+                        "expired index-file cleanup deferred; retaining this and later identities"
+                    );
+                    break;
+                }
+                MappedFileDestroyOutcome::DeleteFailed { kind, raw_os_error } => {
+                    error!(
+                        file_name = %file_name,
+                        ?kind,
+                        ?raw_os_error,
+                        "expired index-file namespace removal failed; retaining this and later identities"
+                    );
+                    break;
+                }
             }
         }
 
@@ -276,10 +298,32 @@ impl IndexServiceAdapter {
 
     #[inline]
     pub fn destroy(&self) {
+        let _ = self.destroy_with_outcome();
+    }
+
+    #[must_use]
+    pub fn destroy_with_outcome(&self) -> bool {
         let mut index_file_list = self.index_file_list.write();
-        destroy_index_files(&mut index_file_list, |f| {
-            f.destroy(3000);
-        });
+        destroy_index_files_with_outcome(&mut index_file_list, |file| match file.try_destroy(3000) {
+            MappedFileDestroyOutcome::NamespaceRemoved => true,
+            MappedFileDestroyOutcome::CleanupPending { ref_count } => {
+                warn!(
+                    file_name = %file.get_file_name(),
+                    ref_count,
+                    "index-file cleanup deferred; retaining this and later identities"
+                );
+                false
+            }
+            MappedFileDestroyOutcome::DeleteFailed { kind, raw_os_error } => {
+                error!(
+                    file_name = %file.get_file_name(),
+                    ?kind,
+                    ?raw_os_error,
+                    "index-file namespace removal failed; retaining this and later identities"
+                );
+                false
+            }
+        })
     }
 
     pub fn query_offset(&self, topic: &str, key: &str, max_num: i32, begin: i64, end: i64) -> QueryOffsetResult {
@@ -915,5 +959,96 @@ mod tests {
         assert!(result.get_phy_offsets().is_empty());
         assert_eq!(result.get_index_last_update_timestamp(), 0);
         assert_eq!(result.get_index_last_update_phyoffset(), 0);
+    }
+
+    #[test]
+    fn destroy_outcome_retains_failed_index_identity_until_retry() {
+        let temp_dir = tempdir().unwrap();
+        let index_service = new_index_service_for_test(&temp_dir, "store_checkpoint_test_destroy_retry");
+        index_service.build_index(&DispatchRequest {
+            topic: CheetahString::from_slice("TestTopic"),
+            commit_log_offset: 1000,
+            msg_size: 100,
+            store_timestamp: 1000000000000,
+            keys: CheetahString::from_slice("key1"),
+            ..DispatchRequest::default()
+        });
+        let index_file = index_service
+            .index_file_list
+            .read()
+            .last()
+            .cloned()
+            .expect("index file");
+        assert!(index_file.hold_for_testing());
+
+        assert!(!index_service.destroy_with_outcome());
+        assert!(index_service
+            .index_file_list
+            .read()
+            .last()
+            .is_some_and(|current| Arc::ptr_eq(current, &index_file)));
+
+        index_file.release_for_testing();
+        assert!(index_service.destroy_with_outcome());
+        assert!(index_service.index_file_list.read().is_empty());
+    }
+
+    #[test]
+    fn shutdown_retains_index_identity_for_later_destroy() {
+        let temp_dir = tempdir().unwrap();
+        let index_service = new_index_service_for_test(&temp_dir, "store_checkpoint_test_shutdown_destroy");
+        index_service.build_index(&DispatchRequest {
+            topic: CheetahString::from_slice("TestTopic"),
+            commit_log_offset: 1000,
+            msg_size: 100,
+            store_timestamp: 1000000000000,
+            keys: CheetahString::from_slice("key1"),
+            ..DispatchRequest::default()
+        });
+        let file_name = index_service
+            .index_file_list
+            .read()
+            .last()
+            .map(|file| file.get_file_name().clone())
+            .expect("index file");
+
+        index_service.shutdown();
+
+        assert_eq!(index_service.index_file_list.read().len(), 1);
+        assert!(Path::new(file_name.as_str()).exists());
+        assert!(index_service.destroy_with_outcome());
+        assert!(!Path::new(file_name.as_str()).exists());
+    }
+
+    #[test]
+    fn expired_cleanup_retains_failed_index_identity_until_retry() {
+        let temp_dir = tempdir().unwrap();
+        let index_service = new_index_service_for_test(&temp_dir, "store_checkpoint_test_expired_retry");
+        index_service.build_index(&DispatchRequest {
+            topic: CheetahString::from_slice("TestTopic"),
+            commit_log_offset: 1000,
+            msg_size: 100,
+            store_timestamp: 1000000000000,
+            keys: CheetahString::from_slice("key1"),
+            ..DispatchRequest::default()
+        });
+        let index_file = index_service
+            .index_file_list
+            .read()
+            .last()
+            .cloned()
+            .expect("index file");
+        assert!(index_file.hold_for_testing());
+
+        index_service.delete_expired_file_list(vec![Arc::clone(&index_file)]);
+        assert!(index_service
+            .index_file_list
+            .read()
+            .last()
+            .is_some_and(|current| Arc::ptr_eq(current, &index_file)));
+
+        index_file.release_for_testing();
+        index_service.delete_expired_file_list(vec![index_file]);
+        assert!(index_service.index_file_list.read().is_empty());
     }
 }

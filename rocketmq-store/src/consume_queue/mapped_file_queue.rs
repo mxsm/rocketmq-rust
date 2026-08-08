@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::io;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -256,12 +258,24 @@ fn get_last_mapped_file_for_append(
     start_offset: u64,
     need_create: bool,
 ) -> Option<Arc<DefaultMappedFile>> {
+    if runtime_state.is_closing() {
+        return None;
+    }
     let mapped_file_last = mapped_files.load().last().cloned();
+    if mapped_file_last.as_ref().is_some_and(|file| !file.is_available()) {
+        return None;
+    }
     if let Some(file) = mapped_file_last.as_ref() {
         let last_file =
             MappedFileQueueLastFile::new(file.get_file_from_offset(), file.get_wrote_position(), file.is_full());
         if let Some(next_offset) = plan_mapped_file_queue_preallocation(mapped_file_size, last_file) {
-            trigger_mapped_file_preallocation(store_path, mapped_file_size, allocate_mapped_file_service, next_offset);
+            trigger_mapped_file_preallocation(
+                store_path,
+                mapped_file_size,
+                allocate_mapped_file_service,
+                runtime_state,
+                next_offset,
+            );
         }
     }
     let roll_file = mapped_file_last
@@ -285,8 +299,13 @@ fn trigger_mapped_file_preallocation(
     store_path: &str,
     mapped_file_size: u64,
     allocate_mapped_file_service: Option<&AllocateMappedFileService>,
+    runtime_state: &MappedFileQueueRuntimeState,
     next_offset: u64,
 ) {
+    let _maintenance_guard = runtime_state.commit_lock().lock();
+    if runtime_state.is_closing() {
+        return;
+    }
     let Some(service) = allocate_mapped_file_service else {
         return;
     };
@@ -307,6 +326,9 @@ fn create_and_publish_mapped_file(
     create_offset: u64,
 ) -> Option<Arc<DefaultMappedFile>> {
     let _maintenance_guard = runtime_state.commit_lock().lock();
+    if runtime_state.is_closing() {
+        return None;
+    }
     let current_files = mapped_files.load();
     if let Some(existing) = current_files
         .iter()
@@ -411,7 +433,7 @@ impl MappedFileQueueCleanupHandle {
             clean_immediately,
             delete_file_batch_max,
             pinned_file_offset,
-            || current_millis() as i64,
+            || i64::try_from(current_millis()).unwrap_or(i64::MAX),
         );
         let delete_count = deletion.deleted_count();
         self.remove_files(deletion.into_mapped_files());
@@ -764,8 +786,14 @@ impl MappedFileQueue {
     /// * `offset` - The offset beyond which files are considered dirty
     #[inline]
     pub fn truncate_dirty_files(&self, offset: i64) {
+        let _ = self.try_truncate_dirty_files(offset);
+    }
+
+    /// Truncates dirty data and reports whether every tail namespace was removed.
+    #[must_use]
+    pub fn try_truncate_dirty_files(&self, offset: i64) -> bool {
         let _maintenance_guard = self.runtime_state.commit_lock().lock();
-        let mut will_remove_files = Vec::new();
+        let mut removal_candidates = Vec::new();
 
         for mapped_file in self.storage.mapped_files().load().iter() {
             match mapped_file_queue_truncate_action(
@@ -780,14 +808,25 @@ impl MappedFileQueue {
                     mapped_file.set_flushed_position(position);
                 }
                 MappedFileQueueTruncateAction::Remove => {
-                    mapped_file.destroy(1000);
-                    will_remove_files.push(mapped_file.clone());
+                    removal_candidates.push(mapped_file.clone());
                 }
             }
         }
 
-        //Actually delete the files that were marked for removal
-        self.delete_expired_file(will_remove_files);
+        // Tail deletion runs newest-to-oldest. If one attempt is deferred, any already removed
+        // candidates still form a contiguous suffix and the remaining identities stay tracked.
+        let mut removed_files = Vec::new();
+        let mut complete = true;
+        for mapped_file in removal_candidates.into_iter().rev() {
+            if mapped_file.try_destroy(1000).is_namespace_removed() {
+                removed_files.push(mapped_file);
+            } else {
+                complete = false;
+                break;
+            }
+        }
+        self.delete_expired_file(removed_files);
+        complete
     }
 
     #[inline]
@@ -798,10 +837,25 @@ impl MappedFileQueue {
 
     #[inline]
     pub fn delete_last_mapped_file(&mut self) {
+        let _ = self.try_delete_last_mapped_file();
+    }
+
+    /// Deletes the newest mapped file and reports whether its namespace was removed.
+    #[must_use]
+    pub fn try_delete_last_mapped_file(&mut self) -> bool {
         let files = self.storage.mapped_files().load();
-        if let Some(last_mapped_file) = destroy_last_mapped_file(files.as_slice()) {
-            self.delete_expired_file(vec![last_mapped_file]);
-        }
+        let Some(last_mapped_file) = files.last() else {
+            return true;
+        };
+        let expected = Arc::clone(last_mapped_file);
+        let removed = destroy_last_mapped_file(files.as_slice());
+        drop(files);
+        let Some(removed) = removed else {
+            return false;
+        };
+        debug_assert!(Arc::ptr_eq(&removed, &expected));
+        self.delete_expired_file(vec![removed]);
+        true
     }
 
     #[inline]
@@ -906,26 +960,26 @@ impl MappedFileQueue {
             return false;
         };
 
+        let mut removed_files = Vec::new();
+        for &index in plan.remove_indices() {
+            let mapped_file = current_files[index].clone();
+            if mapped_file.try_destroy(1000).is_namespace_removed() {
+                removed_files.push(mapped_file);
+            } else {
+                drop(current_files);
+                self.delete_expired_file(removed_files);
+                return false;
+            }
+        }
+
         if let Some((index, position)) = plan.target() {
             let mapped_file = &current_files[index];
             mapped_file.set_flushed_position(position);
             mapped_file.set_wrote_position(position);
             mapped_file.set_committed_position(position);
         }
-
-        // Remove files beyond the offset from the latest generation. Cleanup may
-        // publish a concurrent generation, so retain identity-based candidates
-        // instead of applying stale indices to a newer vector.
-        if !plan.remove_indices().is_empty() {
-            let removal_candidates = plan
-                .remove_indices()
-                .iter()
-                .map(|&index| current_files[index].clone())
-                .collect();
-            drop(current_files);
-            self.delete_expired_file(removal_candidates);
-        }
-
+        drop(current_files);
+        self.delete_expired_file(removed_files);
         true
     }
 
@@ -987,6 +1041,11 @@ impl MappedFileQueue {
     /// # Arguments
     /// * `interval_forcibly` - Force shutdown interval (milliseconds)
     pub fn shutdown(&self, interval_forcibly: u64) {
+        let _maintenance_guard = self.runtime_state.commit_lock().lock();
+        self.runtime_state.begin_close();
+        if let Some(service) = &self.allocate_mapped_file_service {
+            let _ = service.retire_directory(Path::new(self.storage.store_path()));
+        }
         let files = self.storage.mapped_files().load();
         shutdown_mapped_file_queue(files.as_slice(), interval_forcibly);
     }
@@ -1124,11 +1183,10 @@ impl MappedFileQueue {
         self.cleanup_handle().retry_delete_first_file(interval_forcibly)
     }
 
-    /// Swap mapped byte buffers to reduce memory pressure
+    /// Records legacy mapped-buffer swap eligibility.
     ///
-    /// This method implements memory-mapped buffer swapping for old files
-    /// that are no longer frequently accessed. It helps reduce memory usage
-    /// by unmapping buffers that haven't been accessed recently.
+    /// The current compatibility implementation updates swap bookkeeping only. It does not unmap
+    /// buffers or reduce resident memory; physical generation replacement is handled separately.
     ///
     /// # Arguments
     /// * `reserve_num` - Number of recent files to keep in memory (minimum 3)
@@ -1151,15 +1209,14 @@ impl MappedFileQueue {
             reserve_num,
             force_swap_interval_ms,
             normal_swap_interval_ms,
-            || current_millis() as i64,
+            || i64::try_from(current_millis()).unwrap_or(i64::MAX),
         );
     }
 
-    /// Clean swapped mapped byte buffers
+    /// Records compatibility cleanup for previously selected swap candidates.
     ///
-    /// This method cleans up swapped buffers that have been swapped for
-    /// a long time and are unlikely to be accessed again. This helps
-    /// reclaim system resources.
+    /// This operation only updates cleanup metrics and access bookkeeping. It does not reclaim an
+    /// mmap or file owner.
     ///
     /// # Arguments
     /// * `force_clean_swap_interval_ms` - Clean buffers swapped longer than this
@@ -1176,7 +1233,7 @@ impl MappedFileQueue {
     pub fn clean_swapped_map(&self, force_clean_swap_interval_ms: i64) {
         let files = self.storage.mapped_files().load();
         clean_swapped_mapped_file_queue(files.as_slice(), force_clean_swap_interval_ms, || {
-            current_millis() as i64
+            i64::try_from(current_millis()).unwrap_or(i64::MAX)
         });
     }
 
@@ -1192,8 +1249,10 @@ impl MappedFileQueue {
     /// The mapped file containing data for that timestamp, or the last file
     pub fn get_mapped_file_by_time(&self, timestamp: i64) -> Option<Arc<DefaultMappedFile>> {
         let files = self.snapshot();
-        file_index_by_timestamp(&files, timestamp, |file| file.get_last_modified_timestamp() as i64)
-            .map(|index| files[index].clone())
+        file_index_by_timestamp(&files, timestamp, |file| {
+            i64::try_from(file.get_last_modified_timestamp()).unwrap_or(i64::MAX)
+        })
+        .map(|index| files[index].clone())
     }
 
     // ============ Additional Helper Methods ============
@@ -1232,11 +1291,41 @@ impl MappedFileQueue {
     /// It should only be called during shutdown or cleanup operations.
     #[inline]
     pub fn destroy(&mut self) {
+        let _ = self.destroy_with_outcome();
+    }
+
+    /// Begins permanent queue retirement and reports whether every tracked path was removed.
+    ///
+    /// A failed attempt leaves the queue closed to new appends while retaining the remaining
+    /// identities for a later retry.
+    #[inline]
+    pub fn destroy_with_outcome(&mut self) -> bool {
+        let _maintenance_guard = self.runtime_state.commit_lock().lock();
+        self.runtime_state.begin_close();
+        let store_path = PathBuf::from(self.storage.store_path());
+        if let Some(service) = &self.allocate_mapped_file_service {
+            let _ = service.retire_directory(&store_path);
+        }
         let files = self.storage.mapped_files().load();
-        destroy_mapped_file_queue(files.as_slice(), self.storage.store_path());
+        let deletion = destroy_mapped_file_queue(files.as_slice(), self.storage.store_path());
         drop(files);
-        self.replace_mapped_files_exclusive(Vec::new());
-        self.set_flushed_where(0);
+        self.delete_expired_file(deletion.into_mapped_files());
+        let allocator_retirement_complete = self
+            .allocate_mapped_file_service
+            .as_ref()
+            .is_none_or(|service| service.is_directory_retirement_complete(&store_path));
+        let namespace_absent = match std::fs::metadata(&store_path) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => true,
+            Ok(_) | Err(_) => false,
+        };
+        let destroyed = self.is_mapped_files_empty() && allocator_retirement_complete && namespace_absent;
+        if destroyed {
+            self.set_flushed_where(0);
+            if let Some(service) = &self.allocate_mapped_file_service {
+                let _ = service.complete_directory_retirement(&store_path);
+            }
+        }
+        destroyed
     }
 
     /// Find mapped file by offset
@@ -1631,6 +1720,96 @@ mod tests {
         service.shutdown().await;
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn preallocation_rechecks_closing_under_the_maintenance_lock() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let mapped_file_size = 1024;
+        let next_file_path = temp_dir.path().join(offset_to_file_name(mapped_file_size));
+        let service = AllocateMappedFileService::new_with_config(
+            None,
+            false,
+            false,
+            crate::runtime::test_scope("mapped-file-preallocation-close-race-test").mapped_file_allocation_budget(),
+        );
+        service.start();
+        let runtime_state = MappedFileQueueRuntimeState::default();
+        let maintenance_guard = runtime_state.commit_lock().lock();
+        let thread_state = runtime_state.clone();
+        let thread_service = service.clone();
+        let thread_store_path = temp_dir.path().to_string_lossy().into_owned();
+        let barrier = Arc::new(Barrier::new(2));
+        let thread_barrier = Arc::clone(&barrier);
+
+        let submitter = thread::spawn(move || {
+            thread_barrier.wait();
+            trigger_mapped_file_preallocation(
+                &thread_store_path,
+                mapped_file_size,
+                Some(&thread_service),
+                &thread_state,
+                mapped_file_size,
+            );
+        });
+        barrier.wait();
+        assert!(runtime_state.begin_close());
+        drop(maintenance_guard);
+        submitter.join().expect("preallocation submitter");
+
+        let snapshot = service.queue_snapshot();
+        assert_eq!(snapshot.current_count, 0);
+        assert_eq!(snapshot.pending_cleanup_count, 0);
+        assert!(!next_file_path.exists());
+        service.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn queue_retirement_cancels_and_drains_background_preallocation() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let mapped_file_size = 1024;
+        let first_file_path = temp_dir.path().join(offset_to_file_name(0));
+        let next_file_path = temp_dir.path().join(offset_to_file_name(mapped_file_size));
+        let first_file = Arc::new(
+            DefaultMappedFile::try_new(
+                CheetahString::from_string(first_file_path.to_string_lossy().into_owned()),
+                mapped_file_size,
+            )
+            .expect("first mapped file"),
+        );
+        first_file.set_wrote_position(820);
+
+        let runtime_scope = crate::runtime::test_scope("mapped-file-queue-retirement-test");
+        let service = AllocateMappedFileService::new_with_config_and_storage_io(
+            None,
+            false,
+            false,
+            runtime_scope.mapped_file_allocation_budget(),
+            runtime_scope.storage_io(),
+        );
+        service.start();
+        let mut queue = MappedFileQueue::new(
+            temp_dir.path().to_string_lossy().into_owned(),
+            mapped_file_size,
+            Some(service.clone()),
+        );
+        queue.storage.mapped_files().store(Arc::new(vec![first_file]));
+
+        assert!(queue.get_last_mapped_file_mut_start_offset(0, true).is_some());
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while !next_file_path.exists() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("background preallocation should materialize");
+
+        let _ = queue.destroy_with_outcome();
+        service.shutdown().await;
+        assert!(queue.destroy_with_outcome());
+        assert!(!first_file_path.exists());
+        assert!(!next_file_path.exists());
+        assert!(!temp_dir.path().exists());
+    }
+
     #[test]
     fn mapped_file_generation_update_retries_without_losing_concurrent_publication() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -1734,6 +1913,35 @@ mod tests {
     }
 
     #[test]
+    fn cloned_append_handle_cannot_publish_after_queue_retirement_begins() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let mut queue = MappedFileQueue::new(temp_dir.path().to_string_lossy().into_owned(), 1024, None);
+        let first = queue.try_create_mapped_file(0).expect("first mapped file");
+        let append_handle = queue.append_handle();
+        assert!(first.hold());
+
+        assert!(!queue.destroy_with_outcome());
+        assert!(append_handle.get_last_mapped_file(1024, true).is_none());
+        assert_eq!(queue.get_mapped_file_count(), 1);
+
+        first.release();
+        assert!(queue.destroy_with_outcome());
+    }
+
+    #[test]
+    fn empty_queue_shutdown_closes_all_append_and_create_handles() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let queue = MappedFileQueue::new(temp_dir.path().to_string_lossy().into_owned(), 1024, None);
+        let append_handle = queue.append_handle();
+
+        queue.shutdown(0);
+
+        assert!(queue.try_create_mapped_file(0).is_none());
+        assert!(append_handle.get_last_mapped_file(0, true).is_none());
+        assert_eq!(queue.get_mapped_file_count(), 0);
+    }
+
+    #[test]
     fn flush_handle_observes_queue_generation_and_shared_progress() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let mut queue = MappedFileQueue::new(temp_dir.path().to_string_lossy().into_owned(), 1024, None);
@@ -1834,8 +2042,8 @@ mod tests {
         assert_eq!(target.get_wrote_position(), 512);
         assert_eq!(target.get_committed_position(), 512);
         assert_eq!(target.get_flushed_position(), 512);
-        assert!(removed.is_available());
-        removed.destroy(1000);
+        assert!(!removed.is_available());
+        assert!(!temp_dir.path().join(format!("{:020}", 2048)).exists());
         queue.destroy();
     }
 }

@@ -108,6 +108,7 @@ use crate::message_store::recovery::RecoveryReportStats;
 use crate::queue::consume_queue::ConsumeQueueTrait;
 use crate::queue::consume_queue_store::ConsumeQueueStoreTrait;
 use crate::store_error::StoreError;
+use crate::store_path_config_helper::get_abort_file;
 use crate::store_path_config_helper::get_store_checkpoint;
 use rocketmq_store_local::message_store::lifecycle::LocalStoreState;
 
@@ -243,6 +244,56 @@ fn new_controller_test_store(
             ..StoreRuntimeConfig::default()
         },
     )
+}
+
+#[tokio::test]
+async fn destroy_store_failure_retains_metadata_and_commitlog_retry_identity() {
+    let temp_dir = tempdir().unwrap();
+    let config = MessageStoreConfig {
+        mapped_file_size_commit_log: 64,
+        ..MessageStoreConfig::default()
+    };
+    let mut store = new_configured_test_store(&temp_dir, config);
+    store.init().await.expect("init store");
+    let commitlog_dir = std::path::PathBuf::from(store.message_store_config.get_store_path_commit_log());
+    fs::create_dir_all(&commitlog_dir).expect("commitlog directory");
+    let mapped_file_path = commitlog_dir.join("00000000000000000000");
+    drop(DefaultMappedFile::new(
+        CheetahString::from(mapped_file_path.to_string_lossy().as_ref()),
+        64,
+    ));
+    assert!(store.commit_log.load());
+    store.commit_log.set_mapped_file_queue_offset(4);
+    let mapped_file = store
+        .commit_log
+        .last_mapped_file_for_testing()
+        .expect("commitlog mapped file");
+    assert!(mapped_file.hold());
+
+    let root = store.message_store_config.store_path_root_dir.as_str();
+    let abort_path = std::path::PathBuf::from(get_abort_file(root));
+    let checkpoint_path = std::path::PathBuf::from(get_store_checkpoint(root));
+    fs::write(&abort_path, b"abort").expect("abort marker");
+    assert!(checkpoint_path.exists());
+
+    assert!(!store.destroy_store_with_outcome());
+    assert!(abort_path.exists());
+    assert!(checkpoint_path.exists());
+    assert_ne!(store.commit_log.get_flushed_where(), 0);
+    assert!(store
+        .commit_log
+        .last_mapped_file_for_testing()
+        .is_some_and(|current| Arc::ptr_eq(&current, &mapped_file)));
+
+    mapped_file.release();
+    fs::remove_file(&abort_path).expect("replace abort marker with undeletable directory");
+    fs::create_dir(&abort_path).expect("abort directory");
+    assert!(!store.destroy_store_with_outcome());
+    assert!(abort_path.is_dir());
+    assert!(!checkpoint_path.exists());
+
+    fs::remove_dir(&abort_path).expect("remove abort directory before retry");
+    assert!(store.destroy_store_with_outcome());
 }
 
 #[test]
@@ -681,7 +732,7 @@ fn commit_log_store_context_source_contract_removes_local_root_back_reference() 
     assert!(commit_log_production.contains("pub(crate) struct CommitLogStoreContext"));
     assert!(commit_log_production.contains("ha_service: Arc<ArcSwapOption<GeneralHAService>>"));
     assert!(commit_log_production.contains("store_context: super::CommitLogStoreContext"));
-    assert!(commit_log_production.contains("$commit_log.consume_queue_store.truncate_dirty(process_offset)"));
+    assert!(commit_log_production.contains(".truncate_dirty_with_outcome(process_offset)"));
     assert!(!commit_log_production.contains("use rocketmq_rust::ArcMut;"));
     assert!(!commit_log_production.contains("pub(super) local_file_message_store:"));
     assert!(!commit_log_production.contains("message_store: ArcMut<LocalFileMessageStore>"));
@@ -719,12 +770,13 @@ fn commit_log_maintenance_avoids_shared_reference_mutation() {
         .expect("LocalFileMessageStore production section");
     assert!(!local_production.contains(".mut_from_ref()"));
     assert!(local_production.contains("self.commit_log.reset_offset(phy_offset)"));
-    assert!(local_production.contains("self.commit_log.truncate_dirty_files(offset_to_truncate)"));
+    assert!(local_production.contains("self.commit_log.try_truncate_dirty_files(offset_to_truncate)"));
     assert!(local_production.contains("self.commit_log.get_last_mapped_file(start_offset)"));
 
     let commit_log_source = include_str!("../../../src/log_file/commit_log.rs").replace("\r\n", "\n");
     assert!(commit_log_source.contains("pub fn reset_offset(&self, offset: i64)"));
     assert!(commit_log_source.contains("pub fn truncate_dirty_files(&self, offset_to_truncate: i64)"));
+    assert!(commit_log_source.contains("pub fn try_truncate_dirty_files(&self, offset_to_truncate: i64)"));
     assert!(commit_log_source.contains("pub fn get_last_mapped_file(&self, start_offset: i64)"));
 
     let queue_source = include_str!("../../../src/consume_queue/mapped_file_queue.rs").replace("\r\n", "\n");
@@ -3452,6 +3504,43 @@ async fn calc_delta_checksum_matches_truncated_range() {
     let checksum_after_truncate = store.calc_delta_checksum(0, store.get_max_phy_offset());
     assert_eq!(store.get_max_phy_offset(), second_append.wrote_offset);
     assert_eq!(checksum_before_truncate, checksum_after_truncate);
+}
+
+#[tokio::test]
+async fn truncate_files_propagates_pending_commitlog_cleanup_without_recovering_offsets() {
+    let temp_dir = tempdir().unwrap();
+    let mut store = new_configured_test_store(
+        &temp_dir,
+        MessageStoreConfig {
+            mapped_file_size_commit_log: 512,
+            flush_disk_type: FlushDiskType::AsyncFlush,
+            ..MessageStoreConfig::default()
+        },
+    );
+    let topic = CheetahString::from_static_str("truncate-pending-commitlog-topic");
+
+    let first = store
+        .put_message(build_test_message(&topic, Bytes::from(vec![1_u8; 245])))
+        .await;
+    assert_eq!(first.put_message_status(), PutMessageStatus::PutOk);
+    let second = store
+        .put_message(build_test_message(&topic, Bytes::from(vec![2_u8; 75])))
+        .await;
+    assert_eq!(second.put_message_status(), PutMessageStatus::PutOk);
+    assert_eq!(second.append_message_result().expect("second append").wrote_offset, 512);
+
+    let expected_offset_table = HashMap::from([(CheetahString::from_static_str("sentinel-0"), 41)]);
+    store
+        .consume_queue_store
+        .set_topic_queue_table(expected_offset_table.clone());
+    let tail = store.commit_log.last_mapped_file_for_testing().expect("commitlog tail");
+    assert!(tail.hold());
+
+    assert!(!store.truncate_files(0).expect("truncate outcome"));
+    assert_eq!(store.consume_queue_store.get_topic_queue_table(), expected_offset_table);
+
+    tail.release();
+    assert!(store.commit_log.try_truncate_dirty_files(0));
 }
 
 #[tokio::test]

@@ -187,15 +187,14 @@ pub fn max_index_dispatch_offset<F: IndexServiceFile>(files: &[F]) -> Option<i64
         .map(IndexServiceFile::end_phy_offset)
 }
 
-/// Applies shutdown to every file before clearing the owned list.
-pub fn shutdown_index_files<F, Shutdown>(files: &mut Vec<F>, mut shutdown: Shutdown)
+/// Applies shutdown to every file while retaining the owned identities for a later destroy.
+pub fn shutdown_index_files<F, Shutdown>(files: &[F], mut shutdown: Shutdown)
 where
     Shutdown: FnMut(&F),
 {
     for file in files.iter() {
         shutdown(file);
     }
-    files.clear();
 }
 
 /// Applies destroy to every file before clearing the owned list.
@@ -207,6 +206,17 @@ where
         destroy(file);
     }
     files.clear();
+}
+
+/// Destroys an oldest-first prefix and retains the first failed identity and every later file.
+#[must_use]
+pub fn destroy_index_files_with_outcome<F, Destroy>(files: &mut Vec<F>, mut destroy: Destroy) -> bool
+where
+    Destroy: FnMut(&F) -> bool,
+{
+    let removed = files.iter().take_while(|file| destroy(file)).count();
+    files.drain(..removed);
+    files.is_empty()
 }
 
 /// Returns how many oldest files are expired while always retaining the newest file.

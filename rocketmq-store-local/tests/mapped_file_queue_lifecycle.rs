@@ -13,13 +13,18 @@
 // limitations under the License.
 
 use std::sync::Arc;
+use std::time::Duration;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use cheetah_string::CheetahString;
+use rocketmq_store_local::mapped_file::queue_lifecycle::clean_swapped_mapped_file_queue;
 use rocketmq_store_local::mapped_file::queue_lifecycle::delete_expired_mapped_files_by_offset;
 use rocketmq_store_local::mapped_file::queue_lifecycle::delete_expired_mapped_files_by_time;
 use rocketmq_store_local::mapped_file::queue_lifecycle::delete_expired_mapped_files_by_time_before;
 use rocketmq_store_local::mapped_file::queue_lifecycle::destroy_last_mapped_file;
 use rocketmq_store_local::mapped_file::queue_lifecycle::destroy_mapped_file_queue;
+use rocketmq_store_local::mapped_file::queue_lifecycle::is_expired;
 use rocketmq_store_local::mapped_file::queue_lifecycle::mapped_files_after_removal;
 use rocketmq_store_local::mapped_file::queue_lifecycle::retry_delete_first_mapped_file;
 use rocketmq_store_local::mapped_file::queue_lifecycle::shutdown_mapped_file_queue;
@@ -62,6 +67,21 @@ fn destroy_last_returns_the_destroyed_newest_file() {
 }
 
 #[test]
+fn destroy_last_keeps_a_live_newest_file_tracked_for_retry() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let first = mapped_file(&temp_dir, 0, 16);
+    let second = mapped_file(&temp_dir, 16, 16);
+    assert!(second.hold());
+
+    assert!(destroy_last_mapped_file(&[first, second.clone()]).is_none());
+    assert!(!second.is_available());
+
+    second.release();
+    let destroyed = destroy_last_mapped_file(std::slice::from_ref(&second)).expect("retry last file");
+    assert!(Arc::ptr_eq(&destroyed, &second));
+}
+
+#[test]
 fn time_deletion_keeps_the_newest_file_and_honors_the_batch_limit() {
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let files = vec![
@@ -76,6 +96,78 @@ fn time_deletion_keeps_the_newest_file_and_honors_the_batch_limit() {
     let deleted = deletion.into_mapped_files();
     assert!(Arc::ptr_eq(&deleted[0], &files[0]));
     assert!(files[2].is_available());
+}
+
+#[test]
+fn fresh_file_survives_a_nonzero_retention_period() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let files = vec![mapped_file(&temp_dir, 0, 16), mapped_file(&temp_dir, 16, 16)];
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock after Unix epoch")
+        .as_millis() as i64;
+
+    let deletion = delete_expired_mapped_files_by_time(&files, 60_000, 0, 1000, false, 10, || now);
+
+    assert_eq!(deletion.deleted_count(), 0);
+    assert!(files.iter().all(|file| file.is_available()));
+}
+
+#[test]
+fn expiration_uses_duration_and_treats_future_mtime_as_fresh() {
+    let modified = UNIX_EPOCH + Duration::from_secs(100);
+
+    assert!(is_expired(
+        modified,
+        UNIX_EPOCH + Duration::from_secs(160),
+        Duration::from_secs(60)
+    ));
+    assert!(!is_expired(
+        modified,
+        UNIX_EPOCH + Duration::from_secs(99),
+        Duration::ZERO
+    ));
+}
+
+#[test]
+fn negative_retention_never_deletes_a_file() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let files = vec![mapped_file(&temp_dir, 0, 16), mapped_file(&temp_dir, 16, 16)];
+
+    let deletion = delete_expired_mapped_files_by_time(&files, -1, 0, 1000, false, 10, || i64::MAX);
+
+    assert_eq!(deletion.deleted_count(), 0);
+    assert!(files.iter().all(|file| file.is_available()));
+}
+
+#[test]
+fn negative_delete_interval_never_deletes_a_file() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let files = vec![mapped_file(&temp_dir, 0, 16), mapped_file(&temp_dir, 16, 16)];
+
+    let deletion = delete_expired_mapped_files_by_time(&files, 0, -1, 1000, true, 10, || i64::MAX);
+
+    assert_eq!(deletion.deleted_count(), 0);
+    assert!(files.iter().all(|file| file.is_available()));
+}
+
+#[test]
+fn compatibility_last_modified_timestamp_is_unix_epoch_millis() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let before = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock after Unix epoch")
+        .as_millis() as u64;
+    let file = mapped_file(&temp_dir, 0, 16);
+    let after = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock after Unix epoch")
+        .as_millis() as u64;
+
+    let modified = file.get_last_modified_timestamp();
+
+    assert!(modified <= after);
+    assert!(before.saturating_sub(modified) <= 5_000);
 }
 
 #[test]
@@ -155,13 +247,99 @@ fn swap_reserves_three_newest_files_and_shutdown_releases_every_file() {
 }
 
 #[test]
+fn clean_swapped_queue_records_cleanup_without_recording_a_new_swap() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let files: Vec<_> = (0..5).map(|index| mapped_file(&temp_dir, index * 16, 16)).collect();
+
+    clean_swapped_mapped_file_queue(&files, 0, || i64::MAX);
+    clean_swapped_mapped_file_queue(&files, 0, || i64::MAX);
+
+    for file in &files[..2] {
+        let metrics = file.get_metrics().expect("metrics");
+        assert_eq!(metrics.clean_swap_operations(), 1);
+        assert_eq!(metrics.swap_operations(), 0);
+    }
+    for file in &files[2..] {
+        let metrics = file.get_metrics().expect("metrics");
+        assert_eq!(metrics.clean_swap_operations(), 0);
+        assert_eq!(metrics.swap_operations(), 0);
+    }
+
+    files[0].swap_map();
+    clean_swapped_mapped_file_queue(&files, 0, || i64::MAX);
+    assert_eq!(files[0].get_metrics().expect("metrics").clean_swap_operations(), 2);
+    assert_eq!(files[1].get_metrics().expect("metrics").clean_swap_operations(), 1);
+}
+
+#[test]
+fn negative_swap_intervals_do_not_trigger_maintenance() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let files: Vec<_> = (0..5).map(|index| mapped_file(&temp_dir, index * 16, 16)).collect();
+
+    swap_mapped_file_queue(&files, 1, -1, -1, || i64::MAX);
+    clean_swapped_mapped_file_queue(&files, -1, || i64::MAX);
+
+    assert!(files.iter().all(|file| {
+        let metrics = file.get_metrics().expect("metrics");
+        metrics.swap_operations() == 0 && metrics.clean_swap_operations() == 0
+    }));
+}
+
+#[test]
 fn destroy_removes_every_file_and_the_queue_directory() {
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let path = temp_dir.path().to_path_buf();
     let files = vec![mapped_file(&temp_dir, 0, 16), mapped_file(&temp_dir, 16, 16)];
 
-    destroy_mapped_file_queue(&files, path.to_string_lossy().as_ref());
+    let deletion = destroy_mapped_file_queue(&files, path.to_string_lossy().as_ref());
 
+    assert_eq!(deletion.deleted_count(), 2);
     assert!(!path.exists());
     assert!(files.iter().all(|file| !file.is_available()));
+}
+
+#[test]
+fn whole_destroy_stops_at_a_live_holder_and_keeps_retry_identity() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let path = temp_dir.path().to_path_buf();
+    let files = vec![mapped_file(&temp_dir, 0, 16), mapped_file(&temp_dir, 16, 16)];
+    assert!(files[0].hold());
+
+    let first_attempt = destroy_mapped_file_queue(&files, path.to_string_lossy().as_ref());
+
+    assert_eq!(first_attempt.deleted_count(), 0);
+    assert!(path.exists());
+    assert!(!files[1].is_available());
+
+    files[0].release();
+    let retry = destroy_mapped_file_queue(&files, path.to_string_lossy().as_ref());
+    assert_eq!(retry.deleted_count(), 2);
+    assert!(!path.exists());
+}
+
+#[test]
+fn whole_destroy_preserves_unknown_directory_entries() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let path = temp_dir.path().to_path_buf();
+    let sentinel = path.join("do-not-delete.txt");
+    std::fs::write(&sentinel, b"untracked").expect("create sentinel");
+    let files = vec![mapped_file(&temp_dir, 0, 16), mapped_file(&temp_dir, 16, 16)];
+
+    let deletion = destroy_mapped_file_queue(&files, path.to_string_lossy().as_ref());
+
+    assert_eq!(deletion.deleted_count(), 2);
+    assert!(path.exists());
+    assert_eq!(std::fs::read(&sentinel).expect("sentinel remains"), b"untracked");
+}
+
+#[test]
+fn logical_cleanup_marker_does_not_claim_physical_mapping_release() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let file = mapped_file(&temp_dir, 0, 16);
+    assert!(file.is_mapped());
+
+    file.shutdown(u64::MAX);
+
+    assert!(rocketmq_store_local::mapped_file::kernel::ReferenceResource::is_logical_cleanup_marked(file.as_ref()));
+    assert!(file.is_mapped());
 }

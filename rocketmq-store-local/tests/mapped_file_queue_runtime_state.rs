@@ -20,6 +20,7 @@ fn queue_runtime_state_preserves_initial_values_and_signed_offset_round_trips() 
     assert_eq!(state.flushed_where(), 0);
     assert_eq!(state.committed_where(), 0);
     assert_eq!(state.store_timestamp(), 0);
+    assert!(!state.is_closing());
 
     state.set_flushed_where(-1);
     state.set_committed_where(41);
@@ -47,10 +48,13 @@ fn queue_runtime_state_clones_share_progress_and_serialization() {
     clone.set_flushed_where(17);
     clone.set_committed_where(19);
     clone.set_store_timestamp(23);
+    assert!(clone.begin_close());
+    assert!(!clone.begin_close());
 
     assert_eq!(state.flushed_where(), 17);
     assert_eq!(state.committed_where(), 19);
     assert_eq!(state.store_timestamp(), 23);
+    assert!(state.is_closing());
     let guard = clone.commit_lock().lock();
     assert!(state.commit_lock().try_lock().is_none());
     drop(guard);

@@ -81,7 +81,7 @@ async fn mapped_file_queue_rejects_at_byte_limit_before_count_limit() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn mapped_file_timeout_abandons_table_ownership_and_releases_permit() {
+async fn mapped_file_timeout_keeps_the_stale_heap_fence_inside_budget() {
     let service =
         AllocateMappedFileService::new_with_config(None, false, false, allocation_budget("mapped-timeout", 1, 1_024));
 
@@ -92,17 +92,22 @@ async fn mapped_file_timeout_abandons_table_ownership_and_releases_permit() {
 
     assert!(result.is_none());
     let snapshot = service.queue_snapshot();
-    assert_eq!(snapshot.current_count, 0);
-    assert_eq!(snapshot.charged_bytes, 0);
+    assert_eq!(snapshot.current_count, 1);
+    assert_eq!(snapshot.charged_bytes, 1_024);
     assert_eq!(snapshot.abandoned_count, 1);
-    assert_eq!(snapshot.queued_count, 1, "the stale heap key owns no permit");
+    assert_eq!(snapshot.queued_count, 1);
+    assert_eq!(snapshot.pending_cleanup_count, 1);
 
     service.shutdown().await;
-    assert_eq!(service.queue_snapshot().queued_count, 0);
+    let drained = service.queue_snapshot();
+    assert_eq!(drained.queued_count, 0);
+    assert_eq!(drained.current_count, 0);
+    assert_eq!(drained.charged_bytes, 0);
+    assert_eq!(drained.pending_cleanup_count, 0);
 }
 
 #[tokio::test]
-async fn cancelling_mapped_file_wait_releases_table_and_budget_ownership() {
+async fn cancelling_mapped_file_wait_keeps_the_stale_heap_fence_bounded() {
     let service =
         AllocateMappedFileService::new_with_config(None, false, false, allocation_budget("mapped-cancel", 1, 1_024));
 
@@ -118,8 +123,10 @@ async fn cancelling_mapped_file_wait_releases_table_and_budget_ownership() {
     }
 
     let snapshot = service.queue_snapshot();
-    assert_eq!(snapshot.current_count, 0);
-    assert_eq!(snapshot.charged_bytes, 0);
+    assert_eq!(snapshot.current_count, 1);
+    assert_eq!(snapshot.charged_bytes, 1_024);
     assert_eq!(snapshot.abandoned_count, 1);
+    assert_eq!(snapshot.pending_cleanup_count, 1);
     service.shutdown().await;
+    assert_eq!(service.queue_snapshot().current_count, 0);
 }

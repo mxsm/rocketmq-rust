@@ -32,7 +32,7 @@ impl LocalFileMessageStore {
         let _ = string_to_file(pid.to_string().as_str(), file_name.as_str());
     }
 
-    pub(super) async fn recover(&mut self, last_exit_ok: bool) {
+    pub(super) async fn recover(&mut self, last_exit_ok: bool) -> bool {
         let previous_state = self.lifecycle_state();
         let recover_concurrently = self.is_recover_concurrently();
         let mut recovery_plan = RecoveryPlan::new(
@@ -83,8 +83,11 @@ impl LocalFileMessageStore {
                 .local_file_parallelism
         );
         self.set_lifecycle_state(LocalStoreState::RecoveringConsumeQueue);
+        let mut consume_queue_recovered = false;
         let recover_consume_queue = recovery_executor
-            .run_phase(RecoveryPhase::ConsumeQueue, self.recover_consume_queue())
+            .run_phase(RecoveryPhase::ConsumeQueue, async {
+                consume_queue_recovered = self.recover_consume_queue().await;
+            })
             .await;
         let dispatch_recovery_offset = self.get_dispatch_recovery_offset();
         recovery_executor
@@ -95,28 +98,35 @@ impl LocalFileMessageStore {
             .set_max_consume_queue_physical_offset(dispatch_recovery_offset);
 
         self.set_lifecycle_state(LocalStoreState::RecoveringCommitLog);
-        let recover_commit_log = if last_exit_ok {
+        let mut commit_log_recovered = false;
+        let recover_commit_log = if !consume_queue_recovered {
+            error!("consume-queue recovery cleanup failed; skipping CommitLog recovery");
+            0
+        } else if last_exit_ok {
             recovery_executor
-                .run_phase(
-                    RecoveryPhase::CommitLog,
-                    self.recover_normally(dispatch_recovery_offset),
-                )
+                .run_phase(RecoveryPhase::CommitLog, async {
+                    commit_log_recovered = self.recover_normally(dispatch_recovery_offset).await;
+                })
                 .await
         } else {
             recovery_executor
-                .run_phase(
-                    RecoveryPhase::CommitLog,
-                    self.recover_abnormally(dispatch_recovery_offset),
-                )
+                .run_phase(RecoveryPhase::CommitLog, async {
+                    commit_log_recovered = self.recover_abnormally(dispatch_recovery_offset).await;
+                })
                 .await
         };
 
         self.set_lifecycle_state(LocalStoreState::RecoveringTopicQueueTable);
-        let recover_topic_queue_table = recovery_executor
-            .run_phase(RecoveryPhase::TopicQueueTable, async {
-                self.recover_topic_queue_table();
-            })
-            .await;
+        let recover_topic_queue_table = if commit_log_recovered {
+            recovery_executor
+                .run_phase(RecoveryPhase::TopicQueueTable, async {
+                    self.recover_topic_queue_table();
+                })
+                .await
+        } else {
+            error!("CommitLog recovery cleanup failed; skipping topic queue table recovery");
+            0
+        };
         if self.lifecycle_state() != LocalStoreState::Shutdown {
             self.set_lifecycle_state(previous_state);
         }
@@ -146,6 +156,7 @@ impl LocalFileMessageStore {
             recovery_report.plan.offsets.index_safe_offset
         );
         self.last_recovery_report = Some(recovery_report);
+        consume_queue_recovered && commit_log_recovered
     }
 
     pub(super) fn current_index_safe_offset(&self) -> i64 {
@@ -157,7 +168,7 @@ impl LocalFileMessageStore {
         checkpoint_safe_offset.min(confirm_offset) as i64
     }
 
-    pub async fn recover_normally(&mut self, max_phy_offset_of_consume_queue: i64) {
+    pub async fn recover_normally(&mut self, max_phy_offset_of_consume_queue: i64) -> bool {
         let optimized_recovery_value = std::env::var("ROCKETMQ_USE_OPTIMIZED_RECOVERY").ok();
         let use_optimized = optimized_recovery_requested(optimized_recovery_value.as_deref());
 
@@ -165,18 +176,20 @@ impl LocalFileMessageStore {
             match step {
                 CommitLogRecoveryStep::Optimized => {
                     self.commit_log
-                        .recover_normally_optimized(max_phy_offset_of_consume_queue)
-                        .await;
+                        .try_recover_normally_optimized(max_phy_offset_of_consume_queue)
+                        .await
                 }
                 CommitLogRecoveryStep::Standard => {
-                    self.commit_log.recover_normally(max_phy_offset_of_consume_queue).await;
+                    self.commit_log
+                        .try_recover_normally(max_phy_offset_of_consume_queue)
+                        .await
                 }
             }
         })
-        .await;
+        .await
     }
 
-    pub async fn recover_abnormally(&mut self, max_phy_offset_of_consume_queue: i64) {
+    pub async fn recover_abnormally(&mut self, max_phy_offset_of_consume_queue: i64) -> bool {
         let optimized_recovery_value = std::env::var("ROCKETMQ_USE_OPTIMIZED_RECOVERY").ok();
         let use_optimized = optimized_recovery_requested(optimized_recovery_value.as_deref());
 
@@ -184,17 +197,17 @@ impl LocalFileMessageStore {
             match step {
                 CommitLogRecoveryStep::Optimized => {
                     self.commit_log
-                        .recover_abnormally_optimized(max_phy_offset_of_consume_queue)
-                        .await;
+                        .try_recover_abnormally_optimized(max_phy_offset_of_consume_queue)
+                        .await
                 }
                 CommitLogRecoveryStep::Standard => {
                     self.commit_log
-                        .recover_abnormally(max_phy_offset_of_consume_queue)
-                        .await;
+                        .try_recover_abnormally(max_phy_offset_of_consume_queue)
+                        .await
                 }
             }
         })
-        .await;
+        .await
     }
 
     pub(super) fn is_recover_concurrently(&self) -> bool {
@@ -210,9 +223,9 @@ impl LocalFileMessageStore {
                 .enable_local_file_consume_queue_recovery_concurrently
     }
 
-    pub(super) async fn recover_consume_queue(&mut self) {
+    pub(super) async fn recover_consume_queue(&mut self) -> bool {
         if self.broker_config.recover_concurrently && self.message_store_config.is_enable_rocksdb_store() {
-            self.consume_queue_store.recover_concurrently().await;
+            self.consume_queue_store.recover_concurrently().await
         } else if self.broker_config.recover_concurrently && self.is_local_file_consume_queue_recover_concurrently() {
             let parallelism = self.composition.config().recovery.consume_queue_parallelism;
             let summary = self
@@ -221,7 +234,7 @@ impl LocalFileMessageStore {
                 .await;
             if !summary.is_success() {
                 warn!(
-                    "local file consume queue concurrent recovery failed, fallback to serial recovery, \
+                    "local file consume queue concurrent recovery failed; aborting recovery, \
                      parallelism={}, queues={}, success={}, failed={}, failures={}",
                     parallelism,
                     summary.queue_count,
@@ -229,10 +242,12 @@ impl LocalFileMessageStore {
                     summary.failure_count,
                     summary.failure_description()
                 );
-                self.consume_queue_store.recover().await;
+                false
+            } else {
+                true
             }
         } else {
-            self.consume_queue_store.recover().await;
+            self.consume_queue_store.recover_with_outcome().await
         }
     }
 

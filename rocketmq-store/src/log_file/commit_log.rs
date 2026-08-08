@@ -206,10 +206,23 @@ macro_rules! apply_recovery_completion {
     ($commit_log:ident, $completion:expr, $max_consume_queue_offset:expr $(,)?) => {{
         match $completion {
             CommitLogRecoveryCompletion::Empty => {
-                $commit_log.mapped_file_queue.set_flushed_where(0);
-                $commit_log.mapped_file_queue.set_committed_where(0);
-                $commit_log.consume_queue_store.destroy();
-                $commit_log.consume_queue_store.load_after_destroy();
+                if $commit_log.consume_queue_store.destroy_with_outcome() {
+                    if $commit_log.consume_queue_store.load_after_destroy() {
+                        $commit_log.mapped_file_queue.set_flushed_where(0);
+                        $commit_log.mapped_file_queue.set_committed_where(0);
+                        true
+                    } else {
+                        warn!(
+                            "consume-queue reload failed after empty CommitLog recovery; recovery cannot continue"
+                        );
+                        false
+                    }
+                } else {
+                    warn!(
+                        "consume-queue cleanup remains pending after empty CommitLog recovery; retaining queue identities and progress for retry"
+                    );
+                    false
+                }
             }
             CommitLogRecoveryCompletion::Recovered {
                 confirm_offset,
@@ -217,26 +230,43 @@ macro_rules! apply_recovery_completion {
                 process_offset,
                 truncate_consume_queue,
             } => {
-                if $commit_log.broker_config.enable_controller_mode {
-                    $commit_log.clamp_controller_recover_confirm_offset(
-                        $commit_log.get_min_offset(),
-                        controller_confirm_offset,
-                    );
-                } else {
-                    $commit_log.set_confirm_offset(confirm_offset);
-                }
-
-                if truncate_consume_queue {
+                let consume_queue_truncated = if truncate_consume_queue {
                     warn!(
                         "maxPhyOffsetOfConsumeQueue({}) >= processOffset({}), truncate dirty logic files",
                         $max_consume_queue_offset, process_offset
                     );
-                    $commit_log.consume_queue_store.truncate_dirty(process_offset);
-                }
+                    $commit_log
+                        .consume_queue_store
+                        .truncate_dirty_with_outcome(process_offset)
+                } else {
+                    true
+                };
 
-                $commit_log.mapped_file_queue.set_flushed_where(process_offset);
-                $commit_log.mapped_file_queue.set_committed_where(process_offset);
-                $commit_log.mapped_file_queue.truncate_dirty_files(process_offset);
+                if !consume_queue_truncated {
+                    warn!(
+                        process_offset,
+                        "consume-queue truncation remains pending after CommitLog recovery; recovery cannot continue"
+                    );
+                    false
+                } else if $commit_log.mapped_file_queue.try_truncate_dirty_files(process_offset) {
+                    if $commit_log.broker_config.enable_controller_mode {
+                        $commit_log.clamp_controller_recover_confirm_offset(
+                            $commit_log.get_min_offset(),
+                            controller_confirm_offset,
+                        );
+                    } else {
+                        $commit_log.set_confirm_offset(confirm_offset);
+                    }
+                    $commit_log.mapped_file_queue.set_flushed_where(process_offset);
+                    $commit_log.mapped_file_queue.set_committed_where(process_offset);
+                    true
+                } else {
+                    warn!(
+                        process_offset,
+                        "CommitLog tail cleanup remains pending after recovery; recovery cannot continue"
+                    );
+                    false
+                }
             }
         }
     }};
@@ -906,10 +936,17 @@ impl CommitLog {
     }
 
     pub fn destroy(&mut self) {
-        self.destroy_with(MemoryLockManager::unlock_region);
+        if !self.destroy_with_outcome() {
+            warn!("CommitLog mapped-file cleanup remains pending; retaining queue progress for retry");
+        }
     }
 
-    fn destroy_with<U>(&mut self, mut unlock_region: U)
+    #[must_use]
+    pub fn destroy_with_outcome(&mut self) -> bool {
+        self.destroy_with(MemoryLockManager::unlock_region)
+    }
+
+    fn destroy_with<U>(&mut self, mut unlock_region: U) -> bool
     where
         U: FnMut(&MemoryLockManager, &mut MemoryLockHandle) -> RocketMQResult<()>,
     {
@@ -920,8 +957,11 @@ impl CommitLog {
                 "Failed to unlock the active CommitLog memory region before destroying the mapped-file queue; retaining its mapping owner for the drop fallback"
             );
         }
-        self.mapped_file_queue.destroy();
-        self.mapped_file_queue.set_committed_where(0);
+        let destroyed = self.mapped_file_queue.destroy_with_outcome();
+        if destroyed {
+            self.mapped_file_queue.set_committed_where(0);
+        }
+        destroyed
     }
 
     pub fn get_message(&self, offset: i64, size: i32) -> Option<SelectMappedBufferResult> {
@@ -1323,7 +1363,10 @@ impl CommitLog {
     /// - Zero-copy parsing using memory-mapped regions
     /// - Pre-allocated buffers reduce allocation overhead
     /// - Optimized iteration pattern minimizes redundant checks
-    pub async fn recover_normally_optimized(&mut self, max_phy_offset_of_consume_queue: i64) {
+    ///
+    /// Runs optimized normal recovery and reports whether destructive completion succeeded.
+    #[must_use]
+    pub async fn try_recover_normally_optimized(&mut self, max_phy_offset_of_consume_queue: i64) -> bool {
         use crate::log_file::commit_log_recovery::BatchMessageIterator;
         use crate::log_file::commit_log_recovery::RecoveryContext;
 
@@ -1336,12 +1379,11 @@ impl CommitLog {
 
         if mapped_files_inner.is_empty() {
             warn!("The commitlog files are deleted, and delete the consume queue files");
-            apply_recovery_completion!(
+            return apply_recovery_completion!(
                 self,
                 CommitLogRecoveryCompletion::Empty,
                 max_phy_offset_of_consume_queue,
             );
-            return;
         }
 
         let recovery_window = plan_normal_recovery_file_window(
@@ -1359,14 +1401,14 @@ impl CommitLog {
             Ok(offset) => offset,
             Err(error) => {
                 warn!("normal optimized recovery initial offset conversion failed: {error}");
-                return;
+                return false;
             }
         };
         let mut normal_recovery = match NormalRecoveryState::try_new(initial_offset, NormalRecoveryPolicy::Optimized) {
             Ok(state) => state,
             Err(error) => {
                 warn!("normal optimized recovery initial state failed: {error}");
-                return;
+                return false;
             }
         };
         let do_dispatch = false;
@@ -1476,13 +1518,22 @@ impl CommitLog {
         }
 
         let completion = normal_recovery.completion(max_phy_offset_of_consume_queue);
-        apply_recovery_completion!(self, completion, max_phy_offset_of_consume_queue);
+        let recovery_succeeded = apply_recovery_completion!(self, completion, max_phy_offset_of_consume_queue);
 
         recovery_ctx.stats.recovery_time_ms = start.elapsed().as_millis();
         recovery_ctx.stats.log_summary("Normal");
+        recovery_succeeded
     }
 
-    pub async fn recover_normally(&mut self, max_phy_offset_of_consume_queue: i64) {
+    pub async fn recover_normally_optimized(&mut self, max_phy_offset_of_consume_queue: i64) {
+        let _ = self
+            .try_recover_normally_optimized(max_phy_offset_of_consume_queue)
+            .await;
+    }
+
+    /// Runs compatibility normal recovery and reports whether destructive completion succeeded.
+    #[must_use]
+    pub async fn try_recover_normally(&mut self, max_phy_offset_of_consume_queue: i64) -> bool {
         let check_crc_on_recover = self.message_store_config.check_crc_on_recover;
         let check_dup_info = self.message_store_config.duplication_enable;
         let message_store_config = self.message_store_config.clone();
@@ -1504,7 +1555,7 @@ impl CommitLog {
                 Ok(offset) => offset,
                 Err(error) => {
                     warn!("normal recovery initial offset conversion failed: {error}");
-                    return;
+                    return false;
                 }
             };
             let mut normal_recovery = match NormalRecoveryState::try_new(initial_offset, NormalRecoveryPolicy::Standard)
@@ -1512,7 +1563,7 @@ impl CommitLog {
                 Ok(state) => state,
                 Err(error) => {
                     warn!("normal recovery initial state failed: {error}");
-                    return;
+                    return false;
                 }
             };
             let do_dispatch = false;
@@ -1635,7 +1686,7 @@ impl CommitLog {
             }
 
             let completion = normal_recovery.completion(max_phy_offset_of_consume_queue);
-            apply_recovery_completion!(self, completion, max_phy_offset_of_consume_queue);
+            apply_recovery_completion!(self, completion, max_phy_offset_of_consume_queue)
         } else {
             warn!(
                 "The commitlog files are deleted, and delete the consume queue
@@ -1645,8 +1696,12 @@ impl CommitLog {
                 self,
                 CommitLogRecoveryCompletion::Empty,
                 max_phy_offset_of_consume_queue,
-            );
+            )
         }
+    }
+
+    pub async fn recover_normally(&mut self, max_phy_offset_of_consume_queue: i64) {
+        let _ = self.try_recover_normally(max_phy_offset_of_consume_queue).await;
     }
 
     //Fetch and compute the newest confirmOffset.
@@ -1690,7 +1745,10 @@ impl CommitLog {
     /// - Batched message reading (64KB chunks)
     /// - Zero-copy validation using mmap regions
     /// - Reduced lock contention through buffered dispatch
-    pub async fn recover_abnormally_optimized(&mut self, max_phy_offset_of_consume_queue: i64) {
+    ///
+    /// Runs optimized abnormal recovery and reports whether destructive completion succeeded.
+    #[must_use]
+    pub async fn try_recover_abnormally_optimized(&mut self, max_phy_offset_of_consume_queue: i64) -> bool {
         use crate::log_file::commit_log_recovery::plan_abnormal_recovery_window;
         use crate::log_file::commit_log_recovery::BatchMessageIterator;
         use crate::log_file::commit_log_recovery::RecoveryContext;
@@ -1705,12 +1763,11 @@ impl CommitLog {
 
         if mapped_files_inner.is_empty() {
             warn!("The commitlog files are deleted, and delete the consume queue files");
-            apply_recovery_completion!(
+            return apply_recovery_completion!(
                 self,
                 CommitLogRecoveryCompletion::Empty,
                 max_phy_offset_of_consume_queue,
             );
-            return;
         }
 
         let recovery_window = plan_abnormal_recovery_window(
@@ -1727,7 +1784,7 @@ impl CommitLog {
         let mut index = recovery_window.start_index;
         let Some(first_recovery_file) = mapped_files_inner.get(index) else {
             warn!("optimized abnormal recovery window starts outside mapped files: {index}");
-            return;
+            return false;
         };
         let initial_offset = if index == 0 {
             first_recovery_file.get_file_from_offset()
@@ -1739,7 +1796,7 @@ impl CommitLog {
                 Ok(state) => state,
                 Err(error) => {
                     warn!("optimized abnormal recovery initial state failed: {error}");
-                    return;
+                    return false;
                 }
             };
         let do_dispatch = true;
@@ -1888,13 +1945,22 @@ impl CommitLog {
         }
 
         let completion = abnormal_recovery.completion(max_phy_offset_of_consume_queue);
-        apply_recovery_completion!(self, completion, max_phy_offset_of_consume_queue);
+        let recovery_succeeded = apply_recovery_completion!(self, completion, max_phy_offset_of_consume_queue);
 
         recovery_ctx.stats.recovery_time_ms = start.elapsed().as_millis();
         recovery_ctx.stats.log_summary("Abnormal");
+        recovery_succeeded
     }
 
-    pub async fn recover_abnormally(&mut self, max_phy_offset_of_consume_queue: i64) {
+    pub async fn recover_abnormally_optimized(&mut self, max_phy_offset_of_consume_queue: i64) {
+        let _ = self
+            .try_recover_abnormally_optimized(max_phy_offset_of_consume_queue)
+            .await;
+    }
+
+    /// Runs compatibility abnormal recovery and reports whether destructive completion succeeded.
+    #[must_use]
+    pub async fn try_recover_abnormally(&mut self, max_phy_offset_of_consume_queue: i64) -> bool {
         use crate::log_file::commit_log_recovery::plan_abnormal_recovery_window;
 
         let check_crc_on_recover = self.message_store_config.check_crc_on_recover;
@@ -1918,7 +1984,7 @@ impl CommitLog {
             let mut index = recovery_window.start_index;
             let Some(first_recovery_file) = mapped_files_inner.get(index) else {
                 warn!("standard abnormal recovery window starts outside mapped files: {index}");
-                return;
+                return false;
             };
             let initial_offset = first_recovery_file.get_file_from_offset();
             let mut abnormal_recovery =
@@ -1926,7 +1992,7 @@ impl CommitLog {
                     Ok(state) => state,
                     Err(error) => {
                         warn!("standard abnormal recovery initial state failed: {error}");
-                        return;
+                        return false;
                     }
                 };
             let do_dispatch = true;
@@ -2079,7 +2145,7 @@ impl CommitLog {
             }
 
             let completion = abnormal_recovery.completion(max_phy_offset_of_consume_queue);
-            apply_recovery_completion!(self, completion, max_phy_offset_of_consume_queue);
+            apply_recovery_completion!(self, completion, max_phy_offset_of_consume_queue)
         } else {
             warn!(
                 "The commitlog files are deleted, and delete the consume queue
@@ -2089,8 +2155,12 @@ impl CommitLog {
                 self,
                 CommitLogRecoveryCompletion::Empty,
                 max_phy_offset_of_consume_queue,
-            );
+            )
         }
+    }
+
+    pub async fn recover_abnormally(&mut self, max_phy_offset_of_consume_queue: i64) {
+        let _ = self.try_recover_abnormally(max_phy_offset_of_consume_queue).await;
     }
 
     #[inline]
@@ -2223,7 +2293,13 @@ impl CommitLog {
     }
 
     pub fn truncate_dirty_files(&self, offset_to_truncate: i64) {
-        self.mapped_file_queue.truncate_dirty_files(offset_to_truncate);
+        let _ = self.try_truncate_dirty_files(offset_to_truncate);
+    }
+
+    /// Truncates the CommitLog tail and reports whether every removed segment left the namespace.
+    #[must_use]
+    pub fn try_truncate_dirty_files(&self, offset_to_truncate: i64) -> bool {
+        self.mapped_file_queue.try_truncate_dirty_files(offset_to_truncate)
     }
 
     pub fn delete_expired_files_by_time(
@@ -3207,7 +3283,7 @@ mod tests {
         let append_port = commit_log.append_runtime.port();
         let mut unlock_calls = 0;
 
-        commit_log.destroy_with(|manager, handle| {
+        let destroyed = commit_log.destroy_with(|manager, handle| {
             assert!(
                 append_port.snapshot().closed,
                 "append admission must close before unlock"
@@ -3219,6 +3295,7 @@ mod tests {
             })
         });
 
+        assert!(destroyed);
         assert_eq!(unlock_calls, 1);
         assert!(!commit_log
             .runtime_state
@@ -3569,6 +3646,108 @@ mod tests {
         assert_eq!(store.get_commit_log().get_flushed_where(), 0);
         assert_eq!(store.get_commit_log().get_max_offset(), 0);
         assert!(!commitlog_dir.exists());
+
+        let _ = fs::remove_dir_all(temp_root);
+    }
+
+    #[tokio::test]
+    async fn destroy_outcome_retains_progress_and_file_identity_until_retry_succeeds() {
+        let temp_root =
+            std::env::temp_dir().join(format!("rocketmq-rust-commitlog-destroy-retry-{}", current_millis()));
+        let config = MessageStoreConfig {
+            mapped_file_size_commit_log: 64,
+            ..MessageStoreConfig::default()
+        };
+        let mut store = new_test_message_store_with_config(&temp_root, config, BrokerRole::SyncMaster, false);
+        store.init().await.expect("init message store");
+        let commitlog_dir = PathBuf::from(store.get_message_store_config().get_store_path_commit_log());
+        drop(new_test_mapped_file(&commitlog_dir, 0, 64));
+        assert!(store.get_commit_log_mut().load());
+
+        let commit_log = store.get_commit_log_mut();
+        commit_log.set_mapped_file_queue_offset(4);
+        let mapped_file = commit_log.last_mapped_file_for_testing().expect("mapped file");
+        assert!(mapped_file.hold());
+
+        assert!(!commit_log.destroy_with_outcome());
+        assert_ne!(commit_log.get_flushed_where(), 0);
+        assert_ne!(commit_log.mapped_file_queue.get_committed_where(), 0);
+        assert!(commit_log
+            .last_mapped_file_for_testing()
+            .is_some_and(|current| Arc::ptr_eq(&current, &mapped_file)));
+
+        mapped_file.release();
+        assert!(commit_log.destroy_with_outcome());
+        assert_eq!(commit_log.get_flushed_where(), 0);
+        assert_eq!(commit_log.mapped_file_queue.get_committed_where(), 0);
+
+        let _ = fs::remove_dir_all(temp_root);
+    }
+
+    #[tokio::test]
+    async fn empty_recovery_reports_consume_queue_cleanup_failure_and_allows_retry() {
+        let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-empty-recovery-retry-{}", current_millis()));
+        let mut store = new_test_message_store(&temp_root, BrokerRole::SyncMaster, false);
+        store.init().await.expect("init message store");
+
+        let topic = CheetahString::from_static_str("PendingRecoveryTopic");
+        let queue_root = PathBuf::from(crate::store_path_config_helper::get_store_path_consume_queue(
+            store.get_message_store_config().store_path_root_dir.as_str(),
+        ));
+        let queue_dir = queue_root.join(topic.as_str()).join("0");
+        let queue = ConsumeQueueStoreTrait::find_or_create_consume_queue(store.consume_queue_store_mut(), &topic, 0);
+        drop(queue);
+        fs::create_dir_all(&queue_dir).expect("create consume queue directory");
+        let sentinel = queue_dir.join("unknown-entry");
+        fs::write(&sentinel, b"retain").expect("create unknown queue entry");
+
+        assert!(!store.get_commit_log_mut().try_recover_normally(0).await);
+        assert!(queue_dir.exists());
+
+        fs::remove_file(sentinel).expect("remove unknown queue entry");
+        assert!(store.get_commit_log_mut().try_recover_normally(0).await);
+        assert!(!queue_dir.exists());
+
+        let _ = fs::remove_dir_all(temp_root);
+    }
+
+    #[tokio::test]
+    async fn recovered_completion_preserves_progress_until_tail_cleanup_succeeds() {
+        let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-recovery-tail-retry-{}", current_millis()));
+        let config = MessageStoreConfig {
+            mapped_file_size_commit_log: 64,
+            ..MessageStoreConfig::default()
+        };
+        let mut store = new_test_message_store_with_config(&temp_root, config, BrokerRole::SyncMaster, false);
+        store.init().await.expect("init message store");
+        let commitlog_dir = PathBuf::from(store.get_message_store_config().get_store_path_commit_log());
+        drop(new_test_mapped_file(&commitlog_dir, 0, 64));
+        drop(new_test_mapped_file(&commitlog_dir, 64, 64));
+        assert!(store.get_commit_log_mut().load());
+
+        let commit_log = store.get_commit_log_mut();
+        commit_log.set_mapped_file_queue_offset(128);
+        let tail = commit_log.last_mapped_file_for_testing().expect("tail mapped file");
+        assert!(tail.hold());
+        let completion = CommitLogRecoveryCompletion::Recovered {
+            confirm_offset: 32,
+            controller_confirm_offset: 32,
+            process_offset: 32,
+            truncate_consume_queue: false,
+        };
+
+        assert!(!apply_recovery_completion!(commit_log, completion, -1));
+        assert_eq!(commit_log.get_flushed_where(), 128);
+        assert_eq!(commit_log.mapped_file_queue.get_committed_where(), 128);
+        assert!(commit_log
+            .last_mapped_file_for_testing()
+            .is_some_and(|current| Arc::ptr_eq(&current, &tail)));
+
+        tail.release();
+        assert!(apply_recovery_completion!(commit_log, completion, -1));
+        assert_eq!(commit_log.get_flushed_where(), 32);
+        assert_eq!(commit_log.mapped_file_queue.get_committed_where(), 32);
+        assert_eq!(commit_log.mapped_file_queue.get_mapped_files().load().len(), 1);
 
         let _ = fs::remove_dir_all(temp_root);
     }

@@ -195,3 +195,7 @@ required-features = ["test-support"]
 name    = "ha_transfer_benchmark"
 harness = false
 required-features = ["test-support"]
+
+[[test]]
+name              = "mapped_file_queue_retirement"
+required-features = ["test-support"]

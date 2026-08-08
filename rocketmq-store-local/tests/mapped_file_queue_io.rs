@@ -40,6 +40,46 @@ fn missing_queue_directory_preserves_legacy_success() {
 }
 
 #[test]
+fn queue_load_fails_when_the_queue_path_is_not_a_directory() {
+    let temp_dir = tempdir().expect("temp dir");
+    let queue_path = temp_dir.path().join("queue");
+    create_sized_file(&queue_path, 16);
+
+    let outcome = load_mapped_file_queue_path(queue_path.to_string_lossy().as_ref(), 16);
+
+    assert!(!outcome.is_success());
+    assert!(outcome.into_mapped_files().is_empty());
+}
+
+#[test]
+fn queue_load_retains_and_rejects_an_unknown_file_identity() {
+    let temp_dir = tempdir().expect("temp dir");
+    let unknown = temp_dir.path().join("unknown");
+    create_sized_file(&unknown, 0);
+
+    let outcome = load_mapped_file_queue_path(temp_dir.path().to_string_lossy().as_ref(), 16);
+
+    assert!(!outcome.is_success());
+    assert!(outcome.into_mapped_files().is_empty());
+    assert!(unknown.exists());
+}
+
+#[test]
+fn queue_load_retains_and_rejects_a_subdirectory() {
+    let temp_dir = tempdir().expect("temp dir");
+    let unknown_dir = temp_dir.path().join("archive");
+    std::fs::create_dir(&unknown_dir).expect("create unknown directory");
+    let sentinel = unknown_dir.join("sentinel");
+    create_sized_file(&sentinel, 1);
+
+    let outcome = load_mapped_file_queue_path(temp_dir.path().to_string_lossy().as_ref(), 16);
+
+    assert!(!outcome.is_success());
+    assert!(outcome.into_mapped_files().is_empty());
+    assert!(sentinel.exists());
+}
+
+#[test]
 fn queue_load_sorts_files_initializes_positions_and_removes_empty_tail() {
     let temp_dir = tempdir().expect("temp dir");
     let first = temp_dir.path().join("00000000000000000000");
