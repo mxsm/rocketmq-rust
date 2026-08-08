@@ -13,43 +13,47 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::rpc::topic_request_header::TopicRequestHeader;
 
-#[derive(Serialize, Deserialize, Debug, RequestHeaderCodecV2)]
-#[request_header(validate = "validate")]
+#[derive(Serialize, Deserialize, Debug, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::create_topic_request_header::CreateTopicRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.CreateTopicRequestHeader",
+    validate = "Self::validate"
+)]
 pub struct CreateTopicRequestHeader {
-    #[required]
+    #[header(required)]
     #[serde(rename = "topic")]
     pub topic: CheetahString,
 
-    #[required]
+    #[header(required)]
     #[serde(rename = "defaultTopic")]
     pub default_topic: CheetahString,
 
-    #[required]
+    #[header(required)]
     #[serde(rename = "readQueueNums")]
     pub read_queue_nums: i32,
 
-    #[required]
+    #[header(required)]
     #[serde(rename = "writeQueueNums")]
     pub write_queue_nums: i32,
 
-    #[required]
+    #[header(required)]
     #[serde(rename = "perm")]
     pub perm: i32,
 
-    #[required]
+    #[header(required)]
     #[serde(rename = "topicFilterType")]
     pub topic_filter_type: CheetahString,
 
     #[serde(rename = "topicSysFlag")]
     pub topic_sys_flag: Option<i32>,
 
-    #[required]
+    #[header(required)]
     #[serde(rename = "order")]
     pub order: bool,
 
@@ -57,21 +61,43 @@ pub struct CreateTopicRequestHeader {
     pub attributes: Option<CheetahString>,
 
     #[serde(rename = "force")]
+    #[serde(default = "default_force")]
+    #[header(default_with = "default_force", default_semantic = "literal:false")]
     pub force: Option<bool>,
 
     #[serde(flatten)]
+    #[header(flatten, presence = "always")]
     pub topic_request_header: Option<TopicRequestHeader>,
 }
 
+fn default_force() -> Option<bool> {
+    Some(false)
+}
+
 impl CreateTopicRequestHeader {
-    fn validate(&self) -> rocketmq_error::RocketMQResult<()> {
+    fn validate(&self) -> Result<(), crate::protocol::header_codec::HeaderCodecError> {
         match self.topic_filter_type.as_str() {
             "SINGLE_TAG" | "MULTI_TAG" => Ok(()),
-            _ => Err(rocketmq_error::RocketMQError::request_header_error(
-                "CreateTopicRequestHeader.topicFilterType: unsupported value",
-            )),
+            _ => Err(crate::protocol::header_codec::HeaderCodecError::Validation {
+                header: "rocketmq_protocol::protocol::header::create_topic_request_header::CreateTopicRequestHeader",
+                rule: "supported_topic_filter_type",
+            }),
         }
     }
+}
+
+#[cfg(test)]
+impl CreateTopicRequestHeader {
+    const TOPIC: &'static str = "topic";
+    const DEFAULT_TOPIC: &'static str = "defaultTopic";
+    const READ_QUEUE_NUMS: &'static str = "readQueueNums";
+    const WRITE_QUEUE_NUMS: &'static str = "writeQueueNums";
+    const PERM: &'static str = "perm";
+    const TOPIC_FILTER_TYPE: &'static str = "topicFilterType";
+    const TOPIC_SYS_FLAG: &'static str = "topicSysFlag";
+    const ORDER: &'static str = "order";
+    const ATTRIBUTES: &'static str = "attributes";
+    const FORCE: &'static str = "force";
 }
 
 #[cfg(test)]
@@ -258,7 +284,7 @@ mod tests {
         assert_eq!(header.topic_sys_flag, None);
         assert!(header.order);
         assert_eq!(header.attributes, None);
-        assert_eq!(header.force, None);
+        assert_eq!(header.force, Some(false));
     }
 
     #[test]

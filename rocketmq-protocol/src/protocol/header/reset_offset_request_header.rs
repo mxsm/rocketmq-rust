@@ -13,28 +13,39 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::rpc::topic_request_header::TopicRequestHeader;
 
-#[derive(Clone, Debug, Serialize, Deserialize, RequestHeaderCodecV2)]
+#[derive(Clone, Debug, Serialize, Deserialize, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::reset_offset_request_header::ResetOffsetRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.ResetOffsetRequestHeader"
+)]
 #[serde(rename_all = "camelCase")]
 pub struct ResetOffsetRequestHeader {
-    #[required]
+    #[header(required)]
     pub topic: CheetahString,
-    #[required]
+    #[header(required)]
     pub group: CheetahString,
+    #[serde(default = "default_queue_id")]
+    #[header(default_with = "default_queue_id", default_semantic = "literal:-1")]
     pub queue_id: i32,
     pub offset: Option<i64>,
-    #[required]
+    #[header(required)]
     pub timestamp: i64,
-    #[required]
+    #[header(required)]
     pub is_force: bool,
 
     #[serde(flatten)]
+    #[header(flatten, presence = "always")]
     pub topic_request_header: Option<TopicRequestHeader>,
+}
+
+fn default_queue_id() -> i32 {
+    -1
 }
 
 impl Default for ResetOffsetRequestHeader {
@@ -42,7 +53,7 @@ impl Default for ResetOffsetRequestHeader {
         ResetOffsetRequestHeader {
             topic: CheetahString::empty(),
             group: CheetahString::empty(),
-            queue_id: -1,
+            queue_id: default_queue_id(),
             offset: None,
             timestamp: 0,
             is_force: false,

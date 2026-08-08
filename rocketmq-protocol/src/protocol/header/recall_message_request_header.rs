@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -24,7 +24,11 @@ use crate::rpc::topic_request_header::TopicRequestHeader;
 /// This header is used with `RequestCode::RECALL_MESSAGE` to recall a previously
 /// sent message from the broker. The recall operation requires the producer group,
 /// topic, and a recall handle that identifies the message to be recalled.
-#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::recall_message_request_header::RecallMessageRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.RecallMessageRequestHeader"
+)]
 #[serde(rename_all = "camelCase")]
 pub struct RecallMessageRequestHeader {
     /// Producer group name (optional).
@@ -37,14 +41,14 @@ pub struct RecallMessageRequestHeader {
     /// Topic name (required).
     ///
     /// The topic to which the message was originally sent.
-    #[required]
+    #[header(required)]
     pub topic: CheetahString,
 
     /// Recall handle (required).
     ///
     /// A unique identifier or handle that specifies which message to recall.
     /// The format and semantics of this handle are implementation-specific.
-    #[required]
+    #[header(required)]
     pub recall_handle: CheetahString,
 
     /// Topic request header containing common request metadata.
@@ -52,6 +56,7 @@ pub struct RecallMessageRequestHeader {
     /// This field is flattened during serialization/deserialization to merge
     /// its fields with the top-level structure.
     #[serde(flatten)]
+    #[header(flatten, presence = "always")]
     pub topic_request_header: Option<TopicRequestHeader>,
 }
 
