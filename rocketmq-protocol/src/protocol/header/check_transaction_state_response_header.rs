@@ -13,33 +13,38 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize, RequestHeaderCodecV2)]
-#[request_header(validate = "validate")]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, RequestHeaderCodecV3)]
 #[serde(rename_all = "camelCase")]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::check_transaction_state_response_header::CheckTransactionStateResponseHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.CheckTransactionStateResponseHeader",
+    validate = "Self::validate"
+)]
 pub struct CheckTransactionStateResponseHeader {
-    #[required]
+    #[header(required)]
     pub producer_group: CheetahString,
-    #[required]
+    #[header(required)]
     pub tran_state_table_offset: i64,
-    #[required]
+    #[header(required)]
     pub commit_log_offset: i64,
-    #[required]
+    #[header(required)]
     pub commit_or_rollback: i32,
 }
 
 impl CheckTransactionStateResponseHeader {
-    fn validate(&self) -> rocketmq_error::RocketMQResult<()> {
+    fn validate(&self) -> Result<(), crate::protocol::header_codec::HeaderCodecError> {
         use rocketmq_model::common::sys_flag::message_sys_flag::MessageSysFlag;
 
         match self.commit_or_rollback {
             MessageSysFlag::TRANSACTION_COMMIT_TYPE | MessageSysFlag::TRANSACTION_ROLLBACK_TYPE => Ok(()),
-            _ => Err(rocketmq_error::RocketMQError::request_header_error(
-                "CheckTransactionStateResponseHeader.commitOrRollback: expected commit or rollback",
-            )),
+            _ => Err(crate::protocol::header_codec::HeaderCodecError::Validation {
+                header: "rocketmq_protocol::protocol::header::check_transaction_state_response_header::CheckTransactionStateResponseHeader",
+                rule: "commit_or_rollback",
+            }),
         }
     }
 }

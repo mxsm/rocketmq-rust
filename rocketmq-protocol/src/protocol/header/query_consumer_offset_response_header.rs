@@ -12,12 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Debug, Clone, Serialize, Deserialize, RequestHeaderCodecV2, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, RequestHeaderCodecV3, Default)]
 #[serde(rename_all = "camelCase")]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::query_consumer_offset_response_header::QueryConsumerOffsetResponseHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.QueryConsumerOffsetResponseHeader"
+)]
 pub struct QueryConsumerOffsetResponseHeader {
     pub offset: Option<i64>,
 }

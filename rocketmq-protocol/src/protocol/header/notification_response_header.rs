@@ -12,17 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV3)]
 #[serde(rename_all = "camelCase")]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::notification_response_header::NotificationResponseHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.NotificationResponseHeader"
+)]
 pub struct NotificationResponseHeader {
-    #[required]
+    #[header(required)]
     pub has_msg: bool,
 
     #[serde(default)]
+    #[header(default, default_semantic = "literal:false")]
     pub polling_full: bool,
 }
 

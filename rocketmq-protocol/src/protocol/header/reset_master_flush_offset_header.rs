@@ -12,12 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Clone, Debug, Serialize, Deserialize, RequestHeaderCodecV2)]
+#[derive(Clone, Debug, Serialize, Deserialize, RequestHeaderCodecV3)]
 #[serde(rename_all = "camelCase")]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::reset_master_flush_offset_header::ResetMasterFlushOffsetHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.ResetMasterFlushOffsetHeader"
+)]
 pub struct ResetMasterFlushOffsetHeader {
     pub master_flush_offset: Option<i64>,
 }

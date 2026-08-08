@@ -13,18 +13,22 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize, RequestHeaderCodecV2)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, RequestHeaderCodecV3)]
 #[serde(rename_all = "camelCase")]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::remove_broker_request_header::RemoveBrokerRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.RemoveBrokerRequestHeader"
+)]
 pub struct RemoveBrokerRequestHeader {
-    #[required]
+    #[header(required)]
     pub broker_name: CheetahString,
-    #[required]
+    #[header(required)]
     pub broker_cluster_name: CheetahString,
-    #[required]
+    #[header(required, range = "i64")]
     pub broker_id: u64,
 }
 

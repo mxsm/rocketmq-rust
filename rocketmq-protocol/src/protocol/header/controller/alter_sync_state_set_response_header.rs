@@ -12,13 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodecV3)]
 #[serde(rename_all = "camelCase")]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::controller::alter_sync_state_set_response_header::AlterSyncStateSetResponseHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.controller.AlterSyncStateSetResponseHeader"
+)]
 pub struct AlterSyncStateSetResponseHeader {
+    #[header(default, default_semantic = "literal:0")]
     pub new_sync_state_set_epoch: i32,
 }
 

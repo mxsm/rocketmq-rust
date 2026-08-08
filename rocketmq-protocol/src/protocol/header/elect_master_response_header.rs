@@ -13,17 +13,29 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodecV3)]
 #[serde(rename_all = "camelCase")]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::elect_master_response_header::ElectMasterResponseHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.controller.ElectMasterResponseHeader"
+)]
 pub struct ElectMasterResponseHeader {
     pub master_broker_id: Option<i64>,
     pub master_address: Option<CheetahString>,
     pub master_epoch: Option<i32>,
     pub sync_state_set_epoch: Option<i32>,
+}
+
+#[cfg(test)]
+impl ElectMasterResponseHeader {
+    const MASTER_BROKER_ID: &'static str = "masterBrokerId";
+    const MASTER_ADDRESS: &'static str = "masterAddress";
+    const MASTER_EPOCH: &'static str = "masterEpoch";
+    const SYNC_STATE_SET_EPOCH: &'static str = "syncStateSetEpoch";
 }
 
 #[cfg(test)]

@@ -13,14 +13,18 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodecV3)]
 #[serde(rename_all = "camelCase")]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::get_all_subscription_group_request_header::GetAllSubscriptionGroupRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.GetAllSubscriptionGroupRequestHeader"
+)]
 pub struct GetAllSubscriptionGroupRequestHeader {
-    #[required]
+    #[header(required)]
     pub group_seq: i32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data_version: Option<CheetahString>,
@@ -28,10 +32,14 @@ pub struct GetAllSubscriptionGroupRequestHeader {
     pub max_group_num: Option<i32>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodecV3)]
 #[serde(rename_all = "camelCase")]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::get_all_subscription_group_request_header::GetAllSubscriptionGroupResponseHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.GetAllSubscriptionGroupResponseHeader"
+)]
 pub struct GetAllSubscriptionGroupResponseHeader {
-    #[required]
+    #[header(required)]
     pub total_group_num: i32,
 }
 

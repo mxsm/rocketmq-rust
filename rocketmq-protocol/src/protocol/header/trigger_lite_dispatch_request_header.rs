@@ -13,14 +13,18 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Clone, Debug, Serialize, Deserialize, RequestHeaderCodecV2)]
+#[derive(Clone, Debug, Serialize, Deserialize, RequestHeaderCodecV3)]
 #[serde(rename_all = "camelCase")]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::trigger_lite_dispatch_request_header::TriggerLiteDispatchRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.TriggerLiteDispatchRequestHeader"
+)]
 pub struct TriggerLiteDispatchRequestHeader {
-    #[required]
+    #[header(required)]
     pub group: CheetahString,
     pub client_id: Option<CheetahString>,
 }

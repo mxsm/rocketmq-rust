@@ -13,19 +13,23 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::{RequestHeaderCodecV2, RequestHeaderCodecV3};
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::namesrv::kv_config_header::PutKVConfigRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.namesrv.PutKVConfigRequestHeader"
+)]
 pub struct PutKVConfigRequestHeader {
-    #[required]
+    #[header(required)]
     pub namespace: CheetahString,
 
-    #[required]
+    #[header(required)]
     pub key: CheetahString,
 
-    #[required]
+    #[header(required)]
     pub value: CheetahString,
 }
 
@@ -50,12 +54,16 @@ impl PutKVConfigRequestHeader {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::namesrv::kv_config_header::GetKVConfigRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.namesrv.GetKVConfigRequestHeader"
+)]
 pub struct GetKVConfigRequestHeader {
-    #[required]
+    #[header(required)]
     pub namespace: CheetahString,
 
-    #[required]
+    #[header(required)]
     pub key: CheetahString,
 }
 
@@ -79,12 +87,16 @@ impl GetKVConfigResponseHeader {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::namesrv::kv_config_header::DeleteKVConfigRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.namesrv.DeleteKVConfigRequestHeader"
+)]
 pub struct DeleteKVConfigRequestHeader {
-    #[required]
+    #[header(required)]
     pub namespace: CheetahString,
 
-    #[required]
+    #[header(required)]
     pub key: CheetahString,
 }
 
@@ -97,9 +109,13 @@ impl DeleteKVConfigRequestHeader {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::namesrv::kv_config_header::GetKVListByNamespaceRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.namesrv.GetKVListByNamespaceRequestHeader"
+)]
 pub struct GetKVListByNamespaceRequestHeader {
-    #[required]
+    #[header(required)]
     pub namespace: CheetahString,
 }
 

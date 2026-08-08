@@ -13,25 +13,39 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Clone, Debug, Serialize, Deserialize, RequestHeaderCodecV2)]
+fn default_invoke_time() -> u64 {
+    rocketmq_model::time::current_millis()
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, RequestHeaderCodecV3)]
 #[serde(rename_all = "camelCase")]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::controller::elect_master_request_header::ElectMasterRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.controller.ElectMasterRequestHeader"
+)]
 pub struct ElectMasterRequestHeader {
-    #[required]
+    #[header(required)]
     pub cluster_name: CheetahString,
 
-    #[required]
+    #[header(required)]
     pub broker_name: CheetahString,
 
-    #[required]
+    #[header(required)]
     pub broker_id: i64,
 
-    #[required]
+    #[header(required)]
     pub designate_elect: bool,
 
+    #[serde(default = "default_invoke_time")]
+    #[header(
+        default_with = "default_invoke_time",
+        default_semantic = "dynamic:current_time_millis",
+        range = "i64"
+    )]
     pub invoke_time: u64,
 }
 
@@ -60,7 +74,7 @@ impl Default for ElectMasterRequestHeader {
             broker_name: CheetahString::new(),
             broker_id: 0,
             designate_elect: false,
-            invoke_time: 0,
+            invoke_time: default_invoke_time(),
         }
     }
 }
@@ -145,7 +159,7 @@ mod tests {
         assert_eq!(header.broker_name, "");
         assert_eq!(header.broker_id, 0);
         assert!(!header.designate_elect);
-        assert_eq!(header.invoke_time, 0);
+        assert!(header.invoke_time > 0);
     }
 
     #[test]

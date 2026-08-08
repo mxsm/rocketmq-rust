@@ -13,22 +13,26 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Debug, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
+#[derive(Debug, Serialize, Deserialize, Default, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::broker::broker_heartbeat_request_header::BrokerHeartbeatRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.namesrv.BrokerHeartbeatRequestHeader"
+)]
 pub struct BrokerHeartbeatRequestHeader {
     #[serde(rename = "clusterName")]
-    #[required]
+    #[header(required)]
     pub cluster_name: CheetahString,
 
     #[serde(rename = "brokerAddr")]
-    #[required]
+    #[header(required)]
     pub broker_addr: CheetahString,
 
     #[serde(rename = "brokerName")]
-    #[required]
+    #[header(required)]
     pub broker_name: CheetahString,
 
     #[serde(rename = "brokerId")]

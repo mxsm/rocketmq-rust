@@ -13,14 +13,18 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV3)]
 #[serde(rename_all = "camelCase")]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::namesrv::perm_broker_header::WipeWritePermOfBrokerRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.namesrv.WipeWritePermOfBrokerRequestHeader"
+)]
 pub struct WipeWritePermOfBrokerRequestHeader {
-    #[required]
+    #[header(required)]
     pub broker_name: CheetahString,
 }
 
@@ -32,10 +36,14 @@ impl WipeWritePermOfBrokerRequestHeader {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV3)]
 #[serde(rename_all = "camelCase")]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::namesrv::perm_broker_header::WipeWritePermOfBrokerResponseHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.namesrv.WipeWritePermOfBrokerResponseHeader"
+)]
 pub struct WipeWritePermOfBrokerResponseHeader {
-    #[required]
+    #[header(required)]
     pub wipe_topic_count: i32,
 }
 
@@ -49,10 +57,14 @@ impl WipeWritePermOfBrokerResponseHeader {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV3)]
 #[serde(rename_all = "camelCase")]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::namesrv::perm_broker_header::AddWritePermOfBrokerRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.namesrv.AddWritePermOfBrokerRequestHeader"
+)]
 pub struct AddWritePermOfBrokerRequestHeader {
-    #[required]
+    #[header(required)]
     pub broker_name: CheetahString,
 }
 
@@ -64,10 +76,14 @@ impl AddWritePermOfBrokerRequestHeader {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV3)]
 #[serde(rename_all = "camelCase")]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::namesrv::perm_broker_header::AddWritePermOfBrokerResponseHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.namesrv.AddWritePermOfBrokerResponseHeader"
+)]
 pub struct AddWritePermOfBrokerResponseHeader {
-    #[required]
+    #[header(required)]
     pub add_topic_count: i32,
 }
 

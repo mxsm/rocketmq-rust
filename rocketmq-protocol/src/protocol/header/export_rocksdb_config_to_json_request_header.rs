@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -41,10 +41,14 @@ impl ExportRocksdbConfigType {
     }
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize, RequestHeaderCodecV2)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, RequestHeaderCodecV3)]
 #[serde(rename_all = "camelCase")]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::export_rocksdb_config_to_json_request_header::ExportRocksdbConfigToJsonRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.ExportRocksDBConfigToJsonRequestHeader"
+)]
 pub struct ExportRocksdbConfigToJsonRequestHeader {
-    #[required]
+    #[header(required)]
     pub config_type: CheetahString,
 }
 

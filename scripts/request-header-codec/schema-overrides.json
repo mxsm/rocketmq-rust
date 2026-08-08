@@ -121,6 +121,83 @@
         "rust": "rocketmq-protocol/src/protocol/header/query_subscription_by_consumer_request_header.rs",
         "java": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/QuerySubscriptionByConsumerRequestHeader.java"
       }
+    },
+    {
+      "rustType": "AlterSyncStateSetRequestHeader",
+      "field": "brokerName",
+      "semantic": "literal:",
+      "owner": "rocketmq-rust protocol maintainers",
+      "reason": "Preserves the public non-optional Rust field and legacy V2 missing-field behavior for the nullable Java value",
+      "referenceSource": {
+        "rust": "rocketmq-protocol/src/protocol/header/controller/alter_sync_state_set_request_header.rs",
+        "java": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/controller/AlterSyncStateSetRequestHeader.java"
+      }
+    },
+    {
+      "rustType": "AlterSyncStateSetRequestHeader",
+      "field": "masterBrokerId",
+      "semantic": "literal:0",
+      "owner": "rocketmq-rust protocol maintainers",
+      "reason": "Preserves the public non-optional Rust field and legacy V2 missing-field behavior for the nullable Java value",
+      "referenceSource": {
+        "rust": "rocketmq-protocol/src/protocol/header/controller/alter_sync_state_set_request_header.rs",
+        "java": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/controller/AlterSyncStateSetRequestHeader.java"
+      }
+    },
+    {
+      "rustType": "AlterSyncStateSetRequestHeader",
+      "field": "masterEpoch",
+      "semantic": "literal:0",
+      "owner": "rocketmq-rust protocol maintainers",
+      "reason": "Preserves the public non-optional Rust field and legacy V2 missing-field behavior for the nullable Java value",
+      "referenceSource": {
+        "rust": "rocketmq-protocol/src/protocol/header/controller/alter_sync_state_set_request_header.rs",
+        "java": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/controller/AlterSyncStateSetRequestHeader.java"
+      }
+    },
+    {
+      "rustType": "ApplyBrokerIdRequestHeader",
+      "field": "clusterName",
+      "semantic": "literal:",
+      "owner": "rocketmq-rust protocol maintainers",
+      "reason": "Preserves the public non-optional Rust field and legacy V2 missing-field behavior for the nullable Java value",
+      "referenceSource": {
+        "rust": "rocketmq-protocol/src/protocol/header/controller/apply_broker_id_request_header.rs",
+        "java": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/controller/register/ApplyBrokerIdRequestHeader.java"
+      }
+    },
+    {
+      "rustType": "ApplyBrokerIdRequestHeader",
+      "field": "brokerName",
+      "semantic": "literal:",
+      "owner": "rocketmq-rust protocol maintainers",
+      "reason": "Preserves the public non-optional Rust field and legacy V2 missing-field behavior for the nullable Java value",
+      "referenceSource": {
+        "rust": "rocketmq-protocol/src/protocol/header/controller/apply_broker_id_request_header.rs",
+        "java": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/controller/register/ApplyBrokerIdRequestHeader.java"
+      }
+    },
+    {
+      "rustType": "ApplyBrokerIdRequestHeader",
+      "field": "appliedBrokerId",
+      "semantic": "literal:0",
+      "owner": "rocketmq-rust protocol maintainers",
+      "reason": "Preserves the public non-optional Rust field and legacy V2 missing-field behavior for the nullable Java value",
+      "referenceSource": {
+        "rust": "rocketmq-protocol/src/protocol/header/controller/apply_broker_id_request_header.rs",
+        "java": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/controller/register/ApplyBrokerIdRequestHeader.java"
+      }
+    },
+    {
+      "rustType": "ApplyBrokerIdRequestHeader",
+      "field": "registerCheckCode",
+      "semantic": "literal:",
+      "owner": "rocketmq-rust protocol maintainers",
+      "reason": "Preserves the public non-optional Rust field and legacy V2 missing-field behavior for the nullable Java value",
+      "referenceSource": {
+        "rust": "rocketmq-protocol/src/protocol/header/controller/apply_broker_id_request_header.rs",
+        "java": "remoting/src/main/java/org/apache/rocketmq/remoting/protocol/header/controller/register/ApplyBrokerIdRequestHeader.java"
+      }
     }
   ],
   "nameMappings": [
