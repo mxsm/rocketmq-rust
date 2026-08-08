@@ -1985,6 +1985,15 @@
       "entries": [
         {
           "category": "experimental",
+          "declaration": "pub mod __request_header_codec",
+          "identity": "rocketmq-protocol/src/lib.rs:pub mod __request_header_codec",
+          "owner": "protocol",
+          "path": "rocketmq-protocol/src/lib.rs",
+          "rationale": "doc-hidden dependency surface used by derive macro expansions, not a user-facing module",
+          "removal_condition": "replace only when published derive expansions use a versioned narrower support path"
+        },
+        {
+          "category": "experimental",
           "declaration": "pub mod code",
           "identity": "rocketmq-protocol/src/lib.rs:pub mod code",
           "owner": "protocol",
@@ -2066,11 +2075,38 @@
         },
         {
           "category": "stable",
+          "declaration": "pub use protocol::command_custom_header::HeaderEncodeCapability",
+          "identity": "rocketmq-protocol/src/lib.rs:pub use protocol::command_custom_header::HeaderEncodeCapability",
+          "owner": "protocol",
+          "path": "rocketmq-protocol/src/lib.rs",
+          "rationale": "stable capability signal shared by command headers and codec dispatch",
+          "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use protocol::command_custom_header::HeaderMap",
+          "identity": "rocketmq-protocol/src/lib.rs:pub use protocol::command_custom_header::HeaderMap",
+          "owner": "protocol",
+          "path": "rocketmq-protocol/src/lib.rs",
+          "rationale": "stable compatibility map used by derive expansions and legacy command headers",
+          "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
           "declaration": "pub use protocol::encoded_frame::EncodedFrame",
           "identity": "rocketmq-protocol/src/lib.rs:pub use protocol::encoded_frame::EncodedFrame",
           "owner": "protocol",
           "path": "rocketmq-protocol/src/lib.rs",
           "rationale": "deliberate root entry point",
+          "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use protocol::header_codec::HeaderCodec",
+          "identity": "rocketmq-protocol/src/lib.rs:pub use protocol::header_codec::HeaderCodec",
+          "owner": "protocol",
+          "path": "rocketmq-protocol/src/lib.rs",
+          "rationale": "stable typed request-header codec contract",
           "removal_condition": "retain while the stable entry point remains supported"
         },
         {
@@ -2119,7 +2155,7 @@
           "removal_condition": "retain while the stable entry point remains supported"
         }
       ],
-      "maximum_exports": 15
+      "maximum_exports": 19
     },
     "rocketmq-runtime": {
       "entries": [
