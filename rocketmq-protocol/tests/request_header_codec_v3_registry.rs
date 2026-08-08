@@ -136,6 +136,7 @@ struct SchemaOverrides {
 #[serde(rename_all = "camelCase")]
 struct ExtensionAllowlist {
     extensions: Vec<ExtensionOverride>,
+    rust_only_types: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -185,7 +186,7 @@ struct AliasOverride {
 
 struct RegisteredSchema {
     type_id: &'static str,
-    java_class: &'static str,
+    java_class: Option<&'static str>,
     direct_binary: bool,
     local_fields: &'static [HeaderFieldSpec],
     fields: Vec<HeaderFieldSpec>,
@@ -232,7 +233,7 @@ fn register_value<T: HeaderCodec + CommandCustomHeader>(header: &T) -> Registere
     T::visit_flatten_specs(&mut |flatten| flattens.push(*flatten));
     RegisteredSchema {
         type_id: T::TYPE_ID,
-        java_class: T::JAVA_CLASS.expect("registered production headers declare a Java peer"),
+        java_class: T::JAVA_CLASS,
         direct_binary: T::FAST_ENABLED,
         local_fields: T::LOCAL_FIELD_SPECS,
         fields,
@@ -628,6 +629,35 @@ fn registry() -> Vec<RegisteredSchema> {
         register::<rocketmq_protocol::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetResponseHeader>(),
         register::<rocketmq_protocol::protocol::header::update_user_request_header::UpdateUserRequestHeader>(),
         register::<rocketmq_protocol::protocol::header::view_message_response_header::ViewMessageResponseHeader>(),
+        // Rust maintenance, probe, and compare-and-set configuration extensions.
+        register_value(
+            &rocketmq_protocol::protocol::header::maintenance_request_header::MaintenanceRequestHeader {
+                operation_id: CheetahString::from_static_str("registry"),
+                policy_version: 1,
+                deadline_unix_millis: 1,
+                fencing_token: 1,
+            },
+        ),
+        register::<rocketmq_protocol::protocol::header::namesrv::config_header::GetNamesrvConfigRequestHeader>(),
+        register::<rocketmq_protocol::protocol::header::update_broker_config_request_header::UpdateBrokerConfigRequestHeader>(),
+        register::<rocketmq_protocol::protocol::header::update_broker_config_response_header::UpdateBrokerConfigResponseHeader>(),
+        register::<rocketmq_protocol::protocol::header::update_global_white_addrs_config_request_header::UpdateGlobalWhiteAddrsConfigRequestHeader>(),
+        register_value(
+            &rocketmq_protocol::protocol::header::update_subscription_group_config_cas_request_header::UpdateSubscriptionGroupConfigCasRequestHeader {
+                group: CheetahString::from_static_str("registry"),
+                expected_version: 1,
+                ..Default::default()
+            },
+        ),
+        register::<rocketmq_protocol::protocol::header::update_subscription_group_config_cas_response_header::UpdateSubscriptionGroupConfigCasResponseHeader>(),
+        register_value(
+            &rocketmq_protocol::protocol::header::update_topic_config_cas_request_header::UpdateTopicConfigCasRequestHeader {
+                topic: CheetahString::from_static_str("registry"),
+                expected_version: 1,
+                ..Default::default()
+            },
+        ),
+        register::<rocketmq_protocol::protocol::header::update_topic_config_cas_response_header::UpdateTopicConfigCasResponseHeader>(),
     ]
 }
 
@@ -748,6 +778,20 @@ fn registered_typed_schemas_match_the_pinned_java_contract() {
         );
     }
     let by_type_id: HashMap<_, _> = registered.iter().map(|schema| (schema.type_id, schema)).collect();
+    let rust_only_type_ids = extensions
+        .rust_only_types
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+    let registered_rust_only_type_ids = registered
+        .iter()
+        .filter(|schema| schema.java_class.is_none())
+        .map(|schema| schema.type_id)
+        .collect::<HashSet<_>>();
+    assert_eq!(
+        registered_rust_only_type_ids, rust_only_type_ids,
+        "registered schemas without Java peers must match the reviewed Rust-only allowlist"
+    );
 
     for schema in &registered {
         assert!(
@@ -755,12 +799,28 @@ fn registered_typed_schemas_match_the_pinned_java_contract() {
             "{} must infer Java-compatible value kinds instead of repeating java_type metadata",
             schema.type_id
         );
+        if rust_only_type_ids.contains(schema.type_id) {
+            assert!(
+                schema.fields.iter().all(|field| field.java_range.is_none()),
+                "{} Rust-only fields must retain their native numeric domains",
+                schema.type_id
+            );
+            for flatten in &schema.flattens {
+                assert!(
+                    by_type_id.contains_key(flatten.nested_type_id),
+                    "{} flattens unregistered {}",
+                    schema.type_id,
+                    flatten.nested_type_id
+                );
+            }
+            continue;
+        }
         let java_header = java
             .headers
             .iter()
             .find(|header| header.rust_type_id == schema.type_id)
             .unwrap_or_else(|| panic!("missing pinned Java schema for {}", schema.type_id));
-        assert_eq!(schema.java_class, java_header.java_class);
+        assert_eq!(schema.java_class, Some(java_header.java_class.as_str()));
         assert!(
             !java_header.java_fast || schema.direct_binary,
             "{} must preserve Java fast encoding through generated direct binary",
@@ -806,7 +866,7 @@ fn registered_typed_schemas_match_the_pinned_java_contract() {
                 _ => assert_eq!(field.java_range, None),
             }
 
-            assert_eq!(owner.java_class, java_field.declared_in);
+            assert_eq!(owner.java_class, Some(java_field.declared_in.as_str()));
 
             match field.presence {
                 HeaderPresence::Required | HeaderPresence::Optional => {

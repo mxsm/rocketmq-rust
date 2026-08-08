@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_macros::RequestHeaderCodecV2;
+use rocketmq_macros::RequestHeaderCodecV3;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -20,9 +20,13 @@ use serde::Serialize;
 ///
 /// On success this is the newly committed generation. On a compare-and-set
 /// conflict it is the current generation that rejected the stale request.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize, RequestHeaderCodecV2)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize, RequestHeaderCodecV3)]
+#[header(
+    type_id = "rocketmq_protocol::protocol::header::update_broker_config_response_header::UpdateBrokerConfigResponseHeader"
+)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateBrokerConfigResponseHeader {
+    #[header(default, default_semantic = "literal:0")]
     pub config_generation: u64,
 }
 
