@@ -2,181 +2,150 @@
 
 [English](README.md) | [简体中文](README-zh_cn.md)
 
-Procedural macros for RocketMQ-Rust protocol types, request headers, and remoting serialization helpers.
+Procedural macros for RocketMQ-Rust protocol types and remoting headers.
 
-`rocketmq-macros` is a small proc-macro crate used by the RocketMQ-Rust workspace to remove repetitive protocol glue
-from request and response header definitions. Its primary job is to generate `CommandCustomHeader` and `FromMap`
-implementations for RocketMQ remoting headers, preserving Java-compatible wire keys while keeping the Rust structs
-typed and maintainable.
+`rocketmq-macros` is build-time infrastructure. Most application code should use the higher-level client, broker,
+or remoting crates instead of depending on it directly.
 
-This crate is infrastructure, not a runtime component. Most application code should use the higher-level
-`rocketmq-remoting`, `rocketmq-client-rust`, `rocketmq-broker`, or service crates instead of depending on these macros
-directly.
+## Request-header derives
 
-## Capabilities
+| Macro | Status | Purpose |
+| --- | --- | --- |
+| `RequestHeaderCodecV3` | Recommended | Generates typed map/source codecs, wire schema, validation, key resolution, compatibility adapters, and optional reviewed direct encoding. |
+| `RequestHeaderCodecV2` | Deprecated | Preserves the hardened V2 wire contract during the compatibility window. No production header may newly adopt it. |
+| `RequestHeaderCodec` | Deprecated | Preserves the original request-header derive for downstream source compatibility. |
+| `RemotingSerializable` | Utility | Implements the remoting serialization helper for a type. |
 
-| Macro | Status | What it generates |
-|-------|--------|-------------------|
-| `RequestHeaderCodecV2` | Primary | `CommandCustomHeader::to_map`, allocation-aware `encode_into_map`, and borrowed `FromMap::from` generation for named Rust structs, with deterministic aliases, required-field checks, generics, and flattened nested headers. |
-| `RequestHeaderCodec` | Compatibility | Earlier request-header codec derive with Java-style camelCase keys, `#[required]`, optional fields, primitive parsing, and flattened nested headers. |
-| `RemotingSerializable` | Utility | Implements `crate::protocol::RemotingSerializable` for a type. In most current remoting paths, serde-backed blanket implementations are preferred. |
+All registered production request and response headers use V3. Legacy derives remain callable for at least one
+release window and will only be removed in a future breaking release.
 
-## How It Fits
+## Quick start
 
-```text
-typed protocol header struct
-        |
-        | #[derive(RequestHeaderCodecV2)]
-        v
-generated constants + CommandCustomHeader::encode_into_map()
-        |
-        v
-RocketMQ remoting ext fields: HashMap<CheetahString, CheetahString>
-        |
-        v
-generated FromMap::from() with required-field validation and parsing
-```
-
-The generated code targets the public protocol contracts from `rocketmq-protocol`:
-
-- `rocketmq_protocol::protocol::command_custom_header::CommandCustomHeader`
-- `rocketmq_protocol::protocol::command_custom_header::FromMap`
-- `rocketmq_protocol::HeaderMap`
-
-The derive resolves `rocketmq-protocol` even when the dependency is renamed in `Cargo.toml`. An explicit path can be
-provided for generated or re-exported protocol APIs:
+V3 uses dedicated `#[header(...)]` metadata as the only RocketMQ wire contract. Serde attributes remain independent
+and must not be used to infer header keys, defaults, aliases, or flattening.
 
 ```rust
-#[derive(RequestHeaderCodecV2)]
-#[request_header_codec_v2(crate = "path::to::protocol_api")]
+use cheetah_string::CheetahString;
+use rocketmq_macros::RequestHeaderCodecV3;
+
+#[derive(Debug, RequestHeaderCodecV3)]
+#[header(
+    type_id = "example::SendMessageRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.SendMessageRequestHeader"
+)]
+struct SendMessageRequestHeader {
+    #[header(required)]
+    producer_group: CheetahString,
+    #[header(required)]
+    topic: CheetahString,
+    #[header(default, default_semantic = "literal:0")]
+    sys_flag: i32,
+    batch: Option<bool>,
+}
+```
+
+The generated implementation provides:
+
+- `HeaderCodec` with a stable type ID and typed field/flatten schema;
+- `CommandCustomHeader` and `FromMap` compatibility adapters;
+- canonical-key and decode-alias resolution with deterministic conflict handling;
+- explicit required/default/validation/range behavior;
+- zero-copy borrowed field-source decoding where the input supports it;
+- `MapOnly` encoding by default and generated direct encoding only for explicitly reviewed `fast` headers.
+
+## Metadata rules
+
+Container metadata:
+
+| Attribute | Meaning |
+| --- | --- |
+| `type_id = "..."` | Required stable Rust schema identity. |
+| `java_class = "..."` | Java oracle FQCN when the Rust type has a Java peer. Omit it for Rust-only headers. |
+| `crate = "path"` | Optional protocol-crate override, including renamed dependencies. |
+| `fast` | Enables generated direct encoding only after correctness and performance review. |
+| `validate = "path"` | Runs a typed validation hook before the first encode mutation and after decode. |
+| `legacy_shim = "manual"` | Avoids duplicate compatibility impls when an audited manual adapter exists. |
+
+Field metadata:
+
+| Attribute | Meaning |
+| --- | --- |
+| `required` | Missing input is an error. |
+| `default` / `default_with = "path"` | Explicit missing-field behavior; pair it with `default_semantic`. |
+| `key = "..."` | Canonical wire key. The Rust field name is used when omitted. |
+| `alias = "..."` | Decode-only legacy key. V3 never emits aliases. |
+| `flatten, presence = "always|any"` | Nested header inheritance/presence contract. |
+| `range = "i32|i64"` | Restricts an unsigned Rust field to the corresponding Java signed domain. |
+
+Do not write `java_type` on production fields. V3 infers the ordinary wire kind from the Rust type. Use `range`
+only for unsigned Rust fields that are constrained by a Java signed `int` or `long`; signed Rust fields and
+Rust-only unsigned fields do not need it.
+
+## Runtime paths and fallback
+
+V3 is the production default because every registered header implements its typed codec and object-safe
+compatibility adapter. A normal header reports `MapOnly`; the remoting encoder materializes canonical extension
+fields without relying on mutable `Arc` access. A reviewed hot header may report `DirectBinary` for ROCKETMQ frames
+and may provide direct JSON fields. If a command already contains materialized or dynamic fields, the same typed
+schema resolves collisions and the map path remains authoritative.
+
+This fallback is per header and per command. It does not change the wire contract, and it avoids adding a global
+branch or environment lookup to every message.
+
+## Migrating from V2
+
+V2 metadata is not silently reinterpreted. Review it against the fixed Java schema and convert it explicitly:
+
+| V2 source | V3 decision |
+| --- | --- |
+| `#[required]` | `#[header(required)]` |
+| `serde(rename = "...")` | `#[header(key = "...")]` when it is a wire key |
+| `serde(alias = "...")` | `#[header(alias = "...")]` with an explicit conflict policy when required |
+| `serde(default)` | `#[header(default, default_semantic = "literal:...")]` or reviewed `default_with` |
+| `serde(flatten)` | `#[header(flatten, presence = "always|any")]` |
+| unsigned field matching Java `int`/`long` | `range = "i32"` / `range = "i64"` |
+
+Keep V2 only while migrating an existing downstream model. New RocketMQ-Rust production headers are rejected by
+the migration guard unless they use V3 and are registered in the checked-in schema inventory.
+
+## Renamed protocol dependency
+
+The derive resolves `rocketmq-protocol` through Cargo metadata. Generated/re-exported environments can override it:
+
+```rust
+#[derive(RequestHeaderCodecV3)]
+#[header(type_id = "example::Header", crate = "protocol_api")]
 struct Header {
+    #[header(required)]
     queue_id: i32,
 }
 ```
 
-## Quick Start
+The standalone `tests/fixtures/renamed-consumer` project verifies both the V3 path and retained V2 compatibility.
 
-Use `RequestHeaderCodecV2` on a named struct that represents a RocketMQ remoting header:
-
-```rust
-use rocketmq_macros::RequestHeaderCodecV2;
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
-#[serde(rename_all = "camelCase")]
-pub struct SendMessageRequestHeader {
-    #[required]
-    pub producer_group: cheetah_string::CheetahString,
-    #[required]
-    pub topic: cheetah_string::CheetahString,
-    pub queue_id: Option<i32>,
-    pub sys_flag: i32,
-    pub born_timestamp: i64,
-    pub batch: Option<bool>,
-}
-```
-
-The derive generates:
-
-- associated string constants for the wire keys;
-- `CommandCustomHeader::to_map`, omitting `None` values;
-- `CommandCustomHeader::encode_into_map`, writing flattened fields into one destination map;
-- `FromMap::from`, converting `CheetahString` map values back into typed fields;
-- required-field errors for fields annotated with `#[required]`;
-- default values for missing non-required, non-`Option` fields.
-
-## Field Mapping
-
-| Rust field shape | Serialization behavior | Deserialization behavior |
-|------------------|------------------------|--------------------------|
-| `CheetahString` | Insert directly into the ext-field map. | Read directly, or default when not required. |
-| `String` | Convert to `CheetahString`. | Convert back to `String`. |
-| Primitive types | Convert with `to_string()`. | Parse with `FromStr`; required fields return a typed header error on parse failure. |
-| `Option<T>` | Insert only when `Some`. | Missing values become `None`; present primitive values are parsed. |
-| `#[serde(flatten)]` nested header | Merge the nested header map. | Reconstruct by calling the nested type's `FromMap::from`. |
-
-`RequestHeaderCodecV2` uses the field name converted from snake_case to camelCase unless a `serde(rename = "...")`
-attribute is present. `serde(alias = "...")` values are checked in declaration order during decoding, after the
-canonical key. Canonical values therefore win independently of `HashMap` iteration order.
-
-Invalid combinations are rejected at compile time, including tuple/unit structs, enums, unions, empty or colliding
-wire keys, `#[required] Option<T>`, required fields with `serde(default)`, and scalar fields with `serde(flatten)`.
-Key collisions inside flattened child headers are checked by the repository schema comparator because a derive macro
-cannot inspect another type's fields.
-
-## Required Fields
-
-`#[required]` marks a header field that must be present during `FromMap::from`:
-
-```rust
-#[derive(RequestHeaderCodecV2)]
-pub struct QueryMessageRequestHeader {
-    #[required]
-    pub topic: cheetah_string::CheetahString,
-    pub key: Option<cheetah_string::CheetahString>,
-}
-```
-
-This mirrors the intent of Java RocketMQ's `@CFNotNull` annotation. Missing required fields return
-`RocketMQError::DeserializeHeaderError` with the generated wire-key name.
-
-## Crate Layout
+## Crate layout
 
 | Path | Purpose |
-|------|---------|
-| [`src/lib.rs`](src/lib.rs) | Public proc-macro entry points and shared type helpers. |
-| [`src/request_header_custom.rs`](src/request_header_custom.rs) | Legacy `RequestHeaderCodec` expansion logic. |
-| [`src/request_header_codec_v2/`](src/request_header_codec_v2/) | V2 attribute parsing, semantic model, validation, and code generation. |
-| [`src/remoting_serializable.rs`](src/remoting_serializable.rs) | `RemotingSerializable` derive expansion. |
-| [`Cargo.toml`](Cargo.toml) | Proc-macro crate configuration and macro parsing dependencies. |
+| --- | --- |
+| [`src/lib.rs`](src/lib.rs) | Public derive entry points and shared parsing helpers. |
+| [`src/request_header_codec_v3/`](src/request_header_codec_v3/) | V3 metadata, semantic model, validation, and code generation. |
+| [`src/request_header_codec_v2/`](src/request_header_codec_v2/) | Deprecated V2 implementation retained during the compatibility window. |
+| [`src/request_header_custom.rs`](src/request_header_custom.rs) | Deprecated original derive implementation. |
+| [`src/remoting_serializable.rs`](src/remoting_serializable.rs) | Remoting serialization derive. |
 
-## Requirements
-
-- Stable Rust `1.95.0`, using the pinned repository toolchain.
-- The repository toolchain from [`../rust-toolchain.toml`](../rust-toolchain.toml).
-- A direct or renamed `rocketmq-protocol` dependency, or an explicit `request_header_codec_v2(crate = "...")` path.
-
-## Installation
-
-Inside this workspace:
-
-```toml
-[dependencies]
-rocketmq-macros = { path = "../rocketmq-macros" }
-```
-
-For external consumers:
-
-```toml
-[dependencies]
-rocketmq-macros = "1.0.0"
-```
-
-Renamed dependencies are supported without source changes. The standalone fixture under
-`tests/fixtures/renamed-consumer` verifies this contract with an offline Cargo check.
+No Java checkout is accessed during Cargo builds. Java schemas, golden frames, migration state, and performance
+evidence are governed by the repository's `scripts/request-header-codec` assets.
 
 ## Validation
 
-Focused checks for this crate:
-
-```bash
+```powershell
+python scripts/request-header-codec/migrate.py check
+python scripts/request-header-codec/compare_header_schema.py
 cargo test -p rocketmq-macros --lib
-cargo test -p rocketmq-protocol --test request_header_codec_v2_wire_snapshot
+cargo test -p rocketmq-protocol --test request_header_codec_v3_ui
 cargo test -p rocketmq-protocol --test request_header_codec_v2_ui
-cargo check --offline --manifest-path rocketmq-macros/tests/fixtures/renamed-consumer/Cargo.toml
-```
-
-Because the macro is consumed by most protocol headers, validate the protocol crate after changing generation logic:
-
-```bash
-cargo test -p rocketmq-protocol --lib
-```
-
-Workspace-level Rust validation is run from the repository root when Rust code changes:
-
-```bash
-cargo fmt --all
-cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
+cargo test -p rocketmq-protocol --test request_header_codec_v2_wire_snapshot
+cargo check --locked --offline --manifest-path rocketmq-macros/tests/fixtures/renamed-consumer/Cargo.toml
 ```
 
 ## License

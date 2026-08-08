@@ -2,178 +2,140 @@
 
 [English](README.md) | [简体中文](README-zh_cn.md)
 
-RocketMQ-Rust protocol 类型、请求头和 remoting 序列化辅助能力使用的 procedural macros。
+RocketMQ-Rust 协议类型和 Remoting Header 使用的过程宏。
 
-`rocketmq-macros` 是 RocketMQ-Rust workspace 内部使用的小型 proc-macro crate，用于消除 request/response header
-定义中的重复 protocol glue。它的核心职责是为 RocketMQ remoting header 生成 `CommandCustomHeader` 和 `FromMap`
-实现，在保持 Java 兼容 wire key 的同时，让 Rust 结构体保持类型化和可维护。
+`rocketmq-macros` 是编译期基础设施。多数应用代码应使用上层 client、broker 或 remoting crate，不应直接依赖这些宏。
 
-该 crate 是基础设施，不是运行时组件。大多数应用代码应使用更高层的 `rocketmq-remoting`、`rocketmq-client-rust`、
-`rocketmq-broker` 或服务 crate，而不是直接依赖这些宏。
+## Request Header Derive
 
-## 能力边界
+| 宏 | 状态 | 用途 |
+| --- | --- | --- |
+| `RequestHeaderCodecV3` | 推荐 | 生成类型化 map/source codec、wire schema、校验、键解析、兼容适配器，以及经过审查的可选直接编码。 |
+| `RequestHeaderCodecV2` | 已废弃 | 在兼容窗口内保留加固后的 V2 wire 契约；生产 Header 禁止新增使用。 |
+| `RequestHeaderCodec` | 已废弃 | 仅为下游源码兼容保留最早版本的 Request Header derive。 |
+| `RemotingSerializable` | 工具 | 为类型生成 Remoting 序列化辅助实现。 |
 
-| 宏 | 状态 | 生成能力 |
-|----|------|----------|
-| `RequestHeaderCodecV2` | 主用 | 为具名 Rust struct 生成 `CommandCustomHeader::to_map`、低分配 `encode_into_map` 和借用式 `FromMap::from`，支持确定性 alias、required、泛型和 flattened nested header。 |
-| `RequestHeaderCodec` | 兼容 | 早期 request-header codec derive，支持 Java 风格 camelCase key、`#[required]`、可选字段、primitive parse 和 flattened nested header。 |
-| `RemotingSerializable` | 工具 | 为类型实现 `crate::protocol::RemotingSerializable`。当前多数 remoting 路径优先使用 serde-backed blanket impl。 |
+仓库中登记的全部生产请求头和响应头都已使用 V3。旧 derive 至少保留一个发布窗口，只会在未来的破坏性版本中删除。
 
-## 工作方式
+## 快速开始
 
-```text
-typed protocol header struct
-        |
-        | #[derive(RequestHeaderCodecV2)]
-        v
-generated constants + CommandCustomHeader::encode_into_map()
-        |
-        v
-RocketMQ remoting ext fields: HashMap<CheetahString, CheetahString>
-        |
-        v
-generated FromMap::from() with required-field validation and parsing
-```
-
-生成代码面向 `rocketmq-protocol` 的公共 contract：
-
-- `rocketmq_protocol::protocol::command_custom_header::CommandCustomHeader`
-- `rocketmq_protocol::protocol::command_custom_header::FromMap`
-- `rocketmq_protocol::HeaderMap`
-
-derive 能自动解析 `Cargo.toml` 中重命名后的 `rocketmq-protocol` 依赖。生成代码或 re-export 场景也可以显式指定路径：
+V3 只把专用 `#[header(...)]` 元数据作为 RocketMQ wire 契约。Serde 属性继续独立服务 JSON/DTO，不能用于推断 Header 的 key、default、alias 或 flatten。
 
 ```rust
-#[derive(RequestHeaderCodecV2)]
-#[request_header_codec_v2(crate = "path::to::protocol_api")]
+use cheetah_string::CheetahString;
+use rocketmq_macros::RequestHeaderCodecV3;
+
+#[derive(Debug, RequestHeaderCodecV3)]
+#[header(
+    type_id = "example::SendMessageRequestHeader",
+    java_class = "org.apache.rocketmq.remoting.protocol.header.SendMessageRequestHeader"
+)]
+struct SendMessageRequestHeader {
+    #[header(required)]
+    producer_group: CheetahString,
+    #[header(required)]
+    topic: CheetahString,
+    #[header(default, default_semantic = "literal:0")]
+    sys_flag: i32,
+    batch: Option<bool>,
+}
+```
+
+生成结果包括：
+
+- 带稳定类型 ID 和字段/flatten schema 的 `HeaderCodec`；
+- `CommandCustomHeader` 与 `FromMap` 兼容适配器；
+- canonical key 与 decode alias 的确定性解析和冲突处理；
+- 显式 required/default/validation/range 语义；
+- 输入支持时的借用式、零拷贝 field-source 解码；
+- 默认 `MapOnly` 编码，以及仅对显式审查过的 `fast` Header 生成直接编码。
+
+## 元数据规则
+
+容器属性：
+
+| 属性 | 含义 |
+| --- | --- |
+| `type_id = "..."` | 必填的稳定 Rust schema 标识。 |
+| `java_class = "..."` | 存在 Java 对应类型时填写 Java FQCN；Rust-only Header 不填写。 |
+| `crate = "path"` | 可选的 protocol crate 路径覆盖，支持依赖重命名。 |
+| `fast` | 只有完成正确性和性能审查后才启用生成式直接编码。 |
+| `validate = "path"` | 编码首次写入前和解码完成后执行类型化校验。 |
+| `legacy_shim = "manual"` | 已有审计过的手工兼容实现时避免生成重复实现。 |
+
+字段属性：
+
+| 属性 | 含义 |
+| --- | --- |
+| `required` | 输入缺失时报错。 |
+| `default` / `default_with = "path"` | 显式定义字段缺失行为，并同时声明 `default_semantic`。 |
+| `key = "..."` | canonical wire key；省略时使用 Rust 字段名。 |
+| `alias = "..."` | 仅用于解码的历史 key；V3 不会输出 alias。 |
+| `flatten, presence = "always|any"` | 嵌套 Header 的继承/存在性契约。 |
+| `range = "i32|i64"` | 把无符号 Rust 字段限制到对应 Java 有符号域。 |
+
+生产字段不填写 `java_type`。V3 会根据 Rust 类型推断普通 wire kind。只有当无符号 Rust 字段受 Java 有符号 `int` 或 `long` 约束时才填写 `range`；有符号 Rust 字段和 Rust-only 无符号字段都不需要填写。
+
+## 运行路径与回退
+
+所有登记 Header 都实现了类型化 codec 和对象安全兼容适配器，因此 V3 已是生产默认路径。普通 Header 返回 `MapOnly`，Remoting 编码器会物化 canonical extension fields，不依赖可变 `Arc` 访问。经过审查的热 Header 可以对 ROCKETMQ frame 使用 `DirectBinary`，并可提供直接 JSON fields。如果命令已经包含物化字段或动态字段，同一份类型化 schema 会负责冲突解析，map 路径仍是权威回退。
+
+回退按 Header 和命令生效，不改变 wire 契约，也不会在每条消息上增加全局开关或环境变量查询。
+
+## 从 V2 迁移
+
+V2 元数据不会被静默解释成 V3。必须对照固定 Java schema 审核后显式转换：
+
+| V2 来源 | V3 决策 |
+| --- | --- |
+| `#[required]` | `#[header(required)]` |
+| `serde(rename = "...")` | 确认是 wire key 后改为 `#[header(key = "...")]` |
+| `serde(alias = "...")` | 改为 `#[header(alias = "...")]`，必要时明确冲突策略 |
+| `serde(default)` | 改为带 `default_semantic` 的 `header(default)` 或已审查的 `default_with` |
+| `serde(flatten)` | 改为 `#[header(flatten, presence = "always|any")]` |
+| 对应 Java `int`/`long` 的无符号字段 | `range = "i32"` / `range = "i64"` |
+
+V2 只应用于尚未完成迁移的既有下游模型。RocketMQ-Rust 新增生产 Header 必须使用 V3，并进入 checked-in schema inventory，否则 migration guard 会拒绝。
+
+## 重命名 Protocol 依赖
+
+derive 会通过 Cargo 元数据解析 `rocketmq-protocol`。生成代码或 re-export 场景可显式覆盖：
+
+```rust
+#[derive(RequestHeaderCodecV3)]
+#[header(type_id = "example::Header", crate = "protocol_api")]
 struct Header {
+    #[header(required)]
     queue_id: i32,
 }
 ```
 
-## 快速开始
-
-在表示 RocketMQ remoting header 的具名 struct 上使用 `RequestHeaderCodecV2`：
-
-```rust
-use rocketmq_macros::RequestHeaderCodecV2;
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
-#[serde(rename_all = "camelCase")]
-pub struct SendMessageRequestHeader {
-    #[required]
-    pub producer_group: cheetah_string::CheetahString,
-    #[required]
-    pub topic: cheetah_string::CheetahString,
-    pub queue_id: Option<i32>,
-    pub sys_flag: i32,
-    pub born_timestamp: i64,
-    pub batch: Option<bool>,
-}
-```
-
-该 derive 会生成：
-
-- wire key 对应的 associated string constants；
-- `CommandCustomHeader::to_map`，并省略 `None` 值；
-- `CommandCustomHeader::encode_into_map`，将 flattened 字段直接写入同一个目标 map；
-- `FromMap::from`，将 `CheetahString` map value 转回类型化字段；
-- `#[required]` 字段的缺失校验；
-- 非 required、非 `Option` 字段缺失时使用默认值。
-
-## 字段映射
-
-| Rust 字段形态 | 序列化行为 | 反序列化行为 |
-|---------------|------------|--------------|
-| `CheetahString` | 直接写入 ext-field map。 | 直接读取，非 required 缺失时使用默认值。 |
-| `String` | 转换为 `CheetahString`。 | 转回 `String`。 |
-| Primitive 类型 | 使用 `to_string()` 转换。 | 使用 `FromStr` 解析；required 字段解析失败时返回 header 错误。 |
-| `Option<T>` | 仅在 `Some` 时写入。 | 缺失时为 `None`；存在的 primitive value 会被解析。 |
-| `#[serde(flatten)]` nested header | 合并 nested header map。 | 通过 nested type 的 `FromMap::from` 重建。 |
-
-`RequestHeaderCodecV2` 默认将 snake_case 字段名转换为 camelCase wire key；如果存在 `serde(rename = "...")`，则使用
-rename 指定的 wire key。`serde(alias = "...")` 按声明顺序在 canonical key 之后查找，因此结果不受
-`HashMap` 迭代顺序影响。
-
-tuple/unit struct、enum、union、空或冲突 wire key、`#[required] Option<T>`、required 与
-`serde(default)` 组合、scalar 与 `serde(flatten)` 组合都会在编译期报错。跨 flattened child 的 key
-冲突由仓库 schema comparator 检查，因为 derive macro 无法检查另一类型的字段。
-
-## Required 字段
-
-`#[required]` 表示 `FromMap::from` 时必须存在该 header 字段：
-
-```rust
-#[derive(RequestHeaderCodecV2)]
-pub struct QueryMessageRequestHeader {
-    #[required]
-    pub topic: cheetah_string::CheetahString,
-    pub key: Option<cheetah_string::CheetahString>,
-}
-```
-
-这对应 Java RocketMQ 中 `@CFNotNull` 的意图。缺失 required 字段会返回
-`RocketMQError::DeserializeHeaderError`，错误信息使用生成后的 wire-key name。
+独立项目 `tests/fixtures/renamed-consumer` 同时验证 V3 路径和保留的 V2 兼容能力。
 
 ## Crate 结构
 
-| 路径 | 职责 |
-|------|------|
-| [`src/lib.rs`](src/lib.rs) | 公共 proc-macro 入口和共享类型辅助函数。 |
-| [`src/request_header_custom.rs`](src/request_header_custom.rs) | 旧版 `RequestHeaderCodec` 展开逻辑。 |
-| [`src/request_header_codec_v2/`](src/request_header_codec_v2/) | V2 属性解析、语义模型、校验和代码生成。 |
-| [`src/remoting_serializable.rs`](src/remoting_serializable.rs) | `RemotingSerializable` derive 展开逻辑。 |
-| [`Cargo.toml`](Cargo.toml) | Proc-macro crate 配置和宏解析依赖。 |
+| 路径 | 用途 |
+| --- | --- |
+| [`src/lib.rs`](src/lib.rs) | 公开 derive 入口和共享解析辅助函数。 |
+| [`src/request_header_codec_v3/`](src/request_header_codec_v3/) | V3 元数据、语义模型、校验和代码生成。 |
+| [`src/request_header_codec_v2/`](src/request_header_codec_v2/) | 兼容窗口内保留的 V2 实现。 |
+| [`src/request_header_custom.rs`](src/request_header_custom.rs) | 已废弃的最早版本 derive 实现。 |
+| [`src/remoting_serializable.rs`](src/remoting_serializable.rs) | Remoting 序列化 derive。 |
 
-## 环境要求
-
-- Stable Rust `1.95.0`，使用仓库固定的工具链。
-- 使用仓库中的 [`../rust-toolchain.toml`](../rust-toolchain.toml) 工具链。
-- 直接或重命名的 `rocketmq-protocol` 依赖，或显式 `request_header_codec_v2(crate = "...")` 路径。
-
-## 安装
-
-在当前 workspace 内使用：
-
-```toml
-[dependencies]
-rocketmq-macros = { path = "../rocketmq-macros" }
-```
-
-外部项目使用：
-
-```toml
-[dependencies]
-rocketmq-macros = "1.0.0"
-```
-
-依赖重命名无需修改源代码。`tests/fixtures/renamed-consumer` 会通过离线 Cargo check 验证该契约。
+Cargo 构建不会访问 Java checkout。Java schema、golden frame、迁移状态和性能证据由仓库中的 `scripts/request-header-codec` 资产治理。
 
 ## 验证
 
-该 crate 的聚焦检查：
-
-```bash
+```powershell
+python scripts/request-header-codec/migrate.py check
+python scripts/request-header-codec/compare_header_schema.py
 cargo test -p rocketmq-macros --lib
-cargo test -p rocketmq-protocol --test request_header_codec_v2_wire_snapshot
+cargo test -p rocketmq-protocol --test request_header_codec_v3_ui
 cargo test -p rocketmq-protocol --test request_header_codec_v2_ui
-cargo check --offline --manifest-path rocketmq-macros/tests/fixtures/renamed-consumer/Cargo.toml
-```
-
-由于该宏被大多数 protocol header 使用，修改展开逻辑后还应验证 protocol crate：
-
-```bash
-cargo test -p rocketmq-protocol --lib
-```
-
-如果修改 Rust 代码，需要在仓库根目录执行 workspace 级验证：
-
-```bash
-cargo fmt --all
-cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
+cargo test -p rocketmq-protocol --test request_header_codec_v2_wire_snapshot
+cargo check --locked --offline --manifest-path rocketmq-macros/tests/fixtures/renamed-consumer/Cargo.toml
 ```
 
 ## License
 
-RocketMQ-Rust 使用 Apache License 2.0。详见 [../LICENSE-APACHE](../LICENSE-APACHE)。
+RocketMQ-Rust 使用 Apache License 2.0，详见 [../LICENSE-APACHE](../LICENSE-APACHE)。

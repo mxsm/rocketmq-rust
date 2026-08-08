@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![allow(deprecated)]
+
 use cheetah_string::CheetahString;
 use rocketmq_macros::{RequestHeaderCodecV2, RequestHeaderCodecV3};
 use rocketmq_protocol::protocol::header_codec::{
