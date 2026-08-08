@@ -1726,7 +1726,7 @@ where
         &self,
         channel: &Channel,
         _ctx: &ConnectionHandlerContext,
-        _request: &RemotingCommand,
+        request: &RemotingCommand,
         request_header: &SendMessageRequestHeader,
         response: &mut RemotingCommand,
     ) where
@@ -1759,6 +1759,12 @@ where
                 "Sending message to topic[{}] is forbidden.",
                 request_header.topic.as_str()
             ));
+            return;
+        }
+
+        if let Some(remark) = message_body_limit_violation(request, policy.max_message_size) {
+            response.with_code(ResponseCode::MessageIllegal);
+            response.with_remark(remark);
             return;
         }
         let mut topic_config = self.context.topics.select_topic_config(&request_header.topic);
@@ -1862,6 +1868,13 @@ fn rewrite_response_for_static_topic(
     None
 }
 
+fn message_body_limit_violation(request: &RemotingCommand, configured_max_message_size: i32) -> Option<String> {
+    let body_size = request.body().map_or(0, |body| body.len());
+    let max_message_size = usize::try_from(configured_max_message_size).unwrap_or_default();
+    (body_size > max_message_size)
+        .then(|| format!("message body size {body_size} exceeds the configured maximum {max_message_size} bytes"))
+}
+
 fn message_store_not_initialized() -> RocketMQError {
     RocketMQError::not_initialized("message_store")
 }
@@ -1871,6 +1884,7 @@ mod tests {
     use std::future::Future;
 
     use crate::config::broker_config::BrokerConfig;
+    use rocketmq_protocol::code::request_code::RequestCode;
     use rocketmq_protocol::code::response_code::RemotingSysResponseCode;
     use rocketmq_protocol::code::response_code::ResponseCode;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
@@ -1891,6 +1905,7 @@ mod tests {
     use super::has_registered_send_message_hooks;
     use super::map_put_status_to_response;
     use super::map_store_api_error;
+    use super::message_body_limit_violation;
     use super::message_store_not_initialized;
     use super::store_health_reject_remark;
     use super::store_health_reject_remark_from;
@@ -1976,6 +1991,22 @@ mod tests {
         let error = message_store_not_initialized();
 
         assert_eq!(error.kind(), rocketmq_error::ErrorKind::NotInitialized);
+    }
+
+    #[test]
+    fn single_and_batch_requests_share_the_configured_message_body_limit() {
+        let max_message_size = 1024;
+
+        for request_code in [RequestCode::SendMessage, RequestCode::SendBatchMessage] {
+            let exact =
+                RemotingCommand::create_remoting_command(request_code).set_body(vec![0_u8; max_message_size as usize]);
+            let oversized =
+                RemotingCommand::create_remoting_command(request_code)
+                    .set_body(vec![0_u8; max_message_size as usize + 1]);
+
+            assert!(message_body_limit_violation(&exact, max_message_size).is_none());
+            assert!(message_body_limit_violation(&oversized, max_message_size).is_some());
+        }
     }
 
     #[test]

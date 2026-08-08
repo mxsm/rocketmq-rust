@@ -53,11 +53,41 @@ fn oversized_frame_is_rejected_before_body_allocation() {
 }
 
 #[test]
-fn legacy_large_frame_acceptance_requires_an_explicit_owner_profile() {
+fn legacy_large_body_acceptance_requires_an_explicit_owner_profile() {
     let canonical = FrameLimits::default();
     let legacy = FrameLimits::legacy_compatibility();
 
-    assert!(canonical.max_frame_bytes < 16 * 1024 * 1024);
+    assert_eq!(canonical.max_frame_bytes, 16 * 1024 * 1024);
+    assert_eq!(canonical.max_header_bytes, 1024 * 1024);
+    assert_eq!(canonical.max_body_bytes, 4 * 1024 * 1024);
     assert_eq!(legacy.max_frame_bytes, 16 * 1024 * 1024);
+    assert_eq!(legacy.max_body_bytes, 16 * 1024 * 1024);
     assert_eq!(canonical.initial_read_bytes, 8 * 1024);
+}
+
+#[test]
+fn canonical_limits_accept_exact_body_limit_with_non_empty_header() {
+    let limits = FrameLimits::default();
+    let mut codec = RemotingCommandCodec::with_limits(limits);
+    let command = RemotingCommand::create_remoting_command(105).set_body(vec![0_u8; limits.max_body_bytes]);
+    let mut encoded = BytesMut::new();
+
+    codec.encode(command, &mut encoded).unwrap();
+    assert!(encoded.len() > limits.max_body_bytes);
+
+    let decoded = codec.decode(&mut encoded).unwrap().unwrap();
+    assert_eq!(decoded.body().unwrap().len(), limits.max_body_bytes);
+}
+
+#[test]
+fn canonical_limits_reject_announced_body_over_limit_before_allocation() {
+    let limits = FrameLimits::default();
+    let announced_total = 4 + limits.max_body_bytes + 1;
+    let mut announced = BytesMut::with_capacity(8);
+    announced.extend_from_slice(&(announced_total as i32).to_be_bytes());
+    announced.extend_from_slice(&0_u32.to_be_bytes());
+    let mut codec = RemotingCommandCodec::with_limits(limits);
+
+    assert!(codec.decode(&mut announced).is_err());
+    assert!(announced.capacity() < 1024);
 }
