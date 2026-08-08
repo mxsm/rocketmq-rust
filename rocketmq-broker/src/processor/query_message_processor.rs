@@ -31,10 +31,10 @@ use rocketmq_store::SelectMappedBufferResult;
 use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreErrorKind;
 use rocketmq_store_api::StoreOperation;
-use rocketmq_transport::request_code_not_supported_with_remark_and_opaque;
-use rocketmq_transport::Channel;
-use rocketmq_transport::ConnectionHandlerContext;
-use rocketmq_transport::RequestProcessor;
+use rocketmq_transport::api::v1::request_code_not_supported_with_remark_and_opaque;
+use rocketmq_transport::api::v1::Channel;
+use rocketmq_transport::api::v1::ConnectionHandlerContext;
+use rocketmq_transport::api::v1::RequestProcessor;
 use tracing::info;
 use tracing::warn;
 

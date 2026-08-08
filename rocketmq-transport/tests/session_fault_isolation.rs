@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![cfg(feature = "test-support")]
+
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -23,16 +25,16 @@ use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::RuntimeContext;
 use rocketmq_runtime::ShutdownDeadline;
-use rocketmq_transport::connect_with_config;
-use rocketmq_transport::AdmissionController;
-use rocketmq_transport::AdmissionLimits;
-use rocketmq_transport::Connection;
-use rocketmq_transport::FrameLimits;
-use rocketmq_transport::RequestDeadline;
-use rocketmq_transport::SessionProcessor as RequestProcessor;
-use rocketmq_transport::SessionTransportServer;
-use rocketmq_transport::SessionTransportServerConfig;
-use rocketmq_transport::TlsConfig;
+use rocketmq_transport::api::v1::AdmissionController;
+use rocketmq_transport::api::v1::AdmissionLimits;
+use rocketmq_transport::api::v1::FrameLimits;
+use rocketmq_transport::api::v1::RequestDeadline;
+use rocketmq_transport::api::v1::TlsConfig;
+use rocketmq_transport::test_support::connect_with_config;
+use rocketmq_transport::test_support::Connection;
+use rocketmq_transport::test_support::SessionProcessor as RequestProcessor;
+use rocketmq_transport::test_support::SessionTransportServer;
+use rocketmq_transport::test_support::SessionTransportServerConfig;
 
 struct FaultSelectingProcessor;
 

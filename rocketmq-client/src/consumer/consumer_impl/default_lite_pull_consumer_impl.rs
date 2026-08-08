@@ -52,7 +52,7 @@ use rocketmq_runtime::FullPolicy;
 use rocketmq_runtime::QueueSnapshot;
 use rocketmq_runtime::RateLimit;
 use rocketmq_runtime::ResourceBudget;
-use rocketmq_transport::RPCHook;
+use rocketmq_transport::api::v1::RPCHook;
 use serde::Serialize;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;

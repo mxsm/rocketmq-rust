@@ -470,7 +470,7 @@ impl ClientScheduledTaskHandle {
     }
 
     pub(crate) fn task_count(&self) -> usize {
-        self.task_group.task_count() + self.scheduled_tasks.group().task_count()
+        self.task_group.task_count()
     }
 
     pub(crate) fn schedule_snapshot(&self) -> Vec<ScheduledTaskSnapshot> {

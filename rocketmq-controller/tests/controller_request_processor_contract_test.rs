@@ -37,11 +37,11 @@ use rocketmq_protocol::protocol::header::namesrv::broker_request::BrokerHeartbea
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_protocol::protocol::RemotingSerializable;
-use rocketmq_transport::Channel;
-use rocketmq_transport::Connection;
-use rocketmq_transport::ConnectionHandlerContext;
-use rocketmq_transport::ConnectionHandlerContextWrapper;
-use rocketmq_transport::RequestProcessor;
+use rocketmq_transport::api::v1::Channel;
+use rocketmq_transport::api::v1::ConnectionHandlerContext;
+use rocketmq_transport::api::v1::ConnectionHandlerContextWrapper;
+use rocketmq_transport::api::v1::RequestProcessor;
+use rocketmq_transport::test_support::Connection;
 use tokio::time::sleep;
 
 const CLUSTER_NAME: &str = "contract-cluster";

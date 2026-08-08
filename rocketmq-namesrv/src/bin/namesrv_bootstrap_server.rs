@@ -54,7 +54,7 @@ use rocketmq_security_api::SecurityBootstrap;
 use rocketmq_security_api::SecurityBootstrapConfig;
 use rocketmq_security_api::SecurityBootstrapOutcome;
 use rocketmq_security_api::SecurityBootstrapProfile;
-use rocketmq_transport::ServerConfig;
+use rocketmq_transport::api::v1::ServerConfig;
 #[cfg(feature = "embedded-controller")]
 use serde::Deserialize;
 use tracing::info;

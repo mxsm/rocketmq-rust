@@ -47,10 +47,10 @@ use rocketmq_store_api::checkpoint::CheckpointRequest;
 use rocketmq_store_api::checkpoint::CheckpointRestoreVerification;
 use rocketmq_store_api::checkpoint::CheckpointStorageIdentity;
 use rocketmq_store_api::ReleaseCheckpointStore;
-use rocketmq_transport::request_code_not_supported_with_remark;
-use rocketmq_transport::Channel;
-use rocketmq_transport::ConnectionHandlerContext;
-use rocketmq_transport::RequestProcessor;
+use rocketmq_transport::api::v1::request_code_not_supported_with_remark;
+use rocketmq_transport::api::v1::Channel;
+use rocketmq_transport::api::v1::ConnectionHandlerContext;
+use rocketmq_transport::api::v1::RequestProcessor;
 
 use crate::config::broker_config::BrokerConfig;
 

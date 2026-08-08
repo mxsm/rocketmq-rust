@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![cfg(feature = "test-support")]
+
 use std::io::Write;
 use std::sync::Arc;
 use std::time::Duration;
@@ -20,11 +22,11 @@ use rocketmq_protocol::protocol::RemotingCommand;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 use rocketmq_transport::api::v1::file_transfer_snapshot;
+use rocketmq_transport::api::v1::ConnectionState;
 use rocketmq_transport::api::v1::FileRegion;
 use rocketmq_transport::api::v1::FileTransferMode;
 use rocketmq_transport::api::v1::RequestDeadline;
-use rocketmq_transport::Connection;
-use rocketmq_transport::ConnectionState;
+use rocketmq_transport::test_support::Connection;
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;

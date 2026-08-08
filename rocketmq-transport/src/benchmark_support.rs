@@ -36,6 +36,19 @@ use crate::deadline::RequestDeadline;
 use crate::hook_registry::HookRegistry;
 use crate::runtime::RPCHook;
 
+pub use crate::client::connect_with_config;
+pub use crate::codec::remoting_command_codec::RemotingCommandCodec;
+pub use crate::connection::transport_io_snapshot;
+pub use crate::connection::Connection;
+pub use crate::server::run_connected_session;
+pub use crate::server::ConnectionHandler;
+pub use crate::server::SessionHandle;
+pub use crate::server::SessionProcessor;
+pub use crate::server::SessionTransportServer;
+pub use crate::server::SessionTransportServerConfig;
+pub use crate::write_strategy::FrameWriteMode;
+pub use crate::write_strategy::FrameWriter;
+
 /// Same-controller comparison between registry lookup and a prepared session scope.
 pub struct AdmissionHotPathHarness {
     controller: AdmissionController,

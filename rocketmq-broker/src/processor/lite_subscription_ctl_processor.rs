@@ -27,9 +27,9 @@ use rocketmq_protocol::protocol::body::lite_subscription_ctl_request_body::LiteS
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_store::BrokerStorePort;
-use rocketmq_transport::Channel;
-use rocketmq_transport::ConnectionHandlerContext;
-use rocketmq_transport::RequestProcessor;
+use rocketmq_transport::api::v1::Channel;
+use rocketmq_transport::api::v1::ConnectionHandlerContext;
+use rocketmq_transport::api::v1::RequestProcessor;
 use tracing::warn;
 
 use crate::lite::lite_event_dispatcher::LiteEventDispatcher;
@@ -449,10 +449,10 @@ mod tests {
     use rocketmq_protocol::protocol::header::empty_header::EmptyHeader;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     use rocketmq_store::MessageStoreConfig;
-    use rocketmq_transport::Channel;
-    use rocketmq_transport::Connection;
-    use rocketmq_transport::ConnectionHandlerContextWrapper;
-    use rocketmq_transport::RequestProcessor;
+    use rocketmq_transport::api::v1::Channel;
+    use rocketmq_transport::api::v1::ConnectionHandlerContextWrapper;
+    use rocketmq_transport::api::v1::RequestProcessor;
+    use rocketmq_transport::test_support::Connection;
 
     use super::LiteSubscriptionCtlContext;
     use super::LiteSubscriptionCtlPolicy;

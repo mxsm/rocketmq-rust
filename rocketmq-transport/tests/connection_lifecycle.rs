@@ -12,10 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![cfg(feature = "test-support")]
+
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_transport::Connection;
-use rocketmq_transport::ConnectionState;
-use rocketmq_transport::FrameLimits;
+use rocketmq_transport::api::v1::ConnectionState;
+use rocketmq_transport::api::v1::FrameLimits;
+use rocketmq_transport::test_support::Connection;
 
 #[tokio::test]
 async fn loopback_connection_preserves_wire_identity_and_half_close_state() {

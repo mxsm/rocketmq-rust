@@ -21,7 +21,7 @@ use rocketmq_auth::SignatureAlgorithm;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::REDACTED;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_transport::RPCHook;
+use rocketmq_transport::api::v1::RPCHook;
 use smallvec::SmallVec;
 
 use crate::common::session_credentials::SessionCredentials;

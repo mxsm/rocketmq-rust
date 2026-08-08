@@ -24,8 +24,8 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::ResourcePermit;
 use rocketmq_store::ArcMessageFilter;
-use rocketmq_transport::Channel;
-use rocketmq_transport::ConnectionHandlerContext;
+use rocketmq_transport::api::v1::Channel;
+use rocketmq_transport::api::v1::ConnectionHandlerContext;
 
 pub struct PopRequest {
     remoting_command: RemotingCommand,

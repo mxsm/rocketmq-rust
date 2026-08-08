@@ -14,8 +14,8 @@
 
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_transport::RequestOrdering;
-use rocketmq_transport::RequestOrderingKey;
+use rocketmq_transport::api::v1::RequestOrdering;
+use rocketmq_transport::api::v1::RequestOrderingKey;
 
 const CLIENT_LIFECYCLE_KEY: u64 = 0x434c_4945_4e54;
 const SEND_NAMESPACE: u64 = 0x5345_4e44;

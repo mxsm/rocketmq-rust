@@ -29,9 +29,9 @@ use rocketmq_protocol::protocol::header::notification_response_header::Notificat
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::BrokerReadWriteStore;
-use rocketmq_transport::Channel;
-use rocketmq_transport::ConnectionHandlerContext;
-use rocketmq_transport::RequestProcessor;
+use rocketmq_transport::api::v1::Channel;
+use rocketmq_transport::api::v1::ConnectionHandlerContext;
+use rocketmq_transport::api::v1::RequestProcessor;
 use tokio::sync::Mutex as AsyncMutex;
 use tracing::error;
 use tracing::warn;

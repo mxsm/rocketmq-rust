@@ -20,7 +20,7 @@
 use cheetah_string::CheetahString;
 use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::protocol::LanguageCode;
-use rocketmq_transport::TlsConfig;
+use rocketmq_transport::api::v1::TlsConfig;
 
 use super::access_channel::AccessChannel;
 use super::client_config::ClientConfig;

@@ -85,9 +85,9 @@ use rocketmq_security_api::MaintenanceAuthorizationContext;
 use rocketmq_security_api::MaintenanceAuthorizationGrant;
 use rocketmq_security_api::MaintenanceCapability;
 use rocketmq_security_api::MaintenanceRequestClass;
-use rocketmq_transport::Channel;
-use rocketmq_transport::ConnectionHandlerContext;
-use rocketmq_transport::RequestProcessor;
+use rocketmq_transport::api::v1::Channel;
+use rocketmq_transport::api::v1::ConnectionHandlerContext;
+use rocketmq_transport::api::v1::RequestProcessor;
 use tracing::info;
 use tracing::warn;
 /// Timeout for controller operations (in seconds)

@@ -37,9 +37,9 @@ use rocketmq_protocol::protocol::DataVersion;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::BrokerAdminStore;
 use rocketmq_store::CommitLogReadMode;
-use rocketmq_transport::request_code_not_supported_with_remark;
-use rocketmq_transport::Channel;
-use rocketmq_transport::ConnectionHandlerContext;
+use rocketmq_transport::api::v1::request_code_not_supported_with_remark;
+use rocketmq_transport::api::v1::Channel;
+use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use sysinfo::Disks;
 
 use crate::auth::auth_admin_service::AuthAdminService;
@@ -1070,9 +1070,9 @@ mod tests {
     use rocketmq_store::TimerCheckpointSnapshot;
     use rocketmq_store::TimerMessageStore;
     use rocketmq_store::TimerMetricsSerializeWrapper;
-    use rocketmq_transport::Channel;
-    use rocketmq_transport::Connection;
-    use rocketmq_transport::ConnectionHandlerContextWrapper;
+    use rocketmq_transport::api::v1::Channel;
+    use rocketmq_transport::api::v1::ConnectionHandlerContextWrapper;
+    use rocketmq_transport::test_support::Connection;
 
     use crate::broker_runtime::BrokerRuntime;
 

@@ -30,7 +30,7 @@ use criterion::BenchmarkId;
 use criterion::Criterion;
 use criterion::Throughput;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_transport::Connection;
+use rocketmq_transport::benchmark_support::Connection;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
 use tokio::io::ReadBuf;

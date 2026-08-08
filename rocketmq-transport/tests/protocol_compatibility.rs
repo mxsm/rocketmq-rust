@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![cfg(feature = "test-support")]
+
 use bytes::Bytes;
 use bytes::BytesMut;
 use rocketmq_protocol::code::request_code::RequestCode;
@@ -19,7 +21,7 @@ use rocketmq_protocol::code::response_code::RemotingSysResponseCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::client_request_header::GetRouteInfoRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_transport::RemotingCommandCodec;
+use rocketmq_transport::test_support::RemotingCommandCodec;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 

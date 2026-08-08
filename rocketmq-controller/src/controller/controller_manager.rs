@@ -61,13 +61,13 @@ use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
+use rocketmq_transport::api::v1::ChannelEventListener;
+use rocketmq_transport::api::v1::DefaultRequestProcessor;
+use rocketmq_transport::api::v1::RemotingClient;
+use rocketmq_transport::api::v1::ServerConfig;
+use rocketmq_transport::api::v1::TransportClientConfig;
+use rocketmq_transport::api::v1::TransportServer;
 use rocketmq_transport::api::v1::TransportTelemetry;
-use rocketmq_transport::ChannelEventListener;
-use rocketmq_transport::DefaultRequestProcessor;
-use rocketmq_transport::RemotingClient;
-use rocketmq_transport::ServerConfig;
-use rocketmq_transport::TransportClientConfig;
-use rocketmq_transport::TransportServer;
 use tokio::sync::oneshot;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::time::sleep;
@@ -1273,10 +1273,10 @@ mod tests {
     use rocketmq_protocol::protocol::header::controller::register_broker_to_controller_request_header::RegisterBrokerToControllerRequestHeader;
     use rocketmq_protocol::protocol::header::namesrv::broker_request::BrokerHeartbeatRequestHeader;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-    use rocketmq_transport::Channel;
-    use rocketmq_transport::Connection;
-    use rocketmq_transport::ConnectionHandlerContextWrapper;
-    use rocketmq_transport::RequestProcessor;
+    use rocketmq_transport::api::v1::Channel;
+    use rocketmq_transport::api::v1::ConnectionHandlerContextWrapper;
+    use rocketmq_transport::api::v1::RequestProcessor;
+    use rocketmq_transport::test_support::Connection;
 
     fn test_telemetry_handle() -> TelemetryHandle {
         TelemetryHandle::noop()

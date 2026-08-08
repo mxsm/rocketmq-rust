@@ -22,7 +22,7 @@ use rocketmq_model::common::constant::PermName;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_model::common::mix_all;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
-use rocketmq_transport::ClientMetadata;
+use rocketmq_transport::api::v1::ClientMetadata;
 use tracing::warn;
 
 /// Broker-owned publish route containing only queue projection and selection state.

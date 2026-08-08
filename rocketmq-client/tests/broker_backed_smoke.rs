@@ -66,7 +66,7 @@ use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_model::common::message::message_single::Message;
 use rocketmq_model::common::message::MessageTrait;
 use rocketmq_model::common::topic::TopicValidator;
-use rocketmq_transport::RPCHook;
+use rocketmq_transport::api::v1::RPCHook;
 
 mod support;
 

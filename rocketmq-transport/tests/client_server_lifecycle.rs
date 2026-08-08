@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![cfg(feature = "test-support")]
+
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::AtomicUsize;
@@ -35,27 +37,30 @@ use rocketmq_security_api::Secret;
 use rocketmq_security_api::SecurityRequestView;
 use rocketmq_security_api::Signature;
 use rocketmq_security_api::SigningError;
-use rocketmq_transport::transport_io_snapshot;
-use rocketmq_transport::AdmissionClass;
-use rocketmq_transport::AdmissionController;
-use rocketmq_transport::AdmissionLimits;
-use rocketmq_transport::AdmissionResource;
-use rocketmq_transport::AdmissionScope;
-use rocketmq_transport::Connection;
-use rocketmq_transport::ConnectionHandler;
-use rocketmq_transport::OneShotTransportClient;
-use rocketmq_transport::RequestDeadline;
-use rocketmq_transport::ResourceLimit;
-use rocketmq_transport::SessionHandle;
-use rocketmq_transport::SessionProcessor as RequestProcessor;
-use rocketmq_transport::SessionTransportServer;
-use rocketmq_transport::SessionTransportServerConfig;
-use rocketmq_transport::TlsClientConfig;
-use rocketmq_transport::TlsConfig;
-use rocketmq_transport::TlsMode;
-use rocketmq_transport::TlsServerRuntime;
-use rocketmq_transport::TransportListener;
-use rocketmq_transport::TransportSecurity;
+use rocketmq_transport::api::v1::AdmissionClass;
+use rocketmq_transport::api::v1::AdmissionController;
+use rocketmq_transport::api::v1::AdmissionLimits;
+use rocketmq_transport::api::v1::AdmissionResource;
+use rocketmq_transport::api::v1::AdmissionScope;
+use rocketmq_transport::api::v1::OneShotTransportClient;
+use rocketmq_transport::api::v1::RequestDeadline;
+use rocketmq_transport::api::v1::ResourceLimit;
+#[cfg(feature = "tls")]
+use rocketmq_transport::api::v1::TlsClientConfig;
+#[cfg(feature = "tls")]
+use rocketmq_transport::api::v1::TlsConfig;
+use rocketmq_transport::api::v1::TlsMode;
+use rocketmq_transport::api::v1::TlsServerRuntime;
+use rocketmq_transport::api::v1::TransportSecurity;
+#[cfg(feature = "tls")]
+use rocketmq_transport::test_support::transport_io_snapshot;
+use rocketmq_transport::test_support::Connection;
+use rocketmq_transport::test_support::ConnectionHandler;
+use rocketmq_transport::test_support::SessionHandle;
+use rocketmq_transport::test_support::SessionProcessor as RequestProcessor;
+use rocketmq_transport::test_support::SessionTransportServer;
+use rocketmq_transport::test_support::SessionTransportServerConfig;
+use rocketmq_transport::test_support::TransportListener;
 
 struct EchoProcessor;
 
@@ -487,6 +492,7 @@ async fn transport_security_signs_outbound_and_fails_closed_without_a_principal(
 }
 
 #[tokio::test]
+#[cfg(feature = "tls")]
 async fn tls_client_invocation_releases_pending_and_server_ownership() {
     let runtime = RuntimeContext::from_current("transport-tls-client-convergence-test");
     let mut server_config = SessionTransportServerConfig::loopback();

@@ -47,11 +47,11 @@ use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_store::BrokerAdminStore;
-use rocketmq_transport::apply_error_to_response;
-use rocketmq_transport::request_code_not_supported_with_remark;
-use rocketmq_transport::Channel;
-use rocketmq_transport::ConnectionHandlerContext;
-use rocketmq_transport::RequestProcessor;
+use rocketmq_transport::api::v1::apply_error_to_response;
+use rocketmq_transport::api::v1::request_code_not_supported_with_remark;
+use rocketmq_transport::api::v1::Channel;
+use rocketmq_transport::api::v1::ConnectionHandlerContext;
+use rocketmq_transport::api::v1::RequestProcessor;
 use std::sync::Arc;
 use tracing::warn;
 

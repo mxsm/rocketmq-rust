@@ -39,7 +39,7 @@ use rocketmq_model::common::message::message_single::Message;
 use rocketmq_model::common::topic::TopicValidator;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ShutdownReport;
-use rocketmq_transport::RPCHook;
+use rocketmq_transport::api::v1::RPCHook;
 use serde::Serialize;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;

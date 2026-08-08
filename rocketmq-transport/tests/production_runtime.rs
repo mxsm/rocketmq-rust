@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![cfg(feature = "test-support")]
+
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::AtomicUsize;
@@ -20,16 +22,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rocketmq_runtime::RuntimeContext;
-use rocketmq_transport::connect_with_config;
-use rocketmq_transport::AdmissionController;
-use rocketmq_transport::AdmissionLimits;
-use rocketmq_transport::ConnectionHandler;
-use rocketmq_transport::FrameLimits;
-use rocketmq_transport::RequestDeadline;
-use rocketmq_transport::SessionHandle;
-use rocketmq_transport::TlsConfig;
-use rocketmq_transport::TlsServerRuntime;
-use rocketmq_transport::TransportListener;
+use rocketmq_transport::api::v1::AdmissionController;
+use rocketmq_transport::api::v1::AdmissionLimits;
+use rocketmq_transport::api::v1::FrameLimits;
+use rocketmq_transport::api::v1::RequestDeadline;
+use rocketmq_transport::api::v1::TlsConfig;
+use rocketmq_transport::api::v1::TlsServerRuntime;
+use rocketmq_transport::test_support::connect_with_config;
+use rocketmq_transport::test_support::ConnectionHandler;
+use rocketmq_transport::test_support::SessionHandle;
+use rocketmq_transport::test_support::TransportListener;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 

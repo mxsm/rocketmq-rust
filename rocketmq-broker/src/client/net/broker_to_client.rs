@@ -31,7 +31,7 @@ use rocketmq_protocol::protocol::header::notify_unsubscribe_lite_request_header:
 use rocketmq_protocol::protocol::header::reset_offset_request_header::ResetOffsetRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_store::BrokerAdminStore;
-use rocketmq_transport::Channel;
+use rocketmq_transport::api::v1::Channel;
 use tracing::error;
 use tracing::info;
 use tracing::warn;

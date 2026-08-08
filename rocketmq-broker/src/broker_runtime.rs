@@ -78,10 +78,10 @@ use rocketmq_store::StorePorts;
 #[cfg(all(test, feature = "rocksdb_store"))]
 use rocketmq_store::StoreType;
 use rocketmq_store::TimerMessageStore;
-use rocketmq_transport::ChannelEventListener;
-use rocketmq_transport::ServerConfig;
-use rocketmq_transport::TransportClientConfig;
-use rocketmq_transport::TransportServer;
+use rocketmq_transport::api::v1::ChannelEventListener;
+use rocketmq_transport::api::v1::ServerConfig;
+use rocketmq_transport::api::v1::TransportClientConfig;
+use rocketmq_transport::api::v1::TransportServer;
 use tokio::sync::oneshot;
 use tokio::sync::Mutex;
 use tracing::error;

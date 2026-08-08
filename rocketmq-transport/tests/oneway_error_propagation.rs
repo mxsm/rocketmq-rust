@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![cfg(feature = "test-support")]
+
 use std::net::SocketAddr;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
@@ -28,12 +30,13 @@ use rocketmq_runtime::BudgetLimit;
 use rocketmq_runtime::FullPolicy;
 use rocketmq_runtime::ResourceBudgetTree;
 use rocketmq_runtime::RuntimeContext;
-use rocketmq_transport::Connection;
-use rocketmq_transport::DefaultRequestProcessor;
-use rocketmq_transport::RPCHook;
-use rocketmq_transport::RequestDeadline;
-use rocketmq_transport::TransportClient;
-use rocketmq_transport::TransportClientConfig;
+use rocketmq_transport::api::v1::DefaultRequestProcessor;
+use rocketmq_transport::api::v1::RPCHook;
+use rocketmq_transport::api::v1::RequestDeadline;
+use rocketmq_transport::api::v1::TransportClient;
+use rocketmq_transport::api::v1::TransportClientConfig;
+use rocketmq_transport::test_support::Connection;
+use socket2::SockRef;
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpListener;
 
@@ -164,6 +167,9 @@ async fn peer_close_is_returned_by_the_next_oneway_send() {
     let target = CheetahString::from_string(listener.local_addr().expect("closing peer address").to_string());
     let peer = tokio::spawn(async move {
         let (socket, _) = listener.accept().await.expect("accept closing client");
+        SockRef::from(&socket)
+            .set_linger(Some(Duration::ZERO))
+            .expect("force a deterministic reset after the first frame");
         let mut connection = Connection::new(socket);
         connection
             .receive_command()

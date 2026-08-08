@@ -87,19 +87,22 @@ tokio = { workspace = true, features = ["test-util"] }
 [[bench]]
 name = "frame_write"
 harness = false
+required-features = ["test-support"]
 
 [[bench]]
 name = "linux_file_send"
 harness = false
-required-features = ["linux-sendfile"]
+required-features = ["linux-sendfile", "test-support"]
 
 [[bench]]
 name = "p0_overhead"
 harness = false
+required-features = ["test-support"]
 
 [[bench]]
 name = "write_pipeline"
 harness = false
+required-features = ["test-support"]
 
 [[bench]]
 name = "admission_pending_hooks"
@@ -109,11 +112,28 @@ required-features = ["test-support"]
 [[bench]]
 name = "session_client"
 harness = false
+required-features = ["test-support"]
 
 [[bench]]
 name = "network_io"
 harness = false
 required-features = ["tls", "test-support"]
+
+[[example]]
+name = "architecture_network_performance_collector"
+required-features = ["test-support"]
+
+[[example]]
+name = "transport_hot_path_collector"
+required-features = ["test-support"]
+
+[[example]]
+name = "tls_scratch_rss_collector"
+required-features = ["tls", "test-support"]
+
+[[example]]
+name = "transport_p0_probe"
+required-features = ["test-support"]
 
 [target.'cfg(unix)'.dev-dependencies]
 libc = "0.2.186"

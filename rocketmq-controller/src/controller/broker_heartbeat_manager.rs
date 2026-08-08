@@ -20,7 +20,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use rocketmq_transport::Channel;
+use rocketmq_transport::api::v1::Channel;
 
 use crate::heartbeat::broker_live_info::BrokerLiveInfo;
 use crate::helper::broker_lifecycle_listener::BrokerLifecycleListener;

@@ -28,6 +28,8 @@ use rocketmq_transport::api::v1::ServerConfig;
 use rocketmq_transport::api::v1::TransportClient;
 use rocketmq_transport::api::v1::TransportClientConfig;
 use rocketmq_transport::api::v1::TransportServer;
+use tokio::net::TcpListener;
+use tokio::sync::oneshot;
 
 fn assert_stable_result_types(
     snapshot: ClientSnapshot,
@@ -81,4 +83,55 @@ async fn versioned_api_constructs_canonical_client_and_server() {
         Arc::new(ServerConfig::default()),
         runtime.service_context("transport-server"),
     );
+}
+
+#[tokio::test]
+async fn versioned_api_runs_plaintext_request_and_fallible_oneway() {
+    let runtime = RuntimeContext::try_from_current("transport-public-api-v1-flow").unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let mut server = TransportServer::new(
+        Arc::new(ServerConfig::default()),
+        runtime.service_context("transport-public-api-v1-server"),
+    );
+    let server_task = tokio::spawn(async move {
+        server
+            .serve_bound_listener_until(listener, DefaultRequestProcessor, None, None, async {
+                let _ = shutdown_rx.await;
+            })
+            .await
+    });
+
+    let client = TransportClient::builder(
+        Arc::new(TransportClientConfig::default()),
+        DefaultRequestProcessor,
+        runtime.service_context("transport-public-api-v1-client"),
+    )
+    .build()
+    .unwrap();
+    let target = RequestTarget::Endpoint(address.to_string().into());
+    let request = rocketmq_protocol::protocol::remoting_command::RemotingCommand::create_remoting_command(105);
+    let opaque = request.opaque();
+    let response = client
+        .request(target.clone(), request, RequestDeadline::after(Duration::from_secs(2)))
+        .await
+        .unwrap();
+    assert_eq!(response.code(), 105);
+    assert_eq!(response.opaque(), opaque);
+
+    let receipt = client
+        .send_oneway(
+            target,
+            rocketmq_protocol::protocol::remoting_command::RemotingCommand::create_remoting_command(106),
+            RequestDeadline::after(Duration::from_secs(2)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(receipt.endpoint.as_str(), address.to_string());
+
+    assert!(client.shutdown_with_report(Duration::from_secs(1)).await.is_healthy());
+    let _ = shutdown_tx.send(());
+    let report = server_task.await.unwrap().unwrap();
+    assert!(report.is_healthy(), "{}", report.to_json());
 }

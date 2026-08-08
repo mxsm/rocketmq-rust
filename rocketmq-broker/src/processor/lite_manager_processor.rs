@@ -45,10 +45,10 @@ use rocketmq_store::BrokerReadWriteStore;
 use rocketmq_store::ConsumeQueueStore;
 use rocketmq_store::ConsumeQueueStoreTrait;
 use rocketmq_store::MessageStoreConfig;
-use rocketmq_transport::request_code_not_supported_with_remark_and_opaque;
-use rocketmq_transport::Channel;
-use rocketmq_transport::ConnectionHandlerContext;
-use rocketmq_transport::RequestProcessor;
+use rocketmq_transport::api::v1::request_code_not_supported_with_remark_and_opaque;
+use rocketmq_transport::api::v1::Channel;
+use rocketmq_transport::api::v1::ConnectionHandlerContext;
+use rocketmq_transport::api::v1::RequestProcessor;
 use tracing::warn;
 
 use crate::failover::escape_bridge::EscapeBridge;

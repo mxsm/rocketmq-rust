@@ -32,12 +32,12 @@ use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::TaskGroup;
+use rocketmq_transport::api::v1::AdmissionController;
+use rocketmq_transport::api::v1::AdmissionLimits;
+use rocketmq_transport::api::v1::DefaultTopAddressing;
+use rocketmq_transport::api::v1::OneShotTransportClient;
+use rocketmq_transport::api::v1::RequestDeadline;
 use rocketmq_transport::api::v1::TransportTelemetry;
-use rocketmq_transport::AdmissionController;
-use rocketmq_transport::AdmissionLimits;
-use rocketmq_transport::DefaultTopAddressing;
-use rocketmq_transport::OneShotTransportClient;
-use rocketmq_transport::RequestDeadline;
 
 const ROUTE_LOOKUP_TIMEOUT: Duration = Duration::from_secs(3);
 const ROUTE_LOOKUP_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
@@ -302,9 +302,9 @@ mod tests {
     use rocketmq_protocol::protocol::route::route_data_view::QueueData;
     use rocketmq_protocol::protocol::RemotingSerializable;
     use rocketmq_runtime::RuntimeContext;
-    use rocketmq_transport::SessionProcessor as RequestProcessor;
-    use rocketmq_transport::SessionTransportServer;
-    use rocketmq_transport::SessionTransportServerConfig;
+    use rocketmq_transport::test_support::SessionProcessor as RequestProcessor;
+    use rocketmq_transport::test_support::SessionTransportServer;
+    use rocketmq_transport::test_support::SessionTransportServerConfig;
     use tokio::sync::Notify;
 
     use super::*;

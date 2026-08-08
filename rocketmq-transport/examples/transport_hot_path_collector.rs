@@ -20,7 +20,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_transport::Connection;
+use rocketmq_transport::benchmark_support::Connection;
 use serde::Serialize;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;

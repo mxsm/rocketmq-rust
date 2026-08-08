@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_transport::AdmissionController;
-use rocketmq_transport::AdmissionLimits;
-use rocketmq_transport::ServerConfig;
-use rocketmq_transport::TlsClientAuth;
-use rocketmq_transport::TlsClientConfig;
-use rocketmq_transport::TlsConfig;
-use rocketmq_transport::TlsMode;
-use rocketmq_transport::TlsServerConfig;
+use rocketmq_transport::api::v1::AdmissionController;
+use rocketmq_transport::api::v1::AdmissionLimits;
+use rocketmq_transport::api::v1::ServerConfig;
+use rocketmq_transport::api::v1::TlsClientAuth;
+use rocketmq_transport::api::v1::TlsClientConfig;
+use rocketmq_transport::api::v1::TlsConfig;
+use rocketmq_transport::api::v1::TlsMode;
+use rocketmq_transport::api::v1::TlsServerConfig;
 
 #[test]
 fn transport_defaults_preserve_tls_and_bounded_admission_contract() {

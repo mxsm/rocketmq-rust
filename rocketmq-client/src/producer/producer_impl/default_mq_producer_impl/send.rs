@@ -176,7 +176,7 @@ impl DefaultMQProducerImpl {
                         let send_config = runtime.send_config.clone();
                         let namespace = runtime.client_config.namespace.clone();
                         let retained_bytes = Self::message_body_len_for_backpressure(&msg).saturating_add(4 * 1024);
-                        let deadline = rocketmq_transport::RequestDeadline::from_timeout_millis(timeout);
+                        let deadline = rocketmq_transport::api::v1::RequestDeadline::from_timeout_millis(timeout);
                         let target = broker_addr.to_string();
                         self.oneway_egress()?.try_admit(retained_bytes, &target, deadline, || {
                             let request = build_oneway_request_internal(

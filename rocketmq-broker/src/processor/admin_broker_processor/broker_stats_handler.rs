@@ -20,8 +20,8 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::subscription::broker_stats_data::BrokerStatsData;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_store::BrokerStatsManager;
-use rocketmq_transport::Channel;
-use rocketmq_transport::ConnectionHandlerContext;
+use rocketmq_transport::api::v1::Channel;
+use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use std::sync::Arc;
 
 #[derive(Clone)]

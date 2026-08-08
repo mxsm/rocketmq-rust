@@ -37,7 +37,7 @@ use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
 use rocketmq_store::ArcMessageFilter;
 use rocketmq_store::CqExtUnit;
-use rocketmq_transport::ConnectionHandlerContext;
+use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use tokio::select;
 use tokio::sync::Mutex as AsyncMutex;
 use tracing::error;
@@ -113,7 +113,7 @@ pub(crate) struct PopLongPollingService<RP> {
 pub(crate) trait LocalPopLongPollingRequestProcessor {
     async fn process_request_when_wakeup(
         &self,
-        channel: rocketmq_transport::Channel,
+        channel: rocketmq_transport::api::v1::Channel,
         ctx: ConnectionHandlerContext,
         request: RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>>;

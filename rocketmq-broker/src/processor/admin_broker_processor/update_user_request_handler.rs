@@ -8,8 +8,8 @@ use rocketmq_protocol::protocol::body::user_info::UserInfo;
 use rocketmq_protocol::protocol::header::update_user_request_header::UpdateUserRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingDeserializable;
-use rocketmq_transport::Channel;
-use rocketmq_transport::ConnectionHandlerContext;
+use rocketmq_transport::api::v1::Channel;
+use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use std::sync::Arc;
 
 #[derive(Clone)]

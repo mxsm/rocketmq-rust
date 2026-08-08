@@ -918,10 +918,11 @@ fn consumer_send_message_back_header_preserves_broker_name_when_java_passes_valu
         Some("broker-a")
     );
     assert_eq!(
-        map.get(&CheetahString::from_static_str("brokerName"))
+        map.get(&CheetahString::from_static_str("bname"))
             .map(CheetahString::as_str),
         Some("broker-a")
     );
+    assert!(!map.contains_key(&CheetahString::from_static_str("brokerName")));
 }
 
 #[test]

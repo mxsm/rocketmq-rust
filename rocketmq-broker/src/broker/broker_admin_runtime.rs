@@ -38,7 +38,7 @@ use rocketmq_store::StoreError;
 use rocketmq_store::StoreErrorKind;
 use rocketmq_store::StoreOperation;
 use rocketmq_store::TimerMessageStore;
-use rocketmq_transport::ServerConfig;
+use rocketmq_transport::api::v1::ServerConfig;
 use tracing::warn;
 
 use crate::broker::broker_control_plane::BrokerControllerRuntime;

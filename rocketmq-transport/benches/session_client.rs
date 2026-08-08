@@ -26,13 +26,13 @@ use criterion::criterion_main;
 use criterion::Criterion;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::RuntimeContext;
-use rocketmq_transport::AdmissionController;
-use rocketmq_transport::AdmissionLimits;
-use rocketmq_transport::Connection;
-use rocketmq_transport::DefaultRequestProcessor;
-use rocketmq_transport::OneShotTransportClient;
-use rocketmq_transport::TransportClient;
-use rocketmq_transport::TransportClientConfig;
+use rocketmq_transport::api::v1::AdmissionController;
+use rocketmq_transport::api::v1::AdmissionLimits;
+use rocketmq_transport::api::v1::DefaultRequestProcessor;
+use rocketmq_transport::api::v1::OneShotTransportClient;
+use rocketmq_transport::api::v1::TransportClient;
+use rocketmq_transport::api::v1::TransportClientConfig;
+use rocketmq_transport::benchmark_support::Connection;
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -136,7 +136,7 @@ fn benchmark_session_client(c: &mut Criterion) {
                         RemotingCommand::create_remoting_command(10_100)
                             .set_opaque(opaque)
                             .set_body(vec![0x5a; 128]),
-                        rocketmq_transport::RequestDeadline::after(Duration::from_secs(3)),
+                        rocketmq_transport::api::v1::RequestDeadline::after(Duration::from_secs(3)),
                     )
                     .await
                     .expect("one-shot benchmark request");

@@ -93,18 +93,18 @@ use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_store::TimerCheckpointSnapshot;
 use rocketmq_store::TimerMetricsSerializeWrapper;
+use rocketmq_transport::api::v1::ClientMetadata;
+use rocketmq_transport::api::v1::ClientShutdownReport;
+use rocketmq_transport::api::v1::DefaultRequestProcessor;
+use rocketmq_transport::api::v1::RPCHook;
+use rocketmq_transport::api::v1::RemotingClient;
+use rocketmq_transport::api::v1::RpcClient;
+use rocketmq_transport::api::v1::RpcClientImpl;
+use rocketmq_transport::api::v1::RpcRequest;
+use rocketmq_transport::api::v1::RpcRequestHeader;
+use rocketmq_transport::api::v1::TopicRequestHeader as RpcTopicRequestHeader;
+use rocketmq_transport::api::v1::TransportClientConfig;
 use rocketmq_transport::api::v1::TransportTelemetry;
-use rocketmq_transport::ClientMetadata;
-use rocketmq_transport::ClientShutdownReport;
-use rocketmq_transport::DefaultRequestProcessor;
-use rocketmq_transport::RPCHook;
-use rocketmq_transport::RemotingClient;
-use rocketmq_transport::RpcClient;
-use rocketmq_transport::RpcClientImpl;
-use rocketmq_transport::RpcRequest;
-use rocketmq_transport::RpcRequestHeader;
-use rocketmq_transport::TopicRequestHeader as RpcTopicRequestHeader;
-use rocketmq_transport::TransportClientConfig;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -845,7 +845,7 @@ impl BrokerOuterAPI {
     }
 
     fn rpc_response_body_as_bytes(
-        response: rocketmq_transport::RpcResponse,
+        response: rocketmq_transport::api::v1::RpcResponse,
         operation: &'static str,
     ) -> rocketmq_error::RocketMQResult<Bytes> {
         if let Some(exception) = response.exception {

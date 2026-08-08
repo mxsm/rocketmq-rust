@@ -149,6 +149,10 @@ static TRANSPORT_ENCODED_BYTES_WRITTEN: AtomicU64 = AtomicU64::new(0);
 /// optional TLS record encoding, so baseline and candidate measurements remain
 /// comparable across plaintext and TLS variants.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[allow(
+    dead_code,
+    reason = "the process-wide snapshot is exposed only by test_support and benchmark_support"
+)]
 pub struct TransportIoSnapshot {
     pub encoded_bytes_written: u64,
 }
@@ -287,6 +291,10 @@ fn duration_millis(duration: Duration) -> u64 {
 
 /// Returns a read-only snapshot of successful encoded transport writes.
 #[must_use]
+#[allow(
+    dead_code,
+    reason = "the process-wide snapshot is exposed only by test_support and benchmark_support"
+)]
 pub fn transport_io_snapshot() -> TransportIoSnapshot {
     TransportIoSnapshot {
         encoded_bytes_written: TRANSPORT_ENCODED_BYTES_WRITTEN.load(Ordering::Relaxed),
