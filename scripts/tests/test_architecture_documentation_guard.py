@@ -26,6 +26,7 @@ class ArchitectureDocumentationGuardTest(unittest.TestCase):
 
         self.assertIn("Install native build dependencies", workflow)
         self.assertIn("clang llvm libclang-dev", workflow)
+        self.assertIn("protobuf-compiler", workflow)
 
     def test_observability_cache_key_is_normalized_for_feature_lists(self) -> None:
         root = Path(__file__).resolve().parents[2]
