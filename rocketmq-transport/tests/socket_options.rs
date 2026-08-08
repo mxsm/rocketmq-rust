@@ -14,12 +14,12 @@
 
 use std::time::Duration;
 
+use rocketmq_transport::api::v1::TransportTelemetry;
 use rocketmq_transport::connect_with_config_options_and_telemetry;
 use rocketmq_transport::FrameLimits;
 use rocketmq_transport::RequestDeadline;
 use rocketmq_transport::SocketOptions;
 use rocketmq_transport::TlsConfig;
-use rocketmq_transport::TransportTelemetry;
 use tokio::net::TcpListener;
 
 #[tokio::test]

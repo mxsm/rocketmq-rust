@@ -1076,9 +1076,9 @@ impl BrokerRuntime {
         #[cfg(not(feature = "otel-metrics"))]
         let pop_metrics_manager = None;
         #[cfg(any(feature = "otel-metrics", feature = "otel-traces"))]
-        let transport_telemetry = rocketmq_transport::TransportTelemetry::from_handle(&telemetry_handle);
+        let transport_telemetry = rocketmq_transport::api::v1::TransportTelemetry::from_handle(&telemetry_handle);
         #[cfg(not(any(feature = "otel-metrics", feature = "otel-traces")))]
-        let transport_telemetry = rocketmq_transport::TransportTelemetry::noop();
+        let transport_telemetry = rocketmq_transport::api::v1::TransportTelemetry::noop();
         let store_telemetry = rocketmq_store::StoreTelemetry::from_handle(&telemetry_handle);
         let resource_budget = validated_config
             .sections()
@@ -1101,7 +1101,7 @@ impl BrokerRuntime {
             MetadataIoConfig::default(),
         ));
         let broker_outer_api = BrokerOuterAPI::new(
-            Arc::new(TokioClientConfig::default()),
+            Arc::new(TransportClientConfig::default()),
             service_context.component("broker.outer-api"),
             transport_telemetry.clone(),
         );

@@ -29,22 +29,22 @@ use rocketmq_runtime::FullPolicy;
 use rocketmq_runtime::ResourceBudgetTree;
 use rocketmq_runtime::RuntimeContext;
 use rocketmq_transport::Connection;
-use rocketmq_transport::DefaultRemotingRequestProcessor;
+use rocketmq_transport::DefaultRequestProcessor;
 use rocketmq_transport::RPCHook;
-use rocketmq_transport::RemotingClient;
-use rocketmq_transport::RemotingService;
 use rocketmq_transport::RequestDeadline;
-use rocketmq_transport::RocketmqDefaultClient;
-use rocketmq_transport::TokioClientConfig;
+use rocketmq_transport::TransportClient;
+use rocketmq_transport::TransportClientConfig;
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpListener;
 
-fn test_client(name: &'static str) -> RocketmqDefaultClient {
-    RocketmqDefaultClient::new(
-        Arc::new(TokioClientConfig::default()),
-        DefaultRemotingRequestProcessor,
+fn test_client(name: &'static str) -> TransportClient {
+    TransportClient::builder(
+        Arc::new(TransportClientConfig::default()),
+        DefaultRequestProcessor,
         RuntimeContext::from_current(name).service_context("oneway-test-client"),
     )
+    .build()
+    .expect("valid transport client configuration")
 }
 
 fn request(opaque: i32) -> RemotingCommand {

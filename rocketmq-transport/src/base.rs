@@ -15,5 +15,6 @@
 pub mod channel_event_listener;
 pub mod connection_net_event;
 pub mod pending_request_table;
-pub mod response_future;
+#[cfg(test)]
+mod pending_request_table_tests;
 pub mod tokio_event;

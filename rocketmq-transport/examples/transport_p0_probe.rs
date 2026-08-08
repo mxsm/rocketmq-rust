@@ -40,10 +40,10 @@ use rocketmq_transport::AdmissionLimits;
 use rocketmq_transport::FrameLimits;
 use rocketmq_transport::RequestDeadline;
 use rocketmq_transport::ResourceLimit;
-use rocketmq_transport::SessionRequestProcessor as RequestProcessor;
+use rocketmq_transport::SessionProcessor as RequestProcessor;
+use rocketmq_transport::SessionTransportServer;
+use rocketmq_transport::SessionTransportServerConfig;
 use rocketmq_transport::TlsConfig;
-use rocketmq_transport::TransportServer;
-use rocketmq_transport::TransportServerConfig;
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 
@@ -183,9 +183,9 @@ async fn main() -> Result<()> {
     let runtime = RuntimeContext::from_current("transport-p0-probe");
     let service = runtime.service_context("transport-p0-probe");
     let admission = Arc::new(AdmissionController::new(limits));
-    let server = TransportServer::bind(
+    let server = SessionTransportServer::bind(
         service,
-        TransportServerConfig::loopback(),
+        SessionTransportServerConfig::loopback(),
         Arc::new(EchoProcessor),
         admission.clone(),
     )

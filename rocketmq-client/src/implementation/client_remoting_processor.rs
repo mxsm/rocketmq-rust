@@ -45,7 +45,7 @@ use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_transport::Channel;
 use rocketmq_transport::ConnectionHandlerContext;
 use rocketmq_transport::RejectRequestResponse;
-use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
+use rocketmq_transport::RequestProcessor;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;

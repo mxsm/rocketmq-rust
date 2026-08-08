@@ -32,7 +32,7 @@ pub enum ControllerRequestProcessorWrapper {
     ControllerRequestProcessor(Arc<ControllerRequestProcessor>),
 }
 
-impl rocketmq_transport::RemotingRequestProcessor for ControllerRequestProcessorWrapper {
+impl rocketmq_transport::RequestProcessor for ControllerRequestProcessorWrapper {
     async fn process_request(
         &mut self,
         channel: Channel,
@@ -51,7 +51,7 @@ impl rocketmq_transport::RemotingRequestProcessor for ControllerRequestProcessor
     fn reject_request(&self, code: i32) -> RejectRequestResponse {
         match self {
             ControllerRequestProcessorWrapper::ControllerRequestProcessor(processor) => {
-                rocketmq_transport::RemotingRequestProcessor::reject_request(processor.as_ref(), code)
+                rocketmq_transport::RequestProcessor::reject_request(processor.as_ref(), code)
             }
         }
     }
@@ -74,7 +74,7 @@ impl ControllerServerRequestProcessor {
     }
 }
 
-impl rocketmq_transport::RemotingRequestProcessor for ControllerServerRequestProcessor {
+impl rocketmq_transport::RequestProcessor for ControllerServerRequestProcessor {
     async fn process_request(
         &mut self,
         channel: Channel,
@@ -90,7 +90,7 @@ impl rocketmq_transport::RemotingRequestProcessor for ControllerServerRequestPro
                 Ok(Some(response_command.set_opaque(request.opaque())))
             }
             Some(processor) => {
-                rocketmq_transport::RemotingRequestProcessor::process_request(processor, channel, ctx, request).await
+                rocketmq_transport::RequestProcessor::process_request(processor, channel, ctx, request).await
             }
         }
     }

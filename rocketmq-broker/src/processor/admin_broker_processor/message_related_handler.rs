@@ -523,10 +523,8 @@ mod tests {
     use rocketmq_store::DispatchRequest;
     use rocketmq_store::MessageStoreConfig;
     use rocketmq_transport::Channel;
-    use rocketmq_transport::ChannelInner;
     use rocketmq_transport::Connection;
     use rocketmq_transport::ConnectionHandlerContextWrapper;
-    use rocketmq_transport::ResponseFuture;
 
     use super::cq_ext_unit_response_serialize_error;
     use super::MessageRelatedHandler;
@@ -577,16 +575,10 @@ mod tests {
         drop(listener);
         let tcp_stream = tokio::net::TcpStream::from_std(std_stream).expect("convert tcp stream");
         let connection = Connection::new(tcp_stream);
-        let response_table = std::sync::Arc::new(parking_lot::Mutex::new(std::collections::HashMap::<
-            i32,
-            ResponseFuture,
-        >::new()));
-        let inner = std::sync::Arc::new(ChannelInner::new(
-            connection,
-            response_table,
-            crate::test_task_group("channel"),
-        ));
-        Channel::new(inner, local_addr, local_addr)
+        rocketmq_transport::test_support::TestChannelBuilder::new(connection, crate::test_task_group("channel"))
+            .addresses(local_addr, local_addr)
+            .build()
+            .expect("build test channel")
     }
 
     #[test]

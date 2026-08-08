@@ -38,14 +38,12 @@ use rocketmq_transport::AdmissionController;
 use rocketmq_transport::AdmissionLimits;
 use rocketmq_transport::AdmissionResource;
 use rocketmq_transport::AdmissionScope;
-use rocketmq_transport::DefaultRemotingRequestProcessor;
+use rocketmq_transport::DefaultRequestProcessor;
 use rocketmq_transport::FrameWriter;
-use rocketmq_transport::RemotingClient;
 use rocketmq_transport::RemotingCommandCodec;
-use rocketmq_transport::RemotingService;
 use rocketmq_transport::RequestDeadline;
-use rocketmq_transport::RocketmqDefaultClient;
-use rocketmq_transport::TokioClientConfig;
+use rocketmq_transport::TransportClient;
+use rocketmq_transport::TransportClientConfig;
 use tokio::io::AsyncWrite;
 use tokio_util::codec::Decoder;
 
@@ -221,11 +219,15 @@ fn benchmark_oneway(c: &mut Criterion) {
             }
         });
         let runtime_context = RuntimeContext::from_current("p0-oneway");
-        let client = Arc::new(RocketmqDefaultClient::new(
-            Arc::new(TokioClientConfig::default()),
-            DefaultRemotingRequestProcessor,
-            runtime_context.service_context("p0-oneway"),
-        ));
+        let client = Arc::new(
+            TransportClient::builder(
+                Arc::new(TransportClientConfig::default()),
+                DefaultRequestProcessor,
+                runtime_context.service_context("p0-oneway"),
+            )
+            .build()
+            .expect("valid transport client configuration"),
+        );
         (runtime_context, client, target, receiver)
     });
     let next_opaque = AtomicI32::new(1);

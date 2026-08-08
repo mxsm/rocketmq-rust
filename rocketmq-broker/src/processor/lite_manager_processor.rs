@@ -48,7 +48,7 @@ use rocketmq_store::MessageStoreConfig;
 use rocketmq_transport::request_code_not_supported_with_remark_and_opaque;
 use rocketmq_transport::Channel;
 use rocketmq_transport::ConnectionHandlerContext;
-use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
+use rocketmq_transport::RequestProcessor;
 use tracing::warn;
 
 use crate::failover::escape_bridge::EscapeBridge;

@@ -43,19 +43,19 @@ use rocketmq_transport::AdmissionResource;
 use rocketmq_transport::AdmissionScope;
 use rocketmq_transport::Connection;
 use rocketmq_transport::ConnectionHandler;
+use rocketmq_transport::OneShotTransportClient;
 use rocketmq_transport::RequestDeadline;
 use rocketmq_transport::ResourceLimit;
 use rocketmq_transport::SessionHandle;
-use rocketmq_transport::SessionRequestProcessor as RequestProcessor;
+use rocketmq_transport::SessionProcessor as RequestProcessor;
+use rocketmq_transport::SessionTransportServer;
+use rocketmq_transport::SessionTransportServerConfig;
 use rocketmq_transport::TlsClientConfig;
 use rocketmq_transport::TlsConfig;
 use rocketmq_transport::TlsMode;
 use rocketmq_transport::TlsServerRuntime;
-use rocketmq_transport::TransportClient;
 use rocketmq_transport::TransportListener;
 use rocketmq_transport::TransportSecurity;
-use rocketmq_transport::TransportServer;
-use rocketmq_transport::TransportServerConfig;
 
 struct EchoProcessor;
 
@@ -227,9 +227,9 @@ impl RequestProcessor for ControlledProcessor {
 async fn real_request_uses_one_deadline_and_drains_all_owned_tasks() {
     let runtime = RuntimeContext::from_current("transport-lifecycle-test");
     let admission = Arc::new(AdmissionController::new(AdmissionLimits::default()));
-    let server = TransportServer::bind(
+    let server = SessionTransportServer::bind(
         runtime.service_context("transport-server"),
-        TransportServerConfig::loopback(),
+        SessionTransportServerConfig::loopback(),
         Arc::new(EchoProcessor),
         admission.clone(),
     )
@@ -237,7 +237,7 @@ async fn real_request_uses_one_deadline_and_drains_all_owned_tasks() {
     .unwrap();
     let address = server.local_addr();
     server.start().unwrap();
-    let client = TransportClient::new(runtime.service_context("transport-client"), admission);
+    let client = OneShotTransportClient::new(runtime.service_context("transport-client"), admission);
     let response = client
         .invoke(
             address,
@@ -263,9 +263,9 @@ async fn real_request_uses_one_deadline_and_drains_all_owned_tasks() {
 async fn hung_processor_and_send_failure_complete_without_leaking_pending_or_tasks() {
     let runtime = RuntimeContext::from_current("transport-timeout-test");
     let admission = Arc::new(AdmissionController::new(AdmissionLimits::default()));
-    let mut config = TransportServerConfig::loopback();
+    let mut config = SessionTransportServerConfig::loopback();
     config.request_timeout = Duration::from_millis(20);
-    let server = TransportServer::bind(
+    let server = SessionTransportServer::bind(
         runtime.service_context("transport-server"),
         config,
         Arc::new(HungProcessor),
@@ -275,7 +275,7 @@ async fn hung_processor_and_send_failure_complete_without_leaking_pending_or_tas
     .unwrap();
     let address = server.local_addr();
     server.start().unwrap();
-    let client = TransportClient::new(runtime.service_context("transport-client"), admission);
+    let client = OneShotTransportClient::new(runtime.service_context("transport-client"), admission);
     assert!(client
         .invoke(
             address,
@@ -306,9 +306,9 @@ async fn hung_processor_and_send_failure_complete_without_leaking_pending_or_tas
 async fn wrong_response_opaque_is_rejected_and_cannot_complete_the_request() {
     let runtime = RuntimeContext::from_current("transport-wrong-opaque-test");
     let admission = Arc::new(AdmissionController::new(AdmissionLimits::default()));
-    let server = TransportServer::bind(
+    let server = SessionTransportServer::bind(
         runtime.service_context("transport-server"),
-        TransportServerConfig::loopback(),
+        SessionTransportServerConfig::loopback(),
         Arc::new(WrongOpaqueProcessor),
         admission.clone(),
     )
@@ -316,7 +316,7 @@ async fn wrong_response_opaque_is_rejected_and_cannot_complete_the_request() {
     .unwrap();
     let address = server.local_addr();
     server.start().unwrap();
-    let client = TransportClient::new(runtime.service_context("transport-client"), admission);
+    let client = OneShotTransportClient::new(runtime.service_context("transport-client"), admission);
 
     let result = client
         .invoke(
@@ -356,9 +356,9 @@ async fn data_overload_rejects_without_closing_and_control_reserve_survives() {
         release: release.clone(),
         calls: AtomicUsize::new(0),
     });
-    let server = TransportServer::bind(
+    let server = SessionTransportServer::bind(
         runtime.service_context("transport-server"),
-        TransportServerConfig::loopback(),
+        SessionTransportServerConfig::loopback(),
         processor.clone(),
         admission,
     )
@@ -420,9 +420,9 @@ async fn transport_security_signs_outbound_and_fails_closed_without_a_principal(
         Some(Arc::new(AllowAuthenticated)),
         None,
     ));
-    let server = TransportServer::bind_with_security(
+    let server = SessionTransportServer::bind_with_security(
         runtime.service_context("transport-server"),
-        TransportServerConfig::loopback(),
+        SessionTransportServerConfig::loopback(),
         Arc::new(SignatureProcessor),
         admission.clone(),
         server_security,
@@ -450,9 +450,9 @@ async fn transport_security_signs_outbound_and_fails_closed_without_a_principal(
         .shutdown_until(ShutdownDeadline::after(Duration::from_secs(1)))
         .await;
 
-    let open_server = TransportServer::bind_with_security(
+    let open_server = SessionTransportServer::bind_with_security(
         runtime.service_context("signed-server"),
-        TransportServerConfig::loopback(),
+        SessionTransportServerConfig::loopback(),
         Arc::new(SignatureProcessor),
         admission.clone(),
         Arc::new(TransportSecurity::development_insecure_loopback(None, None)),
@@ -462,7 +462,7 @@ async fn transport_security_signs_outbound_and_fails_closed_without_a_principal(
     .unwrap();
     let signed_address = open_server.local_addr();
     open_server.start().unwrap();
-    let client = TransportClient::new_with_security(
+    let client = OneShotTransportClient::new_with_security(
         runtime.service_context("signed-client"),
         admission,
         Arc::new(TransportSecurity::development_insecure_loopback(
@@ -489,10 +489,10 @@ async fn transport_security_signs_outbound_and_fails_closed_without_a_principal(
 #[tokio::test]
 async fn tls_client_invocation_releases_pending_and_server_ownership() {
     let runtime = RuntimeContext::from_current("transport-tls-client-convergence-test");
-    let mut server_config = TransportServerConfig::loopback();
+    let mut server_config = SessionTransportServerConfig::loopback();
     server_config.tls.test_mode_enable = true;
     server_config.tls.server.mode = TlsMode::Permissive;
-    let server = TransportServer::bind(
+    let server = SessionTransportServer::bind(
         runtime.service_context("transport-server"),
         server_config,
         Arc::new(EchoProcessor),
@@ -505,7 +505,7 @@ async fn tls_client_invocation_releases_pending_and_server_ownership() {
     let baseline_tasks = server.live_task_count();
     let baseline_components = server.owned_component_group_count();
 
-    let client = TransportClient::new(
+    let client = OneShotTransportClient::new(
         runtime.service_context("transport-client"),
         Arc::new(AdmissionController::new(AdmissionLimits::default())),
     );
@@ -553,9 +553,9 @@ async fn tls_client_invocation_releases_pending_and_server_ownership() {
 async fn transport_server_reports_plaintext_for_permissive_tls_connections() {
     let runtime = RuntimeContext::from_current("transport-server-negotiated-tls-test");
     let policy = Arc::new(RecordPeerTls::new());
-    let mut config = TransportServerConfig::loopback();
+    let mut config = SessionTransportServerConfig::loopback();
     config.tls.server.mode = TlsMode::Permissive;
-    let server = TransportServer::bind_with_security(
+    let server = SessionTransportServer::bind_with_security(
         runtime.service_context("transport-server"),
         config,
         Arc::new(EchoProcessor),
@@ -637,9 +637,9 @@ async fn large_decoded_headers_count_toward_admission_in_both_server_paths() {
     };
     let runtime = RuntimeContext::from_current("transport-large-header-admission-test");
     let processor = Arc::new(CountingEchoProcessor(AtomicUsize::new(0)));
-    let server = TransportServer::bind(
+    let server = SessionTransportServer::bind(
         runtime.service_context("transport-server"),
-        TransportServerConfig::loopback(),
+        SessionTransportServerConfig::loopback(),
         processor.clone(),
         Arc::new(AdmissionController::new(limits)),
     )

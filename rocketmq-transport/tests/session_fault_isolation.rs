@@ -29,10 +29,10 @@ use rocketmq_transport::AdmissionLimits;
 use rocketmq_transport::Connection;
 use rocketmq_transport::FrameLimits;
 use rocketmq_transport::RequestDeadline;
-use rocketmq_transport::SessionRequestProcessor as RequestProcessor;
+use rocketmq_transport::SessionProcessor as RequestProcessor;
+use rocketmq_transport::SessionTransportServer;
+use rocketmq_transport::SessionTransportServerConfig;
 use rocketmq_transport::TlsConfig;
-use rocketmq_transport::TransportServer;
-use rocketmq_transport::TransportServerConfig;
 
 struct FaultSelectingProcessor;
 
@@ -99,9 +99,9 @@ async fn processor_failure_and_timeout_do_not_cancel_sibling_or_future_sessions(
     let runtime = RuntimeContext::from_current("transport-session-fault-isolation-test");
     let service = runtime.service_context("transport-server");
     let admission = Arc::new(AdmissionController::new(AdmissionLimits::default()));
-    let mut config = TransportServerConfig::loopback();
+    let mut config = SessionTransportServerConfig::loopback();
     config.request_timeout = Duration::from_millis(200);
-    let server = TransportServer::bind(
+    let server = SessionTransportServer::bind(
         service.clone(),
         config,
         Arc::new(FaultSelectingProcessor),

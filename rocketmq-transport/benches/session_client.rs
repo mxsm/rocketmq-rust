@@ -29,12 +29,10 @@ use rocketmq_runtime::RuntimeContext;
 use rocketmq_transport::AdmissionController;
 use rocketmq_transport::AdmissionLimits;
 use rocketmq_transport::Connection;
-use rocketmq_transport::DefaultRemotingRequestProcessor;
-use rocketmq_transport::RemotingClient;
-use rocketmq_transport::RemotingService;
-use rocketmq_transport::RocketmqDefaultClient;
-use rocketmq_transport::TokioClientConfig;
+use rocketmq_transport::DefaultRequestProcessor;
+use rocketmq_transport::OneShotTransportClient;
 use rocketmq_transport::TransportClient;
+use rocketmq_transport::TransportClientConfig;
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -88,15 +86,19 @@ fn benchmark_session_client(c: &mut Criterion) {
             let (baseline_addr, baseline_accepts, baseline_cancel, baseline_task) = echo_server(true).await;
             let (candidate_addr, candidate_accepts, candidate_cancel, candidate_task) = echo_server(false).await;
             let runtime_context = RuntimeContext::from_current("transport-session-client-benchmark");
-            let one_shot = TransportClient::new(
+            let one_shot = OneShotTransportClient::new(
                 runtime_context.service_context("one-shot-client"),
                 Arc::new(AdmissionController::new(AdmissionLimits::default())),
             );
-            let persistent = Arc::new(RocketmqDefaultClient::new(
-                Arc::new(TokioClientConfig::default()),
-                DefaultRemotingRequestProcessor,
-                runtime_context.service_context("persistent-client"),
-            ));
+            let persistent = Arc::new(
+                TransportClient::builder(
+                    Arc::new(TransportClientConfig::default()),
+                    DefaultRequestProcessor,
+                    runtime_context.service_context("persistent-client"),
+                )
+                .build()
+                .expect("valid transport client configuration"),
+            );
             let target = CheetahString::from_string(candidate_addr.to_string());
             persistent
                 .invoke_request(

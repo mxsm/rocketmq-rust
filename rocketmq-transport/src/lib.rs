@@ -66,16 +66,16 @@ pub use admission::ResourceLimit;
 pub use admission::ResourceSnapshot;
 pub use base::channel_event_listener::ChannelEventListener;
 pub use base::connection_net_event::ConnectionNetEvent;
-pub use base::pending_request_table::PendingRequestLimits;
-pub use base::pending_request_table::PendingRequestTable;
-pub use base::response_future::ResponseFuture;
 pub use client::connect_with_config;
 pub use client::connect_with_config_and_telemetry;
 pub use client::connect_with_config_options_and_telemetry;
-pub use clients::rocketmq_tokio_client::RemotingClientShutdownReport;
-pub use clients::rocketmq_tokio_client::RocketmqDefaultClient;
-pub use clients::RemotingClient;
-pub use clients::TransportSession;
+pub use clients::rocketmq_tokio_client::ClientShutdownReport;
+pub use clients::rocketmq_tokio_client::ClientStartReport;
+pub use clients::rocketmq_tokio_client::ConnectionShutdownReport;
+pub use clients::rocketmq_tokio_client::RemotingClient;
+pub use clients::rocketmq_tokio_client::RemotingClientBuilder;
+pub use clients::rocketmq_tokio_client::TransportClient;
+pub use clients::rocketmq_tokio_client::TransportClientBuilder;
 pub use codec::remoting_command_codec::FrameLimits;
 pub use codec::remoting_command_codec::RemotingCommandCodec;
 pub use common::heartbeat_v2_result::HeartbeatV2Result;
@@ -101,23 +101,28 @@ pub use discovery::top_addressing::TopAddressing;
 pub use net::channel::ArcChannel;
 pub use net::channel::Channel;
 pub use net::channel::ChannelId;
-pub use net::channel::ChannelInner;
-pub use public_api::*;
-pub use remoting::InvokeCallback;
-pub use remoting_server::rocketmq_tokio_server::run as run_remoting_server;
-pub use remoting_server::rocketmq_tokio_server::run_with_report as run_remoting_server_with_report;
-pub use remoting_server::rocketmq_tokio_server::run_with_report_with_service_context as run_remoting_server_with_report_with_service_context;
-pub use remoting_server::rocketmq_tokio_server::run_with_report_with_service_context_and_telemetry as run_remoting_server_with_report_with_service_context_and_telemetry;
-pub use remoting_server::RemotingServer;
+/// Versioned, intentionally curated public API.
+pub mod api {
+    /// Stable source API for the 1.x release line.
+    pub mod v1 {
+        pub use crate::public_api::*;
+    }
+}
+
+// Small root conveniences retained for composition roots. New integrations
+// should prefer `api::v1` so additions do not accidentally become stable.
+pub use public_api::OneShotTransportClient;
+pub use public_api::ServerConfig;
+pub use public_api::TransportClientConfig;
+pub use public_api::TransportServer;
 pub use request_ordering::RequestOrdering;
 pub use request_ordering::RequestOrderingKey;
-pub use request_processor::default_request_processor::DefaultRemotingRequestProcessor;
+pub use request_processor::default_request_processor::DefaultRequestProcessor;
 pub use rocketmq_protocol::protocol::RemotingDeserializable;
 pub use rocketmq_protocol::protocol::RemotingSerializable;
 pub use rpc::client_metadata::ClientMetadata;
 pub use rpc::rpc_client::RpcClient;
 pub use rpc::rpc_client::RpcClientLocal;
-pub use rpc::rpc_client_hook::RpcClientHook;
 pub use rpc::rpc_client_hook::RpcClientHookFn;
 pub use rpc::rpc_client_impl::RpcClientImpl;
 pub use rpc::rpc_client_utils::RpcClientUtils;
@@ -129,27 +134,21 @@ pub use runtime::connection_handler_context::ConnectionHandlerContext;
 pub use runtime::connection_handler_context::ConnectionHandlerContextWrapper;
 pub use runtime::processor::LocalRequestProcessor;
 pub use runtime::processor::RejectRequestResponse;
-pub use runtime::processor::RequestProcessor as RemotingRequestProcessor;
-pub use runtime::processor::SessionRequestProcessorAdapter;
-pub use runtime::processor_v2::AdminProcessorExample;
-pub use runtime::processor_v2::CoreProcessor;
-pub use runtime::processor_v2::CoreProcessorVariant;
-pub use runtime::processor_v2::PluginProcessorRegistry;
-pub use runtime::processor_v2::ProcessorDispatcher;
-pub use runtime::processor_v2::PullMessageProcessorExample;
-pub use runtime::processor_v2::RequestProcessorV2;
-pub use runtime::processor_v2::SendMessageProcessorExample;
+pub use runtime::processor::RequestProcessor;
 pub use runtime::RPCHook;
 pub use runtime::RPCHookArc;
 pub use security::TransportSecurity;
 pub use server::run_connected_session;
 pub use server::run_connected_session_with_io_policy;
 pub use server::ConnectionHandler;
-pub use server::RequestProcessor as SessionRequestProcessor;
 pub use server::SessionHandle;
 pub use server::SessionIoPolicy;
+pub use server::SessionProcessor;
+#[doc(hidden)]
+pub use server::SessionTransportServer;
+#[doc(hidden)]
+pub use server::SessionTransportServerConfig;
 pub use server::TransportListener;
-pub use server::TransportServerConfig;
 pub use tls::tls_disabled_error;
 #[cfg(feature = "tls")]
 pub use tls::TlsReloadReport;

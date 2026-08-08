@@ -56,7 +56,7 @@ impl BrokerRuntime {
             })?,
         );
         let authorized_dispatcher = Arc::new(
-            rocketmq_transport::AuthorizedCommandDispatcher::try_new(
+            rocketmq_transport::api::v1::AuthorizedCommandDispatcher::try_new(
                 request_processor.clone(),
                 Vec::new(),
                 &service_context.process_budget(),
@@ -89,7 +89,7 @@ impl BrokerRuntime {
         self.lifecycle.remoting_server_task_group = Some(remoting_server_task_group.clone());
 
         let broker_config = self.composition.state.broker_config();
-        let mut server = RocketMQServer::new_with_telemetry(
+        let mut server = TransportServer::new_with_telemetry(
             Arc::new(broker_config.broker_server_config.clone()),
             service_context.component("broker.remoting-server.normal"),
             self.composition.state.transport_telemetry.clone(),
@@ -127,7 +127,7 @@ impl BrokerRuntime {
         // Start the fast Broker remoting server.
         let mut fast_server_config = broker_config.broker_server_config.clone();
         fast_server_config.listen_port = broker_config.broker_server_config.listen_port - 2;
-        let mut fast_server = RocketMQServer::new_with_telemetry(
+        let mut fast_server = TransportServer::new_with_telemetry(
             Arc::new(fast_server_config),
             service_context.component("broker.remoting-server.fast"),
             self.composition.state.transport_telemetry.clone(),

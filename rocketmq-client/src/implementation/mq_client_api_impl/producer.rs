@@ -310,7 +310,7 @@ impl MQClientAPIImpl {
         reason = "existing asynchronous send context is tracked by the lint debt registry"
     )]
     pub(super) async fn send_message_async_impl(
-        remoting_client: Arc<RocketmqDefaultClient<ClientRemotingProcessor>>,
+        remoting_client: Arc<RemotingClient<ClientRemotingProcessor>>,
         client_config: Arc<ClientConfig>,
         mq_fault_strategy: MQFaultStrategy,
         mut current_addr: CheetahString,

@@ -35,7 +35,7 @@ use rocketmq_store::BrokerStorePort;
 use rocketmq_transport::request_code_not_supported_with_remark_and_opaque;
 use rocketmq_transport::Channel;
 use rocketmq_transport::ConnectionHandlerContext;
-use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
+use rocketmq_transport::RequestProcessor;
 use tracing::info;
 use tracing::warn;
 
@@ -437,7 +437,6 @@ impl<MS: BrokerStorePort> Clone for ClientManageProcessor<MS> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use std::collections::HashSet;
     use std::path::PathBuf;
 
@@ -457,9 +456,7 @@ mod tests {
     use crate::broker_runtime::BrokerRuntime;
     use rocketmq_protocol::code::response_code::ResponseCode as RemotingResponseCode;
     use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
-    use rocketmq_transport::ChannelInner;
     use rocketmq_transport::Connection;
-    use rocketmq_transport::ResponseFuture;
 
     #[test]
     fn production_processor_has_no_complete_runtime_owner() {
@@ -506,13 +503,10 @@ mod tests {
         drop(listener);
         let tcp_stream = TcpStream::from_std(std_stream).expect("convert tcp stream");
         let connection = Connection::new(tcp_stream);
-        let response_table = std::sync::Arc::new(parking_lot::Mutex::new(HashMap::<i32, ResponseFuture>::new()));
-        let inner = std::sync::Arc::new(ChannelInner::new(
-            connection,
-            response_table,
-            crate::test_task_group("channel"),
-        ));
-        Channel::new(inner, local_addr, local_addr)
+        rocketmq_transport::test_support::TestChannelBuilder::new(connection, crate::test_task_group("channel"))
+            .addresses(local_addr, local_addr)
+            .build()
+            .expect("build test channel")
     }
 
     fn check_request(subscription_data: SubscriptionData) -> RemotingCommand {

@@ -36,7 +36,7 @@ use rocketmq_store::GetMessageStatus;
 use rocketmq_transport::command_from_error_with_remark_and_opaque;
 use rocketmq_transport::Channel;
 use rocketmq_transport::ConnectionHandlerContext;
-use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
+use rocketmq_transport::RequestProcessor;
 use tracing::error;
 use tracing::warn;
 

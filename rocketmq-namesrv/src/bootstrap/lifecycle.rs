@@ -20,7 +20,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use rocketmq_runtime::ShutdownReport;
-use rocketmq_transport::RemotingClientShutdownReport;
+use rocketmq_transport::ClientShutdownReport;
 use serde::Serialize;
 use tokio::sync::Notify;
 
@@ -111,7 +111,7 @@ pub struct NameServerShutdownReport {
     pub cluster_test_route_lookup_healthy: Option<bool>,
     pub server: Option<ShutdownReport>,
     pub remoting_server: Option<ShutdownReport>,
-    pub remoting_client: Option<RemotingClientShutdownReport>,
+    pub remoting_client: Option<ClientShutdownReport>,
     pub metadata_io_healthy: Option<bool>,
     pub root: Option<ShutdownReport>,
 }
@@ -134,7 +134,7 @@ impl NameServerShutdownReport {
             && self
                 .remoting_client
                 .as_ref()
-                .is_none_or(RemotingClientShutdownReport::is_healthy)
+                .is_none_or(ClientShutdownReport::is_healthy)
             && self.metadata_io_healthy.unwrap_or(true)
             && self.root.as_ref().is_none_or(ShutdownReport::is_healthy)
     }

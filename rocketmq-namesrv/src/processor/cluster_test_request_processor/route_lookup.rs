@@ -32,12 +32,12 @@ use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::TaskGroup;
+use rocketmq_transport::api::v1::TransportTelemetry;
 use rocketmq_transport::AdmissionController;
 use rocketmq_transport::AdmissionLimits;
 use rocketmq_transport::DefaultTopAddressing;
+use rocketmq_transport::OneShotTransportClient;
 use rocketmq_transport::RequestDeadline;
-use rocketmq_transport::TransportClient;
-use rocketmq_transport::TransportTelemetry;
 
 const ROUTE_LOOKUP_TIMEOUT: Duration = Duration::from_secs(3);
 const ROUTE_LOOKUP_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
@@ -101,7 +101,7 @@ impl ClusterTestEndpointResolver for ProductEnvironmentEndpointResolver {
 
 pub(crate) struct TransportClusterTestRouteLookup {
     resolver: Arc<dyn ClusterTestEndpointResolver>,
-    transport: TransportClient,
+    transport: OneShotTransportClient,
     task_group: TaskGroup,
     cached_endpoints: RwLock<Vec<SocketAddr>>,
     request_timeout: Duration,
@@ -128,7 +128,7 @@ impl TransportClusterTestRouteLookup {
         telemetry: TransportTelemetry,
     ) -> Self {
         let task_group = service_context.task_group().clone();
-        let transport = TransportClient::new(
+        let transport = OneShotTransportClient::new(
             service_context.component("transport"),
             Arc::new(AdmissionController::new(AdmissionLimits::default())),
         )
@@ -302,9 +302,9 @@ mod tests {
     use rocketmq_protocol::protocol::route::route_data_view::QueueData;
     use rocketmq_protocol::protocol::RemotingSerializable;
     use rocketmq_runtime::RuntimeContext;
-    use rocketmq_transport::SessionRequestProcessor as RequestProcessor;
-    use rocketmq_transport::TransportServer;
-    use rocketmq_transport::TransportServerConfig;
+    use rocketmq_transport::SessionProcessor as RequestProcessor;
+    use rocketmq_transport::SessionTransportServer;
+    use rocketmq_transport::SessionTransportServerConfig;
     use tokio::sync::Notify;
 
     use super::*;
@@ -407,9 +407,9 @@ mod tests {
     #[tokio::test]
     async fn transport_lookup_decodes_route_and_caches_resolved_endpoints() {
         let runtime = RuntimeContext::from_current("namesrv-route-lookup-success-test");
-        let server = TransportServer::bind(
+        let server = SessionTransportServer::bind(
             runtime.service_context("route-server"),
-            TransportServerConfig::loopback(),
+            SessionTransportServerConfig::loopback(),
             Arc::new(RouteProcessor { route: sample_route() }),
             Arc::new(AdmissionController::new(AdmissionLimits::default())),
         )
@@ -457,9 +457,9 @@ mod tests {
         let runtime = RuntimeContext::from_current("namesrv-route-lookup-timeout-test");
         let entered = Arc::new(Notify::new());
         let release = Arc::new(Notify::new());
-        let server = TransportServer::bind(
+        let server = SessionTransportServer::bind(
             runtime.service_context("hung-route-server"),
-            TransportServerConfig::loopback(),
+            SessionTransportServerConfig::loopback(),
             Arc::new(BlockingRouteProcessor {
                 entered: entered.clone(),
                 release: release.clone(),

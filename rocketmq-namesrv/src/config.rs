@@ -417,6 +417,36 @@ pub fn reject_removed_route_manager_key(key: &str) -> RocketMQResult<()> {
     Ok(())
 }
 
+pub fn reject_removed_transport_client_key(key: &str) -> RocketMQResult<()> {
+    const REMOVED_KEYS: &[&str] = &[
+        "clientWorkerThreads",
+        "clientCallbackExecutorThreads",
+        "clientOnewaySemaphoreValue",
+        "clientAsyncSemaphoreValue",
+        "clientChannelMaxIdleTimeSeconds",
+        "clientSocketSndBufSize",
+        "clientSocketRcvBufSize",
+        "clientPooledByteBufAllocatorEnable",
+        "clientCloseSocketIfTimeout",
+        "useTls",
+        "socksProxyConfig",
+        "writeBufferHighWaterMark",
+        "writeBufferLowWaterMark",
+        "disableCallbackExecutor",
+        "disableNettyWorkerGroup",
+        "maxReconnectIntervalTimeSeconds",
+        "enableReconnectForGoAway",
+        "enableTransparentRetry",
+    ];
+    let key = key.trim();
+    if REMOVED_KEYS.contains(&key) {
+        return Err(RocketMQError::nameserver_config_invalid(format!(
+            "'{key}' was removed because the Tokio transport never implemented its advertised Netty-style behavior"
+        )));
+    }
+    Ok(())
+}
+
 pub fn validate_namesrv_config_source(source: &str) -> RocketMQResult<()> {
     for line in source.lines() {
         let candidate = line
@@ -427,6 +457,7 @@ pub fn validate_namesrv_config_source(source: &str) -> RocketMQResult<()> {
             .map(|(key, _)| key.trim().trim_matches('"').trim_matches('\''));
         if let Some(key) = candidate {
             reject_removed_route_manager_key(key)?;
+            reject_removed_transport_client_key(key)?;
         }
     }
     Ok(())
@@ -683,5 +714,17 @@ productEnvName = "useRouteInfoManagerV2"
 "#,
         )
         .expect("comments and values must not be interpreted as keys");
+    }
+
+    #[test]
+    fn removed_transport_client_field_is_a_typed_config_error() {
+        let error = validate_namesrv_config_source("clientWorkerThreads = 4")
+            .expect_err("removed transport client field must fail");
+
+        assert!(matches!(
+            error,
+            RocketMQError::Tools(rocketmq_error::ToolsError::NameServerConfigInvalid { .. })
+        ));
+        assert!(error.to_string().contains("clientWorkerThreads"));
     }
 }

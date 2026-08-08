@@ -12,10 +12,40 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Deliberate stable Transport entry points.
+//! Deliberate, versioned transport entry points.
 
-pub use crate::client::TransportClient;
+pub use crate::admission::AdmissionClass;
+pub use crate::admission::AdmissionConfigError;
+pub use crate::admission::AdmissionController;
+pub use crate::admission::AdmissionLimits;
+pub use crate::admission::AdmissionResource;
+pub use crate::admission::AdmissionScope;
+pub use crate::admission::AdmissionSnapshot;
+pub use crate::admission::FullPolicy;
+pub use crate::admission::ResourceLimit;
+pub use crate::admission::ResourceSnapshot;
+pub use crate::client::OneShotTransportClient;
+pub use crate::clients::rocketmq_tokio_client::ClientShutdownReport;
+pub use crate::clients::rocketmq_tokio_client::ClientSnapshot;
+pub use crate::clients::rocketmq_tokio_client::ClientStartReport;
+pub use crate::clients::rocketmq_tokio_client::ConnectionShutdownReport;
+pub use crate::clients::rocketmq_tokio_client::PendingUsage;
+pub use crate::clients::rocketmq_tokio_client::RemotingClient;
+pub use crate::clients::rocketmq_tokio_client::RemotingClientBuilder;
+pub use crate::clients::rocketmq_tokio_client::RequestTarget;
+pub use crate::clients::rocketmq_tokio_client::SendReceipt;
+pub use crate::clients::rocketmq_tokio_client::TransportClient;
+pub use crate::clients::rocketmq_tokio_client::TransportClientBuilder;
+pub use crate::codec::remoting_command_codec::FrameLimits;
 pub use crate::config::ServerConfig;
+pub use crate::config::SocketOptions;
+pub use crate::config::TcpKeepaliveConfig;
+pub use crate::config::TlsClientAuth;
+pub use crate::config::TlsClientConfig;
+pub use crate::config::TlsConfig;
+pub use crate::config::TlsMode;
+pub use crate::config::TlsServerConfig;
+pub use crate::deadline::RequestDeadline;
 pub use crate::dispatch::AuthorizedCommandDispatcher;
 pub use crate::dispatch::AuthorizedDispatchBoundary;
 pub use crate::dispatch::DispatchError;
@@ -26,8 +56,15 @@ pub use crate::dispatch::RequestContextError;
 pub use crate::dispatch::RequestTransport;
 pub use crate::dispatch::ResponseSink;
 pub use crate::dispatch::ResponseSinkError;
-pub use crate::remoting::RemotingService;
-pub use crate::remoting_server::rocketmq_tokio_server::RocketMQServer;
-pub use crate::runtime::config::client_config::TokioClientConfig;
-pub use crate::server::TransportServer;
+pub use crate::remoting_server::rocketmq_tokio_server::TransportServer;
+pub use crate::request_ordering::RequestOrdering;
+pub use crate::request_ordering::RequestOrderingKey;
+pub use crate::request_processor::default_request_processor::DefaultRequestProcessor;
+pub use crate::runtime::config::client_config::ConnectConfig;
+pub use crate::runtime::config::client_config::MaintenanceConfig;
+pub use crate::runtime::config::client_config::TransportClientConfig;
+pub use crate::runtime::processor::RequestProcessor;
+pub use crate::runtime::RPCHook;
+pub use crate::runtime::RPCHookArc;
+pub use crate::security::TransportSecurity;
 pub use crate::telemetry::TransportTelemetry;

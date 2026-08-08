@@ -29,10 +29,10 @@ use rocketmq_transport::AdmissionController;
 use rocketmq_transport::AdmissionLimits;
 use rocketmq_transport::Connection;
 use rocketmq_transport::ConnectionHandler;
+use rocketmq_transport::OneShotTransportClient;
 use rocketmq_transport::RequestDeadline;
 use rocketmq_transport::ResourceLimit;
 use rocketmq_transport::SessionHandle;
-use rocketmq_transport::TransportClient;
 use rocketmq_transport::TransportSecurity;
 use tokio::io::DuplexStream;
 use tokio::sync::oneshot;
@@ -305,7 +305,7 @@ async fn missing_response_uses_the_same_absolute_response_deadline() {
     });
     let runtime = RuntimeContext::from_current("deadline-no-response-test");
     let service = runtime.service_context("deadline-no-response-client");
-    let client = Arc::new(TransportClient::new(
+    let client = Arc::new(OneShotTransportClient::new(
         service,
         Arc::new(AdmissionController::new(AdmissionLimits::default())),
     ));

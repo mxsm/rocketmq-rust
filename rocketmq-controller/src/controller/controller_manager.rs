@@ -61,14 +61,13 @@ use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
+use rocketmq_transport::api::v1::TransportTelemetry;
 use rocketmq_transport::ChannelEventListener;
-use rocketmq_transport::DefaultRemotingRequestProcessor;
-use rocketmq_transport::RemotingService;
-use rocketmq_transport::RocketMQServer;
-use rocketmq_transport::RocketmqDefaultClient;
+use rocketmq_transport::DefaultRequestProcessor;
+use rocketmq_transport::RemotingClient;
 use rocketmq_transport::ServerConfig;
-use rocketmq_transport::TokioClientConfig;
-use rocketmq_transport::TransportTelemetry;
+use rocketmq_transport::TransportClientConfig;
+use rocketmq_transport::TransportServer;
 use tokio::sync::oneshot;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::time::sleep;
@@ -316,7 +315,7 @@ pub struct ControllerManager {
     heartbeat_manager: Arc<DefaultBrokerHeartbeatManager>,
 
     /// Remoting server for inbound RPC requests
-    remoting_server: Mutex<Option<RocketMQServer<ControllerRequestProcessor>>>,
+    remoting_server: Mutex<Option<TransportServer<ControllerRequestProcessor>>>,
     remoting_server_shutdown_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
     manager_task_group: Arc<Mutex<Option<TaskGroup>>>,
     leadership_watch_tasks: Arc<Mutex<Option<ScheduledTaskGroup>>>,
@@ -325,7 +324,7 @@ pub struct ControllerManager {
     security: Option<ControllerSecurity>,
 
     /// Remoting client for outbound RPC calls
-    remoting_client: Arc<RocketmqDefaultClient>,
+    remoting_client: Arc<RemotingClient>,
 
     /// Metrics manager (optional, enabled with "metrics" feature)
     #[cfg(feature = "metrics")]
@@ -447,7 +446,7 @@ impl ControllerManager {
         let transport_telemetry = TransportTelemetry::from_handle(&telemetry_handle);
         #[cfg(not(any(feature = "metrics", feature = "otel-traces")))]
         let transport_telemetry = TransportTelemetry::noop();
-        let remoting_server = Some(RocketMQServer::new_with_telemetry(
+        let remoting_server = Some(TransportServer::new_with_telemetry(
             Arc::new(server_config),
             service_context.component("controller.remoting-server"),
             transport_telemetry.clone(),
@@ -455,15 +454,19 @@ impl ControllerManager {
         info!("Remoting server created on port {}", listen_port);
 
         // Initialize remoting client for outbound RPC
-        let client_config = TokioClientConfig::default();
-        let remoting_client = Arc::new(RocketmqDefaultClient::new_with_telemetry(
-            Arc::new(client_config),
-            DefaultRemotingRequestProcessor,
-            service_context.component("controller.remoting-client"),
-            transport_telemetry,
-        ));
+        let client_config = TransportClientConfig::default();
+        let remoting_client = Arc::new(
+            RemotingClient::builder(
+                Arc::new(client_config),
+                DefaultRequestProcessor,
+                service_context.component("controller.remoting-client"),
+            )
+            .telemetry(transport_telemetry)
+            .build()
+            .map_err(|error| ControllerError::runtime_error(format!("Failed to build remoting client: {error}")))?,
+        );
         let notify_retry_base_delay = Duration::from_millis(config.snapshot().heartbeat_interval_ms.max(100));
-        let broker_role_notifier = BrokerRoleNotifier::new(remoting_client.clone(), notify_retry_base_delay);
+        let broker_role_notifier = BrokerRoleNotifier::new(remoting_client.transport_client(), notify_retry_base_delay);
         info!("Remoting client created");
 
         info!("Controller manager created successfully");
@@ -601,8 +604,8 @@ impl ControllerManager {
     /// Register request processors to the remoting server
     fn register_processor(&self) {
         // Current implementation note:
-        // The remoting_server is started with a DefaultRemotingRequestProcessor in start().
-        // Once ControllerRequestProcessor is fully implemented and RocketMQServer
+        // The remoting_server is started with a DefaultRequestProcessor in start().
+        // Once ControllerRequestProcessor is fully implemented and TransportServer
         // supports dynamic processor registration, this method should register
         // individual request code handlers.
 
@@ -752,8 +755,10 @@ impl ControllerManager {
 
         // Start remoting client (for outbound RPC calls)
         {
-            let weak_client = Arc::downgrade(&self.remoting_client);
-            self.remoting_client.start(weak_client).await;
+            if let Err(error) = self.remoting_client.start().await {
+                let error = ControllerError::runtime_error(format!("Failed to start remoting client: {error}"));
+                return Err(self.cleanup_after_start_failure(error).await);
+            }
             info!("Remoting client started");
         }
 
@@ -1015,7 +1020,7 @@ impl ControllerManager {
     /// # Returns
     ///
     /// A clone of the Arc-wrapped remoting client for making outbound RPC calls
-    pub fn remoting_client(&self) -> Arc<RocketmqDefaultClient> {
+    pub fn remoting_client(&self) -> Arc<RemotingClient> {
         self.remoting_client.clone()
     }
 
@@ -1256,7 +1261,6 @@ impl Drop for ControllerManager {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::collections::HashMap;
     use std::collections::HashSet;
     use std::net::SocketAddr;
 
@@ -1270,11 +1274,9 @@ mod tests {
     use rocketmq_protocol::protocol::header::namesrv::broker_request::BrokerHeartbeatRequestHeader;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     use rocketmq_transport::Channel;
-    use rocketmq_transport::ChannelInner;
     use rocketmq_transport::Connection;
     use rocketmq_transport::ConnectionHandlerContextWrapper;
-    use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
-    use rocketmq_transport::ResponseFuture;
+    use rocketmq_transport::RequestProcessor;
 
     fn test_telemetry_handle() -> TelemetryHandle {
         TelemetryHandle::noop()
@@ -1305,13 +1307,13 @@ mod tests {
         drop(listener);
         let tcp_stream = tokio::net::TcpStream::from_std(std_stream).expect("convert tcp stream");
         let connection = Connection::new(tcp_stream);
-        let response_table = Arc::new(parking_lot::Mutex::new(HashMap::<i32, ResponseFuture>::new()));
-        let inner = Arc::new(ChannelInner::new(
+        rocketmq_transport::test_support::TestChannelBuilder::new(
             connection,
-            response_table,
             test_service_context().component("test-channel").task_group().clone(),
-        ));
-        Channel::new(inner, local_addr, local_addr)
+        )
+        .addresses(local_addr, local_addr)
+        .build()
+        .expect("build test channel")
     }
 
     fn reserve_controller_addresses() -> (SocketAddr, SocketAddr) {
