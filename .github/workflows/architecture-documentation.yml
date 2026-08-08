@@ -95,7 +95,7 @@ jobs:
         run: >-
           sudo apt-get update &&
           sudo apt-get install -y
-          clang llvm libclang-dev cmake make ninja-build pkg-config
+          clang llvm libclang-dev cmake make ninja-build pkg-config protobuf-compiler
 
       - name: Validate architecture documentation
         run: python scripts/architecture_documentation_guard.py --check
