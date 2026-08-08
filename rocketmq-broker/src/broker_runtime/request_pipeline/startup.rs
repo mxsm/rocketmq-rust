@@ -46,8 +46,8 @@ impl BrokerRuntime {
                     detail: "broker remoting servers require an injected service context".to_owned(),
                 })?;
         let admission = Arc::new(
-            rocketmq_transport::AdmissionController::try_new_with_budget(
-                rocketmq_transport::AdmissionLimits::default(),
+            rocketmq_transport::api::v1::AdmissionController::try_new_with_budget(
+                rocketmq_transport::api::v1::AdmissionLimits::default(),
                 &service_context.process_budget(),
             )
             .map_err(|error| BrokerStartupError::Initialization {
@@ -61,9 +61,7 @@ impl BrokerRuntime {
                 Vec::new(),
                 &service_context.process_budget(),
                 self.composition.state.transport_telemetry.clone(),
-                Arc::new(rocketmq_transport::TransportSecurity::development_insecure_loopback(
-                    None, None,
-                )),
+                Arc::new(rocketmq_transport::api::v1::TransportSecurity::development_insecure_loopback(None, None)),
                 admission,
             )
             .map_err(|error| BrokerStartupError::Initialization {

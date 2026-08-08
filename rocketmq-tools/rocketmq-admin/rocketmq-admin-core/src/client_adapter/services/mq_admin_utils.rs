@@ -24,7 +24,7 @@ use rocketmq_protocol::protocol::static_topic::topic_config_and_queue_mapping::T
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_utils::TopicQueueMappingUtils;
-use rocketmq_transport::ClientMetadata;
+use rocketmq_transport::api::v1::ClientMetadata;
 
 use crate::client_adapter::services::errors;
 use rocketmq_client_rust::DefaultMQAdminExt;

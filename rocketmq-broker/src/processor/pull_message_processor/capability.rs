@@ -27,7 +27,7 @@ use rocketmq_store::BrokerReadStore;
 use rocketmq_store::BrokerStatsManager;
 use rocketmq_store::GetMessageResult;
 use rocketmq_store::MessageStoreConfig;
-use rocketmq_transport::RpcClientImpl;
+use rocketmq_transport::api::v1::RpcClientImpl;
 
 use crate::broker::broker_pre_online_capability::BrokerOnlineRoleState;
 use crate::client::manager::consumer_manager::ConsumerManager;

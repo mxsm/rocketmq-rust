@@ -33,17 +33,17 @@ use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::protocol::encoded_frame::EncodedFrame;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::RuntimeContext;
-use rocketmq_transport::AdmissionClass;
-use rocketmq_transport::AdmissionController;
-use rocketmq_transport::AdmissionLimits;
-use rocketmq_transport::AdmissionResource;
-use rocketmq_transport::AdmissionScope;
-use rocketmq_transport::DefaultRequestProcessor;
-use rocketmq_transport::FrameWriter;
-use rocketmq_transport::RemotingCommandCodec;
-use rocketmq_transport::RequestDeadline;
-use rocketmq_transport::TransportClient;
-use rocketmq_transport::TransportClientConfig;
+use rocketmq_transport::api::v1::AdmissionClass;
+use rocketmq_transport::api::v1::AdmissionController;
+use rocketmq_transport::api::v1::AdmissionLimits;
+use rocketmq_transport::api::v1::AdmissionResource;
+use rocketmq_transport::api::v1::AdmissionScope;
+use rocketmq_transport::api::v1::DefaultRequestProcessor;
+use rocketmq_transport::api::v1::RequestDeadline;
+use rocketmq_transport::api::v1::TransportClient;
+use rocketmq_transport::api::v1::TransportClientConfig;
+use rocketmq_transport::benchmark_support::FrameWriter;
+use rocketmq_transport::benchmark_support::RemotingCommandCodec;
 use tokio::io::AsyncWrite;
 use tokio_util::codec::Decoder;
 
@@ -213,7 +213,7 @@ fn benchmark_oneway(c: &mut Criterion) {
             cheetah_string::CheetahString::from_string(listener.local_addr().expect("benchmark address").to_string());
         let receiver = tokio::spawn(async move {
             let (socket, _) = listener.accept().await.expect("benchmark accept");
-            let mut connection = rocketmq_transport::Connection::new(socket);
+            let mut connection = rocketmq_transport::benchmark_support::Connection::new(socket);
             while let Some(Ok(command)) = connection.receive_command().await {
                 black_box(command);
             }

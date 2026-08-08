@@ -68,9 +68,9 @@ use rocketmq_store::PopCheckPoint;
 use rocketmq_store::SelectMappedBufferCacheState;
 use rocketmq_store::SelectMappedBufferResult;
 use rocketmq_store::SelectMappedBufferSourceKind;
-use rocketmq_transport::Channel;
-use rocketmq_transport::ConnectionHandlerContext;
-use rocketmq_transport::RequestProcessor;
+use rocketmq_transport::api::v1::Channel;
+use rocketmq_transport::api::v1::ConnectionHandlerContext;
+use rocketmq_transport::api::v1::RequestProcessor;
 use tokio::select;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::sync::Notify;
@@ -1682,8 +1682,8 @@ mod tests {
     use rocketmq_store::AckMsg;
     use rocketmq_store::LocalFileMessageStore;
     use rocketmq_store::MessageStoreConfig;
-    use rocketmq_transport::Connection;
-    use rocketmq_transport::ConnectionHandlerContextWrapper;
+    use rocketmq_transport::api::v1::ConnectionHandlerContextWrapper;
+    use rocketmq_transport::test_support::Connection;
 
     use super::*;
     use crate::broker_runtime::BrokerRuntime;

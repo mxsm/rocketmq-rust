@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![cfg(feature = "test-support")]
+
 use std::future;
 use std::net::IpAddr;
 use std::net::Ipv4Addr;
@@ -31,27 +33,27 @@ use rocketmq_security_api::AuthenticatedRequestContext;
 use rocketmq_security_api::Decision;
 use rocketmq_security_api::Principal;
 use rocketmq_security_api::RequestPolicy;
+use rocketmq_transport::api::v1::AdmissionClass;
+use rocketmq_transport::api::v1::AdmissionController;
+use rocketmq_transport::api::v1::AdmissionLimits;
+use rocketmq_transport::api::v1::AdmissionResource;
+use rocketmq_transport::api::v1::AdmissionScope;
 use rocketmq_transport::api::v1::AuthorizedCommandDispatcher;
+use rocketmq_transport::api::v1::Channel;
+use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use rocketmq_transport::api::v1::DispatchError;
 use rocketmq_transport::api::v1::RequestContext;
 use rocketmq_transport::api::v1::RequestContextError;
+use rocketmq_transport::api::v1::RequestDeadline;
+use rocketmq_transport::api::v1::RequestProcessor;
+use rocketmq_transport::api::v1::ResourceLimit;
 use rocketmq_transport::api::v1::ResponseSinkError;
+use rocketmq_transport::api::v1::ServerConfig;
+use rocketmq_transport::api::v1::TransportSecurity;
+use rocketmq_transport::api::v1::TransportServer;
 use rocketmq_transport::api::v1::TransportTelemetry;
-use rocketmq_transport::transport_io_snapshot;
-use rocketmq_transport::AdmissionClass;
-use rocketmq_transport::AdmissionController;
-use rocketmq_transport::AdmissionLimits;
-use rocketmq_transport::AdmissionResource;
-use rocketmq_transport::AdmissionScope;
-use rocketmq_transport::Channel;
-use rocketmq_transport::Connection;
-use rocketmq_transport::ConnectionHandlerContext;
-use rocketmq_transport::RequestDeadline;
-use rocketmq_transport::RequestProcessor;
-use rocketmq_transport::ResourceLimit;
-use rocketmq_transport::ServerConfig;
-use rocketmq_transport::TransportSecurity;
-use rocketmq_transport::TransportServer;
+use rocketmq_transport::test_support::transport_io_snapshot;
+use rocketmq_transport::test_support::Connection;
 use tokio::net::TcpStream;
 use tokio::sync::oneshot;
 

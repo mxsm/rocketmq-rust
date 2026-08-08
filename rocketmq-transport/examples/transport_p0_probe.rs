@@ -34,16 +34,16 @@ use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::RuntimeContext;
 use rocketmq_runtime::ShutdownDeadline;
-use rocketmq_transport::connect_with_config;
-use rocketmq_transport::AdmissionController;
-use rocketmq_transport::AdmissionLimits;
-use rocketmq_transport::FrameLimits;
-use rocketmq_transport::RequestDeadline;
-use rocketmq_transport::ResourceLimit;
-use rocketmq_transport::SessionProcessor as RequestProcessor;
-use rocketmq_transport::SessionTransportServer;
-use rocketmq_transport::SessionTransportServerConfig;
-use rocketmq_transport::TlsConfig;
+use rocketmq_transport::api::v1::AdmissionController;
+use rocketmq_transport::api::v1::AdmissionLimits;
+use rocketmq_transport::api::v1::FrameLimits;
+use rocketmq_transport::api::v1::RequestDeadline;
+use rocketmq_transport::api::v1::ResourceLimit;
+use rocketmq_transport::api::v1::TlsConfig;
+use rocketmq_transport::benchmark_support::connect_with_config;
+use rocketmq_transport::benchmark_support::SessionProcessor as RequestProcessor;
+use rocketmq_transport::benchmark_support::SessionTransportServer;
+use rocketmq_transport::benchmark_support::SessionTransportServerConfig;
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 
@@ -298,7 +298,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn observation(snapshot: rocketmq_transport::ResourceSnapshot) -> ResourceObservation {
+fn observation(snapshot: rocketmq_transport::api::v1::ResourceSnapshot) -> ResourceObservation {
     ResourceObservation {
         current_count: snapshot.current_count,
         current_bytes: snapshot.current_bytes,

@@ -12,10 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![cfg(feature = "test-support")]
+
 use bytes::BytesMut;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_transport::FrameLimits;
-use rocketmq_transport::RemotingCommandCodec;
+use rocketmq_transport::api::v1::FrameLimits;
+use rocketmq_transport::test_support::RemotingCommandCodec;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 

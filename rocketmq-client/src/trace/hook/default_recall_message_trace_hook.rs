@@ -22,7 +22,7 @@ use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::recall_message_request_header::RecallMessageRequestHeader;
 use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_transport::RPCHook;
+use rocketmq_transport::api::v1::RPCHook;
 
 use crate::trace::trace_bean::TraceBean;
 use crate::trace::trace_context::TraceContext;

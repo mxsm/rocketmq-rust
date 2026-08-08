@@ -32,10 +32,10 @@ use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_protocol::protocol::heartbeat::heartbeat_data::HeartbeatData;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_store::BrokerStorePort;
-use rocketmq_transport::request_code_not_supported_with_remark_and_opaque;
-use rocketmq_transport::Channel;
-use rocketmq_transport::ConnectionHandlerContext;
-use rocketmq_transport::RequestProcessor;
+use rocketmq_transport::api::v1::request_code_not_supported_with_remark_and_opaque;
+use rocketmq_transport::api::v1::Channel;
+use rocketmq_transport::api::v1::ConnectionHandlerContext;
+use rocketmq_transport::api::v1::RequestProcessor;
 use tracing::info;
 use tracing::warn;
 
@@ -449,14 +449,14 @@ mod tests {
     use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
     use rocketmq_protocol::protocol::heartbeat::producer_data::ProducerData;
     use rocketmq_store::MessageStoreConfig;
-    use rocketmq_transport::ConnectionHandlerContextWrapper;
+    use rocketmq_transport::api::v1::ConnectionHandlerContextWrapper;
     use tokio::net::TcpStream;
 
     use super::*;
     use crate::broker_runtime::BrokerRuntime;
     use rocketmq_protocol::code::response_code::ResponseCode as RemotingResponseCode;
     use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
-    use rocketmq_transport::Connection;
+    use rocketmq_transport::test_support::Connection;
 
     #[test]
     fn production_processor_has_no_complete_runtime_owner() {

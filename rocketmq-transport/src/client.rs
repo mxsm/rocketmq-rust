@@ -44,6 +44,10 @@ use crate::tls::connect_tls_stream;
 use crate::tls::tls_disabled_error;
 use rocketmq_security_api::PeerInfo;
 
+#[allow(
+    dead_code,
+    reason = "diagnostic fields are exposed only through the feature-gated test and benchmark adapters"
+)]
 pub struct ConnectedTransport {
     connection: Connection,
     local_addr: SocketAddr,
@@ -52,6 +56,10 @@ pub struct ConnectedTransport {
     socket_nodelay: bool,
 }
 
+#[allow(
+    dead_code,
+    reason = "diagnostic accessors are exposed only through the feature-gated test and benchmark adapters"
+)]
 impl ConnectedTransport {
     pub fn local_addr(&self) -> SocketAddr {
         self.local_addr
@@ -77,6 +85,10 @@ impl ConnectedTransport {
 
 /// Connects TCP, negotiates optional TLS, and installs the canonical framed transport under one
 /// absolute deadline.
+#[allow(
+    dead_code,
+    reason = "the no-telemetry convenience wrapper is exposed only by test_support and benchmark_support"
+)]
 pub async fn connect_with_config(
     address: &str,
     tls_config: &TlsConfig,

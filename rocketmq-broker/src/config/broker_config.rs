@@ -33,7 +33,7 @@ use rocketmq_model::common::topic::TopicValidator;
 use rocketmq_observability::LogExporterType;
 use rocketmq_observability::MetricsExporterType;
 use rocketmq_observability::TraceExporterType;
-use rocketmq_transport::ServerConfig;
+use rocketmq_transport::api::v1::ServerConfig;
 
 pub static NAMESRV_ADDR: std::sync::LazyLock<Option<String>> =
     std::sync::LazyLock::new(|| std::env::var(NAMESRV_ADDR_PROPERTY).map_or(Some("127.0.0.1:9876".to_string()), Some));

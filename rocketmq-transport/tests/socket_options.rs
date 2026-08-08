@@ -12,14 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![cfg(feature = "test-support")]
+
 use std::time::Duration;
 
+use rocketmq_transport::api::v1::FrameLimits;
+use rocketmq_transport::api::v1::RequestDeadline;
+use rocketmq_transport::api::v1::SocketOptions;
+use rocketmq_transport::api::v1::TlsConfig;
 use rocketmq_transport::api::v1::TransportTelemetry;
-use rocketmq_transport::connect_with_config_options_and_telemetry;
-use rocketmq_transport::FrameLimits;
-use rocketmq_transport::RequestDeadline;
-use rocketmq_transport::SocketOptions;
-use rocketmq_transport::TlsConfig;
+use rocketmq_transport::test_support::connect_with_config_options_and_telemetry;
 use tokio::net::TcpListener;
 
 #[tokio::test]

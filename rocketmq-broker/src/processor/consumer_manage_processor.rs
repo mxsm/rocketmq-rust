@@ -27,13 +27,13 @@ use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_context::Topi
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_utils::TopicQueueMappingUtils;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_store::BrokerStorePort;
-use rocketmq_transport::request_code_not_supported_with_remark_and_opaque;
-use rocketmq_transport::Channel;
-use rocketmq_transport::ConnectionHandlerContext;
-use rocketmq_transport::RequestProcessor;
-use rocketmq_transport::RpcClient;
-use rocketmq_transport::RpcClientImpl;
-use rocketmq_transport::RpcRequest;
+use rocketmq_transport::api::v1::request_code_not_supported_with_remark_and_opaque;
+use rocketmq_transport::api::v1::Channel;
+use rocketmq_transport::api::v1::ConnectionHandlerContext;
+use rocketmq_transport::api::v1::RequestProcessor;
+use rocketmq_transport::api::v1::RpcClient;
+use rocketmq_transport::api::v1::RpcClientImpl;
+use rocketmq_transport::api::v1::RpcRequest;
 use tracing::info;
 use tracing::warn;
 

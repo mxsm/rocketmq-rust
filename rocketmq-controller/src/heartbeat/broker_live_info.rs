@@ -15,7 +15,7 @@
 use std::fmt;
 
 use cheetah_string::CheetahString;
-use rocketmq_transport::Channel;
+use rocketmq_transport::api::v1::Channel;
 
 pub trait RemotingChannel: Send + Sync {}
 
@@ -163,7 +163,7 @@ impl fmt::Debug for BrokerLiveInfo {
 mod tests {
     use std::net::SocketAddr;
 
-    use rocketmq_transport::Connection;
+    use rocketmq_transport::test_support::Connection;
 
     use super::*;
 

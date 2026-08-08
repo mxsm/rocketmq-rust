@@ -19,11 +19,11 @@ use std::time::Instant;
 use rocketmq_observability::metrics::namesrv::NameServerMetrics;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_transport::request_code_not_supported_with_opaque;
-use rocketmq_transport::Channel;
-use rocketmq_transport::ConnectionHandlerContext;
-use rocketmq_transport::RejectRequestResponse;
-use rocketmq_transport::RequestProcessor;
+use rocketmq_transport::api::v1::request_code_not_supported_with_opaque;
+use rocketmq_transport::api::v1::Channel;
+use rocketmq_transport::api::v1::ConnectionHandlerContext;
+use rocketmq_transport::api::v1::RejectRequestResponse;
+use rocketmq_transport::api::v1::RequestProcessor;
 
 pub use self::client_request_processor::ClientRequestProcessor;
 pub use self::cluster_test_request_processor::ClusterTestRequestProcessor;

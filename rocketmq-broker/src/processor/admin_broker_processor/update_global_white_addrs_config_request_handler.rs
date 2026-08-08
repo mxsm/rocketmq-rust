@@ -19,7 +19,7 @@ use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::update_global_white_addrs_config_request_header::UpdateGlobalWhiteAddrsConfigRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_transport::Channel;
+use rocketmq_transport::api::v1::Channel;
 
 use crate::auth::auth_admin_service::AuthAdminService;
 
@@ -36,7 +36,7 @@ impl UpdateGlobalWhiteAddrsConfigRequestHandler {
     pub async fn update_global_white_addrs_config(
         &self,
         _channel: Channel,
-        _ctx: rocketmq_transport::ConnectionHandlerContext,
+        _ctx: rocketmq_transport::api::v1::ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -102,8 +102,8 @@ mod tests {
     use rocketmq_auth::AuthConfig;
     use rocketmq_auth::ProviderRegistry;
     use rocketmq_store::MessageStoreConfig;
-    use rocketmq_transport::Connection;
-    use rocketmq_transport::ConnectionHandlerContextWrapper;
+    use rocketmq_transport::api::v1::ConnectionHandlerContextWrapper;
+    use rocketmq_transport::test_support::Connection;
 
     use super::*;
     use crate::broker_runtime::BrokerRuntime;

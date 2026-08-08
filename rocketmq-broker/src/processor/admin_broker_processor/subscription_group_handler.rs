@@ -30,8 +30,8 @@ use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::BrokerAdminStore;
-use rocketmq_transport::Channel;
-use rocketmq_transport::ConnectionHandlerContext;
+use rocketmq_transport::api::v1::Channel;
+use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use tracing::info;
 
 use crate::broker::broker_admin_runtime::BrokerAdminRuntime;
@@ -453,9 +453,9 @@ mod tests {
     use rocketmq_protocol::protocol::subscription::group_forbidden::GroupForbidden;
     use rocketmq_protocol::protocol::RemotingSerializable;
     use rocketmq_store::MessageStoreConfig;
-    use rocketmq_transport::Channel;
-    use rocketmq_transport::Connection;
-    use rocketmq_transport::ConnectionHandlerContextWrapper;
+    use rocketmq_transport::api::v1::Channel;
+    use rocketmq_transport::api::v1::ConnectionHandlerContextWrapper;
+    use rocketmq_transport::test_support::Connection;
 
     use super::*;
     use crate::broker_runtime::BrokerRuntime;

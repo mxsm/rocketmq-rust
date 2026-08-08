@@ -35,10 +35,10 @@ use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_store::BrokerAdminStore;
 use rocketmq_store::MessageFilter;
 use rocketmq_store::PutMessageStatus;
-use rocketmq_transport::Channel;
-use rocketmq_transport::ConnectionHandlerContext;
-use rocketmq_transport::RpcClient;
-use rocketmq_transport::RpcRequest;
+use rocketmq_transport::api::v1::Channel;
+use rocketmq_transport::api::v1::ConnectionHandlerContext;
+use rocketmq_transport::api::v1::RpcClient;
+use rocketmq_transport::api::v1::RpcRequest;
 use serde::Serialize;
 use std::time::Duration;
 
@@ -522,9 +522,9 @@ mod tests {
     use rocketmq_store::BrokerReadStore;
     use rocketmq_store::DispatchRequest;
     use rocketmq_store::MessageStoreConfig;
-    use rocketmq_transport::Channel;
-    use rocketmq_transport::Connection;
-    use rocketmq_transport::ConnectionHandlerContextWrapper;
+    use rocketmq_transport::api::v1::Channel;
+    use rocketmq_transport::api::v1::ConnectionHandlerContextWrapper;
+    use rocketmq_transport::test_support::Connection;
 
     use super::cq_ext_unit_response_serialize_error;
     use super::MessageRelatedHandler;

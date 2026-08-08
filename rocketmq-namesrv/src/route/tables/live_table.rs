@@ -23,8 +23,8 @@ use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use rocketmq_protocol::protocol::DataVersion;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_transport::Channel;
-use rocketmq_transport::ChannelId;
+use rocketmq_transport::api::v1::Channel;
+use rocketmq_transport::api::v1::ChannelId;
 
 use crate::route_info::broker_addr_info::BrokerAddrInfo;
 

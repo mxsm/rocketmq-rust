@@ -30,9 +30,9 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_security_api::Action;
 use rocketmq_security_api::ResourcePattern;
 use rocketmq_security_api::ResourceType;
-use rocketmq_transport::Channel;
-use rocketmq_transport::ConnectionHandlerContext;
-use rocketmq_transport::ConnectionHandlerContextWrapper;
+use rocketmq_transport::api::v1::Channel;
+use rocketmq_transport::api::v1::ConnectionHandlerContext;
+use rocketmq_transport::api::v1::ConnectionHandlerContextWrapper;
 
 use crate::authentication::enums::subject_type::SubjectType;
 use crate::authorization::builder::AuthorizationContextBuilder;

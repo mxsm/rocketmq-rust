@@ -45,7 +45,7 @@ use rocketmq_proxy::SubscriptionGroupMetadata;
 use rocketmq_proxy_core::ProxyContext;
 use rocketmq_proxy_core::ProxyServiceFuture;
 use rocketmq_runtime::RuntimeContext;
-use rocketmq_transport::Connection;
+use rocketmq_transport::test_support::Connection;
 use std::collections::BTreeMap;
 use tokio::sync::oneshot;
 use tokio::time::timeout;

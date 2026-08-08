@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![cfg(feature = "test-support")]
+
 use std::io;
 use std::io::IoSlice;
 use std::pin::Pin;
@@ -22,7 +24,7 @@ use std::task::Poll;
 
 use rocketmq_protocol::protocol::encoded_frame::EncodedFrame;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_transport::Connection;
+use rocketmq_transport::test_support::Connection;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
 use tokio::io::ReadBuf;

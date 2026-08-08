@@ -35,7 +35,7 @@ use rocketmq_runtime::RateLimit;
 use rocketmq_runtime::ResourceBudget;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
-use rocketmq_transport::ConnectionHandlerContext;
+use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use tokio::select;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::sync::Notify;
@@ -55,7 +55,7 @@ fn prune_empty_polling_queues(polling_map: &DashMap<CheetahString, SkipSet<Arc<P
 pub(crate) trait LocalPopLiteLongPollingRequestProcessor {
     async fn process_request_when_wakeup(
         &self,
-        channel: rocketmq_transport::Channel,
+        channel: rocketmq_transport::api::v1::Channel,
         ctx: ConnectionHandlerContext,
         request: RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>>;

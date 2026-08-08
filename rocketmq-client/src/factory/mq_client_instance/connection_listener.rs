@@ -18,7 +18,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use rocketmq_runtime::ChildServiceContext;
-use rocketmq_transport::ConnectionNetEvent;
+use rocketmq_transport::api::v1::ConnectionNetEvent;
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 use tracing::error;

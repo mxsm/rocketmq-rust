@@ -104,6 +104,10 @@ impl SessionIoPolicy {
     }
 }
 
+#[allow(
+    dead_code,
+    reason = "the low-level session harness is exposed only by test_support and benchmark_support"
+)]
 pub trait SessionProcessor: Send + Sync + 'static {
     fn process(
         &self,
@@ -405,18 +409,24 @@ impl TransportListener {
         }
     }
 
+    #[allow(
+        dead_code,
+        reason = "custom idle policy is used by the feature-gated session harness"
+    )]
     pub fn with_idle_timeout(mut self, idle_timeout: Duration) -> Self {
         self.io_policy.idle_timeout = idle_timeout;
         self
     }
 
     /// Applies explicit idle and write-stall budgets to accepted sessions.
+    #[allow(dead_code, reason = "custom I/O policy is used by the feature-gated session harness")]
     #[must_use]
     pub fn with_io_policy(mut self, io_policy: SessionIoPolicy) -> Self {
         self.io_policy = io_policy;
         self
     }
 
+    #[allow(dead_code, reason = "custom security is used by the feature-gated session harness")]
     pub fn with_security(mut self, security: Arc<TransportSecurity>, principal: Option<Principal>) -> Self {
         self.dispatch = Arc::new(AuthorizedDispatchBoundary::new(
             security,
@@ -444,6 +454,10 @@ impl TransportListener {
     }
 
     #[must_use]
+    #[allow(
+        dead_code,
+        reason = "custom socket policy is used by the feature-gated session harness"
+    )]
     pub fn with_socket_options(mut self, socket_options: SocketOptions) -> Self {
         self.socket_options = socket_options;
         self
@@ -766,6 +780,10 @@ async fn accept_transport_connection(
 }
 
 #[derive(Debug, Clone)]
+#[allow(
+    dead_code,
+    reason = "the low-level session server is exposed only by test_support and benchmark_support"
+)]
 pub struct SessionTransportServerConfig {
     pub bind_address: SocketAddr,
     pub tls: TlsConfig,
@@ -776,6 +794,10 @@ pub struct SessionTransportServerConfig {
     pub file_transfer_mode: FileTransferMode,
 }
 
+#[allow(
+    dead_code,
+    reason = "the low-level session server is exposed only by test_support and benchmark_support"
+)]
 impl SessionTransportServerConfig {
     pub fn loopback() -> Self {
         let mut tls = TlsConfig::default();
@@ -792,6 +814,10 @@ impl SessionTransportServerConfig {
     }
 }
 
+#[allow(
+    dead_code,
+    reason = "the low-level session server is exposed only by test_support and benchmark_support"
+)]
 pub struct SessionTransportServer {
     local_addr: SocketAddr,
     listener: Mutex<Option<tokio::net::TcpListener>>,
@@ -807,10 +833,12 @@ pub struct SessionTransportServer {
     telemetry: TransportTelemetry,
 }
 
+#[allow(dead_code, reason = "owned by the feature-gated low-level session server")]
 struct ActiveSessionGuard {
     server: Arc<SessionTransportServer>,
 }
 
+#[allow(dead_code, reason = "owned by the feature-gated low-level session server")]
 impl ActiveSessionGuard {
     fn new(server: Arc<SessionTransportServer>) -> Self {
         server.active_sessions.fetch_add(1, Ordering::AcqRel);
@@ -824,6 +852,7 @@ impl Drop for ActiveSessionGuard {
     }
 }
 
+#[allow(dead_code, reason = "owned by the feature-gated low-level session server")]
 struct ProcessorSessionHandler {
     processor: Arc<dyn SessionProcessor>,
     request_timeout: Duration,
@@ -874,6 +903,10 @@ impl ConnectionHandler for ProcessorSessionHandler {
     }
 }
 
+#[allow(
+    dead_code,
+    reason = "the low-level session server is exposed only by test_support and benchmark_support"
+)]
 impl SessionTransportServer {
     pub async fn bind(
         service_context: ChildServiceContext,

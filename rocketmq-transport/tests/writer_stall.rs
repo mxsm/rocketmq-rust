@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![cfg(feature = "test-support")]
+
 use std::future::Future;
 use std::io;
 use std::io::IoSlice;
@@ -24,16 +26,16 @@ use std::time::Duration;
 
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::RuntimeContext;
-use rocketmq_transport::run_connected_session_with_io_policy;
-use rocketmq_transport::AdmissionController;
-use rocketmq_transport::AdmissionLimits;
-use rocketmq_transport::Connection;
-use rocketmq_transport::ConnectionHandler;
-use rocketmq_transport::ConnectionState;
-use rocketmq_transport::SessionHandle;
-use rocketmq_transport::SessionIoPolicy;
-use rocketmq_transport::TransportSecurity;
-use rocketmq_transport::WriterQueueConfig;
+use rocketmq_transport::api::v1::AdmissionController;
+use rocketmq_transport::api::v1::AdmissionLimits;
+use rocketmq_transport::api::v1::ConnectionState;
+use rocketmq_transport::api::v1::TransportSecurity;
+use rocketmq_transport::test_support::run_connected_session_with_io_policy;
+use rocketmq_transport::test_support::Connection;
+use rocketmq_transport::test_support::ConnectionHandler;
+use rocketmq_transport::test_support::SessionHandle;
+use rocketmq_transport::test_support::SessionIoPolicy;
+use rocketmq_transport::test_support::WriterQueueConfig;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
 use tokio::io::ReadBuf;

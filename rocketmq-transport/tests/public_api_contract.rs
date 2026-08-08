@@ -20,6 +20,17 @@ use rocketmq_transport::api::v1::ServerConfig;
 #[test]
 fn transport_consumers_use_only_versioned_capabilities_and_dtos() {
     let source = include_str!("../src/lib.rs");
+    assert!(
+        source.lines().all(|line| {
+            let line = line.trim_start();
+            !line.starts_with("pub use ") || line == "pub use crate::public_api::*;"
+        }),
+        "crate-root re-exports bypass the versioned `api::v1` compatibility boundary"
+    );
+    assert!(source.contains("pub mod api {"));
+    assert!(source.contains("pub mod v1 {"));
+    assert!(source.contains("pub use crate::public_api::*;"));
+
     for module in [
         "admission",
         "base",

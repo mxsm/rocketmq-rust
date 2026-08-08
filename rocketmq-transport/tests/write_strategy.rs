@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![cfg(feature = "test-support")]
+
 use std::future::Future;
 use std::io;
 use std::io::IoSlice;
@@ -32,16 +34,16 @@ use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::encoded_frame::EncodedFrame;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::RuntimeContext;
-use rocketmq_transport::run_connected_session;
-use rocketmq_transport::AdmissionController;
-use rocketmq_transport::AdmissionLimits;
-use rocketmq_transport::Connection;
-use rocketmq_transport::ConnectionHandler;
-use rocketmq_transport::FrameWriteMode;
-use rocketmq_transport::FrameWriter;
-use rocketmq_transport::RequestDeadline;
-use rocketmq_transport::SessionHandle;
-use rocketmq_transport::TransportSecurity;
+use rocketmq_transport::api::v1::AdmissionController;
+use rocketmq_transport::api::v1::AdmissionLimits;
+use rocketmq_transport::api::v1::RequestDeadline;
+use rocketmq_transport::api::v1::TransportSecurity;
+use rocketmq_transport::test_support::run_connected_session;
+use rocketmq_transport::test_support::Connection;
+use rocketmq_transport::test_support::ConnectionHandler;
+use rocketmq_transport::test_support::FrameWriteMode;
+use rocketmq_transport::test_support::FrameWriter;
+use rocketmq_transport::test_support::SessionHandle;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
 use tokio::io::ReadBuf;

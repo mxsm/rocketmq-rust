@@ -85,14 +85,14 @@ use rocketmq_proxy_core::ProxyDrainPhase;
 use rocketmq_proxy_core::ProxyDrainSnapshot;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ShutdownReport;
+use rocketmq_transport::api::v1::Channel;
+use rocketmq_transport::api::v1::ConnectionHandlerContext;
+use rocketmq_transport::api::v1::RejectRequestResponse;
+use rocketmq_transport::api::v1::RemotingDeserializable;
+use rocketmq_transport::api::v1::RequestProcessor;
+use rocketmq_transport::api::v1::ServerConfig;
+use rocketmq_transport::api::v1::TransportServer;
 use rocketmq_transport::api::v1::TransportTelemetry;
-use rocketmq_transport::Channel;
-use rocketmq_transport::ConnectionHandlerContext;
-use rocketmq_transport::RejectRequestResponse;
-use rocketmq_transport::RemotingDeserializable;
-use rocketmq_transport::RequestProcessor;
-use rocketmq_transport::ServerConfig;
-use rocketmq_transport::TransportServer;
 use tokio::net::TcpListener;
 use tracing::warn;
 
@@ -1692,10 +1692,10 @@ mod tests {
     use rocketmq_runtime::ServiceLifecycle;
     use rocketmq_runtime::ServiceLifecycleConfig;
     use rocketmq_security_api::Action;
+    use rocketmq_transport::api::v1::RemotingDeserializable;
+    use rocketmq_transport::api::v1::RemotingSerializable;
+    use rocketmq_transport::api::v1::RequestProcessor;
     use rocketmq_transport::test_support::LocalRequestHarness;
-    use rocketmq_transport::RemotingDeserializable;
-    use rocketmq_transport::RemotingSerializable;
-    use rocketmq_transport::RequestProcessor;
     use tokio::time::timeout;
 
     use super::ProxyRemotingBackend;

@@ -16,8 +16,8 @@ use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_store::BrokerAdminStore;
-use rocketmq_transport::Channel;
-use rocketmq_transport::ConnectionHandlerContext;
+use rocketmq_transport::api::v1::Channel;
+use rocketmq_transport::api::v1::ConnectionHandlerContext;
 
 use crate::broker::broker_admin_runtime::BrokerAdminRuntime;
 
@@ -82,8 +82,8 @@ mod tests {
     use rocketmq_protocol::protocol::body::ha_runtime_info::HARuntimeInfo;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     use rocketmq_store::MessageStoreConfig;
-    use rocketmq_transport::Connection;
-    use rocketmq_transport::ConnectionHandlerContextWrapper;
+    use rocketmq_transport::api::v1::ConnectionHandlerContextWrapper;
+    use rocketmq_transport::test_support::Connection;
 
     use crate::broker_runtime::BrokerRuntime;
 

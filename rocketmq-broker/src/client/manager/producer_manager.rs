@@ -26,9 +26,9 @@ use rocketmq_protocol::protocol::body::producer_info::ProducerInfo;
 use rocketmq_protocol::protocol::body::producer_table_info::ProducerTableInfo;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::BrokerStatsManager;
-use rocketmq_transport::Channel;
-use rocketmq_transport::ConnectionHandlerContext;
-use rocketmq_transport::ConnectionState;
+use rocketmq_transport::api::v1::Channel;
+use rocketmq_transport::api::v1::ConnectionHandlerContext;
+use rocketmq_transport::api::v1::ConnectionState;
 use tracing::info;
 use tracing::warn;
 
@@ -820,7 +820,7 @@ mod tests {
     use std::sync::Arc;
 
     use rocketmq_protocol::protocol::LanguageCode;
-    use rocketmq_transport::Connection;
+    use rocketmq_transport::test_support::Connection;
     use tokio::net::TcpStream;
 
     use super::*;

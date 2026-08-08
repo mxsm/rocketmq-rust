@@ -50,7 +50,7 @@ use rocketmq_model::common::message::message_single::Message;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::route::route_data_view::QueueData;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
-use rocketmq_transport::RPCHook;
+use rocketmq_transport::api::v1::RPCHook;
 
 fn build_acl_request(body_size: usize) -> RemotingCommand {
     let mut request = RemotingCommand::create_remoting_command(10).set_body(Bytes::from(vec![b'a'; body_size]));

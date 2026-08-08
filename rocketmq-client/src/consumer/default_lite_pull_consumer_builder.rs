@@ -20,7 +20,7 @@ use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_model::common::message::message_enum::MessageRequestMode;
 use rocketmq_model::common::mix_all;
 use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
-use rocketmq_transport::RPCHook;
+use rocketmq_transport::api::v1::RPCHook;
 
 use crate::base::client_config::ClientConfig;
 use crate::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrategy;

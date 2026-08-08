@@ -17,8 +17,8 @@
 use rocketmq_protocol::protocol::encoded_frame::EncodedFrame;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_transport::benchmark_support;
-use rocketmq_transport::FrameWriteMode;
-use rocketmq_transport::FrameWriter;
+use rocketmq_transport::test_support::FrameWriteMode;
+use rocketmq_transport::test_support::FrameWriter;
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;

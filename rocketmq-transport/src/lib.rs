@@ -14,12 +14,13 @@
 
 //! Bounded TCP/TLS transport ownership boundary.
 //!
-//! File-backed frames use [`FileRegion`] to retain an immutable storage lease through writer
+//! File-backed frames use [`api::v1::FileRegion`] to retain an immutable storage lease through writer
 //! completion. Portable transfers read one reusable 64 KiB buffer on the runtime-owned blocking
-//! I/O lane. With the default-off `linux-sendfile` feature, [`FileTransferMode::Auto`] selects
-//! Linux `sendfile` for plaintext TCP regions of at least 64 KiB after a cached capability
-//! preflight; unsupported filesystems fall back before any frame bytes are written. TLS always
-//! uses portable reads so that payload bytes still pass through the userspace rustls record layer.
+//! I/O lane. With the default-off `linux-sendfile` feature,
+//! [`api::v1::FileTransferMode::Auto`] selects Linux `sendfile` for plaintext TCP regions of at
+//! least 64 KiB after a cached capability preflight; unsupported filesystems fall back before any
+//! frame bytes are written. TLS always uses portable reads so that payload bytes still pass
+//! through the userspace rustls record layer.
 //!
 //! `Bytes` sharing and vectored writes are userspace less-copy techniques. Only the optional
 //! plaintext file-region backend avoids the file-to-userspace body copy; it does not imply NIC
@@ -69,53 +70,6 @@ mod tls;
 mod write_strategy;
 mod writer_runtime;
 
-pub use admission::AdmissionClass;
-pub use admission::AdmissionConfigError;
-pub use admission::AdmissionController;
-pub use admission::AdmissionLimits;
-pub use admission::AdmissionResource;
-pub use admission::AdmissionScope;
-pub use admission::AdmissionSnapshot;
-pub use admission::FullPolicy;
-pub use admission::ResourceLimit;
-pub use admission::ResourceSnapshot;
-pub use base::channel_event_listener::ChannelEventListener;
-pub use base::connection_net_event::ConnectionNetEvent;
-pub use client::connect_with_config;
-pub use client::connect_with_config_and_telemetry;
-pub use client::connect_with_config_options_and_telemetry;
-pub use clients::rocketmq_tokio_client::ClientShutdownReport;
-pub use clients::rocketmq_tokio_client::ClientStartReport;
-pub use clients::rocketmq_tokio_client::ConnectionShutdownReport;
-pub use clients::rocketmq_tokio_client::RemotingClient;
-pub use clients::rocketmq_tokio_client::RemotingClientBuilder;
-pub use clients::rocketmq_tokio_client::TransportClient;
-pub use clients::rocketmq_tokio_client::TransportClientBuilder;
-pub use codec::remoting_command_codec::FrameLimits;
-pub use codec::remoting_command_codec::RemotingCommandCodec;
-pub use common::heartbeat_v2_result::HeartbeatV2Result;
-pub use common::remoting_helper::RemotingHelper;
-pub use config::SocketOptions;
-pub use config::TcpKeepaliveConfig;
-pub use config::TlsClientAuth;
-pub use config::TlsClientConfig;
-pub use config::TlsConfig;
-pub use config::TlsMode;
-pub use config::TlsServerConfig;
-pub use config_support::network_util::NetworkUtil;
-pub use connection::transport_io_snapshot;
-pub use connection::Connection;
-pub use connection::ConnectionState;
-pub use connection_context::ConnectionContext;
-pub use deadline::RequestDeadline;
-pub use discovery::default_top_addressing::DefaultTopAddressing;
-pub use discovery::http_tiny_client::HttpResult;
-pub use discovery::http_tiny_client::HttpTinyClient;
-pub use discovery::name_server_update_callback::NameServerUpdateCallback;
-pub use discovery::top_addressing::TopAddressing;
-pub use net::channel::ArcChannel;
-pub use net::channel::Channel;
-pub use net::channel::ChannelId;
 /// Versioned, intentionally curated public API.
 pub mod api {
     /// Stable source API for the 1.x release line.
@@ -123,87 +77,3 @@ pub mod api {
         pub use crate::public_api::*;
     }
 }
-
-// Small root conveniences retained for composition roots. New integrations
-// should prefer `api::v1` so additions do not accidentally become stable.
-pub use public_api::OneShotTransportClient;
-pub use public_api::ServerConfig;
-pub use public_api::TransportClientConfig;
-pub use public_api::TransportServer;
-pub use request_ordering::RequestOrdering;
-pub use request_ordering::RequestOrderingKey;
-pub use request_processor::default_request_processor::DefaultRequestProcessor;
-pub use rocketmq_protocol::protocol::RemotingDeserializable;
-pub use rocketmq_protocol::protocol::RemotingSerializable;
-pub use rpc::client_metadata::ClientMetadata;
-pub use rpc::rpc_client::RpcClient;
-pub use rpc::rpc_client::RpcClientLocal;
-pub use rpc::rpc_client_hook::RpcClientHookFn;
-pub use rpc::rpc_client_impl::RpcClientImpl;
-pub use rpc::rpc_client_utils::RpcClientUtils;
-pub use rpc::rpc_request::RpcRequest;
-pub use rpc::rpc_request_header::RpcRequestHeader;
-pub use rpc::rpc_response::RpcResponse;
-pub use rpc::topic_request_header::TopicRequestHeader;
-pub use runtime::connection_handler_context::ConnectionHandlerContext;
-pub use runtime::connection_handler_context::ConnectionHandlerContextWrapper;
-pub use runtime::processor::LocalRequestProcessor;
-pub use runtime::processor::RejectRequestResponse;
-pub use runtime::processor::RequestProcessor;
-pub use runtime::RPCHook;
-pub use runtime::RPCHookArc;
-pub use security::TransportSecurity;
-pub use server::run_connected_session;
-pub use server::run_connected_session_with_io_policy;
-pub use server::ConnectionHandler;
-pub use server::SessionHandle;
-pub use server::SessionIoPolicy;
-pub use server::SessionProcessor;
-#[doc(hidden)]
-pub use server::SessionTransportServer;
-#[doc(hidden)]
-pub use server::SessionTransportServerConfig;
-pub use server::TransportListener;
-pub use tls::tls_disabled_error;
-#[cfg(feature = "tls")]
-pub use tls::TlsReloadReport;
-pub use tls::TlsServerRuntime;
-pub use write_strategy::FrameWriteMode;
-pub use write_strategy::FrameWriter;
-pub use writer_runtime::MicroBatchConfig;
-pub use writer_runtime::WriterQueueConfig;
-
-pub use error_helpers::abort_process_error;
-pub use error_helpers::channel_recv_failed;
-pub use error_helpers::channel_send_failed;
-pub use error_helpers::connection_invalid;
-pub use error_helpers::decoder_error;
-pub use error_helpers::decoding_error;
-pub use error_helpers::deserialize_header_error;
-pub use error_helpers::encoder_error;
-pub use error_helpers::illegal_argument;
-pub use error_helpers::io_error;
-pub use error_helpers::remote_error;
-pub use error_helpers::unsupported_serialize_type;
-pub use error_response::apply_error_to_response;
-pub use error_response::command_from_error;
-pub use error_response::command_from_error_with_opaque;
-pub use error_response::command_from_error_with_remark;
-pub use error_response::command_from_error_with_remark_and_opaque;
-pub use error_response::internal_error;
-pub use error_response::internal_error_with_opaque;
-pub use error_response::invalid_parameter_with_remark;
-pub use error_response::invalid_parameter_with_remark_and_opaque;
-pub use error_response::no_permission_with_remark;
-pub use error_response::no_permission_with_remark_and_opaque;
-pub use error_response::query_not_found_with_remark;
-pub use error_response::query_not_found_with_remark_and_opaque;
-pub use error_response::request_code_not_supported;
-pub use error_response::request_code_not_supported_with_opaque;
-pub use error_response::request_code_not_supported_with_remark;
-pub use error_response::request_code_not_supported_with_remark_and_opaque;
-pub use file_region::FileRegion;
-pub use file_region::FileRegionLease;
-pub use file_region::FileTransferMode;
-pub use file_region_writer::file_transfer_snapshot;
-pub use file_region_writer::FileTransferSnapshot;

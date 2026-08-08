@@ -37,7 +37,7 @@ use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
-use rocketmq_transport::ClientMetadata;
+use rocketmq_transport::api::v1::ClientMetadata;
 use tracing::info;
 use tracing::warn;
 

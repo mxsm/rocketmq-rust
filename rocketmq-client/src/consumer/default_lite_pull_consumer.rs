@@ -30,7 +30,7 @@ use rocketmq_protocol::protocol::body::consumer_running_info::ConsumerRunningInf
 use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
-use rocketmq_transport::RPCHook;
+use rocketmq_transport::api::v1::RPCHook;
 use tokio::sync::OnceCell;
 use tokio::sync::RwLock;
 

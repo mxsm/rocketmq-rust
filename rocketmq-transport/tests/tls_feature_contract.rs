@@ -12,9 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_transport::TlsConfig;
-use rocketmq_transport::TlsMode;
-use rocketmq_transport::TlsServerRuntime;
+#![cfg(feature = "test-support")]
+
+use rocketmq_transport::api::v1::TlsConfig;
+use rocketmq_transport::api::v1::TlsMode;
+use rocketmq_transport::api::v1::TlsServerRuntime;
 
 #[tokio::test]
 async fn tls_runtime_preserves_default_permissive_mode() {
@@ -30,6 +32,6 @@ async fn tls_runtime_preserves_default_permissive_mode() {
 #[cfg(not(feature = "tls"))]
 #[test]
 fn tls_off_reports_a_typed_disabled_error() {
-    let error = rocketmq_transport::tls_disabled_error();
+    let error = rocketmq_transport::test_support::tls_disabled_error();
     assert!(error.to_string().contains("compiled without the tls feature"));
 }

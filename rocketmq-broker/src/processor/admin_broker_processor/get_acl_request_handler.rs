@@ -20,7 +20,7 @@ use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::get_acl_request_header::GetAclRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingSerializable;
-use rocketmq_transport::Channel;
+use rocketmq_transport::api::v1::Channel;
 
 use crate::auth::auth_admin_service::AuthAdminService;
 
@@ -37,7 +37,7 @@ impl GetAclRequestHandler {
     pub async fn get_acl(
         &self,
         _channel: Channel,
-        _ctx: rocketmq_transport::ConnectionHandlerContext,
+        _ctx: rocketmq_transport::api::v1::ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -97,9 +97,9 @@ mod tests {
     use rocketmq_protocol::protocol::RemotingSerializable;
     use rocketmq_security_api::Action;
     use rocketmq_store::MessageStoreConfig;
-    use rocketmq_transport::Channel;
-    use rocketmq_transport::Connection;
-    use rocketmq_transport::ConnectionHandlerContextWrapper;
+    use rocketmq_transport::api::v1::Channel;
+    use rocketmq_transport::api::v1::ConnectionHandlerContextWrapper;
+    use rocketmq_transport::test_support::Connection;
 
     use super::*;
     use crate::auth::auth_admin_service::AuthAdminService;

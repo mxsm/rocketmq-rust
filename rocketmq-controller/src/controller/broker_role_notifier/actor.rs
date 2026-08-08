@@ -22,7 +22,7 @@ use parking_lot::Mutex;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
-use rocketmq_transport::TransportClient;
+use rocketmq_transport::api::v1::TransportClient;
 use tokio::sync::mpsc;
 use tracing::info;
 use tracing::warn;

@@ -60,9 +60,9 @@ use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_security_api::Action;
-use rocketmq_transport::Channel;
-use rocketmq_transport::ConnectionHandlerContext;
-use rocketmq_transport::ConnectionHandlerContextWrapper;
+use rocketmq_transport::api::v1::Channel;
+use rocketmq_transport::api::v1::ConnectionHandlerContext;
+use rocketmq_transport::api::v1::ConnectionHandlerContextWrapper;
 use tonic::Request;
 #[cfg(feature = "cluster-mode")]
 use tracing::warn;

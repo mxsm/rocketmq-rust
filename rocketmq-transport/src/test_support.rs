@@ -23,11 +23,31 @@ use rocketmq_error::RocketMQResult;
 use rocketmq_runtime::TaskGroup;
 
 use crate::base::pending_request_table::PendingRequestTable;
-use crate::connection::Connection;
 use crate::net::channel::Channel;
 use crate::net::channel::ChannelInner;
 
+pub use crate::client::connect_with_config;
+pub use crate::client::connect_with_config_and_telemetry;
+pub use crate::client::connect_with_config_options_and_telemetry;
+pub use crate::codec::remoting_command_codec::RemotingCommandCodec;
+pub use crate::connection::transport_io_snapshot;
+pub use crate::connection::Connection;
 pub use crate::local::LocalRequestHarness;
+pub use crate::server::run_connected_session;
+pub use crate::server::run_connected_session_with_io_policy;
+pub use crate::server::ConnectionHandler;
+pub use crate::server::SessionHandle;
+pub use crate::server::SessionIoPolicy;
+pub use crate::server::SessionProcessor;
+pub use crate::server::SessionTransportServer;
+pub use crate::server::SessionTransportServerConfig;
+pub use crate::server::TransportListener;
+#[cfg(not(feature = "tls"))]
+pub use crate::tls::tls_disabled_error;
+pub use crate::write_strategy::FrameWriteMode;
+pub use crate::write_strategy::FrameWriter;
+pub use crate::writer_runtime::MicroBatchConfig;
+pub use crate::writer_runtime::WriterQueueConfig;
 
 /// Builds a real transport-backed channel for downstream tests without
 /// exposing response-table or channel ownership internals.

@@ -51,6 +51,7 @@ use crate::connection::Connection;
 const TLS_HANDSHAKE_MAGIC_CODE: u8 = 0x16;
 #[cfg(feature = "tls")]
 const TLS_RELOAD_POLL_INTERVAL: Duration = Duration::from_secs(5);
+#[cfg(not(feature = "tls"))]
 pub const TLS_DISABLED_ERROR_REASON: &str = "rocketmq-transport was compiled without the tls feature";
 
 /// A canonical connection paired with the result of TLS negotiation.
@@ -910,6 +911,7 @@ async fn peek_tls_handshake(stream: &TcpStream) -> std::io::Result<bool> {
     Ok(read > 0 && first_byte[0] == TLS_HANDSHAKE_MAGIC_CODE)
 }
 
+#[cfg(not(feature = "tls"))]
 pub fn tls_disabled_error() -> RocketMQError {
     RocketMQError::ConfigInvalidValue {
         key: "use_tls",

@@ -14,4 +14,4 @@
 
 //! Compatibility path for the transport-owned server envelope.
 
-pub use rocketmq_transport::ServerConfig;
+pub use rocketmq_transport::api::v1::ServerConfig;

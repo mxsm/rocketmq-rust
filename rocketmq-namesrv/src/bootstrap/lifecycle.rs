@@ -20,7 +20,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use rocketmq_runtime::ShutdownReport;
-use rocketmq_transport::ClientShutdownReport;
+use rocketmq_transport::api::v1::ClientShutdownReport;
 use serde::Serialize;
 use tokio::sync::Notify;
 

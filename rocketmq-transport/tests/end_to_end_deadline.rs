@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![cfg(feature = "test-support")]
+
 use std::future::Future;
 use std::net::SocketAddr;
 use std::pin::Pin;
@@ -24,16 +26,16 @@ use rocketmq_error::NetworkError;
 use rocketmq_error::RocketMQError;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::RuntimeContext;
-use rocketmq_transport::run_connected_session;
-use rocketmq_transport::AdmissionController;
-use rocketmq_transport::AdmissionLimits;
-use rocketmq_transport::Connection;
-use rocketmq_transport::ConnectionHandler;
-use rocketmq_transport::OneShotTransportClient;
-use rocketmq_transport::RequestDeadline;
-use rocketmq_transport::ResourceLimit;
-use rocketmq_transport::SessionHandle;
-use rocketmq_transport::TransportSecurity;
+use rocketmq_transport::api::v1::AdmissionController;
+use rocketmq_transport::api::v1::AdmissionLimits;
+use rocketmq_transport::api::v1::OneShotTransportClient;
+use rocketmq_transport::api::v1::RequestDeadline;
+use rocketmq_transport::api::v1::ResourceLimit;
+use rocketmq_transport::api::v1::TransportSecurity;
+use rocketmq_transport::test_support::run_connected_session;
+use rocketmq_transport::test_support::Connection;
+use rocketmq_transport::test_support::ConnectionHandler;
+use rocketmq_transport::test_support::SessionHandle;
 use tokio::io::DuplexStream;
 use tokio::sync::oneshot;
 

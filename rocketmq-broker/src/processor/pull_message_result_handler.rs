@@ -21,8 +21,8 @@ use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_context::Topi
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_store::ArcMessageFilter;
 use rocketmq_store::GetMessageResult;
-use rocketmq_transport::Channel;
-use rocketmq_transport::ConnectionHandlerContext;
+use rocketmq_transport::api::v1::Channel;
+use rocketmq_transport::api::v1::ConnectionHandlerContext;
 
 /// Trait defining the behavior for handling the result of a pull message request.
 ///

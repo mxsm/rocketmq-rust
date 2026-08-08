@@ -144,6 +144,10 @@ impl OutboundPayload {
 
 /// Socket-write representation selected after TCP/TLS negotiation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(
+    dead_code,
+    reason = "explicit TLS comparison modes are exposed only by test_support and benchmark_support"
+)]
 pub enum FrameWriteMode {
     /// Preserve prefix, header, and body through to vectored plaintext writes.
     PlainVectored,
@@ -203,6 +207,10 @@ impl Drop for WriteCancellationGuard<'_> {
     }
 }
 
+#[allow(
+    dead_code,
+    reason = "direct writer controls are exposed only by test_support and benchmark_support"
+)]
 impl<W> FrameWriter<W>
 where
     W: AsyncWrite + Unpin,
