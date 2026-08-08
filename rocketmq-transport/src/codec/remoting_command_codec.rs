@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use bytes::BytesMut;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
@@ -22,9 +20,8 @@ use rocketmq_protocol::protocol::encoded_frame::EncodedFrame;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
 use crate::admission::AdmissionClass;
-use crate::admission::AdmissionController;
 use crate::admission::AdmissionResource;
-use crate::admission::AdmissionScope;
+use crate::admission::AdmissionScopeHandle;
 use crate::admission::PartialFramePermit;
 
 /// A decoded command together with the complete frame size retained while processing it.
@@ -233,17 +230,15 @@ impl Encoder<RemotingCommand> for RemotingCommandCodec {
 
 pub(crate) struct SessionCommandDecoder {
     inner: RemotingCommandCodec,
-    admission: Arc<AdmissionController>,
-    scope: AdmissionScope,
+    admission: AdmissionScopeHandle,
     partial_frame_permit: Option<PartialFramePermit>,
 }
 
 impl SessionCommandDecoder {
-    pub(crate) fn new(inner: RemotingCommandCodec, admission: Arc<AdmissionController>, scope: AdmissionScope) -> Self {
+    pub(crate) fn new(inner: RemotingCommandCodec, admission: AdmissionScopeHandle) -> Self {
         Self {
             inner,
             admission,
-            scope,
             partial_frame_permit: None,
         }
     }
@@ -271,7 +266,6 @@ impl SessionCommandDecoder {
             .admission
             .try_acquire(
                 AdmissionResource::PartialFrame,
-                self.scope,
                 retained_frame_bytes,
                 AdmissionClass::Data,
             )

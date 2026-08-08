@@ -16,12 +16,15 @@ use std::future::Future;
 use std::marker::PhantomData;
 use std::net::SocketAddr;
 use std::pin::Pin;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
 use crate::config::TlsConfig;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::OperationContext;
 use rocketmq_runtime::ResourceBudget;
@@ -72,6 +75,7 @@ pub struct Client<PR> {
     task_lifecycle: Arc<ClientTaskLifecycle>,
     transport_security: Arc<TransportSecurity>,
     peer: PeerInfo,
+    last_used_millis: Arc<AtomicU64>,
     _processor: PhantomData<fn() -> PR>,
 }
 
@@ -325,6 +329,7 @@ where
             task_lifecycle,
             transport_security: Arc::new(TransportSecurity::development_insecure_loopback(None, None)),
             peer: PeerInfo::new(remote_address, negotiated_tls),
+            last_used_millis: Arc::new(AtomicU64::new(current_millis())),
             _processor: PhantomData,
         })
     }
@@ -339,6 +344,7 @@ where
         request: &mut RemotingCommand,
         deadline: RequestDeadline,
     ) -> RocketMQResult<()> {
+        self.last_used_millis.store(current_millis(), Ordering::Release);
         let transport_security = &self.transport_security;
         let target = self.peer.address().to_string();
         deadline.ensure_before_send(target.clone())?;
@@ -636,6 +642,15 @@ where
 
     pub fn remote_address(&self) -> SocketAddr {
         self.channel.remote_address()
+    }
+
+    pub(crate) fn idle_for_at(&self, now_millis: u64) -> Duration {
+        Duration::from_millis(now_millis.saturating_sub(self.last_used_millis.load(Ordering::Acquire)))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_last_used_millis_for_test(&self, millis: u64) {
+        self.last_used_millis.store(millis, Ordering::Release);
     }
 
     pub(crate) fn retire_after_timeout(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {

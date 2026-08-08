@@ -92,7 +92,12 @@ pub mod metrics {
     pub const ROCKSDB_TIMES_READ: &str = "rocketmq_rocksdb_times_read";
     pub const TRANSPORT_REQUESTS_TOTAL: &str = "rocketmq_transport_requests_total";
     pub const TRANSPORT_REQUEST_LATENCY: &str = "rocketmq_transport_request_latency";
-    pub const TRANSPORT_NETWORK_BYTES: &str = "rocketmq_transport_network_bytes";
+    pub const TRANSPORT_OUTBOUND_ATTEMPTED_PLAINTEXT_BYTES: &str =
+        "rocketmq_transport_outbound_attempted_plaintext_bytes";
+    pub const TRANSPORT_OUTBOUND_ACCEPTED_PLAINTEXT_BYTES: &str =
+        "rocketmq_transport_outbound_accepted_plaintext_bytes";
+    pub const TRANSPORT_OUTBOUND_WRITTEN_PLAINTEXT_BYTES: &str = "rocketmq_transport_outbound_written_plaintext_bytes";
+    pub const TRANSPORT_INBOUND_DECODED_PLAINTEXT_BYTES: &str = "rocketmq_transport_inbound_decoded_plaintext_bytes";
     pub const TRANSPORT_LIFECYCLE_EVENTS_TOTAL: &str = "rocketmq_transport_lifecycle_events_total";
     pub const TRANSPORT_LIFECYCLE_LISTENER_LATENCY: &str = "rocketmq_transport_lifecycle_listener_latency";
     pub const RPC_LATENCY: &str = "rocketmq_rpc_latency";

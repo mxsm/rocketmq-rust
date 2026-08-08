@@ -61,9 +61,36 @@ impl TransportTelemetry {
     }
 
     #[inline]
-    pub(crate) fn record_network_bytes(&self, bytes: usize) {
+    pub(crate) fn record_outbound_attempted_plaintext_bytes(&self, bytes: usize) {
         #[cfg(feature = "observability")]
-        self.remoting.record_network_bytes(bytes as u64);
+        self.remoting.record_outbound_attempted_plaintext_bytes(bytes as u64);
+
+        #[cfg(not(feature = "observability"))]
+        let _ = bytes;
+    }
+
+    #[inline]
+    pub(crate) fn record_outbound_accepted_plaintext_bytes(&self, bytes: usize) {
+        #[cfg(feature = "observability")]
+        self.remoting.record_outbound_accepted_plaintext_bytes(bytes as u64);
+
+        #[cfg(not(feature = "observability"))]
+        let _ = bytes;
+    }
+
+    #[inline]
+    pub(crate) fn record_outbound_written_plaintext_bytes(&self, bytes: usize) {
+        #[cfg(feature = "observability")]
+        self.remoting.record_outbound_written_plaintext_bytes(bytes as u64);
+
+        #[cfg(not(feature = "observability"))]
+        let _ = bytes;
+    }
+
+    #[inline]
+    pub(crate) fn record_inbound_decoded_plaintext_bytes(&self, bytes: usize) {
+        #[cfg(feature = "observability")]
+        self.remoting.record_inbound_decoded_plaintext_bytes(bytes as u64);
 
         #[cfg(not(feature = "observability"))]
         let _ = bytes;
@@ -168,7 +195,9 @@ mod tests {
     #[test]
     fn noop_transport_telemetry_covers_request_and_network_paths() {
         let telemetry = TransportTelemetry::noop();
-        telemetry.record_network_bytes(128);
+        telemetry.record_outbound_attempted_plaintext_bytes(128);
+        telemetry.record_outbound_accepted_plaintext_bytes(128);
+        telemetry.record_outbound_written_plaintext_bytes(128);
         telemetry.record_lifecycle_event("connected", "queued");
         telemetry.record_lifecycle_listener_latency(std::time::Duration::from_millis(1), "connected");
         assert!(telemetry.request_span(10, 1).is_disabled());

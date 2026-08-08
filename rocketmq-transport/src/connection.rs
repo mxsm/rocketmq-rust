@@ -12,14 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::VecDeque;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
-use std::sync::Mutex;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -28,19 +26,17 @@ use cheetah_string::CheetahString;
 use futures_util::StreamExt;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
-use tokio::io::ReadHalf;
-use tokio::io::WriteHalf;
 use tokio::net::TcpStream;
-use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
 use tokio_util::codec::FramedRead;
 use uuid::Uuid;
 
 use crate::admission::AdmissionClass;
-use crate::admission::AdmissionController;
 use crate::admission::AdmissionResource;
-use crate::admission::AdmissionScope;
+use crate::admission::AdmissionScopeHandle;
+use crate::backend::ReadBackend;
+use crate::backend::WriteBackend;
 use crate::codec::remoting_command_codec::FrameLimits;
 use crate::codec::remoting_command_codec::RemotingCommandCodec;
 use crate::codec::remoting_command_codec::SessionCommandDecoder;
@@ -51,6 +47,7 @@ use crate::write_strategy::FrameWriter;
 use crate::write_strategy::OutboundPayload;
 use crate::write_strategy::QueuedWrite;
 use crate::write_strategy::QueuedWriteProgress;
+use crate::writer_runtime::WriterLanes;
 use rocketmq_protocol::protocol::encoded_frame::EncodedFrame;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::ResourcePermit;
@@ -115,10 +112,9 @@ impl Drop for SessionSendLease<'_> {
 }
 
 struct QueuedConnection {
-    writer: mpsc::Sender<QueuedWrite>,
+    writer: WriterLanes,
     writer_diagnostics: Arc<SessionWriterDiagnostics>,
-    admission: Arc<AdmissionController>,
-    scope: AdmissionScope,
+    admission: AdmissionScopeHandle,
     response_class: Option<AdmissionClass>,
     lifecycle: Arc<SessionLifecycle>,
 }
@@ -131,9 +127,9 @@ pub trait ConnectionTransport: AsyncRead + AsyncWrite + Send + Unpin {}
 impl<T> ConnectionTransport for T where T: AsyncRead + AsyncWrite + Send + Unpin {}
 
 pub type BoxedConnectionTransport = Box<dyn ConnectionTransport>;
-type ConnectionReadHalf = FramedRead<ReadHalf<BoxedConnectionTransport>, RemotingCommandCodec>;
-pub(crate) type SessionConnectionReadHalf = FramedRead<ReadHalf<BoxedConnectionTransport>, SessionCommandDecoder>;
-pub(crate) type ConnectionFrameWriter = FrameWriter<WriteHalf<BoxedConnectionTransport>>;
+type ConnectionReadHalf = FramedRead<ReadBackend, RemotingCommandCodec>;
+pub(crate) type SessionConnectionReadHalf = FramedRead<ReadBackend, SessionCommandDecoder>;
+pub(crate) type ConnectionFrameWriter = FrameWriter<WriteBackend>;
 
 enum ConnectionWriter {
     Direct(ConnectionFrameWriter),
@@ -159,6 +155,12 @@ pub struct SessionWriterSnapshot {
     pub capacity: usize,
     pub queued_items: usize,
     pub queued_bytes: usize,
+    pub control_capacity: usize,
+    pub control_queued_items: usize,
+    pub control_queued_bytes: usize,
+    pub data_capacity: usize,
+    pub data_queued_items: usize,
+    pub data_queued_bytes: usize,
     pub oldest_queue_age_millis: Option<u64>,
     pub accepted: u64,
     pub rejected: u64,
@@ -172,123 +174,106 @@ pub struct SessionWriterSnapshot {
 }
 
 #[derive(Debug)]
-struct WriterQueueEntry {
-    id: u64,
-    bytes: usize,
-    enqueued_at: Instant,
-}
-
-#[derive(Debug, Default)]
-struct SessionWriterDiagnosticsState {
-    next_id: u64,
-    queue: VecDeque<WriterQueueEntry>,
-    accepted: u64,
-    rejected: u64,
-    completed: u64,
-    failed: u64,
-    deadline_expired: u64,
-    last_queue_age: Duration,
-    max_queue_age: Duration,
-    last_write_latency: Duration,
-    max_write_latency: Duration,
-}
-
-#[derive(Debug)]
 pub(crate) struct SessionWriterDiagnostics {
     capacity: usize,
-    state: Mutex<SessionWriterDiagnosticsState>,
+    queued_items: AtomicUsize,
+    queued_bytes: AtomicUsize,
+    accepted: AtomicU64,
+    rejected: AtomicU64,
+    completed: AtomicU64,
+    failed: AtomicU64,
+    deadline_expired: AtomicU64,
+    last_queue_age_millis: AtomicU64,
+    max_queue_age_millis: AtomicU64,
+    last_write_latency_millis: AtomicU64,
+    max_write_latency_millis: AtomicU64,
 }
 
 impl SessionWriterDiagnostics {
     pub(crate) fn new(capacity: usize) -> Self {
         Self {
             capacity,
-            state: Mutex::new(SessionWriterDiagnosticsState::default()),
+            queued_items: AtomicUsize::new(0),
+            queued_bytes: AtomicUsize::new(0),
+            accepted: AtomicU64::new(0),
+            rejected: AtomicU64::new(0),
+            completed: AtomicU64::new(0),
+            failed: AtomicU64::new(0),
+            deadline_expired: AtomicU64::new(0),
+            last_queue_age_millis: AtomicU64::new(0),
+            max_queue_age_millis: AtomicU64::new(0),
+            last_write_latency_millis: AtomicU64::new(0),
+            max_write_latency_millis: AtomicU64::new(0),
         }
     }
 
-    pub(crate) fn prepare_enqueue(&self, bytes: usize) -> u64 {
-        let mut state = self.state();
-        state.next_id = state.next_id.wrapping_add(1).max(1);
-        let id = state.next_id;
-        state.queue.push_back(WriterQueueEntry {
-            id,
-            bytes,
-            enqueued_at: Instant::now(),
-        });
-        id
+    pub(crate) fn prepare_enqueue(&self, bytes: usize) -> Instant {
+        self.queued_items.fetch_add(1, Ordering::AcqRel);
+        self.queued_bytes.fetch_add(bytes, Ordering::AcqRel);
+        Instant::now()
     }
 
     pub(crate) fn record_accepted(&self) {
-        let mut state = self.state();
-        state.accepted = state.accepted.saturating_add(1);
+        self.accepted.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(crate) fn record_rejected(&self, prepared_id: Option<u64>) {
-        let mut state = self.state();
-        if let Some(id) = prepared_id {
-            state.queue.retain(|entry| entry.id != id);
+    pub(crate) fn record_rejected(&self, prepared_bytes: Option<usize>) {
+        if let Some(bytes) = prepared_bytes {
+            self.queued_items.fetch_sub(1, Ordering::AcqRel);
+            self.queued_bytes.fetch_sub(bytes, Ordering::AcqRel);
         }
-        state.rejected = state.rejected.saturating_add(1);
+        self.rejected.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(crate) fn start_write(&self, id: u64) -> Instant {
+    pub(crate) fn start_write(&self, enqueued_at: Option<Instant>, bytes: usize) -> Instant {
         let now = Instant::now();
-        let mut state = self.state();
-        if let Some(index) = state.queue.iter().position(|entry| entry.id == id) {
-            let Some(entry) = state.queue.remove(index) else {
-                return now;
-            };
-            let queue_age = now.saturating_duration_since(entry.enqueued_at);
-            state.last_queue_age = queue_age;
-            state.max_queue_age = state.max_queue_age.max(queue_age);
+        if let Some(enqueued_at) = enqueued_at {
+            self.queued_items.fetch_sub(1, Ordering::AcqRel);
+            self.queued_bytes.fetch_sub(bytes, Ordering::AcqRel);
+            let queue_age = duration_millis(now.saturating_duration_since(enqueued_at));
+            self.last_queue_age_millis.store(queue_age, Ordering::Relaxed);
+            self.max_queue_age_millis.fetch_max(queue_age, Ordering::Relaxed);
         }
         now
     }
 
     pub(crate) fn finish_write(&self, started_at: Instant, succeeded: bool, deadline_expired: bool) {
-        let write_latency = started_at.elapsed();
-        let mut state = self.state();
-        state.last_write_latency = write_latency;
-        state.max_write_latency = state.max_write_latency.max(write_latency);
+        let write_latency = duration_millis(started_at.elapsed());
+        self.last_write_latency_millis.store(write_latency, Ordering::Relaxed);
+        self.max_write_latency_millis
+            .fetch_max(write_latency, Ordering::Relaxed);
         if succeeded {
-            state.completed = state.completed.saturating_add(1);
+            self.completed.fetch_add(1, Ordering::Relaxed);
         } else {
-            state.failed = state.failed.saturating_add(1);
+            self.failed.fetch_add(1, Ordering::Relaxed);
         }
         if deadline_expired {
-            state.deadline_expired = state.deadline_expired.saturating_add(1);
+            self.deadline_expired.fetch_add(1, Ordering::Relaxed);
         }
     }
 
     pub(crate) fn snapshot(&self) -> SessionWriterSnapshot {
-        let state = self.state();
-        let now = Instant::now();
         SessionWriterSnapshot {
             capacity: self.capacity,
-            queued_items: state.queue.len(),
-            queued_bytes: state
-                .queue
-                .iter()
-                .fold(0_usize, |total, entry| total.saturating_add(entry.bytes)),
-            oldest_queue_age_millis: state
-                .queue
-                .front()
-                .map(|entry| duration_millis(now.saturating_duration_since(entry.enqueued_at))),
-            accepted: state.accepted,
-            rejected: state.rejected,
-            completed: state.completed,
-            failed: state.failed,
-            deadline_expired: state.deadline_expired,
-            last_queue_age_millis: duration_millis(state.last_queue_age),
-            max_queue_age_millis: duration_millis(state.max_queue_age),
-            last_write_latency_millis: duration_millis(state.last_write_latency),
-            max_write_latency_millis: duration_millis(state.max_write_latency),
+            queued_items: self.queued_items.load(Ordering::Acquire),
+            queued_bytes: self.queued_bytes.load(Ordering::Acquire),
+            control_capacity: 0,
+            control_queued_items: 0,
+            control_queued_bytes: 0,
+            data_capacity: 0,
+            data_queued_items: 0,
+            data_queued_bytes: 0,
+            oldest_queue_age_millis: None,
+            accepted: self.accepted.load(Ordering::Relaxed),
+            rejected: self.rejected.load(Ordering::Relaxed),
+            completed: self.completed.load(Ordering::Relaxed),
+            failed: self.failed.load(Ordering::Relaxed),
+            deadline_expired: self.deadline_expired.load(Ordering::Relaxed),
+            last_queue_age_millis: self.last_queue_age_millis.load(Ordering::Relaxed),
+            max_queue_age_millis: self.max_queue_age_millis.load(Ordering::Relaxed),
+            last_write_latency_millis: self.last_write_latency_millis.load(Ordering::Relaxed),
+            max_write_latency_millis: self.max_write_latency_millis.load(Ordering::Relaxed),
         }
-    }
-
-    fn state(&self) -> std::sync::MutexGuard<'_, SessionWriterDiagnosticsState> {
-        self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
@@ -489,7 +474,7 @@ impl Connection {
     /// });
     /// ```
     pub fn new(tcp_stream: TcpStream) -> Connection {
-        Self::new_with_plaintext_stream(tcp_stream)
+        Self::new_with_limits(tcp_stream, FrameLimits::default())
     }
 
     /// Creates a TCP connection bound to one explicit transport telemetry instance.
@@ -498,7 +483,13 @@ impl Connection {
     }
 
     pub fn new_with_limits(tcp_stream: TcpStream, limits: FrameLimits) -> Connection {
-        Self::new_with_plaintext_stream_and_limits(tcp_stream, limits)
+        let (read_half, write_half) = tcp_stream.into_split();
+        Self::new_with_backends(
+            ReadBackend::Tcp(read_half),
+            WriteBackend::Tcp(write_half),
+            limits,
+            FrameWriteMode::PlainVectored,
+        )
     }
 
     /// Creates a plaintext connection over any compatible async stream.
@@ -534,8 +525,9 @@ impl Connection {
         Self::new_with_stream_limits_and_write_mode(
             stream,
             limits,
-            FrameWriteMode::TlsCoalesced {
+            FrameWriteMode::TlsAuto {
                 max_plaintext_frame_bytes,
+                coalesce_below_bytes: 16 * 1024,
             },
         )
     }
@@ -550,6 +542,20 @@ impl Connection {
     {
         let transport = Box::new(stream) as BoxedConnectionTransport;
         let (read_half, write_half) = tokio::io::split(transport);
+        Self::new_with_backends(
+            ReadBackend::Compat(read_half),
+            WriteBackend::Compat(write_half),
+            limits,
+            write_mode,
+        )
+    }
+
+    fn new_with_backends(
+        read_half: ReadBackend,
+        write_half: WriteBackend,
+        limits: FrameLimits,
+        write_mode: FrameWriteMode,
+    ) -> Connection {
         let inbound = FramedRead::with_capacity(
             read_half,
             RemotingCommandCodec::with_limits(limits),
@@ -580,10 +586,9 @@ impl Connection {
     }
 
     pub(crate) fn new_queued(
-        writer: mpsc::Sender<QueuedWrite>,
+        writer: WriterLanes,
         writer_diagnostics: Arc<SessionWriterDiagnostics>,
-        admission: Arc<AdmissionController>,
-        scope: AdmissionScope,
+        admission: AdmissionScopeHandle,
         state_tx: watch::Sender<ConnectionState>,
         state_rx: watch::Receiver<ConnectionState>,
         connection_id: ConnectionId,
@@ -597,7 +602,6 @@ impl Connection {
                 writer,
                 writer_diagnostics,
                 admission,
-                scope,
                 response_class,
                 lifecycle,
             }),
@@ -617,8 +621,7 @@ impl Connection {
 
     pub(crate) fn into_session_io(
         self,
-        admission: Arc<AdmissionController>,
-        scope: AdmissionScope,
+        admission: AdmissionScopeHandle,
     ) -> (ConnectionFrameWriter, SessionConnectionReadHalf) {
         let writer = match self.outbound {
             ConnectionWriter::Direct(writer) => writer,
@@ -627,7 +630,7 @@ impl Connection {
         let reader = self
             .inbound
             .unwrap_or_else(|| unreachable!("session runtime requires an owned transport reader"))
-            .map_decoder(|decoder| SessionCommandDecoder::new(decoder, admission, scope));
+            .map_decoder(|decoder| SessionCommandDecoder::new(decoder, admission));
         (writer, reader)
     }
 
@@ -683,6 +686,7 @@ impl Connection {
         target: String,
     ) -> rocketmq_error::RocketMQResult<()> {
         let encoded_len = payload.encoded_len();
+        self.telemetry.record_outbound_attempted_plaintext_bytes(encoded_len);
         if let Some(deadline) = deadline {
             deadline.ensure_before_send(target.clone())?;
         }
@@ -716,14 +720,10 @@ impl Connection {
                 }
             }
             let permit = match reservation {
-                Some(reservation) => {
-                    queued
-                        .admission
-                        .rebind_permit(AdmissionResource::Queued, queued.scope, reservation)
-                }
+                Some(reservation) => queued.admission.rebind_permit(AdmissionResource::Queued, reservation),
                 None => queued
                     .admission
-                    .try_acquire(AdmissionResource::Queued, queued.scope, encoded_len, class),
+                    .try_acquire(AdmissionResource::Queued, encoded_len, class),
             }
             .map_err(|_| {
                 queued.writer_diagnostics.record_rejected(None);
@@ -734,24 +734,30 @@ impl Connection {
             }
             let (completion, result) = oneshot::channel();
             let progress = deadline.map(|_| Arc::new(QueuedWriteProgress::waiting()));
-            let queue_id = queued.writer_diagnostics.prepare_enqueue(encoded_len);
-            match queued.writer.try_send(QueuedWrite::data(
-                payload,
-                completion,
-                permit,
-                deadline,
-                target.clone(),
-                progress.clone(),
-                queue_id,
-            )) {
-                Ok(()) => queued.writer_diagnostics.record_accepted(),
+            let enqueued_at = queued.writer_diagnostics.prepare_enqueue(encoded_len);
+            match queued.writer.try_send(
+                class,
+                QueuedWrite::data(
+                    payload,
+                    completion,
+                    permit,
+                    deadline,
+                    target.clone(),
+                    progress.clone(),
+                    enqueued_at,
+                ),
+            ) {
+                Ok(()) => {
+                    queued.writer_diagnostics.record_accepted();
+                    self.telemetry.record_outbound_accepted_plaintext_bytes(encoded_len);
+                }
                 Err(error) => {
-                    queued.writer_diagnostics.record_rejected(Some(queue_id));
+                    queued.writer_diagnostics.record_rejected(Some(encoded_len));
                     return Err(match error {
-                        tokio::sync::mpsc::error::TrySendError::Full(_) => {
+                        crate::writer_runtime::WriterEnqueueError::Full => {
                             rocketmq_error::RocketMQError::network_queue_full(target.clone())
                         }
-                        tokio::sync::mpsc::error::TrySendError::Closed(_) => {
+                        crate::writer_runtime::WriterEnqueueError::Closed => {
                             rocketmq_error::RocketMQError::network_connection_failed(
                                 target.clone(),
                                 "writer queue closed",
@@ -782,6 +788,7 @@ impl Connection {
                 "connection is closed",
             ));
         }
+        self.telemetry.record_outbound_accepted_plaintext_bytes(encoded_len);
         let writer = match &mut self.outbound {
             ConnectionWriter::Direct(writer) => writer,
             ConnectionWriter::Queued(_) => unreachable!("queued writer returned above"),
@@ -805,6 +812,7 @@ impl Connection {
         match send_result {
             Ok(()) => {
                 record_transport_write(encoded_len);
+                self.telemetry.record_outbound_written_plaintext_bytes(encoded_len);
                 Ok(())
             }
             Err(error) => {
@@ -859,7 +867,6 @@ impl Connection {
             .response_class()
             .unwrap_or_else(|| AdmissionClass::for_request_code(command.code()));
         let frame = EncodedFrame::from_command(command)?;
-        self.telemetry.record_network_bytes(frame.encoded_len());
         self.send_payload(
             OutboundPayload::Frame(frame),
             class,
@@ -893,7 +900,6 @@ impl Connection {
         let frame = EncodedFrame::from_command(command)?;
         deadline.ensure_before_send(target.clone())?;
 
-        self.telemetry.record_network_bytes(frame.encoded_len());
         self.send_payload(OutboundPayload::Frame(frame), class, None, Some(deadline), target)
             .await
     }
@@ -920,7 +926,6 @@ impl Connection {
         let frame = EncodedFrame::from_command(command)?;
         deadline.ensure_before_send(target.clone())?;
 
-        self.telemetry.record_network_bytes(frame.encoded_len());
         self.send_payload(
             OutboundPayload::Frame(frame),
             class,
@@ -957,7 +962,6 @@ impl Connection {
         let owned = command.clone();
         let _ = command.take_body();
         let frame = EncodedFrame::from_command(owned)?;
-        self.telemetry.record_network_bytes(frame.encoded_len());
         self.send_payload(
             OutboundPayload::Frame(frame),
             class,
@@ -999,7 +1003,6 @@ impl Connection {
             .map(EncodedFrame::from_command)
             .collect::<rocketmq_error::RocketMQResult<Vec<_>>>()?;
         let payload = OutboundPayload::batch(frames)?;
-        self.telemetry.record_network_bytes(payload.encoded_len());
         self.send_payload(
             payload,
             AdmissionClass::Data,
@@ -1030,7 +1033,6 @@ impl Connection {
     /// This is the most efficient send method as it avoids intermediate buffering
     /// and serialization overhead.
     pub async fn send_bytes(&mut self, bytes: Bytes) -> rocketmq_error::RocketMQResult<()> {
-        self.telemetry.record_network_bytes(bytes.len());
         self.send_payload(
             OutboundPayload::Contiguous(bytes),
             AdmissionClass::Data,
@@ -1063,7 +1065,6 @@ impl Connection {
     /// connection.send_slice(PING).await?;
     /// ```
     pub async fn send_slice(&mut self, slice: &'static [u8]) -> rocketmq_error::RocketMQResult<()> {
-        self.telemetry.record_network_bytes(slice.len());
         let bytes = Bytes::from_static(slice);
         self.send_payload(
             OutboundPayload::Contiguous(bytes),
@@ -1214,7 +1215,7 @@ impl Connection {
         let result = match &mut self.outbound {
             ConnectionWriter::Queued(queued) => {
                 let (completion, result) = oneshot::channel();
-                queued.writer.send(QueuedWrite::close(completion)).await.map_err(|_| {
+                queued.writer.close(completion).await.map_err(|_| {
                     rocketmq_error::RocketMQError::network_connection_failed(
                         "transport-session-writer",
                         "writer queue closed",

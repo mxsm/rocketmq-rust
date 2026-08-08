@@ -33,6 +33,7 @@ use rocketmq_transport::ConnectionState;
 use rocketmq_transport::SessionHandle;
 use rocketmq_transport::SessionIoPolicy;
 use rocketmq_transport::TransportSecurity;
+use rocketmq_transport::WriterQueueConfig;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
 use tokio::io::ReadBuf;
@@ -119,7 +120,10 @@ async fn hard_write_stall_deadline_poison_closes_and_drains_session_writer() {
         None,
         SessionIoPolicy {
             idle_timeout: Duration::from_secs(30),
-            max_write_stall: Duration::from_millis(50),
+            writer_queue: WriterQueueConfig {
+                max_write_stall: Duration::from_millis(50),
+                ..WriterQueueConfig::default()
+            },
         },
         Arc::new(CaptureSessionHandler { sessions: sessions_tx }),
     ));

@@ -4676,6 +4676,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_json_any_key",
+ "socket2 0.6.5",
  "tempfile",
  "thiserror 2.0.19",
  "tokio",

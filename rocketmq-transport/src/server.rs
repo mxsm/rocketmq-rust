@@ -46,16 +46,16 @@ use crate::admission::AdmissionClass;
 use crate::admission::AdmissionController;
 use crate::admission::AdmissionResource;
 use crate::admission::AdmissionScope;
+use crate::admission::AdmissionScopeHandle;
+use crate::config::SocketOptions;
 use crate::config::TlsConfig;
 use crate::config::TlsMode;
-use crate::connection::record_transport_write;
 use crate::connection::Connection;
 use crate::connection::ConnectionId;
 use crate::connection::ConnectionState;
 use crate::connection::SessionLifecycle;
 use crate::connection::SessionWriterDiagnostics;
 use crate::connection::SessionWriterSnapshot;
-use crate::deadline::RequestDeadline;
 use crate::dispatch::AuthorizedDispatchBoundary;
 use crate::dispatch::RequestContext;
 use crate::dispatch::ResponseSink;
@@ -64,10 +64,11 @@ use crate::security::TransportSecurity;
 use crate::telemetry::TransportTelemetry;
 use crate::tls::NegotiatedConnection;
 use crate::tls::TlsServerRuntime;
-use crate::write_strategy::QueuedWrite;
-use crate::write_strategy::WriterOperation;
+use crate::writer_runtime::run_session_writer;
+use crate::writer_runtime::writer_lanes;
+use crate::writer_runtime::WriterLanes;
+use crate::writer_runtime::WriterQueueConfig;
 
-const SESSION_WRITER_QUEUE_CAPACITY: usize = 1024;
 const SESSION_RETIREMENT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Bounded I/O budgets applied to every transport session.
@@ -75,15 +76,15 @@ const SESSION_RETIREMENT_TIMEOUT: Duration = Duration::from_secs(5);
 pub struct SessionIoPolicy {
     /// Maximum time a session may remain idle while waiting for the next frame.
     pub idle_timeout: Duration,
-    /// Maximum time one socket write may remain stalled after leaving the queue.
-    pub max_write_stall: Duration,
+    /// Queue, fairness, batching, and socket-stall bounds for the sole writer owner.
+    pub writer_queue: WriterQueueConfig,
 }
 
 impl Default for SessionIoPolicy {
     fn default() -> Self {
         Self {
             idle_timeout: Duration::from_secs(120),
-            max_write_stall: Duration::from_secs(30),
+            writer_queue: WriterQueueConfig::default(),
         }
     }
 }
@@ -96,12 +97,7 @@ impl SessionIoPolicy {
                 "idle timeout must be greater than zero",
             ));
         }
-        if self.max_write_stall.is_zero() {
-            return Err(RocketMQError::network_connection_failed(
-                "transport-session-policy",
-                "maximum write stall must be greater than zero",
-            ));
-        }
+        self.writer_queue.validate()?;
         Ok(self)
     }
 }
@@ -117,67 +113,71 @@ pub trait RequestProcessor: Send + Sync + 'static {
     }
 }
 
-#[derive(Clone)]
-pub struct SessionHandle {
+struct SessionSendHandle {
     session_id: u64,
     local_addr: SocketAddr,
     remote_addr: SocketAddr,
     connection_id: ConnectionId,
-    writer: tokio::sync::mpsc::Sender<QueuedWrite>,
+    writer: WriterLanes,
     writer_diagnostics: Arc<SessionWriterDiagnostics>,
-    admission: Arc<AdmissionController>,
-    scope: AdmissionScope,
+    admission: AdmissionScopeHandle,
     state_tx: tokio::sync::watch::Sender<ConnectionState>,
     state_rx: tokio::sync::watch::Receiver<ConnectionState>,
     task_group: TaskGroup,
     reader_cancellation: CancellationToken,
-    request_operation: OperationContext,
     writer_operation: OperationContext,
-    response_class: Option<AdmissionClass>,
     lifecycle: Arc<SessionLifecycle>,
     writer_task_id: TaskId,
     telemetry: TransportTelemetry,
 }
 
+#[derive(Clone)]
+pub struct SessionHandle {
+    send: Arc<SessionSendHandle>,
+    request_operation: OperationContext,
+    response_class: Option<AdmissionClass>,
+}
+
 impl SessionHandle {
     pub fn session_id(&self) -> u64 {
-        self.session_id
+        self.send.session_id
     }
 
     pub fn local_addr(&self) -> SocketAddr {
-        self.local_addr
+        self.send.local_addr
     }
 
     pub fn remote_addr(&self) -> SocketAddr {
-        self.remote_addr
+        self.send.remote_addr
     }
 
     pub fn connection(&self) -> Connection {
         Connection::new_queued(
-            self.writer.clone(),
-            self.writer_diagnostics.clone(),
-            self.admission.clone(),
-            self.scope,
-            self.state_tx.clone(),
-            self.state_rx.clone(),
-            self.connection_id.clone(),
+            self.send.writer.clone(),
+            self.send.writer_diagnostics.clone(),
+            self.send.admission.clone(),
+            self.send.state_tx.clone(),
+            self.send.state_rx.clone(),
+            self.send.connection_id.clone(),
             self.response_class,
-            self.lifecycle.clone(),
-            self.telemetry.clone(),
+            self.send.lifecycle.clone(),
+            self.send.telemetry.clone(),
         )
     }
 
     pub fn task_group(&self) -> &TaskGroup {
-        &self.task_group
+        &self.send.task_group
     }
 
     #[must_use]
     pub fn writer_snapshot(&self) -> SessionWriterSnapshot {
-        self.writer_diagnostics.snapshot()
+        let mut snapshot = self.send.writer_diagnostics.snapshot();
+        self.send.writer.enrich_snapshot(&mut snapshot);
+        snapshot
     }
 
     pub(crate) fn request_executor_group(&self) -> &TaskGroup {
-        &self.task_group
+        &self.send.task_group
     }
 
     pub fn operation_context(&self) -> &OperationContext {
@@ -185,11 +185,11 @@ impl SessionHandle {
     }
 
     pub(crate) fn abort(&self) {
-        let _ = self.state_tx.send(ConnectionState::Closed);
-        self.reader_cancellation.cancel();
+        let _ = self.send.state_tx.send(ConnectionState::Closed);
+        self.send.reader_cancellation.cancel();
         self.request_operation.cancel();
-        self.writer_operation.cancel();
-        self.task_group.abort_task(self.writer_task_id);
+        self.send.writer_operation.cancel();
+        self.send.task_group.abort_task(self.send.writer_task_id);
     }
 
     pub(crate) fn with_response_class(mut self, class: AdmissionClass) -> Self {
@@ -221,11 +221,11 @@ impl SessionHandle {
         match tokio::time::timeout(timeout, self.retire_inner(started)).await {
             Ok(result) => result,
             Err(_) => {
-                let _ = self.state_tx.send(ConnectionState::Closed);
-                self.reader_cancellation.cancel();
+                let _ = self.send.state_tx.send(ConnectionState::Closed);
+                self.send.reader_cancellation.cancel();
                 self.request_operation.cancel();
-                self.writer_operation.cancel();
-                self.task_group.abort_task(self.writer_task_id);
+                self.send.writer_operation.cancel();
+                self.send.task_group.abort_task(self.send.writer_task_id);
                 Err(rocketmq_error::RocketMQError::network_connection_failed(
                     "transport-session-writer",
                     "writer retirement exceeded its absolute deadline",
@@ -241,15 +241,15 @@ impl SessionHandle {
         if let Some(started) = started {
             let _ = started.send(());
         }
-        self.lifecycle.begin_retirement().await;
+        self.send.lifecycle.begin_retirement().await;
         let (completion, result) = tokio::sync::oneshot::channel();
-        let send_result = self.writer.send(QueuedWrite::close(completion)).await;
+        let send_result = self.send.writer.close(completion).await;
         if send_result.is_err() {
-            let _ = self.state_tx.send(ConnectionState::Closed);
-            self.reader_cancellation.cancel();
+            let _ = self.send.state_tx.send(ConnectionState::Closed);
+            self.send.reader_cancellation.cancel();
             self.request_operation.cancel();
-            self.writer_operation.cancel();
-            self.task_group.abort_task(self.writer_task_id);
+            self.send.writer_operation.cancel();
+            self.send.task_group.abort_task(self.send.writer_task_id);
             return Err(rocketmq_error::RocketMQError::network_connection_failed(
                 "transport-session-writer",
                 "writer queue closed before retirement",
@@ -261,12 +261,13 @@ impl SessionHandle {
                 "writer retirement completion dropped",
             ))
         });
-        let _ = self.state_tx.send(ConnectionState::Closed);
-        self.reader_cancellation.cancel();
+        let _ = self.send.state_tx.send(ConnectionState::Closed);
+        self.send.reader_cancellation.cancel();
         self.request_operation.cancel();
         let _ = self
+            .send
             .task_group
-            .wait_task(self.writer_task_id, SESSION_RETIREMENT_TIMEOUT)
+            .wait_task(self.send.writer_task_id, SESSION_RETIREMENT_TIMEOUT)
             .await;
         close_result
     }
@@ -369,6 +370,7 @@ pub struct TransportListener {
     principal: Option<Principal>,
     next_session: AtomicU64,
     telemetry: TransportTelemetry,
+    socket_options: SocketOptions,
 }
 
 impl TransportListener {
@@ -393,6 +395,7 @@ impl TransportListener {
             principal: None,
             next_session: AtomicU64::new(1),
             telemetry: TransportTelemetry::noop(),
+            socket_options: SocketOptions::default(),
         }
     }
 
@@ -434,6 +437,12 @@ impl TransportListener {
         self
     }
 
+    #[must_use]
+    pub fn with_socket_options(mut self, socket_options: SocketOptions) -> Self {
+        self.socket_options = socket_options;
+        self
+    }
+
     pub async fn run<H>(self, handler: Arc<H>) -> RocketMQResult<()>
     where
         H: ConnectionHandler,
@@ -447,8 +456,9 @@ impl TransportListener {
                 accepted = accept_transport_connection(&self.listener) => accepted?,
             };
             let (stream, remote_addr) = accepted;
-            if let Err(error) = stream.set_nodelay(true) {
-                tracing::warn!(%remote_addr, %error, "failed to configure accepted transport socket");
+            if let Err(error) = self.socket_options.apply(&stream) {
+                tracing::warn!(%remote_addr, %error, "rejected transport socket with invalid required options");
+                continue;
             }
             let local_addr = stream.local_addr()?;
             let session_id = self.next_session.fetch_add(1, Ordering::Relaxed);
@@ -545,15 +555,19 @@ async fn run_framed_session<H>(
     let connection_id = connection.connection_id().clone();
     let telemetry = connection.telemetry();
     let admission = dispatch.admission_controller();
-    let (mut frame_writer, mut stream) = connection.into_session_io(admission.clone(), scope);
-    let executor = match dispatch.session(&task_group, scope) {
+    let admission_scope = match admission.prepare_scope(scope) {
+        Ok(handle) => handle,
+        Err(_) => return,
+    };
+    let (frame_writer, mut stream) = connection.into_session_io(admission_scope.clone());
+    let executor = match dispatch.session(&task_group, admission_scope.clone()) {
         Ok(executor) => executor,
         Err(_) => return,
     };
     let (state_tx, state_rx) = tokio::sync::watch::channel(ConnectionState::Healthy);
     let lifecycle = Arc::new(SessionLifecycle::new());
-    let (writer, mut writes) = tokio::sync::mpsc::channel::<QueuedWrite>(SESSION_WRITER_QUEUE_CAPACITY);
-    let writer_diagnostics = Arc::new(SessionWriterDiagnostics::new(SESSION_WRITER_QUEUE_CAPACITY));
+    let (writer, writes) = writer_lanes(io_policy.writer_queue);
+    let writer_diagnostics = Arc::new(SessionWriterDiagnostics::new(io_policy.writer_queue.total_capacity()));
     let writer_task_diagnostics = Arc::clone(&writer_diagnostics);
     let writer_state = state_tx.clone();
     let writer_operation = OperationContext::without_deadline(TaskKind::Worker);
@@ -562,83 +576,14 @@ async fn run_framed_session<H>(
     let reader_shutdown = reader_cancellation.clone();
     let writer_group = task_group.clone();
     let writer_cancellation = writer_operation.cancellation_token();
-    let writer_loop = async move {
-        while let Some(next) = writes.recv().await {
-            match next.operation {
-                WriterOperation::Send(payload) => {
-                    let started_at = next
-                        .queue_id
-                        .map(|id| writer_task_diagnostics.start_write(id))
-                        .unwrap_or_else(std::time::Instant::now);
-                    let completion = next.completion;
-                    let deadline = next.deadline;
-                    let target = next.target;
-                    let progress = next.progress;
-                    let deadline_expired = deadline.is_some_and(RequestDeadline::is_expired);
-                    let mut write_timed_out = deadline_expired;
-                    let result = if deadline_expired {
-                        Err(RocketMQError::network_deadline_exceeded_before_send(target))
-                    } else {
-                        if let Some(progress) = progress.as_ref() {
-                            progress.start_write();
-                        }
-                        let stall_deadline = RequestDeadline::after(io_policy.max_write_stall);
-                        let write_deadline = deadline
-                            .filter(|deadline| deadline.instant() <= stall_deadline.instant())
-                            .unwrap_or(stall_deadline);
-                        match write_deadline.timeout(payload.write_to(&mut frame_writer)).await {
-                            Ok(result) => result
-                                .map_err(|error| RocketMQError::network_connection_failed(target, error.to_string())),
-                            Err(_) => {
-                                write_timed_out = true;
-                                Err(RocketMQError::network_write_timeout(
-                                    target,
-                                    write_deadline.budget_millis(),
-                                ))
-                            }
-                        }
-                    };
-                    if result.is_ok() {
-                        record_transport_write(payload.encoded_len());
-                    }
-                    writer_task_diagnostics.finish_write(started_at, result.is_ok(), write_timed_out);
-                    let poisoned = frame_writer.is_poisoned();
-                    if poisoned {
-                        let _ = writer_state.send(ConnectionState::Degraded);
-                    }
-                    drop(next.permit);
-                    let _ = completion.send(result);
-                    if poisoned {
-                        writes.close();
-                        let _ = frame_writer.shutdown().await;
-                        while let Some(pending) = writes.recv().await {
-                            if let Some(id) = pending.queue_id {
-                                let started_at = writer_task_diagnostics.start_write(id);
-                                writer_task_diagnostics.finish_write(started_at, false, false);
-                            }
-                            let target = match pending.operation {
-                                WriterOperation::Send(_) => pending.target,
-                                WriterOperation::Close => "transport-session-writer".to_string(),
-                            };
-                            drop(pending.permit);
-                            let _ = pending.completion.send(Err(RocketMQError::network_connection_failed(
-                                target,
-                                "connection writer is poisoned by a previous frame failure",
-                            )));
-                        }
-                        let _ = writer_state.send(ConnectionState::Closed);
-                        reader_shutdown.cancel();
-                        break;
-                    }
-                }
-                WriterOperation::Close => {
-                    let result = frame_writer.shutdown().await.map_err(Into::into);
-                    let _ = next.completion.send(result);
-                    break;
-                }
-            }
-        }
-    };
+    let writer_loop = run_session_writer(
+        frame_writer,
+        writes,
+        writer_task_diagnostics,
+        writer_state,
+        reader_shutdown,
+        telemetry.clone(),
+    );
     let writer_task_id = match writer_group.spawn("rocketmq.transport.session.writer", TaskKind::Worker, async move {
         tokio::select! {
             biased;
@@ -650,24 +595,25 @@ async fn run_framed_session<H>(
         Err(_) => return,
     };
     let session = SessionHandle {
-        session_id,
-        local_addr,
-        remote_addr,
-        connection_id,
-        writer: writer.clone(),
-        writer_diagnostics,
-        admission: admission.clone(),
-        scope,
-        state_tx: state_tx.clone(),
-        state_rx,
-        task_group: task_group.clone(),
-        reader_cancellation: reader_cancellation.clone(),
+        send: Arc::new(SessionSendHandle {
+            session_id,
+            local_addr,
+            remote_addr,
+            connection_id,
+            writer: writer.clone(),
+            writer_diagnostics,
+            admission: admission_scope,
+            state_tx: state_tx.clone(),
+            state_rx,
+            task_group: task_group.clone(),
+            reader_cancellation: reader_cancellation.clone(),
+            writer_operation,
+            lifecycle,
+            writer_task_id,
+            telemetry,
+        }),
         request_operation: request_operation.clone(),
-        writer_operation,
         response_class: None,
-        lifecycle,
-        writer_task_id,
-        telemetry,
     };
 
     handler.connected(session.clone()).await;
@@ -682,6 +628,10 @@ async fn run_framed_session<H>(
             Ok(Some(Ok(decoded))) => decoded,
             Ok(Some(Err(_))) | Ok(None) | Err(_) => break,
         };
+        session
+            .send
+            .telemetry
+            .record_inbound_decoded_plaintext_bytes(decoded.retained_frame_bytes);
         let command = decoded.command;
         let partial_frame_permit = decoded.partial_frame_permit;
         let class = AdmissionClass::for_request_code(command.code());
@@ -803,6 +753,7 @@ pub struct TransportServerConfig {
     pub handshake_timeout: Duration,
     pub io_policy: SessionIoPolicy,
     pub request_timeout: Duration,
+    pub socket_options: SocketOptions,
 }
 
 impl TransportServerConfig {
@@ -815,6 +766,7 @@ impl TransportServerConfig {
             handshake_timeout: Duration::from_secs(10),
             io_policy: SessionIoPolicy::default(),
             request_timeout: Duration::from_secs(30),
+            socket_options: SocketOptions::default(),
         }
     }
 }
@@ -1017,6 +969,10 @@ impl TransportServer {
                 let Ok((stream, remote_addr)) = accepted else {
                     break;
                 };
+                if let Err(error) = server.config.socket_options.apply(&stream) {
+                    tracing::warn!(%remote_addr, %error, "rejected transport socket with invalid required options");
+                    continue;
+                }
                 let session_id = server.next_session.fetch_add(1, Ordering::Relaxed);
                 let scope = AdmissionScope::new(remote_addr.ip()).with_session(session_id);
                 let Ok(connection_permit) = server.dispatch.admission_controller().try_acquire(

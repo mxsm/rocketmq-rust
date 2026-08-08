@@ -3330,6 +3330,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_json_any_key",
+ "socket2",
  "thiserror",
  "tokio",
  "tokio-rustls",

@@ -22,7 +22,7 @@ use std::time::Duration;
 use crate::metrics::remoting::RemotingMetrics;
 use crate::metrics::remoting::RequestMetricsGuard;
 use crate::metrics::remoting::RPC_LATENCY;
-use crate::metrics::remoting::TRANSPORT_NETWORK_BYTES;
+use crate::metrics::remoting::TRANSPORT_INBOUND_DECODED_PLAINTEXT_BYTES;
 use crate::metrics::remoting::TRANSPORT_REQUESTS_TOTAL;
 use crate::metrics::remoting::TRANSPORT_REQUEST_LATENCY;
 use crate::TelemetryHandle;
@@ -147,6 +147,8 @@ fn request_guards_record_each_terminal_outcome_once_and_keep_instances_isolated(
     let second_provider = test_provider(second_exporter.clone());
     let first = RemotingMetrics::new(&first_provider.meter("rocketmq-transport"));
     let second = RemotingMetrics::new(&second_provider.meter("rocketmq-transport"));
+    first.record_inbound_decoded_plaintext_bytes(21);
+    second.record_inbound_decoded_plaintext_bytes(17);
 
     let mut success = RequestMetricsGuard::start(first.clone(), 10, 5, false);
     success.complete_response(0);
@@ -170,11 +172,17 @@ fn request_guards_record_each_terminal_outcome_once_and_keep_instances_isolated(
     let first_points = first_exporter.points();
     let second_points = second_exporter.points();
     assert_eq!(metric_value(&first_points, TRANSPORT_REQUESTS_TOTAL), 3);
-    assert_eq!(metric_value(&first_points, TRANSPORT_NETWORK_BYTES), 21);
+    assert_eq!(
+        metric_value(&first_points, TRANSPORT_INBOUND_DECODED_PLAINTEXT_BYTES),
+        21
+    );
     assert_eq!(metric_value(&first_points, TRANSPORT_REQUEST_LATENCY), 3);
     assert_eq!(metric_value(&first_points, RPC_LATENCY), 3);
     assert_eq!(metric_value(&second_points, TRANSPORT_REQUESTS_TOTAL), 1);
-    assert_eq!(metric_value(&second_points, TRANSPORT_NETWORK_BYTES), 17);
+    assert_eq!(
+        metric_value(&second_points, TRANSPORT_INBOUND_DECODED_PLAINTEXT_BYTES),
+        17
+    );
     assert_eq!(metric_value(&second_points, TRANSPORT_REQUEST_LATENCY), 1);
     assert_eq!(metric_value(&second_points, RPC_LATENCY), 1);
 
@@ -216,5 +224,7 @@ fn noop_handle_never_reads_global_meter_provider() {
     let metrics = RemotingMetrics::from_handle(&TelemetryHandle::noop());
     let mut guard = RequestMetricsGuard::start(metrics.clone(), 10, 128, false);
     guard.complete_response(0);
-    metrics.record_network_bytes(256);
+    metrics.record_outbound_attempted_plaintext_bytes(256);
+    metrics.record_outbound_accepted_plaintext_bytes(256);
+    metrics.record_outbound_written_plaintext_bytes(256);
 }

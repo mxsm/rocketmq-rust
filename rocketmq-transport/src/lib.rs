@@ -15,8 +15,10 @@
 //! Bounded TCP/TLS transport ownership boundary.
 
 mod admission;
+mod backend;
 mod base;
-mod buffer;
+#[cfg(feature = "test-support")]
+pub mod benchmark_support;
 mod client;
 mod clients;
 mod codec;
@@ -30,6 +32,7 @@ mod discovery;
 mod dispatch;
 mod error_helpers;
 mod error_response;
+mod hook_registry;
 #[cfg(any(test, feature = "test-support"))]
 mod local;
 mod net;
@@ -49,6 +52,7 @@ mod telemetry;
 pub mod test_support;
 mod tls;
 mod write_strategy;
+mod writer_runtime;
 
 pub use admission::AdmissionClass;
 pub use admission::AdmissionConfigError;
@@ -65,17 +69,19 @@ pub use base::connection_net_event::ConnectionNetEvent;
 pub use base::pending_request_table::PendingRequestLimits;
 pub use base::pending_request_table::PendingRequestTable;
 pub use base::response_future::ResponseFuture;
-pub use buffer::ByteBufferPool;
 pub use client::connect_with_config;
 pub use client::connect_with_config_and_telemetry;
+pub use client::connect_with_config_options_and_telemetry;
 pub use clients::rocketmq_tokio_client::RemotingClientShutdownReport;
 pub use clients::rocketmq_tokio_client::RocketmqDefaultClient;
-pub use clients::Client;
 pub use clients::RemotingClient;
+pub use clients::TransportSession;
 pub use codec::remoting_command_codec::FrameLimits;
 pub use codec::remoting_command_codec::RemotingCommandCodec;
 pub use common::heartbeat_v2_result::HeartbeatV2Result;
 pub use common::remoting_helper::RemotingHelper;
+pub use config::SocketOptions;
+pub use config::TcpKeepaliveConfig;
 pub use config::TlsClientAuth;
 pub use config::TlsClientConfig;
 pub use config::TlsConfig;
@@ -150,6 +156,8 @@ pub use tls::TlsReloadReport;
 pub use tls::TlsServerRuntime;
 pub use write_strategy::FrameWriteMode;
 pub use write_strategy::FrameWriter;
+pub use writer_runtime::MicroBatchConfig;
+pub use writer_runtime::WriterQueueConfig;
 
 pub use error_helpers::abort_process_error;
 pub use error_helpers::channel_recv_failed;
