@@ -36,7 +36,7 @@ impl FilterAPI {
             return Ok(subscription_data);
         }
 
-        let tags: Vec<&str> = sub_string.split("||").collect();
+        let tags: Vec<&str> = sub_string.split_str("||").collect();
         if tags.is_empty() {
             return Err("subString split error".to_string());
         }

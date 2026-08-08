@@ -17,7 +17,6 @@ use std::net::SocketAddr;
 use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
-use cheetah_string::CheetahStr;
 use cheetah_string::CheetahString;
 
 /// Message storage metadata
@@ -25,7 +24,7 @@ use cheetah_string::CheetahString;
 /// Contains indexing and location information for messages in the Broker storage engine.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StorageMetadata {
-    broker_name: CheetahStr,
+    broker_name: CheetahString,
     queue_id: i32,
     queue_offset: i64,
     commit_log_offset: i64,
@@ -47,7 +46,7 @@ impl StorageMetadata {
         store_size: i32,
     ) -> Self {
         Self {
-            broker_name: broker_name.into(),
+            broker_name,
             queue_id,
             queue_offset,
             commit_log_offset,
@@ -125,7 +124,7 @@ impl StorageMetadata {
 impl Default for StorageMetadata {
     fn default() -> Self {
         Self {
-            broker_name: CheetahStr::new(),
+            broker_name: CheetahString::new(),
             queue_id: 0,
             queue_offset: 0,
             commit_log_offset: 0,

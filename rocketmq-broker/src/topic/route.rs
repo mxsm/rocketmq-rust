@@ -52,7 +52,7 @@ impl BrokerPublishRoute {
     pub(crate) fn from_topic_route_data(topic: &str, route: &mut TopicRouteData) -> Self {
         let mut message_queues = Vec::new();
         if let Some(order_topic_conf) = route.order_topic_conf.as_ref().filter(|conf| !conf.is_empty()) {
-            for broker in order_topic_conf.split(';') {
+            for broker in order_topic_conf.split_char(';') {
                 let Some((broker_name, queue_count)) = broker.split_once(':') else {
                     continue;
                 };

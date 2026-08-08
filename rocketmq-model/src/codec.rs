@@ -67,7 +67,7 @@ pub fn message_properties_to_string(properties: &HashMap<CheetahString, CheetahS
         value.push_str(property);
         value.push(PROPERTY_SEPARATOR);
     }
-    CheetahString::from_string_owned(value)
+    CheetahString::from_string(value)
 }
 
 pub fn string_to_message_properties(properties: Option<&CheetahString>) -> HashMap<CheetahString, CheetahString> {
@@ -75,7 +75,7 @@ pub fn string_to_message_properties(properties: Option<&CheetahString>) -> HashM
         return HashMap::new();
     };
     properties
-        .split(PROPERTY_SEPARATOR)
+        .split_char(PROPERTY_SEPARATOR)
         .filter_map(|entry| {
             let (name, value) = entry.split_once(NAME_VALUE_SEPARATOR)?;
             (!name.is_empty()).then(|| (CheetahString::from_slice(name), CheetahString::from_slice(value)))

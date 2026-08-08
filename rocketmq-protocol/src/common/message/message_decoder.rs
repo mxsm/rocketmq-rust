@@ -155,7 +155,7 @@ pub fn message_properties_to_string(properties: &HashMap<CheetahString, CheetahS
         builder.push_str(value.as_str());
         builder.push(PROPERTY_SEPARATOR);
     }
-    builder.finish_string()
+    builder.finish()
 }
 
 /// Converts UTF-8 message protocol bytes into a [`CheetahString`], preserving
@@ -163,7 +163,7 @@ pub fn message_properties_to_string(properties: &HashMap<CheetahString, CheetahS
 pub fn cheetah_from_utf8_lossy(bytes: &[u8]) -> CheetahString {
     match String::from_utf8_lossy(bytes) {
         Cow::Borrowed(value) => CheetahString::from_slice(value),
-        Cow::Owned(value) => CheetahString::from_string_owned(value),
+        Cow::Owned(value) => CheetahString::from_string(value),
     }
 }
 

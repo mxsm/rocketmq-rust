@@ -101,7 +101,7 @@ impl MQAdminImpl {
         let Some(keys) = MessageTrait::get_keys(msg) else {
             return false;
         };
-        keys.split(MessageConst::KEY_SEPARATOR)
+        keys.split_str(MessageConst::KEY_SEPARATOR)
             .any(|candidate| candidate == key.as_str())
     }
 

@@ -1294,7 +1294,7 @@ async fn get_message_queue_allocation_result_with_admin(
                 .await
             {
                 for mq in consumer_running_info.mq_table.keys() {
-                    results.insert(mq.clone(), client_id.split('@').next().unwrap_or("").to_string());
+                    results.insert(mq.clone(), client_id.split_char('@').next().unwrap_or("").to_string());
                 }
             }
         }

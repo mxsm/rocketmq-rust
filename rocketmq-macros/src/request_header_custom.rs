@@ -90,7 +90,7 @@ pub(super) fn request_header_codec_inner(input: proc_macro::TokenStream) -> proc
                                    if let Some(ref value) = self.#field_name {
                                       map.insert (
                                            cheetah_string::CheetahString::from_static_str(Self::#static_name),
-                                           cheetah_string::CheetahString::from_string_owned(value.clone())
+                                           cheetah_string::CheetahString::from_string(value.clone())
                                       );
                                     }
                                }
@@ -107,7 +107,7 @@ pub(super) fn request_header_codec_inner(input: proc_macro::TokenStream) -> proc
                                    if let Some(ref value) = self.#field_name {
                                       map.insert (
                                           cheetah_string::CheetahString::from_static_str(Self::#static_name),
-                                          cheetah_string::CheetahString::from_string_owned(value.to_string())
+                                          cheetah_string::CheetahString::from_string(value.to_string())
                                       );
                                     }
                                }
@@ -123,7 +123,7 @@ pub(super) fn request_header_codec_inner(input: proc_macro::TokenStream) -> proc
                         quote! {
                              map.insert (
                                  cheetah_string::CheetahString::from_static_str(Self::#static_name),
-                                 cheetah_string::CheetahString::from_string_owned(self.#field_name.clone())
+                                 cheetah_string::CheetahString::from_string(self.#field_name.clone())
                              );
                          }
                     } else if is_struct_type && has_serde_flatten_attribute {
@@ -138,7 +138,7 @@ pub(super) fn request_header_codec_inner(input: proc_macro::TokenStream) -> proc
                         quote! {
                              map.insert (
                                  cheetah_string::CheetahString::from_static_str(Self::#static_name),
-                                 cheetah_string::CheetahString::from_string_owned(self.#field_name.to_string())
+                                 cheetah_string::CheetahString::from_string(self.#field_name.to_string())
                              );
                          }
                     },

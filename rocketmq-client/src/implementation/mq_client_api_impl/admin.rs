@@ -2862,13 +2862,13 @@ impl MQClientAPIImpl {
                 .unwrap_or_default();
             if mix_all::is_lmq(Some(topic)) && message_ext.reconsume_times() == 0 && !dispatch.is_empty() {
                 // process LMQ
-                let queues: Vec<&str> = dispatch.split(mix_all::MULTI_DISPATCH_QUEUE_SPLITTER).collect();
+                let queues: Vec<&str> = dispatch.split_str(mix_all::MULTI_DISPATCH_QUEUE_SPLITTER).collect();
                 let data = message_ext
                     .property(&CheetahString::from_static_str(
                         MessageConst::PROPERTY_INNER_MULTI_QUEUE_OFFSET,
                     ))
                     .unwrap_or_default();
-                let queue_offsets: Vec<&str> = data.split(mix_all::MULTI_DISPATCH_QUEUE_SPLITTER).collect();
+                let queue_offsets: Vec<&str> = data.split_str(mix_all::MULTI_DISPATCH_QUEUE_SPLITTER).collect();
                 // LMQ topic has only 1 queue, which queue id is 0
                 key = ExtraInfoUtil::get_start_offset_info_map_key(topic, mix_all::LMQ_QUEUE_ID as i64);
                 let Some(position) = queues.iter().position(|&q| q == topic) else {
@@ -3209,7 +3209,7 @@ pub(super) fn admin_message_matches_query(
         return false;
     };
 
-    keys.split(MessageConst::KEY_SEPARATOR)
+    keys.split_str(MessageConst::KEY_SEPARATOR)
         .any(|candidate| candidate == key.as_str())
 }
 

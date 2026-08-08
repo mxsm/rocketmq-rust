@@ -115,7 +115,7 @@ impl ConsumerOrderInfoManager {
         let mut keys_to_remove = Vec::new(); // Temporary storage for keys to remove
 
         for (topic_at_group, qs) in table.iter_mut() {
-            let arrays: Vec<&str> = topic_at_group.split('@').collect();
+            let arrays: Vec<&str> = topic_at_group.split_char('@').collect();
             if arrays.len() != 2 {
                 continue;
             }

@@ -430,7 +430,7 @@ fn validate_network(broker: &BrokerConfig) -> Result<NetworkConfig, BrokerConfig
     let mut name_server_addresses = Vec::new();
     if let Some(addresses) = broker.namesrv_addr.as_ref() {
         for address in addresses
-            .split(';')
+            .split_char(';')
             .map(str::trim)
             .filter(|address| !address.is_empty())
         {
@@ -481,7 +481,7 @@ fn validate_high_availability(
         }
         for address in broker
             .controller_addr
-            .split(';')
+            .split_char(';')
             .map(str::trim)
             .filter(|address| !address.is_empty())
         {

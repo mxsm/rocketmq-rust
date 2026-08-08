@@ -314,7 +314,7 @@ impl PopInflightMessageCounter {
     /// * `Some((topic, group))` if key is valid
     /// * `None` if key format is invalid
     fn split_key(key: &CheetahString) -> Option<(CheetahString, CheetahString)> {
-        let parts: Vec<&str> = key.split(Self::TOPIC_GROUP_SEPARATOR).collect();
+        let parts: Vec<&str> = key.split_str(Self::TOPIC_GROUP_SEPARATOR).collect();
         if parts.len() == 2 {
             Some((parts[0].into(), parts[1].into()))
         } else {

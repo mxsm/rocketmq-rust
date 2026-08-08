@@ -191,17 +191,15 @@ fn gen_encode(field: &FieldModel, command_trait: &TokenStream, string_type: &Tok
         }
         (TypeCategory::CheetahString, false) => insert(quote!(self.#field_ident.clone())),
         (TypeCategory::String, true) => {
-            let insert = insert(quote!(#string_type::from_string_owned(value.clone())));
+            let insert = insert(quote!(#string_type::from_string(value.clone())));
             quote!(if let Some(value) = &self.#field_ident { #insert })
         }
-        (TypeCategory::String, false) => insert(quote!(#string_type::from_string_owned(self.#field_ident.clone()))),
+        (TypeCategory::String, false) => insert(quote!(#string_type::from_string(self.#field_ident.clone()))),
         (TypeCategory::Primitive, true) => {
-            let insert = insert(quote!(#string_type::from_string_owned(value.to_string())));
+            let insert = insert(quote!(#string_type::from_string(value.to_string())));
             quote!(if let Some(value) = &self.#field_ident { #insert })
         }
-        (TypeCategory::Primitive, false) => {
-            insert(quote!(#string_type::from_string_owned(self.#field_ident.to_string())))
-        }
+        (TypeCategory::Primitive, false) => insert(quote!(#string_type::from_string(self.#field_ident.to_string()))),
         (TypeCategory::Flattened, _) => unreachable!("flattened fields are handled above"),
     }
 }

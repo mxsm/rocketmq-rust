@@ -451,7 +451,7 @@ impl TimerMessageWriteHandle {
         let mut queue_keys = Vec::new();
         let mut saw_queue = false;
         let mut is_all_lmq_dispatch = true;
-        for queue_name in multi_dispatch_queue.split(MULTI_DISPATCH_QUEUE_SPLITTER) {
+        for queue_name in multi_dispatch_queue.split_str(MULTI_DISPATCH_QUEUE_SPLITTER) {
             if queue_name.is_empty() {
                 is_all_lmq_dispatch = false;
                 continue;
@@ -582,8 +582,8 @@ fn notify_message_arrive_for_multi_dispatch(
         return;
     }
 
-    let mut queue_iter = multi_dispatch_queue.split(MULTI_DISPATCH_QUEUE_SPLITTER);
-    let mut offset_iter = multi_queue_offset.split(MULTI_DISPATCH_QUEUE_SPLITTER);
+    let mut queue_iter = multi_dispatch_queue.split_str(MULTI_DISPATCH_QUEUE_SPLITTER);
+    let mut offset_iter = multi_queue_offset.split_str(MULTI_DISPATCH_QUEUE_SPLITTER);
     loop {
         match (queue_iter.next(), offset_iter.next()) {
             (None, None) => break,
@@ -597,8 +597,8 @@ fn notify_message_arrive_for_multi_dispatch(
     }
 
     for (queue_name, queue_offset) in multi_dispatch_queue
-        .split(MULTI_DISPATCH_QUEUE_SPLITTER)
-        .zip(multi_queue_offset.split(MULTI_DISPATCH_QUEUE_SPLITTER))
+        .split_str(MULTI_DISPATCH_QUEUE_SPLITTER)
+        .zip(multi_queue_offset.split_str(MULTI_DISPATCH_QUEUE_SPLITTER))
     {
         let Ok(queue_offset) = queue_offset.parse::<i64>() else {
             return;

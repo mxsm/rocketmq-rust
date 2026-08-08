@@ -1906,13 +1906,13 @@ fn attach_pop_receipt_handles(
                 ))
                 .unwrap_or_default();
             let (queue_offset_key, queue_id_key) = if mix_all::is_lmq(Some(topic)) && !dispatch.is_empty() {
-                let queues: Vec<&str> = dispatch.split(mix_all::MULTI_DISPATCH_QUEUE_SPLITTER).collect();
+                let queues: Vec<&str> = dispatch.split_str(mix_all::MULTI_DISPATCH_QUEUE_SPLITTER).collect();
                 let data = message
                     .property(&CheetahString::from_static_str(
                         MessageConst::PROPERTY_INNER_MULTI_QUEUE_OFFSET,
                     ))
                     .unwrap_or_default();
-                let queue_offsets: Vec<&str> = data.split(mix_all::MULTI_DISPATCH_QUEUE_SPLITTER).collect();
+                let queue_offsets: Vec<&str> = data.split_str(mix_all::MULTI_DISPATCH_QUEUE_SPLITTER).collect();
                 let offset = queue_offsets[queues.iter().position(|&queue| queue == topic).unwrap()]
                     .parse::<i64>()
                     .unwrap_or_default();
@@ -2006,13 +2006,13 @@ fn build_queue_offset_sorted_map(topic: &str, messages: &[MessageExt]) -> ProxyR
             ))
             .unwrap_or_default();
         if mix_all::is_lmq(Some(topic)) && message.reconsume_times() == 0 && !dispatch.is_empty() {
-            let queues: Vec<&str> = dispatch.split(mix_all::MULTI_DISPATCH_QUEUE_SPLITTER).collect();
+            let queues: Vec<&str> = dispatch.split_str(mix_all::MULTI_DISPATCH_QUEUE_SPLITTER).collect();
             let data = message
                 .property(&CheetahString::from_static_str(
                     MessageConst::PROPERTY_INNER_MULTI_QUEUE_OFFSET,
                 ))
                 .unwrap_or_default();
-            let queue_offsets: Vec<&str> = data.split(mix_all::MULTI_DISPATCH_QUEUE_SPLITTER).collect();
+            let queue_offsets: Vec<&str> = data.split_str(mix_all::MULTI_DISPATCH_QUEUE_SPLITTER).collect();
             let key = ExtraInfoUtil::get_start_offset_info_map_key(topic, mix_all::LMQ_QUEUE_ID as i64);
             sort_map.entry(key).or_insert_with(|| Vec::with_capacity(4)).push(
                 queue_offsets[queues.iter().position(|&queue| queue == topic).unwrap()]
