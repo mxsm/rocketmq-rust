@@ -255,16 +255,13 @@ struct JsonHeaderFieldIter<'a> {
 impl<'a> JsonHeaderFieldIter<'a> {
     #[inline]
     fn take(&mut self, length: usize) -> &'a [u8] {
-        let end = self
-            .cursor
-            .checked_add(length)
-            .expect("validated JSON header field offset overflowed");
-        let bytes = self
-            .payload
-            .get(self.cursor..end)
-            .expect("validated JSON header field boundary changed");
+        let start = self.cursor;
+        let end = start + length;
+        debug_assert!(end <= self.payload.len());
         self.cursor = end;
-        bytes
+        // SAFETY: construction validates every length-prefixed field boundary,
+        // and the immutable payload cannot change while this iterator is alive.
+        unsafe { self.payload.get_unchecked(start..end) }
     }
 
     #[inline]

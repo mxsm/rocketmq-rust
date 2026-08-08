@@ -348,7 +348,14 @@ fn construct_field(
     let base_type = field.option_inner.as_ref().unwrap_or(&field.ty);
     let context = context_ident(field);
     let value_trait = quote!(#protocol_path::protocol::header_codec::HeaderValue);
-    match field.missing.as_ref().expect("validated scalar missing policy") {
+    let Some(missing) = field.missing.as_ref() else {
+        debug_assert!(
+            field.missing.is_some(),
+            "scalar field must have a validated missing policy"
+        );
+        return TokenStream::new();
+    };
+    match missing {
         MissingPolicy::Optional => quote! {
             #ident: #local
                 .map(|raw| <#base_type as #value_trait>::decode(raw, Self::#context))

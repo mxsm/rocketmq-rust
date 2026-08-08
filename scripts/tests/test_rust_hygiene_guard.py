@@ -14,6 +14,7 @@
 
 import importlib.util
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -187,6 +188,50 @@ fn test_runtime() {
             ([], []),
             self.guard.scan_source("fn probe() { panic!(); }", "crate/src/component/tests.rs"),
         )
+
+    def test_scan_tree_excludes_external_modules_reachable_only_from_test_cfg(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "crate" / "src"
+            qualification = source / "qualification"
+            fixtures = source / "fixtures"
+            qualification.mkdir(parents=True)
+            fixtures.mkdir()
+            (source / "lib.rs").write_text(
+                (
+                    "mod runtime;\n"
+                    "#[cfg(test)]\nmod qualification;\n"
+                    "#[cfg(test)]\n#[path = \"fixtures/custom.rs\"]\nmod custom;\n"
+                ),
+                encoding="utf-8",
+            )
+            (source / "runtime.rs").write_text("fn run() { panic!(); }\n", encoding="utf-8")
+            (source / "qualification.rs").write_text(
+                "mod fixture;\nfn qualify() { panic!(); }\n",
+                encoding="utf-8",
+            )
+            (qualification / "fixture.rs").write_text("fn fixture() { panic!(); }\n", encoding="utf-8")
+            (fixtures / "custom.rs").write_text("fn custom() { panic!(); }\n", encoding="utf-8")
+
+            safety, debt = self.guard.scan_tree(root)
+
+        self.assertEqual([], safety)
+        self.assertEqual(["crate/src/runtime.rs"], [entry["path"] for entry in debt])
+
+    def test_scan_tree_keeps_modules_that_can_compile_without_test_cfg(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "crate" / "src"
+            source.mkdir(parents=True)
+            (source / "lib.rs").write_text(
+                "#[cfg(any(test, unix))]\nmod platform;\n",
+                encoding="utf-8",
+            )
+            (source / "platform.rs").write_text("fn run() { panic!(); }\n", encoding="utf-8")
+
+            _, debt = self.guard.scan_tree(root)
+
+        self.assertEqual(["crate/src/platform.rs"], [entry["path"] for entry in debt])
 
     def test_detects_manual_pin_projection(self):
         _, debt = self.guard.scan_source(

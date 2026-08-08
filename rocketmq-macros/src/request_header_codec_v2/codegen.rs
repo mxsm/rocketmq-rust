@@ -200,7 +200,10 @@ fn gen_encode(field: &FieldModel, command_trait: &TokenStream, string_type: &Tok
             quote!(if let Some(value) = &self.#field_ident { #insert })
         }
         (TypeCategory::Primitive, false) => insert(quote!(#string_type::from_string(self.#field_ident.to_string()))),
-        (TypeCategory::Flattened, _) => unreachable!("flattened fields are handled above"),
+        (TypeCategory::Flattened, _) => {
+            debug_assert!(field.flattened, "flattened category must set the flattened flag");
+            TokenStream::new()
+        }
     }
 }
 
@@ -301,7 +304,10 @@ fn gen_construct(field: &FieldModel, from_map_trait: &TokenStream, error_type: &
                 },
             }
         }
-        (TypeCategory::Flattened, _, _) => unreachable!("flattened fields are handled above"),
+        (TypeCategory::Flattened, _, _) => {
+            debug_assert!(field.flattened, "flattened category must set the flattened flag");
+            TokenStream::new()
+        }
     }
 }
 

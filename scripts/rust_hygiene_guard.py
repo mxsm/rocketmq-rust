@@ -24,6 +24,7 @@ import json
 import re
 import sys
 from collections import Counter
+from collections import defaultdict
 from pathlib import Path
 from typing import NamedTuple
 
@@ -52,6 +53,12 @@ FUNCTION = re.compile(
     re.MULTILINE,
 )
 CFG_ATTRIBUTE = re.compile(r"#\s*\[\s*cfg\s*\((?P<body>.*?)\)\s*\]", re.DOTALL)
+EXTERNAL_MODULE = re.compile(
+    r"(?P<attributes>(?:#\s*\[[^]]*\]\s*)*)"
+    r"(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*;",
+    re.MULTILINE,
+)
+PATH_ATTRIBUTE = re.compile(r'#\s*\[\s*path\s*=\s*"(?P<path>[^"]+)"\s*\]')
 DEBT_FIELDS = {
     "identity",
     "path",
@@ -93,6 +100,13 @@ REVIEWED_PANIC_INVARIANTS: dict[tuple[str, str], tuple[str, str]] = {
     ("rocketmq-store/src/runtime.rs", "new"): (
         "resource_budget_invariant",
         "Store runtime child budgets are derived from a validated parent budget configuration",
+    ),
+    (
+        "rocketmq-sre/crates/rocketmq-sre-connector/src/sources/projection.rs",
+        "apply",
+    ): (
+        "validated_dispatch_invariant",
+        "diagnostic projections are routed before the canonical-only projection match",
     ),
     (
         "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/client_adapter/mutation.rs",
@@ -139,6 +153,56 @@ def is_test_source_path(relative: str) -> bool:
         or stem.endswith("_test")
         or stem.endswith("_tests")
     )
+
+
+def external_module_target(root: Path, parent: Path, attributes: str, name: str) -> Path | None:
+    path_attribute = PATH_ATTRIBUTE.search(attributes)
+    if path_attribute is not None:
+        candidates = [parent.parent / path_attribute.group("path")]
+    else:
+        base = parent.parent if parent.name in {"lib.rs", "main.rs", "mod.rs"} else parent.parent / parent.stem
+        candidates = [base / f"{name}.rs", base / name / "mod.rs"]
+
+    root = root.resolve()
+    existing = []
+    for candidate in candidates:
+        candidate = candidate.resolve()
+        if candidate.is_relative_to(root) and candidate.is_file():
+            existing.append(candidate)
+    return existing[0] if len(existing) == 1 else None
+
+
+def test_only_external_modules(root: Path, sources: list[Path]) -> set[Path]:
+    inbound: dict[Path, list[tuple[Path, bool]]] = defaultdict(list)
+    for parent in sources:
+        source = parent.read_text(encoding="utf-8")
+        masked = rust_source.mask_comments_and_literals(source)
+        for declaration in EXTERNAL_MODULE.finditer(masked):
+            attributes = source[declaration.start("attributes"):declaration.end("attributes")]
+            target = external_module_target(root, parent, attributes, declaration.group("name"))
+            if target is None:
+                continue
+            requires_test = any(
+                cfg_requires_test(attribute.group("body"))
+                for attribute in CFG_ATTRIBUTE.finditer(attributes)
+            )
+            inbound[target].append((parent.resolve(), requires_test))
+
+    test_only = {
+        path.resolve()
+        for path in sources
+        if is_test_source_path(path.relative_to(root).as_posix())
+    }
+    changed = True
+    while changed:
+        changed = False
+        for target, references in inbound.items():
+            if target in test_only:
+                continue
+            if references and all(requires_test or parent in test_only for parent, requires_test in references):
+                test_only.add(target)
+                changed = True
+    return test_only
 
 
 def split_cfg_arguments(arguments: str) -> list[str]:
@@ -424,7 +488,11 @@ def scan_source(source: str, relative: str) -> tuple[list[SafetyFinding], list[d
 def scan_tree(root: Path) -> tuple[list[SafetyFinding], list[dict[str, object]]]:
     safety_findings: list[SafetyFinding] = []
     debt: list[dict[str, object]] = []
-    for path in rust_source.production_sources(root):
+    sources = rust_source.production_sources(root)
+    test_only_modules = test_only_external_modules(root, sources)
+    for path in sources:
+        if path.resolve() in test_only_modules:
+            continue
         relative = path.relative_to(root).as_posix()
         file_safety, file_debt = scan_source(path.read_text(encoding="utf-8"), relative)
         safety_findings.extend(file_safety)
