@@ -3867,10 +3867,10 @@ mod tests {
             .get_bulk_data(12, 8)
             .expect("bulk data across mapped files");
         assert_eq!(segments.len(), 2);
-        assert_eq!(segments[0].start_offset, 12);
-        assert_eq!(segments[0].size, 4);
-        assert_eq!(segments[1].start_offset, 16);
-        assert_eq!(segments[1].size, 4);
+        assert_eq!(segments[0].start_offset(), 12);
+        assert_eq!(segments[0].size(), 4);
+        assert_eq!(segments[1].start_offset(), 16);
+        assert_eq!(segments[1].size(), 4);
 
         let combined: Vec<u8> = segments
             .iter()
@@ -3922,16 +3922,16 @@ mod tests {
             .expect("single-file transfer segments");
 
         assert_eq!(segments.len(), 1);
-        assert_eq!(segments[0].segment().global_offset, 12);
-        assert_eq!(segments[0].segment().position_in_file, 12);
+        assert_eq!(segments[0].segment().global_offset(), 12);
+        assert_eq!(segments[0].segment().position_in_file(), 12);
         assert_eq!(segments[0].len(), 4);
         assert_eq!(
             segments[0].as_bytes().expect("segment bytes"),
             Bytes::from_static(b"CDEF")
         );
         let file_range = segments[0].as_file_range().expect("file range");
-        assert_eq!(file_range.position, 12);
-        assert_eq!(file_range.len, 4);
+        assert_eq!(file_range.position(), 12);
+        assert_eq!(file_range.len(), 4);
 
         let _ = fs::remove_dir_all(temp_root);
     }

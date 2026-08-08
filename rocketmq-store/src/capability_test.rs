@@ -26,7 +26,6 @@ use crate::base::message_status_enum::GetMessageStatus;
 use crate::base::query_message_result::QueryMessageResult;
 use crate::base::select_result::SelectMappedBufferCacheState;
 use crate::base::select_result::SelectMappedBufferResult;
-use crate::base::select_result::SelectMappedBufferSourceKind;
 use bytes::Bytes;
 use cheetah_string::CheetahString;
 use rocketmq_store_api::GetStatus;
@@ -62,16 +61,14 @@ fn commitlog_read_mode_accepts_only_protocol_compatible_values() {
 }
 
 fn selected(payload: Bytes, start_offset: u64, cache_state: SelectMappedBufferCacheState) -> SelectMappedBufferResult {
-    SelectMappedBufferResult {
+    SelectMappedBufferResult::from_bytes_with_metadata(
         start_offset,
-        size: i32::try_from(payload.len()).expect("fixture payload fits i32"),
-        bytes: Some(payload),
-        mapped_file: None,
-        is_in_cache: cache_state == SelectMappedBufferCacheState::Hot,
-        source_kind: SelectMappedBufferSourceKind::Bytes,
-        file_offset: 0,
+        0,
+        payload,
+        cache_state == SelectMappedBufferCacheState::Hot,
         cache_state,
-    }
+    )
+    .expect("fixture payload fits i32")
 }
 
 fn backend_get_result() -> GetMessageResult {
@@ -377,20 +374,17 @@ fn mapped_file_lease_releases_hold_before_shutdown_cleanup() {
     let temp_dir = TempDir::new().expect("temp directory");
     let queue = MappedFileQueue::new(temp_dir.path().to_string_lossy().into_owned(), 4096, None);
     let mapped_file = queue.try_create_mapped_file(0).expect("mapped file");
+    assert!(mapped_file.append_message_bytes(b"mapped"));
     assert_eq!(1, ReferenceResource::get_ref_count(mapped_file.as_ref()));
-    assert!(MappedFile::hold(mapped_file.as_ref()));
+    let selected = SelectMappedBufferResult::try_from_mapped_snapshot(
+        0,
+        0,
+        Bytes::from_static(b"mapped"),
+        mapped_file.clone(),
+        true,
+    )
+    .expect("active mapped file admits the fixture read lease");
     assert_eq!(2, ReferenceResource::get_ref_count(mapped_file.as_ref()));
-
-    let selected = SelectMappedBufferResult {
-        start_offset: 0,
-        bytes: Some(Bytes::from_static(b"mapped")),
-        size: 6,
-        mapped_file: Some(mapped_file.clone()),
-        is_in_cache: true,
-        source_kind: SelectMappedBufferSourceKind::MappedFile,
-        file_offset: 0,
-        cache_state: SelectMappedBufferCacheState::Hot,
-    };
     let bytes = selected_result(selected).into_data().into_bytes();
 
     assert_eq!(b"mapped", bytes.as_ref());

@@ -554,7 +554,7 @@ impl<MS: BrokerReadWriteStore> PopLiteMessageProcessor<MS> {
     fn read_get_message_result(&self, get_message_result: &GetMessageResult) -> Bytes {
         let mut bytes_mut = BytesMut::with_capacity(get_message_result.buffer_total_size() as usize);
         for mapped in get_message_result.message_mapped_list() {
-            if let Some(bytes) = mapped.bytes.as_ref() {
+            if let Some(bytes) = mapped.get_bytes_ref() {
                 bytes_mut.extend_from_slice(bytes);
             } else {
                 bytes_mut.extend_from_slice(mapped.get_buffer());

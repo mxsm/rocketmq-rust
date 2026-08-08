@@ -44,7 +44,6 @@ use crate::base::message_status_enum::GetMessageStatus;
 use crate::base::query_message_result::QueryMessageResult;
 use crate::base::select_result::SelectMappedBufferCacheState;
 use crate::base::select_result::SelectMappedBufferResult;
-use crate::base::select_result::SelectMappedBufferSourceKind;
 use crate::filter::ArcMessageFilter;
 use crate::log_file::commit_log::CommitLog;
 use crate::log_file::commit_log::CommitLogReadHandle;
@@ -265,13 +264,24 @@ impl TieredStoreDecorator {
                     continue;
                 }
             }
+            let Ok(message_size) = i32::try_from(message.len()) else {
+                warn!(
+                    message_size = message.len(),
+                    "tiered message exceeds the selected-buffer size limit"
+                );
+                break;
+            };
             if result.buffer_total_size() > 0
-                && result.buffer_total_size().saturating_add(message.len() as i32) > max_total_msg_size
+                && result.buffer_total_size().saturating_add(message_size) > max_total_msg_size
             {
                 break;
             }
             let queue_offset = next_queue_offset.max(0) as u64;
-            result.add_message(select_result_from_tiered_message(message), queue_offset, 1);
+            let Some(selected) = select_result_from_tiered_message(message) else {
+                warn!(message_size, "tiered message exceeds the selected-buffer size limit");
+                break;
+            };
+            result.add_message(selected, queue_offset, 1);
             next_queue_offset = next_queue_offset.saturating_add(1);
         }
 
@@ -289,7 +299,15 @@ impl TieredStoreDecorator {
             ..QueryMessageResult::default()
         };
         for message in fetched.values {
-            result.add_message(select_result_from_tiered_message(message));
+            let message_size = message.len();
+            let Some(selected) = select_result_from_tiered_message(message) else {
+                warn!(
+                    message_size,
+                    "tiered query message exceeds the selected-buffer size limit"
+                );
+                continue;
+            };
+            result.add_message(selected);
         }
         result
     }
@@ -323,17 +341,8 @@ fn resolve_tiered_dispatch_body_with(
     Some(bytes.slice(..size))
 }
 
-fn select_result_from_tiered_message(message: Bytes) -> SelectMappedBufferResult {
-    SelectMappedBufferResult {
-        start_offset: 0,
-        size: message.len() as i32,
-        bytes: Some(message),
-        mapped_file: None,
-        is_in_cache: false,
-        source_kind: SelectMappedBufferSourceKind::Bytes,
-        file_offset: 0,
-        cache_state: SelectMappedBufferCacheState::Unknown,
-    }
+fn select_result_from_tiered_message(message: Bytes) -> Option<SelectMappedBufferResult> {
+    SelectMappedBufferResult::from_bytes_with_metadata(0, 0, message, false, SelectMappedBufferCacheState::Unknown)
 }
 
 fn map_tiered_get_status(status: TieredGetMessageStatus) -> GetMessageStatus {

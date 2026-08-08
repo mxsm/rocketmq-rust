@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::atomic::fence;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::AtomicI64;
@@ -22,6 +21,12 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
 use parking_lot::Mutex;
+
+use super::lifecycle::BorrowedMappedFileLease;
+use super::lifecycle::MappedFileLease;
+use super::lifecycle::SegmentLifecycle;
+use super::MappedFileLifecycleSnapshot;
+use super::MappedFileOperation;
 
 /// Fixed legacy page unit used by mapped-file flush and commit thresholds.
 ///
@@ -360,32 +365,67 @@ impl MappedFileProgress {
     }
 }
 
-/// Shared state for the mapped-file reference lifecycle.
+/// Compatibility shell around the explicit mapped-file lifecycle.
+///
+/// The fields are intentionally private. New mapped-file code must acquire an operation lease
+/// instead of mutating reference counters directly.
 #[repr(align(64))]
 pub struct ReferenceResourceBase {
-    pub ref_count: AtomicI64,
-    pub available: AtomicBool,
-    /// Indicates that the compatibility cleanup callback completed.
-    ///
-    /// This flag does not prove that a mapped-file owner was unmapped or that its file handle was
-    /// closed. Physical ownership remains governed by the mapped-file owner lifetime.
-    pub cleanup_over: AtomicBool,
-    pub first_shutdown_timestamp: AtomicU64,
-    pub hold_lock: Mutex<()>,
-    pub release_lock: Mutex<()>,
+    lifecycle: std::sync::Arc<SegmentLifecycle>,
+    cleanup_callback_claimed: AtomicBool,
+    cleanup_callback_over: AtomicBool,
+    cleanup_callback_lock: Mutex<()>,
+    legacy_holds: Mutex<Vec<MappedFileLease>>,
+}
+
+struct CleanupCallbackClaim<'a> {
+    claimed: &'a AtomicBool,
+    reset_on_drop: bool,
+}
+
+impl<'a> CleanupCallbackClaim<'a> {
+    #[inline]
+    fn new(claimed: &'a AtomicBool) -> Self {
+        Self {
+            claimed,
+            reset_on_drop: true,
+        }
+    }
+
+    #[inline]
+    fn retain(&mut self) {
+        self.reset_on_drop = false;
+    }
+}
+
+impl Drop for CleanupCallbackClaim<'_> {
+    fn drop(&mut self) {
+        if self.reset_on_drop {
+            self.claimed.store(false, Ordering::Release);
+        }
+    }
 }
 
 impl ReferenceResourceBase {
     #[inline]
     pub fn new() -> Self {
         Self {
-            ref_count: AtomicI64::new(1),
-            available: AtomicBool::new(true),
-            cleanup_over: AtomicBool::new(false),
-            first_shutdown_timestamp: AtomicU64::new(0),
-            hold_lock: Mutex::new(()),
-            release_lock: Mutex::new(()),
+            lifecycle: SegmentLifecycle::shared(),
+            cleanup_callback_claimed: AtomicBool::new(false),
+            cleanup_callback_over: AtomicBool::new(false),
+            cleanup_callback_lock: Mutex::new(()),
+            legacy_holds: Mutex::new(Vec::new()),
         }
+    }
+
+    #[inline]
+    pub fn lifecycle_snapshot(&self) -> MappedFileLifecycleSnapshot {
+        self.lifecycle.snapshot()
+    }
+
+    #[inline]
+    pub(crate) fn lifecycle(&self) -> &std::sync::Arc<SegmentLifecycle> {
+        &self.lifecycle
     }
 }
 
@@ -395,107 +435,94 @@ impl Default for ReferenceResourceBase {
     }
 }
 
-/// Lifecycle behavior shared by local mapped-file resources.
+/// Lifecycle behavior retained as a low-level compatibility adapter.
+///
+/// Production mapped-file operations use owned RAII leases. `hold` and `release` remain for
+/// existing callers that cannot yet return a guard from their public API.
 pub trait ReferenceResource: Send + Sync {
     fn base(&self) -> &ReferenceResourceBase;
 
     #[inline]
     fn hold(&self) -> bool {
-        if !self.base().available.load(Ordering::Relaxed) {
+        let Ok(lease) = self.base().lifecycle.try_acquire(MappedFileOperation::Read) else {
             return false;
-        }
-        let _guard = self.base().hold_lock.lock();
-        if self.base().available.load(Ordering::Acquire) {
-            let previous = self.base().ref_count.fetch_add(1, Ordering::Relaxed);
-            if previous > 0 {
-                return true;
-            }
-            self.base().ref_count.fetch_sub(1, Ordering::Relaxed);
-        }
-        false
+        };
+        self.base().legacy_holds.lock().push(lease);
+        true
     }
 
     #[inline]
     fn is_available(&self) -> bool {
-        self.base().available.load(Ordering::Acquire)
+        self.base().lifecycle.is_available()
     }
 
     fn shutdown(&self, interval_forcibly: u64) {
-        let should_release = {
-            let _guard = self.base().hold_lock.lock();
-            if self.base().available.load(Ordering::Acquire) {
-                self.base()
-                    .first_shutdown_timestamp
-                    .store(current_millis(), Ordering::Relaxed);
-                self.base().available.store(false, Ordering::Release);
-                true
-            } else {
-                let elapsed =
-                    current_millis().saturating_sub(self.base().first_shutdown_timestamp.load(Ordering::Acquire));
-                if elapsed < interval_forcibly {
-                    false
-                } else {
-                    let mut current_count = self.base().ref_count.load(Ordering::Acquire);
-                    loop {
-                        if current_count <= 0 {
-                            break false;
-                        }
-                        match self.base().ref_count.compare_exchange_weak(
-                            current_count,
-                            -1000 - current_count,
-                            Ordering::AcqRel,
-                            Ordering::Acquire,
-                        ) {
-                            Ok(_) => break true,
-                            Err(observed) => current_count = observed,
-                        }
-                    }
-                }
-            }
-        };
-        if should_release {
-            self.release();
+        let snapshot = self.base().lifecycle.begin_close(interval_forcibly);
+        if snapshot.logical_cleanup_marked {
+            self.try_run_cleanup_callback();
         }
     }
 
     #[inline]
     fn release(&self) {
-        let value = self.base().ref_count.fetch_sub(1, Ordering::Release) - 1;
-        if value > 0 {
-            return;
-        }
-        fence(Ordering::Acquire);
-        let _guard = self.base().release_lock.lock();
-        if !self.base().cleanup_over.load(Ordering::Acquire) {
-            let cleanup_result = self.cleanup(value);
-            self.base().cleanup_over.store(cleanup_result, Ordering::Release);
+        let lease = self.base().legacy_holds.lock().pop();
+        drop(lease);
+        if self.base().lifecycle.logical_cleanup_marked() {
+            self.try_run_cleanup_callback();
         }
     }
 
     #[inline]
     fn get_ref_count(&self) -> i64 {
-        self.base().ref_count.load(Ordering::Acquire)
+        self.base().lifecycle.compatibility_ref_count()
     }
 
     fn cleanup(&self, current_ref: i64) -> bool;
 
-    /// Returns whether the compatibility cleanup callback has completed.
+    fn try_run_cleanup_callback(&self) {
+        let base = self.base();
+        if !base.lifecycle.logical_cleanup_marked()
+            || base.cleanup_callback_over.load(Ordering::Acquire)
+            || base.cleanup_callback_claimed.swap(true, Ordering::AcqRel)
+        {
+            return;
+        }
+
+        let mut claim = CleanupCallbackClaim::new(&base.cleanup_callback_claimed);
+        let _guard = base.cleanup_callback_lock.lock();
+        let completed = self.cleanup(self.get_ref_count());
+        base.cleanup_callback_over.store(completed, Ordering::Release);
+        if completed {
+            claim.retain();
+        }
+    }
+
+    /// Returns whether close has drained every admitted lease.
     ///
     /// This is a logical lifecycle marker. It does not guarantee that an mmap or file owner has
     /// been physically released.
     #[inline]
     fn is_logical_cleanup_marked(&self) -> bool {
-        self.base().cleanup_over.load(Ordering::Acquire) && self.base().ref_count.load(Ordering::Acquire) <= 0
+        self.base().lifecycle.logical_cleanup_marked()
     }
 
-    /// Compatibility alias for [`Self::is_logical_cleanup_marked`].
+    /// Returns whether logical drain has completed and the compatibility cleanup callback
+    /// has succeeded.
+    ///
+    /// A typed lease may perform the final lifecycle release without borrowing the resource that
+    /// owns the callback. In that case this method completes cleanup lazily. Failed callbacks stay
+    /// retryable, and a panic releases the callback claim during unwinding.
     #[inline]
     fn is_cleanup_over(&self) -> bool {
-        self.is_logical_cleanup_marked()
+        if !self.is_logical_cleanup_marked() {
+            return false;
+        }
+        self.try_run_cleanup_callback();
+        self.base().cleanup_callback_over.load(Ordering::Acquire)
     }
 }
 
-/// Default lifecycle counter used by the Store compatibility adapter.
+/// Default compatibility adapter used by mapped-file implementations.
 pub struct ReferenceResourceCounter {
     base: ReferenceResourceBase,
 }
@@ -511,6 +538,49 @@ impl ReferenceResourceCounter {
     #[inline]
     pub fn base(&self) -> &ReferenceResourceBase {
         &self.base
+    }
+
+    /// Acquires an owned operation lease from the canonical mapped-file lifecycle.
+    ///
+    /// The lease remains valid if close starts after acquisition and releases admission on drop.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`super::MappedFileError::Unavailable`] when the lifecycle rejects the operation,
+    /// or [`super::MappedFileError::LeaseCountOverflow`] when the active lease count is exhausted.
+    #[doc(hidden)]
+    #[inline]
+    pub fn try_acquire(&self, operation: MappedFileOperation) -> Result<MappedFileLease, super::MappedFileError> {
+        self.base.lifecycle.try_acquire(operation).map_err(|error| match error {
+            super::lifecycle::LifecycleAcquireError::Unavailable { state, operation } => {
+                super::MappedFileError::Unavailable { state, operation }
+            }
+            super::lifecycle::LifecycleAcquireError::LeaseCountOverflow => super::MappedFileError::LeaseCountOverflow,
+        })
+    }
+
+    /// Acquires a borrowed operation lease without cloning the lifecycle owner.
+    #[inline]
+    pub(crate) fn try_acquire_borrowed(
+        &self,
+        operation: MappedFileOperation,
+    ) -> Result<BorrowedMappedFileLease<'_>, super::MappedFileError> {
+        self.base
+            .lifecycle
+            .try_acquire_borrowed(operation)
+            .map_err(|error| match error {
+                super::lifecycle::LifecycleAcquireError::Unavailable { state, operation } => {
+                    super::MappedFileError::Unavailable { state, operation }
+                }
+                super::lifecycle::LifecycleAcquireError::LeaseCountOverflow => {
+                    super::MappedFileError::LeaseCountOverflow
+                }
+            })
+    }
+
+    #[inline]
+    pub(crate) fn lifecycle(&self) -> &std::sync::Arc<SegmentLifecycle> {
+        self.base.lifecycle()
     }
 }
 

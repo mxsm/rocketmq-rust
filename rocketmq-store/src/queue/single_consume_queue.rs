@@ -414,8 +414,8 @@ impl ConsumeQueue {
             return 0;
         }
         let select_result = select_result.unwrap();
-        let buffer = match &select_result.bytes {
-            Some(b) => b,
+        let buffer = match select_result.get_bytes_ref() {
+            Some(bytes) => bytes,
             None => return 0,
         };
 
@@ -1016,23 +1016,17 @@ impl Iterator for ConsumeQueueIterator {
         match self.smbr.as_ref() {
             None => None,
             Some(value) => {
-                if self.counter * CQ_STORE_UNIT_SIZE >= value.size {
+                if self.counter * CQ_STORE_UNIT_SIZE >= value.size() {
                     return None;
                 }
-                let bytes = match value.get_bytes_ref() {
-                    Some(bytes) => bytes.clone(),
-                    None => value
-                        .mapped_file
-                        .as_ref()?
-                        .get_bytes(value.file_offset as usize, value.size as usize)?,
-                };
+                let bytes = value.get_bytes_ref()?;
                 let start = (self.counter * CQ_STORE_UNIT_SIZE) as usize;
                 self.counter += 1;
                 let end = start + CQ_STORE_UNIT_SIZE as usize;
                 let record = ConsumeQueueRecord::decode(&bytes[start..end])?;
                 self.remaining = self.remaining.saturating_sub(1);
                 let mut cq_unit = CqUnit {
-                    queue_offset: (value.start_offset as i64 + start as i64) / CQ_STORE_UNIT_SIZE as i64,
+                    queue_offset: (value.start_offset() as i64 + start as i64) / CQ_STORE_UNIT_SIZE as i64,
                     size: record.message_size,
                     pos: record.physical_offset,
                     tags_code: record.tags_code,

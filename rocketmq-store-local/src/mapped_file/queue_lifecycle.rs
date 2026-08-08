@@ -245,7 +245,7 @@ pub fn delete_expired_mapped_files_by_offset(
         let mut destroy = false;
         if let Some(result) = mapped_file.select_mapped_buffer((mapped_file_size - unit_size as u64) as i32, unit_size)
         {
-            if let Some(ref buffer) = result.bytes {
+            if let Some(buffer) = result.get_bytes_ref() {
                 if buffer.len() >= 8 {
                     let max_offset_in_logic_queue = i64::from_be_bytes(buffer[0..8].try_into().unwrap_or([0; 8]));
                     destroy = max_offset_in_logic_queue < offset;

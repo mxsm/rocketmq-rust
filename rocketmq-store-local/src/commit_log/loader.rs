@@ -145,20 +145,18 @@ impl CommitLogLoader {
     /// Returns an I/O error when directory discovery, metadata collection,
     /// validation, or target opening fails.
     pub fn load_optimized(&self) -> io::Result<(Vec<Arc<DefaultMappedFile>>, LoadStatistics)> {
-        self.load_with_adapter(CommitLogLoadAdapter {
+        let adapter = CommitLogLoadAdapter {
             open: Self::create_native_mapped_file,
-            recovery_mapping: |mapped_file| {
-                if mapped_file.is_lazy_mmap_enabled() && !mapped_file.is_mapped() {
-                    return None;
-                }
-                Some((mapped_file.get_mapped_file(), mapped_file.get_file_name().as_str()))
-            },
+            // Native production hints use `with_mapped_slice` below. Keep this compatibility
+            // adapter field inert so borrowed mapped bytes never escape their admission lease.
+            recovery_mapping: |_| None,
             mark_fully_loaded: |mapped_file, position| {
                 mapped_file.set_wrote_position(position);
                 mapped_file.set_flushed_position(position);
                 mapped_file.set_committed_position(position);
             },
-        })
+        };
+        self.load_with_adapter_and_hints(&adapter, |mapped_file| self.apply_native_memory_hints(mapped_file))
     }
 
     /// Loads CommitLog files through an alternate mapped-file adapter.
@@ -171,6 +169,17 @@ impl CommitLogLoader {
         &self,
         adapter: CommitLogLoadAdapter<T>,
     ) -> io::Result<(Vec<Arc<T>>, LoadStatistics)> {
+        self.load_with_adapter_and_hints(&adapter, |mapped_file| self.apply_memory_hints(mapped_file, &adapter))
+    }
+
+    fn load_with_adapter_and_hints<T: Send + Sync, H>(
+        &self,
+        adapter: &CommitLogLoadAdapter<T>,
+        apply_memory_hints: H,
+    ) -> io::Result<(Vec<Arc<T>>, LoadStatistics)>
+    where
+        H: Fn(&T) -> (HintOutcome, HintOutcome) + Sync,
+    {
         let start = std::time::Instant::now();
         let mut stats = LoadStatistics {
             recovery_mmap_advice: self.recovery_mmap_advice,
@@ -221,10 +230,10 @@ impl CommitLogLoader {
         );
         let mapped_files = match mapping_plan.execution() {
             CommitLogMappingExecution::Parallel => {
-                self.create_mapped_files_parallel(mapping_plan.entries(), &mut stats, &adapter)?
+                self.create_mapped_files_parallel(mapping_plan.entries(), &mut stats, adapter, &apply_memory_hints)?
             }
             CommitLogMappingExecution::Sequential => {
-                self.create_mapped_files_sequential(mapping_plan.entries(), &mut stats, &adapter)?
+                self.create_mapped_files_sequential(mapping_plan.entries(), &mut stats, adapter, &apply_memory_hints)?
             }
         };
 
@@ -246,17 +255,21 @@ impl CommitLogLoader {
         }
     }
 
-    fn create_mapped_files_parallel<T: Send + Sync>(
+    fn create_mapped_files_parallel<T: Send + Sync, H>(
         &self,
         entries: &[CommitLogMappingEntry],
         statistics: &mut LoadStatistics,
         adapter: &CommitLogLoadAdapter<T>,
-    ) -> io::Result<Vec<Arc<T>>> {
+        apply_memory_hints: &H,
+    ) -> io::Result<Vec<Arc<T>>>
+    where
+        H: Fn(&T) -> (HintOutcome, HintOutcome) + Sync,
+    {
         let results: Result<Vec<_>, io::Error> = entries
             .par_iter()
             .map(|entry| {
                 let mapped_file = self.create_mapped_file(entry, adapter)?;
-                let (mmap_advice_outcome, file_prefetch_outcome) = self.apply_memory_hints(&mapped_file, adapter);
+                let (mmap_advice_outcome, file_prefetch_outcome) = apply_memory_hints(&mapped_file);
                 (adapter.mark_fully_loaded)(&mapped_file, self.mapped_file_size as i32);
                 Ok((Arc::new(mapped_file), mmap_advice_outcome, file_prefetch_outcome))
             })
@@ -272,17 +285,21 @@ impl CommitLogLoader {
         Ok(mapped_files)
     }
 
-    fn create_mapped_files_sequential<T: Send + Sync>(
+    fn create_mapped_files_sequential<T: Send + Sync, H>(
         &self,
         entries: &[CommitLogMappingEntry],
         statistics: &mut LoadStatistics,
         adapter: &CommitLogLoadAdapter<T>,
-    ) -> io::Result<Vec<Arc<T>>> {
+        apply_memory_hints: &H,
+    ) -> io::Result<Vec<Arc<T>>>
+    where
+        H: Fn(&T) -> (HintOutcome, HintOutcome) + Sync,
+    {
         let mut mapped_files = Vec::with_capacity(entries.len());
 
         for entry in entries {
             let mapped_file = self.create_mapped_file(entry, adapter)?;
-            let (mmap_advice_outcome, file_prefetch_outcome) = self.apply_memory_hints(&mapped_file, adapter);
+            let (mmap_advice_outcome, file_prefetch_outcome) = apply_memory_hints(&mapped_file);
             record_mmap_advice(statistics, mmap_advice_outcome);
             record_file_prefetch(statistics, file_prefetch_outcome);
             (adapter.mark_fully_loaded)(&mapped_file, self.mapped_file_size as i32);
@@ -303,5 +320,28 @@ impl CommitLogLoader {
         let mmap_advice_outcome = apply_recovery_mmap_advice(self.recovery_mmap_advice, mmap, file_name);
         let file_prefetch_outcome = apply_recovery_file_prefetch(self.recovery_file_prefetch, mmap, file_name);
         (mmap_advice_outcome, file_prefetch_outcome)
+    }
+
+    fn apply_native_memory_hints(&self, mapped_file: &DefaultMappedFile) -> (HintOutcome, HintOutcome) {
+        if mapped_file.is_lazy_mmap_enabled() && !mapped_file.is_mapped() {
+            return (HintOutcome::not_attempted(), HintOutcome::not_attempted());
+        }
+        let file_name = mapped_file.get_file_name().as_str();
+        mapped_file
+            .with_mapped_slice(|mapped| {
+                (
+                    apply_recovery_mmap_advice(self.recovery_mmap_advice, mapped, file_name),
+                    apply_recovery_file_prefetch(self.recovery_file_prefetch, mapped, file_name),
+                )
+            })
+            .unwrap_or_else(|error| {
+                tracing::warn!(
+                    target: "rocketmq_store::log_file::commit_log_loader",
+                    file_name,
+                    error = ?error,
+                    "CommitLog recovery hints skipped because mapped bytes were unavailable"
+                );
+                (HintOutcome::not_attempted(), HintOutcome::not_attempted())
+            })
     }
 }

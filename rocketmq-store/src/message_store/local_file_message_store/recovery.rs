@@ -697,18 +697,18 @@ impl BackgroundIndexRebuildWorker {
             .commit_log
             .get_data(current_offset)
             .ok_or_else(|| format!("commitlog data unavailable at offset {current_offset}"))?;
-        current_offset = result.start_offset as i64;
+        current_offset = result.start_offset() as i64;
         self.progress.update_current_safe_offset(current_offset);
 
         let mut read_size = 0i32;
         let mut rebuilt_bytes = 0u64;
         let mut rebuilt_messages = 0u64;
-        while read_size < result.size
+        while read_size < result.size()
             && current_offset < target_offset
             && rebuilt_messages < self.batch_size as u64
             && !self.shutdown_token.is_cancelled()
         {
-            let Some(bytes) = result.bytes.as_mut() else {
+            let Some(bytes) = result.bytes_mut() else {
                 return Err("commitlog data buffer is missing during background index rebuild".to_string());
             };
             let mut dispatch_request = commit_log::check_message_and_return_size(
@@ -730,7 +730,7 @@ impl BackgroundIndexRebuildWorker {
                 current_offset = self.commit_log.roll_next_file(current_offset);
                 self.index_service.advance_index_safe_offset_to(current_offset);
                 self.progress.update_current_safe_offset(current_offset);
-                read_size = result.size;
+                read_size = result.size();
                 continue;
             }
             if size <= 0 {

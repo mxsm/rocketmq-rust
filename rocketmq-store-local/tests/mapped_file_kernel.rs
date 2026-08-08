@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::panic::catch_unwind;
+use std::panic::AssertUnwindSafe;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -27,6 +29,8 @@ use rocketmq_store_local::mapped_file::kernel::ReferenceResource;
 use rocketmq_store_local::mapped_file::kernel::ReferenceResourceBase;
 use rocketmq_store_local::mapped_file::kernel::ReferenceResourceCounter;
 use rocketmq_store_local::mapped_file::kernel::OS_PAGE_SIZE;
+use rocketmq_store_local::mapped_file::MappedFileAdmissionState;
+use rocketmq_store_local::mapped_file::MappedFileOperation;
 
 fn warmup_schedule(
     file_size: usize,
@@ -340,19 +344,41 @@ fn full_segment_short_circuits_flush_and_commit_thresholds() {
 }
 
 #[test]
-fn graceful_and_forced_shutdown_keep_legacy_reference_semantics() {
+fn graceful_and_forced_shutdown_keep_explicit_lease_state() {
     let graceful = ReferenceResourceCounter::new();
     assert!(graceful.hold());
     graceful.shutdown(0);
+    let closing = graceful.base().lifecycle_snapshot();
+    assert_eq!(closing.state, MappedFileAdmissionState::Closing);
+    assert_eq!(closing.active_leases, 1);
+    assert_eq!(closing.generation, 1);
+    assert!(closing.started_at.is_some());
+    assert!(!closing.force_observed);
+    assert!(!closing.logical_cleanup_marked);
     assert_eq!(graceful.get_ref_count(), 1);
+    assert!(!graceful.hold());
     graceful.release();
+    let drained = graceful.base().lifecycle_snapshot();
+    assert_eq!(drained.active_leases, 0);
+    assert!(drained.logical_cleanup_marked);
     assert!(graceful.is_cleanup_over());
 
     let forced = ReferenceResourceCounter::new();
     assert!(forced.hold());
     forced.shutdown(0);
     forced.shutdown(0);
-    assert!(forced.get_ref_count() <= -1000);
+    let forced_live = forced.base().lifecycle_snapshot();
+    assert_eq!(forced_live.state, MappedFileAdmissionState::Closing);
+    assert_eq!(forced_live.active_leases, 1);
+    assert_eq!(forced_live.generation, 1);
+    assert!(forced_live.force_observed);
+    assert!(!forced_live.logical_cleanup_marked);
+    assert_eq!(forced.get_ref_count(), 1);
+
+    forced.release();
+    let forced_drained = forced.base().lifecycle_snapshot();
+    assert_eq!(forced_drained.active_leases, 0);
+    assert!(forced_drained.logical_cleanup_marked);
     assert!(forced.is_cleanup_over());
 }
 
@@ -382,6 +408,11 @@ fn concurrent_final_releases_cleanup_exactly_once() {
     for _ in 0..holders {
         assert!(resource.hold());
     }
+    resource.shutdown(u64::MAX);
+    let pending = resource.base.lifecycle_snapshot();
+    assert_eq!(pending.state, MappedFileAdmissionState::Closing);
+    assert_eq!(pending.active_leases, holders);
+    assert!(!pending.logical_cleanup_marked);
 
     let handles = (0..holders)
         .map(|_| {
@@ -389,13 +420,93 @@ fn concurrent_final_releases_cleanup_exactly_once() {
             thread::spawn(move || resource.release())
         })
         .collect::<Vec<_>>();
-    resource.release();
     for handle in handles {
         handle.join().expect("release worker must finish");
     }
 
+    let drained = resource.base.lifecycle_snapshot();
+    assert_eq!(drained.active_leases, 0);
+    assert!(drained.logical_cleanup_marked);
     assert_eq!(resource.cleanup_count.load(Ordering::SeqCst), 1);
     assert!(resource.is_cleanup_over());
+}
+
+#[derive(Clone, Copy)]
+enum ScriptedCleanup {
+    FailOnce,
+    PanicOnce,
+}
+
+struct ScriptedCleanupResource {
+    reference_resource: ReferenceResourceCounter,
+    cleanup_attempts: AtomicUsize,
+    behavior: ScriptedCleanup,
+}
+
+impl ScriptedCleanupResource {
+    fn new(behavior: ScriptedCleanup) -> Self {
+        Self {
+            reference_resource: ReferenceResourceCounter::new(),
+            cleanup_attempts: AtomicUsize::new(0),
+            behavior,
+        }
+    }
+}
+
+impl ReferenceResource for ScriptedCleanupResource {
+    fn base(&self) -> &ReferenceResourceBase {
+        self.reference_resource.base()
+    }
+
+    fn cleanup(&self, _current_ref: i64) -> bool {
+        let attempt = self.cleanup_attempts.fetch_add(1, Ordering::SeqCst);
+        match self.behavior {
+            ScriptedCleanup::FailOnce => attempt > 0,
+            ScriptedCleanup::PanicOnce if attempt == 0 => panic!("injected cleanup panic"),
+            ScriptedCleanup::PanicOnce => true,
+        }
+    }
+}
+
+#[test]
+fn typed_last_drop_completes_retryable_cleanup_lazily_exactly_once() {
+    let resource = ScriptedCleanupResource::new(ScriptedCleanup::FailOnce);
+    let lease = resource
+        .reference_resource
+        .try_acquire(MappedFileOperation::Read)
+        .expect("typed read lease");
+
+    resource.shutdown(u64::MAX);
+    drop(lease);
+
+    assert!(resource.base().lifecycle_snapshot().logical_cleanup_marked);
+    assert_eq!(resource.cleanup_attempts.load(Ordering::SeqCst), 0);
+    assert!(!resource.is_cleanup_over());
+    assert_eq!(resource.cleanup_attempts.load(Ordering::SeqCst), 1);
+    assert!(resource.is_cleanup_over());
+    assert_eq!(resource.cleanup_attempts.load(Ordering::SeqCst), 2);
+    assert!(resource.is_cleanup_over());
+    assert_eq!(resource.cleanup_attempts.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn cleanup_panic_releases_claim_for_lazy_retry() {
+    let resource = ScriptedCleanupResource::new(ScriptedCleanup::PanicOnce);
+    let lease = resource
+        .reference_resource
+        .try_acquire(MappedFileOperation::Read)
+        .expect("typed read lease");
+
+    resource.shutdown(u64::MAX);
+    drop(lease);
+
+    let panic = catch_unwind(AssertUnwindSafe(|| resource.is_cleanup_over()));
+    assert!(panic.is_err());
+    assert_eq!(resource.cleanup_attempts.load(Ordering::SeqCst), 1);
+    assert!(resource.is_cleanup_over());
+    assert_eq!(resource.cleanup_attempts.load(Ordering::SeqCst), 2);
+    assert!(resource.is_cleanup_over());
+    assert_eq!(resource.cleanup_attempts.load(Ordering::SeqCst), 2);
 }
 
 #[test]
@@ -426,12 +537,21 @@ fn concurrent_first_shutdown_releases_base_reference_once() {
             handle.join().expect("shutdown worker must finish");
         }
 
+        let pending = resource.base.lifecycle_snapshot();
+        assert_eq!(pending.state, MappedFileAdmissionState::Closing);
+        assert_eq!(pending.active_leases, 1);
+        assert_eq!(pending.generation, 1);
+        assert!(pending.started_at.is_some());
+        assert!(!pending.force_observed);
+        assert!(!pending.logical_cleanup_marked);
         assert_eq!(resource.get_ref_count(), 1);
         assert_eq!(resource.cleanup_count.load(Ordering::SeqCst), 0);
         assert!(!resource.is_available());
-        assert_ne!(resource.base.first_shutdown_timestamp.load(Ordering::Acquire), 0);
 
         resource.release();
+        let drained = resource.base.lifecycle_snapshot();
+        assert_eq!(drained.active_leases, 0);
+        assert!(drained.logical_cleanup_marked);
         assert_eq!(resource.cleanup_count.load(Ordering::SeqCst), 1);
     }
 }
@@ -463,6 +583,18 @@ fn concurrent_forced_shutdown_claims_the_legacy_transition_once() {
         handle.join().expect("force worker must finish");
     }
 
-    assert_eq!(resource.get_ref_count(), -1002);
+    let forced = resource.base.lifecycle_snapshot();
+    assert_eq!(forced.state, MappedFileAdmissionState::Closing);
+    assert_eq!(forced.active_leases, 1);
+    assert_eq!(forced.generation, 1);
+    assert!(forced.force_observed);
+    assert!(!forced.logical_cleanup_marked);
+    assert_eq!(resource.get_ref_count(), 1);
+    assert_eq!(resource.cleanup_count.load(Ordering::SeqCst), 0);
+
+    resource.release();
+    let drained = resource.base.lifecycle_snapshot();
+    assert_eq!(drained.active_leases, 0);
+    assert!(drained.logical_cleanup_marked);
     assert_eq!(resource.cleanup_count.load(Ordering::SeqCst), 1);
 }

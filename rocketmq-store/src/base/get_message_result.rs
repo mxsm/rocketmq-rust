@@ -250,17 +250,19 @@ impl GetMessageResult {
 
     #[inline]
     pub fn add_message(&mut self, mapped_buffer: SelectMappedBufferResult, queue_offset: u64, batch_num: i32) {
-        self.buffer_total_size += mapped_buffer.size;
+        let size = mapped_buffer.size();
+        self.buffer_total_size += size;
         self.message_count += batch_num;
-        self.msg_count4_commercial += (mapped_buffer.size as f64 / self.commercial_size_per_msg as f64).ceil() as i32;
+        self.msg_count4_commercial += (size as f64 / self.commercial_size_per_msg as f64).ceil() as i32;
         self.message_queue_offset.push(queue_offset);
         self.message_mapped_list.push(mapped_buffer);
     }
 
     #[inline]
     pub fn add_message_inner(&mut self, mapped_buffer: SelectMappedBufferResult) {
-        self.buffer_total_size += mapped_buffer.size;
-        self.msg_count4_commercial += (mapped_buffer.size as f64 / self.commercial_size_per_msg as f64).ceil() as i32;
+        let size = mapped_buffer.size();
+        self.buffer_total_size += size;
+        self.msg_count4_commercial += (size as f64 / self.commercial_size_per_msg as f64).ceil() as i32;
         self.message_count += 1;
         self.message_mapped_list.push(mapped_buffer);
     }

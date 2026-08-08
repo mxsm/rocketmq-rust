@@ -861,13 +861,13 @@ impl ReputMessageServiceInner {
                 break;
             };
             self.reput_from_offset
-                .store(result.start_offset as i64, Ordering::Release);
+                .store(result.start_offset() as i64, Ordering::Release);
             let mut read_size = 0i32;
-            while read_size < result.size
+            while read_size < result.size()
                 && self.reput_from_offset.load(Ordering::Acquire) < self.get_reput_end_offset()
                 && do_next
             {
-                let Some(bytes) = result.bytes.as_mut() else {
+                let Some(bytes) = result.bytes_mut() else {
                     warn!("commitlog data is missing bytes during reput dispatch");
                     break;
                 };
@@ -934,7 +934,7 @@ impl ReputMessageServiceInner {
                                     .roll_next_file(self.reput_from_offset.load(Ordering::Relaxed)),
                                 Ordering::SeqCst,
                             );
-                            read_size = result.size;
+                            read_size = result.size();
                         }
                         std::cmp::Ordering::Less => {}
                     }
@@ -1033,14 +1033,14 @@ impl ReputMessageServiceInner {
             .commit_log
             .get_data(self.reput_from_offset.load(Ordering::Acquire))?;
         self.reput_from_offset
-            .store(result.start_offset as i64, Ordering::Release);
+            .store(result.start_offset() as i64, Ordering::Release);
         let mut read_size = 0i32;
 
-        while read_size < result.size
+        while read_size < result.size()
             && self.reput_from_offset.load(Ordering::Acquire) < self.get_reput_end_offset()
             && dispatch_batch.len() < 64
         {
-            let Some(bytes) = result.bytes.as_mut() else {
+            let Some(bytes) = result.bytes_mut() else {
                 warn!("commitlog data is missing bytes during batch reput dispatch");
                 break;
             };
@@ -1095,7 +1095,7 @@ impl ReputMessageServiceInner {
                                 .roll_next_file(self.reput_from_offset.load(Ordering::Relaxed)),
                             Ordering::SeqCst,
                         );
-                        read_size = result.size;
+                        read_size = result.size();
                     }
                     std::cmp::Ordering::Less => {}
                 }

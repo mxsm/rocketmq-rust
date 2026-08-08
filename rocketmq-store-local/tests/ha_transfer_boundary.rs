@@ -123,7 +123,7 @@ async fn owning_file_range_and_bytes_fallback_emit_identical_frames() {
         .select_mapped_buffer(0, payload.len() as i32)
         .expect("selected payload");
     assert!(selected.try_attach_mapped_file(Arc::clone(&mapped_file)));
-    let owning = SegmentLease::from_select_result(0, selected).expect("owning file range");
+    let owning = SegmentLease::from_selection(selected).expect("owning file range");
     assert!(owning.as_file_range().is_some());
 
     let mut file_range_batch = TransferBatch::data(0, vec![owning]);

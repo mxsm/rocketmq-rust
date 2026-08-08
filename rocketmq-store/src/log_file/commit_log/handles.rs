@@ -197,10 +197,7 @@ impl CommitLogReadHandle {
         let Some(results) = self.get_bulk_data(offset, max_bytes as i32) else {
             return Ok(Vec::new());
         };
-        Ok(results
-            .into_iter()
-            .filter_map(|result| SegmentLease::from_select_result(result.start_offset as i64, result))
-            .collect())
+        Ok(results.into_iter().filter_map(SegmentLease::from_selection).collect())
     }
 }
 

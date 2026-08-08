@@ -20,6 +20,7 @@ use std::sync::atomic::Ordering;
 use rocketmq_error::RocketMQResult;
 use tracing::warn;
 
+use crate::mapped_file::lifecycle::MappedFileLease;
 use crate::utils::ffi::lock_memory_region;
 use crate::utils::ffi::unlock_memory_region;
 
@@ -66,6 +67,7 @@ where
 
 #[must_use = "an armed memory-lock handle must be unlocked or retained for a later retry"]
 pub struct MemoryLockHandle {
+    mapped_file_lease: Option<MappedFileLease>,
     region: Box<dyn LockedMemoryRegion>,
     category: MemoryLockCategory,
     locked: bool,
@@ -74,6 +76,7 @@ pub struct MemoryLockHandle {
 impl MemoryLockHandle {
     fn new(region: Box<dyn LockedMemoryRegion>, category: MemoryLockCategory) -> Self {
         Self {
+            mapped_file_lease: None,
             region,
             category,
             locked: true,
@@ -94,6 +97,15 @@ impl MemoryLockHandle {
 
     pub fn category(&self) -> MemoryLockCategory {
         self.category
+    }
+
+    pub(crate) fn attach_mapped_file_lease(&mut self, lease: MappedFileLease) {
+        debug_assert!(self.mapped_file_lease.is_none());
+        self.mapped_file_lease = Some(lease);
+    }
+
+    fn release_mapped_file_lease(&mut self) {
+        drop(self.mapped_file_lease.take());
     }
 }
 
@@ -386,6 +398,7 @@ impl MemoryLockManager {
                     handle.category(),
                     self.locked_bytes.load(Ordering::Relaxed),
                 );
+                handle.release_mapped_file_lease();
                 Ok(())
             }
             Err(error) => {
@@ -740,6 +753,7 @@ mod tests {
 
         assert_eq!(handle.category(), MemoryLockCategory::CommitLogActiveWindow);
         assert_eq!(handle.len(), 4096);
+        assert!(handle.mapped_file_lease.is_none());
         assert_eq!(manager.locked_bytes(), 4096);
 
         let mut unlocked = false;

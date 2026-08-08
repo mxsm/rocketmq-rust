@@ -12,10 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::cell::Cell;
 use std::io;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
+use parking_lot::RwLock;
+use parking_lot::RwLockReadGuard;
 use rocketmq_model::common::hasher::string_hasher::JavaStringHasher;
 use rocketmq_store_local::index::codec::index_file_total_size as local_index_file_total_size;
 use rocketmq_store_local::index::codec::IndexLayoutError;
@@ -28,7 +31,11 @@ use rocketmq_store_local::index::file::query_index_offsets;
 use rocketmq_store_local::index::file::IndexFileSnapshot;
 use rocketmq_store_local::index::file::IndexHeaderUpdate;
 use rocketmq_store_local::index::file::IndexPutOutcome;
+use rocketmq_store_local::mapped_file::MappedFileAdmissionState;
 use rocketmq_store_local::mapped_file::MappedFileDestroyOutcome;
+use rocketmq_store_local::mapped_file::MappedFileError;
+use rocketmq_store_local::mapped_file::MappedFileOperation;
+use rocketmq_store_local::mapped_file::MappedFileResult;
 use tracing::info;
 use tracing::warn;
 
@@ -94,6 +101,7 @@ pub struct IndexFile {
     file_total_size: usize,
     mapped_file: Arc<DefaultMappedFile>,
     index_header: IndexHeader,
+    operation_closing: RwLock<bool>,
 }
 
 impl PartialEq for IndexFile {
@@ -122,10 +130,20 @@ impl IndexFile {
         end_timestamp: i64,
     ) -> io::Result<IndexFile> {
         let file_total_size = index_file_total_size(hash_slot_num, index_num)?;
+        let file_total_size_i32 = i32::try_from(file_total_size).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "index file size exceeds i32 progress range",
+            )
+        })?;
         let mapped_file = Arc::new(DefaultMappedFile::try_new(
             CheetahString::from_slice(file_name),
             file_total_size as u64,
         )?);
+        // IndexFile performs random-access writes across the preallocated mapping rather than
+        // append-position writes. Mark the complete mapping readable so flush covers every header,
+        // slot, and entry update.
+        mapped_file.set_wrote_position(file_total_size_i32);
 
         let index_header = IndexHeader::new(mapped_file.clone());
         let index_file = IndexFile {
@@ -134,16 +152,21 @@ impl IndexFile {
             file_total_size,
             mapped_file,
             index_header,
+            operation_closing: RwLock::new(false),
         };
 
+        let mut initial_updates = Vec::with_capacity(4);
         if end_phy_offset > 0 {
-            index_file.index_header.set_begin_phy_offset(end_phy_offset);
-            index_file.index_header.set_end_phy_offset(end_phy_offset);
+            initial_updates.push(IndexHeaderUpdate::SetBeginPhyOffset(end_phy_offset));
+            initial_updates.push(IndexHeaderUpdate::SetEndPhyOffset(end_phy_offset));
         }
 
         if end_timestamp > 0 {
-            index_file.index_header.set_begin_timestamp(end_timestamp);
-            index_file.index_header.set_end_timestamp(end_timestamp);
+            initial_updates.push(IndexHeaderUpdate::SetBeginTimestamp(end_timestamp));
+            initial_updates.push(IndexHeaderUpdate::SetEndTimestamp(end_timestamp));
+        }
+        if !initial_updates.is_empty() && !index_file.index_header.try_apply_updates(&initial_updates) {
+            return Err(io::Error::other("failed to initialize index file header"));
         }
         Ok(index_file)
     }
@@ -160,22 +183,77 @@ impl IndexFile {
 
     #[inline]
     pub fn load(&self) {
-        self.index_header.load();
+        let _ = self.try_load_with(|| self.index_header.load());
     }
 
     #[inline]
     pub fn shutdown(&self) {
-        self.flush();
+        let begin_time = std::time::Instant::now();
+        let mut closing = self.operation_closing.write();
+        if *closing {
+            MappedFile::shutdown(self.mapped_file.as_ref(), 0);
+            return;
+        }
+        *closing = true;
+
+        match self.flush_header_and_mapping(|| self.index_header.try_update_byte_buffer()) {
+            Ok(_) => {
+                info!(
+                    "final index file flush elapsed time(ms) {}",
+                    begin_time.elapsed().as_millis()
+                );
+            }
+            Err(error) => {
+                warn!(
+                    file_name = %self.get_file_name(),
+                    error = %error,
+                    "failed to perform final index file flush during shutdown"
+                );
+            }
+        }
+        MappedFile::shutdown(self.mapped_file.as_ref(), 0);
     }
 
     pub fn flush(&self) {
         let begin_time = std::time::Instant::now();
-        if self.mapped_file.hold() {
-            self.index_header.update_byte_buffer();
-            self.mapped_file.flush(0);
-            self.mapped_file.release();
-            info!("flush index file elapsed time(ms) {}", begin_time.elapsed().as_millis());
+        match self.try_flush() {
+            Ok(_) => {
+                info!("flush index file elapsed time(ms) {}", begin_time.elapsed().as_millis());
+            }
+            Err(error) => {
+                warn!(
+                    file_name = %self.get_file_name(),
+                    error = %error,
+                    "failed to flush index file"
+                );
+            }
         }
+    }
+
+    fn try_flush(&self) -> MappedFileResult<i32> {
+        self.try_flush_with_header_update(|| self.index_header.try_update_byte_buffer())
+    }
+
+    fn try_flush_with_header_update<F>(&self, update_header: F) -> MappedFileResult<i32>
+    where
+        F: FnOnce() -> bool,
+    {
+        let Some(_operation) = self.try_enter_operation() else {
+            return Err(Self::closing_error(MappedFileOperation::Maintenance));
+        };
+        self.flush_header_and_mapping(update_header)
+    }
+
+    fn flush_header_and_mapping<F>(&self, update_header: F) -> MappedFileResult<i32>
+    where
+        F: FnOnce() -> bool,
+    {
+        if !update_header() {
+            return Err(MappedFileError::Custom(
+                "failed to publish the index header before flush".to_string(),
+            ));
+        }
+        self.mapped_file.try_flush(0)
     }
 
     #[inline]
@@ -190,7 +268,7 @@ impl IndexFile {
 
     #[inline]
     pub fn try_destroy(&self, interval_forcibly: u64) -> MappedFileDestroyOutcome {
-        self.mapped_file.try_destroy(interval_forcibly)
+        self.try_destroy_with_callbacks(interval_forcibly, || {}, || {})
     }
 
     #[cfg(test)]
@@ -204,6 +282,34 @@ impl IndexFile {
     }
 
     pub fn put_key(&self, key: &str, phy_offset: i64, store_timestamp: i64) -> bool {
+        self.put_key_with(
+            key,
+            phy_offset,
+            store_timestamp,
+            || {},
+            |position, bytes| self.mapped_file.write_bytes_segment(bytes, position, 0, bytes.len()),
+        )
+    }
+
+    fn put_key_with<OnEntered, WriteBytes>(
+        &self,
+        key: &str,
+        phy_offset: i64,
+        store_timestamp: i64,
+        on_entered: OnEntered,
+        mut write_bytes: WriteBytes,
+    ) -> bool
+    where
+        OnEntered: FnOnce(),
+        WriteBytes: FnMut(usize, &[u8]) -> bool,
+    {
+        let Some(_operation) = self.try_enter_operation() else {
+            return false;
+        };
+        on_entered();
+
+        let writes_succeeded = Cell::new(true);
+        let mut header_updates = Vec::with_capacity(6);
         let outcome = drive_index_put(
             self.snapshot(),
             self.index_key_hash_method(key),
@@ -211,12 +317,24 @@ impl IndexFile {
             store_timestamp,
             |position| self.read_index_bytes(position),
             |position, bytes| {
-                self.mapped_file.write_bytes_segment(bytes, position, 0, bytes.len());
+                if writes_succeeded.get() && !write_bytes(position, bytes) {
+                    writes_succeeded.set(false);
+                }
             },
-            |update| self.apply_header_update(update),
+            |update| header_updates.push(update),
         );
         match outcome {
-            IndexPutOutcome::Written => true,
+            IndexPutOutcome::Written => {
+                if !writes_succeeded.get() {
+                    warn!(file_name = %self.get_file_name(), "failed to write index entry");
+                    return false;
+                }
+                if !self.index_header.try_apply_updates(&header_updates) {
+                    warn!(file_name = %self.get_file_name(), "failed to publish index header");
+                    return false;
+                }
+                true
+            }
             IndexPutOutcome::Full => {
                 warn!(
                     "Over index file capacity: index count = {}; index max num = {}",
@@ -270,11 +388,9 @@ impl IndexFile {
     }
 
     pub fn select_phy_offset(&self, phy_offsets: &mut Vec<i64>, key: &str, max_num: usize, begin: i64, end: i64) {
-        // CRITICAL: Must hold and release mapped_file to prevent resource leak
-        if !self.mapped_file.hold() {
+        let Some(_operation) = self.try_enter_operation() else {
             return;
-        }
-
+        };
         query_index_offsets(
             self.snapshot(),
             self.index_key_hash_method(key),
@@ -285,7 +401,6 @@ impl IndexFile {
             |position| self.read_index_bytes::<INDEX_HASH_SLOT_SIZE>(position),
             |position| self.read_index_bytes::<INDEX_ENTRY_SIZE>(position),
         );
-        self.mapped_file.release();
     }
 
     fn snapshot(&self) -> IndexFileSnapshot {
@@ -301,14 +416,46 @@ impl IndexFile {
         self.mapped_file.get_slice(position, N)?.as_ref().try_into().ok()
     }
 
-    fn apply_header_update(&self, update: IndexHeaderUpdate) {
-        match update {
-            IndexHeaderUpdate::SetBeginPhyOffset(offset) => self.index_header.set_begin_phy_offset(offset),
-            IndexHeaderUpdate::SetBeginTimestamp(timestamp) => self.index_header.set_begin_timestamp(timestamp),
-            IndexHeaderUpdate::IncrementHashSlotCount => self.index_header.inc_hash_slot_count(),
-            IndexHeaderUpdate::IncrementIndexCount => self.index_header.inc_index_count(),
-            IndexHeaderUpdate::SetEndPhyOffset(offset) => self.index_header.set_end_phy_offset(offset),
-            IndexHeaderUpdate::SetEndTimestamp(timestamp) => self.index_header.set_end_timestamp(timestamp),
+    fn try_load_with<F>(&self, load: F) -> bool
+    where
+        F: FnOnce(),
+    {
+        let Some(_operation) = self.try_enter_operation() else {
+            return false;
+        };
+        load();
+        true
+    }
+
+    fn try_enter_operation(&self) -> Option<RwLockReadGuard<'_, bool>> {
+        let operation = self.operation_closing.read();
+        if *operation {
+            return None;
+        }
+        Some(operation)
+    }
+
+    fn try_destroy_with_callbacks<BeforeWait, OnClosing>(
+        &self,
+        interval_forcibly: u64,
+        before_wait: BeforeWait,
+        on_closing: OnClosing,
+    ) -> MappedFileDestroyOutcome
+    where
+        BeforeWait: FnOnce(),
+        OnClosing: FnOnce(),
+    {
+        before_wait();
+        let mut closing = self.operation_closing.write();
+        *closing = true;
+        on_closing();
+        self.mapped_file.try_destroy(interval_forcibly)
+    }
+
+    fn closing_error(operation: MappedFileOperation) -> MappedFileError {
+        MappedFileError::Unavailable {
+            state: MappedFileAdmissionState::Closing,
+            operation,
         }
     }
 }
@@ -328,6 +475,13 @@ fn index_file_total_size(hash_slot_num: usize, index_num: usize) -> io::Result<u
 
 #[cfg(test)]
 mod tests {
+    use std::panic::catch_unwind;
+    use std::panic::AssertUnwindSafe;
+    use std::sync::mpsc;
+    use std::sync::Barrier;
+    use std::thread;
+    use std::time::Duration;
+
     use super::*;
 
     #[test]
@@ -524,6 +678,152 @@ mod tests {
         assert_eq!(results.len(), 8);
         assert!(results.contains(&0));
         assert!(results.contains(&7));
+    }
+
+    #[test]
+    fn panic_during_flush_preparation_does_not_leak_a_mapped_file_lease() {
+        let file = create_test_index_file("20000000000032");
+        let leases_before = file.mapped_file.lifecycle_snapshot().active_leases;
+
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let _ = file.try_flush_with_header_update(|| panic!("injected header update panic"));
+        }));
+
+        assert!(result.is_err());
+        assert_eq!(file.mapped_file.lifecycle_snapshot().active_leases, leases_before);
+    }
+
+    #[test]
+    fn closed_file_flush_and_select_do_not_advance_or_leak() {
+        let file = create_test_index_file("20000000000033");
+        let timestamp = 1_000_000_000_000;
+        assert!(file.put_key("closed-key", 42, timestamp));
+        let flushed_before = file.mapped_file.get_flushed_position();
+
+        MappedFile::shutdown(file.mapped_file.as_ref(), 0);
+        let leases_before = file.mapped_file.lifecycle_snapshot().active_leases;
+        assert!(file.try_flush().is_err());
+        assert_eq!(file.mapped_file.get_flushed_position(), flushed_before);
+
+        let mut offsets = vec![7];
+        file.select_phy_offset(&mut offsets, "closed-key", 10, timestamp - 1, timestamp + 1);
+
+        assert_eq!(offsets, vec![7]);
+        assert_eq!(file.mapped_file.lifecycle_snapshot().active_leases, leases_before);
+    }
+
+    #[test]
+    fn failed_index_write_does_not_publish_header_or_report_success() {
+        let file = create_test_index_file("20000000000034");
+        let writes = Cell::new(0);
+        let index_count_before = file.index_header.get_index_count();
+        let end_offset_before = file.index_header.get_end_phy_offset();
+        let end_timestamp_before = file.index_header.get_end_timestamp();
+
+        let written = file.put_key_with(
+            "retry-key",
+            91,
+            1_000_000_000_000,
+            || {},
+            |position, bytes| {
+                let attempt = writes.get() + 1;
+                writes.set(attempt);
+                attempt != 2 && file.mapped_file.write_bytes_segment(bytes, position, 0, bytes.len())
+            },
+        );
+
+        assert!(!written);
+        assert_eq!(writes.get(), 2);
+        assert_eq!(file.index_header.get_index_count(), index_count_before);
+        assert_eq!(file.index_header.get_end_phy_offset(), end_offset_before);
+        assert_eq!(file.index_header.get_end_timestamp(), end_timestamp_before);
+        assert!(file.put_key("retry-key", 91, 1_000_000_000_000));
+        assert_eq!(file.index_header.get_index_count(), index_count_before + 1);
+    }
+
+    #[test]
+    fn shutdown_final_flushes_then_rejects_late_operations() {
+        let file = create_test_index_file("20000000000036");
+        assert!(file.put_key("before-shutdown", 17, 1_000_000_000_000));
+        assert_eq!(file.mapped_file.get_flushed_position(), 0);
+
+        file.shutdown();
+
+        assert_eq!(
+            file.mapped_file.get_flushed_position(),
+            file.file_total_size as i32,
+            "shutdown must flush the complete random-access index mapping"
+        );
+        assert_eq!(
+            file.mapped_file.lifecycle_snapshot().state,
+            MappedFileAdmissionState::Closing
+        );
+        let index_count = file.index_header.get_index_count();
+        assert!(!file.put_key("after-shutdown", 18, 1_000_000_001_000));
+        assert_eq!(file.index_header.get_index_count(), index_count);
+        assert!(file.try_flush().is_err());
+    }
+
+    #[test]
+    fn destroy_waits_for_entered_operation_and_rejects_new_operations() {
+        let file = Arc::new(create_test_index_file("20000000000035"));
+        let entered = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        let operation_file = Arc::clone(&file);
+        let writer_file = Arc::clone(&file);
+        let operation_entered = Arc::clone(&entered);
+        let operation_release = Arc::clone(&release);
+        let operation = thread::spawn(move || {
+            operation_file.put_key_with(
+                "fenced-key",
+                17,
+                1_000_000_000_000,
+                || {
+                    operation_entered.wait();
+                    operation_release.wait();
+                },
+                |position, bytes| {
+                    writer_file
+                        .mapped_file
+                        .write_bytes_segment(bytes, position, 0, bytes.len())
+                },
+            )
+        });
+        entered.wait();
+
+        let (waiting_tx, waiting_rx) = mpsc::channel();
+        let (closing_tx, closing_rx) = mpsc::channel();
+        let destroy_file = Arc::clone(&file);
+        let destroy = thread::spawn(move || {
+            destroy_file.try_destroy_with_callbacks(
+                0,
+                || waiting_tx.send(()).expect("publish destroy wait"),
+                || closing_tx.send(()).expect("publish closing"),
+            )
+        });
+
+        waiting_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("destroy reached the operation fence");
+        assert!(matches!(closing_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+
+        release.wait();
+        assert!(operation.join().expect("join active index operation"));
+        closing_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("destroy entered closing after the operation drained");
+        assert!(destroy.join().expect("join index destroy").is_namespace_removed());
+
+        let index_count = file.index_header.get_index_count();
+        assert!(!file.put_key("late-key", 18, 1_000_000_001_000));
+        assert_eq!(file.index_header.get_index_count(), index_count);
+        let mut offsets = vec![99];
+        file.select_phy_offset(&mut offsets, "fenced-key", 10, 0, i64::MAX);
+        assert_eq!(offsets, vec![99]);
+        assert!(file.try_flush().is_err());
+        let load_called = Cell::new(false);
+        assert!(!file.try_load_with(|| load_called.set(true)));
+        assert!(!load_called.get());
     }
 
     #[test]

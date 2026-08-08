@@ -44,15 +44,14 @@ use tempfile::NamedTempFile;
 use tokio::io::AsyncWrite;
 
 #[test]
-fn segment_lease_from_file_range_exposes_file_position_and_len() {
+fn segment_lease_from_file_range_exposes_only_position_and_len() {
     let file = Arc::new(temp_file_with_bytes(b"0123456789abcdef"));
     let lease = SegmentLease::from_file_range(4096, 4096, 5, 7, file.clone(), TransferCacheState::Hot);
 
     let range = lease.as_file_range().expect("file range");
 
-    assert_eq!(range.file.as_raw_fd(), file.as_raw_fd());
-    assert_eq!(range.position, 5);
-    assert_eq!(range.len, 7);
+    assert_eq!(range.position(), 5);
+    assert_eq!(range.len(), 7);
     assert_eq!(lease.len(), 7);
 }
 
