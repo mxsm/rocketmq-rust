@@ -21,6 +21,7 @@ mod default_mapped_file;
 mod direct_io;
 pub mod file;
 mod flush_strategy;
+mod generation;
 #[doc(hidden)]
 pub mod lifecycle;
 mod lifecycle_model;
@@ -63,19 +64,28 @@ pub use direct_io::DirectIoBuffer;
 pub use direct_io::DirectIoRequest;
 pub use direct_io::DirectIoValidationError;
 pub use flush_strategy::FlushStrategy;
+pub use generation::MappedReadLease;
+pub use generation::MappingGenerationId;
 pub use io_uring_impl::io_uring_backend_status;
 pub use io_uring_impl::IoUringBackendStatus;
 pub use lifecycle::MappedFileAdmissionState;
 pub use lifecycle::MappedFileLifecycleSnapshot;
 pub use lifecycle::MappedFileOperation;
 pub use lifecycle_outcome::MappedFileDestroyOutcome;
+pub use lifecycle_outcome::MappedFileDetachOutcome;
 pub use mapped_buffer::MappedBuffer;
 pub use mapped_file_error::MappedFileError;
 pub use mapped_file_error::MappedFileResult;
 pub use memory::MappedMemory;
 pub use memory::MmapRangeError;
-pub use memory::MmapRegionSlice;
 pub use memory::NativeMappedMemory;
+pub use memory::NativeReadOnlyMappedMemory;
+pub use memory::ReadOnlyMappedMemory;
+/// Legacy type name for the new owner-bound native read-only mapped lease.
+///
+/// Construction intentionally moved to [`DefaultMappedFile::try_mapped_read_lease`]; the former
+/// raw writable-mmap constructor is not retained.
+pub type MmapRegionSlice = MappedReadLease<NativeReadOnlyMappedMemory>;
 pub use metrics::MappedFileMetrics;
 pub use raw::MappedFileRawCore;
 pub use select_result::SelectMappedBufferCacheState;

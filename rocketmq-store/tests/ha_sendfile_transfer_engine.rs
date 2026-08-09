@@ -46,7 +46,8 @@ use tokio::io::AsyncWrite;
 #[test]
 fn segment_lease_from_file_range_exposes_only_position_and_len() {
     let file = Arc::new(temp_file_with_bytes(b"0123456789abcdef"));
-    let lease = SegmentLease::from_file_range(4096, 4096, 5, 7, file.clone(), TransferCacheState::Hot);
+    let lease = SegmentLease::try_from_file_range(4096, 4096, 5, 7, file.clone(), TransferCacheState::Hot)
+        .expect("checked file range");
 
     let range = lease.as_file_range().expect("file range");
 
@@ -68,14 +69,10 @@ async fn sendfile_transfer_engine_writes_header_then_sendfile_ranges() {
     let header = transfer_header(4096, 10);
     let batch = TransferBatch {
         frame_header: header.clone(),
-        segments: vec![SegmentLease::from_file_range(
-            4096,
-            4096,
-            3,
-            10,
-            file,
-            TransferCacheState::Hot,
-        )],
+        segments: vec![
+            SegmentLease::try_from_file_range(4096, 4096, 3, 10, file, TransferCacheState::Hot)
+                .expect("checked file range"),
+        ],
         total_body_len: 10,
         start_offset: 4096,
         next_offset: 4106,
@@ -158,14 +155,10 @@ async fn sendfile_transfer_engine_records_syscall_proxy_against_vectored_baselin
     let file = Arc::new(temp_file_with_bytes(&body));
     let sendfile_batch = TransferBatch {
         frame_header: header,
-        segments: vec![SegmentLease::from_file_range(
-            16384,
-            16384,
-            0,
-            body.len(),
-            file,
-            TransferCacheState::Hot,
-        )],
+        segments: vec![
+            SegmentLease::try_from_file_range(16384, 16384, 0, body.len(), file, TransferCacheState::Hot)
+                .expect("checked file range"),
+        ],
         total_body_len: body.len(),
         start_offset: 16384,
         next_offset: 16384 + body.len() as i64,
@@ -194,14 +187,10 @@ async fn sendfile_transfer_engine_retries_interrupted_and_would_block_without_ad
     let header = transfer_header(32768, 6);
     let batch = TransferBatch {
         frame_header: header.clone(),
-        segments: vec![SegmentLease::from_file_range(
-            32768,
-            32768,
-            0,
-            6,
-            file,
-            TransferCacheState::Hot,
-        )],
+        segments: vec![
+            SegmentLease::try_from_file_range(32768, 32768, 0, 6, file, TransferCacheState::Hot)
+                .expect("checked file range"),
+        ],
         total_body_len: 6,
         start_offset: 32768,
         next_offset: 32774,
@@ -243,14 +232,10 @@ async fn sendfile_transfer_engine_reports_write_zero_when_connection_closes() {
     let header = transfer_header(65536, 6);
     let batch = TransferBatch {
         frame_header: header,
-        segments: vec![SegmentLease::from_file_range(
-            65536,
-            65536,
-            0,
-            6,
-            file,
-            TransferCacheState::Hot,
-        )],
+        segments: vec![
+            SegmentLease::try_from_file_range(65536, 65536, 0, 6, file, TransferCacheState::Hot)
+                .expect("checked file range"),
+        ],
         total_body_len: 6,
         start_offset: 65536,
         next_offset: 65542,

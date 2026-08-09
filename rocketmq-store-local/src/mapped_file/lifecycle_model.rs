@@ -90,9 +90,32 @@ pub(crate) enum ReleaseTransition {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ReleaseOutcome {
+    transition: ReleaseTransition,
+    writers_drained_after_rejection: bool,
+}
+
+impl ReleaseOutcome {
+    #[inline]
+    pub(crate) const fn transition(self) -> ReleaseTransition {
+        self.transition
+    }
+
+    /// Returns whether this release removed the final writer after writes were rejected.
+    ///
+    /// `Closing` is included because close may overtake an already-published seal while its waiter
+    /// is still draining the writers admitted before that seal.
+    #[inline]
+    pub(crate) const fn writers_drained_after_rejection(self) -> bool {
+        self.writers_drained_after_rejection
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct LifecyclePackedSnapshot {
     pub(crate) state: MappedFileAdmissionState,
     pub(crate) active_leases: usize,
+    pub(crate) active_writers: usize,
 }
 
 /// Minimal atomic facade shared by the production implementation and Loom.
@@ -135,10 +158,15 @@ impl LifecycleAtomicUsize for AtomicUsize {
     }
 }
 
-const STATE_BITS: usize = 2;
-const STATE_SHIFT: u32 = usize::BITS - STATE_BITS as u32;
-const ACTIVE_LEASE_MASK: usize = usize::MAX >> STATE_BITS;
-const STATE_MASK: usize = !ACTIVE_LEASE_MASK;
+const STATE_BITS: u32 = 2;
+const COUNTER_BITS: u32 = (usize::BITS - STATE_BITS) / 2;
+const ACTIVE_LEASE_MASK: usize = (1usize << COUNTER_BITS) - 1;
+const ACTIVE_WRITER_SHIFT: u32 = COUNTER_BITS;
+const ACTIVE_WRITER_UNIT: usize = 1usize << ACTIVE_WRITER_SHIFT;
+const ACTIVE_WRITER_MASK: usize = ACTIVE_LEASE_MASK << ACTIVE_WRITER_SHIFT;
+const ACTIVE_COUNT_MASK: usize = ACTIVE_LEASE_MASK | ACTIVE_WRITER_MASK;
+const STATE_SHIFT: u32 = ACTIVE_WRITER_SHIFT + COUNTER_BITS;
+const STATE_MASK: usize = !ACTIVE_COUNT_MASK;
 
 #[inline]
 const fn encode_state(state: MappedFileAdmissionState) -> usize {
@@ -154,11 +182,19 @@ const fn decode_state(word: usize) -> MappedFileAdmissionState {
     }
 }
 
+#[inline]
+const fn decode_active_writers(word: usize) -> usize {
+    (word & ACTIVE_WRITER_MASK) >> ACTIVE_WRITER_SHIFT
+}
+
 /// Lock-free lifecycle transitions shared by production and Loom tests.
 ///
-/// The high two bits encode the admission state and the remaining bits encode the active lease
-/// count. Every admission-state transition and lease-count change is linearized by one CAS on the
-/// packed word, so a close cannot race with a successful post-close admission.
+/// The high two bits encode admission state; the remaining bits are split evenly between total
+/// leases and writer leases. Every state transition and count change is linearized by one CAS, so
+/// a write is either wholly counted before seal or wholly rejected after it.
+///
+/// Each counter is limited to 32,767 on 32-bit targets and 2,147,483,647 on 64-bit targets.
+/// Admission fails closed with `LeaseCountOverflow` instead of wrapping either packed field.
 #[derive(Debug)]
 pub(crate) struct LifecycleTransitionState<A: LifecycleAtomicUsize = AtomicUsize> {
     word: A,
@@ -178,6 +214,7 @@ impl<A: LifecycleAtomicUsize> LifecycleTransitionState<A> {
         LifecyclePackedSnapshot {
             state: decode_state(word),
             active_leases: word & ACTIVE_LEASE_MASK,
+            active_writers: decode_active_writers(word),
         }
     }
 
@@ -189,6 +226,30 @@ impl<A: LifecycleAtomicUsize> LifecycleTransitionState<A> {
     #[inline]
     pub(crate) fn active_leases(&self) -> usize {
         self.snapshot().active_leases
+    }
+
+    #[inline]
+    pub(crate) fn active_writers(&self) -> usize {
+        self.snapshot().active_writers
+    }
+
+    /// Publishes a drain-waiter registration into the packed-word modification order.
+    ///
+    /// The caller publishes presence before this identity RMW. If this RMW precedes the final
+    /// release, that release acquires the RMW's release sequence before checking presence. If a
+    /// final release precedes this RMW and no newer admission intervenes, the returned count is
+    /// zero and the caller must not sleep. A newer admission is included in the returned count and
+    /// its later final release acquires the same registration through the all-RMW modification
+    /// sequence.
+    #[inline]
+    pub(crate) fn active_leases_after_drain_waiter_registration(&self) -> usize {
+        let mut current = self.word.load_acquire();
+        loop {
+            match self.word.compare_exchange_weak_acq_rel(current, current) {
+                Ok(_) => return current & ACTIVE_LEASE_MASK,
+                Err(observed) => current = observed,
+            }
+        }
     }
 
     #[inline]
@@ -205,7 +266,12 @@ impl<A: LifecycleAtomicUsize> LifecycleTransitionState<A> {
                 return Err(AcquireTransitionError::LeaseCountOverflow);
             }
 
-            let next = current + 1;
+            let active_writers = decode_active_writers(current);
+            if operation == MappedFileOperation::Write && active_writers == ACTIVE_LEASE_MASK {
+                return Err(AcquireTransitionError::LeaseCountOverflow);
+            }
+
+            let next = current + 1 + usize::from(operation == MappedFileOperation::Write) * ACTIVE_WRITER_UNIT;
             match self.word.compare_exchange_weak_acquire(current, next) {
                 Ok(_) => return Ok(()),
                 Err(observed) => current = observed,
@@ -214,20 +280,33 @@ impl<A: LifecycleAtomicUsize> LifecycleTransitionState<A> {
     }
 
     #[inline]
-    pub(crate) fn release(&self) -> ReleaseTransition {
+    pub(crate) fn release(&self, operation: MappedFileOperation) -> ReleaseOutcome {
         let mut current = self.word.load_acquire();
         loop {
             let active_leases = current & ACTIVE_LEASE_MASK;
-            if active_leases == 0 {
-                return ReleaseTransition::Underflow;
+            let active_writers = decode_active_writers(current);
+            if active_leases == 0 || (operation == MappedFileOperation::Write && active_writers == 0) {
+                return ReleaseOutcome {
+                    transition: ReleaseTransition::Underflow,
+                    writers_drained_after_rejection: false,
+                };
             }
 
-            let next = current - 1;
+            let state = decode_state(current);
+            let next = current - 1 - usize::from(operation == MappedFileOperation::Write) * ACTIVE_WRITER_UNIT;
             match self.word.compare_exchange_weak_acq_rel_relaxed(current, next) {
-                Ok(_) if active_leases == 1 && decode_state(current) == MappedFileAdmissionState::Closing => {
-                    return ReleaseTransition::Drained;
+                Ok(_) => {
+                    return ReleaseOutcome {
+                        transition: if active_leases == 1 && state == MappedFileAdmissionState::Closing {
+                            ReleaseTransition::Drained
+                        } else {
+                            ReleaseTransition::Remaining(active_leases - 1)
+                        },
+                        writers_drained_after_rejection: operation == MappedFileOperation::Write
+                            && active_writers == 1
+                            && state != MappedFileAdmissionState::ActiveWritable,
+                    };
                 }
-                Ok(_) => return ReleaseTransition::Remaining(active_leases - 1),
                 Err(observed) => current = observed,
             }
         }
@@ -241,7 +320,7 @@ impl<A: LifecycleAtomicUsize> LifecycleTransitionState<A> {
                 return BeginCloseTransition::AlreadyClosing;
             }
 
-            let next = (current & ACTIVE_LEASE_MASK) | encode_state(MappedFileAdmissionState::Closing);
+            let next = (current & ACTIVE_COUNT_MASK) | encode_state(MappedFileAdmissionState::Closing);
             match self.word.compare_exchange_weak_acq_rel(current, next) {
                 Ok(_) => return BeginCloseTransition::Started,
                 Err(observed) => current = observed,
@@ -257,7 +336,7 @@ impl<A: LifecycleAtomicUsize> LifecycleTransitionState<A> {
                 return false;
             }
 
-            let next = (current & ACTIVE_LEASE_MASK) | encode_state(MappedFileAdmissionState::SealedReadable);
+            let next = (current & ACTIVE_COUNT_MASK) | encode_state(MappedFileAdmissionState::SealedReadable);
             match self.word.compare_exchange_weak_acq_rel(current, next) {
                 Ok(_) => return true,
                 Err(observed) => current = observed,

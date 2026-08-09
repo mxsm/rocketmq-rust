@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fs::File;
 use std::io;
 use std::time::Duration;
 use std::time::SystemTime;
@@ -534,19 +533,6 @@ pub trait MappedFile {
     /// # Returns
     /// An `i64` representing the number of accesses to the mapped byte buffer since the last swap.
     fn get_mapped_byte_buffer_access_count_since_last_swap(&self) -> i64;
-
-    /// Returns the underlying file through the legacy compatibility boundary.
-    ///
-    /// Repository callers use this handle only for metadata inspection and `try_clone`. A cloned
-    /// handle remains subject to the same compatibility contract.
-    ///
-    /// # Compatibility contract
-    ///
-    /// Callers must not invoke `set_len`, truncate the file, or perform any other size-changing
-    /// operation while a memory mapping or mapped-buffer lease backed by this file is alive. This
-    /// safe legacy accessor cannot enforce that invariant; violating it can invalidate the safety
-    /// requirements of the existing file-backed memory mappings.
-    fn get_file(&self) -> &File;
 
     /// Marks the mapped file for deletion.
     ///

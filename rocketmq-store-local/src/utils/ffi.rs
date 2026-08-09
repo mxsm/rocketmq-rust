@@ -229,6 +229,20 @@ pub(crate) fn lock_memory_region(memory: &[u8]) -> RocketMQResult<()> {
     unsafe { sys_mlock(memory.as_ptr(), memory.len()) }
 }
 
+/// Locks an owner-backed raw address range without manufacturing a shared Rust slice.
+///
+/// # Safety
+///
+/// `addr..addr + len` must remain live and mapped for this call. The owner must prevent unmapping
+/// while the operating-system operation executes.
+pub(crate) unsafe fn lock_memory_address(addr: *const u8, len: usize) -> RocketMQResult<()> {
+    if len == 0 {
+        return Ok(());
+    }
+    // SAFETY: the caller upholds the live owner-backed range contract.
+    unsafe { sys_mlock(addr, len) }
+}
+
 pub(crate) fn unlock_memory_region(memory: &[u8]) -> RocketMQResult<()> {
     if memory.is_empty() {
         return Ok(());
@@ -236,6 +250,19 @@ pub(crate) fn unlock_memory_region(memory: &[u8]) -> RocketMQResult<()> {
     // SAFETY: the slice proves that the complete input range is live for this call. The OS does
     // not retain a Rust reference or access the range after the call returns.
     unsafe { sys_munlock(memory.as_ptr(), memory.len()) }
+}
+
+/// Unlocks an owner-backed raw address range without manufacturing a shared Rust slice.
+///
+/// # Safety
+///
+/// `addr..addr + len` must remain live and identify the same range submitted to the lock call.
+pub(crate) unsafe fn unlock_memory_address(addr: *const u8, len: usize) -> RocketMQResult<()> {
+    if len == 0 {
+        return Ok(());
+    }
+    // SAFETY: the caller upholds the live, previously locked owner-backed range contract.
+    unsafe { sys_munlock(addr, len) }
 }
 
 /// Invokes the platform memory-advice operation.

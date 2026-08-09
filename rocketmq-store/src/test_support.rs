@@ -504,14 +504,15 @@ fn ha_transfer_file_benchmark_batch(file: Arc<std::fs::File>, body_size: usize) 
     let start_offset = 16 * 1024;
     TransferBatch {
         frame_header: ha_transfer_benchmark_header(start_offset, body_size),
-        segments: vec![SegmentLease::from_file_range(
+        segments: vec![SegmentLease::try_from_file_range(
             start_offset,
             start_offset as u64,
             0,
             body_size,
             file,
             TransferCacheState::Hot,
-        )],
+        )
+        .expect("checked file range")],
         total_body_len: body_size,
         start_offset,
         next_offset: start_offset + body_size as i64,

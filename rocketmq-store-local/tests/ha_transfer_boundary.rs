@@ -157,7 +157,8 @@ async fn owning_file_range_and_bytes_fallback_emit_identical_frames() {
 async fn sendfile_and_owning_bytes_fallback_emit_identical_frames() {
     let mut input = tempfile::tempfile().expect("temporary input file");
     std::io::Write::write_all(&mut input, b"sendfile-parity").expect("write input");
-    let file_segment = SegmentLease::from_file_range(0, 0, 0, 15, Arc::new(input), TransferCacheState::Cold);
+    let file_segment = SegmentLease::try_from_file_range(0, 0, 0, 15, Arc::new(input), TransferCacheState::Cold)
+        .expect("checked file range");
     let mut file_batch = TransferBatch::data(0, vec![file_segment]);
     file_batch.frame_header = Bytes::from_static(b"frame:");
     let operation = RecordingSendfile::new(Bytes::from_static(b"sendfile-parity"), 3);

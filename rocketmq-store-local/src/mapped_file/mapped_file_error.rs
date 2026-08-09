@@ -126,7 +126,10 @@ pub enum MappedFileError {
         operation: MappedFileOperation,
     },
 
-    /// The active lease counter cannot represent another admitted operation.
+    /// The packed lifecycle cannot represent another total or writer lease.
+    ///
+    /// Total and writer counters are each limited to 32,767 on 32-bit targets and 2,147,483,647 on
+    /// 64-bit targets. Admission fails closed with this typed error before either field wraps.
     #[error("Mapped-file active lease count overflow")]
     LeaseCountOverflow,
 

@@ -14,8 +14,44 @@
 
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
+
+/// Owner-bound gauge guard for one live mapping generation.
+///
+/// The guard is deliberately non-cloneable. Its constructor performs the only matching gauge
+/// increment and its [`Drop`] implementation performs the decrement and physical-drop count.
+pub(crate) struct MappingGenerationGaugeGuard {
+    metrics: Arc<MappedFileMetrics>,
+    mapped_bytes: u64,
+}
+
+impl Drop for MappingGenerationGaugeGuard {
+    fn drop(&mut self) {
+        self.metrics.mapped_generations_live.fetch_sub(1, Ordering::Relaxed);
+        self.metrics
+            .mapped_bytes_live
+            .fetch_sub(self.mapped_bytes, Ordering::Relaxed);
+        self.metrics.physical_mapping_drop_total.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// Owner-bound gauge guard for one live operating-system file owner.
+///
+/// Moving the guard into `FileOwner` binds the live gauge to the final `Arc<FileOwner>` drop.
+pub(crate) struct FileOwnerGaugeGuard {
+    metrics: Arc<MappedFileMetrics>,
+}
+
+impl Drop for FileOwnerGaugeGuard {
+    fn drop(&mut self) {
+        self.metrics.file_owners_live.fetch_sub(1, Ordering::Relaxed);
+        self.metrics
+            .physical_file_owner_drop_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+}
 
 /// Performance metrics for mapped file operations.
 ///
@@ -92,6 +128,24 @@ pub struct MappedFileMetrics {
     /// Number of swapped-map cleanup decisions.
     clean_swap_operations: AtomicU64,
 
+    /// Number of mapping generations with a live physical owner.
+    mapped_generations_live: AtomicU64,
+
+    /// Number of bytes covered by live mapping generations.
+    mapped_bytes_live: AtomicU64,
+
+    /// Number of live canonical operating-system file owners.
+    file_owners_live: AtomicU64,
+
+    /// Number of mapping generations whose final owner has dropped.
+    physical_mapping_drop_total: AtomicU64,
+
+    /// Number of canonical file owners whose final owner has dropped.
+    physical_file_owner_drop_total: AtomicU64,
+
+    /// Number of mapping/file slot detach winners.
+    lifecycle_detach_total: AtomicU64,
+
     /// Timestamp when metrics collection started
     start_time: Instant,
 }
@@ -127,7 +181,35 @@ impl MappedFileMetrics {
             last_warm_time_ms: AtomicU64::new(0),
             swap_operations: AtomicU64::new(0),
             clean_swap_operations: AtomicU64::new(0),
+            mapped_generations_live: AtomicU64::new(0),
+            mapped_bytes_live: AtomicU64::new(0),
+            file_owners_live: AtomicU64::new(0),
+            physical_mapping_drop_total: AtomicU64::new(0),
+            physical_file_owner_drop_total: AtomicU64::new(0),
+            lifecycle_detach_total: AtomicU64::new(0),
             start_time: Instant::now(),
+        }
+    }
+
+    /// Starts tracking one mapping generation until the returned guard is dropped.
+    ///
+    /// The live byte sum cannot exceed the process address space, so its `u64` representation and
+    /// matching atomic add/subtract are exact on supported targets.
+    pub(crate) fn track_mapping_generation(self: &Arc<Self>, mapped_bytes: usize) -> MappingGenerationGaugeGuard {
+        let mapped_bytes = mapped_bytes as u64;
+        self.mapped_generations_live.fetch_add(1, Ordering::Relaxed);
+        self.mapped_bytes_live.fetch_add(mapped_bytes, Ordering::Relaxed);
+        MappingGenerationGaugeGuard {
+            metrics: Arc::clone(self),
+            mapped_bytes,
+        }
+    }
+
+    /// Starts tracking one canonical file owner until the returned guard is dropped.
+    pub(crate) fn track_file_owner(self: &Arc<Self>) -> FileOwnerGaugeGuard {
+        self.file_owners_live.fetch_add(1, Ordering::Relaxed);
+        FileOwnerGaugeGuard {
+            metrics: Arc::clone(self),
         }
     }
 
@@ -296,6 +378,48 @@ impl MappedFileMetrics {
         self.clean_swap_operations.load(Ordering::Relaxed)
     }
 
+    /// Returns the number of live mapping generation owners.
+    #[inline]
+    pub fn mapped_generations_live(&self) -> u64 {
+        self.mapped_generations_live.load(Ordering::Relaxed)
+    }
+
+    /// Returns the number of bytes covered by live mapping generation owners.
+    #[inline]
+    pub fn mapped_bytes_live(&self) -> u64 {
+        self.mapped_bytes_live.load(Ordering::Relaxed)
+    }
+
+    /// Returns the number of live canonical file owners.
+    #[inline]
+    pub fn file_owners_live(&self) -> u64 {
+        self.file_owners_live.load(Ordering::Relaxed)
+    }
+
+    /// Returns the number of mapping generations released by their final owner.
+    #[inline]
+    pub fn physical_mapping_drop_total(&self) -> u64 {
+        self.physical_mapping_drop_total.load(Ordering::Relaxed)
+    }
+
+    /// Returns the number of canonical file owners released by their final owner.
+    #[inline]
+    pub fn physical_file_owner_drop_total(&self) -> u64 {
+        self.physical_file_owner_drop_total.load(Ordering::Relaxed)
+    }
+
+    /// Records one mapping/file slot detach winner.
+    #[inline]
+    pub(crate) fn record_lifecycle_detach(&self) {
+        self.lifecycle_detach_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Returns the number of mapping/file slot detach winners.
+    #[inline]
+    pub fn lifecycle_detach_total(&self) -> u64 {
+        self.lifecycle_detach_total.load(Ordering::Relaxed)
+    }
+
     /// Calculates write operations per second.
     ///
     /// # Returns
@@ -394,9 +518,11 @@ impl MappedFileMetrics {
         }
     }
 
-    /// Resets all metrics to zero.
+    /// Resets operation metrics to zero.
     ///
-    /// Also resets the start time to the current instant.
+    /// Owner-bound live gauges and physical-drop totals are deliberately preserved: resetting them
+    /// while guards are live would make the matching `Drop` decrement asymmetric. The start time is
+    /// reset to the current instant.
     pub fn reset(&mut self) {
         self.total_writes.store(0, Ordering::Relaxed);
         self.total_bytes_written.store(0, Ordering::Relaxed);
@@ -425,7 +551,8 @@ impl MappedFileMetrics {
         format!(
             "MappedFile Metrics:\nWrites: {} ({:.2} writes/sec, {:.2} MB/s)\nReads: {} ({:.1}% zero-copy)\nFlushes: \
              {} (avg: {:?})\nCache Hit Rate: {:.1}%\nAvg Write Size: {:.1} bytes\nWarm: {} ops, {} bytes, total {} \
-             ms, last {} ms\nSwap: {} ops, clean: {} ops",
+             ms, last {} ms\nSwap: {} ops, clean: {} ops\nPhysical owners: {} mappings / {} bytes, {} files; drops: {} \
+             mappings, {} files; detach: {}",
             self.total_writes(),
             self.writes_per_sec(),
             self.write_throughput_mb_per_sec(),
@@ -440,7 +567,13 @@ impl MappedFileMetrics {
             self.total_warm_millis(),
             self.last_warm_millis(),
             self.swap_operations(),
-            self.clean_swap_operations()
+            self.clean_swap_operations(),
+            self.mapped_generations_live(),
+            self.mapped_bytes_live(),
+            self.file_owners_live(),
+            self.physical_mapping_drop_total(),
+            self.physical_file_owner_drop_total(),
+            self.lifecycle_detach_total()
         )
     }
 }
@@ -451,6 +584,8 @@ fn duration_to_millis(duration: Duration) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
 
     #[test]
@@ -540,5 +675,33 @@ mod tests {
 
         assert_eq!(metrics.total_writes(), 0);
         assert_eq!(metrics.total_flushes(), 0);
+    }
+
+    #[test]
+    fn mapping_generation_gauge_tracks_owner_lifetime_symmetrically() {
+        let metrics = Arc::new(MappedFileMetrics::new());
+
+        let guard = metrics.track_mapping_generation(4096);
+        assert_eq!(metrics.mapped_generations_live(), 1);
+        assert_eq!(metrics.mapped_bytes_live(), 4096);
+        assert_eq!(metrics.physical_mapping_drop_total(), 0);
+
+        drop(guard);
+        assert_eq!(metrics.mapped_generations_live(), 0);
+        assert_eq!(metrics.mapped_bytes_live(), 0);
+        assert_eq!(metrics.physical_mapping_drop_total(), 1);
+    }
+
+    #[test]
+    fn file_owner_gauge_tracks_owner_lifetime_symmetrically() {
+        let metrics = Arc::new(MappedFileMetrics::new());
+
+        let guard = metrics.track_file_owner();
+        assert_eq!(metrics.file_owners_live(), 1);
+        assert_eq!(metrics.physical_file_owner_drop_total(), 0);
+
+        drop(guard);
+        assert_eq!(metrics.file_owners_live(), 0);
+        assert_eq!(metrics.physical_file_owner_drop_total(), 1);
     }
 }

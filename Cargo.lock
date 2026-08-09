@@ -4572,6 +4572,7 @@ dependencies = [
 name = "rocketmq-store-local"
 version = "1.0.0"
 dependencies = [
+ "arc-swap",
  "bytes",
  "cheetah-string",
  "criterion",
