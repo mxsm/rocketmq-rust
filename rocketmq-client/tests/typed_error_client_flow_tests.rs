@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![recursion_limit = "256"]
+
 #[test]
 fn client_callback_files_do_not_use_legacy_error_enum() {
     let files = [

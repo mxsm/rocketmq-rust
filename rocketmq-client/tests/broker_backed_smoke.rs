@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![recursion_limit = "256"]
+
 //! Broker-backed client smoke tests.
 //!
 //! These tests are skipped unless `ROCKETMQ_NAMESRV_ADDR` is set. They are

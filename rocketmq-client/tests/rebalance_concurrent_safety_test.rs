@@ -12,6 +12,8 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 
+#![recursion_limit = "256"]
+
 //! Concurrent Safety Tests for RebalanceImpl
 //!
 //! These tests verify that the bug fixes for race conditions and deadlocks

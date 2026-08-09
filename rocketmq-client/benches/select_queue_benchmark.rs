@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::Criterion;

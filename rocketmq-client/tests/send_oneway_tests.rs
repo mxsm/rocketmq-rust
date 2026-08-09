@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![recursion_limit = "256"]
+
 //! Simple compilation tests for send_oneway optimization (P0 + P1)
 //!
 //! These tests verify that the new APIs compile correctly

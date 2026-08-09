@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![recursion_limit = "256"]
+
 #[test]
 fn client_runtime_and_builder_ownership_boundaries_are_compile_time_enforced() {
     let tests = trybuild::TestCases::new();

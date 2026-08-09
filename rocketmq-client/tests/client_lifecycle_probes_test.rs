@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![recursion_limit = "256"]
+
 use rocketmq_client_rust::test_support::run_concurrent_clean_expire_lifecycle_probe;
 use rocketmq_client_rust::test_support::run_connection_event_listener_lifecycle_probe;
 use rocketmq_client_rust::test_support::run_consumer_stats_manager_lifecycle_probe;

@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![recursion_limit = "256"]
+
 //! Broker-free producer send pipeline baselines.
 //!
 //! These benchmarks measure local work performed before a request reaches the
