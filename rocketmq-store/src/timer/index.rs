@@ -38,12 +38,36 @@ pub(crate) struct TimerIndexPage {
     pub(crate) continuation: Option<TimerIndexCursor>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TimerIndexCursor {
     pub(crate) due_time_ms: i64,
     pub(crate) lane: u16,
     pub(crate) timer_id: TimerId,
     pub(crate) generation: u64,
+    pub(crate) backend: TimerIndexBackendCursor,
+}
+
+impl TimerIndexCursor {
+    pub(crate) const fn ordered_key(due_time_ms: i64, lane: u16, timer_id: TimerId, generation: u64) -> Self {
+        Self {
+            due_time_ms,
+            lane,
+            timer_id,
+            generation,
+            backend: TimerIndexBackendCursor::OrderedKey,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum TimerIndexBackendCursor {
+    OrderedKey,
+    Segmented {
+        manifest_generation: u64,
+        due_day_utc: i32,
+        due_hour_utc: u8,
+        run_positions: Vec<(u64, u64)>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -75,11 +99,14 @@ pub(crate) trait TimerIndex: Send + Sync {
     fn set_state(
         &self,
         timer_id: TimerId,
+        generation: u64,
         state: TimerRecordState,
     ) -> impl Future<Output = Result<(), TimerEngineError>> + Send;
 
     fn checkpoint(&self, checkpoint: TimerIndexCheckpoint)
         -> impl Future<Output = Result<(), TimerEngineError>> + Send;
+
+    fn load_checkpoint(&self) -> impl Future<Output = Result<Option<TimerIndexCheckpoint>, TimerEngineError>> + Send;
 
     fn pin_snapshot(
         &self,

@@ -282,6 +282,27 @@ impl RocksDbTimelineStateIndex {
             .transpose()
     }
 
+    /// Reads a bounded group of state records with one RocksDB multi-get.
+    pub fn get_many(
+        &self,
+        keys: &[(TimerId, TimerGeneration)],
+    ) -> Result<Vec<Option<TimelineStateRecordV1>>, RocketMQError> {
+        let encoded = keys
+            .iter()
+            .map(|(timer_id, generation)| encode_state_key(*timer_id, *generation).to_vec())
+            .collect::<Vec<_>>();
+        self.store
+            .multi_get_cf(STATE_CF, &encoded)?
+            .into_iter()
+            .zip(keys)
+            .map(|(value, (_, generation))| {
+                value
+                    .map(|value| TimelineStateRecordV1::decode(&value, *generation))
+                    .transpose()
+            })
+            .collect()
+    }
+
     /// Scans a bounded state page for restart/promotion lease recovery.
     pub fn scan(&self, max_records: usize) -> Result<Vec<TimelineStateEntry>, RocketMQError> {
         Ok(self.scan_after(None, max_records)?.entries)

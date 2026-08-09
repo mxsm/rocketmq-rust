@@ -29,6 +29,7 @@ use rocketmq_store_rocksdb::timer::codec::TimelineKeyV1;
 use rocketmq_store_rocksdb::timer::codec::TimelineRecordV1;
 use rocketmq_store_rocksdb::timer::state_index::RocksDbTimelineStateIndex;
 use rocketmq_store_rocksdb::timer::state_index::TimelineState;
+use rocketmq_store_rocksdb::timer::state_index::TimelineStateRecordV1;
 use rocketmq_store_rocksdb::timer::timeline_index::RocksDbTimelineIndex;
 use rocketmq_store_rocksdb::timer::timeline_index::TimelineIndexEntry;
 use rocketmq_store_rocksdb::timer::timeline_index::TimelineSnapshotPin;
@@ -36,6 +37,7 @@ use rocketmq_store_rocksdb::timer::timeline_index::TimelineSnapshotPin;
 use crate::timer::engine::WorkBudget;
 use crate::timer::error::TimerEngineError;
 use crate::timer::index::TimerIndex;
+use crate::timer::index::TimerIndexBackendCursor;
 use crate::timer::index::TimerIndexCheckpoint;
 use crate::timer::index::TimerIndexCursor;
 use crate::timer::index::TimerIndexPage;
@@ -85,7 +87,30 @@ impl TimerIndex for RocksDbTimerIndex {
                     .iter()
                     .map(source_to_entry)
                     .collect::<Result<Vec<_>, TimerEngineError>>()?;
-                index.put_batch(&entries, None).map_err(storage_error)
+                let mut batch = rocketmq_store_rocksdb::batch::RocksDbWriteBatch::with_capacity(entries.len() * 2);
+                for (source, entry) in selected.iter().zip(&entries) {
+                    RocksDbTimelineIndex::append_entry(&mut batch, entry).map_err(storage_error)?;
+                    RocksDbTimelineStateIndex::append_state(
+                        &mut batch,
+                        entry.key.timer_id,
+                        entry.key.generation,
+                        &TimelineStateRecordV1 {
+                            state: TimelineState::Pending,
+                            state_version: 0,
+                            route: source.route.clone(),
+                            admission_epoch: rocketmq_store_api::TimerEngineEpoch::new(1),
+                            owner_epoch: rocketmq_store_api::TimerEngineEpoch::new(1),
+                            claim_seq: 0,
+                            due_time_ms: entry.key.due_time_ms,
+                            lane: entry.key.lane,
+                            terminal_at_ms: 0,
+                            shadow_only: false,
+                        },
+                    )
+                    .map_err(storage_error)?;
+                }
+                index.write_batch(&batch).map_err(storage_error)?;
+                Ok(entries.len())
             })
             .await
             .map_err(|error| TimerEngineError::Storage(std::io::Error::other(error.to_string())))?
@@ -121,6 +146,19 @@ impl TimerIndex for RocksDbTimerIndex {
                 let mut last_key = None;
                 let mut budget_exhausted = false;
                 for entry in page.entries {
+                    let state = index
+                        .state_index()
+                        .get(entry.key.timer_id, entry.key.generation)
+                        .map_err(storage_error)?;
+                    if state.is_some_and(|state| {
+                        matches!(
+                            state.state,
+                            TimelineState::Delivered | TimelineState::Cancelled | TimelineState::Quarantined
+                        )
+                    }) {
+                        last_key = Some(entry.key);
+                        continue;
+                    }
                     let record = entry_to_due_record(entry)?;
                     let next_bytes = retained_bytes.saturating_add(record.source.estimated_bytes);
                     if !budget.allows(records.len().saturating_add(1), next_bytes) {
@@ -141,11 +179,16 @@ impl TimerIndex for RocksDbTimerIndex {
             .map_err(|error| TimerEngineError::Storage(std::io::Error::other(error.to_string())))?
     }
 
-    async fn set_state(&self, timer_id: TimerId, state: TimerRecordState) -> Result<(), TimerEngineError> {
+    async fn set_state(
+        &self,
+        timer_id: TimerId,
+        generation: u64,
+        state: TimerRecordState,
+    ) -> Result<(), TimerEngineError> {
         let state_index = Arc::clone(&self.state);
         self.storage_io
             .spawn_io("timer.timeline.set_state", move || {
-                let generation = TimerGeneration::new(0);
+                let generation = TimerGeneration::new(generation);
                 let Some(mut current) = state_index.get(timer_id, generation).map_err(storage_error)? else {
                     return Ok(());
                 };
@@ -177,6 +220,24 @@ impl TimerIndex for RocksDbTimerIndex {
                         )),
                     )
                     .map(|_| ())
+                    .map_err(storage_error)
+            })
+            .await
+            .map_err(|error| TimerEngineError::Storage(std::io::Error::other(error.to_string())))?
+    }
+
+    async fn load_checkpoint(&self) -> Result<Option<TimerIndexCheckpoint>, TimerEngineError> {
+        let index = Arc::clone(&self.index);
+        self.storage_io
+            .spawn_io("timer.timeline.load_checkpoint", move || {
+                index
+                    .checkpoint(TimelineCheckpointKind::Due, 0)
+                    .map(|checkpoint| {
+                        checkpoint.map(|checkpoint| TimerIndexCheckpoint {
+                            cursor: checkpoint.due_cursor,
+                            epoch: rocketmq_store_api::TimerEngineEpoch::new(checkpoint.generation),
+                        })
+                    })
                     .map_err(storage_error)
             })
             .await
@@ -225,8 +286,8 @@ impl TimerIndex for RocksDbTimerIndex {
         let index = Arc::clone(&self.index);
         self.storage_io
             .spawn_io("timer.timeline.gc", move || {
-                index
-                    .gc(
+                let candidates = index
+                    .gc_candidates(
                         TimelineKeyV1 {
                             due_time_ms: fence.due_time_ms(),
                             lane: 0,
@@ -235,7 +296,27 @@ impl TimerIndex for RocksDbTimerIndex {
                         },
                         budget.max_messages,
                     )
-                    .map_err(storage_error)
+                    .map_err(storage_error)?;
+                let state = index.state_index();
+                let mut batch = rocketmq_store_rocksdb::batch::RocksDbWriteBatch::with_capacity(candidates.len());
+                let mut removed = 0usize;
+                for entry in candidates {
+                    let terminal = state
+                        .get(entry.key.timer_id, entry.key.generation)
+                        .map_err(storage_error)?
+                        .is_some_and(|state| {
+                            matches!(
+                                state.state,
+                                TimelineState::Delivered | TimelineState::Cancelled | TimelineState::Quarantined
+                            )
+                        });
+                    if terminal {
+                        RocksDbTimelineIndex::append_delete_entry(&mut batch, entry.key);
+                        removed = removed.saturating_add(1);
+                    }
+                }
+                index.write_batch(&batch).map_err(storage_error)?;
+                Ok(removed)
             })
             .await
             .map_err(|error| TimerEngineError::Storage(std::io::Error::other(error.to_string())))?
@@ -297,15 +378,11 @@ fn entry_to_due_record(entry: TimelineIndexEntry) -> Result<DueTimerRecord, Time
 }
 
 const fn key_to_index_cursor(key: TimelineKeyV1) -> TimerIndexCursor {
-    TimerIndexCursor {
-        due_time_ms: key.due_time_ms,
-        lane: key.lane,
-        timer_id: key.timer_id,
-        generation: key.generation.get(),
-    }
+    TimerIndexCursor::ordered_key(key.due_time_ms, key.lane, key.timer_id, key.generation.get())
 }
 
-const fn index_cursor_to_key(cursor: TimerIndexCursor) -> TimelineKeyV1 {
+fn index_cursor_to_key(cursor: TimerIndexCursor) -> TimelineKeyV1 {
+    debug_assert!(matches!(cursor.backend, TimerIndexBackendCursor::OrderedKey));
     TimelineKeyV1 {
         due_time_ms: cursor.due_time_ms,
         lane: cursor.lane,

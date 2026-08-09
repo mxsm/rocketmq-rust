@@ -463,6 +463,14 @@ impl Default for RocksDbConfig {
 impl RocksDbConfig {
     /// Creates the physically isolated, WAL-protected Extended Timeline configuration.
     pub fn timer_timeline(store_root: impl AsRef<std::path::Path>) -> Self {
+        Self::timer_timeline_at_database_path(store_root.as_ref().join(ROCKSDB_TIMER_TIMELINE_DIRECTORY))
+    }
+
+    /// Creates the Extended Timeline configuration for an exact database directory.
+    ///
+    /// This is used to reopen an immutable RocksDB checkpoint during an online index migration;
+    /// normal broker startup should use [`Self::timer_timeline`].
+    pub fn timer_timeline_at_database_path(path: impl Into<PathBuf>) -> Self {
         let column_families = [
             "default",
             crate::timer::TIMELINE_CF,
@@ -475,13 +483,16 @@ impl RocksDbConfig {
             crate::timer::CHECKPOINT_CF,
             crate::timer::BUCKET_SUMMARY_CF,
             crate::timer::RECEIPT_CF,
+            crate::timer::NATIVE_LOCATOR_CF,
+            crate::timer::NATIVE_MATERIALIZED_CF,
+            crate::timer::NATIVE_META_CF,
         ]
         .into_iter()
         .map(RocksDbColumnFamilyConfig::timer_timeline)
         .collect();
         Self {
             enabled: true,
-            path: store_root.as_ref().join(ROCKSDB_TIMER_TIMELINE_DIRECTORY),
+            path: path.into(),
             wal_enabled: true,
             sync_write: true,
             manual_wal_flush: false,

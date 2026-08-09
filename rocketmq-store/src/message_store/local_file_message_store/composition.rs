@@ -115,7 +115,7 @@ impl LocalFileMessageStore {
 
         let keep_local_derived_dispatchers =
             !message_store_config.is_enable_rocksdb_store() || message_store_config.rocksdb_cq_double_write_enable;
-        let mut dispatcher_vec = if keep_local_derived_dispatchers {
+        let dispatcher_vec = if keep_local_derived_dispatchers {
             vec![build_consume_queue, build_index]
         } else {
             Vec::new()
@@ -123,9 +123,13 @@ impl LocalFileMessageStore {
         #[cfg(feature = "extended_timeline")]
         let extended_timeline_completion_wake = Arc::new(TimelineCompletionWake::default());
         #[cfg(feature = "extended_timeline")]
-        if message_store_config.timer_store_mode == TimerStoreMode::ExtendedTimeline {
-            dispatcher_vec.push(extended_timeline_completion_wake.clone());
-        }
+        let dispatcher_vec = {
+            let mut dispatcher_vec = dispatcher_vec;
+            if message_store_config.timer_store_mode == TimerStoreMode::ExtendedTimeline {
+                dispatcher_vec.push(extended_timeline_completion_wake.clone());
+            }
+            dispatcher_vec
+        };
         let mut dispatcher = CommitLogDispatcherDefault::with_dispatchers(dispatcher_vec);
 
         let memory_lock_budget_bytes = Self::effective_linux_memory_lock_budget_bytes(message_store_config.as_ref());

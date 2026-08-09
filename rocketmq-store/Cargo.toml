@@ -137,6 +137,19 @@ harness           = false
 required-features = ["extended_timeline"]
 
 [[bench]]
+name              = "timer_timeline_index"
+harness           = false
+required-features = ["extended_timeline"]
+
+[[test]]
+name              = "timer_segmented_commit_tests"
+required-features = ["extended_timeline", "test-support"]
+
+[[test]]
+name              = "timer_index_migration_tests"
+required-features = ["extended_timeline", "test-support"]
+
+[[bench]]
 name    = "mapped_buffer_bench"
 harness = false
 

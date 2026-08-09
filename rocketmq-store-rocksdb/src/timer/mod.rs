@@ -15,6 +15,7 @@
 mod build_service;
 pub mod checkpoint;
 pub mod codec;
+pub mod native_overlay;
 pub mod state_index;
 pub mod timeline_index;
 
@@ -43,3 +44,9 @@ pub const CHECKPOINT_CF: &str = "checkpoint";
 pub const BUCKET_SUMMARY_CF: &str = "bucket_summary";
 /// Final CommitLog facts indexed by stable delivery token.
 pub const RECEIPT_CF: &str = "receipt";
+/// Direct native Timeline payload locators keyed by timer id/generation.
+pub const NATIVE_LOCATOR_CF: &str = "native_locator";
+/// Per-source native durability markers committed with the RocksDB overlay.
+pub const NATIVE_MATERIALIZED_CF: &str = "native_materialized";
+/// Native owner, migration, and cross-media checkpoint metadata.
+pub const NATIVE_META_CF: &str = "native_meta";

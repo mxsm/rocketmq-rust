@@ -22,6 +22,7 @@ use rocketmq_store_api::TimerSnapshotFile;
 use rocketmq_store_api::TimerSnapshotManifest;
 use rocketmq_store_api::TimerSnapshotValidationError;
 use rocketmq_store_api::TimerSourceCqOffset;
+use rocketmq_store_api::TimerTimelineIndexKind;
 use rocketmq_store_api::TIMER_SNAPSHOT_SCHEMA_VERSION;
 use rocketmq_store_rocksdb::timer::codec::TimelineKeyV1;
 use rocketmq_store_rocksdb::timer::codec::TimelineRecordV1;
@@ -37,6 +38,11 @@ fn manifest() -> TimerSnapshotManifest {
         due_time_cursor_ms: 1_800_000_000_000,
         completion_physical_cursor: 8_192,
         timeline_sequence: 17,
+        timeline_index_kind: TimerTimelineIndexKind::RocksDb,
+        native_manifest_generation: None,
+        native_durable_end: None,
+        native_manifest_checksum: None,
+        native_files: Vec::new(),
         role_epoch: 9,
         activation_epoch: 7,
         format_fingerprint: 0xA55A,

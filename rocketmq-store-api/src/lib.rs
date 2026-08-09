@@ -97,6 +97,7 @@ pub use timer::JAVA_COMPAT_TIMER_FORMAT_VERSION;
 pub use timer_snapshot::TimerSnapshotFile;
 pub use timer_snapshot::TimerSnapshotManifest;
 pub use timer_snapshot::TimerSnapshotValidationError;
+pub use timer_snapshot::TimerTimelineIndexKind;
 pub use timer_snapshot::TIMER_SNAPSHOT_SCHEMA_VERSION;
 pub use wal::WalPort;
 

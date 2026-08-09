@@ -17,6 +17,10 @@ use std::sync::Arc;
 use rocketmq_store_api::TimerEngineId;
 use rocketmq_store_api::TimerSourceCqOffset;
 use rocketmq_store_api::TimerTimelineCursor;
+use rocketmq_store_local::timer::segmented_timeline::SegmentedTimeline;
+use rocketmq_store_local::timer::segmented_timeline::SegmentedTimelineContinuation;
+use rocketmq_store_local::timer::timeline_segment::TimelineSegmentKey;
+use rocketmq_store_local::timer::timeline_segment::TimelineSegmentRecord;
 use rocketmq_store_rocksdb::batch::RocksDbWriteBatch;
 use rocketmq_store_rocksdb::timer::checkpoint::TimelineCheckpointKind;
 use rocketmq_store_rocksdb::timer::checkpoint::TimelineCheckpointV1;
@@ -26,6 +30,7 @@ use rocketmq_store_rocksdb::timer::state_index::StateTransitionResult;
 use rocketmq_store_rocksdb::timer::state_index::TimelineState;
 use rocketmq_store_rocksdb::timer::timeline_index::RocksDbTimelineIndex;
 use rocketmq_store_rocksdb::timer::timeline_index::ShadowObservationKind;
+use rocketmq_store_rocksdb::timer::timeline_index::TimelineIndexEntry;
 use thiserror::Error;
 
 use super::shadow::ShadowExpectedRecord;
@@ -38,10 +43,105 @@ use crate::timer::clock::TimerClockState;
 const FORMAL_DUE_CHECKPOINT_LANE: u16 = 0;
 const SHADOW_DUE_CHECKPOINT_LANE: u16 = u16::MAX;
 
+#[derive(Clone, Debug)]
+enum FormalDueContinuation {
+    Rocks(TimelineKeyV1),
+    Segmented(SegmentedTimelineContinuation),
+}
+
+#[derive(Clone, Debug, Default)]
+struct FormalDuePage {
+    entries: Vec<TimelineIndexEntry>,
+    continuation: Option<FormalDueContinuation>,
+}
+
+/// Synchronous, bounded read contract used by the blocking Due Scanner. Mutable state, ready,
+/// receipts, and checkpoints remain in the RocksDB overlay for both implementations.
+trait TimelineDueIndex: Send + Sync {
+    fn range_scan(
+        &self,
+        start_due_ms: i64,
+        end_due_exclusive_ms: i64,
+        continuation: Option<FormalDueContinuation>,
+        max_messages: usize,
+        max_bytes: usize,
+    ) -> Result<FormalDuePage, TimelineDueScannerError>;
+}
+
+struct RocksTimelineDueIndex {
+    timeline: Arc<RocksDbTimelineIndex>,
+}
+
+impl TimelineDueIndex for RocksTimelineDueIndex {
+    fn range_scan(
+        &self,
+        start_due_ms: i64,
+        end_due_exclusive_ms: i64,
+        continuation: Option<FormalDueContinuation>,
+        max_messages: usize,
+        max_bytes: usize,
+    ) -> Result<FormalDuePage, TimelineDueScannerError> {
+        let continuation = match continuation {
+            Some(FormalDueContinuation::Rocks(key)) => Some(key),
+            Some(FormalDueContinuation::Segmented(_)) => return Err(TimelineDueScannerError::CursorBackendMismatch),
+            None => None,
+        };
+        let page = self.timeline.range_scan(
+            start_due_ms,
+            end_due_exclusive_ms,
+            continuation,
+            max_messages,
+            max_bytes,
+        )?;
+        Ok(FormalDuePage {
+            entries: page.entries,
+            continuation: page.continuation.map(FormalDueContinuation::Rocks),
+        })
+    }
+}
+
+struct SegmentedTimelineDueIndex {
+    timeline: Arc<SegmentedTimeline>,
+}
+
+impl TimelineDueIndex for SegmentedTimelineDueIndex {
+    fn range_scan(
+        &self,
+        start_due_ms: i64,
+        end_due_exclusive_ms: i64,
+        continuation: Option<FormalDueContinuation>,
+        max_messages: usize,
+        max_bytes: usize,
+    ) -> Result<FormalDuePage, TimelineDueScannerError> {
+        let continuation = match continuation {
+            Some(FormalDueContinuation::Segmented(cursor)) => Some(cursor),
+            Some(FormalDueContinuation::Rocks(_)) => return Err(TimelineDueScannerError::CursorBackendMismatch),
+            None => None,
+        };
+        let page = self.timeline.scan_due(
+            Some(TimelineSegmentKey {
+                due_time_ms: start_due_ms.max(0),
+                lane: 0,
+                timer_id: rocketmq_store_api::TimerId::new(0),
+                generation: rocketmq_store_api::TimerGeneration::new(0),
+            }),
+            end_due_exclusive_ms,
+            max_messages,
+            max_bytes.max(max_messages.saturating_mul(TimelineSegmentRecord::encoded_size())),
+            continuation,
+        )?;
+        Ok(FormalDuePage {
+            entries: page.records.into_iter().map(native_entry).collect(),
+            continuation: page.continuation.map(FormalDueContinuation::Segmented),
+        })
+    }
+}
+
 /// Bounded, overlap-safe Timeline scanner.
 pub(crate) struct TimelineDueScanner {
     config: TimerStoreConfig,
     timeline: Arc<RocksDbTimelineIndex>,
+    formal_index: Arc<dyn TimelineDueIndex>,
     state: RocksDbTimelineStateIndex,
     shadow_reconciler: Option<Arc<ShadowReconciler>>,
     clock: Option<Arc<TimerClockSafety>>,
@@ -52,6 +152,9 @@ impl TimelineDueScanner {
         Self {
             config,
             state: timeline.state_index(),
+            formal_index: Arc::new(RocksTimelineDueIndex {
+                timeline: Arc::clone(&timeline),
+            }),
             timeline,
             shadow_reconciler: None,
             clock: None,
@@ -66,6 +169,9 @@ impl TimelineDueScanner {
         Self {
             config,
             state: timeline.state_index(),
+            formal_index: Arc::new(RocksTimelineDueIndex {
+                timeline: Arc::clone(&timeline),
+            }),
             timeline,
             shadow_reconciler: None,
             clock: Some(clock),
@@ -80,8 +186,28 @@ impl TimelineDueScanner {
         Self {
             config,
             state: timeline.state_index(),
+            formal_index: Arc::new(RocksTimelineDueIndex {
+                timeline: Arc::clone(&timeline),
+            }),
             timeline,
             shadow_reconciler: Some(reconciler),
+            clock: None,
+        }
+    }
+
+    /// Creates a Due Scanner whose ordered records come from native runs and whose state/outbox
+    /// operations remain in the existing RocksDB overlay.
+    pub(crate) fn new_segmented(
+        config: TimerStoreConfig,
+        timeline: Arc<RocksDbTimelineIndex>,
+        native: Arc<SegmentedTimeline>,
+    ) -> Self {
+        Self {
+            config,
+            state: timeline.state_index(),
+            timeline,
+            formal_index: Arc::new(SegmentedTimelineDueIndex { timeline: native }),
+            shadow_reconciler: None,
             clock: None,
         }
     }
@@ -178,7 +304,7 @@ impl TimelineDueScanner {
             .saturating_sub(self.config.safety_overlap_ms);
         let mut continuation = None;
         loop {
-            let page = self.timeline.range_scan(
+            let page = self.formal_index.range_scan(
                 start_ms,
                 now_ms.saturating_add(1),
                 continuation,
@@ -343,6 +469,30 @@ pub(crate) enum TimelineDueScannerError {
     LaneOverflow,
     #[error("CLOCK_UNSAFE prevents formal due promotion")]
     ClockUnsafe,
+    #[error("Timeline continuation belongs to a different index backend")]
+    CursorBackendMismatch,
+    #[error("native Timeline failure: {0}")]
+    Native(#[from] rocketmq_store_local::timer::segmented_timeline::SegmentedTimelineError),
+}
+
+fn native_entry(record: TimelineSegmentRecord) -> TimelineIndexEntry {
+    TimelineIndexEntry {
+        key: TimelineKeyV1 {
+            due_time_ms: record.key.due_time_ms,
+            lane: record.key.lane,
+            timer_id: record.key.timer_id,
+            generation: record.key.generation,
+        },
+        record: rocketmq_store_rocksdb::timer::codec::TimelineRecordV1 {
+            payload: record.payload,
+            source_cq_offset: record.source_cq_offset,
+            source_physical_offset: record.source_physical_offset,
+            source_size: record.source_size,
+            state_version: record.state_version,
+            owner_engine: record.owner_engine,
+            shadow_only: record.shadow_only,
+        },
+    }
 }
 
 #[cfg(test)]
@@ -353,6 +503,7 @@ mod tests {
     use rocketmq_store_api::TimerId;
     use rocketmq_store_api::TimerPayloadStoreLocator;
     use rocketmq_store_api::EXTENDED_TIMELINE_FORMAT_VERSION;
+    use rocketmq_store_local::timer::segmented_timeline::SegmentedTimelineConfig;
     use rocketmq_store_rocksdb::timer::state_index::TimelineStateRecordV1;
     use rocketmq_store_rocksdb::timer::timeline_index::TimelineIndexEntry;
     use tempfile::tempdir;
@@ -498,5 +649,53 @@ mod tests {
             .scan_ready(entry.key.lane, 10)
             .expect("ready")
             .is_empty());
+    }
+
+    #[test]
+    fn segmented_due_index_uses_the_same_state_and_ready_overlay() {
+        let dir = tempdir().expect("tempdir");
+        let timeline = Arc::new(RocksDbTimelineIndex::open(dir.path()).expect("open overlay"));
+        let native =
+            Arc::new(SegmentedTimeline::open(dir.path(), SegmentedTimelineConfig::default()).expect("open native"));
+        let mut entry = formal_entry(8_000, 9);
+        entry.record.payload = TimerPayloadStoreLocator::try_new(0, entry.key.lane, 1, 0, 10, 11).expect("locator");
+        native
+            .append_batch(&[TimelineSegmentRecord {
+                key: TimelineSegmentKey {
+                    due_time_ms: entry.key.due_time_ms,
+                    lane: entry.key.lane,
+                    timer_id: entry.key.timer_id,
+                    generation: entry.key.generation,
+                },
+                payload: entry.record.payload,
+                source_cq_offset: entry.record.source_cq_offset,
+                source_physical_offset: entry.record.source_physical_offset,
+                source_size: entry.record.source_size,
+                state_version: entry.record.state_version,
+                owner_engine: entry.record.owner_engine,
+                shadow_only: false,
+            }])
+            .expect("native entry");
+        let mut state_batch = RocksDbWriteBatch::with_capacity(1);
+        RocksDbTimelineStateIndex::append_state(
+            &mut state_batch,
+            entry.key.timer_id,
+            entry.key.generation,
+            &state_record(),
+        )
+        .expect("state");
+        timeline.write_batch(&state_batch).expect("write state");
+
+        let scanner = TimelineDueScanner::new_segmented(TimerStoreConfig::default(), Arc::clone(&timeline), native);
+        assert_eq!(scanner.scan_formal_until(8_000).expect("scan").ready, 1);
+        assert_eq!(
+            timeline
+                .state_index()
+                .get(entry.key.timer_id, entry.key.generation)
+                .expect("state")
+                .expect("present")
+                .state,
+            TimelineState::Ready
+        );
     }
 }
