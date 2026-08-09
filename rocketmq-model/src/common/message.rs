@@ -340,6 +340,9 @@ mod tests {
         assert_eq!(MessageConst::TIMER_ENGINE_TYPE, "E_T");
         assert_eq!(MessageConst::TIMER_ENGINE_FILE_TIME_WHEEL, "F");
         assert_eq!(MessageConst::TIMER_ENGINE_ROCKSDB_TIMELINE, "R");
+        assert!(STRING_HASH_SET.contains(MessageConst::TIMER_ENGINE_TYPE));
+        assert!(STRING_HASH_SET.contains(MessageConst::PROPERTY_TIMER_FORMAT_VERSION));
+        assert!(STRING_HASH_SET.contains(MessageConst::PROPERTY_TIMER_POLICY_FINGERPRINT));
     }
 
     #[test]
@@ -527,6 +530,10 @@ impl MessageConst {
     pub const PROPERTY_TIMER_DELIVERY_TOKEN: &'static str = "TIMER_DELIVERY_TOKEN";
     /// Logical schedule generation used to fence stale Recall records.
     pub const PROPERTY_TIMER_GENERATION: &'static str = "TIMER_GENERATION";
+    /// Persistent version of the timer engine record format.
+    pub const PROPERTY_TIMER_FORMAT_VERSION: &'static str = "TIMER_FORMAT_VERSION";
+    /// Fingerprint of the normalization policy captured at admission.
+    pub const PROPERTY_TIMER_POLICY_FINGERPRINT: &'static str = "TIMER_POLICY_FINGERPRINT";
     pub const PROPERTY_TRACE_CONTEXT: &'static str = "TRACE_CONTEXT";
     pub const PROPERTY_TRACE_SWITCH: &'static str = "TRACE_ON";
     pub const PROPERTY_TRANS_OFFSET: &'static str = "TRANS_OFFSET";
@@ -611,6 +618,9 @@ pub static STRING_HASH_SET: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
     set.insert(MessageConst::PROPERTY_TIMER_ORIGINAL_DELIVER_MS);
     set.insert(MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN);
     set.insert(MessageConst::PROPERTY_TIMER_GENERATION);
+    set.insert(MessageConst::TIMER_ENGINE_TYPE);
+    set.insert(MessageConst::PROPERTY_TIMER_FORMAT_VERSION);
+    set.insert(MessageConst::PROPERTY_TIMER_POLICY_FINGERPRINT);
     set.insert(MessageConst::PROPERTY_TIMER_DELAY_LEVEL);
     set.insert(MessageConst::PROPERTY_BORN_HOST);
     set.insert(MessageConst::PROPERTY_BORN_TIMESTAMP);

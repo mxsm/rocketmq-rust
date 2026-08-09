@@ -30,6 +30,7 @@ pub struct TimerPolicySnapshot {
 }
 
 impl TimerPolicySnapshot {
+    const FINGERPRINT_NAMESPACE: u64 = 0x524D_5154_504F_4C31;
     /// Creates a validated Java-compatible timer policy.
     ///
     /// # Errors
@@ -54,6 +55,30 @@ impl TimerPolicySnapshot {
     #[inline]
     pub const fn max_delay_ms(self) -> u64 {
         self.max_delay_ms
+    }
+
+    /// Returns the stable fingerprint persisted with normalized timer requests.
+    ///
+    /// Only admission semantics participate. Physical storage parameters such as segment or page
+    /// size deliberately do not change ownership of already accepted records.
+    pub const fn fingerprint(self) -> u64 {
+        const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+        const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+        let values = [Self::FINGERPRINT_NAMESPACE, self.precision_ms, self.max_delay_ms];
+        let mut hash = FNV_OFFSET;
+        let mut value_index = 0;
+        while value_index < values.len() {
+            let bytes = values[value_index].to_be_bytes();
+            let mut byte_index = 0;
+            while byte_index < bytes.len() {
+                hash ^= bytes[byte_index] as u64;
+                hash = hash.wrapping_mul(FNV_PRIME);
+                byte_index += 1;
+            }
+            value_index += 1;
+        }
+        hash
     }
 }
 
@@ -289,5 +314,20 @@ mod tests {
             normalize_timer_request(&past, 10_000, policy),
             Err(TimerNormalizeError::NotInFuture { .. })
         ));
+    }
+
+    #[test]
+    fn timer_policy_fingerprint_changes_only_with_admission_semantics() {
+        let baseline = TimerPolicySnapshot::try_new(1_000, 3_000).unwrap();
+        assert_eq!(baseline.fingerprint(), baseline.fingerprint());
+        assert_eq!(baseline.fingerprint(), 0xef50_c0cf_fbb6_187f);
+        assert_ne!(
+            baseline.fingerprint(),
+            TimerPolicySnapshot::try_new(500, 3_000).unwrap().fingerprint()
+        );
+        assert_ne!(
+            baseline.fingerprint(),
+            TimerPolicySnapshot::try_new(1_000, 4_000).unwrap().fingerprint()
+        );
     }
 }

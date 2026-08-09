@@ -21,6 +21,8 @@ use rocketmq_store_local::mapped_file::file::preallocate_file as canonical_preal
 use rocketmq_store_local::mapped_file::file::FilePreallocateOutcome as CanonicalFilePreallocateOutcome;
 use rocketmq_store_local::mapped_file::file::PREALLOCATE_UNSUPPORTED_ERRNO as CANONICAL_UNSUPPORTED_ERRNO;
 
+use rocketmq_store_api::TimerStoreMode;
+
 fn canonical_outcome(value: FilePreallocateOutcome) -> CanonicalFilePreallocateOutcome {
     value
 }
@@ -58,4 +60,12 @@ fn legacy_preallocation_paths_are_exact_canonical_reexports() {
     let legacy_fn: fn(&std::fs::File, u64) -> FilePreallocateOutcome = rocketmq_store::preallocate_file;
     let canonical_fn: fn(&std::fs::File, u64) -> CanonicalFilePreallocateOutcome = canonical_preallocate;
     assert_eq!(legacy_fn as usize, canonical_fn as usize);
+}
+
+#[test]
+fn timer_pipeline_defaults_to_the_java_compatible_lifecycle() {
+    let config = rocketmq_store::MessageStoreConfig::default();
+    assert_eq!(config.timer_store_mode, TimerStoreMode::JavaCompat);
+    assert!(config.timer_pipeline_queue_messages > 0);
+    assert!(config.timer_pipeline_queue_bytes > 0);
 }

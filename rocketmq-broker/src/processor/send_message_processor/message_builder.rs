@@ -76,6 +76,9 @@ pub(super) fn clear_reserved_properties(
         MessageConst::PROPERTY_TIMER_ORIGINAL_DELIVER_MS,
         MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN,
         MessageConst::PROPERTY_TIMER_GENERATION,
+        MessageConst::TIMER_ENGINE_TYPE,
+        MessageConst::PROPERTY_TIMER_FORMAT_VERSION,
+        MessageConst::PROPERTY_TIMER_POLICY_FINGERPRINT,
     ] {
         changed |= request_properties.remove(property).is_some();
     }
@@ -242,6 +245,18 @@ mod tests {
             CheetahString::from_static_str(MessageConst::PROPERTY_POP_CK),
             CheetahString::from_static_str("broker-only"),
         );
+        for property in [
+            MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN,
+            MessageConst::PROPERTY_TIMER_GENERATION,
+            MessageConst::TIMER_ENGINE_TYPE,
+            MessageConst::PROPERTY_TIMER_FORMAT_VERSION,
+            MessageConst::PROPERTY_TIMER_POLICY_FINGERPRINT,
+        ] {
+            request_properties.insert(
+                CheetahString::from_static_str(property),
+                CheetahString::from_static_str("spoofed"),
+            );
+        }
         let mut request_header = SendMessageRequestHeader {
             properties: Some(message_properties_to_string(&request_properties)),
             ..SendMessageRequestHeader::default()
@@ -250,6 +265,15 @@ mod tests {
         clear_reserved_properties(&mut request_header, &mut request_properties);
 
         assert!(!request_properties.contains_key(MessageConst::PROPERTY_POP_CK));
+        for property in [
+            MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN,
+            MessageConst::PROPERTY_TIMER_GENERATION,
+            MessageConst::TIMER_ENGINE_TYPE,
+            MessageConst::PROPERTY_TIMER_FORMAT_VERSION,
+            MessageConst::PROPERTY_TIMER_POLICY_FINGERPRINT,
+        ] {
+            assert!(!request_properties.contains_key(property));
+        }
         let header_properties = string_to_message_properties(request_header.properties.as_ref());
         assert_eq!(header_properties, request_properties);
         assert_eq!(

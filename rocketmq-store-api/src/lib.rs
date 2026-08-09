@@ -22,6 +22,7 @@ mod checkpoint_artifact;
 mod error;
 mod ha_contract;
 mod progress;
+mod timer;
 mod wal;
 
 pub use capability::AdminStore;
@@ -77,6 +78,17 @@ pub use progress::DerivedRecordIdError;
 pub use progress::LegacyDerivedCursorV0;
 pub use progress::DERIVED_CHECKPOINT_ENCODED_LEN;
 pub use progress::DERIVED_CHECKPOINT_FORMAT_VERSION;
+pub use timer::PersistedTimerRoute;
+pub use timer::TimerContractError;
+pub use timer::TimerEngineEpoch;
+pub use timer::TimerEngineId;
+pub use timer::TimerGeneration;
+pub use timer::TimerId;
+pub use timer::TimerPayloadLocator;
+pub use timer::TimerSourceCqOffset;
+pub use timer::TimerStoreMode;
+pub use timer::TimerTimelineCursor;
+pub use timer::JAVA_COMPAT_TIMER_FORMAT_VERSION;
 pub use wal::WalPort;
 
 use std::error::Error as StdError;

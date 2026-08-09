@@ -188,6 +188,7 @@ pub use crate::store_path_config_helper::get_timer_metrics_path;
 pub use crate::store_path_config_helper::get_timer_wheel_path;
 pub use crate::store_ports::StorePorts;
 pub use crate::telemetry::StoreTelemetry;
+pub use crate::timer::pipeline::TimerPipelineDiagnostics;
 pub use crate::timer::timer_checkpoint::TimerCheckpoint;
 pub use crate::timer::timer_checkpoint::TimerCheckpointSnapshot;
 pub use crate::timer::timer_message_store::build_canonical_delete_key;

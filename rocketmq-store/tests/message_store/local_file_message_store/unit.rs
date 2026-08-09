@@ -3201,6 +3201,7 @@ async fn runtime_info_includes_store_offsets_and_timer_defaults_when_timer_disab
     assert_eq!(runtime_info["timerDequeueTps"], "0.0");
     assert_eq!(runtime_info["timerTopicBacklogDistribution"], "{}");
     assert_eq!(runtime_info["timerBacklogDistribution"], "{}");
+    assert_eq!(runtime_info["timerPipelineMetrics"], "{}");
     assert_eq!(runtime_info["putMessageLockAcquireTotal"], "0");
     assert_eq!(runtime_info["putMessageLockWaitTotalMillis"], "0");
     assert_eq!(runtime_info["putMessageLockWaitMaxMillis"], "0");

@@ -1091,11 +1091,21 @@ pub async fn run_store_stats_service_lifecycle_probe(
 pub async fn run_store_timer_scheduler_lifecycle_probe(
     service_context: ChildServiceContext,
 ) -> StoreTimerSchedulerLifecycleProbe {
+    run_store_timer_scheduler_lifecycle_probe_with_workers(service_context, 3, 3).await
+}
+
+pub async fn run_store_timer_scheduler_lifecycle_probe_with_workers(
+    service_context: ChildServiceContext,
+    source_workers: usize,
+    due_workers: usize,
+) -> StoreTimerSchedulerLifecycleProbe {
     let root = tempfile::tempdir().expect("timer scheduler benchmark root should be created");
     let config = Arc::new(MessageStoreConfig {
         store_path_root_dir: CheetahString::from_string(root.path().to_string_lossy().into_owned()),
         read_uncommitted: true,
         timer_precision_ms: 100,
+        timer_put_message_thread_num: source_workers,
+        timer_get_message_thread_num: due_workers,
         ..MessageStoreConfig::default()
     });
     let timer_store = Arc::new(TimerMessageStore::new_with_message_store_config(
