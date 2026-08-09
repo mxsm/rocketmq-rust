@@ -38,6 +38,7 @@ default          = ["local_file_store", "fast-load"]
 local_file_store = []
 rocksdb_store    = ["dep:rocketmq-store-rocksdb"]
 rocksdb-store    = ["rocksdb_store"]
+extended_timeline = ["dep:rocketmq-store-rocksdb"]
 data_store       = ["local_file_store"]
 # io_uring support for advanced async I/O (Linux 5.1+)
 io_uring = ["rocketmq-store-local/io_uring"]
@@ -203,3 +204,11 @@ required-features = ["test-support"]
 [[test]]
 name              = "mapped_file_queue_retirement"
 required-features = ["test-support"]
+
+[[test]]
+name              = "timer_timeline_codec_tests"
+required-features = ["extended_timeline"]
+
+[[test]]
+name              = "timer_extended_integration_tests"
+required-features = ["extended_timeline"]

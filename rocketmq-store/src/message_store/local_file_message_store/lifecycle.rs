@@ -35,6 +35,67 @@ impl LocalFileMessageStore {
         let task_group = crate::runtime::task_group(&self.runtime_scope, "rocketmq-store.local-file.scheduled");
         let scheduled_tasks = ScheduledTaskGroup::new(task_group.clone());
 
+        #[cfg(feature = "extended_timeline")]
+        if let Some(materializer) = self.extended_timeline_materializer.as_ref() {
+            let materializer = Arc::clone(materializer);
+            let runtime_scope = self.runtime_scope.clone();
+            let interval_ms = self.message_store_config.timer_store_config.scheduler_interval_ms;
+            if let Err(error) = scheduled_tasks.schedule_fixed_delay(
+                ScheduledTaskConfig::fixed_delay(
+                    "timer-extended-shadow-materializer",
+                    Duration::from_millis(interval_ms),
+                ),
+                move || {
+                    let materializer = Arc::clone(&materializer);
+                    let runtime_scope = runtime_scope.clone();
+                    async move {
+                        let _ = run_blocking_scheduled_task(&runtime_scope, "timer extended materializer", move || {
+                            if let Err(error) = materializer.run_once() {
+                                warn!("Extended Timeline materialization paused at its cleanup fence: {error}");
+                            }
+                        })
+                        .await;
+                    }
+                },
+            ) {
+                self.scheduled_task_shutdown.cancel();
+                task_group.cancel();
+                error!("failed to schedule Extended Timeline materializer: {error}");
+                return;
+            }
+        }
+
+        #[cfg(feature = "extended_timeline")]
+        if let Some(scanner) = self.extended_timeline_due_scanner.as_ref() {
+            let scanner = Arc::clone(scanner);
+            let runtime_scope = self.runtime_scope.clone();
+            let interval_ms = self.message_store_config.timer_store_config.scheduler_interval_ms;
+            if let Err(error) = scheduled_tasks.schedule_fixed_delay(
+                ScheduledTaskConfig::fixed_delay(
+                    "timer-extended-shadow-due-scanner",
+                    Duration::from_millis(interval_ms),
+                ),
+                move || {
+                    let scanner = Arc::clone(&scanner);
+                    let runtime_scope = runtime_scope.clone();
+                    async move {
+                        let _ = run_blocking_scheduled_task(&runtime_scope, "timer extended due scanner", move || {
+                            let now_ms = rocketmq_runtime::common::time_utils::current_millis() as i64;
+                            if let Err(error) = scanner.scan_shadow_until(now_ms) {
+                                warn!("Extended Timeline shadow due scan will retry: {error}");
+                            }
+                        })
+                        .await;
+                    }
+                },
+            ) {
+                self.scheduled_task_shutdown.cancel();
+                task_group.cancel();
+                error!("failed to schedule Extended Timeline due scanner: {error}");
+                return;
+            }
+        }
+
         // clean files  Periodically
         let clean_commit_log_service_arc = self.clean_commit_log_service.clone();
         let clean_resource_interval = self.message_store_config.clean_resource_interval as u64;
@@ -420,6 +481,13 @@ impl LocalFileMessageStore {
             if let Some(timer_message_store) = self.timer_message_store.as_ref() {
                 result &= timer_message_store.load();
             }
+            #[cfg(feature = "extended_timeline")]
+            if let Some(materializer) = self.extended_timeline_materializer.as_ref() {
+                if let Err(error) = materializer.refresh_cleanup_fence() {
+                    error!("Extended Timeline cleanup fence recovery failed: {error}");
+                    result = false;
+                }
+            }
         }
 
         let max_offset = self.get_max_phy_offset();
@@ -641,6 +709,10 @@ impl LocalFileMessageStore {
             }
 
             self.shutdown_schedule_tasks().await;
+            #[cfg(feature = "extended_timeline")]
+            if let Some(materializer) = self.extended_timeline_materializer.as_ref() {
+                materializer.close();
+            }
             self.store_stats_service.shutdown_gracefully().await;
             self.background_index_rebuild_service.shutdown().await;
             match self.commit_log.shutdown_gracefully().await {

@@ -21,6 +21,9 @@ use thiserror::Error;
 /// Current route format written by the Java-compatible timer engine.
 pub const JAVA_COMPAT_TIMER_FORMAT_VERSION: u16 = 1;
 
+/// Current record format written by the extended timeline engine.
+pub const EXTENDED_TIMELINE_FORMAT_VERSION: u16 = 1;
+
 /// Configured timer storage mode.
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -174,6 +177,78 @@ impl TimerPayloadLocator {
     }
 }
 
+/// Stable location of one complete message in the long-horizon payload store.
+///
+/// Unlike [`TimerPayloadLocator`], this locator does not depend on the ordinary CommitLog
+/// retention window. Its partition is derived from the original UTC due day and delivery lane.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash, Serialize)]
+pub struct TimerPayloadStoreLocator {
+    due_day_utc: i32,
+    lane: u16,
+    segment_id: u64,
+    offset: u64,
+    length: u32,
+    checksum: u32,
+}
+
+impl TimerPayloadStoreLocator {
+    /// Creates a validated payload-store locator.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TimerContractError::InvalidPayloadStoreLocator`] when `length` is zero.
+    pub const fn try_new(
+        due_day_utc: i32,
+        lane: u16,
+        segment_id: u64,
+        offset: u64,
+        length: u32,
+        checksum: u32,
+    ) -> Result<Self, TimerContractError> {
+        if length == 0 {
+            return Err(TimerContractError::InvalidPayloadStoreLocator);
+        }
+        Ok(Self {
+            due_day_utc,
+            lane,
+            segment_id,
+            offset,
+            length,
+            checksum,
+        })
+    }
+
+    /// Returns the UTC day number since the Unix epoch.
+    pub const fn due_day_utc(self) -> i32 {
+        self.due_day_utc
+    }
+
+    /// Returns the stable delivery lane.
+    pub const fn lane(self) -> u16 {
+        self.lane
+    }
+
+    /// Returns the partition-local segment id.
+    pub const fn segment_id(self) -> u64 {
+        self.segment_id
+    }
+
+    /// Returns the byte offset within the segment.
+    pub const fn offset(self) -> u64 {
+        self.offset
+    }
+
+    /// Returns the encoded record length.
+    pub const fn length(self) -> u32 {
+        self.length
+    }
+
+    /// Returns the CRC32C of the complete encoded payload record.
+    pub const fn checksum(self) -> u32 {
+        self.checksum
+    }
+}
+
 /// Ordered position in a timer timeline.
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 pub struct TimerTimelineCursor {
@@ -269,6 +344,9 @@ pub enum TimerContractError {
     /// The payload locator cannot identify a non-empty CommitLog record.
     #[error("timer payload locator requires a non-negative offset and non-zero size")]
     InvalidPayloadLocator,
+    /// The long-horizon payload locator identifies an empty record.
+    #[error("timer payload-store locator requires a non-zero length")]
+    InvalidPayloadStoreLocator,
     /// The immutable route is incomplete.
     #[error("timer route requires a non-zero format version and non-empty delivery token")]
     InvalidRoute,

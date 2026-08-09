@@ -86,6 +86,7 @@ use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_store_api::checkpoint::CheckpointOffsets as ReleaseCheckpointOffsets;
+use rocketmq_store_api::TimerStoreMode;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio::sync::OwnedMutexGuard;
@@ -183,6 +184,12 @@ use crate::store_path_config_helper::get_store_path_consume_queue;
 use crate::tieredstore::resolve_tiered_dispatch_body_with_reader;
 #[cfg(feature = "tieredstore")]
 use crate::tieredstore::TieredStoreDecorator;
+#[cfg(feature = "extended_timeline")]
+use crate::timer::timeline::ShadowTimelineMaterializer;
+#[cfg(feature = "extended_timeline")]
+use crate::timer::timeline::TimelineDueScanner;
+#[cfg(feature = "extended_timeline")]
+use crate::timer::timeline::TimelineRecallService;
 use crate::timer::timer_message_store::TimerMessageStore;
 use crate::timer::timer_message_store::TimerStoreContext;
 use crate::transfer::error::TransferResult;
@@ -541,6 +548,14 @@ pub struct LocalFileMessageStore {
     compaction_service: Option<CompactionService>,
 
     timer_message_store: Option<Arc<TimerMessageStore>>,
+    #[cfg(feature = "extended_timeline")]
+    extended_timeline_cleanup_pin: Arc<AtomicI64>,
+    #[cfg(feature = "extended_timeline")]
+    extended_timeline_materializer: Option<Arc<ShadowTimelineMaterializer>>,
+    #[cfg(feature = "extended_timeline")]
+    extended_timeline_due_scanner: Option<Arc<TimelineDueScanner>>,
+    #[cfg(feature = "extended_timeline")]
+    extended_timeline_recall_service: Option<Arc<TimelineRecallService>>,
     transient_store_pool: TransientStorePool,
     root_dependencies_wired: bool,
     master_store_in_process: StdRwLock<Option<Arc<dyn Any + Send + Sync>>>,
@@ -1472,6 +1487,70 @@ impl BackendOps for LocalFileMessageStore {
             result.insert("timerBacklogDistribution".to_string(), "{}".to_string());
             result.insert("timerStorageMetrics".to_string(), "{}".to_string());
             result.insert("timerPipelineMetrics".to_string(), "{}".to_string());
+        }
+        #[cfg(feature = "extended_timeline")]
+        if let Some(materializer) = self.extended_timeline_materializer.as_ref() {
+            let metrics = materializer.metrics();
+            result.insert(
+                "timerExtendedMaterializationLag".to_string(),
+                metrics.materialization_lag.to_string(),
+            );
+            result.insert(
+                "timerExtendedMaterializedRecords".to_string(),
+                metrics.materialized_records.to_string(),
+            );
+            result.insert(
+                "timerExtendedMaterializedBytes".to_string(),
+                metrics.materialized_bytes.to_string(),
+            );
+            result.insert(
+                "timerExtendedMaterializationFailures".to_string(),
+                metrics.materialization_failures.to_string(),
+            );
+            result.insert(
+                "timerExtendedPayloadLiveBytes".to_string(),
+                metrics.payload_live_bytes.to_string(),
+            );
+            result.insert(
+                "timerExtendedPayloadRecords".to_string(),
+                metrics.payload_records.to_string(),
+            );
+            result.insert(
+                "timerExtendedPayloadPartitions".to_string(),
+                metrics.payload_partitions.to_string(),
+            );
+            result.insert(
+                "timerExtendedPayloadOpenHandles".to_string(),
+                metrics.payload_open_handles.to_string(),
+            );
+            result.insert(
+                "timerExtendedTimelineBytesWritten".to_string(),
+                metrics.timeline_bytes_written.to_string(),
+            );
+            result.insert(
+                "timerExtendedTimelineBytesRead".to_string(),
+                metrics.timeline_bytes_read.to_string(),
+            );
+            result.insert(
+                "timerExtendedTimelineErrors".to_string(),
+                metrics.timeline_errors.to_string(),
+            );
+            result.insert(
+                "timerExtendedShadowCompared".to_string(),
+                metrics.reconciliation.compared.to_string(),
+            );
+            result.insert(
+                "timerExtendedShadowDifferences".to_string(),
+                metrics.reconciliation.differences.to_string(),
+            );
+            result.insert(
+                "timerExtendedShadowDueObserved".to_string(),
+                metrics.reconciliation.due_observed.to_string(),
+            );
+            result.insert(
+                "timerExtendedShadowRetainedSamples".to_string(),
+                metrics.reconciliation.retained_samples.to_string(),
+            );
         }
 
         result

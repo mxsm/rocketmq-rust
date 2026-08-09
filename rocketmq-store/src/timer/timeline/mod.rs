@@ -1,4 +1,4 @@
-// Copyright 2023 The RocketMQ Rust Authors
+// Copyright 2026 The RocketMQ Rust Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,25 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub(crate) mod clock;
-pub(crate) mod completion;
-pub(crate) mod delivery;
-pub(crate) mod engine;
-pub(crate) mod error;
-pub(crate) mod index;
-pub(crate) mod java_compat;
-pub(crate) mod pipeline;
-pub(crate) mod request;
-pub(crate) mod role;
-pub mod slot;
-pub(crate) mod slot_drain;
-#[cfg(feature = "extended_timeline")]
-pub(crate) mod timeline;
-pub mod timer_checkpoint;
-pub mod timer_log;
-pub mod timer_message_store;
-pub mod timer_metrics;
-pub mod timer_wheel;
+mod due_scanner;
+mod materializer;
+mod ready_outbox;
+mod recall;
+mod rocksdb_index;
+mod shadow;
 
+pub(crate) use due_scanner::TimelineDueScanner;
+pub(crate) use materializer::ShadowTimelineMaterializer;
+pub(crate) use ready_outbox::TimelineReadyOutbox;
+pub(crate) use recall::TimelineRecallService;
 #[cfg(test)]
-mod tests;
+pub(crate) use rocksdb_index::RocksDbTimerIndex;
+pub(crate) use shadow::ShadowReconciler;

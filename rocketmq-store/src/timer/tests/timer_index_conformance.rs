@@ -32,6 +32,7 @@ use crate::timer::engine::WorkBudget;
 use crate::timer::error::TimerEngineError;
 use crate::timer::index::TimerIndex;
 use crate::timer::index::TimerIndexCheckpoint;
+use crate::timer::index::TimerIndexCursor;
 use crate::timer::index::TimerIndexPage;
 use crate::timer::index::TimerRecordState;
 use crate::timer::index::TimerSnapshotPin;
@@ -40,7 +41,7 @@ use crate::timer::request::TimerSourceRecord;
 
 #[derive(Default)]
 struct MemoryTimerIndex {
-    records: Mutex<BTreeMap<TimerTimelineCursor, DueTimerRecord>>,
+    records: Mutex<BTreeMap<TimerIndexCursor, DueTimerRecord>>,
     states: Mutex<BTreeMap<TimerId, TimerRecordState>>,
     generation: AtomicU64,
 }
@@ -56,9 +57,15 @@ impl TimerIndex for MemoryTimerIndex {
             }
             bytes = next_bytes;
             let cursor = TimerTimelineCursor::new(source.due_time_ms, source.source_offset.get() as u64);
+            let index_cursor = TimerIndexCursor {
+                due_time_ms: source.due_time_ms,
+                lane: 0,
+                timer_id: source.id,
+                generation: source.route.generation().get(),
+            };
             self.states.lock().insert(source.id, TimerRecordState::Pending);
             self.records.lock().insert(
-                cursor,
+                index_cursor,
                 DueTimerRecord {
                     source,
                     cursor,
@@ -72,19 +79,24 @@ impl TimerIndex for MemoryTimerIndex {
 
     async fn scan_due(
         &self,
-        from: Option<TimerTimelineCursor>,
+        from: Option<TimerIndexCursor>,
         due_exclusive_ms: i64,
         budget: WorkBudget,
     ) -> Result<TimerIndexPage, TimerEngineError> {
         let mut page = TimerIndexPage::default();
         let mut bytes = 0usize;
         for (cursor, record) in self.records.lock().iter() {
-            if from.is_some_and(|from| *cursor <= from) || cursor.due_time_ms() >= due_exclusive_ms {
+            if from.is_some_and(|from| *cursor <= from) || cursor.due_time_ms >= due_exclusive_ms {
                 continue;
             }
             let next_bytes = bytes.saturating_add(record.source.estimated_bytes);
             if !budget.allows(page.records.len().saturating_add(1), next_bytes) {
-                page.continuation = page.records.last().map(|record| record.cursor);
+                page.continuation = page.records.last().map(|record| TimerIndexCursor {
+                    due_time_ms: record.source.due_time_ms,
+                    lane: 0,
+                    timer_id: record.source.id,
+                    generation: record.source.route.generation().get(),
+                });
                 break;
             }
             bytes = next_bytes;
@@ -119,7 +131,7 @@ impl TimerIndex for MemoryTimerIndex {
             .lock()
             .keys()
             .copied()
-            .filter(|cursor| *cursor < fence)
+            .filter(|cursor| cursor.due_time_ms < fence.due_time_ms())
             .take(budget.max_messages)
             .collect();
         let removed = keys.len();
@@ -199,6 +211,43 @@ async fn timer_index_conformance_exposes_state_checkpoint_snapshot_and_gc_fences
         .checkpoint(TimerIndexCheckpoint {
             cursor: TimerTimelineCursor::new(10, 1),
             epoch: TimerEngineEpoch::new(2),
+        })
+        .await
+        .expect("checkpoint");
+    let pin = index.pin_snapshot(TimerTimelineCursor::new(11, 0)).await.expect("pin");
+    assert_eq!(index.gc(pin.gc_fence, budget(8, 128)).await.expect("gc"), 1);
+    index.release_snapshot(pin).await.expect("release");
+}
+
+#[cfg(feature = "extended_timeline")]
+#[tokio::test]
+async fn rocksdb_pages_checkpoints_and_gc() {
+    let directory = tempfile::tempdir().expect("timeline root");
+    let native = std::sync::Arc::new(
+        rocketmq_store_rocksdb::timer::timeline_index::RocksDbTimelineIndex::open(directory.path())
+            .expect("open Timeline"),
+    );
+    let scope = crate::runtime::test_scope("rocksdb-timer-index-conformance");
+    let index = crate::timer::timeline::RocksDbTimerIndex::new(native, scope.storage_io());
+
+    assert_eq!(
+        index
+            .put_batch(vec![record(1, 10, 1, 40), record(2, 20, 2, 40)], budget(2, 80))
+            .await
+            .expect("put"),
+        2
+    );
+    let first = index.scan_due(None, 100, budget(1, 80)).await.expect("scan");
+    assert_eq!(first.records.len(), 1);
+    let second = index
+        .scan_due(first.continuation, 100, budget(2, 80))
+        .await
+        .expect("continue");
+    assert_eq!(second.records.len(), 1);
+    index
+        .checkpoint(TimerIndexCheckpoint {
+            cursor: TimerTimelineCursor::new(20, 2),
+            epoch: TimerEngineEpoch::new(3),
         })
         .await
         .expect("checkpoint");

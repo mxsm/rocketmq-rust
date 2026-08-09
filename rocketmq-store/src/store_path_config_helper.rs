@@ -77,6 +77,24 @@ pub fn get_timer_check_path(root_dir: &str) -> String {
         .into_owned()
 }
 
+/// Returns the root of the independent long-horizon timer payload store.
+pub fn get_timer_extended_payload_path(root_dir: &str) -> String {
+    PathBuf::from(root_dir)
+        .join("timer-extended")
+        .join("payload-v1")
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// Returns the root of the independent long-horizon Timeline database.
+pub fn get_timer_extended_timeline_path(root_dir: &str) -> String {
+    PathBuf::from(root_dir)
+        .join("timer-extended")
+        .join("timeline-v1")
+        .to_string_lossy()
+        .into_owned()
+}
+
 pub fn get_timer_metrics_path(root_dir: &str) -> String {
     PathBuf::from(root_dir)
         .join("config")

@@ -37,6 +37,7 @@ pub trait RocksDbConfigSource {
 }
 
 const ROCKSDB_MESSAGE_DIRECTORY: &str = "rocksdbstore";
+const ROCKSDB_TIMER_TIMELINE_DIRECTORY: &str = "timer-extended/timeline-v1";
 const KB: usize = 1024;
 const MB: usize = 1024 * KB;
 const GB: usize = 1024 * MB;
@@ -204,6 +205,28 @@ impl RocksDbColumnFamilyConfig {
         config.use_data_block_hash_index();
         config.report_bg_io_stats = true;
         config.optimize_filters_for_hits = true;
+        config
+    }
+
+    /// Column-family profile for the dedicated long-horizon Timer Timeline database.
+    pub fn timer_timeline(name: &str) -> Self {
+        let mut config = Self::java_cf_base(
+            name,
+            64 * MB,
+            4,
+            256 * MB,
+            32 * KB,
+            RocksDbCompressionType::Lz4,
+            RocksDbCompressionType::Zstd,
+            RocksDbCompactionStyle::Level,
+        );
+        config.target_file_size_base = 64 * MB_U64;
+        config.max_bytes_for_level_base = Some(256 * MB_U64);
+        config.max_bytes_for_level_multiplier = Some(4.0);
+        config.level_zero_file_num_compaction_trigger = 8;
+        config.level_zero_slowdown_writes_trigger = 16;
+        config.level_zero_stop_writes_trigger = 24;
+        config.report_bg_io_stats = true;
         config
     }
 
@@ -438,6 +461,34 @@ impl Default for RocksDbConfig {
 }
 
 impl RocksDbConfig {
+    /// Creates the physically isolated, WAL-protected Extended Timeline configuration.
+    pub fn timer_timeline(store_root: impl AsRef<std::path::Path>) -> Self {
+        let column_families = [
+            "default",
+            crate::timer::TIMELINE_CF,
+            crate::timer::STATE_CF,
+            crate::timer::LOOKUP_CF,
+            crate::timer::READY_CF,
+            crate::timer::LATE_READY_CF,
+            crate::timer::SHADOW_TIMELINE_CF,
+            crate::timer::SHADOW_OBSERVATION_CF,
+            crate::timer::CHECKPOINT_CF,
+            crate::timer::BUCKET_SUMMARY_CF,
+        ]
+        .into_iter()
+        .map(RocksDbColumnFamilyConfig::timer_timeline)
+        .collect();
+        Self {
+            enabled: true,
+            path: store_root.as_ref().join(ROCKSDB_TIMER_TIMELINE_DIRECTORY),
+            wal_enabled: true,
+            sync_write: true,
+            manual_wal_flush: false,
+            column_families,
+            ..Self::default()
+        }
+    }
+
     pub fn consume_queue_path_from_message_store_config<S>(message_store_config: &S) -> PathBuf
     where
         S: RocksDbConfigSource + ?Sized,

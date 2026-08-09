@@ -16,6 +16,7 @@ use rocketmq_store_api::PersistedTimerRoute;
 use rocketmq_store_api::TimerEngineId;
 use rocketmq_store_api::TimerGeneration;
 use rocketmq_store_api::TimerPayloadLocator;
+use rocketmq_store_api::TimerPayloadStoreLocator;
 use rocketmq_store_api::TimerStoreMode;
 use rocketmq_store_api::JAVA_COMPAT_TIMER_FORMAT_VERSION;
 
@@ -59,4 +60,16 @@ fn payload_locator_rejects_values_that_cannot_reference_a_record() {
             .commit_log_offset(),
         9
     );
+}
+
+#[test]
+fn extended_payload_locator_is_independent_from_commitlog_retention() {
+    assert!(TimerPayloadStoreLocator::try_new(20_675, 3, 7, 11, 0, 13).is_err());
+    let locator = TimerPayloadStoreLocator::try_new(20_675, 3, 7, 11, 17, 13).expect("locator");
+    assert_eq!(locator.due_day_utc(), 20_675);
+    assert_eq!(locator.lane(), 3);
+    assert_eq!(locator.segment_id(), 7);
+    assert_eq!(locator.offset(), 11);
+    assert_eq!(locator.length(), 17);
+    assert_eq!(locator.checksum(), 13);
 }
