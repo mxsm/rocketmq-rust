@@ -1,0 +1,5 @@
+error[E0609]: no field `files` on type `MappedFileQueueGeneration<DefaultMappedFile>`
+  --> tests/ui/mapped_file_retirement_capability/queue_generation_has_no_raw_storage.rs:20:24
+   |
+20 |     let _ = generation.files;
+   |                        ^^^^^ unknown field

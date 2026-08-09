@@ -126,8 +126,12 @@ impl ConsumeQueueExt {
 
         let real_offset = Self::undecorate(min_address);
         let mapped_file_queue = self.mapped_file_queue.lock();
-        let mut will_remove_files = Vec::new();
-        let mapped_files = mapped_file_queue.get_mapped_files().load().clone();
+        if !mapped_file_queue.allows_legacy_namespace_mutation() {
+            warn!("managed consume-queue extension cleanup requires durable retirement authority");
+            return;
+        }
+        let mapped_files = mapped_file_queue.get_mapped_files();
+        let mut removal_candidates = Vec::new();
 
         for mapped_file in mapped_files.iter() {
             let file_from_offset = mapped_file.get_file_from_offset() as i64;
@@ -139,19 +143,13 @@ impl ConsumeQueueExt {
                     file_tail_offset,
                     real_offset
                 );
-                if mapped_file.try_destroy(1000).is_namespace_removed() {
-                    will_remove_files.push(mapped_file.clone());
-                } else {
-                    warn!(
-                        file_name = %mapped_file.get_file_name(),
-                        "consume-queue extension cleanup deferred; retaining this and later identities"
-                    );
-                    break;
-                }
+                removal_candidates.push(Arc::clone(mapped_file));
             }
         }
 
-        mapped_file_queue.delete_expired_file(will_remove_files);
+        if !mapped_file_queue.try_retire_legacy_candidates(&removal_candidates, 1000) {
+            warn!("consume-queue extension cleanup deferred; retaining the failed and later identities");
+        }
     }
 
     pub fn load(&mut self) -> bool {
@@ -173,7 +171,7 @@ impl ConsumeQueueExt {
     #[must_use]
     pub fn recover_with_outcome(&mut self) -> bool {
         let mapped_file_queue = self.mapped_file_queue.lock();
-        let mapped_files = mapped_file_queue.get_mapped_files().load().clone();
+        let mapped_files = mapped_file_queue.get_mapped_files();
         if mapped_files.is_empty() {
             return true;
         }

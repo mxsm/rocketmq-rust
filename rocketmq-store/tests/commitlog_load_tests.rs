@@ -60,18 +60,18 @@ fn test_load_single_file() {
     std::env::set_var("ROCKETMQ_SAFE_LOAD", "1");
     assert!(queue1.load());
     let files1 = queue1.get_mapped_files();
-    assert_eq!(files1.load().len(), 1);
+    assert_eq!(files1.len(), 1);
 
     // Optimized
     let mut queue2 = MappedFileQueue::new(temp_dir.path().to_string_lossy().to_string(), file_size, None);
     std::env::remove_var("ROCKETMQ_SAFE_LOAD");
     assert!(queue2.load());
     let files2 = queue2.get_mapped_files();
-    assert_eq!(files2.load().len(), 1);
+    assert_eq!(files2.len(), 1);
 
     // Verify file positions are identical
-    let f1 = &files1.load()[0];
-    let f2 = &files2.load()[0];
+    let f1 = &files1[0];
+    let f2 = &files2[0];
     assert_eq!(f1.get_wrote_position(), f2.get_wrote_position());
     assert_eq!(f1.get_flushed_position(), f2.get_flushed_position());
     assert_eq!(f1.get_committed_position(), f2.get_committed_position());
@@ -98,12 +98,12 @@ fn test_load_multiple_files_ordered() {
     // Verify same file count and order
     let files1 = queue1.get_mapped_files();
     let files2 = queue2.get_mapped_files();
-    assert_eq!(files1.load().len(), files2.load().len());
-    assert_eq!(files1.load().len(), num_files);
+    assert_eq!(files1.len(), files2.len());
+    assert_eq!(files1.len(), num_files);
 
     for i in 0..num_files {
-        let f1 = &files1.load()[i];
-        let f2 = &files2.load()[i];
+        let f1 = &files1[i];
+        let f2 = &files2[i];
         assert_eq!(f1.get_file_name(), f2.get_file_name());
         assert_eq!(f1.get_file_from_offset(), f2.get_file_from_offset());
     }
@@ -133,7 +133,7 @@ fn test_load_removes_empty_last_file() {
     let mut queue1 = MappedFileQueue::new(temp_dir.path().to_string_lossy().to_string(), file_size, None);
     std::env::set_var("ROCKETMQ_SAFE_LOAD", "1");
     assert!(queue1.load());
-    assert_eq!(queue1.get_mapped_files().load().len(), num_files - 1);
+    assert_eq!(queue1.get_mapped_files().len(), num_files - 1);
     assert!(!last_path.exists()); // Removed
 
     // Recreate last empty file for second test
@@ -143,7 +143,7 @@ fn test_load_removes_empty_last_file() {
     let mut queue2 = MappedFileQueue::new(temp_dir.path().to_string_lossy().to_string(), file_size, None);
     std::env::remove_var("ROCKETMQ_SAFE_LOAD");
     assert!(queue2.load());
-    assert_eq!(queue2.get_mapped_files().load().len(), num_files - 1);
+    assert_eq!(queue2.get_mapped_files().len(), num_files - 1);
     assert!(!last_path.exists()); // Removed
 }
 
@@ -185,7 +185,7 @@ fn test_parallel_enabled_threshold() {
     let elapsed = start.elapsed();
 
     println!("Parallel load of {} files took {:?}", num_files, elapsed);
-    assert_eq!(queue.get_mapped_files().load().len(), num_files);
+    assert_eq!(queue.get_mapped_files().len(), num_files);
 }
 
 /// Stress test: Load many files
@@ -206,7 +206,7 @@ fn test_load_stress_100_files() {
     let elapsed = start.elapsed();
 
     println!("Loaded {} files in {:?}", num_files, elapsed);
-    assert_eq!(queue.get_mapped_files().load().len(), num_files);
+    assert_eq!(queue.get_mapped_files().len(), num_files);
 }
 
 /// Correctness: Verify data integrity after load
@@ -234,7 +234,7 @@ fn test_load_data_integrity() {
 
     // Verify each file's data
     let files = queue.get_mapped_files();
-    for (i, file) in files.load().iter().enumerate() {
+    for (i, file) in files.iter().enumerate() {
         let bytes = file.get_bytes(0, file_size as usize).unwrap();
         // Check first and last bytes
         let expected_first = (i * 256) % 256;

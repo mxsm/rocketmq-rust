@@ -24,6 +24,7 @@ use rocketmq_store_local::consume_queue::record::ConsumeQueueRecord;
 use rocketmq_store_local::index::codec::IndexEntry;
 use rocketmq_store_local::index::codec::IndexHeaderRecord;
 use rocketmq_store_local::index::codec::IndexSlot;
+use rocketmq_store_local::mapped_file::fuzz_decode_mapped_file_lifecycle;
 
 #[derive(Clone)]
 struct CorpusSource(Bytes);
@@ -54,4 +55,5 @@ fuzz_target!(|input: &[u8]| {
     let _ = IndexHeaderRecord::decode(bytes.as_ref());
     let _ = IndexSlot::decode(bytes.as_ref());
     let _ = IndexEntry::decode(bytes.as_ref());
+    fuzz_decode_mapped_file_lifecycle(bytes.as_ref());
 });

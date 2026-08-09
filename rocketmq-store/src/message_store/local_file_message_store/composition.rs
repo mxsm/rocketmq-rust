@@ -69,6 +69,16 @@ impl LocalFileMessageStore {
         service_context: ChildServiceContext,
         telemetry: crate::telemetry::StoreTelemetry,
     ) -> Result<Self, StoreError> {
+        // The root lock must precede checkpoint construction, mapped-file queue construction,
+        // and every later namespace scan. A Store that cannot establish this boundary must not
+        // publish even a partial in-memory view of the root.
+        let store_root = Path::new(message_store_config.store_path_root_dir.as_str());
+        let store_root_lease = StoreRootLease::acquire_unclassified(store_root, StoreOperation::Load)?;
+        let store_root_mode = store_root_lease.classify(StoreOperation::Load)?;
+        if store_root_mode == StoreRootMode::Managed {
+            let disposition = inspect_and_reconcile_managed_root(&store_root_lease)?;
+            return Err(wave_b_activation_fence(disposition));
+        }
         let runtime_scope = StoreRuntimeScope::new(service_context.clone());
         let local_backend_config = message_store_config.normalized_local_backend_config();
         let cleanup_policy = LocalCleanupPolicy::new(local_backend_config.cleanup);
@@ -276,7 +286,6 @@ impl LocalFileMessageStore {
             controller_epoch_start_offset: Arc::new(AtomicI64::new(-1)),
             shutdown: Arc::new(AtomicBool::new(false)),
             background_index_query_degradation_total: Arc::new(AtomicU64::new(0)),
-            store_lock_guard: None,
             running_flags: running_flags.clone(),
             store_health_recorder,
             reput_message_service: ReputMessageService {
@@ -357,10 +366,14 @@ impl LocalFileMessageStore {
             scheduled_task_shutdown: CancellationToken::new(),
             scheduled_task_group: None,
             scheduled_tasks: None,
+            mapped_file_retirement_service: None,
             ha_update_master_group: Arc::new(StdMutex::new(None)),
             delay_level_table,
             max_delay_level,
             last_recovery_report: None,
+            store_root_lease_state: StoreRootLeaseState::Operational,
+            store_root_mode,
+            store_root_lease,
         })
     }
 
@@ -830,66 +843,23 @@ impl LocalFileMessageStore {
         ))
     }
 
-    pub(super) fn acquire_store_lock(&mut self) -> Result<(), StoreError> {
-        if self.store_lock_guard.is_some() {
-            return Ok(());
+    pub(super) fn ensure_operational_root_lease(&self, operation: StoreOperation) -> Result<(), StoreError> {
+        match self.store_root_lease_state {
+            StoreRootLeaseState::Operational => self.validate_current_root_mode(operation),
+            StoreRootLeaseState::DestroyRetryPending => Err(StoreError::invalid_state(
+                operation,
+                "message store destruction is pending; load, initialize, and start are fenced",
+            )),
+            StoreRootLeaseState::Destroyed => Err(StoreError::invalid_state(
+                operation,
+                "message store was destroyed and cannot be reopened by the same owner",
+            )),
         }
-
-        let lock_path = PathBuf::from(get_lock_file(self.message_store_config.store_path_root_dir.as_str()));
-        if let Some(parent) = lock_path.parent() {
-            fs::create_dir_all(parent).map_err(|error| {
-                StoreError::storage(
-                    StoreOperation::Start,
-                    format!("failed to create store lock parent directory {}", parent.display()),
-                )
-                .with_source(error)
-            })?;
-        }
-
-        let mut file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&lock_path)
-            .map_err(|error| {
-                StoreError::storage(
-                    StoreOperation::Start,
-                    format!("failed to open store lock file {}", lock_path.display()),
-                )
-                .with_source(error)
-            })?;
-        file.try_lock_exclusive().map_err(|error| {
-            StoreError::storage(
-                StoreOperation::Start,
-                format!(
-                    "message store lock file is held by another instance: {}",
-                    lock_path.display()
-                ),
-            )
-            .with_source(error)
-        })?;
-        file.set_len(0).map_err(|error| {
-            StoreError::storage(
-                StoreOperation::Start,
-                format!("failed to truncate store lock file {}", lock_path.display()),
-            )
-            .with_source(error)
-        })?;
-        writeln!(file, "pid={}", std::process::id()).map_err(|error| {
-            StoreError::storage(
-                StoreOperation::Start,
-                format!("failed to write store lock file {}", lock_path.display()),
-            )
-            .with_source(error)
-        })?;
-
-        self.store_lock_guard = Some(StoreLockGuard { file });
-        Ok(())
     }
 
-    pub(super) fn release_store_lock(&mut self) {
-        self.store_lock_guard.take();
+    #[inline]
+    pub(super) fn validate_current_root_mode(&self, operation: StoreOperation) -> Result<(), StoreError> {
+        self.store_root_lease.validate_mode(self.store_root_mode, operation)
     }
 
     pub(super) fn should_run_timer_dequeue(&self) -> bool {

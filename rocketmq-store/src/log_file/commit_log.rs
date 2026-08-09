@@ -1375,7 +1375,7 @@ impl CommitLog {
         let check_dup_info = self.message_store_config.duplication_enable;
         let message_store_config = self.message_store_config.clone();
         let mapped_files = self.mapped_file_queue.get_mapped_files();
-        let mapped_files_inner = mapped_files.load();
+        let mapped_files_inner = mapped_files;
 
         if mapped_files_inner.is_empty() {
             warn!("The commitlog files are deleted, and delete the consume queue files");
@@ -1539,7 +1539,7 @@ impl CommitLog {
         let message_store_config = self.message_store_config.clone();
         // let mut mapped_file_queue = mapped_files.write().await;
         let mapped_files = self.mapped_file_queue.get_mapped_files();
-        let mapped_files_inner = mapped_files.load();
+        let mapped_files_inner = mapped_files;
         if !mapped_files_inner.is_empty() {
             let recovery_window = plan_normal_recovery_file_window(
                 mapped_files_inner.len(),
@@ -1759,7 +1759,7 @@ impl CommitLog {
         let broker_config = self.broker_config.clone();
 
         let binding = self.mapped_file_queue.get_mapped_files();
-        let mapped_files_inner = binding.load();
+        let mapped_files_inner = binding;
 
         if mapped_files_inner.is_empty() {
             warn!("The commitlog files are deleted, and delete the consume queue files");
@@ -1968,7 +1968,7 @@ impl CommitLog {
         let broker_config = self.broker_config.clone();
         // let mut mapped_file_queue = mapped_files.write().await;
         let binding = self.mapped_file_queue.get_mapped_files();
-        let mapped_files_inner = binding.load();
+        let mapped_files_inner = binding;
         if !mapped_files_inner.is_empty() {
             let recovery_window = plan_abnormal_recovery_window(
                 &mapped_files_inner,
@@ -2459,7 +2459,7 @@ impl CommitLog {
             CommitLogReadMode::Random => MemoryAdvice::Random,
         };
 
-        let mapped_files = self.mapped_file_queue.get_mapped_files().load();
+        let mapped_files = self.mapped_file_queue.get_mapped_files();
         let mut updated = 0;
         for mapped_file in mapped_files.iter() {
             if mapped_file.apply_memory_advice(advice).is_ok() {
@@ -3748,7 +3748,7 @@ mod tests {
         assert!(apply_recovery_completion!(commit_log, completion, -1));
         assert_eq!(commit_log.get_flushed_where(), 32);
         assert_eq!(commit_log.mapped_file_queue.get_committed_where(), 32);
-        assert_eq!(commit_log.mapped_file_queue.get_mapped_files().load().len(), 1);
+        assert_eq!(commit_log.mapped_file_queue.get_mapped_files().len(), 1);
 
         let _ = fs::remove_dir_all(temp_root);
     }

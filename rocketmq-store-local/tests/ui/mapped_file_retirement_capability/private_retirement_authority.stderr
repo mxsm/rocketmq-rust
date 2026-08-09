@@ -1,0 +1,13 @@
+error[E0603]: module `retirement` is private
+  --> tests/ui/mapped_file_retirement_capability/private_retirement_authority.rs:15:40
+   |
+15 | use rocketmq_store_local::mapped_file::retirement::registry::DurableRetirementToken;
+   |                                        ^^^^^^^^^^  -------- module `registry` is not publicly re-exported
+   |                                        |
+   |                                        private module
+   |
+note: the module `retirement` is defined here
+  --> src/mapped_file.rs
+   |
+   | pub(crate) mod retirement;
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^

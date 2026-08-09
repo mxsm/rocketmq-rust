@@ -25,8 +25,11 @@ use tracing::error;
 use tracing::warn;
 
 use crate::base::allocate_mapped_file_service::AllocateMappedFileService;
+use crate::mapped_file::retirement::registry::ManagedQueueMember;
 use crate::mapped_file::DefaultMappedFile;
+use crate::mapped_file::ManagedMappedFileQueueGeneration;
 use crate::mapped_file::MappedFile;
+use crate::mapped_file::ReconciledSegmentFile;
 
 /// Files loaded before a queue load completed or failed.
 #[doc(hidden)]
@@ -95,6 +98,68 @@ where
 #[doc(hidden)]
 pub fn load_mapped_file_queue_files(files: Vec<PathBuf>, mapped_file_size: u64) -> MappedFileQueueLoadOutcome {
     load_mapped_file_queue_files_with_remover(files, mapped_file_size, |path| fs::remove_file(path))
+}
+
+/// Loads one fully reconciled queue generation from retained file handles.
+///
+/// This function performs no namespace discovery, pathname open, resize, preallocation, or
+/// deletion. Any failed segment rejects the complete generation; callers never receive a partial
+/// managed publication candidate.
+#[doc(hidden)]
+pub fn load_reconciled_mapped_file_queue(
+    store_root: &Path,
+    mut segments: Vec<ReconciledSegmentFile>,
+) -> io::Result<ManagedMappedFileQueueGeneration<DefaultMappedFile>> {
+    segments.sort_by_key(ReconciledSegmentFile::segment_offset);
+    if segments
+        .windows(2)
+        .any(|pair| pair[0].segment_offset() == pair[1].segment_offset())
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "duplicate durable segment offsets block managed queue loading",
+        ));
+    }
+
+    let mut mapped_files = Vec::new();
+    mapped_files
+        .try_reserve_exact(segments.len())
+        .map_err(|_| io::Error::other("failed to reserve the reconciled mapped-file generation"))?;
+    for segment in segments {
+        let incarnation = segment.incarnation();
+        let physical_key = segment.physical_key();
+        let canonical_path = segment.canonical_path().clone();
+        let segment_offset = segment.segment_offset();
+        let expected_length = segment.expected_length();
+        let relative_path = segment.relative_path().to_owned();
+        let mapped_file = DefaultMappedFile::try_new_reconciled(store_root, segment).map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!("failed to construct reconciled mapped file {relative_path}: {error}"),
+            )
+        })?;
+        let file_size = mapped_file.get_file_size();
+        mapped_file.set_wrote_position(file_size as i32);
+        mapped_file.set_flushed_position(file_size as i32);
+        mapped_file.set_committed_position(file_size as i32);
+        let mapping_generation = mapped_file.current_mapping_generation_id().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "reconciled mapped file has no published mapping generation",
+            )
+        })?;
+        mapped_files.push(ManagedQueueMember::new(
+            Arc::new(mapped_file),
+            incarnation,
+            physical_key,
+            canonical_path,
+            segment_offset,
+            expected_length,
+            mapping_generation,
+        )?);
+    }
+
+    ManagedMappedFileQueueGeneration::from_reconciled_members(mapped_files)
 }
 
 fn load_mapped_file_queue_files_with_remover<R>(
@@ -243,6 +308,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+    use crate::mapped_file::retirement::identity::StoreRelativePath;
+    use crate::mapped_file::retirement::platform::physical_file_key;
 
     #[test]
     fn queue_entry_enumeration_failure_fails_closed() {
@@ -257,6 +324,39 @@ mod tests {
 
         assert!(!outcome.is_success());
         assert!(outcome.into_mapped_files().is_empty());
+    }
+
+    #[test]
+    fn reconciled_queue_load_is_handle_authoritative_and_all_or_nothing() {
+        let root = tempdir().expect("create Store root");
+        std::fs::create_dir(root.path().join("commitlog")).expect("create commitlog directory");
+        let first = reconciled_segment(root.path(), 0, 16, 16);
+        let second = reconciled_segment(root.path(), 16, 16, 16);
+
+        let loaded = load_reconciled_mapped_file_queue(root.path(), vec![second, first])
+            .expect("exact reconciled generation loads")
+            .snapshot();
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0].get_file_from_offset(), 0);
+        assert_eq!(loaded[1].get_file_from_offset(), 16);
+
+        let valid = reconciled_segment(root.path(), 32, 16, 16);
+        let invalid = reconciled_segment(root.path(), 48, 8, 16);
+        assert!(load_reconciled_mapped_file_queue(root.path(), vec![valid, invalid]).is_err());
+    }
+
+    fn reconciled_segment(root: &Path, offset: u64, actual_length: u64, expected_length: u64) -> ReconciledSegmentFile {
+        let relative =
+            StoreRelativePath::new(&format!("commitlog/{offset:020}")).expect("test segment path is canonical");
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(relative.join_under(root))
+            .expect("create test segment");
+        file.set_len(actual_length).expect("size test segment");
+        let key = physical_file_key(&file).expect("capture test physical identity");
+        ReconciledSegmentFile::for_test(relative, key, expected_length, offset, file)
     }
 
     #[test]

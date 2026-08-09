@@ -95,6 +95,14 @@ pub enum MappedFileError {
     #[error("Flush operation failed: {0}")]
     FlushFailed(#[source] io::Error),
 
+    /// Locking the mapped region in physical memory failed.
+    #[error("Mapped-memory lock failed: {0}")]
+    MemoryLockFailed(#[source] rocketmq_error::RocketMQError),
+
+    /// Unlocking the mapped region from physical memory failed.
+    #[error("Mapped-memory unlock failed: {0}")]
+    MemoryUnlockFailed(#[source] rocketmq_error::RocketMQError),
+
     /// Invalid file name or path provided.
     ///
     /// The file name must be a valid path with a parseable numeric offset.
@@ -251,5 +259,20 @@ mod tests {
 
         assert!(!err.is_recoverable());
         assert!(err.source().is_some());
+    }
+
+    #[test]
+    fn memory_lock_errors_preserve_the_typed_source() {
+        let lock = MappedFileError::MemoryLockFailed(rocketmq_error::RocketMQError::internal(
+            "lock mapped memory",
+            io::Error::other("lock failed"),
+        ));
+        let unlock = MappedFileError::MemoryUnlockFailed(rocketmq_error::RocketMQError::internal(
+            "unlock mapped memory",
+            io::Error::other("unlock failed"),
+        ));
+
+        assert!(lock.source().is_some());
+        assert!(unlock.source().is_some());
     }
 }

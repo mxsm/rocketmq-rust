@@ -80,6 +80,15 @@ impl TimerRoleState {
         self.transition_with_term(active, 0)
     }
 
+    /// Closes admission without touching the configured Store path.
+    ///
+    /// Shutdown uses this fail-closed fallback when the retained Store-root lease can no longer
+    /// prove that configured paths still refer to the locked root.
+    pub(crate) fn fence_in_memory(&self) {
+        self.active.store(false, Ordering::Release);
+        self.admission_active.store(false, Ordering::Release);
+    }
+
     /// Applies a role transition fenced by an optional controller/broker term.
     pub(crate) fn transition_with_term(&self, active: bool, external_term: u64) -> std::io::Result<u64> {
         if self.active.load(Ordering::Acquire) == active {
@@ -192,6 +201,23 @@ mod tests {
         assert_eq!(recovered.epoch(), 2);
         assert!(!recovered.is_active());
         assert_eq!(recovered.transition(true).unwrap(), 3);
+    }
+
+    #[test]
+    fn in_memory_fence_closes_admission_without_persisting_configured_path() {
+        let directory = tempdir().unwrap();
+        let root = directory.path().to_string_lossy();
+        let role = TimerRoleState::new(&root);
+        role.load().unwrap();
+        assert_eq!(role.transition(true).unwrap(), 1);
+        let before = std::fs::read(&role.path).unwrap();
+
+        role.fence_in_memory();
+
+        assert!(!role.is_active());
+        assert!(!role.accepts_admission());
+        assert_eq!(role.epoch(), 1);
+        assert_eq!(std::fs::read(&role.path).unwrap(), before);
     }
 
     #[test]

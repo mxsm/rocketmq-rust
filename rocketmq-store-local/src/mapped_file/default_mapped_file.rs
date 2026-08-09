@@ -14,10 +14,12 @@
 
 use std::io;
 use std::path::Path;
+use std::path::PathBuf;
 use std::ptr;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::Weak;
 use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -34,6 +36,7 @@ use tracing::warn;
 
 use super::FlushStrategy;
 use super::MappedFile;
+use super::MappedFileAdmissionState;
 use super::MappedFileDestroyOutcome;
 use super::MappedFileDetachOutcome;
 use super::MappedFileError;
@@ -49,6 +52,7 @@ use crate::base::memory_lock_manager::MemoryLockCategory;
 use crate::base::memory_lock_manager::MemoryLockHandle;
 use crate::base::memory_lock_manager::MemoryLockManager;
 use crate::base::memory_lock_manager::OwnedMemoryRegion;
+use crate::base::transient_store_pool::PoolLease;
 use crate::base::transient_store_pool::TransientStorePool;
 use crate::config::FlushDiskType;
 use crate::mapped_file::file::FileOwner;
@@ -75,6 +79,8 @@ use crate::mapped_file::lifecycle::PhysicalDetachClaimResult;
 use crate::mapped_file::lifecycle::PhysicalDetachHook;
 pub use crate::mapped_file::mapping::LazyMmapStats;
 use crate::mapped_file::memory::ReadOnlyMappedMemory;
+use crate::mapped_file::retirement::identity::PhysicalFileKey;
+use crate::mapped_file::retirement::state::reconciliation::ReconciledSegmentFile;
 use crate::mapped_file::MappedFileLifecycleSnapshot;
 use crate::mapped_file::MappedFileOperation;
 use crate::utils::ffi::advise_memory;
@@ -87,6 +93,32 @@ use crate::utils::ffi::MemoryAdvice;
 
 fn invalid_input_error(message: String) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message)
+}
+
+fn borrow_transient_buffer(
+    transient_store_pool: Option<&TransientStorePool>,
+    file_size: u64,
+) -> io::Result<Option<PoolLease>> {
+    let transient_buffer = transient_store_pool
+        .map(|pool| {
+            pool.borrow_lease().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "transient store pool has no available buffer",
+                )
+            })
+        })
+        .transpose()?;
+    if transient_buffer
+        .as_ref()
+        .is_some_and(|buffer| buffer.len() != file_size as usize)
+    {
+        return Err(invalid_input_error(format!(
+            "transient buffer size does not match mapped file: expected {file_size}, got {}",
+            transient_buffer.as_ref().map_or(0, PoolLease::len)
+        )));
+    }
+    Ok(transient_buffer)
 }
 
 fn current_millis() -> u64 {
@@ -154,7 +186,7 @@ pub struct DefaultMappedFile<M: MappedMemory = NativeMappedMemory> {
     raw_core: MappedFileRawCore,
     write_state: Mutex<MappedWriteState>,
     first_create_in_queue: bool,
-    swap_state: Mutex<SwapLifecycleState>,
+    swap_state: Mutex<SwapLifecycleState<M::ReadOnly>>,
     mapped_byte_buffer_access_count_since_last_swap: AtomicI64,
     metrics: Option<Arc<MappedFileMetrics>>,
     seal_lock: Mutex<()>,
@@ -237,12 +269,13 @@ impl<M: MappedMemory> AdmittedReadGeneration<M> {
 #[derive(Default)]
 struct MappedWriteState {
     staging: Vec<u8>,
+    transient_buffer: Option<PoolLease>,
 }
 
-struct SwapLifecycleState {
+struct SwapLifecycleState<R: ReadOnlyMappedMemory> {
     time_ms: u64,
     generation: u64,
-    cleaned: bool,
+    retired: Vec<Weak<ReadOnlyMappingGeneration<R>>>,
 }
 
 #[derive(Clone, Copy)]
@@ -286,7 +319,7 @@ impl<M: MappedMemory> MappedWriteLease for DefaultMappedWriteLease<'_, M> {
         &mut self.state.staging[..self.capacity]
     }
 
-    fn commit(self, actual_bytes: usize, store_timestamp: Option<u64>) -> MappedFileResult<usize> {
+    fn commit(mut self, actual_bytes: usize, store_timestamp: Option<u64>) -> MappedFileResult<usize> {
         if actual_bytes == 0 || actual_bytes > self.capacity {
             return Err(MappedFileError::InvalidWriteCommit {
                 reserved: self.capacity,
@@ -311,11 +344,22 @@ impl<M: MappedMemory> MappedWriteLease for DefaultMappedWriteLease<'_, M> {
             });
         }
 
-        self.owner.copy_to_mapping(
-            &self.admission,
-            self.start_position,
-            &self.state.staging[..actual_bytes],
-        )?;
+        if self.owner.transient_store_pool.is_some() {
+            let MappedWriteState {
+                staging,
+                transient_buffer,
+            } = &mut *self.state;
+            let transient_buffer = transient_buffer
+                .as_mut()
+                .ok_or(MappedFileError::TransientStoreExhausted)?;
+            transient_buffer[self.start_position..end_position].copy_from_slice(&staging[..actual_bytes]);
+        } else {
+            self.owner.copy_to_mapping(
+                &self.admission,
+                self.start_position,
+                &self.state.staging[..actual_bytes],
+            )?;
+        }
         if let Some(store_timestamp) = store_timestamp {
             self.owner.raw_core.set_store_timestamp(store_timestamp);
         }
@@ -393,7 +437,8 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         }
 
         let admission = self.acquire_borrowed(MappedFileOperation::Maintenance)?;
-        let _writer = self.write_state.lock();
+        let mut writer = self.write_state.lock();
+        self.commit_transient_buffer(&mut writer, &admission)?;
         let writable = self.try_get_writable_generation(&admission, MappedFileOperation::Maintenance)?;
         writable
             .with_mapping(MappedMemory::flush)
@@ -405,12 +450,10 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
             .replace_with_read_only(
                 expected,
                 || {
-                    file_owner.with_file(|file| {
-                        // SAFETY: sealing has rejected and drained writers, `write_state` excludes
-                        // mutation, and the candidate immediately enters a generation retaining
-                        // this canonical FileOwner.
-                        unsafe { M::ReadOnly::map(file) }
-                    })
+                    // SAFETY: sealing has rejected and drained writers, `write_state` excludes
+                    // mutation, and the candidate immediately enters a generation retaining this
+                    // canonical FileOwner.
+                    unsafe { file_owner.map_read_only::<M>() }
                 },
                 || {
                     self.validate_lease(&admission, MappedFileOperation::Maintenance)
@@ -489,7 +532,12 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
     #[inline]
     pub(crate) fn try_clean_swapped_generation(&self, expected: SwapGenerationSnapshot, force: bool) -> bool {
         let mut state = self.swap_state.lock();
-        if state.generation != expected.generation || state.time_ms != expected.time_ms || state.cleaned {
+        if state.generation != expected.generation || state.time_ms != expected.time_ms {
+            return false;
+        }
+        let before = state.retired.len();
+        state.retired.retain(|generation| generation.upgrade().is_some());
+        if state.retired.len() == before {
             return false;
         }
         if force {
@@ -499,8 +547,62 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         if let Some(metrics) = &self.metrics {
             metrics.record_clean_swap();
         }
-        state.cleaned = true;
         true
+    }
+
+    #[cfg(test)]
+    fn retired_swap_observation_count(&self) -> usize {
+        self.swap_state.lock().retired.len()
+    }
+
+    fn try_swap_read_only_generation(&self) -> MappedFileResult<bool> {
+        if self.lifecycle_snapshot().state != MappedFileAdmissionState::SealedReadable {
+            return Ok(false);
+        }
+
+        let admission = self.acquire_borrowed(MappedFileOperation::Maintenance)?;
+        let _writer = self.write_state.lock();
+        let mut swap_state = self.swap_state.lock();
+        let Some(retired) = self.physical_owners.mapping.load_read_only() else {
+            return Ok(false);
+        };
+        let expected = retired.id();
+        let file_owner = Arc::clone(retired.file_owner());
+        let lifecycle = self.reference_resource.lifecycle();
+        let current = self
+            .physical_owners
+            .mapping
+            .replace_with_read_only(
+                expected,
+                || {
+                    // SAFETY: sealed-readable state rejects writers, `write_state` serializes
+                    // maintenance, and the candidate retains this canonical FileOwner before it
+                    // can be published.
+                    unsafe { file_owner.map_read_only::<M>() }
+                },
+                || {
+                    self.validate_lease(&admission, MappedFileOperation::Maintenance)
+                        .is_ok()
+                },
+                |publication| {
+                    lifecycle
+                        .try_publish_before_close(&admission, MappedFileOperation::Maintenance, || {
+                            publication.publish()
+                        })
+                        .ok()
+                },
+            )
+            .map_err(|error| self.map_publication_error(error, MappedFileOperation::Maintenance))?;
+
+        swap_state.time_ms = current_millis();
+        swap_state.generation = current.id().get();
+        swap_state.retired.push(Arc::downgrade(&retired));
+        self.mapped_byte_buffer_access_count_since_last_swap
+            .store(0, Ordering::Release);
+        if let Some(metrics) = &self.metrics {
+            metrics.record_swap();
+        }
+        Ok(true)
     }
 
     #[inline]
@@ -516,12 +618,81 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         Self::try_new_inner(file_name, file_size, None, true)
     }
 
+    /// Builds an eager managed mapping from the exact handle retained during reconciliation.
+    ///
+    /// No namespace path is opened or modified by this constructor.
+    pub(crate) fn try_new_reconciled(store_root: &Path, segment: ReconciledSegmentFile) -> io::Result<Self> {
+        let (relative_path, binding, file) = segment.into_parts();
+        let path = relative_path.join_under(store_root);
+        let file_name = path
+            .to_str()
+            .ok_or_else(|| invalid_input_error(format!("mapped-file path is not UTF-8: {}", path.display())))?;
+        let file_name = CheetahString::from_string(file_name.to_owned());
+        let file_size = binding.expected_length();
+        let metrics = Arc::new(MappedFileMetrics::new());
+        let storage = MappedFileStorage::from_reconciled_file(
+            path,
+            binding.segment_offset(),
+            file_size,
+            binding.physical_key(),
+            file,
+            Arc::clone(&metrics),
+        )?;
+        Self::try_from_storage(file_name, file_size, None, None, false, storage, metrics)
+    }
+
+    /// Builds an eager managed mapping from a newly published, already verified file handle.
+    ///
+    /// The caller must have durably recorded `PublishIncarnation` before invoking this method.
+    /// This constructor never opens, creates, resizes, or preallocates the namespace path.
+    pub(crate) fn try_new_managed_created(
+        path: PathBuf,
+        segment_offset: u64,
+        file_size: u64,
+        physical_key: PhysicalFileKey,
+        file: std::fs::File,
+        transient_store_pool: Option<TransientStorePool>,
+    ) -> io::Result<Self> {
+        let file_name = path
+            .to_str()
+            .ok_or_else(|| invalid_input_error(format!("mapped-file path is not UTF-8: {}", path.display())))?;
+        let file_name = CheetahString::from_string(file_name.to_owned());
+        let transient_buffer = borrow_transient_buffer(transient_store_pool.as_ref(), file_size)?;
+        let metrics = Arc::new(MappedFileMetrics::new());
+        let storage = MappedFileStorage::from_reconciled_file(
+            path,
+            segment_offset,
+            file_size,
+            physical_key,
+            file,
+            Arc::clone(&metrics),
+        )?;
+        Self::try_from_storage(
+            file_name,
+            file_size,
+            transient_store_pool,
+            transient_buffer,
+            false,
+            storage,
+            metrics,
+        )
+    }
+
+    /// Returns the identifier of the owner-bound mapping currently published for this file.
+    pub(crate) fn current_mapping_generation_id(&self) -> Option<u64> {
+        self.physical_owners
+            .mapping
+            .current_generation_id()
+            .map(|generation| generation.get())
+    }
+
     fn try_new_inner(
         file_name: CheetahString,
         file_size: u64,
         transient_store_pool: Option<TransientStorePool>,
         lazy_mmap_enabled: bool,
     ) -> io::Result<Self> {
+        let transient_buffer = borrow_transient_buffer(transient_store_pool.as_ref(), file_size)?;
         let path_buf = Path::new(file_name.as_str()).to_path_buf();
         let dir = path_buf
             .parent()
@@ -529,6 +700,8 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         std::fs::create_dir_all(dir)?;
 
         let metrics = Arc::new(MappedFileMetrics::new());
+        // Wave A keeps the existing mapped-file construction path explicitly unmanaged. A later
+        // retirement activation must use the proof-gated managed storage constructor instead.
         let (storage, preallocate_outcome) =
             MappedFileStorage::open_with_metrics(path_buf, file_size, Arc::clone(&metrics))?;
         if let Some(preallocate_outcome) = preallocate_outcome {
@@ -545,6 +718,26 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
             }
         }
 
+        Self::try_from_storage(
+            file_name,
+            file_size,
+            transient_store_pool,
+            transient_buffer,
+            lazy_mmap_enabled,
+            storage,
+            metrics,
+        )
+    }
+
+    fn try_from_storage(
+        file_name: CheetahString,
+        file_size: u64,
+        transient_store_pool: Option<TransientStorePool>,
+        transient_buffer: Option<PoolLease>,
+        lazy_mmap_enabled: bool,
+        storage: MappedFileStorage,
+        metrics: Arc<MappedFileMetrics>,
+    ) -> io::Result<Self> {
         let mapping = if lazy_mmap_enabled {
             MappedFileMapping::new_lazy(Arc::clone(&metrics))
         } else {
@@ -554,12 +747,10 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
                     "mapped-file owner detached during construction",
                 )
             })?;
-            let mapping = file_owner.with_file(|file| {
-                // SAFETY: storage established the configured length and the mapping immediately
-                // enters a generation retaining the canonical FileOwner. All later mutation is
-                // serialized by mapped-file admission and `write_state`.
-                unsafe { M::map_mut(file) }
-            })?;
+            // SAFETY: storage established the configured length and the mapping immediately enters
+            // a generation retaining the canonical FileOwner. All later mutation is serialized by
+            // mapped-file admission and `write_state`.
+            let mapping = unsafe { file_owner.map_mut::<M>() }?;
             MappedFileMapping::new_eager(mapping, file_owner, Arc::clone(&metrics))
         };
 
@@ -582,12 +773,15 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
             physical_owners,
             file_name,
             raw_core: MappedFileRawCore::new(file_size),
-            write_state: Mutex::new(MappedWriteState::default()),
+            write_state: Mutex::new(MappedWriteState {
+                staging: Vec::new(),
+                transient_buffer,
+            }),
             first_create_in_queue: false,
             swap_state: Mutex::new(SwapLifecycleState {
                 time_ms: current_millis(),
                 generation: 1,
-                cleaned: false,
+                retired: Vec::new(),
             }),
             mapped_byte_buffer_access_count_since_last_swap: Default::default(),
             transient_store_pool,
@@ -683,11 +877,21 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         start: usize,
         data: &[u8],
     ) -> MappedFileResult<()> {
+        self.copy_to_mapping_for_operation(lease, MappedFileOperation::Write, start, data)
+    }
+
+    fn copy_to_mapping_for_operation<L: MappedFileLeaseProof + ?Sized>(
+        &self,
+        lease: &L,
+        operation: MappedFileOperation,
+        start: usize,
+        data: &[u8],
+    ) -> MappedFileResult<()> {
         let end = start
             .checked_add(data.len())
             .filter(|end| *end <= self.raw_core.file_size() as usize)
             .ok_or_else(|| MappedFileError::out_of_bounds(start, data.len(), self.raw_core.file_size()))?;
-        self.validate_lease(lease, MappedFileOperation::Write)?;
+        self.validate_lease(lease, operation)?;
 
         if let Some(result) = self
             .physical_owners
@@ -700,14 +904,87 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         // A missing writable generation is the lazy-initialization path. It intentionally keeps
         // the owned publication flow so candidate construction remains serialized with close and
         // terminal detach. Already-published generations never reach this branch.
-        let generation = self.try_get_writable_generation(lease, MappedFileOperation::Write)?;
+        let generation = self.try_get_writable_generation(lease, operation)?;
         Self::copy_to_writable_generation(&generation, start, end, data)
+    }
+
+    fn ensure_transient_buffer<'a>(&self, state: &'a mut MappedWriteState) -> MappedFileResult<&'a mut PoolLease> {
+        let pool = self
+            .transient_store_pool
+            .as_ref()
+            .ok_or_else(|| MappedFileError::Configuration("mapped file is not transient".to_owned()))?;
+        if state.transient_buffer.is_none() {
+            state.transient_buffer = Some(pool.borrow_lease().ok_or(MappedFileError::TransientStoreExhausted)?);
+        }
+        let buffer = state
+            .transient_buffer
+            .as_mut()
+            .ok_or(MappedFileError::TransientStoreExhausted)?;
+        if buffer.len() != self.raw_core.file_size() as usize {
+            return Err(MappedFileError::Configuration(format!(
+                "transient buffer size mismatch: expected {}, got {}",
+                self.raw_core.file_size(),
+                buffer.len()
+            )));
+        }
+        Ok(buffer)
+    }
+
+    fn commit_transient_buffer<L: MappedFileLeaseProof + ?Sized>(
+        &self,
+        state: &mut MappedWriteState,
+        admission: &L,
+    ) -> MappedFileResult<i32> {
+        if self.transient_store_pool.is_none() {
+            return Ok(self.raw_core.committed_position());
+        }
+
+        let committed_position = self.raw_core.committed_position();
+        let wrote_position = self.raw_core.wrote_position();
+        let committed = usize::try_from(committed_position).map_err(|_| MappedFileError::InvalidWritePosition {
+            position: committed_position,
+            capacity: self.raw_core.file_size(),
+        })?;
+        let wrote = usize::try_from(wrote_position).map_err(|_| MappedFileError::InvalidWritePosition {
+            position: wrote_position,
+            capacity: self.raw_core.file_size(),
+        })?;
+        if wrote < committed || wrote > self.raw_core.file_size() as usize {
+            return Err(MappedFileError::InvalidWritePosition {
+                position: wrote_position,
+                capacity: self.raw_core.file_size(),
+            });
+        }
+        if wrote != committed {
+            let buffer = state
+                .transient_buffer
+                .as_ref()
+                .ok_or(MappedFileError::TransientStoreExhausted)?;
+            let data = buffer
+                .get(committed..wrote)
+                .ok_or_else(|| MappedFileError::out_of_bounds(committed, wrote - committed, buffer.len() as u64))?;
+            self.copy_to_mapping_for_operation(admission, MappedFileOperation::Maintenance, committed, data)?;
+            self.raw_core.set_committed_position_release(wrote_position);
+        }
+        if let Some(buffer) = state.transient_buffer.take() {
+            buffer.return_now();
+        }
+        Ok(wrote_position)
     }
 
     fn try_write_at(&self, start: usize, data: &[u8]) -> MappedFileResult<()> {
         let admission = self.acquire_borrowed(MappedFileOperation::Write)?;
-        let _writer = self.write_state.lock();
-        self.copy_to_mapping(&admission, start, data)
+        let mut state = self.write_state.lock();
+        if self.transient_store_pool.is_some() {
+            let end = start
+                .checked_add(data.len())
+                .filter(|end| *end <= self.raw_core.file_size() as usize)
+                .ok_or_else(|| MappedFileError::out_of_bounds(start, data.len(), self.raw_core.file_size()))?;
+            self.ensure_transient_buffer(&mut state)?[start..end].copy_from_slice(data);
+            Ok(())
+        } else {
+            self.copy_to_mapping(&admission, start, data)
+        }
     }
 
     #[inline]
@@ -841,12 +1118,10 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
                         .lock()
                         .owner()
                         .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "mapped-file owner detached"))?;
-                    let mapping = owner.with_file(|file| {
-                        // SAFETY: the owner retains the already-sized segment, this operation is
-                        // admitted and serialized against detach publication, and the candidate
-                        // immediately enters an owner-bound writable generation.
-                        unsafe { M::map_mut(file) }
-                    })?;
+                    // SAFETY: the owner retains the already-sized segment, this operation is
+                    // admitted and serialized against detach publication, and the candidate
+                    // immediately enters an owner-bound writable generation.
+                    let mapping = unsafe { owner.map_mut::<M>() }?;
                     Ok((mapping, owner))
                 },
                 || self.validate_lease(admission, required).is_ok(),
@@ -1136,6 +1411,9 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
         }
 
         let capacity = required_space.min(file_size - start_position);
+        if self.transient_store_pool.is_some() {
+            self.ensure_transient_buffer(&mut state)?;
+        }
         state.staging.resize(capacity, 0);
         state.staging[..capacity].fill(0);
         Ok(DefaultMappedWriteLease {
@@ -1205,9 +1483,17 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
     }
 
     fn try_commit(&self, commit_least_pages: i32) -> MappedFileResult<i32> {
-        let _admission = self.acquire_borrowed(MappedFileOperation::Maintenance)?;
-        let _writer = self.write_state.lock();
-        Ok(self.raw_core.commit(commit_least_pages))
+        let admission = self.acquire_borrowed(MappedFileOperation::Maintenance)?;
+        let mut state = self.write_state.lock();
+        if self.transient_store_pool.is_none() {
+            return Ok(self.raw_core.commit(commit_least_pages));
+        }
+        if self.raw_core.is_able_to_commit(commit_least_pages)
+            || self.raw_core.wrote_position() == self.raw_core.committed_position()
+        {
+            return self.commit_transient_buffer(&mut state, &admission);
+        }
+        Ok(self.raw_core.committed_position())
     }
 
     fn select_mapped_buffer(&self, pos: i32, size: i32) -> Option<SelectMappedBufferResult<M>> {
@@ -1295,10 +1581,7 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
 
     #[inline]
     fn try_last_modified_time(&self) -> io::Result<SystemTime> {
-        self.physical_owners
-            .storage
-            .lock()
-            .with_file(|file| file.metadata()?.modified())?
+        self.physical_owners.storage.lock().modified()
     }
 
     fn get_data(&self, pos: usize, size: usize) -> Option<bytes::Bytes> {
@@ -1407,8 +1690,7 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
         let admission = self.acquire_borrowed(MappedFileOperation::Maintenance)?;
         let _writer = self.write_state.lock();
         let generation = self.try_get_read_generation(&admission, MappedFileOperation::Maintenance)?;
-        generation
-            .with_slice(|mapped| lock_memory_region(mapped).map_err(|error| MappedFileError::Custom(error.to_string())))
+        generation.with_slice(|mapped| lock_memory_region(mapped).map_err(MappedFileError::MemoryLockFailed))
     }
 
     #[inline]
@@ -1422,9 +1704,7 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
         let admission = self.acquire_borrowed(MappedFileOperation::Maintenance)?;
         let _writer = self.write_state.lock();
         let generation = self.try_get_read_generation(&admission, MappedFileOperation::Maintenance)?;
-        generation.with_slice(|mapped| {
-            unlock_memory_region(mapped).map_err(|error| MappedFileError::Custom(error.to_string()))
-        })
+        generation.with_slice(|mapped| unlock_memory_region(mapped).map_err(MappedFileError::MemoryUnlockFailed))
     }
 
     #[inline]
@@ -1451,16 +1731,13 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
 
     #[inline]
     fn swap_map(&self) -> bool {
-        let mut state = self.swap_state.lock();
-        state.time_ms = current_millis();
-        state.generation = state.generation.wrapping_add(1).max(1);
-        state.cleaned = false;
-        self.mapped_byte_buffer_access_count_since_last_swap
-            .store(0, Ordering::Release);
-        if let Some(metrics) = &self.metrics {
-            metrics.record_swap();
+        match self.try_swap_read_only_generation() {
+            Ok(swapped) => swapped,
+            Err(error) => {
+                warn!(file_name = %self.file_name, error = %error, "failed to replace sealed mapped generation");
+                false
+            }
         }
-        false
     }
 
     #[inline]
@@ -2190,6 +2467,7 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
 mod tests {
     use std::fs::File;
     use std::sync::Arc;
+    use std::time::Duration;
 
     use memmap2::Mmap;
     use memmap2::MmapMut;
@@ -2275,6 +2553,9 @@ mod tests {
         let file_path = temp_dir.path().join("00000000000000000000");
         let file_name = CheetahString::from(file_path.to_str().unwrap());
         let transient_store_pool = TransientStorePool::new(1, 4096);
+        transient_store_pool
+            .init_with_locker(|_| Ok(()))
+            .expect("transient pool initializes");
         let mapped_file =
             TestDefaultMappedFile::new_with_transient_store_pool(file_name, 4096, transient_store_pool.clone());
         (temp_dir, transient_store_pool, mapped_file)
@@ -2594,16 +2875,20 @@ mod tests {
 
     #[test]
     fn transient_store_pool_commit_flush_round_trip() {
-        let (_temp_dir, _pool, mapped_file) = create_transient_test_file();
+        let (_temp_dir, pool, mapped_file) = create_transient_test_file();
 
         assert!(mapped_file.append_message_bytes(b"hello transient"));
         assert_eq!(mapped_file.get_wrote_position(), 15);
         assert_eq!(mapped_file.get_committed_position(), 0);
         assert_eq!(mapped_file.get_read_position(), 0);
+        assert_eq!(mapped_file.get_bytes(0, 15), Some(Bytes::from_static(&[0; 15])));
+        assert_eq!(pool.outstanding_lease_count(), 1);
 
         assert_eq!(mapped_file.commit(0), 15);
         assert_eq!(mapped_file.get_committed_position(), 15);
         assert_eq!(mapped_file.get_read_position(), 15);
+        assert_eq!(pool.outstanding_lease_count(), 0);
+        assert_eq!(pool.available_buffer_nums(), 1);
 
         assert_eq!(mapped_file.flush(0), 15);
         assert_eq!(mapped_file.get_flushed_position(), 15);
@@ -2611,6 +2896,54 @@ mod tests {
             mapped_file.get_bytes_readable_checked(0, 15).unwrap(),
             Bytes::from_static(b"hello transient")
         );
+    }
+
+    #[test]
+    fn transient_constructor_failure_returns_the_borrowed_pool_lease() {
+        let temp_dir = TempDir::new().expect("temporary directory");
+        let not_a_directory = temp_dir.path().join("not-a-directory");
+        std::fs::write(&not_a_directory, b"file").expect("blocking parent file");
+        let file_name = CheetahString::from(
+            not_a_directory
+                .join("00000000000000000000")
+                .to_str()
+                .expect("UTF-8 test path"),
+        );
+        let pool = TransientStorePool::new(1, 4096);
+        pool.init_with_locker(|_| Ok(())).expect("pool initializes");
+
+        let result = TestDefaultMappedFile::try_new_with_transient_store_pool(file_name, 4096, pool.clone());
+
+        assert!(result.is_err());
+        assert_eq!(pool.outstanding_lease_count(), 0);
+        assert_eq!(pool.available_buffer_nums(), 1);
+    }
+
+    #[test]
+    fn transient_mapped_file_drop_returns_an_uncommitted_pool_lease() {
+        let (_temp_dir, pool, mapped_file) = create_transient_test_file();
+        assert!(mapped_file.append_message_bytes(b"uncommitted"));
+        assert_eq!(pool.outstanding_lease_count(), 1);
+
+        drop(mapped_file);
+
+        assert_eq!(pool.outstanding_lease_count(), 0);
+        assert_eq!(pool.available_buffer_nums(), 1);
+    }
+
+    #[test]
+    fn transient_mapped_file_late_drop_does_not_requeue_after_pool_shutdown() {
+        let (_temp_dir, pool, mapped_file) = create_transient_test_file();
+        assert_eq!(pool.outstanding_lease_count(), 1);
+
+        let report = pool.shutdown(Duration::ZERO).expect("pool enters shutdown");
+        assert_eq!(report.outstanding_leases(), 1);
+        assert!(report.timed_out());
+
+        drop(mapped_file);
+
+        assert_eq!(pool.outstanding_lease_count(), 0);
+        assert_eq!(pool.available_buffer_nums(), 0);
     }
 
     #[test]
@@ -2640,7 +2973,7 @@ mod tests {
     }
 
     #[test]
-    fn swap_map_updates_bookkeeping_without_panicking() {
+    fn active_writable_swap_is_rejected_without_fake_bookkeeping() {
         let (_temp_dir, mapped_file) = create_test_file();
         mapped_file
             .mapped_byte_buffer_access_count_since_last_swap
@@ -2648,16 +2981,49 @@ mod tests {
         let before = mapped_file.get_recent_swap_map_time();
 
         assert!(!mapped_file.swap_map());
-        assert_eq!(mapped_file.get_mapped_byte_buffer_access_count_since_last_swap(), 0);
-        assert!(mapped_file.get_recent_swap_map_time() >= before);
-        assert_eq!(mapped_file.get_metrics().unwrap().swap_operations(), 1);
+        assert_eq!(mapped_file.get_mapped_byte_buffer_access_count_since_last_swap(), 3);
+        assert_eq!(mapped_file.get_recent_swap_map_time(), before);
+        assert_eq!(mapped_file.get_metrics().unwrap().swap_operations(), 0);
+    }
+
+    #[test]
+    fn sealed_swap_publishes_once_and_old_generation_lives_until_last_lease_drop() {
+        let (_temp_dir, mapped_file) = create_test_file();
+        assert!(mapped_file.append_message_bytes(b"generation"));
+        assert!(mapped_file.try_seal_readable().expect("segment seals"));
+        let old = mapped_file
+            .try_mapped_read_lease(0, 10)
+            .expect("read admission")
+            .expect("sealed range");
+        let old_generation = old.generation_id();
+
+        assert!(mapped_file.swap_map());
+
+        let current = mapped_file
+            .try_mapped_read_lease(0, 10)
+            .expect("read admission")
+            .expect("replacement range");
+        assert!(current.generation_id().get() > old_generation.get());
+        assert_eq!(old.as_ref(), b"generation");
+        assert_eq!(current.as_ref(), b"generation");
+        assert_eq!(mapped_file.retired_swap_observation_count(), 1);
+        assert_eq!(mapped_file.get_metrics().unwrap().mapped_generations_live(), 2);
+
+        let snapshot = mapped_file.swap_generation_snapshot();
+        assert!(!mapped_file.try_clean_swapped_generation(snapshot, true));
+        drop(old);
+        assert!(mapped_file.try_clean_swapped_generation(snapshot, true));
+        assert_eq!(mapped_file.retired_swap_observation_count(), 0);
+        assert_eq!(mapped_file.get_metrics().unwrap().mapped_generations_live(), 1);
     }
 
     #[test]
     fn stale_swap_snapshot_cannot_clean_new_generation() {
         let (_temp_dir, mapped_file) = create_test_file();
+        assert!(mapped_file.append_message_bytes(b"generation"));
+        assert!(mapped_file.try_seal_readable().expect("segment seals"));
         let stale = mapped_file.swap_generation_snapshot();
-        assert!(!mapped_file.swap_map());
+        assert!(mapped_file.swap_map());
         mapped_file
             .mapped_byte_buffer_access_count_since_last_swap
             .store(7, Ordering::Release);
@@ -2675,7 +3041,9 @@ mod tests {
     #[test]
     fn concurrent_cleanup_claim_is_exactly_once_per_generation() {
         let (_temp_dir, mapped_file) = create_test_file();
-        assert!(!mapped_file.swap_map());
+        assert!(mapped_file.append_message_bytes(b"generation"));
+        assert!(mapped_file.try_seal_readable().expect("segment seals"));
+        assert!(mapped_file.swap_map());
         let mapped_file = Arc::new(mapped_file);
         let snapshot = mapped_file.swap_generation_snapshot();
         let workers = (0..8)
@@ -2697,11 +3065,14 @@ mod tests {
     #[test]
     fn new_swap_reopens_cleanup_after_prior_generation_was_cleaned() {
         let (_temp_dir, mapped_file) = create_test_file();
-        let initial = mapped_file.swap_generation_snapshot();
-        assert!(mapped_file.try_clean_swapped_generation(initial, true));
-        assert!(!mapped_file.try_clean_swapped_generation(initial, true));
+        assert!(mapped_file.append_message_bytes(b"generation"));
+        assert!(mapped_file.try_seal_readable().expect("segment seals"));
+        assert!(mapped_file.swap_map());
+        let first = mapped_file.swap_generation_snapshot();
+        assert!(mapped_file.try_clean_swapped_generation(first, true));
+        assert!(!mapped_file.try_clean_swapped_generation(first, true));
 
-        assert!(!mapped_file.swap_map());
+        assert!(mapped_file.swap_map());
         let next = mapped_file.swap_generation_snapshot();
         assert!(mapped_file.try_clean_swapped_generation(next, true));
         assert_eq!(mapped_file.get_metrics().unwrap().clean_swap_operations(), 2);
@@ -2761,6 +3132,9 @@ mod tests {
         let (_temp_dir, mapped_file) = create_test_file();
 
         mapped_file.warm_mapped_file(FlushDiskType::AsyncFlush, 1);
+        assert!(mapped_file.append_message_bytes(b"generation"));
+        assert!(mapped_file.try_seal_readable().expect("segment seals"));
+        assert!(mapped_file.swap_map());
         mapped_file.clean_swaped_map(true);
 
         let metrics = mapped_file.get_metrics().unwrap();

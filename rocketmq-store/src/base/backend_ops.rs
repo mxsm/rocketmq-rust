@@ -23,6 +23,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
+use std::time::Duration;
 
 use bytes::Bytes;
 use bytes::BytesMut;
@@ -37,6 +38,7 @@ use rocketmq_runtime::common::system_clock::SystemClock;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store_api::TimerRecallRequest;
 use rocketmq_store_api::TimerRecallStatus;
+use rocketmq_store_local::mapped_file::ManagedRetirementStage;
 
 use crate::base::allocate_mapped_file_service::AllocateMappedFileService;
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
@@ -225,6 +227,21 @@ impl StoreHealthRecorder {
 pub struct MessageStoreShutdownReport {
     /// Progress from the canonical final commit-log flush, when the store reached that phase.
     pub final_flush: Option<FlushProgress>,
+    /// Transient buffers still owned by mapped files when pool shutdown finished reporting.
+    ///
+    /// These late leases are never returned to the stopped pool. Their final `Drop` unlocks and
+    /// releases the buffer through the retained pool inner.
+    pub transient_pool_outstanding_leases: usize,
+    /// Durable mapped-file retirement tickets left for restart replay.
+    pub mapped_file_retirement_pending_tickets: usize,
+    /// Pending tickets whose canonical name has already advanced to a durable tombstone.
+    pub mapped_file_retirement_tombstone_backlog: usize,
+    /// Age of the oldest in-process retirement capability at shutdown.
+    pub mapped_file_retirement_oldest_pending_age: Duration,
+    /// Last retirement stage that returned a typed pending outcome.
+    pub mapped_file_retirement_last_failure_stage: Option<ManagedRetirementStage>,
+    /// Whether further lifecycle transitions require replay before restart.
+    pub mapped_file_retirement_recovery_required: bool,
 }
 
 impl From<&StoreError> for StoreHealthError {

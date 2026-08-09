@@ -54,10 +54,20 @@ fn hex_nibble(byte: u8) -> Option<u8> {
 mod tests {
     use super::corpus_bytes;
 
+    const STORE_RECOVERY_TARGET: &str = include_str!("../fuzz_targets/store_recovery_record.rs");
+
     #[test]
     fn hex_corpus_is_decoded_and_arbitrary_input_is_borrowed() {
         assert_eq!(corpus_bytes(b"hex:00 ff 10").as_ref(), &[0x00, 0xff, 0x10]);
         assert_eq!(corpus_bytes(b"arbitrary").as_ref(), b"arbitrary");
         assert_eq!(corpus_bytes(b"hex:0").as_ref(), b"hex:0");
+    }
+
+    #[test]
+    fn store_recovery_target_exercises_the_lifecycle_ledger_codec() {
+        assert!(
+            STORE_RECOVERY_TARGET.contains("fuzz_decode_mapped_file_lifecycle"),
+            "store_recovery_record must exercise the mapped-file lifecycle codec"
+        );
     }
 }

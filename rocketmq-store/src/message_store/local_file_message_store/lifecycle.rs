@@ -14,6 +14,10 @@
 
 use super::*;
 
+mod flush_consume_queue;
+
+pub(super) use flush_consume_queue::FlushConsumeQueueService;
+
 impl LocalFileMessageStore {
     pub(super) fn add_schedule_task(&mut self) {
         if self.scheduled_task_group.is_some() {
@@ -348,17 +352,13 @@ impl LocalFileMessageStore {
     }
 
     pub(crate) fn scheduled_task_count(&self) -> usize {
-        let root_count = self
-            .scheduled_task_group
-            .as_ref()
-            .map(rocketmq_runtime::TaskGroup::task_count)
-            .unwrap_or_default();
-        let scheduled_count = self
-            .scheduled_tasks
+        if let Some(task_group) = self.scheduled_task_group.as_ref() {
+            return task_group.task_count();
+        }
+        self.scheduled_tasks
             .as_ref()
             .map(|scheduled_tasks| scheduled_tasks.group().task_count())
-            .unwrap_or_default();
-        root_count + scheduled_count
+            .unwrap_or_default()
     }
 
     pub(crate) fn scheduled_task_snapshot(&self) -> Vec<ScheduledTaskSnapshot> {
@@ -386,142 +386,28 @@ impl LocalFileMessageStore {
     }
 }
 
-pub(super) struct FlushConsumeQueueService {
-    runtime_scope: StoreRuntimeScope,
-    message_store_config: Arc<MessageStoreConfig>,
-    consume_queue_store: ConsumeQueueStore,
-    store_checkpoint: Arc<StoreCheckpoint>,
-    worker_group: parking_lot::Mutex<Option<rocketmq_runtime::TaskGroup>>,
-    shutdown_token: parking_lot::Mutex<CancellationToken>,
-    wakeup: Arc<Notify>,
-}
-
-impl FlushConsumeQueueService {
-    pub(super) fn new(
-        runtime_scope: StoreRuntimeScope,
-        message_store_config: Arc<MessageStoreConfig>,
-        consume_queue_store: ConsumeQueueStore,
-        store_checkpoint: Arc<StoreCheckpoint>,
-    ) -> Self {
-        Self {
-            runtime_scope,
-            message_store_config,
-            consume_queue_store,
-            store_checkpoint,
-            worker_group: parking_lot::Mutex::new(None),
-            shutdown_token: parking_lot::Mutex::new(CancellationToken::new()),
-            wakeup: Arc::new(Notify::new()),
-        }
-    }
-
-    pub(super) fn flush_once_blocking(
-        consume_queue_store: &ConsumeQueueStore,
-        store_checkpoint: &StoreCheckpoint,
-        flush_least_pages: i32,
-    ) {
-        let consume_queue_table = consume_queue_store.get_consume_queue_table().lock().clone();
-        for consume_queue_table in consume_queue_table.values() {
-            for consume_queue in consume_queue_table.values() {
-                let consume_queue = consume_queue.read();
-                let _ = consume_queue_store.flush(consume_queue.as_ref(), flush_least_pages);
-            }
-        }
-
-        if let Err(error) = store_checkpoint.flush() {
-            error!("flush consume queue service failed to flush store checkpoint: {error}");
-        }
-    }
-
-    pub(super) async fn flush_once(
-        runtime_scope: StoreRuntimeScope,
-        consume_queue_store: ConsumeQueueStore,
-        store_checkpoint: Arc<StoreCheckpoint>,
-        flush_least_pages: i32,
-    ) {
-        if let Err(error) = crate::runtime::spawn_io(&runtime_scope, "flush-consume-queue", move || {
-            Self::flush_once_blocking(&consume_queue_store, &store_checkpoint, flush_least_pages);
-        })
-        .await
-        {
-            error!("flush consume queue service task failed: {error}");
-        }
-    }
-
-    pub(super) fn start(&self) {
-        let mut worker_group = self.worker_group.lock();
-        if worker_group.is_some() {
-            return;
-        }
-
-        let group = crate::runtime::task_group(&self.runtime_scope, "rocketmq-store.flush-consume-queue");
-
-        let message_store_config = self.message_store_config.clone();
-        let consume_queue_store = self.consume_queue_store.clone();
-        let store_checkpoint = self.store_checkpoint.clone();
-        let runtime_scope = self.runtime_scope.clone();
-        let shutdown_token = CancellationToken::new();
-        *self.shutdown_token.lock() = shutdown_token.clone();
-        let wakeup = self.wakeup.clone();
-
-        match group.spawn_service("flush-consume-queue", async move {
-            let interval = message_store_config.flush_interval_consume_queue.max(1) as u64;
-            let thorough_interval = message_store_config.flush_consume_queue_thorough_interval as u64;
-            let default_least_pages = message_store_config.flush_consume_queue_least_pages as i32;
-            let mut last_thorough_flush_timestamp = current_millis();
-
-            loop {
-                let now = current_millis();
-                let flush_least_pages =
-                    if thorough_interval == 0 || now >= last_thorough_flush_timestamp + thorough_interval {
-                        last_thorough_flush_timestamp = now;
-                        0
-                    } else {
-                        default_least_pages
-                    };
-
-                Self::flush_once(
-                    runtime_scope.clone(),
-                    consume_queue_store.clone(),
-                    store_checkpoint.clone(),
-                    flush_least_pages,
-                )
-                .await;
-
-                tokio::select! {
-                    _ = shutdown_token.cancelled() => break,
-                    _ = wakeup.notified() => {}
-                    _ = tokio::time::sleep(Duration::from_millis(interval)) => {}
-                }
-            }
-
-            Self::flush_once(runtime_scope, consume_queue_store, store_checkpoint, 0).await;
-        }) {
-            Ok(_) => {
-                *worker_group = Some(group);
-            }
-            Err(error) => {
-                error!("failed to start flush consume queue service task: {error}");
-            }
-        }
-    }
-
-    pub(super) async fn shutdown(&self) {
-        self.shutdown_token.lock().cancel();
-        self.wakeup.notify_waiters();
-
-        let worker_group = self.worker_group.lock().take();
-        if let Some(worker_group) = worker_group {
-            let report = worker_group.shutdown(Duration::from_secs(5)).await;
-            if let Err(error) = crate::runtime::shutdown_report_result("FlushConsumeQueueService", report) {
-                error!("flush consume queue service task failed during shutdown: {error}");
-            }
-        }
-    }
-}
-
 impl LocalFileMessageStore {
     pub(super) async fn load_store(&mut self) -> bool {
-        let last_exit_ok = !self.is_temp_file_exist();
+        if let Err(error) = self.ensure_operational_root_lease(StoreOperation::Load) {
+            error!(error = %error, "message store root lease is unavailable before load");
+            return false;
+        }
+        if self.lifecycle_state() != LocalStoreState::Initialized || self.shutdown.load(Ordering::Acquire) {
+            error!(
+                state = ?self.lifecycle_state(),
+                shutdown = self.shutdown.load(Ordering::Acquire),
+                "message store must be initialized and non-shutdown before load"
+            );
+            return false;
+        }
+        debug_assert_eq!(self.store_root_mode, StoreRootMode::Legacy);
+        let last_exit_ok = match self.is_temp_file_exist() {
+            Ok(present) => !present,
+            Err(error) => {
+                error!(error = %error, "failed to inspect the retained-root abort marker before load");
+                return false;
+            }
+        };
         info!(
             "last shutdown {}, store path root dir: {}",
             if last_exit_ok { "normally" } else { "abnormally" },
@@ -608,6 +494,14 @@ impl LocalFileMessageStore {
 
     pub(super) async fn start_store(&mut self) -> Result<(), StoreError> {
         self.validate_supported_configuration()?;
+        self.ensure_operational_root_lease(StoreOperation::Start)?;
+        if self.store_root_mode == StoreRootMode::Managed {
+            return Err(StoreError::new(StoreErrorKind::Unsupported, StoreOperation::Start)
+                .in_component(StoreComponent::MappedFile)
+                .with_detail(
+                    "managed mapped-file lifecycle is read-only until Wave-B queue, registry, and reaper activation is complete",
+                ));
+        }
         match self.lifecycle_state() {
             LocalStoreState::Initialized => {}
             LocalStoreState::Created => {
@@ -637,8 +531,8 @@ impl LocalFileMessageStore {
                 ));
             }
         }
+        self.create_temp_file()?;
 
-        self.acquire_store_lock()?;
         let start_result: Result<(), StoreError> = async {
             self.allocate_mapped_file_service.start();
 
@@ -690,7 +584,9 @@ impl LocalFileMessageStore {
                     StoreError::high_availability(StoreOperation::Start, e)
                 })?;
             }
-            self.create_temp_file();
+            if let Some(service) = self.mapped_file_retirement_service.as_mut() {
+                service.start()?;
+            }
             self.add_schedule_task();
             // self.perfs.start();
             Ok(())
@@ -713,7 +609,6 @@ impl LocalFileMessageStore {
                         warn!("tieredstore shutdown after start failure failed: {}", shutdown_error);
                     }
                 }
-                self.release_store_lock();
                 Err(error)
             }
         }
@@ -721,6 +616,7 @@ impl LocalFileMessageStore {
 
     pub(super) async fn initialize_store(&mut self) -> Result<(), StoreError> {
         self.validate_supported_configuration()?;
+        self.ensure_operational_root_lease(StoreOperation::Load)?;
         match self.lifecycle_state() {
             LocalStoreState::Created | LocalStoreState::Shutdown => {}
             LocalStoreState::Initialized => return Ok(()),
@@ -738,6 +634,11 @@ impl LocalFileMessageStore {
                     "message store cannot be initialized while recovering".to_string(),
                 ));
             }
+        }
+
+        if self.store_root_mode == StoreRootMode::Managed {
+            self.set_lifecycle_state(LocalStoreState::Initialized);
+            return Ok(());
         }
 
         if !Self::is_dledger_commit_log_enabled_config(self.message_store_config.as_ref())
@@ -800,16 +701,20 @@ impl LocalFileMessageStore {
     pub(super) async fn shutdown_store_gracefully(&mut self) -> Result<MessageStoreShutdownReport, StoreError> {
         let mut report = MessageStoreShutdownReport::default();
         let mut shutdown_error = None;
-        let previous_state = self.lifecycle_state();
+        let allow_root_path_persistence = match self.validate_current_root_mode(StoreOperation::Shutdown) {
+            Ok(()) => self.store_root_lease_state == StoreRootLeaseState::Operational,
+            Err(error) => {
+                if self.store_root_lease_state != StoreRootLeaseState::Destroyed {
+                    self.store_root_lease_state = StoreRootLeaseState::DestroyRetryPending;
+                }
+                warn!(error = %error, "message store root lease is invalid before shutdown");
+                shutdown_error = Some(error);
+                false
+            }
+        };
         if !self.shutdown.load(Ordering::Acquire) {
             self.shutdown.store(true, Ordering::Release);
             self.set_lifecycle_state(LocalStoreState::Shutdown);
-
-            if matches!(previous_state, LocalStoreState::Created | LocalStoreState::Shutdown) {
-                self.release_store_lock();
-                let _ = self.transient_store_pool.destroy();
-                return Ok(report);
-            }
 
             if let Some(ha_service) = self.ha_service.as_ref() {
                 self.shutdown_ha_update_master_tasks().await;
@@ -817,8 +722,32 @@ impl LocalFileMessageStore {
             }
 
             #[cfg(feature = "extended_timeline")]
-            if let Err(error) = self.extended_timeline_role.transition(false) {
-                warn!("Extended Timeline shutdown fence persistence failed: {error}");
+            if allow_root_path_persistence {
+                if let Err(error) = self.extended_timeline_role.transition(false) {
+                    warn!("Extended Timeline shutdown fence persistence failed: {error}");
+                }
+            } else {
+                self.extended_timeline_role.fence_in_memory();
+            }
+
+            if let Some(service) = self.mapped_file_retirement_service.as_mut() {
+                let service_result = service.cancel_drain_and_await().await;
+                let retirement = match service_result {
+                    Ok(retirement) => retirement,
+                    Err(error) => {
+                        if shutdown_error.is_none() {
+                            shutdown_error = Some(error);
+                        } else {
+                            warn!(error = %error, "mapped-file retirement service also failed during shutdown");
+                        }
+                        service.snapshot()
+                    }
+                };
+                report.mapped_file_retirement_pending_tickets = retirement.pending_tickets;
+                report.mapped_file_retirement_tombstone_backlog = retirement.tombstone_backlog;
+                report.mapped_file_retirement_oldest_pending_age = retirement.oldest_pending_age;
+                report.mapped_file_retirement_last_failure_stage = retirement.last_failure_stage;
+                report.mapped_file_retirement_recovery_required = retirement.recovery_required;
             }
             self.shutdown_schedule_tasks().await;
             #[cfg(feature = "extended_timeline")]
@@ -831,7 +760,11 @@ impl LocalFileMessageStore {
                 Ok(final_flush) => report.final_flush = Some(final_flush),
                 Err(error) => {
                     self.record_flush_failure(&error);
-                    shutdown_error = Some(error);
+                    if shutdown_error.is_none() {
+                        shutdown_error = Some(error);
+                    } else {
+                        warn!(error = %error, "commitlog flush also failed after Store root lease validation failed");
+                    }
                 }
             }
 
@@ -854,22 +787,76 @@ impl LocalFileMessageStore {
             if self.message_store_config.rocksdb_cq_double_write_enable {
                 // this.rocksDBMessageStore.consumeQueueStore.shutdown();
             }
-            if let Some(timer_message_store) = self.timer_message_store.as_ref() {
-                timer_message_store.shutdown_gracefully().await;
+            if let Some(timer_message_store) = self.timer_message_store.clone() {
+                let _ = timer_message_store.stop_gracefully().await;
+                let persist_timer_storage = if allow_root_path_persistence {
+                    match self.validate_current_root_mode(StoreOperation::Shutdown) {
+                        Ok(()) => self.store_root_lease_state == StoreRootLeaseState::Operational,
+                        Err(error) => {
+                            self.store_root_lease_state = StoreRootLeaseState::DestroyRetryPending;
+                            warn!(error = %error, "message store root lease changed before Timer persistence");
+                            if shutdown_error.is_none() {
+                                shutdown_error = Some(error);
+                            }
+                            false
+                        }
+                    }
+                } else {
+                    false
+                };
+                if persist_timer_storage {
+                    timer_message_store.shutdown_storage_with_persistence();
+                }
             }
             self.flush_consume_queue_service.shutdown().await;
             self.allocate_mapped_file_service.shutdown().await;
             if let Some(store_checkpoint) = self.store_checkpoint.as_ref() {
                 let _ = store_checkpoint.shutdown();
             }
-            if self.running_flags.is_writeable() && self.dispatch_behind_bytes() == 0 {
-                //delete abort file
-                self.delete_file(get_abort_file(self.message_store_config.store_path_root_dir.as_str()))
+            // Service shutdown above drains already-owned handles. Only a currently validated
+            // lease may mutate the root namespace, and the mutation stays relative to its
+            // retained directory handle.
+            if allow_root_path_persistence
+                && self.store_root_lease_state == StoreRootLeaseState::Operational
+                && self.running_flags.is_writeable()
+                && self.dispatch_behind_bytes() == 0
+            {
+                match self.validate_current_root_mode(StoreOperation::Shutdown) {
+                    Ok(()) => {
+                        if let Err(error) = self.store_root_lease.remove_abort_marker(StoreOperation::Shutdown) {
+                            self.store_root_lease_state = StoreRootLeaseState::DestroyRetryPending;
+                            warn!(error = %error, "failed to remove abort marker through retained Store root");
+                            if shutdown_error.is_none() {
+                                shutdown_error = Some(error);
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        self.store_root_lease_state = StoreRootLeaseState::DestroyRetryPending;
+                        warn!(error = %error, "message store root lease changed while shutdown services were draining");
+                        if shutdown_error.is_none() {
+                            shutdown_error = Some(error);
+                        }
+                    }
+                }
             }
         }
 
-        self.release_store_lock();
-        let _ = self.transient_store_pool.destroy();
+        match self.transient_store_pool.shutdown(Duration::ZERO) {
+            Ok(pool_report) => {
+                report.transient_pool_outstanding_leases = pool_report.outstanding_leases();
+            }
+            Err(source) => {
+                let error = StoreError::new(StoreErrorKind::Storage, StoreOperation::Shutdown)
+                    .in_component(StoreComponent::MappedFile)
+                    .with_source(source);
+                if shutdown_error.is_none() {
+                    shutdown_error = Some(error);
+                } else {
+                    warn!(error = %error, "transient store pool shutdown also failed");
+                }
+            }
+        }
         match shutdown_error {
             Some(error) => Err(error),
             None => Ok(report),
@@ -884,32 +871,39 @@ impl LocalFileMessageStore {
 
     pub(super) fn destroy_store(&mut self) {
         if !self.destroy_store_with_outcome() {
-            warn!("message store cleanup remains pending; retaining metadata and queue progress for retry");
+            warn!(
+                "message store cleanup remains pending; retaining storage and metadata until durable retirement handoff"
+            );
         }
     }
 
+    /// Attempts an explicit Store-level destroy without bypassing mapped-file retirement.
+    ///
+    /// Wave A keeps lifecycle writes disabled. Until the durable retirement handoff and deletion
+    /// reaper are wired, an eligible request is fenced as retry-pending and performs no consume
+    /// queue, commitlog, index, or metadata namespace mutation.
     #[must_use]
     pub(super) fn destroy_store_with_outcome(&mut self) -> bool {
-        self.release_store_lock();
-        let consume_queue_destroyed = self.consume_queue_store.destroy_with_outcome();
-        let commit_log_destroyed = self.commit_log.destroy_with_outcome();
-        let index_destroyed = self.index_service.destroy_with_outcome();
-        let storage_destroyed = consume_queue_destroyed && commit_log_destroyed && index_destroyed;
-
-        let metadata_destroyed = if storage_destroyed {
-            let store_root = self.message_store_config.store_path_root_dir.clone();
-            let abort_removed = self.delete_file_with_outcome(get_abort_file(store_root.as_str()));
-            let checkpoint_removed = self.delete_file_with_outcome(get_store_checkpoint(store_root.as_str()));
-            abort_removed && checkpoint_removed
-        } else {
+        if self.store_root_lease_state == StoreRootLeaseState::Destroyed {
+            return true;
+        }
+        if matches!(
+            self.lifecycle_state(),
+            LocalStoreState::Started
+                | LocalStoreState::RecoveringConsumeQueue
+                | LocalStoreState::RecoveringCommitLog
+                | LocalStoreState::RecoveringTopicQueueTable
+        ) {
             warn!(
-                consume_queue_destroyed,
-                commit_log_destroyed,
-                index_destroyed,
-                "message store cleanup is incomplete; abort and checkpoint files are retained"
+                state = ?self.lifecycle_state(),
+                "message store must finish shutdown or recovery before destroy"
             );
-            false
-        };
-        storage_destroyed && metadata_destroyed
+            return false;
+        }
+        self.store_root_lease_state = StoreRootLeaseState::DestroyRetryPending;
+        warn!(
+            "message store explicit destroy is write-disabled until durable retirement handoff and reaping are active"
+        );
+        false
     }
 }

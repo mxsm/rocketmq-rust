@@ -178,8 +178,13 @@ impl ConsumeQueue {
                             return false;
                         }
                     } else {
-                        self.mapped_file_queue
-                            .delete_expired_file(vec![self.mapped_file_queue.get_last_mapped_file().unwrap()]);
+                        warn!(
+                            topic = %self.topic,
+                            queue_id = self.queue_id,
+                            file_name = %mapped_file.get_file_name(),
+                            "refusing to untrack a consume-queue file without namespace-removal authority"
+                        );
+                        return false;
                     }
                 }
                 ConsumeQueueTruncatePlan::Retain {
@@ -463,8 +468,7 @@ impl FileQueueLifeCycle for ConsumeQueue {
     }
 
     fn recover_with_outcome(&mut self) -> bool {
-        let binding = self.mapped_file_queue.get_mapped_files();
-        let mapped_files = binding.load();
+        let mapped_files = self.mapped_file_queue.get_mapped_files();
         if mapped_files.is_empty() {
             return true;
         }
@@ -738,7 +742,6 @@ impl ConsumeQueueTrait for ConsumeQueue {
         let mut total_size: i64 = self
             .mapped_file_queue
             .get_mapped_files()
-            .load()
             .iter()
             .map(|mapped_file| mapped_file.get_file_size() as i64)
             .sum();
@@ -799,7 +802,7 @@ impl ConsumeQueueTrait for ConsumeQueue {
         }
 
         let mut min_ext_addr = 1i64;
-        let mapped_files = self.mapped_file_queue.get_mapped_files().load().clone();
+        let mapped_files = self.mapped_file_queue.get_mapped_files();
         for mapped_file in mapped_files.iter() {
             let read_position = mapped_file.get_read_position();
             let Some(selected) = find_min_offset_record(read_position, min_commit_log_offset, |relative_offset| {
@@ -1336,7 +1339,6 @@ mod tests {
         let base_total_size: i64 = consume_queue
             .mapped_file_queue
             .get_mapped_files()
-            .load()
             .iter()
             .map(|mapped_file| mapped_file.get_file_size() as i64)
             .sum();

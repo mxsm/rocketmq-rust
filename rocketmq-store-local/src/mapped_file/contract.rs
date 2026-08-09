@@ -499,18 +499,20 @@ pub trait MappedFile {
         Ok(())
     }
 
-    /// Records one compatibility swap attempt.
+    /// Replaces the currently published sealed read-only mapping generation.
     ///
-    /// The legacy method does not guarantee that a mapping was replaced or unmapped.
+    /// The complete candidate is mapped before a single publication. Existing leases retain the
+    /// retired generation until their final `Drop`; active-writable and closing files reject the
+    /// swap.
     ///
     /// # Returns
     /// `true` if the swap was successful, `false` otherwise.
     fn swap_map(&self) -> bool;
 
-    /// Records compatibility cleanup for a previously selected swap candidate.
+    /// Removes weak observations for retired generations that have already been dropped.
     ///
-    /// The legacy method does not guarantee physical mmap release. `force` only controls
-    /// bookkeeping reset behavior.
+    /// This method never forces an unmap. `force` only resets access-count bookkeeping when at
+    /// least one already-dead observation is removed.
     ///
     /// # Arguments
     /// * `force` - A boolean indicating whether the cleanup should be forced regardless of

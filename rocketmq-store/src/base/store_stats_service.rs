@@ -127,19 +127,14 @@ impl StoreStatsService {
     }
 
     pub(crate) fn task_count(&self) -> usize {
-        let root_count = self
-            .worker_group
-            .lock()
-            .as_ref()
-            .map(rocketmq_runtime::TaskGroup::task_count)
-            .unwrap_or_default();
-        let scheduled_count = self
-            .scheduled_tasks
+        if let Some(worker_group) = self.worker_group.lock().as_ref() {
+            return worker_group.task_count();
+        }
+        self.scheduled_tasks
             .lock()
             .as_ref()
             .map(|scheduled_tasks| scheduled_tasks.group().task_count())
-            .unwrap_or_default();
-        root_count + scheduled_count
+            .unwrap_or_default()
     }
 
     pub(crate) fn schedule_snapshot(&self) -> Vec<ScheduledTaskSnapshot> {

@@ -783,7 +783,7 @@ impl TimerMessageStore {
         if let Some(scheduler_group) = self.scheduler_group.lock().take() {
             let _ = scheduler_group.shutdown_now();
         }
-        self.shutdown_storage();
+        self.shutdown_storage_with_persistence();
     }
 
     pub async fn shutdown_gracefully(&self) {
@@ -791,6 +791,13 @@ impl TimerMessageStore {
     }
 
     pub async fn shutdown_gracefully_with_report(&self) -> Option<ShutdownReport> {
+        let report = self.stop_gracefully().await;
+        self.shutdown_storage_with_persistence();
+        report
+    }
+
+    /// Stops and awaits scheduler work without invoking configured-path shutdown persistence.
+    pub(crate) async fn stop_gracefully(&self) -> Option<ShutdownReport> {
         if let Some(pipeline) = self.pipeline.lock().take() {
             pipeline.close();
         }
@@ -800,13 +807,10 @@ impl TimerMessageStore {
             let report = scheduler_group.shutdown(Duration::from_secs(5)).await;
             if let Err(error) = crate::runtime::shutdown_report_result("TimerMessageStore scheduler", report.clone()) {
                 warn!("TimerMessageStore scheduler failed during shutdown: {error}");
-                self.shutdown_storage();
                 return None;
             }
-            self.shutdown_storage();
             return Some(report);
         }
-        self.shutdown_storage();
         None
     }
 
@@ -841,7 +845,8 @@ impl TimerMessageStore {
             .unwrap_or_default()
     }
 
-    fn shutdown_storage(&self) {
+    /// Persists timer state and releases its storage objects after scheduler work has stopped.
+    pub(crate) fn shutdown_storage_with_persistence(&self) {
         self.sync_last_read_time_ms();
         if let Err(error) = self.timer_metrics.persist() {
             error!("persist timer metrics during shutdown failed: {error}");
@@ -2599,6 +2604,13 @@ mod tests {
         (store, timer_message_store, real_topic)
     }
 
+    async fn initialize_and_load(store: &mut LocalFileMessageStore) -> bool {
+        if store.init().await.is_err() {
+            return false;
+        }
+        store.load().await
+    }
+
     fn build_timer_message(real_topic: &CheetahString, deliver_ms: u64) -> MessageExtBrokerInner {
         build_timer_message_with_queue_id(real_topic, 0, deliver_ms)
     }
@@ -2931,7 +2943,7 @@ mod tests {
         let root_dir = temp_dir.path().to_string_lossy().to_string();
         let (mut store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
 
-        assert!(store.load().await);
+        assert!(initialize_and_load(&mut store).await);
         let local_read_time = timer_message_store.curr_read_time_ms.load(Ordering::Relaxed);
         let deliver_time_ms = (local_read_time as u64).saturating_add(60_000);
         let master_read_time_ms = local_read_time + 120_000;
@@ -2971,7 +2983,7 @@ mod tests {
         let root_dir = temp_dir.path().to_string_lossy().to_string();
         let (mut store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
 
-        assert!(store.load().await);
+        assert!(initialize_and_load(&mut store).await);
         let deliver_ms = current_millis() + 60_000;
         let put_result = store.put_message(build_timer_message(&real_topic, deliver_ms)).await;
         assert!(put_result.is_ok());
@@ -2992,7 +3004,7 @@ mod tests {
         let root_dir = temp_dir.path().to_string_lossy().to_string();
         let (mut store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
 
-        assert!(store.load().await);
+        assert!(initialize_and_load(&mut store).await);
         timer_message_store.set_should_running_dequeue(true);
         let deliver_ms = current_millis().saturating_sub(2_000);
         let put_result = store.put_message(build_timer_message(&real_topic, deliver_ms)).await;
@@ -3033,7 +3045,7 @@ mod tests {
         let root_dir = temp_dir.path().to_string_lossy().to_string();
         let (mut store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
 
-        assert!(store.load().await);
+        assert!(initialize_and_load(&mut store).await);
         timer_message_store.set_should_running_dequeue(true);
         let deliver_ms = current_millis() + 60_000;
         let put_result = store.put_message(build_timer_message(&real_topic, deliver_ms)).await;
@@ -3054,7 +3066,7 @@ mod tests {
         let root_dir = temp_dir.path().to_string_lossy().to_string();
         let (mut store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
 
-        assert!(store.load().await);
+        assert!(initialize_and_load(&mut store).await);
         timer_message_store.set_should_running_dequeue(true);
         let deliver_ms = current_millis().saturating_sub(2_000);
         let put_result = store
@@ -3103,7 +3115,7 @@ mod tests {
         let root_dir = temp_dir.path().to_string_lossy().to_string();
         let (mut store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
 
-        assert!(store.load().await);
+        assert!(initialize_and_load(&mut store).await);
         timer_message_store.set_should_running_dequeue(true);
         let first_deliver_ms = current_millis() + 60_000;
         assert!(store
@@ -3142,7 +3154,7 @@ mod tests {
 
         let clock = Arc::new(ManualTimerClock::new(1_700_000_000_000));
         timer_message_store.set_clock(clock.clone());
-        assert!(store.load().await);
+        assert!(initialize_and_load(&mut store).await);
         timer_message_store.set_should_running_dequeue(true);
         let first_deliver_ms = clock.wall_time_ms() as u64 - 2_000;
         assert!(store
@@ -3225,7 +3237,7 @@ mod tests {
         let root_dir = temp_dir.path().to_string_lossy().to_string();
         let (mut store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
 
-        assert!(store.load().await);
+        assert!(initialize_and_load(&mut store).await);
         timer_message_store.set_should_running_dequeue(true);
         let deliver_ms = current_millis().saturating_sub(2_000);
         let unique_key = "delete-me";
@@ -3259,7 +3271,7 @@ mod tests {
         let root_dir = temp_dir.path().to_string_lossy().to_string();
         let (mut store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
 
-        assert!(store.load().await);
+        assert!(initialize_and_load(&mut store).await);
         timer_message_store.set_should_running_dequeue(true);
         let deliver_ms = current_millis().saturating_sub(2_000);
         let mut deleted_message = build_timer_message(&real_topic, deliver_ms);
@@ -3298,7 +3310,7 @@ mod tests {
             let root_dir = temp_dir.path().to_string_lossy().to_string();
             let config = config_with_root_and_limits(root_dir.as_str(), 1, 1, 1);
             let (mut store, timer_store, real_topic) = build_store_with_timer_and_config(config);
-            assert!(store.load().await);
+            assert!(initialize_and_load(&mut store).await);
             let deliver_ms = current_millis().saturating_sub(2_000);
 
             let mut target = build_timer_message(&real_topic, deliver_ms);
@@ -3346,7 +3358,7 @@ mod tests {
         let root_dir = temp_dir.path().to_string_lossy().to_string();
         let config = config_with_root_and_limits(root_dir.as_str(), 1, 1, 1);
         let (mut store, timer_store, real_topic) = build_store_with_timer_and_config(config.clone());
-        assert!(store.load().await);
+        assert!(initialize_and_load(&mut store).await);
         let deliver_ms = current_millis().saturating_sub(2_000);
 
         assert!(store
@@ -3374,7 +3386,7 @@ mod tests {
         drop(store);
 
         let (mut reloaded, reloaded_timer, _) = build_store_with_timer_and_config(config);
-        assert!(reloaded.load().await);
+        assert!(initialize_and_load(&mut reloaded).await);
         reloaded_timer.set_should_running_dequeue(true);
         // Source materialization was durably checkpointed before the partial slot drain. Restart
         // therefore replays only the slot, not the already indexed source records.
@@ -3391,7 +3403,7 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let root_dir = temp_dir.path().to_string_lossy().to_string();
         let (mut store, timer_store, real_topic) = build_store_with_timer(root_dir.as_str());
-        assert!(store.load().await);
+        assert!(initialize_and_load(&mut store).await);
         let deliver_ms = current_millis().saturating_sub(2_000);
 
         for index in 0..MESSAGE_COUNT {
@@ -3444,7 +3456,7 @@ mod tests {
         let root_dir = temp_dir.path().to_string_lossy().to_string();
         let (mut store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
 
-        assert!(store.load().await);
+        assert!(initialize_and_load(&mut store).await);
         let deliver_ms = current_millis().saturating_sub(2_000);
         let put_result = store.put_message(build_timer_message(&real_topic, deliver_ms)).await;
         assert!(put_result.is_ok());
@@ -3459,7 +3471,7 @@ mod tests {
         let (mut reloaded_store, reloaded_timer_message_store, reloaded_topic) =
             build_store_with_timer(root_dir.as_str());
         assert_eq!(reloaded_topic, real_topic);
-        assert!(reloaded_store.load().await);
+        assert!(initialize_and_load(&mut reloaded_store).await);
         reloaded_timer_message_store.set_should_running_dequeue(true);
 
         let delivered = reloaded_timer_message_store.process_once().await;
@@ -3479,7 +3491,7 @@ mod tests {
         let root_dir = temp_dir.path().to_string_lossy().to_string();
         let (mut store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
 
-        assert!(store.load().await);
+        assert!(initialize_and_load(&mut store).await);
         timer_message_store.set_should_running_dequeue(true);
         let deliver_ms = current_millis().saturating_sub(2_000);
         let put_result = store.put_message(build_timer_message(&real_topic, deliver_ms)).await;
@@ -3500,7 +3512,7 @@ mod tests {
         let (mut reloaded_store, reloaded_timer_message_store, reloaded_topic) =
             build_store_with_timer(root_dir.as_str());
         assert_eq!(reloaded_topic, real_topic);
-        assert!(reloaded_store.load().await);
+        assert!(initialize_and_load(&mut reloaded_store).await);
         reloaded_timer_message_store.set_should_running_dequeue(true);
         let restart_clock = Arc::new(ManualTimerClock::new(
             reloaded_timer_message_store.curr_read_time_ms.load(Ordering::Relaxed)
@@ -3521,7 +3533,7 @@ mod tests {
         let root_dir = temp_dir.path().to_string_lossy().to_string();
         let (mut store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
 
-        assert!(store.load().await);
+        assert!(initialize_and_load(&mut store).await);
         let deliver_ms = current_millis() + 60_000;
         assert!(store
             .put_message(build_timer_message(&real_topic, deliver_ms))
@@ -3546,7 +3558,7 @@ mod tests {
         }
 
         let (mut reloaded_store, reloaded_timer_message_store, _) = build_store_with_timer(root_dir.as_str());
-        assert!(reloaded_store.load().await);
+        assert!(initialize_and_load(&mut reloaded_store).await);
         let metrics = reloaded_timer_message_store.storage_metrics_snapshot();
         let rebuilt_slot = reloaded_timer_message_store
             .get_timer_wheel_slot(reloaded_timer_message_store.ceil_time_ms(deliver_ms as i64))
@@ -3562,7 +3574,7 @@ mod tests {
         let root_dir = temp_dir.path().to_string_lossy().to_string();
         let (mut store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
 
-        assert!(store.load().await);
+        assert!(initialize_and_load(&mut store).await);
         let deliver_ms = current_millis() + 60_000;
         let put_result = store.put_message(build_timer_message(&real_topic, deliver_ms)).await;
         assert!(put_result.is_ok());
@@ -3578,7 +3590,7 @@ mod tests {
         checkpoint.flush().unwrap();
 
         let (mut reloaded_store, reloaded_timer_message_store, _) = build_store_with_timer(root_dir.as_str());
-        assert!(reloaded_store.load().await);
+        assert!(initialize_and_load(&mut reloaded_store).await);
         assert_eq!(
             reloaded_timer_message_store.curr_queue_offset.load(Ordering::Relaxed),
             1
@@ -3592,7 +3604,7 @@ mod tests {
         let config = config_with_root_and_limits(root_dir.as_str(), 1, 1, 1);
         let (mut store, timer_message_store, real_topic) = build_store_with_timer_and_config(config);
 
-        assert!(store.load().await);
+        assert!(initialize_and_load(&mut store).await);
         let first_put = store
             .put_message(build_timer_message(&real_topic, current_millis() + 60_000))
             .await;
@@ -3618,7 +3630,7 @@ mod tests {
         let config = config_with_root_and_limits(root_dir.as_str(), 1, 1, 1);
         let (mut store, timer_message_store, real_topic) = build_store_with_timer_and_config(config);
 
-        assert!(store.load().await);
+        assert!(initialize_and_load(&mut store).await);
         let deliver_ms = current_millis().saturating_sub(2_000);
         let first_put = store.put_message(build_timer_message(&real_topic, deliver_ms)).await;
         assert!(first_put.is_ok());
@@ -3664,7 +3676,7 @@ mod tests {
         let config = config_with_root_precision_and_roll_window(root_dir.as_str(), 1_000, 4);
         let (mut store, timer_message_store, real_topic) = build_store_with_timer_and_config(config);
 
-        assert!(store.load().await);
+        assert!(initialize_and_load(&mut store).await);
         let now_floor = timer_message_store.floor_time_ms(current_millis() as i64);
         let deliver_ms = (now_floor + 20_000) as u64;
         assert!(store
@@ -3709,7 +3721,7 @@ mod tests {
         let config = config_with_root_precision_and_roll_window(root_dir.as_str(), 1_000, 60);
         let (mut store, timer_message_store, real_topic) = build_store_with_timer_and_config(config);
 
-        assert!(store.load().await);
+        assert!(initialize_and_load(&mut store).await);
         let now_floor = timer_message_store.floor_time_ms(current_millis() as i64);
         timer_message_store
             .curr_read_time_ms
@@ -3744,7 +3756,7 @@ mod tests {
 
         let clock = Arc::new(ManualTimerClock::new(1_700_000_000_000));
         timer_message_store.set_clock(clock.clone());
-        assert!(store.load().await);
+        assert!(initialize_and_load(&mut store).await);
         let deliver_ms = clock.wall_time_ms() as u64 + 3_000;
         assert!(store
             .put_message(build_timer_message(&real_topic, deliver_ms))
@@ -3798,7 +3810,7 @@ mod tests {
         let root_dir = temp_dir.path().to_string_lossy().to_string();
         let (mut store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
 
-        assert!(store.load().await);
+        assert!(initialize_and_load(&mut store).await);
         assert!(store
             .put_message(build_timer_message(&real_topic, current_millis() + 60_000))
             .await
@@ -3815,7 +3827,7 @@ mod tests {
         let root_dir = temp_dir.path().to_string_lossy().to_string();
         let (mut store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
 
-        assert!(store.load().await);
+        assert!(initialize_and_load(&mut store).await);
         timer_message_store.set_should_running_dequeue(true);
         assert!(store
             .put_message(build_timer_message(&real_topic, current_millis().saturating_sub(2_000)))
@@ -3833,7 +3845,7 @@ mod tests {
         let root_dir = temp_dir.path().to_string_lossy().to_string();
         let (mut store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
 
-        assert!(store.load().await);
+        assert!(initialize_and_load(&mut store).await);
         assert!(store
             .put_message(build_timer_message(&real_topic, current_millis() + 60_000))
             .await
@@ -3862,7 +3874,7 @@ mod tests {
         let config = config_with_metrics_check(root_dir.as_str(), 10);
         let (mut store, timer_message_store, real_topic) = build_store_with_timer_and_config(config.clone());
 
-        assert!(store.load().await);
+        assert!(initialize_and_load(&mut store).await);
         let deliver_ms = current_millis() + 60_000;
         let unique_key = "revise-key";
         let mut timer_message = build_timer_message(&real_topic, deliver_ms);
@@ -3884,7 +3896,7 @@ mod tests {
         drop(store);
 
         let (mut reloaded_store, reloaded_timer_message_store, _) = build_store_with_timer_and_config(config);
-        assert!(reloaded_store.load().await);
+        assert!(initialize_and_load(&mut reloaded_store).await);
 
         assert_eq!(
             reloaded_timer_message_store.timer_metrics.get_timing_count(&real_topic),
@@ -3898,7 +3910,7 @@ mod tests {
         let root_dir = temp_dir.path().to_string_lossy().to_string();
         let (mut store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
 
-        assert!(store.load().await);
+        assert!(initialize_and_load(&mut store).await);
         timer_message_store.set_should_running_dequeue(true);
         let mut msg = MessageExtBrokerInner::default();
         msg.set_topic(real_topic.clone());
