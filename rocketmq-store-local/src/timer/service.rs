@@ -110,7 +110,10 @@ impl TimerSchedulePolicy {
         let now_floor = self.floor_time_ms(now_ms);
         let ttl_floor = now_floor.saturating_sub(self.wheel_window_ms());
         let base = if checkpoint_read_time_ms <= 0 {
-            now_floor
+            // Start one tick behind the write cursor. Newly indexed already-expired records can
+            // then be processed immediately while dequeue still obeys the strict `< currentTick`
+            // rule required by Java's exact-target-minus-one encoding.
+            now_floor.saturating_sub(self.precision_ms)
         } else {
             self.floor_time_ms(checkpoint_read_time_ms)
         };
@@ -177,6 +180,15 @@ pub fn timer_slot_is_valid(slot: Slot, recovered_log_len: i64) -> bool {
         && slot.first_pos <= slot.last_pos
         && slot.first_pos.rem_euclid(TIMER_LOG_RECORD_SIZE as i64) == 0
         && slot.last_pos.rem_euclid(TIMER_LOG_RECORD_SIZE as i64) == 0
+}
+
+/// Returns whether a Java-compatible timer record may be delivered without violating not-before.
+///
+/// `TIMER_OUT_MS` encodes an exact deadline as the previous tick, so the slot must be strictly
+/// behind the current write tick. The exact original deadline is checked independently to remain
+/// safe during sub-tick execution and backward wall-clock jumps.
+pub fn is_due_not_before(original_deliver_ms: i64, slot_time_ms: i64, current_tick_ms: i64, now_ms: i64) -> bool {
+    slot_time_ms < current_tick_ms && original_deliver_ms <= now_ms
 }
 
 #[derive(Debug)]
@@ -286,6 +298,21 @@ mod tests {
         let policy = TimerSchedulePolicy::new(1_000, 100, 10, 90);
         assert_eq!(policy.plan_slot(95_000, 0, 0, 1, 2), (45_000, 3));
         assert_eq!(policy.plan_slot(5_001, 0, 0, 1, 2), (6_000, 1));
+    }
+
+    #[test]
+    fn timer_policy_starts_new_read_cursor_one_tick_behind_write_time() {
+        let policy = TimerSchedulePolicy::new(1_000, 100, 10, 90);
+        assert_eq!(policy.recover_read_time_ms(0, 10_500), 9_000);
+    }
+
+    #[test]
+    fn timer_not_before_requires_strict_tick_and_exact_deadline() {
+        assert!(!is_due_not_before(10_000, 9_000, 9_000, 9_999));
+        assert!(is_due_not_before(10_000, 9_000, 10_000, 10_000));
+        assert!(!is_due_not_before(10_001, 10_000, 11_000, 10_000));
+        assert!(is_due_not_before(10_001, 10_000, 11_000, 11_000));
+        assert!(!is_due_not_before(10_000, 9_000, 9_000, 10_000));
     }
 
     #[test]

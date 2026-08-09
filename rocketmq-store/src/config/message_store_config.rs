@@ -707,6 +707,11 @@ pub struct MessageStoreConfig {
     #[serde(default = "defaults::timer_max_delay_sec")]
     pub timer_max_delay_sec: u64,
 
+    /// Include the topic in newly written Recall keys using an unambiguous length-prefixed form.
+    /// The Java-compatible default uses only the globally unique message key.
+    #[serde(default)]
+    pub timer_delete_key_with_topic: bool,
+
     #[serde(default = "defaults::timer_wheel_enable")]
     pub timer_wheel_enable: bool,
 
@@ -1321,6 +1326,7 @@ impl Default for MessageStoreConfig {
             timer_enable_check_metrics: false,
             timer_intercept_delay_level: false,
             timer_max_delay_sec: 3600 * 24 * 3,
+            timer_delete_key_with_topic: false,
             timer_wheel_enable: true,
             disappear_time_after_start: -1,
             timer_stop_enqueue: false,
@@ -1513,6 +1519,28 @@ impl Default for MessageStoreConfig {
 }
 
 impl MessageStoreConfig {
+    /// Returns the validated Java-compatible timer admission policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `timerPrecisionMs` is unsupported or `timerMaxDelaySec` cannot be
+    /// represented in milliseconds.
+    pub fn timer_policy_snapshot(
+        &self,
+    ) -> Result<
+        rocketmq_model::common::message::timer_request::TimerPolicySnapshot,
+        rocketmq_model::common::message::timer_request::TimerNormalizeError,
+    > {
+        use rocketmq_model::common::message::timer_request::TimerNormalizeError;
+        use rocketmq_model::common::message::timer_request::TimerPolicySnapshot;
+
+        let max_delay_ms = self
+            .timer_max_delay_sec
+            .checked_mul(1_000)
+            .ok_or(TimerNormalizeError::ArithmeticOverflow)?;
+        TimerPolicySnapshot::try_new(self.timer_precision_ms, max_delay_ms)
+    }
+
     /// Projects the legacy Serde-compatible envelope into local backend settings.
     pub fn normalized_local_backend_config(&self) -> LocalBackendConfig {
         let commit_log_paths = self
@@ -1802,6 +1830,10 @@ impl MessageStoreConfig {
             self.timer_intercept_delay_level.to_string(),
         );
         properties.insert("timerMaxDelaySec".to_string(), self.timer_max_delay_sec.to_string());
+        properties.insert(
+            "timerDeleteKeyWithTopic".to_string(),
+            self.timer_delete_key_with_topic.to_string(),
+        );
         properties.insert("timerWheelEnable".to_string(), self.timer_wheel_enable.to_string());
         properties.insert(
             "disappearTimeAfterStart".to_string(),
