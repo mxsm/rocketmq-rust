@@ -190,6 +190,7 @@ pub use crate::store_ports::StorePorts;
 pub use crate::telemetry::StoreTelemetry;
 pub use crate::timer::timer_checkpoint::TimerCheckpoint;
 pub use crate::timer::timer_checkpoint::TimerCheckpointSnapshot;
+pub use crate::timer::timer_message_store::build_canonical_delete_key;
 pub use crate::timer::timer_message_store::build_delete_key;
 pub use crate::timer::timer_message_store::TimerMessageStore;
 pub use crate::timer::timer_message_store::DAY_SECS;

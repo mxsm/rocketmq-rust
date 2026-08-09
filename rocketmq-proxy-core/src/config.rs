@@ -41,6 +41,10 @@ pub struct GrpcConfig {
     pub max_encoding_message_size: usize,
     pub concurrency_limit_per_connection: usize,
     pub use_endpoint_port_from_request: bool,
+    /// Java-compatible delay admission horizon enforced before forwarding to a Broker.
+    pub timer_max_delay_ms: u64,
+    /// Precision used only to validate and normalize delay admission at the Proxy boundary.
+    pub timer_precision_ms: u64,
 }
 
 impl Default for GrpcConfig {
@@ -51,6 +55,8 @@ impl Default for GrpcConfig {
             max_encoding_message_size: 8 * 1024 * 1024,
             concurrency_limit_per_connection: 256,
             use_endpoint_port_from_request: false,
+            timer_max_delay_ms: 24 * 60 * 60 * 1_000,
+            timer_precision_ms: 1_000,
         }
     }
 }

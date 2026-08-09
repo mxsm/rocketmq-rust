@@ -22,6 +22,7 @@ use std::time::Duration;
 
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
+use parking_lot::RwLock;
 use rocketmq_model::common::message::message_accessor::MessageAccessor;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
@@ -31,7 +32,6 @@ use rocketmq_model::common::message::MessageTrait;
 use rocketmq_observability::metrics::store::StoreMetricsRecorder;
 use rocketmq_observability::metrics::timer::TimerMetricsRecorder;
 use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
-use rocketmq_runtime::common::system_clock::SystemClock;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::common::util_all::is_it_time_to_do;
 use rocketmq_runtime::ScheduledTaskConfig;
@@ -39,6 +39,7 @@ use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_store_local::timer::service::clamp_queue_offset;
+use rocketmq_store_local::timer::service::is_due_not_before;
 use rocketmq_store_local::timer::service::recover_timer_log_len as plan_recovered_timer_log_len;
 use rocketmq_store_local::timer::service::timer_slot_is_valid;
 use rocketmq_store_local::timer::service::TimerBacklogMetrics;
@@ -61,6 +62,9 @@ use crate::store_path_config_helper::get_timer_check_path;
 use crate::store_path_config_helper::get_timer_log_path;
 use crate::store_path_config_helper::get_timer_metrics_path;
 use crate::store_path_config_helper::get_timer_wheel_path;
+use crate::timer::clock::SystemTimerClock;
+use crate::timer::clock::TimerClock;
+use crate::timer::role::TimerRoleState;
 use crate::timer::slot::Slot;
 use crate::timer::timer_checkpoint::TimerCheckpoint;
 use crate::timer::timer_checkpoint::TimerCheckpointSnapshot;
@@ -104,6 +108,23 @@ struct RecoveredTimerState {
     read_time_ms: i64,
     queue_offset: i64,
 }
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+struct TimerDeleteIdentity {
+    key: CheetahString,
+    generation: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PersistenceStage {
+    BeforeTimerLog,
+    AfterTimerLog,
+    AfterTimerWheel,
+    AfterCheckpoint,
+}
+
+#[cfg(test)]
+type PersistenceObserver = Arc<dyn Fn(PersistenceStage) -> std::io::Result<()> + Send + Sync>;
 
 /// Narrow Store capabilities used by Timer's active runtime path.
 #[derive(Clone)]
@@ -155,6 +176,8 @@ pub struct TimerMessageStore {
     timer_checkpoint: Mutex<Option<TimerCheckpoint>>,
     timer_log: Mutex<Option<TimerLog>>,
     timer_wheel: Mutex<Option<TimerWheel>>,
+    clock: RwLock<Arc<dyn TimerClock>>,
+    role_state: TimerRoleState,
     should_running_dequeue: AtomicBool,
     enqueue_suspended: AtomicBool,
     process_lock: AsyncMutex<()>,
@@ -162,11 +185,21 @@ pub struct TimerMessageStore {
     scheduler_tasks: Mutex<Option<ScheduledTaskGroup>>,
     enqueue_tps_counter: TimerTpsCounter,
     dequeue_tps_counter: TimerTpsCounter,
+    #[cfg(test)]
+    persistence_observer: Mutex<Option<PersistenceObserver>>,
 }
 
 impl TimerMessageStore {
     pub fn load(&self) -> bool {
         let root_dir = self.message_store_config.store_path_root_dir.as_str();
+        if let Err(error) = self.message_store_config.timer_policy_snapshot() {
+            error!("load timer store failed because timer configuration is invalid: {error}");
+            return false;
+        }
+        if let Err(error) = self.role_state.load() {
+            error!("load timer role epoch failed: {error}");
+            return false;
+        }
         let timer_checkpoint = match TimerCheckpoint::new(get_timer_check_path(root_dir)) {
             Ok(timer_checkpoint) => timer_checkpoint,
             Err(err) => {
@@ -264,7 +297,10 @@ impl TimerMessageStore {
     }
 
     pub fn get_dequeue_behind_millis(&self) -> i64 {
-        (SystemClock::now() as i64) - self.curr_read_time_ms.load(Ordering::Relaxed)
+        self.clock
+            .read()
+            .wall_time_ms()
+            .saturating_sub(self.curr_read_time_ms.load(Ordering::Relaxed))
     }
 
     pub fn get_enqueue_behind_millis(&self) -> i64 {
@@ -316,7 +352,7 @@ impl TimerMessageStore {
     }
 
     pub fn is_should_running_dequeue(&self) -> bool {
-        self.should_running_dequeue.load(Ordering::Relaxed)
+        self.should_running_dequeue.load(Ordering::Acquire) && self.role_state.is_active()
     }
 
     pub fn timer_metrics_wrapper(&self) -> TimerMetricsSerializeWrapper {
@@ -390,6 +426,7 @@ impl TimerMessageStore {
         otel_store_metrics: StoreMetricsRecorder,
     ) -> Self {
         let timer_metrics_path = get_timer_metrics_path(message_store_config.store_path_root_dir.as_str());
+        let role_state = TimerRoleState::new(message_store_config.store_path_root_dir.as_str());
         Self {
             runtime_scope,
             otel_timer_metrics,
@@ -404,6 +441,8 @@ impl TimerMessageStore {
             timer_checkpoint: Mutex::new(None),
             timer_log: Mutex::new(None),
             timer_wheel: Mutex::new(None),
+            clock: RwLock::new(Arc::new(SystemTimerClock::default())),
+            role_state,
             should_running_dequeue: AtomicBool::new(false),
             enqueue_suspended: AtomicBool::new(false),
             process_lock: AsyncMutex::new(()),
@@ -411,7 +450,14 @@ impl TimerMessageStore {
             scheduler_tasks: Mutex::new(None),
             enqueue_tps_counter: TimerTpsCounter::default(),
             dequeue_tps_counter: TimerTpsCounter::default(),
+            #[cfg(test)]
+            persistence_observer: Mutex::new(None),
         }
+    }
+
+    #[cfg(test)]
+    fn set_clock(&self, clock: Arc<dyn TimerClock>) {
+        *self.clock.write() = clock;
     }
 
     pub(crate) fn new_with_store_context(
@@ -501,7 +547,9 @@ impl TimerMessageStore {
             .as_ref()
             .map(|scheduler_tasks| scheduler_tasks.group().task_count())
             .unwrap_or_default();
-        root_count + scheduled_count
+        // ScheduledTaskGroup is backed by the same root TaskGroup; summing both snapshots counts
+        // every scheduled task twice.
+        root_count.max(scheduled_count)
     }
 
     pub(crate) fn scheduler_snapshot(&self) -> Vec<ScheduledTaskSnapshot> {
@@ -529,45 +577,62 @@ impl TimerMessageStore {
     }
 
     pub fn sync_last_read_time_ms(&self) {
-        let timer_log_len = self
-            .timer_log
-            .lock()
-            .as_ref()
-            .and_then(|timer_log| timer_log.len().ok())
-            .unwrap_or_default();
+        if let Err(error) = self.commit_durable_progress() {
+            error!("commit durable timer progress failed: {error}");
+        }
+    }
+
+    fn commit_durable_progress(&self) -> std::io::Result<()> {
+        // The checkpoint is a commit record, never a write-ahead declaration. Advancing it before
+        // either data file is durable can permanently skip Timer CQ entries after a crash.
+        self.observe_persistence_stage(PersistenceStage::BeforeTimerLog)?;
+        let durable_timer_log_len = {
+            let timer_log_guard = self.timer_log.lock();
+            match timer_log_guard.as_ref() {
+                Some(timer_log) => {
+                    timer_log.flush()?;
+                    timer_log.len()? as i64
+                }
+                None => 0,
+            }
+        };
+        self.observe_persistence_stage(PersistenceStage::AfterTimerLog)?;
+
+        if let Some(timer_wheel) = self.timer_wheel.lock().as_ref() {
+            timer_wheel.flush()?;
+        }
+        self.observe_persistence_stage(PersistenceStage::AfterTimerWheel)?;
 
         if let Some(timer_checkpoint) = self.timer_checkpoint.lock().as_ref() {
-            let queue_offset = self.curr_queue_offset.load(Ordering::Relaxed);
-            let enqueue_suspended = self.enqueue_suspended.load(Ordering::Relaxed);
+            let queue_offset = self.curr_queue_offset.load(Ordering::Acquire);
+            let enqueue_suspended = self.enqueue_suspended.load(Ordering::Acquire);
             let master_queue_offset = if enqueue_suspended {
                 timer_checkpoint.master_timer_queue_offset()
             } else {
                 queue_offset
             };
-            timer_checkpoint.set_last_read_time_ms(self.curr_read_time_ms.load(Ordering::Relaxed));
+            timer_checkpoint.set_last_read_time_ms(self.curr_read_time_ms.load(Ordering::Acquire));
             timer_checkpoint.set_last_timer_queue_offset(queue_offset.min(master_queue_offset));
             timer_checkpoint.set_master_timer_queue_offset(master_queue_offset);
-            timer_checkpoint.set_last_timer_log_flush_pos(timer_log_len as i64);
-            if let Err(err) = timer_checkpoint.flush() {
-                error!("flush timer checkpoint failed: {err}");
-            }
+            timer_checkpoint.set_last_timer_log_flush_pos(durable_timer_log_len);
+            timer_checkpoint.flush()?;
         }
+        self.observe_persistence_stage(PersistenceStage::AfterCheckpoint)?;
+        Ok(())
+    }
 
-        if let Some(timer_log) = self.timer_log.lock().as_ref() {
-            if let Err(err) = timer_log.flush() {
-                error!("flush timer log failed: {err}");
-            }
+    fn observe_persistence_stage(&self, stage: PersistenceStage) -> std::io::Result<()> {
+        #[cfg(test)]
+        if let Some(observer) = self.persistence_observer.lock().as_ref() {
+            observer(stage)?;
         }
-
-        if let Some(timer_wheel) = self.timer_wheel.lock().as_ref() {
-            if let Err(err) = timer_wheel.flush() {
-                error!("flush timer wheel failed: {err}");
-            }
-        }
+        #[cfg(not(test))]
+        let _ = stage;
+        Ok(())
     }
 
     pub fn set_should_running_dequeue(&self, should_start: bool) {
-        let previous = self.should_running_dequeue.swap(should_start, Ordering::Relaxed);
+        let previous = self.should_running_dequeue.load(Ordering::Acquire);
         if previous == should_start {
             return;
         }
@@ -575,7 +640,18 @@ impl TimerMessageStore {
         if should_start {
             self.restore_progress_on_dequeue_resume();
             self.enqueue_suspended.store(false, Ordering::Relaxed);
+            match self.role_state.transition(true) {
+                Ok(_) => self.should_running_dequeue.store(true, Ordering::Release),
+                Err(error) => {
+                    self.should_running_dequeue.store(false, Ordering::Release);
+                    error!("keep timer delivery stopped because activating role epoch failed: {error}");
+                }
+            }
         } else if previous {
+            self.should_running_dequeue.store(false, Ordering::Release);
+            if let Err(error) = self.role_state.transition(false) {
+                error!("persist timer role downgrade epoch failed: {error}");
+            }
             self.enqueue_suspended.store(true, Ordering::Relaxed);
             self.sync_last_read_time_ms();
         }
@@ -630,7 +706,7 @@ impl TimerMessageStore {
 
         let last_read_time_ms = timer_checkpoint.last_read_time_ms();
         if last_read_time_ms > 0 {
-            let now_floor = self.floor_time_ms(current_millis() as i64);
+            let now_floor = self.floor_time_ms(self.clock.read().wall_time_ms());
             self.curr_read_time_ms
                 .store(self.floor_time_ms(last_read_time_ms).min(now_floor), Ordering::Relaxed);
         }
@@ -803,7 +879,7 @@ impl TimerMessageStore {
 
     fn recover_read_time_ms(&self, checkpoint_read_time_ms: i64) -> i64 {
         self.timer_policy()
-            .recover_read_time_ms(checkpoint_read_time_ms, current_millis() as i64)
+            .recover_read_time_ms(checkpoint_read_time_ms, self.clock.read().wall_time_ms())
     }
 
     fn recover_queue_offset(&self, checkpoint_queue_offset: i64) -> i64 {
@@ -866,11 +942,26 @@ impl TimerMessageStore {
 
     pub async fn process_once(&self) -> usize {
         let _guard = self.process_lock.lock().await;
-        let indexed = self.enqueue_from_timer_topic(self.enqueue_batch_limit());
-        let delivered = if self.should_running_dequeue.load(Ordering::Relaxed) {
-            self.dequeue_due_messages(self.dequeue_batch_limit()).await
+        let delivery_epoch = self.role_state.capture_delivery_epoch();
+        let recall_visibility_watermark = delivery_epoch.and_then(|_| self.timer_queue_high_watermark());
+        let mut indexed = self.enqueue_from_timer_topic(self.enqueue_batch_limit());
+        let recall_visible = if let Some(watermark) = recall_visibility_watermark {
+            while self.curr_queue_offset.load(Ordering::Acquire) < watermark {
+                let indexed_now = self.enqueue_from_timer_topic(self.enqueue_batch_limit());
+                if indexed_now == 0 {
+                    break;
+                }
+                indexed = indexed.saturating_add(indexed_now);
+            }
+            self.curr_queue_offset.load(Ordering::Acquire) >= watermark
         } else {
-            0
+            false
+        };
+        let delivered = match delivery_epoch {
+            Some(epoch) if recall_visible && self.role_state.is_current_delivery_epoch(epoch) => {
+                self.dequeue_due_messages(self.dequeue_batch_limit(), epoch).await
+            }
+            _ => 0,
         };
         if indexed > 0 || delivered > 0 {
             self.sync_last_read_time_ms();
@@ -887,7 +978,7 @@ impl TimerMessageStore {
             return 0;
         };
 
-        let now_ms = self.floor_time_ms(current_millis() as i64);
+        let now_ms = self.floor_time_ms(self.clock.read().wall_time_ms());
         let dequeue_cursor = self.ensure_dequeue_cursor(now_ms);
         let enqueue_reference_time_ms = dequeue_cursor.max(now_ms);
         let max_offset = consume_queue.read().get_max_offset_in_queue();
@@ -955,15 +1046,16 @@ impl TimerMessageStore {
         indexed
     }
 
-    async fn dequeue_due_messages(&self, limit: usize) -> usize {
-        let now_ms = self.floor_time_ms(current_millis() as i64);
-        let mut cursor = self.ensure_dequeue_cursor(now_ms);
+    async fn dequeue_due_messages(&self, limit: usize, delivery_epoch: u64) -> usize {
+        let now_ms = self.clock.read().wall_time_ms();
+        let current_tick_ms = self.floor_time_ms(now_ms);
+        let mut cursor = self.ensure_dequeue_cursor(current_tick_ms);
         let mut remaining_budget = limit;
         let mut delivered = 0usize;
 
-        while cursor <= now_ms && remaining_budget > 0 {
+        while cursor < current_tick_ms && remaining_budget > 0 {
             if let Some(slot) = self.get_timer_wheel_slot(cursor).filter(|slot| slot.num > 0) {
-                let delivered_now = self.deliver_slot(cursor, slot, remaining_budget).await;
+                let delivered_now = self.deliver_slot(cursor, slot, remaining_budget, delivery_epoch).await;
                 delivered += delivered_now;
                 remaining_budget = remaining_budget.saturating_sub(delivered_now);
                 if self
@@ -984,6 +1076,11 @@ impl TimerMessageStore {
         }
 
         delivered
+    }
+
+    fn timer_queue_high_watermark(&self) -> Option<i64> {
+        self.find_store_consume_queue(&CheetahString::from_static_str(TIMER_TOPIC), 0)
+            .map(|queue| queue.read().get_max_offset_in_queue())
     }
 
     fn index_timer_message(&self, slot_time_ms: i64, magic: i32, cq_unit: &CqUnit) -> std::io::Result<()> {
@@ -1011,7 +1108,7 @@ impl TimerMessageStore {
         Ok(())
     }
 
-    async fn deliver_slot(&self, slot_time_ms: i64, slot: Slot, limit: usize) -> usize {
+    async fn deliver_slot(&self, slot_time_ms: i64, slot: Slot, limit: usize, delivery_epoch: u64) -> usize {
         let entries = match self.load_slot_entries(slot) {
             Ok(entries) => entries,
             Err(err) => {
@@ -1019,9 +1116,25 @@ impl TimerMessageStore {
                 return 0;
             }
         };
-        let mut loaded_messages = Vec::with_capacity(limit.min(entries.len()));
         let mut delete_keys = HashSet::new();
 
+        // Recall is a slot-wide decision. Scan only tombstone payloads across the complete chain
+        // before applying the delivery budget, so a tombstone in a later page cannot lose to an
+        // earlier normal message.
+        for entry in entries.iter().filter(|entry| entry.record.magic & MAGIC_DELETE != 0) {
+            let Some(message) = self.look_store_message(entry.record.commit_log_offset, entry.record.size) else {
+                warn!(
+                    "recall scan blocked at timer log position {} because commitlog {}:{} is missing",
+                    entry.position, entry.record.commit_log_offset, entry.record.size
+                );
+                return 0;
+            };
+            if let Some(delete_identity) = extract_delete_timer_identity(&message) {
+                delete_keys.insert(delete_identity);
+            }
+        }
+
+        let mut processed = 0usize;
         for entry in entries.iter().take(limit) {
             let Some(message) = self.look_store_message(entry.record.commit_log_offset, entry.record.size) else {
                 warn!(
@@ -1030,17 +1143,13 @@ impl TimerMessageStore {
                 );
                 break;
             };
-            if let Some(delete_key) = extract_delete_timer_key(&message) {
-                delete_keys.insert(delete_key);
-            }
-            loaded_messages.push((*entry, message));
-        }
-
-        let mut processed = 0usize;
-        for (entry, message) in loaded_messages {
             if need_roll(entry.record.magic) {
-                let now_ms = self.floor_time_ms(current_millis() as i64);
+                let now_ms = self.floor_time_ms(self.clock.read().wall_time_ms());
                 if parse_deliver_time_ms(&message).is_some_and(|deliver_time_ms| deliver_time_ms > now_ms) {
+                    if !self.role_state.is_current_delivery_epoch(delivery_epoch) {
+                        warn!("reject stale timer roll batch for role epoch {delivery_epoch}");
+                        break;
+                    }
                     let rolled_topic =
                         message.property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC));
                     let Some(rolled_message) = self.convert_timer_message(message, true) else {
@@ -1069,23 +1178,57 @@ impl TimerMessageStore {
                 processed += 1;
                 continue;
             }
-            if let Some(delete_key) = build_delete_key_for_message(&message) {
-                if delete_keys.contains(&delete_key) {
-                    if let Some(real_topic) =
-                        message.property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))
-                    {
-                        self.timer_metrics.add_timing_count(&real_topic, -1);
-                        self.otel_timer_metrics.record_dequeue_total(real_topic.as_str());
-                    }
-                    processed += 1;
-                    continue;
+            if delete_identities_for_message(&message)
+                .iter()
+                .any(|identity| delete_keys.contains(identity))
+            {
+                if let Some(real_topic) =
+                    message.property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))
+                {
+                    self.timer_metrics.add_timing_count(&real_topic, -1);
+                    self.otel_timer_metrics.record_dequeue_total(real_topic.as_str());
                 }
+                processed += 1;
+                continue;
             }
-            let Some(deliver_message) = self.convert_timer_message(message, false) else {
+
+            let Some(original_deliver_ms) = original_deliver_time_ms(&message, self.precision_ms()) else {
+                warn!("delay delivery blocked because the original timer deadline is invalid");
+                break;
+            };
+            let now_ms = self.clock.read().wall_time_ms();
+            if !is_due_not_before(original_deliver_ms, slot_time_ms, self.floor_time_ms(now_ms), now_ms) {
+                break;
+            }
+            let generation = timer_generation(&message);
+            let Some(mut deliver_message) = self.convert_timer_message(message, false) else {
                 processed += 1;
                 continue;
             };
+            MessageAccessor::put_property(
+                &mut deliver_message,
+                CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN),
+                stable_delivery_token(entry.record.queue_offset, generation),
+            );
+            deliver_message.properties_string =
+                MessageDecoder::message_properties_to_string(deliver_message.get_properties());
             let delivered_topic = deliver_message.get_topic().clone();
+
+            // Recheck both time and ownership immediately before the externally visible write.
+            // A backward wall-clock jump may delay delivery, but it must never make it early.
+            let final_now_ms = self.clock.read().wall_time_ms();
+            if !is_due_not_before(
+                original_deliver_ms,
+                slot_time_ms,
+                self.floor_time_ms(final_now_ms),
+                final_now_ms,
+            ) {
+                break;
+            }
+            if !self.role_state.is_current_delivery_epoch(delivery_epoch) {
+                warn!("reject stale timer delivery batch for role epoch {delivery_epoch}");
+                break;
+            }
             let put_result = self.put_store_message(deliver_message).await;
             if !put_result.is_ok() {
                 warn!(
@@ -1221,6 +1364,21 @@ impl TimerMessageStore {
             }
             MessageAccessor::clear_property(&mut inner, MessageConst::PROPERTY_REAL_TOPIC);
             MessageAccessor::clear_property(&mut inner, MessageConst::PROPERTY_REAL_QUEUE_ID);
+            for property in [
+                MessageConst::PROPERTY_TIMER_OUT_MS,
+                MessageConst::PROPERTY_TIMER_ORIGINAL_DELIVER_MS,
+                MessageConst::PROPERTY_TIMER_DELAY_SEC,
+                MessageConst::PROPERTY_TIMER_DELAY_MS,
+                MessageConst::PROPERTY_TIMER_DELIVER_MS,
+                MessageConst::PROPERTY_TIMER_ENQUEUE_MS,
+                MessageConst::PROPERTY_TIMER_DEQUEUE_MS,
+                MessageConst::PROPERTY_TIMER_ROLL_TIMES,
+                MessageConst::PROPERTY_TIMER_ROLL_LABEL,
+                MessageConst::PROPERTY_TIMER_DEL_UNIQKEY,
+                MessageConst::PROPERTY_TIMER_GENERATION,
+            ] {
+                MessageAccessor::clear_property(&mut inner, property);
+            }
         }
         inner.properties_string = MessageDecoder::message_properties_to_string(inner.get_properties());
         Some(inner)
@@ -1326,6 +1484,18 @@ pub fn build_delete_key(real_topic: &str, unique_key: &str) -> CheetahString {
     CheetahString::from_string(format!("{}_{}", real_topic, unique_key))
 }
 
+/// Builds the canonical key written by new Recall records.
+///
+/// Java compatibility uses the unique key alone. The opt-in topic-aware form is length-prefixed,
+/// avoiding the collisions inherent in the legacy `topic_uniqKey` concatenation.
+pub fn build_canonical_delete_key(real_topic: &str, unique_key: &str, include_topic: bool) -> CheetahString {
+    if include_topic {
+        CheetahString::from_string(format!("T:{}:{real_topic}{unique_key}", real_topic.len()))
+    } else {
+        CheetahString::from_slice(unique_key)
+    }
+}
+
 fn observe_backlog_message(backlog: &mut TimerBacklogMetrics, message: &MessageExt, now_ms: i64) {
     let Some(deliver_time_ms) = parse_deliver_time_ms(message) else {
         return;
@@ -1344,21 +1514,54 @@ fn parse_deliver_time_ms(message: &MessageExt) -> Option<i64> {
 }
 
 fn is_delete_timer_message(message: &MessageExt) -> bool {
-    extract_delete_timer_key(message).is_some()
+    extract_delete_timer_identity(message).is_some()
 }
 
-fn extract_delete_timer_key(message: &MessageExt) -> Option<CheetahString> {
-    message.property(&CheetahString::from_static_str(TIMER_DELETE_UNIQUE_KEY))
+fn extract_delete_timer_identity(message: &MessageExt) -> Option<TimerDeleteIdentity> {
+    Some(TimerDeleteIdentity {
+        key: message.property(&CheetahString::from_static_str(TIMER_DELETE_UNIQUE_KEY))?,
+        generation: timer_generation(message),
+    })
 }
 
-fn build_delete_key_for_message(message: &MessageExt) -> Option<CheetahString> {
-    let unique_key = message.property(&CheetahString::from_static_str(
+fn delete_identities_for_message(message: &MessageExt) -> Vec<TimerDeleteIdentity> {
+    let Some(unique_key) = message.property(&CheetahString::from_static_str(
         MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
-    ))?;
+    )) else {
+        return Vec::new();
+    };
     let real_topic = message
         .property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))
         .unwrap_or_else(|| CheetahString::from_string(message.topic().to_string()));
-    Some(build_delete_key(real_topic.as_str(), unique_key.as_str()))
+    let generation = timer_generation(message);
+    [
+        CheetahString::from_slice(unique_key.as_str()),
+        build_delete_key(real_topic.as_str(), unique_key.as_str()),
+        build_canonical_delete_key(real_topic.as_str(), unique_key.as_str(), true),
+    ]
+    .into_iter()
+    .map(|key| TimerDeleteIdentity { key, generation })
+    .collect()
+}
+
+fn timer_generation(message: &MessageExt) -> u64 {
+    message
+        .property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_GENERATION))
+        .and_then(|generation| generation.parse::<u64>().ok())
+        .unwrap_or_default()
+}
+
+fn original_deliver_time_ms(message: &MessageExt, precision_ms: i64) -> Option<i64> {
+    message
+        .property(&CheetahString::from_static_str(
+            MessageConst::PROPERTY_TIMER_ORIGINAL_DELIVER_MS,
+        ))
+        .and_then(|deadline| deadline.parse::<i64>().ok())
+        .or_else(|| parse_deliver_time_ms(message)?.checked_add(precision_ms))
+}
+
+fn stable_delivery_token(queue_offset: i64, generation: u64) -> CheetahString {
+    CheetahString::from_string(format!("F:1:0:{queue_offset}:{generation}"))
 }
 
 fn need_roll(magic: i32) -> bool {
@@ -1369,12 +1572,14 @@ fn need_roll(magic: i32) -> bool {
 mod tests {
     use std::collections::HashMap;
     use std::path::Path;
+    use std::sync::atomic::AtomicI64;
     use std::sync::Arc;
 
     use crate::config::store_runtime_config::StoreRuntimeConfig;
     use bytes::Bytes;
     use cheetah_string::CheetahString;
     use dashmap::DashMap;
+    use parking_lot::Mutex as ParkingMutex;
     use rocketmq_model::common::config::TopicConfig;
     use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
     use rocketmq_model::common::message::MessageConst;
@@ -1389,9 +1594,11 @@ mod tests {
     use super::get_timer_log_path;
     use super::get_timer_wheel_path;
     use super::MessageStoreConfig;
+    use super::PersistenceStage;
     use super::PutMessageStatus;
     use super::TimerCheckpoint;
     use super::TimerCheckpointSnapshot;
+    use super::TimerClock;
     use super::TimerLog;
     use super::TimerLogRecord;
     use super::TimerMessageStore;
@@ -1406,6 +1613,32 @@ mod tests {
     use crate::message_store::local_file_message_store::LocalFileMessageStore;
     use std::sync::atomic::Ordering;
     use std::time::Duration;
+
+    struct ManualTimerClock {
+        wall_time_ms: AtomicI64,
+    }
+
+    impl ManualTimerClock {
+        fn new(wall_time_ms: i64) -> Self {
+            Self {
+                wall_time_ms: AtomicI64::new(wall_time_ms),
+            }
+        }
+
+        fn advance(&self, delta_ms: i64) {
+            self.wall_time_ms.fetch_add(delta_ms, Ordering::AcqRel);
+        }
+    }
+
+    impl TimerClock for ManualTimerClock {
+        fn wall_time_ms(&self) -> i64 {
+            self.wall_time_ms.load(Ordering::Acquire)
+        }
+
+        fn monotonic_elapsed_ms(&self) -> u64 {
+            self.wall_time_ms().max(0) as u64
+        }
+    }
 
     fn config_with_root(root_dir: &str) -> Arc<MessageStoreConfig> {
         Arc::new(MessageStoreConfig {
@@ -1572,6 +1805,20 @@ mod tests {
         msg
     }
 
+    fn build_java_delete_timer_message(
+        real_topic: &CheetahString,
+        unique_key: &str,
+        deliver_ms: u64,
+    ) -> MessageExtBrokerInner {
+        let mut message = build_delete_timer_message(real_topic, unique_key, deliver_ms);
+        message.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DEL_UNIQKEY),
+            CheetahString::from_slice(unique_key),
+        );
+        message.properties_string = message_properties_to_string(message.get_properties());
+        message
+    }
+
     #[test]
     fn load_creates_durable_timer_artifacts_and_restores_checkpoint() {
         let temp_dir = tempdir().unwrap();
@@ -1596,6 +1843,58 @@ mod tests {
         assert!(reloaded_store.load());
         assert_eq!(reloaded_store.curr_read_time_ms.load(Ordering::Relaxed), read_time_ms);
         assert_eq!(reloaded_store.curr_queue_offset.load(Ordering::Relaxed), 9);
+    }
+
+    #[test]
+    fn commit_durable_progress_orders_data_before_checkpoint_and_fails_closed() {
+        let expected_order = [
+            PersistenceStage::BeforeTimerLog,
+            PersistenceStage::AfterTimerLog,
+            PersistenceStage::AfterTimerWheel,
+            PersistenceStage::AfterCheckpoint,
+        ];
+
+        let order_root = tempdir().unwrap();
+        let order_store = standalone_timer_store(config_with_root(order_root.path().to_string_lossy().as_ref()));
+        assert!(order_store.load());
+        let observed = Arc::new(ParkingMutex::new(Vec::new()));
+        let observed_for_hook = Arc::clone(&observed);
+        *order_store.persistence_observer.lock() = Some(Arc::new(move |stage| {
+            observed_for_hook.lock().push(stage);
+            Ok(())
+        }));
+        order_store.commit_durable_progress().unwrap();
+        assert_eq!(observed.lock().as_slice(), expected_order.as_slice());
+
+        for (failed_stage, checkpoint_may_advance) in [
+            (PersistenceStage::BeforeTimerLog, false),
+            (PersistenceStage::AfterTimerLog, false),
+            (PersistenceStage::AfterTimerWheel, false),
+            (PersistenceStage::AfterCheckpoint, true),
+        ] {
+            let root = tempdir().unwrap();
+            let root_path = root.path().to_string_lossy().to_string();
+            let store = standalone_timer_store(config_with_root(root_path.as_str()));
+            assert!(store.load());
+            store.curr_queue_offset.store(7, Ordering::Release);
+            let failure = failed_stage;
+            *store.persistence_observer.lock() = Some(Arc::new(move |stage| {
+                if stage == failure {
+                    Err(std::io::Error::other(format!("fail at {stage:?}")))
+                } else {
+                    Ok(())
+                }
+            }));
+
+            assert!(store.commit_durable_progress().is_err());
+
+            let recovered = TimerCheckpoint::new(get_timer_check_path(root_path.as_str())).unwrap();
+            assert_eq!(
+                recovered.last_timer_queue_offset(),
+                if checkpoint_may_advance { 7 } else { 0 },
+                "unexpected checkpoint state after {failed_stage:?}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -1843,12 +2142,17 @@ mod tests {
         assert_eq!(delivered.body().unwrap(), Bytes::from_static(b"phase3-body"));
         assert!(delivered
             .property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_OUT_MS))
-            .is_some());
+            .is_none());
         assert!(delivered
             .property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_ENQUEUE_MS))
-            .is_some());
+            .is_none());
         assert!(delivered
             .property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DEQUEUE_MS))
+            .is_none());
+        assert!(delivered
+            .property(&CheetahString::from_static_str(
+                MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN,
+            ))
             .is_some());
     }
 
@@ -1908,12 +2212,17 @@ mod tests {
             .is_none());
         assert!(delivered
             .property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_OUT_MS))
-            .is_some());
+            .is_none());
         assert!(delivered
             .property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_ENQUEUE_MS))
-            .is_some());
+            .is_none());
         assert!(delivered
             .property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DEQUEUE_MS))
+            .is_none());
+        assert!(delivered
+            .property(&CheetahString::from_static_str(
+                MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN,
+            ))
             .is_some());
     }
 
@@ -1960,9 +2269,11 @@ mod tests {
         let root_dir = temp_dir.path().to_string_lossy().to_string();
         let (mut store, timer_message_store, real_topic) = build_store_with_timer(root_dir.as_str());
 
+        let clock = Arc::new(ManualTimerClock::new(1_700_000_000_000));
+        timer_message_store.set_clock(clock.clone());
         assert!(store.load().await);
         timer_message_store.set_should_running_dequeue(true);
-        let first_deliver_ms = current_millis().saturating_sub(2_000);
+        let first_deliver_ms = clock.wall_time_ms() as u64 - 2_000;
         assert!(store
             .put_message(build_timer_message(&real_topic, first_deliver_ms))
             .await
@@ -1973,7 +2284,7 @@ mod tests {
         assert_eq!(store.get_max_offset_in_queue(&real_topic, 0), 1);
 
         timer_message_store.set_should_running_dequeue(false);
-        let second_deliver_ms = current_millis().saturating_sub(1_000);
+        let second_deliver_ms = clock.wall_time_ms() as u64 - 1_000;
         assert!(store
             .put_message(build_timer_message(&real_topic, second_deliver_ms))
             .await
@@ -1983,10 +2294,13 @@ mod tests {
         assert_eq!(store.get_max_offset_in_queue(&real_topic, 0), 1);
 
         timer_message_store.set_should_running_dequeue(true);
-        let resumed = timer_message_store.process_once().await;
+        let resumed_indexed = timer_message_store.process_once().await;
+        clock.advance(timer_message_store.precision_ms());
+        let resumed_delivered = timer_message_store.process_once().await;
         store.reput_once().await;
 
-        assert_eq!(resumed, 2);
+        assert_eq!(resumed_indexed, 1);
+        assert_eq!(resumed_delivered, 1);
         assert_eq!(timer_message_store.curr_queue_offset.load(Ordering::Relaxed), 2);
         assert_eq!(store.get_max_offset_in_queue(&real_topic, 0), 2);
     }
@@ -2014,6 +2328,24 @@ mod tests {
         assert!(restored_read_time >= now_floor);
         assert!(restored_read_time <= now_after_resume);
         assert!(restored_read_time < future_read_time);
+    }
+
+    #[test]
+    fn role_change_fences_a_stale_delivery_epoch() {
+        let temp_dir = tempdir().unwrap();
+        let root_dir = temp_dir.path().to_string_lossy().to_string();
+        let timer_store = standalone_timer_store(config_with_root(root_dir.as_str()));
+        assert!(timer_store.load());
+
+        timer_store.set_should_running_dequeue(true);
+        let captured_epoch = timer_store
+            .role_state
+            .capture_delivery_epoch()
+            .expect("active delivery epoch");
+        timer_store.set_should_running_dequeue(false);
+
+        assert!(!timer_store.role_state.is_current_delivery_epoch(captured_epoch));
+        assert!(!timer_store.is_should_running_dequeue());
     }
 
     #[tokio::test]
@@ -2086,6 +2418,55 @@ mod tests {
 
         assert_eq!(processed, 6);
         assert_eq!(store.get_max_offset_in_queue(&real_topic, 0), 1);
+    }
+
+    #[tokio::test]
+    async fn recall_cross_batch_scans_the_complete_slot_before_delivery() {
+        for tombstone_position in [2usize, 10, 100] {
+            let temp_dir = tempdir().unwrap();
+            let root_dir = temp_dir.path().to_string_lossy().to_string();
+            let config = config_with_root_and_limits(root_dir.as_str(), 1, 1, 1);
+            let (mut store, timer_store, real_topic) = build_store_with_timer_and_config(config);
+            assert!(store.load().await);
+            let deliver_ms = current_millis().saturating_sub(2_000);
+
+            let mut target = build_timer_message(&real_topic, deliver_ms);
+            target.put_property(
+                CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
+                CheetahString::from_static_str("cross-batch-target"),
+            );
+            target.properties_string = message_properties_to_string(target.get_properties());
+            assert!(store.put_message(target).await.is_ok());
+
+            for filler_index in 1..tombstone_position - 1 {
+                let mut filler = build_timer_message(&real_topic, deliver_ms);
+                filler.put_property(
+                    CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
+                    CheetahString::from_string(format!("filler-{filler_index}")),
+                );
+                filler.properties_string = message_properties_to_string(filler.get_properties());
+                assert!(store.put_message(filler).await.is_ok());
+            }
+            assert!(store
+                .put_message(build_java_delete_timer_message(
+                    &real_topic,
+                    "cross-batch-target",
+                    deliver_ms,
+                ))
+                .await
+                .is_ok());
+            store.reput_once().await;
+
+            timer_store.set_should_running_dequeue(true);
+            let _ = timer_store.process_once().await;
+            store.reput_once().await;
+
+            assert_eq!(
+                store.get_max_offset_in_queue(&real_topic, 0),
+                0,
+                "target was delivered before tombstone at slot position {tombstone_position}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -2343,7 +2724,7 @@ mod tests {
     async fn process_once_rolls_due_message_back_to_timer_topic_with_tracking_properties() {
         let temp_dir = tempdir().unwrap();
         let root_dir = temp_dir.path().to_string_lossy().to_string();
-        let config = config_with_root_precision_and_roll_window(root_dir.as_str(), 50, 4);
+        let config = config_with_root_precision_and_roll_window(root_dir.as_str(), 100, 4);
         let (mut store, timer_message_store, real_topic) = build_store_with_timer_and_config(config);
 
         assert!(store.load().await);

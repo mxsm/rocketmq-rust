@@ -34,7 +34,7 @@ use rocketmq_protocol::protocol::header::recall_message_request_header::RecallMe
 use rocketmq_protocol::protocol::header::recall_message_response_header::RecallMessageResponseHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_store::build_delete_key;
+use rocketmq_store::build_canonical_delete_key;
 use rocketmq_store::BrokerStatsManager;
 use rocketmq_store::BrokerWriteStore;
 use rocketmq_store::MessageStoreConfig;
@@ -61,7 +61,8 @@ pub(crate) struct RecallMessagePolicy {
     broker_permission: u32,
     allow_recall_when_broker_not_writeable: bool,
     broker_name: CheetahString,
-    timer_max_delay_sec: i64,
+    timer_max_delay_sec: u64,
+    timer_delete_key_with_topic: bool,
     store_host: SocketAddr,
 }
 
@@ -78,7 +79,8 @@ impl RecallMessagePolicy {
             broker_permission: broker_config.broker_permission,
             allow_recall_when_broker_not_writeable: broker_config.allow_recall_when_broker_not_writeable,
             broker_name: broker_config.broker_name().clone(),
-            timer_max_delay_sec: message_store_config.timer_max_delay_sec as i64,
+            timer_max_delay_sec: message_store_config.timer_max_delay_sec,
+            timer_delete_key_with_topic: message_store_config.timer_delete_key_with_topic,
             store_host,
         }
     }
@@ -312,10 +314,15 @@ where
 
         let timestamp = handle_timestamp_str.parse::<i64>().unwrap_or(-1);
         let current_time_millis = current_millis() as i64;
-        let time_left = timestamp - current_time_millis;
+        let Some(time_left) = timestamp.checked_sub(current_time_millis) else {
+            return Ok(response
+                .set_code(ResponseCode::IllegalOperation)
+                .set_remark(CheetahString::from_static_str("recall failed, timestamp invalid")));
+        };
         let timer_max_delay_sec = self.context.policy.timer_max_delay_sec;
+        let max_delay_ms = timer_max_delay_sec.saturating_mul(1_000);
 
-        if time_left <= 0 || time_left >= timer_max_delay_sec * 1000 {
+        if time_left <= 0 || time_left as u64 >= max_delay_ms {
             return Ok(response
                 .set_code(ResponseCode::IllegalOperation)
                 .set_remark(CheetahString::from_static_str("recall failed, timestamp invalid")));
@@ -358,7 +365,11 @@ where
         handle_timestamp_str: &str,
         handle_message_id: &str,
     ) -> MessageExtBrokerInner {
-        let timer_del_uniqkey = build_delete_key(handle_topic, handle_message_id);
+        let timer_del_uniqkey = build_canonical_delete_key(
+            handle_topic,
+            handle_message_id,
+            self.context.policy.timer_delete_key_with_topic,
+        );
 
         let body = Bytes::from_static(b"0");
 

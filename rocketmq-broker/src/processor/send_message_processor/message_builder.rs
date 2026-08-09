@@ -2,6 +2,8 @@ use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_model::common::message::timer_request::normalize_timer_request;
+use rocketmq_model::common::message::timer_request::TimerPolicySnapshot;
 use rocketmq_model::common::message::MessageConst;
 use rocketmq_protocol::common::message::message_decoder::message_properties_to_string;
 use rocketmq_protocol::common::message::message_decoder::string_to_message_properties;
@@ -14,11 +16,16 @@ pub(super) fn recall_handle_topic_and_timestamp(
     timer_max_delay_sec: u64,
     timer_precision_ms: u64,
 ) -> Option<(CheetahString, i64)> {
-    if let (Some(timestamp_str), Some(real_topic)) = (
-        message.property(MessageConst::PROPERTY_TIMER_OUT_MS),
-        message.property(MessageConst::PROPERTY_REAL_TOPIC),
-    ) {
-        let timestamp = timestamp_str.parse::<i64>().ok()?.checked_add(1)?;
+    if let Some(real_topic) = message.property(MessageConst::PROPERTY_REAL_TOPIC) {
+        let timestamp = message
+            .property(MessageConst::PROPERTY_TIMER_ORIGINAL_DELIVER_MS)
+            .and_then(|value| value.parse::<i64>().ok())
+            .or_else(|| {
+                message
+                    .property(MessageConst::PROPERTY_TIMER_OUT_MS)
+                    .and_then(|value| value.parse::<i64>().ok())
+                    .and_then(|timer_out_ms| i64::try_from(timer_precision_ms).ok()?.checked_add(timer_out_ms))
+            })?;
         return Some((real_topic, timestamp));
     }
 
@@ -26,35 +33,12 @@ pub(super) fn recall_handle_topic_and_timestamp(
         return None;
     }
 
-    let now = time_utils::current_millis();
-    let deliver_ms = if let Some(delay_sec) = message.property(MessageConst::PROPERTY_TIMER_DELAY_SEC) {
-        now.checked_add(delay_sec.parse::<u64>().ok()?.checked_mul(1000)?)?
-    } else if let Some(delay_ms) = message.property(MessageConst::PROPERTY_TIMER_DELAY_MS) {
-        now.checked_add(delay_ms.parse::<u64>().ok()?)?
-    } else {
-        message
-            .property(MessageConst::PROPERTY_TIMER_DELIVER_MS)?
-            .parse::<u64>()
-            .ok()?
-    };
-    if deliver_ms <= now {
-        return None;
-    }
-
     let max_delay_ms = timer_max_delay_sec.checked_mul(1000)?;
-    if deliver_ms.saturating_sub(now) > max_delay_ms {
-        return None;
-    }
-
-    let precision_ms = timer_precision_ms;
-    let timer_out_ms = if precision_ms == 0 {
-        deliver_ms
-    } else if deliver_ms.is_multiple_of(precision_ms) {
-        deliver_ms.saturating_sub(precision_ms)
-    } else {
-        (deliver_ms / precision_ms) * precision_ms
-    };
-    let timestamp = i64::try_from(timer_out_ms).ok()?.checked_add(1)?;
+    let policy = TimerPolicySnapshot::try_new(timer_precision_ms, max_delay_ms).ok()?;
+    let now = time_utils::current_millis();
+    let normalized =
+        normalize_timer_request(message.message_ext_inner.message.properties().as_map(), now, policy).ok()?;
+    let timestamp = i64::try_from(normalized.original_deliver_ms).ok()?;
     Some((message.topic().clone(), timestamp))
 }
 
@@ -87,7 +71,15 @@ pub(super) fn clear_reserved_properties(
     request_header: &mut SendMessageRequestHeader,
     request_properties: &mut HashMap<CheetahString, CheetahString>,
 ) {
-    if request_properties.remove(MessageConst::PROPERTY_POP_CK).is_some() {
+    let mut changed = request_properties.remove(MessageConst::PROPERTY_POP_CK).is_some();
+    for property in [
+        MessageConst::PROPERTY_TIMER_ORIGINAL_DELIVER_MS,
+        MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN,
+        MessageConst::PROPERTY_TIMER_GENERATION,
+    ] {
+        changed |= request_properties.remove(property).is_some();
+    }
+    if changed {
         request_header.properties = Some(message_properties_to_string(request_properties));
     }
 }
@@ -128,7 +120,7 @@ mod tests {
         let (topic, timestamp) = recall_handle_topic_and_timestamp_with_defaults(&message).expect("recall data");
 
         assert_eq!(topic, "RecallTopic");
-        assert_eq!(timestamp, 123001);
+        assert_eq!(timestamp, 124000);
     }
 
     #[test]
@@ -144,7 +136,7 @@ mod tests {
         let (topic, timestamp) = recall_handle_topic_and_timestamp_with_defaults(&message).expect("recall data");
 
         assert_eq!(topic, "RecallTopic");
-        assert_eq!(timestamp, i64::try_from(deliver_ms - 1000).unwrap() + 1);
+        assert_eq!(timestamp, i64::try_from(deliver_ms).unwrap());
     }
 
     #[test]
@@ -159,8 +151,8 @@ mod tests {
         let (topic, timestamp) = recall_handle_topic_and_timestamp_with_defaults(&message).expect("recall data");
 
         assert_eq!(topic, "RecallTopic");
-        let min_expected = i64::try_from(((now + 60_000) / 1000) * 1000).unwrap();
-        let max_expected = i64::try_from(((time_utils::current_millis() + 60_000) / 1000) * 1000).unwrap() + 1;
+        let min_expected = i64::try_from(now + 60_000).unwrap();
+        let max_expected = i64::try_from(time_utils::current_millis() + 60_000).unwrap();
         assert!(
             (min_expected..=max_expected).contains(&timestamp),
             "timestamp {timestamp} should be derived from timer delay ms"
@@ -179,8 +171,8 @@ mod tests {
         let (topic, timestamp) = recall_handle_topic_and_timestamp_with_defaults(&message).expect("recall data");
 
         assert_eq!(topic, "RecallTopic");
-        let min_expected = i64::try_from(((now + 60_000) / 1000) * 1000).unwrap();
-        let max_expected = i64::try_from(((time_utils::current_millis() + 60_000) / 1000) * 1000).unwrap() + 1;
+        let min_expected = i64::try_from(now + 60_000).unwrap();
+        let max_expected = i64::try_from(time_utils::current_millis() + 60_000).unwrap();
         assert!(
             (min_expected..=max_expected).contains(&timestamp),
             "timestamp {timestamp} should be derived from timer delay sec"

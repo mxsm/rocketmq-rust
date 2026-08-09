@@ -44,6 +44,7 @@ pub mod message_queue;
 pub mod message_queue_assignment;
 pub mod message_queue_for_c;
 pub mod message_single;
+pub mod timer_request;
 
 // New refactored message types
 pub mod broker_message;
@@ -520,6 +521,12 @@ impl MessageConst {
     pub const PROPERTY_TIMER_OUT_MS: &'static str = "TIMER_OUT_MS";
     pub const PROPERTY_TIMER_ROLL_LABEL: &'static str = "TIMER_ROLL_LABEL";
     pub const PROPERTY_TIMER_ROLL_TIMES: &'static str = "TIMER_ROLL_TIMES";
+    /// Exact user-requested delivery deadline retained until final timer delivery.
+    pub const PROPERTY_TIMER_ORIGINAL_DELIVER_MS: &'static str = "TIMER_ORIGINAL_DELIVER_MS";
+    /// Stable identifier attached by the Broker to timer delivery attempts.
+    pub const PROPERTY_TIMER_DELIVERY_TOKEN: &'static str = "TIMER_DELIVERY_TOKEN";
+    /// Logical schedule generation used to fence stale Recall records.
+    pub const PROPERTY_TIMER_GENERATION: &'static str = "TIMER_GENERATION";
     pub const PROPERTY_TRACE_CONTEXT: &'static str = "TRACE_CONTEXT";
     pub const PROPERTY_TRACE_SWITCH: &'static str = "TRACE_ON";
     pub const PROPERTY_TRANS_OFFSET: &'static str = "TRANS_OFFSET";
@@ -601,6 +608,9 @@ pub static STRING_HASH_SET: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
     set.insert(MessageConst::PROPERTY_TIMER_ROLL_TIMES);
     set.insert(MessageConst::PROPERTY_TIMER_OUT_MS);
     set.insert(MessageConst::PROPERTY_TIMER_DEL_UNIQKEY);
+    set.insert(MessageConst::PROPERTY_TIMER_ORIGINAL_DELIVER_MS);
+    set.insert(MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN);
+    set.insert(MessageConst::PROPERTY_TIMER_GENERATION);
     set.insert(MessageConst::PROPERTY_TIMER_DELAY_LEVEL);
     set.insert(MessageConst::PROPERTY_BORN_HOST);
     set.insert(MessageConst::PROPERTY_BORN_TIMESTAMP);

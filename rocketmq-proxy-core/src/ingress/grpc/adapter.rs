@@ -22,10 +22,13 @@ use std::time::Duration;
 
 use rocketmq_model::common::filter::expression_type::ExpressionType;
 use rocketmq_model::common::message::message_queue_assignment::MessageQueueAssignment;
+use rocketmq_model::common::message::timer_request::normalize_timer_request_fields;
+use rocketmq_model::common::message::timer_request::TimerPolicySnapshot;
 use rocketmq_protocol::common::wire_constants::KEY_SEPARATOR;
 use rocketmq_protocol::common::wire_constants::MASTER_ID;
 use rocketmq_protocol::protocol::route::route_data_view::QueueData;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
+use rocketmq_runtime::common::time_utils::current_millis;
 
 use crate::config::GrpcConfig;
 use crate::context::ProxyContext;
@@ -115,14 +118,23 @@ pub fn build_send_message_request(
     context: &ProxyContext,
     request: &v2::SendMessageRequest,
 ) -> ProxyResult<SendMessageRequest> {
+    build_send_message_request_with_config(&GrpcConfig::default(), context, request)
+}
+
+pub fn build_send_message_request_with_config(
+    config: &GrpcConfig,
+    context: &ProxyContext,
+    request: &v2::SendMessageRequest,
+) -> ProxyResult<SendMessageRequest> {
     if request.messages.is_empty() {
         return Err(rocketmq_error::RocketMQError::illegal_argument("messages must not be empty").into());
     }
 
+    let now_ms = current_millis();
     let messages = request
         .messages
         .iter()
-        .map(build_send_message_entry)
+        .map(|message| build_send_message_entry(config, message, now_ms))
         .collect::<ProxyResult<Vec<_>>>()?;
 
     Ok(SendMessageRequest {
@@ -887,7 +899,7 @@ fn client_visible_endpoints(endpoints: Option<&v2::Endpoints>) -> Option<v2::End
     endpoints.filter(|endpoints| !endpoints.addresses.is_empty()).cloned()
 }
 
-fn build_send_message_entry(message: &v2::Message) -> ProxyResult<SendMessageEntry> {
+fn build_send_message_entry(config: &GrpcConfig, message: &v2::Message, now_ms: u64) -> ProxyResult<SendMessageEntry> {
     let topic = resource_identity(message.topic.as_ref(), "topic")?;
     let system = message
         .system_properties
@@ -901,7 +913,7 @@ fn build_send_message_entry(message: &v2::Message) -> ProxyResult<SendMessageEnt
 
     let effective_type = infer_message_type(system)?;
     let mut rocketmq_message = build_rocketmq_message(&topic, message, system, &client_message_id)?;
-    apply_message_type(&mut rocketmq_message, system, effective_type)?;
+    apply_message_type(config, &mut rocketmq_message, system, effective_type, now_ms)?;
 
     Ok(SendMessageEntry {
         topic,
@@ -1034,9 +1046,11 @@ fn build_rocketmq_message(
 }
 
 fn apply_message_type(
+    config: &GrpcConfig,
     message: &mut ProxyMessage,
     system: &v2::SystemProperties,
     message_type: ProxyTopicMessageType,
+    now_ms: u64,
 ) -> ProxyResult<()> {
     match message_type {
         ProxyTopicMessageType::Normal => Ok(()),
@@ -1061,6 +1075,11 @@ fn apply_message_type(
                 .ok_or_else(|| {
                     ProxyError::illegal_delivery_time("delay message requires systemProperties.deliveryTimestamp")
                 })?;
+            let policy = TimerPolicySnapshot::try_new(config.timer_precision_ms, config.timer_max_delay_ms)
+                .map_err(|error| ProxyError::illegal_delivery_time(error.to_string()))?;
+            let deliver_time = deliver_time_ms.to_string();
+            normalize_timer_request_fields(None, None, Some(deliver_time.as_str()), now_ms, policy)
+                .map_err(|error| ProxyError::illegal_delivery_time(error.to_string()))?;
             message.put_property(PROPERTY_TIMER_DELIVER_MS, deliver_time_ms.to_string());
             Ok(())
         }
@@ -1246,6 +1265,9 @@ fn is_system_reserved_user_property(key: &str) -> bool {
             | "TIMER_ROLL_TIMES"
             | "TIMER_OUT_MS"
             | "TIMER_DEL_UNIQKEY"
+            | "TIMER_ORIGINAL_DELIVER_MS"
+            | "TIMER_DELIVERY_TOKEN"
+            | "TIMER_GENERATION"
             | "TIMER_DELAY_LEVEL"
             | "__BORNHOST"
             | "BORN_TIMESTAMP"

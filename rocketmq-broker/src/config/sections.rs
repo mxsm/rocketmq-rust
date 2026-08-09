@@ -533,6 +533,9 @@ fn validate_storage(broker: &BrokerConfig, store: &MessageStoreConfig) -> Result
             "must be greater than zero",
         ));
     }
+    store.timer_policy_snapshot().map_err(|error| {
+        BrokerConfigError::invalid(ConfigSection::Storage, "store.timerPrecisionMs", error.to_string())
+    })?;
     if store.disk_space_clean_forcibly_ratio >= store.disk_space_warning_level_ratio {
         return Err(BrokerConfigError::invalid(
             ConfigSection::Storage,
@@ -905,4 +908,22 @@ fn validate_otlp_endpoint(field: &'static str, endpoint: &str) -> Result<(), Bro
             )
         })?;
     validate_endpoint(ConfigSection::Telemetry, field, authority)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn storage_validation_rejects_unsupported_timer_precision() {
+        let broker = BrokerConfig::default();
+        let store = MessageStoreConfig {
+            timer_precision_ms: 0,
+            ..MessageStoreConfig::default()
+        };
+
+        let error = validate_storage(&broker, &store).expect_err("zero timer precision must fail startup");
+
+        assert!(error.to_string().contains("store.timerPrecisionMs"));
+    }
 }

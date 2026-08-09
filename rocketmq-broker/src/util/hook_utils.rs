@@ -22,6 +22,8 @@ use rocketmq_model::common::broker::broker_role::BrokerRole;
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_model::common::message::timer_request::normalize_timer_request;
+use rocketmq_model::common::message::timer_request::TimerPolicySnapshot;
 use rocketmq_model::common::message::MessageConst;
 use rocketmq_model::common::message::MessageTrait;
 use rocketmq_model::common::mix_all::RETRY_GROUP_TOPIC_PREFIX;
@@ -235,61 +237,65 @@ impl HookUtils {
         message_store_config: &MessageStoreConfig,
         msg: &mut MessageExtBrokerInner,
     ) -> Option<PutMessageResult> {
-        let delay_level = msg.message_ext_inner.message.delay_time_level();
-        let deliver_ms = match msg.property(MessageConst::PROPERTY_TIMER_DELAY_SEC) {
-            Some(delay_sec) => current_millis() + delay_sec.parse::<u64>().unwrap() * 1000,
-            None => match msg.property(MessageConst::PROPERTY_TIMER_DELAY_MS) {
-                Some(delay_ms) => current_millis() + delay_ms.parse::<u64>().unwrap(),
-                None => match msg.property(MessageConst::PROPERTY_TIMER_DELIVER_MS) {
-                    Some(deliver_ms) => deliver_ms.parse::<u64>().unwrap(),
-                    None => return Some(PutMessageResult::new_default(PutMessageStatus::WheelTimerMsgIllegal)),
-                },
-            },
-        };
-
-        if deliver_ms > current_millis() {
-            if delay_level <= 0 && deliver_ms - current_millis() > message_store_config.timer_max_delay_sec * 1000 {
-                return Some(PutMessageResult::new_default(PutMessageStatus::WheelTimerMsgIllegal));
-            }
-
-            let timer_precision_ms = message_store_config.timer_precision_ms;
-            let deliver_ms = if deliver_ms.is_multiple_of(timer_precision_ms) {
-                deliver_ms - timer_precision_ms
-            } else {
-                (deliver_ms / timer_precision_ms) * timer_precision_ms
-            };
-
-            if timer_message_store.is_reject(deliver_ms) {
-                return Some(PutMessageResult::new_default(PutMessageStatus::WheelTimerFlowControl));
-            }
-
-            msg.message_ext_inner.message.properties_mut().as_map_mut().insert(
-                CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_OUT_MS),
-                CheetahString::from_string(deliver_ms.to_string()),
-            );
-            let topic_value = CheetahString::from_slice(msg.topic());
-            msg.message_ext_inner.message.properties_mut().as_map_mut().insert(
-                CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC),
-                topic_value,
-            );
-            msg.message_ext_inner.message.properties_mut().as_map_mut().insert(
-                CheetahString::from_static_str(MessageConst::PROPERTY_REAL_QUEUE_ID),
-                CheetahString::from_string(msg.message_ext_inner.queue_id.to_string()),
-            );
-            msg.properties_string = message_properties_to_string(msg.message_ext_inner.message.properties().as_map());
+        for property in [
+            MessageConst::PROPERTY_TIMER_ORIGINAL_DELIVER_MS,
+            MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN,
+            MessageConst::PROPERTY_TIMER_GENERATION,
+        ] {
             msg.message_ext_inner
                 .message
-                .set_topic(CheetahString::from_static_str(TIMER_TOPIC));
-            msg.message_ext_inner.queue_id = 0;
-        } else if msg
-            .message_ext_inner
-            .message
-            .properties()
-            .as_map()
-            .contains_key(MessageConst::PROPERTY_TIMER_DEL_UNIQKEY)
-        {
-            return Some(PutMessageResult::new_default(PutMessageStatus::WheelTimerMsgIllegal));
+                .properties_mut()
+                .as_map_mut()
+                .remove(property);
         }
+
+        let Some(max_delay_ms) = message_store_config.timer_max_delay_sec.checked_mul(1_000) else {
+            warn!("reject timer message because timerMaxDelaySec overflows milliseconds");
+            return Some(PutMessageResult::new_default(PutMessageStatus::WheelTimerMsgIllegal));
+        };
+        let policy = match TimerPolicySnapshot::try_new(message_store_config.timer_precision_ms, max_delay_ms) {
+            Ok(policy) => policy,
+            Err(error) => {
+                warn!("reject timer message because timer policy is invalid: {error}");
+                return Some(PutMessageResult::new_default(PutMessageStatus::WheelTimerMsgIllegal));
+            }
+        };
+        let now_ms = current_millis();
+        let normalized =
+            match normalize_timer_request(msg.message_ext_inner.message.properties().as_map(), now_ms, policy) {
+                Ok(normalized) => normalized,
+                Err(error) => {
+                    warn!("reject invalid timer message: {error}");
+                    return Some(PutMessageResult::new_default(PutMessageStatus::WheelTimerMsgIllegal));
+                }
+            };
+
+        if timer_message_store.is_reject(normalized.timer_out_ms) {
+            return Some(PutMessageResult::new_default(PutMessageStatus::WheelTimerFlowControl));
+        }
+
+        msg.message_ext_inner.message.properties_mut().as_map_mut().insert(
+            CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_OUT_MS),
+            CheetahString::from_string(normalized.timer_out_ms.to_string()),
+        );
+        msg.message_ext_inner.message.properties_mut().as_map_mut().insert(
+            CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_ORIGINAL_DELIVER_MS),
+            CheetahString::from_string(normalized.original_deliver_ms.to_string()),
+        );
+        let topic_value = CheetahString::from_slice(msg.topic());
+        msg.message_ext_inner.message.properties_mut().as_map_mut().insert(
+            CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC),
+            topic_value,
+        );
+        msg.message_ext_inner.message.properties_mut().as_map_mut().insert(
+            CheetahString::from_static_str(MessageConst::PROPERTY_REAL_QUEUE_ID),
+            CheetahString::from_string(msg.message_ext_inner.queue_id.to_string()),
+        );
+        msg.properties_string = message_properties_to_string(msg.message_ext_inner.message.properties().as_map());
+        msg.message_ext_inner
+            .message
+            .set_topic(CheetahString::from_static_str(TIMER_TOPIC));
+        msg.message_ext_inner.queue_id = 0;
         None
     }
 
@@ -411,6 +417,11 @@ mod tests {
         assert!(msg
             .property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_OUT_MS))
             .is_some());
+        assert!(msg
+            .property(&CheetahString::from_static_str(
+                MessageConst::PROPERTY_TIMER_ORIGINAL_DELIVER_MS,
+            ))
+            .is_some());
     }
 
     #[test]
@@ -498,6 +509,44 @@ mod tests {
             PutMessageStatus::WheelTimerMsgIllegal
         );
         assert_eq!(msg.topic().as_str(), "too_far_topic");
+    }
+
+    #[test]
+    fn transform_timer_message_rejects_invalid_input_and_zero_precision_without_panicking() {
+        let timer_message_store = TimerMessageStore::new_empty(crate::test_service_context("timer-store"));
+        let mut invalid_value = MessageExtBrokerInner::default();
+        invalid_value.set_topic(CheetahString::from_static_str("invalid-timer"));
+        invalid_value.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELAY_SEC),
+            CheetahString::from_static_str("not-a-number"),
+        );
+        assert_eq!(
+            HookUtils::transform_timer_message(
+                &timer_message_store,
+                &MessageStoreConfig::default(),
+                &mut invalid_value,
+            )
+            .unwrap()
+            .put_message_status(),
+            PutMessageStatus::WheelTimerMsgIllegal
+        );
+
+        let mut zero_precision = MessageExtBrokerInner::default();
+        zero_precision.set_topic(CheetahString::from_static_str("zero-precision"));
+        zero_precision.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELAY_MS),
+            CheetahString::from_static_str("1000"),
+        );
+        let config = MessageStoreConfig {
+            timer_precision_ms: 0,
+            ..MessageStoreConfig::default()
+        };
+        assert_eq!(
+            HookUtils::transform_timer_message(&timer_message_store, &config, &mut zero_precision)
+                .unwrap()
+                .put_message_status(),
+            PutMessageStatus::WheelTimerMsgIllegal
+        );
     }
 
     #[test]
