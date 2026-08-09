@@ -127,6 +127,10 @@ name    = "delivery"
 harness = false
 
 [[bench]]
+name    = "timer_storage_bench"
+harness = false
+
+[[bench]]
 name    = "mapped_buffer_bench"
 harness = false
 

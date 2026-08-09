@@ -17,102 +17,129 @@ use std::io::Read;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 
-use crate::timer::slot::Slot;
 use parking_lot::Mutex;
 
+use crate::timer::metrics::TimerStorageMetrics;
+use crate::timer::metrics::TimerStorageMetricsSnapshot;
+use crate::timer::paged_timer_wheel::PagedTimerWheel;
+use crate::timer::paged_timer_wheel::PagedTimerWheelError;
+use crate::timer::slot::Slot;
+
+const DEFAULT_PAGE_SIZE: usize = 4_096;
+const V2_SUFFIX: &str = "v2";
+const MIGRATION_COMMITTED: &str = "MIGRATION_COMMITTED";
+
+/// Compatibility facade that keeps the existing Wheel API while persisting V2 dirty pages.
 pub struct TimerWheel {
     file_name: PathBuf,
     slots_total: usize,
     precision_ms: u64,
-    slots: Mutex<Vec<Slot>>,
+    page_size: usize,
+    metrics: Arc<TimerStorageMetrics>,
+    inner: Mutex<Option<PagedTimerWheel>>,
 }
 
 impl TimerWheel {
     pub fn new<P: AsRef<Path>>(file_name: P, slots_total: usize, precision_ms: u64) -> Self {
+        Self::with_page_size_and_metrics(
+            file_name,
+            slots_total,
+            precision_ms,
+            DEFAULT_PAGE_SIZE,
+            Arc::new(TimerStorageMetrics::default()),
+        )
+    }
+
+    pub fn with_page_size_and_metrics<P: AsRef<Path>>(
+        file_name: P,
+        slots_total: usize,
+        precision_ms: u64,
+        page_size: usize,
+        metrics: Arc<TimerStorageMetrics>,
+    ) -> Self {
         Self {
             file_name: file_name.as_ref().to_path_buf(),
             slots_total,
             precision_ms: precision_ms.max(1),
-            slots: Mutex::new(Vec::new()),
+            page_size,
+            metrics,
+            inner: Mutex::new(None),
         }
     }
 
     pub fn load(&self) -> std::io::Result<()> {
-        if let Some(parent) = self.file_name.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
+        self.load_at_generation(u64::MAX)
+    }
 
-        let expected_len = self.expected_file_len();
-        let mut file = OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .truncate(false)
-            .open(&self.file_name)?;
-        let file_len = file.metadata()?.len();
-        if file_len == 0 {
-            file.set_len(expected_len as u64)?;
-            *self.slots.lock() = vec![empty_slot(); self.wheel_len()];
-            return Ok(());
+    pub fn load_at_generation(&self, committed_generation: u64) -> std::io::Result<()> {
+        let paged = PagedTimerWheel::new(
+            self.v2_directory(),
+            self.wheel_len(),
+            self.page_size,
+            Arc::clone(&self.metrics),
+        )
+        .map_err(as_io_error)?;
+        paged.load(committed_generation).map_err(as_io_error)?;
+        if committed_generation == 0 && self.should_import_legacy()? {
+            paged
+                .import_legacy_slots(&self.read_legacy_slots()?)
+                .map_err(as_io_error)?;
         }
-        if file_len != expected_len as u64 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!(
-                    "timer wheel length {} does not match expected {}",
-                    file_len, expected_len
-                ),
-            ));
-        }
+        *self.inner.lock() = Some(paged);
+        Ok(())
+    }
 
-        let mut buffer = vec![0; expected_len];
-        file.read_exact(&mut buffer)?;
-        let mut slots = Vec::with_capacity(self.wheel_len());
-        const SLOT_SIZE: usize = Slot::SIZE as usize;
-        let (slot_chunks, remaining) = buffer.as_chunks::<SLOT_SIZE>();
-        debug_assert!(remaining.is_empty());
-        for chunk in slot_chunks {
-            slots.push(Slot::new_with_num_magic(
-                read_i64(&chunk[0..8]),
-                read_i64(&chunk[8..16]),
-                read_i64(&chunk[16..24]),
-                read_i32(&chunk[24..28]),
-                read_i32(&chunk[28..32]),
-            ));
+    pub fn load_rebuilt(&self, committed_generation: u64, pending_slots: &[Slot]) -> std::io::Result<()> {
+        let paged = PagedTimerWheel::new(
+            self.v2_directory(),
+            self.wheel_len(),
+            self.page_size,
+            Arc::clone(&self.metrics),
+        )
+        .map_err(as_io_error)?;
+        paged.reset_for_repair(committed_generation).map_err(as_io_error)?;
+        let mut slots = vec![Slot::new_with_num_magic(0, 0, 0, 0, 0); self.wheel_len()];
+        for slot in pending_slots.iter().copied().filter(|slot| slot.num > 0) {
+            slots[self.get_slot_index(slot.time_ms)] = slot;
         }
-        *self.slots.lock() = slots;
+        paged.import_legacy_slots(&slots).map_err(as_io_error)?;
+        for _ in 0..paged.dirty_page_count() {
+            self.metrics.record_wheel_repair();
+        }
+        *self.inner.lock() = Some(paged);
         Ok(())
     }
 
     pub fn flush(&self) -> std::io::Result<()> {
-        let slots = self.slots.lock();
-        if slots.is_empty() {
-            return Ok(());
-        }
+        let generation = self.flush_generation()?;
+        self.commit_generation(generation)
+    }
 
-        if let Some(parent) = self.file_name.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
+    pub fn flush_generation(&self) -> std::io::Result<u64> {
+        self.with_inner(PagedTimerWheel::flush_dirty)
+    }
 
-        let mut buffer = vec![0; self.expected_file_len()];
-        for (index, slot) in slots.iter().enumerate() {
-            let start = index * Slot::SIZE as usize;
-            buffer[start..start + 8].copy_from_slice(&slot.time_ms.to_be_bytes());
-            buffer[start + 8..start + 16].copy_from_slice(&slot.first_pos.to_be_bytes());
-            buffer[start + 16..start + 24].copy_from_slice(&slot.last_pos.to_be_bytes());
-            buffer[start + 24..start + 28].copy_from_slice(&slot.num.to_be_bytes());
-            buffer[start + 28..start + 32].copy_from_slice(&slot.magic.to_be_bytes());
+    pub fn commit_generation(&self, generation: u64) -> std::io::Result<()> {
+        self.with_inner(|wheel| wheel.commit_generation(generation))?;
+        if self.file_name.exists() && !self.migration_marker().exists() {
+            let mut marker = OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(self.migration_marker())?;
+            marker.write_all(b"paged-timer-wheel-v2\n")?;
+            marker.sync_data()?;
         }
+        Ok(())
+    }
 
-        let mut file = OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .truncate(true)
-            .open(&self.file_name)?;
-        file.write_all(&buffer)?;
-        file.sync_data()
+    pub fn committed_generation(&self) -> u64 {
+        self.inner
+            .lock()
+            .as_ref()
+            .map(PagedTimerWheel::committed_generation)
+            .unwrap_or_default()
     }
 
     pub fn shutdown(&self, flush: bool) -> std::io::Result<()> {
@@ -123,61 +150,43 @@ impl TimerWheel {
     }
 
     pub fn get_slot(&self, time_ms: i64) -> Option<Slot> {
-        let slots = self.slots.lock();
-        if slots.is_empty() {
-            return None;
-        }
-
-        let slot = slots.get(self.get_slot_index(time_ms)).copied()?;
-        if slot.time_ms == self.format_time_ms(time_ms) {
-            Some(slot)
-        } else {
-            None
-        }
+        let guard = self.inner.lock();
+        let wheel = guard.as_ref()?;
+        let slot = wheel.get_slot(self.get_slot_index(time_ms))?;
+        (slot.time_ms == self.format_time_ms(time_ms)).then_some(slot)
     }
 
     pub fn put_slot(&self, time_ms: i64, first_pos: i64, last_pos: i64, num: i32, magic: i32) -> std::io::Result<()> {
-        let mut slots = self.slots.lock();
-        if slots.is_empty() {
-            return Err(std::io::Error::other("timer wheel is not loaded"));
-        }
-
         let index = self.get_slot_index(time_ms);
-        slots[index] = Slot::new_with_num_magic(self.format_time_ms(time_ms), first_pos, last_pos, num, magic);
-        Ok(())
+        let slot = Slot::new_with_num_magic(self.format_time_ms(time_ms), first_pos, last_pos, num, magic);
+        self.with_inner(|wheel| wheel.put_slot(index, slot))
     }
 
     pub fn get_num(&self, time_ms: i64) -> i64 {
         self.get_slot(time_ms).map(|slot| slot.num as i64).unwrap_or_default()
     }
 
-    pub fn revise_slots<F>(&self, mut revise: F) -> std::io::Result<()>
+    pub fn revise_slots<F>(&self, revise: F) -> std::io::Result<()>
     where
         F: FnMut(Slot) -> Slot,
     {
-        let mut slots = self.slots.lock();
-        if slots.is_empty() {
-            return Err(std::io::Error::other("timer wheel is not loaded"));
-        }
-
-        for slot in slots.iter_mut() {
-            *slot = revise(*slot);
-        }
-        Ok(())
+        self.with_inner(|wheel| {
+            wheel.revise_slots(revise);
+            Ok::<_, PagedTimerWheelError>(())
+        })
     }
 
     pub fn get_all_num(&self, time_start_ms: i64) -> i64 {
-        let slots = self.slots.lock();
+        let slots = self.slots_snapshot();
         if slots.is_empty() {
             return 0;
         }
-
         let mut all_num = 0i64;
         let start_index = self.get_slot_index(time_start_ms);
         for offset in 0..self.wheel_len() {
             let index = (start_index + offset) % self.wheel_len();
             let slot = slots[index];
-            if slot.time_ms == self.format_time_ms(time_start_ms + (offset as i64 * self.precision_ms as i64)) {
+            if slot.time_ms == self.format_time_ms(time_start_ms + offset as i64 * self.precision_ms as i64) {
                 all_num += slot.num as i64;
             }
         }
@@ -185,11 +194,69 @@ impl TimerWheel {
     }
 
     pub fn slots_snapshot(&self) -> Vec<Slot> {
-        self.slots.lock().clone()
+        self.inner
+            .lock()
+            .as_ref()
+            .map(PagedTimerWheel::slots_snapshot)
+            .unwrap_or_default()
     }
 
-    fn expected_file_len(&self) -> usize {
-        self.wheel_len() * Slot::SIZE as usize
+    pub fn dirty_page_count(&self) -> usize {
+        self.inner
+            .lock()
+            .as_ref()
+            .map(PagedTimerWheel::dirty_page_count)
+            .unwrap_or_default()
+    }
+
+    pub fn non_empty_page_count(&self) -> usize {
+        self.inner
+            .lock()
+            .as_ref()
+            .map(PagedTimerWheel::non_empty_page_count)
+            .unwrap_or_default()
+    }
+
+    pub fn metrics_snapshot(&self) -> TimerStorageMetricsSnapshot {
+        self.metrics.snapshot()
+    }
+
+    fn should_import_legacy(&self) -> std::io::Result<bool> {
+        Ok(self.file_name.exists() && self.file_name.metadata()?.len() > 0 && !self.migration_marker().exists())
+    }
+
+    fn read_legacy_slots(&self) -> std::io::Result<Vec<Slot>> {
+        let expected_len = self.wheel_len() * Slot::SIZE as usize;
+        let mut file = OpenOptions::new().read(true).open(&self.file_name)?;
+        let length = file.metadata()?.len() as usize;
+        if length != expected_len {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("legacy timer wheel length {length} does not match expected {expected_len}"),
+            ));
+        }
+        let mut bytes = vec![0u8; expected_len];
+        file.read_exact(&mut bytes)?;
+        Ok(bytes.chunks_exact(Slot::SIZE as usize).map(decode_slot).collect())
+    }
+
+    fn with_inner<T, E>(&self, operation: impl FnOnce(&PagedTimerWheel) -> Result<T, E>) -> std::io::Result<T>
+    where
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        let guard = self.inner.lock();
+        let wheel = guard
+            .as_ref()
+            .ok_or_else(|| std::io::Error::other("timer wheel is not loaded"))?;
+        operation(wheel).map_err(as_io_error)
+    }
+
+    fn v2_directory(&self) -> PathBuf {
+        PathBuf::from(format!("{}.{}", self.file_name.display(), V2_SUFFIX))
+    }
+
+    fn migration_marker(&self) -> PathBuf {
+        self.v2_directory().join(MIGRATION_COMMITTED)
     }
 
     fn wheel_len(&self) -> usize {
@@ -206,16 +273,26 @@ impl TimerWheel {
     }
 }
 
-fn empty_slot() -> Slot {
-    Slot::new_with_num_magic(0, 0, 0, 0, 0)
+fn decode_slot(bytes: &[u8]) -> Slot {
+    Slot::new_with_num_magic(
+        read_i64(bytes, 0),
+        read_i64(bytes, 8),
+        read_i64(bytes, 16),
+        read_i32(bytes, 24),
+        read_i32(bytes, 28),
+    )
 }
 
-fn read_i64(buffer: &[u8]) -> i64 {
-    i64::from_be_bytes(buffer.try_into().expect("timer wheel i64 field size must be 8 bytes"))
+fn read_i64(bytes: &[u8], offset: usize) -> i64 {
+    i64::from_be_bytes(bytes[offset..offset + 8].try_into().expect("fixed i64 field"))
 }
 
-fn read_i32(buffer: &[u8]) -> i32 {
-    i32::from_be_bytes(buffer.try_into().expect("timer wheel i32 field size must be 4 bytes"))
+fn read_i32(bytes: &[u8], offset: usize) -> i32 {
+    i32::from_be_bytes(bytes[offset..offset + 4].try_into().expect("fixed i32 field"))
+}
+
+fn as_io_error(error: impl std::error::Error + Send + Sync + 'static) -> std::io::Error {
+    std::io::Error::other(error)
 }
 
 #[cfg(test)]
@@ -227,33 +304,53 @@ mod tests {
     #[test]
     fn put_flush_and_reload_preserves_timer_wheel_slot() {
         let temp_dir = tempdir().unwrap();
-        let timer_wheel = TimerWheel::new(temp_dir.path().join("timerwheel"), 16, 1_000);
+        let timer_wheel = TimerWheel::with_page_size_and_metrics(
+            temp_dir.path().join("timerwheel"),
+            16,
+            1_000,
+            288,
+            Arc::new(TimerStorageMetrics::default()),
+        );
         timer_wheel.load().unwrap();
         timer_wheel.put_slot(5_000, 10, 20, 1, 2).unwrap();
         timer_wheel.flush().unwrap();
 
-        let reloaded = TimerWheel::new(temp_dir.path().join("timerwheel"), 16, 1_000);
+        let reloaded = TimerWheel::with_page_size_and_metrics(
+            temp_dir.path().join("timerwheel"),
+            16,
+            1_000,
+            288,
+            Arc::new(TimerStorageMetrics::default()),
+        );
         reloaded.load().unwrap();
-
-        let slot = reloaded.get_slot(5_000).unwrap();
-        assert_eq!(slot.time_ms, 5_000);
-        assert_eq!(slot.first_pos, 10);
-        assert_eq!(slot.last_pos, 20);
-        assert_eq!(slot.num, 1);
-        assert_eq!(slot.magic, 2);
+        assert_eq!(
+            reloaded.get_slot(5_000),
+            Some(Slot::new_with_num_magic(5_000, 10, 20, 1, 2))
+        );
     }
 
     #[test]
-    fn revise_slots_can_clear_invalid_slot() {
+    fn revise_slots_marks_only_changed_pages_dirty() {
         let temp_dir = tempdir().unwrap();
-        let timer_wheel = TimerWheel::new(temp_dir.path().join("timerwheel"), 16, 1_000);
-        timer_wheel.load().unwrap();
-        timer_wheel.put_slot(5_000, 10, 20, 1, 2).unwrap();
-
-        timer_wheel
-            .revise_slots(|slot| if slot.time_ms == 5_000 { empty_slot() } else { slot })
+        let wheel = TimerWheel::with_page_size_and_metrics(
+            temp_dir.path().join("timerwheel"),
+            16,
+            1_000,
+            288,
+            Arc::new(TimerStorageMetrics::default()),
+        );
+        wheel.load().unwrap();
+        wheel.put_slot(5_000, 10, 20, 1, 2).unwrap();
+        wheel.flush().unwrap();
+        wheel
+            .revise_slots(|slot| {
+                if slot.time_ms == 5_000 {
+                    Slot::new_with_num_magic(0, 0, 0, 0, 0)
+                } else {
+                    slot
+                }
+            })
             .unwrap();
-
-        assert!(timer_wheel.get_slot(5_000).is_none());
+        assert_eq!(wheel.dirty_page_count(), 1);
     }
 }

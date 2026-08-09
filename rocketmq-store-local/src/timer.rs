@@ -14,7 +14,12 @@
 
 pub mod checkpoint;
 pub mod metrics;
+pub mod migration;
+pub mod paged_timer_wheel;
+pub mod segmented_timer_log;
 pub mod service;
 pub mod slot;
+pub mod slot_drain_file;
+pub mod storage_format;
 pub mod timer_log;
 pub mod timer_wheel;
