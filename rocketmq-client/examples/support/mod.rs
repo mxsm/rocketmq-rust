@@ -54,22 +54,16 @@ impl ExampleClientRuntime {
     }
 
     pub async fn shutdown(self) {
-        // Every example compiles this module into its own crate. Keep the deep client shutdown
-        // future behind a pointer so its layout does not exhaust rustc's query-depth limit in
-        // each calling example's async state machine.
-        Box::pin(async move {
-            let client_report = self.client_runtime.shutdown().await;
-            assert!(client_report.is_healthy(), "{}", client_report.to_json());
+        let client_report = self.client_runtime.shutdown().await;
+        assert!(client_report.is_healthy(), "{}", client_report.to_json());
 
-            let owner_report = self.owner.shutdown_tasks().await;
-            assert!(owner_report.is_healthy(), "{}", owner_report.to_json());
+        let owner_report = self.owner.shutdown_tasks().await;
+        assert!(owner_report.is_healthy(), "{}", owner_report.to_json());
 
-            let background_report = self.owner.shutdown_background();
-            assert!(background_report.is_healthy(), "{}", background_report.to_json());
+        let background_report = self.owner.shutdown_background();
+        assert!(background_report.is_healthy(), "{}", background_report.to_json());
 
-            let telemetry_report = self.telemetry_guard.shutdown();
-            assert!(telemetry_report.is_healthy(), "{}", telemetry_report.to_json());
-        })
-        .await;
+        let telemetry_report = self.telemetry_guard.shutdown();
+        assert!(telemetry_report.is_healthy(), "{}", telemetry_report.to_json());
     }
 }
