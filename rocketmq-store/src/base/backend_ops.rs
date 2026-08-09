@@ -35,6 +35,8 @@ use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerI
 use rocketmq_protocol::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_runtime::common::system_clock::SystemClock;
 use rocketmq_runtime::common::time_utils::current_millis;
+use rocketmq_store_api::TimerRecallRequest;
+use rocketmq_store_api::TimerRecallStatus;
 
 use crate::base::allocate_mapped_file_service::AllocateMappedFileService;
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
@@ -308,6 +310,11 @@ pub trait BackendOps: Send + Sync + 'static {
     /// # Returns
     /// Result of storing batch messages
     async fn put_messages(&mut self, message_ext_batch: MessageExtBatch) -> PutMessageResult;
+
+    /// Cancels one Extended Timer through its durable state-machine lookup.
+    fn recall_extended_timer(&self, _request: &TimerRecallRequest) -> Result<TimerRecallStatus, StoreError> {
+        Ok(TimerRecallStatus::Unsupported)
+    }
 
     /// Query messages belonging to a topic at a queue starting from given offset.
     ///
@@ -752,6 +759,14 @@ pub trait BackendOps: Send + Sync + 'static {
     /// that cache `MessageStoreConfig` snapshots should update those copies so
     /// HA and commitlog logic observe the latest role.
     fn sync_broker_role(&self, broker_role: BrokerRole);
+
+    /// Synchronizes a controller-owned Broker role and its fencing term.
+    ///
+    /// Backends without a separate derived delivery owner may use the ordinary role update.
+    fn sync_broker_role_with_term(&self, broker_role: BrokerRole, _external_term: u64) -> Result<(), StoreError> {
+        self.sync_broker_role(broker_role);
+        Ok(())
+    }
 
     /// Calculate the checksum of a certain range of data.
     fn calc_delta_checksum(&self, from: i64, to: i64) -> Vec<u8>;

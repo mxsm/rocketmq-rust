@@ -54,6 +54,30 @@ pub struct TimerStoreConfig {
     pub shadow_diff_sample_limit: usize,
     /// Fixed-delay interval used by the shadow workers.
     pub scheduler_interval_ms: u64,
+    /// Monotonic in-process delivery lease duration.
+    pub delivery_lease_ms: u64,
+    /// Maximum tolerated wall-clock rollback before CLOCK_UNSAFE.
+    pub clock_backward_tolerance_ms: i64,
+    /// Global non-terminal message limit.
+    pub max_pending_messages: u64,
+    /// Global non-terminal encoded payload byte limit.
+    pub max_pending_bytes: u64,
+    /// Per-topic non-terminal encoded payload byte limit.
+    pub max_topic_pending_bytes: u64,
+    /// Per-namespace/tenant non-terminal encoded payload byte limit.
+    pub max_tenant_pending_bytes: u64,
+    /// Per-deadline-second message limit protecting hot buckets.
+    pub max_bucket_messages: u64,
+    /// Per-deadline-second encoded payload byte limit.
+    pub max_bucket_bytes: u64,
+    /// Minimum free filesystem bytes required for new Extended admissions.
+    pub minimum_free_bytes: u64,
+    /// Minimum free filesystem ratio in basis points (1/10,000).
+    pub minimum_free_ratio_basis_points: u16,
+    /// Maximum materialization lag before long admissions are rejected.
+    pub materialization_lag_reject_messages: u64,
+    /// Grace period after terminal replication and snapshot fences pass.
+    pub gc_retention_grace_ms: u64,
 }
 
 impl Default for TimerStoreConfig {
@@ -73,6 +97,18 @@ impl Default for TimerStoreConfig {
             horizon_days: 400,
             shadow_diff_sample_limit: 1_024,
             scheduler_interval_ms: 1_000,
+            delivery_lease_ms: 30_000,
+            clock_backward_tolerance_ms: 1_000,
+            max_pending_messages: 100_000_000,
+            max_pending_bytes: 64 * GIB,
+            max_topic_pending_bytes: 16 * GIB,
+            max_tenant_pending_bytes: 32 * GIB,
+            max_bucket_messages: 1_000_000,
+            max_bucket_bytes: 4 * GIB,
+            minimum_free_bytes: 10 * GIB,
+            minimum_free_ratio_basis_points: 500,
+            materialization_lag_reject_messages: 100_000,
+            gc_retention_grace_ms: 86_400_000,
         }
     }
 }
@@ -107,6 +143,24 @@ impl TimerStoreConfig {
         }
         if self.shadow_diff_sample_limit == 0 || self.scheduler_interval_ms == 0 {
             return Err(TimerStoreConfigError::Invalid("shadowRuntime"));
+        }
+        if self.delivery_lease_ms == 0
+            || self.clock_backward_tolerance_ms < 0
+            || self.max_pending_messages == 0
+            || self.max_pending_bytes == 0
+            || self.max_topic_pending_bytes == 0
+            || self.max_topic_pending_bytes > self.max_pending_bytes
+            || self.max_tenant_pending_bytes == 0
+            || self.max_tenant_pending_bytes > self.max_pending_bytes
+            || self.max_bucket_messages == 0
+            || self.max_bucket_bytes == 0
+            || self.minimum_free_bytes == 0
+            || self.minimum_free_ratio_basis_points == 0
+            || self.minimum_free_ratio_basis_points >= 10_000
+            || self.materialization_lag_reject_messages == 0
+            || self.gc_retention_grace_ms == 0
+        {
+            return Err(TimerStoreConfigError::Invalid("productionSafety"));
         }
         Ok(())
     }

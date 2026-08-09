@@ -331,6 +331,10 @@ fn formal_state(generation: TimerGeneration, state: TimelineState) -> TimelineSt
         .expect("route"),
         admission_epoch: TimerEngineEpoch::new(5),
         owner_epoch: TimerEngineEpoch::new(5),
+        claim_seq: 0,
+        due_time_ms: 1_800_000_000_000,
+        lane: 0,
+        terminal_at_ms: 0,
         shadow_only: false,
     }
 }

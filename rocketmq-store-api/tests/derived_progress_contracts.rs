@@ -107,6 +107,45 @@ fn checkpoint_round_trip_is_fixed_versioned_and_payload_free() {
 }
 
 #[test]
+fn derived_engine_codes_remain_append_only_and_timer_completion_is_six() {
+    let engines = [
+        DerivedEngine::ConsumeQueue,
+        DerivedEngine::Index,
+        DerivedEngine::RocksDb,
+        DerivedEngine::Tiered,
+        DerivedEngine::Compaction,
+        DerivedEngine::TimerCompletion,
+    ];
+    for (index, engine) in engines.into_iter().enumerate() {
+        let checkpoint = DerivedCheckpoint::new(engine, DerivedCursor::restore(11, 128));
+        let encoded = checkpoint.encode();
+        assert_eq!(encoded[10], u8::try_from(index + 1).expect("stable code"));
+        assert_eq!(
+            checkpoint,
+            DerivedCheckpoint::decode(&encoded, engine).expect("stable owner must decode")
+        );
+    }
+
+    let timer = DerivedCheckpoint::new(DerivedEngine::TimerCompletion, DerivedCursor::restore(4, 512));
+    let encoded = timer.encode();
+    assert_eq!(encoded[10], 6);
+    assert_eq!(
+        DerivedCheckpointDecodeError::EngineMismatch {
+            expected: DerivedEngine::Compaction,
+            actual: DerivedEngine::TimerCompletion,
+        },
+        DerivedCheckpoint::decode(&encoded, DerivedEngine::Compaction).expect_err("owners cannot share cursors")
+    );
+
+    let mut unknown = encoded;
+    unknown[10] = 7;
+    assert_eq!(
+        DerivedCheckpointDecodeError::UnknownEngine(7),
+        DerivedCheckpoint::decode(&unknown, DerivedEngine::TimerCompletion).expect_err("unknown code must fail closed")
+    );
+}
+
+#[test]
 fn checkpoint_rejects_corruption_wrong_owner_and_future_version() {
     let checkpoint = DerivedCheckpoint::new(DerivedEngine::Index, DerivedCursor::restore(3, 64));
     let encoded = checkpoint.encode();

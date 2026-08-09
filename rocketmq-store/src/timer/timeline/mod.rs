@@ -12,17 +12,37 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod admission;
 mod due_scanner;
+mod gc;
+mod ha;
 mod materializer;
 mod ready_outbox;
 mod recall;
+mod receipt;
+mod receipt_reconciler;
 mod rocksdb_index;
 mod shadow;
+mod snapshot;
 
+pub(crate) use admission::usage_summary_keys;
+pub(crate) use admission::TimelineAdmissionController;
+pub(crate) use admission::TimelineAdmissionError;
 pub(crate) use due_scanner::TimelineDueScanner;
+pub(crate) use gc::TimelineGcService;
+pub(crate) use ha::TimelinePromotionGate;
+pub(crate) use ha::TimelinePromotionObservation;
 pub(crate) use materializer::ShadowTimelineMaterializer;
+pub(crate) use materializer::TimelineMaterializerError;
 pub(crate) use ready_outbox::TimelineReadyOutbox;
+pub(crate) use recall::RecallResult;
 pub(crate) use recall::TimelineRecallService;
+pub(crate) use receipt::TimelineCompletionReceiptV1;
+pub(crate) use receipt::TimelineReceiptStore;
+pub(crate) use receipt_reconciler::TimelineCompletionError;
+pub(crate) use receipt_reconciler::TimelineCompletionReconciler;
+pub(crate) use receipt_reconciler::TimelineCompletionWake;
 #[cfg(test)]
 pub(crate) use rocksdb_index::RocksDbTimerIndex;
 pub(crate) use shadow::ShadowReconciler;
+pub(crate) use snapshot::TimelineSnapshotManager;

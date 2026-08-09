@@ -39,6 +39,7 @@ use rocketmq_store_api::MessageReader;
 use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreHealth;
 use rocketmq_store_api::StoreLifecycle;
+use rocketmq_store_api::TimerStoreMode;
 use rocketmq_store_local::config::backend::LocalBackendConfig;
 use rocketmq_store_local::config::backend::LocalCleanupConfig;
 use rocketmq_store_local::config::backend::LocalQueryConfig;
@@ -59,6 +60,23 @@ fn append_result() -> AppendMessageResult {
         page_cache_rt: 0,
         msg_num: 2,
     }
+}
+
+#[test]
+fn timer_extended_capability_configuration_is_explicit_and_bounded() {
+    let config = rocketmq_store::MessageStoreConfig {
+        timer_store_mode: TimerStoreMode::ExtendedTimeline,
+        timer_extended_admission_enable: true,
+        timer_extended_activation_epoch: 3,
+        timer_extended_admission_horizon_days: 366,
+        ..rocketmq_store::MessageStoreConfig::default()
+    };
+
+    assert_eq!(config.timer_store_mode, TimerStoreMode::ExtendedTimeline);
+    assert_eq!(config.timer_extended_admission_horizon_days, 366);
+    assert!(config.timer_extended_admission_enable);
+    assert_ne!(config.timer_extended_activation_epoch, 0);
+    assert!(config.timer_store_config.validate().is_ok());
 }
 
 #[test]

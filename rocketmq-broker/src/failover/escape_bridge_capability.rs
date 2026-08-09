@@ -389,10 +389,15 @@ impl<MS: BrokerReadStore> EscapeBridgeStoreCapability<MS> {
             }
         };
         result?;
-        store.sync_broker_role(match target_role {
-            BrokerReplicaRole::Master => BrokerRole::SyncMaster,
-            BrokerReplicaRole::Slave => BrokerRole::Slave,
-        });
+        store
+            .sync_broker_role_with_term(
+                match target_role {
+                    BrokerReplicaRole::Master => BrokerRole::SyncMaster,
+                    BrokerReplicaRole::Slave => BrokerRole::Slave,
+                },
+                u64::try_from(master_epoch).unwrap_or_default(),
+            )
+            .map_err(|error| HAError::invalid_state(format!("timer role fencing failed: {error}")))?;
         Ok(())
     }
 

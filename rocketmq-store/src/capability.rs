@@ -50,6 +50,8 @@ use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreErrorKind;
 use rocketmq_store_api::StoreHealth;
 use rocketmq_store_api::StoreHealthSnapshot as ApiStoreHealthSnapshot;
+use rocketmq_store_api::TimerRecallRequest;
+use rocketmq_store_api::TimerRecallStatus;
 
 use crate::base::backend_ops::BackendOps;
 use crate::base::backend_ops::MessageStoreShutdownReport;
@@ -530,6 +532,13 @@ pub trait BrokerWriteStore: BrokerReadStore {
     fn increase_offset(&self, message: &MessageExtBrokerInner, message_num: i16) {
         BackendOps::increase_offset(self.backend(), message, message_num);
     }
+
+    fn recall_extended_timer(
+        &self,
+        request: &TimerRecallRequest,
+    ) -> Result<TimerRecallStatus, crate::store_error::StoreError> {
+        BackendOps::recall_extended_timer(self.backend(), request)
+    }
 }
 
 /// Broker paths that atomically combine reads, offsets, and writes.
@@ -648,6 +657,14 @@ pub trait BrokerReplicationStore: BrokerReadWriteStore + BrokerMasterAddressStor
 
     fn sync_broker_role(&self, broker_role: BrokerRole) {
         BackendOps::sync_broker_role(self.backend(), broker_role);
+    }
+
+    fn sync_broker_role_with_term(
+        &self,
+        broker_role: BrokerRole,
+        external_term: u64,
+    ) -> Result<(), crate::store_error::StoreError> {
+        BackendOps::sync_broker_role_with_term(self.backend(), broker_role, external_term)
     }
 
     fn get_ha_service(&self) -> Option<&GeneralHAService> {

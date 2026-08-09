@@ -24,6 +24,34 @@ pub const JAVA_COMPAT_TIMER_FORMAT_VERSION: u16 = 1;
 /// Current record format written by the extended timeline engine.
 pub const EXTENDED_TIMELINE_FORMAT_VERSION: u16 = 1;
 
+/// Broker-to-store request for generation-aware Extended Timer cancellation.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct TimerRecallRequest {
+    /// Original real topic encoded in the Recall handle.
+    pub topic: String,
+    /// Original unique message id encoded in the Recall handle.
+    pub unique_key: String,
+}
+
+/// Stable outcome of an Extended Timer cancellation attempt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TimerRecallStatus {
+    /// Pending/ready generation was atomically cancelled.
+    Cancelled,
+    /// It had already been cancelled.
+    AlreadyCancelled,
+    /// Delivery crossed the READY-to-DELIVERING linearization point.
+    TooLate,
+    /// Lookup does not exist on this owner.
+    NotFound,
+    /// Generation or state should be retried after materialization catches up.
+    Retry,
+    /// Corrupt/quarantined state requires repair.
+    Quarantined,
+    /// Backend does not own the Extended Timeline capability.
+    Unsupported,
+}
+
 /// Configured timer storage mode.
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]

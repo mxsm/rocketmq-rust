@@ -32,6 +32,7 @@ use crate::store::RocksDbStore;
 use crate::timer::checkpoint::encode_checkpoint_key;
 use crate::timer::checkpoint::TimelineCheckpointKind;
 use crate::timer::checkpoint::TimelineCheckpointV1;
+use crate::timer::codec::crc32c;
 use crate::timer::codec::TimelineKeyV1;
 use crate::timer::codec::TimelineRecordV1;
 use crate::timer::state_index::RocksDbTimelineStateIndex;
@@ -44,6 +45,8 @@ use crate::timer::TIMELINE_CF;
 const SHADOW_KEY_VERSION: u8 = 1;
 const SHADOW_KEY_SIZE: usize = 25;
 const SHADOW_OBSERVATION_KEY_VERSION: u8 = 2;
+const ACTIVE_SNAPSHOT_PIN_KEY: &[u8] = b"timer-active-snapshot-pin-v1";
+const SNAPSHOT_PIN_VALUE_SIZE: usize = 8 + 35 + 4;
 
 /// Durable, non-delivering shadow observation type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -106,7 +109,9 @@ impl RocksDbTimelineIndex {
         let config = RocksDbConfig::timer_timeline(store_root);
         debug_assert!(config.wal_enabled && config.sync_write);
         let store = Arc::new(RocksDbStore::open(config)?);
-        Ok(Self::from_store(store))
+        let index = Self::from_store(store);
+        index.restore_snapshot_pin()?;
+        Ok(index)
     }
 
     /// Creates an index over an already opened dedicated Timeline DB.
@@ -361,10 +366,28 @@ impl RocksDbTimelineIndex {
             .next_snapshot_generation
             .fetch_add(1, Ordering::AcqRel)
             .saturating_add(1);
+        self.pin_snapshot_generation(gc_fence, generation)
+    }
+
+    /// Persists a snapshot pin using the generation shared with PayloadStore.
+    pub fn pin_snapshot_generation(
+        &self,
+        gc_fence: TimelineKeyV1,
+        generation: u64,
+    ) -> Result<TimelineSnapshotPin, RocketMQError> {
+        if generation == 0 {
+            return Err(codec_error("Timeline snapshot generation must be non-zero"));
+        }
         let mut pins = self.snapshot_pins.lock().map_err(|error| {
             RocketMQError::storage_write_failed("timer-timeline", format!("snapshot pin lock poisoned: {error}"))
         })?;
+        if !pins.is_empty() {
+            return Err(codec_error("Timeline snapshot is already pinned"));
+        }
+        let value = encode_snapshot_pin(generation, gc_fence);
+        self.store.put_cf(CHECKPOINT_CF, ACTIVE_SNAPSHOT_PIN_KEY, &value)?;
         pins.insert(generation, gc_fence);
+        self.next_snapshot_generation.fetch_max(generation, Ordering::Release);
         Ok(TimelineSnapshotPin { generation, gc_fence })
     }
 
@@ -374,9 +397,24 @@ impl RocksDbTimelineIndex {
             RocketMQError::storage_write_failed("timer-timeline", format!("snapshot pin lock poisoned: {error}"))
         })?;
         match pins.remove(&pin.generation) {
-            Some(fence) if fence == pin.gc_fence => Ok(()),
+            Some(fence) if fence == pin.gc_fence => self.store.delete_cf(CHECKPOINT_CF, ACTIVE_SNAPSHOT_PIN_KEY),
             _ => Err(codec_error("unknown or mismatched Timeline snapshot pin")),
         }
+    }
+
+    fn restore_snapshot_pin(&self) -> Result<(), RocketMQError> {
+        let Some(value) = self.store.get_cf(CHECKPOINT_CF, ACTIVE_SNAPSHOT_PIN_KEY)? else {
+            return Ok(());
+        };
+        let pin = decode_snapshot_pin(&value)?;
+        self.next_snapshot_generation.store(pin.generation, Ordering::Release);
+        self.snapshot_pins
+            .lock()
+            .map_err(|error| {
+                RocketMQError::storage_read_failed("timer-timeline", format!("snapshot pin lock poisoned: {error}"))
+            })?
+            .insert(pin.generation, pin.gc_fence);
+        Ok(())
     }
 
     /// Deletes at most `max_records` formal Timeline records below the effective GC fence.
@@ -413,12 +451,66 @@ impl RocksDbTimelineIndex {
         Ok(raw.len())
     }
 
+    /// Returns a bounded formal GC page below all active snapshot pins without deleting it.
+    pub fn gc_candidates(
+        &self,
+        requested_fence: TimelineKeyV1,
+        max_records: usize,
+    ) -> Result<Vec<TimelineIndexEntry>, RocketMQError> {
+        if max_records == 0 {
+            return Ok(Vec::new());
+        }
+        let effective_fence = {
+            let pins = self.snapshot_pins.lock().map_err(|error| {
+                RocketMQError::storage_read_failed("timer-timeline", format!("snapshot pin lock poisoned: {error}"))
+            })?;
+            pins.values()
+                .copied()
+                .min()
+                .map_or(requested_fence, |pin| pin.min(requested_fence))
+        };
+        self.store
+            .range_scan(&RocksDbRangeScanOptions::new(
+                TIMELINE_CF,
+                TimelineKeyV1 {
+                    due_time_ms: i64::MIN,
+                    lane: 0,
+                    timer_id: TimerId::new(0),
+                    generation: TimerGeneration::new(0),
+                }
+                .encode(),
+                effective_fence.encode(),
+                max_records,
+            ))?
+            .into_iter()
+            .map(|item| {
+                Ok(TimelineIndexEntry {
+                    key: TimelineKeyV1::decode(&item.key)?,
+                    record: TimelineRecordV1::decode(&item.value)?,
+                })
+            })
+            .collect()
+    }
+
+    /// Appends one formal Timeline deletion to a larger terminal-GC batch.
+    pub fn append_delete_entry(batch: &mut RocksDbWriteBatch, key: TimelineKeyV1) {
+        batch.delete_cf(TIMELINE_CF, key.encode());
+    }
+
     /// Stores an 8-byte bucket count/byte summary under a caller-defined ordered bucket key.
     pub fn put_bucket_summary(&self, key: &[u8], count: u64, bytes: u64) -> Result<(), RocketMQError> {
         let mut value = [0u8; 16];
         value[..8].copy_from_slice(&count.to_be_bytes());
         value[8..].copy_from_slice(&bytes.to_be_bytes());
         self.store.put_cf(BUCKET_SUMMARY_CF, key, &value)
+    }
+
+    /// Appends one bucket summary replacement to an existing atomic Timeline batch.
+    pub fn append_bucket_summary(batch: &mut RocksDbWriteBatch, key: Vec<u8>, count: u64, bytes: u64) {
+        let mut value = [0u8; 16];
+        value[..8].copy_from_slice(&count.to_be_bytes());
+        value[8..].copy_from_slice(&bytes.to_be_bytes());
+        batch.put_cf(BUCKET_SUMMARY_CF, key, value);
     }
 
     /// Reads one bucket count/byte summary.
@@ -440,6 +532,40 @@ impl RocksDbTimelineIndex {
     pub fn close(&self) {
         self.store.close();
     }
+}
+
+fn encode_snapshot_pin(generation: u64, gc_fence: TimelineKeyV1) -> [u8; SNAPSHOT_PIN_VALUE_SIZE] {
+    let mut value = [0u8; SNAPSHOT_PIN_VALUE_SIZE];
+    value[..8].copy_from_slice(&generation.to_be_bytes());
+    value[8..43].copy_from_slice(&gc_fence.encode());
+    let checksum = crc32c(&value[..43]);
+    value[43..].copy_from_slice(&checksum.to_be_bytes());
+    value
+}
+
+fn decode_snapshot_pin(value: &[u8]) -> Result<TimelineSnapshotPin, RocketMQError> {
+    if value.len() != SNAPSHOT_PIN_VALUE_SIZE
+        || crc32c(&value[..43])
+            != u32::from_be_bytes(
+                value[43..47]
+                    .try_into()
+                    .map_err(|_| codec_error("invalid Timeline snapshot pin"))?,
+            )
+    {
+        return Err(codec_error("invalid Timeline snapshot pin"));
+    }
+    let generation = u64::from_be_bytes(
+        value[..8]
+            .try_into()
+            .map_err(|_| codec_error("invalid Timeline snapshot generation"))?,
+    );
+    if generation == 0 {
+        return Err(codec_error("invalid Timeline snapshot generation"));
+    }
+    Ok(TimelineSnapshotPin {
+        generation,
+        gc_fence: TimelineKeyV1::decode(&value[8..43])?,
+    })
 }
 
 /// Encodes a Java-compatible shadow key by durable source identity.

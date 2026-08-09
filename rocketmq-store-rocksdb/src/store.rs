@@ -440,6 +440,24 @@ impl RocksDbStore {
         result
     }
 
+    /// Returns the latest committed RocksDB sequence number.
+    pub fn latest_sequence_number(&self) -> Result<u64, RocketMQError> {
+        self.ensure_open()?;
+        Ok(self.db.latest_sequence_number())
+    }
+
+    /// Creates a checkpoint on the caller's owned blocking executor.
+    ///
+    /// This synchronous boundary exists for cross-store snapshots that must keep an external
+    /// payload barrier held until the Timeline checkpoint has captured the same generation.
+    pub fn create_checkpoint_blocking(&self, target_dir: PathBuf) -> Result<(), RocketMQError> {
+        self.ensure_open()?;
+        let checkpoint = ::rocksdb::checkpoint::Checkpoint::new(&self.db).map_rocksdb(RocksDbErrorKind::Checkpoint)?;
+        checkpoint
+            .create_checkpoint(target_dir)
+            .map_rocksdb(RocksDbErrorKind::Checkpoint)
+    }
+
     /// Creates a RocksDB checkpoint without admitting or waiting past `deadline`.
     pub async fn create_checkpoint_until(
         &self,

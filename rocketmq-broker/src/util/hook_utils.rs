@@ -38,6 +38,7 @@ use rocketmq_store::PutMessageResult;
 use rocketmq_store::PutMessageStatus;
 use rocketmq_store::TimerMessageStore;
 use rocketmq_store::TIMER_TOPIC;
+use rocketmq_store_api::TimerStoreMode;
 use tracing::error;
 use tracing::warn;
 
@@ -240,6 +241,9 @@ impl HookUtils {
         for property in [
             MessageConst::PROPERTY_TIMER_ORIGINAL_DELIVER_MS,
             MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN,
+            MessageConst::PROPERTY_TIMER_ID,
+            MessageConst::PROPERTY_TIMER_OWNER_EPOCH,
+            MessageConst::PROPERTY_TIMER_LANE,
             MessageConst::PROPERTY_TIMER_GENERATION,
             MessageConst::TIMER_ENGINE_TYPE,
             MessageConst::PROPERTY_TIMER_FORMAT_VERSION,
@@ -252,7 +256,15 @@ impl HookUtils {
                 .remove(property);
         }
 
-        let Some(max_delay_ms) = message_store_config.timer_max_delay_sec.checked_mul(1_000) else {
+        let max_delay_ms = if message_store_config.timer_store_mode == TimerStoreMode::ExtendedTimeline {
+            if !message_store_config.timer_extended_admission_enable {
+                return Some(PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable));
+            }
+            u64::from(message_store_config.timer_extended_admission_horizon_days).checked_mul(86_400_000)
+        } else {
+            message_store_config.timer_max_delay_sec.checked_mul(1_000)
+        };
+        let Some(max_delay_ms) = max_delay_ms else {
             warn!("reject timer message because timerMaxDelaySec overflows milliseconds");
             return Some(PutMessageResult::new_default(PutMessageStatus::WheelTimerMsgIllegal));
         };
@@ -273,7 +285,9 @@ impl HookUtils {
                 }
             };
 
-        if timer_message_store.is_reject(normalized.timer_out_ms) {
+        if message_store_config.timer_store_mode == TimerStoreMode::JavaCompat
+            && timer_message_store.is_reject(normalized.timer_out_ms)
+        {
             return Some(PutMessageResult::new_default(PutMessageStatus::WheelTimerFlowControl));
         }
 
@@ -300,23 +314,24 @@ impl HookUtils {
                     normalized.original_deliver_ms
                 )
             });
-        let delivery_token = format!(
-            "F:1:{}:{}:{}",
-            source_identity, normalized.original_deliver_ms, generation
-        );
-        let Some(policy_fingerprint) = timer_message_store.normalization_policy_fingerprint() else {
-            warn!("reject timer message because timer policy fingerprint cannot be computed");
-            return Some(PutMessageResult::new_default(PutMessageStatus::WheelTimerMsgIllegal));
+        let (engine, format_version) = match message_store_config.timer_store_mode {
+            TimerStoreMode::JavaCompat => (
+                MessageConst::TIMER_ENGINE_FILE_TIME_WHEEL,
+                rocketmq_store_api::JAVA_COMPAT_TIMER_FORMAT_VERSION,
+            ),
+            TimerStoreMode::ExtendedTimeline => (
+                MessageConst::TIMER_ENGINE_ROCKSDB_TIMELINE,
+                rocketmq_store_api::EXTENDED_TIMELINE_FORMAT_VERSION,
+            ),
         };
+        let delivery_token = format!(
+            "{engine}:{format_version}:{source_identity}:{}:{generation}",
+            normalized.original_deliver_ms
+        );
+        let policy_fingerprint = policy.fingerprint();
         for (key, value) in [
-            (
-                MessageConst::TIMER_ENGINE_TYPE,
-                MessageConst::TIMER_ENGINE_FILE_TIME_WHEEL.to_owned(),
-            ),
-            (
-                MessageConst::PROPERTY_TIMER_FORMAT_VERSION,
-                rocketmq_store_api::JAVA_COMPAT_TIMER_FORMAT_VERSION.to_string(),
-            ),
+            (MessageConst::TIMER_ENGINE_TYPE, engine.to_owned()),
+            (MessageConst::PROPERTY_TIMER_FORMAT_VERSION, format_version.to_string()),
             (
                 MessageConst::PROPERTY_TIMER_POLICY_FINGERPRINT,
                 policy_fingerprint.to_string(),

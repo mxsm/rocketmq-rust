@@ -21,8 +21,10 @@ use thiserror::Error;
 use crate::timer::storage_format::crc32c;
 
 const MANIFEST_MAGIC: u32 = 0x5450_4D31;
-const MANIFEST_VERSION: u16 = 1;
-const MANIFEST_SIZE: usize = 60;
+const LEGACY_MANIFEST_VERSION: u16 = 1;
+const LEGACY_MANIFEST_SIZE: usize = 60;
+const MANIFEST_VERSION: u16 = 2;
+const MANIFEST_SIZE: usize = 68;
 const MANIFEST_A: &str = "manifest.a";
 const MANIFEST_B: &str = "manifest.b";
 
@@ -78,6 +80,8 @@ pub struct TimerPayloadPartitionManifest {
     pub record_count: u64,
     /// Total durable encoded bytes.
     pub live_bytes: u64,
+    /// Oldest active snapshot generation pin, or zero when this partition is unpinned.
+    pub snapshot_pin_generation: u64,
 }
 
 impl TimerPayloadPartitionManifest {
@@ -91,6 +95,7 @@ impl TimerPayloadPartitionManifest {
             active_segment_len: 0,
             record_count: 0,
             live_bytes: 0,
+            snapshot_pin_generation: 0,
         }
     }
 
@@ -146,17 +151,21 @@ impl TimerPayloadPartitionManifest {
         output[32..40].copy_from_slice(&self.active_segment_len.to_be_bytes());
         output[40..48].copy_from_slice(&self.record_count.to_be_bytes());
         output[48..56].copy_from_slice(&self.live_bytes.to_be_bytes());
-        let checksum = crc32c(&output[..56]);
-        output[56..60].copy_from_slice(&checksum.to_be_bytes());
+        output[56..64].copy_from_slice(&self.snapshot_pin_generation.to_be_bytes());
+        let checksum = crc32c(&output[..64]);
+        output[64..68].copy_from_slice(&checksum.to_be_bytes());
         output
     }
 
     fn decode(bytes: &[u8]) -> Result<Self, PartitionManifestError> {
-        if bytes.len() != MANIFEST_SIZE
+        let version = read_u16(bytes, 4)?;
+        let legacy = version == LEGACY_MANIFEST_VERSION && bytes.len() == LEGACY_MANIFEST_SIZE;
+        let current = version == MANIFEST_VERSION && bytes.len() == MANIFEST_SIZE;
+        let checksum_offset = if current { 64 } else { 56 };
+        if (!legacy && !current)
             || read_u32(bytes, 0)? != MANIFEST_MAGIC
-            || read_u16(bytes, 4)? != MANIFEST_VERSION
-            || usize::from(read_u16(bytes, 6)?) != MANIFEST_SIZE
-            || crc32c(&bytes[..56]) != read_u32(bytes, 56)?
+            || usize::from(read_u16(bytes, 6)?) != bytes.len()
+            || crc32c(&bytes[..checksum_offset]) != read_u32(bytes, checksum_offset)?
         {
             return Err(PartitionManifestError::InvalidRecord);
         }
@@ -171,6 +180,7 @@ impl TimerPayloadPartitionManifest {
             active_segment_len: read_u64(bytes, 32)?,
             record_count: read_u64(bytes, 40)?,
             live_bytes: read_u64(bytes, 48)?,
+            snapshot_pin_generation: if current { read_u64(bytes, 56)? } else { 0 },
         })
     }
 }

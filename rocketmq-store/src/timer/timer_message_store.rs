@@ -1619,6 +1619,18 @@ impl TimerMessageStore {
                     break;
                 }
             };
+            if message
+                .property(&CheetahString::from_static_str(MessageConst::TIMER_ENGINE_TYPE))
+                .is_some_and(|engine| engine.as_str() == TimerEngineId::ExtendedTimeline.as_str())
+            {
+                // The Extended materializer owns this source. Advancing the Java-compatible
+                // enqueue cursor is safe because its independent cleanup fence remains pinned
+                // until payload and Timeline commits are durable.
+                self.curr_queue_offset
+                    .store(cq_unit.queue_offset.saturating_add(1), Ordering::Relaxed);
+                indexed = indexed.saturating_add(1);
+                continue;
+            }
             if let Err(reason) = validate_timer_source_route(&message) {
                 self.quarantine_source(cq_unit.queue_offset, reason);
                 warn!(

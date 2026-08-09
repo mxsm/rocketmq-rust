@@ -32,6 +32,8 @@ use super::shadow::ShadowExpectedRecord;
 use super::ShadowReconciler;
 use super::TimelineReadyOutbox;
 use crate::config::timer_store_config::TimerStoreConfig;
+use crate::timer::clock::TimerClockSafety;
+use crate::timer::clock::TimerClockState;
 
 const FORMAL_DUE_CHECKPOINT_LANE: u16 = 0;
 const SHADOW_DUE_CHECKPOINT_LANE: u16 = u16::MAX;
@@ -42,6 +44,7 @@ pub(crate) struct TimelineDueScanner {
     timeline: Arc<RocksDbTimelineIndex>,
     state: RocksDbTimelineStateIndex,
     shadow_reconciler: Option<Arc<ShadowReconciler>>,
+    clock: Option<Arc<TimerClockSafety>>,
 }
 
 impl TimelineDueScanner {
@@ -51,6 +54,21 @@ impl TimelineDueScanner {
             state: timeline.state_index(),
             timeline,
             shadow_reconciler: None,
+            clock: None,
+        }
+    }
+
+    pub(crate) fn new_with_clock(
+        config: TimerStoreConfig,
+        timeline: Arc<RocksDbTimelineIndex>,
+        clock: Arc<TimerClockSafety>,
+    ) -> Self {
+        Self {
+            config,
+            state: timeline.state_index(),
+            timeline,
+            shadow_reconciler: None,
+            clock: Some(clock),
         }
     }
 
@@ -64,6 +82,7 @@ impl TimelineDueScanner {
             state: timeline.state_index(),
             timeline,
             shadow_reconciler: Some(reconciler),
+            clock: None,
         }
     }
 
@@ -142,6 +161,15 @@ impl TimelineDueScanner {
 
     /// Promotes formal, Extended-owned PENDING records to a durable ready outbox.
     pub(crate) fn scan_formal_until(&self, now_ms: i64) -> Result<DueScanResult, TimelineDueScannerError> {
+        let now_ms = if let Some(clock) = self.clock.as_ref() {
+            let observation = clock.observe();
+            if observation.state == TimerClockState::Unsafe {
+                return Err(TimelineDueScannerError::ClockUnsafe);
+            }
+            observation.wall_time_ms.min(now_ms)
+        } else {
+            now_ms
+        };
         let mut result = self.drain_late_ready()?;
         let checkpoint = self.checkpoint(FORMAL_DUE_CHECKPOINT_LANE)?;
         let start_ms = checkpoint
@@ -313,6 +341,8 @@ pub(crate) enum TimelineDueScannerError {
     EmptyPage,
     #[error("configured Timeline lane does not fit the persisted format")]
     LaneOverflow,
+    #[error("CLOCK_UNSAFE prevents formal due promotion")]
+    ClockUnsafe,
 }
 
 #[cfg(test)]
@@ -363,6 +393,10 @@ mod tests {
             .expect("route"),
             admission_epoch: TimerEngineEpoch::new(1),
             owner_epoch: TimerEngineEpoch::new(1),
+            claim_seq: 0,
+            due_time_ms: 1_000,
+            lane: 0,
+            terminal_at_ms: 0,
             shadow_only: false,
         }
     }

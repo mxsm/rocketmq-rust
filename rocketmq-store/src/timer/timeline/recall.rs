@@ -143,6 +143,10 @@ mod tests {
             .expect("route"),
             admission_epoch: TimerEngineEpoch::new(1),
             owner_epoch: TimerEngineEpoch::new(1),
+            claim_seq: 0,
+            due_time_ms: 1_000,
+            lane: 0,
+            terminal_at_ms: 0,
             shadow_only: false,
         }
     }
@@ -183,10 +187,9 @@ mod tests {
             .expect("recall");
         assert!(matches!(result, RecallResult::Cancelled { generation: 2, .. }));
         let states = RocksDbTimelineStateIndex::new(timeline.store());
-        assert_eq!(
-            states.get(timer_id, active).expect("active").expect("state").state,
-            TimelineState::Cancelled
-        );
+        let cancelled = states.get(timer_id, active).expect("active").expect("state");
+        assert_eq!(cancelled.state, TimelineState::Cancelled);
+        assert!(cancelled.terminal_at_ms > 0);
         assert_eq!(
             states.get(timer_id, old).expect("old").expect("state").state,
             TimelineState::Ready

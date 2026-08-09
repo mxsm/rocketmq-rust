@@ -41,3 +41,5 @@ pub const SHADOW_OBSERVATION_CF: &str = "shadow_observation";
 pub const CHECKPOINT_CF: &str = "checkpoint";
 /// Sparse due-day/hour counts used to skip empty ranges.
 pub const BUCKET_SUMMARY_CF: &str = "bucket_summary";
+/// Final CommitLog facts indexed by stable delivery token.
+pub const RECEIPT_CF: &str = "receipt";

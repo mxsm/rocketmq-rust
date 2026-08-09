@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::AtomicU64;
@@ -20,10 +21,14 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
+use parking_lot::Mutex;
+use parking_lot::RwLock;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::MessageConst;
 use rocketmq_model::common::message::MessageTrait;
 use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
+use rocketmq_store_api::PersistedTimerRoute;
+use rocketmq_store_api::TimerEngineEpoch;
 use rocketmq_store_api::TimerEngineId;
 use rocketmq_store_api::TimerGeneration;
 use rocketmq_store_api::TimerId;
@@ -35,8 +40,13 @@ use rocketmq_store_local::timer::payload_store::TimerPayloadStoreConfig;
 use rocketmq_store_rocksdb::batch::RocksDbWriteBatch;
 use rocketmq_store_rocksdb::timer::checkpoint::TimelineCheckpointKind;
 use rocketmq_store_rocksdb::timer::checkpoint::TimelineCheckpointV1;
+use rocketmq_store_rocksdb::timer::codec::RecallLookupKeyV1;
+use rocketmq_store_rocksdb::timer::codec::RecallLookupValueV1;
 use rocketmq_store_rocksdb::timer::codec::TimelineKeyV1;
 use rocketmq_store_rocksdb::timer::codec::TimelineRecordV1;
+use rocketmq_store_rocksdb::timer::state_index::RocksDbTimelineStateIndex;
+use rocketmq_store_rocksdb::timer::state_index::TimelineState;
+use rocketmq_store_rocksdb::timer::state_index::TimelineStateRecordV1;
 use rocketmq_store_rocksdb::timer::timeline_index::RocksDbTimelineIndex;
 use rocketmq_store_rocksdb::timer::timeline_index::ShadowObservationKind;
 use rocketmq_store_rocksdb::timer::timeline_index::TimelineIndexEntry;
@@ -51,6 +61,8 @@ use crate::timer::timer_message_store::TIMER_TOPIC;
 use super::shadow::ShadowExpectedRecord;
 use super::shadow::ShadowReconciliationSnapshot;
 use super::ShadowReconciler;
+use super::TimelineReadyOutbox;
+use super::TimelineRecallService;
 
 const SOURCE_CHECKPOINT_LANE: u16 = 0;
 const SHADOW_DUE_CHECKPOINT_LANE: u16 = u16::MAX;
@@ -69,9 +81,18 @@ pub(crate) struct ShadowTimelineMaterializer {
     first_unmaterialized_physical_offset: Arc<AtomicI64>,
     format_fingerprint: u64,
     reconciler: Arc<ShadowReconciler>,
+    snapshot_barrier: Arc<RwLock<()>>,
+    run_lock: Mutex<()>,
+    mode: TimelineMaterializationMode,
     materialized_records: AtomicU64,
     materialized_bytes: AtomicU64,
     materialization_failures: AtomicU64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TimelineMaterializationMode {
+    Shadow,
+    Formal { admission_epoch: TimerEngineEpoch },
 }
 
 impl ShadowTimelineMaterializer {
@@ -82,6 +103,46 @@ impl ShadowTimelineMaterializer {
         consume_queues: ConsumeQueueLookupHandle,
         commit_log: CommitLogReadHandle,
         first_unmaterialized_physical_offset: Arc<AtomicI64>,
+    ) -> Result<Self, TimelineMaterializerError> {
+        Self::open_with_mode(
+            store_root,
+            config,
+            consume_queues,
+            commit_log,
+            first_unmaterialized_physical_offset,
+            TimelineMaterializationMode::Shadow,
+        )
+    }
+
+    /// Opens a production materializer whose new records are owned by Extended Timeline.
+    pub(crate) fn open_formal(
+        store_root: impl AsRef<Path>,
+        config: TimerStoreConfig,
+        consume_queues: ConsumeQueueLookupHandle,
+        commit_log: CommitLogReadHandle,
+        first_unmaterialized_physical_offset: Arc<AtomicI64>,
+        admission_epoch: TimerEngineEpoch,
+    ) -> Result<Self, TimelineMaterializerError> {
+        if admission_epoch.get() == 0 {
+            return Err(TimelineMaterializerError::InvalidAdmissionEpoch);
+        }
+        Self::open_with_mode(
+            store_root,
+            config,
+            consume_queues,
+            commit_log,
+            first_unmaterialized_physical_offset,
+            TimelineMaterializationMode::Formal { admission_epoch },
+        )
+    }
+
+    fn open_with_mode(
+        store_root: impl AsRef<Path>,
+        config: TimerStoreConfig,
+        consume_queues: ConsumeQueueLookupHandle,
+        commit_log: CommitLogReadHandle,
+        first_unmaterialized_physical_offset: Arc<AtomicI64>,
+        mode: TimelineMaterializationMode,
     ) -> Result<Self, TimelineMaterializerError> {
         config.validate()?;
         let mut payload_config = TimerPayloadStoreConfig::for_store_root(store_root.as_ref());
@@ -108,6 +169,9 @@ impl ShadowTimelineMaterializer {
             first_unmaterialized_physical_offset,
             format_fingerprint,
             reconciler,
+            snapshot_barrier: Arc::new(RwLock::new(())),
+            run_lock: Mutex::new(()),
+            mode,
             materialized_records: AtomicU64::new(0),
             materialized_bytes: AtomicU64::new(0),
             materialization_failures: AtomicU64::new(0),
@@ -126,6 +190,19 @@ impl ShadowTimelineMaterializer {
 
     pub(crate) fn reconciler(&self) -> Arc<ShadowReconciler> {
         Arc::clone(&self.reconciler)
+    }
+
+    pub(crate) fn snapshot_barrier(&self) -> Arc<RwLock<()>> {
+        Arc::clone(&self.snapshot_barrier)
+    }
+
+    pub(crate) fn snapshot_source_cursors(&self) -> Result<(i64, i64, u64), TimelineMaterializerError> {
+        let checkpoint = self.source_checkpoint()?;
+        Ok((
+            checkpoint.materialized_source_offset.get().saturating_add(1),
+            self.first_unmaterialized_physical_offset.load(Ordering::Acquire).max(0),
+            checkpoint.format_fingerprint,
+        ))
     }
 
     /// Returns bounded operational counters without scanning Timeline keys.
@@ -170,6 +247,8 @@ impl ShadowTimelineMaterializer {
 
     /// Materializes one bounded, physically ordered Timer CQ batch.
     pub(crate) fn run_once(&self) -> Result<usize, TimelineMaterializerError> {
+        let _run_guard = self.run_lock.lock();
+        let _snapshot_guard = self.snapshot_barrier.read();
         let result = self.run_once_inner();
         if result.is_err() {
             self.materialization_failures.fetch_add(1, Ordering::Relaxed);
@@ -179,9 +258,13 @@ impl ShadowTimelineMaterializer {
 
     fn run_once_inner(&self) -> Result<usize, TimelineMaterializerError> {
         let checkpoint = self.source_checkpoint()?;
-        let shadow_due_cursor = self
+        let due_checkpoint_lane = match self.mode {
+            TimelineMaterializationMode::Shadow => SHADOW_DUE_CHECKPOINT_LANE,
+            TimelineMaterializationMode::Formal { .. } => 0,
+        };
+        let due_cursor = self
             .timeline
-            .checkpoint(TimelineCheckpointKind::Due, SHADOW_DUE_CHECKPOINT_LANE)?
+            .checkpoint(TimelineCheckpointKind::Due, due_checkpoint_lane)?
             .map(|checkpoint| checkpoint.due_cursor.due_time_ms())
             .unwrap_or_default();
         let start_offset = checkpoint.materialized_source_offset.get().saturating_add(1);
@@ -221,15 +304,30 @@ impl ShadowTimelineMaterializer {
             }
             let raw_frame = self.read_frame(source)?;
             let message = decode_frame(&raw_frame)?;
-            let mut decoded = decode_source(source, raw_frame, &message, self.config.lane_count)?;
+            let mut decoded = decode_source(
+                source,
+                raw_frame,
+                &message,
+                self.config.lane_count,
+                self.mode,
+                self.format_fingerprint,
+            )?;
             decoded.late = !decoded.cancelled
-                && decoded.key.due_time_ms <= shadow_due_cursor.saturating_add(self.config.safety_overlap_ms);
+                && decoded.key.due_time_ms <= due_cursor.saturating_add(self.config.safety_overlap_ms);
             let generation = decoded.key.generation;
-            if let Some(existing) = self
-                .timeline
-                .get_shadow(source.cq_offset, source.physical_offset, generation)?
-            {
-                validate_existing_source(existing, source)?;
+            let existing = match self.mode {
+                TimelineMaterializationMode::Shadow => {
+                    self.timeline
+                        .get_shadow(source.cq_offset, source.physical_offset, generation)?
+                }
+                TimelineMaterializationMode::Formal { .. } => self.timeline.get(decoded.key)?,
+            };
+            if let Some(existing) = existing {
+                validate_existing_source(
+                    existing,
+                    source,
+                    matches!(self.mode, TimelineMaterializationMode::Shadow),
+                )?;
                 prepared.push(PreparedSource::Existing(decoded));
                 retained_bytes = retained_bytes.saturating_add(size);
                 continue;
@@ -251,9 +349,10 @@ impl ShadowTimelineMaterializer {
         let locators = self.payload_store.append_batch(&payload_records)?;
         let mut locator_iter = locators.into_iter();
         let mut batch = RocksDbWriteBatch::with_capacity(prepared.len().saturating_mul(3).saturating_add(1));
+        let mut usage_deltas = BTreeMap::<Vec<u8>, (u64, u64)>::new();
         for prepared_source in &prepared {
             let decoded = prepared_source.decoded();
-            if decoded.late {
+            if decoded.late && matches!(self.mode, TimelineMaterializationMode::Shadow) {
                 RocksDbTimelineIndex::append_shadow_observation(
                     &mut batch,
                     decoded.source.cq_offset,
@@ -278,33 +377,95 @@ impl ShadowTimelineMaterializer {
                     source_size: u32::try_from(source.source.size)
                         .map_err(|_| TimelineMaterializerError::InvalidSourceSize)?,
                     state_version: 0,
-                    owner_engine: TimerEngineId::JavaCompat,
-                    shadow_only: true,
+                    owner_engine: source.route.engine_id(),
+                    shadow_only: matches!(self.mode, TimelineMaterializationMode::Shadow),
                 },
             };
             RocksDbTimelineIndex::append_entry(&mut batch, &entry)?;
-            RocksDbTimelineIndex::append_shadow_observation(
-                &mut batch,
-                source.source.cq_offset,
-                source.source.physical_offset,
-                source.key.generation,
-                ShadowObservationKind::Materialized,
-                source.key.due_time_ms.to_be_bytes(),
-            )?;
-            if source.cancelled {
-                RocksDbTimelineIndex::delete_shadow_due_candidate(&mut batch, source.key);
-                RocksDbTimelineIndex::append_shadow_observation(
-                    &mut batch,
-                    source.source.cq_offset,
-                    source.source.physical_offset,
-                    source.key.generation,
-                    ShadowObservationKind::Cancelled,
-                    source.key.due_time_ms.to_be_bytes(),
-                )?;
+            match self.mode {
+                TimelineMaterializationMode::Shadow => {
+                    RocksDbTimelineIndex::append_shadow_observation(
+                        &mut batch,
+                        source.source.cq_offset,
+                        source.source.physical_offset,
+                        source.key.generation,
+                        ShadowObservationKind::Materialized,
+                        source.key.due_time_ms.to_be_bytes(),
+                    )?;
+                    if source.cancelled {
+                        RocksDbTimelineIndex::delete_shadow_due_candidate(&mut batch, source.key);
+                        RocksDbTimelineIndex::append_shadow_observation(
+                            &mut batch,
+                            source.source.cq_offset,
+                            source.source.physical_offset,
+                            source.key.generation,
+                            ShadowObservationKind::Cancelled,
+                            source.key.due_time_ms.to_be_bytes(),
+                        )?;
+                    }
+                }
+                TimelineMaterializationMode::Formal { admission_epoch } => {
+                    if source.cancelled {
+                        return Err(TimelineMaterializerError::FormalRecallTombstone);
+                    }
+                    RocksDbTimelineStateIndex::append_state(
+                        &mut batch,
+                        source.key.timer_id,
+                        source.key.generation,
+                        &TimelineStateRecordV1 {
+                            state: TimelineState::Pending,
+                            state_version: 0,
+                            route: source.route.clone(),
+                            admission_epoch,
+                            owner_epoch: admission_epoch,
+                            claim_seq: 0,
+                            due_time_ms: source.key.due_time_ms,
+                            lane: source.key.lane,
+                            terminal_at_ms: 0,
+                            shadow_only: false,
+                        },
+                    )?;
+                    if source.late {
+                        TimelineReadyOutbox::append_late_ready(&mut batch, source.key, 0);
+                    }
+                    if let Some(unique_key) = source.unique_key.as_ref() {
+                        TimelineRecallService::append_lookup(
+                            &mut batch,
+                            &RecallLookupKeyV1 {
+                                engine: TimerEngineId::ExtendedTimeline,
+                                topic: source.payload.real_topic.clone(),
+                                unique_key: unique_key.clone(),
+                            },
+                            RecallLookupValueV1 {
+                                timer_id: source.key.timer_id,
+                                generation: source.key.generation,
+                                due_time_ms: source.key.due_time_ms,
+                                lane: source.key.lane,
+                                state_version: 0,
+                            },
+                        )?;
+                    }
+                    let encoded_bytes = u64::try_from(source.payload.encoded_len()?).unwrap_or(u64::MAX);
+                    let keys = super::usage_summary_keys(&source.payload.real_topic, source.key.due_time_ms);
+                    for key in [keys.global, keys.topic, keys.tenant, keys.bucket] {
+                        let delta = usage_deltas.entry(key).or_default();
+                        delta.0 = delta.0.saturating_add(1);
+                        delta.1 = delta.1.saturating_add(encoded_bytes);
+                    }
+                }
             }
         }
         if locator_iter.next().is_some() {
             return Err(TimelineMaterializerError::LocatorCountMismatch);
+        }
+        for (key, (count_delta, bytes_delta)) in usage_deltas {
+            let (count, bytes) = self.timeline.bucket_summary(&key)?.unwrap_or_default();
+            RocksDbTimelineIndex::append_bucket_summary(
+                &mut batch,
+                key,
+                count.saturating_add(count_delta),
+                bytes.saturating_add(bytes_delta),
+            );
         }
 
         let last_source = prepared
@@ -324,11 +485,13 @@ impl ShadowTimelineMaterializer {
             },
         );
         self.timeline.write_batch(&batch)?;
-        for source in &prepared {
-            let source = source.decoded();
-            self.reconciler.reconcile_materialized(source.expected()?);
-            if source.late {
-                self.reconciler.reconcile_due(source.expected()?);
+        if matches!(self.mode, TimelineMaterializationMode::Shadow) {
+            for source in &prepared {
+                let source = source.decoded();
+                self.reconciler.reconcile_materialized(source.expected()?);
+                if source.late {
+                    self.reconciler.reconcile_due(source.expected()?);
+                }
             }
         }
         self.materialized_records.fetch_add(
@@ -428,6 +591,8 @@ struct DecodedSource {
     payload: TimerPayloadRecordV1,
     cancelled: bool,
     late: bool,
+    route: PersistedTimerRoute,
+    unique_key: Option<String>,
 }
 
 impl DecodedSource {
@@ -449,6 +614,8 @@ fn decode_source(
     frame: Vec<u8>,
     message: &MessageExt,
     lane_count: usize,
+    mode: TimelineMaterializationMode,
+    fallback_policy_fingerprint: u64,
 ) -> Result<DecodedSource, TimelineMaterializerError> {
     if source.cq_offset < 0 || source.physical_offset < 0 {
         return Err(TimelineMaterializerError::InvalidSourceIdentity);
@@ -467,6 +634,14 @@ fn decode_source(
     )?;
     let generation =
         TimerGeneration::new(parse_u64_property(message, MessageConst::PROPERTY_TIMER_GENERATION).unwrap_or_default());
+    let route = decode_route(
+        message,
+        mode,
+        source,
+        generation,
+        due_time_ms,
+        fallback_policy_fingerprint,
+    )?;
     let lane = u16::try_from(delivery_shard(&real_topic, real_queue_id, lane_count))
         .map_err(|_| TimelineMaterializerError::LaneOverflow)?;
     let timer_id =
@@ -482,6 +657,8 @@ fn decode_source(
         key,
         cancelled: property(message, MessageConst::PROPERTY_TIMER_DEL_UNIQKEY).is_some(),
         late: false,
+        route,
+        unique_key: property(message, MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
         payload: TimerPayloadRecordV1 {
             due_time_ms,
             lane,
@@ -494,6 +671,54 @@ fn decode_source(
             frame,
         },
     })
+}
+
+fn decode_route(
+    message: &MessageExt,
+    mode: TimelineMaterializationMode,
+    source: SourceIdentity,
+    generation: TimerGeneration,
+    due_time_ms: i64,
+    fallback_policy_fingerprint: u64,
+) -> Result<PersistedTimerRoute, TimelineMaterializerError> {
+    let expected_engine = match mode {
+        TimelineMaterializationMode::Shadow => TimerEngineId::JavaCompat,
+        TimelineMaterializationMode::Formal { .. } => TimerEngineId::ExtendedTimeline,
+    };
+    let encoded_engine = property(message, MessageConst::TIMER_ENGINE_TYPE);
+    let engine = match encoded_engine {
+        Some(engine) => TimerEngineId::parse(&engine).map_err(|_| TimelineMaterializerError::RouteMismatch)?,
+        None if matches!(mode, TimelineMaterializationMode::Shadow) => expected_engine,
+        None => return Err(TimelineMaterializerError::RouteMismatch),
+    };
+    if engine != expected_engine {
+        return Err(TimelineMaterializerError::RouteMismatch);
+    }
+    let format_version = parse_u64_property(message, MessageConst::PROPERTY_TIMER_FORMAT_VERSION)
+        .and_then(|value| u16::try_from(value).ok())
+        .unwrap_or(1);
+    let policy_fingerprint = parse_u64_property(message, MessageConst::PROPERTY_TIMER_POLICY_FINGERPRINT)
+        .filter(|value| *value != 0)
+        .unwrap_or(fallback_policy_fingerprint);
+    let token = property(message, MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN).unwrap_or_else(|| {
+        format!(
+            "{}:{format_version}:{}:{}:{}:{}",
+            expected_engine.as_str(),
+            source.cq_offset,
+            source.physical_offset,
+            due_time_ms,
+            generation.get()
+        )
+    });
+    if matches!(mode, TimelineMaterializationMode::Formal { .. })
+        && (format_version != rocketmq_store_api::EXTENDED_TIMELINE_FORMAT_VERSION
+            || property(message, MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN).is_none()
+            || parse_u64_property(message, MessageConst::PROPERTY_TIMER_POLICY_FINGERPRINT).is_none())
+    {
+        return Err(TimelineMaterializerError::RouteMismatch);
+    }
+    PersistedTimerRoute::try_new(engine, format_version, policy_fingerprint, generation, token)
+        .map_err(|_| TimelineMaterializerError::RouteMismatch)
 }
 
 /// Runtime metrics for the non-delivering Extended Timeline shadow.
@@ -539,12 +764,13 @@ fn parse_u64_property(message: &MessageExt, name: &'static str) -> Option<u64> {
 fn validate_existing_source(
     existing: TimelineRecordV1,
     source: SourceIdentity,
+    expected_shadow: bool,
 ) -> Result<(), TimelineMaterializerError> {
     if existing.source_cq_offset.get() != source.cq_offset
         || existing.source_physical_offset != source.physical_offset
         || existing.source_size
             != u32::try_from(source.size).map_err(|_| TimelineMaterializerError::InvalidSourceSize)?
-        || !existing.shadow_only
+        || existing.shadow_only != expected_shadow
     {
         return Err(TimelineMaterializerError::ReplayIdentityMismatch);
     }
@@ -574,6 +800,8 @@ pub(crate) enum TimelineMaterializerError {
     Config(#[from] crate::config::timer_store_config::TimerStoreConfigError),
     #[error("payload store failure: {0}")]
     Payload(#[from] rocketmq_store_local::timer::payload_store::TimerPayloadStoreError),
+    #[error("payload record failure: {0}")]
+    PayloadRecord(#[from] rocketmq_store_local::timer::payload_record::TimerPayloadRecordError),
     #[error("Timeline store failure: {0}")]
     Timeline(#[from] rocketmq_error::RocketMQError),
     #[error("Timer ConsumeQueue is unavailable")]
@@ -598,4 +826,10 @@ pub(crate) enum TimelineMaterializerError {
     ReplayIdentityMismatch,
     #[error("Extended Timeline configuration fingerprint changed without migration")]
     FormatFingerprintMismatch,
+    #[error("formal Extended Timeline admission epoch must be non-zero")]
+    InvalidAdmissionEpoch,
+    #[error("timer source route does not match the materializer owner")]
+    RouteMismatch,
+    #[error("formal Extended Recall must use the state transition API, not a Timer topic tombstone")]
+    FormalRecallTombstone,
 }
