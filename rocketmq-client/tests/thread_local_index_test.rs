@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use rand::RngExt;
 use rocketmq_client_rust::ThreadLocalIndex;
 use std::cell::RefCell;

@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![recursion_limit = "256"]
+
 use rocketmq_client_rust::test_support::run_lite_pull_assignment_registry_probe;
 
 #[tokio::test]

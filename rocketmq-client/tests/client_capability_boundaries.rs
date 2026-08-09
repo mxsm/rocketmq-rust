@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![recursion_limit = "256"]
+
 const CLIENT_FACADE: &str = include_str!("../src/implementation/mq_client_api_impl.rs");
 const CLIENT_ADMIN: &str = include_str!("../src/implementation/mq_client_api_impl/admin.rs");
 const CLIENT_VERSIONED_CONFIG: &str =

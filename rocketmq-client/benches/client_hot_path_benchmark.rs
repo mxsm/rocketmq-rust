@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![recursion_limit = "256"]
+
 //! Client hot-path benchmarks for Java parity and production readiness.
 //!
 //! These benches are intentionally broker-free. They cover paths whose latency
