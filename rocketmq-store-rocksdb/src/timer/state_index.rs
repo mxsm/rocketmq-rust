@@ -14,6 +14,8 @@
 
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use rocketmq_error::RocketMQError;
 use rocketmq_store_api::PersistedTimerRoute;
@@ -24,6 +26,7 @@ use rocketmq_store_api::EXTENDED_TIMELINE_FORMAT_VERSION;
 
 use crate::batch::RocksDbWriteBatch;
 use crate::error::codec_error;
+use crate::iterator::RocksDbRangeScanOptions;
 use crate::store::KeyValueStore;
 use crate::store::RocksDbStore;
 use crate::timer::codec::crc32c;
@@ -33,7 +36,8 @@ use crate::timer::STATE_CF;
 
 const STATE_KEY_VERSION: u8 = 1;
 const STATE_KEY_SIZE: usize = 25;
-const STATE_VALUE_FIXED_SIZE: usize = 45;
+const LEGACY_STATE_VALUE_FIXED_SIZE: usize = 45;
+const STATE_VALUE_FIXED_SIZE: usize = 71;
 
 /// Durable Extended Timeline state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -117,6 +121,16 @@ pub struct TimelineStateRecordV1 {
     pub admission_epoch: TimerEngineEpoch,
     /// Engine-owner epoch fencing stale workers.
     pub owner_epoch: TimerEngineEpoch,
+    /// Monotonic claim sequence within the owner epoch.
+    pub claim_seq: u64,
+    /// Exact unrounded deadline retained for lease recovery.
+    pub due_time_ms: i64,
+    /// Stable lane retained for ready-outbox reconstruction.
+    pub lane: u16,
+    /// Wall-clock time when DELIVERED or CANCELLED became durable.
+    ///
+    /// Legacy records decode as zero and are not automatically reclaimed.
+    pub terminal_at_ms: i64,
     /// Shadow records never enter formal delivery states.
     pub shadow_only: bool,
 }
@@ -142,6 +156,10 @@ impl TimelineStateRecordV1 {
         output.extend_from_slice(&token_len.to_be_bytes());
         output.extend_from_slice(token);
         output.push(u8::from(self.shadow_only));
+        output.extend_from_slice(&self.claim_seq.to_be_bytes());
+        output.extend_from_slice(&self.due_time_ms.to_be_bytes());
+        output.extend_from_slice(&self.lane.to_be_bytes());
+        output.extend_from_slice(&self.terminal_at_ms.to_be_bytes());
         let checksum = crc32c(&output);
         output.extend_from_slice(&checksum.to_be_bytes());
         Ok(output)
@@ -149,7 +167,7 @@ impl TimelineStateRecordV1 {
 
     /// Decodes a state value using the generation from its key.
     pub fn decode(bytes: &[u8], generation: TimerGeneration) -> Result<Self, RocketMQError> {
-        if bytes.len() < STATE_VALUE_FIXED_SIZE
+        if bytes.len() < LEGACY_STATE_VALUE_FIXED_SIZE
             || read_u16(bytes, 0)? != EXTENDED_TIMELINE_FORMAT_VERSION
             || crc32c(&bytes[..bytes.len() - 4]) != read_u32(bytes, bytes.len() - 4)?
         {
@@ -158,7 +176,11 @@ impl TimelineStateRecordV1 {
         let token_len = usize::from(read_u16(bytes, 38)?);
         let token_start = 40usize;
         let token_end = token_start.saturating_add(token_len);
-        if token_len == 0 || token_end.saturating_add(5) != bytes.len() || bytes[token_end] > 1 {
+        let legacy = token_end.saturating_add(5) == bytes.len();
+        let claim_only = token_end.saturating_add(13) == bytes.len();
+        let recovery_fields = token_end.saturating_add(23) == bytes.len();
+        let current = token_end.saturating_add(31) == bytes.len();
+        if token_len == 0 || (!legacy && !claim_only && !recovery_fields && !current) || bytes[token_end] > 1 {
             return Err(codec_error("invalid extended timer state token or flags"));
         }
         let token = std::str::from_utf8(&bytes[token_start..token_end])
@@ -177,6 +199,22 @@ impl TimelineStateRecordV1 {
             route,
             admission_epoch: TimerEngineEpoch::new(read_u64(bytes, 11)?),
             owner_epoch: TimerEngineEpoch::new(read_u64(bytes, 19)?),
+            claim_seq: if claim_only || recovery_fields || current {
+                read_u64(bytes, token_end + 1)?
+            } else {
+                0
+            },
+            due_time_ms: if recovery_fields || current {
+                read_i64(bytes, token_end + 9)?
+            } else {
+                0
+            },
+            lane: if recovery_fields || current {
+                read_u16(bytes, token_end + 17)?
+            } else {
+                0
+            },
+            terminal_at_ms: if current { read_i64(bytes, token_end + 19)? } else { 0 },
             shadow_only: bytes[token_end] == 1,
         })
     }
@@ -191,6 +229,26 @@ pub enum StateTransitionResult {
     Conflict(TimelineStateRecordV1),
     /// No state exists for this timer generation.
     Missing,
+}
+
+/// Decoded state entry returned by bounded recovery scans.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TimelineStateEntry {
+    /// Timer identity from the state key.
+    pub timer_id: TimerId,
+    /// Generation from the state key.
+    pub generation: TimerGeneration,
+    /// Verified state value.
+    pub record: TimelineStateRecordV1,
+}
+
+/// Bounded state scan page with an exclusive continuation identity.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TimelineStatePage {
+    /// Verified entries in key order.
+    pub entries: Vec<TimelineStateEntry>,
+    /// Last identity when another page may remain.
+    pub continuation: Option<(TimerId, TimerGeneration)>,
 }
 
 /// Serialized state-index operations over the dedicated Timeline database.
@@ -224,6 +282,58 @@ impl RocksDbTimelineStateIndex {
             .transpose()
     }
 
+    /// Scans a bounded state page for restart/promotion lease recovery.
+    pub fn scan(&self, max_records: usize) -> Result<Vec<TimelineStateEntry>, RocketMQError> {
+        Ok(self.scan_after(None, max_records)?.entries)
+    }
+
+    /// Scans after an exclusive timer/generation identity for bounded full-state recovery.
+    pub fn scan_after(
+        &self,
+        continuation: Option<(TimerId, TimerGeneration)>,
+        max_records: usize,
+    ) -> Result<TimelineStatePage, RocketMQError> {
+        if max_records == 0 {
+            return Ok(TimelineStatePage::default());
+        }
+        let start = continuation.map_or_else(
+            || {
+                let mut start = [0u8; STATE_KEY_SIZE];
+                start[0] = STATE_KEY_VERSION;
+                start
+            },
+            |(timer_id, generation)| encode_state_key(timer_id, generation),
+        );
+        let end = [STATE_KEY_VERSION.saturating_add(1)];
+        let scan_limit = max_records.saturating_add(1);
+        let mut entries = self
+            .store
+            .range_scan(&RocksDbRangeScanOptions::new(STATE_CF, start, end, scan_limit))?
+            .into_iter()
+            .map(|item| {
+                let (timer_id, generation) = decode_state_key(&item.key)?;
+                Ok(TimelineStateEntry {
+                    timer_id,
+                    generation,
+                    record: TimelineStateRecordV1::decode(&item.value, generation)?,
+                })
+            })
+            .collect::<Result<Vec<_>, RocketMQError>>()?;
+        let scan_was_full = entries.len() == scan_limit;
+        if let Some(continuation) = continuation {
+            entries.retain(|entry| (entry.timer_id, entry.generation) > continuation);
+        }
+        let has_more = scan_was_full || entries.len() > max_records;
+        entries.truncate(max_records);
+        let continuation = has_more.then(|| {
+            entries
+                .last()
+                .map(|entry| (entry.timer_id, entry.generation))
+                .unwrap_or(continuation.unwrap_or((TimerId::new(0), TimerGeneration::new(0))))
+        });
+        Ok(TimelineStatePage { entries, continuation })
+    }
+
     /// Writes one state record.
     pub fn put(
         &self,
@@ -244,6 +354,11 @@ impl RocksDbTimelineStateIndex {
     ) -> Result<(), RocketMQError> {
         batch.put_cf(STATE_CF, encode_state_key(timer_id, generation), record.encode()?);
         Ok(())
+    }
+
+    /// Appends state deletion after all terminal GC fences have been checked.
+    pub fn append_delete(batch: &mut RocksDbWriteBatch, timer_id: TimerId, generation: TimerGeneration) {
+        batch.delete_cf(STATE_CF, encode_state_key(timer_id, generation));
     }
 
     /// Applies a state transition only when both state and state version match.
@@ -271,10 +386,95 @@ impl RocksDbTimelineStateIndex {
         let mut next = current;
         next.state = next_state;
         next.state_version = next.state_version.saturating_add(1);
+        if matches!(next_state, TimelineState::Delivered | TimelineState::Cancelled) {
+            next.terminal_at_ms = current_time_millis();
+        }
         side_effects.put_cf(STATE_CF, encode_state_key(timer_id, generation), next.encode()?);
         self.store.write_batch(&side_effects)?;
         Ok(StateTransitionResult::Applied(next))
     }
+
+    /// Claims one READY generation for an epoch-fenced delivery worker.
+    ///
+    /// The owner epoch and claim sequence are committed in the same batch as the
+    /// READY-to-DELIVERING transition, making this the Recall/delivery linearization point.
+    pub fn claim_ready(
+        &self,
+        timer_id: TimerId,
+        generation: TimerGeneration,
+        expected_version: u64,
+        owner_epoch: TimerEngineEpoch,
+        claim_seq: u64,
+        mut side_effects: RocksDbWriteBatch,
+    ) -> Result<StateTransitionResult, RocketMQError> {
+        if owner_epoch.get() == 0 || claim_seq == 0 {
+            return Err(codec_error("delivery claim requires non-zero epoch and sequence"));
+        }
+        let _guard = self.transition_lock.lock().map_err(|error| {
+            RocketMQError::storage_write_failed("timer-timeline", format!("state transition lock poisoned: {error}"))
+        })?;
+        let Some(current) = self.get(timer_id, generation)? else {
+            return Ok(StateTransitionResult::Missing);
+        };
+        if current.state != TimelineState::Ready || current.state_version != expected_version {
+            return Ok(StateTransitionResult::Conflict(current));
+        }
+        let mut next = current;
+        next.state = TimelineState::Delivering;
+        next.state_version = next.state_version.saturating_add(1);
+        next.owner_epoch = owner_epoch;
+        next.claim_seq = claim_seq;
+        side_effects.put_cf(STATE_CF, encode_state_key(timer_id, generation), next.encode()?);
+        self.store.write_batch(&side_effects)?;
+        Ok(StateTransitionResult::Applied(next))
+    }
+
+    /// Applies a replicated final fact and its side effects atomically.
+    ///
+    /// READY is accepted only after a previous claim (`claim_seq > 0`), covering the narrow
+    /// case where lease recovery raced with delayed CommitLog replay. A never-claimed READY or
+    /// a cancelled generation fails closed.
+    pub fn complete_from_receipt(
+        &self,
+        timer_id: TimerId,
+        generation: TimerGeneration,
+        delivery_token: &str,
+        owner_epoch: TimerEngineEpoch,
+        mut side_effects: RocksDbWriteBatch,
+    ) -> Result<StateTransitionResult, RocketMQError> {
+        let _guard = self.transition_lock.lock().map_err(|error| {
+            RocketMQError::storage_write_failed("timer-timeline", format!("state transition lock poisoned: {error}"))
+        })?;
+        let Some(current) = self.get(timer_id, generation)? else {
+            return Ok(StateTransitionResult::Missing);
+        };
+        if current.route.delivery_token() != delivery_token || current.owner_epoch != owner_epoch {
+            return Ok(StateTransitionResult::Conflict(current));
+        }
+        if current.state == TimelineState::Delivered {
+            return Ok(StateTransitionResult::Conflict(current));
+        }
+        let receipt_proves_delivery = matches!(current.state, TimelineState::Delivering | TimelineState::Committing)
+            || (current.state == TimelineState::Ready && current.claim_seq > 0);
+        if !receipt_proves_delivery {
+            return Ok(StateTransitionResult::Conflict(current));
+        }
+        let mut next = current;
+        next.state = TimelineState::Delivered;
+        next.state_version = next.state_version.saturating_add(1);
+        next.terminal_at_ms = current_time_millis();
+        side_effects.put_cf(STATE_CF, encode_state_key(timer_id, generation), next.encode()?);
+        self.store.write_batch(&side_effects)?;
+        Ok(StateTransitionResult::Applied(next))
+    }
+}
+
+fn current_time_millis() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| i64::try_from(duration.as_millis()).ok())
+        .unwrap_or(i64::MAX)
 }
 
 /// Encodes a fixed state key.
@@ -316,6 +516,10 @@ fn read_u64(bytes: &[u8], offset: usize) -> Result<u64, RocketMQError> {
     Ok(u64::from_be_bytes(read_array(bytes, offset)?))
 }
 
+fn read_i64(bytes: &[u8], offset: usize) -> Result<i64, RocketMQError> {
+    Ok(i64::from_be_bytes(read_array(bytes, offset)?))
+}
+
 fn read_u128(bytes: &[u8], offset: usize) -> Result<u128, RocketMQError> {
     Ok(u128::from_be_bytes(read_array(bytes, offset)?))
 }
@@ -338,6 +542,10 @@ mod tests {
             .expect("route"),
             admission_epoch: TimerEngineEpoch::new(5),
             owner_epoch: TimerEngineEpoch::new(7),
+            claim_seq: 11,
+            due_time_ms: 1_000,
+            lane: 3,
+            terminal_at_ms: 0,
             shadow_only: false,
         }
     }
@@ -352,5 +560,20 @@ mod tests {
         );
         encoded[3] ^= 1;
         assert!(TimelineStateRecordV1::decode(&encoded, TimerGeneration::new(3)).is_err());
+    }
+
+    #[test]
+    fn state_codec_reads_the_pre_terminal_timestamp_layout_fail_closed() {
+        let expected = record(TimelineState::Delivered);
+        let mut legacy = expected.encode().expect("encode current state");
+        let checksum_start = legacy.len() - 4;
+        legacy.drain(checksum_start - 8..checksum_start);
+        legacy.truncate(legacy.len() - 4);
+        legacy.extend_from_slice(&crc32c(&legacy).to_be_bytes());
+
+        let decoded =
+            TimelineStateRecordV1::decode(&legacy, TimerGeneration::new(3)).expect("decode prior recovery layout");
+        assert_eq!(decoded.state, TimelineState::Delivered);
+        assert_eq!(decoded.terminal_at_ms, 0);
     }
 }

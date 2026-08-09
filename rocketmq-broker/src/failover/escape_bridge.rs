@@ -47,6 +47,8 @@ use rocketmq_store::StoreError as BackendStoreError;
 use rocketmq_store::StoreHealthSnapshot;
 use rocketmq_store::StorePorts;
 use rocketmq_store_api::StoreError;
+use rocketmq_store_api::TimerRecallRequest;
+use rocketmq_store_api::TimerRecallStatus;
 use tracing::error;
 use tracing::warn;
 
@@ -257,6 +259,18 @@ impl<MS: BrokerReadStore> EscapeBridge<MS> {
         MS: BrokerWriteStore,
     {
         self.message_store.put_message(message).await
+    }
+
+    pub(crate) fn recall_extended_timer(
+        &self,
+        request: &TimerRecallRequest,
+    ) -> Result<TimerRecallStatus, MessageStoreUnavailable>
+    where
+        MS: BrokerWriteStore,
+    {
+        self.message_store
+            .with_store(|store| store.recall_extended_timer(request))?
+            .map_err(|_| MessageStoreUnavailable)
     }
 
     pub(crate) fn set_commitlog_read_mode(

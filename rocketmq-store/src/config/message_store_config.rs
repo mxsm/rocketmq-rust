@@ -99,6 +99,10 @@ mod defaults {
         TimerStoreMode::JavaCompat
     }
 
+    pub fn timer_extended_admission_horizon_days() -> u16 {
+        3
+    }
+
     pub fn timer_pipeline_queue_messages() -> usize {
         4_096
     }
@@ -701,6 +705,18 @@ pub struct MessageStoreConfig {
     /// Enables the non-delivering Extended Timeline shadow pipeline.
     #[serde(default)]
     pub timer_extended_shadow_enable: bool,
+
+    /// Enables new Extended-owned admissions. Existing pending records continue to drain.
+    #[serde(default)]
+    pub timer_extended_admission_enable: bool,
+
+    /// Persisted activation boundary separating old shadow records from formal ownership.
+    #[serde(default)]
+    pub timer_extended_activation_epoch: u64,
+
+    /// Current canary horizon for new Extended admissions, independently capped at 400 days.
+    #[serde(default = "defaults::timer_extended_admission_horizon_days")]
+    pub timer_extended_admission_horizon_days: u16,
 
     /// Bounded resource limits for the independent Extended Timeline store.
     #[serde(default)]
@@ -1385,6 +1401,9 @@ impl Default for MessageStoreConfig {
             timer_put_message_thread_num: 3,
             timer_store_mode: TimerStoreMode::JavaCompat,
             timer_extended_shadow_enable: false,
+            timer_extended_admission_enable: false,
+            timer_extended_activation_epoch: 0,
+            timer_extended_admission_horizon_days: defaults::timer_extended_admission_horizon_days(),
             timer_store_config: TimerStoreConfig::default(),
             timer_pipeline_queue_messages: defaults::timer_pipeline_queue_messages(),
             timer_pipeline_queue_bytes: defaults::timer_pipeline_queue_bytes(),
@@ -1871,6 +1890,18 @@ impl MessageStoreConfig {
         properties.insert(
             "timerExtendedShadowEnable".to_string(),
             self.timer_extended_shadow_enable.to_string(),
+        );
+        properties.insert(
+            "timerExtendedAdmissionEnable".to_string(),
+            self.timer_extended_admission_enable.to_string(),
+        );
+        properties.insert(
+            "timerExtendedActivationEpoch".to_string(),
+            self.timer_extended_activation_epoch.to_string(),
+        );
+        properties.insert(
+            "timerExtendedAdmissionHorizonDays".to_string(),
+            self.timer_extended_admission_horizon_days.to_string(),
         );
         properties.insert(
             "timerPipelineQueueMessages".to_string(),

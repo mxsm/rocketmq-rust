@@ -26,6 +26,9 @@ use std::path::PathBuf;
 
 use parking_lot::Mutex;
 use rocketmq_store_api::TimerPayloadStoreLocator;
+use rocketmq_store_api::TimerSnapshotFile;
+use sha2::Digest;
+use sha2::Sha256;
 use thiserror::Error;
 
 use crate::timer::partition_manifest::PartitionManifestError;
@@ -380,6 +383,87 @@ impl TimerPayloadStore {
         metrics
     }
 
+    /// Flushes and copies one immutable payload snapshot while pinning every partition manifest.
+    ///
+    /// Only one artifact generation may be active at a time. A failed copy intentionally leaves
+    /// its durable pins in place so GC cannot invalidate a partially published artifact.
+    pub fn create_snapshot_files(
+        &self,
+        target_root: &Path,
+        generation: u64,
+    ) -> Result<Vec<TimerSnapshotFile>, TimerPayloadStoreError> {
+        if generation == 0 {
+            return Err(TimerPayloadStoreError::InvalidSnapshotGeneration);
+        }
+        let mut state = self.state.lock();
+        if state
+            .partitions
+            .values()
+            .any(|partition| partition.manifest.snapshot_pin_generation != 0)
+        {
+            return Err(TimerPayloadStoreError::SnapshotAlreadyPinned);
+        }
+        for handle in state.handles.values_mut() {
+            handle.sync_data()?;
+        }
+        for runtime in state.partitions.values_mut() {
+            runtime.manifest.snapshot_pin_generation = generation;
+            runtime.manifest.persist(&self.partition_path(runtime.manifest.key))?;
+        }
+
+        let mut files = Vec::new();
+        for runtime in state.partitions.values() {
+            let key = runtime.manifest.key;
+            let source_partition = self.partition_path(key);
+            let relative_partition =
+                PathBuf::from(format!("day-{:010}", key.due_day_utc)).join(format!("lane-{:05}", key.lane));
+            for name in ["manifest.a", "manifest.b"] {
+                let source = source_partition.join(name);
+                if source.exists() {
+                    files.push(copy_snapshot_file(
+                        &source,
+                        &target_root.join(&relative_partition).join(name),
+                        &relative_partition.join(name),
+                        source.metadata()?.len(),
+                    )?);
+                }
+            }
+            for segment_id in 0..=runtime.manifest.active_segment_id {
+                let name = format!("{segment_id:020}");
+                let source = self.segment_path(key, segment_id);
+                if !source.exists() {
+                    continue;
+                }
+                let length = if segment_id == runtime.manifest.active_segment_id {
+                    runtime.manifest.active_segment_len
+                } else {
+                    source.metadata()?.len()
+                };
+                if length > 0 {
+                    files.push(copy_snapshot_file(
+                        &source,
+                        &target_root.join(&relative_partition).join(&name),
+                        &relative_partition.join(&name),
+                        length,
+                    )?);
+                }
+            }
+        }
+        Ok(files)
+    }
+
+    /// Releases one successfully copied snapshot generation from every partition.
+    pub fn release_snapshot_pin(&self, generation: u64) -> Result<(), TimerPayloadStoreError> {
+        let mut state = self.state.lock();
+        for runtime in state.partitions.values_mut() {
+            if runtime.manifest.snapshot_pin_generation == generation {
+                runtime.manifest.snapshot_pin_generation = 0;
+                runtime.manifest.persist(&self.partition_path(runtime.manifest.key))?;
+            }
+        }
+        Ok(())
+    }
+
     fn transition_partition(
         &self,
         key: TimerPayloadPartitionKey,
@@ -593,6 +677,35 @@ impl TimerPayloadStore {
     }
 }
 
+fn copy_snapshot_file(
+    source_path: &Path,
+    target_path: &Path,
+    relative_path: &Path,
+    length: u64,
+) -> Result<TimerSnapshotFile, TimerPayloadStoreError> {
+    if let Some(parent) = target_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut source = File::open(source_path)?;
+    let mut target = OpenOptions::new().create_new(true).write(true).open(target_path)?;
+    let mut remaining = length;
+    let mut buffer = vec![0u8; 64 * 1024];
+    let mut hasher = Sha256::new();
+    while remaining > 0 {
+        let chunk = usize::try_from(remaining.min(buffer.len() as u64)).unwrap_or(buffer.len());
+        source.read_exact(&mut buffer[..chunk])?;
+        target.write_all(&buffer[..chunk])?;
+        hasher.update(&buffer[..chunk]);
+        remaining -= chunk as u64;
+    }
+    target.sync_data()?;
+    Ok(TimerSnapshotFile {
+        relative_path: relative_path.to_string_lossy().replace('\\', "/"),
+        length,
+        sha256: hex::encode(hasher.finalize()),
+    })
+}
+
 /// Bounded operational snapshot for the independent timer payload store.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TimerPayloadStoreMetrics {
@@ -636,6 +749,12 @@ pub enum TimerPayloadStoreError {
     /// In-memory partition state is missing after recovery.
     #[error("timer payload partition state is missing")]
     PartitionMissing,
+    /// Snapshot generation zero is reserved for the unpinned state.
+    #[error("timer payload snapshot generation must be non-zero")]
+    InvalidSnapshotGeneration,
+    /// The first production format keeps one durable snapshot artifact pinned at a time.
+    #[error("timer payload snapshot is already pinned")]
+    SnapshotAlreadyPinned,
     /// Segment ids are not contiguous.
     #[error("timer payload segment hole: expected={expected}, actual={actual}")]
     SegmentHole {

@@ -528,6 +528,12 @@ impl MessageConst {
     pub const PROPERTY_TIMER_ORIGINAL_DELIVER_MS: &'static str = "TIMER_ORIGINAL_DELIVER_MS";
     /// Stable identifier attached by the Broker to timer delivery attempts.
     pub const PROPERTY_TIMER_DELIVERY_TOKEN: &'static str = "TIMER_DELIVERY_TOKEN";
+    /// Stable logical timer id retained on the final CommitLog fact.
+    pub const PROPERTY_TIMER_ID: &'static str = "TIMER_ID";
+    /// Delivery-owner epoch copied to the final CommitLog fact for receipt fencing.
+    pub const PROPERTY_TIMER_OWNER_EPOCH: &'static str = "TIMER_OWNER_EPOCH";
+    /// Stable Extended Timeline delivery lane copied to the final fact.
+    pub const PROPERTY_TIMER_LANE: &'static str = "TIMER_LANE";
     /// Logical schedule generation used to fence stale Recall records.
     pub const PROPERTY_TIMER_GENERATION: &'static str = "TIMER_GENERATION";
     /// Persistent version of the timer engine record format.
@@ -617,6 +623,9 @@ pub static STRING_HASH_SET: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
     set.insert(MessageConst::PROPERTY_TIMER_DEL_UNIQKEY);
     set.insert(MessageConst::PROPERTY_TIMER_ORIGINAL_DELIVER_MS);
     set.insert(MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN);
+    set.insert(MessageConst::PROPERTY_TIMER_ID);
+    set.insert(MessageConst::PROPERTY_TIMER_OWNER_EPOCH);
+    set.insert(MessageConst::PROPERTY_TIMER_LANE);
     set.insert(MessageConst::PROPERTY_TIMER_GENERATION);
     set.insert(MessageConst::TIMER_ENGINE_TYPE);
     set.insert(MessageConst::PROPERTY_TIMER_FORMAT_VERSION);

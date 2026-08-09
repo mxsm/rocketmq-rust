@@ -34,6 +34,7 @@ pub(crate) struct TimerRoleState {
     path: PathBuf,
     epoch: AtomicU64,
     active: AtomicBool,
+    admission_active: AtomicBool,
 }
 
 impl TimerRoleState {
@@ -42,6 +43,7 @@ impl TimerRoleState {
             path: Path::new(store_root).join("config").join("timer-role.meta"),
             epoch: AtomicU64::new(0),
             active: AtomicBool::new(false),
+            admission_active: AtomicBool::new(false),
         }
     }
 
@@ -70,25 +72,37 @@ impl TimerRoleState {
             .unwrap_or_default();
         self.epoch.store(recovered_epoch, Ordering::Release);
         self.active.store(false, Ordering::Release);
+        self.admission_active.store(false, Ordering::Release);
         Ok(())
     }
 
     pub(crate) fn transition(&self, active: bool) -> std::io::Result<u64> {
+        self.transition_with_term(active, 0)
+    }
+
+    /// Applies a role transition fenced by an optional controller/broker term.
+    pub(crate) fn transition_with_term(&self, active: bool, external_term: u64) -> std::io::Result<u64> {
         if self.active.load(Ordering::Acquire) == active {
-            return Ok(self.epoch.load(Ordering::Acquire));
+            let current = self.epoch.load(Ordering::Acquire);
+            if external_term <= current {
+                return Ok(current);
+            }
         }
 
         // Closing the lease is always the first downgrade action. A failed durable epoch write
         // therefore fails closed and still fences every in-flight batch in this process.
         self.active.store(false, Ordering::Release);
+        self.admission_active.store(false, Ordering::Release);
         let next_epoch = self
             .epoch
             .load(Ordering::Acquire)
             .checked_add(1)
-            .ok_or_else(|| std::io::Error::other("timer role epoch is exhausted"))?;
+            .ok_or_else(|| std::io::Error::other("timer role epoch is exhausted"))?
+            .max(external_term);
         self.persist_epoch(next_epoch)?;
         self.epoch.store(next_epoch, Ordering::Release);
         self.active.store(active, Ordering::Release);
+        self.admission_active.store(active, Ordering::Release);
         Ok(next_epoch)
     }
 
@@ -104,6 +118,10 @@ impl TimerRoleState {
 
     pub(crate) fn is_active(&self) -> bool {
         self.active.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn accepts_admission(&self) -> bool {
+        self.admission_active.load(Ordering::Acquire)
     }
 
     pub(crate) fn epoch(&self) -> u64 {

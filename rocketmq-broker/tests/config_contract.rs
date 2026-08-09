@@ -26,6 +26,7 @@ use rocketmq_broker::config::validated::ConfigGeneration;
 use rocketmq_broker::config::validated::ValidatedBrokerConfig;
 use rocketmq_runtime::MemoryLimitSource;
 use rocketmq_store::MessageStoreConfig;
+use rocketmq_store_api::TimerStoreMode;
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -51,6 +52,25 @@ fn load_inline_config(source: &str) -> Result<RawBrokerConfig, Box<BrokerConfigE
     file.write_all(source.as_bytes())
         .expect("write temporary configuration");
     RawBrokerConfig::load(file.path()).map_err(Box::new)
+}
+
+#[test]
+fn timer_extended_capability_configuration_survives_validation_unchanged() {
+    let store = MessageStoreConfig {
+        timer_store_mode: TimerStoreMode::ExtendedTimeline,
+        timer_extended_shadow_enable: false,
+        timer_extended_admission_enable: true,
+        timer_extended_activation_epoch: 11,
+        timer_extended_admission_horizon_days: 366,
+        ..MessageStoreConfig::default()
+    };
+    let validated = ValidatedBrokerConfig::try_from_parts(BrokerConfig::default(), store)
+        .expect("Extended Timer configuration should cross the validated boundary");
+
+    assert_eq!(validated.store().timer_store_mode, TimerStoreMode::ExtendedTimeline);
+    assert!(validated.store().timer_extended_admission_enable);
+    assert_eq!(validated.store().timer_extended_activation_epoch, 11);
+    assert_eq!(validated.store().timer_extended_admission_horizon_days, 366);
 }
 
 #[test]

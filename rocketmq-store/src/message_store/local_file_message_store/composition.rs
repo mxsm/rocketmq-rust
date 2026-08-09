@@ -14,6 +14,9 @@
 
 use super::*;
 
+#[cfg(feature = "extended_timeline")]
+use crate::timer::timeline::TimelinePromotionObservation;
+
 impl LocalFileMessageStore {
     pub(super) fn is_dledger_commit_log_enabled_config(message_store_config: &MessageStoreConfig) -> bool {
         message_store_config.enable_dledger_commit_log || message_store_config.enable_dleger_commit_log
@@ -112,11 +115,17 @@ impl LocalFileMessageStore {
 
         let keep_local_derived_dispatchers =
             !message_store_config.is_enable_rocksdb_store() || message_store_config.rocksdb_cq_double_write_enable;
-        let dispatcher_vec = if keep_local_derived_dispatchers {
+        let mut dispatcher_vec = if keep_local_derived_dispatchers {
             vec![build_consume_queue, build_index]
         } else {
             Vec::new()
         };
+        #[cfg(feature = "extended_timeline")]
+        let extended_timeline_completion_wake = Arc::new(TimelineCompletionWake::default());
+        #[cfg(feature = "extended_timeline")]
+        if message_store_config.timer_store_mode == TimerStoreMode::ExtendedTimeline {
+            dispatcher_vec.push(extended_timeline_completion_wake.clone());
+        }
         let mut dispatcher = CommitLogDispatcherDefault::with_dispatchers(dispatcher_vec);
 
         let memory_lock_budget_bytes = Self::effective_linux_memory_lock_budget_bytes(message_store_config.as_ref());
@@ -206,14 +215,12 @@ impl LocalFileMessageStore {
         #[cfg(not(feature = "tieredstore"))]
         let minimum_pinned_wal_segment: Option<Arc<CommitLogWalPin>> = None;
         #[cfg(feature = "extended_timeline")]
-        let extended_timeline_cleanup_pin =
-            Arc::new(AtomicI64::new(if message_store_config.timer_extended_shadow_enable {
-                0
-            } else {
-                -1
-            }));
+        let extended_timeline_enabled = message_store_config.timer_extended_shadow_enable
+            || message_store_config.timer_store_mode == TimerStoreMode::ExtendedTimeline;
         #[cfg(feature = "extended_timeline")]
-        let minimum_pinned_wal_segment = if message_store_config.timer_extended_shadow_enable {
+        let extended_timeline_cleanup_pin = Arc::new(AtomicI64::new(if extended_timeline_enabled { 0 } else { -1 }));
+        #[cfg(feature = "extended_timeline")]
+        let minimum_pinned_wal_segment = if extended_timeline_enabled {
             let existing_pin = minimum_pinned_wal_segment.clone();
             let timeline_pin = Arc::clone(&extended_timeline_cleanup_pin);
             Some(Arc::new(move || {
@@ -310,6 +317,27 @@ impl LocalFileMessageStore {
             extended_timeline_due_scanner: None,
             #[cfg(feature = "extended_timeline")]
             extended_timeline_recall_service: None,
+            #[cfg(feature = "extended_timeline")]
+            extended_timeline_completion_wake,
+            #[cfg(feature = "extended_timeline")]
+            extended_timeline_completion_reconciler: None,
+            #[cfg(feature = "extended_timeline")]
+            extended_timeline_delivery: None,
+            #[cfg(feature = "extended_timeline")]
+            extended_timeline_snapshot: None,
+            #[cfg(feature = "extended_timeline")]
+            extended_timeline_promotion_gate: None,
+            #[cfg(feature = "extended_timeline")]
+            extended_timeline_admission: None,
+            #[cfg(feature = "extended_timeline")]
+            extended_timeline_gc: None,
+            #[cfg(feature = "extended_timeline")]
+            extended_timeline_role: Arc::new(TimerRoleState::new(message_store_config.store_path_root_dir.as_str())),
+            #[cfg(feature = "extended_timeline")]
+            extended_timeline_clock: Arc::new(TimerClockSafety::new(
+                Arc::new(SystemTimerClock::default()),
+                message_store_config.timer_store_config.clock_backward_tolerance_ms,
+            )),
             transient_store_pool,
             root_dependencies_wired: false,
             master_store_in_process: StdRwLock::new(None),
@@ -475,13 +503,31 @@ impl LocalFileMessageStore {
     ///
     /// # Errors
     ///
-    /// This operation is currently infallible. The result is retained as an additive composition
-    /// contract so future owned-capability validation can fail without changing the public API.
+    /// Returns an error when an enabled derived store cannot be opened or its durable owner epoch
+    /// cannot be recovered.
     pub fn wire_owned_root_dependencies(&mut self) -> Result<(), StoreError> {
         self.consume_queue_store.set_context(self.consume_queue_context());
         #[cfg(feature = "extended_timeline")]
-        if self.message_store_config.timer_extended_shadow_enable && self.extended_timeline_materializer.is_none() {
-            let materializer = Arc::new(
+        if (self.message_store_config.timer_extended_shadow_enable
+            || self.message_store_config.timer_store_mode == TimerStoreMode::ExtendedTimeline)
+            && self.extended_timeline_materializer.is_none()
+        {
+            let formal = self.message_store_config.timer_store_mode == TimerStoreMode::ExtendedTimeline;
+            self.extended_timeline_role.load().map_err(|error| {
+                StoreError::storage(StoreOperation::Load, "failed to recover Extended Timeline owner epoch")
+                    .with_source(error)
+            })?;
+            let admission_epoch = TimerEngineEpoch::new(self.message_store_config.timer_extended_activation_epoch);
+            let open_result = if formal {
+                ShadowTimelineMaterializer::open_formal(
+                    self.message_store_config.store_path_root_dir.as_str(),
+                    self.message_store_config.timer_store_config.clone(),
+                    self.consume_queue_store.lookup_handle(),
+                    self.commit_log.read_handle(),
+                    Arc::clone(&self.extended_timeline_cleanup_pin),
+                    admission_epoch,
+                )
+            } else {
                 ShadowTimelineMaterializer::open(
                     self.message_store_config.store_path_root_dir.as_str(),
                     self.message_store_config.timer_store_config.clone(),
@@ -489,20 +535,109 @@ impl LocalFileMessageStore {
                     self.commit_log.read_handle(),
                     Arc::clone(&self.extended_timeline_cleanup_pin),
                 )
+            };
+            let materializer = Arc::new(open_result.map_err(|error| {
+                StoreError::storage(
+                    StoreOperation::Load,
+                    format!("failed to open Extended Timeline storage: {error}"),
+                )
+            })?);
+            let timeline = materializer.timeline();
+            self.extended_timeline_due_scanner = Some(Arc::new(if formal {
+                TimelineDueScanner::new_with_clock(
+                    self.message_store_config.timer_store_config.clone(),
+                    Arc::clone(&timeline),
+                    Arc::clone(&self.extended_timeline_clock),
+                )
+            } else {
+                TimelineDueScanner::new_shadow(
+                    self.message_store_config.timer_store_config.clone(),
+                    Arc::clone(&timeline),
+                    materializer.reconciler(),
+                )
+            }));
+            self.extended_timeline_recall_service = Some(Arc::new(TimelineRecallService::new(Arc::clone(&timeline))));
+            if formal {
+                let completion = Arc::new(TimelineCompletionReconciler::new(
+                    Arc::clone(&timeline),
+                    self.commit_log.read_handle(),
+                    Arc::clone(&self.extended_timeline_completion_wake),
+                ));
+                let timer_config = &self.message_store_config.timer_store_config;
+                let delivery = TimelineDeliveryCoordinator::new(
+                    timeline,
+                    materializer.payload_store(),
+                    self.timer_message_write_handle(),
+                    Arc::clone(&self.extended_timeline_role),
+                    Arc::clone(&self.extended_timeline_clock),
+                    Arc::clone(&completion),
+                    admission_epoch,
+                    timer_config.lane_count,
+                    timer_config.due_scan_messages,
+                    timer_config.due_scan_bytes,
+                    timer_config.delivery_lease_ms,
+                )
                 .map_err(|error| {
                     StoreError::storage(
                         StoreOperation::Load,
-                        format!("failed to open Extended Timeline shadow storage: {error}"),
+                        format!("failed to construct Extended Timeline delivery: {error}"),
                     )
-                })?,
-            );
-            let timeline = materializer.timeline();
-            self.extended_timeline_due_scanner = Some(Arc::new(TimelineDueScanner::new_shadow(
-                self.message_store_config.timer_store_config.clone(),
-                Arc::clone(&timeline),
-                materializer.reconciler(),
-            )));
-            self.extended_timeline_recall_service = Some(Arc::new(TimelineRecallService::new(timeline)));
+                })?;
+                let snapshot = Arc::new(TimelineSnapshotManager::new(
+                    self.message_store_config.store_path_root_dir.as_str(),
+                    materializer.timeline(),
+                    materializer.payload_store(),
+                    Arc::clone(&materializer),
+                    Arc::clone(&completion),
+                    Arc::clone(&self.extended_timeline_role),
+                    Arc::clone(&self.extended_timeline_clock),
+                    admission_epoch,
+                ));
+                let (_, _, format_fingerprint) = materializer.snapshot_source_cursors().map_err(|error| {
+                    StoreError::storage(
+                        StoreOperation::Load,
+                        format!("failed to read Extended Timeline promotion identity: {error}"),
+                    )
+                })?;
+                let promotion_gate = Arc::new(TimelinePromotionGate::new(
+                    admission_epoch.get(),
+                    format_fingerprint,
+                    1,
+                    Arc::clone(&self.extended_timeline_clock),
+                ));
+                if let Some(manifest) = snapshot.latest_published().map_err(|error| {
+                    StoreError::storage(
+                        StoreOperation::Load,
+                        format!("failed to restore Extended Timeline snapshot identity: {error}"),
+                    )
+                })? {
+                    promotion_gate.mark_snapshot_installed(manifest).map_err(|error| {
+                        StoreError::config(
+                            StoreOperation::Load,
+                            format!("latest Extended Timeline snapshot is not promotable: {error}"),
+                        )
+                    })?;
+                }
+                let admission = Arc::new(TimelineAdmissionController::new(
+                    self.message_store_config.timer_store_config.clone(),
+                    self.message_store_config.timer_extended_admission_horizon_days,
+                    PathBuf::from(self.message_store_config.store_path_root_dir.as_str()),
+                    materializer.timeline(),
+                    Arc::clone(&materializer),
+                    Arc::clone(&self.extended_timeline_role),
+                ));
+                let gc = Arc::new(TimelineGcService::new(
+                    materializer.timeline(),
+                    materializer.payload_store(),
+                    timer_config.gc_retention_grace_ms,
+                ));
+                self.extended_timeline_completion_reconciler = Some(completion);
+                self.extended_timeline_delivery = Some(Arc::new(delivery));
+                self.extended_timeline_snapshot = Some(snapshot);
+                self.extended_timeline_promotion_gate = Some(promotion_gate);
+                self.extended_timeline_admission = Some(admission);
+                self.extended_timeline_gc = Some(gc);
+            }
             self.extended_timeline_materializer = Some(materializer);
         }
         if self.message_store_config.is_timer_wheel_enable() && self.timer_message_store.is_none() {
@@ -596,10 +731,30 @@ impl LocalFileMessageStore {
             ));
         }
         if self.message_store_config.timer_store_mode == TimerStoreMode::ExtendedTimeline {
-            return Err(StoreError::unsupported(
+            if !cfg!(feature = "extended_timeline") {
+                return Err(StoreError::unsupported(
+                    StoreOperation::Load,
+                    "timer_store_mode=extended_timeline requires the rocketmq-store/extended_timeline feature"
+                        .to_string(),
+                ));
+            }
+            if self.message_store_config.timer_extended_shadow_enable
+                || !self.message_store_config.timer_extended_admission_enable
+                || self.message_store_config.timer_extended_activation_epoch == 0
+                || !(3..=self.message_store_config.timer_store_config.horizon_days)
+                    .contains(&self.message_store_config.timer_extended_admission_horizon_days)
+                || self.message_store_config.timer_extended_admission_horizon_days > 400
+            {
+                return Err(StoreError::config(
+                    StoreOperation::Load,
+                    "Extended mode requires formal admission, a non-zero activation epoch, a 3..=400 day admission horizon, and shadow=false"
+                        .to_string(),
+                ));
+            }
+        } else if self.message_store_config.timer_extended_admission_enable {
+            return Err(StoreError::config(
                 StoreOperation::Load,
-                "timer_store_mode=extended_timeline remains unavailable until the activation and delivery protocol is installed"
-                    .to_string(),
+                "timer_extended_admission_enable requires timer_store_mode=extended_timeline".to_string(),
             ));
         }
         if self.message_store_config.timer_extended_shadow_enable && !cfg!(feature = "extended_timeline") {
@@ -608,7 +763,9 @@ impl LocalFileMessageStore {
                 "timer_extended_shadow_enable requires the rocketmq-store/extended_timeline feature".to_string(),
             ));
         }
-        if self.message_store_config.timer_extended_shadow_enable {
+        if self.message_store_config.timer_extended_shadow_enable
+            || self.message_store_config.timer_store_mode == TimerStoreMode::ExtendedTimeline
+        {
             self.message_store_config
                 .timer_store_config
                 .validate()
@@ -732,13 +889,139 @@ impl LocalFileMessageStore {
     }
 
     pub(super) fn should_run_timer_dequeue(&self) -> bool {
-        self.message_store_config.is_timer_wheel_enable() && self.store_runtime_state.broker_role() != BrokerRole::Slave
+        self.message_store_config.is_timer_wheel_enable()
+            && self.message_store_config.timer_store_mode == TimerStoreMode::JavaCompat
+            && self.store_runtime_state.broker_role() != BrokerRole::Slave
     }
 
     pub(super) fn sync_timer_message_store_role(&self) {
         if let Some(timer_message_store) = self.timer_message_store.as_ref() {
             timer_message_store.set_should_running_dequeue(self.should_run_timer_dequeue());
         }
+    }
+
+    #[cfg(feature = "extended_timeline")]
+    pub(super) fn sync_extended_timeline_role(&self) {
+        let active = self.message_store_config.timer_store_mode == TimerStoreMode::ExtendedTimeline
+            && self.store_runtime_state.broker_role() != BrokerRole::Slave;
+        if let Err(error) = self.extended_timeline_role.transition(active) {
+            error!(
+                "Extended Timeline role transition failed closed; delivery remains fenced: {}",
+                error
+            );
+        }
+    }
+
+    #[cfg(feature = "extended_timeline")]
+    pub(super) fn sync_extended_timeline_controller_role(
+        &self,
+        previous_role: BrokerRole,
+        target_role: BrokerRole,
+        external_term: u64,
+    ) -> Result<(), StoreError> {
+        if self.message_store_config.timer_store_mode != TimerStoreMode::ExtendedTimeline {
+            return Ok(());
+        }
+        if target_role == BrokerRole::Slave {
+            self.extended_timeline_role
+                .transition_with_term(false, external_term)
+                .map_err(|error| {
+                    StoreError::storage(StoreOperation::Admin, "failed to persist Extended demotion fence")
+                        .with_source(error)
+                })?;
+            return Ok(());
+        }
+        if previous_role == BrokerRole::Slave {
+            self.validate_extended_timeline_promotion(external_term)?;
+        }
+        self.extended_timeline_role
+            .transition_with_term(true, external_term)
+            .map_err(|error| {
+                StoreError::storage(StoreOperation::Admin, "failed to persist Extended promotion epoch")
+                    .with_source(error)
+            })?;
+        Ok(())
+    }
+
+    #[cfg(feature = "extended_timeline")]
+    fn validate_extended_timeline_promotion(&self, external_term: u64) -> Result<(), StoreError> {
+        let gate = self
+            .extended_timeline_promotion_gate
+            .as_ref()
+            .ok_or_else(|| StoreError::invalid_state(StoreOperation::Admin, "Extended promotion gate is not wired"))?;
+        let materializer = self
+            .extended_timeline_materializer
+            .as_ref()
+            .ok_or_else(|| StoreError::invalid_state(StoreOperation::Admin, "Extended materializer is not wired"))?;
+        let completion = self.extended_timeline_completion_reconciler.as_ref().ok_or_else(|| {
+            StoreError::invalid_state(StoreOperation::Admin, "Extended completion replay is not wired")
+        })?;
+        let (source_cq_cursor, source_physical_cursor, format_fingerprint) = materializer
+            .snapshot_source_cursors()
+            .map_err(|error| StoreError::storage(StoreOperation::Read, error.to_string()))?;
+        let metrics = materializer.metrics();
+        let completion_cursor = completion
+            .completion_physical_cursor()
+            .map_err(|error| StoreError::storage(StoreOperation::Read, error.to_string()))?;
+        let replicated_final_end = self
+            .commit_log
+            .get_flushed_where()
+            .max(self.commit_log.get_confirm_offset())
+            .min(self.commit_log.get_max_offset())
+            .max(0);
+        let prospective_epoch = self.extended_timeline_role.epoch().saturating_add(1).max(external_term);
+        gate.evaluate(TimelinePromotionObservation {
+            source_retention_start: self.commit_log.get_min_offset().max(0),
+            source_replay_cursor: source_physical_cursor,
+            replicated_source_end: source_physical_cursor,
+            final_retention_start: self.commit_log.get_min_offset().max(0),
+            completion_replay_cursor: completion_cursor,
+            replicated_final_end,
+            materialization_backlog: metrics.materialization_lag,
+            due_backlog: 0,
+            completion_backlog: u64::try_from(replicated_final_end.saturating_sub(completion_cursor))
+                .unwrap_or(u64::MAX),
+            role_epoch: prospective_epoch,
+            activation_epoch: self.message_store_config.timer_extended_activation_epoch,
+            format_fingerprint,
+            capability_version: 1,
+        })
+        .map_err(|error| {
+            StoreError::invalid_state(
+                StoreOperation::Admin,
+                format!("Extended promotion rejected at source CQ cursor {source_cq_cursor}: {error}"),
+            )
+        })
+    }
+
+    /// Creates one consistent Extended Timeline snapshot and publishes it to the promotion gate.
+    #[cfg(feature = "extended_timeline")]
+    pub fn create_extended_timer_snapshot(&self) -> Result<rocketmq_store_api::TimerSnapshotManifest, StoreError> {
+        let snapshot = self.extended_timeline_snapshot.as_ref().ok_or_else(|| {
+            StoreError::unsupported(StoreOperation::Admin, "Extended Timeline snapshot is not enabled")
+        })?;
+        let manifest = snapshot
+            .create()
+            .map_err(|error| StoreError::storage(StoreOperation::Admin, error.to_string()))?;
+        self.extended_timeline_promotion_gate
+            .as_ref()
+            .ok_or_else(|| StoreError::invalid_state(StoreOperation::Admin, "Extended promotion gate is not wired"))?
+            .mark_snapshot_installed(manifest.clone())
+            .map_err(|error| StoreError::invalid_state(StoreOperation::Admin, error.to_string()))?;
+        Ok(manifest)
+    }
+
+    /// Releases snapshot GC pins after the artifact has been durably installed elsewhere.
+    #[cfg(feature = "extended_timeline")]
+    pub fn release_extended_timer_snapshot(
+        &self,
+        manifest: &rocketmq_store_api::TimerSnapshotManifest,
+    ) -> Result<(), StoreError> {
+        self.extended_timeline_snapshot
+            .as_ref()
+            .ok_or_else(|| StoreError::unsupported(StoreOperation::Admin, "Extended Timeline snapshot is not enabled"))?
+            .release(manifest)
+            .map_err(|error| StoreError::storage(StoreOperation::Admin, error.to_string()))
     }
 
     pub(super) fn refresh_controller_confirm_offset_after_role_change(&self) {

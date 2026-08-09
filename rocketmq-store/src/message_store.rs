@@ -38,6 +38,8 @@ use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_protocol::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_runtime::common::system_clock::SystemClock;
+use rocketmq_store_api::TimerRecallRequest;
+use rocketmq_store_api::TimerRecallStatus;
 
 use crate::base::allocate_mapped_file_service::AllocateMappedFileService;
 use crate::base::backend_ops::BackendOps;
@@ -183,6 +185,10 @@ macro_rules! message_store_methods {
 
     async fn put_messages(&mut self, message_ext_batch: MessageExtBatch) -> PutMessageResult {
         delegate_store_async!(self, put_messages(message_ext_batch))
+    }
+
+    fn recall_extended_timer(&self, request: &TimerRecallRequest) -> Result<TimerRecallStatus, StoreError> {
+        delegate_store!(self, recall_extended_timer(request))
     }
 
     async fn get_message(
@@ -680,6 +686,10 @@ macro_rules! message_store_methods {
 
     fn sync_broker_role(&self, broker_role: BrokerRole) {
         delegate_store!(self, sync_broker_role(broker_role));
+    }
+
+    fn sync_broker_role_with_term(&self, broker_role: BrokerRole, external_term: u64) -> Result<(), StoreError> {
+        delegate_store!(self, sync_broker_role_with_term(broker_role, external_term))
     }
 
     fn calc_delta_checksum(&self, from: i64, to: i64) -> Vec<u8> {

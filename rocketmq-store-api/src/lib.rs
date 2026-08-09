@@ -23,6 +23,7 @@ mod error;
 mod ha_contract;
 mod progress;
 mod timer;
+mod timer_snapshot;
 mod wal;
 
 pub use capability::AdminStore;
@@ -86,11 +87,17 @@ pub use timer::TimerGeneration;
 pub use timer::TimerId;
 pub use timer::TimerPayloadLocator;
 pub use timer::TimerPayloadStoreLocator;
+pub use timer::TimerRecallRequest;
+pub use timer::TimerRecallStatus;
 pub use timer::TimerSourceCqOffset;
 pub use timer::TimerStoreMode;
 pub use timer::TimerTimelineCursor;
 pub use timer::EXTENDED_TIMELINE_FORMAT_VERSION;
 pub use timer::JAVA_COMPAT_TIMER_FORMAT_VERSION;
+pub use timer_snapshot::TimerSnapshotFile;
+pub use timer_snapshot::TimerSnapshotManifest;
+pub use timer_snapshot::TimerSnapshotValidationError;
+pub use timer_snapshot::TIMER_SNAPSHOT_SCHEMA_VERSION;
 pub use wal::WalPort;
 
 use std::error::Error as StdError;

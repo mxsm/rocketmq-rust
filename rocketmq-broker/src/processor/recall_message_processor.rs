@@ -40,6 +40,9 @@ use rocketmq_store::BrokerWriteStore;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::PutMessageResult;
 use rocketmq_store::PutMessageStatus;
+use rocketmq_store_api::TimerRecallRequest;
+use rocketmq_store_api::TimerRecallStatus;
+use rocketmq_store_api::TimerStoreMode;
 use rocketmq_transport::api::v1::request_code_not_supported_with_remark_and_opaque;
 use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ConnectionHandlerContext;
@@ -62,6 +65,8 @@ pub(crate) struct RecallMessagePolicy {
     allow_recall_when_broker_not_writeable: bool,
     broker_name: CheetahString,
     timer_max_delay_sec: u64,
+    timer_store_mode: TimerStoreMode,
+    timer_extended_horizon_days: u16,
     timer_delete_key_with_topic: bool,
     timer_policy_fingerprint: u64,
     store_host: SocketAddr,
@@ -81,6 +86,8 @@ impl RecallMessagePolicy {
             allow_recall_when_broker_not_writeable: broker_config.allow_recall_when_broker_not_writeable,
             broker_name: broker_config.broker_name().clone(),
             timer_max_delay_sec: message_store_config.timer_max_delay_sec,
+            timer_store_mode: message_store_config.timer_store_mode,
+            timer_extended_horizon_days: message_store_config.timer_extended_admission_horizon_days,
             timer_delete_key_with_topic: message_store_config.timer_delete_key_with_topic,
             timer_policy_fingerprint: message_store_config.timer_policy_fingerprint().unwrap_or_default(),
             store_host,
@@ -105,6 +112,16 @@ impl<MS: BrokerWriteStore> RecallMessageStoreCapability<MS> {
             .ok_or(MessageStoreUnavailable)?
             .put_message_to_local_store(message)
             .await
+    }
+
+    fn recall_extended_timer(
+        &self,
+        request: &TimerRecallRequest,
+    ) -> Result<TimerRecallStatus, MessageStoreUnavailable> {
+        self.escape_bridge
+            .upgrade()
+            .ok_or(MessageStoreUnavailable)?
+            .recall_extended_timer(request)
     }
 
     fn is_slave(&self) -> Result<bool, MessageStoreUnavailable> {
@@ -321,13 +338,52 @@ where
                 .set_code(ResponseCode::IllegalOperation)
                 .set_remark(CheetahString::from_static_str("recall failed, timestamp invalid")));
         };
-        let timer_max_delay_sec = self.context.policy.timer_max_delay_sec;
-        let max_delay_ms = timer_max_delay_sec.saturating_mul(1_000);
+        let max_delay_ms = if self.context.policy.timer_store_mode == TimerStoreMode::ExtendedTimeline {
+            u64::from(self.context.policy.timer_extended_horizon_days).saturating_mul(86_400_000)
+        } else {
+            self.context.policy.timer_max_delay_sec.saturating_mul(1_000)
+        };
 
         if time_left <= 0 || time_left as u64 >= max_delay_ms {
             return Ok(response
                 .set_code(ResponseCode::IllegalOperation)
                 .set_remark(CheetahString::from_static_str("recall failed, timestamp invalid")));
+        }
+
+        if self.context.policy.timer_store_mode == TimerStoreMode::ExtendedTimeline {
+            let status = match self.context.message_store.recall_extended_timer(&TimerRecallRequest {
+                topic: handle_topic.to_owned(),
+                unique_key: handle_message_id.to_owned(),
+            }) {
+                Ok(status) => status,
+                Err(MessageStoreUnavailable) => TimerRecallStatus::Retry,
+            };
+            match status {
+                TimerRecallStatus::Cancelled | TimerRecallStatus::AlreadyCancelled => {
+                    response
+                        .read_custom_header_mut::<RecallMessageResponseHeader>()
+                        .ok_or_else(recall_response_header_missing)?
+                        .set_msg_id(handle_message_id);
+                    response.set_code_mut(ResponseCode::Success);
+                }
+                TimerRecallStatus::TooLate | TimerRecallStatus::NotFound => {
+                    response.set_code_mut(ResponseCode::IllegalOperation);
+                    response.set_remark_mut(CheetahString::from_static_str(
+                        "recall failed, timer is too late or absent",
+                    ));
+                }
+                TimerRecallStatus::Retry => {
+                    response.set_code_mut(ResponseCode::ServiceNotAvailable);
+                    response.set_remark_mut(CheetahString::from_static_str(
+                        "recall failed, timer state is not ready",
+                    ));
+                }
+                TimerRecallStatus::Quarantined | TimerRecallStatus::Unsupported => {
+                    response.set_code_mut(ResponseCode::SystemError);
+                    response.set_remark_mut(CheetahString::from_static_str("recall failed, timer state unavailable"));
+                }
+            }
+            return Ok(response);
         }
 
         let msg_inner = self.build_message(

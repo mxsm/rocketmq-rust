@@ -86,7 +86,13 @@ use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_store_api::checkpoint::CheckpointOffsets as ReleaseCheckpointOffsets;
+use rocketmq_store_api::TimerRecallRequest;
+use rocketmq_store_api::TimerRecallStatus;
 use rocketmq_store_api::TimerStoreMode;
+#[cfg(feature = "extended_timeline")]
+use rocketmq_store_rocksdb::store::KeyValueStore;
+#[cfg(feature = "extended_timeline")]
+use rocketmq_store_rocksdb::timer::codec::RecallLookupKeyV1;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio::sync::OwnedMutexGuard;
@@ -185,16 +191,40 @@ use crate::tieredstore::resolve_tiered_dispatch_body_with_reader;
 #[cfg(feature = "tieredstore")]
 use crate::tieredstore::TieredStoreDecorator;
 #[cfg(feature = "extended_timeline")]
+use crate::timer::clock::SystemTimerClock;
+#[cfg(feature = "extended_timeline")]
+use crate::timer::clock::TimerClockSafety;
+#[cfg(feature = "extended_timeline")]
+use crate::timer::delivery::TimelineDeliveryCoordinator;
+#[cfg(feature = "extended_timeline")]
+use crate::timer::role::TimerRoleState;
+#[cfg(feature = "extended_timeline")]
 use crate::timer::timeline::ShadowTimelineMaterializer;
+#[cfg(feature = "extended_timeline")]
+use crate::timer::timeline::TimelineAdmissionController;
+#[cfg(feature = "extended_timeline")]
+use crate::timer::timeline::TimelineAdmissionError;
+#[cfg(feature = "extended_timeline")]
+use crate::timer::timeline::TimelineCompletionReconciler;
+#[cfg(feature = "extended_timeline")]
+use crate::timer::timeline::TimelineCompletionWake;
 #[cfg(feature = "extended_timeline")]
 use crate::timer::timeline::TimelineDueScanner;
 #[cfg(feature = "extended_timeline")]
+use crate::timer::timeline::TimelineGcService;
+#[cfg(feature = "extended_timeline")]
+use crate::timer::timeline::TimelinePromotionGate;
+#[cfg(feature = "extended_timeline")]
 use crate::timer::timeline::TimelineRecallService;
+#[cfg(feature = "extended_timeline")]
+use crate::timer::timeline::TimelineSnapshotManager;
 use crate::timer::timer_message_store::TimerMessageStore;
 use crate::timer::timer_message_store::TimerStoreContext;
 use crate::transfer::error::TransferResult;
 use crate::transfer::segment::SegmentLease;
 use crate::utils::store_util::TOTAL_PHYSICAL_MEMORY_SIZE;
+#[cfg(feature = "extended_timeline")]
+use rocketmq_store_api::TimerEngineEpoch;
 
 mod composition;
 mod dispatch;
@@ -556,6 +586,24 @@ pub struct LocalFileMessageStore {
     extended_timeline_due_scanner: Option<Arc<TimelineDueScanner>>,
     #[cfg(feature = "extended_timeline")]
     extended_timeline_recall_service: Option<Arc<TimelineRecallService>>,
+    #[cfg(feature = "extended_timeline")]
+    extended_timeline_completion_wake: Arc<TimelineCompletionWake>,
+    #[cfg(feature = "extended_timeline")]
+    extended_timeline_completion_reconciler: Option<Arc<TimelineCompletionReconciler>>,
+    #[cfg(feature = "extended_timeline")]
+    extended_timeline_delivery: Option<Arc<TimelineDeliveryCoordinator>>,
+    #[cfg(feature = "extended_timeline")]
+    extended_timeline_snapshot: Option<Arc<TimelineSnapshotManager>>,
+    #[cfg(feature = "extended_timeline")]
+    extended_timeline_promotion_gate: Option<Arc<TimelinePromotionGate>>,
+    #[cfg(feature = "extended_timeline")]
+    extended_timeline_admission: Option<Arc<TimelineAdmissionController>>,
+    #[cfg(feature = "extended_timeline")]
+    extended_timeline_gc: Option<Arc<TimelineGcService>>,
+    #[cfg(feature = "extended_timeline")]
+    extended_timeline_role: Arc<TimerRoleState>,
+    #[cfg(feature = "extended_timeline")]
+    extended_timeline_clock: Arc<TimerClockSafety>,
     transient_store_pool: TransientStorePool,
     root_dependencies_wired: bool,
     master_store_in_process: StdRwLock<Option<Arc<dyn Any + Send + Sync>>>,
@@ -762,6 +810,45 @@ impl BackendOps for LocalFileMessageStore {
 
     async fn put_messages(&mut self, message_ext_batch: MessageExtBatch) -> PutMessageResult {
         self.put_messages_shared(message_ext_batch).await
+    }
+
+    fn recall_extended_timer(&self, request: &TimerRecallRequest) -> Result<TimerRecallStatus, StoreError> {
+        #[cfg(feature = "extended_timeline")]
+        {
+            if self.message_store_config.timer_store_mode != TimerStoreMode::ExtendedTimeline {
+                return Ok(TimerRecallStatus::Unsupported);
+            }
+            if !self.extended_timeline_role.is_active() {
+                return Ok(TimerRecallStatus::Retry);
+            }
+            let Some(recall) = self.extended_timeline_recall_service.as_ref() else {
+                return Ok(TimerRecallStatus::Retry);
+            };
+            let result = recall
+                .recall(&RecallLookupKeyV1 {
+                    engine: rocketmq_store_api::TimerEngineId::ExtendedTimeline,
+                    topic: request.topic.clone(),
+                    unique_key: request.unique_key.clone(),
+                })
+                .map_err(|error| {
+                    StoreError::storage(StoreOperation::Admin, "Extended Timer Recall failed").with_source(error)
+                })?;
+            Ok(match result {
+                crate::timer::timeline::RecallResult::Cancelled { .. } => TimerRecallStatus::Cancelled,
+                crate::timer::timeline::RecallResult::AlreadyCancelled => TimerRecallStatus::AlreadyCancelled,
+                crate::timer::timeline::RecallResult::TooLate => TimerRecallStatus::TooLate,
+                crate::timer::timeline::RecallResult::NotFound => TimerRecallStatus::NotFound,
+                crate::timer::timeline::RecallResult::Retry | crate::timer::timeline::RecallResult::StaleGeneration => {
+                    TimerRecallStatus::Retry
+                }
+                crate::timer::timeline::RecallResult::Quarantined => TimerRecallStatus::Quarantined,
+            })
+        }
+        #[cfg(not(feature = "extended_timeline"))]
+        {
+            let _ = request;
+            Ok(TimerRecallStatus::Unsupported)
+        }
     }
 
     async fn get_message(
@@ -1488,6 +1575,28 @@ impl BackendOps for LocalFileMessageStore {
             result.insert("timerStorageMetrics".to_string(), "{}".to_string());
             result.insert("timerPipelineMetrics".to_string(), "{}".to_string());
         }
+        result.insert(
+            "timerStoreMode".to_string(),
+            self.message_store_config.timer_store_mode.as_str().to_string(),
+        );
+        result.insert(
+            "timerMaximumHorizonDays".to_string(),
+            self.message_store_config
+                .timer_extended_admission_horizon_days
+                .to_string(),
+        );
+        result.insert(
+            "timerPrecisionMillis".to_string(),
+            self.message_store_config.timer_precision_ms.to_string(),
+        );
+        result.insert(
+            "timerExtendedCapabilityVersion".to_string(),
+            u16::from(cfg!(feature = "extended_timeline")).to_string(),
+        );
+        result.insert(
+            "timerExtendedFormatVersion".to_string(),
+            rocketmq_store_api::EXTENDED_TIMELINE_FORMAT_VERSION.to_string(),
+        );
         #[cfg(feature = "extended_timeline")]
         if let Some(materializer) = self.extended_timeline_materializer.as_ref() {
             let metrics = materializer.metrics();
@@ -1551,6 +1660,72 @@ impl BackendOps for LocalFileMessageStore {
                 "timerExtendedShadowRetainedSamples".to_string(),
                 metrics.reconciliation.retained_samples.to_string(),
             );
+            result.insert(
+                "timerExtendedAdmissionActive".to_string(),
+                (self.message_store_config.timer_extended_admission_enable
+                    && self.extended_timeline_role.accepts_admission())
+                .to_string(),
+            );
+            result.insert(
+                "timerExtendedRoleEpoch".to_string(),
+                self.extended_timeline_role.epoch().to_string(),
+            );
+            let clock = self.extended_timeline_clock.snapshot();
+            result.insert(
+                "timerExtendedClockState".to_string(),
+                match clock.state {
+                    crate::timer::clock::TimerClockState::Safe => "SAFE",
+                    crate::timer::clock::TimerClockState::Unsafe => "CLOCK_UNSAFE",
+                }
+                .to_string(),
+            );
+            result.insert(
+                "timerExtendedClockBackwardJumps".to_string(),
+                clock.backward_jumps.to_string(),
+            );
+            result.insert(
+                "timerExtendedLargestForwardJumpMillis".to_string(),
+                clock.largest_forward_jump_ms.to_string(),
+            );
+            if let Some(completion) = self.extended_timeline_completion_reconciler.as_ref() {
+                if let Ok(cursor) = completion.completion_physical_cursor() {
+                    result.insert("timerExtendedCompletionPhysicalCursor".to_string(), cursor.to_string());
+                }
+            }
+            if let Some(gate) = self.extended_timeline_promotion_gate.as_ref() {
+                result.insert(
+                    "timerExtendedInstalledSnapshotGeneration".to_string(),
+                    gate.snapshot_generation().to_string(),
+                );
+            }
+            if let Ok(page) = materializer
+                .timeline()
+                .range_scan(i64::MIN, i64::MAX, None, 1, 4 * 1024)
+            {
+                let oldest = page.entries.first().map_or(0, |entry| entry.key.due_time_ms);
+                result.insert("timerExtendedOldestPendingDueMillis".to_string(), oldest.to_string());
+                if let Some(entry) = page.entries.first() {
+                    if let Ok(Some(state)) = materializer
+                        .timeline()
+                        .state_index()
+                        .get(entry.key.timer_id, entry.key.generation)
+                    {
+                        result.insert(
+                            "timerExtendedOldestPendingState".to_string(),
+                            format!("{:?}", state.state),
+                        );
+                    }
+                    if let Ok(ready) = materializer.timeline().store().get_cf(
+                        rocketmq_store_rocksdb::timer::READY_CF,
+                        &rocketmq_store_rocksdb::timer::codec::encode_ready_key(entry.key),
+                    ) {
+                        result.insert(
+                            "timerExtendedOldestPendingReady".to_string(),
+                            ready.is_some().to_string(),
+                        );
+                    }
+                }
+            }
         }
 
         result
@@ -2092,9 +2267,24 @@ impl BackendOps for LocalFileMessageStore {
     }
 
     fn sync_broker_role(&self, broker_role: BrokerRole) {
+        let previous_role = self.store_runtime_state.broker_role();
         self.commit_log.sync_broker_role(broker_role);
         self.refresh_controller_confirm_offset_after_role_change();
         self.sync_timer_message_store_role();
+        #[cfg(feature = "extended_timeline")]
+        if let Err(error) = self.sync_extended_timeline_controller_role(previous_role, broker_role, 0) {
+            error!("Extended Timeline role change failed closed: {error}");
+        }
+    }
+
+    fn sync_broker_role_with_term(&self, broker_role: BrokerRole, external_term: u64) -> Result<(), StoreError> {
+        let previous_role = self.store_runtime_state.broker_role();
+        self.commit_log.sync_broker_role(broker_role);
+        self.refresh_controller_confirm_offset_after_role_change();
+        self.sync_timer_message_store_role();
+        #[cfg(feature = "extended_timeline")]
+        self.sync_extended_timeline_controller_role(previous_role, broker_role, external_term)?;
+        Ok(())
     }
 
     fn calc_delta_checksum(&self, from: i64, to: i64) -> Vec<u8> {

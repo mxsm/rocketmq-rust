@@ -141,6 +141,29 @@ impl LocalFileMessageStore {
             return PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable);
         }
 
+        #[cfg(feature = "extended_timeline")]
+        if let Some(admission) = self.extended_timeline_admission.as_ref() {
+            if let Err(error) = admission.check(&msg, current_millis() as i64) {
+                warn!("Extended Timer admission rejected: {error}");
+                let status = match error {
+                    TimelineAdmissionError::MalformedTimer
+                    | TimelineAdmissionError::HorizonOverflow
+                    | TimelineAdmissionError::HorizonExceeded
+                    | TimelineAdmissionError::RecordTooLarge => PutMessageStatus::WheelTimerMsgIllegal,
+                    TimelineAdmissionError::RoleInactive
+                    | TimelineAdmissionError::MaterializationLag
+                    | TimelineAdmissionError::GlobalCapacity
+                    | TimelineAdmissionError::TopicQuota
+                    | TimelineAdmissionError::TenantQuota
+                    | TimelineAdmissionError::HotBucket
+                    | TimelineAdmissionError::DiskHeadroom
+                    | TimelineAdmissionError::Timeline(_)
+                    | TimelineAdmissionError::Io(_) => PutMessageStatus::WheelTimerFlowControl,
+                };
+                return PutMessageResult::new_default(status);
+            }
+        }
+
         for hook in self.put_message_hook_list.snapshot() {
             if let Some(result) = hook.execute_before_put_message(&mut msg) {
                 return result;

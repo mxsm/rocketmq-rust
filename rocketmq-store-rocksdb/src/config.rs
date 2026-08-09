@@ -474,6 +474,7 @@ impl RocksDbConfig {
             crate::timer::SHADOW_OBSERVATION_CF,
             crate::timer::CHECKPOINT_CF,
             crate::timer::BUCKET_SUMMARY_CF,
+            crate::timer::RECEIPT_CF,
         ]
         .into_iter()
         .map(RocksDbColumnFamilyConfig::timer_timeline)

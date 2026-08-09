@@ -40,6 +40,8 @@ pub enum DerivedEngine {
     Tiered = 4,
     /// Represents the compaction case.
     Compaction = 5,
+    /// Reconciles final CommitLog timer facts into Extended Timeline receipts.
+    TimerCompletion = 6,
 }
 
 impl DerivedEngine {
@@ -51,6 +53,7 @@ impl DerivedEngine {
             Self::RocksDb => "rocksdb",
             Self::Tiered => "tiered",
             Self::Compaction => "compaction",
+            Self::TimerCompletion => "timer_completion",
         }
     }
 
@@ -61,6 +64,7 @@ impl DerivedEngine {
             3 => Some(Self::RocksDb),
             4 => Some(Self::Tiered),
             5 => Some(Self::Compaction),
+            6 => Some(Self::TimerCompletion),
             _ => None,
         }
     }

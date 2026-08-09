@@ -41,10 +41,7 @@ impl LocalFileMessageStore {
             let runtime_scope = self.runtime_scope.clone();
             let interval_ms = self.message_store_config.timer_store_config.scheduler_interval_ms;
             if let Err(error) = scheduled_tasks.schedule_fixed_delay(
-                ScheduledTaskConfig::fixed_delay(
-                    "timer-extended-shadow-materializer",
-                    Duration::from_millis(interval_ms),
-                ),
+                ScheduledTaskConfig::fixed_delay("timer-extended-materializer", Duration::from_millis(interval_ms)),
                 move || {
                     let materializer = Arc::clone(&materializer);
                     let runtime_scope = runtime_scope.clone();
@@ -70,19 +67,22 @@ impl LocalFileMessageStore {
             let scanner = Arc::clone(scanner);
             let runtime_scope = self.runtime_scope.clone();
             let interval_ms = self.message_store_config.timer_store_config.scheduler_interval_ms;
+            let formal = self.message_store_config.timer_store_mode == TimerStoreMode::ExtendedTimeline;
             if let Err(error) = scheduled_tasks.schedule_fixed_delay(
-                ScheduledTaskConfig::fixed_delay(
-                    "timer-extended-shadow-due-scanner",
-                    Duration::from_millis(interval_ms),
-                ),
+                ScheduledTaskConfig::fixed_delay("timer-extended-due-scanner", Duration::from_millis(interval_ms)),
                 move || {
                     let scanner = Arc::clone(&scanner);
                     let runtime_scope = runtime_scope.clone();
                     async move {
                         let _ = run_blocking_scheduled_task(&runtime_scope, "timer extended due scanner", move || {
                             let now_ms = rocketmq_runtime::common::time_utils::current_millis() as i64;
-                            if let Err(error) = scanner.scan_shadow_until(now_ms) {
-                                warn!("Extended Timeline shadow due scan will retry: {error}");
+                            let scan = if formal {
+                                scanner.scan_formal_until(now_ms)
+                            } else {
+                                scanner.scan_shadow_until(now_ms)
+                            };
+                            if let Err(error) = scan {
+                                warn!("Extended Timeline due scan will retry: {error}");
                             }
                         })
                         .await;
@@ -92,6 +92,112 @@ impl LocalFileMessageStore {
                 self.scheduled_task_shutdown.cancel();
                 task_group.cancel();
                 error!("failed to schedule Extended Timeline due scanner: {error}");
+                return;
+            }
+        }
+
+        #[cfg(feature = "extended_timeline")]
+        if let Some(completion) = self.extended_timeline_completion_reconciler.as_ref() {
+            let completion = Arc::clone(completion);
+            let runtime_scope = self.runtime_scope.clone();
+            let interval_ms = self.message_store_config.timer_store_config.scheduler_interval_ms;
+            let max_records = self.message_store_config.timer_store_config.due_scan_messages;
+            let max_bytes = self.message_store_config.timer_store_config.due_scan_bytes;
+            if let Err(error) = scheduled_tasks.schedule_fixed_delay(
+                ScheduledTaskConfig::fixed_delay(
+                    "timer-extended-completion-reconciler",
+                    Duration::from_millis(interval_ms),
+                ),
+                move || {
+                    let completion = Arc::clone(&completion);
+                    let runtime_scope = runtime_scope.clone();
+                    async move {
+                        let _ = run_blocking_scheduled_task(
+                            &runtime_scope,
+                            "timer extended completion reconciler",
+                            move || {
+                                if let Err(error) = completion.run_once(max_records, max_bytes) {
+                                    warn!("Extended Timeline completion replay will retry: {error}");
+                                }
+                            },
+                        )
+                        .await;
+                    }
+                },
+            ) {
+                self.scheduled_task_shutdown.cancel();
+                task_group.cancel();
+                error!("failed to schedule Extended Timeline completion reconciler: {error}");
+                return;
+            }
+        }
+
+        #[cfg(feature = "extended_timeline")]
+        if let Some(delivery) = self.extended_timeline_delivery.as_ref() {
+            let delivery = Arc::clone(delivery);
+            let interval_ms = self.message_store_config.timer_store_config.scheduler_interval_ms;
+            if let Err(error) = scheduled_tasks.schedule_fixed_delay(
+                ScheduledTaskConfig::fixed_delay("timer-extended-delivery", Duration::from_millis(interval_ms)),
+                move || {
+                    let delivery = Arc::clone(&delivery);
+                    async move {
+                        if let Err(error) = delivery.run_once().await {
+                            warn!("Extended Timeline delivery will retry: {error}");
+                        }
+                    }
+                },
+            ) {
+                self.scheduled_task_shutdown.cancel();
+                task_group.cancel();
+                error!("failed to schedule Extended Timeline delivery: {error}");
+                return;
+            }
+        }
+
+        #[cfg(feature = "extended_timeline")]
+        if let (Some(gc), Some(completion)) = (
+            self.extended_timeline_gc.as_ref(),
+            self.extended_timeline_completion_reconciler.as_ref(),
+        ) {
+            let gc = Arc::clone(gc);
+            let completion = Arc::clone(completion);
+            let commit_log = self.commit_log.read_handle();
+            let runtime_scope = self.runtime_scope.clone();
+            let interval_ms = self
+                .message_store_config
+                .timer_store_config
+                .scheduler_interval_ms
+                .max(60_000);
+            let max_records = self.message_store_config.timer_store_config.due_scan_messages;
+            if let Err(error) = scheduled_tasks.schedule_fixed_delay(
+                ScheduledTaskConfig::fixed_delay("timer-extended-gc", Duration::from_millis(interval_ms)),
+                move || {
+                    let gc = Arc::clone(&gc);
+                    let completion = Arc::clone(&completion);
+                    let commit_log = commit_log.clone();
+                    let runtime_scope = runtime_scope.clone();
+                    async move {
+                        let _ = run_blocking_scheduled_task(&runtime_scope, "timer extended gc", move || {
+                            let completion_cursor = match completion.completion_physical_cursor() {
+                                Ok(cursor) => cursor,
+                                Err(error) => {
+                                    warn!("Extended Timeline GC cannot read completion cursor: {error}");
+                                    return;
+                                }
+                            };
+                            let replicated_cursor = commit_log.get_confirm_offset().max(0);
+                            let now_ms = rocketmq_runtime::common::time_utils::current_millis() as i64;
+                            if let Err(error) = gc.run_once(now_ms, completion_cursor, replicated_cursor, max_records) {
+                                warn!("Extended Timeline GC will retry: {error}");
+                            }
+                        })
+                        .await;
+                    }
+                },
+            ) {
+                self.scheduled_task_shutdown.cancel();
+                task_group.cancel();
+                error!("failed to schedule Extended Timeline GC: {error}");
                 return;
             }
         }
@@ -575,6 +681,8 @@ impl LocalFileMessageStore {
                 timer_message_store.start();
             }
             self.sync_timer_message_store_role();
+            #[cfg(feature = "extended_timeline")]
+            self.sync_extended_timeline_role();
 
             if let Some(ha_service) = self.ha_service.as_mut() {
                 ha_service.start().await.map_err(|e| {
@@ -708,6 +816,10 @@ impl LocalFileMessageStore {
                 ha_service.shutdown().await;
             }
 
+            #[cfg(feature = "extended_timeline")]
+            if let Err(error) = self.extended_timeline_role.transition(false) {
+                warn!("Extended Timeline shutdown fence persistence failed: {error}");
+            }
             self.shutdown_schedule_tasks().await;
             #[cfg(feature = "extended_timeline")]
             if let Some(materializer) = self.extended_timeline_materializer.as_ref() {

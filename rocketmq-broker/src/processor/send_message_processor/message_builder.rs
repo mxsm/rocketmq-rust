@@ -75,6 +75,9 @@ pub(super) fn clear_reserved_properties(
     for property in [
         MessageConst::PROPERTY_TIMER_ORIGINAL_DELIVER_MS,
         MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN,
+        MessageConst::PROPERTY_TIMER_ID,
+        MessageConst::PROPERTY_TIMER_OWNER_EPOCH,
+        MessageConst::PROPERTY_TIMER_LANE,
         MessageConst::PROPERTY_TIMER_GENERATION,
         MessageConst::TIMER_ENGINE_TYPE,
         MessageConst::PROPERTY_TIMER_FORMAT_VERSION,
@@ -247,6 +250,9 @@ mod tests {
         );
         for property in [
             MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN,
+            MessageConst::PROPERTY_TIMER_ID,
+            MessageConst::PROPERTY_TIMER_OWNER_EPOCH,
+            MessageConst::PROPERTY_TIMER_LANE,
             MessageConst::PROPERTY_TIMER_GENERATION,
             MessageConst::TIMER_ENGINE_TYPE,
             MessageConst::PROPERTY_TIMER_FORMAT_VERSION,
@@ -267,6 +273,9 @@ mod tests {
         assert!(!request_properties.contains_key(MessageConst::PROPERTY_POP_CK));
         for property in [
             MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN,
+            MessageConst::PROPERTY_TIMER_ID,
+            MessageConst::PROPERTY_TIMER_OWNER_EPOCH,
+            MessageConst::PROPERTY_TIMER_LANE,
             MessageConst::PROPERTY_TIMER_GENERATION,
             MessageConst::TIMER_ENGINE_TYPE,
             MessageConst::PROPERTY_TIMER_FORMAT_VERSION,

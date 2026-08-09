@@ -132,6 +132,11 @@ name    = "timer_storage_bench"
 harness = false
 
 [[bench]]
+name              = "timer_extended_bench"
+harness           = false
+required-features = ["extended_timeline"]
+
+[[bench]]
 name    = "mapped_buffer_bench"
 harness = false
 
@@ -211,4 +216,24 @@ required-features = ["extended_timeline"]
 
 [[test]]
 name              = "timer_extended_integration_tests"
+required-features = ["extended_timeline"]
+
+[[test]]
+name              = "timer_extended_delivery_tests"
+required-features = ["extended_timeline"]
+
+[[test]]
+name              = "timer_extended_ha_tests"
+required-features = ["extended_timeline"]
+
+[[test]]
+name              = "timer_clock_tests"
+required-features = ["extended_timeline"]
+
+[[test]]
+name              = "timer_extended_capacity_tests"
+required-features = ["extended_timeline"]
+
+[[test]]
+name              = "timer_extended_soak_tests"
 required-features = ["extended_timeline"]

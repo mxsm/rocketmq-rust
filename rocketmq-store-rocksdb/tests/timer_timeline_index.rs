@@ -165,6 +165,10 @@ fn state_compare_and_set_never_overwrites_a_conflict() {
         .expect("route"),
         admission_epoch: TimerEngineEpoch::new(17),
         owner_epoch: TimerEngineEpoch::new(19),
+        claim_seq: 0,
+        due_time_ms: 1_000,
+        lane: 3,
+        terminal_at_ms: 0,
         shadow_only: false,
     };
     state.put(timer_id, generation, &record).expect("put state");
@@ -221,6 +225,10 @@ fn state_views_from_one_timeline_share_a_single_cas_domain() {
                 .expect("route"),
                 admission_epoch: TimerEngineEpoch::new(1),
                 owner_epoch: TimerEngineEpoch::new(1),
+                claim_seq: 0,
+                due_time_ms: 1_000,
+                lane: 3,
+                terminal_at_ms: 0,
                 shadow_only: false,
             },
         )
