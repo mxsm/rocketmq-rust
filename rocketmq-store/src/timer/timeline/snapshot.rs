@@ -24,8 +24,11 @@ use rocketmq_store_api::TimerEngineEpoch;
 use rocketmq_store_api::TimerGeneration;
 use rocketmq_store_api::TimerId;
 use rocketmq_store_api::TimerSnapshotManifest;
+use rocketmq_store_api::TimerTimelineIndexKind;
 use rocketmq_store_api::TIMER_SNAPSHOT_SCHEMA_VERSION;
 use rocketmq_store_local::timer::payload_store::TimerPayloadStore;
+use rocketmq_store_local::timer::segmented_timeline::NativeSnapshotPin;
+use rocketmq_store_local::timer::segmented_timeline::SegmentedTimeline;
 use rocketmq_store_rocksdb::timer::checkpoint::TimelineCheckpointKind;
 use rocketmq_store_rocksdb::timer::codec::TimelineKeyV1;
 use rocketmq_store_rocksdb::timer::timeline_index::RocksDbTimelineIndex;
@@ -50,6 +53,7 @@ pub(crate) struct TimelineSnapshotManager {
     role: Arc<TimerRoleState>,
     clock: Arc<TimerClockSafety>,
     activation_epoch: TimerEngineEpoch,
+    native_timeline: Option<Arc<SegmentedTimeline>>,
     create_lock: Mutex<()>,
 }
 
@@ -77,8 +81,15 @@ impl TimelineSnapshotManager {
             role,
             clock,
             activation_epoch,
+            native_timeline: None,
             create_lock: Mutex::new(()),
         }
+    }
+
+    /// Enables a segmented owner while retaining the RocksDB overlay checkpoint.
+    pub(crate) fn with_segmented_timeline(mut self, native_timeline: Arc<SegmentedTimeline>) -> Self {
+        self.native_timeline = Some(native_timeline);
+        self
     }
 
     /// Creates and atomically publishes one artifact. Pins remain until explicit release.
@@ -108,7 +119,19 @@ impl TimelineSnapshotManager {
             timer_id: TimerId::new(0),
             generation: TimerGeneration::new(0),
         };
+        let native_pin = self
+            .native_timeline
+            .as_ref()
+            .map(|native| native.pin_snapshot(generation))
+            .transpose()?;
         let pin = self.timeline.pin_snapshot_generation(gc_fence, generation)?;
+        let mut native_files = match (self.native_timeline.as_ref(), native_pin) {
+            (Some(native), Some(native_pin)) => native.create_snapshot_files(&building.join("native"), native_pin)?,
+            _ => Vec::new(),
+        };
+        for file in &mut native_files {
+            file.relative_path = format!("native/{}", file.relative_path);
+        }
         let payload_root = building.join("payload");
         let mut payload_files = self.payload.create_snapshot_files(&payload_root, generation)?;
         for file in &mut payload_files {
@@ -136,6 +159,15 @@ impl TimelineSnapshotManager {
             due_time_cursor_ms,
             completion_physical_cursor,
             timeline_sequence,
+            timeline_index_kind: if native_pin.is_some() {
+                TimerTimelineIndexKind::Segmented
+            } else {
+                TimerTimelineIndexKind::RocksDb
+            },
+            native_manifest_generation: native_pin.map(|pin| pin.manifest_generation),
+            native_durable_end: native_pin.map(|pin| pin.durable_end),
+            native_manifest_checksum: native_pin.map(|pin| pin.manifest_checksum),
+            native_files,
             role_epoch,
             activation_epoch: self.activation_epoch.get(),
             format_fingerprint,
@@ -144,6 +176,7 @@ impl TimelineSnapshotManager {
             checksum: String::new(),
         };
         manifest.seal()?;
+        manifest.validate_artifact_files(&building)?;
         write_manifest(&building.join(MANIFEST_NAME), &manifest)?;
         std::fs::rename(&building, &published)?;
         debug_assert_eq!(pin.generation, generation);
@@ -177,7 +210,7 @@ impl TimelineSnapshotManager {
         };
         let bytes = std::fs::read(directory.join(MANIFEST_NAME))?;
         let manifest: TimerSnapshotManifest = serde_json::from_slice(&bytes)?;
-        manifest.validate()?;
+        manifest.validate_artifact_files(&directory)?;
         Ok(Some(manifest))
     }
 
@@ -193,8 +226,20 @@ impl TimelineSnapshotManager {
                 generation: TimerGeneration::new(0),
             },
         };
+        let native_release = if let (Some(native), TimerTimelineIndexKind::Segmented) =
+            (self.native_timeline.as_ref(), manifest.timeline_index_kind)
+        {
+            let native_pin = native_pin_from_manifest(manifest)?;
+            native.validate_snapshot_pin(native_pin)?;
+            Some((native, native_pin))
+        } else {
+            None
+        };
         self.payload.release_snapshot_pin(manifest.generation)?;
         self.timeline.release_snapshot(pin)?;
+        if let Some((native, native_pin)) = native_release {
+            native.release_snapshot(native_pin)?;
+        }
         Ok(())
     }
 
@@ -211,6 +256,21 @@ impl TimelineSnapshotManager {
         }
         maximum.checked_add(1).ok_or(TimelineSnapshotError::GenerationExhausted)
     }
+}
+
+fn native_pin_from_manifest(manifest: &TimerSnapshotManifest) -> Result<NativeSnapshotPin, TimelineSnapshotError> {
+    Ok(NativeSnapshotPin {
+        snapshot_generation: manifest.generation,
+        manifest_generation: manifest
+            .native_manifest_generation
+            .ok_or(TimelineSnapshotError::MissingNativeBinding)?,
+        durable_end: manifest
+            .native_durable_end
+            .ok_or(TimelineSnapshotError::MissingNativeBinding)?,
+        manifest_checksum: manifest
+            .native_manifest_checksum
+            .ok_or(TimelineSnapshotError::MissingNativeBinding)?,
+    })
 }
 
 fn write_manifest(path: &Path, manifest: &TimerSnapshotManifest) -> Result<(), TimelineSnapshotError> {
@@ -247,4 +307,8 @@ pub(crate) enum TimelineSnapshotError {
     GenerationExhausted,
     #[error("Extended snapshot artifact generation {0} already exists")]
     ArtifactExists(u64),
+    #[error(transparent)]
+    Native(#[from] rocketmq_store_local::timer::segmented_timeline::SegmentedTimelineError),
+    #[error("segmented snapshot manifest is missing its native binding")]
+    MissingNativeBinding,
 }

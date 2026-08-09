@@ -107,6 +107,22 @@ impl RocksDbTimelineIndex {
     /// Returns an error when RocksDB cannot open with the required WAL/sync profile.
     pub fn open(store_root: impl AsRef<Path>) -> Result<Self, RocketMQError> {
         let config = RocksDbConfig::timer_timeline(store_root);
+        Self::open_with_config(config)
+    }
+
+    /// Opens an exact Timeline database directory, normally an immutable migration checkpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the checkpoint cannot be opened or its persisted snapshot pin is
+    /// invalid.
+    pub fn open_database_path(path: impl AsRef<Path>) -> Result<Self, RocketMQError> {
+        Self::open_with_config(RocksDbConfig::timer_timeline_at_database_path(
+            path.as_ref().to_path_buf(),
+        ))
+    }
+
+    fn open_with_config(config: RocksDbConfig) -> Result<Self, RocketMQError> {
         debug_assert!(config.wal_enabled && config.sync_write);
         let store = Arc::new(RocksDbStore::open(config)?);
         let index = Self::from_store(store);

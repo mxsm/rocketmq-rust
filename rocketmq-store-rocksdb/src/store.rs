@@ -282,6 +282,25 @@ impl RocksDbStore {
         Ok(RocksDbSnapshot::new(self.db.as_ref()))
     }
 
+    /// Reads a bounded group of keys from one column family with one native multi-get call.
+    pub fn multi_get_cf(&self, cf: &str, keys: &[Vec<u8>]) -> Result<Vec<Option<Bytes>>, RocketMQError> {
+        self.ensure_open()?;
+        if keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        let handle = self.cf_handle(cf)?;
+        let results = self.db.multi_get_cf(keys.iter().map(|key| (&handle, key.as_slice())));
+        let mut values = Vec::with_capacity(results.len());
+        for result in results {
+            values.push(
+                result
+                    .map(|value| value.map(Bytes::from))
+                    .map_err(|error| self.map_native_error(error, RocksDbErrorKind::Read))?,
+            );
+        }
+        Ok(values)
+    }
+
     pub fn flush(&self) -> Result<(), RocketMQError> {
         self.ensure_open()?;
         let result = self

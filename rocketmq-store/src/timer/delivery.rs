@@ -12,46 +12,81 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[cfg(feature = "extended_timeline")]
 use std::collections::HashMap;
+#[cfg(feature = "extended_timeline")]
 use std::sync::atomic::AtomicU64;
+#[cfg(feature = "extended_timeline")]
 use std::sync::atomic::Ordering;
+#[cfg(feature = "extended_timeline")]
 use std::sync::Arc;
 
+#[cfg(feature = "extended_timeline")]
 use bytes::Bytes;
+#[cfg(feature = "extended_timeline")]
 use cheetah_string::CheetahString;
+#[cfg(feature = "extended_timeline")]
 use parking_lot::Mutex;
+#[cfg(feature = "extended_timeline")]
 use rocketmq_model::common::message::message_accessor::MessageAccessor;
+#[cfg(feature = "extended_timeline")]
 use rocketmq_model::common::message::message_ext::MessageExt;
+#[cfg(feature = "extended_timeline")]
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+#[cfg(feature = "extended_timeline")]
 use rocketmq_model::common::message::message_single;
+#[cfg(feature = "extended_timeline")]
 use rocketmq_model::common::message::MessageConst;
+#[cfg(feature = "extended_timeline")]
 use rocketmq_model::common::message::MessageTrait;
+#[cfg(feature = "extended_timeline")]
 use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
+#[cfg(feature = "extended_timeline")]
 use rocketmq_runtime::common::time_utils::current_millis;
+#[cfg(feature = "extended_timeline")]
 use rocketmq_store_api::TimerEngineEpoch;
+#[cfg(feature = "extended_timeline")]
 use rocketmq_store_api::TimerEngineId;
+#[cfg(feature = "extended_timeline")]
 use rocketmq_store_api::TimerGeneration;
+#[cfg(feature = "extended_timeline")]
 use rocketmq_store_api::TimerId;
+#[cfg(feature = "extended_timeline")]
 use rocketmq_store_local::timer::payload_record::TimerPayloadRecordV1;
+#[cfg(feature = "extended_timeline")]
 use rocketmq_store_local::timer::payload_store::TimerPayloadStore;
+#[cfg(feature = "extended_timeline")]
 use rocketmq_store_rocksdb::batch::RocksDbWriteBatch;
+#[cfg(feature = "extended_timeline")]
 use rocketmq_store_rocksdb::timer::codec::TimelineKeyV1;
+#[cfg(feature = "extended_timeline")]
 use rocketmq_store_rocksdb::timer::state_index::RocksDbTimelineStateIndex;
+#[cfg(feature = "extended_timeline")]
 use rocketmq_store_rocksdb::timer::state_index::StateTransitionResult;
+#[cfg(feature = "extended_timeline")]
 use rocketmq_store_rocksdb::timer::state_index::TimelineState;
+#[cfg(feature = "extended_timeline")]
 use rocketmq_store_rocksdb::timer::timeline_index::RocksDbTimelineIndex;
+#[cfg(feature = "extended_timeline")]
 use thiserror::Error;
 
 use crate::base::message_status_enum::PutMessageStatus;
+#[cfg(feature = "extended_timeline")]
 use crate::message_store::local_file_message_store::TimerMessageWriteHandle;
+#[cfg(feature = "extended_timeline")]
 use crate::timer::clock::TimerClockSafety;
+#[cfg(feature = "extended_timeline")]
 use crate::timer::clock::TimerClockState;
 use crate::timer::error::CorruptionReason;
 use crate::timer::error::RetryClass;
 use crate::timer::error::TimerWorkResult;
+#[cfg(feature = "extended_timeline")]
 use crate::timer::role::TimerRoleState;
+#[cfg(feature = "extended_timeline")]
 use crate::timer::timeline::TimelineCompletionReconciler;
+#[cfg(feature = "extended_timeline")]
 use crate::timer::timeline::TimelineReadyOutbox;
+#[cfg(feature = "extended_timeline")]
 use crate::timer::timeline::TimelineReceiptStore;
 
 pub(crate) fn classify_delivery_status(status: PutMessageStatus) -> TimerWorkResult {
@@ -75,6 +110,7 @@ pub(crate) fn classify_delivery_status(status: PutMessageStatus) -> TimerWorkRes
     }
 }
 
+#[cfg(feature = "extended_timeline")]
 pub(crate) fn delivery_shard(topic: &str, queue_id: i32, shard_count: usize) -> usize {
     let mut hash = 0xcbf2_9ce4_8422_2325u64;
     for byte in topic.as_bytes().iter().chain(queue_id.to_be_bytes().iter()) {
@@ -85,6 +121,7 @@ pub(crate) fn delivery_shard(topic: &str, queue_id: i32, shard_count: usize) -> 
 }
 
 /// Epoch-fenced Extended Timeline delivery owner.
+#[cfg(feature = "extended_timeline")]
 pub(crate) struct TimelineDeliveryCoordinator {
     timeline: Arc<RocksDbTimelineIndex>,
     state: RocksDbTimelineStateIndex,
@@ -103,6 +140,7 @@ pub(crate) struct TimelineDeliveryCoordinator {
     recovery_cursor: Mutex<Option<(TimerId, TimerGeneration)>>,
 }
 
+#[cfg(feature = "extended_timeline")]
 impl TimelineDeliveryCoordinator {
     #[allow(
         clippy::too_many_arguments,
@@ -465,6 +503,7 @@ impl TimelineDeliveryCoordinator {
     }
 }
 
+#[cfg(feature = "extended_timeline")]
 #[derive(Clone, Copy, Debug)]
 struct DeliveryLease {
     owner_epoch: TimerEngineEpoch,
@@ -472,6 +511,7 @@ struct DeliveryLease {
     deadline_monotonic_ms: u64,
 }
 
+#[cfg(feature = "extended_timeline")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DeliveryDisposition {
     Committed,
@@ -479,12 +519,14 @@ enum DeliveryDisposition {
     Skipped,
 }
 
+#[cfg(feature = "extended_timeline")]
 #[derive(Clone, Copy, Debug)]
 struct DeliveryOutcome {
     disposition: DeliveryDisposition,
     payload_bytes: usize,
 }
 
+#[cfg(feature = "extended_timeline")]
 impl DeliveryOutcome {
     const fn skipped() -> Self {
         Self {
@@ -494,6 +536,7 @@ impl DeliveryOutcome {
     }
 }
 
+#[cfg(feature = "extended_timeline")]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct TimelineDeliveryRun {
     pub(crate) examined: usize,
@@ -503,6 +546,7 @@ pub(crate) struct TimelineDeliveryRun {
     pub(crate) clock_unsafe: bool,
 }
 
+#[cfg(feature = "extended_timeline")]
 fn validate_payload(key: TimelineKeyV1, payload: &TimerPayloadRecordV1) -> Result<(), TimelineDeliveryError> {
     if payload.timer_id != key.timer_id
         || payload.generation != key.generation
@@ -514,6 +558,7 @@ fn validate_payload(key: TimelineKeyV1, payload: &TimerPayloadRecordV1) -> Resul
     Ok(())
 }
 
+#[cfg(feature = "extended_timeline")]
 fn build_final_message(
     payload: &TimerPayloadRecordV1,
     state: &rocketmq_store_rocksdb::timer::state_index::TimelineStateRecordV1,
@@ -572,6 +617,7 @@ fn build_final_message(
     Ok(final_message)
 }
 
+#[cfg(feature = "extended_timeline")]
 fn copy_message(source: MessageExt) -> MessageExtBrokerInner {
     let sys_flag = source.sys_flag();
     let born_timestamp = source.born_timestamp();
@@ -610,6 +656,7 @@ fn copy_message(source: MessageExt) -> MessageExtBrokerInner {
     inner
 }
 
+#[cfg(feature = "extended_timeline")]
 #[derive(Debug, Error)]
 pub(crate) enum TimelineDeliveryError {
     #[error("invalid Extended delivery configuration")]
@@ -653,6 +700,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "extended_timeline")]
     fn timer_same_fifo_group_always_uses_the_same_shard() {
         assert_eq!(delivery_shard("orders", 7, 8), delivery_shard("orders", 7, 8));
     }

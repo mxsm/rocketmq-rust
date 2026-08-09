@@ -77,6 +77,15 @@ use crate::transfer::batch::TransferKind;
 use crate::transfer::segment::SegmentLease;
 use crate::transfer::segment::TransferCacheState;
 
+#[cfg(feature = "extended_timeline")]
+mod timer_segmented;
+#[cfg(feature = "extended_timeline")]
+pub use timer_segmented::*;
+#[cfg(feature = "extended_timeline")]
+mod timer_migration;
+#[cfg(feature = "extended_timeline")]
+pub use timer_migration::*;
+
 /// Mapped-file queue surface exposed only to lifecycle integration tests.
 #[doc(hidden)]
 pub use crate::consume_queue::mapped_file_queue::MappedFileQueue as MappedFileQueueTestHarness;

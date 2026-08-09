@@ -61,6 +61,7 @@ use crate::timer::timer_message_store::TIMER_TOPIC;
 use super::shadow::ShadowExpectedRecord;
 use super::shadow::ShadowReconciliationSnapshot;
 use super::ShadowReconciler;
+use super::TimelineIndexMigrationManager;
 use super::TimelineReadyOutbox;
 use super::TimelineRecallService;
 
@@ -84,6 +85,7 @@ pub(crate) struct ShadowTimelineMaterializer {
     snapshot_barrier: Arc<RwLock<()>>,
     run_lock: Mutex<()>,
     mode: TimelineMaterializationMode,
+    index_migration: Option<Arc<TimelineIndexMigrationManager>>,
     materialized_records: AtomicU64,
     materialized_bytes: AtomicU64,
     materialization_failures: AtomicU64,
@@ -172,6 +174,7 @@ impl ShadowTimelineMaterializer {
             snapshot_barrier: Arc::new(RwLock::new(())),
             run_lock: Mutex::new(()),
             mode,
+            index_migration: None,
             materialized_records: AtomicU64::new(0),
             materialized_bytes: AtomicU64::new(0),
             materialization_failures: AtomicU64::new(0),
@@ -194,6 +197,12 @@ impl ShadowTimelineMaterializer {
 
     pub(crate) fn snapshot_barrier(&self) -> Arc<RwLock<()>> {
         Arc::clone(&self.snapshot_barrier)
+    }
+
+    /// Routes formal derived commits through the managed online index migration adapter.
+    pub(crate) fn with_index_migration(mut self, migration: Arc<TimelineIndexMigrationManager>) -> Self {
+        self.index_migration = Some(migration);
+        self
     }
 
     pub(crate) fn snapshot_source_cursors(&self) -> Result<(i64, i64, u64), TimelineMaterializerError> {
@@ -320,7 +329,10 @@ impl ShadowTimelineMaterializer {
                     self.timeline
                         .get_shadow(source.cq_offset, source.physical_offset, generation)?
                 }
-                TimelineMaterializationMode::Formal { .. } => self.timeline.get(decoded.key)?,
+                TimelineMaterializationMode::Formal { .. } => match self.index_migration.as_ref() {
+                    Some(migration) => migration.get(decoded.key)?,
+                    None => self.timeline.get(decoded.key)?,
+                },
             };
             if let Some(existing) = existing {
                 validate_existing_source(
@@ -349,6 +361,7 @@ impl ShadowTimelineMaterializer {
         let locators = self.payload_store.append_batch(&payload_records)?;
         let mut locator_iter = locators.into_iter();
         let mut batch = RocksDbWriteBatch::with_capacity(prepared.len().saturating_mul(3).saturating_add(1));
+        let mut formal_entries = Vec::new();
         let mut usage_deltas = BTreeMap::<Vec<u8>, (u64, u64)>::new();
         for prepared_source in &prepared {
             let decoded = prepared_source.decoded();
@@ -381,7 +394,15 @@ impl ShadowTimelineMaterializer {
                     shadow_only: matches!(self.mode, TimelineMaterializationMode::Shadow),
                 },
             };
-            RocksDbTimelineIndex::append_entry(&mut batch, &entry)?;
+            let keep_rocks_timeline = self
+                .index_migration
+                .as_ref()
+                .map(|migration| migration.keeps_rocks_timeline())
+                .transpose()?
+                .unwrap_or(true);
+            if matches!(self.mode, TimelineMaterializationMode::Shadow) || keep_rocks_timeline {
+                RocksDbTimelineIndex::append_entry(&mut batch, &entry)?;
+            }
             match self.mode {
                 TimelineMaterializationMode::Shadow => {
                     RocksDbTimelineIndex::append_shadow_observation(
@@ -405,6 +426,7 @@ impl ShadowTimelineMaterializer {
                     }
                 }
                 TimelineMaterializationMode::Formal { admission_epoch } => {
+                    formal_entries.push(entry);
                     if source.cancelled {
                         return Err(TimelineMaterializerError::FormalRecallTombstone);
                     }
@@ -472,19 +494,26 @@ impl ShadowTimelineMaterializer {
             .last()
             .map(PreparedSource::identity)
             .ok_or(TimelineMaterializerError::EmptyBatch)?;
-        RocksDbTimelineIndex::append_checkpoint(
-            &mut batch,
-            TimelineCheckpointKind::MaterializedSource,
-            SOURCE_CHECKPOINT_LANE,
-            TimelineCheckpointV1 {
-                materialized_source_offset: TimerSourceCqOffset::new(last_source.cq_offset),
-                due_cursor: checkpoint.due_cursor,
-                completion_cursor: checkpoint.completion_cursor,
-                format_fingerprint: self.format_fingerprint,
-                generation: checkpoint.generation.saturating_add(1),
-            },
-        );
-        self.timeline.write_batch(&batch)?;
+        let next_checkpoint = TimelineCheckpointV1 {
+            materialized_source_offset: TimerSourceCqOffset::new(last_source.cq_offset),
+            due_cursor: checkpoint.due_cursor,
+            completion_cursor: checkpoint.completion_cursor,
+            format_fingerprint: self.format_fingerprint,
+            generation: checkpoint.generation.saturating_add(1),
+        };
+        if let (TimelineMaterializationMode::Formal { .. }, Some(migration)) =
+            (self.mode, self.index_migration.as_ref())
+        {
+            migration.commit_derived(&formal_entries, batch, next_checkpoint)?;
+        } else {
+            RocksDbTimelineIndex::append_checkpoint(
+                &mut batch,
+                TimelineCheckpointKind::MaterializedSource,
+                SOURCE_CHECKPOINT_LANE,
+                next_checkpoint,
+            );
+            self.timeline.write_batch(&batch)?;
+        }
         if matches!(self.mode, TimelineMaterializationMode::Shadow) {
             for source in &prepared {
                 let source = source.decoded();
@@ -804,6 +833,8 @@ pub(crate) enum TimelineMaterializerError {
     PayloadRecord(#[from] rocketmq_store_local::timer::payload_record::TimerPayloadRecordError),
     #[error("Timeline store failure: {0}")]
     Timeline(#[from] rocketmq_error::RocketMQError),
+    #[error("Timeline index migration failure: {0}")]
+    IndexMigration(#[from] super::index_migration::IndexMigrationError),
     #[error("Timer ConsumeQueue is unavailable")]
     SourceUnavailable,
     #[error("Timer source payload is missing at CommitLog offset {0}")]
