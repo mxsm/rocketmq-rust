@@ -4,366 +4,286 @@ import {translate} from '@docusaurus/Translate';
 import clsx from 'clsx';
 import styles from './DeveloperStyleHero.module.css';
 
-const statusItems = [
-  {
-    titleId: 'homepage.hero.status.nameserver.title',
-    title: 'NameServer',
-    detailId: 'homepage.hero.status.nameserver.detail',
-    detail: 'route discovery',
-  },
-  {
-    titleId: 'homepage.hero.status.broker.title',
-    title: 'Broker',
-    detailId: 'homepage.hero.status.broker.detail',
-    detail: 'commit + dispatch',
-  },
-  {
-    titleId: 'homepage.hero.status.storage.title',
-    title: 'CommitLog',
-    detailId: 'homepage.hero.status.storage.detail',
-    detail: 'durable storage',
-  },
-  {
-    titleId: 'homepage.hero.status.client.title',
-    title: 'Rust Client',
-    detailId: 'homepage.hero.status.client.detail',
-    detail: 'producer + consumer',
-  },
-];
+type MetricTone = 'runtime' | 'safety' | 'protocol' | 'status';
 
-const motionStages = [
-  {
-    id: 'homepage.hero.stage.route',
-    message: 'Route Lookup',
-  },
-  {
-    id: 'homepage.hero.stage.produce',
-    message: 'Producer Send',
-  },
-  {
-    id: 'homepage.hero.stage.append',
-    message: 'Broker Append',
-  },
-  {
-    id: 'homepage.hero.stage.commitlog',
-    message: 'CommitLog Flush',
-  },
-  {
-    id: 'homepage.hero.stage.consume',
-    message: 'Consumer Pull',
-  },
-  {
-    id: 'homepage.hero.stage.offset',
-    message: 'Offset Commit',
-  },
-];
+type MetricItem = {
+  value: string;
+  detailId: string;
+  detail: string;
+  tone: MetricTone;
+};
 
-const heroMetrics = [
+const metrics: MetricItem[] = [
   {
     value: 'Tokio',
-    labelId: 'homepage.hero.metric.runtime',
-    label: 'async runtime',
+    detailId: 'homepage.hero.metric.tokio',
+    detail: 'Asynchronous by design',
+    tone: 'runtime',
   },
   {
-    value: 'CommitLog',
-    labelId: 'homepage.hero.metric.storage',
-    label: 'durable storage',
+    value: 'Type Safe',
+    detailId: 'homepage.hero.metric.safety',
+    detail: 'Memory safety without compromise',
+    tone: 'safety',
   },
   {
-    value: '5.x',
-    labelId: 'homepage.hero.metric.model',
-    label: 'RocketMQ model',
+    value: 'RocketMQ 5.x',
+    detailId: 'homepage.hero.metric.protocol',
+    detail: 'Protocol compatible',
+    tone: 'protocol',
   },
 ];
 
-function ParticleField(): React.JSX.Element {
+function ArrowIcon(): React.JSX.Element {
   return (
-    <div className={styles.particleField} aria-hidden="true">
-      <span className={clsx(styles.particleNode, styles.particleOne)} />
-      <span className={clsx(styles.particleNode, styles.particleTwo)} />
-      <span className={clsx(styles.particleNode, styles.particleThree)} />
-      <span className={clsx(styles.particleNode, styles.particleFour)} />
-      <span className={clsx(styles.particleNode, styles.particleFive)} />
-      <span className={clsx(styles.particleLink, styles.linkOne)} />
-      <span className={clsx(styles.particleLink, styles.linkTwo)} />
-      <span className={clsx(styles.particleLink, styles.linkThree)} />
-      <span className={clsx(styles.particleLink, styles.linkFour)} />
-      <span className={clsx(styles.particleLink, styles.linkFive)} />
-      <span className={clsx(styles.particleLink, styles.linkSix)} />
+    <svg viewBox="0 0 20 20" aria-hidden="true">
+      <path d="M4 10h11M11 5l5 5-5 5" />
+    </svg>
+  );
+}
+
+function GitHubIcon(): React.JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.86c-2.78.6-3.37-1.18-3.37-1.18-.45-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.61.07-.61 1 .07 1.53 1.03 1.53 1.03.9 1.53 2.35 1.09 2.92.83.09-.65.35-1.09.64-1.34-2.22-.25-4.55-1.11-4.55-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.64 0 0 .84-.27 2.75 1.02A9.6 9.6 0 0 1 12 6.84a9.5 9.5 0 0 1 2.5.34c1.91-1.3 2.75-1.02 2.75-1.02.55 1.37.2 2.39.1 2.64.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.68-4.57 4.93.36.31.68.92.68 1.86V21c0 .27.18.58.69.48A10 10 0 0 0 12 2Z" />
+    </svg>
+  );
+}
+
+function MetricIcon({tone}: {tone: MetricTone}): React.JSX.Element {
+  if (tone === 'runtime') {
+    return (
+      <svg viewBox="0 0 36 36" aria-hidden="true">
+        <path d="m20 2-12 18h9l-2 14 13-20h-9l1-12Z" />
+      </svg>
+    );
+  }
+
+  if (tone === 'safety') {
+    return (
+      <svg viewBox="0 0 36 36" aria-hidden="true">
+        <path d="M18 3 31 8v9c0 8-5 13-13 16C10 30 5 25 5 17V8l13-5Z" />
+        <path d="m12 18 4 4 8-9" />
+      </svg>
+    );
+  }
+
+  if (tone === 'protocol') {
+    return (
+      <svg viewBox="0 0 36 36" aria-hidden="true">
+        <path d="m18 3 13 7-13 7L5 10l13-7Z" />
+        <path d="m5 10 13 7 13-7v16l-13 7-13-7V10Z" />
+        <path d="M18 17v16" />
+      </svg>
+    );
+  }
+
+  return <span className={styles.statusDot} aria-hidden="true" />;
+}
+
+function TopologyVisual(): React.JSX.Element {
+  const instanceId = React.useId().replace(/:/g, '');
+  const producerRouteId = `producer-route-${instanceId}`;
+  const brokerRouteId = `broker-route-${instanceId}`;
+  const consumerRouteId = `consumer-route-${instanceId}`;
+  const storageRouteId = `storage-route-${instanceId}`;
+
+  return (
+    <div className={styles.topologyPanel}>
+      <div className={styles.visualStatus}>
+        <span />
+        {translate({
+          id: 'homepage.hero.clusterStatus',
+          message: 'Cluster: healthy',
+        })}
+      </div>
+
+      <svg
+        className={styles.topologySvg}
+        viewBox="0 0 760 470"
+        role="img"
+        aria-labelledby={`topology-title-${instanceId}`}>
+        <title id={`topology-title-${instanceId}`}>
+          RocketMQ-Rust producer, NameServer, broker, CommitLog, and consumer topology
+        </title>
+        <defs>
+          <linearGradient id={`broker-gradient-${instanceId}`} x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="#ff9a3d" />
+            <stop offset="100%" stopColor="#ff5a18" />
+          </linearGradient>
+          <filter id={`soft-glow-${instanceId}`} x="-80%" y="-80%" width="260%" height="260%">
+            <feGaussianBlur stdDeviation="4" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+        </defs>
+
+        <g className={styles.topologyGrid} aria-hidden="true">
+          <path d="M20 70H740M20 150H740M20 230H740M20 310H740M20 390H740" />
+          <path d="M80 22V448M200 22V448M320 22V448M440 22V448M560 22V448M680 22V448" />
+        </g>
+
+        <g className={styles.routeTracks} aria-hidden="true">
+          <path
+            className={clsx(styles.route, styles.routeDiscovery)}
+            d="M190 205C242 205 238 91 305 91"
+          />
+          <path
+            className={clsx(styles.route, styles.routeDiscovery)}
+            d="M455 91C520 91 518 205 570 205"
+          />
+          <path
+            id={producerRouteId}
+            className={clsx(styles.route, styles.routeProducer)}
+            d="M190 240C236 240 260 234 305 232"
+          />
+          <path
+            id={brokerRouteId}
+            className={clsx(styles.route, styles.routeLookup)}
+            d="M380 138V174"
+          />
+          <path
+            id={consumerRouteId}
+            className={clsx(styles.route, styles.routeConsumer)}
+            d="M455 232C498 232 526 240 570 240"
+          />
+          <path
+            id={storageRouteId}
+            className={clsx(styles.route, styles.routeStorage)}
+            d="M380 290V330"
+          />
+        </g>
+
+        <g className={styles.packetLayer} aria-hidden="true">
+          <circle className={clsx(styles.packet, styles.packetProducer)} r="5">
+            <animateMotion dur="3.2s" repeatCount="indefinite">
+              <mpath href={`#${producerRouteId}`} />
+            </animateMotion>
+          </circle>
+          <circle className={clsx(styles.packet, styles.packetLookup)} r="4">
+            <animateMotion dur="2.8s" repeatCount="indefinite" begin="-1.1s">
+              <mpath href={`#${brokerRouteId}`} />
+            </animateMotion>
+          </circle>
+          <circle className={clsx(styles.packet, styles.packetConsumer)} r="5">
+            <animateMotion dur="3.4s" repeatCount="indefinite" begin="-1.7s">
+              <mpath href={`#${consumerRouteId}`} />
+            </animateMotion>
+          </circle>
+          <circle className={clsx(styles.packet, styles.packetStorage)} r="5">
+            <animateMotion dur="2.6s" repeatCount="indefinite" begin="-0.8s">
+              <mpath href={`#${storageRouteId}`} />
+            </animateMotion>
+          </circle>
+        </g>
+
+        <g className={clsx(styles.topologyNode, styles.producerNode)} transform="translate(35 180)">
+          <rect width="155" height="116" rx="18" />
+          <text className={styles.nodeLabel} x="77.5" y="28">Producer</text>
+          <g className={styles.nodeIcon} transform="translate(54 43)">
+            <path d="m23 0 23 13v26L23 52 0 39V13L23 0Z" />
+            <path d="m0 13 23 13 23-13M23 26v26" />
+          </g>
+          <circle className={styles.port} cx="155" cy="25" r="4" />
+          <circle className={styles.port} cx="155" cy="60" r="4" />
+        </g>
+
+        <g className={clsx(styles.topologyNode, styles.nameServerNode)} transform="translate(305 38)">
+          <rect width="150" height="100" rx="18" />
+          <text className={styles.nodeLabel} x="75" y="28">NameServer</text>
+          <g className={styles.nodeIcon} transform="translate(53 43)">
+            <path d="M22 0 44 12v25L22 49 0 37V12L22 0Z" />
+            <circle cx="22" cy="14" r="4" />
+            <circle cx="11" cy="33" r="4" />
+            <circle cx="33" cy="33" r="4" />
+            <path d="m20 18-7 11m11-11 7 11M15 33h14" />
+          </g>
+          <circle className={styles.port} cx="0" cy="53" r="4" />
+          <circle className={styles.port} cx="75" cy="100" r="4" />
+          <circle className={styles.port} cx="150" cy="53" r="4" />
+        </g>
+
+        <g className={clsx(styles.topologyNode, styles.brokerNode)} transform="translate(305 174)">
+          <rect width="150" height="116" rx="18" />
+          <text className={styles.nodeLabel} x="75" y="28">Broker</text>
+          <g className={styles.nodeIcon} transform="translate(50 43)">
+            <path d="m25 0 25 13-25 13L0 13 25 0Z" />
+            <path d="m0 24 25 13 25-13M0 35l25 13 25-13" />
+          </g>
+          <circle className={styles.port} cx="0" cy="58" r="4" />
+          <circle className={styles.port} cx="75" cy="0" r="4" />
+          <circle className={styles.port} cx="150" cy="58" r="4" />
+          <circle className={styles.port} cx="75" cy="116" r="4" />
+        </g>
+
+        <g className={clsx(styles.topologyNode, styles.consumerNode)} transform="translate(570 180)">
+          <rect width="155" height="116" rx="18" />
+          <text className={styles.nodeLabel} x="77.5" y="28">Consumer</text>
+          <g className={styles.nodeIcon} transform="translate(51 43)">
+            <circle cx="26" cy="11" r="9" />
+            <circle cx="8" cy="15" r="6" />
+            <circle cx="44" cy="15" r="6" />
+            <path d="M13 48V39c0-8 5-13 13-13s13 5 13 13v9M0 48v-7c0-6 3-10 9-11m43 18v-7c0-6-3-10-9-11" />
+          </g>
+          <circle className={styles.port} cx="0" cy="25" r="4" />
+          <circle className={styles.port} cx="0" cy="60" r="4" />
+        </g>
+
+        <g className={clsx(styles.topologyNode, styles.commitLogNode)} transform="translate(305 330)">
+          <rect width="150" height="104" rx="18" />
+          <text className={styles.nodeLabel} x="75" y="28">CommitLog</text>
+          <g className={styles.nodeIcon} transform="translate(50 48)">
+            <ellipse cx="25" cy="7" rx="24" ry="7" />
+            <path d="M1 7v28c0 4 11 7 24 7s24-3 24-7V7M1 21c0 4 11 7 24 7s24-3 24-7" />
+          </g>
+          <circle className={styles.port} cx="75" cy="0" r="4" />
+        </g>
+      </svg>
     </div>
   );
 }
 
-function LaunchArtwork(): React.JSX.Element {
-  const streamInstanceId = React.useId().replace(/:/g, '');
-  const streamGradientId = `stream-core-gradient-${streamInstanceId}`;
-  const streamRoutePrimaryId = `stream-route-primary-${streamInstanceId}`;
-  const streamRouteSecondaryId = `stream-route-secondary-${streamInstanceId}`;
-  const streamRouteTertiaryId = `stream-route-tertiary-${streamInstanceId}`;
-
+function MetricsRail(): React.JSX.Element {
   return (
-    <div className={styles.launchArtwork} aria-hidden="true">
-      <div className={clsx(styles.launchPanel, styles.launchPanelLeft, styles.streamPanel)}>
-        <svg className={styles.streamSvg} viewBox="0 0 420 520" role="presentation">
-          <defs>
-            <linearGradient id={streamGradientId} x1="0%" y1="0%" x2="100%" y2="100%">
-              <stop offset="0%" stopColor="#18d7f5" />
-              <stop offset="48%" stopColor="#9b6cff" />
-              <stop offset="100%" stopColor="#ff7a1a" />
-            </linearGradient>
-          </defs>
-
-          <g className={styles.streamBackplane}>
-            <path d="M78 132H312" />
-            <path d="M54 214H352" />
-            <path d="M82 296H322" />
-            <path d="M112 88V372" />
-            <path d="M210 66V424" />
-            <path d="M308 104V396" />
-          </g>
-
-          <g className={styles.streamHalo}>
-            <ellipse cx="210" cy="258" rx="142" ry="92" />
-            <ellipse cx="210" cy="258" rx="92" ry="58" />
-          </g>
-
-          <path
-            id={streamRoutePrimaryId}
-            className={clsx(styles.streamRoute, styles.streamRoutePrimary)}
-            d="M46 162C104 126 154 154 187 205C207 236 234 252 286 236C322 225 350 236 374 262"
-          />
-          <path
-            id={streamRouteSecondaryId}
-            className={clsx(styles.streamRoute, styles.streamRouteSecondary)}
-            d="M42 302C98 330 149 323 181 286C213 248 248 224 314 192C338 180 358 160 376 130"
-          />
-          <path
-            id={streamRouteTertiaryId}
-            className={clsx(styles.streamRoute, styles.streamRouteTertiary)}
-            d="M70 244C120 244 151 244 183 244C217 244 248 272 276 318C296 350 322 364 358 360"
-          />
-
-          <g className={styles.streamCore}>
-            <rect x="165" y="214" width="96" height="96" rx="24" fill={`url(#${streamGradientId})`} />
-            <path d="M190 242H236M190 262H222M190 282H238" />
-          </g>
-
-          <g className={styles.streamEndpoints}>
-            <circle cx="46" cy="162" r="5" />
-            <circle cx="42" cy="302" r="5" />
-            <circle cx="358" cy="360" r="5" />
-            <circle cx="376" cy="130" r="4" />
-          </g>
-
-          <g className={styles.streamPackets}>
-            <circle className={clsx(styles.streamPacket, styles.streamPacketPrimary)} r="5">
-              <animateMotion dur="5.4s" repeatCount="indefinite" begin="0s">
-                <mpath href={`#${streamRoutePrimaryId}`} />
-              </animateMotion>
-            </circle>
-            <circle className={clsx(styles.streamPacket, styles.streamPacketSecondary)} r="4">
-              <animateMotion dur="6.2s" repeatCount="indefinite" begin="-1.8s">
-                <mpath href={`#${streamRouteSecondaryId}`} />
-              </animateMotion>
-            </circle>
-            <circle className={clsx(styles.streamPacket, styles.streamPacketTertiary)} r="4">
-              <animateMotion dur="5.8s" repeatCount="indefinite" begin="-3s">
-                <mpath href={`#${streamRouteTertiaryId}`} />
-              </animateMotion>
-            </circle>
-          </g>
-        </svg>
-      </div>
-      <div className={clsx(styles.launchPanel, styles.launchPanelRight, styles.orbitPanel)}>
-        <span className={styles.orbitHorizon} />
-        <span className={styles.orbitArc} />
-        <span className={styles.orbitArcSecondary} />
-        <span className={styles.orbitPacketOne} />
-        <span className={styles.orbitPacketTwo} />
-        <span className={styles.orbitPacketThree} />
-      </div>
-    </div>
-  );
-}
-
-function HeroMetrics(): React.JSX.Element {
-  return (
-    <div className={styles.heroMetrics} aria-label="RocketMQ-Rust implementation highlights">
-      {heroMetrics.map((metric) => (
-        <div key={metric.value} className={styles.heroMetric}>
-          <strong>{metric.value}</strong>
+    <div className={styles.metricsRail} aria-label="RocketMQ-Rust platform highlights">
+      {metrics.map((metric) => (
+        <div key={metric.value} className={clsx(styles.metric, styles[metric.tone])}>
+          <span className={styles.metricIcon}>
+            <MetricIcon tone={metric.tone} />
+          </span>
           <span>
-            {translate({
-              id: metric.labelId,
-              message: metric.label,
-            })}
+            <strong>{metric.value}</strong>
+            <small>
+              {translate({
+                id: metric.detailId,
+                message: metric.detail,
+              })}
+            </small>
           </span>
         </div>
       ))}
-    </div>
-  );
-}
 
-function SignalRail(): React.JSX.Element {
-  return (
-    <div className={styles.signalRail} aria-hidden="true">
-      <div className={styles.signalHeader}>
-        <span>topic: orders.created</span>
-        <strong>live flow</strong>
-      </div>
-      <div className={styles.signalRows}>
-        <span style={{'--delay': '0s'} as React.CSSProperties} />
-        <span style={{'--delay': '-0.7s'} as React.CSSProperties} />
-        <span style={{'--delay': '-1.4s'} as React.CSSProperties} />
-        <span style={{'--delay': '-2.1s'} as React.CSSProperties} />
-      </div>
-      <div className={styles.signalFooter}>
-        <span>route</span>
-        <span>append</span>
-        <span>dispatch</span>
-      </div>
-    </div>
-  );
-}
-
-function RuntimeVisual(): React.JSX.Element {
-  const instanceId = React.useId().replace(/:/g, '');
-  const gradientId = `mq-core-gradient-${instanceId}`;
-  const producePathId = `mq-produce-path-${instanceId}`;
-  const routePathId = `mq-route-path-${instanceId}`;
-  const commitPathId = `mq-commit-path-${instanceId}`;
-  const deliverPathId = `mq-deliver-path-${instanceId}`;
-
-  return (
-    <div className={styles.runtimeVisual} aria-label="RocketMQ-Rust runtime topology">
-      <div className={styles.runtimeChrome} aria-hidden="true">
-        <div className={styles.windowControls}>
-          <span />
-          <span />
-          <span />
-        </div>
-        <span className={styles.runtimeTitle}>rocketmq-rust / broker topology</span>
-        <span className={styles.runtimeBadge}>message flow</span>
-      </div>
-
-      <div className={styles.runtimeCanvas}>
-        <svg className={styles.runtimeSvg} viewBox="0 0 720 390" role="presentation">
-          <defs>
-            <linearGradient id={gradientId} x1="0%" y1="0%" x2="100%" y2="100%">
-              <stop offset="0%" stopColor="#9b6cff" />
-              <stop offset="52%" stopColor="#d858b8" />
-              <stop offset="100%" stopColor="#ff7a1a" />
-            </linearGradient>
-          </defs>
-
-          <g className={styles.runtimeGrid}>
-            <path d="M70 70H650" />
-            <path d="M70 150H650" />
-            <path d="M70 230H650" />
-            <path d="M70 310H650" />
-            <path d="M140 38V360" />
-            <path d="M280 38V360" />
-            <path d="M420 38V360" />
-            <path d="M560 38V360" />
-          </g>
-
-          <g className={styles.runtimeOrbits}>
-            <ellipse cx="360" cy="205" rx="158" ry="128" />
-            <ellipse cx="360" cy="205" rx="102" ry="82" />
-            <path d="M234 118C288 68 433 67 492 121" />
-            <path d="M226 296C291 358 459 350 513 281" />
-          </g>
-
-          <path id={producePathId} className={clsx(styles.flowTrack, styles.flowProduce)} d="M170 168C232 167 272 182 310 204" />
-          <path id={routePathId} className={clsx(styles.flowTrack, styles.flowRoute)} d="M364 93C344 121 337 153 346 180" />
-          <path id={commitPathId} className={clsx(styles.flowTrack, styles.flowCommit)} d="M374 244C407 275 444 293 493 301" />
-          <path id={deliverPathId} className={clsx(styles.flowTrack, styles.flowDelivery)} d="M426 206C479 188 518 171 582 166" />
-
-          <g className={clsx(styles.svgNode, styles.producerNode)} transform="translate(58 128)">
-            <rect width="152" height="74" rx="16" />
-            <text x="20" y="31">Producer</text>
-            <text className={styles.svgNodeMeta} x="20" y="53">batch send</text>
-          </g>
-
-          <g className={clsx(styles.svgNode, styles.nameServerNode)} transform="translate(288 50)">
-            <rect width="168" height="76" rx="16" />
-            <text x="20" y="32">NameServer</text>
-            <text className={styles.svgNodeMeta} x="20" y="54">route table</text>
-          </g>
-
-          <g className={clsx(styles.svgNode, styles.consumerNode)} transform="translate(538 128)">
-            <rect width="154" height="74" rx="16" />
-            <text x="20" y="31">Consumer</text>
-            <text className={styles.svgNodeMeta} x="20" y="53">pull consume</text>
-          </g>
-
-          <g className={clsx(styles.svgNode, styles.storageNode)} transform="translate(98 286)">
-            <rect width="166" height="74" rx="16" />
-            <text x="20" y="31">CommitLog</text>
-            <text className={styles.svgNodeMeta} x="20" y="53">durable store</text>
-          </g>
-
-          <g className={clsx(styles.svgNode, styles.brokerNode)} transform="translate(468 286)">
-            <rect width="168" height="74" rx="16" />
-            <text x="20" y="31">Broker</text>
-            <text className={styles.svgNodeMeta} x="20" y="53">dispatch queue</text>
-          </g>
-
-          <g className={styles.coreNode} transform="translate(292 154)">
-            <rect width="136" height="136" rx="34" fill={`url(#${gradientId})`} />
-            <text x="68" y="79">MQ</text>
-            <text className={styles.coreCaption} x="68" y="102">rust core</text>
-          </g>
-
-          <g className={styles.flowPackets}>
-            <circle className={clsx(styles.flowOrb, styles.produceOrb)} r="6">
-              <animateMotion dur="4.8s" repeatCount="indefinite" begin="0s">
-                <mpath href={`#${producePathId}`} />
-              </animateMotion>
-            </circle>
-            <circle className={clsx(styles.flowOrb, styles.routeOrb)} r="5">
-              <animateMotion dur="5.6s" repeatCount="indefinite" begin="-1.4s">
-                <mpath href={`#${routePathId}`} />
-              </animateMotion>
-            </circle>
-            <circle className={clsx(styles.flowOrb, styles.commitOrb)} r="5">
-              <animateMotion dur="5.2s" repeatCount="indefinite" begin="-2.2s">
-                <mpath href={`#${commitPathId}`} />
-              </animateMotion>
-            </circle>
-            <circle className={clsx(styles.flowOrb, styles.deliverOrb)} r="6">
-              <animateMotion dur="4.6s" repeatCount="indefinite" begin="-3s">
-                <mpath href={`#${deliverPathId}`} />
-              </animateMotion>
-            </circle>
-          </g>
-        </svg>
-
-        <div className={styles.runtimeReadout} aria-hidden="true">
-          <span className={styles.promptDot} />
-          <code>broker.append_commit_log(message)</code>
-          <span className={styles.readoutPulse}>committed</span>
-        </div>
-      </div>
-
-    </div>
-  );
-}
-
-function StageTimeline(): React.JSX.Element {
-  return (
-    <div className={styles.stageTimeline} aria-label="RocketMQ message lifecycle">
-      {motionStages.map((stage, index) => (
-        <div key={stage.id} className={styles.stageItem}>
-          <span>{String(index).padStart(2, '0')}</span>
+      <div className={clsx(styles.metric, styles.status)}>
+        <span className={styles.metricIcon}>
+          <MetricIcon tone="status" />
+        </span>
+        <span>
           <strong>
             {translate({
-              id: stage.id,
-              message: stage.message,
+              id: 'homepage.hero.systemStatus',
+              message: 'All Systems Operational',
             })}
           </strong>
-        </div>
-      ))}
+          <small>
+            {translate({
+              id: 'homepage.hero.systemStatus.detail',
+              message: 'Open-source infrastructure, ready to run',
+            })}
+          </small>
+        </span>
+      </div>
     </div>
   );
 }
@@ -371,99 +291,55 @@ function StageTimeline(): React.JSX.Element {
 export default function DeveloperStyleHero(): React.JSX.Element {
   return (
     <header className={styles.hero}>
-      <LaunchArtwork />
-      <ParticleField />
-
-      <div className={styles.heroInner}>
-        <div className={styles.heroBody}>
-          <div className={styles.heroCopy}>
-            <div className={styles.livePill}>
-              <span className={styles.liveDot} />
-              <span>
+        <div className={styles.heroInner}>
+          <div className={styles.heroBody}>
+            <div className={styles.heroCopy}>
+              <div className={styles.eyebrow}>
+                <span />
                 {translate({
-                  id: 'homepage.hero.pill',
-                  message: 'APACHE ROCKETMQ ARCHITECTURE - RUST IMPLEMENTATION - ASYNC RUNTIME',
+                  id: 'homepage.hero.eyebrow',
+                  message: 'OPEN SOURCE · APACHE ROCKETMQ · RUST',
                 })}
-              </span>
+              </div>
+
+              <h1 className={styles.title}>
+                Rocket<span>MQ</span>-Rust
+              </h1>
+
+              <p className={styles.subheadline}>
+                {translate({
+                  id: 'homepage.hero.subheadline',
+                  message: 'High-performance messaging middleware built with Rust',
+                })}
+              </p>
+
+              <div className={styles.ctaRow}>
+                <Link className={clsx(styles.button, styles.buttonPrimary)} to="/docs/introduction">
+                  {translate({
+                    id: 'homepage.hero.getStarted',
+                    message: 'Get Started',
+                  })}
+                  <ArrowIcon />
+                </Link>
+                <Link
+                  className={clsx(styles.button, styles.buttonSecondary)}
+                  to="https://github.com/mxsm/rocketmq-rust">
+                  <GitHubIcon />
+                  {translate({
+                    id: 'homepage.hero.githubCta',
+                    message: 'View on GitHub',
+                  })}
+                </Link>
+              </div>
             </div>
 
-            <h1 className={styles.title}>
-              <span className={styles.titleBrand}>
-                <span>Rocket</span>
-                <span className={styles.titleMq}>MQ</span>
-              </span>
-              <span className={styles.titleRust}>-Rust</span>
-            </h1>
-
-            <p className={styles.subheadline}>
-              {translate({
-                id: 'homepage.hero.subheadline',
-                message: 'High-performance messaging middleware built with Rust',
-              })}
-            </p>
-
-            <p className={styles.description}>
-              {translate({
-                id: 'homepage.hero.description',
-                message:
-                  "RocketMQ-Rust brings Apache RocketMQ's proven messaging model to Rust: producers send messages to brokers, NameServer provides routing, CommitLog persists data, and consumers process messages through async, type-safe APIs.",
-              })}
-            </p>
-
-            <div className={styles.ctaRow}>
-              <Link className={clsx(styles.button, styles.buttonPrimary)} to="/docs/introduction">
-                {translate({
-                  id: 'homepage.hero.getStarted',
-                  message: 'Get Started',
-                })}
-                <span aria-hidden="true">-&gt;</span>
-              </Link>
-              <Link className={clsx(styles.button, styles.buttonSecondary)} to="https://github.com/mxsm/rocketmq-rust">
-                {translate({
-                  id: 'homepage.hero.github',
-                  message: 'GitHub',
-                })}
-                <span aria-hidden="true">-&gt;</span>
-              </Link>
-              <a className={clsx(styles.button, styles.buttonGhost)} href="#motion-system">
-                {translate({
-                  id: 'homepage.hero.motionSpec',
-                  message: 'Architecture flow',
-                })}
-                <span aria-hidden="true">-&gt;</span>
-              </a>
+            <div className={styles.heroVisual}>
+              <TopologyVisual />
             </div>
-
-            <HeroMetrics />
           </div>
 
-          <div className={styles.heroVisualColumn}>
-            <RuntimeVisual />
-            <SignalRail />
-          </div>
+          <MetricsRail />
         </div>
-
-        <StageTimeline />
-
-        <div className={styles.statusStrip} aria-label="RocketMQ-Rust runtime modules">
-          {statusItems.map((item) => (
-            <div key={item.title} className={styles.statusItem}>
-              <strong>
-                {translate({
-                  id: item.titleId,
-                  message: item.title,
-                })}
-              </strong>
-              <span>
-                {translate({
-                  id: item.detailId,
-                  message: item.detail,
-                })}
-              </span>
-            </div>
-          ))}
-        </div>
-      </div>
     </header>
   );
 }

@@ -9,7 +9,7 @@
  * Infima variables and Docusaurus custom CSS variables.
  */
 
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Sora:wght@500;600;700&display=swap');
 
 :root {
   --ifm-color-primary: #a855f7;
@@ -27,7 +27,8 @@
 
   --ifm-code-font-size: 95%;
 
-  --ifm-font-family-base: 'Inter', system-ui, -apple-system, sans-serif;
+  --ifm-font-family-base: 'Manrope', system-ui, -apple-system, sans-serif;
+  --ifm-heading-font-family: 'Sora', 'Manrope', sans-serif;
   --ifm-heading-font-weight: 700;
   --ifm-global-border-radius: 12px;
   --ifm-heading-margin-top: 2rem;
@@ -71,20 +72,27 @@
 }
 
 .navbar__logo img {
-  height: 40px !important;
+  height: 44px !important;
   width: auto !important;
   vertical-align: middle !important;
+  filter: drop-shadow(0 0 12px rgba(255, 114, 28, 0.22));
 }
 
-/* Ensure navbar height remains consistent */
 .navbar {
-  min-height: 60px !important;
-  max-height: 60px !important;
+  min-height: 72px !important;
+  max-height: 72px !important;
+  padding: 0 1.5rem;
+  border-bottom: 1px solid rgba(102, 132, 190, 0.16);
+  background: rgba(2, 7, 17, 0.9) !important;
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.18);
+  backdrop-filter: blur(22px) saturate(130%);
 }
 
 .navbar__inner {
   display: flex !important;
   align-items: center !important;
+  width: min(1540px, 100%);
+  margin: 0 auto;
 }
 
 /* Custom hero gradient - removed to use module CSS */
@@ -141,67 +149,128 @@ markdown > table {
   transform: translateY(-2px);
 }
 
-/* Improved navbar */
-.navbar {
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-  backdrop-filter: blur(10px);
-}
-
-/* Make navbar title (RocketMQ-Rust) larger and bold with animation */
 .navbar__title {
-  font-size: 1.5rem !important;
-  font-weight: 700 !important;
-  letter-spacing: -0.02em;
-  background: linear-gradient(135deg, #a855f7 0%, #06b6d4 50%, #a855f7 100%);
-  background-size: 200% auto;
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-  animation: gradient-shift 3s ease infinite;
-  transition: transform 0.3s ease;
+  color: #f7f9ff !important;
+  font-family: 'Sora', sans-serif;
+  font-size: 1.24rem !important;
+  font-weight: 650 !important;
+  letter-spacing: -0.035em;
 }
 
-.navbar__title:hover {
-  transform: scale(1.05);
-  animation: gradient-shift 1.5s ease infinite;
+.navbar__brand:hover {
+  text-decoration: none;
 }
 
-@keyframes gradient-shift {
-  0% {
-    background-position: 0% center;
-  }
-  50% {
-    background-position: 100% center;
-  }
-  100% {
-    background-position: 0% center;
-  }
+.navbar__link {
+  position: relative;
+  color: #b7c0d3 !important;
+  font-size: 0.9rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
 }
 
-@keyframes scale-in {
-  0% {
-    transform: scale(0.9);
-  }
-  50% {
-    transform: scale(1.15);
-  }
-  100% {
-    transform: scale(1);
-  }
+.navbar__link::after {
+  position: absolute;
+  right: var(--ifm-navbar-item-padding-horizontal);
+  bottom: 0.2rem;
+  left: var(--ifm-navbar-item-padding-horizontal);
+  height: 1px;
+  background: linear-gradient(90deg, #835cff, #35c9ff);
+  content: '';
+  opacity: 0;
+  transform: scaleX(0.4);
+  transition: opacity 160ms ease, transform 160ms ease;
 }
 
-/* Navbar links styling - removed colorful gradients, keep default */
+.navbar__link:hover,
 .navbar__link--active {
-  font-weight: 700 !important;
-  animation: scale-in 0.4s ease-out;
-  transform: scale(1);
-  display: inline-block;
+  color: #ffffff !important;
+  text-decoration: none;
+}
+
+.navbar__link:hover::after,
+.navbar__link--active::after {
+  opacity: 1;
+  transform: scaleX(1);
+}
+
+.header-github-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.header-github-link::before {
+  width: 18px;
+  height: 18px;
+  background-color: currentColor;
+  content: '';
+  mask: url("data:image/svg+xml,%3Csvg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.86c-2.78.6-3.37-1.18-3.37-1.18-.45-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.61.07-.61 1 .07 1.53 1.03 1.53 1.03.9 1.53 2.35 1.09 2.92.83.09-.65.35-1.09.64-1.34-2.22-.25-4.55-1.11-4.55-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.64 0 0 .84-.27 2.75 1.02A9.6 9.6 0 0 1 12 6.84a9.5 9.5 0 0 1 2.5.34c1.91-1.3 2.75-1.02 2.75-1.02.55 1.37.2 2.39.1 2.64.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.68-4.57 4.93.36.31.68.92.68 1.86V21c0 .27.18.58.69.48A10 10 0 0 0 12 2Z'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+.header-external-link > svg,
+.header-github-link > svg {
+  display: none;
+}
+
+@media (min-width: 997px) {
+  .navbar .DocSearch-Button {
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    justify-content: center;
+    border: 1px solid rgba(109, 141, 200, 0.18);
+    border-radius: 9px;
+    background: rgba(10, 20, 40, 0.72);
+  }
+
+  .navbar .DocSearch-Button-Placeholder,
+  .navbar .DocSearch-Button-Keys {
+    display: none;
+  }
+}
+
+@media (max-width: 996px) {
+  .navbar__items--right > .header-github-link {
+    display: none;
+  }
+}
+
+@media (max-width: 620px) {
+  .navbar {
+    padding: 0 0.75rem;
+  }
+
+  .navbar__toggle {
+    margin-right: 0.55rem;
+  }
+
+  .navbar__logo img {
+    height: 38px !important;
+  }
+
+  .navbar__title {
+    font-size: 1.05rem !important;
+  }
+}
+
+.navbar-sidebar {
+  background: #050b17;
+}
+
+.navbar-sidebar__brand {
+  border-bottom: 1px solid rgba(102, 132, 190, 0.16);
+  background: #020711;
+}
+
+.navbar-sidebar .menu__link {
+  color: #c7d0e3;
 }
 
 /* Better footer */
 .footer {
-  background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
-  border-top: none;
+  border-top: 1px solid rgba(102, 132, 190, 0.14);
+  background: #030813;
 }
 
 /* Smooth scrolling */
