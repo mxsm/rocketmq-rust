@@ -12,33 +12,53 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::fs::File;
+use std::io;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Barrier;
 
-use rocketmq_store_local::mapped_file::mapping::LazyMmapStats;
-use rocketmq_store_local::mapped_file::mapping::MappedFileMapping;
+use cheetah_string::CheetahString;
+use memmap2::Mmap;
+use memmap2::MmapMut;
+use rocketmq_store_local::mapped_file::DefaultMappedFile;
+use rocketmq_store_local::mapped_file::LazyMmapStats;
+use rocketmq_store_local::mapped_file::MappedMemory;
+use rocketmq_store_local::mapped_file::NativeMappedMemory;
+use rocketmq_store_local::mapped_file::ReadOnlyMappedMemory;
+
+fn mapped_path(directory: &tempfile::TempDir) -> CheetahString {
+    CheetahString::from(
+        directory
+            .path()
+            .join("00000000000000000000")
+            .to_string_lossy()
+            .into_owned(),
+    )
+}
 
 #[test]
 fn eager_mapping_starts_initialized_without_lazy_statistics() {
-    let mapping = MappedFileMapping::new_eager(String::from("eager"));
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let mapped_file =
+        DefaultMappedFile::<NativeMappedMemory>::try_new(mapped_path(&directory), 8).expect("eager mapped file");
 
-    assert!(!mapping.is_lazy_enabled());
-    assert!(mapping.is_mapped());
-    assert_eq!(mapping.get().map(String::as_str), Some("eager"));
-    assert_eq!(mapping.stats(), LazyMmapStats::default());
+    assert!(!mapped_file.is_lazy_mmap_enabled());
+    assert!(mapped_file.is_mapped());
+    assert_eq!(mapped_file.lazy_mmap_stats(), LazyMmapStats::default());
 }
 
 #[test]
 fn lazy_mapping_starts_eligible_and_uninitialized() {
-    let mapping = MappedFileMapping::<String>::new_lazy();
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let mapped_file = DefaultMappedFile::<NativeMappedMemory>::try_new_lazy_read_only(mapped_path(&directory), 8)
+        .expect("lazy mapped file");
 
-    assert!(mapping.is_lazy_enabled());
-    assert!(!mapping.is_mapped());
-    assert!(mapping.get().is_none());
+    assert!(mapped_file.is_lazy_mmap_enabled());
+    assert!(!mapped_file.is_mapped());
     assert_eq!(
-        mapping.stats(),
+        mapped_file.lazy_mmap_stats(),
         LazyMmapStats {
             eligible_files: 1,
             mapped_files: 0,
@@ -51,108 +71,100 @@ fn lazy_mapping_starts_eligible_and_uninitialized() {
 }
 
 #[test]
-fn successful_lazy_initialization_records_one_operation() {
-    let mapping = MappedFileMapping::new_lazy();
-
-    let value = mapping
-        .get_or_try_init(|| Ok::<_, &'static str>(String::from("mapped")))
-        .expect("initializer succeeds");
-
-    assert_eq!(value, "mapped");
-    assert!(mapping.is_mapped());
-    let stats = mapping.stats();
-    assert_eq!(stats.eligible_files, 1);
-    assert_eq!(stats.mapped_files, 1);
-    assert_eq!(stats.map_operations, 1);
-    assert_eq!(stats.map_failures, 0);
-    assert_eq!(stats.total_millis, stats.last_millis);
-}
-
-#[test]
-fn failed_lazy_initialization_is_retryable_and_records_each_failure() {
-    let mapping = MappedFileMapping::new_lazy();
-    let attempts = AtomicUsize::new(0);
-
-    let first = mapping.get_or_try_init(|| {
-        attempts.fetch_add(1, Ordering::SeqCst);
-        Err::<usize, _>("first attempt failed")
-    });
-    assert_eq!(first, Err("first attempt failed"));
-    assert!(!mapping.is_mapped());
-    assert_eq!(mapping.stats().map_failures, 1);
-
-    let value = mapping
-        .get_or_try_init(|| {
-            attempts.fetch_add(1, Ordering::SeqCst);
-            Ok::<_, &'static str>(42)
-        })
-        .expect("retry succeeds");
-    assert_eq!(*value, 42);
-    assert_eq!(attempts.load(Ordering::SeqCst), 2);
-    assert_eq!(mapping.stats().map_failures, 1);
-    assert_eq!(mapping.stats().map_operations, 1);
-}
-
-#[test]
-fn concurrent_lazy_callers_run_initializer_exactly_once() {
+fn concurrent_lazy_callers_publish_one_generation() {
     const CALLERS: usize = 8;
-    let mapping = Arc::new(MappedFileMapping::new_lazy());
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let mapped_file = Arc::new(
+        DefaultMappedFile::<NativeMappedMemory>::try_new_lazy_read_only(mapped_path(&directory), 8)
+            .expect("lazy mapped file"),
+    );
     let start = Arc::new(Barrier::new(CALLERS + 1));
-    let initializations = Arc::new(AtomicUsize::new(0));
 
     std::thread::scope(|scope| {
         let mut handles = Vec::with_capacity(CALLERS);
         for _ in 0..CALLERS {
-            let mapping = Arc::clone(&mapping);
+            let mapped_file = Arc::clone(&mapped_file);
             let start = Arc::clone(&start);
-            let initializations = Arc::clone(&initializations);
             handles.push(scope.spawn(move || {
                 start.wait();
-                mapping
-                    .get_or_try_init(|| {
-                        initializations.fetch_add(1, Ordering::SeqCst);
-                        Ok::<_, &'static str>(17usize)
-                    })
-                    .map(|value| value as *const usize as usize)
+                mapped_file.with_mapped_slice(<[u8]>::len)
             }));
         }
 
         start.wait();
-        let addresses = handles
-            .into_iter()
-            .map(|handle| handle.join().expect("caller does not panic").expect("init succeeds"))
-            .collect::<Vec<_>>();
-        assert!(addresses.windows(2).all(|pair| pair[0] == pair[1]));
+        for handle in handles {
+            assert_eq!(
+                handle.join().expect("caller does not panic").expect("mapping succeeds"),
+                8
+            );
+        }
     });
 
-    assert_eq!(initializations.load(Ordering::SeqCst), 1);
-    assert_eq!(mapping.stats().map_operations, 1);
+    assert!(mapped_file.is_mapped());
+    assert_eq!(mapped_file.lazy_mmap_stats().map_operations, 1);
+    assert_eq!(mapped_file.lazy_mmap_stats().map_failures, 0);
+}
+
+static RETRY_MAP_ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
+
+struct RetryMappedMemory(MmapMut);
+struct RetryReadOnlyMappedMemory(Mmap);
+
+// SAFETY: the mapping remains stable for the value lifetime and DefaultMappedFile serializes all
+// mutation through its writer fence.
+unsafe impl MappedMemory for RetryMappedMemory {
+    type ReadOnly = RetryReadOnlyMappedMemory;
+
+    unsafe fn map_mut(file: &File) -> io::Result<Self> {
+        if RETRY_MAP_ATTEMPTS.fetch_add(1, Ordering::SeqCst) == 0 {
+            return Err(io::Error::other("injected first mapping failure"));
+        }
+        // SAFETY: DefaultMappedFile sizes and owns the file for the mapping lifetime.
+        unsafe { MmapMut::map_mut(file).map(Self) }
+    }
+
+    fn as_slice(&self) -> &[u8] {
+        &self.0
+    }
+
+    fn as_mut_ptr(&self) -> *mut u8 {
+        self.0.as_ptr().cast_mut()
+    }
+
+    fn flush(&self) -> io::Result<()> {
+        self.0.flush()
+    }
+
+    fn flush_range(&self, offset: usize, len: usize) -> io::Result<()> {
+        self.0.flush_range(offset, len)
+    }
+}
+
+// SAFETY: this mapping is immutable, stable, and exposes no mutation path.
+unsafe impl ReadOnlyMappedMemory for RetryReadOnlyMappedMemory {
+    unsafe fn map(file: &File) -> io::Result<Self> {
+        // SAFETY: DefaultMappedFile keeps the segment size stable while this generation is live.
+        unsafe { Mmap::map(file).map(Self) }
+    }
+
+    fn as_slice(&self) -> &[u8] {
+        &self.0
+    }
 }
 
 #[test]
-fn initialized_value_identity_is_stable_across_reads() {
-    let mapping = MappedFileMapping::new_lazy();
-    let initialized = mapping
-        .get_or_try_init(|| Ok::<_, &'static str>(Box::new(23usize)))
-        .expect("init succeeds");
-    let read = mapping.get().expect("mapping remains initialized");
+fn failed_lazy_initialization_is_retryable_and_accounted() {
+    RETRY_MAP_ATTEMPTS.store(0, Ordering::SeqCst);
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let mapped_file = DefaultMappedFile::<RetryMappedMemory>::try_new_lazy_read_only(mapped_path(&directory), 8)
+        .expect("lazy mapped file");
 
-    assert!(std::ptr::eq(initialized, read));
-}
+    assert!(mapped_file.with_mapped_slice(<[u8]>::len).is_err());
+    assert!(!mapped_file.is_mapped());
+    assert_eq!(mapped_file.lazy_mmap_stats().map_failures, 1);
 
-#[test]
-fn statistics_are_monotonic_after_failures_and_success() {
-    let mapping = MappedFileMapping::new_lazy();
-    let initial = mapping.stats();
-    let _ = mapping.get_or_try_init(|| Err::<usize, _>("failed"));
-    let after_failure = mapping.stats();
-    let _ = mapping
-        .get_or_try_init(|| Ok::<_, &'static str>(1))
-        .expect("retry succeeds");
-    let after_success = mapping.stats();
-
-    assert!(after_failure.map_failures >= initial.map_failures);
-    assert!(after_success.map_failures >= after_failure.map_failures);
-    assert!(after_success.map_operations >= after_failure.map_operations);
-    assert!(after_success.total_millis >= after_failure.total_millis);
+    assert_eq!(mapped_file.with_mapped_slice(<[u8]>::len).expect("retry maps"), 8);
+    assert_eq!(RETRY_MAP_ATTEMPTS.load(Ordering::SeqCst), 2);
+    assert_eq!(mapped_file.lazy_mmap_stats().map_operations, 1);
+    assert_eq!(mapped_file.lazy_mmap_stats().map_failures, 1);
 }

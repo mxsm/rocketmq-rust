@@ -21,7 +21,9 @@ use rocketmq_error::RocketMQResult;
 use tracing::warn;
 
 use crate::mapped_file::lifecycle::MappedFileLease;
+use crate::utils::ffi::lock_memory_address;
 use crate::utils::ffi::lock_memory_region;
+use crate::utils::ffi::unlock_memory_address;
 use crate::utils::ffi::unlock_memory_region;
 
 #[cfg(test)]
@@ -53,46 +55,88 @@ impl MemoryLockCategory {
 }
 
 trait LockedMemoryRegion: Send + Sync {
-    fn as_slice(&self) -> &[u8];
+    fn address(&self) -> *const u8;
+
+    fn len(&self) -> usize;
 }
 
-impl<T> LockedMemoryRegion for T
+struct SliceLockedMemoryRegion<T>(T);
+
+impl<T: AsRef<[u8]>> SliceLockedMemoryRegion<T> {
+    #[inline]
+    fn as_slice(&self) -> &[u8] {
+        self.0.as_ref()
+    }
+}
+
+impl<T> LockedMemoryRegion for SliceLockedMemoryRegion<T>
 where
     T: AsRef<[u8]> + Send + Sync,
 {
-    fn as_slice(&self) -> &[u8] {
-        self.as_ref()
+    fn address(&self) -> *const u8 {
+        self.0.as_ref().as_ptr()
+    }
+
+    fn len(&self) -> usize {
+        self.0.as_ref().len()
+    }
+}
+
+/// Owner-bearing raw range used by mapped writable generations.
+///
+/// Implementations expose only address and length. They must retain the backing allocation and
+/// must not manufacture a shared byte slice.
+pub(crate) trait OwnedMemoryRegion: Send + Sync + 'static {
+    fn address(&self) -> *const u8;
+
+    fn len(&self) -> usize;
+}
+
+struct RawLockedMemoryRegion<T>(T);
+
+impl<T: OwnedMemoryRegion> LockedMemoryRegion for RawLockedMemoryRegion<T> {
+    fn address(&self) -> *const u8 {
+        self.0.address()
+    }
+
+    fn len(&self) -> usize {
+        self.0.len()
     }
 }
 
 #[must_use = "an armed memory-lock handle must be unlocked or retained for a later retry"]
 pub struct MemoryLockHandle {
+    region: Option<Box<dyn LockedMemoryRegion>>,
     mapped_file_lease: Option<MappedFileLease>,
-    region: Box<dyn LockedMemoryRegion>,
+    region_len: usize,
+    slice_compatible: bool,
     category: MemoryLockCategory,
     locked: bool,
 }
 
 impl MemoryLockHandle {
-    fn new(region: Box<dyn LockedMemoryRegion>, category: MemoryLockCategory) -> Self {
+    fn new(region: Box<dyn LockedMemoryRegion>, category: MemoryLockCategory, slice_compatible: bool) -> Self {
+        let region_len = region.len();
         Self {
+            region: Some(region),
             mapped_file_lease: None,
-            region,
+            region_len,
+            slice_compatible,
             category,
             locked: true,
         }
     }
 
-    fn region(&self) -> &[u8] {
-        self.region.as_slice()
+    fn address(&self) -> Option<(*const u8, usize)> {
+        self.region.as_ref().map(|region| (region.address(), region.len()))
     }
 
     pub fn len(&self) -> usize {
-        self.region().len()
+        self.region_len
     }
 
     pub fn is_empty(&self) -> bool {
-        self.region().is_empty()
+        self.region_len == 0
     }
 
     pub fn category(&self) -> MemoryLockCategory {
@@ -104,8 +148,15 @@ impl MemoryLockHandle {
         self.mapped_file_lease = Some(lease);
     }
 
-    fn release_mapped_file_lease(&mut self) {
+    fn release_region_then_mapped_file_lease(&mut self) {
+        drop(self.region.take());
         drop(self.mapped_file_lease.take());
+    }
+}
+
+impl Drop for MemoryLockHandle {
+    fn drop(&mut self) {
+        self.release_region_then_mapped_file_lease();
     }
 }
 
@@ -307,8 +358,11 @@ impl MemoryLockManager {
         R: AsRef<[u8]> + Send + Sync + 'static,
         F: FnMut(&[u8]) -> RocketMQResult<()>,
     {
-        let region: Box<dyn LockedMemoryRegion> = Box::new(region);
-        let len = region.as_slice().len();
+        // Pin inline owners in their final heap allocation before the lock callback observes an
+        // address. Moving an array after mlock would make the later munlock target a different
+        // range.
+        let region = Box::new(SliceLockedMemoryRegion(region));
+        let len = region.len();
         self.lock_attempts.fetch_add(1, Ordering::Relaxed);
         emit_memory_lock_attempt_observability(self, category);
 
@@ -342,7 +396,96 @@ impl MemoryLockManager {
                     self.locked_bytes.fetch_add(len_bytes, Ordering::Relaxed);
                 }
                 emit_memory_lock_success_observability(self, category, self.locked_bytes.load(Ordering::Relaxed));
-                Ok(Some(MemoryLockHandle::new(region, category)))
+                Ok(Some(MemoryLockHandle::new(region, category, true)))
+            }
+            Err(error) => {
+                self.release_reserved_budget(len_bytes);
+                self.lock_failed_buffers.fetch_add(1, Ordering::Relaxed);
+                self.lock_failed_bytes.fetch_add(len_bytes, Ordering::Relaxed);
+                emit_memory_lock_failure_observability(self, category, self.locked_bytes.load(Ordering::Relaxed));
+                if self.warn_only {
+                    warn!(
+                        "Failed to lock {} memory region of {} bytes, continuing without mlock: {}",
+                        category.as_str(),
+                        len,
+                        error
+                    );
+                    Ok(None)
+                } else {
+                    Err(error)
+                }
+            }
+        }
+    }
+
+    /// Locks a mapped-generation range through its raw address capability.
+    ///
+    /// This path never creates `&[u8]`, so an active writable mapping cannot be aliased by a safe
+    /// shared slice. The returned handle owns `region` until successful unlock or final drop.
+    pub(crate) fn lock_owned_region<R>(
+        &self,
+        category: MemoryLockCategory,
+        region: R,
+    ) -> RocketMQResult<Option<MemoryLockHandle>>
+    where
+        R: OwnedMemoryRegion,
+    {
+        self.lock_owned_region_with(category, region, |address, len| {
+            // SAFETY: the boxed region owner remains live for this call and is moved into the
+            // returned handle only after the operating-system lock succeeds.
+            unsafe { lock_memory_address(address, len) }
+        })
+    }
+
+    pub(crate) fn lock_owned_region_with<R, F>(
+        &self,
+        category: MemoryLockCategory,
+        region: R,
+        mut locker: F,
+    ) -> RocketMQResult<Option<MemoryLockHandle>>
+    where
+        R: OwnedMemoryRegion,
+        F: FnMut(*const u8, usize) -> RocketMQResult<()>,
+    {
+        let len = region.len();
+        self.lock_attempts.fetch_add(1, Ordering::Relaxed);
+        emit_memory_lock_attempt_observability(self, category);
+
+        let len_bytes = len as u64;
+        if !self.reserve_lock_budget(len_bytes) {
+            self.lock_skipped_buffers.fetch_add(1, Ordering::Relaxed);
+            self.lock_skipped_bytes.fetch_add(len_bytes, Ordering::Relaxed);
+            emit_memory_lock_skip_observability(self, category, self.locked_bytes.load(Ordering::Relaxed));
+            if self.warn_only {
+                warn!(
+                    "Skipped {} memory lock of {} bytes because lock budget {} bytes is exhausted",
+                    category.as_str(),
+                    len_bytes,
+                    self.budget_bytes.load(Ordering::Relaxed)
+                );
+                return Ok(None);
+            }
+            return Err(rocketmq_error::RocketMQError::StorageLockFailed {
+                path: format!(
+                    "memory lock budget exhausted: requested={} budget={}",
+                    len_bytes,
+                    self.budget_bytes.load(Ordering::Relaxed)
+                ),
+            });
+        }
+
+        match locker(region.address(), len) {
+            Ok(()) => {
+                self.locked_buffers.fetch_add(1, Ordering::Relaxed);
+                if self.budget_bytes.load(Ordering::Relaxed) == 0 {
+                    self.locked_bytes.fetch_add(len_bytes, Ordering::Relaxed);
+                }
+                emit_memory_lock_success_observability(self, category, self.locked_bytes.load(Ordering::Relaxed));
+                Ok(Some(MemoryLockHandle::new(
+                    Box::new(RawLockedMemoryRegion(region)),
+                    category,
+                    false,
+                )))
             }
             Err(error) => {
                 self.release_reserved_budget(len_bytes);
@@ -365,7 +508,14 @@ impl MemoryLockManager {
     }
 
     pub fn unlock_region(&self, handle: &mut MemoryLockHandle) -> RocketMQResult<()> {
-        self.unlock_region_with(handle, unlock_memory_region)
+        if handle.slice_compatible {
+            self.unlock_region_with(handle, unlock_memory_region)
+        } else {
+            self.unlock_owned_region_with(handle, |address, len| {
+                // SAFETY: the handle retains the exact owner-backed range submitted to lock.
+                unsafe { unlock_memory_address(address, len) }
+            })
+        }
     }
 
     /// Runs the unlock operation through an injected compatibility callback.
@@ -388,8 +538,22 @@ impl MemoryLockManager {
         if !handle.locked {
             return Ok(());
         }
+        if !handle.slice_compatible {
+            return Err(rocketmq_error::RocketMQError::StorageLockFailed {
+                path: "mapped writable ranges require raw owner-backed unlock".to_string(),
+            });
+        }
 
-        match unlocker(handle.region()) {
+        let Some((address, len)) = handle.address() else {
+            return Err(rocketmq_error::RocketMQError::StorageLockFailed {
+                path: "memory-lock handle lost its region owner".to_string(),
+            });
+        };
+        // SAFETY: slice-compatible handles are constructed only from an owned `AsRef<[u8]>`
+        // value, retained in `handle` for this complete callback.
+        let memory = unsafe { std::slice::from_raw_parts(address, len) };
+
+        match unlocker(memory) {
             Ok(()) => {
                 handle.locked = false;
                 self.release_locked_bytes(handle.len() as u64);
@@ -398,7 +562,63 @@ impl MemoryLockManager {
                     handle.category(),
                     self.locked_bytes.load(Ordering::Relaxed),
                 );
-                handle.release_mapped_file_lease();
+                handle.release_region_then_mapped_file_lease();
+                Ok(())
+            }
+            Err(error) => {
+                emit_memory_unlock_failure_observability(
+                    self,
+                    handle.category(),
+                    self.locked_bytes.load(Ordering::Relaxed),
+                );
+                if self.warn_only {
+                    warn!(
+                        "Failed to unlock {} memory region of {} bytes; retaining handle for retry: {}",
+                        handle.category().as_str(),
+                        handle.len(),
+                        error
+                    );
+                }
+                Err(error)
+            }
+        }
+    }
+
+    /// Runs the unlock operation through an injected raw-address callback.
+    ///
+    /// This hidden seam is used by cross-crate storage lifecycle tests and adapters for mapped
+    /// generations that intentionally cannot expose a safe shared byte slice while writable.
+    /// The callback must not dereference the address after it returns; the handle retains the
+    /// owner for the complete call and remains armed on failure.
+    #[doc(hidden)]
+    pub fn unlock_owned_region_with<F>(&self, handle: &mut MemoryLockHandle, mut unlocker: F) -> RocketMQResult<()>
+    where
+        F: FnMut(*const u8, usize) -> RocketMQResult<()>,
+    {
+        if !handle.locked {
+            return Ok(());
+        }
+        if handle.slice_compatible {
+            return Err(rocketmq_error::RocketMQError::StorageLockFailed {
+                path: "slice-backed ranges require slice-compatible unlock".to_string(),
+            });
+        }
+        let Some((address, len)) = handle.address() else {
+            return Err(rocketmq_error::RocketMQError::StorageLockFailed {
+                path: "memory-lock handle lost its region owner".to_string(),
+            });
+        };
+
+        match unlocker(address, len) {
+            Ok(()) => {
+                handle.locked = false;
+                self.release_locked_bytes(handle.len() as u64);
+                emit_memory_lock_locked_bytes_observability(
+                    self,
+                    handle.category(),
+                    self.locked_bytes.load(Ordering::Relaxed),
+                );
+                handle.release_region_then_mapped_file_lease();
                 Ok(())
             }
             Err(error) => {
@@ -675,9 +895,62 @@ impl Default for MemoryLockManager {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::sync::Mutex;
+
     use rocketmq_error::RocketMQError;
 
     use super::*;
+    use crate::mapped_file::lifecycle::MappedFileOperation;
+    use crate::mapped_file::lifecycle::PhysicalDetachHook;
+    use crate::mapped_file::lifecycle::SegmentLifecycle;
+
+    struct DropEventRegion {
+        memory: Box<[u8]>,
+        events: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    impl OwnedMemoryRegion for DropEventRegion {
+        fn address(&self) -> *const u8 {
+            self.memory.as_ptr()
+        }
+
+        fn len(&self) -> usize {
+            self.memory.len()
+        }
+    }
+
+    impl Drop for DropEventRegion {
+        fn drop(&mut self) {
+            self.events.lock().expect("event log").push("region");
+        }
+    }
+
+    struct OperationDropHook {
+        events: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    impl PhysicalDetachHook for OperationDropHook {
+        fn detach_owner_slots(&self) {
+            self.events.lock().expect("event log").push("operation");
+        }
+    }
+
+    fn closing_maintenance_lease(events: &Arc<Mutex<Vec<&'static str>>>) -> (Arc<SegmentLifecycle>, MappedFileLease) {
+        let lifecycle = SegmentLifecycle::shared();
+        let lease = lifecycle
+            .try_acquire(MappedFileOperation::Maintenance)
+            .expect("maintenance lease");
+        assert!(lifecycle.install_physical_detach_hook(Arc::new(OperationDropHook {
+            events: Arc::clone(events),
+        })));
+        lifecycle.begin_close(u64::MAX);
+        (lifecycle, lease)
+    }
+
+    fn drop_events(events: &Arc<Mutex<Vec<&'static str>>>) -> Vec<&'static str> {
+        events.lock().expect("event log").clone()
+    }
 
     #[test]
     fn warn_only_manager_records_failure_without_returning_error() {
@@ -846,13 +1119,103 @@ mod tests {
             })
             .expect("retry should unlock the retained region");
         assert_eq!(manager.locked_bytes(), 0);
-        assert_eq!(drops.load(Ordering::Relaxed), 0);
+        assert_eq!(drops.load(Ordering::Relaxed), 1);
 
         manager
             .unlock_region_with(&mut handle, |_| panic!("disarmed handle must be an idempotent no-op"))
             .expect("repeated unlock after success should be a no-op");
         drop(handle);
         assert_eq!(drops.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn successful_owned_unlock_drops_region_before_mapped_operation() {
+        let manager = MemoryLockManager::warn_only_with_budget(32);
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let (lifecycle, lease) = closing_maintenance_lease(&events);
+        let region = DropEventRegion {
+            memory: vec![0u8; 32].into_boxed_slice(),
+            events: Arc::clone(&events),
+        };
+        let address = region.address();
+        let mut handle = manager
+            .lock_owned_region_with(MemoryLockCategory::CommitLogActiveWindow, region, |locked, len| {
+                assert_eq!(locked, address);
+                assert_eq!(len, 32);
+                Ok(())
+            })
+            .expect("lock owned region")
+            .expect("successful lock handle");
+        handle.attach_mapped_file_lease(lease);
+
+        manager
+            .unlock_owned_region_with(&mut handle, |locked, len| {
+                assert_eq!(locked, address);
+                assert_eq!(len, 32);
+                Ok(())
+            })
+            .expect("unlock owned region");
+
+        assert_eq!(drop_events(&events), vec!["region", "operation"]);
+        assert_eq!(lifecycle.snapshot().active_leases, 0);
+        assert!(handle.region.is_none());
+        assert!(handle.mapped_file_lease.is_none());
+    }
+
+    #[test]
+    fn memory_lock_handle_drop_releases_region_before_mapped_operation() {
+        let manager = MemoryLockManager::warn_only();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let (lifecycle, lease) = closing_maintenance_lease(&events);
+        let region = DropEventRegion {
+            memory: vec![0u8; 16].into_boxed_slice(),
+            events: Arc::clone(&events),
+        };
+        let mut handle = manager
+            .lock_owned_region_with(MemoryLockCategory::CommitLogActiveWindow, region, |_, _| Ok(()))
+            .expect("lock owned region")
+            .expect("successful lock handle");
+        handle.attach_mapped_file_lease(lease);
+
+        drop(handle);
+
+        assert_eq!(drop_events(&events), vec!["region", "operation"]);
+        assert_eq!(lifecycle.snapshot().active_leases, 0);
+    }
+
+    #[test]
+    fn failed_owned_unlock_retains_region_and_mapped_operation() {
+        let manager = MemoryLockManager::warn_only_with_budget(16);
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let (lifecycle, lease) = closing_maintenance_lease(&events);
+        let region = DropEventRegion {
+            memory: vec![0u8; 16].into_boxed_slice(),
+            events: Arc::clone(&events),
+        };
+        let mut handle = manager
+            .lock_owned_region_with(MemoryLockCategory::CommitLogActiveWindow, region, |_, _| Ok(()))
+            .expect("lock owned region")
+            .expect("successful lock handle");
+        handle.attach_mapped_file_lease(lease);
+
+        manager
+            .unlock_owned_region_with(&mut handle, |_, _| {
+                Err(RocketMQError::StorageLockFailed {
+                    path: "retryable owned unlock failure".to_string(),
+                })
+            })
+            .expect_err("failed unlock remains observable");
+
+        assert!(drop_events(&events).is_empty());
+        assert!(handle.region.is_some());
+        assert!(handle.mapped_file_lease.is_some());
+        assert!(handle.locked);
+        assert_eq!(manager.locked_bytes(), 16);
+        assert_eq!(lifecycle.snapshot().active_leases, 1);
+
+        drop(handle);
+        assert_eq!(drop_events(&events), vec!["region", "operation"]);
+        assert_eq!(lifecycle.snapshot().active_leases, 0);
     }
 
     #[test]

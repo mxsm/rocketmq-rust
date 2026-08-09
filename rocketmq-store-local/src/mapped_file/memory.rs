@@ -14,10 +14,9 @@
 
 use std::fs::File;
 use std::io;
-use std::ops::Deref;
 use std::ops::Range;
-use std::sync::Arc;
 
+use memmap2::Mmap;
 use memmap2::MmapMut;
 
 /// Failure to construct a safe view over a mapped range.
@@ -35,20 +34,25 @@ pub enum MmapRangeError {
     },
 }
 
-/// Memory-mapping backend used by the canonical local mapped-file owner.
+/// Writable memory-mapping backend used by an active mapped-file generation.
 ///
 /// # Safety
 ///
-/// Implementors must keep returned slices and regions backed by the same live mapping, serialize
-/// mutable access so it cannot race with reads or writes, reject overflowing or out-of-bounds
-/// regions before construction, and keep the mapping valid independently of compatible file-handle
-/// rename/reopen operations.
-pub unsafe trait MappedMemory: Clone + Send + Sync + 'static {
-    /// Owned immutable region suitable for zero-copy byte ownership.
-    type Region: AsRef<[u8]> + Send + Sync + 'static;
+/// Implementors must keep returned slices backed by the same live mapping, keep the mapped address
+/// stable for the complete value lifetime, serialize mutable access so it cannot race with safe
+/// reads, and keep the mapping valid independently of compatible file-handle rename operations.
+pub unsafe trait MappedMemory: Send + Sync + Sized + 'static {
+    /// Read-only mapping created when the writable generation is sealed.
+    type ReadOnly: ReadOnlyMappedMemory;
 
     /// Maps the complete file as writable memory.
-    fn map_mut(file: &File) -> io::Result<Self>;
+    ///
+    /// # Safety
+    ///
+    /// The caller must keep the file at least as large as the returned mapping and prevent
+    /// uncoordinated writes or truncation for the complete mapping lifetime. The returned value
+    /// must immediately enter an owner-bound generation before safe access is exposed.
+    unsafe fn map_mut(file: &File) -> io::Result<Self>;
 
     /// Returns the complete mapping as bytes.
     fn as_slice(&self) -> &[u8];
@@ -94,45 +98,49 @@ pub unsafe trait MappedMemory: Clone + Send + Sync + 'static {
 
     /// Flushes one mapped range.
     fn flush_range(&self, offset: usize, len: usize) -> io::Result<()>;
+}
 
-    /// Creates an owned immutable view over one mapped range.
+/// Read-only memory-mapping backend used by a sealed mapped-file generation.
+///
+/// # Safety
+///
+/// Implementors must keep the mapped address stable for the complete value lifetime and must not
+/// expose any mutation path for the mapped allocation. The file must not be resized or modified by
+/// another writable mapping while a value of this type is live.
+pub unsafe trait ReadOnlyMappedMemory: Send + Sync + Sized + 'static {
+    /// Maps the complete file as read-only memory.
     ///
-    /// # Errors
+    /// # Safety
     ///
-    /// Returns [`MmapRangeError::Overflow`] when `offset + len` cannot be
-    /// represented, or [`MmapRangeError::OutOfBounds`] when it exceeds the
-    /// mapping.
-    fn region(&self, offset: usize, len: usize) -> Result<Self::Region, MmapRangeError>;
+    /// The caller must keep the file at least as large as the returned mapping and prevent writes
+    /// through every writable mapping, direct file write, and truncation for the complete mapping
+    /// lifetime. The returned value must immediately enter an owner-bound read-only generation.
+    unsafe fn map(file: &File) -> io::Result<Self>;
+
+    /// Returns the complete immutable mapping as bytes.
+    fn as_slice(&self) -> &[u8];
 }
 
 /// Native writable mmap backend used by the default Local mapped-file owner.
-#[derive(Clone)]
 pub struct NativeMappedMemory {
-    mmap: Arc<MmapMut>,
+    mmap: MmapMut,
 }
 
-impl NativeMappedMemory {
-    /// Returns another owner for the live native mapping.
-    pub fn clone_mmap(&self) -> Arc<MmapMut> {
-        self.mmap.clone()
-    }
-}
-
-// SAFETY: construction maps an already-sized segment and `Arc` keeps that mapping alive across
-// cloned regions. Mutable access follows the mapped-file contract requiring callers to serialize
-// writes through the CommitLog/mapped-file ownership boundary.
+// SAFETY: construction maps an already-sized segment and the enclosing mapping generation keeps
+// this value alive. Mutable access follows the mapped-file contract requiring callers to serialize
+// writes through the CommitLog/mapped-file ownership boundary; this type is not cloneable.
 unsafe impl MappedMemory for NativeMappedMemory {
-    type Region = MmapRegionSlice;
+    type ReadOnly = NativeReadOnlyMappedMemory;
 
-    fn map_mut(file: &File) -> io::Result<Self> {
+    unsafe fn map_mut(file: &File) -> io::Result<Self> {
         // SAFETY: callers size the segment before mapping and do not resize it while the mapping is
         // live. NativeMappedMemory keeps the mapping alive independently of the file handle.
         let mmap = unsafe { MmapMut::map_mut(file)? };
-        Ok(Self { mmap: Arc::new(mmap) })
+        Ok(Self { mmap })
     }
 
     fn as_slice(&self) -> &[u8] {
-        self.mmap.as_ref()
+        &self.mmap
     }
 
     fn as_mut_ptr(&self) -> *mut u8 {
@@ -146,33 +154,32 @@ unsafe impl MappedMemory for NativeMappedMemory {
     fn flush_range(&self, offset: usize, len: usize) -> io::Result<()> {
         self.mmap.flush_range(offset, len)
     }
+}
 
-    fn region(&self, offset: usize, len: usize) -> Result<Self::Region, MmapRangeError> {
-        MmapRegionSlice::try_new(self.mmap.clone(), offset, len)
+/// Native read-only mmap backend used after a writable generation is sealed.
+pub struct NativeReadOnlyMappedMemory {
+    mmap: Mmap,
+}
+
+// SAFETY: construction creates a read-only mapping for an already-sized segment. The generation
+// owner keeps it alive, and this type exposes no mutation path.
+unsafe impl ReadOnlyMappedMemory for NativeReadOnlyMappedMemory {
+    unsafe fn map(file: &File) -> io::Result<Self> {
+        // SAFETY: callers keep the file sized and stable while the read-only generation is live.
+        let mmap = unsafe { Mmap::map(file)? };
+        Ok(Self { mmap })
+    }
+
+    fn as_slice(&self) -> &[u8] {
+        &self.mmap
     }
 }
 
-/// Immutable owner for one region of a native mapping.
-pub struct MmapRegionSlice {
-    mmap: Arc<MmapMut>,
-    range: Range<usize>,
-}
-
-impl MmapRegionSlice {
-    /// Creates a checked region backed by a live native mapping.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`MmapRangeError::Overflow`] when `offset + len` cannot be
-    /// represented, or [`MmapRangeError::OutOfBounds`] when the resulting range
-    /// exceeds the mapping.
-    pub fn try_new(mmap: Arc<MmapMut>, offset: usize, len: usize) -> Result<Self, MmapRangeError> {
-        let range = checked_mmap_range(mmap.len(), offset, len)?;
-        Ok(Self { mmap, range })
-    }
-}
-
-fn checked_mmap_range(mapping_len: usize, offset: usize, len: usize) -> Result<Range<usize>, MmapRangeError> {
+pub(crate) fn checked_mmap_range(
+    mapping_len: usize,
+    offset: usize,
+    len: usize,
+) -> Result<Range<usize>, MmapRangeError> {
     let end = offset
         .checked_add(len)
         .ok_or(MmapRangeError::Overflow { offset, len })?;
@@ -184,20 +191,6 @@ fn checked_mmap_range(mapping_len: usize, offset: usize, len: usize) -> Result<R
         });
     }
     Ok(offset..end)
-}
-
-impl Deref for MmapRegionSlice {
-    type Target = [u8];
-
-    fn deref(&self) -> &Self::Target {
-        &self.mmap[self.range.clone()]
-    }
-}
-
-impl AsRef<[u8]> for MmapRegionSlice {
-    fn as_ref(&self) -> &[u8] {
-        self
-    }
 }
 
 #[cfg(test)]

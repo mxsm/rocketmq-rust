@@ -346,7 +346,7 @@ macro_rules! lock_active_mapped_file_parts {
             |manager, target| {
                 mapped_file.lock_region_with(manager, target.category, target.offset, target.len, $locker)
             },
-            |manager, handle| manager.unlock_region_with(handle, $unlocker),
+            |manager, handle| manager.unlock_owned_region_with(handle, $unlocker),
         )
     }};
 }
@@ -614,7 +614,7 @@ impl CommitLog {
     ) -> RocketMQResult<()>
     where
         F: FnMut(&[u8]) -> RocketMQResult<()>,
-        G: FnMut(&[u8]) -> RocketMQResult<()>,
+        G: FnMut(*const u8, usize) -> RocketMQResult<()>,
     {
         let target = self.active_memory_lock_target(mapped_file);
         let (active_memory_lock, active_memory_lock_present) = self.runtime_state.active_memory_lock_parts();
@@ -666,14 +666,14 @@ impl CommitLog {
 
     fn release_active_memory_lock_if_present<G>(&self, unlocker: G) -> RocketMQResult<()>
     where
-        G: FnMut(&[u8]) -> RocketMQResult<()>,
+        G: FnMut(*const u8, usize) -> RocketMQResult<()>,
     {
         let (active_memory_lock, active_memory_lock_present) = self.runtime_state.active_memory_lock_parts();
         let mut unlocker = unlocker;
         Self::release_active_memory_lock_if_present_parts(
             active_memory_lock,
             active_memory_lock_present,
-            |manager, handle| manager.unlock_region_with(handle, &mut unlocker),
+            |manager, handle| manager.unlock_owned_region_with(handle, &mut unlocker),
         )
     }
 
@@ -3107,8 +3107,8 @@ mod tests {
                     events.borrow_mut().push(("lock", memory.len()));
                     Ok(())
                 },
-                |memory| {
-                    events.borrow_mut().push(("unlock", memory.len()));
+                |_, len| {
+                    events.borrow_mut().push(("unlock", len));
                     Ok(())
                 },
             )
@@ -3121,8 +3121,8 @@ mod tests {
                     events.borrow_mut().push(("lock", memory.len()));
                     Ok(())
                 },
-                |memory| {
-                    events.borrow_mut().push(("unlock", memory.len()));
+                |_, len| {
+                    events.borrow_mut().push(("unlock", len));
                     Ok(())
                 },
             )
@@ -3165,8 +3165,8 @@ mod tests {
                     events.borrow_mut().push(("lock", memory.len()));
                     Ok(())
                 },
-                |memory| {
-                    events.borrow_mut().push(("unlock", memory.len()));
+                |_, len| {
+                    events.borrow_mut().push(("unlock", len));
                     Ok(())
                 },
             )
@@ -3180,8 +3180,8 @@ mod tests {
 
         store
             .get_commit_log()
-            .release_active_memory_lock_if_present(|memory| {
-                events.borrow_mut().push(("unlock", memory.len()));
+            .release_active_memory_lock_if_present(|_, len| {
+                events.borrow_mut().push(("unlock", len));
                 Ok(())
             })
             .expect("active file lock release should succeed");
@@ -3194,8 +3194,8 @@ mod tests {
 
         store
             .get_commit_log()
-            .release_active_memory_lock_if_present(|memory| {
-                events.borrow_mut().push(("unexpected_unlock", memory.len()));
+            .release_active_memory_lock_if_present(|_, len| {
+                events.borrow_mut().push(("unexpected_unlock", len));
                 Ok(())
             })
             .expect("inactive release should be a fast no-op");
@@ -3226,11 +3226,11 @@ mod tests {
         let mapped_file = new_test_mapped_file(&temp_root, 0, 4096);
         let commit_log = store.get_commit_log_mut();
         commit_log
-            .ensure_active_mapped_file_locked_with(&mapped_file, |_| Ok(()), |_| Ok(()))
+            .ensure_active_mapped_file_locked_with(&mapped_file, |_| Ok(()), |_, _| Ok(()))
             .expect("active file lock should succeed");
 
         let error = commit_log
-            .release_active_memory_lock_if_present(|_| {
+            .release_active_memory_lock_if_present(|_, _| {
                 Err(rocketmq_error::RocketMQError::StorageLockFailed {
                     path: "retryable active unlock".to_string(),
                 })
@@ -3246,8 +3246,8 @@ mod tests {
         assert_eq!(active_memory_lock.lock().manager().locked_bytes(), 4096);
 
         commit_log
-            .release_active_memory_lock_if_present(|memory| {
-                assert_eq!(memory.len(), 4096);
+            .release_active_memory_lock_if_present(|_, len| {
+                assert_eq!(len, 4096);
                 Ok(())
             })
             .expect("retry should release the retained handle");
@@ -3278,7 +3278,7 @@ mod tests {
         let mapped_file = new_test_mapped_file(&temp_root, 0, 4096);
         let commit_log = store.get_commit_log_mut();
         commit_log
-            .ensure_active_mapped_file_locked_with(&mapped_file, |_| Ok(()), |_| Ok(()))
+            .ensure_active_mapped_file_locked_with(&mapped_file, |_| Ok(()), |_, _| Ok(()))
             .expect("active file lock should succeed");
         let append_port = commit_log.append_runtime.port();
         let mut unlock_calls = 0;
@@ -3288,9 +3288,9 @@ mod tests {
                 append_port.snapshot().closed,
                 "append admission must close before unlock"
             );
-            manager.unlock_region_with(handle, |memory| {
+            manager.unlock_owned_region_with(handle, |_, len| {
                 unlock_calls += 1;
-                assert_eq!(memory.len(), 4096);
+                assert_eq!(len, 4096);
                 Ok(())
             })
         });
@@ -3326,11 +3326,11 @@ mod tests {
         let mapped_file = new_test_mapped_file(&temp_root, 0, 4096);
         let commit_log = store.get_commit_log_mut();
         commit_log
-            .ensure_active_mapped_file_locked_with(&mapped_file, |_| Ok(()), |_| Ok(()))
+            .ensure_active_mapped_file_locked_with(&mapped_file, |_| Ok(()), |_, _| Ok(()))
             .expect("active file lock should succeed");
 
         commit_log.release_active_memory_lock_for_drop_with(|manager, handle| {
-            manager.unlock_region_with(handle, |_| {
+            manager.unlock_owned_region_with(handle, |_, _| {
                 Err(rocketmq_error::RocketMQError::StorageLockFailed {
                     path: "drop retry".to_string(),
                 })
@@ -3342,8 +3342,9 @@ mod tests {
             .1
             .load(Ordering::Acquire));
 
-        commit_log
-            .release_active_memory_lock_for_drop_with(|manager, handle| manager.unlock_region_with(handle, |_| Ok(())));
+        commit_log.release_active_memory_lock_for_drop_with(|manager, handle| {
+            manager.unlock_owned_region_with(handle, |_, _| Ok(()))
+        });
         assert!(!commit_log
             .runtime_state
             .active_memory_lock_parts()
@@ -3383,8 +3384,8 @@ mod tests {
                     events.borrow_mut().push(("lock", memory.len()));
                     Ok(())
                 },
-                |memory| {
-                    events.borrow_mut().push(("unlock", memory.len()));
+                |_, len| {
+                    events.borrow_mut().push(("unlock", len));
                     Ok(())
                 },
             )
@@ -3398,8 +3399,8 @@ mod tests {
                     events.borrow_mut().push(("lock", memory.len()));
                     Ok(())
                 },
-                |memory| {
-                    events.borrow_mut().push(("unlock", memory.len()));
+                |_, len| {
+                    events.borrow_mut().push(("unlock", len));
                     Ok(())
                 },
             )
@@ -3439,7 +3440,7 @@ mod tests {
         let mapped_file = new_test_mapped_file(&temp_root, 4096, 4096);
         store
             .get_commit_log_mut()
-            .ensure_active_mapped_file_locked_with(&mapped_file, |_| Ok(()), |_| Ok(()))
+            .ensure_active_mapped_file_locked_with(&mapped_file, |_| Ok(()), |_, _| Ok(()))
             .expect("active file lock should succeed");
         let append_port = store.get_commit_log().append_runtime.port();
         let mut unlock_calls = 0;
@@ -3451,9 +3452,9 @@ mod tests {
                     append_port.snapshot().closed,
                     "append worker admission must close before unlock"
                 );
-                manager.unlock_region_with(handle, |memory| {
+                manager.unlock_owned_region_with(handle, |_, len| {
                     unlock_calls += 1;
-                    assert_eq!(memory.len(), 4096);
+                    assert_eq!(len, 4096);
                     Ok(())
                 })
             })

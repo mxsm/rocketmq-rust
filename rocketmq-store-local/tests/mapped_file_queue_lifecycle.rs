@@ -333,13 +333,21 @@ fn whole_destroy_preserves_unknown_directory_entries() {
 }
 
 #[test]
-fn logical_cleanup_marker_does_not_claim_physical_mapping_release() {
+fn drained_shutdown_marks_logical_cleanup_and_detaches_physical_mapping() {
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let file = mapped_file(&temp_dir, 0, 16);
+    let path = temp_dir.path().join("00000000000000000000");
+    let metrics = file.get_metrics().expect("mapped-file metrics");
     assert!(file.is_mapped());
+    assert_eq!(metrics.mapped_generations_live(), 1);
+    assert_eq!(metrics.file_owners_live(), 1);
 
     file.shutdown(u64::MAX);
 
     assert!(rocketmq_store_local::mapped_file::kernel::ReferenceResource::is_logical_cleanup_marked(file.as_ref()));
-    assert!(file.is_mapped());
+    assert!(!file.is_mapped());
+    assert!(path.exists(), "normal shutdown must preserve the namespace");
+    assert_eq!(metrics.mapped_generations_live(), 0);
+    assert_eq!(metrics.file_owners_live(), 0);
+    assert_eq!(metrics.lifecycle_detach_total(), 1);
 }

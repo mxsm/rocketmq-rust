@@ -156,7 +156,7 @@ where
         let out_fd = self.writer.sendfile_out_fd();
 
         for range in file_ranges {
-            let in_fd = range.file().as_raw_fd();
+            let in_fd = range.raw_fd();
             let mut position = range.position();
             let mut remaining = range.len();
             while remaining > 0 {

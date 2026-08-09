@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -50,6 +53,83 @@ struct LifecycleControl {
     started_at: Option<Instant>,
     generation: u64,
     force_observed: bool,
+    physical_detach: PhysicalDetachState,
+}
+
+struct DrainWaiterPresence<'a> {
+    waiters: &'a AtomicUsize,
+}
+
+impl<'a> DrainWaiterPresence<'a> {
+    fn register(waiters: &'a AtomicUsize) -> Self {
+        waiters.fetch_add(1, Ordering::Release);
+        Self { waiters }
+    }
+}
+
+impl Drop for DrainWaiterPresence<'_> {
+    fn drop(&mut self) {
+        self.waiters.fetch_sub(1, Ordering::Release);
+    }
+}
+
+/// Owner-only callback invoked after Closing drains every admitted operation.
+///
+/// Implementations must not retain or call back into the lifecycle. Keeping this boundary
+/// acyclic lets a final lease drop detach physical slots without extending the mapped-file
+/// object's lifetime.
+pub(crate) trait PhysicalDetachHook: Send + Sync {
+    fn detach_owner_slots(&self);
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PhysicalDetachState {
+    Attached,
+    Detaching,
+    Detached,
+}
+
+/// Result of attempting to claim the one physical-owner detach transition.
+pub(crate) enum PhysicalDetachClaimResult<'a> {
+    /// This caller owns the detach transition until the claim is completed or dropped.
+    Claimed(PhysicalDetachClaim<'a>),
+    /// Another caller currently owns the detach transition.
+    InProgress,
+    /// The mapping and file-owner slots were already detached.
+    AlreadyDetached,
+    /// Closing has not drained every admitted operation yet.
+    Pending {
+        state: MappedFileAdmissionState,
+        active_leases: usize,
+    },
+}
+
+/// Unwind-safe exactly-once claim for detaching physical owner slots.
+pub(crate) struct PhysicalDetachClaim<'a> {
+    lifecycle: &'a SegmentLifecycle,
+    armed: bool,
+}
+
+impl PhysicalDetachClaim<'_> {
+    /// Commits the detach transition after both physical owner slots have been taken.
+    pub(crate) fn complete(mut self) {
+        let mut control = self.lifecycle.close_control.lock();
+        debug_assert_eq!(control.physical_detach, PhysicalDetachState::Detaching);
+        control.physical_detach = PhysicalDetachState::Detached;
+        self.armed = false;
+    }
+}
+
+impl Drop for PhysicalDetachClaim<'_> {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let mut control = self.lifecycle.close_control.lock();
+        if control.physical_detach == PhysicalDetachState::Detaching {
+            control.physical_detach = PhysicalDetachState::Attached;
+        }
+    }
 }
 
 impl LifecycleControl {
@@ -68,7 +148,12 @@ impl LifecycleControl {
 pub(crate) struct SegmentLifecycle {
     transitions: LifecycleTransitionState,
     close_control: Mutex<LifecycleControl>,
+    drain_waiters: AtomicUsize,
     drained: Condvar,
+    seal_wait_control: Mutex<()>,
+    seal_waiters: AtomicUsize,
+    writers_drained: Condvar,
+    physical_detach_hook: OnceLock<Arc<dyn PhysicalDetachHook>>,
 }
 
 impl SegmentLifecycle {
@@ -79,8 +164,14 @@ impl SegmentLifecycle {
                 started_at: None,
                 generation: 0,
                 force_observed: false,
+                physical_detach: PhysicalDetachState::Attached,
             }),
+            drain_waiters: AtomicUsize::new(0),
             drained: Condvar::new(),
+            seal_wait_control: Mutex::new(()),
+            seal_waiters: AtomicUsize::new(0),
+            writers_drained: Condvar::new(),
+            physical_detach_hook: OnceLock::new(),
         })
     }
 
@@ -155,12 +246,62 @@ impl SegmentLifecycle {
         if packed.active_leases == 0 {
             self.drained.notify_all();
         }
-        control.snapshot(packed)
+        let snapshot = control.snapshot(packed);
+        drop(control);
+        if packed.active_leases == 0 {
+            self.try_trigger_physical_detach();
+        }
+        snapshot
     }
 
-    #[inline]
-    pub(crate) fn seal_readable(&self) -> bool {
-        self.transitions.seal_readable()
+    /// Rejects new writers and waits until every writer admitted before the seal has completed.
+    ///
+    /// The seal CAS changes the state while preserving both packed counters. A writer CAS is
+    /// therefore ordered wholly before the seal and counted, or wholly after it and rejected.
+    pub(crate) fn seal_readable_and_wait_for_writers(&self) -> Result<bool, LifecycleAcquireError> {
+        // Publish waiter presence before the seal CAS. A final writer that observes the sealed
+        // packed word acquires this publication through that CAS, so it cannot miss the waiter.
+        self.seal_waiters.fetch_add(1, Ordering::Release);
+        let started = loop {
+            match self.transitions.state() {
+                MappedFileAdmissionState::ActiveWritable if self.transitions.seal_readable() => break true,
+                MappedFileAdmissionState::ActiveWritable => continue,
+                MappedFileAdmissionState::SealedReadable => break false,
+                MappedFileAdmissionState::Closing => {
+                    self.seal_waiters.fetch_sub(1, Ordering::Release);
+                    return Err(LifecycleAcquireError::Unavailable {
+                        state: MappedFileAdmissionState::Closing,
+                        operation: MappedFileOperation::Maintenance,
+                    });
+                }
+            }
+        };
+        if self.transitions.active_writers() == 0 {
+            self.seal_waiters.fetch_sub(1, Ordering::Release);
+            return Ok(started);
+        }
+
+        let mut control = self.seal_wait_control.lock();
+        if self.transitions.active_writers() == 0 {
+            self.seal_waiters.fetch_sub(1, Ordering::Release);
+            return Ok(started);
+        }
+        while self.transitions.active_writers() != 0 {
+            self.writers_drained.wait(&mut control);
+        }
+        self.seal_waiters.fetch_sub(1, Ordering::Release);
+        Ok(started)
+    }
+
+    /// Installs the acyclic physical-owner detach callback before the mapped file is published.
+    pub(crate) fn install_physical_detach_hook(&self, hook: Arc<dyn PhysicalDetachHook>) -> bool {
+        if self.physical_detach_hook.set(hook).is_err() {
+            return false;
+        }
+        if self.logical_cleanup_marked() {
+            self.try_trigger_physical_detach();
+        }
+        true
     }
 
     pub(crate) fn snapshot(&self) -> MappedFileLifecycleSnapshot {
@@ -179,6 +320,13 @@ impl SegmentLifecycle {
         let Some(deadline) = Instant::now().checked_add(timeout) else {
             return false;
         };
+        // Register before entering the packed-word modification order. If the identity RMW wins,
+        // the final release acquires this presence publication before deciding whether to notify;
+        // if the final release wins, the identity RMW observes zero and this caller never sleeps.
+        let _presence = DrainWaiterPresence::register(&self.drain_waiters);
+        if self.transitions.active_leases_after_drain_waiter_registration() == 0 {
+            return true;
+        }
         let mut control = self.close_control.lock();
         while self.transitions.active_leases() != 0 {
             let now = Instant::now();
@@ -191,6 +339,56 @@ impl SegmentLifecycle {
             }
         }
         true
+    }
+
+    /// Publishes one already-prepared owner candidate while holding the same cold lock as Closing.
+    ///
+    /// Candidate construction and filesystem I/O must happen before this call. The closure should
+    /// only publish a fully built owner into its slot, keeping the critical section short. A lease
+    /// admitted before close still protects any owner it captured before close; a lazy candidate
+    /// that was not yet published loses the race when Closing is already visible and is dropped.
+    pub(crate) fn try_publish_before_close<L, R>(
+        &self,
+        lease: &L,
+        operation: MappedFileOperation,
+        publish: impl FnOnce() -> R,
+    ) -> Result<R, LifecycleAcquireError>
+    where
+        L: MappedFileLeaseProof + ?Sized,
+    {
+        let _control = self.close_control.lock();
+        let state = self.transitions.state();
+        if !std::ptr::eq(lease.lifecycle(), self) || lease.operation() != operation || !state.allows(operation) {
+            return Err(LifecycleAcquireError::Unavailable { state, operation });
+        }
+        Ok(publish())
+    }
+
+    /// Claims the unique physical-owner detach transition after Closing has drained.
+    ///
+    /// Dropping a claim before [`PhysicalDetachClaim::complete`] restores the attached state so a
+    /// later attempt can finish any owner slot that was not taken before an unwind or early return.
+    pub(crate) fn try_claim_physical_detach(&self) -> PhysicalDetachClaimResult<'_> {
+        let mut control = self.close_control.lock();
+        let packed = self.transitions.snapshot();
+        if packed.state != MappedFileAdmissionState::Closing || packed.active_leases != 0 {
+            return PhysicalDetachClaimResult::Pending {
+                state: packed.state,
+                active_leases: packed.active_leases,
+            };
+        }
+
+        match control.physical_detach {
+            PhysicalDetachState::Attached => {
+                control.physical_detach = PhysicalDetachState::Detaching;
+                PhysicalDetachClaimResult::Claimed(PhysicalDetachClaim {
+                    lifecycle: self,
+                    armed: true,
+                })
+            }
+            PhysicalDetachState::Detaching => PhysicalDetachClaimResult::InProgress,
+            PhysicalDetachState::Detached => PhysicalDetachClaimResult::AlreadyDetached,
+        }
     }
 
     #[inline]
@@ -210,15 +408,46 @@ impl SegmentLifecycle {
     }
 
     #[inline]
-    fn release_one(&self) -> ReleaseTransition {
-        let transition = self.transitions.release();
-        if matches!(transition, ReleaseTransition::Drained | ReleaseTransition::Remaining(0)) {
+    fn release_one(&self, operation: MappedFileOperation) -> ReleaseTransition {
+        let outcome = self.transitions.release(operation);
+        if outcome.writers_drained_after_rejection() && self.seal_waiters.load(Ordering::Acquire) != 0 {
+            let _control = self.seal_wait_control.lock();
+            self.writers_drained.notify_all();
+        }
+        let transition = outcome.transition();
+        self.finish_release_transition(transition);
+        transition
+    }
+
+    fn finish_release_transition(&self, transition: ReleaseTransition) {
+        let final_total = matches!(transition, ReleaseTransition::Drained | ReleaseTransition::Remaining(0));
+        let notify_drain_waiters = final_total && self.drain_waiters.load(Ordering::Acquire) != 0;
+        if notify_drain_waiters {
             // Pair the final release with wait_for_drain's predicate check under the same mutex so
             // the condvar notification cannot be lost between checking and sleeping.
             let _control = self.close_control.lock();
             self.drained.notify_all();
         }
-        transition
+        if transition == ReleaseTransition::Drained {
+            self.try_trigger_physical_detach();
+        }
+    }
+
+    fn try_trigger_physical_detach(&self) {
+        let Some(hook) = self.physical_detach_hook.get().cloned() else {
+            return;
+        };
+        let PhysicalDetachClaimResult::Claimed(claim) = self.try_claim_physical_detach() else {
+            return;
+        };
+
+        let detached = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| hook.detach_owner_slots()));
+        match detached {
+            Ok(()) => claim.complete(),
+            Err(_) => {
+                tracing::error!("mapped-file physical detach hook panicked; detach remains retryable");
+            }
+        }
     }
 }
 
@@ -263,7 +492,7 @@ impl MappedFileLeaseProof for MappedFileLease {
 
 impl Drop for MappedFileLease {
     fn drop(&mut self) {
-        release_armed(&self.lifecycle, &mut self.armed);
+        release_armed(&self.lifecycle, self.operation, &mut self.armed);
     }
 }
 
@@ -294,23 +523,50 @@ impl MappedFileLeaseProof for BorrowedMappedFileLease<'_> {
 
 impl Drop for BorrowedMappedFileLease<'_> {
     fn drop(&mut self) {
-        release_armed(self.lifecycle, &mut self.armed);
+        release_armed(self.lifecycle, self.operation, &mut self.armed);
     }
 }
 
 #[inline]
-fn release_armed(lifecycle: &SegmentLifecycle, armed: &mut bool) {
+fn release_armed(lifecycle: &SegmentLifecycle, operation: MappedFileOperation, armed: &mut bool) {
     if !*armed {
         return;
     }
-    let transition = lifecycle.release_one();
+    let transition = lifecycle.release_one(operation);
     debug_assert!(!matches!(transition, ReleaseTransition::Underflow));
     *armed = false;
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+
     use super::*;
+
+    struct CountingDetachHook {
+        calls: AtomicUsize,
+        panic_once: AtomicBool,
+    }
+
+    impl CountingDetachHook {
+        fn new(panic_once: bool) -> Self {
+            Self {
+                calls: AtomicUsize::new(0),
+                panic_once: AtomicBool::new(panic_once),
+            }
+        }
+    }
+
+    impl PhysicalDetachHook for CountingDetachHook {
+        fn detach_owner_slots(&self) {
+            self.calls.fetch_add(1, Ordering::AcqRel);
+            if self.panic_once.swap(false, Ordering::AcqRel) {
+                panic!("injected detach failure");
+            }
+        }
+    }
 
     #[test]
     fn borrowed_and_owned_leases_share_one_active_counter() {
@@ -386,5 +642,195 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(lifecycle.snapshot().active_leases, 0);
+    }
+
+    #[test]
+    fn seal_waits_for_packed_writer_and_rejects_late_writer() {
+        let lifecycle = SegmentLifecycle::shared();
+        let writer = lifecycle
+            .try_acquire(MappedFileOperation::Write)
+            .expect("registered writer");
+        let sealer = {
+            let lifecycle = Arc::clone(&lifecycle);
+            std::thread::spawn(move || lifecycle.seal_readable_and_wait_for_writers())
+        };
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while lifecycle.state() == MappedFileAdmissionState::ActiveWritable {
+            assert!(Instant::now() < deadline, "sealer must publish write rejection");
+            std::thread::yield_now();
+        }
+        assert!(matches!(
+            lifecycle.try_acquire(MappedFileOperation::Write),
+            Err(LifecycleAcquireError::Unavailable {
+                state: MappedFileAdmissionState::SealedReadable,
+                operation: MappedFileOperation::Write,
+            })
+        ));
+        drop(writer);
+
+        assert_eq!(sealer.join().expect("sealer does not panic"), Ok(true));
+        assert_eq!(lifecycle.snapshot().active_leases, 0);
+    }
+
+    #[test]
+    fn final_release_wakes_all_registered_non_closing_drain_waiters() {
+        for seal_before_wait in [false, true] {
+            let lifecycle = SegmentLifecycle::shared();
+            if seal_before_wait {
+                assert_eq!(lifecycle.seal_readable_and_wait_for_writers(), Ok(true));
+            }
+            let lease = lifecycle.try_acquire(MappedFileOperation::Read).expect("read lease");
+            let waiters = (0..2)
+                .map(|_| {
+                    let lifecycle = Arc::clone(&lifecycle);
+                    std::thread::spawn(move || lifecycle.wait_for_drain(Duration::from_secs(5)))
+                })
+                .collect::<Vec<_>>();
+
+            let deadline = Instant::now() + Duration::from_secs(1);
+            while lifecycle.drain_waiters.load(Ordering::Acquire) != 2 {
+                assert!(Instant::now() < deadline, "drain waiters must publish their presence");
+                std::thread::yield_now();
+            }
+            drop(lease);
+
+            for waiter in waiters {
+                assert!(waiter.join().expect("drain waiter does not panic"));
+            }
+            assert_eq!(lifecycle.drain_waiters.load(Ordering::Acquire), 0);
+        }
+    }
+
+    #[test]
+    fn timed_out_drain_wait_unregisters_presence() {
+        let lifecycle = SegmentLifecycle::shared();
+        let lease = lifecycle.try_acquire(MappedFileOperation::Read).expect("read lease");
+
+        assert!(!lifecycle.wait_for_drain(Duration::ZERO));
+        assert_eq!(lifecycle.drain_waiters.load(Ordering::Acquire), 0);
+        drop(lease);
+    }
+
+    #[test]
+    fn final_typed_lease_drop_triggers_physical_detach_once() {
+        let lifecycle = SegmentLifecycle::shared();
+        let hook = Arc::new(CountingDetachHook::new(false));
+        assert!(lifecycle.install_physical_detach_hook(hook.clone()));
+        let lease = lifecycle.try_acquire(MappedFileOperation::Read).expect("read lease");
+
+        lifecycle.begin_close(u64::MAX);
+        assert_eq!(hook.calls.load(Ordering::Acquire), 0);
+        drop(lease);
+
+        assert_eq!(hook.calls.load(Ordering::Acquire), 1);
+        assert!(matches!(
+            lifecycle.try_claim_physical_detach(),
+            PhysicalDetachClaimResult::AlreadyDetached
+        ));
+        lifecycle.begin_close(0);
+        assert_eq!(hook.calls.load(Ordering::Acquire), 1);
+    }
+
+    #[test]
+    fn panicking_physical_detach_hook_is_caught_and_retryable() {
+        let lifecycle = SegmentLifecycle::shared();
+        let hook = Arc::new(CountingDetachHook::new(true));
+        assert!(lifecycle.install_physical_detach_hook(hook.clone()));
+
+        lifecycle.begin_close(u64::MAX);
+        assert_eq!(hook.calls.load(Ordering::Acquire), 1);
+        assert!(matches!(
+            lifecycle.try_claim_physical_detach(),
+            PhysicalDetachClaimResult::Claimed(_)
+        ));
+
+        lifecycle.begin_close(0);
+        assert_eq!(hook.calls.load(Ordering::Acquire), 2);
+        assert!(matches!(
+            lifecycle.try_claim_physical_detach(),
+            PhysicalDetachClaimResult::AlreadyDetached
+        ));
+    }
+
+    #[test]
+    fn physical_detach_waits_for_closing_and_every_active_lease() {
+        let lifecycle = SegmentLifecycle::shared();
+        assert!(matches!(
+            lifecycle.try_claim_physical_detach(),
+            PhysicalDetachClaimResult::Pending {
+                state: MappedFileAdmissionState::ActiveWritable,
+                active_leases: 0,
+            }
+        ));
+
+        let lease = lifecycle.try_acquire(MappedFileOperation::Read).expect("read lease");
+        lifecycle.begin_close(u64::MAX);
+        assert!(matches!(
+            lifecycle.try_claim_physical_detach(),
+            PhysicalDetachClaimResult::Pending {
+                state: MappedFileAdmissionState::Closing,
+                active_leases: 1,
+            }
+        ));
+
+        drop(lease);
+        assert!(matches!(
+            lifecycle.try_claim_physical_detach(),
+            PhysicalDetachClaimResult::Claimed(_)
+        ));
+    }
+
+    #[test]
+    fn physical_detach_claim_is_retryable_on_drop_and_exactly_once_after_commit() {
+        let lifecycle = SegmentLifecycle::shared();
+        lifecycle.begin_close(u64::MAX);
+
+        let first = match lifecycle.try_claim_physical_detach() {
+            PhysicalDetachClaimResult::Claimed(claim) => claim,
+            _ => panic!("first drained close must claim detach"),
+        };
+        assert!(matches!(
+            lifecycle.try_claim_physical_detach(),
+            PhysicalDetachClaimResult::InProgress
+        ));
+        drop(first);
+
+        let retry = match lifecycle.try_claim_physical_detach() {
+            PhysicalDetachClaimResult::Claimed(claim) => claim,
+            _ => panic!("dropped detach claim must be retryable"),
+        };
+        retry.complete();
+        assert!(matches!(
+            lifecycle.try_claim_physical_detach(),
+            PhysicalDetachClaimResult::AlreadyDetached
+        ));
+    }
+
+    #[test]
+    fn publication_and_close_share_one_linearization_lock() {
+        let lifecycle = SegmentLifecycle::shared();
+        let first = lifecycle
+            .try_acquire_borrowed(MappedFileOperation::Read)
+            .expect("publication lease");
+        assert_eq!(
+            lifecycle
+                .try_publish_before_close(&first, MappedFileOperation::Read, || 7)
+                .expect("publication before close"),
+            7
+        );
+        drop(first);
+
+        let losing_candidate = lifecycle
+            .try_acquire_borrowed(MappedFileOperation::Read)
+            .expect("pre-close lazy candidate lease");
+        lifecycle.begin_close(u64::MAX);
+        assert!(matches!(
+            lifecycle.try_publish_before_close(&losing_candidate, MappedFileOperation::Read, || 9),
+            Err(LifecycleAcquireError::Unavailable {
+                state: MappedFileAdmissionState::Closing,
+                operation: MappedFileOperation::Read,
+            })
+        ));
     }
 }

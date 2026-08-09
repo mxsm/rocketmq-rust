@@ -124,7 +124,7 @@ fn closing_rejects_new_read_write_and_maintenance_operations() {
         mapped_file
             .try_warm_mapped_file(FlushDiskType::AsyncFlush, 1)
             .expect_err("warm-up must be rejected"),
-        MappedFileOperation::Maintenance,
+        MappedFileOperation::Write,
     );
     assert_unavailable(
         mapped_file.try_mlock().expect_err("mlock must be rejected"),

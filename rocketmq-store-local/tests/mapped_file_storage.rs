@@ -32,7 +32,12 @@ fn numeric_segment_name_opens_with_canonical_path_offset_and_size() {
 
     assert_eq!(storage.path(), path);
     assert_eq!(storage.file_from_offset(), 123);
-    assert_eq!(storage.file().metadata().expect("file metadata").len(), 32);
+    assert_eq!(
+        storage
+            .with_file(|file| file.metadata().expect("file metadata").len())
+            .expect("attached owner"),
+        32
+    );
     assert!(preallocation.is_some());
 }
 
@@ -58,15 +63,25 @@ fn reopen_resize_preserves_prefix_and_skips_preallocation_at_existing_size() {
 
     let (storage, grown) = MappedFileStorage::open(path, 12).expect("grow storage");
     assert!(grown.is_some());
-    storage.file().seek(SeekFrom::Start(0)).expect("seek file");
     let mut prefix = [0_u8; 6];
-    storage.file().read_exact(&mut prefix).expect("read prefix");
+    storage
+        .with_file(|file| {
+            let mut file = file;
+            file.seek(SeekFrom::Start(0)).expect("seek file");
+            file.read_exact(&mut prefix).expect("read prefix");
+        })
+        .expect("attached owner");
     assert_eq!(&prefix, b"prefix");
 
     let path = storage.path().to_path_buf();
     drop(storage);
     let (storage, unchanged) = MappedFileStorage::open(path, 12).expect("reopen storage");
-    assert_eq!(storage.file().metadata().expect("file metadata").len(), 12);
+    assert_eq!(
+        storage
+            .with_file(|file| file.metadata().expect("file metadata").len())
+            .expect("attached owner"),
+        12
+    );
     assert_eq!(unchanged, None);
 }
 
@@ -79,10 +94,20 @@ fn shrink_truncates_tail_without_preallocation() {
     let (storage, preallocation) = MappedFileStorage::open(path, 6).expect("shrink storage");
 
     assert_eq!(preallocation, None);
-    assert_eq!(storage.file().metadata().expect("file metadata").len(), 6);
-    storage.file().seek(SeekFrom::Start(0)).expect("seek file");
+    assert_eq!(
+        storage
+            .with_file(|file| file.metadata().expect("file metadata").len())
+            .expect("attached owner"),
+        6
+    );
     let mut bytes = Vec::new();
-    storage.file().read_to_end(&mut bytes).expect("read file");
+    storage
+        .with_file(|file| {
+            let mut file = file;
+            file.seek(SeekFrom::Start(0)).expect("seek file");
+            file.read_to_end(&mut bytes).expect("read file");
+        })
+        .expect("attached owner");
     assert_eq!(bytes, b"prefix");
 }
 
@@ -93,7 +118,12 @@ fn zero_length_file_skips_preallocation() {
 
     let (storage, preallocation) = MappedFileStorage::open(path, 0).expect("open zero-length storage");
 
-    assert_eq!(storage.file().metadata().expect("file metadata").len(), 0);
+    assert_eq!(
+        storage
+            .with_file(|file| file.metadata().expect("file metadata").len())
+            .expect("attached owner"),
+        0
+    );
     assert_eq!(preallocation, None);
 }
 
@@ -124,7 +154,10 @@ fn failed_rename_keeps_canonical_path_and_open_handle() {
 
     assert!(storage.rename(&missing_parent).is_err());
     assert_eq!(storage.path(), original);
-    assert!(storage.file().metadata().is_ok());
+    assert!(storage
+        .with_file(|file| file.metadata())
+        .expect("attached owner")
+        .is_ok());
 }
 
 #[test]
@@ -141,7 +174,13 @@ fn successful_rename_updates_path_before_reopen_failure() {
 
     assert!(storage.reopen().is_err());
     assert_eq!(storage.path(), renamed);
-    assert!(storage.file().metadata().is_ok(), "old handle must remain open");
+    assert!(
+        storage
+            .with_file(|file| file.metadata())
+            .expect("attached owner")
+            .is_ok(),
+        "old handle must remain open"
+    );
 }
 
 #[test]
@@ -161,9 +200,14 @@ fn file_handle_remains_usable_for_store_owned_mmap_and_io() {
     let path = directory.path().join("15");
     let (storage, _) = MappedFileStorage::open(path, 8).expect("open storage");
 
-    storage.file().write_all(b"bytes").expect("write through file handle");
-    storage.file().seek(SeekFrom::Start(0)).expect("seek file");
     let mut bytes = [0_u8; 5];
-    storage.file().read_exact(&mut bytes).expect("read through file handle");
+    storage
+        .with_file(|file| {
+            let mut file = file;
+            file.write_all(b"bytes").expect("write through file handle");
+            file.seek(SeekFrom::Start(0)).expect("seek file");
+            file.read_exact(&mut bytes).expect("read through file handle");
+        })
+        .expect("attached owner");
     assert_eq!(&bytes, b"bytes");
 }

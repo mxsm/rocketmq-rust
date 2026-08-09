@@ -35,6 +35,7 @@ observability = [
 ]
 
 [dependencies]
+arc-swap = "1.9"
 bytes.workspace = true
 cheetah-string.workspace = true
 dashmap.workspace = true
