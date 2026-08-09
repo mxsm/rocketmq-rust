@@ -29,6 +29,8 @@ use rocketmq_store_local::config::backend::LocalRecoveryConfig;
 use rocketmq_store_local::config::backend::LocalReputConfig;
 use serde::Deserialize;
 
+use super::timer_store_config::TimerStoreConfig;
+
 use crate::base::store_enum::StoreType;
 use crate::config::flush_disk_type::FlushDiskType;
 use crate::queue::single_consume_queue::CQ_STORE_UNIT_SIZE;
@@ -695,6 +697,14 @@ pub struct MessageStoreConfig {
 
     #[serde(default = "defaults::timer_store_mode")]
     pub timer_store_mode: TimerStoreMode,
+
+    /// Enables the non-delivering Extended Timeline shadow pipeline.
+    #[serde(default)]
+    pub timer_extended_shadow_enable: bool,
+
+    /// Bounded resource limits for the independent Extended Timeline store.
+    #[serde(default)]
+    pub timer_store_config: TimerStoreConfig,
 
     #[serde(default = "defaults::timer_pipeline_queue_messages")]
     pub timer_pipeline_queue_messages: usize,
@@ -1374,6 +1384,8 @@ impl Default for MessageStoreConfig {
             timer_get_message_thread_num: 3,
             timer_put_message_thread_num: 3,
             timer_store_mode: TimerStoreMode::JavaCompat,
+            timer_extended_shadow_enable: false,
+            timer_store_config: TimerStoreConfig::default(),
             timer_pipeline_queue_messages: defaults::timer_pipeline_queue_messages(),
             timer_pipeline_queue_bytes: defaults::timer_pipeline_queue_bytes(),
             timer_source_batch_messages: defaults::timer_source_batch_messages(),
@@ -1856,6 +1868,10 @@ impl MessageStoreConfig {
             self.timer_put_message_thread_num.to_string(),
         );
         properties.insert("timerStoreMode".to_string(), self.timer_store_mode.as_str().to_owned());
+        properties.insert(
+            "timerExtendedShadowEnable".to_string(),
+            self.timer_extended_shadow_enable.to_string(),
+        );
         properties.insert(
             "timerPipelineQueueMessages".to_string(),
             self.timer_pipeline_queue_messages.to_string(),

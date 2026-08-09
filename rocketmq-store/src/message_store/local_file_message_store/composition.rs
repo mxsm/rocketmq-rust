@@ -205,6 +205,28 @@ impl LocalFileMessageStore {
         });
         #[cfg(not(feature = "tieredstore"))]
         let minimum_pinned_wal_segment: Option<Arc<CommitLogWalPin>> = None;
+        #[cfg(feature = "extended_timeline")]
+        let extended_timeline_cleanup_pin =
+            Arc::new(AtomicI64::new(if message_store_config.timer_extended_shadow_enable {
+                0
+            } else {
+                -1
+            }));
+        #[cfg(feature = "extended_timeline")]
+        let minimum_pinned_wal_segment = if message_store_config.timer_extended_shadow_enable {
+            let existing_pin = minimum_pinned_wal_segment.clone();
+            let timeline_pin = Arc::clone(&extended_timeline_cleanup_pin);
+            Some(Arc::new(move || {
+                let timeline_offset = timeline_pin.load(Ordering::Acquire);
+                let timeline_offset = u64::try_from(timeline_offset).ok();
+                match (existing_pin.as_ref().and_then(|pin| pin()), timeline_offset) {
+                    (Some(existing), Some(timeline)) => Some(existing.min(timeline)),
+                    (existing, timeline) => existing.or(timeline),
+                }
+            }) as Arc<CommitLogWalPin>)
+        } else {
+            minimum_pinned_wal_segment
+        };
 
         ensure_dir_ok(message_store_config.store_path_root_dir.as_str());
         ensure_dir_ok(Self::get_store_path_physic(&message_store_config).as_str());
@@ -280,6 +302,14 @@ impl LocalFileMessageStore {
             store_stats_service,
             compaction_store,
             timer_message_store: None,
+            #[cfg(feature = "extended_timeline")]
+            extended_timeline_cleanup_pin,
+            #[cfg(feature = "extended_timeline")]
+            extended_timeline_materializer: None,
+            #[cfg(feature = "extended_timeline")]
+            extended_timeline_due_scanner: None,
+            #[cfg(feature = "extended_timeline")]
+            extended_timeline_recall_service: None,
             transient_store_pool,
             root_dependencies_wired: false,
             master_store_in_process: StdRwLock::new(None),
@@ -449,6 +479,32 @@ impl LocalFileMessageStore {
     /// contract so future owned-capability validation can fail without changing the public API.
     pub fn wire_owned_root_dependencies(&mut self) -> Result<(), StoreError> {
         self.consume_queue_store.set_context(self.consume_queue_context());
+        #[cfg(feature = "extended_timeline")]
+        if self.message_store_config.timer_extended_shadow_enable && self.extended_timeline_materializer.is_none() {
+            let materializer = Arc::new(
+                ShadowTimelineMaterializer::open(
+                    self.message_store_config.store_path_root_dir.as_str(),
+                    self.message_store_config.timer_store_config.clone(),
+                    self.consume_queue_store.lookup_handle(),
+                    self.commit_log.read_handle(),
+                    Arc::clone(&self.extended_timeline_cleanup_pin),
+                )
+                .map_err(|error| {
+                    StoreError::storage(
+                        StoreOperation::Load,
+                        format!("failed to open Extended Timeline shadow storage: {error}"),
+                    )
+                })?,
+            );
+            let timeline = materializer.timeline();
+            self.extended_timeline_due_scanner = Some(Arc::new(TimelineDueScanner::new_shadow(
+                self.message_store_config.timer_store_config.clone(),
+                Arc::clone(&timeline),
+                materializer.reconciler(),
+            )));
+            self.extended_timeline_recall_service = Some(Arc::new(TimelineRecallService::new(timeline)));
+            self.extended_timeline_materializer = Some(materializer);
+        }
         if self.message_store_config.is_timer_wheel_enable() && self.timer_message_store.is_none() {
             let timer_message_store = Arc::new(TimerMessageStore::new_with_store_context(
                 self.timer_store_context(),
@@ -538,6 +594,25 @@ impl LocalFileMessageStore {
                 "Timer RocksDB backend is not implemented in rocketmq-rust; keep timer_rocksdb_enable=false"
                     .to_string(),
             ));
+        }
+        if self.message_store_config.timer_store_mode == TimerStoreMode::ExtendedTimeline {
+            return Err(StoreError::unsupported(
+                StoreOperation::Load,
+                "timer_store_mode=extended_timeline remains unavailable until the activation and delivery protocol is installed"
+                    .to_string(),
+            ));
+        }
+        if self.message_store_config.timer_extended_shadow_enable && !cfg!(feature = "extended_timeline") {
+            return Err(StoreError::unsupported(
+                StoreOperation::Load,
+                "timer_extended_shadow_enable requires the rocketmq-store/extended_timeline feature".to_string(),
+            ));
+        }
+        if self.message_store_config.timer_extended_shadow_enable {
+            self.message_store_config
+                .timer_store_config
+                .validate()
+                .map_err(|error| StoreError::config(StoreOperation::Load, error.to_string()))?;
         }
 
         let enabled_rocksdb_options = Self::enabled_rocksdb_specific_options(self.message_store_config.as_ref());

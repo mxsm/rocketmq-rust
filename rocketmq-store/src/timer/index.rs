@@ -35,7 +35,15 @@ pub(crate) enum TimerRecordState {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct TimerIndexPage {
     pub(crate) records: Vec<DueTimerRecord>,
-    pub(crate) continuation: Option<TimerTimelineCursor>,
+    pub(crate) continuation: Option<TimerIndexCursor>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct TimerIndexCursor {
+    pub(crate) due_time_ms: i64,
+    pub(crate) lane: u16,
+    pub(crate) timer_id: TimerId,
+    pub(crate) generation: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,7 +67,7 @@ pub(crate) trait TimerIndex: Send + Sync {
 
     fn scan_due(
         &self,
-        from: Option<TimerTimelineCursor>,
+        from: Option<TimerIndexCursor>,
         due_exclusive_ms: i64,
         budget: WorkBudget,
     ) -> impl Future<Output = Result<TimerIndexPage, TimerEngineError>> + Send;

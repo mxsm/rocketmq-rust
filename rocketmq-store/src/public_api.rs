@@ -71,6 +71,8 @@ pub use crate::config::flush_disk_type::FlushDiskType;
 pub use crate::config::message_store_config::bounded_local_file_consume_queue_recovery_parallelism;
 pub use crate::config::message_store_config::MessageStoreConfig;
 pub use crate::config::store_runtime_config::StoreRuntimeConfig;
+pub use crate::config::timer_store_config::TimerStoreConfig;
+pub use crate::config::timer_store_config::TimerStoreConfigError;
 pub use crate::consume_queue::cq_ext_unit::CqExtUnit;
 pub use crate::consume_queue::cq_ext_unit::MIN_EXT_UNIT_SIZE;
 pub use crate::consume_queue::mapped_file_queue::FlushProgress;

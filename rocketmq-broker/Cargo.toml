@@ -33,6 +33,7 @@ default          = ["local_file_store"]
 local_file_store = ["rocketmq-store/local_file_store"]
 rocksdb_store    = ["rocketmq-store/rocksdb_store"]
 rocksdb-store    = ["rocksdb_store"]
+extended_timeline = ["rocketmq-store/extended_timeline"]
 tieredstore      = ["local_file_store", "rocketmq-store/tieredstore"]
 observability    = ["otel-metrics", "otel-traces"]
 otel-metrics     = [

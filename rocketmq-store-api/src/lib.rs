@@ -85,9 +85,11 @@ pub use timer::TimerEngineId;
 pub use timer::TimerGeneration;
 pub use timer::TimerId;
 pub use timer::TimerPayloadLocator;
+pub use timer::TimerPayloadStoreLocator;
 pub use timer::TimerSourceCqOffset;
 pub use timer::TimerStoreMode;
 pub use timer::TimerTimelineCursor;
+pub use timer::EXTENDED_TIMELINE_FORMAT_VERSION;
 pub use timer::JAVA_COMPAT_TIMER_FORMAT_VERSION;
 pub use wal::WalPort;
 
