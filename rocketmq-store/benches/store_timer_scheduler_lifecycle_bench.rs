@@ -25,18 +25,29 @@ use criterion::Criterion;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 use rocketmq_store::test_support::run_store_timer_scheduler_lifecycle_probe;
+use rocketmq_store::test_support::run_store_timer_scheduler_lifecycle_probe_with_workers;
 use rocketmq_store::test_support::StoreTimerSchedulerLifecycleProbe;
 
 fn run_lifecycle_probe() -> StoreTimerSchedulerLifecycleProbe {
+    run_lifecycle_probe_with_workers(3)
+}
+
+fn run_lifecycle_probe_with_workers(workers: usize) -> StoreTimerSchedulerLifecycleProbe {
     let owner = RuntimeOwner::new(RuntimeConfig {
-        worker_threads: 2,
+        worker_threads: workers.max(2),
         max_blocking_threads: 4,
         thread_name: "rocketmq-store-timer-scheduler-bench".to_string(),
         ..RuntimeConfig::default()
     })
     .expect("store timer scheduler benchmark runtime should start");
     let context = owner.root_context().component("store-timer-scheduler-bench");
-    let output = owner.block_on(run_store_timer_scheduler_lifecycle_probe(context));
+    let output = if workers == 3 {
+        owner.block_on(run_store_timer_scheduler_lifecycle_probe(context))
+    } else {
+        owner.block_on(run_store_timer_scheduler_lifecycle_probe_with_workers(
+            context, workers, workers,
+        ))
+    };
     owner
         .shutdown_runtime_blocking()
         .expect("store timer scheduler benchmark runtime should stop");
@@ -90,6 +101,18 @@ fn bench_store_timer_scheduler_lifecycle(criterion: &mut Criterion) {
             black_box(output.shutdown_elapsed_us);
         });
     });
+
+    for workers in [2usize, 4, 8] {
+        let benchmark_name = format!("store_timer_scheduler_lifecycle/managed_pipeline/{workers}_workers");
+        criterion.bench_function(&benchmark_name, |bencher| {
+            bencher.iter(|| {
+                let output = run_lifecycle_probe_with_workers(workers);
+                assert!(output.healthy, "{output:?}");
+                black_box(output.task_count_before_shutdown);
+                black_box(output.shutdown_elapsed_us);
+            });
+        });
+    }
 }
 
 criterion_group! {

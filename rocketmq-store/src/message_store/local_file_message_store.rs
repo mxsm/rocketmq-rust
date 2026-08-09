@@ -1455,6 +1455,13 @@ impl BackendOps for LocalFileMessageStore {
             {
                 result.insert("timerStorageMetrics".to_string(), storage_metrics);
             }
+            if let Some(pipeline_snapshot) = timer_message_store.pipeline_diagnostics() {
+                if let Ok(pipeline_metrics) = serde_json::to_string(
+                    &crate::timer::timer_metrics::TimerMetrics::pipeline_runtime_metrics(pipeline_snapshot),
+                ) {
+                    result.insert("timerPipelineMetrics".to_string(), pipeline_metrics);
+                }
+            }
         } else {
             result.insert("timerReadBehind".to_string(), "0".to_string());
             result.insert("timerOffsetBehind".to_string(), "0".to_string());
@@ -1464,6 +1471,7 @@ impl BackendOps for LocalFileMessageStore {
             result.insert("timerTopicBacklogDistribution".to_string(), "{}".to_string());
             result.insert("timerBacklogDistribution".to_string(), "{}".to_string());
             result.insert("timerStorageMetrics".to_string(), "{}".to_string());
+            result.insert("timerPipelineMetrics".to_string(), "{}".to_string());
         }
 
         result

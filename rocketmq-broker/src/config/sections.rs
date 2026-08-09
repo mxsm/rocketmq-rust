@@ -710,6 +710,31 @@ fn validate_resources(broker: &BrokerConfig, store: &MessageStoreConfig) -> Resu
             "timer get and put thread counts must be greater than zero",
         ));
     }
+    let max_message_size = usize::try_from(store.max_message_size).map_err(|_| {
+        BrokerConfigError::invalid(ConfigSection::Resources, "store.maxMessageSize", "must be non-negative")
+    })?;
+    if store.timer_pipeline_queue_messages == 0
+        || store.timer_pipeline_queue_bytes < max_message_size
+        || store.timer_source_batch_messages == 0
+        || store.timer_due_batch_messages == 0
+        || store.timer_completion_gap_limit == 0
+    {
+        return Err(BrokerConfigError::invalid(
+            ConfigSection::Resources,
+            "store.timerPipelineBudget",
+            "timer pipeline queue bytes must fit one maximum message and all queue, batch, and gap limits must be positive",
+        ));
+    }
+    if store.timer_retry_max_attempts == 0
+        || store.timer_retry_initial_backoff_ms == 0
+        || store.timer_retry_max_backoff_ms < store.timer_retry_initial_backoff_ms
+    {
+        return Err(BrokerConfigError::invalid(
+            ConfigSection::Resources,
+            "store.timerRetryPolicy",
+            "timer retry attempts and initial backoff must be positive and max backoff must not be smaller",
+        ));
+    }
 
     let process_memory_limit = if broker.process_memory_limit_bytes == 0 {
         ProcessMemoryLimit::detect()
@@ -925,5 +950,19 @@ mod tests {
         let error = validate_storage(&broker, &store).expect_err("zero timer precision must fail startup");
 
         assert!(error.to_string().contains("store.timerPrecisionMs"));
+    }
+
+    #[test]
+    fn resource_validation_rejects_timer_queue_that_cannot_hold_one_message() {
+        let broker = BrokerConfig::default();
+        let store = MessageStoreConfig {
+            max_message_size: 1_024,
+            timer_pipeline_queue_bytes: 1_023,
+            ..MessageStoreConfig::default()
+        };
+
+        let error = validate_resources(&broker, &store).expect_err("undersized timer queue must fail startup");
+
+        assert!(error.to_string().contains("store.timerPipelineBudget"));
     }
 }

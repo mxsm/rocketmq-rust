@@ -63,6 +63,7 @@ pub(crate) struct RecallMessagePolicy {
     broker_name: CheetahString,
     timer_max_delay_sec: u64,
     timer_delete_key_with_topic: bool,
+    timer_policy_fingerprint: u64,
     store_host: SocketAddr,
 }
 
@@ -81,6 +82,7 @@ impl RecallMessagePolicy {
             broker_name: broker_config.broker_name().clone(),
             timer_max_delay_sec: message_store_config.timer_max_delay_sec,
             timer_delete_key_with_topic: message_store_config.timer_delete_key_with_topic,
+            timer_policy_fingerprint: message_store_config.timer_policy_fingerprint().unwrap_or_default(),
             store_host,
         }
     }
@@ -397,6 +399,27 @@ where
             CheetahString::from_static_str(MessageConst::PROPERTY_TRACE_CONTEXT),
             CheetahString::new(),
         );
+        for (key, value) in [
+            (
+                MessageConst::TIMER_ENGINE_TYPE,
+                MessageConst::TIMER_ENGINE_FILE_TIME_WHEEL.to_owned(),
+            ),
+            (
+                MessageConst::PROPERTY_TIMER_FORMAT_VERSION,
+                rocketmq_store_api::JAVA_COMPAT_TIMER_FORMAT_VERSION.to_string(),
+            ),
+            (
+                MessageConst::PROPERTY_TIMER_POLICY_FINGERPRINT,
+                self.context.policy.timer_policy_fingerprint.to_string(),
+            ),
+            (MessageConst::PROPERTY_TIMER_GENERATION, "0".to_owned()),
+            (
+                MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN,
+                format!("F:1:recall:{handle_message_id}:0"),
+            ),
+        ] {
+            properties.insert(CheetahString::from_static_str(key), CheetahString::from_string(value));
+        }
 
         if let Some(producer_group) = request_header.producer_group() {
             properties.insert(

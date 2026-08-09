@@ -29,6 +29,8 @@ use rocketmq_store_local::timer::metrics::TimerStorageMetricsSnapshot;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::timer::pipeline::TimerPipelineDiagnostics;
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TimerMetricsSerializeWrapper {
@@ -124,6 +126,32 @@ impl TimerMetrics {
             ("spillBytes".into(), snapshot.spill_bytes),
             ("recoveryReplayRecords".into(), snapshot.recovery_replay_records),
             ("wheelRepairPages".into(), snapshot.wheel_repair_pages),
+        ])
+    }
+
+    pub(crate) fn pipeline_runtime_metrics(snapshot: TimerPipelineDiagnostics) -> HashMap<String, u64> {
+        HashMap::from([
+            ("sourceQueueMessages".into(), snapshot.source_queue.depth as u64),
+            ("sourceQueueBytes".into(), snapshot.source_queue.retained_bytes as u64),
+            ("dueQueueMessages".into(), snapshot.due_queue.depth as u64),
+            ("dueQueueBytes".into(), snapshot.due_queue.retained_bytes as u64),
+            ("completionQueueMessages".into(), snapshot.completion_queue.depth as u64),
+            (
+                "completionQueueBytes".into(),
+                snapshot.completion_queue.retained_bytes as u64,
+            ),
+            ("activeSourceWorkers".into(), snapshot.active_source_workers as u64),
+            ("activeDueWorkers".into(), snapshot.active_due_workers as u64),
+            ("completedMessages".into(), snapshot.completed_messages),
+            ("completionGaps".into(), snapshot.completion_gaps as u64),
+            ("retryCount".into(), snapshot.retries),
+            ("quarantineCount".into(), snapshot.quarantined),
+            ("staleCompletionCount".into(), snapshot.stale_completions),
+            ("rejectedSubmissionCount".into(), snapshot.rejected_submissions),
+            ("sourceObservedCompletion".into(), snapshot.source_observed_completion),
+            ("sourceDurableCompletion".into(), snapshot.source_durable_completion),
+            ("dueObservedCompletion".into(), snapshot.due_observed_completion),
+            ("dueDurableCompletion".into(), snapshot.due_durable_completion),
         ])
     }
 

@@ -21,6 +21,7 @@ use std::sync::LazyLock;
 use cheetah_string::CheetahString;
 use rocketmq_model::common::broker::broker_role::BrokerRole;
 use rocketmq_model::common::mix_all;
+use rocketmq_store_api::TimerStoreMode;
 use rocketmq_store_local::config::backend::LocalBackendConfig;
 use rocketmq_store_local::config::backend::LocalCleanupConfig;
 use rocketmq_store_local::config::backend::LocalQueryConfig;
@@ -90,6 +91,42 @@ mod defaults {
 
     pub fn timer_put_message_thread_num() -> usize {
         3
+    }
+
+    pub fn timer_store_mode() -> TimerStoreMode {
+        TimerStoreMode::JavaCompat
+    }
+
+    pub fn timer_pipeline_queue_messages() -> usize {
+        4_096
+    }
+
+    pub fn timer_pipeline_queue_bytes() -> usize {
+        64 * 1024 * 1024
+    }
+
+    pub fn timer_source_batch_messages() -> usize {
+        64
+    }
+
+    pub fn timer_due_batch_messages() -> usize {
+        64
+    }
+
+    pub fn timer_completion_gap_limit() -> usize {
+        16_384
+    }
+
+    pub fn timer_retry_max_attempts() -> u32 {
+        8
+    }
+
+    pub fn timer_retry_initial_backoff_ms() -> u64 {
+        50
+    }
+
+    pub fn timer_retry_max_backoff_ms() -> u64 {
+        30_000
     }
 
     pub fn timer_rocksdb_precision_ms() -> u64 {
@@ -655,6 +692,33 @@ pub struct MessageStoreConfig {
 
     #[serde(default = "defaults::timer_put_message_thread_num")]
     pub timer_put_message_thread_num: usize,
+
+    #[serde(default = "defaults::timer_store_mode")]
+    pub timer_store_mode: TimerStoreMode,
+
+    #[serde(default = "defaults::timer_pipeline_queue_messages")]
+    pub timer_pipeline_queue_messages: usize,
+
+    #[serde(default = "defaults::timer_pipeline_queue_bytes")]
+    pub timer_pipeline_queue_bytes: usize,
+
+    #[serde(default = "defaults::timer_source_batch_messages")]
+    pub timer_source_batch_messages: usize,
+
+    #[serde(default = "defaults::timer_due_batch_messages")]
+    pub timer_due_batch_messages: usize,
+
+    #[serde(default = "defaults::timer_completion_gap_limit")]
+    pub timer_completion_gap_limit: usize,
+
+    #[serde(default = "defaults::timer_retry_max_attempts")]
+    pub timer_retry_max_attempts: u32,
+
+    #[serde(default = "defaults::timer_retry_initial_backoff_ms")]
+    pub timer_retry_initial_backoff_ms: u64,
+
+    #[serde(default = "defaults::timer_retry_max_backoff_ms")]
+    pub timer_retry_max_backoff_ms: u64,
 
     #[serde(default)]
     pub timer_enable_disruptor: bool,
@@ -1309,6 +1373,15 @@ impl Default for MessageStoreConfig {
             timer_flush_interval_ms: 1000,
             timer_get_message_thread_num: 3,
             timer_put_message_thread_num: 3,
+            timer_store_mode: TimerStoreMode::JavaCompat,
+            timer_pipeline_queue_messages: defaults::timer_pipeline_queue_messages(),
+            timer_pipeline_queue_bytes: defaults::timer_pipeline_queue_bytes(),
+            timer_source_batch_messages: defaults::timer_source_batch_messages(),
+            timer_due_batch_messages: defaults::timer_due_batch_messages(),
+            timer_completion_gap_limit: defaults::timer_completion_gap_limit(),
+            timer_retry_max_attempts: defaults::timer_retry_max_attempts(),
+            timer_retry_initial_backoff_ms: defaults::timer_retry_initial_backoff_ms(),
+            timer_retry_max_backoff_ms: defaults::timer_retry_max_backoff_ms(),
             timer_enable_disruptor: false,
             timer_rocksdb_enable: false,
             timer_rocksdb_stop_scan: false,
@@ -1541,6 +1614,17 @@ impl MessageStoreConfig {
         TimerPolicySnapshot::try_new(self.timer_precision_ms, max_delay_ms)
     }
 
+    /// Returns the stable admission-policy fingerprint persisted on timer source records.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same validation errors as [`Self::timer_policy_snapshot`].
+    pub fn timer_policy_fingerprint(
+        &self,
+    ) -> Result<u64, rocketmq_model::common::message::timer_request::TimerNormalizeError> {
+        self.timer_policy_snapshot().map(|policy| policy.fingerprint())
+    }
+
     /// Projects the legacy Serde-compatible envelope into local backend settings.
     pub fn normalized_local_backend_config(&self) -> LocalBackendConfig {
         let commit_log_paths = self
@@ -1770,6 +1854,39 @@ impl MessageStoreConfig {
         properties.insert(
             "timerPutMessageThreadNum".to_string(),
             self.timer_put_message_thread_num.to_string(),
+        );
+        properties.insert("timerStoreMode".to_string(), self.timer_store_mode.as_str().to_owned());
+        properties.insert(
+            "timerPipelineQueueMessages".to_string(),
+            self.timer_pipeline_queue_messages.to_string(),
+        );
+        properties.insert(
+            "timerPipelineQueueBytes".to_string(),
+            self.timer_pipeline_queue_bytes.to_string(),
+        );
+        properties.insert(
+            "timerSourceBatchMessages".to_string(),
+            self.timer_source_batch_messages.to_string(),
+        );
+        properties.insert(
+            "timerDueBatchMessages".to_string(),
+            self.timer_due_batch_messages.to_string(),
+        );
+        properties.insert(
+            "timerCompletionGapLimit".to_string(),
+            self.timer_completion_gap_limit.to_string(),
+        );
+        properties.insert(
+            "timerRetryMaxAttempts".to_string(),
+            self.timer_retry_max_attempts.to_string(),
+        );
+        properties.insert(
+            "timerRetryInitialBackoffMs".to_string(),
+            self.timer_retry_initial_backoff_ms.to_string(),
+        );
+        properties.insert(
+            "timerRetryMaxBackoffMs".to_string(),
+            self.timer_retry_max_backoff_ms.to_string(),
         );
         properties.insert(
             "timerEnableDisruptor".to_string(),

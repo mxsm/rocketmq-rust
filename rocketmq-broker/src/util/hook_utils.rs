@@ -241,6 +241,9 @@ impl HookUtils {
             MessageConst::PROPERTY_TIMER_ORIGINAL_DELIVER_MS,
             MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN,
             MessageConst::PROPERTY_TIMER_GENERATION,
+            MessageConst::TIMER_ENGINE_TYPE,
+            MessageConst::PROPERTY_TIMER_FORMAT_VERSION,
+            MessageConst::PROPERTY_TIMER_POLICY_FINGERPRINT,
         ] {
             msg.message_ext_inner
                 .message
@@ -282,6 +285,51 @@ impl HookUtils {
             CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_ORIGINAL_DELIVER_MS),
             CheetahString::from_string(normalized.original_deliver_ms.to_string()),
         );
+        let generation = 0u64;
+        let source_identity = msg
+            .property(&CheetahString::from_static_str(
+                MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
+            ))
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| {
+                format!(
+                    "{}:{}:{}:{}",
+                    msg.born_timestamp(),
+                    msg.topic(),
+                    msg.queue_id(),
+                    normalized.original_deliver_ms
+                )
+            });
+        let delivery_token = format!(
+            "F:1:{}:{}:{}",
+            source_identity, normalized.original_deliver_ms, generation
+        );
+        let Some(policy_fingerprint) = timer_message_store.normalization_policy_fingerprint() else {
+            warn!("reject timer message because timer policy fingerprint cannot be computed");
+            return Some(PutMessageResult::new_default(PutMessageStatus::WheelTimerMsgIllegal));
+        };
+        for (key, value) in [
+            (
+                MessageConst::TIMER_ENGINE_TYPE,
+                MessageConst::TIMER_ENGINE_FILE_TIME_WHEEL.to_owned(),
+            ),
+            (
+                MessageConst::PROPERTY_TIMER_FORMAT_VERSION,
+                rocketmq_store_api::JAVA_COMPAT_TIMER_FORMAT_VERSION.to_string(),
+            ),
+            (
+                MessageConst::PROPERTY_TIMER_POLICY_FINGERPRINT,
+                policy_fingerprint.to_string(),
+            ),
+            (MessageConst::PROPERTY_TIMER_GENERATION, generation.to_string()),
+            (MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN, delivery_token),
+        ] {
+            msg.message_ext_inner
+                .message
+                .properties_mut()
+                .as_map_mut()
+                .insert(CheetahString::from_static_str(key), CheetahString::from_string(value));
+        }
         let topic_value = CheetahString::from_slice(msg.topic());
         msg.message_ext_inner.message.properties_mut().as_map_mut().insert(
             CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC),
@@ -420,6 +468,28 @@ mod tests {
         assert!(msg
             .property(&CheetahString::from_static_str(
                 MessageConst::PROPERTY_TIMER_ORIGINAL_DELIVER_MS,
+            ))
+            .is_some());
+        assert_eq!(
+            msg.property(&CheetahString::from_static_str(MessageConst::TIMER_ENGINE_TYPE))
+                .as_deref(),
+            Some(MessageConst::TIMER_ENGINE_FILE_TIME_WHEEL)
+        );
+        assert_eq!(
+            msg.property(&CheetahString::from_static_str(
+                MessageConst::PROPERTY_TIMER_FORMAT_VERSION,
+            ))
+            .as_deref(),
+            Some("1")
+        );
+        assert!(msg
+            .property(&CheetahString::from_static_str(
+                MessageConst::PROPERTY_TIMER_POLICY_FINGERPRINT,
+            ))
+            .is_some());
+        assert!(msg
+            .property(&CheetahString::from_static_str(
+                MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN,
             ))
             .is_some());
     }

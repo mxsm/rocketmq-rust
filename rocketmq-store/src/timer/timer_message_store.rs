@@ -17,10 +17,12 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI64;
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
+use bytes::Bytes;
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
 use parking_lot::RwLock;
@@ -39,6 +41,10 @@ use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_runtime::ShutdownReport;
+use rocketmq_store_api::TimerEngineId;
+use rocketmq_store_api::TimerId;
+use rocketmq_store_api::TimerStoreMode;
+use rocketmq_store_api::JAVA_COMPAT_TIMER_FORMAT_VERSION;
 use rocketmq_store_local::timer::metrics::TimerStorageMetrics;
 use rocketmq_store_local::timer::metrics::TimerStorageMetricsSnapshot;
 use rocketmq_store_local::timer::segmented_timer_log::TIMER_LOG_V2_PHYSICAL_RECORD_SIZE;
@@ -70,6 +76,14 @@ use crate::store_path_config_helper::get_timer_metrics_path;
 use crate::store_path_config_helper::get_timer_wheel_path;
 use crate::timer::clock::SystemTimerClock;
 use crate::timer::clock::TimerClock;
+use crate::timer::delivery::classify_delivery_status;
+use crate::timer::error::CorruptionReason;
+use crate::timer::error::QuarantineManifest;
+use crate::timer::error::QuarantineRecord;
+use crate::timer::error::TimerWorkResult;
+use crate::timer::java_compat::JavaCompatEngine;
+use crate::timer::pipeline::TimerPipeline;
+use crate::timer::pipeline::TimerPipelineDiagnostics;
 use crate::timer::role::TimerRoleState;
 use crate::timer::slot::Slot;
 use crate::timer::slot_drain::slot_drain_generation;
@@ -120,9 +134,37 @@ struct TimerDeleteIdentity {
     generation: u64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TimerPayloadReadError {
+    InvalidLocator,
+    Missing,
+    ShortRead,
+    Decode,
+}
+
 struct ActiveSlotDrain {
     plan: SlotDrainPlan,
     delete_keys: HashSet<TimerDeleteIdentity>,
+}
+
+struct AtomicActivityGuard<'a> {
+    counter: &'a AtomicUsize,
+    gate: &'a RwLock<()>,
+}
+
+impl<'a> AtomicActivityGuard<'a> {
+    fn new(counter: &'a AtomicUsize, gate: &'a RwLock<()>) -> Self {
+        let _gate = gate.read();
+        counter.fetch_add(1, Ordering::AcqRel);
+        Self { counter, gate }
+    }
+}
+
+impl Drop for AtomicActivityGuard<'_> {
+    fn drop(&mut self) {
+        let _gate = self.gate.read();
+        self.counter.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -193,8 +235,17 @@ pub struct TimerMessageStore {
     should_running_dequeue: AtomicBool,
     enqueue_suspended: AtomicBool,
     process_lock: AsyncMutex<()>,
+    enqueue_stage_lock: Mutex<()>,
+    due_stage_lock: AsyncMutex<()>,
+    checkpoint_lock: Mutex<()>,
+    persistence_gate: RwLock<()>,
+    active_source_mutations: AtomicUsize,
+    active_due_mutations: AtomicUsize,
+    pending_progress: AtomicBool,
     scheduler_group: Mutex<Option<rocketmq_runtime::TaskGroup>>,
     scheduler_tasks: Mutex<Option<ScheduledTaskGroup>>,
+    pipeline: Mutex<Option<Arc<TimerPipeline>>>,
+    quarantine_manifest: QuarantineManifest,
     enqueue_tps_counter: TimerTpsCounter,
     dequeue_tps_counter: TimerTpsCounter,
     #[cfg(test)]
@@ -203,7 +254,19 @@ pub struct TimerMessageStore {
 
 impl TimerMessageStore {
     pub fn load(&self) -> bool {
+        if self.message_store_config.timer_store_mode != TimerStoreMode::JavaCompat {
+            error!("extended timer timeline is configured but its storage capability is not installed");
+            return false;
+        }
+        if self.message_store_config.timer_skip_unknown_error {
+            error!("timerSkipUnknownError is unsupported because timer corruption must fail closed");
+            return false;
+        }
         let root_dir = self.message_store_config.store_path_root_dir.as_str();
+        if let Err(error) = self.quarantine_manifest.load() {
+            error!("load timer quarantine manifest failed: {error}");
+            return false;
+        }
         if let Err(error) = self.message_store_config.timer_policy_snapshot() {
             error!("load timer store failed because timer configuration is invalid: {error}");
             return false;
@@ -345,25 +408,49 @@ impl TimerMessageStore {
             return;
         }
 
-        let scheduler = self.clone();
-        let interval_ms = scheduler
+        let interval_ms = self
             .message_store_config
             .timer_precision_ms
             .max(MIN_SCHEDULER_INTERVAL_MS);
         let scheduler_group = crate::runtime::task_group(&self.runtime_scope, "rocketmq-store.timer.scheduler");
+        let pipeline = match TimerPipeline::new(&self.runtime_scope, &self.message_store_config) {
+            Ok(pipeline) => pipeline,
+            Err(error) => {
+                error!("failed to create TimerMessageStore pipeline: {error}");
+                return;
+            }
+        };
+        if let Err(error) = pipeline.spawn(
+            &scheduler_group,
+            JavaCompatEngine::new(Arc::clone(self)),
+            self.message_store_config.timer_put_message_thread_num,
+            self.message_store_config.timer_get_message_thread_num,
+            self.message_store_config.timer_completion_gap_limit,
+        ) {
+            error!("failed to spawn TimerMessageStore pipeline: {error}");
+            pipeline.close();
+            scheduler_group.cancel();
+            return;
+        }
         let scheduler_tasks = ScheduledTaskGroup::new(scheduler_group.clone());
+        let scheduler = Arc::clone(self);
+        let scheduled_pipeline = Arc::clone(&pipeline);
         if let Err(error) = scheduler_tasks.schedule_fixed_delay(
             ScheduledTaskConfig::fixed_delay("timer-message-scheduler", Duration::from_millis(interval_ms)),
             move || {
                 let scheduler = scheduler.clone();
+                let pipeline = Arc::clone(&scheduled_pipeline);
                 async move {
-                    let _ = scheduler.process_once().await;
+                    pipeline.submit_tick(scheduler.capture_delivery_epoch());
                 }
             },
         ) {
             error!("failed to spawn TimerMessageStore scheduler: {error}");
+            pipeline.close();
+            scheduler_group.cancel();
             return;
         }
+        *self.pipeline.lock() = Some(pipeline);
         *self.scheduler_tasks.lock() = Some(scheduler_tasks);
         *scheduler_group_guard = Some(scheduler_group);
     }
@@ -440,6 +527,85 @@ impl TimerMessageStore {
         self.storage_metrics.snapshot()
     }
 
+    fn look_messages_by_locator(
+        &self,
+        locators: &[(i64, i32)],
+        max_bytes: usize,
+    ) -> Vec<Result<MessageExt, TimerPayloadReadError>> {
+        let Some(store_context) = self.store_context.as_ref() else {
+            return locators.iter().map(|_| Err(TimerPayloadReadError::Missing)).collect();
+        };
+        let mut output = Vec::with_capacity(locators.len());
+        let mut cursor = 0usize;
+        let mut retained_bytes = 0usize;
+        while cursor < locators.len() {
+            let (start, first_size) = locators[cursor];
+            let Ok(first_size) = usize::try_from(first_size) else {
+                output.push(Err(TimerPayloadReadError::InvalidLocator));
+                cursor += 1;
+                continue;
+            };
+            if start < 0 || first_size == 0 || retained_bytes.saturating_add(first_size) > max_bytes {
+                output.push(Err(TimerPayloadReadError::InvalidLocator));
+                cursor += 1;
+                continue;
+            }
+
+            let run_start = cursor;
+            let mut run_bytes = first_size;
+            let mut expected_next = start.saturating_add(first_size as i64);
+            cursor += 1;
+            while cursor < locators.len() {
+                let (next_offset, next_size) = locators[cursor];
+                let Ok(next_size) = usize::try_from(next_size) else {
+                    break;
+                };
+                if next_offset != expected_next
+                    || next_size == 0
+                    || retained_bytes.saturating_add(run_bytes).saturating_add(next_size) > max_bytes
+                    || run_bytes.saturating_add(next_size) > i32::MAX as usize
+                {
+                    break;
+                }
+                run_bytes += next_size;
+                expected_next = expected_next.saturating_add(next_size as i64);
+                cursor += 1;
+            }
+
+            let Some(segments) = store_context.commit_log.get_bulk_data(start, run_bytes as i32) else {
+                output.extend((run_start..cursor).map(|_| Err(TimerPayloadReadError::Missing)));
+                retained_bytes = retained_bytes.saturating_add(run_bytes);
+                continue;
+            };
+            let mut contiguous = Vec::with_capacity(run_bytes);
+            for segment in segments {
+                contiguous.extend_from_slice(segment.get_buffer());
+            }
+            if contiguous.len() != run_bytes {
+                output.extend((run_start..cursor).map(|_| Err(TimerPayloadReadError::ShortRead)));
+                retained_bytes = retained_bytes.saturating_add(run_bytes);
+                continue;
+            }
+            let mut relative = 0usize;
+            for (_, size) in &locators[run_start..cursor] {
+                let size = *size as usize;
+                let mut bytes = Bytes::copy_from_slice(&contiguous[relative..relative + size]);
+                output.push(
+                    MessageDecoder::decode(&mut bytes, true, false, false, false, false)
+                        .ok_or(TimerPayloadReadError::Decode),
+                );
+                relative += size;
+            }
+            retained_bytes = retained_bytes.saturating_add(run_bytes);
+        }
+        output
+    }
+
+    /// Returns the immutable normalization policy fingerprint written at timer admission.
+    pub fn normalization_policy_fingerprint(&self) -> Option<u64> {
+        self.message_store_config.timer_policy_fingerprint().ok()
+    }
+
     pub fn is_should_running_dequeue(&self) -> bool {
         self.should_running_dequeue.load(Ordering::Acquire) && self.role_state.is_active()
     }
@@ -467,6 +633,14 @@ impl TimerMessageStore {
     }
 
     pub fn sync_checkpoint_from_master(&self, snapshot: &TimerCheckpointSnapshot) -> std::io::Result<bool> {
+        let _checkpoint_guard = self.checkpoint_lock.lock();
+        let _persistence_guard = self.persistence_gate.write();
+        if self.active_source_mutations.load(Ordering::Acquire) > 0
+            || self.active_due_mutations.load(Ordering::Acquire) > 0
+            || !self.slot_drains.lock().is_empty()
+        {
+            return Ok(false);
+        }
         let checkpoint_guard = self.timer_checkpoint.lock();
         let Some(timer_checkpoint) = checkpoint_guard.as_ref() else {
             return Ok(false);
@@ -516,6 +690,7 @@ impl TimerMessageStore {
     ) -> Self {
         let timer_metrics_path = get_timer_metrics_path(message_store_config.store_path_root_dir.as_str());
         let role_state = TimerRoleState::new(message_store_config.store_path_root_dir.as_str());
+        let quarantine_manifest = QuarantineManifest::new(message_store_config.store_path_root_dir.as_str());
         Self {
             runtime_scope,
             otel_timer_metrics,
@@ -537,8 +712,17 @@ impl TimerMessageStore {
             should_running_dequeue: AtomicBool::new(false),
             enqueue_suspended: AtomicBool::new(false),
             process_lock: AsyncMutex::new(()),
+            enqueue_stage_lock: Mutex::new(()),
+            due_stage_lock: AsyncMutex::new(()),
+            checkpoint_lock: Mutex::new(()),
+            persistence_gate: RwLock::new(()),
+            active_source_mutations: AtomicUsize::new(0),
+            active_due_mutations: AtomicUsize::new(0),
+            pending_progress: AtomicBool::new(false),
             scheduler_group: Mutex::new(None),
             scheduler_tasks: Mutex::new(None),
+            pipeline: Mutex::new(None),
+            quarantine_manifest,
             enqueue_tps_counter: TimerTpsCounter::default(),
             dequeue_tps_counter: TimerTpsCounter::default(),
             #[cfg(test)]
@@ -592,9 +776,12 @@ impl TimerMessageStore {
     }
 
     pub fn shutdown(&self) {
+        if let Some(pipeline) = self.pipeline.lock().take() {
+            pipeline.close();
+        }
         self.scheduler_tasks.lock().take();
         if let Some(scheduler_group) = self.scheduler_group.lock().take() {
-            scheduler_group.cancel();
+            let _ = scheduler_group.shutdown_now();
         }
         self.shutdown_storage();
     }
@@ -604,6 +791,9 @@ impl TimerMessageStore {
     }
 
     pub async fn shutdown_gracefully_with_report(&self) -> Option<ShutdownReport> {
+        if let Some(pipeline) = self.pipeline.lock().take() {
+            pipeline.close();
+        }
         self.scheduler_tasks.lock().take();
         let scheduler_group = self.scheduler_group.lock().take();
         if let Some(scheduler_group) = scheduler_group {
@@ -673,13 +863,18 @@ impl TimerMessageStore {
         }
     }
 
-    fn commit_durable_progress(&self) -> std::io::Result<()> {
+    fn commit_durable_progress(&self) -> std::io::Result<bool> {
+        let _checkpoint_guard = self.checkpoint_lock.lock();
+        let _persistence_guard = self.persistence_gate.write();
         // A partial slot depends on the complete tombstone summary built from its original chain.
         // Until that slot is drained, keep the previous checkpoint authoritative. A crash may
         // replay already delivered entries (with the same delivery token), but cannot lose a
         // tombstone by publishing only the remaining suffix.
-        if !self.slot_drains.lock().is_empty() {
-            return Ok(());
+        if self.active_source_mutations.load(Ordering::Acquire) > 0
+            || self.active_due_mutations.load(Ordering::Acquire) > 0
+            || !self.slot_drains.lock().is_empty()
+        {
+            return Ok(false);
         }
         // The checkpoint is a commit record, never a write-ahead declaration. Advancing it before
         // either data file is durable can permanently skip Timer CQ entries after a crash.
@@ -753,7 +948,8 @@ impl TimerMessageStore {
             }
         }
         self.observe_persistence_stage(PersistenceStage::AfterCheckpoint)?;
-        Ok(())
+        self.pending_progress.store(false, Ordering::Release);
+        Ok(true)
     }
 
     fn observe_persistence_stage(&self, stage: PersistenceStage) -> std::io::Result<()> {
@@ -1210,10 +1406,10 @@ impl TimerMessageStore {
         let _guard = self.process_lock.lock().await;
         let delivery_epoch = self.role_state.capture_delivery_epoch();
         let recall_visibility_watermark = delivery_epoch.and_then(|_| self.timer_queue_high_watermark());
-        let mut indexed = self.enqueue_from_timer_topic(self.enqueue_batch_limit());
+        let mut indexed = self.process_enqueue_stage(self.enqueue_batch_limit());
         let recall_visible = if let Some(watermark) = recall_visibility_watermark {
             while self.curr_queue_offset.load(Ordering::Acquire) < watermark {
-                let indexed_now = self.enqueue_from_timer_topic(self.enqueue_batch_limit());
+                let indexed_now = self.process_enqueue_stage(self.enqueue_batch_limit());
                 if indexed_now == 0 {
                     break;
                 }
@@ -1225,7 +1421,7 @@ impl TimerMessageStore {
         };
         let delivered = match delivery_epoch {
             Some(epoch) if recall_visible && self.role_state.is_current_delivery_epoch(epoch) => {
-                self.dequeue_due_messages(self.dequeue_batch_limit(), epoch).await
+                self.process_due_stage(self.dequeue_batch_limit(), epoch).await
             }
             _ => 0,
         };
@@ -1233,6 +1429,140 @@ impl TimerMessageStore {
             self.sync_last_read_time_ms();
         }
         indexed + delivered
+    }
+
+    pub fn pipeline_diagnostics(&self) -> Option<TimerPipelineDiagnostics> {
+        self.pipeline.lock().as_ref().map(|pipeline| pipeline.snapshot())
+    }
+
+    pub(crate) fn process_enqueue_stage(&self, limit: usize) -> usize {
+        match self.process_enqueue_stage_with_durability(limit) {
+            Ok((messages, _)) => messages,
+            Err(error) => {
+                error!("commit timer source stage failed: {error}");
+                0
+            }
+        }
+    }
+
+    pub(crate) fn process_enqueue_stage_with_durability(&self, limit: usize) -> std::io::Result<(usize, bool)> {
+        let _stage_guard = self.enqueue_stage_lock.lock();
+        let indexed = {
+            let _mutation = AtomicActivityGuard::new(&self.active_source_mutations, &self.persistence_gate);
+            self.enqueue_from_timer_topic(limit.max(1))
+        };
+        if indexed > 0 {
+            self.pending_progress.store(true, Ordering::Release);
+        }
+        let durable = if self.pending_progress.load(Ordering::Acquire) {
+            self.commit_durable_progress()?
+        } else {
+            true
+        };
+        Ok((indexed, durable))
+    }
+
+    pub(crate) async fn process_due_stage(&self, limit: usize, delivery_epoch: u64) -> usize {
+        match self.process_due_stage_with_durability(limit, delivery_epoch).await {
+            Ok((messages, _)) => messages,
+            Err(error) => {
+                error!("commit timer due stage failed: {error}");
+                0
+            }
+        }
+    }
+
+    pub(crate) async fn process_due_stage_with_durability(
+        &self,
+        limit: usize,
+        delivery_epoch: u64,
+    ) -> std::io::Result<(usize, bool)> {
+        let delivered = self.process_due_stage_mutation(limit, delivery_epoch).await;
+        let durable = if self.pending_progress.load(Ordering::Acquire) {
+            self.commit_durable_progress()?
+        } else {
+            true
+        };
+        Ok((delivered, durable))
+    }
+
+    async fn process_due_stage_mutation(&self, limit: usize, delivery_epoch: u64) -> usize {
+        let _stage_guard = self.due_stage_lock.lock().await;
+        if !self.role_state.is_current_delivery_epoch(delivery_epoch) {
+            return 0;
+        }
+        // A Recall tombstone already visible in the Timer CQ must be materialized before
+        // delivery starts. The source workers retain a bounded share of every tick; this stage
+        // simply waits for their contiguous watermark instead of bypassing it.
+        if self
+            .timer_queue_high_watermark()
+            .is_some_and(|watermark| self.curr_queue_offset.load(Ordering::Acquire) < watermark)
+        {
+            return 0;
+        }
+        let delivered = {
+            let _mutation = AtomicActivityGuard::new(&self.active_due_mutations, &self.persistence_gate);
+            self.dequeue_due_messages(limit.max(1), delivery_epoch).await
+        };
+        if delivered > 0 {
+            self.pending_progress.store(true, Ordering::Release);
+        }
+        delivered
+    }
+
+    pub(crate) async fn process_pipeline_enqueue_stage(
+        self: &Arc<Self>,
+        limit: usize,
+    ) -> std::io::Result<(usize, bool)> {
+        let _pipeline_guard = self.process_lock.lock().await;
+        let store = Arc::clone(self);
+        self.runtime_scope
+            .storage_io()
+            .spawn_io("timer-source-materialization", move || {
+                store.process_enqueue_stage_with_durability(limit)
+            })
+            .await
+            .map_err(|error| std::io::Error::other(format!("timer source materialization task failed: {error}")))?
+    }
+
+    pub(crate) async fn process_pipeline_due_stage(
+        self: &Arc<Self>,
+        limit: usize,
+        delivery_epoch: u64,
+    ) -> std::io::Result<(usize, bool)> {
+        let _pipeline_guard = self.process_lock.lock().await;
+        let delivered = self.process_due_stage_mutation(limit, delivery_epoch).await;
+        let durable = if self.pending_progress.load(Ordering::Acquire) {
+            let store = Arc::clone(self);
+            self.runtime_scope
+                .storage_io()
+                .spawn_io("timer-due-checkpoint", move || store.commit_durable_progress())
+                .await
+                .map_err(|error| std::io::Error::other(format!("timer due checkpoint task failed: {error}")))??
+        } else {
+            true
+        };
+        Ok((delivered, durable))
+    }
+
+    pub(crate) fn commit_pipeline_progress(&self) -> std::io::Result<bool> {
+        self.commit_durable_progress()
+    }
+
+    pub(crate) fn is_storage_loaded(&self) -> bool {
+        self.timer_checkpoint.lock().is_some() && self.timer_log.lock().is_some() && self.timer_wheel.lock().is_some()
+    }
+
+    pub(crate) fn is_current_delivery_epoch(&self, epoch: u64) -> bool {
+        self.role_state.is_current_delivery_epoch(epoch)
+    }
+
+    pub(crate) fn capture_delivery_epoch(&self) -> Option<u64> {
+        self.role_state.capture_delivery_epoch()
+    }
+
+    pub fn quarantine_count(&self) -> usize {
+        self.quarantine_manifest.snapshot().len()
     }
 
     fn enqueue_from_timer_topic(&self, limit: usize) -> usize {
@@ -1249,26 +1579,61 @@ impl TimerMessageStore {
         let enqueue_reference_time_ms = dequeue_cursor.max(now_ms);
         let max_offset = consume_queue.read().get_max_offset_in_queue();
         let mut queue_offset = self.curr_queue_offset.load(Ordering::Relaxed);
-        let mut indexed = 0usize;
-
-        while queue_offset < max_offset && indexed < limit {
+        let mut batch = Vec::with_capacity(limit.min(1_024));
+        let mut batch_bytes = 0usize;
+        while queue_offset < max_offset && batch.len() < limit {
             let Some(cq_unit) = consume_queue.read().get(queue_offset) else {
                 break;
             };
-            let Some(message) = self.look_store_message(cq_unit.pos, cq_unit.size) else {
-                warn!(
-                    "skip timer queue offset {} because commitlog message {}:{} is missing",
-                    queue_offset, cq_unit.pos, cq_unit.size
-                );
+            let Ok(size) = usize::try_from(cq_unit.size) else {
                 break;
             };
+            if !batch.is_empty()
+                && batch_bytes.saturating_add(size) > self.message_store_config.timer_pipeline_queue_bytes
+            {
+                break;
+            }
+            batch_bytes = batch_bytes.saturating_add(size);
+            queue_offset = cq_unit.queue_offset + 1;
+            batch.push(cq_unit);
+        }
+        let locators: Vec<_> = batch.iter().map(|unit| (unit.pos, unit.size)).collect();
+        let messages = self.look_messages_by_locator(&locators, self.message_store_config.timer_pipeline_queue_bytes);
+        let mut indexed = 0usize;
+
+        for (cq_unit, message) in batch.into_iter().zip(messages) {
+            let message = match message {
+                Ok(message) => message,
+                Err(reason) => {
+                    let corruption = match reason {
+                        TimerPayloadReadError::Missing => CorruptionReason::MissingPayload,
+                        TimerPayloadReadError::ShortRead => CorruptionReason::ShortRead,
+                        TimerPayloadReadError::Decode => CorruptionReason::UnsupportedRecord,
+                        TimerPayloadReadError::InvalidLocator => CorruptionReason::UnsupportedRecord,
+                    };
+                    self.quarantine_source(cq_unit.queue_offset, corruption);
+                    warn!(
+                        "timer queue offset {} is blocked because commitlog message {}:{} cannot be read: {:?}",
+                        cq_unit.queue_offset, cq_unit.pos, cq_unit.size, reason
+                    );
+                    break;
+                }
+            };
+            if let Err(reason) = validate_timer_source_route(&message) {
+                self.quarantine_source(cq_unit.queue_offset, reason);
+                warn!(
+                    "timer queue offset {} is blocked because its persisted route is invalid: {:?}",
+                    cq_unit.queue_offset, reason
+                );
+                break;
+            }
             let Some(deliver_time_ms) = parse_deliver_time_ms(&message) else {
                 warn!(
                     "skip timer queue offset {} because TIMER_OUT_MS is invalid",
                     queue_offset
                 );
-                queue_offset = cq_unit.queue_offset + 1;
-                self.curr_queue_offset.store(queue_offset, Ordering::Relaxed);
+                self.curr_queue_offset
+                    .store(cq_unit.queue_offset + 1, Ordering::Relaxed);
                 continue;
             };
 
@@ -1295,8 +1660,8 @@ impl TimerMessageStore {
                         }
                     }
                     self.enqueue_tps_counter.record(1, current_millis() as i64);
-                    queue_offset = cq_unit.queue_offset + 1;
-                    self.curr_queue_offset.store(queue_offset, Ordering::Relaxed);
+                    self.curr_queue_offset
+                        .store(cq_unit.queue_offset + 1, Ordering::Relaxed);
                     indexed += 1;
                 }
                 Err(err) => {
@@ -1310,6 +1675,17 @@ impl TimerMessageStore {
         }
 
         indexed
+    }
+
+    fn quarantine_source(&self, source_offset: i64, reason: CorruptionReason) {
+        if let Err(error) = self.quarantine_manifest.record(QuarantineRecord {
+            timer_id: TimerId::new(source_offset.max(0) as u128),
+            reason,
+            source_offset,
+            attempts: 0,
+        }) {
+            error!("persist timer quarantine record failed: {error}");
+        }
     }
 
     async fn dequeue_due_messages(&self, limit: usize, delivery_epoch: u64) -> usize {
@@ -1405,6 +1781,7 @@ impl TimerMessageStore {
         let mut processed = 0usize;
         for entry in &entries {
             let Some(message) = self.look_store_message(entry.record.commit_log_offset, entry.record.size) else {
+                self.quarantine_source(entry.record.queue_offset, CorruptionReason::MissingPayload);
                 warn!(
                     "delay delivery blocked at timer log position {} because commitlog {}:{} is missing",
                     entry.position, entry.record.commit_log_offset, entry.record.size
@@ -1421,16 +1798,11 @@ impl TimerMessageStore {
                     let rolled_topic =
                         message.property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC));
                     let Some(rolled_message) = self.convert_timer_message(message, true) else {
-                        processed += 1;
-                        continue;
+                        self.quarantine_source(entry.record.queue_offset, CorruptionReason::UnsupportedRecord);
+                        break;
                     };
                     let put_result = self.put_store_message(rolled_message).await;
-                    if !put_result.is_ok() {
-                        warn!(
-                            "roll timer message for slot {} failed with status {:?}",
-                            slot_time_ms,
-                            put_result.put_message_status()
-                        );
+                    if !self.accept_delivery_result(entry.record.queue_offset, "roll", &put_result) {
                         break;
                     }
                     if let Some(real_topic) = rolled_topic {
@@ -1461,6 +1833,7 @@ impl TimerMessageStore {
             }
 
             let Some(original_deliver_ms) = original_deliver_time_ms(&message, self.precision_ms()) else {
+                self.quarantine_source(entry.record.queue_offset, CorruptionReason::UnsupportedRecord);
                 warn!("delay delivery blocked because the original timer deadline is invalid");
                 break;
             };
@@ -1470,14 +1843,23 @@ impl TimerMessageStore {
             }
             let generation = timer_generation(&message);
             let Some(mut deliver_message) = self.convert_timer_message(message, false) else {
-                processed += 1;
-                continue;
+                self.quarantine_source(entry.record.queue_offset, CorruptionReason::UnsupportedRecord);
+                break;
             };
-            MessageAccessor::put_property(
-                &mut deliver_message,
-                CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN),
-                stable_delivery_token(entry.record.queue_offset, generation),
-            );
+            if deliver_message
+                .property(&CheetahString::from_static_str(
+                    MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN,
+                ))
+                .is_none()
+            {
+                // V1 records predate admission-time tokens. The fallback is deterministic for
+                // replay; new records always persist the token before entering the timer topic.
+                MessageAccessor::put_property(
+                    &mut deliver_message,
+                    CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN),
+                    stable_delivery_token(entry.record.queue_offset, generation),
+                );
+            }
             deliver_message.properties_string =
                 MessageDecoder::message_properties_to_string(deliver_message.get_properties());
             let delivered_topic = deliver_message.get_topic().clone();
@@ -1498,12 +1880,7 @@ impl TimerMessageStore {
                 break;
             }
             let put_result = self.put_store_message(deliver_message).await;
-            if !put_result.is_ok() {
-                warn!(
-                    "delay delivery for slot {} failed with status {:?}",
-                    slot_time_ms,
-                    put_result.put_message_status()
-                );
+            if !self.accept_delivery_result(entry.record.queue_offset, "deliver", &put_result) {
                 break;
             }
             self.timer_metrics.add_timing_count(&delivered_topic, -1);
@@ -1547,6 +1924,23 @@ impl TimerMessageStore {
             self.slot_drains.lock().insert(slot_time_ms, active_drain);
         }
         processed
+    }
+
+    fn accept_delivery_result(&self, source_offset: i64, operation: &'static str, result: &PutMessageResult) -> bool {
+        let status = result.put_message_status();
+        match classify_delivery_status(status) {
+            TimerWorkResult::Complete if result.is_ok() => true,
+            TimerWorkResult::Complete | TimerWorkResult::Retry(_) => {
+                warn!("timer {operation} will retry after put status {status:?}");
+                false
+            }
+            TimerWorkResult::Quarantine(reason) => {
+                self.quarantine_source(source_offset, reason);
+                warn!("timer {operation} is quarantined after put status {status:?}");
+                false
+            }
+            TimerWorkResult::Cancelled | TimerWorkResult::StaleGeneration => false,
+        }
     }
 
     fn take_or_build_slot_drain(&self, slot: Slot) -> std::io::Result<ActiveSlotDrain> {
@@ -1727,6 +2121,9 @@ impl TimerMessageStore {
                 MessageConst::PROPERTY_TIMER_ROLL_LABEL,
                 MessageConst::PROPERTY_TIMER_DEL_UNIQKEY,
                 MessageConst::PROPERTY_TIMER_GENERATION,
+                MessageConst::TIMER_ENGINE_TYPE,
+                MessageConst::PROPERTY_TIMER_FORMAT_VERSION,
+                MessageConst::PROPERTY_TIMER_POLICY_FINGERPRINT,
             ] {
                 MessageAccessor::clear_property(&mut inner, property);
             }
@@ -1831,17 +2228,11 @@ impl TimerMessageStore {
     }
 
     fn enqueue_batch_limit(&self) -> usize {
-        self.message_store_config
-            .max_msgs_num_batch
-            .max(1)
-            .saturating_mul(self.message_store_config.timer_put_message_thread_num.max(1))
+        self.message_store_config.timer_source_batch_messages.max(1)
     }
 
     fn dequeue_batch_limit(&self) -> usize {
-        self.message_store_config
-            .max_msgs_num_batch
-            .max(1)
-            .saturating_mul(self.message_store_config.timer_get_message_thread_num.max(1))
+        self.message_store_config.timer_due_batch_messages.max(1)
     }
 }
 
@@ -1916,6 +2307,45 @@ fn timer_generation(message: &MessageExt) -> u64 {
         .unwrap_or_default()
 }
 
+fn validate_timer_source_route(message: &MessageExt) -> Result<(), CorruptionReason> {
+    let engine_key = CheetahString::from_static_str(MessageConst::TIMER_ENGINE_TYPE);
+    let Some(engine_id) = message.property(&engine_key) else {
+        // V1 and Java-originated records predate the extended route envelope.
+        return Ok(());
+    };
+    if TimerEngineId::parse(engine_id.as_str()).ok() != Some(TimerEngineId::JavaCompat) {
+        return Err(CorruptionReason::UnsupportedRecord);
+    }
+    let version = message
+        .property(&CheetahString::from_static_str(
+            MessageConst::PROPERTY_TIMER_FORMAT_VERSION,
+        ))
+        .and_then(|value| value.parse::<u16>().ok());
+    if version != Some(JAVA_COMPAT_TIMER_FORMAT_VERSION) {
+        return Err(CorruptionReason::UnsupportedRecord);
+    }
+    let fingerprint_valid = message
+        .property(&CheetahString::from_static_str(
+            MessageConst::PROPERTY_TIMER_POLICY_FINGERPRINT,
+        ))
+        .and_then(|value| value.parse::<u64>().ok())
+        .is_some_and(|value| value != 0);
+    let generation_valid = message
+        .property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_GENERATION))
+        .and_then(|value| value.parse::<u64>().ok())
+        .is_some();
+    let token_valid = message
+        .property(&CheetahString::from_static_str(
+            MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN,
+        ))
+        .is_some_and(|value| !value.is_empty());
+    if fingerprint_valid && generation_valid && token_valid {
+        Ok(())
+    } else {
+        Err(CorruptionReason::UnsupportedRecord)
+    }
+}
+
 fn original_deliver_time_ms(message: &MessageExt, precision_ms: i64) -> Option<i64> {
     message
         .property(&CheetahString::from_static_str(
@@ -1949,6 +2379,7 @@ mod tests {
     use dashmap::DashMap;
     use parking_lot::Mutex as ParkingMutex;
     use rocketmq_model::common::config::TopicConfig;
+    use rocketmq_model::common::message::message_ext::MessageExt;
     use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
     use rocketmq_model::common::message::MessageConst;
     use rocketmq_model::common::message::MessageTrait;
@@ -1961,6 +2392,8 @@ mod tests {
     use super::get_timer_check_path;
     use super::get_timer_log_path;
     use super::get_timer_wheel_path;
+    use super::validate_timer_source_route;
+    use super::CorruptionReason;
     use super::MessageStoreConfig;
     use super::PersistenceStage;
     use super::PutMessageStatus;
@@ -1981,6 +2414,36 @@ mod tests {
     use crate::message_store::local_file_message_store::LocalFileMessageStore;
     struct ManualTimerClock {
         wall_time_ms: AtomicI64,
+    }
+
+    #[test]
+    fn persisted_timer_route_fails_closed_for_unknown_or_partial_envelopes() {
+        let mut legacy = MessageExt::default();
+        assert_eq!(validate_timer_source_route(&legacy), Ok(()));
+
+        legacy.message.put_property(
+            CheetahString::from_static_str(MessageConst::TIMER_ENGINE_TYPE),
+            CheetahString::from_static_str("unknown"),
+        );
+        assert_eq!(
+            validate_timer_source_route(&legacy),
+            Err(CorruptionReason::UnsupportedRecord)
+        );
+
+        let mut canonical = MessageExt::default();
+        for (key, value) in [
+            (MessageConst::TIMER_ENGINE_TYPE, "F"),
+            (MessageConst::PROPERTY_TIMER_FORMAT_VERSION, "1"),
+            (MessageConst::PROPERTY_TIMER_POLICY_FINGERPRINT, "7"),
+            (MessageConst::PROPERTY_TIMER_GENERATION, "0"),
+            (MessageConst::PROPERTY_TIMER_DELIVERY_TOKEN, "token"),
+        ] {
+            canonical.message.put_property(
+                CheetahString::from_static_str(key),
+                CheetahString::from_static_str(value),
+            );
+        }
+        assert_eq!(validate_timer_source_route(&canonical), Ok(()));
     }
 
     impl ManualTimerClock {
@@ -2032,6 +2495,8 @@ mod tests {
             max_msgs_num_batch,
             timer_get_message_thread_num,
             timer_put_message_thread_num,
+            timer_source_batch_messages: max_msgs_num_batch,
+            timer_due_batch_messages: max_msgs_num_batch,
             ..MessageStoreConfig::default()
         })
     }
@@ -2272,7 +2737,7 @@ mod tests {
         assert!(timer_message_store.load());
         timer_message_store.start();
         assert!(timer_message_store.has_scheduler_handle());
-        assert_eq!(timer_message_store.scheduler_task_count(), 1);
+        assert_eq!(timer_message_store.scheduler_task_count(), 8);
 
         let report = timer_message_store
             .shutdown_gracefully_with_report()
@@ -2417,6 +2882,35 @@ mod tests {
         assert_eq!(reloaded_checkpoint.last_read_time_ms(), local_read_time);
         assert_eq!(reloaded_checkpoint.master_timer_queue_offset(), 78);
         assert_eq!(reloaded_checkpoint.data_version(), data_version);
+    }
+
+    #[test]
+    fn sync_checkpoint_from_master_waits_for_active_timer_mutations() {
+        let temp_dir = tempdir().unwrap();
+        let root_dir = temp_dir.path().to_string_lossy().to_string();
+        let timer_message_store = standalone_timer_store(config_with_root(root_dir.as_str()));
+        assert!(timer_message_store.load());
+
+        let snapshot = TimerCheckpointSnapshot::new(
+            12_000,
+            34,
+            56,
+            78,
+            rocketmq_protocol::protocol::data_version_facade::new_data_version(),
+        );
+        timer_message_store.active_source_mutations.store(1, Ordering::Release);
+        assert!(!timer_message_store.sync_checkpoint_from_master(&snapshot).unwrap());
+        assert_ne!(
+            timer_message_store
+                .timer_checkpoint
+                .lock()
+                .as_ref()
+                .expect("checkpoint")
+                .master_timer_queue_offset(),
+            78
+        );
+        timer_message_store.active_source_mutations.store(0, Ordering::Release);
+        assert!(timer_message_store.sync_checkpoint_from_master(&snapshot).unwrap());
     }
 
     #[tokio::test]
@@ -2870,7 +3364,9 @@ mod tests {
         let (mut reloaded, reloaded_timer, _) = build_store_with_timer_and_config(config);
         assert!(reloaded.load().await);
         reloaded_timer.set_should_running_dequeue(true);
-        assert_eq!(reloaded_timer.process_once().await, 3);
+        // Source materialization was durably checkpointed before the partial slot drain. Restart
+        // therefore replays only the slot, not the already indexed source records.
+        assert_eq!(reloaded_timer.process_once().await, 1);
         assert_eq!(reloaded_timer.process_once().await, 1);
         reloaded.reput_once().await;
         assert_eq!(reloaded.get_max_offset_in_queue(&real_topic, 0), 0);
@@ -2909,10 +3405,15 @@ mod tests {
         store.reput_once().await;
 
         timer_store.set_should_running_dequeue(true);
-        assert_eq!(
-            timer_store.process_once().await,
-            (MESSAGE_COUNT + MESSAGE_COUNT / 2) * 2
-        );
+        let mut processed = 0usize;
+        loop {
+            let processed_now = timer_store.process_once().await;
+            if processed_now == 0 {
+                break;
+            }
+            processed += processed_now;
+        }
+        assert_eq!(processed, (MESSAGE_COUNT + MESSAGE_COUNT / 2) * 2);
         store.reput_once().await;
 
         assert_eq!(
