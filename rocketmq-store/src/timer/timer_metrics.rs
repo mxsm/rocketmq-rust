@@ -25,6 +25,7 @@ use rocketmq_runtime::RuntimeResult;
 use rocketmq_store_local::timer::metrics::default_timer_dist;
 use rocketmq_store_local::timer::metrics::TimerMetric;
 use rocketmq_store_local::timer::metrics::TimerMetricsState;
+use rocketmq_store_local::timer::metrics::TimerStorageMetricsSnapshot;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -109,6 +110,23 @@ impl TimerMetrics {
 }
 
 impl TimerMetrics {
+    pub fn storage_runtime_metrics(snapshot: TimerStorageMetricsSnapshot) -> HashMap<String, u64> {
+        HashMap::from([
+            ("logicalWriteBytes".into(), snapshot.logical_write_bytes),
+            ("physicalWriteBytes".into(), snapshot.physical_write_bytes),
+            ("dirtyPages".into(), snapshot.dirty_pages),
+            ("fsyncCount".into(), snapshot.fsync_count),
+            ("fsyncLatencyNanos".into(), snapshot.fsync_latency_ns),
+            ("liveLogBytes".into(), snapshot.live_log_bytes),
+            ("garbageLogBytes".into(), snapshot.garbage_log_bytes),
+            ("segmentCount".into(), snapshot.segment_count),
+            ("hotSlotScannedRecords".into(), snapshot.hot_slot_scanned_records),
+            ("spillBytes".into(), snapshot.spill_bytes),
+            ("recoveryReplayRecords".into(), snapshot.recovery_replay_records),
+            ("wheelRepairPages".into(), snapshot.wheel_repair_pages),
+        ])
+    }
+
     pub fn new(config_path: Option<String>) -> Self {
         Self {
             config_path: Mutex::new(config_path),

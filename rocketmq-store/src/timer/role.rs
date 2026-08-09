@@ -106,7 +106,6 @@ impl TimerRoleState {
         self.active.load(Ordering::Acquire)
     }
 
-    #[cfg(test)]
     pub(crate) fn epoch(&self) -> u64 {
         self.epoch.load(Ordering::Acquire)
     }

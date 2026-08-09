@@ -15,6 +15,7 @@
 pub(crate) mod clock;
 pub(crate) mod role;
 pub mod slot;
+pub(crate) mod slot_drain;
 pub mod timer_checkpoint;
 pub mod timer_log;
 pub mod timer_message_store;
