@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![recursion_limit = "256"]
-
 //! Example demonstrating the use of SelectMessageQueueByRandom for load-balanced message delivery.
 //!
 //! This example shows how to use random queue selection to distribute messages
