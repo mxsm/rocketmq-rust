@@ -175,6 +175,10 @@ fn apply_to_snapshot(
             | "namesrvWorkloadAdmissionObserveOnly"
             | "namesrvWorkloadAdmissionTimeoutMillis"
             | "enableRegistrationDelta"
+            | "clusterTestRouteCachePositiveTtlMillis"
+            | "clusterTestRouteCacheNegativeTtlMillis"
+            | "clusterTestRouteCacheMaxEntries"
+            | "clusterTestRouteCacheMaxBytes"
             | "kvMutationQueueCapacity"
             | "kvMutationBatchSize"
             | "unRegisterBrokerBatchSize"
@@ -310,6 +314,26 @@ fn format_runtime_config(config_snapshot: &NameServerRuntimeConfig) -> RocketMQR
         &mut entries,
         "enableRegistrationDelta",
         name_server_config.enable_registration_delta,
+    );
+    push_config_entry(
+        &mut entries,
+        "clusterTestRouteCachePositiveTtlMillis",
+        name_server_config.cluster_test_route_cache_positive_ttl_millis,
+    );
+    push_config_entry(
+        &mut entries,
+        "clusterTestRouteCacheNegativeTtlMillis",
+        name_server_config.cluster_test_route_cache_negative_ttl_millis,
+    );
+    push_config_entry(
+        &mut entries,
+        "clusterTestRouteCacheMaxEntries",
+        name_server_config.cluster_test_route_cache_max_entries,
+    );
+    push_config_entry(
+        &mut entries,
+        "clusterTestRouteCacheMaxBytes",
+        name_server_config.cluster_test_route_cache_max_bytes,
     );
     push_config_entry(
         &mut entries,

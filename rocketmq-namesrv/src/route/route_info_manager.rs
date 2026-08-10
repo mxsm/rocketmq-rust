@@ -533,7 +533,7 @@ impl RouteInfoManager {
             }
         }
 
-        info!(
+        debug!(
             "Broker registered: cluster={}, broker={}, id={}, addr={}, first={}",
             cluster_name, broker_name, broker_id, broker_addr, register_first
         );

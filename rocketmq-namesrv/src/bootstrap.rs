@@ -1162,6 +1162,7 @@ impl Builder {
                     &name_server_config.product_env_name,
                     service_context.component("namesrv.cluster-test-route-lookup"),
                     transport_telemetry.clone(),
+                    &name_server_config,
                 )) as Arc<dyn ClusterTestRouteLookup>)
             })
         } else {
@@ -1557,6 +1558,26 @@ impl NameServerRuntimeInner {
             &mut entries,
             "enableRegistrationDelta",
             name_server_config.enable_registration_delta,
+        );
+        push_config_entry(
+            &mut entries,
+            "clusterTestRouteCachePositiveTtlMillis",
+            name_server_config.cluster_test_route_cache_positive_ttl_millis,
+        );
+        push_config_entry(
+            &mut entries,
+            "clusterTestRouteCacheNegativeTtlMillis",
+            name_server_config.cluster_test_route_cache_negative_ttl_millis,
+        );
+        push_config_entry(
+            &mut entries,
+            "clusterTestRouteCacheMaxEntries",
+            name_server_config.cluster_test_route_cache_max_entries,
+        );
+        push_config_entry(
+            &mut entries,
+            "clusterTestRouteCacheMaxBytes",
+            name_server_config.cluster_test_route_cache_max_bytes,
         );
         push_config_entry(
             &mut entries,

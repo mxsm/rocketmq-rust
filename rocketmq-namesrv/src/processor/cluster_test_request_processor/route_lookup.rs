@@ -39,6 +39,12 @@ use rocketmq_transport::api::v1::OneShotTransportClient;
 use rocketmq_transport::api::v1::RequestDeadline;
 use rocketmq_transport::api::v1::TransportTelemetry;
 
+use super::lookup_cache::ClusterTestLookupCache;
+use super::lookup_cache::LookupCacheConfig;
+use super::lookup_cache::LookupCacheKey;
+use super::lookup_cache::ResolvedRoute;
+use crate::NamesrvConfig;
+
 const ROUTE_LOOKUP_TIMEOUT: Duration = Duration::from_secs(3);
 const ROUTE_LOOKUP_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 const LOOKUP_OWNER: &str = "namesrv.cluster-test-route-lookup";
@@ -103,8 +109,16 @@ pub(crate) struct TransportClusterTestRouteLookup {
     resolver: Arc<dyn ClusterTestEndpointResolver>,
     transport: OneShotTransportClient,
     task_group: TaskGroup,
-    cached_endpoints: RwLock<Vec<SocketAddr>>,
+    cached_endpoints: RwLock<CachedEndpoints>,
+    endpoint_resolution: tokio::sync::Mutex<()>,
+    lookup_cache: ClusterTestLookupCache,
     request_timeout: Duration,
+}
+
+#[derive(Default)]
+struct CachedEndpoints {
+    generation: u64,
+    endpoints: Vec<SocketAddr>,
 }
 
 impl TransportClusterTestRouteLookup {
@@ -112,12 +126,14 @@ impl TransportClusterTestRouteLookup {
         product_env_name: &str,
         service_context: ChildServiceContext,
         telemetry: TransportTelemetry,
+        namesrv_config: &NamesrvConfig,
     ) -> Self {
-        Self::with_resolver(
+        Self::with_resolver_and_cache(
             service_context,
             Arc::new(ProductEnvironmentEndpointResolver::new(product_env_name)),
             ROUTE_LOOKUP_TIMEOUT,
             telemetry,
+            LookupCacheConfig::from_namesrv_config(namesrv_config),
         )
     }
 
@@ -126,6 +142,22 @@ impl TransportClusterTestRouteLookup {
         resolver: Arc<dyn ClusterTestEndpointResolver>,
         request_timeout: Duration,
         telemetry: TransportTelemetry,
+    ) -> Self {
+        Self::with_resolver_and_cache(
+            service_context,
+            resolver,
+            request_timeout,
+            telemetry,
+            LookupCacheConfig::default(),
+        )
+    }
+
+    fn with_resolver_and_cache(
+        service_context: ChildServiceContext,
+        resolver: Arc<dyn ClusterTestEndpointResolver>,
+        request_timeout: Duration,
+        telemetry: TransportTelemetry,
+        cache_config: LookupCacheConfig,
     ) -> Self {
         let task_group = service_context.task_group().clone();
         let transport = OneShotTransportClient::new(
@@ -137,7 +169,9 @@ impl TransportClusterTestRouteLookup {
             resolver,
             transport,
             task_group,
-            cached_endpoints: RwLock::new(Vec::new()),
+            cached_endpoints: RwLock::new(CachedEndpoints::default()),
+            endpoint_resolution: tokio::sync::Mutex::new(()),
+            lookup_cache: ClusterTestLookupCache::new(cache_config),
             request_timeout,
         }
     }
@@ -147,7 +181,23 @@ impl TransportClusterTestRouteLookup {
         topic: &CheetahString,
         deadline: RequestDeadline,
     ) -> RocketMQResult<Option<TopicRouteData>> {
-        let endpoints = self.resolve_endpoints(deadline).await?;
+        let (endpoints, endpoint_generation) = self.resolve_endpoints(deadline).await?;
+        let cache_key = LookupCacheKey::new(endpoint_generation, topic.clone());
+        self.lookup_cache
+            .get_or_resolve(cache_key, || async move {
+                self.lookup_endpoints_until(topic, endpoints, endpoint_generation, deadline)
+                    .await
+            })
+            .await
+    }
+
+    async fn lookup_endpoints_until(
+        &self,
+        topic: &CheetahString,
+        endpoints: Vec<SocketAddr>,
+        endpoint_generation: u64,
+        deadline: RequestDeadline,
+    ) -> RocketMQResult<ResolvedRoute> {
         let mut last_error = None;
 
         for endpoint in endpoints {
@@ -161,18 +211,30 @@ impl TransportClusterTestRouteLookup {
             }
         }
 
-        self.cached_endpoints.write().clear();
+        let mut cached = self.cached_endpoints.write();
+        if cached.generation == endpoint_generation {
+            cached.endpoints.clear();
+        }
         Err(last_error.unwrap_or_else(|| {
             RocketMQError::network_connection_failed(LOOKUP_OWNER, "no product-environment endpoint was reachable")
         }))
     }
 
-    async fn resolve_endpoints(&self, deadline: RequestDeadline) -> RocketMQResult<Vec<SocketAddr>> {
-        let cached = self.cached_endpoints.read().clone();
-        if !cached.is_empty() {
-            return Ok(cached);
+    async fn resolve_endpoints(&self, deadline: RequestDeadline) -> RocketMQResult<(Vec<SocketAddr>, u64)> {
+        {
+            let cached = self.cached_endpoints.read();
+            if !cached.endpoints.is_empty() {
+                return Ok((cached.endpoints.clone(), cached.generation));
+            }
         }
 
+        let _resolution = self.endpoint_resolution.lock().await;
+        {
+            let cached = self.cached_endpoints.read();
+            if !cached.endpoints.is_empty() {
+                return Ok((cached.endpoints.clone(), cached.generation));
+            }
+        }
         let resolved = self.resolver.resolve(deadline).await?;
         if resolved.is_empty() {
             return Err(RocketMQError::network_connection_failed(
@@ -180,8 +242,10 @@ impl TransportClusterTestRouteLookup {
                 "product environment resolved to an empty endpoint list",
             ));
         }
-        *self.cached_endpoints.write() = resolved.clone();
-        Ok(resolved)
+        let mut cached = self.cached_endpoints.write();
+        cached.generation = cached.generation.wrapping_add(1).max(1);
+        cached.endpoints = resolved.clone();
+        Ok((resolved, cached.generation))
     }
 }
 
@@ -230,16 +294,23 @@ fn route_request(topic: &CheetahString) -> RemotingCommand {
     request
 }
 
-fn decode_route_response(response: RemotingCommand) -> RocketMQResult<Option<TopicRouteData>> {
+fn decode_route_response(response: RemotingCommand) -> RocketMQResult<ResolvedRoute> {
     let code = response.code();
     match ResponseCode::from(code) {
         ResponseCode::Success => {
             let body = response.body().ok_or_else(|| {
                 RpcClientError::remote_error(code, "successful route response did not include a body")
             })?;
-            TopicRouteData::decode(body.as_ref()).map(Some)
+            let response_bytes = body.len();
+            TopicRouteData::decode(body.as_ref()).map(|route| ResolvedRoute {
+                route: Some(route),
+                response_bytes,
+            })
         }
-        ResponseCode::TopicNotExist => Ok(None),
+        ResponseCode::TopicNotExist => Ok(ResolvedRoute {
+            route: None,
+            response_bytes: response.body().map_or(0, bytes::Bytes::len),
+        }),
         _ => Err(RpcClientError::remote_error(
             code,
             response.remark().map_or("route lookup failed", CheetahString::as_str),

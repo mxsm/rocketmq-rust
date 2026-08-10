@@ -45,6 +45,9 @@ const MAX_EXPIRY_SAFETY_SCAN_INTERVAL_MILLIS: u64 = 3_600_000;
 const MAX_MIN_BROKER_NOTIFY_CONCURRENCY: u64 = 128;
 const MAX_KV_MUTATION_QUEUE_CAPACITY: u64 = 1_000_000;
 const MAX_KV_MUTATION_BATCH_SIZE: u64 = 1024;
+const MAX_CLUSTER_TEST_ROUTE_CACHE_TTL_MILLIS: u64 = 60_000;
+const MAX_CLUSTER_TEST_ROUTE_CACHE_ENTRIES: u64 = 1_000_000;
+const MAX_CLUSTER_TEST_ROUTE_CACHE_BYTES: u64 = 1024 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -106,6 +109,10 @@ pub(crate) enum NamesrvConfigKey {
     NamesrvWorkloadAdmissionObserveOnly,
     NamesrvWorkloadAdmissionTimeoutMillis,
     EnableRegistrationDelta,
+    ClusterTestRouteCachePositiveTtlMillis,
+    ClusterTestRouteCacheNegativeTtlMillis,
+    ClusterTestRouteCacheMaxEntries,
+    ClusterTestRouteCacheMaxBytes,
     KvMutationQueueCapacity,
     KvMutationBatchSize,
     UnregisterBrokerBatchSize,
@@ -153,6 +160,10 @@ impl NamesrvConfigKey {
             "namesrvWorkloadAdmissionObserveOnly" => Self::NamesrvWorkloadAdmissionObserveOnly,
             "namesrvWorkloadAdmissionTimeoutMillis" => Self::NamesrvWorkloadAdmissionTimeoutMillis,
             "enableRegistrationDelta" => Self::EnableRegistrationDelta,
+            "clusterTestRouteCachePositiveTtlMillis" => Self::ClusterTestRouteCachePositiveTtlMillis,
+            "clusterTestRouteCacheNegativeTtlMillis" => Self::ClusterTestRouteCacheNegativeTtlMillis,
+            "clusterTestRouteCacheMaxEntries" => Self::ClusterTestRouteCacheMaxEntries,
+            "clusterTestRouteCacheMaxBytes" => Self::ClusterTestRouteCacheMaxBytes,
             "kvMutationQueueCapacity" => Self::KvMutationQueueCapacity,
             "kvMutationBatchSize" => Self::KvMutationBatchSize,
             "unRegisterBrokerBatchSize" => Self::UnregisterBrokerBatchSize,
@@ -213,6 +224,10 @@ impl NamesrvConfigKey {
             | Self::NamesrvRouteResponseCacheShards => ConfigMutability::RestartRequired,
             Self::NamesrvWorkloadAdmissionTimeoutMillis
             | Self::EnableRegistrationDelta
+            | Self::ClusterTestRouteCachePositiveTtlMillis
+            | Self::ClusterTestRouteCacheNegativeTtlMillis
+            | Self::ClusterTestRouteCacheMaxEntries
+            | Self::ClusterTestRouteCacheMaxBytes
             | Self::KvMutationQueueCapacity
             | Self::KvMutationBatchSize
             | Self::UnregisterBrokerBatchSize
@@ -292,6 +307,16 @@ pub(crate) fn validate_namesrv_property(key: NamesrvConfigKey, value: &str) -> R
         NamesrvConfigKey::KvMutationBatchSize => {
             parse_bounded_u64(key, value, 1, MAX_KV_MUTATION_BATCH_SIZE)?;
         }
+        NamesrvConfigKey::ClusterTestRouteCachePositiveTtlMillis
+        | NamesrvConfigKey::ClusterTestRouteCacheNegativeTtlMillis => {
+            parse_bounded_u64(key, value, 1, MAX_CLUSTER_TEST_ROUTE_CACHE_TTL_MILLIS)?;
+        }
+        NamesrvConfigKey::ClusterTestRouteCacheMaxEntries => {
+            parse_bounded_u64(key, value, 1, MAX_CLUSTER_TEST_ROUTE_CACHE_ENTRIES)?;
+        }
+        NamesrvConfigKey::ClusterTestRouteCacheMaxBytes => {
+            parse_bounded_u64(key, value, 1, MAX_CLUSTER_TEST_ROUTE_CACHE_BYTES)?;
+        }
         NamesrvConfigKey::UnregisterBrokerBatchTimeMillis => {
             parse_bounded_u64(key, value, 1, MAX_UNREGISTER_BATCH_TIME_MILLIS)?;
         }
@@ -366,6 +391,10 @@ impl NamesrvConfigKey {
             Self::NamesrvWorkloadAdmissionObserveOnly => "namesrvWorkloadAdmissionObserveOnly",
             Self::NamesrvWorkloadAdmissionTimeoutMillis => "namesrvWorkloadAdmissionTimeoutMillis",
             Self::EnableRegistrationDelta => "enableRegistrationDelta",
+            Self::ClusterTestRouteCachePositiveTtlMillis => "clusterTestRouteCachePositiveTtlMillis",
+            Self::ClusterTestRouteCacheNegativeTtlMillis => "clusterTestRouteCacheNegativeTtlMillis",
+            Self::ClusterTestRouteCacheMaxEntries => "clusterTestRouteCacheMaxEntries",
+            Self::ClusterTestRouteCacheMaxBytes => "clusterTestRouteCacheMaxBytes",
             Self::KvMutationQueueCapacity => "kvMutationQueueCapacity",
             Self::KvMutationBatchSize => "kvMutationBatchSize",
             Self::UnregisterBrokerBatchSize => "unRegisterBrokerBatchSize",
@@ -538,6 +567,22 @@ mod defaults {
         100
     }
 
+    pub fn cluster_test_route_cache_positive_ttl_millis() -> u64 {
+        1_000
+    }
+
+    pub fn cluster_test_route_cache_negative_ttl_millis() -> u64 {
+        250
+    }
+
+    pub fn cluster_test_route_cache_max_entries() -> u64 {
+        1_000
+    }
+
+    pub fn cluster_test_route_cache_max_bytes() -> u64 {
+        16 * 1024 * 1024
+    }
+
     pub fn config_black_list() -> String {
         "configBlackList;configStorePath;kvConfigPath".to_string()
     }
@@ -618,6 +663,30 @@ pub struct NamesrvConfig {
 
     #[serde(alias = "enableRegistrationDelta", default)]
     pub enable_registration_delta: bool,
+
+    #[serde(
+        alias = "clusterTestRouteCachePositiveTtlMillis",
+        default = "defaults::cluster_test_route_cache_positive_ttl_millis"
+    )]
+    pub cluster_test_route_cache_positive_ttl_millis: u64,
+
+    #[serde(
+        alias = "clusterTestRouteCacheNegativeTtlMillis",
+        default = "defaults::cluster_test_route_cache_negative_ttl_millis"
+    )]
+    pub cluster_test_route_cache_negative_ttl_millis: u64,
+
+    #[serde(
+        alias = "clusterTestRouteCacheMaxEntries",
+        default = "defaults::cluster_test_route_cache_max_entries"
+    )]
+    pub cluster_test_route_cache_max_entries: u64,
+
+    #[serde(
+        alias = "clusterTestRouteCacheMaxBytes",
+        default = "defaults::cluster_test_route_cache_max_bytes"
+    )]
+    pub cluster_test_route_cache_max_bytes: u64,
 
     #[serde(alias = "kvMutationQueueCapacity", default = "defaults::kv_mutation_queue_capacity")]
     pub kv_mutation_queue_capacity: usize,
@@ -750,6 +819,10 @@ impl Default for NamesrvConfig {
             namesrv_workload_admission_observe_only: true,
             namesrv_workload_admission_timeout_millis: defaults::namesrv_workload_admission_timeout_millis(),
             enable_registration_delta: false,
+            cluster_test_route_cache_positive_ttl_millis: defaults::cluster_test_route_cache_positive_ttl_millis(),
+            cluster_test_route_cache_negative_ttl_millis: defaults::cluster_test_route_cache_negative_ttl_millis(),
+            cluster_test_route_cache_max_entries: defaults::cluster_test_route_cache_max_entries(),
+            cluster_test_route_cache_max_bytes: defaults::cluster_test_route_cache_max_bytes(),
             kv_mutation_queue_capacity: defaults::kv_mutation_queue_capacity(),
             kv_mutation_batch_size: defaults::kv_mutation_batch_size(),
             unregister_broker_batch_size: defaults::unregister_broker_batch_size(),
@@ -850,6 +923,22 @@ impl NamesrvConfig {
         json_map.insert(
             "enableRegistrationDelta".to_string(),
             Value::String(self.enable_registration_delta.to_string()),
+        );
+        json_map.insert(
+            "clusterTestRouteCachePositiveTtlMillis".to_string(),
+            Value::String(self.cluster_test_route_cache_positive_ttl_millis.to_string()),
+        );
+        json_map.insert(
+            "clusterTestRouteCacheNegativeTtlMillis".to_string(),
+            Value::String(self.cluster_test_route_cache_negative_ttl_millis.to_string()),
+        );
+        json_map.insert(
+            "clusterTestRouteCacheMaxEntries".to_string(),
+            Value::String(self.cluster_test_route_cache_max_entries.to_string()),
+        );
+        json_map.insert(
+            "clusterTestRouteCacheMaxBytes".to_string(),
+            Value::String(self.cluster_test_route_cache_max_bytes.to_string()),
         );
         json_map.insert(
             "kvMutationQueueCapacity".to_string(),
@@ -1065,6 +1154,22 @@ impl NamesrvConfig {
                     self.enable_registration_delta =
                         value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
+                "clusterTestRouteCachePositiveTtlMillis" => {
+                    self.cluster_test_route_cache_positive_ttl_millis =
+                        value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
+                }
+                "clusterTestRouteCacheNegativeTtlMillis" => {
+                    self.cluster_test_route_cache_negative_ttl_millis =
+                        value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
+                }
+                "clusterTestRouteCacheMaxEntries" => {
+                    self.cluster_test_route_cache_max_entries =
+                        value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
+                }
+                "clusterTestRouteCacheMaxBytes" => {
+                    self.cluster_test_route_cache_max_bytes =
+                        value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
+                }
                 "kvMutationQueueCapacity" => {
                     self.kv_mutation_queue_capacity =
                         value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
@@ -1221,6 +1326,22 @@ impl NamesrvConfig {
             (
                 NamesrvConfigKey::NamesrvWorkloadAdmissionTimeoutMillis,
                 self.namesrv_workload_admission_timeout_millis.to_string(),
+            ),
+            (
+                NamesrvConfigKey::ClusterTestRouteCachePositiveTtlMillis,
+                self.cluster_test_route_cache_positive_ttl_millis.to_string(),
+            ),
+            (
+                NamesrvConfigKey::ClusterTestRouteCacheNegativeTtlMillis,
+                self.cluster_test_route_cache_negative_ttl_millis.to_string(),
+            ),
+            (
+                NamesrvConfigKey::ClusterTestRouteCacheMaxEntries,
+                self.cluster_test_route_cache_max_entries.to_string(),
+            ),
+            (
+                NamesrvConfigKey::ClusterTestRouteCacheMaxBytes,
+                self.cluster_test_route_cache_max_bytes.to_string(),
             ),
             (
                 NamesrvConfigKey::KvMutationQueueCapacity,
@@ -1417,6 +1538,10 @@ mod tests {
         assert!(config.namesrv_workload_admission_observe_only);
         assert_eq!(config.namesrv_workload_admission_timeout_millis, 100);
         assert!(!config.enable_registration_delta);
+        assert_eq!(config.cluster_test_route_cache_positive_ttl_millis, 1_000);
+        assert_eq!(config.cluster_test_route_cache_negative_ttl_millis, 250);
+        assert_eq!(config.cluster_test_route_cache_max_entries, 1_000);
+        assert_eq!(config.cluster_test_route_cache_max_bytes, 16 * 1024 * 1024);
         assert_eq!(config.kv_mutation_queue_capacity, 1024);
         assert_eq!(config.kv_mutation_batch_size, 100);
         assert_eq!(config.unregister_broker_batch_size, 100);
@@ -1741,6 +1866,10 @@ productEnvName = "useRouteInfoManagerV2"
             (NamesrvConfigKey::KvMutationQueueCapacity, "1000001"),
             (NamesrvConfigKey::KvMutationBatchSize, "0"),
             (NamesrvConfigKey::KvMutationBatchSize, "1025"),
+            (NamesrvConfigKey::ClusterTestRouteCachePositiveTtlMillis, "0"),
+            (NamesrvConfigKey::ClusterTestRouteCacheNegativeTtlMillis, "60001"),
+            (NamesrvConfigKey::ClusterTestRouteCacheMaxEntries, "1000001"),
+            (NamesrvConfigKey::ClusterTestRouteCacheMaxBytes, "1073741825"),
         ] {
             assert!(validate_namesrv_property(key, value).is_err(), "{key:?}={value}");
             assert_eq!(key.mutability(), ConfigMutability::RestartRequired);

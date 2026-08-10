@@ -92,6 +92,13 @@ unRegisterBrokerQueueCapacity = 5000
 # digests remain aligned.
 enableRegistrationDelta = false
 
+# Cluster-test external route protection. Entries are scoped by resolved
+# endpoint generation; positive and negative results use separate short TTLs.
+clusterTestRouteCachePositiveTtlMillis = 1000
+clusterTestRouteCacheNegativeTtlMillis = 250
+clusterTestRouteCacheMaxEntries = 1000
+clusterTestRouteCacheMaxBytes = 16777216
+
 # Bounded durable-before-publish KV mutation service. Both settings are
 # restart-required. Accepted commands are additionally capped at 16 MiB.
 kvMutationQueueCapacity = 1024

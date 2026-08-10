@@ -33,6 +33,7 @@ use crate::route::zone_filter::TYPED_ZONE_ROUTE_ENABLED;
 use crate::route::zone_filter::TYPED_ZONE_ROUTE_MARKER;
 use crate::route::zone_filter::TYPED_ZONE_ROUTE_SHADOW;
 
+mod lookup_cache;
 mod route_lookup;
 
 pub(crate) use route_lookup::ClusterTestRouteLookup;

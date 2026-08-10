@@ -61,7 +61,7 @@ use rocketmq_transport::api::v1::request_code_not_supported_with_remark;
 use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use rocketmq_transport::api::v1::RequestProcessor;
-use tracing::info;
+use tracing::debug;
 use tracing::warn;
 
 use crate::bootstrap::NameServerRuntimeHandle;
@@ -93,7 +93,7 @@ impl DefaultRequestProcessor {
             rocketmq_error::RocketMQError::not_initialized("NameServer runtime is no longer available")
         })?;
         let request_code = RequestCode::from(request.code());
-        info!(
+        debug!(
             "Name server DefaultRequestProcessor Received request code: {:?}",
             request_code
         );
