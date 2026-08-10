@@ -312,7 +312,7 @@ impl TimerIndex for SegmentedTimelineIndex {
                 Ok(entries.len())
             })
             .await
-            .map_err(|error| TimerEngineError::Storage(std::io::Error::other(error.to_string())))?
+            .map_err(|error| TimerEngineError::Storage(std::io::Error::other(error)))?
     }
 
     async fn scan_due(
@@ -374,7 +374,7 @@ impl TimerIndex for SegmentedTimelineIndex {
                 Ok(TimerIndexPage { records, continuation })
             })
             .await
-            .map_err(|error| TimerEngineError::Storage(std::io::Error::other(error.to_string())))?
+            .map_err(|error| TimerEngineError::Storage(std::io::Error::other(error)))?
     }
 
     async fn set_state(
@@ -395,7 +395,7 @@ impl TimerIndex for SegmentedTimelineIndex {
                 state_index.put(timer_id, generation, &current).map_err(storage_error)
             })
             .await
-            .map_err(|error| TimerEngineError::Storage(std::io::Error::other(error.to_string())))?
+            .map_err(|error| TimerEngineError::Storage(std::io::Error::other(error)))?
     }
 
     async fn checkpoint(&self, checkpoint: TimerIndexCheckpoint) -> Result<(), TimerEngineError> {
@@ -421,7 +421,7 @@ impl TimerIndex for SegmentedTimelineIndex {
                     .map_err(storage_error)
             })
             .await
-            .map_err(|error| TimerEngineError::Storage(std::io::Error::other(error.to_string())))?
+            .map_err(|error| TimerEngineError::Storage(std::io::Error::other(error)))?
     }
 
     async fn load_checkpoint(&self) -> Result<Option<TimerIndexCheckpoint>, TimerEngineError> {
@@ -439,7 +439,7 @@ impl TimerIndex for SegmentedTimelineIndex {
                     .map_err(storage_error)
             })
             .await
-            .map_err(|error| TimerEngineError::Storage(std::io::Error::other(error.to_string())))?
+            .map_err(|error| TimerEngineError::Storage(std::io::Error::other(error)))?
     }
 
     async fn pin_snapshot(&self, gc_fence: TimerTimelineCursor) -> Result<TimerSnapshotPin, TimerEngineError> {
@@ -499,7 +499,7 @@ impl TimerIndex for SegmentedTimelineIndex {
                     .count())
             })
             .await
-            .map_err(|error| TimerEngineError::Storage(std::io::Error::other(error.to_string())))?
+            .map_err(|error| TimerEngineError::Storage(std::io::Error::other(error)))?
     }
 }
 
@@ -650,15 +650,15 @@ const fn map_state(state: TimerRecordState) -> TimelineState {
 }
 
 fn storage_error(error: rocketmq_error::RocketMQError) -> TimerEngineError {
-    TimerEngineError::Storage(std::io::Error::other(error.to_string()))
+    TimerEngineError::Storage(std::io::Error::other(error))
 }
 
-fn local_error(error: impl std::fmt::Display) -> TimerEngineError {
-    TimerEngineError::Storage(std::io::Error::other(error.to_string()))
+fn local_error(error: rocketmq_store_local::timer::segmented_timeline::SegmentedTimelineError) -> TimerEngineError {
+    TimerEngineError::Storage(std::io::Error::other(error))
 }
 
 fn commit_error(error: SegmentedCommitError) -> TimerEngineError {
-    TimerEngineError::Storage(std::io::Error::other(error.to_string()))
+    TimerEngineError::Storage(std::io::Error::other(error))
 }
 
 /// Native/overlay commit or recovery failure.
@@ -674,4 +674,31 @@ pub(crate) enum SegmentedCommitError {
     EmptyBatch,
     #[error("injected segmented commit crash at {0:?}")]
     InjectedCrash(SegmentedCommitCrashPoint),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_storage_source<T>(error: TimerEngineError)
+    where
+        T: std::error::Error + Send + Sync + 'static,
+    {
+        let TimerEngineError::Storage(error) = error else {
+            panic!("expected timer storage error");
+        };
+        assert!(error.get_ref().is_some_and(|source| source.is::<T>()));
+    }
+
+    #[test]
+    fn local_error_preserves_segmented_timeline_error_as_source() {
+        assert_storage_source::<rocketmq_store_local::timer::segmented_timeline::SegmentedTimelineError>(local_error(
+            rocketmq_store_local::timer::segmented_timeline::SegmentedTimelineError::EmptyBatch,
+        ));
+    }
+
+    #[test]
+    fn commit_error_preserves_segmented_commit_error_as_source() {
+        assert_storage_source::<SegmentedCommitError>(commit_error(SegmentedCommitError::EmptyBatch));
+    }
 }
