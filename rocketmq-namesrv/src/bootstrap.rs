@@ -646,13 +646,19 @@ impl NameServerRuntime {
             .subscribe();
         let server_task_group = self.inner.component_task_group("namesrv.server");
         let (server_report_tx, server_report_rx) = oneshot::channel();
+        let (server_startup_tx, server_startup_rx) = oneshot::channel();
         server_task_group
             .spawn_service("namesrv.server", async move {
                 debug!("Server task started");
                 let report = server
-                    .run_with_shutdown_report(request_processor, channel_event_listener, async move {
-                        signals::wait(&mut server_shutdown_rx).await;
-                    })
+                    .run_with_shutdown_report_and_startup(
+                        request_processor,
+                        channel_event_listener,
+                        async move {
+                            signals::wait(&mut server_shutdown_rx).await;
+                        },
+                        server_startup_tx,
+                    )
                     .await;
                 if let Some(report) = report.as_ref() {
                     report.log_if_unhealthy();
@@ -664,14 +670,17 @@ impl NameServerRuntime {
         self.server_task_group = Some(server_task_group);
         self.server_report_rx = Some(server_report_rx);
 
+        let bound_address = server_startup_rx
+            .await
+            .map_err(|error| namesrv_startup_failed("await listener startup acknowledgement", error))??;
+
         // Setup remoting client with name server address
         let local_address = NetworkUtil::get_local_address().unwrap_or_else(|| {
             warn!("Failed to determine local address, using 127.0.0.1");
             "127.0.0.1".to_string()
         });
 
-        let namesrv =
-            CheetahString::from_string(format!("{}:{}", local_address, self.inner.server_config().listen_port));
+        let namesrv = CheetahString::from_string(format!("{}:{}", local_address, bound_address.port()));
 
         debug!("NameServer address: {}", namesrv);
 
@@ -1627,6 +1636,7 @@ mod tests {
     use rocketmq_transport::api::v1::ConnectionState;
     use rocketmq_transport::api::v1::RequestProcessor;
     use rocketmq_transport::api::v1::ServerConfig;
+    use rocketmq_transport::api::v1::TlsMode;
     use rocketmq_transport::test_support::LocalRequestHarness;
     use tokio::net::TcpStream as TokioTcpStream;
     use tokio::sync::oneshot;
@@ -2065,6 +2075,60 @@ mod tests {
             .local_addr()
             .expect("reserved listener should expose a local addr")
             .port()
+    }
+
+    #[tokio::test]
+    async fn occupied_listener_fails_startup_before_running() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("test should reserve a listener");
+        let port = listener
+            .local_addr()
+            .expect("listener should expose its address")
+            .port();
+        let (config, _root) = isolated_namesrv_config(NamesrvConfig::default());
+        let server_config = ServerConfig {
+            bind_address: "127.0.0.1".to_string(),
+            listen_port: u32::from(port),
+            ..ServerConfig::default()
+        };
+        let bootstrap = Builder::new(test_service_context(), TelemetryHandle::noop())
+            .set_name_server_config(config)
+            .set_server_config(server_config)
+            .build();
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            bootstrap.boot_with_shutdown_report(std::future::pending()),
+        )
+        .await
+        .expect("listener failure must be reported instead of entering the main loop");
+
+        assert!(result.is_err());
+        drop(listener);
+    }
+
+    #[tokio::test]
+    async fn invalid_tls_material_fails_startup_before_running() {
+        let (config, root) = isolated_namesrv_config(NamesrvConfig::default());
+        let mut server_config = namesrv_server_config();
+        server_config.tls_config.enable = true;
+        server_config.tls_config.server.mode = TlsMode::Enforcing;
+        server_config.tls_config.server.key_path =
+            Some(root.path().join("missing-key.pem").to_string_lossy().into_owned());
+        server_config.tls_config.server.cert_path =
+            Some(root.path().join("missing-cert.pem").to_string_lossy().into_owned());
+        let bootstrap = Builder::new(test_service_context(), TelemetryHandle::noop())
+            .set_name_server_config(config)
+            .set_server_config(server_config)
+            .build();
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            bootstrap.boot_with_shutdown_report(std::future::pending()),
+        )
+        .await
+        .expect("TLS initialization failure must be reported instead of entering the main loop");
+
+        assert!(result.is_err());
     }
 
     fn namesrv_server_config() -> ServerConfig {
