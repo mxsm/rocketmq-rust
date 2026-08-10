@@ -74,6 +74,7 @@ use tracing::info;
 use tracing::instrument;
 use tracing::warn;
 
+use crate::processor::workload_admission::NameServerWorkloadAdmission;
 use crate::processor::ClientRequestProcessor;
 use crate::processor::ClusterTestRequestProcessor;
 use crate::processor::ClusterTestRouteLookup;
@@ -1009,12 +1010,14 @@ impl NameServerRuntime {
             )))
         };
         let default_request_processor =
-            crate::processor::default_request_processor::DefaultRequestProcessor::new(runtime_handle);
+            crate::processor::default_request_processor::DefaultRequestProcessor::new(runtime_handle.clone());
 
         let mut name_server_request_processor = NameServerRequestProcessor::new_with_in_flight_tracker(
             self.inner.in_flight_request_tracker(),
             self.inner.namesrv_metrics(),
         )
+        .with_runtime_handle(runtime_handle)
+        .with_workload_admission(Arc::clone(&self.inner.workload_admission))
         .with_auth_runtime(self.inner.auth_runtime());
 
         // Register topic route query processor
@@ -1182,6 +1185,7 @@ impl Builder {
         // return that typed error instead of panicking in `mpsc::channel`.
         let unregister_broker_queue_capacity = name_server_config.unregister_broker_queue_capacity().unwrap_or(1);
         let route_response_cache = Arc::new(RouteResponseCache::from_namesrv_config(&name_server_config));
+        let workload_admission = Arc::new(NameServerWorkloadAdmission::from_namesrv_config(&name_server_config));
         let initial_config = Arc::new(NameServerRuntimeConfig {
             name_server_config: Arc::new(name_server_config),
             tokio_client_config: Arc::new(tokio_client_config),
@@ -1209,6 +1213,7 @@ impl Builder {
                 auth_runtime: OnceLock::new(),
                 route_info_manager: Arc::new(route_info_manager),
                 route_response_cache: Arc::clone(&route_response_cache),
+                workload_admission: Arc::clone(&workload_admission),
                 kvconfig_manager: Arc::new(KVConfigManager::new(runtime_handle.clone(), metadata_io.clone())),
                 remoting_client,
                 broker_housekeeping_service: Arc::new(BrokerHousekeepingService::new(runtime_handle)),
@@ -1256,6 +1261,7 @@ pub(crate) struct NameServerRuntimeInner {
     auth_runtime: OnceLock<Arc<AuthRuntime>>,
     route_info_manager: Arc<RouteInfoManager>,
     route_response_cache: Arc<RouteResponseCache>,
+    workload_admission: Arc<NameServerWorkloadAdmission>,
     kvconfig_manager: Arc<KVConfigManager>,
     remoting_client: Arc<RemotingClient>,
     broker_housekeeping_service: Arc<BrokerHousekeepingService>,

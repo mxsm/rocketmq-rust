@@ -33,12 +33,17 @@ pub use self::cluster_test_request_processor::ClusterTestRequestProcessor;
 pub(crate) use self::cluster_test_request_processor::ClusterTestRouteLookup;
 pub(crate) use self::cluster_test_request_processor::TransportClusterTestRouteLookup;
 use crate::bootstrap::InFlightRequestTracker;
+use crate::bootstrap::NameServerRuntimeHandle;
 use crate::processor::default_request_processor::DefaultRequestProcessor;
+use crate::processor::workload_admission::NameServerWorkloadAdmission;
+use crate::processor::workload_admission::WorkloadAdmissionClass;
 use crate::security::classify_namesrv_request;
 
 pub(crate) mod client_request_processor;
 mod cluster_test_request_processor;
 pub mod default_request_processor;
+#[doc(hidden)]
+pub mod workload_admission;
 
 const NAMESPACE_ORDER_TOPIC_CONFIG: &str = "ORDER_TOPIC_CONFIG";
 
@@ -92,6 +97,8 @@ pub struct NameServerRequestProcessor {
     default_request_processor: Option<NameServerRequestProcessorWrapper>,
     in_flight_requests: Option<Arc<InFlightRequestTracker>>,
     auth_runtime: Option<Arc<AuthRuntime>>,
+    runtime_handle: Option<NameServerRuntimeHandle>,
+    workload_admission: Option<Arc<NameServerWorkloadAdmission>>,
     metrics: NameServerMetrics,
 }
 
@@ -102,6 +109,8 @@ impl NameServerRequestProcessor {
             default_request_processor: None,
             in_flight_requests: None,
             auth_runtime: None,
+            runtime_handle: None,
+            workload_admission: None,
             metrics: NameServerMetrics::noop(),
         }
     }
@@ -127,6 +136,16 @@ impl NameServerRequestProcessor {
 
     pub(crate) fn with_auth_runtime(mut self, auth_runtime: Option<Arc<AuthRuntime>>) -> Self {
         self.auth_runtime = auth_runtime;
+        self
+    }
+
+    pub(crate) fn with_runtime_handle(mut self, runtime_handle: NameServerRuntimeHandle) -> Self {
+        self.runtime_handle = Some(runtime_handle);
+        self
+    }
+
+    pub(crate) fn with_workload_admission(mut self, admission: Arc<NameServerWorkloadAdmission>) -> Self {
+        self.workload_admission = Some(admission);
         self
     }
 }
@@ -170,6 +189,32 @@ impl RequestProcessor for NameServerRequestProcessor {
                 )));
             }
         }
+        let admission_class = WorkloadAdmissionClass::from(request_class);
+        let admission_config = self
+            .runtime_handle
+            .as_ref()
+            .map(NameServerRuntimeHandle::name_server_config);
+        let _admission_lease = if let (Some(admission), Some(config)) = (&self.workload_admission, admission_config) {
+            if !config.namesrv_workload_admission_enable {
+                None
+            } else if config.namesrv_workload_admission_observe_only {
+                admission.try_observe(admission_class)
+            } else {
+                match admission.acquire(admission_class).await {
+                    Ok(lease) => Some(lease),
+                    Err(rejection) => {
+                        tracing::warn!(
+                            request_class = admission_class.as_str(),
+                            reason = rejection.as_str(),
+                            "NameServer workload admission rejected request"
+                        );
+                        return Ok(Some(workload_admission_rejection_response(rejection, request.opaque())));
+                    }
+                }
+            }
+        } else {
+            None
+        };
         let route_request_started = (request.code() == RequestCode::GetRouteinfoByTopic as i32).then(Instant::now);
         let response = match self.processor_table.get(request.code_ref()).cloned() {
             None => match self.default_request_processor.clone() {
@@ -210,6 +255,18 @@ impl RequestProcessor for NameServerRequestProcessor {
     }
 }
 
+fn workload_admission_rejection_response(
+    rejection: workload_admission::WorkloadAdmissionRejection,
+    opaque: i32,
+) -> RemotingCommand {
+    RemotingCommand::create_response_command_with_code(rocketmq_protocol::code::response_code::ResponseCode::SystemBusy)
+        .set_remark(format!(
+            "NameServer workload admission rejected request: {}",
+            rejection.as_str()
+        ))
+        .set_opaque(opaque)
+}
+
 #[cfg(test)]
 mod tests {
     use std::net::SocketAddr;
@@ -231,6 +288,19 @@ mod tests {
         let cloned = processor.clone();
 
         assert!(Arc::ptr_eq(&processor.processor_table, &cloned.processor_table));
+    }
+
+    #[test]
+    fn admission_rejection_is_stable_system_busy_and_preserves_opaque() {
+        let response =
+            workload_admission_rejection_response(workload_admission::WorkloadAdmissionRejection::QueueFull, 9191);
+
+        assert_eq!(response.code(), ResponseCode::SystemBusy as i32);
+        assert_eq!(response.opaque(), 9191);
+        assert_eq!(
+            response.remark().map(cheetah_string::CheetahString::as_str),
+            Some("NameServer workload admission rejected request: queue-full")
+        );
     }
 
     #[tokio::test]

@@ -37,6 +37,7 @@ const MAX_ROUTE_FRESHNESS_SAMPLE_INTERVAL: u64 = 1_000_000;
 const MAX_ROUTE_RESPONSE_CACHE_BYTES: u64 = 1_073_741_824;
 const MAX_ROUTE_RESPONSE_CACHE_ENTRIES: u64 = 1_000_000;
 const MAX_ROUTE_RESPONSE_CACHE_SHARDS: u64 = 256;
+const MAX_WORKLOAD_ADMISSION_TIMEOUT_MILLIS: u64 = 60_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ConfigMutability {
@@ -61,6 +62,9 @@ pub(crate) enum NamesrvConfigKey {
     NamesrvRouteResponseCacheMaxEntries,
     NamesrvRouteResponseCacheMaxSingleResponseBytes,
     NamesrvRouteResponseCacheShards,
+    NamesrvWorkloadAdmissionEnable,
+    NamesrvWorkloadAdmissionObserveOnly,
+    NamesrvWorkloadAdmissionTimeoutMillis,
     ReturnOrderTopicConfigToBroker,
     ClientRequestThreadPoolNums,
     DefaultThreadPoolNums,
@@ -97,6 +101,9 @@ impl NamesrvConfigKey {
             "namesrvRouteResponseCacheMaxEntries" => Self::NamesrvRouteResponseCacheMaxEntries,
             "namesrvRouteResponseCacheMaxSingleResponseBytes" => Self::NamesrvRouteResponseCacheMaxSingleResponseBytes,
             "namesrvRouteResponseCacheShards" => Self::NamesrvRouteResponseCacheShards,
+            "namesrvWorkloadAdmissionEnable" => Self::NamesrvWorkloadAdmissionEnable,
+            "namesrvWorkloadAdmissionObserveOnly" => Self::NamesrvWorkloadAdmissionObserveOnly,
+            "namesrvWorkloadAdmissionTimeoutMillis" => Self::NamesrvWorkloadAdmissionTimeoutMillis,
             "returnOrderTopicConfigToBroker" => Self::ReturnOrderTopicConfigToBroker,
             "clientRequestThreadPoolNums" => Self::ClientRequestThreadPoolNums,
             "defaultThreadPoolNums" => Self::DefaultThreadPoolNums,
@@ -125,6 +132,8 @@ impl NamesrvConfigKey {
             | Self::NamesrvTypedZoneRouteEnable
             | Self::NamesrvTypedZoneRouteShadow
             | Self::NamesrvRouteResponseCacheEnable
+            | Self::NamesrvWorkloadAdmissionEnable
+            | Self::NamesrvWorkloadAdmissionObserveOnly
             | Self::ReturnOrderTopicConfigToBroker
             | Self::SupportActingMaster
             | Self::EnableAllTopicList
@@ -146,6 +155,7 @@ impl NamesrvConfigKey {
             | Self::NamesrvRouteResponseCacheMaxEntries
             | Self::NamesrvRouteResponseCacheMaxSingleResponseBytes
             | Self::NamesrvRouteResponseCacheShards => ConfigMutability::RestartRequired,
+            Self::NamesrvWorkloadAdmissionTimeoutMillis => ConfigMutability::RestartRequired,
             Self::RocketmqHome
             | Self::KvConfigPath
             | Self::ConfigStorePath
@@ -157,13 +167,17 @@ impl NamesrvConfigKey {
 
 pub(crate) fn validate_namesrv_property(key: NamesrvConfigKey, value: &str) -> RocketMQResult<()> {
     match key {
-        NamesrvConfigKey::ClientRequestThreadPoolNums | NamesrvConfigKey::DefaultThreadPoolNums => {
+        NamesrvConfigKey::ClientRequestThreadPoolNums => {
             parse_bounded_i32(key, value, 1, MAX_THREAD_COUNT)?;
         }
-        NamesrvConfigKey::ClientRequestThreadPoolQueueCapacity
-        | NamesrvConfigKey::DefaultThreadPoolQueueCapacity
-        | NamesrvConfigKey::UnregisterBrokerQueueCapacity => {
+        NamesrvConfigKey::DefaultThreadPoolNums => {
+            parse_bounded_i32(key, value, 2, MAX_THREAD_COUNT)?;
+        }
+        NamesrvConfigKey::ClientRequestThreadPoolQueueCapacity | NamesrvConfigKey::UnregisterBrokerQueueCapacity => {
             parse_bounded_i32(key, value, 1, MAX_QUEUE_CAPACITY)?;
+        }
+        NamesrvConfigKey::DefaultThreadPoolQueueCapacity => {
+            parse_bounded_i32(key, value, 2, MAX_QUEUE_CAPACITY)?;
         }
         NamesrvConfigKey::ScanNotActiveBrokerInterval => {
             let value = value
@@ -202,11 +216,16 @@ pub(crate) fn validate_namesrv_property(key: NamesrvConfigKey, value: &str) -> R
         NamesrvConfigKey::NamesrvRouteResponseCacheShards => {
             parse_bounded_u64(key, value, 1, MAX_ROUTE_RESPONSE_CACHE_SHARDS)?;
         }
+        NamesrvConfigKey::NamesrvWorkloadAdmissionTimeoutMillis => {
+            parse_bounded_u64(key, value, 1, MAX_WORKLOAD_ADMISSION_TIMEOUT_MILLIS)?;
+        }
         NamesrvConfigKey::ClusterTest
         | NamesrvConfigKey::OrderMessageEnable
         | NamesrvConfigKey::NamesrvTypedZoneRouteEnable
         | NamesrvConfigKey::NamesrvTypedZoneRouteShadow
         | NamesrvConfigKey::NamesrvRouteResponseCacheEnable
+        | NamesrvConfigKey::NamesrvWorkloadAdmissionEnable
+        | NamesrvConfigKey::NamesrvWorkloadAdmissionObserveOnly
         | NamesrvConfigKey::ReturnOrderTopicConfigToBroker
         | NamesrvConfigKey::SupportActingMaster
         | NamesrvConfigKey::EnableAllTopicList
@@ -250,6 +269,9 @@ impl NamesrvConfigKey {
             Self::NamesrvRouteResponseCacheMaxEntries => "namesrvRouteResponseCacheMaxEntries",
             Self::NamesrvRouteResponseCacheMaxSingleResponseBytes => "namesrvRouteResponseCacheMaxSingleResponseBytes",
             Self::NamesrvRouteResponseCacheShards => "namesrvRouteResponseCacheShards",
+            Self::NamesrvWorkloadAdmissionEnable => "namesrvWorkloadAdmissionEnable",
+            Self::NamesrvWorkloadAdmissionObserveOnly => "namesrvWorkloadAdmissionObserveOnly",
+            Self::NamesrvWorkloadAdmissionTimeoutMillis => "namesrvWorkloadAdmissionTimeoutMillis",
             Self::ReturnOrderTopicConfigToBroker => "returnOrderTopicConfigToBroker",
             Self::ClientRequestThreadPoolNums => "clientRequestThreadPoolNums",
             Self::DefaultThreadPoolNums => "defaultThreadPoolNums",
@@ -383,6 +405,14 @@ mod defaults {
         16
     }
 
+    pub fn namesrv_workload_admission_timeout_millis() -> u64 {
+        100
+    }
+
+    pub fn default_true() -> bool {
+        true
+    }
+
     pub fn config_black_list() -> String {
         "configBlackList;configStorePath;kvConfigPath".to_string()
     }
@@ -446,6 +476,20 @@ pub struct NamesrvConfig {
         default = "defaults::namesrv_route_response_cache_shards"
     )]
     pub namesrv_route_response_cache_shards: usize,
+
+    /// Enables semantic NameServer admission using the Java-compatible pool knobs.
+    #[serde(alias = "namesrvWorkloadAdmissionEnable", default = "defaults::default_true")]
+    pub namesrv_workload_admission_enable: bool,
+
+    /// Measures saturation but does not reject while admission is being rolled out.
+    #[serde(alias = "namesrvWorkloadAdmissionObserveOnly", default = "defaults::default_true")]
+    pub namesrv_workload_admission_observe_only: bool,
+
+    #[serde(
+        alias = "namesrvWorkloadAdmissionTimeoutMillis",
+        default = "defaults::namesrv_workload_admission_timeout_millis"
+    )]
+    pub namesrv_workload_admission_timeout_millis: u64,
 
     #[serde(
         alias = "returnOrderTopicConfigToBroker",
@@ -541,6 +585,9 @@ impl Default for NamesrvConfig {
             namesrv_route_response_cache_max_single_response_bytes:
                 defaults::namesrv_route_response_cache_max_single_response_bytes(),
             namesrv_route_response_cache_shards: defaults::namesrv_route_response_cache_shards(),
+            namesrv_workload_admission_enable: true,
+            namesrv_workload_admission_observe_only: true,
+            namesrv_workload_admission_timeout_millis: defaults::namesrv_workload_admission_timeout_millis(),
             return_order_topic_config_to_broker: true,
             client_request_thread_pool_nums: 8,
             default_thread_pool_nums: 16,
@@ -618,6 +665,18 @@ impl NamesrvConfig {
         json_map.insert(
             "namesrvRouteResponseCacheShards".to_string(),
             Value::String(self.namesrv_route_response_cache_shards.to_string()),
+        );
+        json_map.insert(
+            "namesrvWorkloadAdmissionEnable".to_string(),
+            Value::String(self.namesrv_workload_admission_enable.to_string()),
+        );
+        json_map.insert(
+            "namesrvWorkloadAdmissionObserveOnly".to_string(),
+            Value::String(self.namesrv_workload_admission_observe_only.to_string()),
+        );
+        json_map.insert(
+            "namesrvWorkloadAdmissionTimeoutMillis".to_string(),
+            Value::String(self.namesrv_workload_admission_timeout_millis.to_string()),
         );
         json_map.insert(
             "returnOrderTopicConfigToBroker".to_string(),
@@ -789,6 +848,18 @@ impl NamesrvConfig {
                     self.namesrv_route_response_cache_shards =
                         value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
+                "namesrvWorkloadAdmissionEnable" => {
+                    self.namesrv_workload_admission_enable =
+                        value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
+                }
+                "namesrvWorkloadAdmissionObserveOnly" => {
+                    self.namesrv_workload_admission_observe_only =
+                        value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
+                }
+                "namesrvWorkloadAdmissionTimeoutMillis" => {
+                    self.namesrv_workload_admission_timeout_millis =
+                        value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
+                }
                 "returnOrderTopicConfigToBroker" => {
                     self.return_order_topic_config_to_broker =
                         value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
@@ -912,6 +983,10 @@ impl NamesrvConfig {
             (
                 NamesrvConfigKey::NamesrvRouteResponseCacheShards,
                 self.namesrv_route_response_cache_shards.to_string(),
+            ),
+            (
+                NamesrvConfigKey::NamesrvWorkloadAdmissionTimeoutMillis,
+                self.namesrv_workload_admission_timeout_millis.to_string(),
             ),
         ] {
             validate_namesrv_property(key, &value)?;
@@ -1076,6 +1151,9 @@ mod tests {
         assert_eq!(config.namesrv_route_response_cache_max_entries, 10_000);
         assert_eq!(config.namesrv_route_response_cache_max_single_response_bytes, 1_048_576);
         assert_eq!(config.namesrv_route_response_cache_shards, 16);
+        assert!(config.namesrv_workload_admission_enable);
+        assert!(config.namesrv_workload_admission_observe_only);
+        assert_eq!(config.namesrv_workload_admission_timeout_millis, 100);
         assert!(config.return_order_topic_config_to_broker);
         assert_eq!(config.client_request_thread_pool_nums, 8);
         assert_eq!(config.default_thread_pool_nums, 16);
@@ -1120,6 +1198,18 @@ mod tests {
         properties.insert(
             CheetahString::from("routeFreshnessSampleInterval"),
             CheetahString::from("250"),
+        );
+        properties.insert(
+            CheetahString::from("namesrvWorkloadAdmissionEnable"),
+            CheetahString::from("false"),
+        );
+        properties.insert(
+            CheetahString::from("namesrvWorkloadAdmissionObserveOnly"),
+            CheetahString::from("false"),
+        );
+        properties.insert(
+            CheetahString::from("namesrvWorkloadAdmissionTimeoutMillis"),
+            CheetahString::from("500"),
         );
         properties.insert(
             CheetahString::from("clientRequestThreadPoolNums"),
@@ -1178,6 +1268,9 @@ mod tests {
         assert!(config.cluster_test);
         assert!(config.order_message_enable);
         assert_eq!(config.route_freshness_sample_interval, 250);
+        assert!(!config.namesrv_workload_admission_enable);
+        assert!(!config.namesrv_workload_admission_observe_only);
+        assert_eq!(config.namesrv_workload_admission_timeout_millis, 500);
         assert_eq!(config.client_request_thread_pool_nums, 10);
         assert_eq!(config.default_thread_pool_nums, 20);
         assert_eq!(config.client_request_thread_pool_queue_capacity, 10000);
