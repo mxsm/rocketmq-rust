@@ -1169,6 +1169,132 @@ pub const RUST_METRICS: &[MetricDescriptor] = &[
         source: MetricSource::NameServer,
     },
     MetricDescriptor {
+        name: metrics::NAMESRV_REQUESTS_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{request}",
+        labels: &[labels::REQUEST_TYPE, labels::RESULT],
+        source: MetricSource::NameServer,
+    },
+    MetricDescriptor {
+        name: metrics::NAMESRV_REQUEST_HANDLER_LATENCY,
+        kind: MetricKind::Histogram,
+        unit: "us",
+        labels: &[labels::REQUEST_TYPE, labels::RESULT],
+        source: MetricSource::NameServer,
+    },
+    MetricDescriptor {
+        name: metrics::NAMESRV_RESPONSE_BYTES,
+        kind: MetricKind::Histogram,
+        unit: "By",
+        labels: &[labels::REQUEST_TYPE],
+        source: MetricSource::NameServer,
+    },
+    MetricDescriptor {
+        name: metrics::NAMESRV_REGISTRATION_BODY_BYTES,
+        kind: MetricKind::Histogram,
+        unit: "By",
+        labels: &[labels::STAGE],
+        source: MetricSource::NameServer,
+    },
+    MetricDescriptor {
+        name: metrics::NAMESRV_REGISTRATION_DECODE_LATENCY,
+        kind: MetricKind::Histogram,
+        unit: "us",
+        labels: &[],
+        source: MetricSource::NameServer,
+    },
+    MetricDescriptor {
+        name: metrics::NAMESRV_MUTATION_LATENCY,
+        kind: MetricKind::Histogram,
+        unit: "us",
+        labels: &[labels::STAGE],
+        source: MetricSource::NameServer,
+    },
+    MetricDescriptor {
+        name: metrics::NAMESRV_SNAPSHOT_REBUILDS_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{snapshot}",
+        labels: &[labels::RESULT],
+        source: MetricSource::NameServer,
+    },
+    MetricDescriptor {
+        name: metrics::NAMESRV_EXPIRY_EVENTS_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{event}",
+        labels: &[labels::RESULT],
+        source: MetricSource::NameServer,
+    },
+    MetricDescriptor {
+        name: metrics::NAMESRV_UNREGISTRATION_OLDEST_AGE,
+        kind: MetricKind::ObservableGauge,
+        unit: "ms",
+        labels: &[],
+        source: MetricSource::NameServer,
+    },
+    MetricDescriptor {
+        name: metrics::NAMESRV_KV_GENERATION,
+        kind: MetricKind::ObservableGauge,
+        unit: "{generation}",
+        labels: &[labels::STATE],
+        source: MetricSource::NameServer,
+    },
+    MetricDescriptor {
+        name: metrics::NAMESRV_KV_QUEUE_DEPTH,
+        kind: MetricKind::ObservableGauge,
+        unit: "{command}",
+        labels: &[],
+        source: MetricSource::NameServer,
+    },
+    MetricDescriptor {
+        name: metrics::NAMESRV_KV_QUEUE_BYTES,
+        kind: MetricKind::ObservableGauge,
+        unit: "By",
+        labels: &[],
+        source: MetricSource::NameServer,
+    },
+    MetricDescriptor {
+        name: metrics::NAMESRV_KV_PERSIST_LATENCY,
+        kind: MetricKind::Histogram,
+        unit: "us",
+        labels: &[labels::RESULT],
+        source: MetricSource::NameServer,
+    },
+    MetricDescriptor {
+        name: metrics::NAMESRV_KV_BATCH_SIZE,
+        kind: MetricKind::Histogram,
+        unit: "{command}",
+        labels: &[],
+        source: MetricSource::NameServer,
+    },
+    MetricDescriptor {
+        name: metrics::NAMESRV_KV_EVENTS_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{event}",
+        labels: &[labels::RESULT],
+        source: MetricSource::NameServer,
+    },
+    MetricDescriptor {
+        name: metrics::NAMESRV_SECURITY_EVENTS_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{event}",
+        labels: &[labels::OPERATION, labels::RESULT],
+        source: MetricSource::NameServer,
+    },
+    MetricDescriptor {
+        name: metrics::NAMESRV_CONNECTION_EVENTS_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{event}",
+        labels: &[labels::EVENT],
+        source: MetricSource::NameServer,
+    },
+    MetricDescriptor {
+        name: metrics::NAMESRV_ACTIVE_CONNECTIONS,
+        kind: MetricKind::ObservableGauge,
+        unit: "{connection}",
+        labels: &[],
+        source: MetricSource::NameServer,
+    },
+    MetricDescriptor {
         name: metrics::CONTROLLER_ELECTION_TOTAL,
         kind: MetricKind::Counter,
         unit: "{election}",
@@ -1540,8 +1666,8 @@ mod tests {
             .collect::<HashSet<_>>();
 
         assert_eq!(JAVA_METRICS.len(), 94);
-        assert_eq!(RUST_METRICS.len(), 82);
-        assert_eq!(combined.len(), 176, "duplicate metric names across catalogs");
+        assert_eq!(RUST_METRICS.len(), 100);
+        assert_eq!(combined.len(), 194, "duplicate metric names across catalogs");
     }
 
     #[test]
@@ -1561,6 +1687,28 @@ mod tests {
         assert!(sources.contains(&MetricSource::Observability));
         assert!(sources.contains(&MetricSource::Mcp));
         assert!(sources.contains(&MetricSource::Runtime));
+    }
+
+    #[test]
+    fn namesrv_metrics_reject_unbounded_identity_labels() {
+        const FORBIDDEN: &[&str] = &[
+            labels::TOPIC,
+            labels::ADDRESS,
+            labels::NODE_ID,
+            labels::GROUP,
+            labels::CONSUMER_GROUP,
+        ];
+        for descriptor in RUST_METRICS
+            .iter()
+            .filter(|descriptor| descriptor.source == MetricSource::NameServer)
+        {
+            assert!(
+                descriptor.labels.iter().all(|label| !FORBIDDEN.contains(label)),
+                "{} contains an unbounded identity label: {:?}",
+                descriptor.name,
+                descriptor.labels
+            );
+        }
     }
 
     #[test]

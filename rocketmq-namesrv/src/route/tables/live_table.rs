@@ -181,9 +181,9 @@ impl Clone for BrokerLiveInfo {
 /// timestamps and data versions. Uses DashMap for concurrent access.
 ///
 /// # Performance
-/// - Read operations: O(1) average, lock-free
+/// - Read operations: O(1) average with sharded locking
 /// - Write operations: O(1) average, per-entry lock
-/// - Heartbeat updates: Lock-free for same broker
+/// - Heartbeat updates: atomic timestamp update for an existing broker
 ///
 /// # Example
 /// ```no_run

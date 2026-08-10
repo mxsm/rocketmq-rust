@@ -20,7 +20,7 @@
 //! which provide the route manager's main concurrency improvements.
 //!
 //! Key findings:
-//! - DashMap provides lock-free reads
+//! - DashMap provides sharded lock-backed concurrent reads
 //! - Fine-grained locking for writes
 //! - CheetahString provides zero-copy cloning
 //! - Concurrent operations scale linearly with thread count

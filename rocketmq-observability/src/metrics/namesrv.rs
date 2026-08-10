@@ -13,11 +13,26 @@
 // limitations under the License.
 
 pub use crate::semantic::metrics::NAMESRV_ACTIVE_BROKERS;
+pub use crate::semantic::metrics::NAMESRV_ACTIVE_CONNECTIONS;
 pub use crate::semantic::metrics::NAMESRV_BROKER_REGISTRATIONS;
+pub use crate::semantic::metrics::NAMESRV_CONNECTION_EVENTS_TOTAL;
+pub use crate::semantic::metrics::NAMESRV_EXPIRY_EVENTS_TOTAL;
 pub use crate::semantic::metrics::NAMESRV_EXPIRY_SCAN_BROKERS;
 pub use crate::semantic::metrics::NAMESRV_EXPIRY_SCAN_DURATION;
+pub use crate::semantic::metrics::NAMESRV_KV_BATCH_SIZE;
+pub use crate::semantic::metrics::NAMESRV_KV_EVENTS_TOTAL;
+pub use crate::semantic::metrics::NAMESRV_KV_GENERATION;
+pub use crate::semantic::metrics::NAMESRV_KV_PERSIST_LATENCY;
+pub use crate::semantic::metrics::NAMESRV_KV_QUEUE_BYTES;
+pub use crate::semantic::metrics::NAMESRV_KV_QUEUE_DEPTH;
+pub use crate::semantic::metrics::NAMESRV_MUTATION_LATENCY;
+pub use crate::semantic::metrics::NAMESRV_REGISTRATION_BODY_BYTES;
+pub use crate::semantic::metrics::NAMESRV_REGISTRATION_DECODE_LATENCY;
 pub use crate::semantic::metrics::NAMESRV_REGISTRATION_DIRTY_TOPICS;
 pub use crate::semantic::metrics::NAMESRV_REGISTRATION_EVENTS_TOTAL;
+pub use crate::semantic::metrics::NAMESRV_REQUESTS_TOTAL;
+pub use crate::semantic::metrics::NAMESRV_REQUEST_HANDLER_LATENCY;
+pub use crate::semantic::metrics::NAMESRV_RESPONSE_BYTES;
 pub use crate::semantic::metrics::NAMESRV_ROUTE_CACHE_BYTES;
 pub use crate::semantic::metrics::NAMESRV_ROUTE_CACHE_EVENTS_TOTAL;
 pub use crate::semantic::metrics::NAMESRV_ROUTE_END_TO_END_LATENCY;
@@ -30,8 +45,11 @@ pub use crate::semantic::metrics::NAMESRV_ROUTE_RESPONSE_BYTES;
 pub use crate::semantic::metrics::NAMESRV_ROUTE_RESPONSE_WRITE_ERRORS_TOTAL;
 pub use crate::semantic::metrics::NAMESRV_ROUTE_RESPONSE_WRITE_LATENCY;
 pub use crate::semantic::metrics::NAMESRV_ROUTE_STAGE_LATENCY;
+pub use crate::semantic::metrics::NAMESRV_SECURITY_EVENTS_TOTAL;
+pub use crate::semantic::metrics::NAMESRV_SNAPSHOT_REBUILDS_TOTAL;
 pub use crate::semantic::metrics::NAMESRV_UNREGISTRATION_BATCH_SIZE;
 pub use crate::semantic::metrics::NAMESRV_UNREGISTRATION_EVENTS_TOTAL;
+pub use crate::semantic::metrics::NAMESRV_UNREGISTRATION_OLDEST_AGE;
 pub use crate::semantic::metrics::NAMESRV_UNREGISTRATION_QUEUE_DEPTH;
 pub use crate::semantic::metrics::NAMESRV_WORKLOAD_ADMISSION_EVENTS_TOTAL;
 pub use crate::semantic::metrics::NAMESRV_WORKLOAD_ADMISSION_INFLIGHT;
@@ -85,6 +103,44 @@ pub enum NameServerAdmissionOutcome {
     ObserveSaturated,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NameServerRequestOutcome {
+    Success,
+    Rejected,
+    Error,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NameServerExpiryEvent {
+    IndexMismatch,
+    SafetyReconcile,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NameServerKvEvent {
+    Queued,
+    QueueFull,
+    ByteLimit,
+    Closed,
+    Drained,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NameServerSecurityEvent {
+    AuthDenied,
+    TlsReloadSuccess,
+    TlsReloadFailed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NameServerConnectionEvent {
+    Admitted,
+    Rejected,
+    Closed,
+    IdleReconnect,
+    SlowWrite,
+}
+
 #[cfg(feature = "otel-metrics")]
 impl NameServerRouteStage {
     const fn as_str(self) -> &'static str {
@@ -129,6 +185,64 @@ impl NameServerAdmissionOutcome {
             Self::Rejected => "rejected",
             Self::TimedOut => "timeout",
             Self::ObserveSaturated => "observe-saturated",
+        }
+    }
+}
+
+#[cfg(feature = "otel-metrics")]
+impl NameServerRequestOutcome {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Success => "success",
+            Self::Rejected => "rejected",
+            Self::Error => "error",
+        }
+    }
+}
+
+#[cfg(feature = "otel-metrics")]
+impl NameServerExpiryEvent {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::IndexMismatch => "index-mismatch",
+            Self::SafetyReconcile => "safety-reconcile",
+        }
+    }
+}
+
+#[cfg(feature = "otel-metrics")]
+impl NameServerKvEvent {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::QueueFull => "queue-full",
+            Self::ByteLimit => "byte-limit",
+            Self::Closed => "closed",
+            Self::Drained => "drained",
+        }
+    }
+}
+
+#[cfg(feature = "otel-metrics")]
+impl NameServerSecurityEvent {
+    const fn labels(self) -> (&'static str, &'static str) {
+        match self {
+            Self::AuthDenied => ("auth", "denied"),
+            Self::TlsReloadSuccess => ("tls-reload", "success"),
+            Self::TlsReloadFailed => ("tls-reload", "failed"),
+        }
+    }
+}
+
+#[cfg(feature = "otel-metrics")]
+impl NameServerConnectionEvent {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Admitted => "admitted",
+            Self::Rejected => "rejected",
+            Self::Closed => "closed",
+            Self::IdleReconnect => "idle-reconnect",
+            Self::SlowWrite => "slow-write",
         }
     }
 }
@@ -243,6 +357,57 @@ impl NameServerMetrics {
 
     #[inline]
     pub fn record_expiry_scan(&self, _mode: &'static str, _examined: usize, _expired: usize, _elapsed: Duration) {}
+
+    #[inline]
+    pub fn record_request(
+        &self,
+        _class: NameServerWorkloadClass,
+        _outcome: NameServerRequestOutcome,
+        _elapsed: Duration,
+        _response_bytes: usize,
+    ) {
+    }
+
+    #[inline]
+    pub fn record_registration_decode(&self, _wire_bytes: usize, _decoded_bytes: Option<usize>, _elapsed: Duration) {}
+
+    #[inline]
+    pub fn record_mutation_wait(&self, _elapsed: Duration) {}
+
+    #[inline]
+    pub fn record_mutation_hold(&self, _elapsed: Duration) {}
+
+    #[inline]
+    pub fn record_snapshot_rebuild(&self, _elapsed: Duration, _present: bool) {}
+
+    #[inline]
+    pub fn record_expiry_event(&self, _event: NameServerExpiryEvent) {}
+
+    #[inline]
+    pub fn record_unregistration_oldest_age(&self, _age: Duration) {}
+
+    #[inline]
+    pub fn record_kv_snapshot(
+        &self,
+        _desired: u64,
+        _durable: u64,
+        _applied: u64,
+        _queue_depth: usize,
+        _queue_bytes: usize,
+    ) {
+    }
+
+    #[inline]
+    pub fn record_kv_persist(&self, _elapsed: Duration, _success: bool, _batch_size: usize) {}
+
+    #[inline]
+    pub fn record_kv_event(&self, _event: NameServerKvEvent) {}
+
+    #[inline]
+    pub fn record_security_event(&self, _event: NameServerSecurityEvent) {}
+
+    #[inline]
+    pub fn record_connection_event(&self, _event: NameServerConnectionEvent, _active: usize) {}
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -280,6 +445,24 @@ struct NameServerMetricInstruments {
     unregistration_batch_size: opentelemetry::metrics::Histogram<u64>,
     expiry_scan_brokers: opentelemetry::metrics::Histogram<u64>,
     expiry_scan_duration: opentelemetry::metrics::Histogram<u64>,
+    requests_total: opentelemetry::metrics::Counter<u64>,
+    request_handler_latency: opentelemetry::metrics::Histogram<u64>,
+    response_bytes: opentelemetry::metrics::Histogram<u64>,
+    registration_body_bytes: opentelemetry::metrics::Histogram<u64>,
+    registration_decode_latency: opentelemetry::metrics::Histogram<u64>,
+    mutation_latency: opentelemetry::metrics::Histogram<u64>,
+    snapshot_rebuilds_total: opentelemetry::metrics::Counter<u64>,
+    expiry_events_total: opentelemetry::metrics::Counter<u64>,
+    unregistration_oldest_age: opentelemetry::metrics::Gauge<u64>,
+    kv_generation: opentelemetry::metrics::Gauge<u64>,
+    kv_queue_depth: opentelemetry::metrics::Gauge<u64>,
+    kv_queue_bytes: opentelemetry::metrics::Gauge<u64>,
+    kv_persist_latency: opentelemetry::metrics::Histogram<u64>,
+    kv_batch_size: opentelemetry::metrics::Histogram<u64>,
+    kv_events_total: opentelemetry::metrics::Counter<u64>,
+    security_events_total: opentelemetry::metrics::Counter<u64>,
+    connection_events_total: opentelemetry::metrics::Counter<u64>,
+    active_connections: opentelemetry::metrics::Gauge<u64>,
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -549,6 +732,182 @@ impl NameServerMetrics {
             }
         }
     }
+
+    pub fn record_request(
+        &self,
+        class: NameServerWorkloadClass,
+        outcome: NameServerRequestOutcome,
+        elapsed: Duration,
+        response_bytes: usize,
+    ) {
+        if self.is_active() {
+            if let Some(instruments) = &self.instruments {
+                let class = opentelemetry::KeyValue::new(crate::semantic::labels::REQUEST_TYPE, class.as_str());
+                let result = opentelemetry::KeyValue::new(crate::semantic::labels::RESULT, outcome.as_str());
+                instruments.requests_total.add(1, &[class.clone(), result.clone()]);
+                instruments
+                    .request_handler_latency
+                    .record(duration_micros_u64(elapsed), &[class.clone(), result]);
+                instruments.response_bytes.record(response_bytes as u64, &[class]);
+            }
+        }
+    }
+
+    pub fn record_registration_decode(&self, wire_bytes: usize, decoded_bytes: Option<usize>, elapsed: Duration) {
+        if self.is_active() {
+            if let Some(instruments) = &self.instruments {
+                instruments.registration_body_bytes.record(
+                    wire_bytes as u64,
+                    &[opentelemetry::KeyValue::new(crate::semantic::labels::STAGE, "wire")],
+                );
+                if let Some(decoded_bytes) = decoded_bytes {
+                    instruments.registration_body_bytes.record(
+                        decoded_bytes as u64,
+                        &[opentelemetry::KeyValue::new(crate::semantic::labels::STAGE, "decoded")],
+                    );
+                }
+                instruments
+                    .registration_decode_latency
+                    .record(duration_micros_u64(elapsed), &[]);
+            }
+        }
+    }
+
+    pub fn record_mutation_wait(&self, elapsed: Duration) {
+        self.record_mutation_stage("wait", elapsed);
+    }
+
+    pub fn record_mutation_hold(&self, elapsed: Duration) {
+        self.record_mutation_stage("hold", elapsed);
+    }
+
+    fn record_mutation_stage(&self, stage: &'static str, elapsed: Duration) {
+        if self.is_active() {
+            if let Some(instruments) = &self.instruments {
+                instruments.mutation_latency.record(
+                    duration_micros_u64(elapsed),
+                    &[opentelemetry::KeyValue::new(crate::semantic::labels::STAGE, stage)],
+                );
+            }
+        }
+    }
+
+    pub fn record_snapshot_rebuild(&self, elapsed: Duration, present: bool) {
+        if self.is_active() {
+            if let Some(instruments) = &self.instruments {
+                instruments.snapshot_rebuilds_total.add(
+                    1,
+                    &[opentelemetry::KeyValue::new(
+                        crate::semantic::labels::RESULT,
+                        if present { "published" } else { "deleted" },
+                    )],
+                );
+                instruments.mutation_latency.record(
+                    duration_micros_u64(elapsed),
+                    &[opentelemetry::KeyValue::new(
+                        crate::semantic::labels::STAGE,
+                        "snapshot-rebuild",
+                    )],
+                );
+            }
+        }
+    }
+
+    pub fn record_expiry_event(&self, event: NameServerExpiryEvent) {
+        if self.is_active() {
+            if let Some(instruments) = &self.instruments {
+                instruments.expiry_events_total.add(
+                    1,
+                    &[opentelemetry::KeyValue::new(
+                        crate::semantic::labels::RESULT,
+                        event.as_str(),
+                    )],
+                );
+            }
+        }
+    }
+
+    pub fn record_unregistration_oldest_age(&self, age: Duration) {
+        if self.is_active() {
+            if let Some(instruments) = &self.instruments {
+                instruments
+                    .unregistration_oldest_age
+                    .record(duration_millis_u64(age), &[]);
+            }
+        }
+    }
+
+    pub fn record_kv_snapshot(&self, desired: u64, durable: u64, applied: u64, queue_depth: usize, queue_bytes: usize) {
+        if self.is_active() {
+            if let Some(instruments) = &self.instruments {
+                for (state, generation) in [("desired", desired), ("durable", durable), ("applied", applied)] {
+                    instruments.kv_generation.record(
+                        generation,
+                        &[opentelemetry::KeyValue::new(crate::semantic::labels::STATE, state)],
+                    );
+                }
+                instruments.kv_queue_depth.record(queue_depth as u64, &[]);
+                instruments.kv_queue_bytes.record(queue_bytes as u64, &[]);
+            }
+        }
+    }
+
+    pub fn record_kv_persist(&self, elapsed: Duration, success: bool, batch_size: usize) {
+        if self.is_active() {
+            if let Some(instruments) = &self.instruments {
+                let result = if success { "success" } else { "failed" };
+                instruments.kv_persist_latency.record(
+                    duration_micros_u64(elapsed),
+                    &[opentelemetry::KeyValue::new(crate::semantic::labels::RESULT, result)],
+                );
+                instruments.kv_batch_size.record(batch_size as u64, &[]);
+            }
+        }
+    }
+
+    pub fn record_kv_event(&self, event: NameServerKvEvent) {
+        if self.is_active() {
+            if let Some(instruments) = &self.instruments {
+                instruments.kv_events_total.add(
+                    1,
+                    &[opentelemetry::KeyValue::new(
+                        crate::semantic::labels::RESULT,
+                        event.as_str(),
+                    )],
+                );
+            }
+        }
+    }
+
+    pub fn record_security_event(&self, event: NameServerSecurityEvent) {
+        if self.is_active() {
+            if let Some(instruments) = &self.instruments {
+                let (operation, result) = event.labels();
+                instruments.security_events_total.add(
+                    1,
+                    &[
+                        opentelemetry::KeyValue::new(crate::semantic::labels::OPERATION, operation),
+                        opentelemetry::KeyValue::new(crate::semantic::labels::RESULT, result),
+                    ],
+                );
+            }
+        }
+    }
+
+    pub fn record_connection_event(&self, event: NameServerConnectionEvent, active: usize) {
+        if self.is_active() {
+            if let Some(instruments) = &self.instruments {
+                instruments.connection_events_total.add(
+                    1,
+                    &[opentelemetry::KeyValue::new(
+                        crate::semantic::labels::EVENT,
+                        event.as_str(),
+                    )],
+                );
+                instruments.active_connections.record(active as u64, &[]);
+            }
+        }
+    }
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -677,6 +1036,96 @@ impl NameServerMetricInstruments {
             .with_description("NameServer broker expiry scan duration")
             .with_unit("us")
             .build();
+        let requests_total = meter
+            .u64_counter(NAMESRV_REQUESTS_TOTAL)
+            .with_description("NameServer requests grouped by bounded workload class and outcome")
+            .with_unit("{request}")
+            .build();
+        let request_handler_latency = meter
+            .u64_histogram(NAMESRV_REQUEST_HANDLER_LATENCY)
+            .with_description("NameServer request handler latency excluding response channel completion")
+            .with_unit("us")
+            .build();
+        let response_bytes = meter
+            .u64_histogram(NAMESRV_RESPONSE_BYTES)
+            .with_description("NameServer response body bytes grouped by bounded workload class")
+            .with_unit("By")
+            .build();
+        let registration_body_bytes = meter
+            .u64_histogram(NAMESRV_REGISTRATION_BODY_BYTES)
+            .with_description("NameServer broker registration wire and decoded body bytes")
+            .with_unit("By")
+            .build();
+        let registration_decode_latency = meter
+            .u64_histogram(NAMESRV_REGISTRATION_DECODE_LATENCY)
+            .with_description("NameServer broker registration body decode latency")
+            .with_unit("us")
+            .build();
+        let mutation_latency = meter
+            .u64_histogram(NAMESRV_MUTATION_LATENCY)
+            .with_description("NameServer route mutation wait, hold, and snapshot rebuild latency")
+            .with_unit("us")
+            .build();
+        let snapshot_rebuilds_total = meter
+            .u64_counter(NAMESRV_SNAPSHOT_REBUILDS_TOTAL)
+            .with_description("NameServer immutable route snapshot rebuild outcomes")
+            .with_unit("{snapshot}")
+            .build();
+        let expiry_events_total = meter
+            .u64_counter(NAMESRV_EXPIRY_EVENTS_TOTAL)
+            .with_description("NameServer expiry index mismatch and safety reconciliation events")
+            .with_unit("{event}")
+            .build();
+        let unregistration_oldest_age = meter
+            .u64_gauge(NAMESRV_UNREGISTRATION_OLDEST_AGE)
+            .with_description("Age of the oldest NameServer pending broker unregistration")
+            .with_unit("ms")
+            .build();
+        let kv_generation = meter
+            .u64_gauge(NAMESRV_KV_GENERATION)
+            .with_description("NameServer KV desired, durable, and applied generation")
+            .with_unit("{generation}")
+            .build();
+        let kv_queue_depth = meter
+            .u64_gauge(NAMESRV_KV_QUEUE_DEPTH)
+            .with_description("NameServer pending KV mutation command count")
+            .with_unit("{command}")
+            .build();
+        let kv_queue_bytes = meter
+            .u64_gauge(NAMESRV_KV_QUEUE_BYTES)
+            .with_description("NameServer pending KV mutation retained bytes")
+            .with_unit("By")
+            .build();
+        let kv_persist_latency = meter
+            .u64_histogram(NAMESRV_KV_PERSIST_LATENCY)
+            .with_description("NameServer KV durable snapshot persistence latency")
+            .with_unit("us")
+            .build();
+        let kv_batch_size = meter
+            .u64_histogram(NAMESRV_KV_BATCH_SIZE)
+            .with_description("NameServer KV mutations committed per durable snapshot")
+            .with_unit("{command}")
+            .build();
+        let kv_events_total = meter
+            .u64_counter(NAMESRV_KV_EVENTS_TOTAL)
+            .with_description("NameServer KV admission and drain outcomes")
+            .with_unit("{event}")
+            .build();
+        let security_events_total = meter
+            .u64_counter(NAMESRV_SECURITY_EVENTS_TOTAL)
+            .with_description("NameServer authentication and TLS lifecycle outcomes")
+            .with_unit("{event}")
+            .build();
+        let connection_events_total = meter
+            .u64_counter(NAMESRV_CONNECTION_EVENTS_TOTAL)
+            .with_description("NameServer connection admission and lifecycle outcomes")
+            .with_unit("{event}")
+            .build();
+        let active_connections = meter
+            .u64_gauge(NAMESRV_ACTIVE_CONNECTIONS)
+            .with_description("Current active NameServer transport connections")
+            .with_unit("{connection}")
+            .build();
 
         Self {
             route_request_total,
@@ -703,6 +1152,24 @@ impl NameServerMetricInstruments {
             unregistration_batch_size,
             expiry_scan_brokers,
             expiry_scan_duration,
+            requests_total,
+            request_handler_latency,
+            response_bytes,
+            registration_body_bytes,
+            registration_decode_latency,
+            mutation_latency,
+            snapshot_rebuilds_total,
+            expiry_events_total,
+            unregistration_oldest_age,
+            kv_generation,
+            kv_queue_depth,
+            kv_queue_bytes,
+            kv_persist_latency,
+            kv_batch_size,
+            kv_events_total,
+            security_events_total,
+            connection_events_total,
+            active_connections,
         }
     }
 
@@ -741,6 +1208,23 @@ mod tests {
         metrics.record_unregistration_queue("queued", 2);
         metrics.record_unregistration_batch(2);
         metrics.record_expiry_scan("shadow", 10, 1, Duration::from_micros(75));
+        metrics.record_request(
+            NameServerWorkloadClass::Admin,
+            NameServerRequestOutcome::Success,
+            Duration::from_micros(10),
+            128,
+        );
+        metrics.record_registration_decode(256, Some(512), Duration::from_micros(20));
+        metrics.record_mutation_wait(Duration::from_micros(2));
+        metrics.record_mutation_hold(Duration::from_micros(5));
+        metrics.record_snapshot_rebuild(Duration::from_micros(3), true);
+        metrics.record_expiry_event(NameServerExpiryEvent::IndexMismatch);
+        metrics.record_unregistration_oldest_age(Duration::from_millis(10));
+        metrics.record_kv_snapshot(3, 2, 2, 1, 64);
+        metrics.record_kv_persist(Duration::from_micros(30), true, 4);
+        metrics.record_kv_event(NameServerKvEvent::Queued);
+        metrics.record_security_event(NameServerSecurityEvent::AuthDenied);
+        metrics.record_connection_event(NameServerConnectionEvent::Admitted, 2);
     }
 
     #[test]
@@ -755,6 +1239,15 @@ mod tests {
         metrics.record_unregistration_queue("coalesced", 0);
         metrics.record_unregistration_batch(1);
         metrics.record_expiry_scan("off", 10, 0, Duration::from_micros(25));
+        metrics.record_request(
+            NameServerWorkloadClass::Admin,
+            NameServerRequestOutcome::Success,
+            Duration::ZERO,
+            0,
+        );
+        metrics.record_kv_snapshot(0, 0, 0, 0, 0);
+        metrics.record_security_event(NameServerSecurityEvent::AuthDenied);
+        metrics.record_connection_event(NameServerConnectionEvent::Closed, 0);
         assert!(!metrics.is_enabled());
         assert!(!metrics.should_record_route_freshness(1));
     }

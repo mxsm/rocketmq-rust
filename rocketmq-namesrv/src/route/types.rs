@@ -123,7 +123,15 @@ pub type SharedTopicQueueMappingInfo = Arc<TopicQueueMappingInfo>;
 pub type SharedBrokerAddrInfo = Arc<BrokerAddrInfo>;
 
 /// Configuration for RouteInfoManager
+///
+/// Runtime configuration is owned by [`crate::NamesrvConfig`]. In particular,
+/// `NamesrvConfig::unregister_broker_batch_size` is wired to the production
+/// batch-unregistration service.
 #[derive(Clone, Debug)]
+#[deprecated(
+    since = "1.0.0",
+    note = "use NamesrvConfig; this compatibility DTO is not consumed by the production runtime"
+)]
 pub struct RouteManagerConfig {
     /// Broker channel expired time in milliseconds
     pub broker_channel_expired_time: i64,
@@ -141,6 +149,7 @@ pub struct RouteManagerConfig {
     pub scan_not_active_broker_interval: u64,
 }
 
+#[allow(deprecated, reason = "implements the retained compatibility DTO")]
 impl Default for RouteManagerConfig {
     fn default() -> Self {
         Self {
@@ -274,6 +283,10 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(
+        deprecated,
+        reason = "covers the retained compatibility DTO until its next-major removal"
+    )]
     fn test_route_manager_config_default() {
         let config = RouteManagerConfig::default();
 

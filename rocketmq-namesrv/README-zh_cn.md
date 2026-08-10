@@ -205,7 +205,7 @@ async fn run_namesrv() -> rocketmq_error::RocketMQResult<()> {
 | [`src/route`](src/route) | Route manager、segmented lock、route table、unregister service 和 zone route hook。 |
 | [`src/route/tables`](src/route/tables) | Topic queue、broker、cluster、live broker、filter server 和 topic queue mapping 的并发表。 |
 | [`src/kvconfig`](src/kvconfig) | KV config manager 和持久化。 |
-| [`src/observability_metrics.rs`](src/observability_metrics.rs) | `observability` feature 下的可选 metrics 记录。 |
+| [`../rocketmq-observability/src/metrics/namesrv.rs`](../rocketmq-observability/src/metrics/namesrv.rs) | OpenTelemetry 与 Prometheus 导出器共用的低基数 NameServer 指标。 |
 | [`tests`](tests) | 网络级和 route-table integration 覆盖。 |
 | [`benches`](benches) | Route manager、concurrency、lock 和 topic-table 热路径 benchmark。 |
 

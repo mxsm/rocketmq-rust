@@ -13,42 +13,62 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::io;
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
-use std::time::Instant;
 
 use cheetah_string::CheetahString;
 use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::protocol::body::kv_table::KVTable;
 use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_protocol::protocol::RemotingSerializable;
-use rocketmq_runtime::common::file_utils;
+use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::MetadataDeadline;
 use rocketmq_runtime::MetadataIoActor;
 use rocketmq_runtime::MetadataIoError;
 use rocketmq_runtime::MetadataIoShutdownReport;
+#[cfg(test)]
 use rocketmq_runtime::MetadataIoSnapshot;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
 
 use crate::bootstrap::NameServerRuntimeHandle;
+use crate::kvconfig::persistence::KvMutation;
+use crate::kvconfig::persistence::KvMutationService;
+use crate::kvconfig::persistence::KvMutationSnapshot;
 use crate::kvconfig::KVConfigSerializeWrapper;
 use crate::NamesrvConfig;
 
 /// Type alias for namespace in the KV configuration
-type Namespace = CheetahString;
+pub(super) type Namespace = CheetahString;
 /// Type alias for key in the KV configuration
-type Key = CheetahString;
+pub(super) type Key = CheetahString;
 /// Type alias for value in the KV configuration
-type Value = CheetahString;
+pub(super) type Value = CheetahString;
 /// Type alias for the configuration map structure
-type ConfigMap = HashMap<Key, Value>;
+pub(super) type ConfigMap = HashMap<Key, Value>;
+pub(super) type ConfigTable = dashmap::DashMap<Namespace, ConfigMap>;
 
-/// Threshold for triggering automatic persistence (number of pending changes)
-const AUTO_PERSIST_THRESHOLD: usize = 100;
-/// Minimum interval between automatic persistence operations
-const MIN_PERSIST_INTERVAL: Duration = Duration::from_secs(1);
+fn load_config_table_with(
+    config_path: &Path,
+    read: impl FnOnce(&Path) -> io::Result<String>,
+) -> RocketMQResult<Option<ConfigTable>> {
+    let content = match read(config_path) {
+        Ok(content) if content.is_empty() => return Ok(None),
+        Ok(content) => content,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(rocketmq_error::RocketMQError::IO(io::Error::new(
+                error.kind(),
+                format!("failed to read KV config at {}: {error}", config_path.display()),
+            )));
+        }
+    };
+
+    Ok(KVConfigSerializeWrapper::decode(content.as_bytes())?.config_table)
+}
 
 /// KV Configuration Manager
 ///
@@ -58,12 +78,8 @@ pub struct KVConfigManager {
     pub(crate) config_table: Arc<dashmap::DashMap<Namespace, ConfigMap>>,
     /// Runtime inner for accessing configuration
     pub(crate) name_server_runtime_inner: NameServerRuntimeHandle,
-    /// Counter for pending changes since last persistence
-    pending_changes: Arc<std::sync::atomic::AtomicUsize>,
-    /// Last persistence timestamp
-    last_persist_time: Arc<parking_lot::Mutex<Instant>>,
-    /// Serializes file replacement while allowing concurrent table access.
-    persist_lock: parking_lot::Mutex<()>,
+    /// Bounded, lifecycle-owned durable-before-publish mutation service.
+    mutation_service: Result<KvMutationService, Arc<str>>,
     /// Production persistence owner. Absence is retained only for legacy
     /// builders that do not inject a service lifecycle.
     metadata_io: Option<Result<MetadataIoActor, MetadataIoError>>,
@@ -82,13 +98,35 @@ impl KVConfigManager {
     pub(crate) fn new(
         name_server_runtime_inner: NameServerRuntimeHandle,
         metadata_io: Option<Result<MetadataIoActor, MetadataIoError>>,
+        service_context: &ChildServiceContext,
+        target: PathBuf,
+        queue_capacity: usize,
+        batch_size: usize,
+        max_pending_bytes: usize,
+        metrics: rocketmq_observability::metrics::namesrv::NameServerMetrics,
     ) -> Self {
+        let config_table = Arc::new(dashmap::DashMap::with_capacity(64));
+        let mutation_service = metadata_io
+            .as_ref()
+            .ok_or_else(|| Arc::<str>::from("metadata I/O actor is unavailable"))
+            .and_then(|actor| actor.as_ref().map_err(|error| Arc::<str>::from(error.to_string())))
+            .and_then(|actor| {
+                KvMutationService::start(
+                    service_context,
+                    Arc::clone(&config_table),
+                    actor.clone(),
+                    target,
+                    queue_capacity,
+                    batch_size,
+                    max_pending_bytes,
+                    metrics,
+                )
+                .map_err(|error| Arc::<str>::from(error.to_string()))
+            });
         Self {
-            config_table: Arc::new(dashmap::DashMap::with_capacity(64)),
+            config_table,
             name_server_runtime_inner,
-            pending_changes: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-            last_persist_time: Arc::new(parking_lot::Mutex::new(Instant::now())),
-            persist_lock: parking_lot::Mutex::new(()),
+            mutation_service,
             metadata_io,
         }
     }
@@ -103,11 +141,20 @@ impl KVConfigManager {
         &self.config_table
     }
 
+    #[cfg(test)]
     pub(crate) fn metadata_io_snapshot(&self) -> Option<MetadataIoSnapshot> {
         self.metadata_io
             .as_ref()
             .and_then(|result| result.as_ref().ok())
             .map(MetadataIoActor::snapshot)
+    }
+
+    pub(crate) fn mutation_snapshot(&self) -> Option<KvMutationSnapshot> {
+        self.mutation_service.as_ref().ok().map(KvMutationService::snapshot)
+    }
+
+    pub(crate) fn validate_persistence_owner(&self) -> RocketMQResult<()> {
+        self.mutation_service().map(|_| ())
     }
 
     /// Gets a reference to the Namesrv configuration.
@@ -123,7 +170,16 @@ impl KVConfigManager {
     /// Gets the number of pending changes since last persistence
     #[inline]
     pub fn pending_changes(&self) -> usize {
-        self.pending_changes.load(std::sync::atomic::Ordering::Relaxed)
+        self.mutation_snapshot().map_or(0, |snapshot| snapshot.pending_commands)
+    }
+
+    fn mutation_service(&self) -> RocketMQResult<&KvMutationService> {
+        self.mutation_service.as_ref().map_err(|error| {
+            rocketmq_error::RocketMQError::IO(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                format!("NameServer KV persistence owner is unavailable: {error}"),
+            ))
+        })
     }
 }
 
@@ -136,36 +192,25 @@ impl KVConfigManager {
     /// - `Err(RocketMQError)` if deserialization fails
     pub fn load(&self) -> RocketMQResult<()> {
         let namesrv_config = self.name_server_runtime_inner.name_server_config();
-        let config_path = namesrv_config.kv_config_path.as_str();
+        let config_path = Path::new(namesrv_config.kv_config_path.as_str());
+        let config_table =
+            load_config_table_with(config_path, |path| std::fs::read_to_string(path)).inspect_err(|error| {
+                error!(
+                    path = %config_path.display(),
+                    error_kind = ?error.kind(),
+                    "Failed to load KV config"
+                );
+            })?;
 
-        let content = match file_utils::file_to_string(config_path) {
-            Ok(content) if !content.is_empty() => content,
-            Ok(_) => {
-                debug!("KV config file is empty, skipping load");
-                return Ok(());
-            }
-            Err(_) => {
-                debug!("KV config file not found, skipping load");
-                return Ok(());
-            }
-        };
-
-        let wrapper = KVConfigSerializeWrapper::decode(content.as_bytes()).map_err(|e| {
-            error!("Failed to decode KV config: {}", e);
-            e
-        })?;
-
-        if let Some(config_table) = wrapper.config_table {
+        if let Some(config_table) = config_table {
             let entry_count = config_table.len();
             for (namespace, kv_map) in config_table {
                 self.config_table.insert(namespace, kv_map);
             }
             info!("Loaded {} namespace(s) from KV config file", entry_count);
+        } else {
+            debug!("KV config file is missing or empty, starting with an empty table");
         }
-
-        // Reset pending changes after successful load
-        self.pending_changes.store(0, std::sync::atomic::Ordering::Relaxed);
-        *self.last_persist_time.lock() = Instant::now();
 
         Ok(())
     }
@@ -200,41 +245,11 @@ impl KVConfigManager {
     /// - `Ok(())` if persistence succeeds
     /// - `Err(RocketMQError)` if serialization or file write fails
     pub async fn persist_until(&self, deadline: MetadataDeadline) -> RocketMQResult<()> {
-        let namesrv_config = self.name_server_runtime_inner.name_server_config();
-        let config_path = namesrv_config.kv_config_path.to_string();
-
-        // Create a snapshot to minimize lock time
-        let content = {
-            let _persist_guard = self.persist_lock.lock();
-            let snapshot: dashmap::DashMap<Namespace, ConfigMap> = self
-                .config_table
-                .iter()
-                .map(|entry| (entry.key().clone(), entry.value().clone()))
-                .collect();
-            KVConfigSerializeWrapper::new_with_config_table(snapshot).serialize_json_pretty()?
-        };
-
-        match self.metadata_io.as_ref() {
-            Some(Ok(metadata_io)) => {
-                metadata_io
-                    .submit_next_durable("namesrv.kv-config", &config_path, content.into_bytes(), deadline)
-                    .await
-                    .map_err(crate::runtime_to_rocketmq_error)?;
-            }
-            Some(Err(error)) => return Err(crate::runtime_to_rocketmq_error(error.clone())),
-            None => {
-                // Legacy builders without ServiceContext retain a synchronous
-                // compatibility path. Production builders always install the
-                // actor above.
-                file_utils::string_to_file(content.as_str(), &config_path).map_err(crate::runtime_to_rocketmq_error)?;
-            }
-        }
-
-        // Reset counters after successful persistence
-        self.pending_changes.store(0, std::sync::atomic::Ordering::Relaxed);
-        *self.last_persist_time.lock() = Instant::now();
-
-        debug!("KV config persisted successfully to {}", config_path);
+        self.mutation_service()?
+            .submit(KvMutation::Persist, deadline)?
+            .wait_until(deadline)
+            .await?;
+        debug!(operation = "persist", "KV config persisted successfully");
         Ok(())
     }
 
@@ -250,10 +265,7 @@ impl KVConfigManager {
     /// - `Ok(false)` if persistence was skipped
     /// - `Err(RocketMQError)` if persistence fails
     pub async fn persist_if_needed(&self, deadline: MetadataDeadline) -> RocketMQResult<bool> {
-        let pending = self.pending_changes.load(std::sync::atomic::Ordering::Relaxed);
-        let elapsed = self.last_persist_time.lock().elapsed();
-
-        if pending >= AUTO_PERSIST_THRESHOLD || elapsed >= MIN_PERSIST_INTERVAL {
+        if self.pending_changes() > 0 {
             self.persist_until(deadline).await?;
             Ok(true)
         } else {
@@ -272,6 +284,19 @@ impl KVConfigManager {
 
     /// Stops admission and drains the owned persistence actor.
     pub async fn shutdown_metadata_io(&self, deadline: MetadataDeadline) -> Option<MetadataIoShutdownReport> {
+        if let Ok(service) = self.mutation_service.as_ref() {
+            let report = service.shutdown_until(deadline).await;
+            if report.timed_out || report.snapshot.pending_commands != 0 {
+                error!(
+                    timed_out = report.timed_out,
+                    pending = report.snapshot.pending_commands,
+                    desired_generation = report.snapshot.desired_generation,
+                    durable_generation = report.snapshot.durable_generation,
+                    applied_generation = report.snapshot.applied_generation,
+                    "KV mutation service did not drain cleanly"
+                );
+            }
+        }
         match self.metadata_io.as_ref() {
             Some(Ok(metadata_io)) => Some(metadata_io.shutdown_until(deadline).await),
             Some(Err(_)) | None => None,
@@ -294,28 +319,21 @@ impl KVConfigManager {
         value: Value,
         deadline: MetadataDeadline,
     ) -> RocketMQResult<()> {
-        let is_new = {
-            let mut namespace_entry = self.config_table.entry(namespace.clone()).or_default();
-            let pre_value = namespace_entry.insert(key.clone(), value.clone());
-            pre_value.is_none()
-        };
+        let receipt = self
+            .mutation_service()?
+            .submit(KvMutation::Put { namespace, key, value }, deadline)?
+            .wait_until(deadline)
+            .await?;
 
-        // Increment pending changes counter
-        self.pending_changes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-
-        if is_new {
-            debug!(
-                "Created new KV config: namespace={}, key={}, value={}",
-                namespace, key, value
-            );
-        } else {
-            debug!(
-                "Updated KV config: namespace={}, key={}, value={}",
-                namespace, key, value
-            );
-        }
-
-        self.persist_until(deadline).await?;
+        debug!(
+            operation = "put",
+            outcome = if receipt.changed_entries == 0 {
+                "unchanged"
+            } else {
+                "changed"
+            },
+            "KV config mutated"
+        );
         Ok(())
     }
 
@@ -338,24 +356,26 @@ impl KVConfigManager {
         key: &Key,
         deadline: MetadataDeadline,
     ) -> RocketMQResult<bool> {
-        let deleted_value = self
-            .config_table
-            .get_mut(namespace)
-            .and_then(|mut table| table.remove(key));
-
-        if let Some(value) = deleted_value {
-            // Increment pending changes counter
-            self.pending_changes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-
-            debug!(
-                "Deleted KV config: namespace={}, key={}, value={}",
-                namespace, key, value
-            );
-
-            self.persist_until(deadline).await?;
+        let receipt = self
+            .mutation_service()?
+            .submit(
+                KvMutation::Delete {
+                    namespace: namespace.clone(),
+                    key: key.clone(),
+                },
+                deadline,
+            )?
+            .wait_until(deadline)
+            .await?;
+        if receipt.changed_entries > 0 {
+            debug!(operation = "delete", outcome = "deleted", "KV config mutated");
             Ok(true)
         } else {
-            debug!("KV config not found for deletion: namespace={}, key={}", namespace, key);
+            debug!(
+                operation = "delete",
+                outcome = "not-found",
+                "KV config mutation skipped"
+            );
             Ok(false)
         }
     }
@@ -383,22 +403,24 @@ impl KVConfigManager {
             return Ok(0);
         }
 
-        let count = kv_pairs.len();
-        {
-            let mut namespace_entry = self.config_table.entry(namespace.clone()).or_default();
-            for (key, value) in kv_pairs {
-                namespace_entry.insert(key, value);
-            }
-        }
+        let receipt = self
+            .mutation_service()?
+            .submit(
+                KvMutation::BatchPut {
+                    namespace,
+                    values: kv_pairs,
+                },
+                deadline,
+            )?
+            .wait_until(deadline)
+            .await?;
 
-        // Increment pending changes counter
-        self.pending_changes
-            .fetch_add(count, std::sync::atomic::Ordering::Relaxed);
-
-        debug!("Batch updated {} KV configs in namespace={}", count, namespace);
-
-        self.persist_until(deadline).await?;
-        Ok(count)
+        debug!(
+            operation = "batch-put",
+            changed_entries = receipt.changed_entries,
+            "KV config batch mutated"
+        );
+        Ok(receipt.changed_entries)
     }
 
     /// Batch delete multiple key-value configurations in a namespace.
@@ -421,29 +443,25 @@ impl KVConfigManager {
             return Ok(0);
         }
 
-        let mut deleted_count = 0;
-        if let Some(mut namespace_entry) = self.config_table.get_mut(namespace) {
-            for key in keys {
-                if namespace_entry.remove(key).is_some() {
-                    deleted_count += 1;
-                }
-            }
-        }
-
-        if deleted_count > 0 {
-            // Increment pending changes counter
-            self.pending_changes
-                .fetch_add(deleted_count, std::sync::atomic::Ordering::Relaxed);
-
+        let receipt = self
+            .mutation_service()?
+            .submit(
+                KvMutation::BatchDelete {
+                    namespace: namespace.clone(),
+                    keys: keys.to_vec(),
+                },
+                deadline,
+            )?
+            .wait_until(deadline)
+            .await?;
+        if receipt.changed_entries > 0 {
             debug!(
-                "Batch deleted {} KV configs from namespace={}",
-                deleted_count, namespace
+                operation = "batch-delete",
+                changed_entries = receipt.changed_entries,
+                "KV config batch mutated"
             );
-
-            self.persist_until(deadline).await?;
         }
-
-        Ok(deleted_count)
+        Ok(receipt.changed_entries)
     }
 
     /// Deletes an entire namespace and all its key-value configurations.
@@ -456,19 +474,29 @@ impl KVConfigManager {
     ///
     /// - `Ok(usize)` - Number of keys deleted
     pub async fn delete_namespace(&self, namespace: &Namespace, deadline: MetadataDeadline) -> RocketMQResult<usize> {
-        if let Some((_, kv_map)) = self.config_table.remove(namespace) {
-            let count = kv_map.len();
-
-            // Increment pending changes counter
-            self.pending_changes
-                .fetch_add(count, std::sync::atomic::Ordering::Relaxed);
-
-            info!("Deleted namespace={} with {} configs", namespace, count);
-
-            self.persist_until(deadline).await?;
-            Ok(count)
+        let receipt = self
+            .mutation_service()?
+            .submit(
+                KvMutation::DeleteNamespace {
+                    namespace: namespace.clone(),
+                },
+                deadline,
+            )?
+            .wait_until(deadline)
+            .await?;
+        if receipt.changed_entries > 0 {
+            info!(
+                operation = "delete-namespace",
+                changed_entries = receipt.changed_entries,
+                "KV namespace deleted"
+            );
+            Ok(receipt.changed_entries)
         } else {
-            debug!("Namespace not found for deletion: {}", namespace);
+            debug!(
+                operation = "delete-namespace",
+                outcome = "not-found",
+                "KV namespace mutation skipped"
+            );
             Ok(0)
         }
     }
@@ -491,7 +519,7 @@ impl KVConfigManager {
             match table.encode() {
                 Ok(encoded) => Some(encoded),
                 Err(e) => {
-                    error!("Failed to encode KV table for namespace {}: {}", namespace, e);
+                    error!(operation = "encode-namespace", error = %e, "Failed to encode KV table");
                     None
                 }
             }
@@ -559,7 +587,7 @@ impl KVConfigManager {
     pub fn get_statistics(&self) -> (usize, usize, usize) {
         let namespace_count = self.config_table.len();
         let total_kv_pairs: usize = self.config_table.iter().map(|entry| entry.value().len()).sum();
-        let pending = self.pending_changes.load(std::sync::atomic::Ordering::Relaxed);
+        let pending = self.pending_changes();
 
         (namespace_count, total_kv_pairs, pending)
     }
@@ -568,11 +596,79 @@ impl KVConfigManager {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::io;
+    use std::path::Path;
     use std::sync::Arc;
 
     use cheetah_string::CheetahString;
+    use rocketmq_error::RocketMQError;
 
     use super::*;
+
+    #[test]
+    fn missing_kv_file_loads_as_an_empty_table() {
+        let loaded = load_config_table_with(Path::new("missing.json"), |_| {
+            Err(io::Error::new(io::ErrorKind::NotFound, "missing"))
+        })
+        .expect("a missing KV file is a valid first startup");
+
+        assert!(loaded.is_none());
+    }
+
+    #[test]
+    fn empty_kv_file_loads_as_an_empty_table() {
+        let loaded = load_config_table_with(Path::new("empty.json"), |_| Ok(String::new()))
+            .expect("an empty KV file should load successfully");
+
+        assert!(loaded.is_none());
+    }
+
+    #[test]
+    fn kv_load_preserves_permission_errors() {
+        let error = load_config_table_with(Path::new("protected.json"), |_| {
+            Err(io::Error::new(io::ErrorKind::PermissionDenied, "denied"))
+        })
+        .expect_err("permission failures must not be treated as a missing file");
+
+        match error {
+            RocketMQError::IO(source) => {
+                assert_eq!(source.kind(), io::ErrorKind::PermissionDenied);
+                assert!(source.to_string().contains("read KV config"));
+                assert!(source.to_string().contains("protected.json"));
+            }
+            other => panic!("expected an I/O error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn corrupt_kv_json_fails_load() {
+        let error = load_config_table_with(Path::new("corrupt.json"), |_| Ok("{not-json".to_string()))
+            .expect_err("corrupt persisted KV data must fail closed");
+
+        assert!(matches!(error, RocketMQError::Serialization(_)));
+    }
+
+    #[test]
+    fn java_config_table_fixture_is_compatible() {
+        let fixture = include_str!("../../tests/fixtures/kv/java-config-table.json");
+        let loaded = load_config_table_with(Path::new("java-config-table.json"), |_| Ok(fixture.to_string()))
+            .expect("Java KV fixture should decode")
+            .expect("Java KV fixture should contain configTable");
+
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(
+            loaded
+                .get("ORDER_TOPIC_CONFIG")
+                .and_then(|namespace| namespace.get("orders-eu").cloned()),
+            Some(CheetahString::from_static_str("broker-a:4;broker-b:4"))
+        );
+        assert_eq!(
+            loaded
+                .get("PROJECT_CONFIG")
+                .and_then(|namespace| namespace.get("tenant-unicode").cloned()),
+            Some(CheetahString::from_static_str("生产"))
+        );
+    }
 
     /// Tests for the internal config_table (DashMap) operations
     /// These tests don't require full KVConfigManager setup
@@ -728,30 +824,5 @@ mod tests {
         // Collect namespaces
         let namespaces: Vec<_> = config_table.iter().map(|entry| entry.key().clone()).collect();
         assert_eq!(namespaces.len(), 3);
-    }
-
-    #[test]
-    fn test_pending_changes_atomic() {
-        use std::sync::atomic::AtomicUsize;
-        use std::sync::atomic::Ordering;
-
-        let pending = Arc::new(AtomicUsize::new(0));
-
-        // Test atomic operations
-        pending.fetch_add(1, Ordering::Relaxed);
-        assert_eq!(pending.load(Ordering::Relaxed), 1);
-
-        pending.fetch_add(5, Ordering::Relaxed);
-        assert_eq!(pending.load(Ordering::Relaxed), 6);
-
-        pending.store(0, Ordering::Relaxed);
-        assert_eq!(pending.load(Ordering::Relaxed), 0);
-    }
-
-    #[test]
-    fn test_constants() {
-        // Verify constants are defined with expected values
-        assert_eq!(AUTO_PERSIST_THRESHOLD, 100);
-        assert_eq!(MIN_PERSIST_INTERVAL.as_secs(), 1);
     }
 }

@@ -1,0 +1,93 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "id": 1,
+      "title": "Request rate by class and outcome",
+      "type": "timeseries",
+      "targets": [{ "expr": "sum by (request_type, result) (rate(rocketmq_namesrv_requests_total[$__rate_interval]))", "legendFormat": "{{request_type}} {{result}}", "refId": "A" }],
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 }
+    },
+    {
+      "id": 2,
+      "title": "Route response-sent latency",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum by (le) (rate(rocketmq_namesrv_route_end_to_end_latency_bucket[$__rate_interval])))", "legendFormat": "p50", "refId": "A" },
+        { "expr": "histogram_quantile(0.99, sum by (le) (rate(rocketmq_namesrv_route_end_to_end_latency_bucket[$__rate_interval])))", "legendFormat": "p99", "refId": "B" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "µs" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 }
+    },
+    {
+      "id": 3,
+      "title": "Admission inflight and waiting",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "max by (request_type) (rocketmq_namesrv_workload_admission_inflight)", "legendFormat": "{{request_type}} inflight", "refId": "A" },
+        { "expr": "max by (request_type) (rocketmq_namesrv_workload_admission_waiting)", "legendFormat": "{{request_type}} waiting", "refId": "B" }
+      ],
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 8 }
+    },
+    {
+      "id": 4,
+      "title": "Route mutation latency",
+      "type": "timeseries",
+      "targets": [{ "expr": "histogram_quantile(0.99, sum by (le, stage) (rate(rocketmq_namesrv_mutation_latency_bucket[$__rate_interval])))", "legendFormat": "{{stage}} p99", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "µs" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 8 }
+    },
+    {
+      "id": 5,
+      "title": "Unregister queue and oldest age",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "max(rocketmq_namesrv_unregistration_queue_depth)", "legendFormat": "depth", "refId": "A" },
+        { "expr": "max(rocketmq_namesrv_unregistration_oldest_age)", "legendFormat": "oldest ms", "refId": "B" }
+      ],
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 8 }
+    },
+    {
+      "id": 6,
+      "title": "KV generation and queue",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "max by (state) (rocketmq_namesrv_kv_generation)", "legendFormat": "{{state}}", "refId": "A" },
+        { "expr": "max(rocketmq_namesrv_kv_queue_depth)", "legendFormat": "queue depth", "refId": "B" },
+        { "expr": "max(rocketmq_namesrv_kv_queue_bytes)", "legendFormat": "queue bytes", "refId": "C" }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 }
+    },
+    {
+      "id": 7,
+      "title": "Expiry scan and mismatches",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "sum by (result) (rate(rocketmq_namesrv_expiry_events_total[$__rate_interval]))", "legendFormat": "{{result}}", "refId": "A" },
+        { "expr": "histogram_quantile(0.99, sum by (le, result) (rate(rocketmq_namesrv_expiry_scan_duration_bucket[$__rate_interval])))", "legendFormat": "{{result}} p99", "refId": "B" }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 }
+    },
+    {
+      "id": 8,
+      "title": "Security and connections",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "sum by (operation, result) (rate(rocketmq_namesrv_security_events_total[$__rate_interval]))", "legendFormat": "{{operation}} {{result}}", "refId": "A" },
+        { "expr": "max(rocketmq_namesrv_active_connections)", "legendFormat": "active connections", "refId": "B" }
+      ],
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 24 }
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["rocketmq", "namesrv"],
+  "templating": { "list": [] },
+  "time": { "from": "now-6h", "to": "now" },
+  "timezone": "browser",
+  "title": "RocketMQ NameServer Production",
+  "uid": "rocketmq-namesrv-production",
+  "version": 1
+}

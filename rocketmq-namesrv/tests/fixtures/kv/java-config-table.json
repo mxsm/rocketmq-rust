@@ -1,0 +1,11 @@
+{
+  "configTable": {
+    "ORDER_TOPIC_CONFIG": {
+      "orders-eu": "broker-a:4;broker-b:4"
+    },
+    "PROJECT_CONFIG": {
+      "tenant-a": "project-alpha",
+      "tenant-unicode": "生产"
+    }
+  }
+}

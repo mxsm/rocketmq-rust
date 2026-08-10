@@ -18,6 +18,8 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::OnceLock;
+use std::time::Duration;
+use std::time::Instant;
 
 use arc_swap::ArcSwapOption;
 use dashmap::DashMap;
@@ -50,7 +52,6 @@ pub(crate) enum RouteVariant {
 pub(crate) struct TopicRouteView {
     route_data: Arc<TopicRouteData>,
     version: u64,
-    published_at: u64,
     variant: RouteVariant,
 }
 
@@ -68,7 +69,6 @@ impl TopicRouteSnapshot {
         TopicRouteView {
             route_data: Arc::clone(&self.route_data),
             version: self.version,
-            published_at: self.published_at,
             variant: RouteVariant::Base,
         }
     }
@@ -84,7 +84,6 @@ impl TopicRouteSnapshot {
             Some(route_data) => TopicRouteView {
                 route_data: Arc::clone(route_data),
                 version: self.version,
-                published_at: self.published_at,
                 variant: RouteVariant::ActingMaster,
             },
             None => self.base_view(),
@@ -101,10 +100,6 @@ impl TopicRouteView {
         self.version
     }
 
-    pub(crate) fn published_at(&self) -> u64 {
-        self.published_at
-    }
-
     pub(crate) fn variant(&self) -> RouteVariant {
         self.variant
     }
@@ -118,20 +113,41 @@ pub(crate) struct RouteMutationCoordinator {
     mutation_gate: Mutex<()>,
     snapshots: DashMap<RouteTopicName, Arc<ArcSwapOption<TopicRouteSnapshot>>>,
     next_version: AtomicU64,
+    metrics: rocketmq_observability::metrics::namesrv::NameServerMetrics,
 }
 
 impl RouteMutationCoordinator {
     pub(crate) fn new() -> Self {
+        Self::with_metrics(rocketmq_observability::metrics::namesrv::NameServerMetrics::noop())
+    }
+
+    pub(crate) fn with_metrics(metrics: rocketmq_observability::metrics::namesrv::NameServerMetrics) -> Self {
         Self {
             mutation_gate: Mutex::new(()),
             snapshots: DashMap::new(),
             next_version: AtomicU64::new(0),
+            metrics,
         }
     }
 
     pub(crate) fn begin_mutation(&self) -> RouteMutationGuard<'_> {
+        let wait_started = Instant::now();
+        let gate = self.mutation_gate.lock();
+        self.metrics.record_mutation_wait(wait_started.elapsed());
         RouteMutationGuard {
             coordinator: self,
+            _gate: gate,
+            hold_started: Instant::now(),
+        }
+    }
+
+    /// Pins the mutable source tables to one completed mutation generation.
+    ///
+    /// Management endpoints use this guard while assembling DTOs that span
+    /// multiple DashMap tables. Topic-route reads intentionally remain on the
+    /// independently published ArcSwap snapshots and never acquire this gate.
+    pub(crate) fn begin_management_read(&self) -> ManagementReadGuard<'_> {
+        ManagementReadGuard {
             _gate: self.mutation_gate.lock(),
         }
     }
@@ -152,9 +168,18 @@ impl Default for RouteMutationCoordinator {
 pub(crate) struct RouteMutationGuard<'a> {
     coordinator: &'a RouteMutationCoordinator,
     _gate: MutexGuard<'a, ()>,
+    hold_started: Instant,
+}
+
+pub(crate) struct ManagementReadGuard<'a> {
+    _gate: MutexGuard<'a, ()>,
 }
 
 impl RouteMutationGuard<'_> {
+    pub(crate) fn record_snapshot_rebuild(&self, elapsed: Duration, present: bool) {
+        self.coordinator.metrics.record_snapshot_rebuild(elapsed, present);
+    }
+
     /// Publishes a complete route, or an explicit absence, while the mutation gate is held.
     pub(crate) fn publish(&self, topic: TopicName, route_data: Option<TopicRouteData>) -> u64 {
         let version = self.coordinator.next_version.fetch_add(1, Ordering::Relaxed) + 1;
@@ -179,6 +204,14 @@ impl RouteMutationGuard<'_> {
             self.coordinator.snapshots.remove(&topic);
         }
         version
+    }
+}
+
+impl Drop for RouteMutationGuard<'_> {
+    fn drop(&mut self) {
+        self.coordinator
+            .metrics
+            .record_mutation_hold(self.hold_started.elapsed());
     }
 }
 

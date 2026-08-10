@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![allow(deprecated, reason = "this benchmark retains the legacy lock model as a comparison")]
+
 //! Performance benchmarks for RouteInfoManager concurrency models
 //!
 //! This benchmark compares three different concurrency approaches:
 //! 1. **Global RwLock**: Single lock for all operations (like Java version)
-//! 2. **Lock-Free DashMap**: No explicit locking (pure DashMap)
+//! 2. **Sharded DashMap**: No external coordinator (DashMap manages shard locks)
 //! 3. **Segmented Locks**: DashMap + segment-level locks (hybrid approach)
 //!
 //! ## Benchmark Scenarios
@@ -113,7 +115,7 @@ impl GlobalLockModel {
 }
 
 // ============================================================================
-// Concurrency Model 2: Lock-Free DashMap
+// Concurrency Model 2: Sharded DashMap
 // ============================================================================
 
 use dashmap::DashMap;
@@ -399,7 +401,7 @@ fn main() {
     for &num_threads in &thread_counts {
         let model = Arc::clone(&lock_free);
         bench_concurrent_reads(
-            "Lock-Free DashMap",
+            "Sharded DashMap",
             move |topic| {
                 model.read_topic(topic);
             },
@@ -444,7 +446,7 @@ fn main() {
     for &num_threads in &thread_counts {
         let model = Arc::clone(&lock_free);
         bench_concurrent_writes(
-            "Lock-Free DashMap",
+            "Sharded DashMap",
             move |name, data| {
                 model.write_broker(name, data);
             },
@@ -494,7 +496,7 @@ fn main() {
         let model = Arc::clone(&lock_free);
         let model_write = Arc::clone(&lock_free);
         bench_mixed_workload(
-            "Lock-Free DashMap",
+            "Sharded DashMap",
             move |topic| {
                 model.read_topic(topic);
             },

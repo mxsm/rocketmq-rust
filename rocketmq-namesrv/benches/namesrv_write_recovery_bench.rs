@@ -32,7 +32,6 @@ use rocketmq_namesrv::route::types::BrokerAddrInfo;
 use rocketmq_protocol::protocol::DataVersion;
 
 const BROKER_COUNT: usize = 10_000;
-const EXPIRED_COUNT: usize = 1_000;
 const CURRENT_TIME: u64 = 1_000_000;
 
 fn broker(index: usize) -> Arc<BrokerAddrInfo> {
@@ -42,11 +41,11 @@ fn broker(index: usize) -> Arc<BrokerAddrInfo> {
     ))
 }
 
-fn fixture(mode: ExpiryIndexMode) -> (BrokerLiveTable, Vec<Arc<BrokerAddrInfo>>) {
+fn fixture(mode: ExpiryIndexMode, expired_count: usize) -> (BrokerLiveTable, Vec<Arc<BrokerAddrInfo>>) {
     let table = BrokerLiveTable::with_capacity_and_expiry_index(BROKER_COUNT, mode);
     let brokers = (0..BROKER_COUNT).map(broker).collect::<Vec<_>>();
     for (index, broker) in brokers.iter().enumerate() {
-        let last_update = if index < EXPIRED_COUNT { 0 } else { CURRENT_TIME };
+        let last_update = if index < expired_count { 0 } else { CURRENT_TIME };
         table.register(
             Arc::clone(broker),
             BrokerLiveInfo::new(
@@ -62,21 +61,23 @@ fn fixture(mode: ExpiryIndexMode) -> (BrokerLiveTable, Vec<Arc<BrokerAddrInfo>>)
 }
 
 fn bench_expiry_lookup(c: &mut Criterion) {
-    let (full_scan, _) = fixture(ExpiryIndexMode::Off);
-    let (indexed, _) = fixture(ExpiryIndexMode::Active);
-    let mut group = c.benchmark_group("namesrv-expiry-10k-brokers-10pct-expired");
-    group.bench_function("full-scan", |b| {
-        b.iter(|| black_box(full_scan.get_expired_brokers(CURRENT_TIME)))
-    });
-    group.bench_function("deadline-index", |b| {
-        b.iter(|| black_box(indexed.get_indexed_expired_brokers(CURRENT_TIME)))
-    });
-    group.finish();
+    for (label, expired_count) in [("10pct", 1_000), ("50pct", 5_000), ("100pct", 10_000)] {
+        let (full_scan, _) = fixture(ExpiryIndexMode::Off, expired_count);
+        let (indexed, _) = fixture(ExpiryIndexMode::Active, expired_count);
+        let mut group = c.benchmark_group(format!("namesrv-expiry-10k-brokers-{label}-expired"));
+        group.bench_function("full-scan", |b| {
+            b.iter(|| black_box(full_scan.get_expired_brokers(CURRENT_TIME)))
+        });
+        group.bench_function("deadline-index", |b| {
+            b.iter(|| black_box(indexed.get_indexed_expired_brokers(CURRENT_TIME)))
+        });
+        group.finish();
+    }
 }
 
 fn bench_heartbeat_update(c: &mut Criterion) {
-    let (without_index, off_brokers) = fixture(ExpiryIndexMode::Off);
-    let (with_index, active_brokers) = fixture(ExpiryIndexMode::Active);
+    let (without_index, off_brokers) = fixture(ExpiryIndexMode::Off, 1_000);
+    let (with_index, active_brokers) = fixture(ExpiryIndexMode::Active, 1_000);
     let mut sequence = 0_usize;
     let mut group = c.benchmark_group("namesrv-heartbeat-10k-brokers");
     group.bench_function("atomic-only", |b| {

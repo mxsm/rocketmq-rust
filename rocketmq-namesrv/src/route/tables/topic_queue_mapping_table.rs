@@ -39,7 +39,7 @@ use crate::route::types::TopicName;
 /// # Performance
 /// - Read operations: O(1) average for topic, O(1) for broker lookup
 /// - Write operations: O(1) average, per-topic lock
-/// - Concurrent access: Lock-free reads, per-topic lock for writes
+/// - Concurrent access: DashMap sharding plus per-topic mutation guards
 ///
 /// # Example
 /// ```no_run

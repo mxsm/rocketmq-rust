@@ -19,6 +19,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 pub mod kvconfig_mananger;
+pub(crate) mod persistence;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct KVConfigSerializeWrapper {
@@ -37,12 +38,6 @@ impl KVConfigSerializeWrapper {
     ) -> KVConfigSerializeWrapper {
         KVConfigSerializeWrapper {
             config_table: Some(config_table),
-        }
-    }
-
-    pub fn new() -> KVConfigSerializeWrapper {
-        KVConfigSerializeWrapper {
-            config_table: Some(dashmap::DashMap::new()),
         }
     }
 }

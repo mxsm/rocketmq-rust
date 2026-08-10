@@ -12,32 +12,47 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use rocketmq_observability::metrics::namesrv::NameServerConnectionEvent;
 use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ChannelEventListener;
+use rocketmq_transport::api::v1::ChannelId;
 
 use crate::bootstrap::NameServerRuntimeHandle;
 
 pub struct BrokerHousekeepingService {
     name_server_runtime_inner: NameServerRuntimeHandle,
+    active_channels: dashmap::DashSet<ChannelId>,
 }
 
 impl BrokerHousekeepingService {
     pub(crate) fn new(name_server_runtime_inner: NameServerRuntimeHandle) -> Self {
         Self {
             name_server_runtime_inner,
+            active_channels: dashmap::DashSet::new(),
         }
     }
 }
 
 impl ChannelEventListener for BrokerHousekeepingService {
     #[inline]
-    fn on_channel_connect(&self, _remote_addr: &str, _channel: &Channel) {
-        //nothing needs to be done
+    fn on_channel_connect(&self, _remote_addr: &str, channel: &Channel) {
+        if self.active_channels.insert(channel.channel_id_owned()) {
+            if let Some(runtime) = self.name_server_runtime_inner.upgrade() {
+                runtime
+                    .namesrv_metrics()
+                    .record_connection_event(NameServerConnectionEvent::Admitted, self.active_channels.len());
+            }
+        }
     }
 
     #[inline]
     fn on_channel_close(&self, _remote_addr: &str, channel: &Channel) {
         if let Some(runtime) = self.name_server_runtime_inner.upgrade() {
+            if self.active_channels.remove(&channel.channel_id_owned()).is_some() {
+                runtime
+                    .namesrv_metrics()
+                    .record_connection_event(NameServerConnectionEvent::Closed, self.active_channels.len());
+            }
             runtime.route_info_manager().on_channel_destroy(channel);
         }
     }
@@ -52,6 +67,9 @@ impl ChannelEventListener for BrokerHousekeepingService {
     #[inline]
     fn on_channel_idle(&self, _remote_addr: &str, channel: &Channel) {
         if let Some(runtime) = self.name_server_runtime_inner.upgrade() {
+            runtime
+                .namesrv_metrics()
+                .record_connection_event(NameServerConnectionEvent::IdleReconnect, self.active_channels.len());
             runtime.route_info_manager().on_channel_destroy(channel);
         }
     }

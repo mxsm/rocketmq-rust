@@ -43,6 +43,11 @@ const MAX_UNREGISTER_BATCH_TIME_MILLIS: u64 = 50;
 const MIN_EXPIRY_SAFETY_SCAN_INTERVAL_MILLIS: u64 = 30_000;
 const MAX_EXPIRY_SAFETY_SCAN_INTERVAL_MILLIS: u64 = 3_600_000;
 const MAX_MIN_BROKER_NOTIFY_CONCURRENCY: u64 = 128;
+const MAX_KV_MUTATION_QUEUE_CAPACITY: u64 = 1_000_000;
+const MAX_KV_MUTATION_BATCH_SIZE: u64 = 1024;
+const MAX_CLUSTER_TEST_ROUTE_CACHE_TTL_MILLIS: u64 = 60_000;
+const MAX_CLUSTER_TEST_ROUTE_CACHE_ENTRIES: u64 = 1_000_000;
+const MAX_CLUSTER_TEST_ROUTE_CACHE_BYTES: u64 = 1024 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -104,6 +109,12 @@ pub(crate) enum NamesrvConfigKey {
     NamesrvWorkloadAdmissionObserveOnly,
     NamesrvWorkloadAdmissionTimeoutMillis,
     EnableRegistrationDelta,
+    ClusterTestRouteCachePositiveTtlMillis,
+    ClusterTestRouteCacheNegativeTtlMillis,
+    ClusterTestRouteCacheMaxEntries,
+    ClusterTestRouteCacheMaxBytes,
+    KvMutationQueueCapacity,
+    KvMutationBatchSize,
     UnregisterBrokerBatchSize,
     UnregisterBrokerBatchTimeMillis,
     ExpiryIndexMode,
@@ -129,6 +140,56 @@ pub(crate) enum NamesrvConfigKey {
 }
 
 impl NamesrvConfigKey {
+    #[cfg(test)]
+    const ALL: [Self; 46] = [
+        Self::RocketmqHome,
+        Self::KvConfigPath,
+        Self::ConfigStorePath,
+        Self::ProductEnvName,
+        Self::ClusterTest,
+        Self::OrderMessageEnable,
+        Self::RouteFreshnessSampleInterval,
+        Self::NamesrvTypedZoneRouteEnable,
+        Self::NamesrvTypedZoneRouteShadow,
+        Self::NamesrvRouteResponseCacheEnable,
+        Self::NamesrvRouteResponseCacheMaxBytes,
+        Self::NamesrvRouteResponseCacheMaxEntries,
+        Self::NamesrvRouteResponseCacheMaxSingleResponseBytes,
+        Self::NamesrvRouteResponseCacheShards,
+        Self::NamesrvWorkloadAdmissionEnable,
+        Self::NamesrvWorkloadAdmissionObserveOnly,
+        Self::NamesrvWorkloadAdmissionTimeoutMillis,
+        Self::EnableRegistrationDelta,
+        Self::ClusterTestRouteCachePositiveTtlMillis,
+        Self::ClusterTestRouteCacheNegativeTtlMillis,
+        Self::ClusterTestRouteCacheMaxEntries,
+        Self::ClusterTestRouteCacheMaxBytes,
+        Self::KvMutationQueueCapacity,
+        Self::KvMutationBatchSize,
+        Self::UnregisterBrokerBatchSize,
+        Self::UnregisterBrokerBatchTimeMillis,
+        Self::ExpiryIndexMode,
+        Self::ExpirySafetyScanInterval,
+        Self::MinBrokerNotifyConcurrency,
+        Self::ReturnOrderTopicConfigToBroker,
+        Self::ClientRequestThreadPoolNums,
+        Self::DefaultThreadPoolNums,
+        Self::ClientRequestThreadPoolQueueCapacity,
+        Self::DefaultThreadPoolQueueCapacity,
+        Self::ScanNotActiveBrokerInterval,
+        Self::UnregisterBrokerQueueCapacity,
+        Self::SupportActingMaster,
+        Self::EnableAllTopicList,
+        Self::EnableTopicList,
+        Self::NotifyMinBrokerIdChanged,
+        Self::EnableControllerInNamesrv,
+        Self::NeedWaitForService,
+        Self::WaitSecondsForService,
+        Self::DeleteTopicWithBrokerRegistration,
+        Self::AllowInsecurePublicListener,
+        Self::ConfigBlackList,
+    ];
+
     pub(crate) fn from_java_name(key: &str) -> Option<Self> {
         Some(match key {
             "rocketmqHome" => Self::RocketmqHome,
@@ -149,6 +210,12 @@ impl NamesrvConfigKey {
             "namesrvWorkloadAdmissionObserveOnly" => Self::NamesrvWorkloadAdmissionObserveOnly,
             "namesrvWorkloadAdmissionTimeoutMillis" => Self::NamesrvWorkloadAdmissionTimeoutMillis,
             "enableRegistrationDelta" => Self::EnableRegistrationDelta,
+            "clusterTestRouteCachePositiveTtlMillis" => Self::ClusterTestRouteCachePositiveTtlMillis,
+            "clusterTestRouteCacheNegativeTtlMillis" => Self::ClusterTestRouteCacheNegativeTtlMillis,
+            "clusterTestRouteCacheMaxEntries" => Self::ClusterTestRouteCacheMaxEntries,
+            "clusterTestRouteCacheMaxBytes" => Self::ClusterTestRouteCacheMaxBytes,
+            "kvMutationQueueCapacity" => Self::KvMutationQueueCapacity,
+            "kvMutationBatchSize" => Self::KvMutationBatchSize,
             "unRegisterBrokerBatchSize" => Self::UnregisterBrokerBatchSize,
             "unRegisterBrokerBatchTimeMillis" => Self::UnregisterBrokerBatchTimeMillis,
             "expiryIndexMode" => Self::ExpiryIndexMode,
@@ -207,6 +274,12 @@ impl NamesrvConfigKey {
             | Self::NamesrvRouteResponseCacheShards => ConfigMutability::RestartRequired,
             Self::NamesrvWorkloadAdmissionTimeoutMillis
             | Self::EnableRegistrationDelta
+            | Self::ClusterTestRouteCachePositiveTtlMillis
+            | Self::ClusterTestRouteCacheNegativeTtlMillis
+            | Self::ClusterTestRouteCacheMaxEntries
+            | Self::ClusterTestRouteCacheMaxBytes
+            | Self::KvMutationQueueCapacity
+            | Self::KvMutationBatchSize
             | Self::UnregisterBrokerBatchSize
             | Self::UnregisterBrokerBatchTimeMillis
             | Self::ExpiryIndexMode
@@ -277,6 +350,22 @@ pub(crate) fn validate_namesrv_property(key: NamesrvConfigKey, value: &str) -> R
         }
         NamesrvConfigKey::UnregisterBrokerBatchSize => {
             parse_bounded_u64(key, value, 1, MAX_UNREGISTER_BATCH_SIZE)?;
+        }
+        NamesrvConfigKey::KvMutationQueueCapacity => {
+            parse_bounded_u64(key, value, 1, MAX_KV_MUTATION_QUEUE_CAPACITY)?;
+        }
+        NamesrvConfigKey::KvMutationBatchSize => {
+            parse_bounded_u64(key, value, 1, MAX_KV_MUTATION_BATCH_SIZE)?;
+        }
+        NamesrvConfigKey::ClusterTestRouteCachePositiveTtlMillis
+        | NamesrvConfigKey::ClusterTestRouteCacheNegativeTtlMillis => {
+            parse_bounded_u64(key, value, 1, MAX_CLUSTER_TEST_ROUTE_CACHE_TTL_MILLIS)?;
+        }
+        NamesrvConfigKey::ClusterTestRouteCacheMaxEntries => {
+            parse_bounded_u64(key, value, 1, MAX_CLUSTER_TEST_ROUTE_CACHE_ENTRIES)?;
+        }
+        NamesrvConfigKey::ClusterTestRouteCacheMaxBytes => {
+            parse_bounded_u64(key, value, 1, MAX_CLUSTER_TEST_ROUTE_CACHE_BYTES)?;
         }
         NamesrvConfigKey::UnregisterBrokerBatchTimeMillis => {
             parse_bounded_u64(key, value, 1, MAX_UNREGISTER_BATCH_TIME_MILLIS)?;
@@ -352,6 +441,12 @@ impl NamesrvConfigKey {
             Self::NamesrvWorkloadAdmissionObserveOnly => "namesrvWorkloadAdmissionObserveOnly",
             Self::NamesrvWorkloadAdmissionTimeoutMillis => "namesrvWorkloadAdmissionTimeoutMillis",
             Self::EnableRegistrationDelta => "enableRegistrationDelta",
+            Self::ClusterTestRouteCachePositiveTtlMillis => "clusterTestRouteCachePositiveTtlMillis",
+            Self::ClusterTestRouteCacheNegativeTtlMillis => "clusterTestRouteCacheNegativeTtlMillis",
+            Self::ClusterTestRouteCacheMaxEntries => "clusterTestRouteCacheMaxEntries",
+            Self::ClusterTestRouteCacheMaxBytes => "clusterTestRouteCacheMaxBytes",
+            Self::KvMutationQueueCapacity => "kvMutationQueueCapacity",
+            Self::KvMutationBatchSize => "kvMutationBatchSize",
             Self::UnregisterBrokerBatchSize => "unRegisterBrokerBatchSize",
             Self::UnregisterBrokerBatchTimeMillis => "unRegisterBrokerBatchTimeMillis",
             Self::ExpiryIndexMode => "expiryIndexMode",
@@ -514,6 +609,30 @@ mod defaults {
         8
     }
 
+    pub fn kv_mutation_queue_capacity() -> usize {
+        1024
+    }
+
+    pub fn kv_mutation_batch_size() -> usize {
+        100
+    }
+
+    pub fn cluster_test_route_cache_positive_ttl_millis() -> u64 {
+        1_000
+    }
+
+    pub fn cluster_test_route_cache_negative_ttl_millis() -> u64 {
+        250
+    }
+
+    pub fn cluster_test_route_cache_max_entries() -> u64 {
+        1_000
+    }
+
+    pub fn cluster_test_route_cache_max_bytes() -> u64 {
+        16 * 1024 * 1024
+    }
+
     pub fn config_black_list() -> String {
         "configBlackList;configStorePath;kvConfigPath".to_string()
     }
@@ -594,6 +713,36 @@ pub struct NamesrvConfig {
 
     #[serde(alias = "enableRegistrationDelta", default)]
     pub enable_registration_delta: bool,
+
+    #[serde(
+        alias = "clusterTestRouteCachePositiveTtlMillis",
+        default = "defaults::cluster_test_route_cache_positive_ttl_millis"
+    )]
+    pub cluster_test_route_cache_positive_ttl_millis: u64,
+
+    #[serde(
+        alias = "clusterTestRouteCacheNegativeTtlMillis",
+        default = "defaults::cluster_test_route_cache_negative_ttl_millis"
+    )]
+    pub cluster_test_route_cache_negative_ttl_millis: u64,
+
+    #[serde(
+        alias = "clusterTestRouteCacheMaxEntries",
+        default = "defaults::cluster_test_route_cache_max_entries"
+    )]
+    pub cluster_test_route_cache_max_entries: u64,
+
+    #[serde(
+        alias = "clusterTestRouteCacheMaxBytes",
+        default = "defaults::cluster_test_route_cache_max_bytes"
+    )]
+    pub cluster_test_route_cache_max_bytes: u64,
+
+    #[serde(alias = "kvMutationQueueCapacity", default = "defaults::kv_mutation_queue_capacity")]
+    pub kv_mutation_queue_capacity: usize,
+
+    #[serde(alias = "kvMutationBatchSize", default = "defaults::kv_mutation_batch_size")]
+    pub kv_mutation_batch_size: usize,
 
     #[serde(
         alias = "unRegisterBrokerBatchSize",
@@ -720,6 +869,12 @@ impl Default for NamesrvConfig {
             namesrv_workload_admission_observe_only: true,
             namesrv_workload_admission_timeout_millis: defaults::namesrv_workload_admission_timeout_millis(),
             enable_registration_delta: false,
+            cluster_test_route_cache_positive_ttl_millis: defaults::cluster_test_route_cache_positive_ttl_millis(),
+            cluster_test_route_cache_negative_ttl_millis: defaults::cluster_test_route_cache_negative_ttl_millis(),
+            cluster_test_route_cache_max_entries: defaults::cluster_test_route_cache_max_entries(),
+            cluster_test_route_cache_max_bytes: defaults::cluster_test_route_cache_max_bytes(),
+            kv_mutation_queue_capacity: defaults::kv_mutation_queue_capacity(),
+            kv_mutation_batch_size: defaults::kv_mutation_batch_size(),
             unregister_broker_batch_size: defaults::unregister_broker_batch_size(),
             unregister_broker_batch_time_millis: defaults::unregister_broker_batch_time_millis(),
             expiry_index_mode: ExpiryIndexMode::Off,
@@ -818,6 +973,30 @@ impl NamesrvConfig {
         json_map.insert(
             "enableRegistrationDelta".to_string(),
             Value::String(self.enable_registration_delta.to_string()),
+        );
+        json_map.insert(
+            "clusterTestRouteCachePositiveTtlMillis".to_string(),
+            Value::String(self.cluster_test_route_cache_positive_ttl_millis.to_string()),
+        );
+        json_map.insert(
+            "clusterTestRouteCacheNegativeTtlMillis".to_string(),
+            Value::String(self.cluster_test_route_cache_negative_ttl_millis.to_string()),
+        );
+        json_map.insert(
+            "clusterTestRouteCacheMaxEntries".to_string(),
+            Value::String(self.cluster_test_route_cache_max_entries.to_string()),
+        );
+        json_map.insert(
+            "clusterTestRouteCacheMaxBytes".to_string(),
+            Value::String(self.cluster_test_route_cache_max_bytes.to_string()),
+        );
+        json_map.insert(
+            "kvMutationQueueCapacity".to_string(),
+            Value::String(self.kv_mutation_queue_capacity.to_string()),
+        );
+        json_map.insert(
+            "kvMutationBatchSize".to_string(),
+            Value::String(self.kv_mutation_batch_size.to_string()),
         );
         json_map.insert(
             "unRegisterBrokerBatchSize".to_string(),
@@ -966,153 +1145,172 @@ impl NamesrvConfig {
                 RocketMQError::nameserver_config_invalid(format!("unknown configuration key '{key}'"))
             })?;
             validate_namesrv_property(config_key, value.as_str())?;
-            match key.as_str() {
-                "rocketmqHome" => self.rocketmq_home = value.to_string(),
-                "kvConfigPath" => self.kv_config_path = value.to_string(),
-                "configStorePath" => self.config_store_path = value.to_string(),
-                "productEnvName" => self.product_env_name = value.to_string(),
-                "clusterTest" => {
+            match config_key {
+                NamesrvConfigKey::RocketmqHome => self.rocketmq_home = value.to_string(),
+                NamesrvConfigKey::KvConfigPath => self.kv_config_path = value.to_string(),
+                NamesrvConfigKey::ConfigStorePath => self.config_store_path = value.to_string(),
+                NamesrvConfigKey::ProductEnvName => self.product_env_name = value.to_string(),
+                NamesrvConfigKey::ClusterTest => {
                     self.cluster_test = value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
-                "orderMessageEnable" => {
+                NamesrvConfigKey::OrderMessageEnable => {
                     self.order_message_enable = value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
-                "routeFreshnessSampleInterval" => {
+                NamesrvConfigKey::RouteFreshnessSampleInterval => {
                     self.route_freshness_sample_interval =
                         value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
-                "namesrvTypedZoneRouteEnable" => {
+                NamesrvConfigKey::NamesrvTypedZoneRouteEnable => {
                     self.namesrv_typed_zone_route_enable =
                         value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
-                "namesrvTypedZoneRouteShadow" => {
+                NamesrvConfigKey::NamesrvTypedZoneRouteShadow => {
                     self.namesrv_typed_zone_route_shadow =
                         value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
-                "namesrvRouteResponseCacheEnable" => {
+                NamesrvConfigKey::NamesrvRouteResponseCacheEnable => {
                     self.namesrv_route_response_cache_enable =
                         value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
-                "namesrvRouteResponseCacheMaxBytes" => {
+                NamesrvConfigKey::NamesrvRouteResponseCacheMaxBytes => {
                     self.namesrv_route_response_cache_max_bytes =
                         value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
-                "namesrvRouteResponseCacheMaxEntries" => {
+                NamesrvConfigKey::NamesrvRouteResponseCacheMaxEntries => {
                     self.namesrv_route_response_cache_max_entries =
                         value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
-                "namesrvRouteResponseCacheMaxSingleResponseBytes" => {
+                NamesrvConfigKey::NamesrvRouteResponseCacheMaxSingleResponseBytes => {
                     self.namesrv_route_response_cache_max_single_response_bytes =
                         value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
-                "namesrvRouteResponseCacheShards" => {
+                NamesrvConfigKey::NamesrvRouteResponseCacheShards => {
                     self.namesrv_route_response_cache_shards =
                         value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
-                "namesrvWorkloadAdmissionEnable" => {
+                NamesrvConfigKey::NamesrvWorkloadAdmissionEnable => {
                     self.namesrv_workload_admission_enable =
                         value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
-                "namesrvWorkloadAdmissionObserveOnly" => {
+                NamesrvConfigKey::NamesrvWorkloadAdmissionObserveOnly => {
                     self.namesrv_workload_admission_observe_only =
                         value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
-                "namesrvWorkloadAdmissionTimeoutMillis" => {
+                NamesrvConfigKey::NamesrvWorkloadAdmissionTimeoutMillis => {
                     self.namesrv_workload_admission_timeout_millis =
                         value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
-                "enableRegistrationDelta" => {
+                NamesrvConfigKey::EnableRegistrationDelta => {
                     self.enable_registration_delta =
                         value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
-                "unRegisterBrokerBatchSize" => {
+                NamesrvConfigKey::ClusterTestRouteCachePositiveTtlMillis => {
+                    self.cluster_test_route_cache_positive_ttl_millis =
+                        value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
+                }
+                NamesrvConfigKey::ClusterTestRouteCacheNegativeTtlMillis => {
+                    self.cluster_test_route_cache_negative_ttl_millis =
+                        value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
+                }
+                NamesrvConfigKey::ClusterTestRouteCacheMaxEntries => {
+                    self.cluster_test_route_cache_max_entries =
+                        value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
+                }
+                NamesrvConfigKey::ClusterTestRouteCacheMaxBytes => {
+                    self.cluster_test_route_cache_max_bytes =
+                        value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
+                }
+                NamesrvConfigKey::KvMutationQueueCapacity => {
+                    self.kv_mutation_queue_capacity =
+                        value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
+                }
+                NamesrvConfigKey::KvMutationBatchSize => {
+                    self.kv_mutation_batch_size =
+                        value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
+                }
+                NamesrvConfigKey::UnregisterBrokerBatchSize => {
                     self.unregister_broker_batch_size =
                         value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
-                "unRegisterBrokerBatchTimeMillis" => {
+                NamesrvConfigKey::UnregisterBrokerBatchTimeMillis => {
                     self.unregister_broker_batch_time_millis =
                         value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
-                "expiryIndexMode" => {
+                NamesrvConfigKey::ExpiryIndexMode => {
                     self.expiry_index_mode = value
                         .parse()
                         .map_err(|_| invalid_value(&key, "expected one of off, shadow, active"))?
                 }
-                "expirySafetyScanInterval" => {
+                NamesrvConfigKey::ExpirySafetyScanInterval => {
                     self.expiry_safety_scan_interval =
                         value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
-                "minBrokerNotifyConcurrency" => {
+                NamesrvConfigKey::MinBrokerNotifyConcurrency => {
                     self.min_broker_notify_concurrency =
                         value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
-                "returnOrderTopicConfigToBroker" => {
+                NamesrvConfigKey::ReturnOrderTopicConfigToBroker => {
                     self.return_order_topic_config_to_broker =
                         value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
-                "clientRequestThreadPoolNums" => {
+                NamesrvConfigKey::ClientRequestThreadPoolNums => {
                     self.client_request_thread_pool_nums =
                         value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
-                "defaultThreadPoolNums" => {
+                NamesrvConfigKey::DefaultThreadPoolNums => {
                     self.default_thread_pool_nums =
                         value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
-                "clientRequestThreadPoolQueueCapacity" => {
+                NamesrvConfigKey::ClientRequestThreadPoolQueueCapacity => {
                     self.client_request_thread_pool_queue_capacity =
                         value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
-                "defaultThreadPoolQueueCapacity" => {
+                NamesrvConfigKey::DefaultThreadPoolQueueCapacity => {
                     self.default_thread_pool_queue_capacity =
                         value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
-                "scanNotActiveBrokerInterval" => {
+                NamesrvConfigKey::ScanNotActiveBrokerInterval => {
                     self.scan_not_active_broker_interval =
                         value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
-                "unRegisterBrokerQueueCapacity" => {
+                NamesrvConfigKey::UnregisterBrokerQueueCapacity => {
                     self.unregister_broker_queue_capacity =
                         value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
-                "supportActingMaster" => {
+                NamesrvConfigKey::SupportActingMaster => {
                     self.support_acting_master = value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
-                "enableAllTopicList" => {
+                NamesrvConfigKey::EnableAllTopicList => {
                     self.enable_all_topic_list = value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
-                "enableTopicList" => {
+                NamesrvConfigKey::EnableTopicList => {
                     self.enable_topic_list = value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
-                "notifyMinBrokerIdChanged" => {
+                NamesrvConfigKey::NotifyMinBrokerIdChanged => {
                     self.notify_min_broker_id_changed =
                         value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
-                "enableControllerInNamesrv" => {
+                NamesrvConfigKey::EnableControllerInNamesrv => {
                     self.enable_controller_in_namesrv =
                         value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
-                "needWaitForService" => {
+                NamesrvConfigKey::NeedWaitForService => {
                     self.need_wait_for_service = value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
-                "waitSecondsForService" => {
+                NamesrvConfigKey::WaitSecondsForService => {
                     self.wait_seconds_for_service =
                         value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
-                "deleteTopicWithBrokerRegistration" => {
+                NamesrvConfigKey::DeleteTopicWithBrokerRegistration => {
                     self.delete_topic_with_broker_registration =
                         value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
-                "allowInsecurePublicListener" => {
+                NamesrvConfigKey::AllowInsecurePublicListener => {
                     self.allow_insecure_public_listener =
                         value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
-                "configBlackList" => {
+                NamesrvConfigKey::ConfigBlackList => {
                     self.config_black_list = value.to_string();
-                }
-                _ => {
-                    return Err(RocketMQError::nameserver_config_invalid(format!(
-                        "unknown configuration key '{key}'"
-                    )));
                 }
             }
         }
@@ -1173,6 +1371,30 @@ impl NamesrvConfig {
             (
                 NamesrvConfigKey::NamesrvWorkloadAdmissionTimeoutMillis,
                 self.namesrv_workload_admission_timeout_millis.to_string(),
+            ),
+            (
+                NamesrvConfigKey::ClusterTestRouteCachePositiveTtlMillis,
+                self.cluster_test_route_cache_positive_ttl_millis.to_string(),
+            ),
+            (
+                NamesrvConfigKey::ClusterTestRouteCacheNegativeTtlMillis,
+                self.cluster_test_route_cache_negative_ttl_millis.to_string(),
+            ),
+            (
+                NamesrvConfigKey::ClusterTestRouteCacheMaxEntries,
+                self.cluster_test_route_cache_max_entries.to_string(),
+            ),
+            (
+                NamesrvConfigKey::ClusterTestRouteCacheMaxBytes,
+                self.cluster_test_route_cache_max_bytes.to_string(),
+            ),
+            (
+                NamesrvConfigKey::KvMutationQueueCapacity,
+                self.kv_mutation_queue_capacity.to_string(),
+            ),
+            (
+                NamesrvConfigKey::KvMutationBatchSize,
+                self.kv_mutation_batch_size.to_string(),
             ),
             (
                 NamesrvConfigKey::UnregisterBrokerBatchSize,
@@ -1314,6 +1536,7 @@ pub fn is_tls_config_key(key: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::env;
 
     use super::*;
@@ -1361,6 +1584,12 @@ mod tests {
         assert!(config.namesrv_workload_admission_observe_only);
         assert_eq!(config.namesrv_workload_admission_timeout_millis, 100);
         assert!(!config.enable_registration_delta);
+        assert_eq!(config.cluster_test_route_cache_positive_ttl_millis, 1_000);
+        assert_eq!(config.cluster_test_route_cache_negative_ttl_millis, 250);
+        assert_eq!(config.cluster_test_route_cache_max_entries, 1_000);
+        assert_eq!(config.cluster_test_route_cache_max_bytes, 16 * 1024 * 1024);
+        assert_eq!(config.kv_mutation_queue_capacity, 1024);
+        assert_eq!(config.kv_mutation_batch_size, 100);
         assert_eq!(config.unregister_broker_batch_size, 100);
         assert_eq!(config.unregister_broker_batch_time_millis, 2);
         assert_eq!(config.expiry_index_mode, ExpiryIndexMode::Off);
@@ -1424,6 +1653,11 @@ mod tests {
             CheetahString::from("500"),
         );
         properties.insert(
+            CheetahString::from("kvMutationQueueCapacity"),
+            CheetahString::from("2048"),
+        );
+        properties.insert(CheetahString::from("kvMutationBatchSize"), CheetahString::from("64"));
+        properties.insert(
             CheetahString::from("clientRequestThreadPoolNums"),
             CheetahString::from("10"),
         );
@@ -1483,6 +1717,8 @@ mod tests {
         assert!(!config.namesrv_workload_admission_enable);
         assert!(!config.namesrv_workload_admission_observe_only);
         assert_eq!(config.namesrv_workload_admission_timeout_millis, 500);
+        assert_eq!(config.kv_mutation_queue_capacity, 2048);
+        assert_eq!(config.kv_mutation_batch_size, 64);
         assert_eq!(config.client_request_thread_pool_nums, 10);
         assert_eq!(config.default_thread_pool_nums, 20);
         assert_eq!(config.client_request_thread_pool_queue_capacity, 10000);
@@ -1523,6 +1759,14 @@ mod tests {
         assert_eq!(
             parsed["routeFreshnessSampleInterval"].as_str().unwrap(),
             config.route_freshness_sample_interval.to_string()
+        );
+        assert_eq!(
+            parsed["kvMutationQueueCapacity"].as_str().unwrap(),
+            config.kv_mutation_queue_capacity.to_string()
+        );
+        assert_eq!(
+            parsed["kvMutationBatchSize"].as_str().unwrap(),
+            config.kv_mutation_batch_size.to_string()
         );
         assert_eq!(
             parsed["returnOrderTopicConfigToBroker"].as_str().unwrap(),
@@ -1600,6 +1844,29 @@ mod tests {
     }
 
     #[test]
+    fn namesrv_config_schema_keys_are_unique_round_trip_and_exported() {
+        let config = NamesrvConfig::new();
+        let exported: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
+            &config
+                .get_all_configs_format_string()
+                .expect("default NameServer configuration should serialize"),
+        )
+        .expect("configuration export should be a JSON object");
+        let mut names = HashSet::new();
+
+        for key in NamesrvConfigKey::ALL {
+            let java_name = key.java_name();
+            assert!(names.insert(java_name), "duplicate NameServer schema key: {java_name}");
+            assert_eq!(NamesrvConfigKey::from_java_name(java_name), Some(key));
+            assert!(
+                exported.contains_key(java_name),
+                "schema key is not exported: {java_name}"
+            );
+            let _ = key.mutability();
+        }
+    }
+
+    #[test]
     fn removed_route_manager_switch_is_a_typed_config_error() {
         let mut config = NamesrvConfig::default();
         let error = config
@@ -1664,6 +1931,14 @@ productEnvName = "useRouteInfoManagerV2"
             (NamesrvConfigKey::ExpiryIndexMode, "enabled"),
             (NamesrvConfigKey::ExpirySafetyScanInterval, "29999"),
             (NamesrvConfigKey::MinBrokerNotifyConcurrency, "129"),
+            (NamesrvConfigKey::KvMutationQueueCapacity, "0"),
+            (NamesrvConfigKey::KvMutationQueueCapacity, "1000001"),
+            (NamesrvConfigKey::KvMutationBatchSize, "0"),
+            (NamesrvConfigKey::KvMutationBatchSize, "1025"),
+            (NamesrvConfigKey::ClusterTestRouteCachePositiveTtlMillis, "0"),
+            (NamesrvConfigKey::ClusterTestRouteCacheNegativeTtlMillis, "60001"),
+            (NamesrvConfigKey::ClusterTestRouteCacheMaxEntries, "1000001"),
+            (NamesrvConfigKey::ClusterTestRouteCacheMaxBytes, "1073741825"),
         ] {
             assert!(validate_namesrv_property(key, value).is_err(), "{key:?}={value}");
             assert_eq!(key.mutability(), ConfigMutability::RestartRequired);

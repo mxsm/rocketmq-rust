@@ -265,6 +265,7 @@ impl ClientRequestProcessor {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn encode_topic_route_response(
     topic_route_data: &TopicRouteData,
     request_version: i32,

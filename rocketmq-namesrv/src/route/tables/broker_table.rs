@@ -34,7 +34,7 @@ use crate::route::types::RouteBrokerName;
 /// including cluster membership and broker addresses (master/slaves).
 ///
 /// # Performance
-/// - Read operations: O(1) average, lock-free
+/// - Read operations: O(1) average with sharded locking
 /// - Write operations: O(1) average, per-entry lock
 ///
 /// # Example

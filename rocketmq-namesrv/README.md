@@ -19,13 +19,13 @@ the `bootstrap::Builder` API for tests and service composition.
 | ---- | ---------------- |
 | Service discovery | Broker registration, unregistration, heartbeat tracking, inactive broker scanning, and channel destroy cleanup. |
 | Topic routing | Topic route lookup, standard/legacy JSON route encoding, zone-aware route filtering, filter-server metadata, and order-topic configuration lookup. |
-| Route storage | `RouteInfoManager` owns the canonical DashMap-based tables and segmented cross-table locks. |
+| Route storage | `RouteInfoManager` serializes cross-table mutations and atomically publishes immutable per-topic route snapshots. |
 | Broker and topic admin | Cluster info, broker member groups, topic registration/deletion, topic lists by cluster, unit-topic lists, and write-permission updates. |
 | KV configuration | Put/get/delete/list KV config namespaces with on-disk persistence through `KVConfigManager`. |
-| Runtime configuration | `GetNamesrvConfig` and `UpdateNamesrvConfig` support Java-properties payloads with a fixed blacklist for sensitive paths and home settings. |
+| Runtime configuration | `GetNamesrvConfig` and `UpdateNamesrvConfig` support Java-properties payloads; keys are classified as live, restart-required, or unsupported. |
 | Cluster test mode | Optional product-environment route fallback via `DefaultMQAdminExtImpl` when local route data is missing. |
 | Embedded controller | Compile with `--features embedded-controller` and set `enableControllerInNamesrv=true` to initialize `rocketmq-controller`, with conflict checks against the NameServer listen address. The default dependency graph excludes Controller. |
-| Observability | Optional `observability` feature records route request counts/latency, broker registrations, and active broker gauges. |
+| Observability | Low-cardinality metrics cover request admission, route, registration, mutation, expiry, unregister, KV, security, and connection state. |
 
 ## Architecture
 
@@ -169,7 +169,9 @@ field names where serde aliases are defined.
 | `configBlackList` | `configBlackList;configStorePath;kvConfigPath` | Additional runtime config keys that cannot be updated remotely. |
 
 `UpdateNamesrvConfig` also rejects a fixed protected set that includes `rocketmqHome`, `kvConfigPath`,
-`configStorePath`, and `configBlackList`.
+`configStorePath`, and `configBlackList`. A successful response means every accepted live key was applied and
+persisted. Restart-required keys are persisted but reported as restart-required; startup-only or protected keys
+are rejected rather than being reported as applied.
 
 ## Embedded Usage
 
@@ -218,7 +220,7 @@ shutdown future.
 | [`src/route`](src/route) | Route managers, segmented locks, route table implementations, unregister service, and zone route hook. |
 | [`src/route/tables`](src/route/tables) | Concurrent tables for topic queues, brokers, clusters, live brokers, filter servers, and topic queue mapping. |
 | [`src/kvconfig`](src/kvconfig) | KV config manager and persistence. |
-| [`src/observability_metrics.rs`](src/observability_metrics.rs) | Optional metrics recording behind the `observability` feature. |
+| [`../rocketmq-observability/src/metrics/namesrv.rs`](../rocketmq-observability/src/metrics/namesrv.rs) | Low-cardinality NameServer metrics shared by OpenTelemetry and Prometheus exporters. |
 | [`tests`](tests) | Network-level and route-table integration coverage. |
 | [`benches`](benches) | Route manager, concurrency, lock, and topic-table hot-path benchmarks. |
 
