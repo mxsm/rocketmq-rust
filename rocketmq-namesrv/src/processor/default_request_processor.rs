@@ -270,7 +270,12 @@ impl DefaultRequestProcessor {
         let topic_config_wrapper;
         let mut filter_server_list = Vec::new();
         if broker_version >= RocketMqVersion::V3_0_11 {
-            let register_broker_body = extract_register_broker_body_from_request(request, &request_header)?;
+            let decode_limits = self
+                .name_server_runtime_inner
+                .name_server_config()
+                .register_broker_decode_limits();
+            let register_broker_body =
+                extract_register_broker_body_from_request(request, &request_header, decode_limits)?;
             topic_config_wrapper = register_broker_body.topic_config_serialize_wrapper;
             filter_server_list = register_broker_body.filter_server_list;
         } else {
@@ -635,13 +640,15 @@ fn extract_register_topic_config_from_request(
 fn extract_register_broker_body_from_request(
     request: &RemotingCommand,
     request_header: &RegisterBrokerRequestHeader,
+    limits: rocketmq_protocol::protocol::body::broker_body::register_broker_body::RegisterBrokerDecodeLimits,
 ) -> rocketmq_error::RocketMQResult<RegisterBrokerBody> {
     if let Some(body_inner) = request.body() {
         if !body_inner.is_empty() {
             let version = request.rocketmq_version();
-            return RegisterBrokerBody::decode(body_inner, request_header.compressed, version).inspect_err(|e| {
-                warn!("Failed to decode RegisterBrokerBody: {:?}", e);
-            });
+            return RegisterBrokerBody::decode_with_limits(body_inner, request_header.compressed, version, limits)
+                .inspect_err(|e| {
+                    warn!("Failed to decode RegisterBrokerBody: {:?}", e);
+                });
         }
     }
     let mut register_broker_body = RegisterBrokerBody::default();
@@ -782,7 +789,7 @@ mod tests {
         let request = RemotingCommand::new_request(0, body);
         let request_header = RegisterBrokerRequestHeader::default();
         // Should return Ok with default body since body is invalid
-        let _result = extract_register_broker_body_from_request(&request, &request_header);
+        let _result = extract_register_broker_body_from_request(&request, &request_header, Default::default());
         assert!(_result.is_ok());
     }
 
@@ -791,7 +798,8 @@ mod tests {
         // Test with empty body (should initialize DataVersion to zeros)
         let request = RemotingCommand::new_request(0, vec![]);
         let request_header = RegisterBrokerRequestHeader::default();
-        let result = extract_register_broker_body_from_request(&request, &request_header).expect("should succeed");
+        let result = extract_register_broker_body_from_request(&request, &request_header, Default::default())
+            .expect("should succeed");
 
         // Verify DataVersion fields are explicitly set to 0 (Java behavior)
         let data_version = &result.topic_config_serialize_wrapper.mapping_data_version;
@@ -804,7 +812,8 @@ mod tests {
     fn extract_register_broker_body_from_request_without_body() {
         let request = RemotingCommand::new_request(0, vec![]);
         let request_header = RegisterBrokerRequestHeader::default();
-        let result = extract_register_broker_body_from_request(&request, &request_header).expect("should succeed");
+        let result = extract_register_broker_body_from_request(&request, &request_header, Default::default())
+            .expect("should succeed");
 
         // Verify DataVersion is explicitly initialized with zeros (align with Java logic)
         assert_eq!(
