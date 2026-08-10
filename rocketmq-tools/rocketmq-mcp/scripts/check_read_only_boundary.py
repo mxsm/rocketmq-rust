@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -28,6 +29,14 @@ FORBIDDEN_IMPORTS = (
     "RouteAdmin",
     "TopicAdmin",
 )
+FORBIDDEN_DIRECT_DEPENDENCIES = {"async-trait"}
+FORBIDDEN_SOURCE_PATTERNS = (
+    (
+        "async-trait source token",
+        re.compile(r"\basync_trait\b"),
+    ),
+)
+SOURCE_ROOTS = (ROOT / "src", ROOT / "tests")
 
 
 def main() -> int:
@@ -43,6 +52,16 @@ def main() -> int:
     metadata = json.loads(subprocess.check_output(command, cwd=ROOT, text=True))
     packages = {package["id"]: package["name"] for package in metadata["packages"]}
     violations: list[str] = []
+    root_manifest = (ROOT / "Cargo.toml").resolve()
+    root_package = next(
+        package
+        for package in metadata["packages"]
+        if pathlib.Path(package["manifest_path"]).resolve() == root_manifest
+    )
+    for dependency in root_package["dependencies"]:
+        if dependency["name"] in FORBIDDEN_DIRECT_DEPENDENCIES:
+            violations.append(f"rocketmq-mcp directly depends on forbidden `{dependency['name']}`")
+
     for node in metadata["resolve"]["nodes"]:
         package = packages.get(node["id"])
         forbidden = FORBIDDEN.get(package)
@@ -53,11 +72,15 @@ def main() -> int:
         if overlap:
             violations.append(f"{package}: forbidden features enabled: {', '.join(overlap)}")
 
-    for path in sorted((ROOT / "src").rglob("*.rs")):
-        text = path.read_text(encoding="utf-8")
-        for forbidden in FORBIDDEN_IMPORTS:
-            if forbidden in text:
-                violations.append(f"{path.relative_to(ROOT)} imports forbidden capability `{forbidden}`")
+    for source_root in SOURCE_ROOTS:
+        for path in sorted(source_root.rglob("*.rs")):
+            text = path.read_text(encoding="utf-8")
+            for forbidden in FORBIDDEN_IMPORTS:
+                if forbidden in text:
+                    violations.append(f"{path.relative_to(ROOT)} imports forbidden capability `{forbidden}`")
+            for label, pattern in FORBIDDEN_SOURCE_PATTERNS:
+                if pattern.search(text):
+                    violations.append(f"{path.relative_to(ROOT)} uses forbidden {label}")
 
     if violations:
         print("MCP read-only boundary violations:", file=sys.stderr)

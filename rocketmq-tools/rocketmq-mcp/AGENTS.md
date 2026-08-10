@@ -12,6 +12,7 @@ This file applies to `rocketmq-tools/rocketmq-mcp/`.
 - Do not enable `client-adapter`, `mutation-client-adapter`, `admin-full`, or `admin-mutation`.
 - Streamable HTTP is authenticated by default. Stdio is local-development only and writes protocol frames only to stdout.
 - Tool and Resource output must use the shared authorization, audit, correlation, sanitization, row, and byte policy.
+- Prefer native async fn methods in traits. #[allow(async_fn_in_trait)] is permitted when required by the lint for an intentional public async trait API; do not add #[async_trait].
 
 ## Mandatory validation
 

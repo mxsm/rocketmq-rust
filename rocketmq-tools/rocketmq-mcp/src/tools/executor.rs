@@ -902,7 +902,6 @@ mod tests {
         fail: bool,
     }
 
-    #[async_trait::async_trait]
     impl ReadOnlyQuery for FakeAdapter {
         async fn cluster_overview(
             &self,

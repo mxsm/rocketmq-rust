@@ -14,6 +14,7 @@
 
 use std::collections::VecDeque;
 use std::fs::OpenOptions;
+use std::future::Future;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -26,7 +27,6 @@ use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
-use async_trait::async_trait;
 use serde::Serialize;
 use tokio::sync::mpsc;
 use tokio::sync::Notify;
@@ -259,13 +259,13 @@ impl AuditLog {
         config: &AuditConfig,
         service_context: &rocketmq_runtime::ChildServiceContext,
     ) -> Result<(), GuardError> {
-        let sink: Box<dyn AuditSink> = match config.sink.as_str() {
-            "file" => Box::new(FileAuditSink {
+        let sink = match config.sink.as_str() {
+            "file" => ConfiguredAuditSink::File(FileAuditSink {
                 path: PathBuf::from(&config.path),
                 blocking: service_context.storage_io().clone(),
             }),
-            "tracing" => Box::new(TracingAuditSink),
-            "memory" => Box::new(MemoryAuditSink),
+            "tracing" => ConfiguredAuditSink::Tracing(TracingAuditSink),
+            "memory" => ConfiguredAuditSink::Memory(MemoryAuditSink),
             _ => {
                 return Err(GuardError::InvalidArgument("unsupported audit sink".to_string()));
             }
@@ -426,12 +426,15 @@ impl AuditLog {
         self.drain_report(status, started_at.elapsed())
     }
 
-    fn start_with_sink(
+    fn start_with_sink<S>(
         &self,
         config: &AuditConfig,
         service_context: &rocketmq_runtime::ChildServiceContext,
-        sink: Box<dyn AuditSink>,
-    ) -> Result<(), GuardError> {
+        sink: S,
+    ) -> Result<(), GuardError>
+    where
+        S: AuditSink,
+    {
         validate_queue_config(config)?;
         let mut lifecycle = self
             .lifecycle
@@ -551,10 +554,33 @@ struct AuditEnvelope {
     pending: PendingAuditRecord,
 }
 
-#[async_trait]
-trait AuditSink: Send {
-    async fn write(&mut self, record: &AuditRecord, encoded: &[u8]) -> Result<(), ()>;
-    async fn flush(&mut self) -> Result<(), ()>;
+trait AuditSink: Send + 'static {
+    fn write(&mut self, record: &AuditRecord, encoded: &[u8]) -> impl Future<Output = Result<(), ()>> + Send;
+    fn flush(&mut self) -> impl Future<Output = Result<(), ()>> + Send;
+}
+
+enum ConfiguredAuditSink {
+    File(FileAuditSink),
+    Tracing(TracingAuditSink),
+    Memory(MemoryAuditSink),
+}
+
+impl AuditSink for ConfiguredAuditSink {
+    async fn write(&mut self, record: &AuditRecord, encoded: &[u8]) -> Result<(), ()> {
+        match self {
+            Self::File(sink) => sink.write(record, encoded).await,
+            Self::Tracing(sink) => sink.write(record, encoded).await,
+            Self::Memory(sink) => sink.write(record, encoded).await,
+        }
+    }
+
+    async fn flush(&mut self) -> Result<(), ()> {
+        match self {
+            Self::File(sink) => sink.flush().await,
+            Self::Tracing(sink) => sink.flush().await,
+            Self::Memory(sink) => sink.flush().await,
+        }
+    }
 }
 
 struct FileAuditSink {
@@ -562,7 +588,6 @@ struct FileAuditSink {
     blocking: rocketmq_runtime::BlockingExecutor,
 }
 
-#[async_trait]
 impl AuditSink for FileAuditSink {
     async fn write(&mut self, _record: &AuditRecord, encoded: &[u8]) -> Result<(), ()> {
         let path = self.path.clone();
@@ -586,7 +611,6 @@ impl AuditSink for FileAuditSink {
 
 struct TracingAuditSink;
 
-#[async_trait]
 impl AuditSink for TracingAuditSink {
     async fn write(&mut self, record: &AuditRecord, _encoded: &[u8]) -> Result<(), ()> {
         tracing::info!(
@@ -611,7 +635,6 @@ impl AuditSink for TracingAuditSink {
 
 struct MemoryAuditSink;
 
-#[async_trait]
 impl AuditSink for MemoryAuditSink {
     async fn write(&mut self, _record: &AuditRecord, _encoded: &[u8]) -> Result<(), ()> {
         Ok(())
@@ -622,13 +645,15 @@ impl AuditSink for MemoryAuditSink {
     }
 }
 
-async fn run_audit_writer(
+async fn run_audit_writer<S>(
     mut receiver: mpsc::Receiver<AuditEnvelope>,
-    mut sink: Box<dyn AuditSink>,
+    mut sink: S,
     counters: Arc<AuditCounters>,
     records: Arc<Mutex<VecDeque<AuditRecord>>>,
     completion: Arc<WriterCompletion>,
-) {
+) where
+    S: AuditSink,
+{
     let completion = CompletionGuard(completion);
     while let Some(envelope) = receiver.recv().await {
         if sink.write(&envelope.record, &envelope.encoded).await.is_ok() {

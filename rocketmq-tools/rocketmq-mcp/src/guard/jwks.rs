@@ -13,13 +13,13 @@
 // limitations under the License.
 
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
 use arc_swap::ArcSwap;
-use async_trait::async_trait;
 use jsonwebtoken::Algorithm;
 use jsonwebtoken::DecodingKey;
 use serde::Deserialize;
@@ -29,9 +29,8 @@ const MAX_JWKS_BYTES: usize = 256 * 1024;
 const MAX_JWKS_KEYS: usize = 64;
 const JWKS_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
 
-#[async_trait]
 pub trait JwksSource: Send + Sync {
-    async fn fetch(&self) -> Result<Vec<u8>, JwksError>;
+    fn fetch(&self) -> impl Future<Output = Result<Vec<u8>, JwksError>> + Send;
 }
 
 #[derive(Clone)]
@@ -64,7 +63,6 @@ impl HttpJwksSource {
     }
 }
 
-#[async_trait]
 impl JwksSource for HttpJwksSource {
     async fn fetch(&self) -> Result<Vec<u8>, JwksError> {
         let mut response = self
@@ -93,16 +91,27 @@ impl JwksSource for HttpJwksSource {
     }
 }
 
-#[derive(Clone)]
-pub struct JwksVerifier {
-    source: Arc<dyn JwksSource>,
+pub struct JwksVerifier<S = HttpJwksSource> {
+    source: Arc<S>,
     active: Arc<ArcSwap<JwksSnapshot>>,
     refresh_writer: Arc<Mutex<()>>,
     refresh_after: Duration,
     max_stale: Duration,
 }
 
-impl std::fmt::Debug for JwksVerifier {
+impl<S> Clone for JwksVerifier<S> {
+    fn clone(&self) -> Self {
+        Self {
+            source: self.source.clone(),
+            active: self.active.clone(),
+            refresh_writer: self.refresh_writer.clone(),
+            refresh_after: self.refresh_after,
+            max_stale: self.max_stale,
+        }
+    }
+}
+
+impl<S> std::fmt::Debug for JwksVerifier<S> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("JwksVerifier")
@@ -113,8 +122,11 @@ impl std::fmt::Debug for JwksVerifier {
     }
 }
 
-impl JwksVerifier {
-    pub fn new(source: Arc<dyn JwksSource>, refresh_after: Duration, max_stale: Duration) -> Self {
+impl<S> JwksVerifier<S>
+where
+    S: JwksSource,
+{
+    pub fn new(source: Arc<S>, refresh_after: Duration, max_stale: Duration) -> Self {
         Self {
             source,
             active: Arc::new(ArcSwap::from_pointee(JwksSnapshot::empty())),
@@ -337,6 +349,19 @@ mod tests {
         assert!(verifier.decoding_key("eyJhbGciOiJSUzI1NiJ9.e30.invalid").await.is_err());
     }
 
+    #[test]
+    fn source_future_is_send_and_verifier_clone_does_not_require_source_clone() {
+        fn assert_send<T: Send>(_: T) {}
+        fn assert_source_future_is_send<S: JwksSource>(source: &S) {
+            assert_send(source.fetch());
+        }
+
+        let source = Arc::new(QueueSource::new([Ok(jwks_document(&["one"]))]));
+        assert_source_future_is_send(source.as_ref());
+        let verifier = JwksVerifier::new(source, Duration::from_secs(60), Duration::from_secs(60));
+        let _cloned = verifier.clone();
+    }
+
     fn jwks_document(kids: &[&str]) -> Vec<u8> {
         serde_json::to_vec(&serde_json::json!({
             "keys": kids.iter().map(|kid| serde_json::json!({
@@ -371,7 +396,6 @@ mod tests {
         }
     }
 
-    #[async_trait]
     impl JwksSource for QueueSource {
         async fn fetch(&self) -> Result<Vec<u8>, JwksError> {
             self.responses

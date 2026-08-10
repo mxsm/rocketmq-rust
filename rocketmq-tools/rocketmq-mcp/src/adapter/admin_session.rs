@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::sync::Arc;
 
 use rocketmq_admin_core::core::broker::BrokerQueryAdmin;
@@ -60,32 +61,35 @@ pub(crate) struct SessionConsumerLag {
     pub inflight_total: i64,
 }
 
-#[async_trait::async_trait]
 pub(crate) trait AdminSession: Send {
-    async fn broker_rows(&mut self) -> Result<Vec<BrokerSummary>, ToolExecutionError>;
+    fn broker_rows(&mut self) -> impl Future<Output = Result<Vec<BrokerSummary>, ToolExecutionError>> + Send;
 
-    async fn topic_entries(&mut self) -> Result<Vec<TopicListEntry>, ToolExecutionError>;
+    fn topic_entries(&mut self) -> impl Future<Output = Result<Vec<TopicListEntry>, ToolExecutionError>> + Send;
 
-    async fn topic_route(&mut self, topic: &str) -> Result<SessionTopicRoute, ToolExecutionError>;
+    fn topic_route(
+        &mut self,
+        topic: &str,
+    ) -> impl Future<Output = Result<SessionTopicRoute, ToolExecutionError>> + Send;
 
-    async fn consumer_groups(&mut self) -> Result<Vec<ConsumerGroupSummary>, ToolExecutionError>;
+    fn consumer_groups(&mut self)
+        -> impl Future<Output = Result<Vec<ConsumerGroupSummary>, ToolExecutionError>> + Send;
 
-    async fn consumer_lag(
+    fn consumer_lag(
         &mut self,
         topic: &str,
         consumer_group: &str,
-    ) -> Result<SessionConsumerLag, ToolExecutionError>;
+    ) -> impl Future<Output = Result<SessionConsumerLag, ToolExecutionError>> + Send;
 
-    async fn probe_broker_runtime(&mut self) -> Result<(), ToolExecutionError>;
+    fn probe_broker_runtime(&mut self) -> impl Future<Output = Result<(), ToolExecutionError>> + Send;
 
-    async fn shutdown(self) -> Result<(), ToolExecutionError>;
+    fn shutdown(self) -> impl Future<Output = Result<(), ToolExecutionError>> + Send;
 }
 
-#[async_trait::async_trait]
 pub(crate) trait AdminSessionFactory: Clone + Send + Sync + 'static {
     type Session: AdminSession;
 
-    async fn start(&self, cluster: ResolvedCluster) -> Result<Self::Session, ToolExecutionError>;
+    fn start(&self, cluster: ResolvedCluster)
+        -> impl Future<Output = Result<Self::Session, ToolExecutionError>> + Send;
 }
 
 #[derive(Clone)]
@@ -108,7 +112,6 @@ impl AdminCoreSessionFactory {
     }
 }
 
-#[async_trait::async_trait]
 impl AdminSessionFactory for AdminCoreSessionFactory {
     type Session = AdminCoreSession;
 
@@ -138,7 +141,6 @@ impl AdminCoreSession {
     }
 }
 
-#[async_trait::async_trait]
 impl AdminSession for AdminCoreSession {
     async fn broker_rows(&mut self) -> Result<Vec<BrokerSummary>, ToolExecutionError> {
         let request = ListBrokersRequest::try_new(self.cluster.rocketmq_cluster_name.clone())
