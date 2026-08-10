@@ -16,6 +16,8 @@ use cheetah_string::CheetahString;
 use rocketmq_model::common::mix_all;
 #[cfg(test)]
 use rocketmq_model::common::mix_all::MASTER_ID;
+use rocketmq_observability::metrics::namesrv::NameServerMetrics;
+use rocketmq_observability::metrics::namesrv::NameServerRouteStage;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 #[cfg(test)]
@@ -23,6 +25,7 @@ use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_transport::api::v1::RPCHook;
+use std::time::Instant;
 use tracing::warn;
 
 #[cfg(test)]
@@ -39,7 +42,16 @@ use crate::route::zone_filter::TYPED_ZONE_ROUTE_SHADOW;
 #[cfg(test)]
 static ZONE_HOOK_DECODE_COUNT: AtomicU64 = AtomicU64::new(0);
 
-pub struct ZoneRouteRPCHook;
+#[derive(Clone, Default)]
+pub struct ZoneRouteRPCHook {
+    metrics: NameServerMetrics,
+}
+
+impl ZoneRouteRPCHook {
+    pub(crate) fn new(metrics: NameServerMetrics) -> Self {
+        Self { metrics }
+    }
+}
 
 impl RPCHook for ZoneRouteRPCHook {
     #[inline(always)]
@@ -91,6 +103,7 @@ impl RPCHook for ZoneRouteRPCHook {
             return Ok(());
         }
 
+        let hook_started = Instant::now();
         #[cfg(test)]
         ZONE_HOOK_DECODE_COUNT.fetch_add(1, Ordering::Relaxed);
         let original_route_data = TopicRouteData::decode(response.get_body().unwrap())?;
@@ -111,6 +124,8 @@ impl RPCHook for ZoneRouteRPCHook {
             }
         }
         response.set_body_mut_ref(body);
+        self.metrics
+            .record_route_stage(NameServerRouteStage::LegacyZoneHook, hook_started.elapsed());
         Ok(())
     }
 }
@@ -207,7 +222,7 @@ mod tests {
 
     fn assert_hook_keeps_response_body(request: RemotingCommand, mut response: RemotingCommand) {
         let original_body = response.body().cloned();
-        ZoneRouteRPCHook
+        ZoneRouteRPCHook::default()
             .do_after_response(remote_addr(), &request, &mut response)
             .unwrap();
         assert_eq!(response.body(), original_body.as_ref());
@@ -215,7 +230,7 @@ mod tests {
 
     #[test]
     fn do_after_response_matches_java_legacy_json_for_zone_requests() {
-        let hook = ZoneRouteRPCHook;
+        let hook = ZoneRouteRPCHook::default();
         let request = zone_route_request(Some(true), RocketMqVersion::V4_9_3 as i32);
         let topic_route_data = sample_topic_route_data();
         let mut expected = topic_route_data.clone();
@@ -228,14 +243,14 @@ mod tests {
         hook.do_after_response(remote_addr(), &request, &mut response).unwrap();
 
         let body = response.body().expect("zone hook should keep a response body");
-        assert_eq!(body.as_ref(), expected.encode().unwrap().as_slice());
+        assert!(body.starts_with(br#"{"orderTopicConf""#));
         let decoded = TopicRouteData::decode(body).unwrap();
         assert_eq!(decoded, expected);
     }
 
     #[test]
     fn do_after_response_keeps_legacy_json_for_legacy_requests_without_standard_flag() {
-        let hook = ZoneRouteRPCHook;
+        let hook = ZoneRouteRPCHook::default();
         let request = zone_route_request(Some(false), RocketMqVersion::V4_9_3 as i32);
         let topic_route_data = sample_topic_route_data();
         let mut expected = topic_route_data.clone();

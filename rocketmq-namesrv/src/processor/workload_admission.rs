@@ -131,6 +131,14 @@ impl Drop for WaitingGuard<'_> {
 #[derive(Debug)]
 pub struct WorkloadAdmissionLease {
     _permit: OwnedSemaphorePermit,
+    queued: bool,
+}
+
+impl WorkloadAdmissionLease {
+    #[must_use]
+    pub const fn was_queued(&self) -> bool {
+        self.queued
+    }
 }
 
 #[derive(Debug)]
@@ -180,14 +188,20 @@ impl NameServerWorkloadAdmission {
     ) -> Result<WorkloadAdmissionLease, WorkloadAdmissionRejection> {
         let pool = self.pool(class);
         if let Ok(permit) = Arc::clone(&pool.semaphore).try_acquire_owned() {
-            return Ok(WorkloadAdmissionLease { _permit: permit });
+            return Ok(WorkloadAdmissionLease {
+                _permit: permit,
+                queued: false,
+            });
         }
 
         let waiting = pool.reserve_waiter()?;
         let acquired = tokio::time::timeout(self.queue_timeout, Arc::clone(&pool.semaphore).acquire_owned()).await;
         drop(waiting);
         match acquired {
-            Ok(Ok(permit)) => Ok(WorkloadAdmissionLease { _permit: permit }),
+            Ok(Ok(permit)) => Ok(WorkloadAdmissionLease {
+                _permit: permit,
+                queued: true,
+            }),
             Ok(Err(_)) | Err(_) => Err(WorkloadAdmissionRejection::TimedOut),
         }
     }
@@ -197,7 +211,10 @@ impl NameServerWorkloadAdmission {
         Arc::clone(&self.pool(class).semaphore)
             .try_acquire_owned()
             .ok()
-            .map(|permit| WorkloadAdmissionLease { _permit: permit })
+            .map(|permit| WorkloadAdmissionLease {
+                _permit: permit,
+                queued: false,
+            })
     }
 
     #[must_use]
@@ -210,6 +227,12 @@ impl NameServerWorkloadAdmission {
             admin_inflight: self.admin.inflight(),
             admin_waiting: self.admin.waiting(),
         }
+    }
+
+    #[must_use]
+    pub fn class_counts(&self, class: WorkloadAdmissionClass) -> (usize, usize) {
+        let pool = self.pool(class);
+        (pool.inflight(), pool.waiting())
     }
 
     fn pool(&self, class: WorkloadAdmissionClass) -> &AdmissionPool {

@@ -14,10 +14,21 @@
 
 pub use crate::semantic::metrics::NAMESRV_ACTIVE_BROKERS;
 pub use crate::semantic::metrics::NAMESRV_BROKER_REGISTRATIONS;
+pub use crate::semantic::metrics::NAMESRV_ROUTE_CACHE_BYTES;
+pub use crate::semantic::metrics::NAMESRV_ROUTE_CACHE_EVENTS_TOTAL;
+pub use crate::semantic::metrics::NAMESRV_ROUTE_END_TO_END_LATENCY;
 pub use crate::semantic::metrics::NAMESRV_ROUTE_ERRORS_TOTAL;
 pub use crate::semantic::metrics::NAMESRV_ROUTE_FRESHNESS;
+pub use crate::semantic::metrics::NAMESRV_ROUTE_FRESHNESS_SAMPLED_TOTAL;
 pub use crate::semantic::metrics::NAMESRV_ROUTE_REQUEST_LATENCY;
 pub use crate::semantic::metrics::NAMESRV_ROUTE_REQUEST_TOTAL;
+pub use crate::semantic::metrics::NAMESRV_ROUTE_RESPONSE_BYTES;
+pub use crate::semantic::metrics::NAMESRV_ROUTE_RESPONSE_WRITE_ERRORS_TOTAL;
+pub use crate::semantic::metrics::NAMESRV_ROUTE_RESPONSE_WRITE_LATENCY;
+pub use crate::semantic::metrics::NAMESRV_ROUTE_STAGE_LATENCY;
+pub use crate::semantic::metrics::NAMESRV_WORKLOAD_ADMISSION_EVENTS_TOTAL;
+pub use crate::semantic::metrics::NAMESRV_WORKLOAD_ADMISSION_INFLIGHT;
+pub use crate::semantic::metrics::NAMESRV_WORKLOAD_ADMISSION_WAITING;
 
 use std::time::Duration;
 
@@ -35,6 +46,86 @@ pub enum NameServerRouteErrorKind {
     Internal,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NameServerRouteStage {
+    ZoneFilter,
+    Encode,
+    LegacyZoneHook,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NameServerRouteCacheOutcome {
+    Hit,
+    Miss,
+    Bypass,
+    Oversize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NameServerWorkloadClass {
+    RouteRead,
+    BrokerControl,
+    Admin,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NameServerAdmissionOutcome {
+    Acquired,
+    Queued,
+    Released,
+    Rejected,
+    TimedOut,
+    ObserveSaturated,
+}
+
+#[cfg(feature = "otel-metrics")]
+impl NameServerRouteStage {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::ZoneFilter => "zone-filter",
+            Self::Encode => "encode",
+            Self::LegacyZoneHook => "legacy-zone-hook",
+        }
+    }
+}
+
+#[cfg(feature = "otel-metrics")]
+impl NameServerRouteCacheOutcome {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Hit => "hit",
+            Self::Miss => "miss",
+            Self::Bypass => "bypass",
+            Self::Oversize => "oversize",
+        }
+    }
+}
+
+#[cfg(feature = "otel-metrics")]
+impl NameServerWorkloadClass {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::RouteRead => "route-read",
+            Self::BrokerControl => "broker-control",
+            Self::Admin => "admin",
+        }
+    }
+}
+
+#[cfg(feature = "otel-metrics")]
+impl NameServerAdmissionOutcome {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Acquired => "acquired",
+            Self::Queued => "queued",
+            Self::Released => "released",
+            Self::Rejected => "rejected",
+            Self::TimedOut => "timeout",
+            Self::ObserveSaturated => "observe-saturated",
+        }
+    }
+}
+
 #[cfg(feature = "otel-metrics")]
 impl NameServerRouteErrorKind {
     const fn as_str(self) -> &'static str {
@@ -50,6 +141,12 @@ impl NameServerRouteErrorKind {
 #[cfg(feature = "otel-metrics")]
 fn duration_millis_u64(duration: Duration) -> u64 {
     duration.as_millis().clamp(0, u128::from(u64::MAX)) as u64
+}
+
+#[inline]
+#[cfg(feature = "otel-metrics")]
+fn duration_micros_u64(duration: Duration) -> u64 {
+    duration.as_micros().clamp(0, u128::from(u64::MAX)) as u64
 }
 
 #[cfg(not(feature = "otel-metrics"))]
@@ -102,6 +199,31 @@ impl NameServerMetrics {
 
     #[inline]
     pub fn record_route_freshness(&self, _freshness_ms: u64) {}
+
+    #[inline]
+    pub fn record_route_freshness_sampled(&self) {}
+
+    #[inline]
+    pub fn record_route_stage(&self, _stage: NameServerRouteStage, _elapsed: Duration) {}
+
+    #[inline]
+    pub fn record_route_response_bytes(&self, _bytes: usize) {}
+
+    #[inline]
+    pub fn record_route_cache(&self, _outcome: NameServerRouteCacheOutcome, _current_bytes: u64) {}
+
+    #[inline]
+    pub fn record_workload_admission(
+        &self,
+        _class: NameServerWorkloadClass,
+        _outcome: NameServerAdmissionOutcome,
+        _inflight: usize,
+        _waiting: usize,
+    ) {
+    }
+
+    #[inline]
+    pub fn record_route_response_write(&self, _write: Duration, _end_to_end: Duration, _success: bool) {}
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -121,6 +243,17 @@ struct NameServerMetricInstruments {
     active_brokers: opentelemetry::metrics::Gauge<u64>,
     route_errors_total: opentelemetry::metrics::Counter<u64>,
     route_freshness: opentelemetry::metrics::Histogram<u64>,
+    route_freshness_sampled_total: opentelemetry::metrics::Counter<u64>,
+    route_stage_latency: opentelemetry::metrics::Histogram<u64>,
+    route_response_bytes: opentelemetry::metrics::Histogram<u64>,
+    route_cache_events_total: opentelemetry::metrics::Counter<u64>,
+    route_cache_bytes: opentelemetry::metrics::Gauge<u64>,
+    workload_admission_events_total: opentelemetry::metrics::Counter<u64>,
+    workload_admission_inflight: opentelemetry::metrics::Gauge<u64>,
+    workload_admission_waiting: opentelemetry::metrics::Gauge<u64>,
+    route_response_write_latency: opentelemetry::metrics::Histogram<u64>,
+    route_end_to_end_latency: opentelemetry::metrics::Histogram<u64>,
+    route_response_write_errors_total: opentelemetry::metrics::Counter<u64>,
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -242,6 +375,97 @@ impl NameServerMetrics {
             }
         }
     }
+
+    pub fn record_route_freshness_sampled(&self) {
+        if self.is_active() {
+            if let Some(instruments) = &self.instruments {
+                instruments.route_freshness_sampled_total.add(1, &[]);
+            }
+        }
+    }
+
+    pub fn record_route_stage(&self, stage: NameServerRouteStage, elapsed: Duration) {
+        if self.is_active() {
+            if let Some(instruments) = &self.instruments {
+                instruments.route_stage_latency.record(
+                    duration_micros_u64(elapsed),
+                    &[opentelemetry::KeyValue::new(
+                        crate::semantic::labels::STAGE,
+                        stage.as_str(),
+                    )],
+                );
+            }
+        }
+    }
+
+    pub fn record_route_response_bytes(&self, bytes: usize) {
+        if self.is_active() {
+            if let Some(instruments) = &self.instruments {
+                instruments.route_response_bytes.record(bytes as u64, &[]);
+            }
+        }
+    }
+
+    pub fn record_route_cache(&self, outcome: NameServerRouteCacheOutcome, current_bytes: u64) {
+        if self.is_active() {
+            if let Some(instruments) = &self.instruments {
+                instruments.route_cache_events_total.add(
+                    1,
+                    &[opentelemetry::KeyValue::new(
+                        crate::semantic::labels::RESULT,
+                        outcome.as_str(),
+                    )],
+                );
+                instruments.route_cache_bytes.record(current_bytes, &[]);
+            }
+        }
+    }
+
+    pub fn record_workload_admission(
+        &self,
+        class: NameServerWorkloadClass,
+        outcome: NameServerAdmissionOutcome,
+        inflight: usize,
+        waiting: usize,
+    ) {
+        if self.is_active() {
+            if let Some(instruments) = &self.instruments {
+                let class_attribute =
+                    opentelemetry::KeyValue::new(crate::semantic::labels::REQUEST_TYPE, class.as_str());
+                instruments.workload_admission_events_total.add(
+                    1,
+                    &[
+                        class_attribute.clone(),
+                        opentelemetry::KeyValue::new(crate::semantic::labels::RESULT, outcome.as_str()),
+                    ],
+                );
+                instruments
+                    .workload_admission_inflight
+                    .record(inflight as u64, std::slice::from_ref(&class_attribute));
+                instruments
+                    .workload_admission_waiting
+                    .record(waiting as u64, &[class_attribute]);
+            }
+        }
+    }
+
+    pub fn record_route_response_write(&self, write: Duration, end_to_end: Duration, success: bool) {
+        if self.is_active() {
+            if let Some(instruments) = &self.instruments {
+                let result = if success { "success" } else { "failed" };
+                let attributes = [opentelemetry::KeyValue::new(crate::semantic::labels::RESULT, result)];
+                instruments
+                    .route_response_write_latency
+                    .record(duration_micros_u64(write), &attributes);
+                instruments
+                    .route_end_to_end_latency
+                    .record(duration_micros_u64(end_to_end), &attributes);
+                if !success {
+                    instruments.route_response_write_errors_total.add(1, &[]);
+                }
+            }
+        }
+    }
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -280,6 +504,61 @@ impl NameServerMetricInstruments {
             .with_description("Age of the oldest live broker entry used by a route lookup")
             .with_unit("ms")
             .build();
+        let route_freshness_sampled_total = meter
+            .u64_counter(NAMESRV_ROUTE_FRESHNESS_SAMPLED_TOTAL)
+            .with_description("Number of NameServer route freshness samples selected")
+            .with_unit("{sample}")
+            .build();
+        let route_stage_latency = meter
+            .u64_histogram(NAMESRV_ROUTE_STAGE_LATENCY)
+            .with_description("NameServer route typed-filter and encoding stage latency")
+            .with_unit("us")
+            .build();
+        let route_response_bytes = meter
+            .u64_histogram(NAMESRV_ROUTE_RESPONSE_BYTES)
+            .with_description("Encoded NameServer route response body size")
+            .with_unit("By")
+            .build();
+        let route_cache_events_total = meter
+            .u64_counter(NAMESRV_ROUTE_CACHE_EVENTS_TOTAL)
+            .with_description("NameServer route response cache outcomes")
+            .with_unit("{event}")
+            .build();
+        let route_cache_bytes = meter
+            .u64_gauge(NAMESRV_ROUTE_CACHE_BYTES)
+            .with_description("Current weighted NameServer route response cache size")
+            .with_unit("By")
+            .build();
+        let workload_admission_events_total = meter
+            .u64_counter(NAMESRV_WORKLOAD_ADMISSION_EVENTS_TOTAL)
+            .with_description("NameServer semantic workload admission outcomes")
+            .with_unit("{event}")
+            .build();
+        let workload_admission_inflight = meter
+            .u64_gauge(NAMESRV_WORKLOAD_ADMISSION_INFLIGHT)
+            .with_description("Current NameServer requests holding semantic admission permits")
+            .with_unit("{request}")
+            .build();
+        let workload_admission_waiting = meter
+            .u64_gauge(NAMESRV_WORKLOAD_ADMISSION_WAITING)
+            .with_description("Current NameServer requests waiting for semantic admission permits")
+            .with_unit("{request}")
+            .build();
+        let route_response_write_latency = meter
+            .u64_histogram(NAMESRV_ROUTE_RESPONSE_WRITE_LATENCY)
+            .with_description("NameServer route response dispatch latency to the transport channel")
+            .with_unit("us")
+            .build();
+        let route_end_to_end_latency = meter
+            .u64_histogram(NAMESRV_ROUTE_END_TO_END_LATENCY)
+            .with_description("NameServer route latency from transport dispatch through response channel completion")
+            .with_unit("us")
+            .build();
+        let route_response_write_errors_total = meter
+            .u64_counter(NAMESRV_ROUTE_RESPONSE_WRITE_ERRORS_TOTAL)
+            .with_description("NameServer route response channel write failures")
+            .with_unit("{error}")
+            .build();
 
         Self {
             route_request_total,
@@ -288,6 +567,17 @@ impl NameServerMetricInstruments {
             active_brokers,
             route_errors_total,
             route_freshness,
+            route_freshness_sampled_total,
+            route_stage_latency,
+            route_response_bytes,
+            route_cache_events_total,
+            route_cache_bytes,
+            workload_admission_events_total,
+            workload_admission_inflight,
+            workload_admission_waiting,
+            route_response_write_latency,
+            route_end_to_end_latency,
+            route_response_write_errors_total,
         }
     }
 

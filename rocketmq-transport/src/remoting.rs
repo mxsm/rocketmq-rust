@@ -16,6 +16,7 @@
 pub(crate) mod inner {
     use std::net::SocketAddr;
     use std::sync::Arc;
+    use std::time::Instant;
 
     use rocketmq_error::RocketMQError;
     use rocketmq_error::RocketMQResult;
@@ -28,6 +29,8 @@ pub(crate) mod inner {
     use crate::hook_registry::HookSnapshot;
     use crate::runtime::connection_handler_context::ConnectionHandlerContext;
     use crate::runtime::processor::RequestProcessor;
+    use crate::runtime::processor::ResponseWriteObservation;
+    use crate::runtime::processor::ResponseWriteOutcome;
     use crate::runtime::RPCHook;
     use crate::telemetry::TransportTelemetry;
     use rocketmq_protocol::code::request_code::RequestCode;
@@ -91,7 +94,9 @@ pub(crate) mod inner {
             ctx: &ConnectionHandlerContext,
             mut cmd: RemotingCommand,
         ) -> RocketMQResult<()> {
+            let request_started = Instant::now();
             let opaque = cmd.opaque();
+            let request_code = cmd.code();
             let mut metrics_guard = self.telemetry.request_guard(
                 cmd.code(),
                 cmd.body().map_or(0, |body| body.len() as u64),
@@ -110,7 +115,19 @@ pub(crate) mod inner {
                     )
                 };
                 let response_code = response.code();
+                let write_started = Instant::now();
                 let result = ctx.channel().send_command(response.set_opaque(opaque)).await;
+                request_processor.observe_response_write(ResponseWriteObservation {
+                    request_code,
+                    response_code,
+                    write_elapsed: write_started.elapsed(),
+                    end_to_end_elapsed: request_started.elapsed(),
+                    outcome: if result.is_ok() {
+                        ResponseWriteOutcome::Sent
+                    } else {
+                        ResponseWriteOutcome::Failed
+                    },
+                });
                 match result {
                     Ok(_) => {
                         metrics_guard.complete_response(response_code);
@@ -180,7 +197,19 @@ pub(crate) mod inner {
                 return Ok(());
             };
             let response_code = response.code();
+            let write_started = Instant::now();
             let result = ctx.channel().send_command(response.set_opaque(opaque)).await;
+            request_processor.observe_response_write(ResponseWriteObservation {
+                request_code,
+                response_code,
+                write_elapsed: write_started.elapsed(),
+                end_to_end_elapsed: request_started.elapsed(),
+                outcome: if result.is_ok() {
+                    ResponseWriteOutcome::Sent
+                } else {
+                    ResponseWriteOutcome::Failed
+                },
+            });
             match result {
                 Ok(_) => {
                     metrics_guard.complete_response(response_code);

@@ -638,7 +638,7 @@ impl NameServerRuntime {
     /// Initialize RPC hooks for request pre/post-processing
     fn initialize_rpc_hooks(&mut self) {
         if let Some(server) = self.server_inner.as_mut() {
-            server.register_rpc_hook(Arc::new(ZoneRouteRPCHook));
+            server.register_rpc_hook(Arc::new(ZoneRouteRPCHook::new(self.inner.namesrv_metrics())));
             debug!("RPC hooks registered: ZoneRouteRPCHook");
         }
     }
@@ -4577,7 +4577,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        ZoneRouteRPCHook
+        ZoneRouteRPCHook::default()
             .do_after_response(SocketAddr::from(([127, 0, 0, 1], 10911)), &request, &mut response)
             .unwrap();
 

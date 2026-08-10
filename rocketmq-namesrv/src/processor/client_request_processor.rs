@@ -14,11 +14,14 @@
 
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::time::Instant;
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
 use rocketmq_model::common::FAQUrl;
 use rocketmq_model::version::RocketMqVersion;
+use rocketmq_observability::metrics::namesrv::NameServerRouteCacheOutcome;
+use rocketmq_observability::metrics::namesrv::NameServerRouteStage;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::client_request_header::GetRouteInfoRequestHeader;
@@ -37,6 +40,7 @@ use crate::bootstrap::NameServerRuntimeHandle;
 use crate::processor::NAMESPACE_ORDER_TOPIC_CONFIG;
 use crate::route::response_cache::JsonEncoding;
 use crate::route::response_cache::RouteCacheKey;
+use crate::route::response_cache::RouteCacheOutcomeKind;
 use crate::route::response_cache::RouteCachePolicy;
 use crate::route::zone_filter::filter_route_by_zone;
 use crate::route::zone_filter::ZoneRequest;
@@ -153,6 +157,7 @@ impl ClientRequestProcessor {
         };
         let metrics = self.name_server_runtime_inner.namesrv_metrics();
         if metrics.should_record_route_freshness(route_config.route_freshness_sample_interval) {
+            metrics.record_route_freshness_sampled();
             if let Some(freshness_ms) = self
                 .name_server_runtime_inner
                 .route_info_manager()
@@ -181,7 +186,9 @@ impl ClientRequestProcessor {
         let filtered_route;
         let topic_route_data = if route_config.namesrv_typed_zone_route_enable {
             request.add_ext_field(TYPED_ZONE_ROUTE_MARKER, TYPED_ZONE_ROUTE_ENABLED);
+            let filter_started = Instant::now();
             filtered_route = filter_route_by_zone(topic_route_data, &zone_request);
+            metrics.record_route_stage(NameServerRouteStage::ZoneFilter, filter_started.elapsed());
             filtered_route.as_ref()
         } else {
             if route_config.namesrv_typed_zone_route_shadow {
@@ -197,12 +204,15 @@ impl ClientRequestProcessor {
             external_route: false,
         };
         let encode = || {
-            encode_topic_route_response_for_zone(
+            let encode_started = Instant::now();
+            let result = encode_topic_route_response_for_zone(
                 topic_route_data,
                 request.version(),
                 request_header.accept_standard_json_only,
                 typed_zone_filtered,
-            )
+            );
+            metrics.record_route_stage(NameServerRouteStage::Encode, encode_started.elapsed());
+            result
         };
         let content = if cache_policy.is_eligible() {
             let encoding = if should_use_standard_json(request.version(), request_header.accept_standard_json_only) {
@@ -216,11 +226,28 @@ impl ClientRequestProcessor {
                 topic_route_view.variant(),
                 encoding,
             );
-            self.name_server_runtime_inner
-                .route_response_cache()
-                .get_or_try_insert_with(key, encode)
-                .map(|outcome| outcome.body)
+            let cache = self.name_server_runtime_inner.route_response_cache();
+            cache.get_or_try_insert_with(key, encode).map(|outcome| {
+                if metrics.is_enabled() {
+                    let metric_outcome = match outcome.kind {
+                        RouteCacheOutcomeKind::Hit => NameServerRouteCacheOutcome::Hit,
+                        RouteCacheOutcomeKind::Miss => NameServerRouteCacheOutcome::Miss,
+                        RouteCacheOutcomeKind::Oversize => NameServerRouteCacheOutcome::Oversize,
+                    };
+                    metrics.record_route_cache(metric_outcome, cache.stats().weighted_size);
+                }
+                outcome.body
+            })
         } else {
+            if metrics.is_enabled() {
+                metrics.record_route_cache(
+                    NameServerRouteCacheOutcome::Bypass,
+                    self.name_server_runtime_inner
+                        .route_response_cache()
+                        .stats()
+                        .weighted_size,
+                );
+            }
             encode().map(Bytes::from)
         };
         let content = match content {
@@ -230,6 +257,7 @@ impl ClientRequestProcessor {
                 return Err(error);
             }
         };
+        metrics.record_route_response_bytes(content.len());
         route_span.record("result", "success");
         Ok(Some(
             RemotingCommand::create_response_command_with_code(ResponseCode::Success).set_body(content),

@@ -19,8 +19,15 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
+use crate::metrics::namesrv::NameServerAdmissionOutcome;
 use crate::metrics::namesrv::NameServerMetrics;
+use crate::metrics::namesrv::NameServerRouteCacheOutcome;
+use crate::metrics::namesrv::NameServerWorkloadClass;
+use crate::metrics::namesrv::NAMESRV_ROUTE_CACHE_EVENTS_TOTAL;
+use crate::metrics::namesrv::NAMESRV_ROUTE_FRESHNESS_SAMPLED_TOTAL;
 use crate::metrics::namesrv::NAMESRV_ROUTE_REQUEST_TOTAL;
+use crate::metrics::namesrv::NAMESRV_ROUTE_RESPONSE_WRITE_ERRORS_TOTAL;
+use crate::metrics::namesrv::NAMESRV_WORKLOAD_ADMISSION_EVENTS_TOTAL;
 use crate::metrics::proxy::ProxyMetrics;
 use crate::metrics::proxy::ProxyUpAttributes;
 use crate::metrics::proxy::PROXY_ACTIVE_CONNECTIONS;
@@ -203,6 +210,53 @@ fn namesrv_and_proxy_recorders_keep_instance_counts_and_labels_isolated() {
 
     first_provider.shutdown().expect("shutdown first provider");
     second_provider.shutdown().expect("shutdown second provider");
+}
+
+#[test]
+fn namesrv_read_path_metrics_use_only_bounded_labels() {
+    let exporter = CapturingExporter::default();
+    let provider = test_provider(exporter.clone());
+    let meter = provider.meter("rocketmq-namesrv-read-path-metrics");
+    let metrics = NameServerMetrics::new(&meter);
+
+    metrics.record_route_freshness_sampled();
+    metrics.record_route_cache(NameServerRouteCacheOutcome::Hit, 4096);
+    metrics.record_workload_admission(
+        NameServerWorkloadClass::RouteRead,
+        NameServerAdmissionOutcome::Rejected,
+        8,
+        50,
+    );
+    metrics.record_route_response_write(Duration::from_micros(5), Duration::from_micros(50), false);
+    provider.force_flush().expect("collect NameServer read-path metrics");
+
+    let points = exporter.points();
+    assert!(points
+        .iter()
+        .any(|point| point.metric == NAMESRV_ROUTE_FRESHNESS_SAMPLED_TOTAL && point.value == 1));
+    assert!(points.iter().any(|point| {
+        point.metric == NAMESRV_ROUTE_CACHE_EVENTS_TOTAL
+            && point.attributes.get("result").map(String::as_str) == Some("hit")
+    }));
+    assert!(points.iter().any(|point| {
+        point.metric == NAMESRV_WORKLOAD_ADMISSION_EVENTS_TOTAL
+            && point.attributes.get("request_type").map(String::as_str) == Some("route-read")
+            && point.attributes.get("result").map(String::as_str) == Some("rejected")
+    }));
+    assert!(points
+        .iter()
+        .any(|point| point.metric == NAMESRV_ROUTE_RESPONSE_WRITE_ERRORS_TOTAL && point.value == 1));
+    for point in points.iter().filter(|point| {
+        matches!(
+            point.metric.as_str(),
+            NAMESRV_ROUTE_CACHE_EVENTS_TOTAL | NAMESRV_WORKLOAD_ADMISSION_EVENTS_TOTAL
+        )
+    }) {
+        assert!(point
+            .attributes
+            .keys()
+            .all(|key| matches!(key.as_str(), "result" | "request_type")));
+    }
 }
 
 #[test]

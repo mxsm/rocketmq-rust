@@ -18,7 +18,9 @@ use std::time::Instant;
 
 use rocketmq_auth::AuthRuntime;
 use rocketmq_error::RocketMQError;
+use rocketmq_observability::metrics::namesrv::NameServerAdmissionOutcome;
 use rocketmq_observability::metrics::namesrv::NameServerMetrics;
+use rocketmq_observability::metrics::namesrv::NameServerWorkloadClass;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_transport::api::v1::command_from_error_with_remark_and_opaque;
@@ -27,6 +29,8 @@ use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use rocketmq_transport::api::v1::RejectRequestResponse;
 use rocketmq_transport::api::v1::RequestProcessor;
+use rocketmq_transport::api::v1::ResponseWriteObservation;
+use rocketmq_transport::api::v1::ResponseWriteOutcome;
 
 pub use self::client_request_processor::ClientRequestProcessor;
 pub use self::cluster_test_request_processor::ClusterTestRequestProcessor;
@@ -161,6 +165,7 @@ impl RequestProcessor for NameServerRequestProcessor {
             .in_flight_requests
             .as_ref()
             .map(|in_flight_requests| in_flight_requests.enter());
+        let route_request_started = (request.code() == RequestCode::GetRouteinfoByTopic as i32).then(Instant::now);
         let request_class = match classify_namesrv_request(RequestCode::from(request.code())) {
             Some(request_class) => request_class,
             None => {
@@ -198,16 +203,46 @@ impl RequestProcessor for NameServerRequestProcessor {
             if !config.namesrv_workload_admission_enable {
                 None
             } else if config.namesrv_workload_admission_observe_only {
-                admission.try_observe(admission_class)
+                let lease = admission.try_observe(admission_class);
+                let outcome = if lease.is_some() {
+                    NameServerAdmissionOutcome::Acquired
+                } else {
+                    NameServerAdmissionOutcome::ObserveSaturated
+                };
+                record_admission_metric(&self.metrics, admission, admission_class, outcome);
+                lease
             } else {
                 match admission.acquire(admission_class).await {
-                    Ok(lease) => Some(lease),
+                    Ok(lease) => {
+                        let outcome = if lease.was_queued() {
+                            NameServerAdmissionOutcome::Queued
+                        } else {
+                            NameServerAdmissionOutcome::Acquired
+                        };
+                        record_admission_metric(&self.metrics, admission, admission_class, outcome);
+                        Some(lease)
+                    }
                     Err(rejection) => {
+                        let outcome = match rejection {
+                            workload_admission::WorkloadAdmissionRejection::QueueFull => {
+                                NameServerAdmissionOutcome::Rejected
+                            }
+                            workload_admission::WorkloadAdmissionRejection::TimedOut => {
+                                NameServerAdmissionOutcome::TimedOut
+                            }
+                        };
+                        record_admission_metric(&self.metrics, admission, admission_class, outcome);
                         tracing::warn!(
                             request_class = admission_class.as_str(),
                             reason = rejection.as_str(),
                             "NameServer workload admission rejected request"
                         );
+                        if let Some(started) = route_request_started {
+                            self.metrics.record_route_request(started.elapsed());
+                            self.metrics.record_route_error(
+                                rocketmq_observability::metrics::namesrv::NameServerRouteErrorKind::Rejected,
+                            );
+                        }
                         return Ok(Some(workload_admission_rejection_response(rejection, request.opaque())));
                     }
                 }
@@ -215,7 +250,7 @@ impl RequestProcessor for NameServerRequestProcessor {
         } else {
             None
         };
-        let route_request_started = (request.code() == RequestCode::GetRouteinfoByTopic as i32).then(Instant::now);
+        let had_admission_lease = _admission_lease.is_some();
         let response = match self.processor_table.get(request.code_ref()).cloned() {
             None => match self.default_request_processor.clone() {
                 None => {
@@ -251,8 +286,44 @@ impl RequestProcessor for NameServerRequestProcessor {
                 Ok(_) => {}
             }
         }
+        drop(_admission_lease);
+        if had_admission_lease {
+            if let Some(admission) = &self.workload_admission {
+                record_admission_metric(
+                    &self.metrics,
+                    admission,
+                    admission_class,
+                    NameServerAdmissionOutcome::Released,
+                );
+            }
+        }
         response
     }
+
+    fn observe_response_write(&self, observation: ResponseWriteObservation) {
+        if observation.request_code == RequestCode::GetRouteinfoByTopic as i32 {
+            self.metrics.record_route_response_write(
+                observation.write_elapsed,
+                observation.end_to_end_elapsed,
+                observation.outcome == ResponseWriteOutcome::Sent,
+            );
+        }
+    }
+}
+
+fn record_admission_metric(
+    metrics: &NameServerMetrics,
+    admission: &NameServerWorkloadAdmission,
+    class: WorkloadAdmissionClass,
+    outcome: NameServerAdmissionOutcome,
+) {
+    let metric_class = match class {
+        WorkloadAdmissionClass::RouteRead => NameServerWorkloadClass::RouteRead,
+        WorkloadAdmissionClass::BrokerControl => NameServerWorkloadClass::BrokerControl,
+        WorkloadAdmissionClass::Admin => NameServerWorkloadClass::Admin,
+    };
+    let (inflight, waiting) = admission.class_counts(class);
+    metrics.record_workload_admission(metric_class, outcome, inflight, waiting);
 }
 
 fn workload_admission_rejection_response(

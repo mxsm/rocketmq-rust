@@ -98,6 +98,8 @@ pub use crate::runtime::connection_handler_context::ConnectionHandlerContextWrap
 pub use crate::runtime::processor::LocalRequestProcessor;
 pub use crate::runtime::processor::RejectRequestResponse;
 pub use crate::runtime::processor::RequestProcessor;
+pub use crate::runtime::processor::ResponseWriteObservation;
+pub use crate::runtime::processor::ResponseWriteOutcome;
 pub use crate::runtime::RPCHook;
 pub use crate::runtime::RPCHookArc;
 pub use crate::security::TransportSecurity;
