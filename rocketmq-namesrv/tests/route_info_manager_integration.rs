@@ -362,6 +362,62 @@ async fn namesrv_returns_java_style_config_properties_over_remoting() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn malformed_registration_does_not_mutate_routes_or_poison_the_session() {
+    let harness = NamesrvHarness::start(default_namesrv_config()).await;
+    let cluster_name = CheetahString::from_static_str("malformed-cluster");
+    let broker_name = CheetahString::from_static_str("malformed-broker");
+    let broker_addr = CheetahString::from_static_str("127.0.0.1:11911");
+    let topic_name = CheetahString::from_static_str("malformed-topic");
+    let malformed_body = vec![0, 0, 0, 1, 0, 0, 16, 0];
+    let mut malformed = RemotingCommand::create_request_command(
+        RequestCode::RegisterBroker,
+        RegisterBrokerRequestHeader::new(
+            broker_name.clone(),
+            broker_addr.clone(),
+            cluster_name.clone(),
+            broker_addr.clone(),
+            MASTER_ID,
+            Some(60_000),
+            Some(false),
+            false,
+            crc32_utils::crc32(malformed_body.as_slice()),
+        ),
+    )
+    .set_version(RocketMqVersion::V5_0_0 as i32)
+    .set_body(malformed_body);
+    malformed.make_custom_header_to_net();
+
+    let response = harness
+        .request(malformed)
+        .await
+        .expect("malformed request should receive a response");
+    assert_ne!(ResponseCode::from(response.code()), ResponseCode::Success);
+
+    let response = harness
+        .request(route_request(&topic_name))
+        .await
+        .expect("route query after malformed request should keep working");
+    assert_eq!(ResponseCode::from(response.code()), ResponseCode::TopicNotExist);
+
+    let response = harness
+        .request(register_broker_request(
+            &cluster_name,
+            &broker_name,
+            &broker_addr,
+            &topic_name,
+        ))
+        .await
+        .expect("valid registration after malformed input should work");
+    assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+    let response = harness
+        .request(route_request(&topic_name))
+        .await
+        .expect("valid registration should publish a route");
+    assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+    harness.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn namesrv_kvconfig_roundtrip_works_over_remoting() {
     let harness = NamesrvHarness::start(default_namesrv_config()).await;
     let namespace = CheetahString::from_static_str("phase5-network-namespace");

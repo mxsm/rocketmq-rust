@@ -40,12 +40,14 @@ use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::DataVersion;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_transport::api::v1::Channel;
+use rocketmq_transport::api::v1::ChannelId;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
 use crate::bootstrap::NameServerRuntimeHandle;
 use crate::route::batch_unregistration_service::BatchUnregistrationService;
+use crate::route::batch_unregistration_service::BrokerUnregistrationRequest;
 use crate::route::error::RocketMQError;
 use crate::route::error::RouteResult;
 use crate::route::segmented_lock::SegmentedLock;
@@ -260,15 +262,18 @@ impl RouteInfoManager {
     /// 3. Submit to batch unregistration service
     pub fn on_channel_destroy(&self, channel: &Channel) {
         let mut unregister_request = UnRegisterBrokerRequestHeader::default();
-        let mut need_unregister = false;
-
-        // Find broker by socket address and setup unregister request
-        if let Some(broker_addr_info) = Self::find_broker_by_channel(&self.broker_live_table, channel) {
-            need_unregister = self.setup_unregister_request(&mut unregister_request, &broker_addr_info);
-        }
+        let Some(broker_addr_info) = Self::find_broker_by_channel(&self.broker_live_table, channel) else {
+            return;
+        };
+        let Some(live_info) = self.broker_live_table.get(&broker_addr_info) else {
+            return;
+        };
+        let need_unregister =
+            self.setup_unregister_request_from_live(&mut unregister_request, &broker_addr_info, &live_info);
 
         if need_unregister {
-            let result = self.submit_unregister_broker_request(unregister_request.clone());
+            let result =
+                self.submit_unregister_broker_request_guarded(unregister_request.clone(), live_info.channel_id.clone());
             info!(
                 "the broker's channel destroyed, submit the unregister request at once, broker info: {:?}, submit \
                  result: {}",
@@ -284,10 +289,8 @@ impl RouteInfoManager {
         {
             if let Some(channel) = live_info.channel.as_ref() {
                 channel.connection_ref().close();
-                self.on_channel_destroy(channel);
-            } else {
-                self.on_channel_destroy_by_addr_info(broker_addr_info);
             }
+            self.on_channel_destroy_by_addr_info_and_live(broker_addr_info, live_info);
         }
     }
 
@@ -436,6 +439,8 @@ impl RouteInfoManager {
         // Still unpublished under the mutation gate.
         let prev_broker_live_info = self.register_broker_live_info(
             cluster_name.clone(),
+            broker_name.clone(),
+            broker_id,
             broker_addr.clone(),
             timeout_millis,
             topic_config_wrapper
@@ -796,6 +801,8 @@ impl RouteInfoManager {
     fn register_broker_live_info(
         &self,
         cluster_name: CheetahString,
+        broker_name: CheetahString,
+        broker_id: u64,
         broker_addr: CheetahString,
         timeout_millis: Option<u64>,
         data_version: DataVersion,
@@ -814,6 +821,7 @@ impl RouteInfoManager {
             channel.channel_id_owned(),
         )
         .with_channel(channel.clone())
+        .with_broker_identity(broker_name, broker_id)
         .with_timeout(timeout)
         .with_ha_server(ha_server_addr);
 
@@ -1130,6 +1138,15 @@ impl RouteInfoManager {
         self.un_register_service.submit(request)
     }
 
+    fn submit_unregister_broker_request_guarded(
+        &self,
+        request: UnRegisterBrokerRequestHeader,
+        expected_channel_id: ChannelId,
+    ) -> bool {
+        self.un_register_service
+            .submit_channel_guarded(request, expected_channel_id)
+    }
+
     /// Unregister a broker from the name server
     ///
     /// This method removes a broker under the route mutation gate and publishes every
@@ -1240,11 +1257,51 @@ impl RouteInfoManager {
     /// ## Arguments
     /// * `un_register_requests` - Vector of unregistration requests to process
     pub fn un_register_broker(&self, un_register_requests: Vec<UnRegisterBrokerRequestHeader>) {
-        if un_register_requests.is_empty() {
+        self.un_register_broker_requests(
+            un_register_requests
+                .into_iter()
+                .map(BrokerUnregistrationRequest::explicit)
+                .collect(),
+        );
+    }
+
+    pub(crate) fn un_register_broker_requests(&self, requests: Vec<BrokerUnregistrationRequest>) {
+        if requests.is_empty() {
             return;
         }
 
         let route_mutation = self.route_mutations.begin_mutation();
+        let mut seen = HashSet::new();
+        let mut un_register_requests = Vec::with_capacity(requests.len());
+        for request in requests {
+            let dedup_key = (
+                request.header.cluster_name.clone(),
+                request.header.broker_addr.clone(),
+                request.expected_channel_id.clone(),
+            );
+            if !seen.insert(dedup_key) {
+                continue;
+            }
+            if let Some(expected_channel_id) = request.expected_channel_id.as_ref() {
+                let broker_addr_info =
+                    BrokerAddrInfo::new(request.header.cluster_name.clone(), request.header.broker_addr.clone());
+                let matches_current_registration = self
+                    .broker_live_table
+                    .get(&broker_addr_info)
+                    .is_some_and(|live_info| &live_info.channel_id == expected_channel_id);
+                if !matches_current_registration {
+                    debug!(
+                        broker_addr = %request.header.broker_addr,
+                        "ignore stale or duplicate channel-destroy event"
+                    );
+                    continue;
+                }
+            }
+            un_register_requests.push(request.header);
+        }
+        if un_register_requests.is_empty() {
+            return;
+        }
         let affected_topics = un_register_requests
             .iter()
             .flat_map(|request| self.topic_queue_table.topics_for_broker(request.broker_name.as_str()))
@@ -1601,9 +1658,9 @@ impl RouteInfoManager {
 
                     if let Some(channel) = live_info.channel.as_ref() {
                         channel.connection_ref().close();
-                        self.on_channel_destroy(channel);
-                        continue;
                     }
+                    self.on_channel_destroy_by_addr_info_and_live(broker_addr_info, live_info);
+                    continue;
                 }
 
                 // Trigger channel destroy logic, which will submit to batch unregistration service
@@ -1622,6 +1679,10 @@ impl RouteInfoManager {
     ///
     /// The batch service will process the request asynchronously.
     fn on_channel_destroy_by_addr_info(&self, broker_addr_info: Arc<BrokerAddrInfo>) {
+        if let Some(live_info) = self.broker_live_table.get(&broker_addr_info) {
+            self.on_channel_destroy_by_addr_info_and_live(broker_addr_info, live_info);
+            return;
+        }
         let mut unregister_request = UnRegisterBrokerRequestHeader::default();
         let need_unregister = self.setup_unregister_request(&mut unregister_request, &broker_addr_info);
 
@@ -1632,6 +1693,41 @@ impl RouteInfoManager {
                  result: {}",
                 unregister_request, result
             );
+        }
+    }
+
+    fn on_channel_destroy_by_addr_info_and_live(
+        &self,
+        broker_addr_info: Arc<BrokerAddrInfo>,
+        live_info: Arc<BrokerLiveInfo>,
+    ) {
+        let mut unregister_request = UnRegisterBrokerRequestHeader::default();
+        if !self.setup_unregister_request_from_live(&mut unregister_request, &broker_addr_info, &live_info) {
+            return;
+        }
+        let result =
+            self.submit_unregister_broker_request_guarded(unregister_request.clone(), live_info.channel_id.clone());
+        info!(
+            "the broker's channel destroyed, submit guarded unregister request, broker info: {}, submit result: {}",
+            unregister_request, result
+        );
+    }
+
+    fn setup_unregister_request_from_live(
+        &self,
+        unregister_request: &mut UnRegisterBrokerRequestHeader,
+        broker_addr_info: &BrokerAddrInfo,
+        live_info: &BrokerLiveInfo,
+    ) -> bool {
+        unregister_request.cluster_name = broker_addr_info.cluster_name.clone();
+        unregister_request.broker_addr = broker_addr_info.broker_addr.clone();
+        match (&live_info.broker_name, live_info.broker_id) {
+            (Some(broker_name), Some(broker_id)) => {
+                unregister_request.broker_name = broker_name.clone();
+                unregister_request.broker_id = broker_id;
+                true
+            }
+            _ => self.setup_unregister_request(unregister_request, broker_addr_info),
         }
     }
 
@@ -2109,6 +2205,97 @@ mod tests {
 
         manager.delete_topic(topic.clone(), None);
         assert!(manager.pickup_topic_route_data(topic.as_str()).is_err());
+    }
+
+    #[test]
+    fn mass_expiry_uses_known_identity() {
+        let (_bootstrap, manager) = test_route_manager();
+        let cluster_name = CheetahString::from_static_str("mass-expiry-cluster");
+        const BROKER_COUNT: usize = 128;
+
+        for index in 0..BROKER_COUNT {
+            let broker_name = CheetahString::from_string(format!("mass-expiry-broker-{index}"));
+            let broker_addr = CheetahString::from_string(format!("127.0.1.1:{}", 10_000 + index));
+            manager
+                .cluster_addr_table
+                .add_broker(cluster_name.clone(), broker_name.clone());
+            manager.broker_addr_table.insert(
+                broker_name.clone(),
+                BrokerData::new(
+                    cluster_name.clone(),
+                    broker_name.clone(),
+                    HashMap::from([(mix_all::MASTER_ID, broker_addr.clone())]),
+                    None,
+                ),
+            );
+            let broker_addr_info = Arc::new(BrokerAddrInfo::new(cluster_name.clone(), broker_addr));
+            manager.broker_live_table.register(
+                broker_addr_info,
+                BrokerLiveInfo::new(
+                    0,
+                    DataVersion::default(),
+                    SocketAddr::from(([127, 0, 1, 1], (10_000 + index) as u16)),
+                    CheetahString::from_string(format!("mass-expiry-channel-{index}")),
+                )
+                .with_timeout(1)
+                .with_broker_identity(broker_name, mix_all::MASTER_ID),
+            );
+        }
+
+        assert_eq!(manager.scan_not_active_broker(), BROKER_COUNT);
+        assert_eq!(manager.un_register_service.queue_length(), BROKER_COUNT);
+    }
+
+    #[test]
+    fn duplicate_channel_destroy_is_idempotent_and_stale_event_cannot_delete_new_registration() {
+        let (_bootstrap, manager) = test_route_manager();
+        let cluster_name = CheetahString::from_static_str("channel-fence-cluster");
+        let broker_name = CheetahString::from_static_str("channel-fence-broker");
+        let broker_addr = CheetahString::from_static_str("127.0.2.1:10911");
+        let broker_addr_info = Arc::new(BrokerAddrInfo::new(cluster_name.clone(), broker_addr.clone()));
+        let new_channel_id = CheetahString::from_static_str("new-channel");
+        manager
+            .cluster_addr_table
+            .add_broker(cluster_name.clone(), broker_name.clone());
+        manager.broker_addr_table.insert(
+            broker_name.clone(),
+            BrokerData::new(
+                cluster_name.clone(),
+                broker_name.clone(),
+                HashMap::from([(mix_all::MASTER_ID, broker_addr.clone())]),
+                None,
+            ),
+        );
+        manager.broker_live_table.register(
+            Arc::clone(&broker_addr_info),
+            BrokerLiveInfo::new(
+                current_millis(),
+                DataVersion::default(),
+                SocketAddr::from(([127, 0, 2, 1], 10911)),
+                new_channel_id.clone(),
+            )
+            .with_broker_identity(broker_name.clone(), mix_all::MASTER_ID),
+        );
+        let header = UnRegisterBrokerRequestHeader {
+            cluster_name: cluster_name.clone(),
+            broker_addr: broker_addr.clone(),
+            broker_name: broker_name.clone(),
+            broker_id: mix_all::MASTER_ID,
+        };
+
+        manager.un_register_broker_requests(vec![BrokerUnregistrationRequest::channel_guarded(
+            header.clone(),
+            CheetahString::from_static_str("old-channel"),
+        )]);
+        assert!(manager.broker_live_table.contains(&broker_addr_info));
+        assert!(manager.broker_addr_table.contains(&broker_name));
+
+        manager.un_register_broker_requests(vec![
+            BrokerUnregistrationRequest::channel_guarded(header.clone(), new_channel_id.clone()),
+            BrokerUnregistrationRequest::channel_guarded(header, new_channel_id),
+        ]);
+        assert!(!manager.broker_live_table.contains(&broker_addr_info));
+        assert!(!manager.broker_addr_table.contains(&broker_name));
     }
 
     #[test]

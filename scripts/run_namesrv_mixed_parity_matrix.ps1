@@ -26,6 +26,7 @@ $defaultDataRoot = Join-Path $runRoot "data"
 $dataRoot = $defaultDataRoot
 $namesrvAddr = "$NamesrvHost`:$NamesrvPort"
 $brokerAddr = "$NamesrvHost`:$BrokerPort"
+$probeBrokerAddr = "$NamesrvHost`:$($BrokerPort + 1000)"
 $processes = @()
 $script:ResolvedJavaHome = ""
 
@@ -318,6 +319,15 @@ function Invoke-LoggedCommandUntilMatch {
         [int]$DelaySeconds = 5
     )
 
+    if ($DryRun) {
+        return Invoke-LoggedCommand `
+            -FilePath $FilePath `
+            -ArgumentList $ArgumentList `
+            -WorkingDirectory $WorkingDirectory `
+            -OutputPath $OutputPath `
+            -Environment $Environment
+    }
+
     $lastOutput = ""
     for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
         if ($attempt -gt 1) {
@@ -396,21 +406,24 @@ function Write-RustBrokerConfig {
     param([string]$Path)
 
     $content = @"
+[broker]
 namesrvAddr = "$namesrvAddr"
 brokerIp1 = "$NamesrvHost"
 listenPort = $BrokerPort
 storePathRootDir = "$($dataRoot -replace '\\','/')"
-storePathCommitLog = "$((Join-Path $dataRoot 'commitlog') -replace '\\','/')"
 enableControllerMode = false
 
-[brokerServerConfig]
-listenPort = $BrokerPort
+[broker.brokerServerConfig]
 bindAddress = "0.0.0.0"
 
-[brokerIdentity]
+[broker.brokerIdentity]
 brokerName = "$BrokerName"
 brokerClusterName = "$ClusterName"
 brokerId = 0
+
+[store]
+storePathRootDir = "$($dataRoot -replace '\\','/')"
+storePathCommitLog = "$((Join-Path $dataRoot 'commitlog') -replace '\\','/')"
 "@
     Write-AsciiFile -Path $Path -Content $content
 }
@@ -419,6 +432,23 @@ $dataRoot = Resolve-TestDataRoot
 New-Directory $runRoot
 New-Directory $logRoot
 New-Directory $dataRoot
+
+$fixtureManifest = Join-Path $workspaceRoot "rocketmq-namesrv\tests\fixtures\namesrv-parity\manifest.json"
+$fixtureDigest = (Get-FileHash -Algorithm SHA256 -LiteralPath $fixtureManifest).Hash.ToLowerInvariant()
+$gitCommit = (& git -C $workspaceRoot rev-parse HEAD).Trim()
+$runMetadata = [ordered]@{
+    commit = $gitCommit
+    profile = $Mode
+    seed = 9189
+    fixtureSha256 = $fixtureDigest
+    namesrv = $namesrvAddr
+    broker = $brokerAddr
+}
+[System.IO.File]::WriteAllText(
+    (Join-Path $runRoot "run-metadata.json"),
+    ($runMetadata | ConvertTo-Json -Depth 4),
+    [System.Text.Encoding]::UTF8
+)
 
 $javaBinRoot = if ($JavaRocketmqHome) { Join-Path $JavaRocketmqHome "bin" } else { $null }
 
@@ -444,7 +474,8 @@ try {
                     "--bindAddress", $NamesrvHost
                 ) `
                 -WorkingDirectory $workspaceRoot `
-                -LogPath $rustNamesrvLog
+                -LogPath $rustNamesrvLog `
+                -Environment @{ ROCKETMQ_HOME = $runRoot }
             Wait-ForTcpPort -EndpointHost $NamesrvHost -Port $NamesrvPort
 
             $javaBrokerConfig = Join-Path $runRoot "java-broker.properties"
@@ -473,11 +504,25 @@ try {
 
             $rustBrokerConfig = Join-Path $runRoot "rust-broker.toml"
             Write-RustBrokerConfig -Path $rustBrokerConfig
+            $rustBrokerBinary = Join-Path $workspaceRoot "target\debug\rocketmq-broker-rust.exe"
+            $rustBrokerBuildArguments = @(
+                "build", "-p", "rocketmq-broker", "--bin", "rocketmq-broker-rust"
+            )
+            if ($env:OS -eq "Windows_NT") {
+                $rustBrokerBuildArguments = @(
+                    "rustc", "-p", "rocketmq-broker", "--bin", "rocketmq-broker-rust", "--",
+                    "-C", "link-arg=/STACK:16777216"
+                )
+            }
+            Invoke-LoggedCommand `
+                -FilePath "cargo" `
+                -ArgumentList $rustBrokerBuildArguments `
+                -WorkingDirectory $workspaceRoot `
+                -OutputPath (Join-Path $runRoot "rust-broker-build.txt") | Out-Null
             $rustBrokerLog = Join-Path $logRoot "rust-broker.log"
             $processes += Start-LoggedProcess `
-                -FilePath "cargo" `
+                -FilePath $rustBrokerBinary `
                 -ArgumentList @(
-                    "run", "-p", "rocketmq-broker", "--bin", "rocketmq-broker-rust", "--",
                     "-c", $rustBrokerConfig,
                     "-n", $namesrvAddr
                 ) `
@@ -513,6 +558,19 @@ try {
         -RequiredValues @($BrokerName, $brokerAddr) `
         -Description "topicRoute"
 
+    $parityProbeOutput = Invoke-LoggedCommand `
+        -FilePath "cargo" `
+        -ArgumentList @(
+            "run", "-p", "rocketmq-namesrv", "--example", "namesrv_parity_probe", "--",
+            "--namesrv", $namesrvAddr,
+            "--cluster", "$ClusterName-Probe",
+            "--broker", "$BrokerName-probe",
+            "--broker-addr", $probeBrokerAddr,
+            "--topic", "$Topic-Probe"
+        ) `
+        -WorkingDirectory $workspaceRoot `
+        -OutputPath (Join-Path $runRoot "register-query-update-unregister.txt")
+
     if (-not $DryRun) {
         if ($clusterListOutput -notmatch [regex]::Escape($ClusterName)) {
             throw "clusterList output does not contain cluster '$ClusterName'."
@@ -528,6 +586,11 @@ try {
         }
         if ($topicRouteOutput -notmatch [regex]::Escape($brokerAddr)) {
             throw "topicRoute output does not contain broker address '$brokerAddr'."
+        }
+        foreach ($step in @("register", "route-after-register", "topic-update", "route-after-update", "unregister", "route-after-unregister")) {
+            if ($parityProbeOutput -notmatch "step=$([regex]::Escape($step))\s") {
+                throw "parity probe output does not contain completed step '$step'."
+            }
         }
     }
 

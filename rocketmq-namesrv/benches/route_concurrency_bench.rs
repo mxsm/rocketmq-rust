@@ -44,6 +44,11 @@ use rocketmq_namesrv::route::segmented_lock::SegmentedLock;
 use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
 use rocketmq_protocol::protocol::route::route_data_view::QueueData;
 
+#[path = "support/operation_mix.rs"]
+mod operation_mix;
+
+use operation_mix::OperationMix;
+
 // ============================================================================
 // Benchmark Data Structures
 // ============================================================================
@@ -97,6 +102,10 @@ impl GlobalLockModel {
         lock.get_topic(topic).cloned()
     }
 
+    fn insert_topic(&self, topic: String, queue_data: QueueData) {
+        self.data.write().add_topic(topic, queue_data);
+    }
+
     fn write_broker(&self, broker_name: String, broker_data: BrokerData) {
         let mut lock = self.data.write();
         lock.add_broker(broker_name, broker_data);
@@ -124,6 +133,10 @@ impl LockFreeModel {
 
     fn read_topic(&self, topic: &str) -> Option<Vec<QueueData>> {
         self.topics.get(topic).map(|v| v.clone())
+    }
+
+    fn insert_topic(&self, topic: String, queue_data: QueueData) {
+        self.topics.insert(topic, vec![queue_data]);
     }
 
     fn write_broker(&self, broker_name: String, broker_data: BrokerData) {
@@ -155,6 +168,11 @@ impl SegmentedLockModel {
     fn read_topic(&self, topic: &str) -> Option<Vec<QueueData>> {
         let _lock = self.topic_locks.read_lock(&topic);
         self.topics.get(topic).map(|v| v.clone())
+    }
+
+    fn insert_topic(&self, topic: String, queue_data: QueueData) {
+        let _lock = self.topic_locks.write_lock(&topic);
+        self.topics.insert(topic, vec![queue_data]);
     }
 
     fn write_broker(&self, broker_name: String, broker_data: BrokerData) {
@@ -280,20 +298,23 @@ where
         let handle = std::thread::spawn(move || {
             let mut read_count = 0u64;
             let mut write_count = 0u64;
+            let mut operation_index = 0usize;
             let thread_start = Instant::now();
 
             while thread_start.elapsed() < duration {
-                // 90% reads, 10% writes (typical production ratio)
-                if !read_count.is_multiple_of(10) {
+                let operation = OperationMix::NinetyTen.operation_at(operation_index);
+                if operation.is_read() {
                     let topic = format!("topic-{}", i % 10);
                     read_fn(&topic);
                     read_count += 1;
                 } else {
+                    debug_assert!(operation.is_write());
                     let broker_name = format!("broker-{}-{}", i, write_count);
                     let broker_data = create_broker_data(&broker_name);
                     write_fn(broker_name, broker_data);
                     write_count += 1;
                 }
+                operation_index += 1;
             }
 
             (read_count, write_count)
@@ -334,6 +355,9 @@ fn main() {
     println!("RouteInfoManager Concurrency Benchmark");
     println!("=================================================================\n");
 
+    let operation_counts = OperationMix::NinetyTen.counts(1_000);
+    assert_eq!((operation_counts.reads, operation_counts.writes), (900, 100));
+
     let duration = Duration::from_secs(2);
     let thread_counts = vec![1, 2, 4, 8, 16];
 
@@ -348,9 +372,9 @@ fn main() {
         let broker_name = format!("broker-{}", i);
         let queue_data = create_queue_data(&broker_name);
 
-        // Can't easily pre-populate global lock model without exposing internals
-        lock_free.topics.insert(topic.clone(), vec![queue_data.clone()]);
-        segmented.topics.insert(topic, vec![queue_data]);
+        global_lock.insert_topic(topic.clone(), queue_data.clone());
+        lock_free.insert_topic(topic.clone(), queue_data.clone());
+        segmented.insert_topic(topic, queue_data);
     }
 
     // ========================================================================

@@ -36,6 +36,7 @@ pub fn parse_command_and_config_file(config_file: PathBuf) -> RocketMQResult<Nam
         .map_err(|error| {
             RocketMQError::nameserver_config_invalid(format!("failed to parse '{}': {error}", config_file.display()))
         })?;
+    namesrv_config.validate_domains()?;
     info!("rocketmq-namesrv config: {:?}", namesrv_config);
     Ok(namesrv_config)
 }

@@ -17,6 +17,7 @@ use std::time::Duration;
 use rocketmq_protocol::protocol::header::namesrv::broker_request::UnRegisterBrokerRequestHeader;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
+use rocketmq_transport::api::v1::ChannelId;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 use tracing::warn;
@@ -25,16 +26,38 @@ use crate::bootstrap::NameServerRuntimeHandle;
 
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
+#[derive(Clone)]
+pub(crate) struct BrokerUnregistrationRequest {
+    pub(crate) header: UnRegisterBrokerRequestHeader,
+    pub(crate) expected_channel_id: Option<ChannelId>,
+}
+
+impl BrokerUnregistrationRequest {
+    pub(crate) fn explicit(header: UnRegisterBrokerRequestHeader) -> Self {
+        Self {
+            header,
+            expected_channel_id: None,
+        }
+    }
+
+    pub(crate) fn channel_guarded(header: UnRegisterBrokerRequestHeader, channel_id: ChannelId) -> Self {
+        Self {
+            header,
+            expected_channel_id: Some(channel_id),
+        }
+    }
+}
+
 pub(crate) struct BatchUnregistrationService {
     name_server_runtime_inner: NameServerRuntimeHandle,
-    tx: tokio::sync::mpsc::Sender<UnRegisterBrokerRequestHeader>,
-    rx: parking_lot::Mutex<Option<tokio::sync::mpsc::Receiver<UnRegisterBrokerRequestHeader>>>,
+    tx: tokio::sync::mpsc::Sender<BrokerUnregistrationRequest>,
+    rx: parking_lot::Mutex<Option<tokio::sync::mpsc::Receiver<BrokerUnregistrationRequest>>>,
     task_group: parking_lot::Mutex<Option<TaskGroup>>,
 }
 
 impl BatchUnregistrationService {
     pub(crate) fn new(name_server_runtime_inner: NameServerRuntimeHandle, queue_capacity: usize) -> Self {
-        let (tx, rx) = tokio::sync::mpsc::channel::<UnRegisterBrokerRequestHeader>(queue_capacity);
+        let (tx, rx) = tokio::sync::mpsc::channel::<BrokerUnregistrationRequest>(queue_capacity);
         BatchUnregistrationService {
             name_server_runtime_inner,
             tx,
@@ -44,6 +67,14 @@ impl BatchUnregistrationService {
     }
 
     pub fn submit(&self, request: UnRegisterBrokerRequestHeader) -> bool {
+        self.submit_request(BrokerUnregistrationRequest::explicit(request))
+    }
+
+    pub(crate) fn submit_channel_guarded(&self, request: UnRegisterBrokerRequestHeader, channel_id: ChannelId) -> bool {
+        self.submit_request(BrokerUnregistrationRequest::channel_guarded(request, channel_id))
+    }
+
+    fn submit_request(&self, request: BrokerUnregistrationRequest) -> bool {
         if let Err(e) = self.tx.try_send(request) {
             warn!("submit unregister broker request failed: {:?}", e);
             return false;
@@ -100,7 +131,7 @@ impl BatchUnregistrationService {
 
 async fn run_batch_unregistration_service(
     name_server_runtime_inner: NameServerRuntimeHandle,
-    rx: &mut tokio::sync::mpsc::Receiver<UnRegisterBrokerRequestHeader>,
+    rx: &mut tokio::sync::mpsc::Receiver<BrokerUnregistrationRequest>,
     shutdown_token: CancellationToken,
 ) {
     loop {
@@ -123,7 +154,9 @@ async fn run_batch_unregistration_service(
                             info!("BatchUnregistrationService stopped because NameServer runtime was released");
                             break;
                         };
-                        runtime.route_info_manager().un_register_broker(unregistration_requests);
+                        runtime
+                            .route_info_manager()
+                            .un_register_broker_requests(unregistration_requests);
                     }
                     None => {
                         info!("BatchUnregistrationService channel closed");

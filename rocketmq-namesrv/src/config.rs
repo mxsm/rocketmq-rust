@@ -16,16 +16,211 @@ use std::collections::HashMap;
 use std::env;
 
 use cheetah_string::CheetahString;
+use rocketmq_auth::AuthConfig;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::mix_all::ROCKETMQ_HOME_ENV;
 use rocketmq_model::common::mix_all::ROCKETMQ_HOME_PROPERTY;
 use rocketmq_model::utils::serde_json_utils::SerdeJsonUtils;
+use rocketmq_protocol::protocol::body::broker_body::register_broker_body::RegisterBrokerDecodeLimits;
 use serde::Deserialize;
 use serde_json::Value;
 
 pub const REMOVED_ROUTE_MANAGER_CONFIG_KEY: &str = "useRouteInfoManagerV2";
 const REMOVED_ROUTE_MANAGER_CONFIG_FIELD: &str = "use_route_info_manager_v2";
+
+const MAX_THREAD_COUNT: i32 = 4096;
+const MAX_QUEUE_CAPACITY: i32 = 10_000_000;
+const MAX_SCAN_INTERVAL_MILLIS: u64 = 3_600_000;
+const MAX_WAIT_SECONDS: i32 = 3600;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ConfigMutability {
+    Live,
+    RestartRequired,
+    Unsupported,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum NamesrvConfigKey {
+    RocketmqHome,
+    KvConfigPath,
+    ConfigStorePath,
+    ProductEnvName,
+    ClusterTest,
+    OrderMessageEnable,
+    ReturnOrderTopicConfigToBroker,
+    ClientRequestThreadPoolNums,
+    DefaultThreadPoolNums,
+    ClientRequestThreadPoolQueueCapacity,
+    DefaultThreadPoolQueueCapacity,
+    ScanNotActiveBrokerInterval,
+    UnregisterBrokerQueueCapacity,
+    SupportActingMaster,
+    EnableAllTopicList,
+    EnableTopicList,
+    NotifyMinBrokerIdChanged,
+    EnableControllerInNamesrv,
+    NeedWaitForService,
+    WaitSecondsForService,
+    DeleteTopicWithBrokerRegistration,
+    AllowInsecurePublicListener,
+    ConfigBlackList,
+}
+
+impl NamesrvConfigKey {
+    pub(crate) fn from_java_name(key: &str) -> Option<Self> {
+        Some(match key {
+            "rocketmqHome" => Self::RocketmqHome,
+            "kvConfigPath" => Self::KvConfigPath,
+            "configStorePath" => Self::ConfigStorePath,
+            "productEnvName" => Self::ProductEnvName,
+            "clusterTest" => Self::ClusterTest,
+            "orderMessageEnable" => Self::OrderMessageEnable,
+            "returnOrderTopicConfigToBroker" => Self::ReturnOrderTopicConfigToBroker,
+            "clientRequestThreadPoolNums" => Self::ClientRequestThreadPoolNums,
+            "defaultThreadPoolNums" => Self::DefaultThreadPoolNums,
+            "clientRequestThreadPoolQueueCapacity" => Self::ClientRequestThreadPoolQueueCapacity,
+            "defaultThreadPoolQueueCapacity" => Self::DefaultThreadPoolQueueCapacity,
+            "scanNotActiveBrokerInterval" => Self::ScanNotActiveBrokerInterval,
+            "unRegisterBrokerQueueCapacity" => Self::UnregisterBrokerQueueCapacity,
+            "supportActingMaster" => Self::SupportActingMaster,
+            "enableAllTopicList" => Self::EnableAllTopicList,
+            "enableTopicList" => Self::EnableTopicList,
+            "notifyMinBrokerIdChanged" => Self::NotifyMinBrokerIdChanged,
+            "enableControllerInNamesrv" => Self::EnableControllerInNamesrv,
+            "needWaitForService" => Self::NeedWaitForService,
+            "waitSecondsForService" => Self::WaitSecondsForService,
+            "deleteTopicWithBrokerRegistration" => Self::DeleteTopicWithBrokerRegistration,
+            "allowInsecurePublicListener" => Self::AllowInsecurePublicListener,
+            "configBlackList" => Self::ConfigBlackList,
+            _ => return None,
+        })
+    }
+
+    pub(crate) fn mutability(self) -> ConfigMutability {
+        match self {
+            Self::ReturnOrderTopicConfigToBroker
+            | Self::SupportActingMaster
+            | Self::EnableAllTopicList
+            | Self::EnableTopicList
+            | Self::NotifyMinBrokerIdChanged
+            | Self::DeleteTopicWithBrokerRegistration => ConfigMutability::Live,
+            Self::ProductEnvName
+            | Self::ClusterTest
+            | Self::OrderMessageEnable
+            | Self::ClientRequestThreadPoolNums
+            | Self::DefaultThreadPoolNums
+            | Self::ClientRequestThreadPoolQueueCapacity
+            | Self::DefaultThreadPoolQueueCapacity
+            | Self::ScanNotActiveBrokerInterval
+            | Self::UnregisterBrokerQueueCapacity
+            | Self::EnableControllerInNamesrv
+            | Self::NeedWaitForService
+            | Self::WaitSecondsForService => ConfigMutability::RestartRequired,
+            Self::RocketmqHome
+            | Self::KvConfigPath
+            | Self::ConfigStorePath
+            | Self::AllowInsecurePublicListener
+            | Self::ConfigBlackList => ConfigMutability::Unsupported,
+        }
+    }
+}
+
+pub(crate) fn validate_namesrv_property(key: NamesrvConfigKey, value: &str) -> RocketMQResult<()> {
+    match key {
+        NamesrvConfigKey::ClientRequestThreadPoolNums | NamesrvConfigKey::DefaultThreadPoolNums => {
+            parse_bounded_i32(key, value, 1, MAX_THREAD_COUNT)?;
+        }
+        NamesrvConfigKey::ClientRequestThreadPoolQueueCapacity
+        | NamesrvConfigKey::DefaultThreadPoolQueueCapacity
+        | NamesrvConfigKey::UnregisterBrokerQueueCapacity => {
+            parse_bounded_i32(key, value, 1, MAX_QUEUE_CAPACITY)?;
+        }
+        NamesrvConfigKey::ScanNotActiveBrokerInterval => {
+            let value = value
+                .parse::<u64>()
+                .map_err(|_| invalid_value(key.java_name(), "expected a non-negative integer"))?;
+            if !(1..=MAX_SCAN_INTERVAL_MILLIS).contains(&value) {
+                return Err(invalid_value(
+                    key.java_name(),
+                    &format!("must be between 1 and {MAX_SCAN_INTERVAL_MILLIS}"),
+                ));
+            }
+        }
+        NamesrvConfigKey::WaitSecondsForService => {
+            parse_bounded_i32(key, value, 0, MAX_WAIT_SECONDS)?;
+        }
+        NamesrvConfigKey::ClusterTest
+        | NamesrvConfigKey::OrderMessageEnable
+        | NamesrvConfigKey::ReturnOrderTopicConfigToBroker
+        | NamesrvConfigKey::SupportActingMaster
+        | NamesrvConfigKey::EnableAllTopicList
+        | NamesrvConfigKey::EnableTopicList
+        | NamesrvConfigKey::NotifyMinBrokerIdChanged
+        | NamesrvConfigKey::EnableControllerInNamesrv
+        | NamesrvConfigKey::NeedWaitForService
+        | NamesrvConfigKey::DeleteTopicWithBrokerRegistration
+        | NamesrvConfigKey::AllowInsecurePublicListener => {
+            value
+                .parse::<bool>()
+                .map_err(|_| invalid_value(key.java_name(), "expected a boolean"))?;
+        }
+        NamesrvConfigKey::ProductEnvName
+        | NamesrvConfigKey::RocketmqHome
+        | NamesrvConfigKey::KvConfigPath
+        | NamesrvConfigKey::ConfigStorePath
+        | NamesrvConfigKey::ConfigBlackList => {
+            if value.trim().is_empty() {
+                return Err(invalid_value(key.java_name(), "must not be empty"));
+            }
+        }
+    }
+    Ok(())
+}
+
+impl NamesrvConfigKey {
+    fn java_name(self) -> &'static str {
+        match self {
+            Self::RocketmqHome => "rocketmqHome",
+            Self::KvConfigPath => "kvConfigPath",
+            Self::ConfigStorePath => "configStorePath",
+            Self::ProductEnvName => "productEnvName",
+            Self::ClusterTest => "clusterTest",
+            Self::OrderMessageEnable => "orderMessageEnable",
+            Self::ReturnOrderTopicConfigToBroker => "returnOrderTopicConfigToBroker",
+            Self::ClientRequestThreadPoolNums => "clientRequestThreadPoolNums",
+            Self::DefaultThreadPoolNums => "defaultThreadPoolNums",
+            Self::ClientRequestThreadPoolQueueCapacity => "clientRequestThreadPoolQueueCapacity",
+            Self::DefaultThreadPoolQueueCapacity => "defaultThreadPoolQueueCapacity",
+            Self::ScanNotActiveBrokerInterval => "scanNotActiveBrokerInterval",
+            Self::UnregisterBrokerQueueCapacity => "unRegisterBrokerQueueCapacity",
+            Self::SupportActingMaster => "supportActingMaster",
+            Self::EnableAllTopicList => "enableAllTopicList",
+            Self::EnableTopicList => "enableTopicList",
+            Self::NotifyMinBrokerIdChanged => "notifyMinBrokerIdChanged",
+            Self::EnableControllerInNamesrv => "enableControllerInNamesrv",
+            Self::NeedWaitForService => "needWaitForService",
+            Self::WaitSecondsForService => "waitSecondsForService",
+            Self::DeleteTopicWithBrokerRegistration => "deleteTopicWithBrokerRegistration",
+            Self::AllowInsecurePublicListener => "allowInsecurePublicListener",
+            Self::ConfigBlackList => "configBlackList",
+        }
+    }
+}
+
+fn parse_bounded_i32(key: NamesrvConfigKey, value: &str, minimum: i32, maximum: i32) -> RocketMQResult<i32> {
+    let value = value
+        .parse::<i32>()
+        .map_err(|_| invalid_value(key.java_name(), "expected an integer"))?;
+    if !(minimum..=maximum).contains(&value) {
+        return Err(invalid_value(
+            key.java_name(),
+            &format!("must be between {minimum} and {maximum}"),
+        ));
+    }
+    Ok(value)
+}
 
 /// Default value functions for serde deserialization
 mod defaults {
@@ -181,6 +376,15 @@ pub struct NamesrvConfig {
     #[serde(alias = "deleteTopicWithBrokerRegistration", default)]
     pub delete_topic_with_broker_registration: bool,
 
+    /// Migration-only escape hatch for an unauthenticated non-loopback listener.
+    /// Secure deployments must leave this disabled and select the secure profile.
+    #[serde(alias = "allowInsecurePublicListener", default)]
+    pub allow_insecure_public_listener: bool,
+
+    /// Shared RocketMQ authentication and authorization configuration.
+    #[serde(flatten, default)]
+    pub auth_config: AuthConfig,
+
     #[serde(alias = "configBlackList", default = "defaults::config_black_list")]
     pub config_black_list: String,
 }
@@ -209,6 +413,8 @@ impl Default for NamesrvConfig {
             need_wait_for_service: false,
             wait_seconds_for_service: 45,
             delete_topic_with_broker_registration: false,
+            allow_insecure_public_listener: false,
+            auth_config: AuthConfig::default(),
             config_black_list: "configBlackList;configStorePath;kvConfigPath".to_string(),
         }
     }
@@ -299,6 +505,18 @@ impl NamesrvConfig {
             Value::String(self.delete_topic_with_broker_registration.to_string()),
         );
         json_map.insert(
+            "allowInsecurePublicListener".to_string(),
+            Value::String(self.allow_insecure_public_listener.to_string()),
+        );
+        json_map.insert(
+            "authenticationEnabled".to_string(),
+            Value::String(self.auth_config.authentication_enabled.to_string()),
+        );
+        json_map.insert(
+            "authorizationEnabled".to_string(),
+            Value::String(self.auth_config.authorization_enabled.to_string()),
+        );
+        json_map.insert(
             "configBlackList".to_string(),
             Value::String(self.config_black_list.clone()),
         );
@@ -319,8 +537,40 @@ impl NamesrvConfig {
     }
 
     pub fn update(&mut self, properties: HashMap<CheetahString, CheetahString>) -> RocketMQResult<()> {
+        let mut candidate = self.clone();
+        candidate.apply_updates(properties)?;
+        candidate.validate_domains()?;
+        *self = candidate;
+        Ok(())
+    }
+
+    /// Applies only NameServer-owned keys from a composite persisted runtime
+    /// snapshot. Listener and transport keys are returned to their owning
+    /// configuration components by the startup loader.
+    pub fn update_known_properties(
+        &mut self,
+        properties: &HashMap<CheetahString, CheetahString>,
+    ) -> RocketMQResult<()> {
+        let namesrv_properties = properties
+            .iter()
+            .filter(|(key, _)| NamesrvConfigKey::from_java_name(key.as_str()).is_some())
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
+        self.update(namesrv_properties)
+    }
+
+    #[must_use]
+    pub fn is_known_property(key: &str) -> bool {
+        NamesrvConfigKey::from_java_name(key).is_some()
+    }
+
+    fn apply_updates(&mut self, properties: HashMap<CheetahString, CheetahString>) -> RocketMQResult<()> {
         for (key, value) in properties {
             reject_removed_route_manager_key(key.as_str())?;
+            let config_key = NamesrvConfigKey::from_java_name(key.as_str()).ok_or_else(|| {
+                RocketMQError::nameserver_config_invalid(format!("unknown configuration key '{key}'"))
+            })?;
+            validate_namesrv_property(config_key, value.as_str())?;
             match key.as_str() {
                 "rocketmqHome" => self.rocketmq_home = value.to_string(),
                 "kvConfigPath" => self.kv_config_path = value.to_string(),
@@ -388,6 +638,10 @@ impl NamesrvConfig {
                     self.delete_topic_with_broker_registration =
                         value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
+                "allowInsecurePublicListener" => {
+                    self.allow_insecure_public_listener =
+                        value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
+                }
                 "configBlackList" => {
                     self.config_black_list = value.to_string();
                 }
@@ -400,6 +654,63 @@ impl NamesrvConfig {
         }
 
         Ok(())
+    }
+
+    pub(crate) fn validate_domains(&self) -> RocketMQResult<()> {
+        for (key, value) in [
+            (
+                NamesrvConfigKey::ClientRequestThreadPoolNums,
+                self.client_request_thread_pool_nums.to_string(),
+            ),
+            (
+                NamesrvConfigKey::DefaultThreadPoolNums,
+                self.default_thread_pool_nums.to_string(),
+            ),
+            (
+                NamesrvConfigKey::ClientRequestThreadPoolQueueCapacity,
+                self.client_request_thread_pool_queue_capacity.to_string(),
+            ),
+            (
+                NamesrvConfigKey::DefaultThreadPoolQueueCapacity,
+                self.default_thread_pool_queue_capacity.to_string(),
+            ),
+            (
+                NamesrvConfigKey::ScanNotActiveBrokerInterval,
+                self.scan_not_active_broker_interval.to_string(),
+            ),
+            (
+                NamesrvConfigKey::UnregisterBrokerQueueCapacity,
+                self.unregister_broker_queue_capacity.to_string(),
+            ),
+            (
+                NamesrvConfigKey::WaitSecondsForService,
+                self.wait_seconds_for_service.to_string(),
+            ),
+        ] {
+            validate_namesrv_property(key, &value)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn unregister_broker_queue_capacity(&self) -> RocketMQResult<usize> {
+        validate_namesrv_property(
+            NamesrvConfigKey::UnregisterBrokerQueueCapacity,
+            &self.unregister_broker_queue_capacity.to_string(),
+        )?;
+        usize::try_from(self.unregister_broker_queue_capacity).map_err(|_| {
+            invalid_value(
+                NamesrvConfigKey::UnregisterBrokerQueueCapacity.java_name(),
+                "must fit the platform channel capacity",
+            )
+        })
+    }
+
+    /// Builds the bounded registration decoder policy owned by NameServer.
+    ///
+    /// These compatibility limits deliberately remain startup constants in P0;
+    /// chunked registration and its generation protocol are introduced in P2.
+    pub(crate) fn register_broker_decode_limits(&self) -> RegisterBrokerDecodeLimits {
+        RegisterBrokerDecodeLimits::default()
     }
 }
 
@@ -463,6 +774,30 @@ pub fn validate_namesrv_config_source(source: &str) -> RocketMQResult<()> {
     Ok(())
 }
 
+#[must_use]
+pub fn is_tls_config_key(key: &str) -> bool {
+    matches!(
+        key,
+        "tls.enable"
+            | "tls.test.mode.enable"
+            | "tls.config.file"
+            | "tls.server.mode"
+            | "tls.server.need.client.auth"
+            | "tls.server.keyPath"
+            | "tls.server.keyPassword"
+            | "tls.server.certPath"
+            | "tls.server.authClient"
+            | "tls.server.trustCertPath"
+            | "tls.client.keyPath"
+            | "tls.client.keyPassword"
+            | "tls.client.certPath"
+            | "tls.client.authServer"
+            | "tls.client.trustCertPath"
+            | "tls.ciphers"
+            | "tls.protocols"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use std::env;
@@ -515,6 +850,9 @@ mod tests {
         assert!(!config.need_wait_for_service);
         assert_eq!(config.wait_seconds_for_service, 45);
         assert!(!config.delete_topic_with_broker_registration);
+        assert!(!config.allow_insecure_public_listener);
+        assert!(!config.auth_config.authentication_enabled);
+        assert!(!config.auth_config.authorization_enabled);
         assert_eq!(
             config.config_black_list,
             "configBlackList;configStorePath;kvConfigPath".to_string()
@@ -577,6 +915,10 @@ mod tests {
             CheetahString::from("true"),
         );
         properties.insert(
+            CheetahString::from("allowInsecurePublicListener"),
+            CheetahString::from("true"),
+        );
+        properties.insert(
             CheetahString::from("configBlackList"),
             CheetahString::from("newBlackList"),
         );
@@ -604,6 +946,7 @@ mod tests {
         assert!(config.need_wait_for_service);
         assert_eq!(config.wait_seconds_for_service, 30);
         assert!(config.delete_topic_with_broker_registration);
+        assert!(config.allow_insecure_public_listener);
         assert_eq!(config.config_black_list, "newBlackList");
     }
 
@@ -686,6 +1029,18 @@ mod tests {
             parsed["deleteTopicWithBrokerRegistration"].as_str().unwrap(),
             config.delete_topic_with_broker_registration.to_string()
         );
+        assert_eq!(
+            parsed["allowInsecurePublicListener"].as_str().unwrap(),
+            config.allow_insecure_public_listener.to_string()
+        );
+        assert_eq!(
+            parsed["authenticationEnabled"].as_str().unwrap(),
+            config.auth_config.authentication_enabled.to_string()
+        );
+        assert_eq!(
+            parsed["authorizationEnabled"].as_str().unwrap(),
+            config.auth_config.authorization_enabled.to_string()
+        );
         assert_eq!(parsed["configBlackList"], config.config_black_list);
     }
 
@@ -726,5 +1081,21 @@ productEnvName = "useRouteInfoManagerV2"
             RocketMQError::Tools(rocketmq_error::ToolsError::NameServerConfigInvalid { .. })
         ));
         assert!(error.to_string().contains("clientWorkerThreads"));
+    }
+
+    #[test]
+    fn rejects_zero_unregister_queue_capacity() {
+        let mut config = NamesrvConfig::default();
+        let error = config
+            .update(HashMap::from([(
+                CheetahString::from_static_str("unRegisterBrokerQueueCapacity"),
+                CheetahString::from_static_str("0"),
+            )]))
+            .expect_err("zero-capacity channel must be rejected before construction");
+
+        assert!(matches!(
+            error,
+            RocketMQError::Tools(rocketmq_error::ToolsError::NameServerConfigInvalid { .. })
+        ));
     }
 }

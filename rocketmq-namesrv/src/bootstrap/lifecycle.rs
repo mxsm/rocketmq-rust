@@ -112,6 +112,7 @@ pub struct NameServerShutdownReport {
     pub server: Option<ShutdownReport>,
     pub remoting_server: Option<ShutdownReport>,
     pub remoting_client: Option<ClientShutdownReport>,
+    pub auth_runtime_healthy: Option<bool>,
     pub metadata_io_healthy: Option<bool>,
     pub root: Option<ShutdownReport>,
 }
@@ -135,6 +136,7 @@ impl NameServerShutdownReport {
                 .remoting_client
                 .as_ref()
                 .is_none_or(ClientShutdownReport::is_healthy)
+            && self.auth_runtime_healthy.unwrap_or(true)
             && self.metadata_io_healthy.unwrap_or(true)
             && self.root.as_ref().is_none_or(ShutdownReport::is_healthy)
     }

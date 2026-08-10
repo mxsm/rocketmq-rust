@@ -131,7 +131,7 @@ impl DefaultRequestProcessor {
             RequestCode::GetUnitTopicList => self.get_unit_topic_list(request),
             RequestCode::GetHasUnitSubTopicList => self.get_has_unit_sub_topic_list(request),
             RequestCode::GetHasUnitSubUnunitTopicList => self.get_has_unit_sub_un_unit_topic_list(request),
-            RequestCode::UpdateNamesrvConfig => self.update_config(request),
+            RequestCode::UpdateNamesrvConfig => self.update_config(request).await,
             RequestCode::GetNamesrvConfig => self.get_config(request),
             _ => Ok(request_code_not_supported_with_remark(
                 request.code(),
@@ -270,7 +270,12 @@ impl DefaultRequestProcessor {
         let topic_config_wrapper;
         let mut filter_server_list = Vec::new();
         if broker_version >= RocketMqVersion::V3_0_11 {
-            let register_broker_body = extract_register_broker_body_from_request(request, &request_header)?;
+            let decode_limits = self
+                .name_server_runtime_inner
+                .name_server_config()
+                .register_broker_decode_limits();
+            let register_broker_body =
+                extract_register_broker_body_from_request(request, &request_header, decode_limits)?;
             topic_config_wrapper = register_broker_body.topic_config_serialize_wrapper;
             filter_server_list = register_broker_body.filter_server_list;
         } else {
@@ -540,7 +545,8 @@ impl DefaultRequestProcessor {
         Ok(internal_error("disable"))
     }
 
-    fn update_config(&self, request: &mut RemotingCommand) -> rocketmq_error::RocketMQResult<RemotingCommand> {
+    async fn update_config(&self, request: &mut RemotingCommand) -> rocketmq_error::RocketMQResult<RemotingCommand> {
+        let mut apply_outcome = None;
         if let Some(body) = request.body() {
             let body_str = match str::from_utf8(body) {
                 Ok(s) => s,
@@ -564,13 +570,29 @@ impl DefaultRequestProcessor {
                 return Ok(no_permission_with_remark("Cannot update config in blacklist."));
             }
 
-            self.name_server_runtime_inner.update_runtime_config(properties)?;
+            apply_outcome = Some(self.name_server_runtime_inner.update_runtime_config(properties).await?);
         }
 
-        Ok(
-            RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::Success)
-                .set_remark(CheetahString::empty()),
-        )
+        let mut response = RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::Success);
+        response.ensure_ext_fields_initialized();
+        if let Some(outcome) = apply_outcome {
+            response.add_ext_field("desiredGeneration", outcome.desired_generation.to_string());
+            response.add_ext_field("durableGeneration", outcome.durable_generation.to_string());
+            response.add_ext_field("effectiveGeneration", outcome.effective_generation.to_string());
+            response.add_ext_field("appliedKeys", outcome.applied_keys.join(","));
+            response.add_ext_field("restartRequiredKeys", outcome.restart_required_keys.join(","));
+            if outcome.restart_required_keys.is_empty() {
+                response.set_remark_mut(CheetahString::empty());
+            } else {
+                response.set_remark_mut(format!(
+                    "configuration persisted; restart required for: {}",
+                    outcome.restart_required_keys.join(",")
+                ));
+            }
+        } else {
+            response.set_remark_mut(CheetahString::empty());
+        }
+        Ok(response)
     }
 
     fn get_config(&self, request: &mut RemotingCommand) -> rocketmq_error::RocketMQResult<RemotingCommand> {
@@ -618,13 +640,15 @@ fn extract_register_topic_config_from_request(
 fn extract_register_broker_body_from_request(
     request: &RemotingCommand,
     request_header: &RegisterBrokerRequestHeader,
+    limits: rocketmq_protocol::protocol::body::broker_body::register_broker_body::RegisterBrokerDecodeLimits,
 ) -> rocketmq_error::RocketMQResult<RegisterBrokerBody> {
     if let Some(body_inner) = request.body() {
         if !body_inner.is_empty() {
             let version = request.rocketmq_version();
-            return RegisterBrokerBody::decode(body_inner, request_header.compressed, version).inspect_err(|e| {
-                warn!("Failed to decode RegisterBrokerBody: {:?}", e);
-            });
+            return RegisterBrokerBody::decode_with_limits(body_inner, request_header.compressed, version, limits)
+                .inspect_err(|e| {
+                    warn!("Failed to decode RegisterBrokerBody: {:?}", e);
+                });
         }
     }
     let mut register_broker_body = RegisterBrokerBody::default();
@@ -765,7 +789,7 @@ mod tests {
         let request = RemotingCommand::new_request(0, body);
         let request_header = RegisterBrokerRequestHeader::default();
         // Should return Ok with default body since body is invalid
-        let _result = extract_register_broker_body_from_request(&request, &request_header);
+        let _result = extract_register_broker_body_from_request(&request, &request_header, Default::default());
         assert!(_result.is_ok());
     }
 
@@ -774,7 +798,8 @@ mod tests {
         // Test with empty body (should initialize DataVersion to zeros)
         let request = RemotingCommand::new_request(0, vec![]);
         let request_header = RegisterBrokerRequestHeader::default();
-        let result = extract_register_broker_body_from_request(&request, &request_header).expect("should succeed");
+        let result = extract_register_broker_body_from_request(&request, &request_header, Default::default())
+            .expect("should succeed");
 
         // Verify DataVersion fields are explicitly set to 0 (Java behavior)
         let data_version = &result.topic_config_serialize_wrapper.mapping_data_version;
@@ -787,7 +812,8 @@ mod tests {
     fn extract_register_broker_body_from_request_without_body() {
         let request = RemotingCommand::new_request(0, vec![]);
         let request_header = RegisterBrokerRequestHeader::default();
-        let result = extract_register_broker_body_from_request(&request, &request_header).expect("should succeed");
+        let result = extract_register_broker_body_from_request(&request, &request_header, Default::default())
+            .expect("should succeed");
 
         // Verify DataVersion is explicitly initialized with zeros (align with Java logic)
         assert_eq!(

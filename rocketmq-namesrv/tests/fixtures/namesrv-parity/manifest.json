@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "seed": 9189,
+  "fixture": {
+    "topicCount": 10,
+    "brokerCount": 10,
+    "routeWidth": 1,
+    "jsonEncoding": "legacy"
+  },
+  "mixedWorkload": {
+    "readPercent": 90,
+    "writePercent": 10,
+    "period": 10,
+    "firstOperation": "write"
+  }
+}

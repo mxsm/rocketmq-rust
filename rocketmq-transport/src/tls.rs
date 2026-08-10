@@ -152,9 +152,9 @@ impl TlsServerRuntime {
     ///
     /// # Errors
     ///
-    /// Returns an error when the blocking job cannot be scheduled or joined. Invalid initial TLS
-    /// material is logged and retained as an empty acceptor so permissive plaintext behavior stays
-    /// compatible; strict negotiation subsequently fails closed.
+    /// Returns an error when the blocking job cannot be scheduled or joined, or when enforcing
+    /// mode cannot build its initial acceptor. Permissive mode retains its plaintext-compatible
+    /// fallback while reporting invalid TLS material.
     ///
     /// [`BlockingExecutor`]: rocketmq_runtime::BlockingExecutor
     pub async fn initialize_with_service_context(
@@ -202,6 +202,12 @@ impl TlsServerRuntime {
                     generation: 1,
                     acceptor: initial,
                 }))),
+                Err(error) if mode == TlsMode::Enforcing => {
+                    return Err(RocketMQError::network_connection_failed(
+                        "tls-initialize",
+                        error.to_string(),
+                    ));
+                }
                 Err(error) => warn!("failed to build initial TLS server acceptor: {error}"),
             }
         }
@@ -964,6 +970,29 @@ mod tests {
             .await
             .expect("reload task should be running");
         assert!(report.is_healthy(), "{}", report.to_json());
+    }
+
+    #[cfg(feature = "tls")]
+    #[tokio::test]
+    async fn enforcing_mode_rejects_invalid_initial_tls_material() {
+        let context = rocketmq_runtime::RuntimeContext::from_current("tls-enforcing-startup-test");
+        let service = context.service_context("tls-enforcing-startup");
+        let config = TlsConfig {
+            server: crate::config::TlsServerConfig {
+                mode: TlsMode::Enforcing,
+                key_path: Some("missing-key.pem".to_string()),
+                cert_path: Some("missing-cert.pem".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let error = match TlsServerRuntime::initialize_with_service_context(config, &service).await {
+            Ok(_) => panic!("enforcing TLS must fail before listener readiness"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("tls-initialize"));
     }
 
     #[cfg(feature = "tls")]

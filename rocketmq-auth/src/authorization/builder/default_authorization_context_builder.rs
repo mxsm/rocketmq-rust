@@ -451,6 +451,13 @@ impl DefaultAuthorizationContextBuilder {
             | RequestCode::GetKvConfig
             | RequestCode::GetKvlistByNamespace
             | RequestCode::QueryDataVersion
+            | RequestCode::GetBrokerClusterInfo
+            | RequestCode::GetAllTopicListFromNameserver
+            | RequestCode::GetSystemTopicListFromNs
+            | RequestCode::GetUnitTopicList
+            | RequestCode::GetHasUnitSubTopicList
+            | RequestCode::GetHasUnitSubUnunitTopicList
+            | RequestCode::GetNamesrvConfig
             | RequestCode::GetBrokerRuntimeInfo
             | RequestCode::GetProxyDrainState
             | RequestCode::ViewBrokerStatsData
@@ -460,6 +467,28 @@ impl DefaultAuthorizationContextBuilder {
             | RequestCode::GetBrokerHaStatus => {
                 self.push_java_annotation_cluster_default(contexts, subject_key, vec![Action::Get], source_ip, rpc_code)
             }
+            RequestCode::GetBrokerMemberGroup => self.push_java_annotation_field(
+                contexts,
+                subject_key,
+                fields,
+                "clusterName",
+                None,
+                ResourceType::Cluster,
+                vec![Action::Get],
+                source_ip,
+                rpc_code,
+            ),
+            RequestCode::GetTopicsByCluster => self.push_java_annotation_field(
+                contexts,
+                subject_key,
+                fields,
+                "cluster",
+                None,
+                ResourceType::Cluster,
+                vec![Action::List],
+                source_ip,
+                rpc_code,
+            ),
             _ => {}
         }
     }
@@ -934,5 +963,45 @@ mod tests {
         assert_eq!(contexts.len(), 1);
         assert_eq!(contexts[0].resource_key(), Some("Cluster:DefaultCluster".to_string()));
         assert_eq!(contexts[0].actions(), &[Action::Get]);
+    }
+
+    #[test]
+    fn nameserver_admin_reads_never_produce_an_empty_authorization_context() {
+        let builder = DefaultAuthorizationContextBuilder::new(AuthConfig {
+            cluster_name: CheetahString::from_static_str("DefaultCluster"),
+            ..AuthConfig::default()
+        });
+
+        for code in [
+            RequestCode::GetBrokerClusterInfo,
+            RequestCode::GetAllTopicListFromNameserver,
+            RequestCode::GetSystemTopicListFromNs,
+            RequestCode::GetUnitTopicList,
+            RequestCode::GetHasUnitSubTopicList,
+            RequestCode::GetHasUnitSubUnunitTopicList,
+            RequestCode::GetNamesrvConfig,
+        ] {
+            let command = command_with_fields(code, &[("AccessKey", "reader")]);
+            let contexts = builder.build_from_remoting(&(), &command).unwrap();
+            assert_eq!(contexts.len(), 1, "missing authorization context for {code:?}");
+            assert_eq!(contexts[0].resource_key(), Some("Cluster:DefaultCluster".to_string()));
+            assert_eq!(contexts[0].actions(), &[Action::Get]);
+        }
+
+        let member = command_with_fields(
+            RequestCode::GetBrokerMemberGroup,
+            &[("AccessKey", "reader"), ("clusterName", "ClusterA")],
+        );
+        let contexts = builder.build_from_remoting(&(), &member).unwrap();
+        assert_eq!(contexts[0].resource_key(), Some("Cluster:ClusterA".to_string()));
+        assert_eq!(contexts[0].actions(), &[Action::Get]);
+
+        let topics = command_with_fields(
+            RequestCode::GetTopicsByCluster,
+            &[("AccessKey", "reader"), ("cluster", "ClusterA")],
+        );
+        let contexts = builder.build_from_remoting(&(), &topics).unwrap();
+        assert_eq!(contexts[0].resource_key(), Some("Cluster:ClusterA".to_string()));
+        assert_eq!(contexts[0].actions(), &[Action::List]);
     }
 }

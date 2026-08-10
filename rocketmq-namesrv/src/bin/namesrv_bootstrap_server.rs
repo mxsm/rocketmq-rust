@@ -17,12 +17,12 @@
 use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::bail;
 use anyhow::Context;
 use anyhow::Result;
 use clap::Parser;
-#[cfg(feature = "embedded-controller")]
 use config::Config;
 #[cfg(feature = "embedded-controller")]
 use rocketmq_controller::resolve_controller_raft_bind_addr;
@@ -34,10 +34,13 @@ use rocketmq_controller::ControllerConfig;
 use rocketmq_controller::RaftPeer;
 #[cfg(feature = "embedded-controller")]
 use rocketmq_controller::StorageBackendType;
+use rocketmq_model::common::mix_all::string_to_properties;
 use rocketmq_model::utils::env_utils::EnvUtils;
 use rocketmq_model::version::CURRENT_VERSION;
 use rocketmq_namesrv::bootstrap::Builder;
+use rocketmq_namesrv::config::is_tls_config_key;
 use rocketmq_namesrv::parse_command_and_config_file;
+use rocketmq_namesrv::security::NameServerTransportPolicy;
 use rocketmq_namesrv::NamesrvConfig;
 #[cfg(feature = "embedded-controller")]
 use rocketmq_observability::MetricsExporterType;
@@ -50,12 +53,16 @@ use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::ServiceLifecycle;
 use rocketmq_runtime::ServiceLifecycleState;
 use rocketmq_runtime::ShutdownReason;
+use rocketmq_security_api::Principal;
 use rocketmq_security_api::SecurityBootstrap;
 use rocketmq_security_api::SecurityBootstrapConfig;
+use rocketmq_security_api::SecurityBootstrapError;
 use rocketmq_security_api::SecurityBootstrapOutcome;
 use rocketmq_security_api::SecurityBootstrapProfile;
 use rocketmq_transport::api::v1::ServerConfig;
-#[cfg(feature = "embedded-controller")]
+use rocketmq_transport::api::v1::TlsMode;
+use rocketmq_transport::api::v1::TransportClientConfig;
+use rocketmq_transport::api::v1::TransportSecurity;
 use serde::Deserialize;
 use tracing::info;
 
@@ -119,7 +126,7 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         .context("failed to initialize the immutable NameServer remoting version")?;
 
     // Parse and merge configurations
-    let (namesrv_config, server_config, controller_config, logging_overrides) =
+    let (namesrv_config, server_config, tokio_client_config, controller_config, logging_overrides) =
         parse_and_merge_config(&args).context("failed to parse namesrv configuration")?;
 
     // Handle print config item mode
@@ -143,6 +150,7 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         SecurityBootstrapConfig::from_env().context("failed to load NameServer security bootstrap configuration")?;
     let validated_security = validate_namesrv_security(
         &security_bootstrap,
+        &namesrv_config,
         &server_config,
         controller_config.as_ref(),
         process_telemetry.prometheus_listener_addr(),
@@ -167,6 +175,7 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         telemetry_guard.subscriber_install_status(),
     );
     log_security_bootstrap(validated_security);
+    let (transport_security, transport_principal) = build_namesrv_transport_security(validated_security);
 
     if let Err(error) = lifecycle.start(&service_context).await {
         lifecycle.mark_failed();
@@ -211,7 +220,9 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
     // Start the name server
     let builder = Builder::new(service_context.clone(), telemetry_guard.handle())
         .set_name_server_config(namesrv_config)
-        .set_server_config(server_config);
+        .set_server_config(server_config)
+        .set_tokio_client_config(tokio_client_config)
+        .set_transport_security(transport_security, transport_principal);
     #[cfg(feature = "embedded-controller")]
     let builder = builder.set_controller_config_opt(controller_config);
     #[cfg(not(feature = "embedded-controller"))]
@@ -257,14 +268,12 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
 
 fn validate_namesrv_security(
     security_bootstrap: &SecurityBootstrap,
+    namesrv_config: &NamesrvConfig,
     server_config: &ServerConfig,
     controller_config: Option<&EmbeddedControllerConfig>,
     prometheus_bind_addr: Option<SocketAddr>,
     probe_bind_addr: Option<SocketAddr>,
 ) -> Result<SecurityBootstrapOutcome> {
-    if !security_bootstrap.is_enabled() {
-        return security_bootstrap.validate(&[]).map_err(anyhow::Error::from);
-    }
     let bind_ip = server_config
         .bind_address
         .parse::<IpAddr>()
@@ -287,7 +296,68 @@ fn validate_namesrv_security(
     if let Some(probe_bind_addr) = probe_bind_addr {
         listeners.push(probe_bind_addr);
     }
-    security_bootstrap.validate(&listeners).map_err(anyhow::Error::from)
+    let has_public_listener = listeners.iter().any(|listener| !listener.ip().is_loopback());
+    let outcome = match security_bootstrap.validate(&listeners) {
+        Ok(outcome) => outcome,
+        Err(SecurityBootstrapError::DevelopmentListenerNotLoopback)
+            if namesrv_config.allow_insecure_public_listener =>
+        {
+            security_bootstrap.validate(&[]).map_err(anyhow::Error::from)?
+        }
+        Err(error) => return Err(error.into()),
+    };
+
+    if matches!(outcome, SecurityBootstrapOutcome::Disabled)
+        && has_public_listener
+        && !namesrv_config.allow_insecure_public_listener
+    {
+        bail!(
+            "a non-loopback NameServer listener requires a security profile; set allowInsecurePublicListener=true only as a temporary migration exception"
+        );
+    }
+
+    if matches!(outcome, SecurityBootstrapOutcome::Validated(validated) if validated.profile() == SecurityBootstrapProfile::SecureEnforced)
+    {
+        if namesrv_config.allow_insecure_public_listener {
+            bail!("allowInsecurePublicListener is incompatible with the secure-enforced profile");
+        }
+        if !namesrv_config.auth_config.authentication_enabled || !namesrv_config.auth_config.authorization_enabled {
+            bail!("secure-enforced NameServer requires both authenticationEnabled and authorizationEnabled");
+        }
+        if namesrv_config.auth_config.auth_config_path.trim().is_empty() {
+            bail!("secure-enforced NameServer requires a durable authConfigPath");
+        }
+        if namesrv_config.auth_config.init_authentication_user.trim().is_empty()
+            && namesrv_config.auth_config.acl_file.trim().is_empty()
+        {
+            bail!("secure-enforced NameServer requires initAuthenticationUser or aclFile identity material");
+        }
+        if !server_config.tls_config.enable || server_config.tls_config.server.mode != TlsMode::Enforcing {
+            bail!("secure-enforced NameServer requires an enforcing TLS listener");
+        }
+    }
+
+    Ok(outcome)
+}
+
+fn build_namesrv_transport_security(outcome: SecurityBootstrapOutcome) -> (Arc<TransportSecurity>, Option<Principal>) {
+    match outcome {
+        SecurityBootstrapOutcome::Validated(validated)
+            if validated.profile() == SecurityBootstrapProfile::SecureEnforced =>
+        {
+            (
+                Arc::new(TransportSecurity::secure_enforced(
+                    Some(Arc::new(NameServerTransportPolicy)),
+                    None,
+                )),
+                Some(Principal::new("namesrv.protocol-authorization")),
+            )
+        }
+        SecurityBootstrapOutcome::Disabled | SecurityBootstrapOutcome::Validated(_) => (
+            Arc::new(TransportSecurity::development_insecure_loopback(None, None)),
+            None,
+        ),
+    }
 }
 
 fn log_security_bootstrap(outcome: SecurityBootstrapOutcome) {
@@ -391,6 +461,7 @@ fn parse_and_merge_config(
 ) -> Result<(
     NamesrvConfig,
     ServerConfig,
+    TransportClientConfig,
     Option<EmbeddedControllerConfig>,
     rocketmq_observability::LoggingOverrides,
 )> {
@@ -417,13 +488,23 @@ fn parse_and_merge_config(
         namesrv_config.kv_config_path = kv_path.to_string_lossy().to_string();
     }
 
-    let mut server_config = ServerConfig {
-        listen_port: args.listen_port.unwrap_or(9876),
-        bind_address: args.bind_address.clone().unwrap_or_else(|| "0.0.0.0".to_string()),
-        ..ServerConfig::default()
-    };
+    let mut server_config = ServerConfig::default();
+    let mut tokio_client_config = TransportClientConfig::default();
     if let Some(config_file) = args.config_file.clone() {
+        let config = Config::builder()
+            .add_source(config::File::from(config_file.as_path()))
+            .build()?
+            .try_deserialize::<RuntimeTransportOverrides>()?;
+        apply_runtime_transport_overrides(&mut server_config, &mut tokio_client_config, config)?;
         apply_tls_properties_from_file(&mut server_config, config_file)?;
+    }
+    load_durable_desired_snapshot(&mut namesrv_config, &mut server_config, &mut tokio_client_config)?;
+
+    if let Some(listen_port) = args.listen_port {
+        server_config.listen_port = listen_port;
+    }
+    if let Some(bind_address) = &args.bind_address {
+        server_config.bind_address.clone_from(bind_address);
     }
 
     let controller_config: Option<EmbeddedControllerConfig> = if namesrv_config.enable_controller_in_namesrv {
@@ -447,7 +528,122 @@ fn parse_and_merge_config(
         None => rocketmq_observability::LoggingOverrides::default(),
     };
 
-    Ok((namesrv_config, server_config, controller_config, logging_overrides))
+    Ok((
+        namesrv_config,
+        server_config,
+        tokio_client_config,
+        controller_config,
+        logging_overrides,
+    ))
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RuntimeTransportOverrides {
+    listen_port: Option<u32>,
+    bind_address: Option<String>,
+    connect_timeout_millis: Option<u64>,
+    channel_not_active_interval: Option<u64>,
+}
+
+fn apply_runtime_transport_overrides(
+    server_config: &mut ServerConfig,
+    client_config: &mut TransportClientConfig,
+    overrides: RuntimeTransportOverrides,
+) -> Result<()> {
+    if let Some(listen_port) = overrides.listen_port {
+        if listen_port == 0 || listen_port > u16::MAX as u32 {
+            bail!("listenPort must be between 1 and {}", u16::MAX);
+        }
+        server_config.listen_port = listen_port;
+    }
+    if let Some(bind_address) = overrides.bind_address {
+        if bind_address.trim().is_empty() {
+            bail!("bindAddress must not be empty");
+        }
+        server_config.bind_address = bind_address;
+    }
+    if let Some(timeout) = overrides.connect_timeout_millis {
+        if timeout == 0 || timeout > 3_600_000 {
+            bail!("connectTimeoutMillis must be between 1 and 3600000");
+        }
+        client_config.connect.timeout = std::time::Duration::from_millis(timeout);
+    }
+    if let Some(interval) = overrides.channel_not_active_interval {
+        if interval > 86_400_000 {
+            bail!("channelNotActiveInterval must be between 0 and 86400000");
+        }
+        client_config.maintenance.idle_scan_interval =
+            (interval > 0).then(|| std::time::Duration::from_millis(interval));
+    }
+    Ok(())
+}
+
+fn load_durable_desired_snapshot(
+    namesrv_config: &mut NamesrvConfig,
+    server_config: &mut ServerConfig,
+    client_config: &mut TransportClientConfig,
+) -> Result<()> {
+    let path = PathBuf::from(&namesrv_config.config_store_path);
+    if !path.exists() {
+        return Ok(());
+    }
+    let content = std::fs::read_to_string(&path).with_context(|| {
+        format!(
+            "failed to read durable NameServer configuration from {}",
+            path.display()
+        )
+    })?;
+    rocketmq_namesrv::config::validate_namesrv_config_source(&content)
+        .context("durable NameServer configuration contains a removed key")?;
+    let properties = string_to_properties(&content)
+        .ok_or_else(|| anyhow::anyhow!("failed to parse durable NameServer configuration"))?;
+    namesrv_config
+        .update_known_properties(&properties)
+        .context("durable NameServer configuration failed domain validation")?;
+
+    for (key, value) in &properties {
+        match key.as_str() {
+            key if NamesrvConfig::is_known_property(key) => {}
+            "listenPort" => {
+                let parsed = value
+                    .parse::<u32>()
+                    .with_context(|| format!("invalid durable value for {key}"))?;
+                if parsed == 0 || parsed > u16::MAX as u32 {
+                    bail!("durable listenPort must be between 1 and {}", u16::MAX);
+                }
+                server_config.listen_port = parsed;
+            }
+            "bindAddress" => {
+                if value.trim().is_empty() {
+                    bail!("durable bindAddress must not be empty");
+                }
+                server_config.bind_address = value.to_string();
+            }
+            "connectTimeoutMillis" => {
+                let parsed = value
+                    .parse::<u64>()
+                    .with_context(|| format!("invalid durable value for {key}"))?;
+                if parsed == 0 || parsed > 3_600_000 {
+                    bail!("durable connectTimeoutMillis must be between 1 and 3600000");
+                }
+                client_config.connect.timeout = std::time::Duration::from_millis(parsed);
+            }
+            "channelNotActiveInterval" => {
+                let parsed = value
+                    .parse::<u64>()
+                    .with_context(|| format!("invalid durable value for {key}"))?;
+                if parsed > 86_400_000 {
+                    bail!("durable channelNotActiveInterval must be between 0 and 86400000");
+                }
+                client_config.maintenance.idle_scan_interval =
+                    (parsed > 0).then(|| std::time::Duration::from_millis(parsed));
+            }
+            key if is_tls_config_key(key) => server_config.tls_config.apply_java_property(key, value.as_str()),
+            _ => bail!("unknown durable NameServer configuration key '{key}'"),
+        }
+    }
+    Ok(())
 }
 
 fn resolve_startup_log_filter(
@@ -525,6 +721,18 @@ fn print_config(
     println!(
         "deleteTopicWithBrokerRegistration = {}",
         namesrv_config.delete_topic_with_broker_registration
+    );
+    println!(
+        "allowInsecurePublicListener = {}",
+        namesrv_config.allow_insecure_public_listener
+    );
+    println!(
+        "authenticationEnabled = {}",
+        namesrv_config.auth_config.authentication_enabled
+    );
+    println!(
+        "authorizationEnabled = {}",
+        namesrv_config.auth_config.authorization_enabled
     );
 
     println!("\n========== Server Configuration ==========");
@@ -793,17 +1001,45 @@ struct Args {
 mod tests {
     use super::*;
 
+    fn secure_bootstrap(root: &std::path::Path) -> SecurityBootstrap {
+        let material = root.join("material.pem");
+        std::fs::write(&material, "test-material").expect("security material should be written");
+        SecurityBootstrap::Enabled(
+            SecurityBootstrapConfig::new(SecurityBootstrapProfile::SecureEnforced)
+                .with_trust_anchor(&material)
+                .with_tls_identity(&material, &material)
+                .with_secret_provider(rocketmq_security_api::MOUNTED_FILES_SECRET_PROVIDER)
+                .with_admin_identity(&material)
+                .with_request_policy(&material),
+        )
+    }
+
     #[test]
-    fn disabled_security_bootstrap_allows_default_namesrv_listeners() {
-        let outcome = validate_namesrv_security(
+    fn disabled_security_bootstrap_requires_explicit_public_listener_opt_in() {
+        let error = validate_namesrv_security(
             &rocketmq_security_api::SecurityBootstrap::Disabled,
+            &NamesrvConfig::default(),
             &ServerConfig::default(),
             None,
             None,
             None,
         )
-        .expect("disabled security bootstrap should not restrict NameServer listeners");
+        .expect_err("an unauthenticated public listener must fail closed");
+        assert!(error.to_string().contains("allowInsecurePublicListener"));
 
+        let namesrv = NamesrvConfig {
+            allow_insecure_public_listener: true,
+            ..NamesrvConfig::default()
+        };
+        let outcome = validate_namesrv_security(
+            &rocketmq_security_api::SecurityBootstrap::Disabled,
+            &namesrv,
+            &ServerConfig::default(),
+            None,
+            None,
+            None,
+        )
+        .expect("explicit migration opt-in should preserve the legacy public listener");
         assert_eq!(outcome, rocketmq_security_api::SecurityBootstrapOutcome::Disabled);
     }
 
@@ -820,6 +1056,7 @@ mod tests {
 
         validate_namesrv_security(
             &security,
+            &NamesrvConfig::default(),
             &server,
             None,
             None,
@@ -828,7 +1065,7 @@ mod tests {
         .expect("loopback-only NameServer bootstrap should pass");
 
         server.bind_address = "0.0.0.0".to_string();
-        assert!(validate_namesrv_security(&security, &server, None, None, None).is_err());
+        assert!(validate_namesrv_security(&security, &NamesrvConfig::default(), &server, None, None, None).is_err());
     }
 
     #[test]
@@ -844,12 +1081,48 @@ mod tests {
 
         assert!(validate_namesrv_security(
             &security,
+            &NamesrvConfig::default(),
             &server,
             None,
             None,
             Some(SocketAddr::from(([0, 0, 0, 0], 5557))),
         )
         .is_err());
+    }
+
+    #[test]
+    fn secure_profile_requires_tls_authentication_and_authorization() {
+        let root = tempfile::tempdir().expect("temporary security root");
+        let security = secure_bootstrap(root.path());
+        let server = ServerConfig {
+            bind_address: "0.0.0.0".to_string(),
+            listen_port: 9876,
+            ..ServerConfig::default()
+        };
+
+        let error = validate_namesrv_security(&security, &NamesrvConfig::default(), &server, None, None, None)
+            .expect_err("secure mode without protocol auth must fail");
+        assert!(error.to_string().contains("authenticationEnabled"));
+
+        let mut namesrv = NamesrvConfig::default();
+        namesrv.auth_config.authentication_enabled = true;
+        namesrv.auth_config.authorization_enabled = true;
+        namesrv.auth_config.auth_config_path = root.path().join("auth").to_string_lossy().as_ref().into();
+        namesrv.auth_config.acl_file = root.path().join("material.pem").to_string_lossy().as_ref().into();
+        let error = validate_namesrv_security(&security, &namesrv, &server, None, None, None)
+            .expect_err("secure mode without enforcing TLS must fail");
+        assert!(error.to_string().contains("enforcing TLS"));
+
+        let mut server = server;
+        server.tls_config.enable = true;
+        server.tls_config.server.mode = TlsMode::Enforcing;
+        let outcome = validate_namesrv_security(&security, &namesrv, &server, None, None, None)
+            .expect("complete secure profile should validate");
+        assert!(matches!(
+            outcome,
+            SecurityBootstrapOutcome::Validated(validated)
+                if validated.profile() == SecurityBootstrapProfile::SecureEnforced
+        ));
     }
 
     #[test]
@@ -931,5 +1204,47 @@ mod tests {
             config.observability.logs.exporter,
             rocketmq_observability::LogsExporter::OtlpGrpc
         );
+    }
+
+    #[test]
+    fn durable_desired_snapshot_is_loaded_for_next_startup() {
+        let root = tempfile::tempdir().expect("test directory should be created");
+        let path = root.path().join("namesrv.properties");
+        std::fs::write(
+            &path,
+            "enableTopicList=false\nlistenPort=19876\nconnectTimeoutMillis=1234\n",
+        )
+        .expect("durable configuration should be written");
+        let mut namesrv = NamesrvConfig {
+            config_store_path: path.to_string_lossy().into_owned(),
+            ..NamesrvConfig::default()
+        };
+        let mut server = ServerConfig::default();
+        let mut client = TransportClientConfig::default();
+
+        load_durable_desired_snapshot(&mut namesrv, &mut server, &mut client)
+            .expect("durable desired configuration should load");
+
+        assert!(!namesrv.enable_topic_list);
+        assert_eq!(server.listen_port, 19876);
+        assert_eq!(client.connect.timeout, std::time::Duration::from_millis(1234));
+    }
+
+    #[test]
+    fn corrupt_durable_desired_snapshot_fails_closed() {
+        let root = tempfile::tempdir().expect("test directory should be created");
+        let path = root.path().join("namesrv.properties");
+        std::fs::write(&path, "unknownRuntimeKey=true\n").expect("durable configuration should be written");
+        let mut namesrv = NamesrvConfig {
+            config_store_path: path.to_string_lossy().into_owned(),
+            ..NamesrvConfig::default()
+        };
+        let mut server = ServerConfig::default();
+        let mut client = TransportClientConfig::default();
+
+        let error = load_durable_desired_snapshot(&mut namesrv, &mut server, &mut client)
+            .expect_err("unknown durable keys must prevent startup");
+
+        assert!(error.to_string().contains("unknown durable"));
     }
 }
