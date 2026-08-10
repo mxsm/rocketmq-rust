@@ -635,7 +635,10 @@ fn message_fingerprint(
     hasher.update(tenant_id.as_uuid().as_bytes());
     hasher.update(cluster_id.as_uuid().as_bytes());
     hasher.update(query.as_bytes());
-    Ok(format!("sha256:{:x}", hasher.finalize()))
+    Ok(format!(
+        "sha256:{}",
+        rocketmq_sre_contracts::encode_lower_hex(hasher.finalize())
+    ))
 }
 
 fn parse_message_hop(value: &Value, evidence_id: EvidenceId) -> Option<MessageJourneyHop> {

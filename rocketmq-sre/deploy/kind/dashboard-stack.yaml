@@ -1,0 +1,169 @@
+# Copyright 2023 The RocketMQ Rust Authors
+# Licensed under the Apache License, Version 2.0.
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: rocketmq-dashboard-backend
+  namespace: rocketmq-dashboard
+spec:
+  selector:
+    app.kubernetes.io/name: rocketmq-dashboard-backend
+  ports:
+    - name: http
+      port: 8082
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rocketmq-dashboard-backend
+  namespace: rocketmq-dashboard
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rocketmq-dashboard-backend
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rocketmq-dashboard-backend
+        app.kubernetes.io/part-of: rocketmq-rust
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: backend
+          image: rocketmq-rust/dashboard-backend:phase00-local
+          imagePullPolicy: Never
+          env:
+            - {name: NAMESRV_ADDR, value: "rocketmq-namesrv.rocketmq-system.svc.cluster.local:9876"}
+            - {name: DASHBOARD_WEB_USE_VIP_CHANNEL, value: "false"}
+            - {name: DASHBOARD_WEB_LOGIN_REQUIRED, value: "true"}
+            - {name: DASHBOARD_WEB_USERNAME, value: "admin"}
+            - name: DASHBOARD_WEB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: rocketmq-dashboard-kind-secrets
+                  key: dashboard-password
+            - name: DASHBOARD_WEB_ROCKETMQ_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: rocketmq-dashboard-kind-secrets
+                  key: admin-access-key
+            - name: DASHBOARD_WEB_ROCKETMQ_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: rocketmq-dashboard-kind-secrets
+                  key: admin-secret-key
+            - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://otel-collector.observability.svc.cluster.local:4317"}
+            - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: "grpc"}
+          ports:
+            - name: http
+              containerPort: 8082
+          readinessProbe:
+            httpGet: {path: /api/health, port: http}
+            periodSeconds: 3
+            timeoutSeconds: 2
+            failureThreshold: 60
+          livenessProbe:
+            httpGet: {path: /api/health, port: http}
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: 1000m, memory: 1Gi}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/rocketmq-dashboard
+      volumes:
+        - name: data
+          emptyDir:
+            sizeLimit: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rocketmq-dashboard
+  namespace: rocketmq-dashboard
+spec:
+  selector:
+    app.kubernetes.io/name: rocketmq-dashboard-frontend
+  ports:
+    - name: http
+      port: 3003
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rocketmq-dashboard-frontend
+  namespace: rocketmq-dashboard
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rocketmq-dashboard-frontend
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rocketmq-dashboard-frontend
+        app.kubernetes.io/part-of: rocketmq-rust
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: frontend
+          image: rocketmq-rust/dashboard-frontend:phase00-local
+          imagePullPolicy: Never
+          command: ["nginx"]
+          args: ["-g", "daemon off;", "-c", "/etc/nginx/nginx.conf"]
+          ports:
+            - name: http
+              containerPort: 3003
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+            periodSeconds: 3
+            timeoutSeconds: 2
+            failureThreshold: 60
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {cpu: 250m, memory: 256Mi}
+          volumeMounts:
+            - name: nginx-cache
+              mountPath: /var/cache/nginx
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: nginx-cache
+          emptyDir:
+            sizeLimit: 64Mi
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Mi

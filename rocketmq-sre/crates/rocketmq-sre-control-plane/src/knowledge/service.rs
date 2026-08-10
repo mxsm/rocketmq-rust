@@ -69,7 +69,10 @@ impl KnowledgeService {
             review_status: request.review_status,
             review_due_at: request.review_due_at,
             sensitivity: sensitivity_name(request.sensitivity).to_owned(),
-            content_hash: format!("sha256:{:x}", Sha256::digest(request.markdown.as_bytes())),
+            content_hash: format!(
+                "sha256:{}",
+                rocketmq_sre_contracts::encode_lower_hex(Sha256::digest(request.markdown.as_bytes()))
+            ),
             conflict: false,
             created_at: now,
             updated_at: now,

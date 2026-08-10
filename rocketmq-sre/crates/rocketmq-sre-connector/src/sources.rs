@@ -959,7 +959,10 @@ fn cache_key(query: &EvidenceQuery, external_cluster: &str) -> Result<String, Co
     };
     let canonical = serde_jcs::to_vec(&material)
         .map_err(|_| ConnectorError::source("evidence query cache key cannot be canonicalized"))?;
-    Ok(format!("sha256:{:x}", Sha256::digest(canonical)))
+    Ok(format!(
+        "sha256:{}",
+        rocketmq_sre_contracts::encode_lower_hex(Sha256::digest(canonical))
+    ))
 }
 
 fn pseudonymize_evidence_resource(resource: &mut String, pseudonym_key: &[u8]) {

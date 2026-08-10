@@ -238,7 +238,7 @@ impl RequestDescriptor {
             operation: operation_for(request.method()),
             resource_type,
             resource_id,
-            request_hash: format!("sha256:{digest:x}"),
+            request_hash: format!("sha256:{}", rocketmq_sre_contracts::encode_lower_hex(digest)),
         }
     }
 }

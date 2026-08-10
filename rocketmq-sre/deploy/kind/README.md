@@ -23,6 +23,11 @@ a separate 10 GiB `standard` StorageClass PVC named
 replacement so the DR acceptance can verify message-history RPO and RTO.
 This single-node local-path fixture does not claim node-loss, Kind-cluster
 recreation, replicated commit-log, or production backup/restore coverage.
+The runner also builds and deploys RocketMQ Dashboard Web as separate backend
+and frontend workloads in the `rocketmq-dashboard` namespace. Its Nginx
+frontend proxies `/api` to the backend, and the backend uses the generated
+Kind-only administrator identity. Login is required and the Service remains
+ClusterIP-only.
 The development Control Plane alone mounts a private 1 GiB `emptyDir` for
 large Evidence objects. It survives a Control Plane container restart within
 the Pod, but is intentionally ephemeral with the Kind cluster; production
@@ -68,17 +73,46 @@ From the repository root:
 .\rocketmq-sre\scripts\kind.ps1 -Action Up
 .\rocketmq-sre\scripts\kind.ps1 -Action Status
 .\rocketmq-sre\scripts\kind.ps1 -Action Smoke
+.\rocketmq-sre\scripts\kind.ps1 -Action Ports
 .\rocketmq-sre\scripts\kind.ps1 -Action Down
 ```
 
-The cluster does not publish host ports. To inspect the read-only UI:
+The cluster does not publish NodePorts. `Up` starts supervised loopback-only
+forwards for RocketMQ NameServer `9876`, Broker Remoting `10911`, Proxy
+Remoting `8080`, Proxy gRPC `8081`, Dashboard `3003`, SRE UI `3004`, and
+Prometheus `9090`. The supervisors reconnect after a Pod or Docker Desktop
+restart. To restore only the local endpoints without rebuilding the cluster,
+run:
 
 ```powershell
-kubectl --kubeconfig .\target\phase00-kind\kubeconfig `
-  --context kind-rocketmq-sre-phase00 `
-  --namespace rocketmq-sre `
-  port-forward service/sre-ui 3004:3004
+.\rocketmq-sre\scripts\kind.ps1 -Action Ports
 ```
+
+Local Remoting clients use `127.0.0.1:9876` as the NameServer address. Because
+the NameServer route advertises the Broker's Kubernetes FQDN, the host must
+resolve
+`rocketmq-broker-0.rocketmq-broker-headless.rocketmq-system.svc.cluster.local`
+to `127.0.0.1`. RocketMQ 5 gRPC clients avoid that DNS requirement and use the
+Proxy endpoint `127.0.0.1:8081`. Both paths require the generated Kind-only ACL
+credentials; they are development credentials and must not be reused outside
+this local fixture.
+
+To inspect RocketMQ Dashboard Web, retrieve its generated local password:
+
+```powershell
+$encodedPassword = kubectl --kubeconfig .\target\phase00-kind\kubeconfig `
+  --context kind-rocketmq-sre-phase00 `
+  --namespace rocketmq-dashboard `
+  get secret rocketmq-dashboard-kind-secrets `
+  -o jsonpath='{.data.dashboard-password}'
+$dashboardPassword = [Text.Encoding]::UTF8.GetString(
+  [Convert]::FromBase64String($encodedPassword)
+)
+$dashboardPassword
+```
+
+Open `http://127.0.0.1:3003` and sign in as `admin` with the generated
+password. This is a local acceptance credential, not a production secret.
 
 The internal SRE ports are Control Plane API `8090`, Connector mTLS `8444`,
 Connector-only loopback upstream `8093`, Connector diagnostics `8091`, Change
@@ -125,7 +159,7 @@ their read and mutation access keys are distinct. Topic precheck resolves every
 route Broker and fails closed on configuration/version drift. A production
 deployment must additionally use TLS and production secret delivery.
 
-`Up` builds and loads all local RocketMQ/SRE images. Use `-SkipBuild` only when
+`Up` builds and loads all local RocketMQ/SRE/Dashboard images. Use `-SkipBuild` only when
 every required image already exists in the local Docker engine. Re-running
 `Up` reuses the generated credential fixtures and replays the idempotent
 onboarding Job, so live Pods and PostgreSQL keep the same credentials. If an
@@ -133,6 +167,8 @@ existing cluster has only a partial fixture set, the runner fails closed and
 requires `Down` before regeneration. `Smoke`
 verifies workload readiness, performs real Prometheus/Loki/Tempo queries,
 requires non-empty RocketMQ service metrics, log entries, and MCP traces,
+authenticates to Dashboard Web, verifies that its live cluster overview is
+`UP`,
 checks the persisted `ready_read_only`/`read_only` onboarding state, validates
 all six required data sources (including the versioned MCP Runtime and
 Observability resources), confirms the mutation-disabled capability contract,

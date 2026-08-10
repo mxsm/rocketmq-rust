@@ -12,6 +12,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --manifest-path rocketmq-sre/Cargo.toml \
     --locked \
     --release \
+    --jobs 4 \
     --package rocketmq-sre-control-plane \
     --package rocketmq-sre-connector \
     --package rocketmq-sre-executor \

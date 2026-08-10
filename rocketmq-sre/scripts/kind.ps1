@@ -4,7 +4,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('Up', 'Down', 'Status', 'Smoke')]
+    [ValidateSet('Up', 'Down', 'Status', 'Smoke', 'Ports')]
     [string]$Action,
 
     [ValidatePattern('^[a-z0-9][a-z0-9-]{0,39}$')]
@@ -20,6 +20,7 @@ $sreRoot = [IO.Path]::GetFullPath((Join-Path $scriptDirectory '..'))
 $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $sreRoot '..'))
 $kindDirectory = Join-Path $sreRoot 'deploy/kind'
 $clusterConfig = Join-Path $kindDirectory 'cluster.yaml'
+$portForwardScript = Join-Path $scriptDirectory 'kind-port-forward.ps1'
 $chartPath = Join-Path $repositoryRoot 'distribution/helm/rocketmq-rust'
 $devValues = Join-Path $chartPath 'values-dev-single.yaml'
 $kindValues = Join-Path $kindDirectory 'helm-values.yaml'
@@ -31,6 +32,7 @@ $targetRoot = [IO.Path]::GetFullPath((Join-Path $repositoryRoot 'target'))
 $kubeconfigPath = Join-Path $artifactRoot 'kubeconfig'
 $certificateRoot = [IO.Path]::GetFullPath((Join-Path $repositoryRoot 'target/phase00-certs'))
 $rocketmqNamespace = 'rocketmq-system'
+$dashboardNamespace = 'rocketmq-dashboard'
 $sreNamespace = 'rocketmq-sre'
 $observabilityNamespace = 'observability'
 
@@ -47,6 +49,8 @@ $localImages = [ordered]@{
     'sre-probe' = 'rocketmq-rust/sre-probe:phase00-local'
     'sre-model-mock' = 'rocketmq-rust/sre-model-mock:phase00-local'
     'sre-ui' = 'rocketmq-rust/sre-ui:phase00-local'
+    'dashboard-backend' = 'rocketmq-rust/dashboard-backend:phase00-local'
+    'dashboard-frontend' = 'rocketmq-rust/dashboard-frontend:phase00-local'
     'fault-driver' = 'rocketmq-rust/fault-driver:local'
 }
 $supportImages = @(
@@ -200,6 +204,115 @@ function Ensure-Kubeconfig {
     Write-Utf8File $kubeconfigPath $kubeconfig
 }
 
+function Stop-PortForwarders {
+    $portForwardRoot = Join-Path $artifactRoot 'port-forward-supervisors'
+    if (-not (Test-Path -LiteralPath $portForwardRoot -PathType Container)) {
+        return
+    }
+    foreach ($pidFile in Get-ChildItem -LiteralPath $portForwardRoot -Filter '*.pid' -File) {
+        $supervisorPid = 0
+        if ([int]::TryParse((Get-Content -Raw -LiteralPath $pidFile.FullName).Trim(), [ref]$supervisorPid)) {
+            $children = Get-CimInstance Win32_Process -Filter "ParentProcessId = $supervisorPid" -ErrorAction SilentlyContinue
+            foreach ($child in $children) {
+                Stop-Process -Id $child.ProcessId -Force -ErrorAction SilentlyContinue
+            }
+            Stop-Process -Id $supervisorPid -Force -ErrorAction SilentlyContinue
+        }
+        Remove-Item -LiteralPath $pidFile.FullName -Force
+    }
+}
+
+function Start-PortForwarders {
+    Assert-ClusterExists
+    Ensure-Kubeconfig
+    Require-Command kubectl
+    if (-not (Test-Path -LiteralPath $portForwardScript -PathType Leaf)) {
+        throw "Kind port-forward supervisor script is missing at '$portForwardScript'."
+    }
+
+    $portForwardRoot = Join-Path $artifactRoot 'port-forward-supervisors'
+    New-Item -ItemType Directory -Force -Path $portForwardRoot | Out-Null
+    $currentPowerShell = (Get-Process -Id $PID).Path
+    $kubectlPath = (Get-Command kubectl).Source
+    $forwards = @(
+        [pscustomobject]@{ Name = 'namesrv'; Namespace = $rocketmqNamespace; Service = 'rocketmq-namesrv'; LocalPort = 9876; RemotePort = 9876 },
+        [pscustomobject]@{ Name = 'broker'; Namespace = $rocketmqNamespace; Service = 'rocketmq-broker'; LocalPort = 10911; RemotePort = 10911 },
+        [pscustomobject]@{ Name = 'proxy-remoting'; Namespace = $rocketmqNamespace; Service = 'rocketmq-proxy'; LocalPort = 8080; RemotePort = 8080 },
+        [pscustomobject]@{ Name = 'proxy-grpc'; Namespace = $rocketmqNamespace; Service = 'rocketmq-proxy'; LocalPort = 8081; RemotePort = 8081 },
+        [pscustomobject]@{ Name = 'dashboard'; Namespace = $dashboardNamespace; Service = 'rocketmq-dashboard'; LocalPort = 3003; RemotePort = 3003 },
+        [pscustomobject]@{ Name = 'sre-ui'; Namespace = $sreNamespace; Service = 'sre-ui'; LocalPort = 3004; RemotePort = 3004 },
+        [pscustomobject]@{ Name = 'prometheus'; Namespace = $observabilityNamespace; Service = 'prometheus'; LocalPort = 9090; RemotePort = 9090 }
+    )
+
+    foreach ($forward in $forwards) {
+        $pidPath = Join-Path $portForwardRoot "$($forward.Name).pid"
+        $existingPid = 0
+        if (
+            (Test-Path -LiteralPath $pidPath -PathType Leaf) -and
+            [int]::TryParse((Get-Content -Raw -LiteralPath $pidPath).Trim(), [ref]$existingPid) -and
+            (Get-Process -Id $existingPid -ErrorAction SilentlyContinue)
+        ) {
+            continue
+        }
+        if (Test-Path -LiteralPath $pidPath -PathType Leaf) {
+            Remove-Item -LiteralPath $pidPath -Force
+        }
+        if (Get-NetTCPConnection -State Listen -LocalPort $forward.LocalPort -ErrorAction SilentlyContinue) {
+            throw "Local port $($forward.LocalPort) is already in use; cannot expose $($forward.Name)."
+        }
+
+        $arguments = @(
+            '-NoLogo',
+            '-NoProfile',
+            '-NonInteractive',
+            '-ExecutionPolicy', 'Bypass',
+            '-File', $portForwardScript,
+            '-KubectlPath', $kubectlPath,
+            '-KubeconfigPath', $kubeconfigPath,
+            '-KubeContext', $kubeContext,
+            '-Namespace', $forward.Namespace,
+            '-Service', $forward.Service,
+            '-LocalPort', $forward.LocalPort,
+            '-RemotePort', $forward.RemotePort
+        )
+        $startParameters = @{
+            FilePath = $currentPowerShell
+            ArgumentList = $arguments
+            RedirectStandardOutput = Join-Path $portForwardRoot "$($forward.Name).out.log"
+            RedirectStandardError = Join-Path $portForwardRoot "$($forward.Name).err.log"
+            WindowStyle = 'Hidden'
+            PassThru = $true
+        }
+        $process = Start-Process @startParameters
+        Write-Utf8File $pidPath $process.Id
+    }
+
+    $deadline = [DateTime]::UtcNow.AddSeconds(30)
+    do {
+        $missingPorts = @(
+            $forwards | Where-Object {
+                -not (Get-NetTCPConnection -State Listen -LocalPort $_.LocalPort -ErrorAction SilentlyContinue)
+            }
+        )
+        if ($missingPorts.Count -eq 0) {
+            $endpointSummary = @(
+                'NameServer 127.0.0.1:9876'
+                'Broker Remoting 127.0.0.1:10911'
+                'Proxy Remoting 127.0.0.1:8080'
+                'Proxy gRPC 127.0.0.1:8081'
+                'Dashboard http://127.0.0.1:3003'
+                'SRE UI http://127.0.0.1:3004'
+                'Prometheus http://127.0.0.1:9090'
+            )
+            Write-Host ("Kind local endpoints are ready:`n  " + ($endpointSummary -join "`n  "))
+            return
+        }
+        Start-Sleep -Seconds 1
+    } while ([DateTime]::UtcNow -lt $deadline)
+
+    throw "Kind port-forward supervisors did not bind every local port within 30 seconds: $($missingPorts.LocalPort -join ', ')."
+}
+
 function Get-SourceRevision {
     Require-Command git
     $sourceRevision = (Invoke-Native git @('-C', $repositoryRoot, 'rev-parse', 'HEAD')).Output.Trim()
@@ -246,6 +359,20 @@ function Build-Images([string]$SourceRevision) {
                 '--build-arg', 'VITE_SRE_DEV_CLUSTERS=00000000-0000-4000-8000-000000000001',
                 '--build-arg', 'VITE_SRE_DEV_ROLES=rocketmq:read rocketmq:diagnose operator approver',
                 '--build-arg', 'VITE_SRE_DEV_TOKEN=phase00-internal-token',
+                '--tag', $entry.Value,
+                $repositoryRoot
+            ) | Out-Null
+        }
+        elseif ($entry.Key -in @('dashboard-backend', 'dashboard-frontend')) {
+            $dockerfile = if ($entry.Key -eq 'dashboard-backend') {
+                'rocketmq-dashboard/rocketmq-dashboard-web/deploy/backend.Dockerfile'
+            }
+            else {
+                'rocketmq-dashboard/rocketmq-dashboard-web/deploy/frontend.Dockerfile'
+            }
+            Invoke-Native docker @(
+                'build',
+                '--file', (Join-Path $repositoryRoot $dockerfile),
                 '--tag', $entry.Value,
                 $repositoryRoot
             ) | Out-Null
@@ -361,6 +488,7 @@ function New-SecretMaterial([switch]$ExistingCluster) {
         'agent-read-secret-key',
         'agent-mutation-access-key',
         'agent-mutation-secret-key',
+        'dashboard-password',
         'mcp-token',
         'internal-token',
         'postgres-user',
@@ -395,6 +523,7 @@ function New-SecretMaterial([switch]$ExistingCluster) {
     $agentReadSecretKey = New-RandomSecret
     $agentMutationAccessKey = 'phase03-kind-agent-mutation'
     $agentMutationSecretKey = New-RandomSecret
+    $dashboardPassword = New-RandomSecret
     $mcpToken = New-RandomSecret
     $internalToken = New-RandomSecret
     $postgresPassword = New-RandomSecret
@@ -487,6 +616,7 @@ function New-SecretMaterial([switch]$ExistingCluster) {
         'agent-read-secret-key' = $agentReadSecretKey
         'agent-mutation-access-key' = $agentMutationAccessKey
         'agent-mutation-secret-key' = $agentMutationSecretKey
+        'dashboard-password' = $dashboardPassword
         'mcp-token' = $mcpToken
         'internal-token' = $internalToken
         'postgres-user' = 'rocketmq_sre'
@@ -544,7 +674,13 @@ function Apply-Secrets {
         "--from-file=bootstrap-access-key=$(Join-Path $artifactRoot 'bootstrap-access-key')",
         "--from-file=bootstrap-secret-key=$(Join-Path $artifactRoot 'bootstrap-secret-key')",
         "--from-file=admin-read-access-key=$(Join-Path $artifactRoot 'admin-read-access-key')",
-        "--from-file=admin-read-secret-key=$(Join-Path $artifactRoot 'admin-read-secret-key')"
+        "--from-file=admin-read-secret-key=$(Join-Path $artifactRoot 'admin-read-secret-key')",
+        "--from-file=dashboard-password=$(Join-Path $artifactRoot 'dashboard-password')"
+    )
+    Apply-GeneratedSecret $dashboardNamespace 'rocketmq-dashboard-kind-secrets' @(
+        "--from-file=dashboard-password=$(Join-Path $artifactRoot 'dashboard-password')",
+        "--from-file=admin-access-key=$(Join-Path $artifactRoot 'agent-mutation-access-key')",
+        "--from-file=admin-secret-key=$(Join-Path $artifactRoot 'agent-mutation-secret-key')"
     )
     Apply-GeneratedSecret $sreNamespace 'rocketmq-sre-kind-secrets' @(
         "--from-file=internal-token=$(Join-Path $artifactRoot 'internal-token')",
@@ -576,6 +712,15 @@ function Wait-Rollout([string]$Namespace, [string]$Workload, [int]$Seconds = 300
         'rollout', 'status', $Workload,
         "--timeout=${Seconds}s"
     ) | Out-Null
+}
+
+function Restart-Workloads([string]$Namespace, [string[]]$Workloads) {
+    foreach ($workload in $Workloads) {
+        Invoke-Kubectl @(
+            '--namespace', $Namespace,
+            'rollout', 'restart', $workload
+        ) | Out-Null
+    }
 }
 
 function Invoke-Smoke {
@@ -614,6 +759,7 @@ function Invoke-Smoke {
 switch ($Action) {
     'Down' {
         Require-Command kind
+        Stop-PortForwarders
         if (Test-ClusterExists) {
             Ensure-Kubeconfig
             Invoke-Native kind @(
@@ -632,7 +778,7 @@ switch ($Action) {
         Ensure-Kubeconfig
         Require-Command kubectl
         Invoke-Kubectl @('get', 'nodes', '--output=wide') | ForEach-Object { Write-Host $_.Output }
-        foreach ($namespace in @($rocketmqNamespace, $sreNamespace, $observabilityNamespace)) {
+        foreach ($namespace in @($rocketmqNamespace, $dashboardNamespace, $sreNamespace, $observabilityNamespace)) {
             Write-Host "`n[$namespace]"
             Invoke-Kubectl @('--namespace', $namespace, 'get', 'pods', '--output=wide') |
                 ForEach-Object { Write-Host $_.Output }
@@ -640,6 +786,9 @@ switch ($Action) {
     }
     'Smoke' {
         Invoke-Smoke
+    }
+    'Ports' {
+        Start-PortForwarders
     }
     'Up' {
         Assert-PinnedTools
@@ -698,6 +847,20 @@ switch ($Action) {
         ) | Out-Null
         Invoke-Kubectl @('apply', '--kustomize', $kindDirectory) | Out-Null
 
+        if ($existingCluster -and -not $SkipBuild) {
+            Restart-Workloads $sreNamespace @(
+                'deployment/sre-model-mock',
+                'deployment/sre-control-plane',
+                'deployment/sre-execution-agent',
+                'deployment/sre-executor',
+                'deployment/sre-ui'
+            )
+            Restart-Workloads $dashboardNamespace @(
+                'deployment/rocketmq-dashboard-backend',
+                'deployment/rocketmq-dashboard-frontend'
+            )
+        }
+
         Wait-Rollout $sreNamespace 'statefulset/postgres'
         Wait-Rollout $sreNamespace 'deployment/sre-model-mock'
         Wait-Rollout $sreNamespace 'deployment/sre-control-plane'
@@ -710,6 +873,8 @@ switch ($Action) {
             '--timeout=180s'
         ) | Out-Null
         Wait-Rollout $sreNamespace 'deployment/sre-ui'
+        Wait-Rollout $dashboardNamespace 'deployment/rocketmq-dashboard-backend' 600
+        Wait-Rollout $dashboardNamespace 'deployment/rocketmq-dashboard-frontend' 600
         foreach ($component in @('otel-collector', 'prometheus', 'loki', 'tempo')) {
             Wait-Rollout $observabilityNamespace "deployment/$component"
         }
@@ -740,6 +905,16 @@ switch ($Action) {
             '--patch-file', (Join-Path $kindDirectory 'mcp-connector-patch.yaml')
         ) | Out-Null
 
+        if ($existingCluster -and -not $SkipBuild) {
+            Restart-Workloads $rocketmqNamespace @(
+                'statefulset/rocketmq-broker',
+                'statefulset/rocketmq-namesrv',
+                'statefulset/rocketmq-controller',
+                'deployment/rocketmq-proxy',
+                'deployment/rocketmq-mcp'
+            )
+        }
+
         foreach ($component in @('broker', 'namesrv', 'controller')) {
             Wait-Rollout $rocketmqNamespace "statefulset/rocketmq-$component" 600
         }
@@ -747,6 +922,7 @@ switch ($Action) {
             Wait-Rollout $rocketmqNamespace "deployment/rocketmq-$component" 600
         }
         Invoke-Smoke
+        Start-PortForwarders
         Write-Host "Phase 00 Kind stack is ready in context '$kubeContext'."
     }
 }

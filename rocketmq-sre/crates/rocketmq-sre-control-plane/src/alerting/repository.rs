@@ -1430,7 +1430,10 @@ fn correlation_key_digest(event: &AlertEvent) -> String {
         event.correlation_key.window_start.timestamp(),
         event.correlation_key.window_seconds
     );
-    format!("sha256:{:x}", Sha256::digest(material.as_bytes()))
+    format!(
+        "sha256:{}",
+        rocketmq_sre_contracts::encode_lower_hex(Sha256::digest(material.as_bytes()))
+    )
 }
 
 fn deterministic_uuid(material: &str) -> Uuid {

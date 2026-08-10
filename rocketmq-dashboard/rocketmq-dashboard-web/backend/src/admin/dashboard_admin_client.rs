@@ -27,6 +27,7 @@ use rocketmq_admin_core::client_adapter::AdminSession;
 use rocketmq_admin_core::client_adapter::ClientRuntime;
 use rocketmq_admin_core::core::dashboard as core;
 use rocketmq_admin_core::core::dashboard::DashboardAdmin;
+use rocketmq_admin_core::core::security::AdminCredentials;
 use rocketmq_runtime::ChildServiceContext;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
@@ -83,6 +84,7 @@ use self::mapping::*;
 pub struct DashboardAdminClient {
     config: Arc<RwLock<DashboardConfigView>>,
     client_runtime: Arc<ClientRuntime>,
+    admin_credentials: Option<AdminCredentials>,
     admin_session: Arc<Mutex<Option<Arc<ManagedAdminSession>>>>,
     next_generation: Arc<AtomicU64>,
     session_tasks: ChildServiceContext,
@@ -179,11 +181,16 @@ impl Drop for AdminSessionLease {
 }
 
 impl DashboardAdminClient {
-    pub fn new(config: Arc<RwLock<DashboardConfigView>>, client_runtime: Arc<ClientRuntime>) -> Self {
+    pub fn new(
+        config: Arc<RwLock<DashboardConfigView>>,
+        client_runtime: Arc<ClientRuntime>,
+        admin_credentials: Option<AdminCredentials>,
+    ) -> Self {
         let session_tasks = client_runtime.component("dashboard-admin-session");
         Self {
             config,
             client_runtime,
+            admin_credentials,
             admin_session: Arc::new(Mutex::new(None)),
             next_generation: Arc::new(AtomicU64::new(1)),
             session_tasks,
@@ -737,14 +744,17 @@ impl DashboardAdminClient {
                 return Ok(session);
             }
 
-            let guard = AdminBuilder::new(Arc::clone(&self.client_runtime))
+            let builder = AdminBuilder::new(Arc::clone(&self.client_runtime))
                 .namesrv_addr(snapshot.namesrv_addr.clone())
                 .admin_group(unique_admin_group())
                 .timeout_millis(5_000)
                 .vip_channel_enabled(snapshot.use_vip_channel)
-                .use_tls(snapshot.use_tls)
-                .build_with_guard()
-                .await?;
+                .use_tls(snapshot.use_tls);
+            let builder = match self.admin_credentials.clone() {
+                Some(credentials) => builder.credentials(credentials),
+                None => builder,
+            };
+            let guard = builder.build_with_guard().await?;
             if self.admin_config_snapshot().await? != snapshot {
                 guard.shutdown().await;
                 continue;

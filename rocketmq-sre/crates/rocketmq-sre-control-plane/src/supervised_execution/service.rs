@@ -293,13 +293,13 @@ impl SupervisedExecutionService {
             )
         })?;
         let content_digest = format!(
-            "sha256:{:x}",
-            Sha256::digest(serde_json::to_vec(&content).map_err(|_| {
+            "sha256:{}",
+            rocketmq_sre_contracts::encode_lower_hex(Sha256::digest(serde_json::to_vec(&content).map_err(|_| {
                 ControlPlaneError::validation(
                     "invalid_execution_precondition",
                     "Execution Agent Evidence cannot be encoded",
                 )
-            })?)
+            })?,))
         );
         let mut evidence = EvidenceSnapshot::capture(
             EvidenceQuery {

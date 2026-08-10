@@ -404,7 +404,10 @@ fn query_hash(snapshot: &EvidenceSnapshot) -> String {
         snapshot.time_range.start.to_rfc3339(),
         snapshot.time_range.end.to_rfc3339()
     );
-    format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()))
+    format!(
+        "sha256:{}",
+        rocketmq_sre_contracts::encode_lower_hex(Sha256::digest(canonical.as_bytes()))
+    )
 }
 
 fn coverage_name(value: CoverageStatus) -> &'static str {

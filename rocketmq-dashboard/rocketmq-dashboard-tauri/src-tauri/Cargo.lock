@@ -4203,6 +4203,7 @@ name = "rocketmq-transport"
 version = "1.0.0"
 dependencies = [
  "anyhow",
+ "arc-swap",
  "bitvec",
  "bytemuck",
  "bytes",
@@ -4227,6 +4228,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_json_any_key",
+ "socket2",
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",

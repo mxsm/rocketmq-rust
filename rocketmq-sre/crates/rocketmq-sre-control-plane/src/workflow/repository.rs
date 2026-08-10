@@ -2240,7 +2240,10 @@ pub(super) fn fingerprint(
         symptom_family,
         bounded_window
     );
-    format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()))
+    format!(
+        "sha256:{}",
+        rocketmq_sre_contracts::encode_lower_hex(Sha256::digest(canonical.as_bytes()))
+    )
 }
 
 #[cfg(test)]

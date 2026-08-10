@@ -15,6 +15,7 @@
 use chrono::DateTime;
 use chrono::Utc;
 use hmac::Hmac;
+use hmac::KeyInit;
 use hmac::Mac;
 use reqwest::RequestBuilder;
 use reqwest::header::HeaderValue;

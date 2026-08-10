@@ -223,7 +223,7 @@ impl EvidenceSnapshot {
             reason: format!("evidence cannot be canonicalized: {error}"),
         })?;
         let digest = Sha256::digest(canonical);
-        Ok(format!("sha256:{digest:x}"))
+        Ok(format!("sha256:{}", crate::encode_lower_hex(digest)))
     }
 
     /// Verifies the serialized snapshot against its canonical content hash.

@@ -164,7 +164,7 @@ fn hmac_sha256(key: &[u8], message: &[u8]) -> String {
     let mut outer = Sha256::new();
     outer.update(outer_pad);
     outer.update(inner_digest);
-    format!("{:x}", outer.finalize())
+    rocketmq_sre_contracts::encode_lower_hex(outer.finalize())
 }
 
 #[cfg(test)]

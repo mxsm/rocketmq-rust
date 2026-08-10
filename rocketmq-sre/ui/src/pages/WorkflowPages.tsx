@@ -328,7 +328,7 @@ export function ConversationDetailPage() {
   const [submitError, setSubmitError] = useState<string>();
   const [streamEvents, setStreamEvents] = useState<ConversationStreamEvent[]>([]);
   const [provisionalAnswer, setProvisionalAnswer] = useState("");
-  const streamAbort = useRef<AbortController>();
+  const streamAbort = useRef<AbortController | undefined>(undefined);
 
   useEffect(() => () => streamAbort.current?.abort(), []);
 
