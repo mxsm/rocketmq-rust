@@ -39,6 +39,13 @@ mod native;
 #[allow(dead_code, reason = "M3 retains a typed unsupported backend for other targets")]
 #[path = "platform/unsupported.rs"]
 mod native;
+#[cfg(all(test, any(target_os = "linux", windows)))]
+#[allow(
+    dead_code,
+    reason = "supported-target tests compile the unsupported backend contract"
+)]
+#[path = "platform/unsupported.rs"]
+mod unsupported_contract;
 
 #[allow(unused_imports, reason = "M3 proof types are staged for the future reaper boundary")]
 pub(crate) use types::NamespaceAbsenceProof;
@@ -76,6 +83,14 @@ use super::identity::PhysicalFileKey;
 use super::identity::StoreUuid;
 use super::registry::LogicalRemovedCapability;
 use super::registry::TombstonedCapability;
+
+#[cfg(all(test, any(target_os = "linux", windows)))]
+const _: fn(
+    &unsupported_contract::NamespaceRoot,
+    &StoreRelativePath,
+    PhysicalFileKey,
+    u64,
+) -> Result<File, NamespaceVerificationError> = unsupported_contract::NamespaceRoot::open_active_segment;
 
 /// Exact namespace mutation authority derived from one durable `LogicalRemoved` stage.
 ///

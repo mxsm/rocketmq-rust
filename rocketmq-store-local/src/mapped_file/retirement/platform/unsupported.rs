@@ -24,6 +24,7 @@ use super::types::NamespaceRetirementRequest;
 use super::types::NamespaceTransition;
 use super::types::NamespaceVerificationError;
 use crate::mapped_file::retirement::identity::PhysicalFileKey;
+use crate::mapped_file::retirement::identity::StoreRelativePath;
 use crate::mapped_file::retirement::writer::AllocatedIncarnationReceipt;
 use crate::mapped_file::retirement::writer::BoundIncarnationReceipt;
 
@@ -36,6 +37,18 @@ pub(super) struct NamespaceRoot;
 
 impl NamespaceRoot {
     pub(super) fn open(_file: File) -> Result<Self, NamespaceVerificationError> {
+        Err(NamespaceVerificationError::Unsupported {
+            platform: "unsupported target",
+            reason: REASON,
+        })
+    }
+
+    pub(super) fn open_active_segment(
+        &self,
+        _path: &StoreRelativePath,
+        _expected_key: PhysicalFileKey,
+        _expected_length: u64,
+    ) -> Result<File, NamespaceVerificationError> {
         Err(NamespaceVerificationError::Unsupported {
             platform: "unsupported target",
             reason: REASON,
