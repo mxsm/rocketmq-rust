@@ -113,7 +113,7 @@ impl TimerIndex for RocksDbTimerIndex {
                 Ok(entries.len())
             })
             .await
-            .map_err(|error| TimerEngineError::Storage(std::io::Error::other(error.to_string())))?
+            .map_err(|error| TimerEngineError::Storage(std::io::Error::other(error)))?
     }
 
     async fn scan_due(
@@ -176,7 +176,7 @@ impl TimerIndex for RocksDbTimerIndex {
                 })
             })
             .await
-            .map_err(|error| TimerEngineError::Storage(std::io::Error::other(error.to_string())))?
+            .map_err(|error| TimerEngineError::Storage(std::io::Error::other(error)))?
     }
 
     async fn set_state(
@@ -197,7 +197,7 @@ impl TimerIndex for RocksDbTimerIndex {
                 state_index.put(timer_id, generation, &current).map_err(storage_error)
             })
             .await
-            .map_err(|error| TimerEngineError::Storage(std::io::Error::other(error.to_string())))?
+            .map_err(|error| TimerEngineError::Storage(std::io::Error::other(error)))?
     }
 
     async fn checkpoint(&self, checkpoint: TimerIndexCheckpoint) -> Result<(), TimerEngineError> {
@@ -223,7 +223,7 @@ impl TimerIndex for RocksDbTimerIndex {
                     .map_err(storage_error)
             })
             .await
-            .map_err(|error| TimerEngineError::Storage(std::io::Error::other(error.to_string())))?
+            .map_err(|error| TimerEngineError::Storage(std::io::Error::other(error)))?
     }
 
     async fn load_checkpoint(&self) -> Result<Option<TimerIndexCheckpoint>, TimerEngineError> {
@@ -241,7 +241,7 @@ impl TimerIndex for RocksDbTimerIndex {
                     .map_err(storage_error)
             })
             .await
-            .map_err(|error| TimerEngineError::Storage(std::io::Error::other(error.to_string())))?
+            .map_err(|error| TimerEngineError::Storage(std::io::Error::other(error)))?
     }
 
     async fn pin_snapshot(&self, gc_fence: TimerTimelineCursor) -> Result<TimerSnapshotPin, TimerEngineError> {
@@ -259,7 +259,7 @@ impl TimerIndex for RocksDbTimerIndex {
                     .map_err(storage_error)
             })
             .await
-            .map_err(|error| TimerEngineError::Storage(std::io::Error::other(error.to_string())))??;
+            .map_err(|error| TimerEngineError::Storage(std::io::Error::other(error)))??;
         self.pins.lock().insert(pin.generation, pin);
         Ok(TimerSnapshotPin {
             generation: pin.generation,
@@ -279,7 +279,7 @@ impl TimerIndex for RocksDbTimerIndex {
                 index.release_snapshot(native).map_err(storage_error)
             })
             .await
-            .map_err(|error| TimerEngineError::Storage(std::io::Error::other(error.to_string())))?
+            .map_err(|error| TimerEngineError::Storage(std::io::Error::other(error)))?
     }
 
     async fn gc(&self, fence: TimerTimelineCursor, budget: WorkBudget) -> Result<usize, TimerEngineError> {
@@ -319,7 +319,7 @@ impl TimerIndex for RocksDbTimerIndex {
                 Ok(removed)
             })
             .await
-            .map_err(|error| TimerEngineError::Storage(std::io::Error::other(error.to_string())))?
+            .map_err(|error| TimerEngineError::Storage(std::io::Error::other(error)))?
     }
 }
 
@@ -402,5 +402,24 @@ const fn map_state(state: TimerRecordState) -> TimelineState {
 }
 
 fn storage_error(error: rocketmq_error::RocketMQError) -> TimerEngineError {
-    TimerEngineError::Storage(std::io::Error::other(error.to_string()))
+    TimerEngineError::Storage(std::io::Error::other(error))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn storage_error_preserves_rocketmq_error_as_source() {
+        let error = storage_error(rocketmq_error::RocketMQError::InvalidProperty(
+            "invalid timer property".to_owned(),
+        ));
+
+        let TimerEngineError::Storage(error) = error else {
+            panic!("expected timer storage error");
+        };
+        assert!(error
+            .get_ref()
+            .is_some_and(|source| source.is::<rocketmq_error::RocketMQError>()));
+    }
 }
