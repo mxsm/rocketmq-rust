@@ -15,9 +15,7 @@
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
-#[cfg(test)]
-use std::sync::atomic::AtomicU64;
-
+use bytes::Bytes;
 use cheetah_string::CheetahString;
 use rocketmq_model::common::FAQUrl;
 use rocketmq_model::version::RocketMqVersion;
@@ -37,6 +35,9 @@ use tracing::warn;
 
 use crate::bootstrap::NameServerRuntimeHandle;
 use crate::processor::NAMESPACE_ORDER_TOPIC_CONFIG;
+use crate::route::response_cache::JsonEncoding;
+use crate::route::response_cache::RouteCacheKey;
+use crate::route::response_cache::RouteCachePolicy;
 use crate::route::zone_filter::filter_route_by_zone;
 use crate::route::zone_filter::ZoneRequest;
 use crate::route::zone_filter::TYPED_ZONE_ROUTE_ENABLED;
@@ -44,7 +45,9 @@ use crate::route::zone_filter::TYPED_ZONE_ROUTE_MARKER;
 use crate::route::zone_filter::TYPED_ZONE_ROUTE_SHADOW;
 
 #[cfg(test)]
-static ROUTE_ENCODE_COUNT: AtomicU64 = AtomicU64::new(0);
+thread_local! {
+    static ROUTE_ENCODE_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
 
 /// Client request processor for handling route info queries
 pub struct ClientRequestProcessor {
@@ -187,12 +190,40 @@ impl ClientRequestProcessor {
             topic_route_data
         };
 
-        let content = match encode_topic_route_response_for_zone(
-            topic_route_data,
-            request.version(),
-            request_header.accept_standard_json_only,
-            typed_zone_filtered,
-        ) {
+        let cache_policy = RouteCachePolicy {
+            enabled: route_config.namesrv_route_response_cache_enable,
+            zone_requested: zone_request.is_enabled(),
+            order_enabled: route_config.order_message_enable,
+            external_route: false,
+        };
+        let encode = || {
+            encode_topic_route_response_for_zone(
+                topic_route_data,
+                request.version(),
+                request_header.accept_standard_json_only,
+                typed_zone_filtered,
+            )
+        };
+        let content = if cache_policy.is_eligible() {
+            let encoding = if should_use_standard_json(request.version(), request_header.accept_standard_json_only) {
+                JsonEncoding::Standard
+            } else {
+                JsonEncoding::Legacy
+            };
+            let key = RouteCacheKey::new(
+                request_header.topic.clone(),
+                topic_route_view.version(),
+                topic_route_view.variant(),
+                encoding,
+            );
+            self.name_server_runtime_inner
+                .route_response_cache()
+                .get_or_try_insert_with(key, encode)
+                .map(|outcome| outcome.body)
+        } else {
+            encode().map(Bytes::from)
+        };
+        let content = match content {
             Ok(content) => content,
             Err(error) => {
                 route_span.record("result", "internal");
@@ -221,7 +252,7 @@ pub(crate) fn encode_topic_route_response_for_zone(
     force_java_zone_legacy_json: bool,
 ) -> rocketmq_error::RocketMQResult<Vec<u8>> {
     #[cfg(test)]
-    ROUTE_ENCODE_COUNT.fetch_add(1, Ordering::Relaxed);
+    ROUTE_ENCODE_COUNT.with(|count| count.set(count.get() + 1));
     if force_java_zone_legacy_json {
         topic_route_data.encode()
     } else if should_use_standard_json(request_version, accept_standard_json_only) {
@@ -233,12 +264,12 @@ pub(crate) fn encode_topic_route_response_for_zone(
 
 #[cfg(test)]
 pub(crate) fn reset_route_encode_count() {
-    ROUTE_ENCODE_COUNT.store(0, Ordering::Relaxed);
+    ROUTE_ENCODE_COUNT.with(|count| count.set(0));
 }
 
 #[cfg(test)]
 pub(crate) fn route_encode_count() -> u64 {
-    ROUTE_ENCODE_COUNT.load(Ordering::Relaxed)
+    ROUTE_ENCODE_COUNT.with(std::cell::Cell::get)
 }
 
 pub(crate) fn should_use_standard_json(request_version: i32, accept_standard_json_only: Option<bool>) -> bool {

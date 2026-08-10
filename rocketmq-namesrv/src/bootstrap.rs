@@ -80,6 +80,7 @@ use crate::processor::ClusterTestRouteLookup;
 use crate::processor::NameServerRequestProcessor;
 use crate::processor::NameServerRequestProcessorWrapper;
 use crate::processor::TransportClusterTestRouteLookup;
+use crate::route::response_cache::RouteResponseCache;
 use crate::route::route_info_manager::RouteInfoManager;
 use crate::route::zone_route_rpc_hook::ZoneRouteRPCHook;
 use crate::route_info::broker_housekeeping_service::BrokerHousekeepingService;
@@ -1180,6 +1181,7 @@ impl Builder {
         // listener starts. Keep construction itself panic-free so startup can
         // return that typed error instead of panicking in `mpsc::channel`.
         let unregister_broker_queue_capacity = name_server_config.unregister_broker_queue_capacity().unwrap_or(1);
+        let route_response_cache = Arc::new(RouteResponseCache::from_namesrv_config(&name_server_config));
         let initial_config = Arc::new(NameServerRuntimeConfig {
             name_server_config: Arc::new(name_server_config),
             tokio_client_config: Arc::new(tokio_client_config),
@@ -1206,6 +1208,7 @@ impl Builder {
                 config_metadata_io,
                 auth_runtime: OnceLock::new(),
                 route_info_manager: Arc::new(route_info_manager),
+                route_response_cache: Arc::clone(&route_response_cache),
                 kvconfig_manager: Arc::new(KVConfigManager::new(runtime_handle.clone(), metadata_io.clone())),
                 remoting_client,
                 broker_housekeeping_service: Arc::new(BrokerHousekeepingService::new(runtime_handle)),
@@ -1252,6 +1255,7 @@ pub(crate) struct NameServerRuntimeInner {
     config_metadata_io: Option<Result<MetadataIoActor, rocketmq_runtime::MetadataIoError>>,
     auth_runtime: OnceLock<Arc<AuthRuntime>>,
     route_info_manager: Arc<RouteInfoManager>,
+    route_response_cache: Arc<RouteResponseCache>,
     kvconfig_manager: Arc<KVConfigManager>,
     remoting_client: Arc<RemotingClient>,
     broker_housekeeping_service: Arc<BrokerHousekeepingService>,
@@ -1319,6 +1323,10 @@ impl NameServerRuntimeHandle {
 
     pub(crate) fn route_info_manager(&self) -> Arc<RouteInfoManager> {
         self.runtime().route_info_manager()
+    }
+
+    pub(crate) fn route_response_cache(&self) -> Arc<RouteResponseCache> {
+        self.runtime().route_response_cache()
     }
 
     pub(crate) fn kvconfig_manager(&self) -> Arc<KVConfigManager> {
@@ -1389,6 +1397,10 @@ impl NameServerRuntimeInner {
 
     pub(crate) fn namesrv_metrics(&self) -> NameServerMetrics {
         self.namesrv_metrics.clone()
+    }
+
+    pub(crate) fn route_response_cache(&self) -> Arc<RouteResponseCache> {
+        Arc::clone(&self.route_response_cache)
     }
 
     pub(crate) fn auth_runtime(&self) -> Option<Arc<AuthRuntime>> {
@@ -1469,6 +1481,31 @@ impl NameServerRuntimeInner {
             &mut entries,
             "namesrvTypedZoneRouteShadow",
             name_server_config.namesrv_typed_zone_route_shadow,
+        );
+        push_config_entry(
+            &mut entries,
+            "namesrvRouteResponseCacheEnable",
+            name_server_config.namesrv_route_response_cache_enable,
+        );
+        push_config_entry(
+            &mut entries,
+            "namesrvRouteResponseCacheMaxBytes",
+            name_server_config.namesrv_route_response_cache_max_bytes,
+        );
+        push_config_entry(
+            &mut entries,
+            "namesrvRouteResponseCacheMaxEntries",
+            name_server_config.namesrv_route_response_cache_max_entries,
+        );
+        push_config_entry(
+            &mut entries,
+            "namesrvRouteResponseCacheMaxSingleResponseBytes",
+            name_server_config.namesrv_route_response_cache_max_single_response_bytes,
+        );
+        push_config_entry(
+            &mut entries,
+            "namesrvRouteResponseCacheShards",
+            name_server_config.namesrv_route_response_cache_shards,
         );
         push_config_entry(
             &mut entries,
@@ -4546,5 +4583,94 @@ mod tests {
             route.broker_datas[0].zone_name().map(CheetahString::as_str),
             Some("zone-a")
         );
+    }
+
+    #[tokio::test]
+    async fn cache_disabled_uses_live_encode() {
+        let (namesrv_config, _namesrv_root) = isolated_namesrv_config(NamesrvConfig::default());
+        let bootstrap = build_bootstrap_with_config(namesrv_config);
+        let harness = LocalRequestHarness::new(test_task_group("namesrv-cache-disabled-test"))
+            .await
+            .unwrap();
+        register_test_broker(
+            &bootstrap,
+            &CheetahString::from_static_str("cache-disabled-cluster"),
+            &CheetahString::from_static_str("cache-disabled-broker"),
+            &CheetahString::from_static_str("10.0.0.41:10911"),
+            MASTER_ID,
+            &CheetahString::from_static_str("zone-a"),
+            false,
+            topic_config_wrapper(&[("cache-disabled-topic", 0, PermName::PERM_READ | PermName::PERM_WRITE)]),
+        )
+        .await;
+        let mut processor =
+            ClientRequestProcessor::new(NameServerRuntimeHandle::new(&bootstrap.name_server_runtime.inner));
+        crate::processor::client_request_processor::reset_route_encode_count();
+
+        for _ in 0..2 {
+            let mut request = RemotingCommand::create_request_command(
+                RequestCode::GetRouteinfoByTopic,
+                GetRouteInfoRequestHeader::new(CheetahString::from_static_str("cache-disabled-topic"), Some(true)),
+            );
+            request.make_custom_header_to_net();
+            let response = processor
+                .process_request(harness.channel(), harness.context(), &mut request)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        }
+
+        assert_eq!(crate::processor::client_request_processor::route_encode_count(), 2);
+        let stats = bootstrap.runtime_inner().route_response_cache().stats();
+        assert_eq!(stats.hits, 0);
+        assert_eq!(stats.misses, 0);
+    }
+
+    #[tokio::test]
+    async fn cache_hit_reuses_the_versioned_encoded_body() {
+        let (namesrv_config, _namesrv_root) = isolated_namesrv_config(NamesrvConfig {
+            namesrv_route_response_cache_enable: true,
+            ..NamesrvConfig::default()
+        });
+        let bootstrap = build_bootstrap_with_config(namesrv_config);
+        let harness = LocalRequestHarness::new(test_task_group("namesrv-cache-hit-test"))
+            .await
+            .unwrap();
+        register_test_broker(
+            &bootstrap,
+            &CheetahString::from_static_str("cache-hit-cluster"),
+            &CheetahString::from_static_str("cache-hit-broker"),
+            &CheetahString::from_static_str("10.0.0.42:10911"),
+            MASTER_ID,
+            &CheetahString::from_static_str("zone-a"),
+            false,
+            topic_config_wrapper(&[("cache-hit-topic", 0, PermName::PERM_READ | PermName::PERM_WRITE)]),
+        )
+        .await;
+        let mut processor =
+            ClientRequestProcessor::new(NameServerRuntimeHandle::new(&bootstrap.name_server_runtime.inner));
+        crate::processor::client_request_processor::reset_route_encode_count();
+        let mut bodies = Vec::new();
+
+        for _ in 0..2 {
+            let mut request = RemotingCommand::create_request_command(
+                RequestCode::GetRouteinfoByTopic,
+                GetRouteInfoRequestHeader::new(CheetahString::from_static_str("cache-hit-topic"), Some(true)),
+            );
+            request.make_custom_header_to_net();
+            let response = processor
+                .process_request(harness.channel(), harness.context(), &mut request)
+                .await
+                .unwrap()
+                .unwrap();
+            bodies.push(response.body().expect("route response should include a body").clone());
+        }
+
+        assert_eq!(bodies[0], bodies[1]);
+        assert_eq!(crate::processor::client_request_processor::route_encode_count(), 1);
+        let stats = bootstrap.runtime_inner().route_response_cache().stats();
+        assert_eq!(stats.hits, 1);
+        assert_eq!(stats.misses, 1);
     }
 }

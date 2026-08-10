@@ -19,6 +19,7 @@
 pub mod async_segmented_lock;
 pub mod batch_unregistration_service;
 pub mod error;
+pub(crate) mod response_cache;
 pub mod route_info_manager;
 pub mod segmented_lock;
 pub mod tables;

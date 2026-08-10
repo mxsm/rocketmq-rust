@@ -69,6 +69,8 @@ dirs.workspace        = true
 parking_lot.workspace = true
 dashmap               = { version = "6.2.1", features = ["serde"] }
 hashbrown             = "0.17"
+bytes.workspace       = true
+moka                   = { version = "0.12", features = ["sync"] }
 
 clap           = { version = "4.6.1", features = ["derive"] }
 cheetah-string = { workspace = true }

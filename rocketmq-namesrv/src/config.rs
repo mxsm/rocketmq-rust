@@ -34,6 +34,9 @@ const MAX_QUEUE_CAPACITY: i32 = 10_000_000;
 const MAX_SCAN_INTERVAL_MILLIS: u64 = 3_600_000;
 const MAX_WAIT_SECONDS: i32 = 3600;
 const MAX_ROUTE_FRESHNESS_SAMPLE_INTERVAL: u64 = 1_000_000;
+const MAX_ROUTE_RESPONSE_CACHE_BYTES: u64 = 1_073_741_824;
+const MAX_ROUTE_RESPONSE_CACHE_ENTRIES: u64 = 1_000_000;
+const MAX_ROUTE_RESPONSE_CACHE_SHARDS: u64 = 256;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ConfigMutability {
@@ -53,6 +56,11 @@ pub(crate) enum NamesrvConfigKey {
     RouteFreshnessSampleInterval,
     NamesrvTypedZoneRouteEnable,
     NamesrvTypedZoneRouteShadow,
+    NamesrvRouteResponseCacheEnable,
+    NamesrvRouteResponseCacheMaxBytes,
+    NamesrvRouteResponseCacheMaxEntries,
+    NamesrvRouteResponseCacheMaxSingleResponseBytes,
+    NamesrvRouteResponseCacheShards,
     ReturnOrderTopicConfigToBroker,
     ClientRequestThreadPoolNums,
     DefaultThreadPoolNums,
@@ -84,6 +92,11 @@ impl NamesrvConfigKey {
             "routeFreshnessSampleInterval" => Self::RouteFreshnessSampleInterval,
             "namesrvTypedZoneRouteEnable" => Self::NamesrvTypedZoneRouteEnable,
             "namesrvTypedZoneRouteShadow" => Self::NamesrvTypedZoneRouteShadow,
+            "namesrvRouteResponseCacheEnable" => Self::NamesrvRouteResponseCacheEnable,
+            "namesrvRouteResponseCacheMaxBytes" => Self::NamesrvRouteResponseCacheMaxBytes,
+            "namesrvRouteResponseCacheMaxEntries" => Self::NamesrvRouteResponseCacheMaxEntries,
+            "namesrvRouteResponseCacheMaxSingleResponseBytes" => Self::NamesrvRouteResponseCacheMaxSingleResponseBytes,
+            "namesrvRouteResponseCacheShards" => Self::NamesrvRouteResponseCacheShards,
             "returnOrderTopicConfigToBroker" => Self::ReturnOrderTopicConfigToBroker,
             "clientRequestThreadPoolNums" => Self::ClientRequestThreadPoolNums,
             "defaultThreadPoolNums" => Self::DefaultThreadPoolNums,
@@ -111,6 +124,7 @@ impl NamesrvConfigKey {
             | Self::RouteFreshnessSampleInterval
             | Self::NamesrvTypedZoneRouteEnable
             | Self::NamesrvTypedZoneRouteShadow
+            | Self::NamesrvRouteResponseCacheEnable
             | Self::ReturnOrderTopicConfigToBroker
             | Self::SupportActingMaster
             | Self::EnableAllTopicList
@@ -128,6 +142,10 @@ impl NamesrvConfigKey {
             | Self::EnableControllerInNamesrv
             | Self::NeedWaitForService
             | Self::WaitSecondsForService => ConfigMutability::RestartRequired,
+            Self::NamesrvRouteResponseCacheMaxBytes
+            | Self::NamesrvRouteResponseCacheMaxEntries
+            | Self::NamesrvRouteResponseCacheMaxSingleResponseBytes
+            | Self::NamesrvRouteResponseCacheShards => ConfigMutability::RestartRequired,
             Self::RocketmqHome
             | Self::KvConfigPath
             | Self::ConfigStorePath
@@ -172,10 +190,23 @@ pub(crate) fn validate_namesrv_property(key: NamesrvConfigKey, value: &str) -> R
                 ));
             }
         }
+        NamesrvConfigKey::NamesrvRouteResponseCacheMaxBytes => {
+            parse_bounded_u64(key, value, 1, MAX_ROUTE_RESPONSE_CACHE_BYTES)?;
+        }
+        NamesrvConfigKey::NamesrvRouteResponseCacheMaxEntries => {
+            parse_bounded_u64(key, value, 1, MAX_ROUTE_RESPONSE_CACHE_ENTRIES)?;
+        }
+        NamesrvConfigKey::NamesrvRouteResponseCacheMaxSingleResponseBytes => {
+            parse_bounded_u64(key, value, 1, MAX_ROUTE_RESPONSE_CACHE_BYTES)?;
+        }
+        NamesrvConfigKey::NamesrvRouteResponseCacheShards => {
+            parse_bounded_u64(key, value, 1, MAX_ROUTE_RESPONSE_CACHE_SHARDS)?;
+        }
         NamesrvConfigKey::ClusterTest
         | NamesrvConfigKey::OrderMessageEnable
         | NamesrvConfigKey::NamesrvTypedZoneRouteEnable
         | NamesrvConfigKey::NamesrvTypedZoneRouteShadow
+        | NamesrvConfigKey::NamesrvRouteResponseCacheEnable
         | NamesrvConfigKey::ReturnOrderTopicConfigToBroker
         | NamesrvConfigKey::SupportActingMaster
         | NamesrvConfigKey::EnableAllTopicList
@@ -214,6 +245,11 @@ impl NamesrvConfigKey {
             Self::RouteFreshnessSampleInterval => "routeFreshnessSampleInterval",
             Self::NamesrvTypedZoneRouteEnable => "namesrvTypedZoneRouteEnable",
             Self::NamesrvTypedZoneRouteShadow => "namesrvTypedZoneRouteShadow",
+            Self::NamesrvRouteResponseCacheEnable => "namesrvRouteResponseCacheEnable",
+            Self::NamesrvRouteResponseCacheMaxBytes => "namesrvRouteResponseCacheMaxBytes",
+            Self::NamesrvRouteResponseCacheMaxEntries => "namesrvRouteResponseCacheMaxEntries",
+            Self::NamesrvRouteResponseCacheMaxSingleResponseBytes => "namesrvRouteResponseCacheMaxSingleResponseBytes",
+            Self::NamesrvRouteResponseCacheShards => "namesrvRouteResponseCacheShards",
             Self::ReturnOrderTopicConfigToBroker => "returnOrderTopicConfigToBroker",
             Self::ClientRequestThreadPoolNums => "clientRequestThreadPoolNums",
             Self::DefaultThreadPoolNums => "defaultThreadPoolNums",
@@ -239,6 +275,19 @@ fn parse_bounded_i32(key: NamesrvConfigKey, value: &str, minimum: i32, maximum: 
     let value = value
         .parse::<i32>()
         .map_err(|_| invalid_value(key.java_name(), "expected an integer"))?;
+    if !(minimum..=maximum).contains(&value) {
+        return Err(invalid_value(
+            key.java_name(),
+            &format!("must be between {minimum} and {maximum}"),
+        ));
+    }
+    Ok(value)
+}
+
+fn parse_bounded_u64(key: NamesrvConfigKey, value: &str, minimum: u64, maximum: u64) -> RocketMQResult<u64> {
+    let value = value
+        .parse::<u64>()
+        .map_err(|_| invalid_value(key.java_name(), "expected a positive integer"))?;
     if !(minimum..=maximum).contains(&value) {
         return Err(invalid_value(
             key.java_name(),
@@ -318,6 +367,22 @@ mod defaults {
         1000
     }
 
+    pub fn namesrv_route_response_cache_max_bytes() -> u64 {
+        67_108_864
+    }
+
+    pub fn namesrv_route_response_cache_max_entries() -> u64 {
+        10_000
+    }
+
+    pub fn namesrv_route_response_cache_max_single_response_bytes() -> u64 {
+        1_048_576
+    }
+
+    pub fn namesrv_route_response_cache_shards() -> usize {
+        16
+    }
+
     pub fn config_black_list() -> String {
         "configBlackList;configStorePath;kvConfigPath".to_string()
     }
@@ -354,6 +419,33 @@ pub struct NamesrvConfig {
 
     #[serde(alias = "namesrvTypedZoneRouteShadow", default)]
     pub namesrv_typed_zone_route_shadow: bool,
+
+    #[serde(alias = "namesrvRouteResponseCacheEnable", default)]
+    pub namesrv_route_response_cache_enable: bool,
+
+    #[serde(
+        alias = "namesrvRouteResponseCacheMaxBytes",
+        default = "defaults::namesrv_route_response_cache_max_bytes"
+    )]
+    pub namesrv_route_response_cache_max_bytes: u64,
+
+    #[serde(
+        alias = "namesrvRouteResponseCacheMaxEntries",
+        default = "defaults::namesrv_route_response_cache_max_entries"
+    )]
+    pub namesrv_route_response_cache_max_entries: u64,
+
+    #[serde(
+        alias = "namesrvRouteResponseCacheMaxSingleResponseBytes",
+        default = "defaults::namesrv_route_response_cache_max_single_response_bytes"
+    )]
+    pub namesrv_route_response_cache_max_single_response_bytes: u64,
+
+    #[serde(
+        alias = "namesrvRouteResponseCacheShards",
+        default = "defaults::namesrv_route_response_cache_shards"
+    )]
+    pub namesrv_route_response_cache_shards: usize,
 
     #[serde(
         alias = "returnOrderTopicConfigToBroker",
@@ -443,6 +535,12 @@ impl Default for NamesrvConfig {
             route_freshness_sample_interval: defaults::route_freshness_sample_interval(),
             namesrv_typed_zone_route_enable: false,
             namesrv_typed_zone_route_shadow: false,
+            namesrv_route_response_cache_enable: false,
+            namesrv_route_response_cache_max_bytes: defaults::namesrv_route_response_cache_max_bytes(),
+            namesrv_route_response_cache_max_entries: defaults::namesrv_route_response_cache_max_entries(),
+            namesrv_route_response_cache_max_single_response_bytes:
+                defaults::namesrv_route_response_cache_max_single_response_bytes(),
+            namesrv_route_response_cache_shards: defaults::namesrv_route_response_cache_shards(),
             return_order_topic_config_to_broker: true,
             client_request_thread_pool_nums: 8,
             default_thread_pool_nums: 16,
@@ -500,6 +598,26 @@ impl NamesrvConfig {
         json_map.insert(
             "namesrvTypedZoneRouteShadow".to_string(),
             Value::String(self.namesrv_typed_zone_route_shadow.to_string()),
+        );
+        json_map.insert(
+            "namesrvRouteResponseCacheEnable".to_string(),
+            Value::String(self.namesrv_route_response_cache_enable.to_string()),
+        );
+        json_map.insert(
+            "namesrvRouteResponseCacheMaxBytes".to_string(),
+            Value::String(self.namesrv_route_response_cache_max_bytes.to_string()),
+        );
+        json_map.insert(
+            "namesrvRouteResponseCacheMaxEntries".to_string(),
+            Value::String(self.namesrv_route_response_cache_max_entries.to_string()),
+        );
+        json_map.insert(
+            "namesrvRouteResponseCacheMaxSingleResponseBytes".to_string(),
+            Value::String(self.namesrv_route_response_cache_max_single_response_bytes.to_string()),
+        );
+        json_map.insert(
+            "namesrvRouteResponseCacheShards".to_string(),
+            Value::String(self.namesrv_route_response_cache_shards.to_string()),
         );
         json_map.insert(
             "returnOrderTopicConfigToBroker".to_string(),
@@ -651,6 +769,26 @@ impl NamesrvConfig {
                     self.namesrv_typed_zone_route_shadow =
                         value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
+                "namesrvRouteResponseCacheEnable" => {
+                    self.namesrv_route_response_cache_enable =
+                        value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
+                }
+                "namesrvRouteResponseCacheMaxBytes" => {
+                    self.namesrv_route_response_cache_max_bytes =
+                        value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
+                }
+                "namesrvRouteResponseCacheMaxEntries" => {
+                    self.namesrv_route_response_cache_max_entries =
+                        value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
+                }
+                "namesrvRouteResponseCacheMaxSingleResponseBytes" => {
+                    self.namesrv_route_response_cache_max_single_response_bytes =
+                        value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
+                }
+                "namesrvRouteResponseCacheShards" => {
+                    self.namesrv_route_response_cache_shards =
+                        value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
+                }
                 "returnOrderTopicConfigToBroker" => {
                     self.return_order_topic_config_to_broker =
                         value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
@@ -759,8 +897,30 @@ impl NamesrvConfig {
                 NamesrvConfigKey::RouteFreshnessSampleInterval,
                 self.route_freshness_sample_interval.to_string(),
             ),
+            (
+                NamesrvConfigKey::NamesrvRouteResponseCacheMaxBytes,
+                self.namesrv_route_response_cache_max_bytes.to_string(),
+            ),
+            (
+                NamesrvConfigKey::NamesrvRouteResponseCacheMaxEntries,
+                self.namesrv_route_response_cache_max_entries.to_string(),
+            ),
+            (
+                NamesrvConfigKey::NamesrvRouteResponseCacheMaxSingleResponseBytes,
+                self.namesrv_route_response_cache_max_single_response_bytes.to_string(),
+            ),
+            (
+                NamesrvConfigKey::NamesrvRouteResponseCacheShards,
+                self.namesrv_route_response_cache_shards.to_string(),
+            ),
         ] {
             validate_namesrv_property(key, &value)?;
+        }
+        if self.namesrv_route_response_cache_max_single_response_bytes > self.namesrv_route_response_cache_max_bytes {
+            return Err(invalid_value(
+                NamesrvConfigKey::NamesrvRouteResponseCacheMaxSingleResponseBytes.java_name(),
+                "must not exceed namesrvRouteResponseCacheMaxBytes",
+            ));
         }
         Ok(())
     }
@@ -911,6 +1071,11 @@ mod tests {
         assert_eq!(config.route_freshness_sample_interval, 1000);
         assert!(!config.namesrv_typed_zone_route_enable);
         assert!(!config.namesrv_typed_zone_route_shadow);
+        assert!(!config.namesrv_route_response_cache_enable);
+        assert_eq!(config.namesrv_route_response_cache_max_bytes, 67_108_864);
+        assert_eq!(config.namesrv_route_response_cache_max_entries, 10_000);
+        assert_eq!(config.namesrv_route_response_cache_max_single_response_bytes, 1_048_576);
+        assert_eq!(config.namesrv_route_response_cache_shards, 16);
         assert!(config.return_order_topic_config_to_broker);
         assert_eq!(config.client_request_thread_pool_nums, 8);
         assert_eq!(config.default_thread_pool_nums, 16);
