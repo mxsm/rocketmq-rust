@@ -163,6 +163,7 @@ fn apply_to_snapshot(
             | "productEnvName"
             | "clusterTest"
             | "orderMessageEnable"
+            | "routeFreshnessSampleInterval"
             | "returnOrderTopicConfigToBroker"
             | "clientRequestThreadPoolNums"
             | "defaultThreadPoolNums"
@@ -231,6 +232,11 @@ fn format_runtime_config(config_snapshot: &NameServerRuntimeConfig) -> RocketMQR
         &mut entries,
         "orderMessageEnable",
         name_server_config.order_message_enable,
+    );
+    push_config_entry(
+        &mut entries,
+        "routeFreshnessSampleInterval",
+        name_server_config.route_freshness_sample_interval,
     );
     push_config_entry(
         &mut entries,
@@ -451,6 +457,8 @@ mod tests {
             ("defaultThreadPoolNums", "0"),
             ("defaultThreadPoolQueueCapacity", "10000001"),
             ("scanNotActiveBrokerInterval", "0"),
+            ("routeFreshnessSampleInterval", "0"),
+            ("routeFreshnessSampleInterval", "1000001"),
             ("connectTimeoutMillis", "-1"),
         ] {
             let result = classify_runtime_updates([(CheetahString::from(key), CheetahString::from(value))]);

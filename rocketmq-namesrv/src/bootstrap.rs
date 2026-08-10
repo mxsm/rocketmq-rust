@@ -1457,6 +1457,11 @@ impl NameServerRuntimeInner {
         );
         push_config_entry(
             &mut entries,
+            "routeFreshnessSampleInterval",
+            name_server_config.route_freshness_sample_interval,
+        );
+        push_config_entry(
+            &mut entries,
             "returnOrderTopicConfigToBroker",
             name_server_config.return_order_topic_config_to_broker,
         );
@@ -4352,5 +4357,115 @@ mod tests {
         assert_eq!(broker_data.broker_name(), &broker_name);
         assert_eq!(broker_data.broker_addrs().get(&MASTER_ID), Some(&primary_broker_addr));
         assert_eq!(topic_route_data.queue_datas[0].broker_name(), &broker_name);
+    }
+
+    #[tokio::test]
+    async fn noop_metrics_skip_freshness_lookup() {
+        let (namesrv_config, _namesrv_root) = isolated_namesrv_config(NamesrvConfig::default());
+        let bootstrap = build_bootstrap_with_config(namesrv_config);
+        let harness = LocalRequestHarness::new(test_task_group("namesrv-freshness-gate-test"))
+            .await
+            .unwrap();
+        register_test_broker(
+            &bootstrap,
+            &CheetahString::from_static_str("freshness-cluster"),
+            &CheetahString::from_static_str("freshness-broker"),
+            &CheetahString::from_static_str("10.0.0.20:10911"),
+            MASTER_ID,
+            &CheetahString::from_static_str("zone-a"),
+            false,
+            topic_config_wrapper(&[("freshness-topic", 0, PermName::PERM_READ | PermName::PERM_WRITE)]),
+        )
+        .await;
+        let route_manager = bootstrap.runtime_inner().route_info_manager();
+        let mut processor =
+            ClientRequestProcessor::new(NameServerRuntimeHandle::new(&bootstrap.name_server_runtime.inner));
+        let mut request = RemotingCommand::create_request_command(
+            RequestCode::GetRouteinfoByTopic,
+            GetRouteInfoRequestHeader::new(CheetahString::from_static_str("freshness-topic"), Some(true)),
+        );
+        request.make_custom_header_to_net();
+
+        let response = processor
+            .process_request(harness.channel(), harness.context(), &mut request)
+            .await
+            .expect("route processing should succeed")
+            .expect("route processing should return a response");
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        assert_eq!(route_manager.route_freshness_lookup_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn next_request_observes_effective_config_generation() {
+        let (namesrv_config, _namesrv_root) = isolated_namesrv_config(NamesrvConfig::default());
+        let bootstrap = build_bootstrap_with_config(namesrv_config);
+        let harness = LocalRequestHarness::new(test_task_group("namesrv-live-route-config-test"))
+            .await
+            .unwrap();
+        let topic = CheetahString::from_static_str("live-route-config-topic");
+        let order_conf = CheetahString::from_static_str("live-route-config-broker:4");
+        register_test_broker(
+            &bootstrap,
+            &CheetahString::from_static_str("live-route-config-cluster"),
+            &CheetahString::from_static_str("live-route-config-broker"),
+            &CheetahString::from_static_str("10.0.0.21:10911"),
+            MASTER_ID,
+            &CheetahString::from_static_str("zone-a"),
+            false,
+            topic_config_wrapper(&[("live-route-config-topic", 0, PermName::PERM_READ | PermName::PERM_WRITE)]),
+        )
+        .await;
+        bootstrap
+            .runtime_inner()
+            .kvconfig_manager()
+            .put_kv_config(
+                CheetahString::from_static_str("ORDER_TOPIC_CONFIG"),
+                topic.clone(),
+                order_conf.clone(),
+                MetadataDeadline::after(Duration::from_secs(5)),
+            )
+            .await
+            .unwrap();
+        let mut processor =
+            ClientRequestProcessor::new(NameServerRuntimeHandle::new(&bootstrap.name_server_runtime.inner));
+
+        let mut before_request = RemotingCommand::create_request_command(
+            RequestCode::GetRouteinfoByTopic,
+            GetRouteInfoRequestHeader::new(topic.clone(), Some(true)),
+        );
+        before_request.make_custom_header_to_net();
+        let before = processor
+            .process_request(harness.channel(), harness.context(), &mut before_request)
+            .await
+            .unwrap()
+            .unwrap();
+        let before_route =
+            TopicRouteData::decode(before.body().expect("route response should include a body")).unwrap();
+        assert!(before_route.order_topic_conf.is_none());
+
+        let outcome = bootstrap
+            .runtime_inner()
+            .update_runtime_config(HashMap::from([(
+                CheetahString::from_static_str("orderMessageEnable"),
+                CheetahString::from_static_str("true"),
+            )]))
+            .await
+            .expect("live route configuration should update durably");
+        assert_eq!(outcome.effective_generation, 1);
+        assert_eq!(outcome.applied_keys, vec!["orderMessageEnable"]);
+
+        let mut after_request = RemotingCommand::create_request_command(
+            RequestCode::GetRouteinfoByTopic,
+            GetRouteInfoRequestHeader::new(topic, Some(true)),
+        );
+        after_request.make_custom_header_to_net();
+        let after = processor
+            .process_request(harness.channel(), harness.context(), &mut after_request)
+            .await
+            .unwrap()
+            .unwrap();
+        let after_route = TopicRouteData::decode(after.body().expect("route response should include a body")).unwrap();
+        assert_eq!(after_route.order_topic_conf.as_ref(), Some(&order_conf));
     }
 }

@@ -21,6 +21,13 @@ pub use crate::semantic::metrics::NAMESRV_ROUTE_REQUEST_TOTAL;
 
 use std::time::Duration;
 
+#[cfg(feature = "otel-metrics")]
+use std::sync::atomic::AtomicU64;
+#[cfg(feature = "otel-metrics")]
+use std::sync::atomic::Ordering;
+#[cfg(feature = "otel-metrics")]
+use std::sync::Arc;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NameServerRouteErrorKind {
     NotFound,
@@ -60,6 +67,16 @@ impl NameServerMetrics {
     }
 
     #[inline]
+    pub fn is_enabled(&self) -> bool {
+        false
+    }
+
+    #[inline]
+    pub fn should_record_route_freshness(&self, _sample_interval: u64) -> bool {
+        false
+    }
+
+    #[inline]
     pub fn record_route_request_total(&self, _count: u64) {}
 
     #[inline]
@@ -92,6 +109,7 @@ impl NameServerMetrics {
 pub struct NameServerMetrics {
     telemetry: Option<crate::TelemetryHandle>,
     instruments: Option<NameServerMetricInstruments>,
+    route_freshness_sequence: Arc<AtomicU64>,
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -118,6 +136,7 @@ impl NameServerMetrics {
         Self {
             telemetry: Some(telemetry.clone()),
             instruments: Some(NameServerMetricInstruments::new(&meter)),
+            route_freshness_sequence: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -126,11 +145,30 @@ impl NameServerMetrics {
         Self {
             telemetry: None,
             instruments: Some(NameServerMetricInstruments::new(meter)),
+            route_freshness_sequence: Arc::new(AtomicU64::new(0)),
         }
     }
 
     fn is_active(&self) -> bool {
         self.telemetry.as_ref().is_none_or(crate::TelemetryHandle::is_active)
+    }
+
+    #[inline]
+    pub fn is_enabled(&self) -> bool {
+        self.instruments.is_some() && self.is_active()
+    }
+
+    /// Returns true only for requests selected by the bounded freshness sampler.
+    ///
+    /// Call this before looking up broker live entries so disabled metrics and
+    /// discarded samples add no hash-table or allocation work to route queries.
+    #[inline]
+    pub fn should_record_route_freshness(&self, sample_interval: u64) -> bool {
+        self.is_enabled()
+            && self
+                .route_freshness_sequence
+                .fetch_add(1, Ordering::Relaxed)
+                .is_multiple_of(sample_interval.max(1))
     }
 
     #[inline]
@@ -294,5 +332,20 @@ mod tests {
         metrics.record_active_broker_count(2);
         metrics.record_route_error(NameServerRouteErrorKind::NotFound);
         metrics.record_route_freshness(25);
+        assert!(!metrics.is_enabled());
+        assert!(!metrics.should_record_route_freshness(1));
+    }
+
+    #[test]
+    fn route_freshness_sampler_selects_only_the_configured_interval() {
+        let provider = SdkMeterProvider::builder().build();
+        let meter = provider.meter("namesrv-freshness-sampler-test");
+        let metrics = NameServerMetrics::new(&meter);
+
+        assert!(metrics.is_enabled());
+        assert!(metrics.should_record_route_freshness(3));
+        assert!(!metrics.should_record_route_freshness(3));
+        assert!(!metrics.should_record_route_freshness(3));
+        assert!(metrics.should_record_route_freshness(3));
     }
 }

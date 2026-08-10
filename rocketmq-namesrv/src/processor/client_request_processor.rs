@@ -40,10 +40,6 @@ pub struct ClientRequestProcessor {
     name_server_runtime_inner: NameServerRuntimeHandle,
     need_check_namesrv_ready: AtomicBool,
     startup_time_millis: u64,
-    // Cached configuration values (immutable after construction)
-    wait_seconds_millis: u64,
-    need_wait_for_service: bool,
-    order_message_enable: bool,
 }
 
 impl RequestProcessor for ClientRequestProcessor {
@@ -76,17 +72,9 @@ impl ClientRequestProcessor {
     }
 
     pub(crate) fn new(name_server_runtime_inner: NameServerRuntimeHandle) -> Self {
-        let config = name_server_runtime_inner.name_server_config();
-        let wait_seconds_millis = config.wait_seconds_for_service as u64 * 1000;
-        let need_wait_for_service = config.need_wait_for_service;
-        let order_message_enable = config.order_message_enable;
-
         Self {
             need_check_namesrv_ready: AtomicBool::new(true),
             startup_time_millis: time_utils::current_millis(),
-            wait_seconds_millis,
-            need_wait_for_service,
-            order_message_enable,
             name_server_runtime_inner,
         }
     }
@@ -106,12 +94,13 @@ impl ClientRequestProcessor {
                 return Err(error);
             }
         };
+        let route_config = self.name_server_runtime_inner.name_server_config();
 
-        // Early return: Check if nameserver is ready (using cached config)
-        if self.need_wait_for_service {
+        if route_config.need_wait_for_service {
             let elapsed_millis = time_utils::current_millis().saturating_sub(self.startup_time_millis);
+            let wait_seconds_millis = route_config.wait_seconds_for_service as u64 * 1000;
             let namesrv_ready =
-                !self.need_check_namesrv_ready.load(Ordering::Relaxed) || elapsed_millis >= self.wait_seconds_millis;
+                !self.need_check_namesrv_ready.load(Ordering::Relaxed) || elapsed_millis >= wait_seconds_millis;
 
             if !namesrv_ready {
                 warn!("name server not ready. request code {}", request.code());
@@ -148,21 +137,22 @@ impl ClientRequestProcessor {
                 return Err(error);
             }
         };
-        if let Some(freshness_ms) = self
-            .name_server_runtime_inner
-            .route_info_manager()
-            .route_freshness_millis(topic_route_view.route_data())
-        {
-            self.name_server_runtime_inner
-                .namesrv_metrics()
-                .record_route_freshness(freshness_ms);
+        let metrics = self.name_server_runtime_inner.namesrv_metrics();
+        if metrics.should_record_route_freshness(route_config.route_freshness_sample_interval) {
+            if let Some(freshness_ms) = self
+                .name_server_runtime_inner
+                .route_info_manager()
+                .route_freshness_millis(topic_route_view.route_data())
+            {
+                metrics.record_route_freshness(freshness_ms);
+            }
         }
         if self.need_check_namesrv_ready.load(Ordering::Relaxed) {
             self.need_check_namesrv_ready.store(false, Ordering::Relaxed);
         }
 
         let mut route_with_order_config;
-        let topic_route_data = if self.order_message_enable {
+        let topic_route_data = if route_config.order_message_enable {
             route_with_order_config = topic_route_view.route_data().as_ref().clone();
             route_with_order_config.order_topic_conf = self.name_server_runtime_inner.kvconfig_manager().get_kvconfig(
                 &CheetahString::from_static_str(NAMESPACE_ORDER_TOPIC_CONFIG),

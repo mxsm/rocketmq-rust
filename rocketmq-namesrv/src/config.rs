@@ -33,6 +33,7 @@ const MAX_THREAD_COUNT: i32 = 4096;
 const MAX_QUEUE_CAPACITY: i32 = 10_000_000;
 const MAX_SCAN_INTERVAL_MILLIS: u64 = 3_600_000;
 const MAX_WAIT_SECONDS: i32 = 3600;
+const MAX_ROUTE_FRESHNESS_SAMPLE_INTERVAL: u64 = 1_000_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ConfigMutability {
@@ -49,6 +50,7 @@ pub(crate) enum NamesrvConfigKey {
     ProductEnvName,
     ClusterTest,
     OrderMessageEnable,
+    RouteFreshnessSampleInterval,
     ReturnOrderTopicConfigToBroker,
     ClientRequestThreadPoolNums,
     DefaultThreadPoolNums,
@@ -77,6 +79,7 @@ impl NamesrvConfigKey {
             "productEnvName" => Self::ProductEnvName,
             "clusterTest" => Self::ClusterTest,
             "orderMessageEnable" => Self::OrderMessageEnable,
+            "routeFreshnessSampleInterval" => Self::RouteFreshnessSampleInterval,
             "returnOrderTopicConfigToBroker" => Self::ReturnOrderTopicConfigToBroker,
             "clientRequestThreadPoolNums" => Self::ClientRequestThreadPoolNums,
             "defaultThreadPoolNums" => Self::DefaultThreadPoolNums,
@@ -100,7 +103,9 @@ impl NamesrvConfigKey {
 
     pub(crate) fn mutability(self) -> ConfigMutability {
         match self {
-            Self::ReturnOrderTopicConfigToBroker
+            Self::OrderMessageEnable
+            | Self::RouteFreshnessSampleInterval
+            | Self::ReturnOrderTopicConfigToBroker
             | Self::SupportActingMaster
             | Self::EnableAllTopicList
             | Self::EnableTopicList
@@ -108,7 +113,6 @@ impl NamesrvConfigKey {
             | Self::DeleteTopicWithBrokerRegistration => ConfigMutability::Live,
             Self::ProductEnvName
             | Self::ClusterTest
-            | Self::OrderMessageEnable
             | Self::ClientRequestThreadPoolNums
             | Self::DefaultThreadPoolNums
             | Self::ClientRequestThreadPoolQueueCapacity
@@ -151,6 +155,17 @@ pub(crate) fn validate_namesrv_property(key: NamesrvConfigKey, value: &str) -> R
         NamesrvConfigKey::WaitSecondsForService => {
             parse_bounded_i32(key, value, 0, MAX_WAIT_SECONDS)?;
         }
+        NamesrvConfigKey::RouteFreshnessSampleInterval => {
+            let value = value
+                .parse::<u64>()
+                .map_err(|_| invalid_value(key.java_name(), "expected a positive integer"))?;
+            if !(1..=MAX_ROUTE_FRESHNESS_SAMPLE_INTERVAL).contains(&value) {
+                return Err(invalid_value(
+                    key.java_name(),
+                    &format!("must be between 1 and {MAX_ROUTE_FRESHNESS_SAMPLE_INTERVAL}"),
+                ));
+            }
+        }
         NamesrvConfigKey::ClusterTest
         | NamesrvConfigKey::OrderMessageEnable
         | NamesrvConfigKey::ReturnOrderTopicConfigToBroker
@@ -188,6 +203,7 @@ impl NamesrvConfigKey {
             Self::ProductEnvName => "productEnvName",
             Self::ClusterTest => "clusterTest",
             Self::OrderMessageEnable => "orderMessageEnable",
+            Self::RouteFreshnessSampleInterval => "routeFreshnessSampleInterval",
             Self::ReturnOrderTopicConfigToBroker => "returnOrderTopicConfigToBroker",
             Self::ClientRequestThreadPoolNums => "clientRequestThreadPoolNums",
             Self::DefaultThreadPoolNums => "defaultThreadPoolNums",
@@ -288,6 +304,10 @@ mod defaults {
         45
     }
 
+    pub fn route_freshness_sample_interval() -> u64 {
+        1000
+    }
+
     pub fn config_black_list() -> String {
         "configBlackList;configStorePath;kvConfigPath".to_string()
     }
@@ -312,6 +332,12 @@ pub struct NamesrvConfig {
 
     #[serde(alias = "orderMessageEnable", default)]
     pub order_message_enable: bool,
+
+    #[serde(
+        alias = "routeFreshnessSampleInterval",
+        default = "defaults::route_freshness_sample_interval"
+    )]
+    pub route_freshness_sample_interval: u64,
 
     #[serde(
         alias = "returnOrderTopicConfigToBroker",
@@ -398,6 +424,7 @@ impl Default for NamesrvConfig {
             product_env_name: "center".to_string(),
             cluster_test: false,
             order_message_enable: false,
+            route_freshness_sample_interval: defaults::route_freshness_sample_interval(),
             return_order_topic_config_to_broker: true,
             client_request_thread_pool_nums: 8,
             default_thread_pool_nums: 16,
@@ -443,6 +470,10 @@ impl NamesrvConfig {
         json_map.insert(
             "orderMessageEnable".to_string(),
             Value::String(self.order_message_enable.to_string()),
+        );
+        json_map.insert(
+            "routeFreshnessSampleInterval".to_string(),
+            Value::String(self.route_freshness_sample_interval.to_string()),
         );
         json_map.insert(
             "returnOrderTopicConfigToBroker".to_string(),
@@ -582,6 +613,10 @@ impl NamesrvConfig {
                 "orderMessageEnable" => {
                     self.order_message_enable = value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
+                "routeFreshnessSampleInterval" => {
+                    self.route_freshness_sample_interval =
+                        value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
+                }
                 "returnOrderTopicConfigToBroker" => {
                     self.return_order_topic_config_to_broker =
                         value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
@@ -685,6 +720,10 @@ impl NamesrvConfig {
             (
                 NamesrvConfigKey::WaitSecondsForService,
                 self.wait_seconds_for_service.to_string(),
+            ),
+            (
+                NamesrvConfigKey::RouteFreshnessSampleInterval,
+                self.route_freshness_sample_interval.to_string(),
             ),
         ] {
             validate_namesrv_property(key, &value)?;
@@ -835,6 +874,7 @@ mod tests {
         assert_eq!(config.product_env_name, "center");
         assert!(!config.cluster_test);
         assert!(!config.order_message_enable);
+        assert_eq!(config.route_freshness_sample_interval, 1000);
         assert!(config.return_order_topic_config_to_broker);
         assert_eq!(config.client_request_thread_pool_nums, 8);
         assert_eq!(config.default_thread_pool_nums, 16);
@@ -876,6 +916,10 @@ mod tests {
         properties.insert(CheetahString::from("productEnvName"), CheetahString::from("new_env"));
         properties.insert(CheetahString::from("clusterTest"), CheetahString::from("true"));
         properties.insert(CheetahString::from("orderMessageEnable"), CheetahString::from("true"));
+        properties.insert(
+            CheetahString::from("routeFreshnessSampleInterval"),
+            CheetahString::from("250"),
+        );
         properties.insert(
             CheetahString::from("clientRequestThreadPoolNums"),
             CheetahString::from("10"),
@@ -932,6 +976,7 @@ mod tests {
         assert_eq!(config.product_env_name, "new_env");
         assert!(config.cluster_test);
         assert!(config.order_message_enable);
+        assert_eq!(config.route_freshness_sample_interval, 250);
         assert_eq!(config.client_request_thread_pool_nums, 10);
         assert_eq!(config.default_thread_pool_nums, 20);
         assert_eq!(config.client_request_thread_pool_queue_capacity, 10000);
@@ -968,6 +1013,10 @@ mod tests {
         assert_eq!(
             parsed["orderMessageEnable"].as_str().unwrap(),
             config.order_message_enable.to_string()
+        );
+        assert_eq!(
+            parsed["routeFreshnessSampleInterval"].as_str().unwrap(),
+            config.route_freshness_sample_interval.to_string()
         );
         assert_eq!(
             parsed["returnOrderTopicConfigToBroker"].as_str().unwrap(),

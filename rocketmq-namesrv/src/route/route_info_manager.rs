@@ -22,6 +22,11 @@ use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+#[cfg(test)]
+use std::sync::atomic::AtomicU64;
+#[cfg(test)]
+use std::sync::atomic::Ordering;
+
 use cheetah_string::CheetahString;
 use rocketmq_model::common::constant::PermName;
 use rocketmq_model::common::mix_all;
@@ -129,6 +134,8 @@ pub struct RouteInfoManager {
 
     #[cfg(test)]
     before_topic_cleanup_hook: parking_lot::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+    #[cfg(test)]
+    route_freshness_lookups: AtomicU64,
 }
 
 impl RouteInfoManager {
@@ -163,6 +170,8 @@ impl RouteInfoManager {
 
             #[cfg(test)]
             before_topic_cleanup_hook: parking_lot::Mutex::new(None),
+            #[cfg(test)]
+            route_freshness_lookups: AtomicU64::new(0),
         }
     }
 
@@ -1587,6 +1596,8 @@ impl RouteInfoManager {
             .iter()
             .flat_map(|broker| {
                 broker.broker_addrs().values().filter_map(|address| {
+                    #[cfg(test)]
+                    self.route_freshness_lookups.fetch_add(1, Ordering::Relaxed);
                     let key = BrokerAddrInfo::new(CheetahString::from(broker.cluster()), address.clone());
                     self.broker_live_table
                         .get(&key)
@@ -1594,6 +1605,11 @@ impl RouteInfoManager {
                 })
             })
             .max()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn route_freshness_lookup_count(&self) -> u64 {
+        self.route_freshness_lookups.load(Ordering::Relaxed)
     }
 
     /// Get topics for a specific cluster
