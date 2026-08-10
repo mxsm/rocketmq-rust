@@ -60,6 +60,7 @@ use crate::route::tables::TopicQueueMappingInfoTable;
 use crate::route::tables::TopicQueueTable;
 use crate::route::topic_route_snapshot::RouteMutationCoordinator;
 use crate::route::topic_route_snapshot::RouteMutationGuard;
+use crate::route::topic_route_snapshot::TopicRouteView;
 use crate::route::types::BrokerName;
 use crate::route::types::TopicName;
 use crate::route_info::broker_addr_info::BrokerAddrInfo;
@@ -1493,7 +1494,11 @@ impl RouteInfoManager {
     /// This method loads one immutable snapshot. Source tables are consulted only
     /// by the serialized write model when publishing a replacement snapshot.
     pub fn pickup_topic_route_data(&self, topic: &str) -> RouteResult<TopicRouteData> {
-        use rocketmq_model::common::constant::PermName;
+        self.load_topic_route_view(topic)
+            .map(|view| view.route_data().as_ref().clone())
+    }
+
+    pub(crate) fn load_topic_route_view(&self, topic: &str) -> RouteResult<TopicRouteView> {
         use rocketmq_model::common::topic::TopicValidator;
 
         let snapshot = self
@@ -1504,83 +1509,67 @@ impl RouteInfoManager {
             "Loaded topic route snapshot: topic={}, version={}, published_at={}",
             topic, snapshot.version, snapshot.published_at
         );
-        let mut topic_route_data = snapshot.route_data.clone();
 
-        // Check if acting master support is enabled
         if !self
             .name_server_runtime_inner
             .name_server_config()
             .support_acting_master
+            || topic.starts_with(TopicValidator::SYNC_BROKER_MEMBER_GROUP_PREFIX)
         {
-            return Ok(topic_route_data);
+            return Ok(snapshot.base_view());
         }
 
-        // Skip acting master logic for sync broker member group topics
-        if topic.starts_with(TopicValidator::SYNC_BROKER_MEMBER_GROUP_PREFIX) {
-            return Ok(topic_route_data);
-        }
+        Ok(snapshot.acting_master_view(build_acting_master_route_data))
+    }
+}
 
-        // Check if broker and queue data are available
-        if topic_route_data.broker_datas.is_empty() || topic_route_data.queue_datas.is_empty() {
-            return Ok(topic_route_data);
-        }
-
-        // Check if any broker needs acting master (no master broker ID present)
-        let need_acting_master = topic_route_data.broker_datas.iter().any(|broker_data| {
-            !broker_data.broker_addrs().is_empty() && !broker_data.broker_addrs().contains_key(&mix_all::MASTER_ID)
-        });
-
-        if !need_acting_master {
-            return Ok(topic_route_data);
-        }
-
-        // Process acting master for brokers without master
-        for broker_data in &mut topic_route_data.broker_datas {
-            // Check conditions before getting mutable reference
-            let enable_acting_master = broker_data.enable_acting_master();
-            let broker_name = broker_data.broker_name().to_string();
-            let broker_addrs = broker_data.broker_addrs_mut();
-
-            // Skip if:
-            // 1. No broker addresses
-            // 2. Master already exists
-            // 3. Acting master not enabled for this broker
-            if broker_addrs.is_empty() || broker_addrs.contains_key(&mix_all::MASTER_ID) || !enable_acting_master {
-                continue;
-            }
-
-            // No master - check if we should promote a slave to acting master
-            for queue_data in &topic_route_data.queue_datas {
-                if queue_data.broker_name() == broker_name.as_str() {
-                    // Only promote if queue is not writable (read-only)
-                    if !PermName::is_writeable(queue_data.perm()) {
-                        // Find the minimum broker ID (closest slave)
-                        if let Some(&min_broker_id) = broker_addrs.keys().min() {
-                            // Remove the slave with minimum ID and promote it to master
-                            if let Some(acting_master_addr) = broker_addrs.remove(&min_broker_id) {
-                                broker_addrs.insert(mix_all::MASTER_ID, acting_master_addr);
-                                debug!(
-                                    "Promoted acting master: broker={}, slave_id={} -> master",
-                                    broker_name, min_broker_id
-                                );
-                            }
-                        }
-                    }
-                    break;
-                }
-            }
-        }
-
-        debug!(
-            "Topic route data retrieved: topic={}, brokers={}, queues={}",
-            topic,
-            topic_route_data.broker_datas.len(),
-            topic_route_data.queue_datas.len()
-        );
-
-        Ok(topic_route_data)
+fn build_acting_master_route_data(route_data: &TopicRouteData) -> Option<TopicRouteData> {
+    if route_data.broker_datas.is_empty() || route_data.queue_datas.is_empty() {
+        return None;
     }
 
+    let need_acting_master = route_data.broker_datas.iter().any(|broker_data| {
+        !broker_data.broker_addrs().is_empty() && !broker_data.broker_addrs().contains_key(&mix_all::MASTER_ID)
+    });
+
+    if !need_acting_master {
+        return None;
+    }
+
+    let mut acting_route_data = route_data.clone();
+    let mut promoted = false;
+    for broker_data in &mut acting_route_data.broker_datas {
+        let enable_acting_master = broker_data.enable_acting_master();
+        let broker_name = broker_data.broker_name().clone();
+        let broker_addrs = broker_data.broker_addrs_mut();
+
+        if broker_addrs.is_empty() || broker_addrs.contains_key(&mix_all::MASTER_ID) || !enable_acting_master {
+            continue;
+        }
+
+        for queue_data in &acting_route_data.queue_datas {
+            if queue_data.broker_name() == &broker_name {
+                if !PermName::is_writeable(queue_data.perm()) {
+                    if let Some(&min_broker_id) = broker_addrs.keys().min() {
+                        if let Some(acting_master_addr) = broker_addrs.remove(&min_broker_id) {
+                            broker_addrs.insert(mix_all::MASTER_ID, acting_master_addr);
+                            promoted = true;
+                            debug!(
+                                "Promoted acting master: broker={}, slave_id={} -> master",
+                                broker_name, min_broker_id
+                            );
+                        }
+                    }
+                }
+                break;
+            }
+        }
+    }
+
+    promoted.then_some(acting_route_data)
+}
+
+impl RouteInfoManager {
     /// Get all topics registered in the name server
     pub fn get_all_topics(&self) -> Vec<TopicName> {
         self.topic_queue_table.get_all_topics()
@@ -2054,6 +2043,44 @@ mod tests {
     #[test]
     fn test_default_broker_timeout() {
         assert_eq!(DEFAULT_BROKER_CHANNEL_EXPIRED_TIME, 1000 * 60 * 2);
+    }
+
+    #[test]
+    fn route_views_share_base_data_and_preserve_the_owned_api() {
+        let (_bootstrap, manager) = test_route_manager();
+        let cluster_name = CheetahString::from_static_str("shared-view-cluster");
+        let broker_name = CheetahString::from_static_str("shared-view-broker");
+        let broker_addr = CheetahString::from_static_str("127.0.0.1:20911");
+        let topic = CheetahString::from_static_str("shared-view-topic");
+
+        manager
+            .cluster_addr_table
+            .add_broker(cluster_name.clone(), broker_name.clone());
+        manager.broker_addr_table.insert(
+            broker_name.clone(),
+            BrokerData::new(
+                cluster_name,
+                broker_name.clone(),
+                HashMap::from([(mix_all::MASTER_ID, broker_addr)]),
+                None,
+            ),
+        );
+        manager.register_topic(topic.clone(), vec![QueueData::new(broker_name, 4, 4, 6, 0)]);
+
+        let first = manager
+            .load_topic_route_view(topic.as_str())
+            .expect("first shared view should exist");
+        let second = manager
+            .load_topic_route_view(topic.as_str())
+            .expect("second shared view should exist");
+        let owned = manager
+            .pickup_topic_route_data(topic.as_str())
+            .expect("the compatibility API should still return a route");
+
+        assert_eq!(first.variant(), crate::route::topic_route_snapshot::RouteVariant::Base);
+        assert_eq!(first.version(), second.version());
+        assert!(Arc::ptr_eq(first.route_data(), second.route_data()));
+        assert_eq!(first.route_data().as_ref(), &owned);
     }
 
     #[test]

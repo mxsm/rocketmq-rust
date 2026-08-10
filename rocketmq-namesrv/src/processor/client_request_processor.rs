@@ -122,10 +122,10 @@ impl ClientRequestProcessor {
         }
 
         // Lookup topic route data
-        let mut topic_route_data = match self
+        let topic_route_view = match self
             .name_server_runtime_inner
             .route_info_manager()
-            .pickup_topic_route_data(request_header.topic.as_ref())
+            .load_topic_route_view(request_header.topic.as_ref())
         {
             Ok(data) => data,
             Err(
@@ -151,7 +151,7 @@ impl ClientRequestProcessor {
         if let Some(freshness_ms) = self
             .name_server_runtime_inner
             .route_info_manager()
-            .route_freshness_millis(&topic_route_data)
+            .route_freshness_millis(topic_route_view.route_data())
         {
             self.name_server_runtime_inner
                 .namesrv_metrics()
@@ -161,15 +161,20 @@ impl ClientRequestProcessor {
             self.need_check_namesrv_ready.store(false, Ordering::Relaxed);
         }
 
-        if self.order_message_enable {
-            topic_route_data.order_topic_conf = self.name_server_runtime_inner.kvconfig_manager().get_kvconfig(
+        let mut route_with_order_config;
+        let topic_route_data = if self.order_message_enable {
+            route_with_order_config = topic_route_view.route_data().as_ref().clone();
+            route_with_order_config.order_topic_conf = self.name_server_runtime_inner.kvconfig_manager().get_kvconfig(
                 &CheetahString::from_static_str(NAMESPACE_ORDER_TOPIC_CONFIG),
                 &request_header.topic,
             );
-        }
+            &route_with_order_config
+        } else {
+            topic_route_view.route_data().as_ref()
+        };
 
         let content = match encode_topic_route_response(
-            &topic_route_data,
+            topic_route_data,
             request.version(),
             request_header.accept_standard_json_only,
         ) {

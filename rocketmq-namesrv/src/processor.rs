@@ -88,7 +88,7 @@ pub(crate) type RequestCodeType = i32;
 
 #[derive(Clone, Default)]
 pub struct NameServerRequestProcessor {
-    processor_table: HashMap<RequestCodeType, NameServerRequestProcessorWrapper>,
+    processor_table: Arc<HashMap<RequestCodeType, NameServerRequestProcessorWrapper>>,
     default_request_processor: Option<NameServerRequestProcessorWrapper>,
     in_flight_requests: Option<Arc<InFlightRequestTracker>>,
     auth_runtime: Option<Arc<AuthRuntime>>,
@@ -98,7 +98,7 @@ pub struct NameServerRequestProcessor {
 impl NameServerRequestProcessor {
     pub fn new() -> Self {
         Self {
-            processor_table: HashMap::new(),
+            processor_table: Arc::new(HashMap::new()),
             default_request_processor: None,
             in_flight_requests: None,
             auth_runtime: None,
@@ -118,7 +118,7 @@ impl NameServerRequestProcessor {
     }
 
     pub fn register_processor(&mut self, request_code: RequestCode, processor: NameServerRequestProcessorWrapper) {
-        self.processor_table.insert(request_code as i32, processor);
+        Arc::make_mut(&mut self.processor_table).insert(request_code as i32, processor);
     }
 
     pub fn register_default_processor(&mut self, processor: NameServerRequestProcessorWrapper) {
@@ -171,15 +171,15 @@ impl RequestProcessor for NameServerRequestProcessor {
             }
         }
         let route_request_started = (request.code() == RequestCode::GetRouteinfoByTopic as i32).then(Instant::now);
-        let response = match self.processor_table.get_mut(request.code_ref()) {
-            None => match self.default_request_processor.as_mut() {
+        let response = match self.processor_table.get(request.code_ref()).cloned() {
+            None => match self.default_request_processor.clone() {
                 None => {
                     let response = request_code_not_supported_with_opaque(request.code(), request.opaque());
                     Ok(Some(response))
                 }
-                Some(processor) => RequestProcessor::process_request(processor, channel, ctx, request).await,
+                Some(mut processor) => RequestProcessor::process_request(&mut processor, channel, ctx, request).await,
             },
-            Some(processor) => RequestProcessor::process_request(processor, channel, ctx, request).await,
+            Some(mut processor) => RequestProcessor::process_request(&mut processor, channel, ctx, request).await,
         };
         if let Some(started) = route_request_started {
             self.metrics.record_route_request(started.elapsed());
@@ -224,6 +224,14 @@ mod tests {
     use rocketmq_transport::test_support::TestChannelBuilder;
 
     use super::*;
+
+    #[test]
+    fn cloned_nameserver_processors_share_the_dispatch_table() {
+        let processor = NameServerRequestProcessor::new();
+        let cloned = processor.clone();
+
+        assert!(Arc::ptr_eq(&processor.processor_table, &cloned.processor_table));
+    }
 
     #[tokio::test]
     async fn anonymous_broker_control_request_returns_no_permission_with_opaque() {

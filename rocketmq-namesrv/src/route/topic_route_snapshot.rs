@@ -17,6 +17,7 @@
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use arc_swap::ArcSwapOption;
 use dashmap::DashMap;
@@ -30,11 +31,83 @@ use crate::route::types::RouteTopicName;
 use crate::route::types::TopicName;
 
 /// One coherent, immutable view of all route data exposed for a topic.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(crate) struct TopicRouteSnapshot {
-    pub(crate) route_data: TopicRouteData,
+    route_data: Arc<TopicRouteData>,
+    acting_master_route_data: OnceLock<Option<Arc<TopicRouteData>>>,
     pub(crate) version: u64,
     pub(crate) published_at: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum RouteVariant {
+    Base,
+    ActingMaster,
+}
+
+/// A cheap, generation-stamped reference to one immutable route representation.
+#[derive(Clone, Debug)]
+pub(crate) struct TopicRouteView {
+    route_data: Arc<TopicRouteData>,
+    version: u64,
+    published_at: u64,
+    variant: RouteVariant,
+}
+
+impl TopicRouteSnapshot {
+    fn new(route_data: TopicRouteData, version: u64) -> Self {
+        Self {
+            route_data: Arc::new(route_data),
+            acting_master_route_data: OnceLock::new(),
+            version,
+            published_at: current_millis(),
+        }
+    }
+
+    pub(crate) fn base_view(&self) -> TopicRouteView {
+        TopicRouteView {
+            route_data: Arc::clone(&self.route_data),
+            version: self.version,
+            published_at: self.published_at,
+            variant: RouteVariant::Base,
+        }
+    }
+
+    pub(crate) fn acting_master_view(
+        &self,
+        build: impl FnOnce(&TopicRouteData) -> Option<TopicRouteData>,
+    ) -> TopicRouteView {
+        let acting_master_route_data = self
+            .acting_master_route_data
+            .get_or_init(|| build(&self.route_data).map(Arc::new));
+        match acting_master_route_data {
+            Some(route_data) => TopicRouteView {
+                route_data: Arc::clone(route_data),
+                version: self.version,
+                published_at: self.published_at,
+                variant: RouteVariant::ActingMaster,
+            },
+            None => self.base_view(),
+        }
+    }
+}
+
+impl TopicRouteView {
+    pub(crate) fn route_data(&self) -> &Arc<TopicRouteData> {
+        &self.route_data
+    }
+
+    pub(crate) fn version(&self) -> u64 {
+        self.version
+    }
+
+    pub(crate) fn published_at(&self) -> u64 {
+        self.published_at
+    }
+
+    pub(crate) fn variant(&self) -> RouteVariant {
+        self.variant
+    }
 }
 
 /// Serializes source-table mutations and atomically publishes their derived views.
@@ -93,11 +166,7 @@ impl RouteMutationGuard<'_> {
                 .entry(topic)
                 .or_insert_with(|| Arc::new(ArcSwapOption::empty()))
                 .clone();
-            publisher.store(Some(Arc::new(TopicRouteSnapshot {
-                route_data,
-                version,
-                published_at: current_millis(),
-            })));
+            publisher.store(Some(Arc::new(TopicRouteSnapshot::new(route_data, version))));
         } else if let Some(publisher) = self
             .coordinator
             .snapshots
@@ -177,5 +246,47 @@ mod tests {
         assert!(coordinator.load(topic.as_str()).is_some());
         assert!(recreated_version > first_version);
         assert_eq!(coordinator.snapshots.len(), 1);
+    }
+
+    #[test]
+    fn repeated_base_views_share_the_published_route_allocation() {
+        let coordinator = RouteMutationCoordinator::new();
+        let topic = CheetahString::from_static_str("snapshot-topic");
+
+        coordinator
+            .begin_mutation()
+            .publish(topic.clone(), Some(TopicRouteData::default()));
+        let snapshot = coordinator.load(topic.as_str()).expect("snapshot should exist");
+
+        let first = snapshot.base_view();
+        let second = snapshot.base_view();
+
+        assert_eq!(first.variant(), RouteVariant::Base);
+        assert_eq!(first.version(), second.version());
+        assert!(Arc::ptr_eq(first.route_data(), second.route_data()));
+    }
+
+    #[test]
+    fn acting_master_view_is_lazy_shared_and_does_not_mutate_the_base_view() {
+        let coordinator = RouteMutationCoordinator::new();
+        let topic = CheetahString::from_static_str("snapshot-topic");
+        coordinator
+            .begin_mutation()
+            .publish(topic.clone(), Some(TopicRouteData::default()));
+        let snapshot = coordinator.load(topic.as_str()).expect("snapshot should exist");
+
+        let first = snapshot.acting_master_view(|base| {
+            let mut acting = base.clone();
+            acting.order_topic_conf = Some(CheetahString::from_static_str("acting"));
+            Some(acting)
+        });
+        let second = snapshot.acting_master_view(|_| panic!("the acting view must initialize only once"));
+        let base = snapshot.base_view();
+
+        assert_eq!(first.variant(), RouteVariant::ActingMaster);
+        assert_eq!(first.route_data().order_topic_conf.as_deref(), Some("acting"));
+        assert!(base.route_data().order_topic_conf.is_none());
+        assert!(Arc::ptr_eq(first.route_data(), second.route_data()));
+        assert!(!Arc::ptr_eq(first.route_data(), base.route_data()));
     }
 }
