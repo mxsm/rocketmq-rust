@@ -359,15 +359,20 @@ impl RouteInfoManager {
         let registration_span = rocketmq_observability::trace::namesrv::broker_registration_span();
         let _registration_guard = registration_span.enter();
         let route_mutation = self.route_mutations.begin_mutation();
-        let mut affected_topics = self.topic_set_of_broker_name(broker_name.as_str());
-        affected_topics.extend(
-            topic_config_wrapper
-                .topic_config_serialize_wrapper()
-                .topic_config_table()
-                .keys()
-                .cloned(),
+        let old_topics = self.topic_set_of_broker_name(broker_name.as_str());
+        let mut incoming_topics = topic_config_wrapper
+            .topic_config_serialize_wrapper()
+            .topic_config_table()
+            .keys()
+            .cloned()
+            .collect::<HashSet<_>>();
+        incoming_topics.extend(topic_config_wrapper.topic_queue_mapping_info_map().keys().cloned());
+        let broker_addr_info = Arc::new(BrokerAddrInfo::new(cluster_name.clone(), broker_addr.clone()));
+        let broker_topic_config_changed = self.is_broker_topic_config_changed(
+            &cluster_name,
+            &broker_addr,
+            topic_config_wrapper.topic_config_serialize_wrapper().data_version(),
         );
-        affected_topics.extend(topic_config_wrapper.topic_queue_mapping_info_map().keys().cloned());
         // ===================================================================
         // SEGMENTED LOCK ACQUISITION
         // ===================================================================
@@ -386,17 +391,7 @@ impl RouteInfoManager {
         let cluster_name_arc = cluster_name.clone();
         let broker_name_arc = broker_name.clone();
 
-        // Step 1: Update cluster membership
-        // The mutation gate keeps this update in the unpublished write model.
-        self.cluster_addr_table
-            .add_broker(cluster_name_arc, broker_name_arc.clone());
-
-        debug!(
-            "Cluster membership updated: cluster={}, broker={}",
-            cluster_name, broker_name
-        );
-
-        // Step 2: Update broker address table with conflict detection
+        // Step 1: Validate and update the broker address table before mutating cluster membership.
         // Still unpublished under the mutation gate.
         let update_result = self.update_broker_addr_table(
             &cluster_name,
@@ -418,7 +413,16 @@ impl RouteInfoManager {
             registration_span.record("result", "rejected");
             return Ok(result);
         }
-        let (register_first, is_min_broker_id_changed) = update_result.unwrap();
+        let (register_first, is_min_broker_id_changed, broker_topology_changed) = update_result.unwrap();
+
+        // Step 2: Update cluster membership only after registration validation succeeds.
+        self.cluster_addr_table
+            .add_broker(cluster_name_arc, broker_name_arc.clone());
+
+        debug!(
+            "Cluster membership updated: cluster={}, broker={}",
+            cluster_name, broker_name
+        );
 
         // Step 4: Update topic queue configurations
         // Still unpublished under the mutation gate.
@@ -441,8 +445,17 @@ impl RouteInfoManager {
             false
         };
 
+        let mut dirty_topics = HashSet::new();
         if is_master || is_prime_slave {
-            self.update_topic_queue_table(&broker_name_arc, &topic_config_wrapper, register_first, is_prime_slave)?;
+            dirty_topics = self.update_topic_queue_table(
+                &broker_name_arc,
+                &cluster_name,
+                &broker_addr,
+                &topic_config_wrapper,
+                register_first,
+                is_prime_slave,
+                broker_topic_config_changed,
+            )?;
         }
 
         // Step 5: Register broker live status
@@ -469,7 +482,11 @@ impl RouteInfoManager {
         }
 
         // Step 6: Handle filter server list
-        let broker_addr_info = Arc::new(BrokerAddrInfo::new(cluster_name.clone(), broker_addr.clone()));
+        let previous_filter_servers = self.filter_server_table.get(broker_addr_info.as_ref());
+        let filter_servers_changed = match previous_filter_servers.as_ref() {
+            Some(previous) => previous != &filter_server_list,
+            None => !filter_server_list.is_empty(),
+        };
         if filter_server_list.is_empty() {
             self.filter_server_table.remove(&broker_addr_info);
         } else {
@@ -477,7 +494,15 @@ impl RouteInfoManager {
                 .register(broker_addr_info.clone(), filter_server_list);
         }
 
-        self.publish_topic_route_snapshots(&route_mutation, affected_topics);
+        let delta_enabled = self
+            .name_server_runtime_inner
+            .name_server_config()
+            .enable_registration_delta;
+        if !delta_enabled || broker_topology_changed || filter_servers_changed {
+            dirty_topics.extend(old_topics);
+            dirty_topics.extend(incoming_topics);
+        }
+        self.publish_topic_route_snapshots(&route_mutation, dirty_topics);
 
         // Step 7: Handle master address for slaves
         // Protected by broker write lock - consistent read of master info
@@ -522,7 +547,7 @@ impl RouteInfoManager {
     /// Update broker address table with conflict detection.
     ///
     /// Returns:
-    /// - Ok(Some((register_first, is_min_broker_id_changed))): Success
+    /// - Ok(Some((register_first, is_min_broker_id_changed, topology_changed))): Success
     /// - Ok(None): Registration rejected due to version conflict
     /// - Err: Other errors
     fn update_broker_addr_table(
@@ -534,7 +559,7 @@ impl RouteInfoManager {
         zone_name: Option<&CheetahString>,
         enable_acting_master: Option<bool>,
         topic_config_wrapper: &TopicConfigAndMappingSerializeWrapper,
-    ) -> RouteResult<Option<(bool, bool)>> {
+    ) -> RouteResult<Option<(bool, bool, bool)>> {
         let broker_name_arc: BrokerName = broker_name.clone();
         let mut is_min_broker_id_changed = false;
 
@@ -626,8 +651,14 @@ impl RouteInfoManager {
             register_first =
                 register_first || old_addr.is_none() || old_addr.as_ref().map(|s| s.is_empty()).unwrap_or(false);
 
-            // Update in table
-            self.broker_addr_table.insert(broker_name_arc, new_broker_data);
+            let topology_changed = existing_broker.cluster() != new_broker_data.cluster()
+                || existing_broker.zone_name() != new_broker_data.zone_name()
+                || existing_broker.enable_acting_master() != new_broker_data.enable_acting_master()
+                || existing_broker.broker_addrs() != new_broker_data.broker_addrs();
+            if topology_changed {
+                self.broker_addr_table.insert(broker_name_arc, new_broker_data);
+            }
+            return Ok(Some((register_first, is_min_broker_id_changed, topology_changed)));
         } else {
             // New broker, create it
             register_first = true;
@@ -646,17 +677,20 @@ impl RouteInfoManager {
             self.broker_addr_table.insert(broker_name_arc, broker_data);
         }
 
-        Ok(Some((register_first, is_min_broker_id_changed)))
+        Ok(Some((register_first, is_min_broker_id_changed, true)))
     }
 
     /// Update topic queue table with deletion and prime-slave handling.
     fn update_topic_queue_table(
         &self,
         broker_name: &BrokerName,
+        cluster_name: &CheetahString,
+        broker_addr: &CheetahString,
         topic_config_wrapper: &TopicConfigAndMappingSerializeWrapper,
         register_first: bool,
         is_prime_slave: bool,
-    ) -> RouteResult<()> {
+        broker_topic_config_changed: bool,
+    ) -> RouteResult<HashSet<TopicName>> {
         use std::collections::HashSet;
 
         use rocketmq_model::common::constant::PermName;
@@ -665,6 +699,7 @@ impl RouteInfoManager {
             .topic_config_serialize_wrapper()
             .topic_config_table();
         let topic_queue_mapping_info_map = topic_config_wrapper.topic_queue_mapping_info_map();
+        let mut dirty_topics = HashSet::new();
 
         // Delete topics that don't exist in tcTable from the current broker
         // Static topic is not supported if topicQueueMappingInfoMap is empty
@@ -687,9 +722,15 @@ impl RouteInfoManager {
                         "deleteTopic, remove one broker's topic {} {} {:?}",
                         broker_name, to_delete_topic, removed_qd
                     );
+                    dirty_topics.insert(to_delete_topic.clone());
                 }
-                self.topic_queue_mapping_info_table
-                    .remove_broker(to_delete_topic.as_ref(), broker_name.as_str());
+                if self
+                    .topic_queue_mapping_info_table
+                    .remove_broker(to_delete_topic.as_ref(), broker_name.as_str())
+                    .is_some()
+                {
+                    dirty_topics.insert(to_delete_topic.clone());
+                }
 
                 // Check if topic is now empty
                 if self
@@ -704,29 +745,16 @@ impl RouteInfoManager {
             }
         }
 
-        // Get cluster name and broker addr for config change detection
-        let (cluster_name, broker_addr) = if let Some(broker_data) = self.broker_addr_table.get(broker_name) {
-            let cluster = broker_data.cluster().to_string();
-            let addr = broker_data
-                .broker_addrs()
-                .values()
-                .next()
-                .map(|s| s.to_string())
-                .unwrap_or_default();
-            (cluster, addr)
-        } else {
-            (String::new(), String::new())
-        };
-
         // Process each topic configuration
         for (topic_name, topic_config) in topic_config_table.iter() {
             let topic_name_cheetah = topic_name.clone();
 
             // Check if we should update this topic
             if register_first
+                || broker_topic_config_changed
                 || self.is_topic_config_changed(
-                    &cluster_name,
-                    &broker_addr,
+                    cluster_name,
+                    broker_addr,
                     topic_config_wrapper.topic_config_serialize_wrapper().data_version(),
                     broker_name.as_str(),
                     topic_name.as_str(),
@@ -757,7 +785,7 @@ impl RouteInfoManager {
 
                 // Check if queue data exists and log appropriately
                 let old_queue_data = self.topic_queue_table.get(topic_name, broker_name.as_str());
-                if let Some(existed_qd) = old_queue_data {
+                if let Some(ref existed_qd) = old_queue_data {
                     if existed_qd.as_ref() != &queue_data {
                         info!(
                             "topic changed, {} OLD: {:?} NEW: {:?}",
@@ -768,8 +796,12 @@ impl RouteInfoManager {
                     info!("new topic registered, {} {:?}", topic_name, &queue_data);
                 }
 
-                self.topic_queue_table
-                    .insert(topic_name_cheetah.clone(), broker_name.clone(), queue_data);
+                let queue_changed = old_queue_data.as_deref() != Some(&queue_data);
+                if queue_changed {
+                    self.topic_queue_table
+                        .insert(topic_name_cheetah.clone(), broker_name.clone(), queue_data);
+                    dirty_topics.insert(topic_name_cheetah.clone());
+                }
 
                 debug!(
                     "Topic queue updated: topic={}, broker={}, read={}, write={}, perm={}",
@@ -783,27 +815,30 @@ impl RouteInfoManager {
         }
 
         // Update topic queue mapping info if broker topic config changed or first registration
-        if self.is_broker_topic_config_changed(
-            &cluster_name.into(),
-            &broker_addr.into(),
-            topic_config_wrapper.topic_config_serialize_wrapper().data_version(),
-        ) || register_first
-        {
+        if broker_topic_config_changed || register_first {
             for (topic, mapping_info) in topic_queue_mapping_info_map {
                 let topic = topic.clone();
 
                 // Extract broker name from mapping info (bname is a field, not a method)
                 let broker_name_mapping = mapping_info.bname.clone().unwrap_or_else(|| broker_name.clone());
 
-                self.topic_queue_mapping_info_table.register(
-                    topic,
-                    broker_name_mapping,
-                    Arc::new(mapping_info.clone()),
-                );
+                let mapping_changed = self
+                    .topic_queue_mapping_info_table
+                    .get(topic.as_str(), broker_name_mapping.as_str())
+                    .as_deref()
+                    != Some(mapping_info);
+                if mapping_changed {
+                    self.topic_queue_mapping_info_table.register(
+                        topic.clone(),
+                        broker_name_mapping,
+                        Arc::new(mapping_info.clone()),
+                    );
+                    dirty_topics.insert(topic.clone());
+                }
             }
         }
 
-        Ok(())
+        Ok(dirty_topics)
     }
 
     /// Register broker live information (heartbeat tracking)
@@ -823,6 +858,20 @@ impl RouteInfoManager {
 
         let timeout = timeout_millis.unwrap_or(DEFAULT_BROKER_CHANNEL_EXPIRED_TIME);
         let current_time = current_millis();
+
+        if let Some(existing) = self.broker_live_table.get(broker_addr_info.as_ref()) {
+            let is_unchanged = existing.heartbeat_timeout_millis == timeout
+                && existing.data_version == data_version
+                && existing.ha_server_addr.as_ref() == Some(&ha_server_addr)
+                && existing.remote_addr == channel.remote_address()
+                && existing.channel_id == channel.channel_id_owned()
+                && existing.broker_name.as_ref() == Some(&broker_name)
+                && existing.broker_id == Some(broker_id);
+            if is_unchanged {
+                existing.update_timestamp(current_time);
+                return Ok(Some(existing));
+            }
+        }
 
         let live_info = BrokerLiveInfo::new(
             current_time,
@@ -2024,10 +2073,13 @@ mod tests {
     use std::sync::Barrier;
     use std::sync::OnceLock;
 
+    use rocketmq_model::common::config::TopicConfig;
     use rocketmq_observability::TelemetryHandle;
     use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo;
     use rocketmq_runtime::RuntimeConfig;
+    use rocketmq_runtime::RuntimeContext;
     use rocketmq_runtime::RuntimeOwner;
+    use rocketmq_transport::test_support::LocalRequestHarness;
 
     use super::*;
     use crate::bootstrap::Builder;
@@ -2046,6 +2098,25 @@ mod tests {
         (bootstrap, manager)
     }
 
+    fn registration_wrapper(topic: &CheetahString, version: i64, queues: u32) -> TopicConfigAndMappingSerializeWrapper {
+        registration_wrapper_with_topics(version, &[(topic, queues)])
+    }
+
+    fn registration_wrapper_with_topics(
+        version: i64,
+        topics: &[(&CheetahString, u32)],
+    ) -> TopicConfigAndMappingSerializeWrapper {
+        let mut wrapper = TopicConfigAndMappingSerializeWrapper::default();
+        wrapper.topic_config_serialize_wrapper.data_version = DataVersion::with_values(version, version, version);
+        for (topic, queues) in topics {
+            wrapper.topic_config_serialize_wrapper.topic_config_table.insert(
+                (*topic).clone(),
+                TopicConfig::with_perm((*topic).clone(), *queues, *queues, 6),
+            );
+        }
+        wrapper
+    }
+
     // NOTE: Integration tests for RouteInfoManager require complex setup.
     // Unit tests for underlying components are in their respective modules:
     // - TopicQueueTable: route::tables::topic_table::tests (8 tests)
@@ -2059,6 +2130,111 @@ mod tests {
     #[test]
     fn test_default_broker_timeout() {
         assert_eq!(DEFAULT_BROKER_CHANNEL_EXPIRED_TIME, 1000 * 60 * 2);
+    }
+
+    #[tokio::test]
+    async fn unchanged_full_registration_keeps_snapshot_and_live_allocation() {
+        let runtime_context = RuntimeContext::from_current("namesrv-registration-delta-test");
+        let mut config = crate::NamesrvConfig::default();
+        config.enable_registration_delta = true;
+        let bootstrap = Builder::new(runtime_context.service_context("namesrv"), TelemetryHandle::noop())
+            .set_name_server_config(config)
+            .build();
+        let manager = bootstrap.runtime_inner().route_info_manager();
+        let harness = LocalRequestHarness::new(
+            runtime_context
+                .service_context("namesrv-registration-channel")
+                .task_group()
+                .clone(),
+        )
+        .await
+        .expect("test channel should build");
+        let cluster_name = CheetahString::from_static_str("delta-cluster");
+        let broker_name = CheetahString::from_static_str("delta-broker");
+        let broker_addr = CheetahString::from_static_str("127.0.0.1:10911");
+        let topic = CheetahString::from_static_str("delta-topic");
+        let second_topic = CheetahString::from_static_str("delta-topic-two");
+        let broker_addr_info = BrokerAddrInfo::new(cluster_name.clone(), broker_addr.clone());
+
+        manager
+            .register_broker(
+                cluster_name.clone(),
+                broker_addr.clone(),
+                broker_name.clone(),
+                mix_all::MASTER_ID,
+                broker_addr.clone(),
+                None,
+                Some(60_000),
+                Some(false),
+                registration_wrapper(&topic, 1, 4),
+                Vec::new(),
+                harness.channel(),
+            )
+            .expect("first registration should succeed");
+        let first_version = manager
+            .topic_route_snapshot_version(topic.as_str())
+            .expect("first registration should publish the route");
+        let first_live = manager
+            .broker_live_table
+            .get(&broker_addr_info)
+            .expect("first registration should create live info");
+
+        manager
+            .register_broker(
+                cluster_name.clone(),
+                broker_addr.clone(),
+                broker_name.clone(),
+                mix_all::MASTER_ID,
+                broker_addr.clone(),
+                None,
+                Some(60_000),
+                Some(false),
+                registration_wrapper(&topic, 1, 4),
+                Vec::new(),
+                harness.channel(),
+            )
+            .expect("unchanged registration should succeed");
+
+        assert_eq!(
+            manager.topic_route_snapshot_version(topic.as_str()),
+            Some(first_version)
+        );
+        let second_live = manager
+            .broker_live_table
+            .get(&broker_addr_info)
+            .expect("unchanged registration should retain live info");
+        assert!(Arc::ptr_eq(&first_live, &second_live));
+        assert_eq!(second_live.heartbeat_generation(), 1);
+
+        manager
+            .register_broker(
+                cluster_name,
+                broker_addr.clone(),
+                broker_name,
+                mix_all::MASTER_ID,
+                broker_addr,
+                None,
+                Some(60_000),
+                Some(false),
+                registration_wrapper_with_topics(2, &[(&topic, 4), (&second_topic, 8)]),
+                Vec::new(),
+                harness.channel(),
+            )
+            .expect("changed registration should succeed");
+        assert_eq!(
+            manager.topic_route_snapshot_version(topic.as_str()),
+            Some(first_version)
+        );
+        assert!(manager
+            .topic_route_snapshot_version(second_topic.as_str())
+            .is_some_and(|version| version > first_version));
+
+        harness.channel().connection_ref().close();
+        drop(manager);
+        drop(bootstrap);
+        drop(harness);
+        tokio::task::yield_now().await;
+        let _ = runtime_context.shutdown_tasks(std::time::Duration::from_secs(1)).await;
     }
 
     #[test]
