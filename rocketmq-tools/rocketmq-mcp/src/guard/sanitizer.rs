@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
+
 use regex::Regex;
 use rmcp::model::CallToolResult;
 use rmcp::model::ContentBlock;
@@ -26,14 +27,14 @@ use crate::tools::output_policy;
 
 const REDACTED: &str = "[REDACTED]";
 
-static SENSITIVE_ASSIGNMENT: Lazy<Regex> = Lazy::new(|| {
+static SENSITIVE_ASSIGNMENT: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
             r#"(?i)(access[_-]?key|secret[_-]?key|client[_-]?secret|token|password|private[_-]?key|message[_-]?body)(["'\s:=]+)([^,\s"'}]+)"#,
         )
         .expect("sensitive assignment regex is a compile-time invariant")
 });
 
-static NETWORK_ADDRESS: Lazy<Regex> = Lazy::new(|| {
+static NETWORK_ADDRESS: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r"(?ix)
         \b(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?\b
