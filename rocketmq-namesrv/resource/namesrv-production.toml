@@ -86,3 +86,23 @@ namesrvRouteResponseCacheShards = 16
 # Unregister broker queue capacity.
 # Default: 3000. Raise alongside cluster size / broker churn rate.
 unRegisterBrokerQueueCapacity = 5000
+
+# Registration delta publication is restart-scoped. Keep false for the first
+# canary, then enable after no-op/changed counters and Java mixed-version route
+# digests remain aligned.
+enableRegistrationDelta = false
+
+# Bound each unregister mutation slice by both count and collection time. Queue
+# saturation falls back to one synchronous fenced cleanup rather than dropping
+# route removal.
+unRegisterBrokerBatchSize = 100
+unRegisterBrokerBatchTimeMillis = 2
+
+# Expiry-index rollout: off -> shadow -> active. Shadow keeps the full scan as
+# authority and reports divergence; active uses deadline lookup plus a five
+# minute safety reconciliation.
+expiryIndexMode = "shadow"
+expirySafetyScanInterval = 300000
+
+# Bound and coalesce minimum-broker notifications during broker churn.
+minBrokerNotifyConcurrency = 8

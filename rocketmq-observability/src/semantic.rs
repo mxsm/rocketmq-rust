@@ -141,6 +141,13 @@ pub mod metrics {
     pub const NAMESRV_ROUTE_RESPONSE_WRITE_LATENCY: &str = "rocketmq_namesrv_route_response_write_latency";
     pub const NAMESRV_ROUTE_END_TO_END_LATENCY: &str = "rocketmq_namesrv_route_end_to_end_latency";
     pub const NAMESRV_ROUTE_RESPONSE_WRITE_ERRORS_TOTAL: &str = "rocketmq_namesrv_route_response_write_errors_total";
+    pub const NAMESRV_REGISTRATION_EVENTS_TOTAL: &str = "rocketmq_namesrv_registration_events_total";
+    pub const NAMESRV_REGISTRATION_DIRTY_TOPICS: &str = "rocketmq_namesrv_registration_dirty_topics";
+    pub const NAMESRV_UNREGISTRATION_EVENTS_TOTAL: &str = "rocketmq_namesrv_unregistration_events_total";
+    pub const NAMESRV_UNREGISTRATION_QUEUE_DEPTH: &str = "rocketmq_namesrv_unregistration_queue_depth";
+    pub const NAMESRV_UNREGISTRATION_BATCH_SIZE: &str = "rocketmq_namesrv_unregistration_batch_size";
+    pub const NAMESRV_EXPIRY_SCAN_BROKERS: &str = "rocketmq_namesrv_expiry_scan_brokers";
+    pub const NAMESRV_EXPIRY_SCAN_DURATION: &str = "rocketmq_namesrv_expiry_scan_duration";
     pub const CONTROLLER_ELECTION_TOTAL: &str = "rocketmq_controller_election_total";
     pub const CONTROLLER_ELECTION_LATENCY: &str = "rocketmq_controller_election_latency";
     pub const CONTROLLER_LEADER_CHANGES_TOTAL: &str = "rocketmq_controller_leader_changes_total";

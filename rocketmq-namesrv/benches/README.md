@@ -92,6 +92,39 @@ Disable each switch independently if response digest differs, error rate rises
 by at least 0.1 percentage point, p99 remains above 2x baseline for five
 minutes, or RSS exceeds the agreed budget by more than 10%.
 
+## Write scalability and recovery benchmark
+
+The P2 harness isolates the two liveness algorithms with 10,000 Brokers and a
+10% simultaneous-expiry event, and separately measures the heartbeat cost of
+maintaining the deadline index:
+
+```powershell
+cargo bench -p rocketmq-namesrv --bench namesrv_write_recovery_bench
+```
+
+Compare `full-scan` with `deadline-index`, and `atomic-only` with
+`atomic-plus-deadline-index`. The first pair measures recovery lookup benefit;
+the second makes the steady-state heartbeat tax explicit. Do not mix these
+microbenchmarks with end-to-end registration or route-query QPS. Production
+rollout remains `off -> shadow -> active`, with the five-minute full-scan safety
+reconciliation retained in active mode.
+
+### 2026-08-11 Windows P2 microbenchmark
+
+Criterion used 20 samples, one-second warm-up, and two-second measurement on
+the same development host. These are isolated in-process algorithm results,
+not TCP end-to-end NameServer throughput.
+
+| Operation | Baseline mean | P2 mean | Difference |
+|---|---:|---:|---:|
+| Find 1,000 expired of 10,000 Brokers | full scan 175.60 us | deadline index 14.741 us | 91.6% lower / 11.9x faster |
+| Update one heartbeat | atomic only 68.420 ns | atomic + deadline index 221.49 ns | +153.07 ns / 3.24x cost |
+
+The recovery lookup gain is large, while the active index deliberately adds a
+small absolute heartbeat tax. Keep `expiryIndexMode="shadow"` until scan
+digests match and Broker heartbeat CPU remains inside budget, then switch to
+`active`; use `off` as the immediate rollback.
+
 ## Acceptance targets
 
 The following are engineering targets, not measured claims: route p99 at least

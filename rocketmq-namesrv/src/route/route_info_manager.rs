@@ -20,14 +20,12 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::net::SocketAddr;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-#[cfg(test)]
-use std::sync::atomic::AtomicU64;
-#[cfg(test)]
-use std::sync::atomic::Ordering;
-
 use cheetah_string::CheetahString;
+use futures::StreamExt;
 use rocketmq_model::common::constant::PermName;
 use rocketmq_model::common::mix_all;
 use rocketmq_protocol::code::request_code::RequestCode;
@@ -55,7 +53,6 @@ use crate::route::batch_unregistration_service::BatchUnregistrationService;
 use crate::route::batch_unregistration_service::BrokerUnregistrationRequest;
 use crate::route::error::RocketMQError;
 use crate::route::error::RouteResult;
-use crate::route::segmented_lock::SegmentedLock;
 use crate::route::tables::BrokerAddrTable;
 use crate::route::tables::BrokerLiveInfo;
 use crate::route::tables::BrokerLiveTable;
@@ -77,7 +74,7 @@ const DEFAULT_BROKER_CHANNEL_EXPIRED_TIME: u64 = 1000 * 60 * 2; // 2 minutes
 /// Key properties:
 /// - Coherent reads: one atomic per-topic snapshot load
 /// - Serialized writes: one mutation gate covers every route-visible source-table update
-/// - Existing segmented locks remain for keyed validation after the mutation gate
+/// - One coordinator avoids redundant nested lock layers on write paths
 /// - Zero-copy: Arc<str> for shared strings instead of String clones
 /// - Type-safe errors: Result<T, RocketMQError> instead of Option
 /// - Better modularity: Separate table modules for maintainability
@@ -97,14 +94,13 @@ const DEFAULT_BROKER_CHANNEL_EXPIRED_TIME: u64 = 1000 * 60 * 2; // 2 minutes
 ///
 /// ### Lock Acquisition Strategy
 ///
-/// - **Route-visible writes**: Acquire the mutation gate before any broker/topic segmented lock.
-/// - **Route reads**: Load one immutable snapshot without the mutation or segmented locks.
+/// - **Route-visible writes**: Acquire the single mutation gate.
+/// - **Route reads**: Load one immutable snapshot without the mutation gate.
 /// - **Management reads**: May continue to inspect source tables directly.
 ///
 /// ### Deadlock Prevention
 ///
-/// The mutation gate is always the outermost write lock. When multiple segmented locks are
-/// needed, `SegmentedLock::*_lock_multiple` keeps their segment order deterministic.
+/// The mutation gate is the only coordinator for route-visible writes.
 ///
 /// ## Performance Characteristics
 ///
@@ -121,16 +117,15 @@ pub struct RouteInfoManager {
     topic_queue_mapping_info_table: TopicQueueMappingInfoTable,
     route_mutations: RouteMutationCoordinator,
 
-    // Keyed validation locks, always acquired after the route mutation gate.
-    // - broker_locks: Locks for broker-related operations (keyed by broker name)
-    // - topic_locks: Locks for topic-related operations (keyed by topic name)
-    broker_locks: SegmentedLock,
-    topic_locks: SegmentedLock,
-
     // Runtime and lifecycle components
     name_server_runtime_inner: NameServerRuntimeHandle,
     un_register_service: Arc<BatchUnregistrationService>,
     metrics: rocketmq_observability::metrics::namesrv::NameServerMetrics,
+    expiry_safety_scan_interval: u64,
+    last_expiry_safety_scan: AtomicU64,
+    min_broker_notify_concurrency: usize,
+    min_broker_notify_sequence: AtomicU64,
+    min_broker_notify_versions: Arc<dashmap::DashMap<CheetahString, u64>>,
 
     #[cfg(test)]
     before_topic_cleanup_hook: parking_lot::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
@@ -143,11 +138,19 @@ impl RouteInfoManager {
     pub(crate) fn new(
         name_server_runtime_inner: NameServerRuntimeHandle,
         queue_capacity: usize,
+        unregister_batch_size: usize,
+        unregister_batch_time: std::time::Duration,
+        expiry_index_mode: crate::config::ExpiryIndexMode,
+        expiry_safety_scan_interval: u64,
+        min_broker_notify_concurrency: usize,
         metrics: rocketmq_observability::metrics::namesrv::NameServerMetrics,
     ) -> Self {
         let un_register_service = Arc::new(BatchUnregistrationService::new(
             name_server_runtime_inner.clone(),
             queue_capacity,
+            unregister_batch_size,
+            unregister_batch_time,
+            metrics.clone(),
         ));
 
         Self {
@@ -155,18 +158,19 @@ impl RouteInfoManager {
             topic_queue_table: TopicQueueTable::with_capacity(1024),
             broker_addr_table: BrokerAddrTable::with_capacity(128),
             cluster_addr_table: ClusterAddrTable::with_capacity(32),
-            broker_live_table: BrokerLiveTable::with_capacity(256),
+            broker_live_table: BrokerLiveTable::with_capacity_and_expiry_index(256, expiry_index_mode),
             filter_server_table: FilterServerTable::with_capacity(128),
             topic_queue_mapping_info_table: TopicQueueMappingInfoTable::with_capacity(256),
             route_mutations: RouteMutationCoordinator::new(),
 
-            // Retain 16-way keyed locks inside the outer mutation gate.
-            broker_locks: SegmentedLock::new(),
-            topic_locks: SegmentedLock::new(),
-
             name_server_runtime_inner,
             un_register_service,
             metrics,
+            expiry_safety_scan_interval,
+            last_expiry_safety_scan: AtomicU64::new(0),
+            min_broker_notify_concurrency,
+            min_broker_notify_sequence: AtomicU64::new(0),
+            min_broker_notify_versions: Arc::new(dashmap::DashMap::new()),
 
             #[cfg(test)]
             before_topic_cleanup_hook: parking_lot::Mutex::new(None),
@@ -282,8 +286,11 @@ impl RouteInfoManager {
             self.setup_unregister_request_from_live(&mut unregister_request, &broker_addr_info, &live_info);
 
         if need_unregister {
-            let result =
-                self.submit_unregister_broker_request_guarded(unregister_request.clone(), live_info.channel_id.clone());
+            let result = self.submit_unregister_broker_request_guarded(
+                unregister_request.clone(),
+                live_info.channel_id.clone(),
+                live_info.generation(),
+            );
             info!(
                 "the broker's channel destroyed, submit the unregister request at once, broker info: {:?}, submit \
                  result: {}",
@@ -373,19 +380,6 @@ impl RouteInfoManager {
             &broker_addr,
             topic_config_wrapper.topic_config_serialize_wrapper().data_version(),
         );
-        // ===================================================================
-        // SEGMENTED LOCK ACQUISITION
-        // ===================================================================
-        // Acquire the keyed broker lock after the outer mutation gate.
-        //
-        // This prevents race conditions such as:
-        // 1. Concurrent registrations of the same broker
-        // 2. Registration racing with unregistration
-        // 3. Inconsistent state across tables
-        //
-        // The outer mutation gate intentionally serializes all route-visible writes.
-        let _broker_lock = self.broker_locks.write_lock(&broker_name.as_str());
-
         let mut result = RegisterBrokerResult::default();
 
         let cluster_name_arc = cluster_name.clone();
@@ -410,6 +404,7 @@ impl RouteInfoManager {
                 cluster_name, broker_name, broker_id, broker_addr
             );
             self.metrics.record_broker_registration(self.active_broker_count());
+            self.metrics.record_registration_delta("rejected", 0);
             registration_span.record("result", "rejected");
             return Ok(result);
         }
@@ -502,6 +497,10 @@ impl RouteInfoManager {
             dirty_topics.extend(old_topics);
             dirty_topics.extend(incoming_topics);
         }
+        self.metrics.record_registration_delta(
+            if dirty_topics.is_empty() { "no-op" } else { "changed" },
+            dirty_topics.len(),
+        );
         self.publish_topic_route_snapshots(&route_mutation, dirty_topics);
 
         // Step 7: Handle master address for slaves
@@ -530,7 +529,7 @@ impl RouteInfoManager {
                     .get(broker_addr_info.as_ref())
                     .map(|item| item.ha_server_addr.clone())
                     .unwrap_or_default();
-                self.notify_min_broker_id_changed(broker_data.broker_addrs(), None, ha_server_addr);
+                self.notify_min_broker_id_changed(&broker_name, broker_data.broker_addrs(), None, ha_server_addr);
             }
         }
 
@@ -868,7 +867,8 @@ impl RouteInfoManager {
                 && existing.broker_name.as_ref() == Some(&broker_name)
                 && existing.broker_id == Some(broker_id);
             if is_unchanged {
-                existing.update_timestamp(current_time);
+                self.broker_live_table
+                    .update_heartbeat(broker_addr_info.as_ref(), current_time);
                 return Ok(Some(existing));
             }
         }
@@ -932,6 +932,7 @@ impl RouteInfoManager {
     /// * `ha_server_addr` - HA server address
     fn notify_min_broker_id_changed(
         &self,
+        broker_name: &CheetahString,
         broker_addrs: &HashMap<u64, CheetahString>,
         offline_broker_addr: Option<CheetahString>,
         ha_server_addr: Option<CheetahString>,
@@ -969,6 +970,9 @@ impl RouteInfoManager {
 
         // Create remoting command
         let request = RemotingCommand::create_request_command(RequestCode::NotifyMinBrokerIdChange, request_header);
+        let notification_version = self.min_broker_notify_sequence.fetch_add(1, Ordering::Relaxed) + 1;
+        self.min_broker_notify_versions
+            .insert(broker_name.clone(), notification_version);
 
         // Send notification to each broker asynchronously
         let Some(task_group) = self.name_server_runtime_inner.task_group() else {
@@ -976,24 +980,49 @@ impl RouteInfoManager {
             return;
         };
         let remoting_client = self.name_server_runtime_inner.clone();
+        let broker_name = broker_name.clone();
+        let notification_versions = Arc::clone(&self.min_broker_notify_versions);
+        let concurrency = self.min_broker_notify_concurrency;
         if let Err(error) = task_group.spawn_service("namesrv.notify-min-broker-id", async move {
             let Some(runtime) = remoting_client.upgrade() else {
                 return;
             };
             let client = runtime.remoting_client().clone();
             let attempted = broker_addrs_notify.len();
-            let mut succeeded = 0_usize;
-            for broker_addr in broker_addrs_notify {
-                match client.invoke_request_oneway(&broker_addr, request.clone(), 3000).await {
-                    Ok(()) => succeeded = succeeded.saturating_add(1),
-                    Err(error) => warn!(
-                        remote_addr = %broker_addr,
-                        error_kind = ?error.kind(),
-                        "minimum broker id notification failed"
-                    ),
-                }
-            }
-            if succeeded != attempted {
+            let results = futures::stream::iter(broker_addrs_notify)
+                .map(|broker_addr| {
+                    let client = client.clone();
+                    let request = request.clone();
+                    let broker_name = broker_name.clone();
+                    let notification_versions = Arc::clone(&notification_versions);
+                    async move {
+                        let is_latest = notification_versions
+                            .get(&broker_name)
+                            .is_some_and(|version| *version == notification_version);
+                        if !is_latest {
+                            return None;
+                        }
+                        let succeeded = match client.invoke_request_oneway(&broker_addr, request, 3000).await {
+                            Ok(()) => true,
+                            Err(error) => {
+                                warn!(
+                                    remote_addr = %broker_addr,
+                                    error_kind = ?error.kind(),
+                                    "minimum broker id notification failed"
+                                );
+                                false
+                            }
+                        };
+                        Some(succeeded)
+                    }
+                })
+                .buffer_unordered(concurrency)
+                .collect::<Vec<_>>()
+                .await;
+            let superseded = results.iter().any(Option::is_none);
+            let succeeded = results.into_iter().filter(|result| *result == Some(true)).count();
+            notification_versions.remove_if(&broker_name, |_, version| *version == notification_version);
+            if !superseded && succeeded != attempted {
                 warn!(
                     attempted,
                     succeeded, "minimum broker id notification broadcast was incomplete"
@@ -1056,7 +1085,7 @@ impl RouteInfoManager {
     /// Register a topic with queue data for multiple brokers
     ///
     /// This method mutates and publishes under the global route mutation gate,
-    /// then uses keyed topic/broker locks for validation within that transaction.
+    /// and validates brokers within that transaction.
     ///
     /// ## Consistency Guarantee
     ///
@@ -1071,7 +1100,7 @@ impl RouteInfoManager {
     /// ## Lock Strategy
     ///
     /// - **Mutation gate**: Serializes every route-visible write and publication
-    /// - **Topic/broker locks**: Preserve existing keyed validation invariants
+    /// - **Mutation gate**: Keeps validation and publication in one generation
     ///
     /// This ensures that if all brokers pass validation, they're guaranteed to
     /// still exist when we insert the queue data.
@@ -1081,15 +1110,6 @@ impl RouteInfoManager {
         }
 
         let route_mutation = self.route_mutations.begin_mutation();
-
-        // Acquire topic write lock and broker read locks atomically
-        // This prevents:
-        // 1. Concurrent topic registrations (topic write lock)
-        // 2. Broker deletion during registration (broker read locks)
-        let broker_names: Vec<_> = queue_data_vec.iter().map(|qd| qd.broker_name.as_str()).collect();
-
-        let _topic_lock = self.topic_locks.write_lock(&topic);
-        let _broker_locks = self.broker_locks.read_lock_multiple(&broker_names);
 
         // Check if topic already exists
         let topic_exists = self.topic_queue_table.contains_topic(topic.as_str());
@@ -1134,13 +1154,10 @@ impl RouteInfoManager {
     /// 2. Remove topic-broker mappings (topic_queue_table)
     /// 3. Cleanup empty topics (topic_queue_table)
     ///
-    /// The mutation gate is acquired before the topic lock. Deletion is published
-    /// atomically as a replacement snapshot or explicit absence.
+    /// The mutation gate serializes deletion, which is published atomically as a
+    /// replacement snapshot or explicit absence.
     pub(crate) fn delete_topic(&self, topic: CheetahString, cluster_name: Option<CheetahString>) {
         let route_mutation = self.route_mutations.begin_mutation();
-
-        // Acquire topic write lock to prevent concurrent modifications
-        let _topic_lock = self.topic_locks.write_lock(&topic);
 
         match cluster_name {
             Some(cluster_name) => {
@@ -1201,9 +1218,10 @@ impl RouteInfoManager {
         &self,
         request: UnRegisterBrokerRequestHeader,
         expected_channel_id: ChannelId,
+        expected_generation: crate::route::types::BrokerGeneration,
     ) -> bool {
         self.un_register_service
-            .submit_channel_guarded(request, expected_channel_id)
+            .submit_channel_guarded(request, expected_channel_id, expected_generation)
     }
 
     /// Unregister a broker from the name server
@@ -1223,19 +1241,6 @@ impl RouteInfoManager {
             .topics_for_broker(broker_name.as_str())
             .into_iter()
             .collect();
-
-        // ===================================================================
-        // SEGMENTED LOCK ACQUISITION
-        // ===================================================================
-        // Acquire the keyed broker lock after the outer mutation gate.
-        //
-        // This prevents race conditions such as:
-        // 1. Unregistration racing with registration
-        // 2. Partial cleanup visible to route lookups
-        // 3. Inconsistent broker state across tables
-        //
-        // The outer mutation gate intentionally serializes all route-visible writes.
-        let _broker_lock = self.broker_locks.write_lock(&broker_name.as_str());
 
         // Step 1: Remove from broker live table
         // Still unpublished under the mutation gate.
@@ -1337,17 +1342,24 @@ impl RouteInfoManager {
                 request.header.cluster_name.clone(),
                 request.header.broker_addr.clone(),
                 request.expected_channel_id.clone(),
+                request.expected_generation,
             );
             if !seen.insert(dedup_key) {
                 continue;
             }
-            if let Some(expected_channel_id) = request.expected_channel_id.as_ref() {
+            if request.expected_channel_id.is_some() || request.expected_generation.is_some() {
                 let broker_addr_info =
                     BrokerAddrInfo::new(request.header.cluster_name.clone(), request.header.broker_addr.clone());
-                let matches_current_registration = self
-                    .broker_live_table
-                    .get(&broker_addr_info)
-                    .is_some_and(|live_info| &live_info.channel_id == expected_channel_id);
+                let matches_current_registration =
+                    self.broker_live_table.get(&broker_addr_info).is_some_and(|live_info| {
+                        request
+                            .expected_channel_id
+                            .as_ref()
+                            .is_none_or(|expected| &live_info.channel_id == expected)
+                            && request
+                                .expected_generation
+                                .is_none_or(|expected| live_info.generation() == expected)
+                    });
                 if !matches_current_registration {
                     debug!(
                         broker_addr = %request.header.broker_addr,
@@ -1381,9 +1393,6 @@ impl RouteInfoManager {
             let cluster_name = &un_register_request.cluster_name;
             let broker_addr = &un_register_request.broker_addr;
             let broker_id = un_register_request.broker_id;
-
-            // Acquire write lock for this broker segment
-            let _broker_lock = self.broker_locks.write_lock(broker_name.as_str());
 
             // Step 1: Remove from broker live table
             let broker_addr_info = BrokerAddrInfo::new(cluster_name.clone(), broker_addr.clone());
@@ -1474,7 +1483,7 @@ impl RouteInfoManager {
                 // Check if broker exists and has acting master enabled
                 if let Some(broker_data) = self.broker_addr_table.get(&broker_name) {
                     if broker_data.enable_acting_master() {
-                        self.notify_min_broker_id_changed(&broker_addrs, Some(offline_broker_addr), None);
+                        self.notify_min_broker_id_changed(&broker_name, &broker_addrs, Some(offline_broker_addr), None);
                     }
                 }
             }
@@ -1694,17 +1703,78 @@ impl RouteInfoManager {
     /// - Submissions are batched and processed together
     /// - This coalesces source-table cleanup and snapshot publication
     pub fn scan_not_active_broker(&self) -> usize {
+        let scan_started = std::time::Instant::now();
         debug!("start scanNotActiveBroker");
         let current_time = current_millis();
 
-        // Get expired brokers by checking heartbeat timeout
-        let expired_brokers = self.broker_live_table.get_expired_brokers(current_time);
+        let expiry_mode = self.broker_live_table.expiry_index_mode();
+        let indexed_expired = self.broker_live_table.get_indexed_expired_brokers(current_time);
+        let safety_scan_due = expiry_mode == crate::config::ExpiryIndexMode::Active
+            && current_time.saturating_sub(self.last_expiry_safety_scan.load(Ordering::Acquire))
+                >= self.expiry_safety_scan_interval
+            && self
+                .last_expiry_safety_scan
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |last| {
+                    (current_time.saturating_sub(last) >= self.expiry_safety_scan_interval).then_some(current_time)
+                })
+                .is_ok();
+        let full_scan_expired = match expiry_mode {
+            crate::config::ExpiryIndexMode::Off | crate::config::ExpiryIndexMode::Shadow => {
+                self.broker_live_table.get_expired_brokers(current_time)
+            }
+            crate::config::ExpiryIndexMode::Active if safety_scan_due => {
+                self.broker_live_table.get_expired_brokers(current_time)
+            }
+            crate::config::ExpiryIndexMode::Active => Vec::new(),
+        };
+        if expiry_mode == crate::config::ExpiryIndexMode::Shadow {
+            let full_set = full_scan_expired
+                .iter()
+                .map(|broker| broker.as_ref())
+                .collect::<HashSet<_>>();
+            let indexed_set = indexed_expired
+                .iter()
+                .map(|(broker, _)| broker.as_ref())
+                .collect::<HashSet<_>>();
+            if full_set != indexed_set {
+                warn!(
+                    full_scan_count = full_set.len(),
+                    indexed_count = indexed_set.len(),
+                    "broker expiry shadow index diverged from the authoritative full scan"
+                );
+            }
+        }
+        let examined = if expiry_mode != crate::config::ExpiryIndexMode::Active || safety_scan_due {
+            self.active_broker_count()
+        } else {
+            indexed_expired.len()
+        };
+        let mut expired_brokers = indexed_expired
+            .into_iter()
+            .map(|(broker, generation)| (broker, Some(generation)))
+            .collect::<Vec<_>>();
+        if expiry_mode != crate::config::ExpiryIndexMode::Active {
+            expired_brokers = full_scan_expired.into_iter().map(|broker| (broker, None)).collect();
+        } else if safety_scan_due {
+            let mut indexed_keys = expired_brokers
+                .iter()
+                .map(|(broker, _)| broker.as_ref().clone())
+                .collect::<HashSet<_>>();
+            for broker in full_scan_expired {
+                if indexed_keys.insert(broker.as_ref().clone()) {
+                    expired_brokers.push((broker, None));
+                }
+            }
+        }
 
         let count = expired_brokers.len();
         if count > 0 {
             // Submit unregistration requests for each expired broker
-            for broker_addr_info in expired_brokers {
+            for (broker_addr_info, expected_generation) in expired_brokers {
                 if let Some(live_info) = self.broker_live_table.get(&broker_addr_info) {
+                    if expected_generation.is_some_and(|generation| live_info.generation() != generation) {
+                        continue;
+                    }
                     warn!(
                         "The broker channel expired, {} {}ms",
                         broker_addr_info, live_info.heartbeat_timeout_millis
@@ -1723,6 +1793,8 @@ impl RouteInfoManager {
         }
 
         self.metrics.record_active_broker_count(self.active_broker_count());
+        self.metrics
+            .record_expiry_scan(expiry_mode.as_str(), examined, count, scan_started.elapsed());
         count
     }
 
@@ -1759,8 +1831,11 @@ impl RouteInfoManager {
         if !self.setup_unregister_request_from_live(&mut unregister_request, &broker_addr_info, &live_info) {
             return;
         }
-        let result =
-            self.submit_unregister_broker_request_guarded(unregister_request.clone(), live_info.channel_id.clone());
+        let result = self.submit_unregister_broker_request_guarded(
+            unregister_request.clone(),
+            live_info.channel_id.clone(),
+            live_info.generation(),
+        );
         info!(
             "the broker's channel destroyed, submit guarded unregister request, broker info: {}, submit result: {}",
             unregister_request, result
@@ -1933,7 +2008,7 @@ impl RouteInfoManager {
     ///
     /// This method removes write permission from all topics that contain queue data
     /// for the specified broker:
-    /// 1. Acquiring the route mutation gate and keyed broker lock
+    /// 1. Acquiring the route mutation gate
     /// 2. Directly looking up the broker in each topic's queue map
     /// 3. Removing write permission from matched queue data
     ///
@@ -1946,9 +2021,6 @@ impl RouteInfoManager {
         use rocketmq_model::common::constant::PermName;
 
         let route_mutation = self.route_mutations.begin_mutation();
-
-        // Keyed broker lock is nested inside the route mutation gate.
-        let _broker_lock = self.broker_locks.write_lock(&broker_name);
 
         let topic_queue_pairs = self.topic_queue_table.topic_queue_pairs_for_broker(&broker_name);
         let affected_topics = topic_queue_pairs.iter().map(|(topic, _)| topic.clone()).collect();
@@ -1967,7 +2039,7 @@ impl RouteInfoManager {
     ///
     /// This method adds write permission to all topics that contain queue data
     /// for the specified broker:
-    /// 1. Acquiring the route mutation gate and keyed broker lock
+    /// 1. Acquiring the route mutation gate
     /// 2. Directly looking up the broker in each topic's queue map
     /// 3. Setting permission to READ | WRITE (not just adding write flag)
     ///
@@ -1980,9 +2052,6 @@ impl RouteInfoManager {
         use rocketmq_model::common::constant::PermName;
 
         let route_mutation = self.route_mutations.begin_mutation();
-
-        // Keyed broker lock is nested inside the route mutation gate.
-        let _broker_lock = self.broker_locks.write_lock(&broker_name);
 
         let topic_queue_pairs = self.topic_queue_table.topic_queue_pairs_for_broker(&broker_name);
         let affected_topics = topic_queue_pairs.iter().map(|(topic, _)| topic.clone()).collect();
@@ -2085,6 +2154,12 @@ mod tests {
     use crate::bootstrap::Builder;
 
     fn test_route_manager() -> (crate::bootstrap::NameServerBootstrap, Arc<RouteInfoManager>) {
+        test_route_manager_with_config(crate::NamesrvConfig::default())
+    }
+
+    fn test_route_manager_with_config(
+        config: crate::NamesrvConfig,
+    ) -> (crate::bootstrap::NameServerBootstrap, Arc<RouteInfoManager>) {
         static OWNER: OnceLock<RuntimeOwner> = OnceLock::new();
         let service_context = OWNER
             .get_or_init(|| {
@@ -2093,7 +2168,9 @@ mod tests {
             })
             .root_context()
             .component("namesrv");
-        let bootstrap = Builder::new(service_context, TelemetryHandle::noop()).build();
+        let bootstrap = Builder::new(service_context, TelemetryHandle::noop())
+            .set_name_server_config(config)
+            .build();
         let manager = bootstrap.runtime_inner().route_info_manager();
         (bootstrap, manager)
     }
@@ -2133,10 +2210,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unchanged_full_registration_keeps_snapshot_and_live_allocation() {
+    async fn unchanged_and_split_registrations_publish_only_missing_routes() {
         let runtime_context = RuntimeContext::from_current("namesrv-registration-delta-test");
-        let mut config = crate::NamesrvConfig::default();
-        config.enable_registration_delta = true;
+        let config = crate::NamesrvConfig {
+            enable_registration_delta: true,
+            ..Default::default()
+        };
         let bootstrap = Builder::new(runtime_context.service_context("namesrv"), TelemetryHandle::noop())
             .set_name_server_config(config)
             .build();
@@ -2216,7 +2295,7 @@ mod tests {
                 None,
                 Some(60_000),
                 Some(false),
-                registration_wrapper_with_topics(2, &[(&topic, 4), (&second_topic, 8)]),
+                registration_wrapper(&second_topic, 1, 8),
                 Vec::new(),
                 harness.channel(),
             )
@@ -2466,6 +2545,47 @@ mod tests {
     }
 
     #[test]
+    fn active_expiry_index_finds_deadlines_without_safety_scan() {
+        let config = crate::NamesrvConfig {
+            expiry_index_mode: crate::config::ExpiryIndexMode::Active,
+            ..Default::default()
+        };
+        let (_bootstrap, manager) = test_route_manager_with_config(config);
+        let cluster_name = CheetahString::from_static_str("indexed-expiry-cluster");
+        let broker_name = CheetahString::from_static_str("indexed-expiry-broker");
+        let broker_addr = CheetahString::from_static_str("127.0.3.1:10911");
+        manager
+            .cluster_addr_table
+            .add_broker(cluster_name.clone(), broker_name.clone());
+        manager.broker_addr_table.insert(
+            broker_name.clone(),
+            BrokerData::new(
+                cluster_name.clone(),
+                broker_name.clone(),
+                HashMap::from([(mix_all::MASTER_ID, broker_addr.clone())]),
+                None,
+            ),
+        );
+        manager.broker_live_table.register(
+            Arc::new(BrokerAddrInfo::new(cluster_name, broker_addr)),
+            BrokerLiveInfo::new(
+                0,
+                DataVersion::default(),
+                SocketAddr::from(([127, 0, 3, 1], 10911)),
+                CheetahString::from_static_str("indexed-expiry-channel"),
+            )
+            .with_timeout(1)
+            .with_broker_identity(broker_name, mix_all::MASTER_ID),
+        );
+        manager
+            .last_expiry_safety_scan
+            .store(current_millis(), Ordering::Release);
+
+        assert_eq!(manager.scan_not_active_broker(), 1);
+        assert_eq!(manager.un_register_service.queue_length(), 1);
+    }
+
+    #[test]
     fn duplicate_channel_destroy_is_idempotent_and_stale_event_cannot_delete_new_registration() {
         let (_bootstrap, manager) = test_route_manager();
         let cluster_name = CheetahString::from_static_str("channel-fence-cluster");
@@ -2501,17 +2621,38 @@ mod tests {
             broker_name: broker_name.clone(),
             broker_id: mix_all::MASTER_ID,
         };
+        let current_generation = manager
+            .broker_live_table
+            .get(&broker_addr_info)
+            .expect("registered broker should be live")
+            .generation();
 
         manager.un_register_broker_requests(vec![BrokerUnregistrationRequest::channel_guarded(
             header.clone(),
             CheetahString::from_static_str("old-channel"),
+            current_generation,
         )]);
         assert!(manager.broker_live_table.contains(&broker_addr_info));
         assert!(manager.broker_addr_table.contains(&broker_name));
 
+        assert!(manager
+            .broker_live_table
+            .update_heartbeat(&broker_addr_info, current_millis().saturating_add(1)));
+        manager.un_register_broker_requests(vec![BrokerUnregistrationRequest::channel_guarded(
+            header.clone(),
+            new_channel_id.clone(),
+            current_generation,
+        )]);
+        assert!(manager.broker_live_table.contains(&broker_addr_info));
+        let refreshed_generation = manager
+            .broker_live_table
+            .get(&broker_addr_info)
+            .expect("refreshed broker should still be live")
+            .generation();
+
         manager.un_register_broker_requests(vec![
-            BrokerUnregistrationRequest::channel_guarded(header.clone(), new_channel_id.clone()),
-            BrokerUnregistrationRequest::channel_guarded(header, new_channel_id),
+            BrokerUnregistrationRequest::channel_guarded(header.clone(), new_channel_id.clone(), refreshed_generation),
+            BrokerUnregistrationRequest::channel_guarded(header, new_channel_id, refreshed_generation),
         ]);
         assert!(!manager.broker_live_table.contains(&broker_addr_info));
         assert!(!manager.broker_addr_table.contains(&broker_name));

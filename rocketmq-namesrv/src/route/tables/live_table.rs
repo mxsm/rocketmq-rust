@@ -16,6 +16,8 @@
 //!
 //! Manages broker live status and heartbeat information.
 
+use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -28,6 +30,7 @@ use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ChannelId;
 
+use crate::config::ExpiryIndexMode;
 use crate::route::types::BrokerGeneration;
 use crate::route_info::broker_addr_info::BrokerAddrInfo;
 
@@ -204,6 +207,71 @@ pub struct BrokerLiveTable {
     inner: DashMap<Arc<BrokerAddrInfo>, Arc<BrokerLiveInfo>>,
     by_channel: DashMap<ChannelId, Arc<BrokerAddrInfo>>,
     by_remote_addr: DashMap<SocketAddr, Arc<BrokerAddrInfo>>,
+    expiry_index: Arc<ExpiryIndex>,
+}
+
+struct ExpiryIndex {
+    mode: ExpiryIndexMode,
+    state: parking_lot::Mutex<ExpiryIndexState>,
+}
+
+#[derive(Default)]
+struct ExpiryIndexState {
+    by_deadline: BTreeMap<(u64, u64), (Arc<BrokerAddrInfo>, BrokerGeneration)>,
+    by_broker: HashMap<Arc<BrokerAddrInfo>, (u64, u64)>,
+}
+
+impl ExpiryIndex {
+    fn new(mode: ExpiryIndexMode) -> Self {
+        Self {
+            mode,
+            state: parking_lot::Mutex::new(ExpiryIndexState::default()),
+        }
+    }
+
+    fn schedule(&self, broker: Arc<BrokerAddrInfo>, live_info: &BrokerLiveInfo) {
+        if self.mode == ExpiryIndexMode::Off {
+            return;
+        }
+        let deadline = live_info
+            .last_update_timestamp()
+            .saturating_add(live_info.heartbeat_timeout_millis);
+        let generation = live_info.generation();
+        let index_key = (deadline, generation.registration_epoch);
+        let mut state = self.state.lock();
+        if let Some(previous_key) = state.by_broker.insert(Arc::clone(&broker), index_key) {
+            state.by_deadline.remove(&previous_key);
+        }
+        state.by_deadline.insert(index_key, (broker, generation));
+    }
+
+    fn remove(&self, broker: &BrokerAddrInfo) {
+        if self.mode == ExpiryIndexMode::Off {
+            return;
+        }
+        let mut state = self.state.lock();
+        if let Some(index_key) = state.by_broker.remove(broker) {
+            state.by_deadline.remove(&index_key);
+        }
+    }
+
+    fn expired(&self, current_time: u64) -> Vec<(Arc<BrokerAddrInfo>, BrokerGeneration)> {
+        if self.mode == ExpiryIndexMode::Off {
+            return Vec::new();
+        }
+        let state = self.state.lock();
+        state
+            .by_deadline
+            .range(..=(current_time, u64::MAX))
+            .map(|(_, (broker, generation))| (Arc::clone(broker), *generation))
+            .collect()
+    }
+
+    fn clear(&self) {
+        let mut state = self.state.lock();
+        state.by_deadline.clear();
+        state.by_broker.clear();
+    }
 }
 
 impl BrokerLiveTable {
@@ -213,6 +281,7 @@ impl BrokerLiveTable {
             inner: DashMap::new(),
             by_channel: DashMap::new(),
             by_remote_addr: DashMap::new(),
+            expiry_index: Arc::new(ExpiryIndex::new(ExpiryIndexMode::Off)),
         }
     }
 
@@ -221,10 +290,16 @@ impl BrokerLiveTable {
     /// # Arguments
     /// * `capacity` - Expected number of live brokers
     pub fn with_capacity(capacity: usize) -> Self {
+        Self::with_capacity_and_expiry_index(capacity, ExpiryIndexMode::Off)
+    }
+
+    /// Create with estimated capacity and an optional deadline index.
+    pub fn with_capacity_and_expiry_index(capacity: usize, expiry_index_mode: ExpiryIndexMode) -> Self {
         Self {
             inner: DashMap::with_capacity(capacity),
             by_channel: DashMap::with_capacity(capacity),
             by_remote_addr: DashMap::with_capacity(capacity),
+            expiry_index: Arc::new(ExpiryIndex::new(expiry_index_mode)),
         }
     }
 
@@ -243,13 +318,15 @@ impl BrokerLiveTable {
     ) -> Option<Arc<BrokerLiveInfo>> {
         let channel_id = live_info.channel_id.clone();
         let remote_addr = live_info.remote_addr;
-        let previous = self.inner.insert(Arc::clone(&broker_addr_info), Arc::new(live_info));
+        let live_info = Arc::new(live_info);
+        let previous = self.inner.insert(Arc::clone(&broker_addr_info), Arc::clone(&live_info));
         if let Some(previous) = &previous {
             self.remove_channel_index_if_current(&previous.channel_id, &broker_addr_info);
             self.remove_remote_index_if_current(previous.remote_addr, &broker_addr_info);
         }
         self.by_channel.insert(channel_id, Arc::clone(&broker_addr_info));
-        self.by_remote_addr.insert(remote_addr, broker_addr_info);
+        self.by_remote_addr.insert(remote_addr, Arc::clone(&broker_addr_info));
+        self.expiry_index.schedule(broker_addr_info, &live_info);
         previous
     }
 
@@ -264,6 +341,7 @@ impl BrokerLiveTable {
     pub fn update_heartbeat(&self, broker_addr_info: &BrokerAddrInfo, timestamp: u64) -> bool {
         if let Some(entry) = self.inner.get(broker_addr_info) {
             entry.update_timestamp(timestamp);
+            self.expiry_index.schedule(Arc::clone(entry.key()), entry.value());
             true
         } else {
             false
@@ -295,6 +373,7 @@ impl BrokerLiveTable {
     /// Removed live info if existed
     pub fn remove(&self, broker_addr_info: &BrokerAddrInfo) -> Option<Arc<BrokerLiveInfo>> {
         let (key, live_info) = self.inner.remove(broker_addr_info)?;
+        self.expiry_index.remove(&key);
         self.remove_channel_index_if_current(&live_info.channel_id, &key);
         self.remove_remote_index_if_current(live_info.remote_addr, &key);
         Some(live_info)
@@ -326,6 +405,16 @@ impl BrokerLiveTable {
             .filter(|entry| !entry.value().is_alive(current_time))
             .map(|entry| Arc::clone(entry.key()))
             .collect()
+    }
+
+    /// Get expiry candidates from the optional deadline index.
+    pub fn get_indexed_expired_brokers(&self, current_time: u64) -> Vec<(Arc<BrokerAddrInfo>, BrokerGeneration)> {
+        self.expiry_index.expired(current_time)
+    }
+
+    /// Return the configured expiry-index rollout mode.
+    pub fn expiry_index_mode(&self) -> ExpiryIndexMode {
+        self.expiry_index.mode
     }
 
     /// Remove expired brokers
@@ -361,6 +450,7 @@ impl BrokerLiveTable {
         self.inner.clear();
         self.by_channel.clear();
         self.by_remote_addr.clear();
+        self.expiry_index.clear();
     }
 
     /// Get brokers with stale data versions
@@ -462,6 +552,7 @@ impl BrokerLiveTable {
             let key_addr: &str = entry.key().broker_addr.as_ref();
             if key_addr == broker_addr {
                 entry.update_timestamp(timestamp);
+                self.expiry_index.schedule(Arc::clone(entry.key()), entry.value());
                 return;
             }
         }
@@ -623,6 +714,27 @@ mod tests {
         // Check expired at 150000ms (broker1 should be expired)
         let expired = table.get_expired_brokers(150_000);
         assert_eq!(expired.len(), 1);
+    }
+
+    #[test]
+    fn expiry_index_reschedules_heartbeat_and_removes_deleted_broker() {
+        let table = BrokerLiveTable::with_capacity_and_expiry_index(4, ExpiryIndexMode::Active);
+        let broker = create_test_broker_addr_info("broker-indexed", 0);
+        table.register(Arc::clone(&broker), create_test_live_info(1000).with_timeout(100));
+
+        assert!(table.get_indexed_expired_brokers(1099).is_empty());
+        let initial = table.get_indexed_expired_brokers(1100);
+        assert_eq!(initial.len(), 1);
+        assert_eq!(initial[0].1.heartbeat_generation, 0);
+
+        assert!(table.update_heartbeat(&broker, 1080));
+        assert!(table.get_indexed_expired_brokers(1100).is_empty());
+        let rescheduled = table.get_indexed_expired_brokers(1180);
+        assert_eq!(rescheduled.len(), 1);
+        assert_eq!(rescheduled[0].1.heartbeat_generation, 1);
+
+        assert!(table.remove(&broker).is_some());
+        assert!(table.get_indexed_expired_brokers(u64::MAX).is_empty());
     }
 
     #[test]

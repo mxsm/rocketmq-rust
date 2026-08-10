@@ -28,7 +28,7 @@ use rocketmq_protocol::protocol::route::route_data_view::QueueData;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo;
 
 use crate::route::tables::BrokerLiveInfo;
-use crate::route_info::broker_addr_info::BrokerAddrInfo;
+pub use crate::route_info::broker_addr_info::BrokerAddrInfo;
 
 /// Public topic name type.
 pub type TopicName = CheetahString;
@@ -101,7 +101,7 @@ impl BrokerInstanceKey {
 }
 
 /// Local fencing generation attached to liveness and cleanup events.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub struct BrokerGeneration {
     pub registration_epoch: u64,
     pub heartbeat_generation: u64,

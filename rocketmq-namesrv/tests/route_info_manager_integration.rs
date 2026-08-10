@@ -821,7 +821,7 @@ async fn namesrv_zone_route_accept_standard_json_only_preserves_standard_json_ov
     .expect("standard json route response should stay valid utf-8");
     let broker_addrs_index = body
         .find("\"brokerAddrs\":{\"10\":\"10.30.0.10:10911\"")
-        .expect("standard json should preserve sorted brokerAddrs keys");
+        .unwrap_or_else(|| panic!("standard json should preserve sorted brokerAddrs keys, body={body}"));
     let broker_addrs_second_index = body
         .find("\"2\":\"10.30.0.2:10911\"")
         .unwrap_or_else(|| panic!("standard json should include broker id 2, body={body}"));
