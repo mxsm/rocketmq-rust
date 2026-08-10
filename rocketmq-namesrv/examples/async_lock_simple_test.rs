@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![allow(deprecated, reason = "this example intentionally demonstrates the legacy lock model")]
+
 use std::sync::Arc;
 
 use rocketmq_namesrv::route::async_segmented_lock::AsyncSegmentedLock;

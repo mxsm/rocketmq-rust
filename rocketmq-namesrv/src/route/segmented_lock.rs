@@ -77,6 +77,10 @@ const DEFAULT_SEGMENT_COUNT: usize = 16;
 /// # Type Parameters
 ///
 /// * `T` - The lock data type (usually unit `()` for pure synchronization)
+#[deprecated(
+    since = "1.0.0",
+    note = "benchmark-only legacy model; production NameServer mutations use RouteMutationCoordinator"
+)]
 pub struct SegmentedLock<T = ()> {
     /// Array of RwLock segments
     segments: Vec<RwLock<T>>,
@@ -88,6 +92,7 @@ pub struct SegmentedLock<T = ()> {
     hash_builder: DefaultHashBuilder,
 }
 
+#[allow(deprecated, reason = "implements the retained benchmark-only compatibility type")]
 impl<T: Default> SegmentedLock<T> {
     /// Create a new segmented lock manager with default segment count
     ///
@@ -249,6 +254,7 @@ impl<T: Default> SegmentedLock<T> {
     }
 }
 
+#[allow(deprecated, reason = "implements the retained benchmark-only compatibility type")]
 impl<T: Default> Default for SegmentedLock<T> {
     fn default() -> Self {
         Self::new()
@@ -256,6 +262,7 @@ impl<T: Default> Default for SegmentedLock<T> {
 }
 
 #[cfg(test)]
+#[allow(deprecated, reason = "tests cover the retained benchmark-only compatibility type")]
 mod tests {
     use std::collections::HashSet;
     use std::sync::Arc;

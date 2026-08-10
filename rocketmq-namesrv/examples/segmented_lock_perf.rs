@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![allow(deprecated, reason = "this example intentionally measures the legacy lock model")]
+
 //! Simplified segmented lock performance test
 //!
 //! Run: cargo run --release --example segmented_lock_perf

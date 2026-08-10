@@ -137,6 +137,7 @@ impl TransportClusterTestRouteLookup {
         )
     }
 
+    #[cfg(test)]
     fn with_resolver(
         service_context: ChildServiceContext,
         resolver: Arc<dyn ClusterTestEndpointResolver>,

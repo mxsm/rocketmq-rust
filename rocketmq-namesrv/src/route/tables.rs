@@ -14,7 +14,7 @@
 
 //! Concurrent data table modules for route management
 //!
-//! These modules use DashMap for lock-free concurrent access,
+//! These modules use DashMap for sharded lock-backed concurrent access,
 //! replacing the previous global RwLock approach.
 
 mod broker_table;

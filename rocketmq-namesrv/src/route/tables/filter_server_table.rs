@@ -29,9 +29,9 @@ use crate::route_info::broker_addr_info::BrokerAddrInfo;
 /// filter servers. Filter servers are used for message filtering in RocketMQ.
 ///
 /// # Performance
-/// - Read operations: O(1) average, lock-free
+/// - Read operations: O(1) average with sharded locking
 /// - Write operations: O(1) average, per-entry lock
-/// - Concurrent access: Lock-free reads, per-entry lock for writes
+/// - Concurrent access: DashMap sharding plus per-entry mutation guards
 #[derive(Clone)]
 pub struct FilterServerTable {
     inner: DashMap<Arc<BrokerAddrInfo>, Vec<CheetahString>>,

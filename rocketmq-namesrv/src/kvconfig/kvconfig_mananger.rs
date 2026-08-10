@@ -28,6 +28,7 @@ use rocketmq_runtime::MetadataDeadline;
 use rocketmq_runtime::MetadataIoActor;
 use rocketmq_runtime::MetadataIoError;
 use rocketmq_runtime::MetadataIoShutdownReport;
+#[cfg(test)]
 use rocketmq_runtime::MetadataIoSnapshot;
 use tracing::debug;
 use tracing::error;
@@ -140,6 +141,7 @@ impl KVConfigManager {
         &self.config_table
     }
 
+    #[cfg(test)]
     pub(crate) fn metadata_io_snapshot(&self) -> Option<MetadataIoSnapshot> {
         self.metadata_io
             .as_ref()

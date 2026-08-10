@@ -40,10 +40,4 @@ impl KVConfigSerializeWrapper {
             config_table: Some(config_table),
         }
     }
-
-    pub fn new() -> KVConfigSerializeWrapper {
-        KVConfigSerializeWrapper {
-            config_table: Some(dashmap::DashMap::new()),
-        }
-    }
 }

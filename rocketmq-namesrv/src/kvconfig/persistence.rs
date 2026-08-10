@@ -138,6 +138,7 @@ impl KvCommitError {
 
 #[derive(Debug)]
 pub(crate) struct KvMutationReceipt {
+    #[cfg(test)]
     requested_generation: u64,
     completion: oneshot::Receiver<Result<KvCommitReceipt, KvCommitError>>,
 }
@@ -311,6 +312,7 @@ impl KvMutationService {
         self.metrics.record_kv_event(NameServerKvEvent::Queued);
         record_kv_snapshot(&self.metrics, &self.inner);
         Ok(KvMutationReceipt {
+            #[cfg(test)]
             requested_generation,
             completion: receiver,
         })

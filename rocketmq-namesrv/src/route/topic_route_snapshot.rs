@@ -52,7 +52,6 @@ pub(crate) enum RouteVariant {
 pub(crate) struct TopicRouteView {
     route_data: Arc<TopicRouteData>,
     version: u64,
-    published_at: u64,
     variant: RouteVariant,
 }
 
@@ -70,7 +69,6 @@ impl TopicRouteSnapshot {
         TopicRouteView {
             route_data: Arc::clone(&self.route_data),
             version: self.version,
-            published_at: self.published_at,
             variant: RouteVariant::Base,
         }
     }
@@ -86,7 +84,6 @@ impl TopicRouteSnapshot {
             Some(route_data) => TopicRouteView {
                 route_data: Arc::clone(route_data),
                 version: self.version,
-                published_at: self.published_at,
                 variant: RouteVariant::ActingMaster,
             },
             None => self.base_view(),
@@ -101,10 +98,6 @@ impl TopicRouteView {
 
     pub(crate) fn version(&self) -> u64 {
         self.version
-    }
-
-    pub(crate) fn published_at(&self) -> u64 {
-        self.published_at
     }
 
     pub(crate) fn variant(&self) -> RouteVariant {

@@ -37,7 +37,7 @@ use crate::route::types::TopicName;
 /// across different brokers. Uses nested DashMap for fine-grained concurrency.
 ///
 /// # Performance
-/// - Read operations: O(1) average, lock-free
+/// - Read operations: O(1) average with sharded locking
 /// - Write operations: O(1) average, per-entry lock
 /// - Memory: ~40 bytes overhead per entry (DashMap metadata)
 ///

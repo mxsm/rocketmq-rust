@@ -38,7 +38,7 @@ use crate::route::types::RouteClusterName;
 /// concurrent set operations.
 ///
 /// # Performance
-/// - Read operations: O(1) average, lock-free
+/// - Read operations: O(1) average with sharded locking
 /// - Write operations: O(1) average, per-entry lock
 ///
 /// # Example

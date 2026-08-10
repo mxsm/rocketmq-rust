@@ -97,6 +97,7 @@ pub(crate) mod config_apply;
 mod lifecycle;
 mod signals;
 
+#[cfg(test)]
 pub(crate) use lifecycle::InFlightRequestGuard;
 pub(crate) use lifecycle::InFlightRequestTracker;
 pub use lifecycle::NameServerInFlightDrainReport;
@@ -143,6 +144,7 @@ struct NameServerRuntime {
 }
 
 impl NameServerBootstrap {
+    #[cfg(test)]
     #[inline]
     pub(crate) fn runtime_inner(&self) -> Arc<NameServerRuntimeInner> {
         Arc::clone(&self.name_server_runtime.inner)
@@ -654,6 +656,7 @@ impl NameServerRuntime {
     /// 4. Waits for shutdown signal
     /// 5. Performs graceful shutdown
     #[instrument(skip(self), name = "runtime_start")]
+    #[cfg(all(test, feature = "embedded-controller"))]
     pub async fn start(&mut self) -> RocketMQResult<()> {
         self.start_with_shutdown_report(None).await.map(|_| ())
     }
@@ -1102,6 +1105,7 @@ impl Builder {
     }
 
     #[inline]
+    #[cfg(test)]
     pub(crate) fn set_cluster_test_route_lookup(
         mut self,
         cluster_test_route_lookup: Arc<dyn ClusterTestRouteLookup>,
@@ -1251,6 +1255,7 @@ impl Builder {
                 task_group: OnceLock::new(),
                 in_flight_requests: Arc::new(InFlightRequestTracker::default()),
                 namesrv_metrics: namesrv_metrics.clone(),
+                #[cfg(feature = "embedded-controller")]
                 telemetry: self.telemetry.clone(),
                 transport_telemetry,
                 transport_security,
@@ -1294,6 +1299,7 @@ pub(crate) struct NameServerRuntimeInner {
     broker_housekeeping_service: Arc<BrokerHousekeepingService>,
     #[cfg(feature = "embedded-controller")]
     controller_manager: OnceLock<Arc<ControllerManager>>,
+    #[cfg(feature = "embedded-controller")]
     telemetry: TelemetryHandle,
     transport_telemetry: TransportTelemetry,
     transport_security: Option<Arc<TransportSecurity>>,
@@ -1440,11 +1446,13 @@ impl NameServerRuntimeInner {
         self.auth_runtime.get().cloned()
     }
 
+    #[cfg(test)]
     pub(crate) fn in_flight_request_guard(&self) -> InFlightRequestGuard {
         self.in_flight_requests.enter()
     }
 
     #[inline]
+    #[cfg(test)]
     pub fn tokio_client_config(&self) -> Arc<TransportClientConfig> {
         Arc::clone(&self.config.load().tokio_client_config)
     }

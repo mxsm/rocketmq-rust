@@ -140,6 +140,56 @@ pub(crate) enum NamesrvConfigKey {
 }
 
 impl NamesrvConfigKey {
+    #[cfg(test)]
+    const ALL: [Self; 46] = [
+        Self::RocketmqHome,
+        Self::KvConfigPath,
+        Self::ConfigStorePath,
+        Self::ProductEnvName,
+        Self::ClusterTest,
+        Self::OrderMessageEnable,
+        Self::RouteFreshnessSampleInterval,
+        Self::NamesrvTypedZoneRouteEnable,
+        Self::NamesrvTypedZoneRouteShadow,
+        Self::NamesrvRouteResponseCacheEnable,
+        Self::NamesrvRouteResponseCacheMaxBytes,
+        Self::NamesrvRouteResponseCacheMaxEntries,
+        Self::NamesrvRouteResponseCacheMaxSingleResponseBytes,
+        Self::NamesrvRouteResponseCacheShards,
+        Self::NamesrvWorkloadAdmissionEnable,
+        Self::NamesrvWorkloadAdmissionObserveOnly,
+        Self::NamesrvWorkloadAdmissionTimeoutMillis,
+        Self::EnableRegistrationDelta,
+        Self::ClusterTestRouteCachePositiveTtlMillis,
+        Self::ClusterTestRouteCacheNegativeTtlMillis,
+        Self::ClusterTestRouteCacheMaxEntries,
+        Self::ClusterTestRouteCacheMaxBytes,
+        Self::KvMutationQueueCapacity,
+        Self::KvMutationBatchSize,
+        Self::UnregisterBrokerBatchSize,
+        Self::UnregisterBrokerBatchTimeMillis,
+        Self::ExpiryIndexMode,
+        Self::ExpirySafetyScanInterval,
+        Self::MinBrokerNotifyConcurrency,
+        Self::ReturnOrderTopicConfigToBroker,
+        Self::ClientRequestThreadPoolNums,
+        Self::DefaultThreadPoolNums,
+        Self::ClientRequestThreadPoolQueueCapacity,
+        Self::DefaultThreadPoolQueueCapacity,
+        Self::ScanNotActiveBrokerInterval,
+        Self::UnregisterBrokerQueueCapacity,
+        Self::SupportActingMaster,
+        Self::EnableAllTopicList,
+        Self::EnableTopicList,
+        Self::NotifyMinBrokerIdChanged,
+        Self::EnableControllerInNamesrv,
+        Self::NeedWaitForService,
+        Self::WaitSecondsForService,
+        Self::DeleteTopicWithBrokerRegistration,
+        Self::AllowInsecurePublicListener,
+        Self::ConfigBlackList,
+    ];
+
     pub(crate) fn from_java_name(key: &str) -> Option<Self> {
         Some(match key {
             "rocketmqHome" => Self::RocketmqHome,
@@ -1095,177 +1145,172 @@ impl NamesrvConfig {
                 RocketMQError::nameserver_config_invalid(format!("unknown configuration key '{key}'"))
             })?;
             validate_namesrv_property(config_key, value.as_str())?;
-            match key.as_str() {
-                "rocketmqHome" => self.rocketmq_home = value.to_string(),
-                "kvConfigPath" => self.kv_config_path = value.to_string(),
-                "configStorePath" => self.config_store_path = value.to_string(),
-                "productEnvName" => self.product_env_name = value.to_string(),
-                "clusterTest" => {
+            match config_key {
+                NamesrvConfigKey::RocketmqHome => self.rocketmq_home = value.to_string(),
+                NamesrvConfigKey::KvConfigPath => self.kv_config_path = value.to_string(),
+                NamesrvConfigKey::ConfigStorePath => self.config_store_path = value.to_string(),
+                NamesrvConfigKey::ProductEnvName => self.product_env_name = value.to_string(),
+                NamesrvConfigKey::ClusterTest => {
                     self.cluster_test = value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
-                "orderMessageEnable" => {
+                NamesrvConfigKey::OrderMessageEnable => {
                     self.order_message_enable = value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
-                "routeFreshnessSampleInterval" => {
+                NamesrvConfigKey::RouteFreshnessSampleInterval => {
                     self.route_freshness_sample_interval =
                         value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
-                "namesrvTypedZoneRouteEnable" => {
+                NamesrvConfigKey::NamesrvTypedZoneRouteEnable => {
                     self.namesrv_typed_zone_route_enable =
                         value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
-                "namesrvTypedZoneRouteShadow" => {
+                NamesrvConfigKey::NamesrvTypedZoneRouteShadow => {
                     self.namesrv_typed_zone_route_shadow =
                         value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
-                "namesrvRouteResponseCacheEnable" => {
+                NamesrvConfigKey::NamesrvRouteResponseCacheEnable => {
                     self.namesrv_route_response_cache_enable =
                         value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
-                "namesrvRouteResponseCacheMaxBytes" => {
+                NamesrvConfigKey::NamesrvRouteResponseCacheMaxBytes => {
                     self.namesrv_route_response_cache_max_bytes =
                         value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
-                "namesrvRouteResponseCacheMaxEntries" => {
+                NamesrvConfigKey::NamesrvRouteResponseCacheMaxEntries => {
                     self.namesrv_route_response_cache_max_entries =
                         value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
-                "namesrvRouteResponseCacheMaxSingleResponseBytes" => {
+                NamesrvConfigKey::NamesrvRouteResponseCacheMaxSingleResponseBytes => {
                     self.namesrv_route_response_cache_max_single_response_bytes =
                         value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
-                "namesrvRouteResponseCacheShards" => {
+                NamesrvConfigKey::NamesrvRouteResponseCacheShards => {
                     self.namesrv_route_response_cache_shards =
                         value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
-                "namesrvWorkloadAdmissionEnable" => {
+                NamesrvConfigKey::NamesrvWorkloadAdmissionEnable => {
                     self.namesrv_workload_admission_enable =
                         value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
-                "namesrvWorkloadAdmissionObserveOnly" => {
+                NamesrvConfigKey::NamesrvWorkloadAdmissionObserveOnly => {
                     self.namesrv_workload_admission_observe_only =
                         value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
-                "namesrvWorkloadAdmissionTimeoutMillis" => {
+                NamesrvConfigKey::NamesrvWorkloadAdmissionTimeoutMillis => {
                     self.namesrv_workload_admission_timeout_millis =
                         value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
-                "enableRegistrationDelta" => {
+                NamesrvConfigKey::EnableRegistrationDelta => {
                     self.enable_registration_delta =
                         value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
-                "clusterTestRouteCachePositiveTtlMillis" => {
+                NamesrvConfigKey::ClusterTestRouteCachePositiveTtlMillis => {
                     self.cluster_test_route_cache_positive_ttl_millis =
                         value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
-                "clusterTestRouteCacheNegativeTtlMillis" => {
+                NamesrvConfigKey::ClusterTestRouteCacheNegativeTtlMillis => {
                     self.cluster_test_route_cache_negative_ttl_millis =
                         value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
-                "clusterTestRouteCacheMaxEntries" => {
+                NamesrvConfigKey::ClusterTestRouteCacheMaxEntries => {
                     self.cluster_test_route_cache_max_entries =
                         value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
-                "clusterTestRouteCacheMaxBytes" => {
+                NamesrvConfigKey::ClusterTestRouteCacheMaxBytes => {
                     self.cluster_test_route_cache_max_bytes =
                         value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
-                "kvMutationQueueCapacity" => {
+                NamesrvConfigKey::KvMutationQueueCapacity => {
                     self.kv_mutation_queue_capacity =
                         value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
-                "kvMutationBatchSize" => {
+                NamesrvConfigKey::KvMutationBatchSize => {
                     self.kv_mutation_batch_size =
                         value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
-                "unRegisterBrokerBatchSize" => {
+                NamesrvConfigKey::UnregisterBrokerBatchSize => {
                     self.unregister_broker_batch_size =
                         value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
-                "unRegisterBrokerBatchTimeMillis" => {
+                NamesrvConfigKey::UnregisterBrokerBatchTimeMillis => {
                     self.unregister_broker_batch_time_millis =
                         value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
-                "expiryIndexMode" => {
+                NamesrvConfigKey::ExpiryIndexMode => {
                     self.expiry_index_mode = value
                         .parse()
                         .map_err(|_| invalid_value(&key, "expected one of off, shadow, active"))?
                 }
-                "expirySafetyScanInterval" => {
+                NamesrvConfigKey::ExpirySafetyScanInterval => {
                     self.expiry_safety_scan_interval =
                         value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
-                "minBrokerNotifyConcurrency" => {
+                NamesrvConfigKey::MinBrokerNotifyConcurrency => {
                     self.min_broker_notify_concurrency =
                         value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
-                "returnOrderTopicConfigToBroker" => {
+                NamesrvConfigKey::ReturnOrderTopicConfigToBroker => {
                     self.return_order_topic_config_to_broker =
                         value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
-                "clientRequestThreadPoolNums" => {
+                NamesrvConfigKey::ClientRequestThreadPoolNums => {
                     self.client_request_thread_pool_nums =
                         value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
-                "defaultThreadPoolNums" => {
+                NamesrvConfigKey::DefaultThreadPoolNums => {
                     self.default_thread_pool_nums =
                         value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
-                "clientRequestThreadPoolQueueCapacity" => {
+                NamesrvConfigKey::ClientRequestThreadPoolQueueCapacity => {
                     self.client_request_thread_pool_queue_capacity =
                         value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
-                "defaultThreadPoolQueueCapacity" => {
+                NamesrvConfigKey::DefaultThreadPoolQueueCapacity => {
                     self.default_thread_pool_queue_capacity =
                         value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
-                "scanNotActiveBrokerInterval" => {
+                NamesrvConfigKey::ScanNotActiveBrokerInterval => {
                     self.scan_not_active_broker_interval =
                         value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
-                "unRegisterBrokerQueueCapacity" => {
+                NamesrvConfigKey::UnregisterBrokerQueueCapacity => {
                     self.unregister_broker_queue_capacity =
                         value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
-                "supportActingMaster" => {
+                NamesrvConfigKey::SupportActingMaster => {
                     self.support_acting_master = value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
-                "enableAllTopicList" => {
+                NamesrvConfigKey::EnableAllTopicList => {
                     self.enable_all_topic_list = value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
-                "enableTopicList" => {
+                NamesrvConfigKey::EnableTopicList => {
                     self.enable_topic_list = value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
-                "notifyMinBrokerIdChanged" => {
+                NamesrvConfigKey::NotifyMinBrokerIdChanged => {
                     self.notify_min_broker_id_changed =
                         value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
-                "enableControllerInNamesrv" => {
+                NamesrvConfigKey::EnableControllerInNamesrv => {
                     self.enable_controller_in_namesrv =
                         value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
-                "needWaitForService" => {
+                NamesrvConfigKey::NeedWaitForService => {
                     self.need_wait_for_service = value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
-                "waitSecondsForService" => {
+                NamesrvConfigKey::WaitSecondsForService => {
                     self.wait_seconds_for_service =
                         value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
-                "deleteTopicWithBrokerRegistration" => {
+                NamesrvConfigKey::DeleteTopicWithBrokerRegistration => {
                     self.delete_topic_with_broker_registration =
                         value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
-                "allowInsecurePublicListener" => {
+                NamesrvConfigKey::AllowInsecurePublicListener => {
                     self.allow_insecure_public_listener =
                         value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
-                "configBlackList" => {
+                NamesrvConfigKey::ConfigBlackList => {
                     self.config_black_list = value.to_string();
-                }
-                _ => {
-                    return Err(RocketMQError::nameserver_config_invalid(format!(
-                        "unknown configuration key '{key}'"
-                    )));
                 }
             }
         }
@@ -1491,6 +1536,7 @@ pub fn is_tls_config_key(key: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::env;
 
     use super::*;
@@ -1795,6 +1841,29 @@ mod tests {
             config.auth_config.authorization_enabled.to_string()
         );
         assert_eq!(parsed["configBlackList"], config.config_black_list);
+    }
+
+    #[test]
+    fn namesrv_config_schema_keys_are_unique_round_trip_and_exported() {
+        let config = NamesrvConfig::new();
+        let exported: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
+            &config
+                .get_all_configs_format_string()
+                .expect("default NameServer configuration should serialize"),
+        )
+        .expect("configuration export should be a JSON object");
+        let mut names = HashSet::new();
+
+        for key in NamesrvConfigKey::ALL {
+            let java_name = key.java_name();
+            assert!(names.insert(java_name), "duplicate NameServer schema key: {java_name}");
+            assert_eq!(NamesrvConfigKey::from_java_name(java_name), Some(key));
+            assert!(
+                exported.contains_key(java_name),
+                "schema key is not exported: {java_name}"
+            );
+            let _ = key.mutability();
+        }
     }
 
     #[test]

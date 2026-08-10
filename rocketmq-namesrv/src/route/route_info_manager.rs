@@ -29,9 +29,6 @@ use futures::StreamExt;
 use rocketmq_model::common::constant::PermName;
 use rocketmq_model::common::mix_all;
 use rocketmq_protocol::code::request_code::RequestCode;
-use rocketmq_protocol::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
-use rocketmq_protocol::protocol::body::broker_body::cluster_info::ClusterInfo;
-use rocketmq_protocol::protocol::body::topic::topic_list::TopicList;
 use rocketmq_protocol::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
 use rocketmq_protocol::protocol::header::namesrv::broker_request::UnRegisterBrokerRequestHeader;
 use rocketmq_protocol::protocol::header::namesrv::brokerid_change_request_header::NotifyMinBrokerIdChangeRequestHeader;
@@ -67,6 +64,8 @@ use crate::route::types::BrokerName;
 use crate::route::types::TopicName;
 use crate::route_info::broker_addr_info::BrokerAddrInfo;
 
+mod management;
+
 const DEFAULT_BROKER_CHANNEL_EXPIRED_TIME: u64 = 1000 * 60 * 2; // 2 minutes
 
 /// Canonical route manager with serialized mutations and immutable route snapshots
@@ -75,7 +74,7 @@ const DEFAULT_BROKER_CHANNEL_EXPIRED_TIME: u64 = 1000 * 60 * 2; // 2 minutes
 /// - Coherent reads: one atomic per-topic snapshot load
 /// - Serialized writes: one mutation gate covers every route-visible source-table update
 /// - One coordinator avoids redundant nested lock layers on write paths
-/// - Zero-copy: Arc<str> for shared strings instead of String clones
+/// - Compact strings: CheetahString avoids repeated temporary conversions
 /// - Type-safe errors: Result<T, RocketMQError> instead of Option
 /// - Better modularity: Separate table modules for maintainability
 ///
@@ -1640,12 +1639,6 @@ fn build_acting_master_route_data(route_data: &TopicRouteData) -> Option<TopicRo
 }
 
 impl RouteInfoManager {
-    /// Get all topics registered in the name server
-    pub fn get_all_topics(&self) -> Vec<TopicName> {
-        let _management_view = self.route_mutations.begin_management_read();
-        self.topic_queue_table.get_all_topics()
-    }
-
     /// Get the number of brokers currently tracked as live.
     pub fn active_broker_count(&self) -> usize {
         self.broker_live_table.len()
@@ -1682,19 +1675,6 @@ impl RouteInfoManager {
     #[cfg(test)]
     pub(crate) fn route_freshness_lookup_count(&self) -> u64 {
         self.route_freshness_lookups.load(Ordering::Relaxed)
-    }
-
-    /// Get topics for a specific cluster
-    pub fn get_topics_by_cluster(&self, cluster_name: &str) -> RouteResult<Vec<TopicName>> {
-        let _management_view = self.route_mutations.begin_management_read();
-        let broker_names = self.cluster_addr_table.get_brokers(cluster_name);
-
-        if broker_names.is_empty() {
-            return Err(RocketMQError::cluster_not_found(cluster_name));
-        }
-
-        let broker_names = broker_names.into_iter().collect::<HashSet<_>>();
-        Ok(self.topic_queue_table.topics_for_brokers_with_duplicates(&broker_names))
     }
 }
 
@@ -1923,11 +1903,6 @@ impl RouteInfoManager {
         false
     }
 
-    /// Find broker name and ID by address
-    fn find_broker_by_addr(&self, broker_addr: &str) -> Option<(CheetahString, u64)> {
-        self.broker_addr_table.find_broker_by_addr(broker_addr)
-    }
-
     /// Check if broker topic config has changed
     ///
     /// Compares the provided data version with the broker's current data version
@@ -1987,44 +1962,6 @@ impl RouteInfoManager {
         self.broker_live_table
             .get(&broker_addr_info)
             .map(|info| info.data_version.clone())
-    }
-
-    /// Get broker member group
-    ///
-    /// Returns a BrokerMemberGroup containing all broker addresses for the given broker name.
-    ///
-    /// # Arguments
-    /// * `cluster_name` - Name of the cluster
-    /// * `broker_name` - Name of the broker
-    ///
-    /// # Returns
-    /// Always returns `Some(BrokerMemberGroup)`. If the broker exists in `broker_addr_table`, the
-    /// group will contain its addresses; otherwise, it returns an empty `BrokerMemberGroup` with
-    /// the provided cluster name and broker name but no addresses.
-    pub fn get_broker_member_group(
-        &self,
-        cluster_name: CheetahString,
-        broker_name: CheetahString,
-    ) -> Option<BrokerMemberGroup> {
-        let mut group_member = BrokerMemberGroup::new(cluster_name, broker_name.clone());
-
-        // Get broker addresses from broker_addr_table
-        if let Some(broker_data) = self.broker_addr_table.get(&broker_name) {
-            group_member.broker_addrs = broker_data.broker_addrs().clone();
-        }
-
-        Some(group_member)
-    }
-
-    /// Get all cluster info
-    ///
-    /// Rust requires creating snapshot copies due to ownership rules and DashMap usage.
-    pub fn get_all_cluster_info(&self) -> ClusterInfo {
-        let _management_view = self.route_mutations.begin_management_read();
-        ClusterInfo {
-            broker_addr_table: Some(self.broker_addr_table.snapshot()),
-            cluster_addr_table: Some(self.cluster_addr_table.snapshot()),
-        }
     }
 
     /// Wipe write permission of broker by lock
@@ -2087,80 +2024,6 @@ impl RouteInfoManager {
 
         self.publish_topic_route_snapshots(&route_mutation, affected_topics);
         topic_queue_pairs.len() as i32
-    }
-
-    /// Get system topic list.
-    ///
-    /// Java NameServer exposes cluster names and broker names here rather than
-    /// filtering the topic table by built-in system topics.
-    pub fn get_system_topic_list(&self) -> TopicList {
-        let _management_view = self.route_mutations.begin_management_read();
-        let mut topic_list =
-            Vec::with_capacity(self.cluster_addr_table.cluster_count() + self.cluster_addr_table.total_broker_count());
-        self.cluster_addr_table.append_cluster_and_broker_names(&mut topic_list);
-
-        TopicList {
-            topic_list,
-            broker_addr: self.broker_addr_table.first_broker_addr(),
-        }
-    }
-
-    /// Get unit topics.
-    ///
-    /// Returns topics marked with the Unit flag (FLAG_UNIT = 0x1).
-    /// These are pure unit topics that support unit-based message routing.
-    pub fn get_unit_topics(&self) -> TopicList {
-        use rocketmq_model::common::TopicSysFlag;
-
-        let _management_view = self.route_mutations.begin_management_read();
-        let topics = self
-            .topic_queue_table
-            .filter_topics_by_first_queue(|queue_data| TopicSysFlag::has_unit_flag(queue_data.topic_sys_flag()));
-
-        TopicList {
-            topic_list: topics,
-            broker_addr: None,
-        }
-    }
-
-    /// Get topics with unit-subscription semantics.
-    ///
-    /// Returns topics marked with the Unit Subscription flag (FLAG_UNIT_SUB = 0x2).
-    /// These topics have consumers that support unit-based subscription.
-    pub fn get_has_unit_sub_topic_list(&self) -> TopicList {
-        use rocketmq_model::common::TopicSysFlag;
-
-        let _management_view = self.route_mutations.begin_management_read();
-        let topics = self
-            .topic_queue_table
-            .filter_topics_by_first_queue(|queue_data| TopicSysFlag::has_unit_sub_flag(queue_data.topic_sys_flag()));
-
-        TopicList {
-            topic_list: topics,
-            broker_addr: None,
-        }
-    }
-
-    /// Get non-unit topics with unit-subscription semantics.
-    ///
-    /// Returns topics that:
-    /// - Have unit subscription flag (FLAG_UNIT_SUB = 0x2) set
-    /// - Do NOT have unit flag (FLAG_UNIT = 0x1) set
-    ///
-    /// These are non-unit topics whose consumers support unit-based subscription.
-    pub fn get_has_unit_sub_ununit_topic_list(&self) -> TopicList {
-        use rocketmq_model::common::TopicSysFlag;
-
-        let _management_view = self.route_mutations.begin_management_read();
-        let topics = self.topic_queue_table.filter_topics_by_first_queue(|queue_data| {
-            let sys_flag = queue_data.topic_sys_flag();
-            !TopicSysFlag::has_unit_flag(sys_flag) && TopicSysFlag::has_unit_sub_flag(sys_flag)
-        });
-
-        TopicList {
-            topic_list: topics,
-            broker_addr: None,
-        }
     }
 }
 
