@@ -737,6 +737,10 @@ mod tests {
         metrics.record_active_brokers(2, &attrs);
         metrics.record_route_error(NameServerRouteErrorKind::NotFound);
         metrics.record_route_freshness(25);
+        metrics.record_registration_delta("changed", 3);
+        metrics.record_unregistration_queue("queued", 2);
+        metrics.record_unregistration_batch(2);
+        metrics.record_expiry_scan("shadow", 10, 1, Duration::from_micros(75));
     }
 
     #[test]
@@ -747,6 +751,10 @@ mod tests {
         metrics.record_active_broker_count(2);
         metrics.record_route_error(NameServerRouteErrorKind::NotFound);
         metrics.record_route_freshness(25);
+        metrics.record_registration_delta("unchanged", 0);
+        metrics.record_unregistration_queue("coalesced", 0);
+        metrics.record_unregistration_batch(1);
+        metrics.record_expiry_scan("off", 10, 0, Duration::from_micros(25));
         assert!(!metrics.is_enabled());
         assert!(!metrics.should_record_route_freshness(1));
     }
