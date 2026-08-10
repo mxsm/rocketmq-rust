@@ -130,6 +130,17 @@ pub mod metrics {
     pub const NAMESRV_ACTIVE_BROKERS: &str = "rocketmq_namesrv_active_brokers";
     pub const NAMESRV_ROUTE_ERRORS_TOTAL: &str = "rocketmq_namesrv_route_errors_total";
     pub const NAMESRV_ROUTE_FRESHNESS: &str = "rocketmq_namesrv_route_freshness";
+    pub const NAMESRV_ROUTE_FRESHNESS_SAMPLED_TOTAL: &str = "rocketmq_namesrv_route_freshness_sampled_total";
+    pub const NAMESRV_ROUTE_STAGE_LATENCY: &str = "rocketmq_namesrv_route_stage_latency";
+    pub const NAMESRV_ROUTE_RESPONSE_BYTES: &str = "rocketmq_namesrv_route_response_bytes";
+    pub const NAMESRV_ROUTE_CACHE_EVENTS_TOTAL: &str = "rocketmq_namesrv_route_cache_events_total";
+    pub const NAMESRV_ROUTE_CACHE_BYTES: &str = "rocketmq_namesrv_route_cache_bytes";
+    pub const NAMESRV_WORKLOAD_ADMISSION_EVENTS_TOTAL: &str = "rocketmq_namesrv_workload_admission_events_total";
+    pub const NAMESRV_WORKLOAD_ADMISSION_INFLIGHT: &str = "rocketmq_namesrv_workload_admission_inflight";
+    pub const NAMESRV_WORKLOAD_ADMISSION_WAITING: &str = "rocketmq_namesrv_workload_admission_waiting";
+    pub const NAMESRV_ROUTE_RESPONSE_WRITE_LATENCY: &str = "rocketmq_namesrv_route_response_write_latency";
+    pub const NAMESRV_ROUTE_END_TO_END_LATENCY: &str = "rocketmq_namesrv_route_end_to_end_latency";
+    pub const NAMESRV_ROUTE_RESPONSE_WRITE_ERRORS_TOTAL: &str = "rocketmq_namesrv_route_response_write_errors_total";
     pub const CONTROLLER_ELECTION_TOTAL: &str = "rocketmq_controller_election_total";
     pub const CONTROLLER_ELECTION_LATENCY: &str = "rocketmq_controller_election_latency";
     pub const CONTROLLER_LEADER_CHANGES_TOTAL: &str = "rocketmq_controller_leader_changes_total";
@@ -202,6 +213,7 @@ pub mod labels {
     pub const IS_LONG_POLLING: &str = "is_long_polling";
     pub const EVENT: &str = "event";
     pub const RESULT: &str = "result";
+    pub const STAGE: &str = "stage";
     pub const STATE: &str = "state";
     pub const STORAGE_TYPE: &str = "storage_type";
     pub const STORAGE_MEDIUM: &str = "storage_medium";

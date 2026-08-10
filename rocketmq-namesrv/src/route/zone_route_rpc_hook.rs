@@ -14,18 +14,44 @@
 
 use cheetah_string::CheetahString;
 use rocketmq_model::common::mix_all;
+#[cfg(test)]
 use rocketmq_model::common::mix_all::MASTER_ID;
-use rocketmq_model::version::RocketMqVersion;
+use rocketmq_observability::metrics::namesrv::NameServerMetrics;
+use rocketmq_observability::metrics::namesrv::NameServerRouteStage;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
-use rocketmq_protocol::protocol::header::client_request_header::GetRouteInfoRequestHeader;
-use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+#[cfg(test)]
 use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_transport::api::v1::RPCHook;
+use std::time::Instant;
+use tracing::warn;
 
-pub struct ZoneRouteRPCHook;
+#[cfg(test)]
+use std::sync::atomic::AtomicU64;
+#[cfg(test)]
+use std::sync::atomic::Ordering;
+
+use crate::route::zone_filter::filter_route_by_zone;
+use crate::route::zone_filter::ZoneRequest;
+use crate::route::zone_filter::TYPED_ZONE_ROUTE_ENABLED;
+use crate::route::zone_filter::TYPED_ZONE_ROUTE_MARKER;
+use crate::route::zone_filter::TYPED_ZONE_ROUTE_SHADOW;
+
+#[cfg(test)]
+static ZONE_HOOK_DECODE_COUNT: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Clone, Default)]
+pub struct ZoneRouteRPCHook {
+    metrics: NameServerMetrics,
+}
+
+impl ZoneRouteRPCHook {
+    pub(crate) fn new(metrics: NameServerMetrics) -> Self {
+        Self { metrics }
+    }
+}
 
 impl RPCHook for ZoneRouteRPCHook {
     #[inline(always)]
@@ -49,6 +75,13 @@ impl RPCHook for ZoneRouteRPCHook {
         if response.get_body().is_none() || ResponseCode::Success as i32 != response.code() {
             return Ok(());
         }
+        let typed_mode = request
+            .get_ext_fields()
+            .and_then(|fields| fields.get(TYPED_ZONE_ROUTE_MARKER))
+            .map(CheetahString::as_str);
+        if typed_mode == Some(TYPED_ZONE_ROUTE_ENABLED) {
+            return Ok(());
+        }
         let zone_mode = if let Some(ext) = request.get_ext_fields() {
             ext.get(mix_all::ZONE_MODE)
                 .unwrap_or(&"false".into())
@@ -66,84 +99,53 @@ impl RPCHook for ZoneRouteRPCHook {
             return Ok(());
         }
         let zone_name = zone_name.unwrap();
-        if zone_name.is_empty() {
+        if zone_name.trim().is_empty() {
             return Ok(());
         }
 
-        let mut topic_route_data = TopicRouteData::decode(response.get_body().unwrap())?;
+        let hook_started = Instant::now();
+        #[cfg(test)]
+        ZONE_HOOK_DECODE_COUNT.fetch_add(1, Ordering::Relaxed);
+        let original_route_data = TopicRouteData::decode(response.get_body().unwrap())?;
+        let mut topic_route_data = original_route_data.clone();
         filter_by_zone_name(&mut topic_route_data, zone_name);
-        let body = if should_use_standard_json_route_response(request) {
-            topic_route_data.encode_standard_json()?
-        } else {
-            topic_route_data.encode()?
-        };
+        let body = topic_route_data.encode()?;
+        if typed_mode == Some(TYPED_ZONE_ROUTE_SHADOW) {
+            let typed_route = filter_route_by_zone(&original_route_data, &ZoneRequest::enabled(zone_name.clone()));
+            let typed_body = typed_route.encode()?;
+            if typed_body != body {
+                warn!(
+                    mode = "shadow",
+                    reason = "encoded-route-mismatch",
+                    legacy_bytes = body.len(),
+                    typed_bytes = typed_body.len(),
+                    "typed zone route differs from the legacy hook"
+                );
+            }
+        }
         response.set_body_mut_ref(body);
+        self.metrics
+            .record_route_stage(NameServerRouteStage::LegacyZoneHook, hook_started.elapsed());
         Ok(())
     }
 }
 
-fn should_use_standard_json_route_response(request: &RemotingCommand) -> bool {
-    request.version() >= RocketMqVersion::V4_9_4 as i32 || accept_standard_json_only(request)
-}
-
-fn accept_standard_json_only(request: &RemotingCommand) -> bool {
-    if let Some(header) = request.read_custom_header_ref::<GetRouteInfoRequestHeader>() {
-        if header.accept_standard_json_only.unwrap_or(false) {
-            return true;
-        }
-    }
-
-    request
-        .get_ext_fields()
-        .and_then(|ext_fields| ext_fields.get("acceptStandardJsonOnly"))
-        .and_then(|value| value.parse::<bool>().ok())
-        .unwrap_or(false)
-}
-
 pub fn filter_by_zone_name(topic_route_data: &mut TopicRouteData, zone_name: &CheetahString) {
-    use std::collections::HashMap;
-
-    let mut broker_data_reserved = Vec::new();
-    let mut broker_data_removed: HashMap<CheetahString, BrokerData> = HashMap::new();
-
-    for bd in topic_route_data.broker_datas.iter() {
-        let addrs = bd.broker_addrs();
-
-        // master down => keep (consume from slave)
-        let master_down = !addrs.contains_key(&MASTER_ID);
-
-        let same_zone = bd
-            .zone_name()
-            .map(|z| z.eq_ignore_ascii_case(zone_name))
-            .unwrap_or(false);
-
-        if master_down || same_zone {
-            broker_data_reserved.push(bd.clone());
-        } else {
-            broker_data_removed.insert(bd.broker_name().clone(), bd.clone());
-        }
+    if let std::borrow::Cow::Owned(filtered) =
+        filter_route_by_zone(topic_route_data, &ZoneRequest::enabled(zone_name.clone()))
+    {
+        *topic_route_data = filtered;
     }
+}
 
-    topic_route_data.broker_datas = broker_data_reserved;
+#[cfg(test)]
+pub(crate) fn reset_zone_hook_decode_count() {
+    ZONE_HOOK_DECODE_COUNT.store(0, Ordering::Relaxed);
+}
 
-    // Filter queue data
-    let mut queue_data_reserved = Vec::new();
-    for qd in topic_route_data.queue_datas.iter() {
-        if !broker_data_removed.contains_key(&qd.broker_name) {
-            queue_data_reserved.push(qd.clone());
-        }
-    }
-    topic_route_data.queue_datas = queue_data_reserved;
-
-    // Remove filter server entries whose broker addresses belong to removed brokers
-
-    if !topic_route_data.filter_server_table.is_empty() {
-        for bd in broker_data_removed.values() {
-            for addr in bd.broker_addrs().values() {
-                topic_route_data.filter_server_table.remove(addr);
-            }
-        }
-    }
+#[cfg(test)]
+pub(crate) fn zone_hook_decode_count() -> u64 {
+    ZONE_HOOK_DECODE_COUNT.load(Ordering::Relaxed)
 }
 
 #[cfg(test)]
@@ -220,15 +222,15 @@ mod tests {
 
     fn assert_hook_keeps_response_body(request: RemotingCommand, mut response: RemotingCommand) {
         let original_body = response.body().cloned();
-        ZoneRouteRPCHook
+        ZoneRouteRPCHook::default()
             .do_after_response(remote_addr(), &request, &mut response)
             .unwrap();
         assert_eq!(response.body(), original_body.as_ref());
     }
 
     #[test]
-    fn do_after_response_preserves_standard_json_for_accept_standard_json_only_requests() {
-        let hook = ZoneRouteRPCHook;
+    fn do_after_response_matches_java_legacy_json_for_zone_requests() {
+        let hook = ZoneRouteRPCHook::default();
         let request = zone_route_request(Some(true), RocketMqVersion::V4_9_3 as i32);
         let topic_route_data = sample_topic_route_data();
         let mut expected = topic_route_data.clone();
@@ -241,22 +243,14 @@ mod tests {
         hook.do_after_response(remote_addr(), &request, &mut response).unwrap();
 
         let body = response.body().expect("zone hook should keep a response body");
-        let body = std::str::from_utf8(body).expect("route body should stay utf-8 json");
-        let broker_addrs_index = body
-            .find("\"brokerAddrs\":{\"10\"")
-            .expect("standard json should sort brokerAddrs");
-        let broker_addrs_second_index = body
-            .find("\"2\":\"10.0.0.2:10911\"")
-            .expect("standard json should include broker id 2");
-        assert!(broker_addrs_index < broker_addrs_second_index);
-
-        let decoded = TopicRouteData::decode(body.as_bytes()).unwrap();
+        assert!(body.starts_with(br#"{"orderTopicConf""#));
+        let decoded = TopicRouteData::decode(body).unwrap();
         assert_eq!(decoded, expected);
     }
 
     #[test]
     fn do_after_response_keeps_legacy_json_for_legacy_requests_without_standard_flag() {
-        let hook = ZoneRouteRPCHook;
+        let hook = ZoneRouteRPCHook::default();
         let request = zone_route_request(Some(false), RocketMqVersion::V4_9_3 as i32);
         let topic_route_data = sample_topic_route_data();
         let mut expected = topic_route_data.clone();

@@ -163,6 +163,14 @@ fn apply_to_snapshot(
             | "productEnvName"
             | "clusterTest"
             | "orderMessageEnable"
+            | "routeFreshnessSampleInterval"
+            | "namesrvTypedZoneRouteEnable"
+            | "namesrvTypedZoneRouteShadow"
+            | "namesrvRouteResponseCacheEnable"
+            | "namesrvRouteResponseCacheMaxBytes"
+            | "namesrvRouteResponseCacheMaxEntries"
+            | "namesrvRouteResponseCacheMaxSingleResponseBytes"
+            | "namesrvRouteResponseCacheShards"
             | "returnOrderTopicConfigToBroker"
             | "clientRequestThreadPoolNums"
             | "defaultThreadPoolNums"
@@ -231,6 +239,46 @@ fn format_runtime_config(config_snapshot: &NameServerRuntimeConfig) -> RocketMQR
         &mut entries,
         "orderMessageEnable",
         name_server_config.order_message_enable,
+    );
+    push_config_entry(
+        &mut entries,
+        "routeFreshnessSampleInterval",
+        name_server_config.route_freshness_sample_interval,
+    );
+    push_config_entry(
+        &mut entries,
+        "namesrvTypedZoneRouteEnable",
+        name_server_config.namesrv_typed_zone_route_enable,
+    );
+    push_config_entry(
+        &mut entries,
+        "namesrvTypedZoneRouteShadow",
+        name_server_config.namesrv_typed_zone_route_shadow,
+    );
+    push_config_entry(
+        &mut entries,
+        "namesrvRouteResponseCacheEnable",
+        name_server_config.namesrv_route_response_cache_enable,
+    );
+    push_config_entry(
+        &mut entries,
+        "namesrvRouteResponseCacheMaxBytes",
+        name_server_config.namesrv_route_response_cache_max_bytes,
+    );
+    push_config_entry(
+        &mut entries,
+        "namesrvRouteResponseCacheMaxEntries",
+        name_server_config.namesrv_route_response_cache_max_entries,
+    );
+    push_config_entry(
+        &mut entries,
+        "namesrvRouteResponseCacheMaxSingleResponseBytes",
+        name_server_config.namesrv_route_response_cache_max_single_response_bytes,
+    );
+    push_config_entry(
+        &mut entries,
+        "namesrvRouteResponseCacheShards",
+        name_server_config.namesrv_route_response_cache_shards,
     );
     push_config_entry(
         &mut entries,
@@ -451,6 +499,12 @@ mod tests {
             ("defaultThreadPoolNums", "0"),
             ("defaultThreadPoolQueueCapacity", "10000001"),
             ("scanNotActiveBrokerInterval", "0"),
+            ("routeFreshnessSampleInterval", "0"),
+            ("routeFreshnessSampleInterval", "1000001"),
+            ("namesrvRouteResponseCacheMaxBytes", "0"),
+            ("namesrvRouteResponseCacheMaxEntries", "0"),
+            ("namesrvRouteResponseCacheMaxSingleResponseBytes", "0"),
+            ("namesrvRouteResponseCacheShards", "0"),
             ("connectTimeoutMillis", "-1"),
         ] {
             let result = classify_runtime_updates([(CheetahString::from(key), CheetahString::from(value))]);

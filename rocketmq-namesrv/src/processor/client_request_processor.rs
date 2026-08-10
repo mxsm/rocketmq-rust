@@ -14,10 +14,14 @@
 
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::time::Instant;
 
+use bytes::Bytes;
 use cheetah_string::CheetahString;
 use rocketmq_model::common::FAQUrl;
 use rocketmq_model::version::RocketMqVersion;
+use rocketmq_observability::metrics::namesrv::NameServerRouteCacheOutcome;
+use rocketmq_observability::metrics::namesrv::NameServerRouteStage;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::client_request_header::GetRouteInfoRequestHeader;
@@ -34,16 +38,26 @@ use tracing::warn;
 
 use crate::bootstrap::NameServerRuntimeHandle;
 use crate::processor::NAMESPACE_ORDER_TOPIC_CONFIG;
+use crate::route::response_cache::JsonEncoding;
+use crate::route::response_cache::RouteCacheKey;
+use crate::route::response_cache::RouteCacheOutcomeKind;
+use crate::route::response_cache::RouteCachePolicy;
+use crate::route::zone_filter::filter_route_by_zone;
+use crate::route::zone_filter::ZoneRequest;
+use crate::route::zone_filter::TYPED_ZONE_ROUTE_ENABLED;
+use crate::route::zone_filter::TYPED_ZONE_ROUTE_MARKER;
+use crate::route::zone_filter::TYPED_ZONE_ROUTE_SHADOW;
+
+#[cfg(test)]
+thread_local! {
+    static ROUTE_ENCODE_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
 
 /// Client request processor for handling route info queries
 pub struct ClientRequestProcessor {
     name_server_runtime_inner: NameServerRuntimeHandle,
     need_check_namesrv_ready: AtomicBool,
     startup_time_millis: u64,
-    // Cached configuration values (immutable after construction)
-    wait_seconds_millis: u64,
-    need_wait_for_service: bool,
-    order_message_enable: bool,
 }
 
 impl RequestProcessor for ClientRequestProcessor {
@@ -76,17 +90,9 @@ impl ClientRequestProcessor {
     }
 
     pub(crate) fn new(name_server_runtime_inner: NameServerRuntimeHandle) -> Self {
-        let config = name_server_runtime_inner.name_server_config();
-        let wait_seconds_millis = config.wait_seconds_for_service as u64 * 1000;
-        let need_wait_for_service = config.need_wait_for_service;
-        let order_message_enable = config.order_message_enable;
-
         Self {
             need_check_namesrv_ready: AtomicBool::new(true),
             startup_time_millis: time_utils::current_millis(),
-            wait_seconds_millis,
-            need_wait_for_service,
-            order_message_enable,
             name_server_runtime_inner,
         }
     }
@@ -106,12 +112,13 @@ impl ClientRequestProcessor {
                 return Err(error);
             }
         };
+        let route_config = self.name_server_runtime_inner.name_server_config();
 
-        // Early return: Check if nameserver is ready (using cached config)
-        if self.need_wait_for_service {
+        if route_config.need_wait_for_service {
             let elapsed_millis = time_utils::current_millis().saturating_sub(self.startup_time_millis);
+            let wait_seconds_millis = route_config.wait_seconds_for_service as u64 * 1000;
             let namesrv_ready =
-                !self.need_check_namesrv_ready.load(Ordering::Relaxed) || elapsed_millis >= self.wait_seconds_millis;
+                !self.need_check_namesrv_ready.load(Ordering::Relaxed) || elapsed_millis >= wait_seconds_millis;
 
             if !namesrv_ready {
                 warn!("name server not ready. request code {}", request.code());
@@ -122,10 +129,10 @@ impl ClientRequestProcessor {
         }
 
         // Lookup topic route data
-        let mut topic_route_data = match self
+        let topic_route_view = match self
             .name_server_runtime_inner
             .route_info_manager()
-            .pickup_topic_route_data(request_header.topic.as_ref())
+            .load_topic_route_view(request_header.topic.as_ref())
         {
             Ok(data) => data,
             Err(
@@ -148,37 +155,109 @@ impl ClientRequestProcessor {
                 return Err(error);
             }
         };
-        if let Some(freshness_ms) = self
-            .name_server_runtime_inner
-            .route_info_manager()
-            .route_freshness_millis(&topic_route_data)
-        {
-            self.name_server_runtime_inner
-                .namesrv_metrics()
-                .record_route_freshness(freshness_ms);
+        let metrics = self.name_server_runtime_inner.namesrv_metrics();
+        if metrics.should_record_route_freshness(route_config.route_freshness_sample_interval) {
+            metrics.record_route_freshness_sampled();
+            if let Some(freshness_ms) = self
+                .name_server_runtime_inner
+                .route_info_manager()
+                .route_freshness_millis(topic_route_view.route_data())
+            {
+                metrics.record_route_freshness(freshness_ms);
+            }
         }
         if self.need_check_namesrv_ready.load(Ordering::Relaxed) {
             self.need_check_namesrv_ready.store(false, Ordering::Relaxed);
         }
 
-        if self.order_message_enable {
-            topic_route_data.order_topic_conf = self.name_server_runtime_inner.kvconfig_manager().get_kvconfig(
+        let mut route_with_order_config;
+        let topic_route_data = if route_config.order_message_enable {
+            route_with_order_config = topic_route_view.route_data().as_ref().clone();
+            route_with_order_config.order_topic_conf = self.name_server_runtime_inner.kvconfig_manager().get_kvconfig(
                 &CheetahString::from_static_str(NAMESPACE_ORDER_TOPIC_CONFIG),
                 &request_header.topic,
             );
-        }
+            &route_with_order_config
+        } else {
+            topic_route_view.route_data().as_ref()
+        };
+        let zone_request = ZoneRequest::from_command(request);
+        let typed_zone_filtered = route_config.namesrv_typed_zone_route_enable && zone_request.is_enabled();
+        let filtered_route;
+        let topic_route_data = if route_config.namesrv_typed_zone_route_enable {
+            request.add_ext_field(TYPED_ZONE_ROUTE_MARKER, TYPED_ZONE_ROUTE_ENABLED);
+            let filter_started = Instant::now();
+            filtered_route = filter_route_by_zone(topic_route_data, &zone_request);
+            metrics.record_route_stage(NameServerRouteStage::ZoneFilter, filter_started.elapsed());
+            filtered_route.as_ref()
+        } else {
+            if route_config.namesrv_typed_zone_route_shadow {
+                request.add_ext_field(TYPED_ZONE_ROUTE_MARKER, TYPED_ZONE_ROUTE_SHADOW);
+            }
+            topic_route_data
+        };
 
-        let content = match encode_topic_route_response(
-            &topic_route_data,
-            request.version(),
-            request_header.accept_standard_json_only,
-        ) {
+        let cache_policy = RouteCachePolicy {
+            enabled: route_config.namesrv_route_response_cache_enable,
+            zone_requested: zone_request.is_enabled(),
+            order_enabled: route_config.order_message_enable,
+            external_route: false,
+        };
+        let encode = || {
+            let encode_started = Instant::now();
+            let result = encode_topic_route_response_for_zone(
+                topic_route_data,
+                request.version(),
+                request_header.accept_standard_json_only,
+                typed_zone_filtered,
+            );
+            metrics.record_route_stage(NameServerRouteStage::Encode, encode_started.elapsed());
+            result
+        };
+        let content = if cache_policy.is_eligible() {
+            let encoding = if should_use_standard_json(request.version(), request_header.accept_standard_json_only) {
+                JsonEncoding::Standard
+            } else {
+                JsonEncoding::Legacy
+            };
+            let key = RouteCacheKey::new(
+                request_header.topic.clone(),
+                topic_route_view.version(),
+                topic_route_view.variant(),
+                encoding,
+            );
+            let cache = self.name_server_runtime_inner.route_response_cache();
+            cache.get_or_try_insert_with(key, encode).map(|outcome| {
+                if metrics.is_enabled() {
+                    let metric_outcome = match outcome.kind {
+                        RouteCacheOutcomeKind::Hit => NameServerRouteCacheOutcome::Hit,
+                        RouteCacheOutcomeKind::Miss => NameServerRouteCacheOutcome::Miss,
+                        RouteCacheOutcomeKind::Oversize => NameServerRouteCacheOutcome::Oversize,
+                    };
+                    metrics.record_route_cache(metric_outcome, cache.stats().weighted_size);
+                }
+                outcome.body
+            })
+        } else {
+            if metrics.is_enabled() {
+                metrics.record_route_cache(
+                    NameServerRouteCacheOutcome::Bypass,
+                    self.name_server_runtime_inner
+                        .route_response_cache()
+                        .stats()
+                        .weighted_size,
+                );
+            }
+            encode().map(Bytes::from)
+        };
+        let content = match content {
             Ok(content) => content,
             Err(error) => {
                 route_span.record("result", "internal");
                 return Err(error);
             }
         };
+        metrics.record_route_response_bytes(content.len());
         route_span.record("result", "success");
         Ok(Some(
             RemotingCommand::create_response_command_with_code(ResponseCode::Success).set_body(content),
@@ -191,11 +270,34 @@ pub(crate) fn encode_topic_route_response(
     request_version: i32,
     accept_standard_json_only: Option<bool>,
 ) -> rocketmq_error::RocketMQResult<Vec<u8>> {
-    if should_use_standard_json(request_version, accept_standard_json_only) {
+    encode_topic_route_response_for_zone(topic_route_data, request_version, accept_standard_json_only, false)
+}
+
+pub(crate) fn encode_topic_route_response_for_zone(
+    topic_route_data: &TopicRouteData,
+    request_version: i32,
+    accept_standard_json_only: Option<bool>,
+    force_java_zone_legacy_json: bool,
+) -> rocketmq_error::RocketMQResult<Vec<u8>> {
+    #[cfg(test)]
+    ROUTE_ENCODE_COUNT.with(|count| count.set(count.get() + 1));
+    if force_java_zone_legacy_json {
+        topic_route_data.encode()
+    } else if should_use_standard_json(request_version, accept_standard_json_only) {
         topic_route_data.encode_standard_json()
     } else {
         topic_route_data.encode()
     }
+}
+
+#[cfg(test)]
+pub(crate) fn reset_route_encode_count() {
+    ROUTE_ENCODE_COUNT.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn route_encode_count() -> u64 {
+    ROUTE_ENCODE_COUNT.with(std::cell::Cell::get)
 }
 
 pub(crate) fn should_use_standard_json(request_version: i32, accept_standard_json_only: Option<bool>) -> bool {
@@ -259,6 +361,17 @@ mod tests {
 
         let encoded =
             encode_topic_route_response(&topic_route_data, RocketMqVersion::V4_9_3 as i32, Some(false)).unwrap();
+
+        assert_eq!(encoded, topic_route_data.encode().unwrap());
+    }
+
+    #[test]
+    fn java_zone_mode_forces_legacy_encoder_for_modern_requests() {
+        let topic_route_data = sample_topic_route_data();
+
+        let encoded =
+            encode_topic_route_response_for_zone(&topic_route_data, RocketMqVersion::V4_9_4 as i32, Some(true), true)
+                .unwrap();
 
         assert_eq!(encoded, topic_route_data.encode().unwrap());
     }

@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "seed": 9191,
+  "profiles": [
+    {
+      "name": "smoke",
+      "topics": 100,
+      "brokers": 10,
+      "routeWidth": 4,
+      "connections": 16,
+      "operations": 2000,
+      "writePercent": 5,
+      "zonePercent": 10,
+      "standardJsonPercent": 50
+    },
+    {
+      "name": "topics-20k-width-1",
+      "topics": 20000,
+      "brokers": 1000,
+      "routeWidth": 1,
+      "connections": 64,
+      "operations": 100000,
+      "writePercent": 5,
+      "zonePercent": 0,
+      "standardJsonPercent": 50
+    },
+    {
+      "name": "topics-100k-width-4",
+      "topics": 100000,
+      "brokers": 1000,
+      "routeWidth": 4,
+      "connections": 256,
+      "operations": 200000,
+      "writePercent": 5,
+      "zonePercent": 10,
+      "standardJsonPercent": 50
+    },
+    {
+      "name": "topics-100k-width-16",
+      "topics": 100000,
+      "brokers": 1000,
+      "routeWidth": 16,
+      "connections": 1024,
+      "operations": 200000,
+      "writePercent": 5,
+      "zonePercent": 10,
+      "standardJsonPercent": 50
+    }
+  ]
+}

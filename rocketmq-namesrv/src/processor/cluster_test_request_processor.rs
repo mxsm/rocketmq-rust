@@ -18,7 +18,6 @@ use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::client_request_header::GetRouteInfoRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use rocketmq_transport::api::v1::RequestProcessor;
@@ -26,7 +25,13 @@ use tracing::debug;
 use tracing::info;
 
 use crate::bootstrap::NameServerRuntimeHandle;
+use crate::processor::client_request_processor::encode_topic_route_response_for_zone;
 use crate::processor::NAMESPACE_ORDER_TOPIC_CONFIG;
+use crate::route::zone_filter::filter_route_by_zone;
+use crate::route::zone_filter::ZoneRequest;
+use crate::route::zone_filter::TYPED_ZONE_ROUTE_ENABLED;
+use crate::route::zone_filter::TYPED_ZONE_ROUTE_MARKER;
+use crate::route::zone_filter::TYPED_ZONE_ROUTE_SHADOW;
 
 mod route_lookup;
 
@@ -49,6 +54,7 @@ impl ClusterTestRequestProcessor {
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<GetRouteInfoRequestHeader>()?;
+        let route_config = self.name_server_runtime_inner.name_server_config();
 
         let mut topic_route_data = match self
             .name_server_runtime_inner
@@ -80,15 +86,32 @@ impl ClusterTestRequestProcessor {
                 Err(error) => {
                     info!(
                         "get route info by topic from product environment failed. envName={}, error={}",
-                        self.name_server_runtime_inner.name_server_config().product_env_name,
-                        error
+                        route_config.product_env_name, error
                     );
                 }
             }
         }
 
         if let Some(topic_route_data) = topic_route_data {
-            let content = topic_route_data.encode()?;
+            let zone_request = ZoneRequest::from_command(request);
+            let typed_zone_filtered = route_config.namesrv_typed_zone_route_enable && zone_request.is_enabled();
+            let filtered_route;
+            let topic_route_data = if route_config.namesrv_typed_zone_route_enable {
+                request.add_ext_field(TYPED_ZONE_ROUTE_MARKER, TYPED_ZONE_ROUTE_ENABLED);
+                filtered_route = filter_route_by_zone(&topic_route_data, &zone_request);
+                filtered_route.as_ref()
+            } else {
+                if route_config.namesrv_typed_zone_route_shadow {
+                    request.add_ext_field(TYPED_ZONE_ROUTE_MARKER, TYPED_ZONE_ROUTE_SHADOW);
+                }
+                &topic_route_data
+            };
+            let content = encode_topic_route_response_for_zone(
+                topic_route_data,
+                request.version(),
+                request_header.accept_standard_json_only,
+                typed_zone_filtered,
+            )?;
             return Ok(Some(
                 RemotingCommand::create_response_command_with_code(ResponseCode::Success).set_body(content),
             ));
@@ -143,6 +166,7 @@ mod tests {
     use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
     use rocketmq_protocol::protocol::route::route_data_view::QueueData;
     use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
+    use rocketmq_protocol::protocol::RemotingSerializable;
     use rocketmq_transport::api::v1::RequestProcessor;
     use rocketmq_transport::test_support::LocalRequestHarness;
 

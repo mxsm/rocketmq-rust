@@ -4257,6 +4257,7 @@ version = "1.0.0"
 dependencies = [
  "anyhow",
  "arc-swap",
+ "bytes",
  "cheetah-string",
  "clap",
  "config",
@@ -4265,6 +4266,7 @@ dependencies = [
  "dirs",
  "futures",
  "hashbrown 0.17.1",
+ "moka",
  "parking_lot",
  "rocketmq-auth",
  "rocketmq-controller",
@@ -4277,6 +4279,7 @@ dependencies = [
  "rocketmq-transport",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "tempfile",
  "tokio",
  "tokio-util",

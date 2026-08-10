@@ -69,6 +69,8 @@ dirs.workspace        = true
 parking_lot.workspace = true
 dashmap               = { version = "6.2.1", features = ["serde"] }
 hashbrown             = "0.17"
+bytes.workspace       = true
+moka                   = { version = "0.12", features = ["sync"] }
 
 clap           = { version = "4.6.1", features = ["derive"] }
 cheetah-string = { workspace = true }
@@ -77,6 +79,7 @@ cheetah-string = { workspace = true }
 rocketmq-transport = { workspace = true, features = ["test-support"] }
 criterion = { version = "0.8", features = ["html_reports", "async_futures"] }
 futures   = "0.3"
+sha2 = "0.11"
 tempfile = "3.27.0"
 
 [[bin]]
@@ -101,4 +104,8 @@ harness = false
 
 [[bench]]
 name    = "namesrv_shutdown_drain_bench"
+harness = false
+
+[[bench]]
+name    = "namesrv_route_e2e_bench"
 harness = false

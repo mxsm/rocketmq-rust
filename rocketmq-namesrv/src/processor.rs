@@ -18,7 +18,9 @@ use std::time::Instant;
 
 use rocketmq_auth::AuthRuntime;
 use rocketmq_error::RocketMQError;
+use rocketmq_observability::metrics::namesrv::NameServerAdmissionOutcome;
 use rocketmq_observability::metrics::namesrv::NameServerMetrics;
+use rocketmq_observability::metrics::namesrv::NameServerWorkloadClass;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_transport::api::v1::command_from_error_with_remark_and_opaque;
@@ -27,18 +29,25 @@ use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use rocketmq_transport::api::v1::RejectRequestResponse;
 use rocketmq_transport::api::v1::RequestProcessor;
+use rocketmq_transport::api::v1::ResponseWriteObservation;
+use rocketmq_transport::api::v1::ResponseWriteOutcome;
 
 pub use self::client_request_processor::ClientRequestProcessor;
 pub use self::cluster_test_request_processor::ClusterTestRequestProcessor;
 pub(crate) use self::cluster_test_request_processor::ClusterTestRouteLookup;
 pub(crate) use self::cluster_test_request_processor::TransportClusterTestRouteLookup;
 use crate::bootstrap::InFlightRequestTracker;
+use crate::bootstrap::NameServerRuntimeHandle;
 use crate::processor::default_request_processor::DefaultRequestProcessor;
+use crate::processor::workload_admission::NameServerWorkloadAdmission;
+use crate::processor::workload_admission::WorkloadAdmissionClass;
 use crate::security::classify_namesrv_request;
 
-mod client_request_processor;
+pub(crate) mod client_request_processor;
 mod cluster_test_request_processor;
 pub mod default_request_processor;
+#[doc(hidden)]
+pub mod workload_admission;
 
 const NAMESPACE_ORDER_TOPIC_CONFIG: &str = "ORDER_TOPIC_CONFIG";
 
@@ -88,20 +97,24 @@ pub(crate) type RequestCodeType = i32;
 
 #[derive(Clone, Default)]
 pub struct NameServerRequestProcessor {
-    processor_table: HashMap<RequestCodeType, NameServerRequestProcessorWrapper>,
+    processor_table: Arc<HashMap<RequestCodeType, NameServerRequestProcessorWrapper>>,
     default_request_processor: Option<NameServerRequestProcessorWrapper>,
     in_flight_requests: Option<Arc<InFlightRequestTracker>>,
     auth_runtime: Option<Arc<AuthRuntime>>,
+    runtime_handle: Option<NameServerRuntimeHandle>,
+    workload_admission: Option<Arc<NameServerWorkloadAdmission>>,
     metrics: NameServerMetrics,
 }
 
 impl NameServerRequestProcessor {
     pub fn new() -> Self {
         Self {
-            processor_table: HashMap::new(),
+            processor_table: Arc::new(HashMap::new()),
             default_request_processor: None,
             in_flight_requests: None,
             auth_runtime: None,
+            runtime_handle: None,
+            workload_admission: None,
             metrics: NameServerMetrics::noop(),
         }
     }
@@ -118,7 +131,7 @@ impl NameServerRequestProcessor {
     }
 
     pub fn register_processor(&mut self, request_code: RequestCode, processor: NameServerRequestProcessorWrapper) {
-        self.processor_table.insert(request_code as i32, processor);
+        Arc::make_mut(&mut self.processor_table).insert(request_code as i32, processor);
     }
 
     pub fn register_default_processor(&mut self, processor: NameServerRequestProcessorWrapper) {
@@ -127,6 +140,16 @@ impl NameServerRequestProcessor {
 
     pub(crate) fn with_auth_runtime(mut self, auth_runtime: Option<Arc<AuthRuntime>>) -> Self {
         self.auth_runtime = auth_runtime;
+        self
+    }
+
+    pub(crate) fn with_runtime_handle(mut self, runtime_handle: NameServerRuntimeHandle) -> Self {
+        self.runtime_handle = Some(runtime_handle);
+        self
+    }
+
+    pub(crate) fn with_workload_admission(mut self, admission: Arc<NameServerWorkloadAdmission>) -> Self {
+        self.workload_admission = Some(admission);
         self
     }
 }
@@ -142,6 +165,7 @@ impl RequestProcessor for NameServerRequestProcessor {
             .in_flight_requests
             .as_ref()
             .map(|in_flight_requests| in_flight_requests.enter());
+        let route_request_started = (request.code() == RequestCode::GetRouteinfoByTopic as i32).then(Instant::now);
         let request_class = match classify_namesrv_request(RequestCode::from(request.code())) {
             Some(request_class) => request_class,
             None => {
@@ -170,16 +194,72 @@ impl RequestProcessor for NameServerRequestProcessor {
                 )));
             }
         }
-        let route_request_started = (request.code() == RequestCode::GetRouteinfoByTopic as i32).then(Instant::now);
-        let response = match self.processor_table.get_mut(request.code_ref()) {
-            None => match self.default_request_processor.as_mut() {
+        let admission_class = WorkloadAdmissionClass::from(request_class);
+        let admission_config = self
+            .runtime_handle
+            .as_ref()
+            .map(NameServerRuntimeHandle::name_server_config);
+        let _admission_lease = if let (Some(admission), Some(config)) = (&self.workload_admission, admission_config) {
+            if !config.namesrv_workload_admission_enable {
+                None
+            } else if config.namesrv_workload_admission_observe_only {
+                let lease = admission.try_observe(admission_class);
+                let outcome = if lease.is_some() {
+                    NameServerAdmissionOutcome::Acquired
+                } else {
+                    NameServerAdmissionOutcome::ObserveSaturated
+                };
+                record_admission_metric(&self.metrics, admission, admission_class, outcome);
+                lease
+            } else {
+                match admission.acquire(admission_class).await {
+                    Ok(lease) => {
+                        let outcome = if lease.was_queued() {
+                            NameServerAdmissionOutcome::Queued
+                        } else {
+                            NameServerAdmissionOutcome::Acquired
+                        };
+                        record_admission_metric(&self.metrics, admission, admission_class, outcome);
+                        Some(lease)
+                    }
+                    Err(rejection) => {
+                        let outcome = match rejection {
+                            workload_admission::WorkloadAdmissionRejection::QueueFull => {
+                                NameServerAdmissionOutcome::Rejected
+                            }
+                            workload_admission::WorkloadAdmissionRejection::TimedOut => {
+                                NameServerAdmissionOutcome::TimedOut
+                            }
+                        };
+                        record_admission_metric(&self.metrics, admission, admission_class, outcome);
+                        tracing::warn!(
+                            request_class = admission_class.as_str(),
+                            reason = rejection.as_str(),
+                            "NameServer workload admission rejected request"
+                        );
+                        if let Some(started) = route_request_started {
+                            self.metrics.record_route_request(started.elapsed());
+                            self.metrics.record_route_error(
+                                rocketmq_observability::metrics::namesrv::NameServerRouteErrorKind::Rejected,
+                            );
+                        }
+                        return Ok(Some(workload_admission_rejection_response(rejection, request.opaque())));
+                    }
+                }
+            }
+        } else {
+            None
+        };
+        let had_admission_lease = _admission_lease.is_some();
+        let response = match self.processor_table.get(request.code_ref()).cloned() {
+            None => match self.default_request_processor.clone() {
                 None => {
                     let response = request_code_not_supported_with_opaque(request.code(), request.opaque());
                     Ok(Some(response))
                 }
-                Some(processor) => RequestProcessor::process_request(processor, channel, ctx, request).await,
+                Some(mut processor) => RequestProcessor::process_request(&mut processor, channel, ctx, request).await,
             },
-            Some(processor) => RequestProcessor::process_request(processor, channel, ctx, request).await,
+            Some(mut processor) => RequestProcessor::process_request(&mut processor, channel, ctx, request).await,
         };
         if let Some(started) = route_request_started {
             self.metrics.record_route_request(started.elapsed());
@@ -206,8 +286,56 @@ impl RequestProcessor for NameServerRequestProcessor {
                 Ok(_) => {}
             }
         }
+        drop(_admission_lease);
+        if had_admission_lease {
+            if let Some(admission) = &self.workload_admission {
+                record_admission_metric(
+                    &self.metrics,
+                    admission,
+                    admission_class,
+                    NameServerAdmissionOutcome::Released,
+                );
+            }
+        }
         response
     }
+
+    fn observe_response_write(&self, observation: ResponseWriteObservation) {
+        if observation.request_code == RequestCode::GetRouteinfoByTopic as i32 {
+            self.metrics.record_route_response_write(
+                observation.write_elapsed,
+                observation.end_to_end_elapsed,
+                observation.outcome == ResponseWriteOutcome::Sent,
+            );
+        }
+    }
+}
+
+fn record_admission_metric(
+    metrics: &NameServerMetrics,
+    admission: &NameServerWorkloadAdmission,
+    class: WorkloadAdmissionClass,
+    outcome: NameServerAdmissionOutcome,
+) {
+    let metric_class = match class {
+        WorkloadAdmissionClass::RouteRead => NameServerWorkloadClass::RouteRead,
+        WorkloadAdmissionClass::BrokerControl => NameServerWorkloadClass::BrokerControl,
+        WorkloadAdmissionClass::Admin => NameServerWorkloadClass::Admin,
+    };
+    let (inflight, waiting) = admission.class_counts(class);
+    metrics.record_workload_admission(metric_class, outcome, inflight, waiting);
+}
+
+fn workload_admission_rejection_response(
+    rejection: workload_admission::WorkloadAdmissionRejection,
+    opaque: i32,
+) -> RemotingCommand {
+    RemotingCommand::create_response_command_with_code(rocketmq_protocol::code::response_code::ResponseCode::SystemBusy)
+        .set_remark(format!(
+            "NameServer workload admission rejected request: {}",
+            rejection.as_str()
+        ))
+        .set_opaque(opaque)
 }
 
 #[cfg(test)]
@@ -224,6 +352,27 @@ mod tests {
     use rocketmq_transport::test_support::TestChannelBuilder;
 
     use super::*;
+
+    #[test]
+    fn cloned_nameserver_processors_share_the_dispatch_table() {
+        let processor = NameServerRequestProcessor::new();
+        let cloned = processor.clone();
+
+        assert!(Arc::ptr_eq(&processor.processor_table, &cloned.processor_table));
+    }
+
+    #[test]
+    fn admission_rejection_is_stable_system_busy_and_preserves_opaque() {
+        let response =
+            workload_admission_rejection_response(workload_admission::WorkloadAdmissionRejection::QueueFull, 9191);
+
+        assert_eq!(response.code(), ResponseCode::SystemBusy as i32);
+        assert_eq!(response.opaque(), 9191);
+        assert_eq!(
+            response.remark().map(cheetah_string::CheetahString::as_str),
+            Some("NameServer workload admission rejected request: queue-full")
+        );
+    }
 
     #[tokio::test]
     async fn anonymous_broker_control_request_returns_no_permission_with_opaque() {

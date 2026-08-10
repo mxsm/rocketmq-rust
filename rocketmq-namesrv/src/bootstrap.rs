@@ -74,12 +74,14 @@ use tracing::info;
 use tracing::instrument;
 use tracing::warn;
 
+use crate::processor::workload_admission::NameServerWorkloadAdmission;
 use crate::processor::ClientRequestProcessor;
 use crate::processor::ClusterTestRequestProcessor;
 use crate::processor::ClusterTestRouteLookup;
 use crate::processor::NameServerRequestProcessor;
 use crate::processor::NameServerRequestProcessorWrapper;
 use crate::processor::TransportClusterTestRouteLookup;
+use crate::route::response_cache::RouteResponseCache;
 use crate::route::route_info_manager::RouteInfoManager;
 use crate::route::zone_route_rpc_hook::ZoneRouteRPCHook;
 use crate::route_info::broker_housekeeping_service::BrokerHousekeepingService;
@@ -636,7 +638,7 @@ impl NameServerRuntime {
     /// Initialize RPC hooks for request pre/post-processing
     fn initialize_rpc_hooks(&mut self) {
         if let Some(server) = self.server_inner.as_mut() {
-            server.register_rpc_hook(Arc::new(ZoneRouteRPCHook));
+            server.register_rpc_hook(Arc::new(ZoneRouteRPCHook::new(self.inner.namesrv_metrics())));
             debug!("RPC hooks registered: ZoneRouteRPCHook");
         }
     }
@@ -1008,12 +1010,14 @@ impl NameServerRuntime {
             )))
         };
         let default_request_processor =
-            crate::processor::default_request_processor::DefaultRequestProcessor::new(runtime_handle);
+            crate::processor::default_request_processor::DefaultRequestProcessor::new(runtime_handle.clone());
 
         let mut name_server_request_processor = NameServerRequestProcessor::new_with_in_flight_tracker(
             self.inner.in_flight_request_tracker(),
             self.inner.namesrv_metrics(),
         )
+        .with_runtime_handle(runtime_handle)
+        .with_workload_admission(Arc::clone(&self.inner.workload_admission))
         .with_auth_runtime(self.inner.auth_runtime());
 
         // Register topic route query processor
@@ -1180,6 +1184,8 @@ impl Builder {
         // listener starts. Keep construction itself panic-free so startup can
         // return that typed error instead of panicking in `mpsc::channel`.
         let unregister_broker_queue_capacity = name_server_config.unregister_broker_queue_capacity().unwrap_or(1);
+        let route_response_cache = Arc::new(RouteResponseCache::from_namesrv_config(&name_server_config));
+        let workload_admission = Arc::new(NameServerWorkloadAdmission::from_namesrv_config(&name_server_config));
         let initial_config = Arc::new(NameServerRuntimeConfig {
             name_server_config: Arc::new(name_server_config),
             tokio_client_config: Arc::new(tokio_client_config),
@@ -1206,6 +1212,8 @@ impl Builder {
                 config_metadata_io,
                 auth_runtime: OnceLock::new(),
                 route_info_manager: Arc::new(route_info_manager),
+                route_response_cache: Arc::clone(&route_response_cache),
+                workload_admission: Arc::clone(&workload_admission),
                 kvconfig_manager: Arc::new(KVConfigManager::new(runtime_handle.clone(), metadata_io.clone())),
                 remoting_client,
                 broker_housekeeping_service: Arc::new(BrokerHousekeepingService::new(runtime_handle)),
@@ -1252,6 +1260,8 @@ pub(crate) struct NameServerRuntimeInner {
     config_metadata_io: Option<Result<MetadataIoActor, rocketmq_runtime::MetadataIoError>>,
     auth_runtime: OnceLock<Arc<AuthRuntime>>,
     route_info_manager: Arc<RouteInfoManager>,
+    route_response_cache: Arc<RouteResponseCache>,
+    workload_admission: Arc<NameServerWorkloadAdmission>,
     kvconfig_manager: Arc<KVConfigManager>,
     remoting_client: Arc<RemotingClient>,
     broker_housekeeping_service: Arc<BrokerHousekeepingService>,
@@ -1319,6 +1329,10 @@ impl NameServerRuntimeHandle {
 
     pub(crate) fn route_info_manager(&self) -> Arc<RouteInfoManager> {
         self.runtime().route_info_manager()
+    }
+
+    pub(crate) fn route_response_cache(&self) -> Arc<RouteResponseCache> {
+        self.runtime().route_response_cache()
     }
 
     pub(crate) fn kvconfig_manager(&self) -> Arc<KVConfigManager> {
@@ -1391,6 +1405,10 @@ impl NameServerRuntimeInner {
         self.namesrv_metrics.clone()
     }
 
+    pub(crate) fn route_response_cache(&self) -> Arc<RouteResponseCache> {
+        Arc::clone(&self.route_response_cache)
+    }
+
     pub(crate) fn auth_runtime(&self) -> Option<Arc<AuthRuntime>> {
         self.auth_runtime.get().cloned()
     }
@@ -1454,6 +1472,46 @@ impl NameServerRuntimeInner {
             &mut entries,
             "orderMessageEnable",
             name_server_config.order_message_enable,
+        );
+        push_config_entry(
+            &mut entries,
+            "routeFreshnessSampleInterval",
+            name_server_config.route_freshness_sample_interval,
+        );
+        push_config_entry(
+            &mut entries,
+            "namesrvTypedZoneRouteEnable",
+            name_server_config.namesrv_typed_zone_route_enable,
+        );
+        push_config_entry(
+            &mut entries,
+            "namesrvTypedZoneRouteShadow",
+            name_server_config.namesrv_typed_zone_route_shadow,
+        );
+        push_config_entry(
+            &mut entries,
+            "namesrvRouteResponseCacheEnable",
+            name_server_config.namesrv_route_response_cache_enable,
+        );
+        push_config_entry(
+            &mut entries,
+            "namesrvRouteResponseCacheMaxBytes",
+            name_server_config.namesrv_route_response_cache_max_bytes,
+        );
+        push_config_entry(
+            &mut entries,
+            "namesrvRouteResponseCacheMaxEntries",
+            name_server_config.namesrv_route_response_cache_max_entries,
+        );
+        push_config_entry(
+            &mut entries,
+            "namesrvRouteResponseCacheMaxSingleResponseBytes",
+            name_server_config.namesrv_route_response_cache_max_single_response_bytes,
+        );
+        push_config_entry(
+            &mut entries,
+            "namesrvRouteResponseCacheShards",
+            name_server_config.namesrv_route_response_cache_shards,
         );
         push_config_entry(
             &mut entries,
@@ -1676,6 +1734,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::net::SocketAddr;
     use std::net::TcpListener;
     use std::str;
     use std::sync::atomic::AtomicBool;
@@ -1689,6 +1748,7 @@ mod tests {
     use rocketmq_model::common::constant::PermName;
     use rocketmq_model::common::mix_all::string_to_properties;
     use rocketmq_model::common::mix_all::MASTER_ID;
+    use rocketmq_model::common::mix_all::ZONE_MODE;
     use rocketmq_model::common::mix_all::ZONE_NAME;
     use rocketmq_model::common::TopicSysFlag;
     use rocketmq_model::utils::crc32_utils;
@@ -1729,6 +1789,7 @@ mod tests {
     use rocketmq_protocol::protocol::RemotingSerializable;
     use rocketmq_runtime::RuntimeContext;
     use rocketmq_transport::api::v1::ConnectionState;
+    use rocketmq_transport::api::v1::RPCHook;
     use rocketmq_transport::api::v1::RequestProcessor;
     use rocketmq_transport::api::v1::ServerConfig;
     use rocketmq_transport::api::v1::TlsMode;
@@ -4352,5 +4413,270 @@ mod tests {
         assert_eq!(broker_data.broker_name(), &broker_name);
         assert_eq!(broker_data.broker_addrs().get(&MASTER_ID), Some(&primary_broker_addr));
         assert_eq!(topic_route_data.queue_datas[0].broker_name(), &broker_name);
+    }
+
+    #[tokio::test]
+    async fn noop_metrics_skip_freshness_lookup() {
+        let (namesrv_config, _namesrv_root) = isolated_namesrv_config(NamesrvConfig::default());
+        let bootstrap = build_bootstrap_with_config(namesrv_config);
+        let harness = LocalRequestHarness::new(test_task_group("namesrv-freshness-gate-test"))
+            .await
+            .unwrap();
+        register_test_broker(
+            &bootstrap,
+            &CheetahString::from_static_str("freshness-cluster"),
+            &CheetahString::from_static_str("freshness-broker"),
+            &CheetahString::from_static_str("10.0.0.20:10911"),
+            MASTER_ID,
+            &CheetahString::from_static_str("zone-a"),
+            false,
+            topic_config_wrapper(&[("freshness-topic", 0, PermName::PERM_READ | PermName::PERM_WRITE)]),
+        )
+        .await;
+        let route_manager = bootstrap.runtime_inner().route_info_manager();
+        let mut processor =
+            ClientRequestProcessor::new(NameServerRuntimeHandle::new(&bootstrap.name_server_runtime.inner));
+        let mut request = RemotingCommand::create_request_command(
+            RequestCode::GetRouteinfoByTopic,
+            GetRouteInfoRequestHeader::new(CheetahString::from_static_str("freshness-topic"), Some(true)),
+        );
+        request.make_custom_header_to_net();
+
+        let response = processor
+            .process_request(harness.channel(), harness.context(), &mut request)
+            .await
+            .expect("route processing should succeed")
+            .expect("route processing should return a response");
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        assert_eq!(route_manager.route_freshness_lookup_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn next_request_observes_effective_config_generation() {
+        let (namesrv_config, _namesrv_root) = isolated_namesrv_config(NamesrvConfig::default());
+        let bootstrap = build_bootstrap_with_config(namesrv_config);
+        let harness = LocalRequestHarness::new(test_task_group("namesrv-live-route-config-test"))
+            .await
+            .unwrap();
+        let topic = CheetahString::from_static_str("live-route-config-topic");
+        let order_conf = CheetahString::from_static_str("live-route-config-broker:4");
+        register_test_broker(
+            &bootstrap,
+            &CheetahString::from_static_str("live-route-config-cluster"),
+            &CheetahString::from_static_str("live-route-config-broker"),
+            &CheetahString::from_static_str("10.0.0.21:10911"),
+            MASTER_ID,
+            &CheetahString::from_static_str("zone-a"),
+            false,
+            topic_config_wrapper(&[("live-route-config-topic", 0, PermName::PERM_READ | PermName::PERM_WRITE)]),
+        )
+        .await;
+        bootstrap
+            .runtime_inner()
+            .kvconfig_manager()
+            .put_kv_config(
+                CheetahString::from_static_str("ORDER_TOPIC_CONFIG"),
+                topic.clone(),
+                order_conf.clone(),
+                MetadataDeadline::after(Duration::from_secs(5)),
+            )
+            .await
+            .unwrap();
+        let mut processor =
+            ClientRequestProcessor::new(NameServerRuntimeHandle::new(&bootstrap.name_server_runtime.inner));
+
+        let mut before_request = RemotingCommand::create_request_command(
+            RequestCode::GetRouteinfoByTopic,
+            GetRouteInfoRequestHeader::new(topic.clone(), Some(true)),
+        );
+        before_request.make_custom_header_to_net();
+        let before = processor
+            .process_request(harness.channel(), harness.context(), &mut before_request)
+            .await
+            .unwrap()
+            .unwrap();
+        let before_route =
+            TopicRouteData::decode(before.body().expect("route response should include a body")).unwrap();
+        assert!(before_route.order_topic_conf.is_none());
+
+        let outcome = bootstrap
+            .runtime_inner()
+            .update_runtime_config(HashMap::from([(
+                CheetahString::from_static_str("orderMessageEnable"),
+                CheetahString::from_static_str("true"),
+            )]))
+            .await
+            .expect("live route configuration should update durably");
+        assert_eq!(outcome.effective_generation, 1);
+        assert_eq!(outcome.applied_keys, vec!["orderMessageEnable"]);
+
+        let mut after_request = RemotingCommand::create_request_command(
+            RequestCode::GetRouteinfoByTopic,
+            GetRouteInfoRequestHeader::new(topic, Some(true)),
+        );
+        after_request.make_custom_header_to_net();
+        let after = processor
+            .process_request(harness.channel(), harness.context(), &mut after_request)
+            .await
+            .unwrap()
+            .unwrap();
+        let after_route = TopicRouteData::decode(after.body().expect("route response should include a body")).unwrap();
+        assert_eq!(after_route.order_topic_conf.as_ref(), Some(&order_conf));
+    }
+
+    #[tokio::test]
+    async fn typed_zone_route_encodes_once_without_hook_decode() {
+        let (namesrv_config, _namesrv_root) = isolated_namesrv_config(NamesrvConfig {
+            namesrv_typed_zone_route_enable: true,
+            ..NamesrvConfig::default()
+        });
+        let bootstrap = build_bootstrap_with_config(namesrv_config);
+        let harness = LocalRequestHarness::new(test_task_group("namesrv-typed-zone-test"))
+            .await
+            .unwrap();
+        let topic_wrapper =
+            || topic_config_wrapper(&[("typed-zone-topic", 0, PermName::PERM_READ | PermName::PERM_WRITE)]);
+        register_test_broker(
+            &bootstrap,
+            &CheetahString::from_static_str("typed-zone-cluster"),
+            &CheetahString::from_static_str("typed-zone-broker-a"),
+            &CheetahString::from_static_str("10.0.0.31:10911"),
+            MASTER_ID,
+            &CheetahString::from_static_str("zone-a"),
+            false,
+            topic_wrapper(),
+        )
+        .await;
+        register_test_broker(
+            &bootstrap,
+            &CheetahString::from_static_str("typed-zone-cluster"),
+            &CheetahString::from_static_str("typed-zone-broker-b"),
+            &CheetahString::from_static_str("10.0.0.32:10911"),
+            MASTER_ID,
+            &CheetahString::from_static_str("zone-b"),
+            false,
+            topic_wrapper(),
+        )
+        .await;
+        let mut processor =
+            ClientRequestProcessor::new(NameServerRuntimeHandle::new(&bootstrap.name_server_runtime.inner));
+        let mut request = RemotingCommand::create_request_command(
+            RequestCode::GetRouteinfoByTopic,
+            GetRouteInfoRequestHeader::new(CheetahString::from_static_str("typed-zone-topic"), Some(true)),
+        );
+        request.make_custom_header_to_net();
+        request
+            .add_ext_field(ZONE_MODE, "true")
+            .add_ext_field(ZONE_NAME, "zone-a");
+        crate::processor::client_request_processor::reset_route_encode_count();
+        crate::route::zone_route_rpc_hook::reset_zone_hook_decode_count();
+
+        let mut response = processor
+            .process_request(harness.channel(), harness.context(), &mut request)
+            .await
+            .unwrap()
+            .unwrap();
+        ZoneRouteRPCHook::default()
+            .do_after_response(SocketAddr::from(([127, 0, 0, 1], 10911)), &request, &mut response)
+            .unwrap();
+
+        assert_eq!(crate::processor::client_request_processor::route_encode_count(), 1);
+        assert_eq!(crate::route::zone_route_rpc_hook::zone_hook_decode_count(), 0);
+        let route = TopicRouteData::decode(response.body().expect("route response should include a body")).unwrap();
+        assert_eq!(route.broker_datas.len(), 1);
+        assert_eq!(
+            route.broker_datas[0].zone_name().map(CheetahString::as_str),
+            Some("zone-a")
+        );
+    }
+
+    #[tokio::test]
+    async fn cache_disabled_uses_live_encode() {
+        let (namesrv_config, _namesrv_root) = isolated_namesrv_config(NamesrvConfig::default());
+        let bootstrap = build_bootstrap_with_config(namesrv_config);
+        let harness = LocalRequestHarness::new(test_task_group("namesrv-cache-disabled-test"))
+            .await
+            .unwrap();
+        register_test_broker(
+            &bootstrap,
+            &CheetahString::from_static_str("cache-disabled-cluster"),
+            &CheetahString::from_static_str("cache-disabled-broker"),
+            &CheetahString::from_static_str("10.0.0.41:10911"),
+            MASTER_ID,
+            &CheetahString::from_static_str("zone-a"),
+            false,
+            topic_config_wrapper(&[("cache-disabled-topic", 0, PermName::PERM_READ | PermName::PERM_WRITE)]),
+        )
+        .await;
+        let mut processor =
+            ClientRequestProcessor::new(NameServerRuntimeHandle::new(&bootstrap.name_server_runtime.inner));
+        crate::processor::client_request_processor::reset_route_encode_count();
+
+        for _ in 0..2 {
+            let mut request = RemotingCommand::create_request_command(
+                RequestCode::GetRouteinfoByTopic,
+                GetRouteInfoRequestHeader::new(CheetahString::from_static_str("cache-disabled-topic"), Some(true)),
+            );
+            request.make_custom_header_to_net();
+            let response = processor
+                .process_request(harness.channel(), harness.context(), &mut request)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        }
+
+        assert_eq!(crate::processor::client_request_processor::route_encode_count(), 2);
+        let stats = bootstrap.runtime_inner().route_response_cache().stats();
+        assert_eq!(stats.hits, 0);
+        assert_eq!(stats.misses, 0);
+    }
+
+    #[tokio::test]
+    async fn cache_hit_reuses_the_versioned_encoded_body() {
+        let (namesrv_config, _namesrv_root) = isolated_namesrv_config(NamesrvConfig {
+            namesrv_route_response_cache_enable: true,
+            ..NamesrvConfig::default()
+        });
+        let bootstrap = build_bootstrap_with_config(namesrv_config);
+        let harness = LocalRequestHarness::new(test_task_group("namesrv-cache-hit-test"))
+            .await
+            .unwrap();
+        register_test_broker(
+            &bootstrap,
+            &CheetahString::from_static_str("cache-hit-cluster"),
+            &CheetahString::from_static_str("cache-hit-broker"),
+            &CheetahString::from_static_str("10.0.0.42:10911"),
+            MASTER_ID,
+            &CheetahString::from_static_str("zone-a"),
+            false,
+            topic_config_wrapper(&[("cache-hit-topic", 0, PermName::PERM_READ | PermName::PERM_WRITE)]),
+        )
+        .await;
+        let mut processor =
+            ClientRequestProcessor::new(NameServerRuntimeHandle::new(&bootstrap.name_server_runtime.inner));
+        crate::processor::client_request_processor::reset_route_encode_count();
+        let mut bodies = Vec::new();
+
+        for _ in 0..2 {
+            let mut request = RemotingCommand::create_request_command(
+                RequestCode::GetRouteinfoByTopic,
+                GetRouteInfoRequestHeader::new(CheetahString::from_static_str("cache-hit-topic"), Some(true)),
+            );
+            request.make_custom_header_to_net();
+            let response = processor
+                .process_request(harness.channel(), harness.context(), &mut request)
+                .await
+                .unwrap()
+                .unwrap();
+            bodies.push(response.body().expect("route response should include a body").clone());
+        }
+
+        assert_eq!(bodies[0], bodies[1]);
+        assert_eq!(crate::processor::client_request_processor::route_encode_count(), 1);
+        let stats = bootstrap.runtime_inner().route_response_cache().stats();
+        assert_eq!(stats.hits, 1);
+        assert_eq!(stats.misses, 1);
     }
 }

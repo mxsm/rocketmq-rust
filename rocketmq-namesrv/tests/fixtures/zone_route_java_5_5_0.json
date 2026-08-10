@@ -1,0 +1,138 @@
+{
+  "oracle": {
+    "repository": "D:/Github/Java/rocketmq",
+    "releaseBaseline": "rocketmq-all-5.5.0",
+    "sourceCommit": "e3458616d207ee636b1762f0f8dcf788a590d59d",
+    "sourceFile": "namesrv/src/main/java/org/apache/rocketmq/namesrv/route/ZoneRouteRPCHook.java",
+    "capturedAt": "2026-08-11"
+  },
+  "route": {
+    "orderTopicConf": null,
+    "queueDatas": [
+      { "brokerName": "same", "readQueueNums": 4, "writeQueueNums": 4, "perm": 6, "topicSysFlag": 0 },
+      { "brokerName": "other", "readQueueNums": 4, "writeQueueNums": 4, "perm": 6, "topicSysFlag": 0 },
+      { "brokerName": "no-zone", "readQueueNums": 4, "writeQueueNums": 4, "perm": 6, "topicSysFlag": 0 },
+      { "brokerName": "master-down", "readQueueNums": 4, "writeQueueNums": 0, "perm": 4, "topicSysFlag": 0 },
+      { "brokerName": "acting-master", "readQueueNums": 4, "writeQueueNums": 0, "perm": 4, "topicSysFlag": 0 }
+    ],
+    "brokerDatas": [
+      {
+        "cluster": "cluster-a",
+        "brokerName": "same",
+        "brokerAddrs": { "0": "10.0.0.1:10911" },
+        "zoneName": "Zone-A",
+        "enableActingMaster": false
+      },
+      {
+        "cluster": "cluster-a",
+        "brokerName": "other",
+        "brokerAddrs": { "0": "10.0.1.1:10911" },
+        "zoneName": "zone-b",
+        "enableActingMaster": false
+      },
+      {
+        "cluster": "cluster-a",
+        "brokerName": "no-zone",
+        "brokerAddrs": { "0": "10.0.2.1:10911" },
+        "zoneName": null,
+        "enableActingMaster": false
+      },
+      {
+        "cluster": "cluster-a",
+        "brokerName": "master-down",
+        "brokerAddrs": { "1": "10.0.3.1:10911" },
+        "zoneName": null,
+        "enableActingMaster": false
+      },
+      {
+        "cluster": "cluster-a",
+        "brokerName": "acting-master",
+        "brokerAddrs": { "0": "10.0.4.1:10911" },
+        "zoneName": "zone-a",
+        "enableActingMaster": true
+      }
+    ],
+    "filterServerTable": {
+      "10.0.0.1:10911": ["10.0.0.1:12000"],
+      "10.0.1.1:10911": ["10.0.1.1:12000"],
+      "10.0.2.1:10911": ["10.0.2.1:12000"],
+      "10.0.3.1:10911": ["10.0.3.1:12000"],
+      "10.0.4.1:10911": ["10.0.4.1:12000"]
+    },
+    "topicQueueMappingInfo": null
+  },
+  "cases": [
+    {
+      "name": "zone-mode-missing-modern",
+      "zoneMode": null,
+      "zoneName": null,
+      "modernRequest": true,
+      "acceptStandardJsonOnly": false,
+      "expectedBrokers": ["acting-master", "master-down", "no-zone", "other", "same"],
+      "expectedByteMode": "standard"
+    },
+    {
+      "name": "zone-mode-false-legacy",
+      "zoneMode": "false",
+      "zoneName": "zone-a",
+      "modernRequest": false,
+      "acceptStandardJsonOnly": false,
+      "expectedBrokers": ["acting-master", "master-down", "no-zone", "other", "same"],
+      "expectedByteMode": "legacy"
+    },
+    {
+      "name": "zone-name-missing-modern",
+      "zoneMode": "true",
+      "zoneName": null,
+      "modernRequest": true,
+      "acceptStandardJsonOnly": false,
+      "expectedBrokers": ["acting-master", "master-down", "no-zone", "other", "same"],
+      "expectedByteMode": "standard"
+    },
+    {
+      "name": "zone-name-blank-modern",
+      "zoneMode": "true",
+      "zoneName": "   ",
+      "modernRequest": true,
+      "acceptStandardJsonOnly": false,
+      "expectedBrokers": ["acting-master", "master-down", "no-zone", "other", "same"],
+      "expectedByteMode": "standard"
+    },
+    {
+      "name": "same-zone-modern-forces-java-legacy",
+      "zoneMode": "true",
+      "zoneName": "zone-a",
+      "modernRequest": true,
+      "acceptStandardJsonOnly": false,
+      "expectedBrokers": ["acting-master", "master-down", "same"],
+      "expectedByteMode": "legacy"
+    },
+    {
+      "name": "same-zone-case-insensitive-legacy",
+      "zoneMode": "true",
+      "zoneName": "ZONE-A",
+      "modernRequest": false,
+      "acceptStandardJsonOnly": false,
+      "expectedBrokers": ["acting-master", "master-down", "same"],
+      "expectedByteMode": "legacy"
+    },
+    {
+      "name": "unknown-zone-keeps-master-down",
+      "zoneMode": "true",
+      "zoneName": "unknown",
+      "modernRequest": true,
+      "acceptStandardJsonOnly": false,
+      "expectedBrokers": ["master-down"],
+      "expectedByteMode": "legacy"
+    },
+    {
+      "name": "other-zone-standard-request-forces-java-legacy",
+      "zoneMode": "true",
+      "zoneName": "zone-b",
+      "modernRequest": true,
+      "acceptStandardJsonOnly": true,
+      "expectedBrokers": ["master-down", "other"],
+      "expectedByteMode": "legacy"
+    }
+  ]
+}
