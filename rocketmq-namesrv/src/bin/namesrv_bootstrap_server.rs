@@ -22,7 +22,6 @@ use anyhow::bail;
 use anyhow::Context;
 use anyhow::Result;
 use clap::Parser;
-#[cfg(feature = "embedded-controller")]
 use config::Config;
 #[cfg(feature = "embedded-controller")]
 use rocketmq_controller::resolve_controller_raft_bind_addr;
@@ -34,9 +33,11 @@ use rocketmq_controller::ControllerConfig;
 use rocketmq_controller::RaftPeer;
 #[cfg(feature = "embedded-controller")]
 use rocketmq_controller::StorageBackendType;
+use rocketmq_model::common::mix_all::string_to_properties;
 use rocketmq_model::utils::env_utils::EnvUtils;
 use rocketmq_model::version::CURRENT_VERSION;
 use rocketmq_namesrv::bootstrap::Builder;
+use rocketmq_namesrv::config::is_tls_config_key;
 use rocketmq_namesrv::parse_command_and_config_file;
 use rocketmq_namesrv::NamesrvConfig;
 #[cfg(feature = "embedded-controller")]
@@ -55,7 +56,7 @@ use rocketmq_security_api::SecurityBootstrapConfig;
 use rocketmq_security_api::SecurityBootstrapOutcome;
 use rocketmq_security_api::SecurityBootstrapProfile;
 use rocketmq_transport::api::v1::ServerConfig;
-#[cfg(feature = "embedded-controller")]
+use rocketmq_transport::api::v1::TransportClientConfig;
 use serde::Deserialize;
 use tracing::info;
 
@@ -119,7 +120,7 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         .context("failed to initialize the immutable NameServer remoting version")?;
 
     // Parse and merge configurations
-    let (namesrv_config, server_config, controller_config, logging_overrides) =
+    let (namesrv_config, server_config, tokio_client_config, controller_config, logging_overrides) =
         parse_and_merge_config(&args).context("failed to parse namesrv configuration")?;
 
     // Handle print config item mode
@@ -211,7 +212,8 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
     // Start the name server
     let builder = Builder::new(service_context.clone(), telemetry_guard.handle())
         .set_name_server_config(namesrv_config)
-        .set_server_config(server_config);
+        .set_server_config(server_config)
+        .set_tokio_client_config(tokio_client_config);
     #[cfg(feature = "embedded-controller")]
     let builder = builder.set_controller_config_opt(controller_config);
     #[cfg(not(feature = "embedded-controller"))]
@@ -391,6 +393,7 @@ fn parse_and_merge_config(
 ) -> Result<(
     NamesrvConfig,
     ServerConfig,
+    TransportClientConfig,
     Option<EmbeddedControllerConfig>,
     rocketmq_observability::LoggingOverrides,
 )> {
@@ -417,13 +420,23 @@ fn parse_and_merge_config(
         namesrv_config.kv_config_path = kv_path.to_string_lossy().to_string();
     }
 
-    let mut server_config = ServerConfig {
-        listen_port: args.listen_port.unwrap_or(9876),
-        bind_address: args.bind_address.clone().unwrap_or_else(|| "0.0.0.0".to_string()),
-        ..ServerConfig::default()
-    };
+    let mut server_config = ServerConfig::default();
+    let mut tokio_client_config = TransportClientConfig::default();
     if let Some(config_file) = args.config_file.clone() {
+        let config = Config::builder()
+            .add_source(config::File::from(config_file.as_path()))
+            .build()?
+            .try_deserialize::<RuntimeTransportOverrides>()?;
+        apply_runtime_transport_overrides(&mut server_config, &mut tokio_client_config, config)?;
         apply_tls_properties_from_file(&mut server_config, config_file)?;
+    }
+    load_durable_desired_snapshot(&mut namesrv_config, &mut server_config, &mut tokio_client_config)?;
+
+    if let Some(listen_port) = args.listen_port {
+        server_config.listen_port = listen_port;
+    }
+    if let Some(bind_address) = &args.bind_address {
+        server_config.bind_address.clone_from(bind_address);
     }
 
     let controller_config: Option<EmbeddedControllerConfig> = if namesrv_config.enable_controller_in_namesrv {
@@ -447,7 +460,122 @@ fn parse_and_merge_config(
         None => rocketmq_observability::LoggingOverrides::default(),
     };
 
-    Ok((namesrv_config, server_config, controller_config, logging_overrides))
+    Ok((
+        namesrv_config,
+        server_config,
+        tokio_client_config,
+        controller_config,
+        logging_overrides,
+    ))
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RuntimeTransportOverrides {
+    listen_port: Option<u32>,
+    bind_address: Option<String>,
+    connect_timeout_millis: Option<u64>,
+    channel_not_active_interval: Option<u64>,
+}
+
+fn apply_runtime_transport_overrides(
+    server_config: &mut ServerConfig,
+    client_config: &mut TransportClientConfig,
+    overrides: RuntimeTransportOverrides,
+) -> Result<()> {
+    if let Some(listen_port) = overrides.listen_port {
+        if listen_port == 0 || listen_port > u16::MAX as u32 {
+            bail!("listenPort must be between 1 and {}", u16::MAX);
+        }
+        server_config.listen_port = listen_port;
+    }
+    if let Some(bind_address) = overrides.bind_address {
+        if bind_address.trim().is_empty() {
+            bail!("bindAddress must not be empty");
+        }
+        server_config.bind_address = bind_address;
+    }
+    if let Some(timeout) = overrides.connect_timeout_millis {
+        if timeout == 0 || timeout > 3_600_000 {
+            bail!("connectTimeoutMillis must be between 1 and 3600000");
+        }
+        client_config.connect.timeout = std::time::Duration::from_millis(timeout);
+    }
+    if let Some(interval) = overrides.channel_not_active_interval {
+        if interval > 86_400_000 {
+            bail!("channelNotActiveInterval must be between 0 and 86400000");
+        }
+        client_config.maintenance.idle_scan_interval =
+            (interval > 0).then(|| std::time::Duration::from_millis(interval));
+    }
+    Ok(())
+}
+
+fn load_durable_desired_snapshot(
+    namesrv_config: &mut NamesrvConfig,
+    server_config: &mut ServerConfig,
+    client_config: &mut TransportClientConfig,
+) -> Result<()> {
+    let path = PathBuf::from(&namesrv_config.config_store_path);
+    if !path.exists() {
+        return Ok(());
+    }
+    let content = std::fs::read_to_string(&path).with_context(|| {
+        format!(
+            "failed to read durable NameServer configuration from {}",
+            path.display()
+        )
+    })?;
+    rocketmq_namesrv::config::validate_namesrv_config_source(&content)
+        .context("durable NameServer configuration contains a removed key")?;
+    let properties = string_to_properties(&content)
+        .ok_or_else(|| anyhow::anyhow!("failed to parse durable NameServer configuration"))?;
+    namesrv_config
+        .update_known_properties(&properties)
+        .context("durable NameServer configuration failed domain validation")?;
+
+    for (key, value) in &properties {
+        match key.as_str() {
+            key if NamesrvConfig::is_known_property(key) => {}
+            "listenPort" => {
+                let parsed = value
+                    .parse::<u32>()
+                    .with_context(|| format!("invalid durable value for {key}"))?;
+                if parsed == 0 || parsed > u16::MAX as u32 {
+                    bail!("durable listenPort must be between 1 and {}", u16::MAX);
+                }
+                server_config.listen_port = parsed;
+            }
+            "bindAddress" => {
+                if value.trim().is_empty() {
+                    bail!("durable bindAddress must not be empty");
+                }
+                server_config.bind_address = value.to_string();
+            }
+            "connectTimeoutMillis" => {
+                let parsed = value
+                    .parse::<u64>()
+                    .with_context(|| format!("invalid durable value for {key}"))?;
+                if parsed == 0 || parsed > 3_600_000 {
+                    bail!("durable connectTimeoutMillis must be between 1 and 3600000");
+                }
+                client_config.connect.timeout = std::time::Duration::from_millis(parsed);
+            }
+            "channelNotActiveInterval" => {
+                let parsed = value
+                    .parse::<u64>()
+                    .with_context(|| format!("invalid durable value for {key}"))?;
+                if parsed > 86_400_000 {
+                    bail!("durable channelNotActiveInterval must be between 0 and 86400000");
+                }
+                client_config.maintenance.idle_scan_interval =
+                    (parsed > 0).then(|| std::time::Duration::from_millis(parsed));
+            }
+            key if is_tls_config_key(key) => server_config.tls_config.apply_java_property(key, value.as_str()),
+            _ => bail!("unknown durable NameServer configuration key '{key}'"),
+        }
+    }
+    Ok(())
 }
 
 fn resolve_startup_log_filter(
@@ -931,5 +1059,47 @@ mod tests {
             config.observability.logs.exporter,
             rocketmq_observability::LogsExporter::OtlpGrpc
         );
+    }
+
+    #[test]
+    fn durable_desired_snapshot_is_loaded_for_next_startup() {
+        let root = tempfile::tempdir().expect("test directory should be created");
+        let path = root.path().join("namesrv.properties");
+        std::fs::write(
+            &path,
+            "enableTopicList=false\nlistenPort=19876\nconnectTimeoutMillis=1234\n",
+        )
+        .expect("durable configuration should be written");
+        let mut namesrv = NamesrvConfig {
+            config_store_path: path.to_string_lossy().into_owned(),
+            ..NamesrvConfig::default()
+        };
+        let mut server = ServerConfig::default();
+        let mut client = TransportClientConfig::default();
+
+        load_durable_desired_snapshot(&mut namesrv, &mut server, &mut client)
+            .expect("durable desired configuration should load");
+
+        assert!(!namesrv.enable_topic_list);
+        assert_eq!(server.listen_port, 19876);
+        assert_eq!(client.connect.timeout, std::time::Duration::from_millis(1234));
+    }
+
+    #[test]
+    fn corrupt_durable_desired_snapshot_fails_closed() {
+        let root = tempfile::tempdir().expect("test directory should be created");
+        let path = root.path().join("namesrv.properties");
+        std::fs::write(&path, "unknownRuntimeKey=true\n").expect("durable configuration should be written");
+        let mut namesrv = NamesrvConfig {
+            config_store_path: path.to_string_lossy().into_owned(),
+            ..NamesrvConfig::default()
+        };
+        let mut server = ServerConfig::default();
+        let mut client = TransportClientConfig::default();
+
+        let error = load_durable_desired_snapshot(&mut namesrv, &mut server, &mut client)
+            .expect_err("unknown durable keys must prevent startup");
+
+        assert!(error.to_string().contains("unknown durable"));
     }
 }

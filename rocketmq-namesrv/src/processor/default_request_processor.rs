@@ -131,7 +131,7 @@ impl DefaultRequestProcessor {
             RequestCode::GetUnitTopicList => self.get_unit_topic_list(request),
             RequestCode::GetHasUnitSubTopicList => self.get_has_unit_sub_topic_list(request),
             RequestCode::GetHasUnitSubUnunitTopicList => self.get_has_unit_sub_un_unit_topic_list(request),
-            RequestCode::UpdateNamesrvConfig => self.update_config(request),
+            RequestCode::UpdateNamesrvConfig => self.update_config(request).await,
             RequestCode::GetNamesrvConfig => self.get_config(request),
             _ => Ok(request_code_not_supported_with_remark(
                 request.code(),
@@ -540,7 +540,8 @@ impl DefaultRequestProcessor {
         Ok(internal_error("disable"))
     }
 
-    fn update_config(&self, request: &mut RemotingCommand) -> rocketmq_error::RocketMQResult<RemotingCommand> {
+    async fn update_config(&self, request: &mut RemotingCommand) -> rocketmq_error::RocketMQResult<RemotingCommand> {
+        let mut apply_outcome = None;
         if let Some(body) = request.body() {
             let body_str = match str::from_utf8(body) {
                 Ok(s) => s,
@@ -564,13 +565,29 @@ impl DefaultRequestProcessor {
                 return Ok(no_permission_with_remark("Cannot update config in blacklist."));
             }
 
-            self.name_server_runtime_inner.update_runtime_config(properties)?;
+            apply_outcome = Some(self.name_server_runtime_inner.update_runtime_config(properties).await?);
         }
 
-        Ok(
-            RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::Success)
-                .set_remark(CheetahString::empty()),
-        )
+        let mut response = RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::Success);
+        response.ensure_ext_fields_initialized();
+        if let Some(outcome) = apply_outcome {
+            response.add_ext_field("desiredGeneration", outcome.desired_generation.to_string());
+            response.add_ext_field("durableGeneration", outcome.durable_generation.to_string());
+            response.add_ext_field("effectiveGeneration", outcome.effective_generation.to_string());
+            response.add_ext_field("appliedKeys", outcome.applied_keys.join(","));
+            response.add_ext_field("restartRequiredKeys", outcome.restart_required_keys.join(","));
+            if outcome.restart_required_keys.is_empty() {
+                response.set_remark_mut(CheetahString::empty());
+            } else {
+                response.set_remark_mut(format!(
+                    "configuration persisted; restart required for: {}",
+                    outcome.restart_required_keys.join(",")
+                ));
+            }
+        } else {
+            response.set_remark_mut(CheetahString::empty());
+        }
+        Ok(response)
     }
 
     fn get_config(&self, request: &mut RemotingCommand) -> rocketmq_error::RocketMQResult<RemotingCommand> {

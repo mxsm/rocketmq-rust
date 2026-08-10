@@ -513,6 +513,26 @@ impl NamesrvConfig {
         Ok(())
     }
 
+    /// Applies only NameServer-owned keys from a composite persisted runtime
+    /// snapshot. Listener and transport keys are returned to their owning
+    /// configuration components by the startup loader.
+    pub fn update_known_properties(
+        &mut self,
+        properties: &HashMap<CheetahString, CheetahString>,
+    ) -> RocketMQResult<()> {
+        let namesrv_properties = properties
+            .iter()
+            .filter(|(key, _)| NamesrvConfigKey::from_java_name(key.as_str()).is_some())
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
+        self.update(namesrv_properties)
+    }
+
+    #[must_use]
+    pub fn is_known_property(key: &str) -> bool {
+        NamesrvConfigKey::from_java_name(key).is_some()
+    }
+
     fn apply_updates(&mut self, properties: HashMap<CheetahString, CheetahString>) -> RocketMQResult<()> {
         for (key, value) in properties {
             reject_removed_route_manager_key(key.as_str())?;
@@ -991,4 +1011,28 @@ productEnvName = "useRouteInfoManagerV2"
             RocketMQError::Tools(rocketmq_error::ToolsError::NameServerConfigInvalid { .. })
         ));
     }
+}
+
+#[must_use]
+pub fn is_tls_config_key(key: &str) -> bool {
+    matches!(
+        key,
+        "tls.enable"
+            | "tls.test.mode.enable"
+            | "tls.config.file"
+            | "tls.server.mode"
+            | "tls.server.need.client.auth"
+            | "tls.server.keyPath"
+            | "tls.server.keyPassword"
+            | "tls.server.certPath"
+            | "tls.server.authClient"
+            | "tls.server.trustCertPath"
+            | "tls.client.keyPath"
+            | "tls.client.keyPassword"
+            | "tls.client.certPath"
+            | "tls.client.authServer"
+            | "tls.client.trustCertPath"
+            | "tls.ciphers"
+            | "tls.protocols"
+    )
 }

@@ -82,8 +82,8 @@ use crate::route_info::broker_housekeeping_service::BrokerHousekeepingService;
 use crate::KVConfigManager;
 use crate::NamesrvConfig;
 
-use self::config_apply::classify_runtime_updates;
-use crate::config::ConfigMutability;
+use self::config_apply::ConfigApplyOutcome;
+use self::config_apply::ConfigGenerationState;
 
 pub(crate) mod config_apply;
 mod lifecycle;
@@ -108,6 +108,7 @@ struct NameServerStartupJournal {
 pub struct Builder {
     name_server_config: Option<NamesrvConfig>,
     server_config: Option<ServerConfig>,
+    tokio_client_config: Option<TransportClientConfig>,
     #[cfg(feature = "embedded-controller")]
     controller_config: Option<ControllerConfig>,
     cluster_test_route_lookup: Option<Arc<dyn ClusterTestRouteLookup>>,
@@ -988,6 +989,7 @@ impl Builder {
         Builder {
             name_server_config: None,
             server_config: None,
+            tokio_client_config: None,
             #[cfg(feature = "embedded-controller")]
             controller_config: None,
             cluster_test_route_lookup: None,
@@ -1005,6 +1007,12 @@ impl Builder {
     #[inline]
     pub fn set_server_config(mut self, server_config: ServerConfig) -> Self {
         self.server_config = Some(server_config);
+        self
+    }
+
+    #[inline]
+    pub fn set_tokio_client_config(mut self, tokio_client_config: TransportClientConfig) -> Self {
+        self.tokio_client_config = Some(tokio_client_config);
         self
     }
 
@@ -1042,7 +1050,7 @@ impl Builder {
         #[cfg(not(any(feature = "observability", feature = "otel-traces")))]
         let transport_telemetry = TransportTelemetry::noop();
         let name_server_config = self.name_server_config.unwrap_or_default();
-        let tokio_client_config = TransportClientConfig::default();
+        let tokio_client_config = self.tokio_client_config.unwrap_or_default();
         let server_config = self.server_config.unwrap_or_default();
         #[cfg(feature = "embedded-controller")]
         let controller_config = if name_server_config.enable_controller_in_namesrv {
@@ -1064,6 +1072,7 @@ impl Builder {
             &service_context.component("namesrv.metadata-io"),
             MetadataIoConfig::default(),
         ));
+        let config_metadata_io = metadata_io.clone();
         let cluster_test_route_lookup = if name_server_config.cluster_test {
             self.cluster_test_route_lookup.or_else(|| {
                 Some(Arc::new(TransportClusterTestRouteLookup::new(
@@ -1113,6 +1122,9 @@ impl Builder {
             NameServerRuntimeInner {
                 config: ArcSwap::from(Arc::clone(&initial_config)),
                 config_update_lock: parking_lot::Mutex::new(()),
+                config_transaction_lock: tokio::sync::Mutex::new(()),
+                config_generations: parking_lot::RwLock::new(ConfigGenerationState::new(Arc::clone(&initial_config))),
+                config_metadata_io,
                 route_info_manager: Arc::new(route_info_manager),
                 kvconfig_manager: Arc::new(KVConfigManager::new(runtime_handle.clone(), metadata_io.clone())),
                 remoting_client,
@@ -1153,6 +1165,9 @@ impl Builder {
 pub(crate) struct NameServerRuntimeInner {
     config: ArcSwap<NameServerRuntimeConfig>,
     config_update_lock: parking_lot::Mutex<()>,
+    config_transaction_lock: tokio::sync::Mutex<()>,
+    config_generations: parking_lot::RwLock<ConfigGenerationState>,
+    config_metadata_io: Option<Result<MetadataIoActor, rocketmq_runtime::MetadataIoError>>,
     route_info_manager: Arc<RouteInfoManager>,
     kvconfig_manager: Arc<KVConfigManager>,
     remoting_client: Arc<RemotingClient>,
@@ -1168,6 +1183,7 @@ pub(crate) struct NameServerRuntimeInner {
     namesrv_metrics: NameServerMetrics,
 }
 
+#[derive(Clone)]
 struct NameServerRuntimeConfig {
     name_server_config: Arc<NamesrvConfig>,
     tokio_client_config: Arc<TransportClientConfig>,
@@ -1240,8 +1256,11 @@ impl NameServerRuntimeHandle {
         self.runtime().cluster_test_route_lookup()
     }
 
-    pub(crate) fn update_runtime_config(&self, updates: HashMap<CheetahString, CheetahString>) -> RocketMQResult<()> {
-        self.runtime().update_runtime_config(updates)
+    pub(crate) async fn update_runtime_config(
+        &self,
+        updates: HashMap<CheetahString, CheetahString>,
+    ) -> RocketMQResult<ConfigApplyOutcome> {
+        self.runtime().update_runtime_config(updates).await
     }
 
     pub(crate) fn get_all_configs_format_string(&self) -> Result<String, String> {
@@ -1460,91 +1479,11 @@ impl NameServerRuntimeInner {
         Ok(config)
     }
 
-    pub fn update_runtime_config(&self, updates: HashMap<CheetahString, CheetahString>) -> RocketMQResult<()> {
-        let _update_guard = self.config_update_lock.lock();
-        let classified = classify_runtime_updates(updates)?;
-        let restart_required = classified
-            .iter()
-            .filter(|update| update.mutability == ConfigMutability::RestartRequired)
-            .map(|update| update.key.as_str())
-            .collect::<Vec<_>>();
-        if !restart_required.is_empty() {
-            return Err(RocketMQError::nameserver_config_invalid(format!(
-                "configuration changes require a restart: {}",
-                restart_required.join(",")
-            )));
-        }
-        let current = self.config_snapshot();
-        let mut name_server_config = (*current.name_server_config).clone();
-        let mut tokio_client_config = (*current.tokio_client_config).clone();
-        let mut server_config = (*current.server_config).clone();
-        let mut namesrv_updates = HashMap::new();
-
-        for update in classified {
-            let key = update.key;
-            let value = update.value;
-            crate::config::reject_removed_route_manager_key(key.as_str())?;
-            crate::config::reject_removed_transport_client_key(key.as_str())?;
-            match key.as_str() {
-                "rocketmqHome"
-                | "kvConfigPath"
-                | "configStorePath"
-                | "productEnvName"
-                | "clusterTest"
-                | "orderMessageEnable"
-                | "returnOrderTopicConfigToBroker"
-                | "clientRequestThreadPoolNums"
-                | "defaultThreadPoolNums"
-                | "clientRequestThreadPoolQueueCapacity"
-                | "defaultThreadPoolQueueCapacity"
-                | "scanNotActiveBrokerInterval"
-                | "unRegisterBrokerQueueCapacity"
-                | "supportActingMaster"
-                | "enableAllTopicList"
-                | "enableTopicList"
-                | "notifyMinBrokerIdChanged"
-                | "enableControllerInNamesrv"
-                | "needWaitForService"
-                | "waitSecondsForService"
-                | "deleteTopicWithBrokerRegistration"
-                | "configBlackList" => {
-                    namesrv_updates.insert(key, value);
-                }
-                "listenPort" => {
-                    server_config.listen_port = parse_config_value(&key, &value)?;
-                }
-                "bindAddress" => {
-                    server_config.bind_address = value.to_string();
-                }
-                key if is_tls_config_key(key) => {
-                    server_config.tls_config.apply_java_property(key, value.as_str());
-                }
-                "connectTimeoutMillis" => {
-                    let timeout_millis = parse_config_value::<u64>(&key, &value)?.max(1);
-                    tokio_client_config.connect.timeout = Duration::from_millis(timeout_millis);
-                }
-                "channelNotActiveInterval" => {
-                    let interval_millis = parse_config_value::<u64>(&key, &value)?;
-                    tokio_client_config.maintenance.idle_scan_interval =
-                        (interval_millis > 0).then(|| Duration::from_millis(interval_millis));
-                }
-                _ => {}
-            }
-        }
-
-        if !namesrv_updates.is_empty() {
-            name_server_config.update(namesrv_updates)?;
-        }
-        validate_startup_only_namesrv_config(&current.name_server_config, &name_server_config)?;
-
-        self.config.store(Arc::new(NameServerRuntimeConfig {
-            name_server_config: Arc::new(name_server_config),
-            tokio_client_config: Arc::new(tokio_client_config),
-            server_config: Arc::new(server_config),
-            #[cfg(feature = "embedded-controller")]
-            controller_config: current.controller_config.clone(),
-        }));
-        Ok(())
+    pub async fn update_runtime_config(
+        &self,
+        updates: HashMap<CheetahString, CheetahString>,
+    ) -> RocketMQResult<ConfigApplyOutcome> {
+        config_apply::apply_runtime_updates(self, updates).await
     }
 
     // Component accessors
@@ -1621,29 +1560,6 @@ fn push_config_entry(entries: &mut Vec<(&'static str, String)>, key: &'static st
     entries.push((key, value.to_string()));
 }
 
-fn is_tls_config_key(key: &str) -> bool {
-    matches!(
-        key,
-        "tls.enable"
-            | "tls.test.mode.enable"
-            | "tls.config.file"
-            | "tls.server.mode"
-            | "tls.server.need.client.auth"
-            | "tls.server.keyPath"
-            | "tls.server.keyPassword"
-            | "tls.server.certPath"
-            | "tls.server.authClient"
-            | "tls.server.trustCertPath"
-            | "tls.client.keyPath"
-            | "tls.client.keyPassword"
-            | "tls.client.certPath"
-            | "tls.client.authServer"
-            | "tls.client.trustCertPath"
-            | "tls.ciphers"
-            | "tls.protocols"
-    )
-}
-
 fn parse_config_value<T>(key: &str, value: &CheetahString) -> RocketMQResult<T>
 where
     T: std::str::FromStr,
@@ -1711,7 +1627,6 @@ mod tests {
     use rocketmq_transport::api::v1::ConnectionState;
     use rocketmq_transport::api::v1::RequestProcessor;
     use rocketmq_transport::api::v1::ServerConfig;
-    use rocketmq_transport::api::v1::TlsMode;
     use rocketmq_transport::test_support::LocalRequestHarness;
     use tokio::net::TcpStream as TokioTcpStream;
     use tokio::sync::oneshot;
@@ -1804,24 +1719,26 @@ mod tests {
         }
     }
 
-    #[test]
-    fn runtime_config_failed_update_preserves_published_snapshot() {
+    #[tokio::test]
+    async fn runtime_config_failed_update_preserves_published_snapshot() {
         let bootstrap = build_default_bootstrap();
         let runtime = bootstrap.runtime_inner();
         let before = runtime.config_snapshot();
         let before_port = before.server_config.listen_port;
         let before_connect_timeout = before.tokio_client_config.connect.timeout;
 
-        let result = runtime.update_runtime_config(HashMap::from([
-            (
-                CheetahString::from_static_str("listenPort"),
-                CheetahString::from_static_str("19876"),
-            ),
-            (
-                CheetahString::from_static_str("connectTimeoutMillis"),
-                CheetahString::from_static_str("not-a-number"),
-            ),
-        ]));
+        let result = runtime
+            .update_runtime_config(HashMap::from([
+                (
+                    CheetahString::from_static_str("listenPort"),
+                    CheetahString::from_static_str("19876"),
+                ),
+                (
+                    CheetahString::from_static_str("connectTimeoutMillis"),
+                    CheetahString::from_static_str("not-a-number"),
+                ),
+            ]))
+            .await;
 
         assert!(result.is_err());
         let after = runtime.config_snapshot();
@@ -1830,8 +1747,59 @@ mod tests {
         assert_eq!(after.tokio_client_config.connect.timeout, before_connect_timeout);
     }
 
-    #[test]
-    fn runtime_config_rejects_removed_route_manager_switch_with_typed_error() {
+    #[tokio::test]
+    async fn durable_runtime_update_publishes_only_live_keys() {
+        let (config, root) = isolated_namesrv_config(NamesrvConfig::default());
+        let config_path = config.config_store_path.clone();
+        let bootstrap = build_bootstrap_with_config(config);
+        let runtime = bootstrap.runtime_inner();
+        let original_port = runtime.server_config().listen_port;
+
+        let outcome = runtime
+            .update_runtime_config(HashMap::from([
+                (
+                    CheetahString::from_static_str("enableTopicList"),
+                    CheetahString::from_static_str("false"),
+                ),
+                (
+                    CheetahString::from_static_str("listenPort"),
+                    CheetahString::from_static_str("19876"),
+                ),
+            ]))
+            .await
+            .expect("valid desired configuration should become durable");
+
+        assert!(!runtime.name_server_config().enable_topic_list);
+        assert_eq!(runtime.server_config().listen_port, original_port);
+        assert_eq!(outcome.restart_required_keys, vec!["listenPort"]);
+        assert_eq!(outcome.desired_generation, outcome.durable_generation);
+        assert_eq!(outcome.effective_generation, 1);
+        let persisted = std::fs::read_to_string(config_path).expect("desired snapshot should be durable");
+        assert!(persisted.contains("listenPort=19876"));
+        drop(root);
+    }
+
+    #[tokio::test]
+    async fn persistence_failure_does_not_publish_live_configuration() {
+        let (mut config, root) = isolated_namesrv_config(NamesrvConfig::default());
+        config.config_store_path = root.path().to_string_lossy().into_owned();
+        let bootstrap = build_bootstrap_with_config(config);
+        let runtime = bootstrap.runtime_inner();
+        let before = runtime.config_snapshot();
+
+        let result = runtime
+            .update_runtime_config(HashMap::from([(
+                CheetahString::from_static_str("enableTopicList"),
+                CheetahString::from_static_str("false"),
+            )]))
+            .await;
+
+        assert!(result.is_err());
+        assert!(Arc::ptr_eq(&before, &runtime.config_snapshot()));
+    }
+
+    #[tokio::test]
+    async fn runtime_config_rejects_removed_route_manager_switch_with_typed_error() {
         let bootstrap = build_default_bootstrap();
         let runtime = bootstrap.runtime_inner();
         let before = runtime.config_snapshot();
@@ -1841,6 +1809,7 @@ mod tests {
                 CheetahString::from_static_str("useRouteInfoManagerV2"),
                 CheetahString::from_static_str("false"),
             )]))
+            .await
             .expect_err("removed route manager switch must fail");
 
         assert!(matches!(
@@ -1850,9 +1819,10 @@ mod tests {
         assert!(Arc::ptr_eq(&before, &runtime.config_snapshot()));
     }
 
-    #[test]
-    fn runtime_config_rejects_dynamic_embedded_controller_topology() {
-        let bootstrap = build_default_bootstrap();
+    #[tokio::test]
+    async fn runtime_config_persists_dynamic_embedded_controller_topology_for_restart() {
+        let (config, _root) = isolated_namesrv_config(NamesrvConfig::default());
+        let bootstrap = build_bootstrap_with_config(config);
         let runtime = bootstrap.runtime_inner();
         let before = runtime.config_snapshot();
         let update = HashMap::from([(
@@ -1860,14 +1830,11 @@ mod tests {
             CheetahString::from_static_str("true"),
         )]);
 
-        let aggregate_error = runtime
+        let outcome = runtime
             .update_runtime_config(update.clone())
-            .expect_err("aggregate runtime update must reject an embedded Controller topology change");
-        assert!(matches!(
-            aggregate_error,
-            RocketMQError::Tools(rocketmq_error::ToolsError::NameServerConfigInvalid { .. })
-        ));
-        assert!(aggregate_error.to_string().contains("require a restart"));
+            .await
+            .expect("restart-required update should be persisted as desired state");
+        assert_eq!(outcome.restart_required_keys, vec!["enableControllerInNamesrv"]);
         assert!(Arc::ptr_eq(&before, &runtime.config_snapshot()));
 
         let namesrv_error = runtime
@@ -1883,21 +1850,21 @@ mod tests {
         assert!(Arc::ptr_eq(&before, &runtime.config_snapshot()));
     }
 
-    #[test]
-    fn runtime_config_concurrent_readers_only_observe_complete_snapshots() {
-        let namesrv_config = NamesrvConfig {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn runtime_config_concurrent_readers_only_observe_complete_snapshots() {
+        let (namesrv_config, _root) = isolated_namesrv_config(NamesrvConfig {
             enable_all_topic_list: true,
             enable_topic_list: true,
             ..NamesrvConfig::default()
-        };
+        });
         let bootstrap = Builder::new(test_service_context(), TelemetryHandle::noop())
             .set_name_server_config(namesrv_config)
             .build();
         let runtime = bootstrap.runtime_inner();
 
         let writer = |runtime: Arc<NameServerRuntimeInner>, enable_all: &'static str, enable_topic: &'static str| {
-            std::thread::spawn(move || {
-                for _ in 0..500 {
+            tokio::spawn(async move {
+                for _ in 0..20 {
                     runtime
                         .update_runtime_config(HashMap::from([
                             (
@@ -1909,6 +1876,7 @@ mod tests {
                                 CheetahString::from_static_str(enable_topic),
                             ),
                         ]))
+                        .await
                         .expect("valid snapshot update should succeed");
                 }
             })
@@ -1927,8 +1895,8 @@ mod tests {
                 "reader observed a torn runtime configuration: {observed:?}"
             );
         }
-        first_writer.join().expect("first config writer should not panic");
-        second_writer.join().expect("second config writer should not panic");
+        first_writer.await.expect("first config writer should not panic");
+        second_writer.await.expect("second config writer should not panic");
     }
 
     #[test]
@@ -3969,32 +3937,48 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_namesrv_config_updates_aggregate_known_keys_and_ignores_unknown() {
-        let bootstrap = build_default_bootstrap();
+    async fn update_namesrv_config_rejects_unknown_key_atomically() {
+        let (config, _root) = isolated_namesrv_config(NamesrvConfig::default());
+        let bootstrap = build_bootstrap_with_config(config);
         let harness = LocalRequestHarness::new(test_task_group("namesrv-local-harness"))
             .await
             .unwrap();
+        let before = bootstrap.name_server_runtime.inner.config_snapshot();
         let mut request = RemotingCommand::create_remoting_command(RequestCode::UpdateNamesrvConfig).set_body(
             b"listenPort=19876\nbindAddress=127.0.0.2\nconnectTimeoutMillis=9\nenableTopicList=false\ntls.server.mode=enforcing\ntls.server.certPath=/certs/server.pem\nunknownKey=42"
                 .as_slice(),
         );
 
+        let processor =
+            DefaultRequestProcessor::new(NameServerRuntimeHandle::new(&bootstrap.name_server_runtime.inner));
+        let result = processor
+            .process_request_inner(harness.channel(), RequestCode::UpdateNamesrvConfig, &mut request)
+            .await;
+
+        assert!(result.is_err());
+        assert!(Arc::ptr_eq(
+            &before,
+            &bootstrap.name_server_runtime.inner.config_snapshot()
+        ));
+    }
+
+    #[tokio::test]
+    async fn update_namesrv_config_reports_durable_and_restart_generations() {
+        let (config, _root) = isolated_namesrv_config(NamesrvConfig::default());
+        let bootstrap = build_bootstrap_with_config(config);
+        let original_port = bootstrap.name_server_runtime.inner.server_config().listen_port;
+        let harness = LocalRequestHarness::new(test_task_group("namesrv-local-harness"))
+            .await
+            .unwrap();
+        let mut request = RemotingCommand::create_remoting_command(RequestCode::UpdateNamesrvConfig)
+            .set_body(b"listenPort=19876\nenableTopicList=false".as_slice());
+
         let response = process_with_default_processor(&bootstrap, &harness, &mut request).await;
 
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
-        assert_eq!(bootstrap.name_server_runtime.inner.server_config().listen_port, 19876);
         assert_eq!(
-            bootstrap.name_server_runtime.inner.server_config().bind_address,
-            "127.0.0.2"
-        );
-        assert_eq!(
-            bootstrap
-                .name_server_runtime
-                .inner
-                .tokio_client_config()
-                .connect
-                .timeout,
-            Duration::from_millis(9)
+            bootstrap.name_server_runtime.inner.server_config().listen_port,
+            original_port
         );
         assert!(
             !bootstrap
@@ -4003,26 +3987,19 @@ mod tests {
                 .name_server_config()
                 .enable_topic_list
         );
+        let ext = response
+            .ext_fields()
+            .expect("config outcome should include extension fields");
+        assert_eq!(ext.get("desiredGeneration").map(|value| value.as_str()), Some("1"));
+        assert_eq!(ext.get("durableGeneration").map(|value| value.as_str()), Some("1"));
+        assert_eq!(ext.get("effectiveGeneration").map(|value| value.as_str()), Some("1"));
         assert_eq!(
-            bootstrap
-                .name_server_runtime
-                .inner
-                .server_config()
-                .tls_config
-                .server
-                .mode,
-            TlsMode::Enforcing
+            ext.get("appliedKeys").map(|value| value.as_str()),
+            Some("enableTopicList")
         );
         assert_eq!(
-            bootstrap
-                .name_server_runtime
-                .inner
-                .server_config()
-                .tls_config
-                .server
-                .cert_path
-                .as_deref(),
-            Some("/certs/server.pem")
+            ext.get("restartRequiredKeys").map(|value| value.as_str()),
+            Some("listenPort")
         );
     }
 

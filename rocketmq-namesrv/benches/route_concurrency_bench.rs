@@ -302,11 +302,13 @@ where
             let thread_start = Instant::now();
 
             while thread_start.elapsed() < duration {
-                if OperationMix::NinetyTen.operation_at(operation_index).is_read() {
+                let operation = OperationMix::NinetyTen.operation_at(operation_index);
+                if operation.is_read() {
                     let topic = format!("topic-{}", i % 10);
                     read_fn(&topic);
                     read_count += 1;
                 } else {
+                    debug_assert!(operation.is_write());
                     let broker_name = format!("broker-{}-{}", i, write_count);
                     let broker_data = create_broker_data(&broker_name);
                     write_fn(broker_name, broker_data);
