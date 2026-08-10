@@ -1601,7 +1601,7 @@ impl RouteInfoManager {
                     let key = BrokerAddrInfo::new(CheetahString::from(broker.cluster()), address.clone());
                     self.broker_live_table
                         .get(&key)
-                        .map(|live| now.saturating_sub(live.last_update_timestamp))
+                        .map(|live| now.saturating_sub(live.last_update_timestamp()))
                 })
             })
             .max()

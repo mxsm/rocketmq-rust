@@ -17,6 +17,8 @@
 //! Manages broker live status and heartbeat information.
 
 use std::net::SocketAddr;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
@@ -26,15 +28,22 @@ use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ChannelId;
 
+use crate::route::types::BrokerGeneration;
 use crate::route_info::broker_addr_info::BrokerAddrInfo;
+
+static NEXT_REGISTRATION_EPOCH: AtomicU64 = AtomicU64::new(1);
 
 /// Broker live information
 ///
 /// Contains heartbeat timestamp and data version for a live broker.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct BrokerLiveInfo {
     /// Last heartbeat timestamp (milliseconds since epoch)
-    pub last_update_timestamp: u64,
+    last_update_timestamp: AtomicU64,
+    /// Monotonic generation advanced for every accepted heartbeat.
+    heartbeat_generation: AtomicU64,
+    /// Process-local epoch assigned when a full registration replaces this entry.
+    registration_epoch: u64,
     /// Heartbeat timeout in milliseconds (default: 120000ms = 2min)
     pub heartbeat_timeout_millis: u64,
     /// Data version for change detection
@@ -66,7 +75,9 @@ impl BrokerLiveInfo {
     /// * `data_version` - Data version
     pub fn new(timestamp: u64, data_version: DataVersion, remote_addr: SocketAddr, channel_id: ChannelId) -> Self {
         Self {
-            last_update_timestamp: timestamp,
+            last_update_timestamp: AtomicU64::new(timestamp),
+            heartbeat_generation: AtomicU64::new(0),
+            registration_epoch: NEXT_REGISTRATION_EPOCH.fetch_add(1, Ordering::Relaxed),
             heartbeat_timeout_millis: 120_000, // 2 minutes default
             data_version,
             ha_server_addr: None,
@@ -108,12 +119,56 @@ impl BrokerLiveInfo {
     /// # Arguments
     /// * `current_time` - Current timestamp in milliseconds
     pub fn is_alive(&self, current_time: u64) -> bool {
-        current_time.saturating_sub(self.last_update_timestamp) < self.heartbeat_timeout_millis
+        current_time.saturating_sub(self.last_update_timestamp()) < self.heartbeat_timeout_millis
     }
 
-    /// Update last heartbeat timestamp
-    pub fn update_timestamp(&mut self, timestamp: u64) {
-        self.last_update_timestamp = timestamp;
+    /// Return the last accepted heartbeat timestamp.
+    pub fn last_update_timestamp(&self) -> u64 {
+        self.last_update_timestamp.load(Ordering::Acquire)
+    }
+
+    /// Return the heartbeat generation for stale-event fencing.
+    pub fn heartbeat_generation(&self) -> u64 {
+        self.heartbeat_generation.load(Ordering::Acquire)
+    }
+
+    /// Return the registration epoch for stale-event fencing.
+    pub const fn registration_epoch(&self) -> u64 {
+        self.registration_epoch
+    }
+
+    /// Return the complete generation used by delayed cleanup events.
+    pub fn generation(&self) -> BrokerGeneration {
+        BrokerGeneration {
+            registration_epoch: self.registration_epoch,
+            heartbeat_generation: self.heartbeat_generation(),
+        }
+    }
+
+    /// Atomically update the timestamp without allowing it to move backwards.
+    ///
+    /// Returns the new heartbeat generation.
+    pub fn update_timestamp(&self, timestamp: u64) -> u64 {
+        self.last_update_timestamp.fetch_max(timestamp, Ordering::AcqRel);
+        self.heartbeat_generation.fetch_add(1, Ordering::AcqRel) + 1
+    }
+}
+
+impl Clone for BrokerLiveInfo {
+    fn clone(&self) -> Self {
+        Self {
+            last_update_timestamp: AtomicU64::new(self.last_update_timestamp()),
+            heartbeat_generation: AtomicU64::new(self.heartbeat_generation()),
+            registration_epoch: self.registration_epoch,
+            heartbeat_timeout_millis: self.heartbeat_timeout_millis,
+            data_version: self.data_version.clone(),
+            ha_server_addr: self.ha_server_addr.clone(),
+            remote_addr: self.remote_addr,
+            channel_id: self.channel_id.clone(),
+            channel: self.channel.clone(),
+            broker_name: self.broker_name.clone(),
+            broker_id: self.broker_id,
+        }
     }
 }
 
@@ -207,10 +262,8 @@ impl BrokerLiveTable {
     /// # Returns
     /// true if broker exists and was updated
     pub fn update_heartbeat(&self, broker_addr_info: &BrokerAddrInfo, timestamp: u64) -> bool {
-        if let Some(mut entry) = self.inner.get_mut(broker_addr_info) {
-            let mut new_info = (**entry.value()).clone();
-            new_info.update_timestamp(timestamp);
-            *entry.value_mut() = Arc::new(new_info);
+        if let Some(entry) = self.inner.get(broker_addr_info) {
+            entry.update_timestamp(timestamp);
             true
         } else {
             false
@@ -402,22 +455,13 @@ impl BrokerLiveTable {
         &self,
         broker_addr: &str,
         timestamp: u64,
-        remote_addr: SocketAddr,
-        channel_id: ChannelId,
+        _remote_addr: SocketAddr,
+        _channel_id: ChannelId,
     ) {
-        for mut entry in self.inner.iter_mut() {
+        for entry in &self.inner {
             let key_addr: &str = entry.key().broker_addr.as_ref();
             if key_addr == broker_addr {
-                // Create new BrokerLiveInfo with updated timestamp
-                let old_info = entry.value();
-                let mut new_info =
-                    BrokerLiveInfo::new(timestamp, old_info.data_version.clone(), remote_addr, channel_id);
-                new_info.ha_server_addr = old_info.ha_server_addr.clone();
-                new_info.channel = old_info.channel.clone();
-                new_info.broker_name = old_info.broker_name.clone();
-                new_info.broker_id = old_info.broker_id;
-
-                *entry.value_mut() = Arc::new(new_info);
+                entry.update_timestamp(timestamp);
                 return;
             }
         }
@@ -429,23 +473,8 @@ impl BrokerLiveTable {
     ///
     /// # Arguments
     /// * `broker_addr_info` - BrokerAddrInfo containing cluster name and broker address
-    pub fn update_last_update_timestamp_by_addr_info(&self, broker_addr_info: &BrokerAddrInfo) {
-        if let Some(mut entry) = self.inner.get_mut(broker_addr_info) {
-            let current_time = current_millis();
-            let old_info = entry.value();
-            let new_info = BrokerLiveInfo {
-                last_update_timestamp: current_time,
-                heartbeat_timeout_millis: old_info.heartbeat_timeout_millis,
-                data_version: old_info.data_version.clone(),
-                ha_server_addr: old_info.ha_server_addr.clone(),
-                remote_addr: old_info.remote_addr,
-                channel_id: old_info.channel_id.clone(),
-                channel: old_info.channel.clone(),
-                broker_name: old_info.broker_name.clone(),
-                broker_id: old_info.broker_id,
-            };
-            *entry.value_mut() = Arc::new(new_info);
-        }
+    pub fn update_last_update_timestamp_by_addr_info(&self, broker_addr_info: &BrokerAddrInfo) -> bool {
+        self.update_heartbeat(broker_addr_info, current_millis())
     }
 
     fn remove_channel_index_if_current(&self, channel_id: &ChannelId, broker_addr_info: &BrokerAddrInfo) {
@@ -469,6 +498,8 @@ impl Default for BrokerLiveTable {
 mod tests {
     use std::net::SocketAddr;
     use std::str::FromStr;
+    use std::sync::Barrier;
+    use std::thread;
 
     use super::*;
 
@@ -494,7 +525,7 @@ mod tests {
 
         // Get
         let retrieved = table.get(&broker_info).unwrap();
-        assert_eq!(retrieved.last_update_timestamp, 1000);
+        assert_eq!(retrieved.last_update_timestamp(), 1000);
     }
 
     #[test]
@@ -504,13 +535,56 @@ mod tests {
         let live_info = create_test_live_info(1000);
 
         table.register(broker_info.clone(), live_info);
+        let original = table.get(&broker_info).unwrap();
+        let original_epoch = original.registration_epoch();
 
         // Update heartbeat
         assert!(table.update_heartbeat(&broker_info, 2000));
 
         // Verify update
         let updated = table.get(&broker_info).unwrap();
-        assert_eq!(updated.last_update_timestamp, 2000);
+        assert!(Arc::ptr_eq(&original, &updated));
+        assert_eq!(updated.last_update_timestamp(), 2000);
+        assert_eq!(updated.heartbeat_generation(), 1);
+        assert_eq!(updated.registration_epoch(), original_epoch);
+    }
+
+    #[test]
+    fn heartbeat_timestamp_is_monotonic_under_concurrent_updates() {
+        let table = Arc::new(BrokerLiveTable::new());
+        let broker_info = create_test_broker_addr_info("broker-a", 0);
+        table.register(Arc::clone(&broker_info), create_test_live_info(1000));
+        let barrier = Arc::new(Barrier::new(17));
+
+        let handles = (0..16)
+            .map(|worker| {
+                let table = Arc::clone(&table);
+                let broker_info = Arc::clone(&broker_info);
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    barrier.wait();
+                    for offset in 0..64 {
+                        assert!(table.update_heartbeat(&broker_info, 2000 + worker * 64 + offset));
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        barrier.wait();
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        let updated = table.get(&broker_info).unwrap();
+        assert_eq!(updated.last_update_timestamp(), 3023);
+        assert_eq!(updated.heartbeat_generation(), 1024);
+    }
+
+    #[test]
+    fn heartbeat_for_unknown_broker_is_rejected() {
+        let table = BrokerLiveTable::new();
+        let broker_info = create_test_broker_addr_info("broker-a", 0);
+
+        assert!(!table.update_heartbeat(&broker_info, 2000));
     }
 
     #[test]
@@ -616,7 +690,7 @@ mod tests {
         table.update_last_update_timestamp_by_addr_info(&broker_info);
 
         let updated = table.get(&broker_info).unwrap();
-        assert!(updated.last_update_timestamp > 1000);
+        assert!(updated.last_update_timestamp() > 1000);
         assert_eq!(updated.heartbeat_timeout_millis, 45_000);
         assert_eq!(updated.data_version, data_version);
         assert_eq!(
