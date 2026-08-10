@@ -3434,8 +3434,77 @@
       }
     },
     {
-      "id": "rocketmq_transport_network_bytes",
-      "source_symbol": "TRANSPORT_NETWORK_BYTES",
+      "id": "rocketmq_transport_outbound_attempted_plaintext_bytes",
+      "source_symbol": "TRANSPORT_OUTBOUND_ATTEMPTED_PLAINTEXT_BYTES",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "By",
+      "owner": "remoting",
+      "catalog": "rust",
+      "family": "connection-bytes",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_transport_outbound_accepted_plaintext_bytes",
+      "source_symbol": "TRANSPORT_OUTBOUND_ACCEPTED_PLAINTEXT_BYTES",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "By",
+      "owner": "remoting",
+      "catalog": "rust",
+      "family": "connection-bytes",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_transport_outbound_written_plaintext_bytes",
+      "source_symbol": "TRANSPORT_OUTBOUND_WRITTEN_PLAINTEXT_BYTES",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "By",
+      "owner": "remoting",
+      "catalog": "rust",
+      "family": "connection-bytes",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_transport_inbound_decoded_plaintext_bytes",
+      "source_symbol": "TRANSPORT_INBOUND_DECODED_PLAINTEXT_BYTES",
       "signal_type": "metric",
       "kind": "counter",
       "unit": "By",
