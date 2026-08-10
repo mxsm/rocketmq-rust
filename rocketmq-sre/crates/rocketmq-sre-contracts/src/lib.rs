@@ -113,6 +113,7 @@ pub use autonomy::VerifyDynamicSafetyDecisionRequest;
 pub use canonical::canonical_evidence_hash;
 pub use canonical::canonical_precondition_hash;
 pub use canonical::canonical_sha256;
+pub use canonical::encode_lower_hex;
 pub use canonical::is_sha256_digest;
 pub use connector::ConnectorCapabilityState;
 pub use connector::ConnectorHeartbeat;

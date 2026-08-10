@@ -18,6 +18,19 @@ use sha2::Sha256;
 
 use crate::ContractError;
 
+/// Encodes bytes as lowercase hexadecimal without exposing digest internals.
+#[must_use]
+pub fn encode_lower_hex(bytes: impl AsRef<[u8]>) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let bytes = bytes.as_ref();
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for &byte in bytes {
+        encoded.push(HEX[(byte >> 4) as usize] as char);
+        encoded.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    encoded
+}
+
 /// Computes an RFC 8785 canonical JSON SHA-256 digest.
 ///
 /// # Errors
@@ -31,7 +44,7 @@ where
         reason: format!("value cannot be canonicalized: {error}"),
     })?;
     let digest = Sha256::digest(canonical);
-    Ok(format!("sha256:{digest:x}"))
+    Ok(format!("sha256:{}", encode_lower_hex(digest)))
 }
 
 /// Computes the evidence-set digest used by an action plan.
@@ -82,6 +95,11 @@ mod tests {
             canonical_precondition_hash(&first).expect("first value should hash"),
             canonical_precondition_hash(&second).expect("second value should hash")
         );
+    }
+
+    #[test]
+    fn lower_hex_encoding_is_stable_for_digest_bytes() {
+        assert_eq!(encode_lower_hex([0x00, 0x0f, 0x10, 0xff]), "000f10ff");
     }
 
     #[test]

@@ -302,8 +302,8 @@ fn normalize_alertmanager(
     validate_identity("symptom family", &symptom_family, 128)?;
     let source_event_id = if alert.fingerprint.trim().is_empty() {
         format!(
-            "sha256:{:x}",
-            Sha256::digest(
+            "sha256:{}",
+            rocketmq_sre_contracts::encode_lower_hex(Sha256::digest(
                 format!(
                     "{}|{}|{}|{}",
                     webhook.cluster_id,
@@ -312,7 +312,7 @@ fn normalize_alertmanager(
                     alert.starts_at.timestamp_millis()
                 )
                 .as_bytes()
-            )
+            ))
         )
     } else {
         alert.fingerprint.clone()
@@ -435,7 +435,10 @@ fn build_event(
         &resource_key,
         &symptom_family,
     );
-    let fingerprint = format!("sha256:{:x}", Sha256::digest(material.canonical_bytes()));
+    let fingerprint = format!(
+        "sha256:{}",
+        rocketmq_sre_contracts::encode_lower_hex(Sha256::digest(material.canonical_bytes()))
+    );
     let event_id = AlertEventId::from_uuid(deterministic_uuid(&format!(
         "{}:{}:{}:{}",
         auth.tenant_id,

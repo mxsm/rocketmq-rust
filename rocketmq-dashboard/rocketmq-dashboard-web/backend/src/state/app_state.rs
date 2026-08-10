@@ -48,7 +48,8 @@ impl AppState {
         let dashboard_tasks = DashboardTaskManager::default();
         let dashboard_config = config_store.load_or_init(&config.initial_config)?;
         let dashboard_config = Arc::new(RwLock::new(dashboard_config));
-        let admin_client = DashboardAdminClient::new(dashboard_config.clone(), client_runtime);
+        let admin_client =
+            DashboardAdminClient::new(dashboard_config.clone(), client_runtime, config.admin_credentials);
         if config.dashboard_history_interval_secs > 0 {
             spawn_dashboard_history_collector(
                 &dashboard_tasks,

@@ -105,7 +105,10 @@ fn flush(
         ordinal,
         heading: heading.clone(),
         content: trimmed.to_owned(),
-        content_hash: format!("sha256:{:x}", Sha256::digest(hash_material.as_bytes())),
+        content_hash: format!(
+            "sha256:{}",
+            rocketmq_sre_contracts::encode_lower_hex(Sha256::digest(hash_material.as_bytes()))
+        ),
     });
     content.clear();
     Ok(())

@@ -6,6 +6,7 @@ kind: Kustomization
 resources:
   - namespaces.yaml
   - sre-stack.yaml
+  - dashboard-stack.yaml
   - observability.yaml
   - connector-service.yaml
   - connector-rbac.yaml

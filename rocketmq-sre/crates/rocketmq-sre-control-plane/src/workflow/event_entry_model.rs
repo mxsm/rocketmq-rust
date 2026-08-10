@@ -302,7 +302,10 @@ impl UnifiedEventEntryRequest {
         let canonical = serde_jcs::to_vec(self).map_err(|_| {
             ControlPlaneError::validation("invalid_request", "event entry request cannot be canonicalized")
         })?;
-        Ok(format!("sha256:{:x}", Sha256::digest(canonical)))
+        Ok(format!(
+            "sha256:{}",
+            rocketmq_sre_contracts::encode_lower_hex(Sha256::digest(canonical))
+        ))
     }
 
     pub(super) fn alert_request(&self) -> Option<IntegrationEventRequest> {

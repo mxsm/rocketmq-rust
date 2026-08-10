@@ -14,6 +14,7 @@
 use crate::error::DashboardError;
 use crate::model::DashboardConfigView;
 use crate::model::StorageBackend;
+use rocketmq_admin_core::core::security::AdminCredentials;
 use rocketmq_error::REDACTED;
 use std::env;
 use std::fmt;
@@ -28,6 +29,7 @@ pub struct AppConfig {
     pub monitor_store_path: PathBuf,
     pub dashboard_history_interval_secs: u64,
     pub initial_config: DashboardConfigView,
+    pub admin_credentials: Option<AdminCredentials>,
 }
 
 #[derive(Debug, Clone)]
@@ -80,6 +82,9 @@ impl AppConfig {
                 initial_config.namesrv_addr_list = vec![namesrv_addr];
             }
         }
+        initial_config.use_vip_channel =
+            parse_bool_env("DASHBOARD_WEB_USE_VIP_CHANNEL", initial_config.use_vip_channel);
+        initial_config.use_tls = parse_bool_env("DASHBOARD_WEB_USE_TLS", initial_config.use_tls);
 
         let monitor_store_path = env::var("DASHBOARD_WEB_MONITOR_STORE_PATH")
             .map(PathBuf::from)
@@ -109,7 +114,34 @@ impl AppConfig {
             monitor_store_path,
             dashboard_history_interval_secs,
             initial_config,
+            admin_credentials: admin_credentials_from_env()?,
         })
+    }
+}
+
+fn admin_credentials_from_env() -> Result<Option<AdminCredentials>, DashboardError> {
+    resolve_admin_credentials(
+        env::var("DASHBOARD_WEB_ROCKETMQ_ACCESS_KEY").ok(),
+        env::var("DASHBOARD_WEB_ROCKETMQ_SECRET_KEY").ok(),
+        env::var("DASHBOARD_WEB_ROCKETMQ_SECURITY_TOKEN").ok(),
+    )
+}
+
+fn resolve_admin_credentials(
+    access_key: Option<String>,
+    secret_key: Option<String>,
+    security_token: Option<String>,
+) -> Result<Option<AdminCredentials>, DashboardError> {
+    match (access_key, secret_key, security_token) {
+        (None, None, None) => Ok(None),
+        (Some(access_key), Some(secret_key), security_token) => {
+            AdminCredentials::try_new(access_key, secret_key, security_token)
+                .map(Some)
+                .map_err(|_| DashboardError::Config("RocketMQ admin credentials are invalid".to_string()))
+        }
+        _ => Err(DashboardError::Config(
+            "RocketMQ admin credentials require both access and secret keys".to_string(),
+        )),
     }
 }
 
@@ -254,6 +286,7 @@ mod tests {
     use super::AuthConfig;
     use super::ConfigStore;
     use super::StorageConfig;
+    use super::resolve_admin_credentials;
     use crate::model::DashboardConfigView;
     use crate::model::StorageBackend;
 
@@ -313,5 +346,21 @@ mod tests {
 
         assert!(debug.contains("<redacted>"));
         assert!(!debug.contains("dashboard-secret"));
+    }
+
+    #[test]
+    fn admin_credentials_require_a_complete_redacted_pair() {
+        assert!(resolve_admin_credentials(None, None, None).unwrap().is_none());
+        assert!(resolve_admin_credentials(Some("access".to_string()), None, None).is_err());
+
+        let credentials =
+            resolve_admin_credentials(Some("access-value".to_string()), Some("secret-value".to_string()), None)
+                .unwrap()
+                .expect("credentials");
+        let debug = format!("{credentials:?}");
+
+        assert!(!debug.contains("access-value"));
+        assert!(!debug.contains("secret-value"));
+        assert!(debug.contains("<redacted>"));
     }
 }

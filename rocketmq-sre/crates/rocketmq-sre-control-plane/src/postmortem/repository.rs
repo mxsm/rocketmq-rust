@@ -689,7 +689,10 @@ async fn insert_knowledge(
     .bind(item.id.as_uuid())
     .bind("Postmortem")
     .bind(markdown)
-    .bind(format!("sha256:{:x}", Sha256::digest(markdown.as_bytes())))
+    .bind(format!(
+        "sha256:{}",
+        rocketmq_sre_contracts::encode_lower_hex(Sha256::digest(markdown.as_bytes()))
+    ))
     .execute(&mut **transaction)
     .await?;
     Ok(())
@@ -988,7 +991,10 @@ mod tests {
             review_status: KnowledgeReviewStatus::Validated,
             review_due_at: now + chrono::Duration::days(90),
             sensitivity: "internal".to_owned(),
-            content_hash: format!("sha256:{:x}", Sha256::digest(b"postmortem")),
+            content_hash: format!(
+                "sha256:{}",
+                rocketmq_sre_contracts::encode_lower_hex(Sha256::digest(b"postmortem"))
+            ),
             conflict: false,
             created_at: now,
             updated_at: now,

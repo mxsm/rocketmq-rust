@@ -273,7 +273,10 @@ pub fn verify_manifest(
 pub(crate) fn digest_value(value: Value) -> String {
     let canonical = canonical_value(value);
     let encoded = serde_json::to_vec(&canonical).unwrap_or_default();
-    format!("sha256:{:x}", Sha256::digest(encoded))
+    format!(
+        "sha256:{}",
+        rocketmq_sre_contracts::encode_lower_hex(Sha256::digest(encoded))
+    )
 }
 
 fn canonical_value(value: Value) -> Value {

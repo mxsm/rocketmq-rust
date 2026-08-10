@@ -152,7 +152,10 @@ impl EvidenceService {
         };
         let encoded = serde_json::to_vec(value)
             .map_err(|_| ControlPlaneError::validation("invalid_request", "evidence content cannot be encoded"))?;
-        let content_digest = format!("sha256:{:x}", Sha256::digest(&encoded));
+        let content_digest = format!(
+            "sha256:{}",
+            rocketmq_sre_contracts::encode_lower_hex(Sha256::digest(&encoded))
+        );
         if encoded.len() <= self.blobs.max_inline_bytes() {
             return Ok((snapshot, content_digest));
         }
@@ -198,7 +201,10 @@ fn postgres_timestamp(value: DateTime<Utc>) -> Result<DateTime<Utc>, ControlPlan
 }
 
 fn verify_content_digest(content: &[u8], expected_digest: &str) -> Result<(), ControlPlaneError> {
-    let actual_digest = format!("sha256:{:x}", Sha256::digest(content));
+    let actual_digest = format!(
+        "sha256:{}",
+        rocketmq_sre_contracts::encode_lower_hex(Sha256::digest(content))
+    );
     if actual_digest != expected_digest {
         return Err(ControlPlaneError::validation(
             "invalid_content_hash",
@@ -294,7 +300,10 @@ mod tests {
         let blobs = EvidenceBlobStore::in_memory(1_024);
         let path = "evidence/tenant/cluster/tamper.json";
         let uri = blobs.put(path, b"original".to_vec()).await.expect("put original");
-        let expected_digest = format!("sha256:{:x}", Sha256::digest(b"original"));
+        let expected_digest = format!(
+            "sha256:{}",
+            rocketmq_sre_contracts::encode_lower_hex(Sha256::digest(b"original"))
+        );
         blobs.put(path, b"tampered".to_vec()).await.expect("replace object");
 
         let content = blobs.get(&uri, 128).await.expect("get tampered object");
@@ -505,7 +514,10 @@ mod tests {
                 EvidenceContent::Inline(value) => serde_json::to_vec(value).expect("json"),
                 EvidenceContent::Reference(_) => Vec::new(),
             };
-            let digest = format!("sha256:{:x}", Sha256::digest(&encoded));
+            let digest = format!(
+                "sha256:{}",
+                rocketmq_sre_contracts::encode_lower_hex(Sha256::digest(&encoded))
+            );
             let uri = self.blobs.put("evidence/test.json", encoded.clone()).await?;
             snapshot.content = EvidenceContent::Reference(EvidenceReference {
                 uri,

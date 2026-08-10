@@ -17,6 +17,7 @@ use std::sync::Arc;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use hmac::Hmac;
+use hmac::KeyInit;
 use hmac::Mac;
 use rocketmq_sre_contracts::GovernanceSignature;
 use rocketmq_sre_contracts::GovernanceSignaturePayload;

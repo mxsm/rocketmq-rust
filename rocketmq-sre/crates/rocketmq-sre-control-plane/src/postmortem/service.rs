@@ -299,7 +299,10 @@ impl PostmortemService {
             review_status: KnowledgeReviewStatus::Validated,
             review_due_at: request.review_due_at,
             sensitivity: "internal".to_owned(),
-            content_hash: format!("sha256:{:x}", Sha256::digest(markdown.as_bytes())),
+            content_hash: format!(
+                "sha256:{}",
+                rocketmq_sre_contracts::encode_lower_hex(Sha256::digest(markdown.as_bytes()))
+            ),
             conflict: false,
             created_at: now,
             updated_at: now,

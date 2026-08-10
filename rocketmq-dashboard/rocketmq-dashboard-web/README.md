@@ -44,7 +44,14 @@ $env:DASHBOARD_WEB_LOGIN_REQUIRED="false"
 $env:DASHBOARD_WEB_USERNAME="admin"
 $env:DASHBOARD_WEB_PASSWORD="rocketmq"
 $env:DASHBOARD_WEB_HISTORY_INTERVAL_SECS="60"
+$env:DASHBOARD_WEB_USE_VIP_CHANNEL="false"
+$env:DASHBOARD_WEB_USE_TLS="false"
+$env:DASHBOARD_WEB_ROCKETMQ_ACCESS_KEY="<access-key>"
+$env:DASHBOARD_WEB_ROCKETMQ_SECRET_KEY="<secret-key>"
 ```
+
+The RocketMQ access and secret key variables are optional, but they must be
+configured together when the target cluster enforces ACL authentication.
 
 For SQLite storage:
 
@@ -62,6 +69,20 @@ npm run dev
 ```
 
 The Vite dev server proxies `/api` to `http://127.0.0.1:8082`.
+
+## Local Kind Deployment
+
+The repository Kind acceptance runner builds the backend and frontend images,
+deploys them to the `rocketmq-dashboard` namespace, provisions a generated
+login password, and validates a live RocketMQ cluster overview:
+
+```powershell
+.\rocketmq-sre\scripts\kind.ps1 -Action Up
+```
+
+See `rocketmq-sre/deploy/kind/README.md` for the Dashboard port-forward and
+generated-password commands. The frontend remains a ClusterIP Service and
+proxies `/api` to the backend inside the cluster.
 
 ## Production Build
 

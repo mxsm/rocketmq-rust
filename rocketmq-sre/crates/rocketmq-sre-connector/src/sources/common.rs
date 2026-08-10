@@ -322,7 +322,7 @@ pub(super) fn pseudonymize_identifier(value: &str, key: &[u8]) -> String {
     digest.update(key);
     digest.update(b"\0");
     digest.update(value.as_bytes());
-    format!("sha256:{:x}", digest.finalize())
+    format!("sha256:{}", rocketmq_sre_contracts::encode_lower_hex(digest.finalize()))
 }
 
 fn is_canonical_pseudonym(value: &str) -> bool {

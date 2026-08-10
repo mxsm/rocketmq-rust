@@ -38,6 +38,11 @@ spec:
                 secretKeyRef:
                   name: rocketmq-sre-kind-secrets
                   key: internal-token
+            - name: DASHBOARD_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: rocketmq-sre-kind-secrets
+                  key: dashboard-password
           command: ["/bin/sh", "-ec"]
           args:
             - |
@@ -58,10 +63,36 @@ spec:
               retry curl --fail --silent http://sre-control-plane.rocketmq-sre.svc.cluster.local:8090/readyz >/dev/null
               retry curl --fail --silent http://rocketmq-sre-connector:8091/readyz >/dev/null
               retry curl --fail --silent http://sre-ui.rocketmq-sre.svc.cluster.local:3004/readyz >/dev/null
+              retry curl --fail --silent http://rocketmq-dashboard.rocketmq-dashboard.svc.cluster.local:3003/readyz >/dev/null
               retry curl --fail --silent http://prometheus.observability.svc.cluster.local:9090/-/ready >/dev/null
               retry curl --fail --silent http://loki.observability.svc.cluster.local:3100/ready >/dev/null
               retry curl --fail --silent http://tempo.observability.svc.cluster.local:3200/ready >/dev/null
               retry curl --fail --silent http://otel-collector.observability.svc.cluster.local:13133/ >/dev/null
+
+              check_dashboard_frontend() {
+                curl --fail --silent \
+                  http://rocketmq-dashboard.rocketmq-dashboard.svc.cluster.local:3003/ |
+                  grep -q 'id="root"'
+              }
+              echo "checking RocketMQ Dashboard frontend"
+              retry check_dashboard_frontend
+
+              check_dashboard_cluster() {
+                login="$(printf '{"username":"admin","password":"%s"}' "$DASHBOARD_PASSWORD" |
+                  curl --fail --silent \
+                    --header 'Content-Type: application/json' \
+                    --data-binary @- \
+                    http://rocketmq-dashboard.rocketmq-dashboard.svc.cluster.local:3003/api/auth/login)" || return 1
+                compact_login="$(echo "$login" | tr -d '[:space:]')"
+                session_id="$(echo "$compact_login" | sed -n 's/.*"sessionId":"\([^"]*\)".*/\1/p')"
+                [ -n "$session_id" ] || return 1
+                overview="$(curl --fail --silent \
+                  --header "x-dashboard-session: $session_id" \
+                  http://rocketmq-dashboard.rocketmq-dashboard.svc.cluster.local:3003/api/dashboard/overview)" || return 1
+                compact_overview="$(echo "$overview" | tr -d '[:space:]')"
+                echo "$compact_overview" | grep -q '"success":true' || return 1
+                echo "$compact_overview" | grep -q '"systemStatus":"UP"'
+              }
 
               check_observability_evidence() {
                 prometheus="$(curl --fail --silent --get \
@@ -143,6 +174,8 @@ spec:
 
               echo "checking non-empty Prometheus, Loki, and Tempo evidence"
               retry check_observability_evidence
+              echo "checking authenticated RocketMQ Dashboard cluster data"
+              retry check_dashboard_cluster
               echo "PHASE00_KIND_SMOKE_OK"
           resources:
             requests: {cpu: 10m, memory: 32Mi}

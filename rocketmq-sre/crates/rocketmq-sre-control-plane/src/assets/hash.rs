@@ -370,7 +370,10 @@ fn canonical_digest<T: Serialize>(value: &T) -> Result<String, ControlPlaneError
         .map_err(|_| ControlPlaneError::validation("invalid_request", "inventory content cannot be serialized"))?;
     let bytes = serde_json::to_vec(&sorted_json(&serialized))
         .map_err(|_| ControlPlaneError::validation("invalid_request", "inventory content cannot be canonicalized"))?;
-    Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
+    Ok(format!(
+        "sha256:{}",
+        rocketmq_sre_contracts::encode_lower_hex(Sha256::digest(bytes))
+    ))
 }
 
 fn sorted_json(value: &Value) -> Value {

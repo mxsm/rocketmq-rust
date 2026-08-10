@@ -468,8 +468,10 @@ async fn postgres_plan_accepts_only_incident_linked_execution_precondition_evide
         "observed_at": observed_at,
     });
     let content_digest = format!(
-        "sha256:{:x}",
-        Sha256::digest(serde_json::to_vec(&content).expect("Evidence content"))
+        "sha256:{}",
+        rocketmq_sre_contracts::encode_lower_hex(Sha256::digest(
+            serde_json::to_vec(&content).expect("Evidence content")
+        ))
     );
     let mut agent_evidence = rocketmq_sre_contracts::EvidenceSnapshot::capture(
         EvidenceQuery {
