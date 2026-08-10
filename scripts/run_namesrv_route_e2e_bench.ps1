@@ -208,9 +208,31 @@ try {
             -Destination $isolatedRustNamesrv `
             -Force
         Set-ProcessEnvironment -Values @{ ROCKETMQ_HOME = $runRoot }
+        $rustArguments = @("--listenPort", $NamesrvPort, "--bindAddress", $NamesrvHost)
+        if ($Profile -eq "p1") {
+            $rustConfig = Join-Path $runRoot "rust-namesrv-p1.toml"
+            $rustConfigText = @"
+namesrvTypedZoneRouteEnable = true
+namesrvTypedZoneRouteShadow = false
+namesrvRouteResponseCacheEnable = true
+namesrvRouteResponseCacheMaxBytes = 67108864
+namesrvRouteResponseCacheMaxEntries = 10000
+namesrvRouteResponseCacheMaxSingleResponseBytes = 1048576
+namesrvRouteResponseCacheShards = 16
+namesrvWorkloadAdmissionEnable = true
+namesrvWorkloadAdmissionObserveOnly = false
+namesrvWorkloadAdmissionTimeoutMillis = 100
+clientRequestThreadPoolNums = 32
+clientRequestThreadPoolQueueCapacity = 50000
+defaultThreadPoolNums = 32
+defaultThreadPoolQueueCapacity = 10000
+"@
+            [System.IO.File]::WriteAllText($rustConfig, $rustConfigText, [System.Text.Encoding]::UTF8)
+            $rustArguments += @("--configFile", $rustConfig)
+        }
         $serverProcess = Start-Process `
             -FilePath $isolatedRustNamesrv `
-            -ArgumentList @("--listenPort", $NamesrvPort, "--bindAddress", $NamesrvHost) `
+            -ArgumentList $rustArguments `
             -WorkingDirectory $workspaceRoot `
             -RedirectStandardOutput (Join-Path $logRoot "rust-namesrv.stdout.log") `
             -RedirectStandardError (Join-Path $logRoot "rust-namesrv.stderr.log") `
@@ -272,6 +294,7 @@ configStorePath=$($javaConfig -replace '\\','/')
         fixtureSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $manifestPath).Hash.ToLowerInvariant()
         generatedAt = (Get-Date).ToUniversalTime().ToString("o")
         allocationBytesPerOperation = $null
+        rustFeatureProfile = if ($Server -eq "rust") { $Profile } else { $null }
     }
     [System.IO.File]::WriteAllText(
         (Join-Path $runRoot "run-metadata.json"),

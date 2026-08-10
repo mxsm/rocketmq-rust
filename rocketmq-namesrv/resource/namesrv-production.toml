@@ -44,25 +44,44 @@ authorizationEnabled = true
 authConfigPath = "/opt/rocketmq/data/auth"
 aclFile = "/opt/rocketmq/conf/plain_acl.yml"
 
-# Client request thread pool size (handles broker/client registration and
-# heartbeat traffic).
-# Default: 8. Suggested range: 16-32, scaled with expected concurrent
-# broker/client connections.
+# Rust semantic route-read concurrent permits. The Java-compatible property
+# name is retained, but this does not create OS threads in the Tokio runtime.
+# Default: 8. Suggested range: 16-32 after measuring route p99 and CPU.
 clientRequestThreadPoolNums = 16
 
-# Default thread pool size for general (non client-request) tasks.
-# Default: 16. Suggested range: 32-64 for higher-throughput clusters.
+# Total broker-control + admin permits. Rust reserves a quarter for admin so a
+# registration storm cannot starve authenticated operational requests.
+# Default: 16. Suggested range: 32-64 after measuring registration bursts.
 defaultThreadPoolNums = 32
 
-# Client request thread pool queue capacity (pending task backlog).
-# Default: 50000. Raise if client requests are rejected/dropped under
-# burst load; each queued task is a lightweight struct.
+# Maximum route-read waiters. Prefer a bounded deadline and fast SystemBusy
+# response over continually raising this limit under sustained overload.
 clientRequestThreadPoolQueueCapacity = 100000
 
-# Default thread pool queue capacity.
-# Default: 10000. Suggested range: 20000-50000 for higher-throughput
-# clusters.
+# Total broker-control + admin waiting budget.
 defaultThreadPoolQueueCapacity = 20000
+
+# Start in observe-only mode, then set observe-only=false after validating
+# class mapping, reject rate, and route p99. Both switches are live; permit,
+# queue, and timeout sizing changes require restart.
+namesrvWorkloadAdmissionEnable = true
+namesrvWorkloadAdmissionObserveOnly = true
+namesrvWorkloadAdmissionTimeoutMillis = 100
+
+# Sample one route freshness lookup per 1000 successful route reads. Disabled
+# telemetry performs no live-table lookup.
+routeFreshnessSampleInterval = 1000
+
+# Typed zone filtering and response cache have independent rollback switches.
+# Enable typed zone filtering in shadow first. Keep the cache disabled until
+# registration generation churn and RSS are proven within budget.
+namesrvTypedZoneRouteEnable = false
+namesrvTypedZoneRouteShadow = false
+namesrvRouteResponseCacheEnable = false
+namesrvRouteResponseCacheMaxBytes = 67108864
+namesrvRouteResponseCacheMaxEntries = 10000
+namesrvRouteResponseCacheMaxSingleResponseBytes = 1048576
+namesrvRouteResponseCacheShards = 16
 
 # Unregister broker queue capacity.
 # Default: 3000. Raise alongside cluster size / broker churn rate.
