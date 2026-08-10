@@ -53,6 +53,49 @@ pub mod queue_state;
 #[doc(hidden)]
 pub mod queue_storage;
 pub mod raw;
+pub(crate) mod retirement;
+
+#[doc(hidden)]
+pub use retirement::activation::{
+    prepare_managed_lifecycle_activation, ManagedLifecycleActivationError, ManagedLifecycleActivationErrorKind,
+    PreparedManagedLifecycleActivation,
+};
+#[doc(hidden)]
+pub use retirement::registry::ManagedMappedFileQueueGeneration;
+#[doc(hidden)]
+pub use retirement::registry::MappedFileQueueGeneration;
+#[doc(hidden)]
+pub use retirement::registry::MappedFileQueueSnapshot;
+#[doc(hidden)]
+pub use retirement::replay::{
+    inspect_managed_lifecycle_read_only, inspect_managed_lifecycle_read_only_with_limits,
+    inspect_managed_lifecycle_under_exclusive_lock, LockedManagedLifecycleInspection, ManagedLifecycleReadError,
+    ManagedLifecycleReadErrorKind, ManagedLifecycleReadLimits, ManagedLifecycleReadOutcome,
+    ManagedLifecycleRecoveryReason, ManagedLifecycleSession,
+};
+#[doc(hidden)]
+pub use retirement::service::{
+    ManagedIncarnationCreateRequest, ManagedIncarnationCreation, ManagedIncarnationCreationError,
+    ManagedIncarnationCreationErrorKind, ManagedLifecycleRuntime, ManagedRetirementBatchReport,
+    ManagedRetirementReason, ManagedRetirementStage, ManagedRetirementSubmission, ManagedRetirementSubmissionError,
+    ManagedRetirementSubmissionErrorKind,
+};
+#[doc(hidden)]
+pub use retirement::state::reconciliation::{
+    ManagedReconciliationDisposition, ManagedReconciliationError, ManagedReconciliationErrorKind,
+    ManagedReconciliationLimits, ManagedRecoverySession, ManagedSegmentClaimError, ReconciledLifecycleSession,
+    ReconciledSegmentFile,
+};
+
+/// Exercises every bounded mapped-file lifecycle decoder with an arbitrary byte slice.
+///
+/// This hidden entry point exists for the standalone recovery-record fuzz target. It deliberately
+/// discards typed decode errors because the fuzzing invariant is total, bounded decoding without
+/// panics or out-of-bounds reads.
+#[doc(hidden)]
+pub fn fuzz_decode_mapped_file_lifecycle(input: &[u8]) {
+    retirement::fuzz_decode_lifecycle(input);
+}
 
 pub use contract::MappedFile;
 pub use contract::MappedWriteLease;

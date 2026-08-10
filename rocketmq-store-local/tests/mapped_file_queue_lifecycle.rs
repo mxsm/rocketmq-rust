@@ -233,6 +233,9 @@ fn retry_deletion_succeeds_after_the_last_reader_releases_the_first_file() {
 fn swap_reserves_three_newest_files_and_shutdown_releases_every_file() {
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let files: Vec<_> = (0..5).map(|index| mapped_file(&temp_dir, index * 16, 16)).collect();
+    for file in &files {
+        assert!(file.try_seal_readable().expect("queue segment seals"));
+    }
 
     swap_mapped_file_queue(&files, 1, 0, 0, || i64::MAX);
     assert_eq!(files[0].get_metrics().expect("metrics").swap_operations(), 1);
@@ -247,9 +250,14 @@ fn swap_reserves_three_newest_files_and_shutdown_releases_every_file() {
 }
 
 #[test]
-fn clean_swapped_queue_records_cleanup_without_recording_a_new_swap() {
+fn clean_swapped_queue_only_removes_dropped_retired_observations() {
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let files: Vec<_> = (0..5).map(|index| mapped_file(&temp_dir, index * 16, 16)).collect();
+    for file in &files {
+        assert!(file.try_seal_readable().expect("queue segment seals"));
+    }
+
+    swap_mapped_file_queue(&files, 1, 0, 0, || i64::MAX);
 
     clean_swapped_mapped_file_queue(&files, 0, || i64::MAX);
     clean_swapped_mapped_file_queue(&files, 0, || i64::MAX);
@@ -257,7 +265,7 @@ fn clean_swapped_queue_records_cleanup_without_recording_a_new_swap() {
     for file in &files[..2] {
         let metrics = file.get_metrics().expect("metrics");
         assert_eq!(metrics.clean_swap_operations(), 1);
-        assert_eq!(metrics.swap_operations(), 0);
+        assert_eq!(metrics.swap_operations(), 1);
     }
     for file in &files[2..] {
         let metrics = file.get_metrics().expect("metrics");

@@ -23,10 +23,7 @@ use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt::Write as FmtWrite;
 use std::fs;
-use std::fs::File;
-use std::fs::OpenOptions;
 use std::future::Future;
-use std::io::Write;
 use std::net::IpAddr;
 use std::ops::Deref;
 use std::path::Path;
@@ -50,7 +47,6 @@ use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
-use fs2::FileExt;
 use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::attribute::cleanup_policy::CleanupPolicy;
 use rocketmq_model::common::boundary_type::BoundaryType;
@@ -183,7 +179,6 @@ use crate::store_error::StoreError;
 use crate::store_error::StoreErrorKind;
 use crate::store_error::StoreOperation;
 use crate::store_path_config_helper::get_abort_file;
-use crate::store_path_config_helper::get_lock_file;
 use crate::store_path_config_helper::get_store_checkpoint;
 use crate::store_path_config_helper::get_store_path_consume_queue;
 #[cfg(feature = "tieredstore")]
@@ -230,8 +225,11 @@ mod composition;
 mod dispatch;
 mod health;
 mod lifecycle;
+mod managed_recovery;
+mod mapped_file_retirement_service;
 mod read_path;
 mod recovery;
+mod root_lock;
 mod write_path;
 
 pub use composition::parse_delay_level;
@@ -253,20 +251,21 @@ use health::CleanConsumeQueueService;
 use health::CommitLogWalPin;
 use health::CorrectLogicOffsetService;
 use lifecycle::FlushConsumeQueueService;
+use managed_recovery::inspect_and_reconcile_managed_root;
+use managed_recovery::wave_b_activation_fence;
+use mapped_file_retirement_service::MappedFileRetirementService;
 use read_path::estimate_in_mem_by_commit_offset;
 use read_path::is_the_batch_full;
 use recovery::BackgroundIndexRebuildService;
+use root_lock::StoreRootLease;
+use root_lock::StoreRootMode;
 use write_path::murmur3_x64_128_bytes;
 
-struct StoreLockGuard {
-    file: File,
-}
-
-impl Drop for StoreLockGuard {
-    fn drop(&mut self) {
-        let _ = self.file.sync_all();
-        let _ = FileExt::unlock(&self.file);
-    }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StoreRootLeaseState {
+    Operational,
+    DestroyRetryPending,
+    Destroyed,
 }
 
 enum PendingHAService {
@@ -561,7 +560,6 @@ pub struct LocalFileMessageStore {
     controller_epoch_start_offset: Arc<AtomicI64>,
     shutdown: Arc<AtomicBool>,
     background_index_query_degradation_total: Arc<AtomicU64>,
-    store_lock_guard: Option<StoreLockGuard>,
     running_flags: Arc<RunningFlags>,
     store_health_recorder: StoreHealthRecorder,
     reput_message_service: ReputMessageService,
@@ -614,10 +612,16 @@ pub struct LocalFileMessageStore {
     scheduled_task_shutdown: CancellationToken,
     scheduled_task_group: Option<rocketmq_runtime::TaskGroup>,
     scheduled_tasks: Option<ScheduledTaskGroup>,
+    mapped_file_retirement_service: Option<MappedFileRetirementService>,
     ha_update_master_group: Arc<StdMutex<Option<rocketmq_runtime::TaskGroup>>>,
     delay_level_table: Arc<BTreeMap<i32 /* level */, i64 /* delay timeMillis */>>,
     max_delay_level: i32,
     last_recovery_report: Option<RecoveryReport>,
+    store_root_lease_state: StoreRootLeaseState,
+    store_root_mode: StoreRootMode,
+    // Declared last so the verified Store-root boundary outlives every component field during
+    // ordinary Rust field destruction, including mapped-file and allocator owner teardown.
+    store_root_lease: StoreRootLease,
 }
 
 pub(crate) struct LocalReleaseCheckpointWriteLease {
@@ -680,15 +684,6 @@ fn notify_message_arrive_for_multi_dispatch(
             dispatch_request.bit_map.clone(),
             dispatch_request.properties_map.as_ref(),
         );
-    }
-}
-
-impl Drop for LocalFileMessageStore {
-    fn drop(&mut self) {
-        self.release_store_lock();
-        // if let Some(runtime) = self.message_store_runtime.take() {
-        //     runtime.shutdown();
-        // }
     }
 }
 

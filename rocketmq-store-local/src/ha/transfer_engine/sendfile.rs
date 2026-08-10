@@ -46,6 +46,10 @@ use crate::transfer::error::TransferResult;
 use crate::transfer::segment::FileRange;
 
 #[cfg(unix)]
+/// Legacy injectable sendfile seam for explicitly standalone/unmanaged file ranges.
+///
+/// Owner-bound mapped-file ranges execute sendfile inside their `FileOwner`, so their input
+/// descriptor is never passed to this trait.
 pub trait SendfileOperation {
     fn sendfile(&mut self, out_fd: RawFd, in_fd: RawFd, offset: u64, len: usize) -> io::Result<usize>;
 }
@@ -156,11 +160,12 @@ where
         let out_fd = self.writer.sendfile_out_fd();
 
         for range in file_ranges {
-            let in_fd = range.raw_fd();
             let mut position = range.position();
             let mut remaining = range.len();
             while remaining > 0 {
-                let written = match self.operation.sendfile(out_fd, in_fd, position, remaining) {
+                let written = match range.sendfile_to(out_fd, position, remaining, |out_fd, in_fd, offset, len| {
+                    self.operation.sendfile(out_fd, in_fd, offset, len)
+                }) {
                     Ok(0) => return Err(write_zero_error()),
                     Ok(written) => written,
                     Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,

@@ -15,21 +15,14 @@
 use super::*;
 
 impl LocalFileMessageStore {
-    pub(super) fn is_temp_file_exist(&self) -> bool {
-        let file_name = get_abort_file(self.message_store_config.store_path_root_dir.as_str());
-        Path::new(&file_name).exists()
+    pub(super) fn is_temp_file_exist(&self) -> Result<bool, StoreError> {
+        self.store_root_lease.abort_marker_present(StoreOperation::Load)
     }
 
-    pub(super) fn create_temp_file(&self) {
-        let file_name = get_abort_file(self.message_store_config.store_path_root_dir.as_str());
-        let pid = std::process::id();
-        match fs::File::create(file_name.as_str()) {
-            Ok(_) => {}
-            Err(e) => {
-                error!("create temp file error: {}", e);
-            }
-        }
-        let _ = string_to_file(pid.to_string().as_str(), file_name.as_str());
+    pub(super) fn create_temp_file(&self) -> Result<(), StoreError> {
+        let pid = std::process::id().to_string();
+        self.store_root_lease
+            .create_abort_marker(StoreOperation::Start, pid.as_bytes())
     }
 
     pub(super) async fn recover(&mut self, last_exit_ok: bool) -> bool {

@@ -108,6 +108,11 @@ impl FileRangeAliasInner {
             .as_deref()
             .expect("file-range owner is present until alias Drop")
     }
+
+    #[cfg(unix)]
+    fn is_standalone_compatibility(&self) -> bool {
+        matches!(self.operation.as_ref(), Some(FileRangeOperationLease::Standalone))
+    }
 }
 
 impl Drop for FileRangeAliasInner {
@@ -212,8 +217,9 @@ impl SegmentLease {
 
     /// Creates a checked standalone range for compatibility tests and benchmarks.
     ///
-    /// Mapped-file production paths must use the internal `try_from_file_owner_range` constructor so the range
-    /// carries the mapped file's owned operation admission.
+    /// This constructor never manufactures mapped-file admission or retirement authority. Mapped-file
+    /// production paths must use the internal `try_from_file_owner_range` constructor so the range carries
+    /// the mapped file's owned operation admission.
     pub fn try_from_file_range(
         global_offset: i64,
         file_offset: u64,
@@ -489,23 +495,48 @@ impl FileRangeLease {
         self.range.bounds.end = self.range.bounds.start + retained as u64;
     }
 
+    /// Runs one sendfile operation without exposing a managed input descriptor.
+    ///
+    /// The injected operation is retained solely for the explicitly standalone compatibility
+    /// constructor. Owner-bound mapped ranges always execute the native syscall inside `FileOwner`
+    /// while both the physical owner and mapped-file admission remain held.
     #[cfg(unix)]
-    #[inline]
-    pub(crate) fn raw_fd(&self) -> std::os::fd::RawFd {
-        self.aliases.owner().raw_fd()
+    pub(crate) fn sendfile_to(
+        &self,
+        out_fd: std::os::fd::RawFd,
+        offset: u64,
+        len: usize,
+        unmanaged_operation: impl FnOnce(std::os::fd::RawFd, std::os::fd::RawFd, u64, usize) -> io::Result<usize>,
+    ) -> io::Result<usize> {
+        let requested_end = offset
+            .checked_add(
+                u64::try_from(len)
+                    .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "sendfile length overflow"))?,
+            )
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "sendfile range end overflow"))?;
+        if offset < self.range.bounds.start || requested_end > self.range.bounds.end {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "sendfile request exceeds the owned file range",
+            ));
+        }
+        if self.aliases.is_standalone_compatibility() {
+            return self
+                .aliases
+                .owner()
+                .sendfile_to_unmanaged(out_fd, offset, len, unmanaged_operation);
+        }
+        self.aliases.owner().sendfile_to(out_fd, offset, len)
     }
 
     #[cfg(test)]
-    fn with_file<R>(&self, operation: impl for<'file> FnOnce(&'file File) -> R) -> R {
-        self.aliases.owner().with_file(operation)
+    fn read_exact_for_test(&self, output: &mut [u8]) -> io::Result<()> {
+        self.aliases.owner().read_exact_at_for_test(self.position(), output)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::io::Read;
-    use std::io::Seek;
-    use std::io::SeekFrom;
     use std::io::Write;
 
     use cheetah_string::CheetahString;
@@ -529,13 +560,9 @@ mod tests {
     }
 
     fn read_file_range(range: &FileRange) -> Vec<u8> {
-        range.with_file(|file| {
-            let mut file = file;
-            file.seek(SeekFrom::Start(range.position())).expect("seek range");
-            let mut bytes = vec![0; range.len()];
-            file.read_exact(&mut bytes).expect("read range");
-            bytes
-        })
+        let mut bytes = vec![0; range.len()];
+        range.read_exact_for_test(&mut bytes).expect("read range");
+        bytes
     }
 
     #[test]
@@ -655,6 +682,62 @@ mod tests {
             SegmentLease::try_from_file_range(0, 0, u64::MAX, 2, file, TransferCacheState::Cold,),
             Err(FileRangeError::EndOverflow { .. })
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn managed_range_sendfile_never_invokes_the_unmanaged_descriptor_seam() {
+        let file = tempfile::tempfile().expect("temporary file");
+        file.set_len(1).expect("size temporary file");
+        let metrics = Arc::new(MappedFileMetrics::new());
+        let owner =
+            Arc::new(FileOwner::try_new_managed(file, Arc::clone(&metrics)).expect("capture managed physical owner"));
+        let observed_file_owners = Arc::new(std::sync::atomic::AtomicU64::new(u64::MAX));
+        let range = FileRangeLease::try_new(
+            owner,
+            0,
+            1,
+            FileRangeOperationLease::Probe {
+                _probe: OperationDropProbe {
+                    metrics,
+                    observed_file_owners,
+                },
+            },
+        )
+        .expect("managed checked range");
+        let unmanaged_called = std::cell::Cell::new(false);
+
+        let error = range
+            .sendfile_to(-1, 0, 1, |_, _, _, _| {
+                unmanaged_called.set(true);
+                Ok(1)
+            })
+            .expect_err("invalid output descriptor must fail inside managed sendfile");
+
+        assert!(!unmanaged_called.get());
+        assert_ne!(error.kind(), io::ErrorKind::PermissionDenied);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn standalone_range_retains_only_the_explicit_unmanaged_sendfile_seam() {
+        let file = tempfile::tempfile().expect("temporary file");
+        file.set_len(1).expect("size temporary file");
+        let segment = SegmentLease::try_from_file_range(0, 0, 0, 1, Arc::new(file), TransferCacheState::Cold)
+            .expect("standalone checked range");
+        let range = segment.as_file_range().expect("file range");
+        let unmanaged_called = std::cell::Cell::new(false);
+
+        let written = range
+            .sendfile_to(-1, 0, 1, |_, _, offset, len| {
+                unmanaged_called.set(true);
+                assert_eq!((offset, len), (0, 1));
+                Ok(1)
+            })
+            .expect("standalone compatibility operation");
+
+        assert!(unmanaged_called.get());
+        assert_eq!(written, 1);
     }
 
     #[test]

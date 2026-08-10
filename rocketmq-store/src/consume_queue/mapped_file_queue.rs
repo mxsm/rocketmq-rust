@@ -41,12 +41,13 @@ use rocketmq_store_local::mapped_file::queue_io::MappedFileQueueLoadOutcome;
 use rocketmq_store_local::mapped_file::queue_lifecycle::clean_swapped_mapped_file_queue;
 use rocketmq_store_local::mapped_file::queue_lifecycle::delete_expired_mapped_files_by_offset;
 use rocketmq_store_local::mapped_file::queue_lifecycle::delete_expired_mapped_files_by_time_before;
-use rocketmq_store_local::mapped_file::queue_lifecycle::destroy_last_mapped_file;
+use rocketmq_store_local::mapped_file::queue_lifecycle::destroy_last_mapped_file_for_queue;
 use rocketmq_store_local::mapped_file::queue_lifecycle::destroy_mapped_file_queue;
-use rocketmq_store_local::mapped_file::queue_lifecycle::mapped_files_after_removal;
+use rocketmq_store_local::mapped_file::queue_lifecycle::destroy_mapped_files_in_order;
 use rocketmq_store_local::mapped_file::queue_lifecycle::retry_delete_first_mapped_file;
 use rocketmq_store_local::mapped_file::queue_lifecycle::shutdown_mapped_file_queue;
 use rocketmq_store_local::mapped_file::queue_lifecycle::swap_mapped_file_queue;
+use rocketmq_store_local::mapped_file::queue_lifecycle::MappedFileQueueDeletion;
 use rocketmq_store_local::mapped_file::queue_maintenance::mapped_file_queue_truncate_action;
 use rocketmq_store_local::mapped_file::queue_maintenance::plan_mapped_file_queue_reset;
 use rocketmq_store_local::mapped_file::queue_maintenance::MappedFileQueueResetLastFile;
@@ -65,6 +66,9 @@ pub use rocketmq_store_local::mapped_file::queue_metrics::MappedFileIoStats;
 pub use rocketmq_store_local::mapped_file::queue_metrics::MappedFileWarmupStats;
 use rocketmq_store_local::mapped_file::queue_state::MappedFileQueueRuntimeState;
 use rocketmq_store_local::mapped_file::queue_storage::MappedFileQueueStorage;
+use rocketmq_store_local::mapped_file::ManagedMappedFileQueueGeneration;
+use rocketmq_store_local::mapped_file::MappedFileQueueGeneration;
+use rocketmq_store_local::mapped_file::MappedFileQueueSnapshot;
 use tracing::error;
 
 use crate::base::allocate_mapped_file_service::AllocateMappedFileService;
@@ -76,7 +80,90 @@ use crate::log_file::mapped_file::MappedFile;
 use crate::log_file::mapped_file::MappedFileResult;
 use crate::queue::single_consume_queue::CQ_STORE_UNIT_SIZE;
 
-type MappedFileGeneration = Arc<ArcSwap<Vec<Arc<DefaultMappedFile>>>>;
+enum MappedFileGenerationState {
+    Legacy(MappedFileQueueGeneration<DefaultMappedFile>),
+    Managed(ManagedMappedFileQueueGeneration<DefaultMappedFile>),
+}
+
+#[derive(Clone)]
+struct MappedFileGeneration {
+    state: Arc<ArcSwap<MappedFileGenerationState>>,
+}
+
+impl MappedFileGeneration {
+    fn legacy() -> Self {
+        Self {
+            state: Arc::new(ArcSwap::from_pointee(MappedFileGenerationState::Legacy(
+                MappedFileQueueGeneration::new(),
+            ))),
+        }
+    }
+
+    #[cfg(test)]
+    fn from_legacy_recovery_files(files: Vec<Arc<DefaultMappedFile>>) -> Self {
+        Self {
+            state: Arc::new(ArcSwap::from_pointee(MappedFileGenerationState::Legacy(
+                MappedFileQueueGeneration::from_recovery_files(files),
+            ))),
+        }
+    }
+
+    fn snapshot(&self) -> MappedFileQueueSnapshot<DefaultMappedFile> {
+        match self.state.load().as_ref() {
+            MappedFileGenerationState::Legacy(generation) => generation.snapshot(),
+            MappedFileGenerationState::Managed(generation) => generation.snapshot(),
+        }
+    }
+
+    fn allows_legacy_namespace_mutation(&self) -> bool {
+        matches!(self.state.load().as_ref(), MappedFileGenerationState::Legacy(_))
+    }
+
+    fn publish_legacy_created_file(&self, mapped_file: Arc<DefaultMappedFile>) -> bool {
+        let state = self.state.load();
+        let MappedFileGenerationState::Legacy(generation) = state.as_ref() else {
+            return false;
+        };
+        generation.publish_legacy_created_file(mapped_file);
+        true
+    }
+
+    fn apply_legacy_namespace_removal(&self, deletion: MappedFileQueueDeletion) -> i32 {
+        match self.state.load().as_ref() {
+            MappedFileGenerationState::Legacy(generation) => generation.apply_legacy_namespace_removal(deletion),
+            MappedFileGenerationState::Managed(_) => 0,
+        }
+    }
+
+    fn extend_legacy_recovery_generation(&self, files: Vec<Arc<DefaultMappedFile>>) -> bool {
+        let state = self.state.load();
+        let MappedFileGenerationState::Legacy(generation) = state.as_ref() else {
+            return false;
+        };
+        generation.extend_recovery_generation(files);
+        true
+    }
+
+    fn install_legacy_recovery_generation(&self, files: Vec<Arc<DefaultMappedFile>>) -> bool {
+        let state = self.state.load();
+        let MappedFileGenerationState::Legacy(generation) = state.as_ref() else {
+            return false;
+        };
+        generation.install_recovery_generation(files);
+        true
+    }
+
+    fn install_reconciled_generation(&self, generation: ManagedMappedFileQueueGeneration<DefaultMappedFile>) -> bool {
+        let current = self.state.load_full();
+        if !matches!(current.as_ref(), MappedFileGenerationState::Legacy(_)) {
+            return false;
+        }
+        let previous = self
+            .state
+            .compare_and_swap(&current, Arc::new(MappedFileGenerationState::Managed(generation)));
+        Arc::ptr_eq(&previous, &current)
+    }
+}
 
 /// Narrow, cloneable capability used by commit-log readers.
 ///
@@ -96,11 +183,11 @@ impl MappedFileQueueReadHandle {
         offset: i64,
         return_first_on_not_found: bool,
     ) -> Option<Arc<DefaultMappedFile>> {
-        let files = self.mapped_files.load();
+        let files = self.mapped_files.snapshot();
         let first = files.first()?.clone();
         let last = files.last()?.clone();
         match file_index_by_offset(
-            files.as_slice(),
+            files.as_ref(),
             self.mapped_file_size,
             offset,
             return_first_on_not_found,
@@ -115,12 +202,12 @@ impl MappedFileQueueReadHandle {
     }
 
     pub(crate) fn get_max_offset(&self) -> i64 {
-        let files = self.mapped_files.load();
+        let files = self.mapped_files.snapshot();
         mapped_file_queue_max_offset(files.last())
     }
 
     pub(crate) fn get_min_offset(&self) -> i64 {
-        match self.mapped_files.load().first() {
+        match self.mapped_files.snapshot().first() {
             None => -1,
             Some(mapped_file) if mapped_file.is_available() => mapped_file.get_file_from_offset() as i64,
             Some(mapped_file) => self.roll_next_file(mapped_file.get_file_from_offset() as i64),
@@ -132,9 +219,9 @@ impl MappedFileQueueReadHandle {
     }
 
     pub(crate) fn check_self(&self) {
-        let mapped_files = self.mapped_files.load();
+        let mapped_files = self.mapped_files.snapshot();
         for_each_discontinuous_pair(
-            mapped_files.as_slice(),
+            mapped_files.as_ref(),
             self.mapped_file_size,
             |file| file.get_file_from_offset(),
             |previous, current| {
@@ -225,7 +312,7 @@ impl MappedFileQueueAppendHandle {
     /// Returns the current absolute append position without exposing the mapped-file generation.
     pub(crate) fn current_append_offset(&self) -> u64 {
         self.mapped_files
-            .load()
+            .snapshot()
             .last()
             .map(|mapped_file| {
                 mapped_file
@@ -257,24 +344,27 @@ fn get_last_mapped_file_for_append(
     start_offset: u64,
     need_create: bool,
 ) -> Option<Arc<DefaultMappedFile>> {
-    if runtime_state.is_closing() {
+    if runtime_state.is_closing() || !mapped_files.allows_legacy_namespace_mutation() {
         return None;
     }
-    let mapped_file_last = mapped_files.load().last().cloned();
+    let mapped_file_last = mapped_files.snapshot().last().cloned();
     if mapped_file_last.as_ref().is_some_and(|file| !file.is_available()) {
         return None;
     }
     if let Some(file) = mapped_file_last.as_ref() {
         let last_file =
             MappedFileQueueLastFile::new(file.get_file_from_offset(), file.get_wrote_position(), file.is_full());
-        if let Some(next_offset) = plan_mapped_file_queue_preallocation(mapped_file_size, last_file) {
-            trigger_mapped_file_preallocation(
-                store_path,
-                mapped_file_size,
-                allocate_mapped_file_service,
-                runtime_state,
-                next_offset,
-            );
+        if mapped_files.allows_legacy_namespace_mutation() {
+            if let Some(next_offset) = plan_mapped_file_queue_preallocation(mapped_file_size, last_file) {
+                trigger_mapped_file_preallocation(
+                    mapped_files,
+                    store_path,
+                    mapped_file_size,
+                    allocate_mapped_file_service,
+                    runtime_state,
+                    next_offset,
+                );
+            }
         }
     }
     let roll_file = mapped_file_last
@@ -295,6 +385,7 @@ fn get_last_mapped_file_for_append(
 }
 
 fn trigger_mapped_file_preallocation(
+    mapped_files: &MappedFileGeneration,
     store_path: &str,
     mapped_file_size: u64,
     allocate_mapped_file_service: Option<&AllocateMappedFileService>,
@@ -302,7 +393,7 @@ fn trigger_mapped_file_preallocation(
     next_offset: u64,
 ) {
     let _maintenance_guard = runtime_state.commit_lock().lock();
-    if runtime_state.is_closing() {
+    if runtime_state.is_closing() || !mapped_files.allows_legacy_namespace_mutation() {
         return;
     }
     let Some(service) = allocate_mapped_file_service else {
@@ -324,11 +415,38 @@ fn create_and_publish_mapped_file(
     runtime_state: &MappedFileQueueRuntimeState,
     create_offset: u64,
 ) -> Option<Arc<DefaultMappedFile>> {
-    let _maintenance_guard = runtime_state.commit_lock().lock();
-    if runtime_state.is_closing() {
+    create_and_publish_mapped_file_with_before_lock(
+        mapped_files,
+        store_path,
+        mapped_file_size,
+        allocate_mapped_file_service,
+        runtime_state,
+        create_offset,
+        || {},
+    )
+}
+
+fn create_and_publish_mapped_file_with_before_lock<F>(
+    mapped_files: &MappedFileGeneration,
+    store_path: &str,
+    mapped_file_size: u64,
+    allocate_mapped_file_service: Option<&AllocateMappedFileService>,
+    runtime_state: &MappedFileQueueRuntimeState,
+    create_offset: u64,
+    before_lock: F,
+) -> Option<Arc<DefaultMappedFile>>
+where
+    F: FnOnce(),
+{
+    if !mapped_files.allows_legacy_namespace_mutation() {
         return None;
     }
-    let current_files = mapped_files.load();
+    before_lock();
+    let _maintenance_guard = runtime_state.commit_lock().lock();
+    if runtime_state.is_closing() || !mapped_files.allows_legacy_namespace_mutation() {
+        return None;
+    }
+    let current_files = mapped_files.snapshot();
     if let Some(existing) = current_files
         .iter()
         .find(|mapped_file| mapped_file.get_file_from_offset() == create_offset)
@@ -336,8 +454,6 @@ fn create_and_publish_mapped_file(
         return Some(Arc::clone(existing));
     }
     let is_first = current_files.is_empty();
-    drop(current_files);
-
     let next_file_path = PathBuf::from(store_path).join(offset_to_file_name(create_offset));
     let next_next_file_path = PathBuf::from(store_path).join(offset_to_file_name(create_offset + mapped_file_size));
     let mapped_file = create_mapped_file_for_queue(
@@ -348,12 +464,9 @@ fn create_and_publish_mapped_file(
         is_first,
     )?;
 
-    mapped_files.rcu(|current| {
-        let mut files = current.as_slice().to_vec();
-        files.push(mapped_file.clone());
-        files
-    });
-    Some(mapped_file)
+    mapped_files
+        .publish_legacy_created_file(Arc::clone(&mapped_file))
+        .then_some(mapped_file)
 }
 
 /// Narrow, cloneable capability used by background commit-log cleanup.
@@ -366,28 +479,14 @@ fn create_and_publish_mapped_file(
 pub(crate) struct MappedFileQueueCleanupHandle {
     mapped_files: MappedFileGeneration,
     mapped_file_size: u64,
+    runtime_state: MappedFileQueueRuntimeState,
 }
 
 impl MappedFileQueueCleanupHandle {
-    #[inline]
-    fn update_generation<F>(&self, mut update: F)
-    where
-        F: FnMut(&[Arc<DefaultMappedFile>]) -> Vec<Arc<DefaultMappedFile>>,
-    {
-        self.mapped_files.rcu(|current| update(current.as_slice()));
-    }
-
-    #[inline]
-    fn remove_files(&self, files: Vec<Arc<DefaultMappedFile>>) {
-        if !files.is_empty() {
-            self.update_generation(|current| mapped_files_after_removal(current, &files));
-        }
-    }
-
     fn check_self(&self) {
-        let mapped_files = self.mapped_files.load();
+        let mapped_files = self.mapped_files.snapshot();
         for_each_discontinuous_pair(
-            mapped_files.as_slice(),
+            mapped_files.as_ref(),
             self.mapped_file_size,
             |file| file.get_file_from_offset(),
             |previous, current| {
@@ -402,7 +501,7 @@ impl MappedFileQueueCleanupHandle {
     }
 
     pub(crate) fn get_min_offset(&self) -> i64 {
-        match self.mapped_files.load().first() {
+        match self.mapped_files.snapshot().first() {
             None => -1,
             Some(mapped_file) if mapped_file.is_available() => mapped_file.get_file_from_offset() as i64,
             Some(mapped_file) => {
@@ -422,10 +521,14 @@ impl MappedFileQueueCleanupHandle {
         delete_file_batch_max: i32,
         pinned_file_offset: Option<u64>,
     ) -> i32 {
-        let files = (**self.mapped_files.load()).clone();
+        let _maintenance_guard = self.runtime_state.commit_lock().lock();
+        if !self.mapped_files.allows_legacy_namespace_mutation() {
+            return 0;
+        }
+        let files = self.mapped_files.snapshot();
         self.check_self();
         let deletion = delete_expired_mapped_files_by_time_before(
-            &files,
+            files.as_ref(),
             expired_time,
             delete_files_interval,
             interval_forcibly,
@@ -434,16 +537,18 @@ impl MappedFileQueueCleanupHandle {
             pinned_file_offset,
             || i64::try_from(current_millis()).unwrap_or(i64::MAX),
         );
-        let delete_count = deletion.deleted_count();
-        self.remove_files(deletion.into_mapped_files());
-        delete_count
+        self.mapped_files.apply_legacy_namespace_removal(deletion)
     }
 
     pub(crate) fn retry_delete_first_file(&self, interval_forcibly: i64) -> bool {
-        let first = self.mapped_files.load().first().cloned();
+        let _maintenance_guard = self.runtime_state.commit_lock().lock();
+        if !self.mapped_files.allows_legacy_namespace_mutation() {
+            return false;
+        }
+        let first = self.mapped_files.snapshot().first().cloned();
         let deletion = retry_delete_first_mapped_file(first.as_ref(), interval_forcibly);
         let deleted = deletion.deleted_count() > 0;
-        self.remove_files(deletion.into_mapped_files());
+        self.mapped_files.apply_legacy_namespace_removal(deletion);
         deleted
     }
 }
@@ -466,11 +571,11 @@ impl MappedFileQueueFlushHandle {
         offset: i64,
         return_first_on_not_found: bool,
     ) -> Option<Arc<DefaultMappedFile>> {
-        let files = self.mapped_files.load();
+        let files = self.mapped_files.snapshot();
         let first = files.first()?.clone();
         let last = files.last()?.clone();
         match file_index_by_offset(
-            files.as_slice(),
+            files.as_ref(),
             self.mapped_file_size,
             offset,
             return_first_on_not_found,
@@ -486,7 +591,7 @@ impl MappedFileQueueFlushHandle {
 
     #[inline]
     fn get_max_offset(&self) -> i64 {
-        let files = self.mapped_files.load();
+        let files = self.mapped_files.snapshot();
         mapped_file_queue_max_offset(files.last())
     }
 
@@ -558,7 +663,7 @@ pub use rocketmq_store_local::flush::FlushProgress;
 impl Default for MappedFileQueue {
     fn default() -> Self {
         Self {
-            storage: MappedFileQueueStorage::new(String::new(), 0, Arc::new(ArcSwap::from_pointee(Vec::new()))),
+            storage: MappedFileQueueStorage::new(String::new(), 0, MappedFileGeneration::legacy()),
             allocate_mapped_file_service: None,
             runtime_state: MappedFileQueueRuntimeState::default(),
         }
@@ -573,11 +678,7 @@ impl MappedFileQueue {
         allocate_mapped_file_service: Option<AllocateMappedFileService>,
     ) -> MappedFileQueue {
         MappedFileQueue {
-            storage: MappedFileQueueStorage::new(
-                store_path,
-                mapped_file_size,
-                Arc::new(ArcSwap::from_pointee(Vec::new())),
-            ),
+            storage: MappedFileQueueStorage::new(store_path, mapped_file_size, MappedFileGeneration::legacy()),
             allocate_mapped_file_service,
             runtime_state: MappedFileQueueRuntimeState::default(),
         }
@@ -587,6 +688,9 @@ impl MappedFileQueue {
 impl MappedFileQueue {
     #[inline]
     pub fn load(&mut self) -> bool {
+        if !self.storage.mapped_files().allows_legacy_namespace_mutation() {
+            return false;
+        }
         let outcome = load_mapped_file_queue_path(self.storage.store_path(), self.storage.mapped_file_size());
         self.apply_load_outcome(outcome)
     }
@@ -610,9 +714,9 @@ impl MappedFileQueue {
     }
 
     pub fn check_self(&self) {
-        let mapped_files = self.storage.mapped_files().load();
+        let mapped_files = self.storage.mapped_files().snapshot();
         for_each_discontinuous_pair(
-            mapped_files.as_slice(),
+            mapped_files.as_ref(),
             self.storage.mapped_file_size(),
             |file| file.get_file_from_offset(),
             |previous, current| {
@@ -627,6 +731,9 @@ impl MappedFileQueue {
     }
 
     pub fn do_load(&mut self, files: Vec<std::path::PathBuf>) -> bool {
+        if !self.storage.mapped_files().allows_legacy_namespace_mutation() {
+            return false;
+        }
         let outcome = load_mapped_file_queue_files(files, self.storage.mapped_file_size());
         self.apply_load_outcome(outcome)
     }
@@ -634,24 +741,20 @@ impl MappedFileQueue {
     fn apply_load_outcome(&mut self, outcome: MappedFileQueueLoadOutcome) -> bool {
         let success = outcome.is_success();
         let loaded_files = outcome.into_mapped_files();
-        if !loaded_files.is_empty() {
-            self.update_mapped_file_generation(|current| {
-                let mut files = current.to_vec();
-                files.extend(loaded_files.iter().cloned());
-                files
-            });
-        }
-        success
+        self.storage
+            .mapped_files()
+            .extend_legacy_recovery_generation(loaded_files)
+            && success
     }
 
     #[inline]
     pub fn get_last_mapped_file(&self) -> Option<Arc<DefaultMappedFile>> {
-        self.storage.mapped_files().load().last().cloned()
+        self.storage.mapped_files().snapshot().last().cloned()
     }
 
     #[inline]
     pub fn get_first_mapped_file(&self) -> Option<Arc<DefaultMappedFile>> {
-        self.storage.mapped_files().load().first().cloned()
+        self.storage.mapped_files().snapshot().first().cloned()
     }
 
     #[inline]
@@ -683,19 +786,6 @@ impl MappedFileQueue {
         )
     }
 
-    /// Applies a collection update against the latest mapped-file generation.
-    ///
-    /// ArcSwap may invoke `update` more than once when another publisher wins the
-    /// compare-and-swap race. Callers must therefore keep the closure free of I/O
-    /// and other externally visible side effects.
-    #[inline]
-    fn update_mapped_file_generation<F>(&self, mut update: F)
-    where
-        F: FnMut(&[Arc<DefaultMappedFile>]) -> Vec<Arc<DefaultMappedFile>>,
-    {
-        self.storage.mapped_files().rcu(|current| update(current.as_slice()));
-    }
-
     /// Replaces the complete mapped-file generation during load/recovery.
     ///
     /// The caller must have exclusive lifecycle ownership: append and cleanup
@@ -703,18 +793,38 @@ impl MappedFileQueue {
     /// installed.
     #[inline]
     pub(crate) fn replace_mapped_files_exclusive(&mut self, mapped_files: Vec<Arc<DefaultMappedFile>>) {
-        self.storage.mapped_files().store(Arc::new(mapped_files));
+        let _ = self
+            .storage
+            .mapped_files()
+            .install_legacy_recovery_generation(mapped_files);
     }
 
+    /// Installs a proof-gated managed generation before queue workers are started.
+    pub(crate) fn install_reconciled_generation(
+        &self,
+        generation: ManagedMappedFileQueueGeneration<DefaultMappedFile>,
+    ) -> bool {
+        let _maintenance_guard = self.runtime_state.commit_lock().lock();
+        if self.runtime_state.is_closing() {
+            return false;
+        }
+        self.storage.mapped_files().install_reconciled_generation(generation)
+    }
+
+    pub(crate) fn allows_legacy_namespace_mutation(&self) -> bool {
+        self.storage.mapped_files().allows_legacy_namespace_mutation()
+    }
+
+    /// Returns an immutable owner snapshot without exposing the publication primitive.
     #[inline]
-    pub fn get_mapped_files(&self) -> &ArcSwap<Vec<Arc<DefaultMappedFile>>> {
-        self.storage.mapped_files()
+    pub fn get_mapped_files(&self) -> MappedFileQueueSnapshot<DefaultMappedFile> {
+        self.storage.mapped_files().snapshot()
     }
 
     #[inline]
     pub(crate) fn read_handle(&self) -> MappedFileQueueReadHandle {
         MappedFileQueueReadHandle {
-            mapped_files: Arc::clone(self.storage.mapped_files()),
+            mapped_files: self.storage.mapped_files().clone(),
             mapped_file_size: self.storage.mapped_file_size(),
             runtime_state: self.runtime_state.clone(),
         }
@@ -723,7 +833,7 @@ impl MappedFileQueue {
     #[inline]
     pub(crate) fn append_handle(&self) -> MappedFileQueueAppendHandle {
         MappedFileQueueAppendHandle {
-            mapped_files: Arc::clone(self.storage.mapped_files()),
+            mapped_files: self.storage.mapped_files().clone(),
             store_path: self.storage.store_path().to_owned(),
             mapped_file_size: self.storage.mapped_file_size(),
             allocate_mapped_file_service: self.allocate_mapped_file_service.clone(),
@@ -734,15 +844,16 @@ impl MappedFileQueue {
     #[inline]
     pub(crate) fn cleanup_handle(&self) -> MappedFileQueueCleanupHandle {
         MappedFileQueueCleanupHandle {
-            mapped_files: Arc::clone(self.storage.mapped_files()),
+            mapped_files: self.storage.mapped_files().clone(),
             mapped_file_size: self.storage.mapped_file_size(),
+            runtime_state: self.runtime_state.clone(),
         }
     }
 
     #[inline]
     pub(crate) fn flush_handle(&self) -> MappedFileQueueFlushHandle {
         MappedFileQueueFlushHandle {
-            mapped_files: Arc::clone(self.storage.mapped_files()),
+            mapped_files: self.storage.mapped_files().clone(),
             mapped_file_size: self.storage.mapped_file_size(),
             runtime_state: self.runtime_state.clone(),
         }
@@ -750,23 +861,23 @@ impl MappedFileQueue {
 
     #[inline]
     pub fn get_mapped_files_size(&self) -> usize {
-        self.storage.mapped_files().load().len()
+        self.storage.mapped_files().snapshot().len()
     }
 
     pub fn warmup_stats(&self) -> MappedFileWarmupStats {
-        let mapped_files = self.storage.mapped_files().load();
-        mapped_file_queue_warmup_stats(mapped_files.as_slice())
+        let mapped_files = self.storage.mapped_files().snapshot();
+        mapped_file_queue_warmup_stats(mapped_files.as_ref())
     }
 
     /// Returns a read-only I/O counter aggregate for the current file generation.
     pub fn io_stats(&self) -> MappedFileIoStats {
-        let mapped_files = self.storage.mapped_files().load();
-        mapped_file_queue_io_stats(mapped_files.as_slice())
+        let mapped_files = self.storage.mapped_files().snapshot();
+        mapped_file_queue_io_stats(mapped_files.as_ref())
     }
 
     pub fn lazy_mmap_stats(&self) -> LazyMmapStats {
-        let mapped_files = self.storage.mapped_files().load();
-        mapped_file_queue_lazy_mmap_stats(mapped_files.as_slice())
+        let mapped_files = self.storage.mapped_files().snapshot();
+        mapped_file_queue_lazy_mmap_stats(mapped_files.as_ref())
     }
 
     #[inline]
@@ -791,10 +902,25 @@ impl MappedFileQueue {
     /// Truncates dirty data and reports whether every tail namespace was removed.
     #[must_use]
     pub fn try_truncate_dirty_files(&self, offset: i64) -> bool {
+        self.try_truncate_dirty_files_with_before_lock(offset, || {})
+    }
+
+    fn try_truncate_dirty_files_with_before_lock<F>(&self, offset: i64, before_lock: F) -> bool
+    where
+        F: FnOnce(),
+    {
+        if !self.allows_legacy_namespace_mutation() {
+            return false;
+        }
+        before_lock();
         let _maintenance_guard = self.runtime_state.commit_lock().lock();
+        if !self.allows_legacy_namespace_mutation() {
+            return false;
+        }
         let mut removal_candidates = Vec::new();
 
-        for mapped_file in self.storage.mapped_files().load().iter() {
+        let current_files = self.storage.mapped_files().snapshot();
+        for mapped_file in current_files.iter() {
             match mapped_file_queue_truncate_action(
                 offset,
                 self.storage.mapped_file_size(),
@@ -814,17 +940,9 @@ impl MappedFileQueue {
 
         // Tail deletion runs newest-to-oldest. If one attempt is deferred, any already removed
         // candidates still form a contiguous suffix and the remaining identities stay tracked.
-        let mut removed_files = Vec::new();
-        let mut complete = true;
-        for mapped_file in removal_candidates.into_iter().rev() {
-            if mapped_file.try_destroy(1000).is_namespace_removed() {
-                removed_files.push(mapped_file);
-            } else {
-                complete = false;
-                break;
-            }
-        }
-        self.delete_expired_file(removed_files);
+        let ordered_candidates: Vec<_> = removal_candidates.into_iter().rev().collect();
+        let (deletion, complete) = destroy_mapped_files_in_order(&ordered_candidates, 1000);
+        self.apply_namespace_removal_under_maintenance_lock(deletion);
         complete
     }
 
@@ -842,26 +960,52 @@ impl MappedFileQueue {
     /// Deletes the newest mapped file and reports whether its namespace was removed.
     #[must_use]
     pub fn try_delete_last_mapped_file(&mut self) -> bool {
-        let files = self.storage.mapped_files().load();
-        let Some(last_mapped_file) = files.last() else {
+        let _maintenance_guard = self.runtime_state.commit_lock().lock();
+        if !self.allows_legacy_namespace_mutation() {
+            return false;
+        }
+        let files = self.storage.mapped_files().snapshot();
+        let Some(_last_mapped_file) = files.last() else {
             return true;
         };
-        let expected = Arc::clone(last_mapped_file);
-        let removed = destroy_last_mapped_file(files.as_slice());
-        drop(files);
-        let Some(removed) = removed else {
-            return false;
-        };
-        debug_assert!(Arc::ptr_eq(&removed, &expected));
-        self.delete_expired_file(vec![removed]);
-        true
+        let deletion = destroy_last_mapped_file_for_queue(files.as_ref());
+        let removed = deletion.deleted_count() > 0;
+        self.apply_namespace_removal_under_maintenance_lock(deletion);
+        removed
     }
 
     #[inline]
-    pub(crate) fn delete_expired_file(&self, files: Vec<Arc<DefaultMappedFile>>) {
-        if !files.is_empty() {
-            self.update_mapped_file_generation(|current| mapped_files_after_removal(current, &files));
+    fn apply_namespace_removal_under_maintenance_lock(&self, deletion: MappedFileQueueDeletion) -> i32 {
+        self.storage.mapped_files().apply_legacy_namespace_removal(deletion)
+    }
+
+    /// Retires an exact caller-selected legacy candidate set under the queue transition lock.
+    ///
+    /// This narrow adapter exists for the consume-queue extension index. It rejects stale or
+    /// duplicate candidates before namespace I/O and never exposes the raw generation mutation
+    /// primitive outside this module.
+    pub(crate) fn try_retire_legacy_candidates(
+        &self,
+        candidates: &[Arc<DefaultMappedFile>],
+        interval_forcibly: u64,
+    ) -> bool {
+        let _maintenance_guard = self.runtime_state.commit_lock().lock();
+        if !self.allows_legacy_namespace_mutation() {
+            return false;
         }
+        let current = self.storage.mapped_files().snapshot();
+        let is_current_prefix = candidates.len() <= current.len()
+            && candidates
+                .iter()
+                .zip(current.iter())
+                .all(|(candidate, published)| Arc::ptr_eq(candidate, published));
+        if !is_current_prefix {
+            return false;
+        }
+
+        let (deletion, complete) = destroy_mapped_files_in_order(candidates, interval_forcibly);
+        self.apply_namespace_removal_under_maintenance_lock(deletion);
+        complete
     }
 
     /// Delete expired files by time
@@ -925,11 +1069,14 @@ impl MappedFileQueue {
     /// # Returns
     /// Number of files deleted
     pub fn delete_expired_file_by_offset(&self, offset: i64, unit_size: i32) -> i32 {
-        let mfs = (**self.storage.mapped_files().load()).clone();
-        let deletion = delete_expired_mapped_files_by_offset(&mfs, self.storage.mapped_file_size(), offset, unit_size);
-        let delete_count = deletion.deleted_count();
-        self.delete_expired_file(deletion.into_mapped_files());
-        delete_count
+        let _maintenance_guard = self.runtime_state.commit_lock().lock();
+        if !self.allows_legacy_namespace_mutation() {
+            return 0;
+        }
+        let files = self.storage.mapped_files().snapshot();
+        let deletion =
+            delete_expired_mapped_files_by_offset(files.as_ref(), self.storage.mapped_file_size(), offset, unit_size);
+        self.apply_namespace_removal_under_maintenance_lock(deletion)
     }
 
     /// Reset offset to specified position
@@ -943,32 +1090,34 @@ impl MappedFileQueue {
     /// true if reset succeeded, false if offset is too far back
     pub fn reset_offset(&self, offset: i64) -> bool {
         let _maintenance_guard = self.runtime_state.commit_lock().lock();
+        if !self.allows_legacy_namespace_mutation() {
+            return false;
+        }
         let last_file = self.get_last_mapped_file().map(|mapped_file| {
             MappedFileQueueResetLastFile::new(mapped_file.get_file_from_offset(), mapped_file.get_wrote_position())
         });
 
-        let current_files = self.storage.mapped_files().load();
+        let current_files = self.storage.mapped_files().snapshot();
         let Some(plan) = plan_mapped_file_queue_reset(
             offset,
             self.storage.mapped_file_size(),
             last_file,
-            current_files.as_slice(),
+            current_files.as_ref(),
             |file| file.get_file_from_offset(),
             |file| file.get_file_size(),
         ) else {
             return false;
         };
 
-        let mut removed_files = Vec::new();
-        for &index in plan.remove_indices() {
-            let mapped_file = current_files[index].clone();
-            if mapped_file.try_destroy(1000).is_namespace_removed() {
-                removed_files.push(mapped_file);
-            } else {
-                drop(current_files);
-                self.delete_expired_file(removed_files);
-                return false;
-            }
+        let removal_candidates: Vec<_> = plan
+            .remove_indices()
+            .iter()
+            .map(|&index| Arc::clone(&current_files[index]))
+            .collect();
+        let (deletion, complete) = destroy_mapped_files_in_order(&removal_candidates, 1000);
+        self.apply_namespace_removal_under_maintenance_lock(deletion);
+        if !complete {
+            return false;
         }
 
         if let Some((index, position)) = plan.target() {
@@ -977,15 +1126,13 @@ impl MappedFileQueue {
             mapped_file.set_wrote_position(position);
             mapped_file.set_committed_position(position);
         }
-        drop(current_files);
-        self.delete_expired_file(removed_files);
         true
     }
 
     /// Check if mapped files list is empty
     #[inline]
     pub fn is_mapped_files_empty(&self) -> bool {
-        self.storage.mapped_files().load().is_empty()
+        self.storage.mapped_files().snapshot().is_empty()
     }
 
     /// Check if list is empty or current file is full
@@ -1022,8 +1169,8 @@ impl MappedFileQueue {
     /// Only counts available (not destroyed) mapped files
     #[inline]
     pub fn get_mapped_memory_size(&self) -> i64 {
-        let files = self.storage.mapped_files().load();
-        mapped_file_queue_available_memory_size(files.as_slice(), self.storage.mapped_file_size())
+        let files = self.storage.mapped_files().snapshot();
+        mapped_file_queue_available_memory_size(files.as_ref(), self.storage.mapped_file_size())
     }
 
     /// Get how much data has fallen behind
@@ -1045,8 +1192,8 @@ impl MappedFileQueue {
         if let Some(service) = &self.allocate_mapped_file_service {
             let _ = service.retire_directory(Path::new(self.storage.store_path()));
         }
-        let files = self.storage.mapped_files().load();
-        shutdown_mapped_file_queue(files.as_slice(), interval_forcibly);
+        let files = self.storage.mapped_files().snapshot();
+        shutdown_mapped_file_queue(files.as_ref(), interval_forcibly);
     }
 
     /// Create a snapshot of current mapped files
@@ -1066,7 +1213,7 @@ impl MappedFileQueue {
     /// ```
     #[inline]
     pub fn snapshot(&self) -> Vec<Arc<DefaultMappedFile>> {
-        (**self.storage.mapped_files().load()).clone()
+        self.storage.mapped_files().snapshot().as_ref().to_vec()
     }
 
     /// Create an iterator over mapped files
@@ -1123,8 +1270,8 @@ impl MappedFileQueue {
     /// }
     /// ```
     pub fn range(&self, from: i64, to: i64) -> Vec<Arc<DefaultMappedFile>> {
-        let files = self.storage.mapped_files().load();
-        let range = overlapping_file_range(files.as_slice(), from, to, |file| {
+        let files = self.storage.mapped_files().snapshot();
+        let range = overlapping_file_range(files.as_ref(), from, to, |file| {
             let file_from = file.get_file_from_offset() as i64;
             (file_from, file_from + file.get_file_size() as i64)
         });
@@ -1137,7 +1284,7 @@ impl MappedFileQueue {
     /// Total size in bytes
     #[inline]
     pub fn get_total_file_size(&self) -> i64 {
-        let files = self.storage.mapped_files().load();
+        let files = self.storage.mapped_files().snapshot();
         mapped_file_queue_total_size(files.len(), self.storage.mapped_file_size())
     }
 
@@ -1147,7 +1294,7 @@ impl MappedFileQueue {
     /// Count of mapped files in the queue
     #[inline]
     pub fn get_mapped_file_count(&self) -> usize {
-        self.storage.mapped_files().load().len()
+        self.storage.mapped_files().snapshot().len()
     }
 
     /// Get store path
@@ -1202,9 +1349,9 @@ impl MappedFileQueue {
     /// queue.swap_map(3, 1000 * 60 * 10, 1000 * 60 * 5);
     /// ```
     pub fn swap_map(&self, reserve_num: i32, force_swap_interval_ms: i64, normal_swap_interval_ms: i64) {
-        let files = self.storage.mapped_files().load();
+        let files = self.storage.mapped_files().snapshot();
         swap_mapped_file_queue(
-            files.as_slice(),
+            files.as_ref(),
             reserve_num,
             force_swap_interval_ms,
             normal_swap_interval_ms,
@@ -1230,8 +1377,8 @@ impl MappedFileQueue {
     /// queue.clean_swapped_map(1000 * 60 * 60);
     /// ```
     pub fn clean_swapped_map(&self, force_clean_swap_interval_ms: i64) {
-        let files = self.storage.mapped_files().load();
-        clean_swapped_mapped_file_queue(files.as_slice(), force_clean_swap_interval_ms, || {
+        let files = self.storage.mapped_files().snapshot();
+        clean_swapped_mapped_file_queue(files.as_ref(), force_clean_swap_interval_ms, || {
             i64::try_from(current_millis()).unwrap_or(i64::MAX)
         });
     }
@@ -1267,13 +1414,13 @@ impl MappedFileQueue {
     /// # Returns
     /// Vector of mapped files, or None if insufficient files
     fn copy_mapped_files(&self, reserved_mapped_files: usize) -> Option<Vec<Arc<DefaultMappedFile>>> {
-        let files = self.storage.mapped_files().load();
+        let files = self.storage.mapped_files().snapshot();
 
         if files.len() <= reserved_mapped_files {
             return None;
         }
 
-        Some((**files).clone())
+        Some(files.as_ref().to_vec())
     }
 
     /// Stream access to mapped files
@@ -1301,14 +1448,16 @@ impl MappedFileQueue {
     pub fn destroy_with_outcome(&mut self) -> bool {
         let _maintenance_guard = self.runtime_state.commit_lock().lock();
         self.runtime_state.begin_close();
+        if !self.allows_legacy_namespace_mutation() {
+            return false;
+        }
         let store_path = PathBuf::from(self.storage.store_path());
         if let Some(service) = &self.allocate_mapped_file_service {
             let _ = service.retire_directory(&store_path);
         }
-        let files = self.storage.mapped_files().load();
-        let deletion = destroy_mapped_file_queue(files.as_slice(), self.storage.store_path());
-        drop(files);
-        self.delete_expired_file(deletion.into_mapped_files());
+        let files = self.storage.mapped_files().snapshot();
+        let deletion = destroy_mapped_file_queue(files.as_ref(), self.storage.store_path());
+        self.apply_namespace_removal_under_maintenance_lock(deletion);
         let allocator_retirement_complete = self
             .allocate_mapped_file_service
             .as_ref()
@@ -1345,9 +1494,9 @@ impl MappedFileQueue {
     ) -> Option<Arc<DefaultMappedFile>> {
         let first = self.get_first_mapped_file()?;
         let last = self.get_last_mapped_file()?;
-        let files = self.storage.mapped_files().load();
+        let files = self.storage.mapped_files().snapshot();
         match file_index_by_offset(
-            files.as_slice(),
+            files.as_ref(),
             self.storage.mapped_file_size(),
             offset,
             return_first_on_not_found,
@@ -1427,7 +1576,7 @@ impl MappedFileQueue {
         commit_log: &CommitLogReadHandle,
         boundary_type: BoundaryType,
     ) -> Option<Arc<DefaultMappedFile>> {
-        let mapped_files = self.storage.mapped_files().load();
+        let mapped_files = self.storage.mapped_files().snapshot();
         if mapped_files.is_empty() {
             return None;
         }
@@ -1499,9 +1648,7 @@ impl MappedFileQueue {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::sync::atomic::AtomicBool;
-    use std::sync::atomic::AtomicUsize;
-    use std::sync::atomic::Ordering;
+    use std::sync::mpsc;
     use std::sync::Barrier;
     use std::thread;
 
@@ -1513,7 +1660,7 @@ mod tests {
     fn test_load_empty_dir() {
         let mut queue = MappedFileQueue::new(String::from("/path/to/empty/dir"), 0, None);
         assert!(queue.load());
-        assert!(queue.storage.mapped_files().load().is_empty());
+        assert!(queue.storage.mapped_files().snapshot().is_empty());
     }
 
     #[test]
@@ -1526,7 +1673,7 @@ mod tests {
 
         let mut queue = MappedFileQueue::new(temp_dir.path().to_string_lossy().into_owned(), 0, None);
         assert!(queue.load());
-        assert_eq!(queue.storage.mapped_files().load().len(), 1);
+        assert_eq!(queue.storage.mapped_files().snapshot().len(), 1);
     }
 
     #[test]
@@ -1537,7 +1684,7 @@ mod tests {
 
         let mut queue = MappedFileQueue::new(temp_dir.path().to_string_lossy().into_owned(), 0, None);
         assert!(queue.load());
-        assert!(queue.storage.mapped_files().load().is_empty());
+        assert!(queue.storage.mapped_files().snapshot().is_empty());
     }
 
     #[test]
@@ -1548,7 +1695,7 @@ mod tests {
 
         let mut queue = MappedFileQueue::new(temp_dir.path().to_string_lossy().into_owned(), 0, None);
         assert!(!queue.load());
-        assert!(queue.storage.mapped_files().load().is_empty());
+        assert!(queue.storage.mapped_files().snapshot().is_empty());
     }
 
     #[test]
@@ -1567,7 +1714,7 @@ mod tests {
         let mut queue = MappedFileQueue::new(temp_dir.path().to_string_lossy().into_owned(), 16, None);
 
         assert!(!queue.do_load(vec![invalid_path, valid_path]));
-        let files = queue.storage.mapped_files().load();
+        let files = queue.storage.mapped_files().snapshot();
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].get_file_from_offset(), 0);
     }
@@ -1580,7 +1727,7 @@ mod tests {
 
         let mut queue = MappedFileQueue::new(temp_dir.path().to_string_lossy().into_owned(), 1024, None);
         assert!(queue.load());
-        assert_eq!(queue.storage.mapped_files().load().len(), 1);
+        assert_eq!(queue.storage.mapped_files().snapshot().len(), 1);
     }
 
     #[test]
@@ -1615,7 +1762,7 @@ mod tests {
             storage: MappedFileQueueStorage::new(
                 String::new(),
                 1024,
-                Arc::new(ArcSwap::from_pointee(vec![first_file, second_file])),
+                MappedFileGeneration::from_legacy_recovery_files(vec![first_file, second_file]),
             ),
             ..MappedFileQueue::default()
         };
@@ -1663,7 +1810,7 @@ mod tests {
             storage: MappedFileQueueStorage::new(
                 String::new(),
                 1024,
-                Arc::new(ArcSwap::from_pointee(vec![first_file, second_file])),
+                MappedFileGeneration::from_legacy_recovery_files(vec![first_file, second_file]),
             ),
             ..MappedFileQueue::default()
         };
@@ -1702,12 +1849,12 @@ mod tests {
             crate::runtime::test_scope("mapped-file-queue-preallocation-test").mapped_file_allocation_budget(),
         );
         service.start();
-        let queue = MappedFileQueue::new(
+        let mut queue = MappedFileQueue::new(
             temp_dir.path().to_string_lossy().to_string(),
             mapped_file_size,
             Some(service.clone()),
         );
-        queue.storage.mapped_files().store(Arc::new(vec![first_file]));
+        queue.replace_mapped_files_exclusive(vec![first_file]);
 
         assert!(queue.get_last_mapped_file_mut_start_offset(0, true).is_some());
         let preallocated = service
@@ -1732,8 +1879,10 @@ mod tests {
         );
         service.start();
         let runtime_state = MappedFileQueueRuntimeState::default();
+        let mapped_files = MappedFileGeneration::legacy();
         let maintenance_guard = runtime_state.commit_lock().lock();
         let thread_state = runtime_state.clone();
+        let thread_mapped_files = mapped_files.clone();
         let thread_service = service.clone();
         let thread_store_path = temp_dir.path().to_string_lossy().into_owned();
         let barrier = Arc::new(Barrier::new(2));
@@ -1742,6 +1891,7 @@ mod tests {
         let submitter = thread::spawn(move || {
             thread_barrier.wait();
             trigger_mapped_file_preallocation(
+                &thread_mapped_files,
                 &thread_store_path,
                 mapped_file_size,
                 Some(&thread_service),
@@ -1790,7 +1940,7 @@ mod tests {
             mapped_file_size,
             Some(service.clone()),
         );
-        queue.storage.mapped_files().store(Arc::new(vec![first_file]));
+        queue.replace_mapped_files_exclusive(vec![first_file]);
 
         assert!(queue.get_last_mapped_file_mut_start_offset(0, true).is_some());
         tokio::time::timeout(std::time::Duration::from_secs(2), async {
@@ -1810,7 +1960,81 @@ mod tests {
     }
 
     #[test]
-    fn mapped_file_generation_update_retries_without_losing_concurrent_publication() {
+    fn prebuilt_handles_observe_an_exclusive_queue_generation_switch() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let file_path = temp_dir.path().join(offset_to_file_name(0));
+        let mapped_file = Arc::new(
+            DefaultMappedFile::try_new(
+                CheetahString::from_string(file_path.to_string_lossy().into_owned()),
+                1024,
+            )
+            .expect("mapped file"),
+        );
+        let queue = MappedFileQueue::new(temp_dir.path().to_string_lossy().into_owned(), 1024, None);
+        let read_handle = queue.read_handle();
+        let append_handle = queue.append_handle();
+        mapped_file.set_wrote_position(512);
+
+        queue
+            .storage
+            .mapped_files()
+            .state
+            .store(Arc::new(MappedFileGenerationState::Legacy(
+                MappedFileQueueGeneration::from_recovery_files(vec![Arc::clone(&mapped_file)]),
+            )));
+
+        assert_eq!(read_handle.get_max_offset(), mapped_file.get_read_position() as i64);
+        assert_eq!(append_handle.current_append_offset(), 512);
+        assert!(Arc::ptr_eq(
+            queue.get_mapped_files().first().expect("published file"),
+            &mapped_file
+        ));
+    }
+
+    #[test]
+    fn queued_legacy_creation_rechecks_managed_mode_before_namespace_io() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let mapped_file_size = 1024;
+        let queue = MappedFileQueue::new(temp_dir.path().to_string_lossy().into_owned(), mapped_file_size, None);
+        let mapped_files = queue.storage.mapped_files().clone();
+        let runtime_state = queue.runtime_state.clone();
+        let store_path = queue.storage.store_path().to_owned();
+        let expected_path = temp_dir.path().join(offset_to_file_name(0));
+        let (preflight_done_tx, preflight_done_rx) = mpsc::channel();
+        let (resume_tx, resume_rx) = mpsc::channel();
+
+        let creator = thread::spawn(move || {
+            create_and_publish_mapped_file_with_before_lock(
+                &mapped_files,
+                &store_path,
+                mapped_file_size,
+                None,
+                &runtime_state,
+                0,
+                || {
+                    preflight_done_tx.send(()).expect("signal legacy preflight");
+                    resume_rx.recv().expect("resume after managed publication");
+                },
+            )
+        });
+        preflight_done_rx.recv().expect("creator observed legacy mode");
+
+        let managed =
+            rocketmq_store_local::mapped_file::queue_io::load_reconciled_mapped_file_queue(temp_dir.path(), Vec::new())
+                .expect("construct an empty reconciled generation");
+        assert!(queue.install_reconciled_generation(managed));
+        resume_tx.send(()).expect("release queued creator");
+
+        assert!(creator.join().expect("creator completes").is_none());
+        assert!(
+            !expected_path.exists(),
+            "managed activation must precede every later namespace write"
+        );
+        assert!(queue.get_mapped_files().is_empty());
+    }
+
+    #[test]
+    fn mapped_file_snapshot_retains_its_generation_during_concurrent_publication() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let mapped_file_size = 1024;
         let queue = MappedFileQueue::new(temp_dir.path().to_string_lossy().into_owned(), mapped_file_size, None);
@@ -1818,55 +2042,25 @@ mod tests {
         let second = queue
             .try_create_mapped_file(mapped_file_size)
             .expect("second mapped file");
-        let tail_path = temp_dir.path().join(offset_to_file_name(mapped_file_size * 2));
-        let tail = Arc::new(
-            DefaultMappedFile::try_new(
-                CheetahString::from_string(tail_path.to_string_lossy().into_owned()),
-                mapped_file_size,
-            )
-            .expect("tail mapped file"),
-        );
-
         let queue = Arc::new(queue);
-        let first_snapshot_captured = Arc::new(Barrier::new(2));
-        let concurrent_publication_complete = Arc::new(Barrier::new(2));
-        let block_first_attempt = Arc::new(AtomicBool::new(true));
-        let update_attempts = Arc::new(AtomicUsize::new(0));
+        let observed = queue.get_mapped_files();
+        let publisher = Arc::clone(&queue);
+        let tail = thread::spawn(move || {
+            publisher
+                .try_create_mapped_file(mapped_file_size * 2)
+                .expect("tail mapped file")
+        })
+        .join()
+        .expect("publisher completes");
 
-        let cleanup_queue = Arc::clone(&queue);
-        let cleanup_first = Arc::clone(&first);
-        let cleanup_snapshot_captured = Arc::clone(&first_snapshot_captured);
-        let cleanup_publication_complete = Arc::clone(&concurrent_publication_complete);
-        let cleanup_block_first_attempt = Arc::clone(&block_first_attempt);
-        let cleanup_update_attempts = Arc::clone(&update_attempts);
-        let cleanup = thread::spawn(move || {
-            cleanup_queue.update_mapped_file_generation(|current| {
-                cleanup_update_attempts.fetch_add(1, Ordering::SeqCst);
-                if cleanup_block_first_attempt.swap(false, Ordering::SeqCst) {
-                    cleanup_snapshot_captured.wait();
-                    cleanup_publication_complete.wait();
-                }
-                mapped_files_after_removal(current, std::slice::from_ref(&cleanup_first))
-            });
-        });
+        assert_eq!(observed.len(), 2);
+        assert!(Arc::ptr_eq(&observed[0], &first));
+        assert!(Arc::ptr_eq(&observed[1], &second));
+        let current = queue.get_mapped_files();
+        assert_eq!(current.len(), 3);
+        assert!(Arc::ptr_eq(&current[2], &tail));
+        drop((observed, current, first, second, tail));
 
-        first_snapshot_captured.wait();
-        queue.update_mapped_file_generation(|current| {
-            let mut files = current.to_vec();
-            files.push(Arc::clone(&tail));
-            files
-        });
-        concurrent_publication_complete.wait();
-        cleanup.join().expect("cleanup generation update completes");
-
-        let files = queue.snapshot();
-        assert_eq!(files.len(), 2);
-        assert!(Arc::ptr_eq(&files[0], &second));
-        assert!(Arc::ptr_eq(&files[1], &tail));
-        assert!(update_attempts.load(Ordering::SeqCst) >= 2);
-        drop(files);
-
-        first.destroy(1000);
         let mut queue = Arc::try_unwrap(queue).unwrap_or_else(|_| panic!("release shared queue handles"));
         queue.destroy();
     }
@@ -2015,6 +2209,63 @@ mod tests {
         assert_eq!(target.get_committed_position(), 512);
         assert_eq!(target.get_flushed_position(), 512);
         assert!(!removed.is_available());
+        queue.destroy();
+    }
+
+    #[test]
+    fn queued_legacy_truncation_rechecks_managed_mode_before_namespace_io() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let mapped_file_size = 1024;
+        let queue = Arc::new(MappedFileQueue::new(
+            temp_dir.path().to_string_lossy().into_owned(),
+            mapped_file_size,
+            None,
+        ));
+        let first = queue.try_create_mapped_file(0).expect("first mapped file");
+        let tail = queue
+            .try_create_mapped_file(mapped_file_size)
+            .expect("tail mapped file");
+        let first_path = PathBuf::from(first.get_file_name().as_str());
+        let tail_path = PathBuf::from(tail.get_file_name().as_str());
+        let (preflight_done_tx, preflight_done_rx) = mpsc::channel();
+        let (resume_tx, resume_rx) = mpsc::channel();
+
+        let truncating_queue = Arc::clone(&queue);
+        let truncation = thread::spawn(move || {
+            truncating_queue.try_truncate_dirty_files_with_before_lock(512, || {
+                preflight_done_tx.send(()).expect("signal legacy preflight");
+                resume_rx.recv().expect("resume after managed publication");
+            })
+        });
+        preflight_done_rx.recv().expect("truncation observed legacy mode");
+
+        let managed =
+            rocketmq_store_local::mapped_file::queue_io::load_reconciled_mapped_file_queue(temp_dir.path(), Vec::new())
+                .expect("construct an empty reconciled generation");
+        assert!(queue.install_reconciled_generation(managed));
+        resume_tx.send(()).expect("release queued truncation");
+
+        assert!(!truncation.join().expect("truncation completes"));
+        assert!(first_path.exists());
+        assert!(tail_path.exists());
+        assert!(queue.get_mapped_files().is_empty());
+    }
+
+    #[test]
+    fn legacy_candidate_retirement_rejects_non_prefix_without_namespace_io() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let mut queue = MappedFileQueue::new(temp_dir.path().to_string_lossy().into_owned(), 1024, None);
+        let first = queue.try_create_mapped_file(0).expect("first mapped file");
+        let second = queue.try_create_mapped_file(1024).expect("second mapped file");
+        let first_path = PathBuf::from(first.get_file_name().as_str());
+        let second_path = PathBuf::from(second.get_file_name().as_str());
+
+        assert!(!queue.try_retire_legacy_candidates(std::slice::from_ref(&second), 1000));
+        assert!(first_path.exists());
+        assert!(second_path.exists());
+        assert_eq!(queue.get_mapped_file_count(), 2);
+
+        drop((first, second));
         queue.destroy();
     }
 

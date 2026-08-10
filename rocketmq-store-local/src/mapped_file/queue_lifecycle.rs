@@ -84,6 +84,36 @@ pub fn destroy_last_mapped_file(files: &[Arc<DefaultMappedFile>]) -> Option<Arc<
     }
 }
 
+/// Destroys the newest mapped file and preserves namespace-removal authority as a typed outcome.
+#[doc(hidden)]
+pub fn destroy_last_mapped_file_for_queue(files: &[Arc<DefaultMappedFile>]) -> MappedFileQueueDeletion {
+    match destroy_last_mapped_file(files) {
+        Some(mapped_file) => MappedFileQueueDeletion::new(1, vec![mapped_file]),
+        None => MappedFileQueueDeletion::new(0, Vec::new()),
+    }
+}
+
+/// Destroys exact candidates in caller-provided order until the first namespace failure.
+///
+/// The returned deletion value is the only authority that permits the legacy queue facade to
+/// forget owners. The boolean reports whether every candidate produced that typed success; it is
+/// never accepted as removal authority itself.
+#[doc(hidden)]
+pub fn destroy_mapped_files_in_order(
+    candidates: &[Arc<DefaultMappedFile>],
+    interval_forcibly: u64,
+) -> (MappedFileQueueDeletion, bool) {
+    let mut removed = Vec::with_capacity(candidates.len());
+    for mapped_file in candidates {
+        if mapped_file.try_destroy(interval_forcibly).is_namespace_removed() {
+            removed.push(Arc::clone(mapped_file));
+        } else {
+            return (MappedFileQueueDeletion::new(removed.len() as i32, removed), false);
+        }
+    }
+    (MappedFileQueueDeletion::new(removed.len() as i32, removed), true)
+}
+
 /// Produces a collection snapshot with existing removal candidates excluded.
 #[doc(hidden)]
 pub fn mapped_files_after_removal(

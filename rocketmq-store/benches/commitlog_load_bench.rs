@@ -213,12 +213,11 @@ fn bench_post_load_access(c: &mut Criterion) {
     let mut queue = MappedFileQueue::new(temp_dir.path().to_string_lossy().to_string(), file_size, None);
     queue.load();
     let files = queue.get_mapped_files();
-    let files_guard = files.load();
 
     // Benchmark: Sequential reads from first file
     group.bench_function("sequential_read_4KB_blocks", |b| {
         b.iter(|| {
-            let file = &files_guard[0];
+            let file = &files[0];
             let mut sum = 0u64;
             let block_size = 4096;
             let num_blocks = (file_size / block_size as u64) as usize;
@@ -233,7 +232,6 @@ fn bench_post_load_access(c: &mut Criterion) {
         });
     });
 
-    drop(files_guard);
     group.finish();
     drop(temp_dir);
 }

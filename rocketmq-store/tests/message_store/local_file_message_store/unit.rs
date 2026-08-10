@@ -16,7 +16,9 @@ use bytes::Buf;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs;
+use std::fs::OpenOptions;
 use std::net::TcpListener;
+use std::path::Path;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::AtomicU64;
@@ -30,6 +32,7 @@ use std::time::Instant;
 use crate::config::store_runtime_config::StoreRuntimeConfig;
 use crate::store_error::StoreComponent;
 use crate::store_error::StoreErrorKind;
+use crate::store_error::StoreOperation;
 use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
@@ -70,6 +73,8 @@ use rocketmq_tieredstore::TieredStoreConfig;
 use tempfile::tempdir;
 use tokio_util::sync::CancellationToken;
 
+use super::root_lock::StoreRootLease;
+use super::root_lock::StoreRootMode;
 use super::run_blocking_scheduled_task;
 use super::BackgroundIndexRebuildService;
 use super::BackgroundIndexRebuildState;
@@ -79,6 +84,7 @@ use super::DiskCleanDecision;
 use super::LocalFileMessageStore;
 use super::ReputMessageService;
 use super::ReputMessageServiceInner;
+use super::StoreRootLeaseState;
 use crate::base::backend_ops::BackendOps;
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
 use crate::base::dispatch_request::DispatchRequest;
@@ -110,6 +116,9 @@ use crate::queue::consume_queue_store::ConsumeQueueStoreTrait;
 use crate::store_error::StoreError;
 use crate::store_path_config_helper::get_abort_file;
 use crate::store_path_config_helper::get_store_checkpoint;
+use crate::store_path_config_helper::get_timer_metrics_path;
+use rocketmq_store_local::mapped_file::ManagedLifecycleReadOutcome;
+use rocketmq_store_local::mapped_file::ManagedLifecycleRecoveryReason;
 use rocketmq_store_local::message_store::lifecycle::LocalStoreState;
 
 fn local_store_production_source() -> String {
@@ -122,6 +131,8 @@ fn local_store_production_source() -> String {
         include_str!("../../../src/message_store/local_file_message_store/recovery.rs"),
         include_str!("../../../src/message_store/local_file_message_store/health.rs"),
         include_str!("../../../src/message_store/local_file_message_store/lifecycle.rs"),
+        include_str!("../../../src/message_store/local_file_message_store/managed_recovery.rs"),
+        include_str!("../../../src/message_store/local_file_message_store/root_lock.rs"),
         "#[cfg(test)]\nmod tests",
     ]
     .join("\n")
@@ -191,23 +202,38 @@ fn new_configured_test_store(
 
 fn new_owned_test_store_with_broker(
     temp_dir: &tempfile::TempDir,
-    mut message_store_config: MessageStoreConfig,
+    message_store_config: MessageStoreConfig,
     broker_config: StoreRuntimeConfig,
 ) -> LocalFileMessageStore {
-    message_store_config.store_path_root_dir = temp_dir.path().to_string_lossy().to_string().into();
+    try_new_owned_test_store_with_broker(temp_dir, message_store_config, broker_config)
+        .expect("create LocalFile test Store under the exclusive root lock")
+}
+
+fn try_new_owned_test_store_with_broker(
+    temp_dir: &tempfile::TempDir,
+    message_store_config: MessageStoreConfig,
+    broker_config: StoreRuntimeConfig,
+) -> Result<LocalFileMessageStore, StoreError> {
+    try_new_owned_test_store_at_root(temp_dir.path(), message_store_config, broker_config)
+}
+
+fn try_new_owned_test_store_at_root(
+    store_root: &Path,
+    mut message_store_config: MessageStoreConfig,
+    broker_config: StoreRuntimeConfig,
+) -> Result<LocalFileMessageStore, StoreError> {
+    message_store_config.store_path_root_dir = store_root.to_string_lossy().to_string().into();
     message_store_config.timer_wheel_enable = false;
-    let mut store = LocalFileMessageStore::new(
+    let mut store = LocalFileMessageStore::try_new(
         Arc::new(message_store_config),
         Arc::new(broker_config),
         Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
         None,
         false,
         crate::runtime::test_service_context("local-file-store-test"),
-    );
-    store
-        .wire_owned_root_dependencies()
-        .expect("LocalFile tests should wire owned Store capabilities");
-    store
+    )?;
+    store.wire_owned_root_dependencies()?;
+    Ok(store)
 }
 
 fn new_configured_test_store_with_broker(
@@ -247,53 +273,213 @@ fn new_controller_test_store(
 }
 
 #[tokio::test]
-async fn destroy_store_failure_retains_metadata_and_commitlog_retry_identity() {
+async fn destroy_store_is_write_disabled_and_retries_without_namespace_mutation() {
     let temp_dir = tempdir().unwrap();
-    let config = MessageStoreConfig {
-        mapped_file_size_commit_log: 64,
-        ..MessageStoreConfig::default()
-    };
-    let mut store = new_configured_test_store(&temp_dir, config);
+    let mut store = new_configured_test_store(
+        &temp_dir,
+        MessageStoreConfig {
+            mapped_file_size_commit_log: 64,
+            ..MessageStoreConfig::default()
+        },
+    );
     store.init().await.expect("init store");
-    let commitlog_dir = std::path::PathBuf::from(store.message_store_config.get_store_path_commit_log());
-    fs::create_dir_all(&commitlog_dir).expect("commitlog directory");
-    let mapped_file_path = commitlog_dir.join("00000000000000000000");
+    let root = std::path::PathBuf::from(store.message_store_config.store_path_root_dir.as_str());
+    let mapped_file_path = root.join("commitlog").join("00000000000000000000");
+    fs::create_dir_all(mapped_file_path.parent().expect("commitlog parent")).expect("commitlog directory");
     drop(DefaultMappedFile::new(
         CheetahString::from(mapped_file_path.to_string_lossy().as_ref()),
         64,
     ));
     assert!(store.commit_log.load());
-    store.commit_log.set_mapped_file_queue_offset(4);
-    let mapped_file = store
-        .commit_log
-        .last_mapped_file_for_testing()
-        .expect("commitlog mapped file");
-    assert!(mapped_file.hold());
+    let abort_path = std::path::PathBuf::from(get_abort_file(root.to_string_lossy().as_ref()));
+    let checkpoint_path = std::path::PathBuf::from(get_store_checkpoint(root.to_string_lossy().as_ref()));
+    fs::write(&abort_path, b"abort-must-remain").expect("abort marker");
+    let checkpoint_before = fs::read(&checkpoint_path).expect("checkpoint snapshot");
 
+    for attempt in 1..=2 {
+        assert!(
+            !store.destroy_store_with_outcome(),
+            "Wave-A destroy attempt {attempt} must remain write-disabled"
+        );
+        assert_eq!(store.store_root_lease_state, StoreRootLeaseState::DestroyRetryPending);
+        assert_eq!(fs::read(&abort_path).unwrap(), b"abort-must-remain");
+        assert_eq!(fs::read(&checkpoint_path).unwrap(), checkpoint_before);
+        assert!(
+            mapped_file_path.is_file(),
+            "commitlog namespace changed on attempt {attempt}"
+        );
+        assert!(store.commit_log.last_mapped_file_for_testing().is_some());
+    }
+
+    assert!(!store.load().await, "pending destroy must fence numeric loading");
+    let error = store
+        .init()
+        .await
+        .expect_err("pending destroy must fence initialization");
+    assert_eq!(error.kind(), StoreErrorKind::Internal);
+    let error = store
+        .start()
+        .await
+        .expect_err("pending destroy must fence service start");
+    assert_eq!(error.kind(), StoreErrorKind::Internal);
+
+    let error = match try_new_owned_test_store_with_broker(
+        &temp_dir,
+        MessageStoreConfig::default(),
+        StoreRuntimeConfig::default(),
+    ) {
+        Ok(_) => panic!("destroy retry state must retain the Store root lease across shutdown"),
+        Err(error) => error,
+    };
+    assert_eq!(error.kind(), StoreErrorKind::Storage);
+
+    drop(store);
+    drop(new_configured_test_store(&temp_dir, MessageStoreConfig::default()));
+}
+
+#[test]
+fn destroyed_store_outcome_is_idempotent_and_retains_root_lease_until_drop() {
+    let temp_dir = tempdir().unwrap();
+    let mut store = new_configured_test_store(&temp_dir, MessageStoreConfig::default());
     let root = store.message_store_config.store_path_root_dir.as_str();
     let abort_path = std::path::PathBuf::from(get_abort_file(root));
-    let checkpoint_path = std::path::PathBuf::from(get_store_checkpoint(root));
-    fs::write(&abort_path, b"abort").expect("abort marker");
-    assert!(checkpoint_path.exists());
+    fs::write(&abort_path, b"terminal-state-must-remain").expect("abort sentinel");
+    store.store_root_lease_state = StoreRootLeaseState::Destroyed;
 
-    assert!(!store.destroy_store_with_outcome());
-    assert!(abort_path.exists());
-    assert!(checkpoint_path.exists());
-    assert_ne!(store.commit_log.get_flushed_where(), 0);
-    assert!(store
-        .commit_log
-        .last_mapped_file_for_testing()
-        .is_some_and(|current| Arc::ptr_eq(&current, &mapped_file)));
-
-    mapped_file.release();
-    fs::remove_file(&abort_path).expect("replace abort marker with undeletable directory");
-    fs::create_dir(&abort_path).expect("abort directory");
-    assert!(!store.destroy_store_with_outcome());
-    assert!(abort_path.is_dir());
-    assert!(!checkpoint_path.exists());
-
-    fs::remove_dir(&abort_path).expect("remove abort directory before retry");
     assert!(store.destroy_store_with_outcome());
+    assert!(store.destroy_store_with_outcome());
+    assert_eq!(fs::read(&abort_path).unwrap(), b"terminal-state-must-remain");
+
+    let error = match try_new_owned_test_store_with_broker(
+        &temp_dir,
+        MessageStoreConfig::default(),
+        StoreRuntimeConfig::default(),
+    ) {
+        Ok(_) => panic!("terminal destroy state must retain the Store root lease until owner drop"),
+        Err(error) => error,
+    };
+    assert_eq!(error.kind(), StoreErrorKind::Storage);
+
+    drop(store);
+    drop(new_configured_test_store(&temp_dir, MessageStoreConfig::default()));
+}
+
+#[test]
+fn destroy_rejects_recovery_states_without_namespace_mutation() {
+    let temp_dir = tempdir().unwrap();
+    let mut store = new_configured_test_store(&temp_dir, MessageStoreConfig::default());
+    let abort_path = std::path::PathBuf::from(get_abort_file(store.message_store_config.store_path_root_dir.as_str()));
+    fs::write(&abort_path, b"recovery-must-remain").expect("abort sentinel");
+
+    for state in [
+        LocalStoreState::RecoveringConsumeQueue,
+        LocalStoreState::RecoveringCommitLog,
+        LocalStoreState::RecoveringTopicQueueTable,
+    ] {
+        store.set_lifecycle_state(state);
+        assert!(!store.destroy_store_with_outcome());
+        assert_eq!(store.lifecycle_state(), state);
+        assert_eq!(store.store_root_lease_state, StoreRootLeaseState::Operational);
+        assert_eq!(fs::read(&abort_path).unwrap(), b"recovery-must-remain");
+    }
+}
+
+#[test]
+fn managed_lifecycle_evidence_destroy_attempt_is_non_mutating() {
+    let temp_dir = tempdir().unwrap();
+    let mut store = new_configured_test_store(&temp_dir, MessageStoreConfig::default());
+    let root = temp_dir.path();
+    let abort_path = std::path::PathBuf::from(get_abort_file(root.to_string_lossy().as_ref()));
+    let checkpoint_path = std::path::PathBuf::from(get_store_checkpoint(root.to_string_lossy().as_ref()));
+    fs::write(&abort_path, b"managed-abort-must-remain").expect("abort sentinel");
+    let checkpoint_before = fs::read(&checkpoint_path).expect("checkpoint snapshot");
+    let lifecycle_sentinel = root.join(".rocketmq-lifecycle").join("must-remain");
+    fs::create_dir(lifecycle_sentinel.parent().expect("lifecycle parent")).expect("lifecycle directory");
+    fs::write(&lifecycle_sentinel, b"managed-evidence-must-remain").expect("lifecycle sentinel");
+
+    assert!(!store.destroy_store_with_outcome());
+    assert!(!store.destroy_store_with_outcome());
+
+    assert_eq!(store.store_root_lease_state, StoreRootLeaseState::DestroyRetryPending);
+    assert_eq!(fs::read(&abort_path).unwrap(), b"managed-abort-must-remain");
+    assert_eq!(fs::read(&checkpoint_path).unwrap(), checkpoint_before);
+    assert_eq!(fs::read(&lifecycle_sentinel).unwrap(), b"managed-evidence-must-remain");
+}
+
+#[cfg(unix)]
+fn assert_destroy_is_non_mutating_after_root_replacement(replacement_contents: Option<&[u8]>) {
+    let parent = tempdir().unwrap();
+    let configured_root = parent.path().join("store-root");
+    let retained_root = parent.path().join("retained-root");
+    fs::create_dir(&configured_root).expect("create configured Store root");
+    let mut store = try_new_owned_test_store_at_root(
+        &configured_root,
+        MessageStoreConfig::default(),
+        StoreRuntimeConfig::default(),
+    )
+    .expect("construct Store under verified root");
+    fs::write(configured_root.join("abort"), b"retained-abort-must-remain").expect("abort sentinel");
+    let checkpoint_before = fs::read(configured_root.join("checkpoint")).expect("checkpoint snapshot");
+    let retained_storage = configured_root.join("commitlog").join("must-remain");
+    fs::create_dir_all(retained_storage.parent().expect("commitlog parent")).expect("commitlog directory");
+    fs::write(&retained_storage, b"retained-storage-must-remain").expect("storage sentinel");
+
+    fs::rename(&configured_root, &retained_root).expect("detach retained Store root");
+    fs::create_dir(&configured_root).expect("install replacement Store root");
+    let replacement_sentinel = configured_root.join("must-remain");
+    if let Some(contents) = replacement_contents {
+        fs::write(&replacement_sentinel, contents).expect("replacement sentinel");
+    }
+
+    assert!(!store.destroy_store_with_outcome());
+    assert!(!store.destroy_store_with_outcome());
+
+    assert_eq!(store.store_root_lease_state, StoreRootLeaseState::DestroyRetryPending);
+    assert_eq!(
+        fs::read(retained_root.join("abort")).unwrap(),
+        b"retained-abort-must-remain"
+    );
+    assert_eq!(fs::read(retained_root.join("checkpoint")).unwrap(), checkpoint_before);
+    assert_eq!(
+        fs::read(retained_root.join("commitlog").join("must-remain")).unwrap(),
+        b"retained-storage-must-remain"
+    );
+    match replacement_contents {
+        Some(contents) => assert_eq!(fs::read(&replacement_sentinel).unwrap(), contents),
+        None => assert_eq!(fs::read_dir(&configured_root).unwrap().count(), 0),
+    }
+
+    let error = match try_new_owned_test_store_at_root(
+        &retained_root,
+        MessageStoreConfig::default(),
+        StoreRuntimeConfig::default(),
+    ) {
+        Ok(_) => panic!("the retained physical root must stay leased until owner drop"),
+        Err(error) => error,
+    };
+    assert_eq!(error.kind(), StoreErrorKind::Storage);
+
+    drop(store);
+    drop(
+        try_new_owned_test_store_at_root(
+            &retained_root,
+            MessageStoreConfig::default(),
+            StoreRuntimeConfig::default(),
+        )
+        .expect("retained root lock must be reusable after owner drop"),
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn destroy_after_root_replacement_preserves_replacement_and_retained_roots() {
+    assert_destroy_is_non_mutating_after_root_replacement(Some(b"replacement-must-remain"));
+}
+
+#[cfg(unix)]
+#[test]
+fn destroy_after_root_replacement_preserves_empty_replacement_root() {
+    assert_destroy_is_non_mutating_after_root_replacement(None);
 }
 
 #[test]
@@ -662,9 +848,26 @@ fn clean_commit_log_source_contract_uses_narrow_cleanup_capability() {
     assert!(production.contains("pub(crate) struct MappedFileQueueCleanupHandle"));
     assert!(production.contains("pub fn delete_expired_file_by_time_before(\n        &self,"));
     assert!(production.contains("pub fn retry_delete_first_file(&self,"));
-    assert!(production.contains("self.mapped_files.rcu(|current| update(current.as_slice()))"));
+    assert!(production.contains("apply_legacy_namespace_removal"));
+    assert!(production.contains("MappedFileGenerationState::Managed"));
+    assert!(production.contains("install_reconciled_generation"));
+    assert!(!production.contains(".rcu("));
     assert!(production.contains("pub(crate) fn replace_mapped_files_exclusive(&mut self,"));
-    assert_eq!(production.matches(".store(").count(), 1);
+    assert_eq!(production.matches(".store(").count(), 0);
+
+    let queue_slot_source =
+        include_str!("../../../../rocketmq-store-local/src/mapped_file/retirement/registry/queue_slot.rs")
+            .replace("\r\n", "\n");
+    let queue_slot_production = queue_slot_source
+        .rsplit_once("#[cfg(test)]")
+        .map(|(source, _)| source)
+        .expect("managed queue-slot production section");
+    assert!(queue_slot_production.contains("files: ArcSwap<Vec<Arc<T>>>"));
+    assert!(queue_slot_production.contains("pub fn apply_legacy_namespace_removal"));
+    assert!(queue_slot_production.contains("fn handoff_retirement"));
+    assert!(queue_slot_production.contains("compare_and_swap"));
+    assert!(!queue_slot_production.contains("pub fn files"));
+    assert!(!queue_slot_production.contains(".rcu("));
 }
 
 #[test]
@@ -849,8 +1052,8 @@ fn local_store_owned_wiring_does_not_retain_its_complete_root_handle() {
 
 #[test]
 fn owned_root_wiring_scheduled_lifecycle_probe_has_no_shared_owner() {
-    let lib_source = include_str!("../../../src/lib.rs").replace("\r\n", "\n");
-    let probe = lib_source
+    let test_support_source = include_str!("../../../src/test_support.rs").replace("\r\n", "\n");
+    let probe = test_support_source
         .split_once("pub async fn run_store_local_file_scheduled_lifecycle_probe")
         .and_then(|(_, source)| source.split_once("#[cfg(feature = \"rocksdb_store\")]"))
         .map(|(source, _)| source)
@@ -860,7 +1063,7 @@ fn owned_root_wiring_scheduled_lifecycle_probe_has_no_shared_owner() {
     assert!(probe.contains("duplication_enable: true"));
     assert!(!probe.contains("ArcMut"));
     assert!(!probe.contains("set_message_store_arc"));
-    assert!(!lib_source.contains("local_file_shared_owner"));
+    assert!(!test_support_source.contains("local_file_shared_owner"));
 }
 
 #[tokio::test]
@@ -1699,11 +1902,14 @@ async fn start_requires_init_before_services_begin() {
     assert!(error
         .detail()
         .is_some_and(|message| message.contains("initialized before start")));
-    assert!(!temp_dir.path().join("lock").exists());
+    assert!(
+        temp_dir.path().join("lock").exists(),
+        "construction must establish the Store lock before creating storage components"
+    );
 }
 
 #[tokio::test]
-async fn start_holds_store_root_lock_until_shutdown() {
+async fn store_root_lease_outlives_shutdown_until_owner_drop() {
     let temp_dir = tempdir().unwrap();
     let config = MessageStoreConfig {
         duplication_enable: true,
@@ -1715,12 +1921,10 @@ async fn start_holds_store_root_lock_until_shutdown() {
     first.start().await.expect("start first store");
     assert!(temp_dir.path().join("lock").exists());
 
-    let mut second = new_configured_test_store(&temp_dir, config);
-    second.init().await.expect("init second store");
-    let error = second
-        .start()
-        .await
-        .expect_err("second store should not start while lock is held");
+    let error = match try_new_owned_test_store_with_broker(&temp_dir, config.clone(), StoreRuntimeConfig::default()) {
+        Ok(_) => panic!("second store must not inspect the root while its lock is held"),
+        Err(error) => error,
+    };
     assert_eq!(error.kind(), StoreErrorKind::Storage);
     assert!(error
         .detail()
@@ -1728,8 +1932,476 @@ async fn start_holds_store_root_lock_until_shutdown() {
 
     first.shutdown().await;
 
-    second.start().await.expect("lock should be reusable after shutdown");
+    let error = match try_new_owned_test_store_with_broker(&temp_dir, config.clone(), StoreRuntimeConfig::default()) {
+        Ok(_) => panic!("shutdown must not expose a stale Store object alongside a replacement owner"),
+        Err(error) => error,
+    };
+    assert_eq!(error.kind(), StoreErrorKind::Storage);
+
+    drop(first);
+    let mut second = new_configured_test_store(&temp_dir, config);
+    second.init().await.expect("init second store");
+    second.start().await.expect("lock should be reusable after owner drop");
     second.shutdown().await;
+}
+
+#[test]
+fn constructor_checks_store_lock_before_checkpoint_creation() {
+    let temp_dir = tempdir().unwrap();
+    let lock_path = temp_dir.path().join("lock");
+    let lock_file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+        .expect("open competing Store lock");
+    fs2::FileExt::try_lock_exclusive(&lock_file).expect("hold competing Store lock");
+
+    let error = match try_new_owned_test_store_with_broker(
+        &temp_dir,
+        MessageStoreConfig::default(),
+        StoreRuntimeConfig::default(),
+    ) {
+        Ok(_) => panic!("constructor must fail before opening persistent Store components"),
+        Err(error) => error,
+    };
+
+    assert_eq!(error.kind(), StoreErrorKind::Storage);
+    assert!(
+        !std::path::PathBuf::from(get_store_checkpoint(temp_dir.path().to_string_lossy().as_ref())).exists(),
+        "checkpoint construction must remain behind the exclusive root lock"
+    );
+}
+
+#[test]
+fn root_mode_accepts_only_stable_legacy_or_reconciliable_managed_evidence() {
+    assert_eq!(
+        StoreRootMode::from_read_outcome(ManagedLifecycleReadOutcome::LegacyAbsent),
+        Ok(StoreRootMode::Legacy)
+    );
+    assert_eq!(
+        StoreRootMode::from_read_outcome(ManagedLifecycleReadOutcome::ManagedNeedsReconciliation),
+        Ok(StoreRootMode::Managed)
+    );
+    assert_eq!(
+        StoreRootMode::from_read_outcome(ManagedLifecycleReadOutcome::RecoveryWriteRequired(
+            ManagedLifecycleRecoveryReason::TailRepair,
+        )),
+        Err(ManagedLifecycleRecoveryReason::TailRepair)
+    );
+}
+
+#[test]
+fn managed_reconciliation_precedes_every_persistent_component_constructor() {
+    let composition =
+        include_str!("../../../src/message_store/local_file_message_store/composition.rs").replace("\r\n", "\n");
+    let reconcile = composition
+        .find("inspect_and_reconcile_managed_root(&store_root_lease)")
+        .expect("constructor must reconcile managed lifecycle evidence under the retained root lease");
+    let runtime_scope = composition
+        .find("StoreRuntimeScope::new")
+        .expect("constructor still owns the Store runtime scope");
+    let checkpoint = composition
+        .find("StoreCheckpoint::new")
+        .expect("constructor still owns checkpoint construction");
+
+    assert!(
+        reconcile < runtime_scope && reconcile < checkpoint,
+        "managed replay and namespace reconciliation must fail closed before runtime or persistent component construction"
+    );
+}
+
+#[test]
+fn recognized_lifecycle_directory_fences_legacy_construction_before_checkpoint() {
+    let temp_dir = tempdir().unwrap();
+    fs::create_dir(temp_dir.path().join(".rocketmq-lifecycle")).expect("recognized lifecycle directory");
+
+    let error = match try_new_owned_test_store_with_broker(
+        &temp_dir,
+        MessageStoreConfig::default(),
+        StoreRuntimeConfig::default(),
+    ) {
+        Ok(_) => panic!("recognized lifecycle artifacts must fence legacy Store construction"),
+        Err(error) => error,
+    };
+
+    assert_eq!(error.kind(), StoreErrorKind::Unsupported);
+    assert!(error.detail().is_some_and(
+        |detail| detail.contains("bootstrap recovery") && detail.contains("legacy numeric Store loading is fenced")
+    ));
+    assert!(
+        !std::path::PathBuf::from(get_store_checkpoint(temp_dir.path().to_string_lossy().as_ref())).exists(),
+        "checkpoint construction must remain behind lifecycle artifact classification"
+    );
+}
+
+#[test]
+fn managed_lifecycle_session_owns_the_exclusive_root_lease() {
+    let temp_dir = tempdir().unwrap();
+    fs::create_dir(temp_dir.path().join(".rocketmq-lifecycle")).expect("recognized lifecycle directory");
+
+    let lease = StoreRootLease::acquire_unclassified(temp_dir.path(), StoreOperation::Load)
+        .expect("acquire the exclusive Store-root lease before classification");
+    let inspection = lease
+        .inspect_managed_lifecycle(StoreOperation::Load)
+        .expect("inspect managed evidence under the retained exclusive lease");
+
+    assert_eq!(
+        inspection.outcome(),
+        ManagedLifecycleReadOutcome::RecoveryWriteRequired(ManagedLifecycleRecoveryReason::BootstrapResume)
+    );
+
+    drop(lease);
+    let competing = match StoreRootLease::acquire_unclassified(temp_dir.path(), StoreOperation::Load) {
+        Ok(_) => panic!("the managed session must keep the exclusive root lease alive"),
+        Err(error) => error,
+    };
+    assert_eq!(competing.kind(), StoreErrorKind::Storage);
+
+    drop(inspection);
+    drop(
+        StoreRootLease::acquire_unclassified(temp_dir.path(), StoreOperation::Load)
+            .expect("dropping the managed session releases its last root-lock owner"),
+    );
+}
+
+#[test]
+fn unknown_lifecycle_entry_is_corruption_before_checkpoint_construction() {
+    let temp_dir = tempdir().unwrap();
+    let lifecycle = temp_dir.path().join(".rocketmq-lifecycle");
+    fs::create_dir(&lifecycle).expect("create lifecycle directory");
+    let unknown = lifecycle.join("unknown.future");
+    fs::write(&unknown, b"must-remain-intact").expect("write unknown lifecycle artifact");
+
+    let error = match try_new_owned_test_store_with_broker(
+        &temp_dir,
+        MessageStoreConfig::default(),
+        StoreRuntimeConfig::default(),
+    ) {
+        Ok(_) => panic!("unsafe lifecycle inventory must fence legacy Store construction"),
+        Err(error) => error,
+    };
+
+    assert_eq!(error.kind(), StoreErrorKind::Corruption);
+    assert_eq!(error.component(), StoreComponent::MappedFile);
+    assert!(error
+        .detail()
+        .is_some_and(|detail| detail.contains("read-only lifecycle inspection failed")));
+    assert_eq!(fs::read(&unknown).unwrap(), b"must-remain-intact");
+    assert!(
+        !std::path::PathBuf::from(get_store_checkpoint(temp_dir.path().to_string_lossy().as_ref())).exists(),
+        "checkpoint construction must remain behind complete lifecycle inventory validation"
+    );
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn constructor_rejects_lock_symlink_without_truncating_its_target() {
+    let temp_dir = tempdir().unwrap();
+    let target_path = temp_dir.path().join("lock-target");
+    fs::write(&target_path, b"must-remain-intact").expect("write lock symlink target");
+    if let Err(error) = create_file_symlink(&target_path, &temp_dir.path().join("lock")) {
+        if symlink_creation_is_unavailable(&error) {
+            return;
+        }
+        panic!("create lock symlink: {error}");
+    }
+
+    let error = match try_new_owned_test_store_with_broker(
+        &temp_dir,
+        MessageStoreConfig::default(),
+        StoreRuntimeConfig::default(),
+    ) {
+        Ok(_) => panic!("Store lock acquisition must reject symbolic links"),
+        Err(error) => error,
+    };
+
+    assert_eq!(error.kind(), StoreErrorKind::Corruption);
+    assert_eq!(fs::read(&target_path).unwrap(), b"must-remain-intact");
+    assert!(!temp_dir.path().join("checkpoint").exists());
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn constructor_rejects_a_symbolic_link_store_root() {
+    let parent = tempdir().unwrap();
+    let real_root = parent.path().join("real-root");
+    let linked_root = parent.path().join("linked-root");
+    fs::create_dir(&real_root).expect("create real Store root");
+    if let Err(error) = create_directory_symlink(&real_root, &linked_root) {
+        if symlink_creation_is_unavailable(&error) {
+            return;
+        }
+        panic!("create Store root symlink: {error}");
+    }
+
+    let error = match try_new_owned_test_store_at_root(
+        &linked_root,
+        MessageStoreConfig::default(),
+        StoreRuntimeConfig::default(),
+    ) {
+        Ok(_) => panic!("configured Store root must be a real no-follow directory"),
+        Err(error) => error,
+    };
+
+    assert_eq!(error.kind(), StoreErrorKind::Corruption);
+    assert!(!real_root.join("lock").exists());
+    assert!(!real_root.join("checkpoint").exists());
+}
+
+#[cfg(any(unix, windows))]
+#[tokio::test]
+async fn dangling_abort_link_is_abnormal_exit_evidence() {
+    let temp_dir = tempdir().unwrap();
+    let mut store = new_configured_test_store(&temp_dir, MessageStoreConfig::default());
+    store.init().await.expect("initialize Store before recovery");
+    let missing_target = temp_dir.path().join("missing-abort-target");
+    let abort_path = std::path::PathBuf::from(get_abort_file(temp_dir.path().to_string_lossy().as_ref()));
+    if let Err(error) = create_file_symlink(&missing_target, &abort_path) {
+        if symlink_creation_is_unavailable(&error) {
+            return;
+        }
+        panic!("create dangling abort symlink: {error}");
+    }
+
+    assert!(store.load().await, "empty Store should recover successfully");
+    assert_eq!(
+        store.last_recovery_report().expect("recovery report").plan.exit,
+        RecoveryExit::Abnormal,
+        "a no-follow abort probe must classify even a dangling link as evidence"
+    );
+}
+
+#[cfg(any(unix, windows))]
+#[tokio::test]
+async fn start_rejects_abort_link_without_truncating_its_target() {
+    let temp_dir = tempdir().unwrap();
+    let mut store = new_configured_test_store(
+        &temp_dir,
+        MessageStoreConfig {
+            duplication_enable: true,
+            ..MessageStoreConfig::default()
+        },
+    );
+    store.init().await.expect("initialize Store");
+    let target_path = temp_dir.path().join("abort-target");
+    fs::write(&target_path, b"must-remain-intact").expect("write abort symlink target");
+    let abort_path = std::path::PathBuf::from(get_abort_file(temp_dir.path().to_string_lossy().as_ref()));
+    if let Err(error) = create_file_symlink(&target_path, &abort_path) {
+        if symlink_creation_is_unavailable(&error) {
+            return;
+        }
+        panic!("create abort symlink: {error}");
+    }
+
+    let error = store
+        .start()
+        .await
+        .expect_err("start must not follow an abort marker link");
+
+    assert_eq!(error.kind(), StoreErrorKind::Corruption);
+    assert_eq!(fs::read(&target_path).unwrap(), b"must-remain-intact");
+    assert_eq!(store.lifecycle_state(), LocalStoreState::Initialized);
+}
+
+#[cfg(unix)]
+fn create_file_symlink(target: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(target, link)
+}
+
+#[cfg(windows)]
+fn create_file_symlink(target: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::windows::fs::symlink_file(target, link)
+}
+
+#[cfg(unix)]
+fn create_directory_symlink(target: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(target, link)
+}
+
+#[cfg(windows)]
+fn create_directory_symlink(target: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::windows::fs::symlink_dir(target, link)
+}
+
+#[cfg(unix)]
+const fn symlink_creation_is_unavailable(_error: &std::io::Error) -> bool {
+    false
+}
+
+#[cfg(windows)]
+fn symlink_creation_is_unavailable(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::Unsupported
+    ) || error.raw_os_error() == Some(1314)
+}
+
+#[tokio::test]
+async fn lifecycle_artifact_created_after_shutdown_blocks_reinitialization_and_load() {
+    let temp_dir = tempdir().unwrap();
+    let mut store = new_configured_test_store(&temp_dir, MessageStoreConfig::default());
+    store.init().await.expect("initialize legacy Store");
+    store.shutdown().await;
+    fs::create_dir(temp_dir.path().join(".rocketmq-lifecycle")).expect("create managed lifecycle evidence");
+
+    let error = store
+        .init()
+        .await
+        .expect_err("a current lifecycle artifact must invalidate the legacy root lease");
+    assert_eq!(error.kind(), StoreErrorKind::Unsupported);
+    assert!(
+        !store.load().await,
+        "managed lifecycle evidence must prevent numeric scanning"
+    );
+}
+
+#[tokio::test]
+async fn load_rejects_the_created_lifecycle_state() {
+    let temp_dir = tempdir().unwrap();
+    let mut store = new_configured_test_store(&temp_dir, MessageStoreConfig::default());
+
+    assert!(!store.load().await, "load requires an initialized, non-shutdown Store");
+    assert_eq!(store.lifecycle_state(), LocalStoreState::Created);
+}
+
+#[tokio::test]
+async fn destroy_rejects_a_started_store_until_shutdown_completes() {
+    let temp_dir = tempdir().unwrap();
+    let mut store = new_configured_test_store(
+        &temp_dir,
+        MessageStoreConfig {
+            duplication_enable: true,
+            ..MessageStoreConfig::default()
+        },
+    );
+    store.init().await.expect("initialize Store");
+    store.start().await.expect("start Store");
+
+    assert!(!store.destroy_store_with_outcome());
+    assert_eq!(store.lifecycle_state(), LocalStoreState::Started);
+
+    store.shutdown().await;
+}
+
+#[tokio::test]
+async fn shutdown_with_new_lifecycle_evidence_stops_services_but_retains_abort_and_fences_reuse() {
+    let temp_dir = tempdir().unwrap();
+    let mut store = new_configured_test_store(
+        &temp_dir,
+        MessageStoreConfig {
+            duplication_enable: true,
+            ..MessageStoreConfig::default()
+        },
+    );
+    store.init().await.expect("initialize Store");
+    store.start().await.expect("start Store");
+    let abort_path = std::path::PathBuf::from(get_abort_file(temp_dir.path().to_string_lossy().as_ref()));
+    assert!(abort_path.is_file(), "started Store must publish its abort marker");
+    fs::create_dir(temp_dir.path().join(".rocketmq-lifecycle")).expect("create managed lifecycle evidence");
+
+    let error = store
+        .shutdown_store_gracefully()
+        .await
+        .expect_err("managed lifecycle evidence must invalidate graceful shutdown persistence");
+
+    assert_eq!(error.kind(), StoreErrorKind::Unsupported);
+    assert_eq!(store.lifecycle_state(), LocalStoreState::Shutdown);
+    assert_eq!(store.store_root_lease_state, StoreRootLeaseState::DestroyRetryPending);
+    assert!(
+        abort_path.is_file(),
+        "an invalidated root lease must retain abnormal-exit evidence"
+    );
+    assert!(!store.has_scheduled_task_group());
+    assert!(!store.reput_message_service.has_task_group());
+    assert!(!store.background_index_rebuild_service.has_task_group());
+    assert!(store.init().await.is_err(), "pending destruction must fence init");
+    assert!(!store.load().await, "pending destruction must fence load");
+    assert!(store.start().await.is_err(), "pending destruction must fence start");
+    assert!(!store.destroy_store_with_outcome(), "destroy must remain retry-safe");
+    assert_eq!(store.store_root_lease_state, StoreRootLeaseState::DestroyRetryPending);
+}
+
+#[tokio::test]
+async fn shutdown_with_invalid_root_lease_stops_timer_without_path_persistence() {
+    let temp_dir = tempdir().unwrap();
+    let mut store = new_configured_test_store_with_broker(
+        &temp_dir,
+        MessageStoreConfig {
+            duplication_enable: true,
+            timer_wheel_enable: true,
+            ..MessageStoreConfig::default()
+        },
+        StoreRuntimeConfig::default(),
+    );
+    store.init().await.expect("initialize Store");
+    let timer = store
+        .get_timer_message_store()
+        .cloned()
+        .expect("timer root dependency is wired");
+    timer.start();
+    assert!(timer.has_scheduler_handle());
+
+    let metrics_path = std::path::PathBuf::from(get_timer_metrics_path(temp_dir.path().to_string_lossy().as_ref()));
+    fs::create_dir_all(metrics_path.parent().expect("timer metrics parent")).expect("create timer metrics parent");
+    fs::write(&metrics_path, b"replacement-must-remain").expect("write timer metrics sentinel");
+    fs::create_dir(temp_dir.path().join(".rocketmq-lifecycle")).expect("create managed lifecycle evidence");
+
+    let error = store
+        .shutdown_store_gracefully()
+        .await
+        .expect_err("managed lifecycle evidence must invalidate graceful shutdown persistence");
+
+    assert_eq!(error.kind(), StoreErrorKind::Unsupported);
+    assert_eq!(fs::read(&metrics_path).unwrap(), b"replacement-must-remain");
+    assert!(!timer.has_scheduler_handle());
+    assert_eq!(timer.scheduler_task_count(), 0);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn shutdown_after_store_root_replacement_does_not_delete_from_the_replacement() {
+    let parent = tempdir().unwrap();
+    let configured_root = parent.path().join("store-root");
+    let retained_root = parent.path().join("retained-root");
+    fs::create_dir(&configured_root).expect("create configured Store root");
+    let mut store = try_new_owned_test_store_at_root(
+        &configured_root,
+        MessageStoreConfig {
+            duplication_enable: true,
+            ..MessageStoreConfig::default()
+        },
+        StoreRuntimeConfig::default(),
+    )
+    .expect("construct Store under verified root");
+    store.init().await.expect("initialize Store");
+    store.start().await.expect("start Store");
+
+    let replacement_abort = std::path::PathBuf::from(get_abort_file(configured_root.to_string_lossy().as_ref()));
+    let configured_root_for_hook = configured_root.clone();
+    let retained_root_for_hook = retained_root.clone();
+    let replacement_abort_for_hook = replacement_abort.clone();
+    store
+        .store_root_lease
+        .set_before_abort_remove_hook_for_testing(move || {
+            fs::rename(&configured_root_for_hook, &retained_root_for_hook)
+                .expect("detach verified Store root after final validation");
+            fs::create_dir(&configured_root_for_hook).expect("install replacement Store root");
+            fs::write(&replacement_abort_for_hook, b"replacement-must-remain")
+                .expect("write replacement abort sentinel");
+        });
+
+    store
+        .shutdown_store_gracefully()
+        .await
+        .expect("retained-root abort removal must not follow the replaced configured path");
+
+    assert_eq!(fs::read(&replacement_abort).unwrap(), b"replacement-must-remain");
+    assert!(
+        !std::path::PathBuf::from(get_abort_file(retained_root.to_string_lossy().as_ref())).exists(),
+        "only the abort marker under the retained physical root is eligible for deletion"
+    );
 }
 
 #[tokio::test]
@@ -2704,6 +3376,36 @@ async fn graceful_shutdown_reports_typed_final_flush_failure() {
         health.last_flush_error.as_ref().map(|error| error.kind),
         Some(crate::store_error::StoreErrorKind::Storage)
     );
+}
+
+#[tokio::test]
+async fn graceful_shutdown_reports_outstanding_transient_pool_leases() {
+    let temp_dir = tempdir().unwrap();
+    let mut store = new_configured_test_store(
+        &temp_dir,
+        MessageStoreConfig {
+            transient_store_pool_enable: true,
+            transient_store_pool_size: 1,
+            mapped_file_size_commit_log: 4096,
+            ..MessageStoreConfig::default()
+        },
+    );
+    store.init().await.expect("initialize transient message store");
+    let lease = store
+        .transient_store_pool
+        .borrow_lease()
+        .expect("initialized transient pool has one buffer");
+
+    let report = store
+        .shutdown_gracefully()
+        .await
+        .expect("shutdown reports the live lease");
+
+    assert_eq!(report.transient_pool_outstanding_leases, 1);
+    assert_eq!(store.transient_store_pool.outstanding_lease_count(), 1);
+    drop(lease);
+    assert_eq!(store.transient_store_pool.outstanding_lease_count(), 0);
+    assert_eq!(store.transient_store_pool.available_buffer_nums(), 0);
 }
 
 #[test]

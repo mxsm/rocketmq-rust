@@ -589,6 +589,12 @@ impl<W, R> MappedFileMapping<W, R> {
         self.slot.load().is_some()
     }
 
+    /// Returns the exact currently published generation identifier.
+    #[inline]
+    pub(crate) fn current_generation_id(&self) -> Option<MappingGenerationId> {
+        self.slot.load().as_ref().map(|generation| generation.id())
+    }
+
     /// Returns whether the owner slot has been terminally detached.
     #[inline]
     pub fn is_detached(&self) -> bool {
