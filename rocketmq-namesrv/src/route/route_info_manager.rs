@@ -96,7 +96,7 @@ const DEFAULT_BROKER_CHANNEL_EXPIRED_TIME: u64 = 1000 * 60 * 2; // 2 minutes
 ///
 /// - **Route-visible writes**: Acquire the single mutation gate.
 /// - **Route reads**: Load one immutable snapshot without the mutation gate.
-/// - **Management reads**: May continue to inspect source tables directly.
+/// - **Management reads**: Hold the mutation gate while assembling source-table DTOs.
 ///
 /// ### Deadlock Prevention
 ///
@@ -1639,6 +1639,7 @@ fn build_acting_master_route_data(route_data: &TopicRouteData) -> Option<TopicRo
 impl RouteInfoManager {
     /// Get all topics registered in the name server
     pub fn get_all_topics(&self) -> Vec<TopicName> {
+        let _management_view = self.route_mutations.begin_management_read();
         self.topic_queue_table.get_all_topics()
     }
 
@@ -1672,6 +1673,7 @@ impl RouteInfoManager {
 
     /// Get topics for a specific cluster
     pub fn get_topics_by_cluster(&self, cluster_name: &str) -> RouteResult<Vec<TopicName>> {
+        let _management_view = self.route_mutations.begin_management_read();
         let broker_names = self.cluster_addr_table.get_brokers(cluster_name);
 
         if broker_names.is_empty() {
@@ -1998,6 +2000,7 @@ impl RouteInfoManager {
     ///
     /// Rust requires creating snapshot copies due to ownership rules and DashMap usage.
     pub fn get_all_cluster_info(&self) -> ClusterInfo {
+        let _management_view = self.route_mutations.begin_management_read();
         ClusterInfo {
             broker_addr_table: Some(self.broker_addr_table.snapshot()),
             cluster_addr_table: Some(self.cluster_addr_table.snapshot()),
@@ -2071,6 +2074,7 @@ impl RouteInfoManager {
     /// Java NameServer exposes cluster names and broker names here rather than
     /// filtering the topic table by built-in system topics.
     pub fn get_system_topic_list(&self) -> TopicList {
+        let _management_view = self.route_mutations.begin_management_read();
         let mut topic_list =
             Vec::with_capacity(self.cluster_addr_table.cluster_count() + self.cluster_addr_table.total_broker_count());
         self.cluster_addr_table.append_cluster_and_broker_names(&mut topic_list);
@@ -2088,6 +2092,7 @@ impl RouteInfoManager {
     pub fn get_unit_topics(&self) -> TopicList {
         use rocketmq_model::common::TopicSysFlag;
 
+        let _management_view = self.route_mutations.begin_management_read();
         let topics = self
             .topic_queue_table
             .filter_topics_by_first_queue(|queue_data| TopicSysFlag::has_unit_flag(queue_data.topic_sys_flag()));
@@ -2105,6 +2110,7 @@ impl RouteInfoManager {
     pub fn get_has_unit_sub_topic_list(&self) -> TopicList {
         use rocketmq_model::common::TopicSysFlag;
 
+        let _management_view = self.route_mutations.begin_management_read();
         let topics = self
             .topic_queue_table
             .filter_topics_by_first_queue(|queue_data| TopicSysFlag::has_unit_sub_flag(queue_data.topic_sys_flag()));
@@ -2125,6 +2131,7 @@ impl RouteInfoManager {
     pub fn get_has_unit_sub_ununit_topic_list(&self) -> TopicList {
         use rocketmq_model::common::TopicSysFlag;
 
+        let _management_view = self.route_mutations.begin_management_read();
         let topics = self.topic_queue_table.filter_topics_by_first_queue(|queue_data| {
             let sys_flag = queue_data.topic_sys_flag();
             !TopicSysFlag::has_unit_flag(sys_flag) && TopicSysFlag::has_unit_sub_flag(sys_flag)
@@ -2418,6 +2425,7 @@ mod tests {
 
         let mutation_paused = Arc::new(Barrier::new(2));
         let resume_mutation = Arc::new(Barrier::new(2));
+        let management_cluster = cluster_name.clone();
         manager.set_before_topic_cleanup_hook({
             let mutation_paused = Arc::clone(&mutation_paused);
             let resume_mutation = Arc::clone(&resume_mutation);
@@ -2439,12 +2447,28 @@ mod tests {
 
         mutation_paused.wait();
         let route_while_unregistration_is_paused = manager.pickup_topic_route_data(topic.as_str());
+        let (management_result_tx, management_result_rx) = std::sync::mpsc::sync_channel(1);
+        let management_manager = Arc::clone(&manager);
+        let management_thread = std::thread::spawn(move || {
+            management_result_tx
+                .send(management_manager.get_topics_by_cluster(management_cluster.as_str()))
+                .expect("management result receiver should remain available");
+        });
+        assert!(matches!(
+            management_result_rx.recv_timeout(std::time::Duration::from_millis(25)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ));
         resume_mutation.wait();
         unregister_thread.join().expect("unregister thread should not panic");
+        let management_result = management_result_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("management read should complete after mutation publication");
+        management_thread.join().expect("management thread should not panic");
 
         let route_while_unregistration_is_paused = route_while_unregistration_is_paused
             .expect("an unpublished unregister mutation must leave the complete old route visible");
         assert_eq!(route_while_unregistration_is_paused, initial_route);
+        assert!(matches!(management_result, Err(RocketMQError::ClusterNotFound { .. })));
         assert!(manager.pickup_topic_route_data(topic.as_str()).is_err());
     }
 

@@ -136,6 +136,17 @@ impl RouteMutationCoordinator {
         }
     }
 
+    /// Pins the mutable source tables to one completed mutation generation.
+    ///
+    /// Management endpoints use this guard while assembling DTOs that span
+    /// multiple DashMap tables. Topic-route reads intentionally remain on the
+    /// independently published ArcSwap snapshots and never acquire this gate.
+    pub(crate) fn begin_management_read(&self) -> ManagementReadGuard<'_> {
+        ManagementReadGuard {
+            _gate: self.mutation_gate.lock(),
+        }
+    }
+
     /// Loads exactly one published pointer for the requested topic.
     pub(crate) fn load(&self, topic: &str) -> Option<Arc<TopicRouteSnapshot>> {
         let publisher = self.snapshots.get(topic).map(|entry| Arc::clone(entry.value()))?;
@@ -151,6 +162,10 @@ impl Default for RouteMutationCoordinator {
 
 pub(crate) struct RouteMutationGuard<'a> {
     coordinator: &'a RouteMutationCoordinator,
+    _gate: MutexGuard<'a, ()>,
+}
+
+pub(crate) struct ManagementReadGuard<'a> {
     _gate: MutexGuard<'a, ()>,
 }
 
