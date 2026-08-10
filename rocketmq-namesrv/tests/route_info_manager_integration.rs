@@ -819,13 +819,11 @@ async fn namesrv_zone_route_accept_standard_json_only_preserves_standard_json_ov
             .expect("standard json route response should include a body"),
     )
     .expect("standard json route response should stay valid utf-8");
-    let broker_addrs_index = body
-        .find("\"brokerAddrs\":{\"10\":\"10.30.0.10:10911\"")
-        .unwrap_or_else(|| panic!("standard json should preserve sorted brokerAddrs keys, body={body}"));
-    let broker_addrs_second_index = body
-        .find("\"2\":\"10.30.0.2:10911\"")
-        .unwrap_or_else(|| panic!("standard json should include broker id 2, body={body}"));
-    assert!(broker_addrs_index < broker_addrs_second_index);
+    let json: serde_json::Value =
+        serde_json::from_str(body).expect("standard json route response should remain standards-compliant");
+    let broker_addrs = &json["brokerDatas"][0]["brokerAddrs"];
+    assert_eq!(broker_addrs["10"], "10.30.0.10:10911");
+    assert_eq!(broker_addrs["2"], "10.30.0.2:10911");
 
     let topic_route_data = TopicRouteData::decode(body.as_bytes()).unwrap();
     assert_eq!(topic_route_data.broker_datas.len(), 1);
