@@ -74,44 +74,46 @@ impl Default for WorkflowControl {
 
 type WorkflowFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, ToolExecutionError>> + Send + 'a>>;
 
-#[async_trait::async_trait]
 pub(crate) trait ReadOnlyQuery: Clone + Send + Sync + 'static {
-    async fn cluster_overview(
+    fn cluster_overview(
         &self,
         args: ClusterOverviewArgs,
-    ) -> Result<QueryResult<ClusterOverviewOutput>, ToolExecutionError>;
+    ) -> impl Future<Output = Result<QueryResult<ClusterOverviewOutput>, ToolExecutionError>> + Send;
 
-    async fn list_topics(&self, args: ListTopicsArgs) -> Result<QueryResult<ListTopicsOutput>, ToolExecutionError>;
+    fn list_topics(
+        &self,
+        args: ListTopicsArgs,
+    ) -> impl Future<Output = Result<QueryResult<ListTopicsOutput>, ToolExecutionError>> + Send;
 
-    async fn describe_topic(
+    fn describe_topic(
         &self,
         args: DescribeTopicArgs,
-    ) -> Result<QueryResult<DescribeTopicOutput>, ToolExecutionError>;
+    ) -> impl Future<Output = Result<QueryResult<DescribeTopicOutput>, ToolExecutionError>> + Send;
 
-    async fn query_topic_route(
+    fn query_topic_route(
         &self,
         args: QueryTopicRouteArgs,
-    ) -> Result<QueryResult<QueryTopicRouteOutput>, ToolExecutionError>;
+    ) -> impl Future<Output = Result<QueryResult<QueryTopicRouteOutput>, ToolExecutionError>> + Send;
 
-    async fn list_consumer_groups(
+    fn list_consumer_groups(
         &self,
         args: ListConsumerGroupsArgs,
-    ) -> Result<QueryResult<ListConsumerGroupsOutput>, ToolExecutionError>;
+    ) -> impl Future<Output = Result<QueryResult<ListConsumerGroupsOutput>, ToolExecutionError>> + Send;
 
-    async fn query_consumer_lag(
+    fn query_consumer_lag(
         &self,
         args: QueryConsumerLagArgs,
-    ) -> Result<QueryResult<QueryConsumerLagOutput>, ToolExecutionError>;
+    ) -> impl Future<Output = Result<QueryResult<QueryConsumerLagOutput>, ToolExecutionError>> + Send;
 
-    async fn describe_broker(
+    fn describe_broker(
         &self,
         args: DescribeBrokerArgs,
-    ) -> Result<QueryResult<DescribeBrokerOutput>, ToolExecutionError>;
+    ) -> impl Future<Output = Result<QueryResult<DescribeBrokerOutput>, ToolExecutionError>> + Send;
 
-    async fn diagnose_consumer_lag(
+    fn diagnose_consumer_lag(
         &self,
         args: DiagnoseConsumerLagArgs,
-    ) -> Result<QueryResult<DiagnosisReport>, ToolExecutionError>;
+    ) -> impl Future<Output = Result<QueryResult<DiagnosisReport>, ToolExecutionError>> + Send;
 }
 
 #[derive(Clone)]
@@ -578,7 +580,6 @@ impl QueryFacade<AdminCoreSessionFactory> {
     }
 }
 
-#[async_trait::async_trait]
 impl<F> ReadOnlyQuery for QueryFacade<F>
 where
     F: AdminSessionFactory,
@@ -822,7 +823,6 @@ mod tests {
         fail_topic_query: bool,
     }
 
-    #[async_trait::async_trait]
     impl AdminSessionFactory for FakeSessionFactory {
         type Session = FakeSession;
 
@@ -850,7 +850,6 @@ mod tests {
         fail_topic_query: bool,
     }
 
-    #[async_trait::async_trait]
     impl AdminSession for FakeSession {
         async fn broker_rows(&mut self) -> Result<Vec<BrokerSummary>, ToolExecutionError> {
             self.counters.broker_queries.fetch_add(1, Ordering::SeqCst);
@@ -915,6 +914,68 @@ mod tests {
             self.counters.shutdowns.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
+    }
+
+    #[test]
+    fn read_only_query_futures_preserve_the_send_contract() {
+        fn assert_send<T: Send>(_: T) {}
+
+        fn assert_query_futures_are_send<Q: ReadOnlyQuery>(
+            query: &Q,
+            cluster_overview: ClusterOverviewArgs,
+            list_topics: ListTopicsArgs,
+            describe_topic: DescribeTopicArgs,
+            topic_route: QueryTopicRouteArgs,
+            consumer_groups: ListConsumerGroupsArgs,
+            consumer_lag: QueryConsumerLagArgs,
+            broker: DescribeBrokerArgs,
+            diagnosis: DiagnoseConsumerLagArgs,
+        ) {
+            assert_send(query.cluster_overview(cluster_overview));
+            assert_send(query.list_topics(list_topics));
+            assert_send(query.describe_topic(describe_topic));
+            assert_send(query.query_topic_route(topic_route));
+            assert_send(query.list_consumer_groups(consumer_groups));
+            assert_send(query.query_consumer_lag(consumer_lag));
+            assert_send(query.describe_broker(broker));
+            assert_send(query.diagnose_consumer_lag(diagnosis));
+        }
+
+        let facade = QueryFacade::with_factory(example_config(), FakeSessionFactory::default());
+        let page = PageRequest::default();
+        assert_query_futures_are_send(
+            &facade,
+            ClusterOverviewArgs {
+                cluster: "local-dev".to_string(),
+            },
+            ListTopicsArgs::default(),
+            DescribeTopicArgs {
+                cluster: "local-dev".to_string(),
+                topic: "orders".to_string(),
+                page: page.clone(),
+            },
+            QueryTopicRouteArgs {
+                cluster: "local-dev".to_string(),
+                topic: "orders".to_string(),
+                page: page.clone(),
+            },
+            ListConsumerGroupsArgs::default(),
+            QueryConsumerLagArgs {
+                cluster: "local-dev".to_string(),
+                topic: "orders".to_string(),
+                consumer_group: "order-service".to_string(),
+                page,
+            },
+            DescribeBrokerArgs {
+                cluster: "local-dev".to_string(),
+                broker_name: "broker-a".to_string(),
+            },
+            DiagnoseConsumerLagArgs {
+                cluster: "local-dev".to_string(),
+                topic: "orders".to_string(),
+                consumer_group: "order-service".to_string(),
+            },
+        );
     }
 
     #[tokio::test]

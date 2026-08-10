@@ -510,7 +510,6 @@ mod tests {
         missing_lag: bool,
     }
 
-    #[async_trait::async_trait]
     impl ReadOnlyQuery for FakeDiagnosisAdapter {
         async fn cluster_overview(
             &self,

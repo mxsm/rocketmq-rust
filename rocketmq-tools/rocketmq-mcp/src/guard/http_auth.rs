@@ -36,27 +36,56 @@ use crate::config::HttpConfig;
 use crate::guard::context::Principal;
 use crate::guard::context::RequestContext;
 use crate::guard::jwks::HttpJwksSource;
+use crate::guard::jwks::JwksSource;
 use crate::guard::jwks::JwksVerifier;
 use crate::guard::Guard;
 
-#[derive(Clone)]
-pub struct HttpAuthState {
-    authenticator: HttpAuthenticator,
+pub struct HttpAuthState<S = HttpJwksSource> {
+    authenticator: HttpAuthenticator<S>,
     guard: Guard,
     resource_metadata: Option<Arc<str>>,
 }
 
-#[derive(Clone)]
-enum HttpAuthenticator {
+enum HttpAuthenticator<S = HttpJwksSource> {
     DevelopmentToken {
         token: Arc<str>,
         tenant: Option<String>,
     },
     OAuthJwt {
-        verifier: JwksVerifier,
+        verifier: JwksVerifier<S>,
         validation: Arc<Validation>,
         required_scopes: BTreeSet<String>,
     },
+}
+
+impl<S> Clone for HttpAuthState<S> {
+    fn clone(&self) -> Self {
+        Self {
+            authenticator: self.authenticator.clone(),
+            guard: self.guard.clone(),
+            resource_metadata: self.resource_metadata.clone(),
+        }
+    }
+}
+
+impl<S> Clone for HttpAuthenticator<S> {
+    fn clone(&self) -> Self {
+        match self {
+            Self::DevelopmentToken { token, tenant } => Self::DevelopmentToken {
+                token: token.clone(),
+                tenant: tenant.clone(),
+            },
+            Self::OAuthJwt {
+                verifier,
+                validation,
+                required_scopes,
+            } => Self::OAuthJwt {
+                verifier: verifier.clone(),
+                validation: validation.clone(),
+                required_scopes: required_scopes.clone(),
+            },
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -76,7 +105,7 @@ struct JwtClaims {
     rocketmq_clusters: Option<Vec<String>>,
 }
 
-impl HttpAuthState {
+impl HttpAuthState<HttpJwksSource> {
     pub fn from_config(config: &HttpAuthConfig, guard: Guard) -> Result<Self, HttpAuthError> {
         Self::from_parts(config, guard, None)
     }
@@ -133,7 +162,12 @@ impl HttpAuthState {
             resource_metadata,
         })
     }
+}
 
+impl<S> HttpAuthState<S>
+where
+    S: JwksSource,
+{
     pub async fn warm_up(&self) -> Result<(), HttpAuthError> {
         if let HttpAuthenticator::OAuthJwt { verifier, .. } = &self.authenticator {
             verifier.warm_up().await.map_err(|_| HttpAuthError::InvalidJwksConfig)?;
@@ -320,7 +354,6 @@ pub async fn http_auth_middleware(State(state): State<HttpAuthState>, mut reques
 
 #[cfg(test)]
 mod tests {
-    use async_trait::async_trait;
     use jsonwebtoken::encode;
     use jsonwebtoken::EncodingKey;
     use jsonwebtoken::Header;
@@ -350,6 +383,7 @@ mod tests {
     #[tokio::test]
     async fn oauth_jwt_attributes_the_verified_principal() {
         let state = oauth_state(["rocketmq:read"]).await;
+        let _cloned = state.clone();
         let token = signed_token("rocketmq:read rocketmq:diagnose", "test-key");
         let context = state.authenticate(&bearer_headers(&token)).await.unwrap();
 
@@ -429,7 +463,7 @@ mod tests {
         }
     }
 
-    async fn oauth_state(required_scopes: impl IntoIterator<Item = &'static str>) -> HttpAuthState {
+    async fn oauth_state(required_scopes: impl IntoIterator<Item = &'static str>) -> HttpAuthState<StaticSource> {
         let verifier = JwksVerifier::new(
             Arc::new(StaticSource),
             Duration::from_secs(300),
@@ -514,7 +548,6 @@ mod tests {
 
     struct StaticSource;
 
-    #[async_trait]
     impl JwksSource for StaticSource {
         async fn fetch(&self) -> Result<Vec<u8>, JwksError> {
             Ok(serde_json::to_vec(&serde_json::json!({"keys": [{

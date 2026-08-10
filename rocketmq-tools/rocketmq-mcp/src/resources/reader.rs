@@ -328,7 +328,6 @@ mod tests {
     #[derive(Clone)]
     struct FakeQuery;
 
-    #[async_trait::async_trait]
     impl ReadOnlyQuery for FakeQuery {
         async fn cluster_overview(
             &self,

@@ -43,7 +43,6 @@ struct TestAuditSink {
     state: Arc<TestSinkState>,
 }
 
-#[async_trait]
 impl AuditSink for TestAuditSink {
     async fn write(&mut self, record: &AuditRecord, _encoded: &[u8]) -> Result<(), ()> {
         self.state
@@ -127,7 +126,7 @@ async fn count_capacity_is_non_blocking_and_preserves_fifo_for_accepted_records(
     config.queue_capacity = 1;
     let state = Arc::new(TestSinkState::default());
     state.stall_first.store(true, Ordering::Release);
-    log.start_with_sink(&config, &service, Box::new(TestAuditSink { state: state.clone() }))
+    log.start_with_sink(&config, &service, TestAuditSink { state: state.clone() })
         .unwrap();
 
     log.record(&config, sample_record("request-1", None));
@@ -171,7 +170,7 @@ async fn byte_capacity_is_non_blocking_independent_of_record_capacity() {
     config.queue_capacity = 8;
     let state = Arc::new(TestSinkState::default());
     state.stall_first.store(true, Ordering::Release);
-    log.start_with_sink(&config, &service, Box::new(TestAuditSink { state: state.clone() }))
+    log.start_with_sink(&config, &service, TestAuditSink { state: state.clone() })
         .unwrap();
 
     log.record(&config, sample_record("request-1", None));
@@ -203,7 +202,7 @@ async fn sink_failure_does_not_stop_fifo_writer_and_flush_failure_is_reported() 
     let state = Arc::new(TestSinkState::default());
     state.failures_remaining.store(1, Ordering::Release);
     state.fail_flush.store(true, Ordering::Release);
-    log.start_with_sink(&config, &service, Box::new(TestAuditSink { state: state.clone() }))
+    log.start_with_sink(&config, &service, TestAuditSink { state: state.clone() })
         .unwrap();
 
     for request_id in ["request-1", "request-2", "request-3"] {
@@ -239,7 +238,7 @@ async fn one_absolute_deadline_reports_stall_then_allows_a_later_drain() {
     let config = test_config("tracing");
     let state = Arc::new(TestSinkState::default());
     state.stall_first.store(true, Ordering::Release);
-    log.start_with_sink(&config, &service, Box::new(TestAuditSink { state: state.clone() }))
+    log.start_with_sink(&config, &service, TestAuditSink { state: state.clone() })
         .unwrap();
     log.record(&config, sample_record("request-1", None));
     tokio::time::timeout(Duration::from_secs(1), state.started.notified())
@@ -273,7 +272,7 @@ async fn runtime_cancellation_releases_pending_capacity_without_claiming_a_drain
     let config = test_config("tracing");
     let state = Arc::new(TestSinkState::default());
     state.stall_first.store(true, Ordering::Release);
-    log.start_with_sink(&config, &service, Box::new(TestAuditSink { state: state.clone() }))
+    log.start_with_sink(&config, &service, TestAuditSink { state: state.clone() })
         .unwrap();
     log.record(&config, sample_record("request-cancelled", None));
     tokio::time::timeout(Duration::from_secs(1), state.started.notified())
