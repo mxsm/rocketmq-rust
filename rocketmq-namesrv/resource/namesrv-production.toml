@@ -33,6 +33,17 @@ kvConfigPath = "/opt/rocketmq/data/kvConfig.json"
 # Default: ~/rocketmq-namesrv/rocketmq-namesrv.properties
 configStorePath = "/opt/rocketmq/data/rocketmq-namesrv.properties"
 
+# A public listener must never rely on the migration-only insecure override.
+allowInsecurePublicListener = false
+
+# The secure-enforced process profile additionally requires an enforcing TLS
+# listener and the ROCKETMQ_SECURITY_* bootstrap material. Keep the ACL and
+# metadata paths on durable, access-controlled storage.
+authenticationEnabled = true
+authorizationEnabled = true
+authConfigPath = "/opt/rocketmq/data/auth"
+aclFile = "/opt/rocketmq/conf/plain_acl.yml"
+
 # Client request thread pool size (handles broker/client registration and
 # heartbeat traffic).
 # Default: 8. Suggested range: 16-32, scaled with expected concurrent

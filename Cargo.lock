@@ -4266,6 +4266,7 @@ dependencies = [
  "futures",
  "hashbrown 0.17.1",
  "parking_lot",
+ "rocketmq-auth",
  "rocketmq-controller",
  "rocketmq-error",
  "rocketmq-model",

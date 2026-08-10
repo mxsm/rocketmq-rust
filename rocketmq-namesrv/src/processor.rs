@@ -16,9 +16,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
+use rocketmq_auth::AuthRuntime;
+use rocketmq_error::RocketMQError;
 use rocketmq_observability::metrics::namesrv::NameServerMetrics;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_transport::api::v1::command_from_error_with_remark_and_opaque;
 use rocketmq_transport::api::v1::request_code_not_supported_with_opaque;
 use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ConnectionHandlerContext;
@@ -31,6 +34,7 @@ pub(crate) use self::cluster_test_request_processor::ClusterTestRouteLookup;
 pub(crate) use self::cluster_test_request_processor::TransportClusterTestRouteLookup;
 use crate::bootstrap::InFlightRequestTracker;
 use crate::processor::default_request_processor::DefaultRequestProcessor;
+use crate::security::classify_namesrv_request;
 
 mod client_request_processor;
 mod cluster_test_request_processor;
@@ -87,6 +91,7 @@ pub struct NameServerRequestProcessor {
     processor_table: HashMap<RequestCodeType, NameServerRequestProcessorWrapper>,
     default_request_processor: Option<NameServerRequestProcessorWrapper>,
     in_flight_requests: Option<Arc<InFlightRequestTracker>>,
+    auth_runtime: Option<Arc<AuthRuntime>>,
     metrics: NameServerMetrics,
 }
 
@@ -96,6 +101,7 @@ impl NameServerRequestProcessor {
             processor_table: HashMap::new(),
             default_request_processor: None,
             in_flight_requests: None,
+            auth_runtime: None,
             metrics: NameServerMetrics::noop(),
         }
     }
@@ -118,6 +124,11 @@ impl NameServerRequestProcessor {
     pub fn register_default_processor(&mut self, processor: NameServerRequestProcessorWrapper) {
         self.default_request_processor = Some(processor);
     }
+
+    pub(crate) fn with_auth_runtime(mut self, auth_runtime: Option<Arc<AuthRuntime>>) -> Self {
+        self.auth_runtime = auth_runtime;
+        self
+    }
 }
 
 impl RequestProcessor for NameServerRequestProcessor {
@@ -131,6 +142,34 @@ impl RequestProcessor for NameServerRequestProcessor {
             .in_flight_requests
             .as_ref()
             .map(|in_flight_requests| in_flight_requests.enter());
+        let request_class = match classify_namesrv_request(RequestCode::from(request.code())) {
+            Some(request_class) => request_class,
+            None => {
+                let error = RocketMQError::authentication_failed("request code is not authorized by NameServer");
+                return Ok(Some(command_from_error_with_remark_and_opaque(
+                    &error,
+                    "NameServer request is not authorized",
+                    request.opaque(),
+                )));
+            }
+        };
+        if let Some(auth_runtime) = &self.auth_runtime {
+            if auth_runtime.check_remoting(&ctx, request).await.is_err() {
+                tracing::warn!(
+                    remote_endpoint = %ctx.remote_address(),
+                    request_class = request_class.as_str(),
+                    reason_code = "protocol-auth-denied",
+                    "NameServer request denied"
+                );
+                let error =
+                    RocketMQError::authentication_failed("NameServer request authentication or authorization failed");
+                return Ok(Some(command_from_error_with_remark_and_opaque(
+                    &error,
+                    error.to_string(),
+                    request.opaque(),
+                )));
+            }
+        }
         let route_request_started = (request.code() == RequestCode::GetRouteinfoByTopic as i32).then(Instant::now);
         let response = match self.processor_table.get_mut(request.code_ref()) {
             None => match self.default_request_processor.as_mut() {
@@ -168,5 +207,67 @@ impl RequestProcessor for NameServerRequestProcessor {
             }
         }
         response
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::SocketAddr;
+    use std::time::Duration;
+
+    use rocketmq_auth::AuthConfig;
+    use rocketmq_auth::AuthRuntimeBuilder;
+    use rocketmq_protocol::code::response_code::ResponseCode;
+    use rocketmq_runtime::RuntimeContext;
+    use rocketmq_transport::api::v1::ConnectionHandlerContextWrapper;
+    use rocketmq_transport::test_support::Connection;
+    use rocketmq_transport::test_support::TestChannelBuilder;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn anonymous_broker_control_request_returns_no_permission_with_opaque() {
+        let runtime = RuntimeContext::from_current("namesrv-auth-processor-test");
+        let auth_runtime = Arc::new(
+            AuthRuntimeBuilder::new(
+                AuthConfig {
+                    authentication_enabled: true,
+                    authorization_enabled: true,
+                    ..AuthConfig::default()
+                },
+                runtime.service_context("namesrv.auth"),
+            )
+            .build()
+            .await
+            .expect("test auth runtime should initialize"),
+        );
+        let channel_service = runtime.service_context("namesrv.channel");
+        let (transport, _peer) = tokio::io::duplex(4096);
+        let channel = TestChannelBuilder::new(
+            Connection::new_with_plaintext_stream(transport),
+            channel_service.task_group().clone(),
+        )
+        .addresses(
+            SocketAddr::from(([127, 0, 0, 1], 9876)),
+            SocketAddr::from(([127, 0, 0, 1], 10911)),
+        )
+        .build()
+        .expect("test channel should initialize");
+        let context = Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let mut processor = NameServerRequestProcessor::new().with_auth_runtime(Some(Arc::clone(&auth_runtime)));
+        let mut request =
+            RemotingCommand::create_remoting_command(RequestCode::RegisterBroker.to_i32()).set_opaque(0x5a5a);
+
+        let response = processor
+            .process_request(channel, context, &mut request)
+            .await
+            .expect("authorization denial should be encoded as a response")
+            .expect("authorization denial should return a command");
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::NoPermission);
+        assert_eq!(response.opaque(), 0x5a5a);
+        auth_runtime.shutdown().await.expect("auth runtime should shut down");
+        let report = channel_service.task_group().shutdown(Duration::from_secs(1)).await;
+        report.assert_no_task_leak().expect("channel tasks should be owned");
     }
 }

@@ -41,6 +41,7 @@ otlp-logs     = ["otel-logs", "rocketmq-observability/otlp-logs"]
 
 [dependencies]
 rocketmq-model         = { workspace = true }
+rocketmq-auth          = { workspace = true }
 rocketmq-error         = { workspace = true }
 rocketmq-protocol      = { workspace = true }
 rocketmq-transport     = { workspace = true }

@@ -16,11 +16,13 @@ use std::collections::HashMap;
 use std::env;
 
 use cheetah_string::CheetahString;
+use rocketmq_auth::AuthConfig;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::mix_all::ROCKETMQ_HOME_ENV;
 use rocketmq_model::common::mix_all::ROCKETMQ_HOME_PROPERTY;
 use rocketmq_model::utils::serde_json_utils::SerdeJsonUtils;
+use rocketmq_protocol::protocol::body::broker_body::register_broker_body::RegisterBrokerDecodeLimits;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -62,6 +64,7 @@ pub(crate) enum NamesrvConfigKey {
     NeedWaitForService,
     WaitSecondsForService,
     DeleteTopicWithBrokerRegistration,
+    AllowInsecurePublicListener,
     ConfigBlackList,
 }
 
@@ -89,6 +92,7 @@ impl NamesrvConfigKey {
             "needWaitForService" => Self::NeedWaitForService,
             "waitSecondsForService" => Self::WaitSecondsForService,
             "deleteTopicWithBrokerRegistration" => Self::DeleteTopicWithBrokerRegistration,
+            "allowInsecurePublicListener" => Self::AllowInsecurePublicListener,
             "configBlackList" => Self::ConfigBlackList,
             _ => return None,
         })
@@ -114,9 +118,11 @@ impl NamesrvConfigKey {
             | Self::EnableControllerInNamesrv
             | Self::NeedWaitForService
             | Self::WaitSecondsForService => ConfigMutability::RestartRequired,
-            Self::RocketmqHome | Self::KvConfigPath | Self::ConfigStorePath | Self::ConfigBlackList => {
-                ConfigMutability::Unsupported
-            }
+            Self::RocketmqHome
+            | Self::KvConfigPath
+            | Self::ConfigStorePath
+            | Self::AllowInsecurePublicListener
+            | Self::ConfigBlackList => ConfigMutability::Unsupported,
         }
     }
 }
@@ -154,7 +160,8 @@ pub(crate) fn validate_namesrv_property(key: NamesrvConfigKey, value: &str) -> R
         | NamesrvConfigKey::NotifyMinBrokerIdChanged
         | NamesrvConfigKey::EnableControllerInNamesrv
         | NamesrvConfigKey::NeedWaitForService
-        | NamesrvConfigKey::DeleteTopicWithBrokerRegistration => {
+        | NamesrvConfigKey::DeleteTopicWithBrokerRegistration
+        | NamesrvConfigKey::AllowInsecurePublicListener => {
             value
                 .parse::<bool>()
                 .map_err(|_| invalid_value(key.java_name(), "expected a boolean"))?;
@@ -196,6 +203,7 @@ impl NamesrvConfigKey {
             Self::NeedWaitForService => "needWaitForService",
             Self::WaitSecondsForService => "waitSecondsForService",
             Self::DeleteTopicWithBrokerRegistration => "deleteTopicWithBrokerRegistration",
+            Self::AllowInsecurePublicListener => "allowInsecurePublicListener",
             Self::ConfigBlackList => "configBlackList",
         }
     }
@@ -368,6 +376,15 @@ pub struct NamesrvConfig {
     #[serde(alias = "deleteTopicWithBrokerRegistration", default)]
     pub delete_topic_with_broker_registration: bool,
 
+    /// Migration-only escape hatch for an unauthenticated non-loopback listener.
+    /// Secure deployments must leave this disabled and select the secure profile.
+    #[serde(alias = "allowInsecurePublicListener", default)]
+    pub allow_insecure_public_listener: bool,
+
+    /// Shared RocketMQ authentication and authorization configuration.
+    #[serde(flatten, default)]
+    pub auth_config: AuthConfig,
+
     #[serde(alias = "configBlackList", default = "defaults::config_black_list")]
     pub config_black_list: String,
 }
@@ -396,6 +413,8 @@ impl Default for NamesrvConfig {
             need_wait_for_service: false,
             wait_seconds_for_service: 45,
             delete_topic_with_broker_registration: false,
+            allow_insecure_public_listener: false,
+            auth_config: AuthConfig::default(),
             config_black_list: "configBlackList;configStorePath;kvConfigPath".to_string(),
         }
     }
@@ -484,6 +503,18 @@ impl NamesrvConfig {
         json_map.insert(
             "deleteTopicWithBrokerRegistration".to_string(),
             Value::String(self.delete_topic_with_broker_registration.to_string()),
+        );
+        json_map.insert(
+            "allowInsecurePublicListener".to_string(),
+            Value::String(self.allow_insecure_public_listener.to_string()),
+        );
+        json_map.insert(
+            "authenticationEnabled".to_string(),
+            Value::String(self.auth_config.authentication_enabled.to_string()),
+        );
+        json_map.insert(
+            "authorizationEnabled".to_string(),
+            Value::String(self.auth_config.authorization_enabled.to_string()),
         );
         json_map.insert(
             "configBlackList".to_string(),
@@ -607,6 +638,10 @@ impl NamesrvConfig {
                     self.delete_topic_with_broker_registration =
                         value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
+                "allowInsecurePublicListener" => {
+                    self.allow_insecure_public_listener =
+                        value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
+                }
                 "configBlackList" => {
                     self.config_black_list = value.to_string();
                 }
@@ -668,6 +703,14 @@ impl NamesrvConfig {
                 "must fit the platform channel capacity",
             )
         })
+    }
+
+    /// Builds the bounded registration decoder policy owned by NameServer.
+    ///
+    /// These compatibility limits deliberately remain startup constants in P0;
+    /// chunked registration and its generation protocol are introduced in P2.
+    pub(crate) fn register_broker_decode_limits(&self) -> RegisterBrokerDecodeLimits {
+        RegisterBrokerDecodeLimits::default()
     }
 }
 
@@ -783,6 +826,9 @@ mod tests {
         assert!(!config.need_wait_for_service);
         assert_eq!(config.wait_seconds_for_service, 45);
         assert!(!config.delete_topic_with_broker_registration);
+        assert!(!config.allow_insecure_public_listener);
+        assert!(!config.auth_config.authentication_enabled);
+        assert!(!config.auth_config.authorization_enabled);
         assert_eq!(
             config.config_black_list,
             "configBlackList;configStorePath;kvConfigPath".to_string()
@@ -845,6 +891,10 @@ mod tests {
             CheetahString::from("true"),
         );
         properties.insert(
+            CheetahString::from("allowInsecurePublicListener"),
+            CheetahString::from("true"),
+        );
+        properties.insert(
             CheetahString::from("configBlackList"),
             CheetahString::from("newBlackList"),
         );
@@ -872,6 +922,7 @@ mod tests {
         assert!(config.need_wait_for_service);
         assert_eq!(config.wait_seconds_for_service, 30);
         assert!(config.delete_topic_with_broker_registration);
+        assert!(config.allow_insecure_public_listener);
         assert_eq!(config.config_black_list, "newBlackList");
     }
 
@@ -953,6 +1004,18 @@ mod tests {
         assert_eq!(
             parsed["deleteTopicWithBrokerRegistration"].as_str().unwrap(),
             config.delete_topic_with_broker_registration.to_string()
+        );
+        assert_eq!(
+            parsed["allowInsecurePublicListener"].as_str().unwrap(),
+            config.allow_insecure_public_listener.to_string()
+        );
+        assert_eq!(
+            parsed["authenticationEnabled"].as_str().unwrap(),
+            config.auth_config.authentication_enabled.to_string()
+        );
+        assert_eq!(
+            parsed["authorizationEnabled"].as_str().unwrap(),
+            config.auth_config.authorization_enabled.to_string()
         );
         assert_eq!(parsed["configBlackList"], config.config_black_list);
     }

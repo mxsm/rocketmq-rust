@@ -178,6 +178,7 @@ fn apply_to_snapshot(
             | "needWaitForService"
             | "waitSecondsForService"
             | "deleteTopicWithBrokerRegistration"
+            | "allowInsecurePublicListener"
             | "configBlackList" => {
                 namesrv_updates.insert(key.clone(), value.clone());
             }
@@ -301,6 +302,11 @@ fn format_runtime_config(config_snapshot: &NameServerRuntimeConfig) -> RocketMQR
         &mut entries,
         "deleteTopicWithBrokerRegistration",
         name_server_config.delete_topic_with_broker_registration,
+    );
+    push_config_entry(
+        &mut entries,
+        "allowInsecurePublicListener",
+        name_server_config.allow_insecure_public_listener,
     );
     push_config_entry(&mut entries, "configBlackList", &name_server_config.config_black_list);
     push_config_entry(&mut entries, "listenPort", server_config.listen_port);

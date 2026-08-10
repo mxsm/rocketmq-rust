@@ -30,6 +30,8 @@ use std::time::Instant;
 
 use arc_swap::ArcSwap;
 use cheetah_string::CheetahString;
+use rocketmq_auth::AuthRuntime;
+use rocketmq_auth::AuthRuntimeBuilder;
 #[cfg(feature = "embedded-controller")]
 use rocketmq_controller::ControllerConfig;
 #[cfg(feature = "embedded-controller")]
@@ -52,6 +54,7 @@ use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::ShutdownReason;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
+use rocketmq_security_api::Principal;
 use rocketmq_transport::api::v1::ChannelEventListener;
 #[cfg(test)]
 use rocketmq_transport::api::v1::ClientShutdownReport;
@@ -60,6 +63,7 @@ use rocketmq_transport::api::v1::NetworkUtil;
 use rocketmq_transport::api::v1::RemotingClient;
 use rocketmq_transport::api::v1::ServerConfig;
 use rocketmq_transport::api::v1::TransportClientConfig;
+use rocketmq_transport::api::v1::TransportSecurity;
 use rocketmq_transport::api::v1::TransportServer;
 use rocketmq_transport::api::v1::TransportTelemetry;
 use tokio::sync::oneshot;
@@ -112,6 +116,8 @@ pub struct Builder {
     #[cfg(feature = "embedded-controller")]
     controller_config: Option<ControllerConfig>,
     cluster_test_route_lookup: Option<Arc<dyn ClusterTestRouteLookup>>,
+    transport_security: Option<Arc<TransportSecurity>>,
+    transport_principal: Option<Principal>,
     telemetry: TelemetryHandle,
     service_context: ChildServiceContext,
 }
@@ -417,19 +423,22 @@ impl NameServerRuntime {
         self.validate_state(&[RuntimeState::Created], "initialize")?;
         self.validate_runtime_config()?;
 
-        info!("Phase 1/4: Loading configuration...");
+        info!("Phase 1/5: Loading configuration...");
         if let Err(e) = self.load_config().await {
             error!("Initialization failed during config load: {}", e);
             return Err(e);
         }
 
-        info!("Phase 2/4: Initializing network server...");
+        info!("Phase 2/5: Initializing authentication and authorization...");
+        self.initialize_auth_runtime().await?;
+
+        info!("Phase 3/5: Initializing network server...");
         self.initialize_network_components();
 
-        info!("Phase 3/4: Registering RPC hooks...");
+        info!("Phase 4/5: Registering RPC hooks...");
         self.initialize_rpc_hooks();
 
-        info!("Phase 4/4: Starting scheduled tasks...");
+        info!("Phase 5/5: Starting scheduled tasks...");
         self.start_schedule_service()?;
 
         // Transition to Initialized state
@@ -535,6 +544,36 @@ impl NameServerRuntime {
         Ok(())
     }
 
+    async fn initialize_auth_runtime(&self) -> RocketMQResult<()> {
+        let namesrv_config = self.inner.name_server_config();
+        let mut auth_config = namesrv_config.auth_config.clone();
+        if !auth_config.authentication_enabled && !auth_config.authorization_enabled {
+            return Ok(());
+        }
+        if auth_config.config_name.trim().is_empty() {
+            auth_config.config_name = CheetahString::from_static_str("namesrv");
+        }
+        if auth_config.cluster_name.trim().is_empty() {
+            auth_config.cluster_name = CheetahString::from_string(namesrv_config.product_env_name.clone());
+        }
+        let service_context = self
+            .inner
+            .service_context
+            .as_ref()
+            .expect("NameServerRuntime always has an injected ChildServiceContext")
+            .component("namesrv.auth");
+        let mut builder = AuthRuntimeBuilder::new(auth_config, service_context);
+        if let Some(Ok(metadata_io)) = self.inner.config_metadata_io.as_ref() {
+            builder = builder.with_metadata_io_actor(metadata_io.clone());
+        }
+        let auth_runtime = Arc::new(builder.build().await?);
+        self.inner
+            .auth_runtime
+            .set(auth_runtime)
+            .map_err(|_| namesrv_runtime_state_error("NameServer auth runtime is already initialized"))?;
+        Ok(())
+    }
+
     /// Initialize network server for handling client requests
     fn initialize_network_components(&mut self) {
         let config = self.inner.server_config();
@@ -543,11 +582,15 @@ impl NameServerRuntime {
             .service_context
             .as_ref()
             .expect("NameServerRuntime always has an injected ChildServiceContext");
-        let server = TransportServer::new_with_telemetry(
+        let mut server = TransportServer::new_with_telemetry(
             config,
             context.component("namesrv.remoting-server"),
             self.inner.transport_telemetry.clone(),
         );
+        if let Some(transport_security) = &self.inner.transport_security {
+            server =
+                server.with_transport_security(Arc::clone(transport_security), self.inner.transport_principal.clone());
+        }
         self.server_inner = Some(server);
         debug!(
             "Network server initialized on port {}",
@@ -785,6 +828,16 @@ impl NameServerRuntime {
             shutdown_report.scheduled = Some(scheduled_report);
         }
 
+        if let Some(auth_runtime) = self.inner.auth_runtime() {
+            shutdown_report.auth_runtime_healthy = Some(match auth_runtime.shutdown_with_report().await {
+                Ok(report) => report.as_ref().is_none_or(ShutdownReport::is_healthy),
+                Err(error) => {
+                    warn!(%error, "NameServer auth runtime shutdown failed");
+                    false
+                }
+            });
+        }
+
         let metadata_deadline = MetadataDeadline::after(deadline.remaining());
         let metadata_persisted = match self.inner.kvconfig_manager().force_persist(metadata_deadline).await {
             Ok(()) => true,
@@ -960,7 +1013,8 @@ impl NameServerRuntime {
         let mut name_server_request_processor = NameServerRequestProcessor::new_with_in_flight_tracker(
             self.inner.in_flight_request_tracker(),
             self.inner.namesrv_metrics(),
-        );
+        )
+        .with_auth_runtime(self.inner.auth_runtime());
 
         // Register topic route query processor
         name_server_request_processor.register_processor(RequestCode::GetRouteinfoByTopic, route_request_processor);
@@ -1002,6 +1056,8 @@ impl Builder {
             #[cfg(feature = "embedded-controller")]
             controller_config: None,
             cluster_test_route_lookup: None,
+            transport_security: None,
+            transport_principal: None,
             telemetry,
             service_context,
         }
@@ -1045,6 +1101,18 @@ impl Builder {
         cluster_test_route_lookup: Arc<dyn ClusterTestRouteLookup>,
     ) -> Self {
         self.cluster_test_route_lookup = Some(cluster_test_route_lookup);
+        self
+    }
+
+    /// Installs the validated listener security boundary.
+    #[must_use]
+    pub fn set_transport_security(
+        mut self,
+        transport_security: Arc<TransportSecurity>,
+        principal: Option<Principal>,
+    ) -> Self {
+        self.transport_security = Some(transport_security);
+        self.transport_principal = principal;
         self
     }
 
@@ -1093,6 +1161,8 @@ impl Builder {
         } else {
             self.cluster_test_route_lookup
         };
+        let transport_security = self.transport_security;
+        let transport_principal = self.transport_principal;
 
         // Create remoting client
         let remoting_client = Arc::new(
@@ -1134,6 +1204,7 @@ impl Builder {
                 config_transaction_lock: tokio::sync::Mutex::new(()),
                 config_generations: parking_lot::RwLock::new(ConfigGenerationState::new(Arc::clone(&initial_config))),
                 config_metadata_io,
+                auth_runtime: OnceLock::new(),
                 route_info_manager: Arc::new(route_info_manager),
                 kvconfig_manager: Arc::new(KVConfigManager::new(runtime_handle.clone(), metadata_io.clone())),
                 remoting_client,
@@ -1147,6 +1218,8 @@ impl Builder {
                 namesrv_metrics: namesrv_metrics.clone(),
                 telemetry: self.telemetry.clone(),
                 transport_telemetry,
+                transport_security,
+                transport_principal,
             }
         });
 
@@ -1177,6 +1250,7 @@ pub(crate) struct NameServerRuntimeInner {
     config_transaction_lock: tokio::sync::Mutex<()>,
     config_generations: parking_lot::RwLock<ConfigGenerationState>,
     config_metadata_io: Option<Result<MetadataIoActor, rocketmq_runtime::MetadataIoError>>,
+    auth_runtime: OnceLock<Arc<AuthRuntime>>,
     route_info_manager: Arc<RouteInfoManager>,
     kvconfig_manager: Arc<KVConfigManager>,
     remoting_client: Arc<RemotingClient>,
@@ -1185,6 +1259,8 @@ pub(crate) struct NameServerRuntimeInner {
     controller_manager: OnceLock<Arc<ControllerManager>>,
     telemetry: TelemetryHandle,
     transport_telemetry: TransportTelemetry,
+    transport_security: Option<Arc<TransportSecurity>>,
+    transport_principal: Option<Principal>,
     cluster_test_route_lookup: Option<Arc<dyn ClusterTestRouteLookup>>,
     service_context: Option<ChildServiceContext>,
     task_group: OnceLock<TaskGroup>,
@@ -1313,6 +1389,10 @@ impl NameServerRuntimeInner {
 
     pub(crate) fn namesrv_metrics(&self) -> NameServerMetrics {
         self.namesrv_metrics.clone()
+    }
+
+    pub(crate) fn auth_runtime(&self) -> Option<Arc<AuthRuntime>> {
+        self.auth_runtime.get().cloned()
     }
 
     pub(crate) fn in_flight_request_guard(&self) -> InFlightRequestGuard {
@@ -1445,6 +1525,21 @@ impl NameServerRuntimeInner {
             &mut entries,
             "deleteTopicWithBrokerRegistration",
             name_server_config.delete_topic_with_broker_registration,
+        );
+        push_config_entry(
+            &mut entries,
+            "allowInsecurePublicListener",
+            name_server_config.allow_insecure_public_listener,
+        );
+        push_config_entry(
+            &mut entries,
+            "authenticationEnabled",
+            name_server_config.auth_config.authentication_enabled,
+        );
+        push_config_entry(
+            &mut entries,
+            "authorizationEnabled",
+            name_server_config.auth_config.authorization_enabled,
         );
         push_config_entry(&mut entries, "configBlackList", &name_server_config.config_black_list);
         push_config_entry(&mut entries, "listenPort", server_config.listen_port);
@@ -2212,7 +2307,7 @@ mod tests {
         let mut request = RemotingCommand::create_remoting_command(999_999);
 
         let response = process_with_name_server_processor(&bootstrap, &harness, &mut request).await;
-        assert_eq!(response.code(), ResponseCode::RequestCodeNotSupported as i32);
+        assert_eq!(response.code(), ResponseCode::NoPermission as i32);
 
         let report = bootstrap
             .name_server_runtime
