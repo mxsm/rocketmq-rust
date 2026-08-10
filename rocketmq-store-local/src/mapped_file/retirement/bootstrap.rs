@@ -12,9 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod executor;
+mod inventory;
 mod plan;
 mod proof;
 mod types;
+
+pub use executor::{
+    bootstrap_managed_lifecycle_under_exclusive_lock, InitialBootstrapCompletion, ManagedLifecycleBootstrapError,
+    ManagedLifecycleBootstrapErrorKind,
+};
 
 #[cfg(test)]
 #[path = "bootstrap_tests.rs"]

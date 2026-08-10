@@ -340,7 +340,7 @@ impl<T> ManagedMappedFileQueueGeneration<T> {
         })
     }
 
-    pub(in crate::mapped_file::retirement::registry) fn new_write_disabled() -> Self {
+    pub(in crate::mapped_file::retirement) fn new_write_disabled() -> Self {
         Self {
             slot: Arc::new(QueueSlot::new(Vec::new())),
         }

@@ -272,6 +272,216 @@ fn new_controller_test_store(
     )
 }
 
+#[cfg(any(target_os = "linux", windows))]
+#[tokio::test]
+async fn wave_b_managed_store_bootstraps_starts_and_creates_first_queue_segments() {
+    let temp_dir = tempdir().expect("temporary managed Store root");
+    let mut store = new_configured_test_store(
+        &temp_dir,
+        MessageStoreConfig {
+            enable_mapped_file_lifecycle_wave_b: true,
+            message_index_enable: false,
+            timer_wheel_enable: false,
+            enable_consume_queue_ext: false,
+            duplication_enable: true,
+            flush_disk_type: FlushDiskType::AsyncFlush,
+            mapped_file_size_commit_log: 16 * 1024,
+            mapped_file_size_consume_queue: 20 * 100,
+            ..MessageStoreConfig::default()
+        },
+    );
+    let topic = CheetahString::from_static_str("wave-b-first-managed-queue");
+
+    store.init().await.expect("initialize managed Store");
+    assert!(store.load().await, "reconcile and activate managed Store");
+    store.start().await.expect("start fully activated managed Store");
+
+    let result = store
+        .put_message(build_test_message(&topic, Bytes::from_static(b"managed-wave-b")))
+        .await;
+    assert_eq!(result.put_message_status(), PutMessageStatus::PutOk);
+
+    let mut queue_offset = 0;
+    for _ in 0..100 {
+        queue_offset = store.get_max_offset_in_queue(&topic, 0);
+        if queue_offset == 1 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    store.shutdown().await;
+
+    assert_eq!(queue_offset, 1);
+    assert!(temp_dir.path().join("commitlog/00000000000000000000").is_file());
+    assert!(temp_dir
+        .path()
+        .join("consumequeue/wave-b-first-managed-queue/0/00000000000000000000")
+        .is_file());
+}
+
+#[cfg(any(target_os = "linux", windows))]
+#[tokio::test]
+async fn wave_b_managed_truncation_durably_retires_the_tail_segment() {
+    let temp_dir = tempdir().expect("temporary managed Store root");
+    let mut store = new_configured_test_store(
+        &temp_dir,
+        MessageStoreConfig {
+            enable_mapped_file_lifecycle_wave_b: true,
+            message_index_enable: false,
+            timer_wheel_enable: false,
+            enable_consume_queue_ext: false,
+            duplication_enable: true,
+            flush_disk_type: FlushDiskType::AsyncFlush,
+            mapped_file_size_commit_log: 512,
+            mapped_file_size_consume_queue: 20 * 100,
+            ..MessageStoreConfig::default()
+        },
+    );
+    let topic = CheetahString::from_static_str("wave-b-managed-truncation");
+
+    store.init().await.expect("initialize managed Store");
+    assert!(store.load().await, "reconcile and activate managed Store");
+    store.start().await.expect("start fully activated managed Store");
+
+    let first = store
+        .put_message(build_test_message(&topic, Bytes::from(vec![1_u8; 245])))
+        .await;
+    assert_eq!(first.put_message_status(), PutMessageStatus::PutOk);
+    let first_append = first.append_message_result().expect("first append result");
+    let truncate_offset = first_append.wrote_offset + i64::from(first_append.wrote_bytes);
+    let second = store
+        .put_message(build_test_message(&topic, Bytes::from(vec![2_u8; 75])))
+        .await;
+    assert_eq!(second.put_message_status(), PutMessageStatus::PutOk);
+    assert_eq!(
+        second
+            .append_message_result()
+            .expect("second append result")
+            .wrote_offset,
+        512
+    );
+    assert!(
+        store.get_max_phy_offset() > truncate_offset,
+        "the second managed segment must be published before truncation"
+    );
+    let retired_tail = temp_dir.path().join("commitlog/00000000000000000512");
+    assert!(retired_tail.is_file());
+
+    assert!(store.truncate_files(truncate_offset).expect("truncate outcome"));
+    assert_eq!(store.get_max_phy_offset(), truncate_offset);
+
+    store.shutdown().await;
+
+    assert!(
+        !retired_tail.exists(),
+        "shutdown drain must complete the durable tail retirement"
+    );
+}
+
+#[cfg(any(target_os = "linux", windows))]
+#[tokio::test]
+async fn wave_b_managed_reset_durably_retires_the_tail_segment() {
+    let temp_dir = tempdir().expect("temporary managed Store root");
+    let mut store = new_configured_test_store(
+        &temp_dir,
+        MessageStoreConfig {
+            enable_mapped_file_lifecycle_wave_b: true,
+            message_index_enable: false,
+            timer_wheel_enable: false,
+            enable_consume_queue_ext: false,
+            duplication_enable: true,
+            flush_disk_type: FlushDiskType::AsyncFlush,
+            mapped_file_size_commit_log: 512,
+            mapped_file_size_consume_queue: 20 * 100,
+            ..MessageStoreConfig::default()
+        },
+    );
+    let topic = CheetahString::from_static_str("wave-b-managed-reset");
+
+    store.init().await.expect("initialize managed Store");
+    assert!(store.load().await, "reconcile and activate managed Store");
+    store.start().await.expect("start fully activated managed Store");
+
+    let first = store
+        .put_message(build_test_message(&topic, Bytes::from(vec![1_u8; 245])))
+        .await;
+    let first_append = first.append_message_result().expect("first append result");
+    let reset_offset = first_append.wrote_offset + i64::from(first_append.wrote_bytes);
+    let second = store
+        .put_message(build_test_message(&topic, Bytes::from(vec![2_u8; 75])))
+        .await;
+    assert_eq!(
+        second
+            .append_message_result()
+            .expect("second append result")
+            .wrote_offset,
+        512
+    );
+    let retired_tail = temp_dir.path().join("commitlog/00000000000000000512");
+
+    assert!(store.reset_write_offset(reset_offset));
+    assert_eq!(store.get_max_phy_offset(), reset_offset);
+
+    store.shutdown().await;
+
+    assert!(
+        !retired_tail.exists(),
+        "shutdown drain must complete the reset retirement"
+    );
+}
+
+#[cfg(any(target_os = "linux", windows))]
+#[tokio::test]
+async fn wave_b_managed_delete_last_durably_retires_the_exact_tail_segment() {
+    let temp_dir = tempdir().expect("temporary managed Store root");
+    let mut store = new_configured_test_store(
+        &temp_dir,
+        MessageStoreConfig {
+            enable_mapped_file_lifecycle_wave_b: true,
+            message_index_enable: false,
+            timer_wheel_enable: false,
+            enable_consume_queue_ext: false,
+            duplication_enable: true,
+            flush_disk_type: FlushDiskType::AsyncFlush,
+            mapped_file_size_commit_log: 512,
+            mapped_file_size_consume_queue: 20 * 100,
+            ..MessageStoreConfig::default()
+        },
+    );
+    let topic = CheetahString::from_static_str("wave-b-managed-delete-last");
+
+    store.init().await.expect("initialize managed Store");
+    assert!(store.load().await, "reconcile and activate managed Store");
+    store.start().await.expect("start fully activated managed Store");
+
+    let first = store
+        .put_message(build_test_message(&topic, Bytes::from(vec![1_u8; 245])))
+        .await;
+    let _first_append = first.append_message_result().expect("first append result");
+    let second = store
+        .put_message(build_test_message(&topic, Bytes::from(vec![2_u8; 75])))
+        .await;
+    assert_eq!(
+        second
+            .append_message_result()
+            .expect("second append result")
+            .wrote_offset,
+        512
+    );
+    let retired_tail = temp_dir.path().join("commitlog/00000000000000000512");
+
+    assert!(store.commit_log.try_delete_last_mapped_file_for_testing());
+    assert_eq!(store.get_max_phy_offset(), 512);
+
+    store.shutdown().await;
+
+    assert!(
+        !retired_tail.exists(),
+        "shutdown drain must complete the delete-last retirement"
+    );
+}
+
 #[tokio::test]
 async fn destroy_store_is_write_disabled_and_retries_without_namespace_mutation() {
     let temp_dir = tempdir().unwrap();

@@ -21,6 +21,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use fs2::FileExt;
+use rocketmq_store_local::mapped_file::bootstrap_managed_lifecycle_under_exclusive_lock;
 use rocketmq_store_local::mapped_file::inspect_managed_lifecycle_read_only;
 use rocketmq_store_local::mapped_file::inspect_managed_lifecycle_under_exclusive_lock;
 use rocketmq_store_local::mapped_file::LockedManagedLifecycleInspection;
@@ -99,11 +100,48 @@ impl StoreRootLease {
     }
 
     pub(super) fn classify(&self, operation: StoreOperation) -> Result<StoreRootMode, StoreError> {
-        self.validate_root_binding(operation)?;
-        let outcome = inspect_managed_lifecycle_read_only(&self.root)
-            .map_err(|error| managed_lifecycle_read_error(operation, &self.configured_root, error))?;
+        let outcome = self.lifecycle_outcome(operation)?;
         StoreRootMode::from_read_outcome(outcome)
             .map_err(|reason| managed_lifecycle_fence(operation, recovery_requirement(reason)))
+    }
+
+    pub(super) fn lifecycle_outcome(
+        &self,
+        operation: StoreOperation,
+    ) -> Result<ManagedLifecycleReadOutcome, StoreError> {
+        self.validate_root_binding(operation)?;
+        inspect_managed_lifecycle_read_only(&self.root)
+            .map_err(|error| managed_lifecycle_read_error(operation, &self.configured_root, error))
+    }
+
+    pub(super) fn bootstrap_managed_lifecycle(&self, operation: StoreOperation) -> Result<(), StoreError> {
+        self.validate_root_binding(operation)?;
+        // SAFETY: this lease retains the exact no-follow Store-root and lock handles, owns the
+        // exclusive lock, and revalidated both configured-path bindings immediately above. Store
+        // construction has not published or started any legacy component.
+        unsafe { bootstrap_managed_lifecycle_under_exclusive_lock(&self.root) }.map_err(|error| {
+            let kind = match error.kind() {
+                rocketmq_store_local::mapped_file::ManagedLifecycleBootstrapErrorKind::UnsupportedPlatform => {
+                    StoreErrorKind::Unsupported
+                }
+                rocketmq_store_local::mapped_file::ManagedLifecycleBootstrapErrorKind::Io
+                | rocketmq_store_local::mapped_file::ManagedLifecycleBootstrapErrorKind::Inventory => {
+                    StoreErrorKind::Storage
+                }
+                rocketmq_store_local::mapped_file::ManagedLifecycleBootstrapErrorKind::InvalidIdentity
+                | rocketmq_store_local::mapped_file::ManagedLifecycleBootstrapErrorKind::InvalidArtifact => {
+                    StoreErrorKind::Corruption
+                }
+                rocketmq_store_local::mapped_file::ManagedLifecycleBootstrapErrorKind::RecoveryRequired => {
+                    StoreErrorKind::Unavailable
+                }
+            };
+            StoreError::new(kind, operation)
+                .in_component(StoreComponent::MappedFile)
+                .with_detail("explicit Wave-B bootstrap failed before Store component construction")
+                .with_source(error)
+        })?;
+        self.validate_root_binding(operation)
     }
 
     pub(super) fn acquire_unclassified(configured_root: &Path, operation: StoreOperation) -> Result<Self, StoreError> {

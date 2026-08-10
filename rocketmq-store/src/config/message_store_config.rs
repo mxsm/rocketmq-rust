@@ -1165,6 +1165,13 @@ pub struct MessageStoreConfig {
     #[serde(default)]
     pub mapped_file_swap_enable: bool,
 
+    /// Enables the crash-durable mapped-file lifecycle writer after Wave-A readers are deployed.
+    ///
+    /// This remains disabled by default. Enabling it does not bypass replay, reconciliation,
+    /// retained-root validation, or platform writer qualification.
+    #[serde(default)]
+    pub enable_mapped_file_lifecycle_wave_b: bool,
+
     #[serde(default)]
     pub commit_log_force_swap_map_interval: usize,
 
@@ -1550,6 +1557,7 @@ impl Default for MessageStoreConfig {
             correct_logic_min_offset_sleep_interval: 0,
             correct_logic_min_offset_force_interval: 0,
             mapped_file_swap_enable: false,
+            enable_mapped_file_lifecycle_wave_b: false,
             commit_log_force_swap_map_interval: 0,
             commit_log_swap_map_interval: 0,
             commit_log_swap_map_reserve_file_num: 0,
@@ -2316,6 +2324,10 @@ impl MessageStoreConfig {
             self.mapped_file_swap_enable.to_string(),
         );
         properties.insert(
+            "enableMappedFileLifecycleWaveB".to_string(),
+            self.enable_mapped_file_lifecycle_wave_b.to_string(),
+        );
+        properties.insert(
             "commitLogForceSwapMapInterval".to_string(),
             self.commit_log_force_swap_map_interval.to_string(),
         );
@@ -2566,7 +2578,22 @@ mod tests {
 
     #[test]
     fn default_max_checksum_range_matches_java_default() {
-        assert_eq!(MessageStoreConfig::default().max_checksum_range, 1024 * 1024 * 1024);
+        let config = MessageStoreConfig::default();
+
+        assert_eq!(config.max_checksum_range, 1024 * 1024 * 1024);
+        assert!(!config.enable_mapped_file_lifecycle_wave_b);
+        assert_eq!(config.get_properties()["enableMappedFileLifecycleWaveB"], "false");
+    }
+
+    #[test]
+    fn serde_requires_an_explicit_wave_b_opt_in() -> Result<(), serde_json::Error> {
+        let legacy: MessageStoreConfig = serde_json::from_str("{}")?;
+        let enabled: MessageStoreConfig = serde_json::from_str(r#"{"enableMappedFileLifecycleWaveB":true}"#)?;
+
+        assert!(!legacy.enable_mapped_file_lifecycle_wave_b);
+        assert!(enabled.enable_mapped_file_lifecycle_wave_b);
+        assert_eq!(enabled.get_properties()["enableMappedFileLifecycleWaveB"], "true");
+        Ok(())
     }
 
     #[test]

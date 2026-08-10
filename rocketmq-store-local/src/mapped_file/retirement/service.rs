@@ -290,6 +290,15 @@ impl ManagedLifecycleRuntime {
         }
     }
 
+    /// Creates an empty queue generation bound to this managed runtime's trust boundary.
+    ///
+    /// The generation contains no owner and cannot publish one without a durable creation
+    /// receipt. Admission remains controlled by the runtime when allocation is attempted.
+    #[must_use]
+    pub fn empty_queue_generation(&self) -> ManagedMappedFileQueueGeneration<DefaultMappedFile> {
+        ManagedMappedFileQueueGeneration::new_write_disabled()
+    }
+
     /// Executes at most `max_actions` durable or namespace transitions synchronously.
     ///
     /// This function performs blocking file operations and must not run directly on an async

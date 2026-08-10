@@ -14,13 +14,13 @@
 
 //! Proof-gated staging for managed mapped-file lifecycle activation.
 
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::path::PathBuf;
 
 use thiserror::Error;
 
-use super::identity::StoreUuid;
 use super::io::FileLedgerIo;
 use super::platform::NamespaceVerificationError;
 use super::platform::VerifiedNamespaceRoot;
@@ -47,11 +47,9 @@ pub enum ManagedLifecycleActivationErrorKind {
     DuplicateQueue,
     StagingFailed,
     UnclaimedSegments,
-    FleetFenceMismatch,
     Writer,
     Namespace,
 }
-
 #[derive(Debug, Error)]
 enum ManagedLifecycleActivationSource {
     #[error(transparent)]
@@ -62,12 +60,34 @@ enum ManagedLifecycleActivationSource {
     QueueLoad(#[source] std::io::Error),
     #[error("managed queue directory was staged more than once: {0}")]
     DuplicateQueue(String),
+    #[error("managed queue inventory is invalid: {0}")]
+    InvalidQueueInventory(String),
     #[error(transparent)]
     Preflight(#[from] ActivationPreflightError),
     #[error(transparent)]
     Writer(#[from] ManagedLedgerWriterError),
     #[error(transparent)]
     Namespace(#[from] NamespaceVerificationError),
+}
+
+/// One replay-authorized mapped-file queue that must be staged before activation.
+#[doc(hidden)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedQueueDescriptor {
+    directory: Box<str>,
+    expected_file_length: u64,
+}
+
+impl ManagedQueueDescriptor {
+    /// Store-relative queue directory containing canonical numeric segments.
+    pub fn directory(&self) -> &str {
+        &self.directory
+    }
+
+    /// Exact mapped-file length recorded for every segment in this queue.
+    pub const fn expected_file_length(&self) -> u64 {
+        self.expected_file_length
+    }
 }
 
 /// Opaque activation failure with a stable public category and a retained typed source.
@@ -145,6 +165,12 @@ impl PreparedManagedLifecycleActivation {
     #[doc(hidden)]
     pub fn active_segment_paths(&self) -> impl Iterator<Item = &str> {
         self.session.active_segment_paths()
+    }
+
+    /// Returns the complete replay-authorized queue inventory without claiming any handles.
+    #[doc(hidden)]
+    pub fn queue_descriptors(&self) -> Result<Vec<ManagedQueueDescriptor>, ManagedLifecycleActivationError> {
+        collect_queue_descriptors(self.session.active_segment_bindings())
     }
 
     /// Number of active segment handles not yet transferred into a staged queue generation.
@@ -228,21 +254,17 @@ impl PreparedManagedLifecycleActivation {
         Ok(generation)
     }
 
-    /// Final activation is deliberately private to the retirement trust boundary.
+    /// Activates a completely staged managed lifecycle generation.
     ///
-    /// Wave A has no production constructor for `WaveBActivationEvidence`; therefore Store code
-    /// cannot call this method until the independent fleet-fencing sign-off is integrated.
-    pub(in crate::mapped_file::retirement) fn activate(
-        self,
-        evidence: WaveBActivationEvidence,
-    ) -> Result<ManagedLifecycleRuntime, ManagedLifecycleActivationError> {
-        let store_uuid = self.session.writer_frontier().store_uuid();
+    /// The Store calls this only from its explicit Wave-B mode. Safety remains bound to the
+    /// retained exclusive root lease, complete replay/reconciliation, queue staging, and verified
+    /// writer/namespace capabilities; no cryptographic signing protocol is required.
+    #[doc(hidden)]
+    pub fn activate(self) -> Result<ManagedLifecycleRuntime, ManagedLifecycleActivationError> {
         validate_activation_preflight(
             self.session.unclaimed_active_count(),
             self.staging_failed,
             self.store_root.is_some(),
-            store_uuid,
-            evidence,
         )
         .map_err(|source| {
             let kind = match source {
@@ -253,7 +275,6 @@ impl PreparedManagedLifecycleActivation {
                 ActivationPreflightError::UnclaimedSegments { .. } => {
                     ManagedLifecycleActivationErrorKind::UnclaimedSegments
                 }
-                ActivationPreflightError::StoreUuidMismatch => ManagedLifecycleActivationErrorKind::FleetFenceMismatch,
             };
             ManagedLifecycleActivationError::new(kind, source)
         })?;
@@ -284,6 +305,44 @@ impl PreparedManagedLifecycleActivation {
     }
 }
 
+fn collect_queue_descriptors<'a>(
+    bindings: impl IntoIterator<Item = (&'a str, u64)>,
+) -> Result<Vec<ManagedQueueDescriptor>, ManagedLifecycleActivationError> {
+    let mut queues = BTreeMap::<Box<str>, u64>::new();
+    for (path, expected_file_length) in bindings {
+        let Some((directory, _file_name)) = path.rsplit_once('/') else {
+            return Err(ManagedLifecycleActivationError::new(
+                ManagedLifecycleActivationErrorKind::StagingFailed,
+                ManagedLifecycleActivationSource::InvalidQueueInventory(format!(
+                    "active segment {path:?} has no parent directory"
+                )),
+            ));
+        };
+        match queues.entry(directory.into()) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(expected_file_length);
+            }
+            std::collections::btree_map::Entry::Occupied(entry) if *entry.get() != expected_file_length => {
+                return Err(ManagedLifecycleActivationError::new(
+                    ManagedLifecycleActivationErrorKind::StagingFailed,
+                    ManagedLifecycleActivationSource::InvalidQueueInventory(format!(
+                        "queue {directory:?} contains lengths {} and {expected_file_length}",
+                        entry.get()
+                    )),
+                ));
+            }
+            std::collections::btree_map::Entry::Occupied(_) => {}
+        }
+    }
+    Ok(queues
+        .into_iter()
+        .map(|(directory, expected_file_length)| ManagedQueueDescriptor {
+            directory,
+            expected_file_length,
+        })
+        .collect())
+}
+
 /// Fully activated in-process authority. Construction remains unreachable in production Wave A.
 pub(in crate::mapped_file::retirement) struct ActiveManagedLifecycle {
     pub(super) session: ReconciledLifecycleSession,
@@ -304,21 +363,6 @@ impl std::fmt::Debug for ActiveManagedLifecycle {
     }
 }
 
-/// Independent operations evidence required before Wave-B can become reachable.
-///
-/// There is intentionally no production constructor. A later, separately reviewed activation
-/// commit must bind this value to the fleet inventory and filesystem-access fencing artifact.
-pub(in crate::mapped_file::retirement) struct WaveBActivationEvidence {
-    store_uuid: StoreUuid,
-}
-
-impl WaveBActivationEvidence {
-    #[cfg(test)]
-    const fn for_test(store_uuid: StoreUuid) -> Self {
-        Self { store_uuid }
-    }
-}
-
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 enum ActivationPreflightError {
     #[error("a previous queue-staging attempt failed")]
@@ -329,16 +373,12 @@ enum ActivationPreflightError {
     StoreRootMismatch,
     #[error("{count} replay-authorized active segments remain unclaimed")]
     UnclaimedSegments { count: usize },
-    #[error("fleet-fencing evidence belongs to another Store UUID")]
-    StoreUuidMismatch,
 }
 
 fn validate_activation_preflight(
     unclaimed_active: usize,
     staging_failed: bool,
     store_root_bound: bool,
-    store_uuid: StoreUuid,
-    evidence: WaveBActivationEvidence,
 ) -> Result<(), ActivationPreflightError> {
     if staging_failed {
         return Err(ActivationPreflightError::StagingFailed);
@@ -351,46 +391,17 @@ fn validate_activation_preflight(
             count: unclaimed_active,
         });
     }
-    if evidence.store_uuid != store_uuid {
-        return Err(ActivationPreflightError::StoreUuidMismatch);
-    }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mapped_file::retirement::identity::StoreUuid;
-
-    macro_rules! assert_not_clone {
-        ($type:ty) => {
-            const _: fn() = || {
-                trait AmbiguousIfClone<A> {
-                    fn marker() {}
-                }
-                impl<T: ?Sized> AmbiguousIfClone<()> for T {}
-                impl<T: ?Sized + Clone> AmbiguousIfClone<u8> for T {}
-                let _ = <$type as AmbiguousIfClone<_>>::marker;
-            };
-        };
-    }
-
-    assert_not_clone!(WaveBActivationEvidence);
-
-    fn store_uuid(byte: u8) -> StoreUuid {
-        StoreUuid::new([byte; 16]).expect("test Store UUID is nonzero")
-    }
 
     #[test]
     fn unclaimed_segments_block_activation_before_writer_open() {
         assert_eq!(
-            validate_activation_preflight(
-                1,
-                false,
-                true,
-                store_uuid(1),
-                WaveBActivationEvidence::for_test(store_uuid(1))
-            ),
+            validate_activation_preflight(1, false, true),
             Err(ActivationPreflightError::UnclaimedSegments { count: 1 })
         );
     }
@@ -398,13 +409,7 @@ mod tests {
     #[test]
     fn an_earlier_staging_failure_permanently_blocks_activation() {
         assert_eq!(
-            validate_activation_preflight(
-                0,
-                true,
-                true,
-                store_uuid(1),
-                WaveBActivationEvidence::for_test(store_uuid(1))
-            ),
+            validate_activation_preflight(0, true, true),
             Err(ActivationPreflightError::StagingFailed)
         );
     }
@@ -412,51 +417,57 @@ mod tests {
     #[test]
     fn activation_requires_the_exact_store_root_used_for_queue_staging() {
         assert_eq!(
-            validate_activation_preflight(
-                0,
-                false,
-                false,
-                store_uuid(1),
-                WaveBActivationEvidence::for_test(store_uuid(1))
-            ),
+            validate_activation_preflight(0, false, false),
             Err(ActivationPreflightError::MissingStoreRoot)
         );
     }
 
     #[test]
-    fn fleet_fence_evidence_is_bound_to_the_exact_store_uuid() {
-        assert_eq!(
-            validate_activation_preflight(
-                0,
-                false,
-                true,
-                store_uuid(1),
-                WaveBActivationEvidence::for_test(store_uuid(2))
-            ),
-            Err(ActivationPreflightError::StoreUuidMismatch)
-        );
-        assert_eq!(
-            validate_activation_preflight(
-                0,
-                false,
-                true,
-                store_uuid(1),
-                WaveBActivationEvidence::for_test(store_uuid(1))
-            ),
-            Ok(())
-        );
-    }
-
-    #[test]
-    fn production_source_has_no_fleet_fence_constructor() {
+    fn explicit_activation_has_no_signature_or_force_bypass_surface() {
         let source = include_str!("activation.rs").replace("\r\n", "\n");
         let production = source
             .rsplit_once("\n#[cfg(test)]\nmod tests {")
             .expect("tests follow production activation code")
             .0;
 
-        assert!(!production.contains("WaveBActivationEvidence::new"));
-        assert!(!production.contains("pub fn for_test"));
-        assert!(!production.contains("managed_lifecycle_write_enabled"));
+        assert!(production.contains("pub fn activate(self)"));
+        assert!(!production.contains("ed25519"));
+        assert!(!production.contains("signature"));
+        assert!(!production.contains("force"));
+    }
+
+    #[test]
+    fn queue_inventory_groups_segments_by_directory_in_canonical_order() {
+        let queues = collect_queue_descriptors([
+            ("consumequeue/topic-a/0/00000000000000000000", 300_000),
+            ("commitlog/00000000001073741824", 1_073_741_824),
+            ("commitlog/00000000000000000000", 1_073_741_824),
+        ])
+        .expect("valid replay inventory groups by queue directory");
+
+        assert_eq!(
+            queues,
+            vec![
+                ManagedQueueDescriptor {
+                    directory: "commitlog".into(),
+                    expected_file_length: 1_073_741_824,
+                },
+                ManagedQueueDescriptor {
+                    directory: "consumequeue/topic-a/0".into(),
+                    expected_file_length: 300_000,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn queue_inventory_rejects_mixed_segment_lengths_before_claiming_handles() {
+        let error = collect_queue_descriptors([
+            ("commitlog/00000000000000000000", 1_073_741_824),
+            ("commitlog/00000000001073741824", 512),
+        ])
+        .expect_err("one queue cannot mix mapped-file lengths");
+
+        assert_eq!(error.kind(), ManagedLifecycleActivationErrorKind::StagingFailed);
     }
 }

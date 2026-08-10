@@ -39,9 +39,12 @@ use rocketmq_store_local::consume_queue::root::ConsumeQueueDispatchMetadata;
 use rocketmq_store_local::consume_queue::root::ConsumeQueueDispatchMode;
 use rocketmq_store_local::consume_queue::root::ConsumeQueueDispatchOutcome;
 use rocketmq_store_local::consume_queue::single::ConsumeQueueTimeBoundary;
+use rocketmq_store_local::mapped_file::ManagedLifecycleRuntime;
+use rocketmq_store_local::mapped_file::ManagedMappedFileQueueGeneration;
 use tracing::info;
 use tracing::warn;
 
+use crate::base::allocate_mapped_file_service::AllocateMappedFileService;
 use crate::base::dispatch_request::DispatchRequest;
 use crate::base::swappable::Swappable;
 use crate::config::message_store_config::MessageStoreConfig;
@@ -72,6 +75,15 @@ pub struct BatchConsumeQueue {
 }
 
 impl BatchConsumeQueue {
+    pub(crate) fn install_reconciled_generation(
+        &self,
+        generation: ManagedMappedFileQueueGeneration<DefaultMappedFile>,
+        runtime: ManagedLifecycleRuntime,
+    ) -> bool {
+        self.mapped_file_queue.install_reconciled_generation(generation)
+            && self.mapped_file_queue.bind_managed_runtime(runtime)
+    }
+
     #[inline]
     pub fn new(
         topic: CheetahString,
@@ -81,19 +93,67 @@ impl BatchConsumeQueue {
         subfolder: Option<CheetahString>,
         message_store_config: Arc<MessageStoreConfig>,
     ) -> Self {
+        Self::new_inner(
+            topic,
+            queue_id,
+            store_path,
+            mapped_file_size,
+            subfolder,
+            message_store_config,
+            None,
+        )
+    }
+
+    pub(crate) fn new_managed(
+        topic: CheetahString,
+        queue_id: i32,
+        store_path: CheetahString,
+        mapped_file_size: usize,
+        subfolder: Option<CheetahString>,
+        message_store_config: Arc<MessageStoreConfig>,
+        allocate_mapped_file_service: AllocateMappedFileService,
+        runtime: ManagedLifecycleRuntime,
+    ) -> Self {
+        Self::new_inner(
+            topic,
+            queue_id,
+            store_path,
+            mapped_file_size,
+            subfolder,
+            message_store_config,
+            Some((allocate_mapped_file_service, runtime)),
+        )
+    }
+
+    fn new_inner(
+        topic: CheetahString,
+        queue_id: i32,
+        store_path: CheetahString,
+        mapped_file_size: usize,
+        subfolder: Option<CheetahString>,
+        message_store_config: Arc<MessageStoreConfig>,
+        managed: Option<(AllocateMappedFileService, ManagedLifecycleRuntime)>,
+    ) -> Self {
         let commit_log_size = message_store_config.mapped_file_size_commit_log;
 
-        let mapped_file_queue = if let Some(subfolder) = subfolder {
-            let queue_dir = PathBuf::from(store_path.as_str())
+        let queue_dir = if let Some(subfolder) = subfolder {
+            PathBuf::from(store_path.as_str())
                 .join(topic.as_str())
                 .join(queue_id.to_string())
-                .join(subfolder.as_str());
-            MappedFileQueue::new(queue_dir.to_string_lossy().to_string(), mapped_file_size as u64, None)
+                .join(subfolder.as_str())
         } else {
-            let queue_dir = PathBuf::from(store_path.as_str())
+            PathBuf::from(store_path.as_str())
                 .join(topic.as_str())
-                .join(queue_id.to_string());
-            MappedFileQueue::new(queue_dir.to_string_lossy().to_string(), mapped_file_size as u64, None)
+                .join(queue_id.to_string())
+        };
+        let mapped_file_queue = match managed {
+            Some((allocator, runtime)) => MappedFileQueue::new_managed(
+                queue_dir.to_string_lossy().to_string(),
+                mapped_file_size as u64,
+                allocator,
+                runtime,
+            ),
+            None => MappedFileQueue::new(queue_dir.to_string_lossy().to_string(), mapped_file_size as u64, None),
         };
 
         BatchConsumeQueue {

@@ -400,7 +400,7 @@ impl LocalFileMessageStore {
             );
             return false;
         }
-        debug_assert_eq!(self.store_root_mode, StoreRootMode::Legacy);
+        let managed = self.store_root_mode == StoreRootMode::Managed;
         let last_exit_ok = match self.is_temp_file_exist() {
             Ok(present) => !present,
             Err(error) => {
@@ -413,13 +413,23 @@ impl LocalFileMessageStore {
             if last_exit_ok { "normally" } else { "abnormally" },
             self.message_store_config.store_path_root_dir
         );
-        //load Commit log-- init commit mapped file queue
-        let mut result = self.commit_log.load();
-        if !result {
-            return result;
-        }
-        // load Consume Queue-- init Consume log mapped file queue
-        result &= self.consume_queue_store.load();
+        let mut result = if managed {
+            match self.activate_managed_queue_runtime() {
+                Ok(()) => true,
+                Err(error) => {
+                    error!(error = %error, "managed queue activation failed before recovery");
+                    return false;
+                }
+            }
+        } else {
+            //load Commit log-- init commit mapped file queue
+            let loaded_commit_log = self.commit_log.load();
+            if !loaded_commit_log {
+                return false;
+            }
+            // load Consume Queue-- init Consume log mapped file queue
+            loaded_commit_log && self.consume_queue_store.load()
+        };
 
         if self.message_store_config.enable_compaction {
             let required_wal_position = self.commit_log.get_max_offset();
@@ -495,12 +505,13 @@ impl LocalFileMessageStore {
     pub(super) async fn start_store(&mut self) -> Result<(), StoreError> {
         self.validate_supported_configuration()?;
         self.ensure_operational_root_lease(StoreOperation::Start)?;
-        if self.store_root_mode == StoreRootMode::Managed {
-            return Err(StoreError::new(StoreErrorKind::Unsupported, StoreOperation::Start)
-                .in_component(StoreComponent::MappedFile)
-                .with_detail(
-                    "managed mapped-file lifecycle is read-only until Wave-B queue, registry, and reaper activation is complete",
-                ));
+        if self.store_root_mode == StoreRootMode::Managed
+            && (self.managed_lifecycle_runtime.is_none() || self.mapped_file_retirement_service.is_none())
+        {
+            return Err(StoreError::invalid_state(
+                StoreOperation::Start,
+                "managed mapped-file lifecycle has not completed queue/runtime/reaper activation",
+            ));
         }
         match self.lifecycle_state() {
             LocalStoreState::Initialized => {}
@@ -600,6 +611,15 @@ impl LocalFileMessageStore {
                 Ok(())
             }
             Err(error) => {
+                if self.store_root_mode == StoreRootMode::Managed {
+                    if let Some(runtime) = self.managed_lifecycle_runtime.as_ref() {
+                        runtime.begin_shutdown();
+                    }
+                    if let Some(service) = self.mapped_file_retirement_service.as_mut() {
+                        let _ = service.cancel_drain_and_await().await;
+                    }
+                    self.allocate_mapped_file_service.shutdown().await;
+                }
                 if self.background_index_rebuild_service.has_task_group() {
                     self.background_index_rebuild_service.shutdown().await;
                 }
@@ -634,11 +654,6 @@ impl LocalFileMessageStore {
                     "message store cannot be initialized while recovering".to_string(),
                 ));
             }
-        }
-
-        if self.store_root_mode == StoreRootMode::Managed {
-            self.set_lifecycle_state(LocalStoreState::Initialized);
-            return Ok(());
         }
 
         if !Self::is_dledger_commit_log_enabled_config(self.message_store_config.as_ref())
@@ -879,9 +894,10 @@ impl LocalFileMessageStore {
 
     /// Attempts an explicit Store-level destroy without bypassing mapped-file retirement.
     ///
-    /// Wave A keeps lifecycle writes disabled. Until the durable retirement handoff and deletion
-    /// reaper are wired, an eligible request is fenced as retry-pending and performs no consume
-    /// queue, commitlog, index, or metadata namespace mutation.
+    /// Wave-B enables durable per-segment retirement, but whole-Store destruction remains disabled
+    /// until every Store-owned namespace and metadata artifact participates in the same durable
+    /// handoff. An eligible request is fenced as retry-pending and performs no consume queue,
+    /// commitlog, index, or metadata namespace mutation.
     #[must_use]
     pub(super) fn destroy_store_with_outcome(&mut self) -> bool {
         if self.store_root_lease_state == StoreRootLeaseState::Destroyed {
@@ -901,9 +917,7 @@ impl LocalFileMessageStore {
             return false;
         }
         self.store_root_lease_state = StoreRootLeaseState::DestroyRetryPending;
-        warn!(
-            "message store explicit destroy is write-disabled until durable retirement handoff and reaping are active"
-        );
+        warn!("message store explicit destroy is write-disabled until all Store namespaces support durable retirement");
         false
     }
 }

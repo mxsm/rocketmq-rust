@@ -92,6 +92,8 @@ use crate::consume_queue::mapped_file_queue::MappedFileWarmupStats;
 use crate::ha::general_ha_service::GeneralHAService;
 use crate::ha::ha_service::HAService;
 use crate::log_file::cold_data_check_service::ColdDataCheckService;
+use rocketmq_store_local::mapped_file::ManagedLifecycleRuntime;
+use rocketmq_store_local::mapped_file::ManagedMappedFileQueueGeneration;
 // Import the optimized loader module
 use crate::base::flush_manager::SyncFlushRuntimeInfo;
 use crate::log_file::commit_log_loader::CommitLogLoader;
@@ -206,7 +208,18 @@ macro_rules! apply_recovery_completion {
     ($commit_log:ident, $completion:expr, $max_consume_queue_offset:expr $(,)?) => {{
         match $completion {
             CommitLogRecoveryCompletion::Empty => {
-                if $commit_log.consume_queue_store.destroy_with_outcome() {
+                if $commit_log.mapped_file_queue.is_managed() {
+                    if $commit_log.consume_queue_store.get_total_size() == 0 {
+                        $commit_log.mapped_file_queue.set_flushed_where(0);
+                        $commit_log.mapped_file_queue.set_committed_where(0);
+                        true
+                    } else {
+                        warn!(
+                            "managed empty CommitLog recovery found consume-queue data that requires durable retirement"
+                        );
+                        false
+                    }
+                } else if $commit_log.consume_queue_store.destroy_with_outcome() {
                     if $commit_log.consume_queue_store.load_after_destroy() {
                         $commit_log.mapped_file_queue.set_flushed_where(0);
                         $commit_log.mapped_file_queue.set_committed_where(0);
@@ -396,6 +409,16 @@ impl DerefMut for CommitLog {
 }
 
 impl CommitLog {
+    /// Installs the reconciled managed CommitLog generation before Store workers start.
+    pub(crate) fn install_reconciled_generation(
+        &self,
+        generation: ManagedMappedFileQueueGeneration<DefaultMappedFile>,
+        runtime: ManagedLifecycleRuntime,
+    ) -> bool {
+        self.mapped_file_queue.install_reconciled_generation(generation)
+            && self.mapped_file_queue.bind_managed_runtime(runtime)
+    }
+
     pub(crate) fn try_new(
         runtime_scope: crate::runtime::StoreRuntimeScope,
         message_store_config: Arc<MessageStoreConfig>,
@@ -2223,6 +2246,11 @@ impl CommitLog {
     #[cfg(test)]
     pub(crate) fn last_mapped_file_for_testing(&self) -> Option<Arc<DefaultMappedFile>> {
         self.mapped_file_queue.get_last_mapped_file()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn try_delete_last_mapped_file_for_testing(&mut self) -> bool {
+        self.mapped_file_queue.try_delete_last_mapped_file()
     }
 
     #[inline]
