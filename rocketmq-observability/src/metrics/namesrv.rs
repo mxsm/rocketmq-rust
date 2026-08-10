@@ -14,6 +14,10 @@
 
 pub use crate::semantic::metrics::NAMESRV_ACTIVE_BROKERS;
 pub use crate::semantic::metrics::NAMESRV_BROKER_REGISTRATIONS;
+pub use crate::semantic::metrics::NAMESRV_EXPIRY_SCAN_BROKERS;
+pub use crate::semantic::metrics::NAMESRV_EXPIRY_SCAN_DURATION;
+pub use crate::semantic::metrics::NAMESRV_REGISTRATION_DIRTY_TOPICS;
+pub use crate::semantic::metrics::NAMESRV_REGISTRATION_EVENTS_TOTAL;
 pub use crate::semantic::metrics::NAMESRV_ROUTE_CACHE_BYTES;
 pub use crate::semantic::metrics::NAMESRV_ROUTE_CACHE_EVENTS_TOTAL;
 pub use crate::semantic::metrics::NAMESRV_ROUTE_END_TO_END_LATENCY;
@@ -26,6 +30,9 @@ pub use crate::semantic::metrics::NAMESRV_ROUTE_RESPONSE_BYTES;
 pub use crate::semantic::metrics::NAMESRV_ROUTE_RESPONSE_WRITE_ERRORS_TOTAL;
 pub use crate::semantic::metrics::NAMESRV_ROUTE_RESPONSE_WRITE_LATENCY;
 pub use crate::semantic::metrics::NAMESRV_ROUTE_STAGE_LATENCY;
+pub use crate::semantic::metrics::NAMESRV_UNREGISTRATION_BATCH_SIZE;
+pub use crate::semantic::metrics::NAMESRV_UNREGISTRATION_EVENTS_TOTAL;
+pub use crate::semantic::metrics::NAMESRV_UNREGISTRATION_QUEUE_DEPTH;
 pub use crate::semantic::metrics::NAMESRV_WORKLOAD_ADMISSION_EVENTS_TOTAL;
 pub use crate::semantic::metrics::NAMESRV_WORKLOAD_ADMISSION_INFLIGHT;
 pub use crate::semantic::metrics::NAMESRV_WORKLOAD_ADMISSION_WAITING;
@@ -224,6 +231,18 @@ impl NameServerMetrics {
 
     #[inline]
     pub fn record_route_response_write(&self, _write: Duration, _end_to_end: Duration, _success: bool) {}
+
+    #[inline]
+    pub fn record_registration_delta(&self, _outcome: &'static str, _dirty_topics: usize) {}
+
+    #[inline]
+    pub fn record_unregistration_queue(&self, _outcome: &'static str, _depth: usize) {}
+
+    #[inline]
+    pub fn record_unregistration_batch(&self, _size: usize) {}
+
+    #[inline]
+    pub fn record_expiry_scan(&self, _mode: &'static str, _examined: usize, _expired: usize, _elapsed: Duration) {}
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -254,6 +273,13 @@ struct NameServerMetricInstruments {
     route_response_write_latency: opentelemetry::metrics::Histogram<u64>,
     route_end_to_end_latency: opentelemetry::metrics::Histogram<u64>,
     route_response_write_errors_total: opentelemetry::metrics::Counter<u64>,
+    registration_events_total: opentelemetry::metrics::Counter<u64>,
+    registration_dirty_topics: opentelemetry::metrics::Histogram<u64>,
+    unregistration_events_total: opentelemetry::metrics::Counter<u64>,
+    unregistration_queue_depth: opentelemetry::metrics::Gauge<u64>,
+    unregistration_batch_size: opentelemetry::metrics::Histogram<u64>,
+    expiry_scan_brokers: opentelemetry::metrics::Histogram<u64>,
+    expiry_scan_duration: opentelemetry::metrics::Histogram<u64>,
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -466,6 +492,63 @@ impl NameServerMetrics {
             }
         }
     }
+
+    pub fn record_registration_delta(&self, outcome: &'static str, dirty_topics: usize) {
+        if self.is_active() {
+            if let Some(instruments) = &self.instruments {
+                instruments.registration_events_total.add(
+                    1,
+                    &[opentelemetry::KeyValue::new(crate::semantic::labels::RESULT, outcome)],
+                );
+                instruments.registration_dirty_topics.record(dirty_topics as u64, &[]);
+            }
+        }
+    }
+
+    pub fn record_unregistration_queue(&self, outcome: &'static str, depth: usize) {
+        if self.is_active() {
+            if let Some(instruments) = &self.instruments {
+                instruments.unregistration_events_total.add(
+                    1,
+                    &[opentelemetry::KeyValue::new(crate::semantic::labels::RESULT, outcome)],
+                );
+                instruments.unregistration_queue_depth.record(depth as u64, &[]);
+            }
+        }
+    }
+
+    pub fn record_unregistration_batch(&self, size: usize) {
+        if self.is_active() {
+            if let Some(instruments) = &self.instruments {
+                instruments.unregistration_batch_size.record(size as u64, &[]);
+            }
+        }
+    }
+
+    pub fn record_expiry_scan(&self, mode: &'static str, examined: usize, expired: usize, elapsed: Duration) {
+        if self.is_active() {
+            if let Some(instruments) = &self.instruments {
+                instruments.expiry_scan_brokers.record(
+                    examined as u64,
+                    &[opentelemetry::KeyValue::new(
+                        crate::semantic::labels::RESULT,
+                        format!("{mode}-examined"),
+                    )],
+                );
+                instruments.expiry_scan_brokers.record(
+                    expired as u64,
+                    &[opentelemetry::KeyValue::new(
+                        crate::semantic::labels::RESULT,
+                        format!("{mode}-expired"),
+                    )],
+                );
+                instruments.expiry_scan_duration.record(
+                    duration_micros_u64(elapsed),
+                    &[opentelemetry::KeyValue::new(crate::semantic::labels::RESULT, mode)],
+                );
+            }
+        }
+    }
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -559,6 +642,41 @@ impl NameServerMetricInstruments {
             .with_description("NameServer route response channel write failures")
             .with_unit("{error}")
             .build();
+        let registration_events_total = meter
+            .u64_counter(NAMESRV_REGISTRATION_EVENTS_TOTAL)
+            .with_description("NameServer registration outcomes")
+            .with_unit("{event}")
+            .build();
+        let registration_dirty_topics = meter
+            .u64_histogram(NAMESRV_REGISTRATION_DIRTY_TOPICS)
+            .with_description("Number of route snapshots dirtied by one broker registration")
+            .with_unit("{topic}")
+            .build();
+        let unregistration_events_total = meter
+            .u64_counter(NAMESRV_UNREGISTRATION_EVENTS_TOTAL)
+            .with_description("NameServer unregistration queue and fallback outcomes")
+            .with_unit("{event}")
+            .build();
+        let unregistration_queue_depth = meter
+            .u64_gauge(NAMESRV_UNREGISTRATION_QUEUE_DEPTH)
+            .with_description("Current NameServer pending unregistration queue depth")
+            .with_unit("{request}")
+            .build();
+        let unregistration_batch_size = meter
+            .u64_histogram(NAMESRV_UNREGISTRATION_BATCH_SIZE)
+            .with_description("Number of broker unregistrations handled per bounded batch")
+            .with_unit("{request}")
+            .build();
+        let expiry_scan_brokers = meter
+            .u64_histogram(NAMESRV_EXPIRY_SCAN_BROKERS)
+            .with_description("Brokers examined and expired by the NameServer liveness scanner")
+            .with_unit("{broker}")
+            .build();
+        let expiry_scan_duration = meter
+            .u64_histogram(NAMESRV_EXPIRY_SCAN_DURATION)
+            .with_description("NameServer broker expiry scan duration")
+            .with_unit("us")
+            .build();
 
         Self {
             route_request_total,
@@ -578,6 +696,13 @@ impl NameServerMetricInstruments {
             route_response_write_latency,
             route_end_to_end_latency,
             route_response_write_errors_total,
+            registration_events_total,
+            registration_dirty_topics,
+            unregistration_events_total,
+            unregistration_queue_depth,
+            unregistration_batch_size,
+            expiry_scan_brokers,
+            expiry_scan_duration,
         }
     }
 
@@ -612,6 +737,10 @@ mod tests {
         metrics.record_active_brokers(2, &attrs);
         metrics.record_route_error(NameServerRouteErrorKind::NotFound);
         metrics.record_route_freshness(25);
+        metrics.record_registration_delta("changed", 3);
+        metrics.record_unregistration_queue("queued", 2);
+        metrics.record_unregistration_batch(2);
+        metrics.record_expiry_scan("shadow", 10, 1, Duration::from_micros(75));
     }
 
     #[test]
@@ -622,6 +751,10 @@ mod tests {
         metrics.record_active_broker_count(2);
         metrics.record_route_error(NameServerRouteErrorKind::NotFound);
         metrics.record_route_freshness(25);
+        metrics.record_registration_delta("unchanged", 0);
+        metrics.record_unregistration_queue("coalesced", 0);
+        metrics.record_unregistration_batch(1);
+        metrics.record_expiry_scan("off", 10, 0, Duration::from_micros(25));
         assert!(!metrics.is_enabled());
         assert!(!metrics.should_record_route_freshness(1));
     }

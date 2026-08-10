@@ -28,7 +28,7 @@ use rocketmq_protocol::protocol::route::route_data_view::QueueData;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo;
 
 use crate::route::tables::BrokerLiveInfo;
-use crate::route_info::broker_addr_info::BrokerAddrInfo;
+pub use crate::route_info::broker_addr_info::BrokerAddrInfo;
 
 /// Public topic name type.
 pub type TopicName = CheetahString;
@@ -70,6 +70,42 @@ pub(crate) fn public_name_from_route(route_name: &CheetahString) -> CheetahStrin
 
 /// Broker address string
 pub type BrokerAddr = CheetahString;
+
+/// NameServer-local identity for one concrete broker registration instance.
+///
+/// The address is part of the key so delayed events for an old master address
+/// cannot remove a newer master that reused the same broker ID.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct BrokerInstanceKey {
+    pub cluster_name: CheetahString,
+    pub broker_name: CheetahString,
+    pub broker_id: u64,
+    pub broker_addr: CheetahString,
+}
+
+impl BrokerInstanceKey {
+    #[must_use]
+    pub fn new(
+        cluster_name: impl Into<CheetahString>,
+        broker_name: impl Into<CheetahString>,
+        broker_id: u64,
+        broker_addr: impl Into<CheetahString>,
+    ) -> Self {
+        Self {
+            cluster_name: cluster_name.into(),
+            broker_name: broker_name.into(),
+            broker_id,
+            broker_addr: broker_addr.into(),
+        }
+    }
+}
+
+/// Local fencing generation attached to liveness and cleanup events.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub struct BrokerGeneration {
+    pub registration_epoch: u64,
+    pub heartbeat_generation: u64,
+}
 
 /// Shared broker data
 pub type SharedBrokerData = Arc<BrokerData>;
@@ -198,6 +234,16 @@ impl BrokerUnregistration {
             broker_id,
         }
     }
+
+    #[must_use]
+    pub fn instance_key(&self) -> BrokerInstanceKey {
+        BrokerInstanceKey::new(
+            self.cluster_name.clone(),
+            self.broker_name.clone(),
+            self.broker_id,
+            self.broker_addr.clone(),
+        )
+    }
 }
 
 /// Topic routing query parameters
@@ -272,5 +318,22 @@ mod tests {
 
         assert_eq!(query.topic.as_str(), "TestTopic");
         assert!(query.include_inactive_brokers);
+    }
+
+    #[test]
+    fn broker_instance_identity_includes_address_and_generation_is_explicit() {
+        let old = BrokerInstanceKey::new("cluster", "broker", 0, "127.0.0.1:10911");
+        let new = BrokerInstanceKey::new("cluster", "broker", 0, "127.0.0.2:10911");
+        assert_ne!(old, new);
+        assert_eq!(
+            BrokerGeneration {
+                registration_epoch: 7,
+                heartbeat_generation: 11,
+            },
+            BrokerGeneration {
+                registration_epoch: 7,
+                heartbeat_generation: 11,
+            }
+        );
     }
 }

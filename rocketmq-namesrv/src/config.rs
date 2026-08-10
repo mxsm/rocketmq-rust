@@ -38,6 +38,44 @@ const MAX_ROUTE_RESPONSE_CACHE_BYTES: u64 = 1_073_741_824;
 const MAX_ROUTE_RESPONSE_CACHE_ENTRIES: u64 = 1_000_000;
 const MAX_ROUTE_RESPONSE_CACHE_SHARDS: u64 = 256;
 const MAX_WORKLOAD_ADMISSION_TIMEOUT_MILLIS: u64 = 60_000;
+const MAX_UNREGISTER_BATCH_SIZE: u64 = 1024;
+const MAX_UNREGISTER_BATCH_TIME_MILLIS: u64 = 50;
+const MIN_EXPIRY_SAFETY_SCAN_INTERVAL_MILLIS: u64 = 30_000;
+const MAX_EXPIRY_SAFETY_SCAN_INTERVAL_MILLIS: u64 = 3_600_000;
+const MAX_MIN_BROKER_NOTIFY_CONCURRENCY: u64 = 128;
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum ExpiryIndexMode {
+    #[default]
+    Off,
+    Shadow,
+    Active,
+}
+
+impl ExpiryIndexMode {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Shadow => "shadow",
+            Self::Active => "active",
+        }
+    }
+}
+
+impl std::str::FromStr for ExpiryIndexMode {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "off" => Ok(Self::Off),
+            "shadow" => Ok(Self::Shadow),
+            "active" => Ok(Self::Active),
+            _ => Err(()),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ConfigMutability {
@@ -65,6 +103,12 @@ pub(crate) enum NamesrvConfigKey {
     NamesrvWorkloadAdmissionEnable,
     NamesrvWorkloadAdmissionObserveOnly,
     NamesrvWorkloadAdmissionTimeoutMillis,
+    EnableRegistrationDelta,
+    UnregisterBrokerBatchSize,
+    UnregisterBrokerBatchTimeMillis,
+    ExpiryIndexMode,
+    ExpirySafetyScanInterval,
+    MinBrokerNotifyConcurrency,
     ReturnOrderTopicConfigToBroker,
     ClientRequestThreadPoolNums,
     DefaultThreadPoolNums,
@@ -104,6 +148,12 @@ impl NamesrvConfigKey {
             "namesrvWorkloadAdmissionEnable" => Self::NamesrvWorkloadAdmissionEnable,
             "namesrvWorkloadAdmissionObserveOnly" => Self::NamesrvWorkloadAdmissionObserveOnly,
             "namesrvWorkloadAdmissionTimeoutMillis" => Self::NamesrvWorkloadAdmissionTimeoutMillis,
+            "enableRegistrationDelta" => Self::EnableRegistrationDelta,
+            "unRegisterBrokerBatchSize" => Self::UnregisterBrokerBatchSize,
+            "unRegisterBrokerBatchTimeMillis" => Self::UnregisterBrokerBatchTimeMillis,
+            "expiryIndexMode" => Self::ExpiryIndexMode,
+            "expirySafetyScanInterval" => Self::ExpirySafetyScanInterval,
+            "minBrokerNotifyConcurrency" => Self::MinBrokerNotifyConcurrency,
             "returnOrderTopicConfigToBroker" => Self::ReturnOrderTopicConfigToBroker,
             "clientRequestThreadPoolNums" => Self::ClientRequestThreadPoolNums,
             "defaultThreadPoolNums" => Self::DefaultThreadPoolNums,
@@ -155,7 +205,13 @@ impl NamesrvConfigKey {
             | Self::NamesrvRouteResponseCacheMaxEntries
             | Self::NamesrvRouteResponseCacheMaxSingleResponseBytes
             | Self::NamesrvRouteResponseCacheShards => ConfigMutability::RestartRequired,
-            Self::NamesrvWorkloadAdmissionTimeoutMillis => ConfigMutability::RestartRequired,
+            Self::NamesrvWorkloadAdmissionTimeoutMillis
+            | Self::EnableRegistrationDelta
+            | Self::UnregisterBrokerBatchSize
+            | Self::UnregisterBrokerBatchTimeMillis
+            | Self::ExpiryIndexMode
+            | Self::ExpirySafetyScanInterval
+            | Self::MinBrokerNotifyConcurrency => ConfigMutability::RestartRequired,
             Self::RocketmqHome
             | Self::KvConfigPath
             | Self::ConfigStorePath
@@ -219,6 +275,28 @@ pub(crate) fn validate_namesrv_property(key: NamesrvConfigKey, value: &str) -> R
         NamesrvConfigKey::NamesrvWorkloadAdmissionTimeoutMillis => {
             parse_bounded_u64(key, value, 1, MAX_WORKLOAD_ADMISSION_TIMEOUT_MILLIS)?;
         }
+        NamesrvConfigKey::UnregisterBrokerBatchSize => {
+            parse_bounded_u64(key, value, 1, MAX_UNREGISTER_BATCH_SIZE)?;
+        }
+        NamesrvConfigKey::UnregisterBrokerBatchTimeMillis => {
+            parse_bounded_u64(key, value, 1, MAX_UNREGISTER_BATCH_TIME_MILLIS)?;
+        }
+        NamesrvConfigKey::ExpirySafetyScanInterval => {
+            parse_bounded_u64(
+                key,
+                value,
+                MIN_EXPIRY_SAFETY_SCAN_INTERVAL_MILLIS,
+                MAX_EXPIRY_SAFETY_SCAN_INTERVAL_MILLIS,
+            )?;
+        }
+        NamesrvConfigKey::MinBrokerNotifyConcurrency => {
+            parse_bounded_u64(key, value, 1, MAX_MIN_BROKER_NOTIFY_CONCURRENCY)?;
+        }
+        NamesrvConfigKey::ExpiryIndexMode => {
+            value
+                .parse::<ExpiryIndexMode>()
+                .map_err(|_| invalid_value(key.java_name(), "expected one of off, shadow, active"))?;
+        }
         NamesrvConfigKey::ClusterTest
         | NamesrvConfigKey::OrderMessageEnable
         | NamesrvConfigKey::NamesrvTypedZoneRouteEnable
@@ -226,6 +304,7 @@ pub(crate) fn validate_namesrv_property(key: NamesrvConfigKey, value: &str) -> R
         | NamesrvConfigKey::NamesrvRouteResponseCacheEnable
         | NamesrvConfigKey::NamesrvWorkloadAdmissionEnable
         | NamesrvConfigKey::NamesrvWorkloadAdmissionObserveOnly
+        | NamesrvConfigKey::EnableRegistrationDelta
         | NamesrvConfigKey::ReturnOrderTopicConfigToBroker
         | NamesrvConfigKey::SupportActingMaster
         | NamesrvConfigKey::EnableAllTopicList
@@ -272,6 +351,12 @@ impl NamesrvConfigKey {
             Self::NamesrvWorkloadAdmissionEnable => "namesrvWorkloadAdmissionEnable",
             Self::NamesrvWorkloadAdmissionObserveOnly => "namesrvWorkloadAdmissionObserveOnly",
             Self::NamesrvWorkloadAdmissionTimeoutMillis => "namesrvWorkloadAdmissionTimeoutMillis",
+            Self::EnableRegistrationDelta => "enableRegistrationDelta",
+            Self::UnregisterBrokerBatchSize => "unRegisterBrokerBatchSize",
+            Self::UnregisterBrokerBatchTimeMillis => "unRegisterBrokerBatchTimeMillis",
+            Self::ExpiryIndexMode => "expiryIndexMode",
+            Self::ExpirySafetyScanInterval => "expirySafetyScanInterval",
+            Self::MinBrokerNotifyConcurrency => "minBrokerNotifyConcurrency",
             Self::ReturnOrderTopicConfigToBroker => "returnOrderTopicConfigToBroker",
             Self::ClientRequestThreadPoolNums => "clientRequestThreadPoolNums",
             Self::DefaultThreadPoolNums => "defaultThreadPoolNums",
@@ -413,6 +498,22 @@ mod defaults {
         true
     }
 
+    pub fn unregister_broker_batch_size() -> usize {
+        100
+    }
+
+    pub fn unregister_broker_batch_time_millis() -> u64 {
+        2
+    }
+
+    pub fn expiry_safety_scan_interval() -> u64 {
+        300_000
+    }
+
+    pub fn min_broker_notify_concurrency() -> usize {
+        8
+    }
+
     pub fn config_black_list() -> String {
         "configBlackList;configStorePath;kvConfigPath".to_string()
     }
@@ -490,6 +591,36 @@ pub struct NamesrvConfig {
         default = "defaults::namesrv_workload_admission_timeout_millis"
     )]
     pub namesrv_workload_admission_timeout_millis: u64,
+
+    #[serde(alias = "enableRegistrationDelta", default)]
+    pub enable_registration_delta: bool,
+
+    #[serde(
+        alias = "unRegisterBrokerBatchSize",
+        default = "defaults::unregister_broker_batch_size"
+    )]
+    pub unregister_broker_batch_size: usize,
+
+    #[serde(
+        alias = "unRegisterBrokerBatchTimeMillis",
+        default = "defaults::unregister_broker_batch_time_millis"
+    )]
+    pub unregister_broker_batch_time_millis: u64,
+
+    #[serde(alias = "expiryIndexMode", default)]
+    pub expiry_index_mode: ExpiryIndexMode,
+
+    #[serde(
+        alias = "expirySafetyScanInterval",
+        default = "defaults::expiry_safety_scan_interval"
+    )]
+    pub expiry_safety_scan_interval: u64,
+
+    #[serde(
+        alias = "minBrokerNotifyConcurrency",
+        default = "defaults::min_broker_notify_concurrency"
+    )]
+    pub min_broker_notify_concurrency: usize,
 
     #[serde(
         alias = "returnOrderTopicConfigToBroker",
@@ -588,6 +719,12 @@ impl Default for NamesrvConfig {
             namesrv_workload_admission_enable: true,
             namesrv_workload_admission_observe_only: true,
             namesrv_workload_admission_timeout_millis: defaults::namesrv_workload_admission_timeout_millis(),
+            enable_registration_delta: false,
+            unregister_broker_batch_size: defaults::unregister_broker_batch_size(),
+            unregister_broker_batch_time_millis: defaults::unregister_broker_batch_time_millis(),
+            expiry_index_mode: ExpiryIndexMode::Off,
+            expiry_safety_scan_interval: defaults::expiry_safety_scan_interval(),
+            min_broker_notify_concurrency: defaults::min_broker_notify_concurrency(),
             return_order_topic_config_to_broker: true,
             client_request_thread_pool_nums: 8,
             default_thread_pool_nums: 16,
@@ -677,6 +814,30 @@ impl NamesrvConfig {
         json_map.insert(
             "namesrvWorkloadAdmissionTimeoutMillis".to_string(),
             Value::String(self.namesrv_workload_admission_timeout_millis.to_string()),
+        );
+        json_map.insert(
+            "enableRegistrationDelta".to_string(),
+            Value::String(self.enable_registration_delta.to_string()),
+        );
+        json_map.insert(
+            "unRegisterBrokerBatchSize".to_string(),
+            Value::String(self.unregister_broker_batch_size.to_string()),
+        );
+        json_map.insert(
+            "unRegisterBrokerBatchTimeMillis".to_string(),
+            Value::String(self.unregister_broker_batch_time_millis.to_string()),
+        );
+        json_map.insert(
+            "expiryIndexMode".to_string(),
+            Value::String(self.expiry_index_mode.as_str().to_string()),
+        );
+        json_map.insert(
+            "expirySafetyScanInterval".to_string(),
+            Value::String(self.expiry_safety_scan_interval.to_string()),
+        );
+        json_map.insert(
+            "minBrokerNotifyConcurrency".to_string(),
+            Value::String(self.min_broker_notify_concurrency.to_string()),
         );
         json_map.insert(
             "returnOrderTopicConfigToBroker".to_string(),
@@ -860,6 +1021,31 @@ impl NamesrvConfig {
                     self.namesrv_workload_admission_timeout_millis =
                         value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
                 }
+                "enableRegistrationDelta" => {
+                    self.enable_registration_delta =
+                        value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
+                }
+                "unRegisterBrokerBatchSize" => {
+                    self.unregister_broker_batch_size =
+                        value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
+                }
+                "unRegisterBrokerBatchTimeMillis" => {
+                    self.unregister_broker_batch_time_millis =
+                        value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
+                }
+                "expiryIndexMode" => {
+                    self.expiry_index_mode = value
+                        .parse()
+                        .map_err(|_| invalid_value(&key, "expected one of off, shadow, active"))?
+                }
+                "expirySafetyScanInterval" => {
+                    self.expiry_safety_scan_interval =
+                        value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
+                }
+                "minBrokerNotifyConcurrency" => {
+                    self.min_broker_notify_concurrency =
+                        value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
+                }
                 "returnOrderTopicConfigToBroker" => {
                     self.return_order_topic_config_to_broker =
                         value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
@@ -987,6 +1173,26 @@ impl NamesrvConfig {
             (
                 NamesrvConfigKey::NamesrvWorkloadAdmissionTimeoutMillis,
                 self.namesrv_workload_admission_timeout_millis.to_string(),
+            ),
+            (
+                NamesrvConfigKey::UnregisterBrokerBatchSize,
+                self.unregister_broker_batch_size.to_string(),
+            ),
+            (
+                NamesrvConfigKey::UnregisterBrokerBatchTimeMillis,
+                self.unregister_broker_batch_time_millis.to_string(),
+            ),
+            (
+                NamesrvConfigKey::ExpiryIndexMode,
+                self.expiry_index_mode.as_str().to_string(),
+            ),
+            (
+                NamesrvConfigKey::ExpirySafetyScanInterval,
+                self.expiry_safety_scan_interval.to_string(),
+            ),
+            (
+                NamesrvConfigKey::MinBrokerNotifyConcurrency,
+                self.min_broker_notify_concurrency.to_string(),
             ),
         ] {
             validate_namesrv_property(key, &value)?;
@@ -1154,6 +1360,12 @@ mod tests {
         assert!(config.namesrv_workload_admission_enable);
         assert!(config.namesrv_workload_admission_observe_only);
         assert_eq!(config.namesrv_workload_admission_timeout_millis, 100);
+        assert!(!config.enable_registration_delta);
+        assert_eq!(config.unregister_broker_batch_size, 100);
+        assert_eq!(config.unregister_broker_batch_time_millis, 2);
+        assert_eq!(config.expiry_index_mode, ExpiryIndexMode::Off);
+        assert_eq!(config.expiry_safety_scan_interval, 300_000);
+        assert_eq!(config.min_broker_notify_concurrency, 8);
         assert!(config.return_order_topic_config_to_broker);
         assert_eq!(config.client_request_thread_pool_nums, 8);
         assert_eq!(config.default_thread_pool_nums, 16);
@@ -1440,5 +1652,21 @@ productEnvName = "useRouteInfoManagerV2"
             error,
             RocketMQError::Tools(rocketmq_error::ToolsError::NameServerConfigInvalid { .. })
         ));
+    }
+
+    #[test]
+    fn rejects_invalid_write_recovery_rollout_values() {
+        for (key, value) in [
+            (NamesrvConfigKey::UnregisterBrokerBatchSize, "0"),
+            (NamesrvConfigKey::UnregisterBrokerBatchSize, "1025"),
+            (NamesrvConfigKey::UnregisterBrokerBatchTimeMillis, "0"),
+            (NamesrvConfigKey::UnregisterBrokerBatchTimeMillis, "51"),
+            (NamesrvConfigKey::ExpiryIndexMode, "enabled"),
+            (NamesrvConfigKey::ExpirySafetyScanInterval, "29999"),
+            (NamesrvConfigKey::MinBrokerNotifyConcurrency, "129"),
+        ] {
+            assert!(validate_namesrv_property(key, value).is_err(), "{key:?}={value}");
+            assert_eq!(key.mutability(), ConfigMutability::RestartRequired);
+        }
     }
 }

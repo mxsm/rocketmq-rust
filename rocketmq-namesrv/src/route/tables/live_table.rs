@@ -16,7 +16,11 @@
 //!
 //! Manages broker live status and heartbeat information.
 
+use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
@@ -26,15 +30,23 @@ use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ChannelId;
 
+use crate::config::ExpiryIndexMode;
+use crate::route::types::BrokerGeneration;
 use crate::route_info::broker_addr_info::BrokerAddrInfo;
+
+static NEXT_REGISTRATION_EPOCH: AtomicU64 = AtomicU64::new(1);
 
 /// Broker live information
 ///
 /// Contains heartbeat timestamp and data version for a live broker.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct BrokerLiveInfo {
     /// Last heartbeat timestamp (milliseconds since epoch)
-    pub last_update_timestamp: u64,
+    last_update_timestamp: AtomicU64,
+    /// Monotonic generation advanced for every accepted heartbeat.
+    heartbeat_generation: AtomicU64,
+    /// Process-local epoch assigned when a full registration replaces this entry.
+    registration_epoch: u64,
     /// Heartbeat timeout in milliseconds (default: 120000ms = 2min)
     pub heartbeat_timeout_millis: u64,
     /// Data version for change detection
@@ -66,7 +78,9 @@ impl BrokerLiveInfo {
     /// * `data_version` - Data version
     pub fn new(timestamp: u64, data_version: DataVersion, remote_addr: SocketAddr, channel_id: ChannelId) -> Self {
         Self {
-            last_update_timestamp: timestamp,
+            last_update_timestamp: AtomicU64::new(timestamp),
+            heartbeat_generation: AtomicU64::new(0),
+            registration_epoch: NEXT_REGISTRATION_EPOCH.fetch_add(1, Ordering::Relaxed),
             heartbeat_timeout_millis: 120_000, // 2 minutes default
             data_version,
             ha_server_addr: None,
@@ -108,12 +122,56 @@ impl BrokerLiveInfo {
     /// # Arguments
     /// * `current_time` - Current timestamp in milliseconds
     pub fn is_alive(&self, current_time: u64) -> bool {
-        current_time.saturating_sub(self.last_update_timestamp) < self.heartbeat_timeout_millis
+        current_time.saturating_sub(self.last_update_timestamp()) < self.heartbeat_timeout_millis
     }
 
-    /// Update last heartbeat timestamp
-    pub fn update_timestamp(&mut self, timestamp: u64) {
-        self.last_update_timestamp = timestamp;
+    /// Return the last accepted heartbeat timestamp.
+    pub fn last_update_timestamp(&self) -> u64 {
+        self.last_update_timestamp.load(Ordering::Acquire)
+    }
+
+    /// Return the heartbeat generation for stale-event fencing.
+    pub fn heartbeat_generation(&self) -> u64 {
+        self.heartbeat_generation.load(Ordering::Acquire)
+    }
+
+    /// Return the registration epoch for stale-event fencing.
+    pub const fn registration_epoch(&self) -> u64 {
+        self.registration_epoch
+    }
+
+    /// Return the complete generation used by delayed cleanup events.
+    pub fn generation(&self) -> BrokerGeneration {
+        BrokerGeneration {
+            registration_epoch: self.registration_epoch,
+            heartbeat_generation: self.heartbeat_generation(),
+        }
+    }
+
+    /// Atomically update the timestamp without allowing it to move backwards.
+    ///
+    /// Returns the new heartbeat generation.
+    pub fn update_timestamp(&self, timestamp: u64) -> u64 {
+        self.last_update_timestamp.fetch_max(timestamp, Ordering::AcqRel);
+        self.heartbeat_generation.fetch_add(1, Ordering::AcqRel) + 1
+    }
+}
+
+impl Clone for BrokerLiveInfo {
+    fn clone(&self) -> Self {
+        Self {
+            last_update_timestamp: AtomicU64::new(self.last_update_timestamp()),
+            heartbeat_generation: AtomicU64::new(self.heartbeat_generation()),
+            registration_epoch: self.registration_epoch,
+            heartbeat_timeout_millis: self.heartbeat_timeout_millis,
+            data_version: self.data_version.clone(),
+            ha_server_addr: self.ha_server_addr.clone(),
+            remote_addr: self.remote_addr,
+            channel_id: self.channel_id.clone(),
+            channel: self.channel.clone(),
+            broker_name: self.broker_name.clone(),
+            broker_id: self.broker_id,
+        }
     }
 }
 
@@ -149,6 +207,71 @@ pub struct BrokerLiveTable {
     inner: DashMap<Arc<BrokerAddrInfo>, Arc<BrokerLiveInfo>>,
     by_channel: DashMap<ChannelId, Arc<BrokerAddrInfo>>,
     by_remote_addr: DashMap<SocketAddr, Arc<BrokerAddrInfo>>,
+    expiry_index: Arc<ExpiryIndex>,
+}
+
+struct ExpiryIndex {
+    mode: ExpiryIndexMode,
+    state: parking_lot::Mutex<ExpiryIndexState>,
+}
+
+#[derive(Default)]
+struct ExpiryIndexState {
+    by_deadline: BTreeMap<(u64, u64), (Arc<BrokerAddrInfo>, BrokerGeneration)>,
+    by_broker: HashMap<Arc<BrokerAddrInfo>, (u64, u64)>,
+}
+
+impl ExpiryIndex {
+    fn new(mode: ExpiryIndexMode) -> Self {
+        Self {
+            mode,
+            state: parking_lot::Mutex::new(ExpiryIndexState::default()),
+        }
+    }
+
+    fn schedule(&self, broker: Arc<BrokerAddrInfo>, live_info: &BrokerLiveInfo) {
+        if self.mode == ExpiryIndexMode::Off {
+            return;
+        }
+        let deadline = live_info
+            .last_update_timestamp()
+            .saturating_add(live_info.heartbeat_timeout_millis);
+        let generation = live_info.generation();
+        let index_key = (deadline, generation.registration_epoch);
+        let mut state = self.state.lock();
+        if let Some(previous_key) = state.by_broker.insert(Arc::clone(&broker), index_key) {
+            state.by_deadline.remove(&previous_key);
+        }
+        state.by_deadline.insert(index_key, (broker, generation));
+    }
+
+    fn remove(&self, broker: &BrokerAddrInfo) {
+        if self.mode == ExpiryIndexMode::Off {
+            return;
+        }
+        let mut state = self.state.lock();
+        if let Some(index_key) = state.by_broker.remove(broker) {
+            state.by_deadline.remove(&index_key);
+        }
+    }
+
+    fn expired(&self, current_time: u64) -> Vec<(Arc<BrokerAddrInfo>, BrokerGeneration)> {
+        if self.mode == ExpiryIndexMode::Off {
+            return Vec::new();
+        }
+        let state = self.state.lock();
+        state
+            .by_deadline
+            .range(..=(current_time, u64::MAX))
+            .map(|(_, (broker, generation))| (Arc::clone(broker), *generation))
+            .collect()
+    }
+
+    fn clear(&self) {
+        let mut state = self.state.lock();
+        state.by_deadline.clear();
+        state.by_broker.clear();
+    }
 }
 
 impl BrokerLiveTable {
@@ -158,6 +281,7 @@ impl BrokerLiveTable {
             inner: DashMap::new(),
             by_channel: DashMap::new(),
             by_remote_addr: DashMap::new(),
+            expiry_index: Arc::new(ExpiryIndex::new(ExpiryIndexMode::Off)),
         }
     }
 
@@ -166,10 +290,16 @@ impl BrokerLiveTable {
     /// # Arguments
     /// * `capacity` - Expected number of live brokers
     pub fn with_capacity(capacity: usize) -> Self {
+        Self::with_capacity_and_expiry_index(capacity, ExpiryIndexMode::Off)
+    }
+
+    /// Create with estimated capacity and an optional deadline index.
+    pub fn with_capacity_and_expiry_index(capacity: usize, expiry_index_mode: ExpiryIndexMode) -> Self {
         Self {
             inner: DashMap::with_capacity(capacity),
             by_channel: DashMap::with_capacity(capacity),
             by_remote_addr: DashMap::with_capacity(capacity),
+            expiry_index: Arc::new(ExpiryIndex::new(expiry_index_mode)),
         }
     }
 
@@ -188,13 +318,15 @@ impl BrokerLiveTable {
     ) -> Option<Arc<BrokerLiveInfo>> {
         let channel_id = live_info.channel_id.clone();
         let remote_addr = live_info.remote_addr;
-        let previous = self.inner.insert(Arc::clone(&broker_addr_info), Arc::new(live_info));
+        let live_info = Arc::new(live_info);
+        let previous = self.inner.insert(Arc::clone(&broker_addr_info), Arc::clone(&live_info));
         if let Some(previous) = &previous {
             self.remove_channel_index_if_current(&previous.channel_id, &broker_addr_info);
             self.remove_remote_index_if_current(previous.remote_addr, &broker_addr_info);
         }
         self.by_channel.insert(channel_id, Arc::clone(&broker_addr_info));
-        self.by_remote_addr.insert(remote_addr, broker_addr_info);
+        self.by_remote_addr.insert(remote_addr, Arc::clone(&broker_addr_info));
+        self.expiry_index.schedule(broker_addr_info, &live_info);
         previous
     }
 
@@ -207,10 +339,9 @@ impl BrokerLiveTable {
     /// # Returns
     /// true if broker exists and was updated
     pub fn update_heartbeat(&self, broker_addr_info: &BrokerAddrInfo, timestamp: u64) -> bool {
-        if let Some(mut entry) = self.inner.get_mut(broker_addr_info) {
-            let mut new_info = (**entry.value()).clone();
-            new_info.update_timestamp(timestamp);
-            *entry.value_mut() = Arc::new(new_info);
+        if let Some(entry) = self.inner.get(broker_addr_info) {
+            entry.update_timestamp(timestamp);
+            self.expiry_index.schedule(Arc::clone(entry.key()), entry.value());
             true
         } else {
             false
@@ -242,6 +373,7 @@ impl BrokerLiveTable {
     /// Removed live info if existed
     pub fn remove(&self, broker_addr_info: &BrokerAddrInfo) -> Option<Arc<BrokerLiveInfo>> {
         let (key, live_info) = self.inner.remove(broker_addr_info)?;
+        self.expiry_index.remove(&key);
         self.remove_channel_index_if_current(&live_info.channel_id, &key);
         self.remove_remote_index_if_current(live_info.remote_addr, &key);
         Some(live_info)
@@ -273,6 +405,16 @@ impl BrokerLiveTable {
             .filter(|entry| !entry.value().is_alive(current_time))
             .map(|entry| Arc::clone(entry.key()))
             .collect()
+    }
+
+    /// Get expiry candidates from the optional deadline index.
+    pub fn get_indexed_expired_brokers(&self, current_time: u64) -> Vec<(Arc<BrokerAddrInfo>, BrokerGeneration)> {
+        self.expiry_index.expired(current_time)
+    }
+
+    /// Return the configured expiry-index rollout mode.
+    pub fn expiry_index_mode(&self) -> ExpiryIndexMode {
+        self.expiry_index.mode
     }
 
     /// Remove expired brokers
@@ -308,6 +450,7 @@ impl BrokerLiveTable {
         self.inner.clear();
         self.by_channel.clear();
         self.by_remote_addr.clear();
+        self.expiry_index.clear();
     }
 
     /// Get brokers with stale data versions
@@ -402,22 +545,14 @@ impl BrokerLiveTable {
         &self,
         broker_addr: &str,
         timestamp: u64,
-        remote_addr: SocketAddr,
-        channel_id: ChannelId,
+        _remote_addr: SocketAddr,
+        _channel_id: ChannelId,
     ) {
-        for mut entry in self.inner.iter_mut() {
+        for entry in &self.inner {
             let key_addr: &str = entry.key().broker_addr.as_ref();
             if key_addr == broker_addr {
-                // Create new BrokerLiveInfo with updated timestamp
-                let old_info = entry.value();
-                let mut new_info =
-                    BrokerLiveInfo::new(timestamp, old_info.data_version.clone(), remote_addr, channel_id);
-                new_info.ha_server_addr = old_info.ha_server_addr.clone();
-                new_info.channel = old_info.channel.clone();
-                new_info.broker_name = old_info.broker_name.clone();
-                new_info.broker_id = old_info.broker_id;
-
-                *entry.value_mut() = Arc::new(new_info);
+                entry.update_timestamp(timestamp);
+                self.expiry_index.schedule(Arc::clone(entry.key()), entry.value());
                 return;
             }
         }
@@ -429,23 +564,8 @@ impl BrokerLiveTable {
     ///
     /// # Arguments
     /// * `broker_addr_info` - BrokerAddrInfo containing cluster name and broker address
-    pub fn update_last_update_timestamp_by_addr_info(&self, broker_addr_info: &BrokerAddrInfo) {
-        if let Some(mut entry) = self.inner.get_mut(broker_addr_info) {
-            let current_time = current_millis();
-            let old_info = entry.value();
-            let new_info = BrokerLiveInfo {
-                last_update_timestamp: current_time,
-                heartbeat_timeout_millis: old_info.heartbeat_timeout_millis,
-                data_version: old_info.data_version.clone(),
-                ha_server_addr: old_info.ha_server_addr.clone(),
-                remote_addr: old_info.remote_addr,
-                channel_id: old_info.channel_id.clone(),
-                channel: old_info.channel.clone(),
-                broker_name: old_info.broker_name.clone(),
-                broker_id: old_info.broker_id,
-            };
-            *entry.value_mut() = Arc::new(new_info);
-        }
+    pub fn update_last_update_timestamp_by_addr_info(&self, broker_addr_info: &BrokerAddrInfo) -> bool {
+        self.update_heartbeat(broker_addr_info, current_millis())
     }
 
     fn remove_channel_index_if_current(&self, channel_id: &ChannelId, broker_addr_info: &BrokerAddrInfo) {
@@ -469,6 +589,8 @@ impl Default for BrokerLiveTable {
 mod tests {
     use std::net::SocketAddr;
     use std::str::FromStr;
+    use std::sync::Barrier;
+    use std::thread;
 
     use super::*;
 
@@ -494,7 +616,7 @@ mod tests {
 
         // Get
         let retrieved = table.get(&broker_info).unwrap();
-        assert_eq!(retrieved.last_update_timestamp, 1000);
+        assert_eq!(retrieved.last_update_timestamp(), 1000);
     }
 
     #[test]
@@ -504,13 +626,56 @@ mod tests {
         let live_info = create_test_live_info(1000);
 
         table.register(broker_info.clone(), live_info);
+        let original = table.get(&broker_info).unwrap();
+        let original_epoch = original.registration_epoch();
 
         // Update heartbeat
         assert!(table.update_heartbeat(&broker_info, 2000));
 
         // Verify update
         let updated = table.get(&broker_info).unwrap();
-        assert_eq!(updated.last_update_timestamp, 2000);
+        assert!(Arc::ptr_eq(&original, &updated));
+        assert_eq!(updated.last_update_timestamp(), 2000);
+        assert_eq!(updated.heartbeat_generation(), 1);
+        assert_eq!(updated.registration_epoch(), original_epoch);
+    }
+
+    #[test]
+    fn heartbeat_timestamp_is_monotonic_under_concurrent_updates() {
+        let table = Arc::new(BrokerLiveTable::new());
+        let broker_info = create_test_broker_addr_info("broker-a", 0);
+        table.register(Arc::clone(&broker_info), create_test_live_info(1000));
+        let barrier = Arc::new(Barrier::new(17));
+
+        let handles = (0..16)
+            .map(|worker| {
+                let table = Arc::clone(&table);
+                let broker_info = Arc::clone(&broker_info);
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    barrier.wait();
+                    for offset in 0..64 {
+                        assert!(table.update_heartbeat(&broker_info, 2000 + worker * 64 + offset));
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        barrier.wait();
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        let updated = table.get(&broker_info).unwrap();
+        assert_eq!(updated.last_update_timestamp(), 3023);
+        assert_eq!(updated.heartbeat_generation(), 1024);
+    }
+
+    #[test]
+    fn heartbeat_for_unknown_broker_is_rejected() {
+        let table = BrokerLiveTable::new();
+        let broker_info = create_test_broker_addr_info("broker-a", 0);
+
+        assert!(!table.update_heartbeat(&broker_info, 2000));
     }
 
     #[test]
@@ -549,6 +714,27 @@ mod tests {
         // Check expired at 150000ms (broker1 should be expired)
         let expired = table.get_expired_brokers(150_000);
         assert_eq!(expired.len(), 1);
+    }
+
+    #[test]
+    fn expiry_index_reschedules_heartbeat_and_removes_deleted_broker() {
+        let table = BrokerLiveTable::with_capacity_and_expiry_index(4, ExpiryIndexMode::Active);
+        let broker = create_test_broker_addr_info("broker-indexed", 0);
+        table.register(Arc::clone(&broker), create_test_live_info(1000).with_timeout(100));
+
+        assert!(table.get_indexed_expired_brokers(1099).is_empty());
+        let initial = table.get_indexed_expired_brokers(1100);
+        assert_eq!(initial.len(), 1);
+        assert_eq!(initial[0].1.heartbeat_generation, 0);
+
+        assert!(table.update_heartbeat(&broker, 1080));
+        assert!(table.get_indexed_expired_brokers(1100).is_empty());
+        let rescheduled = table.get_indexed_expired_brokers(1180);
+        assert_eq!(rescheduled.len(), 1);
+        assert_eq!(rescheduled[0].1.heartbeat_generation, 1);
+
+        assert!(table.remove(&broker).is_some());
+        assert!(table.get_indexed_expired_brokers(u64::MAX).is_empty());
     }
 
     #[test]
@@ -616,7 +802,7 @@ mod tests {
         table.update_last_update_timestamp_by_addr_info(&broker_info);
 
         let updated = table.get(&broker_info).unwrap();
-        assert!(updated.last_update_timestamp > 1000);
+        assert!(updated.last_update_timestamp() > 1000);
         assert_eq!(updated.heartbeat_timeout_millis, 45_000);
         assert_eq!(updated.data_version, data_version);
         assert_eq!(

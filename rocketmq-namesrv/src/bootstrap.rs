@@ -1184,6 +1184,12 @@ impl Builder {
         // listener starts. Keep construction itself panic-free so startup can
         // return that typed error instead of panicking in `mpsc::channel`.
         let unregister_broker_queue_capacity = name_server_config.unregister_broker_queue_capacity().unwrap_or(1);
+        let unregister_broker_batch_size = name_server_config.unregister_broker_batch_size;
+        let unregister_broker_batch_time =
+            std::time::Duration::from_millis(name_server_config.unregister_broker_batch_time_millis);
+        let expiry_index_mode = name_server_config.expiry_index_mode;
+        let expiry_safety_scan_interval = name_server_config.expiry_safety_scan_interval;
+        let min_broker_notify_concurrency = name_server_config.min_broker_notify_concurrency;
         let route_response_cache = Arc::new(RouteResponseCache::from_namesrv_config(&name_server_config));
         let workload_admission = Arc::new(NameServerWorkloadAdmission::from_namesrv_config(&name_server_config));
         let initial_config = Arc::new(NameServerRuntimeConfig {
@@ -1201,6 +1207,11 @@ impl Builder {
             let route_info_manager = RouteInfoManager::new(
                 runtime_handle.clone(),
                 unregister_broker_queue_capacity,
+                unregister_broker_batch_size,
+                unregister_broker_batch_time,
+                expiry_index_mode,
+                expiry_safety_scan_interval,
+                min_broker_notify_concurrency,
                 namesrv_metrics.clone(),
             );
 

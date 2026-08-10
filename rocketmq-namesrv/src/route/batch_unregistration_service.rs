@@ -12,17 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
 use std::time::Duration;
 
+use dashmap::DashSet;
+use rocketmq_observability::metrics::namesrv::NameServerMetrics;
 use rocketmq_protocol::protocol::header::namesrv::broker_request::UnRegisterBrokerRequestHeader;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_transport::api::v1::ChannelId;
+use tokio::sync::mpsc::error::TrySendError;
+use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 use tracing::warn;
 
 use crate::bootstrap::NameServerRuntimeHandle;
+use crate::route::types::BrokerGeneration;
+use crate::route::types::BrokerInstanceKey;
 
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -30,6 +37,7 @@ const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) struct BrokerUnregistrationRequest {
     pub(crate) header: UnRegisterBrokerRequestHeader,
     pub(crate) expected_channel_id: Option<ChannelId>,
+    pub(crate) expected_generation: Option<BrokerGeneration>,
 }
 
 impl BrokerUnregistrationRequest {
@@ -37,15 +45,39 @@ impl BrokerUnregistrationRequest {
         Self {
             header,
             expected_channel_id: None,
+            expected_generation: None,
         }
     }
 
-    pub(crate) fn channel_guarded(header: UnRegisterBrokerRequestHeader, channel_id: ChannelId) -> Self {
+    pub(crate) fn channel_guarded(
+        header: UnRegisterBrokerRequestHeader,
+        channel_id: ChannelId,
+        generation: BrokerGeneration,
+    ) -> Self {
         Self {
             header,
             expected_channel_id: Some(channel_id),
+            expected_generation: Some(generation),
         }
     }
+
+    fn pending_key(&self) -> PendingUnregistrationKey {
+        PendingUnregistrationKey {
+            broker: BrokerInstanceKey::new(
+                self.header.cluster_name.clone(),
+                self.header.broker_name.clone(),
+                self.header.broker_id,
+                self.header.broker_addr.clone(),
+            ),
+            generation: self.expected_generation,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct PendingUnregistrationKey {
+    broker: BrokerInstanceKey,
+    generation: Option<BrokerGeneration>,
 }
 
 pub(crate) struct BatchUnregistrationService {
@@ -53,16 +85,30 @@ pub(crate) struct BatchUnregistrationService {
     tx: tokio::sync::mpsc::Sender<BrokerUnregistrationRequest>,
     rx: parking_lot::Mutex<Option<tokio::sync::mpsc::Receiver<BrokerUnregistrationRequest>>>,
     task_group: parking_lot::Mutex<Option<TaskGroup>>,
+    pending: Arc<DashSet<PendingUnregistrationKey>>,
+    batch_size: usize,
+    batch_time: Duration,
+    metrics: NameServerMetrics,
 }
 
 impl BatchUnregistrationService {
-    pub(crate) fn new(name_server_runtime_inner: NameServerRuntimeHandle, queue_capacity: usize) -> Self {
+    pub(crate) fn new(
+        name_server_runtime_inner: NameServerRuntimeHandle,
+        queue_capacity: usize,
+        batch_size: usize,
+        batch_time: Duration,
+        metrics: NameServerMetrics,
+    ) -> Self {
         let (tx, rx) = tokio::sync::mpsc::channel::<BrokerUnregistrationRequest>(queue_capacity);
         BatchUnregistrationService {
             name_server_runtime_inner,
             tx,
             rx: parking_lot::Mutex::new(Some(rx)),
             task_group: parking_lot::Mutex::new(None),
+            pending: Arc::new(DashSet::new()),
+            batch_size,
+            batch_time,
+            metrics,
         }
     }
 
@@ -70,16 +116,42 @@ impl BatchUnregistrationService {
         self.submit_request(BrokerUnregistrationRequest::explicit(request))
     }
 
-    pub(crate) fn submit_channel_guarded(&self, request: UnRegisterBrokerRequestHeader, channel_id: ChannelId) -> bool {
-        self.submit_request(BrokerUnregistrationRequest::channel_guarded(request, channel_id))
+    pub(crate) fn submit_channel_guarded(
+        &self,
+        request: UnRegisterBrokerRequestHeader,
+        channel_id: ChannelId,
+        generation: BrokerGeneration,
+    ) -> bool {
+        self.submit_request(BrokerUnregistrationRequest::channel_guarded(
+            request, channel_id, generation,
+        ))
     }
 
     fn submit_request(&self, request: BrokerUnregistrationRequest) -> bool {
-        if let Err(e) = self.tx.try_send(request) {
-            warn!("submit unregister broker request failed: {:?}", e);
-            return false;
+        let pending_key = request.pending_key();
+        if !self.pending.insert(pending_key.clone()) {
+            self.metrics
+                .record_unregistration_queue("coalesced", self.queue_length());
+            return true;
         }
-        true
+        match self.tx.try_send(request) {
+            Ok(()) => {
+                self.metrics.record_unregistration_queue("queued", self.queue_length());
+                true
+            }
+            Err(TrySendError::Full(request) | TrySendError::Closed(request)) => {
+                self.pending.remove(&pending_key);
+                let Some(runtime) = self.name_server_runtime_inner.upgrade() else {
+                    warn!("cannot process unregister request because NameServer runtime is unavailable");
+                    return false;
+                };
+                warn!("unregister queue unavailable; applying one request synchronously");
+                self.metrics
+                    .record_unregistration_queue("synchronous-fallback", self.queue_length());
+                runtime.route_info_manager().un_register_broker_requests(vec![request]);
+                true
+            }
+        }
     }
 
     pub fn start(&self) {
@@ -97,9 +169,22 @@ impl BatchUnregistrationService {
             return;
         };
         let shutdown_token = task_group.cancellation_token();
+        let pending = Arc::clone(&self.pending);
+        let batch_size = self.batch_size;
+        let batch_time = self.batch_time;
+        let metrics = self.metrics.clone();
         if let Err(error) = task_group.spawn_service("namesrv.batch-unregistration", async move {
             info!("BatchUnregistrationService started");
-            run_batch_unregistration_service(name_server_runtime_inner, &mut rx, shutdown_token).await;
+            run_batch_unregistration_service(
+                name_server_runtime_inner,
+                &mut rx,
+                shutdown_token,
+                pending,
+                batch_size,
+                batch_time,
+                metrics,
+            )
+            .await;
         }) {
             warn!("BatchUnregistrationService cannot start because task spawn failed: {error}");
             return;
@@ -133,37 +218,101 @@ async fn run_batch_unregistration_service(
     name_server_runtime_inner: NameServerRuntimeHandle,
     rx: &mut tokio::sync::mpsc::Receiver<BrokerUnregistrationRequest>,
     shutdown_token: CancellationToken,
+    pending: Arc<DashSet<PendingUnregistrationKey>>,
+    batch_size: usize,
+    batch_time: Duration,
+    metrics: NameServerMetrics,
 ) {
     loop {
+        let first_request = tokio::select! {
+            biased;
+            _ = shutdown_token.cancelled(), if !shutdown_token.is_cancelled() => {
+                info!("BatchUnregistrationService draining for shutdown");
+                rx.close();
+                rx.recv().await
+            }
+            request = rx.recv() => request,
+        };
+        let Some(first_request) = first_request else {
+            info!("BatchUnregistrationService channel drained");
+            break;
+        };
+
+        let unregistration_requests = collect_batch(first_request, rx, &shutdown_token, batch_size, batch_time).await;
+
+        let pending_keys = unregistration_requests
+            .iter()
+            .map(BrokerUnregistrationRequest::pending_key)
+            .collect::<Vec<_>>();
+        let Some(runtime) = name_server_runtime_inner.upgrade() else {
+            info!("BatchUnregistrationService stopped because NameServer runtime was released");
+            for key in pending_keys {
+                pending.remove(&key);
+            }
+            break;
+        };
+        runtime
+            .route_info_manager()
+            .un_register_broker_requests(unregistration_requests);
+        metrics.record_unregistration_batch(pending_keys.len());
+        for key in pending_keys {
+            pending.remove(&key);
+        }
+        tokio::task::yield_now().await;
+    }
+}
+
+async fn collect_batch(
+    first_request: BrokerUnregistrationRequest,
+    rx: &mut tokio::sync::mpsc::Receiver<BrokerUnregistrationRequest>,
+    shutdown_token: &CancellationToken,
+    batch_size: usize,
+    batch_time: Duration,
+) -> Vec<BrokerUnregistrationRequest> {
+    let mut requests = Vec::with_capacity(batch_size);
+    requests.push(first_request);
+    let deadline = Instant::now() + batch_time;
+    while requests.len() < batch_size {
         tokio::select! {
             biased;
-            _ = shutdown_token.cancelled() => {
-                info!("BatchUnregistrationService shutdown");
-                break;
+            _ = shutdown_token.cancelled(), if !shutdown_token.is_cancelled() => {
+                rx.close();
             }
-            first_request = rx.recv() => {
-                match first_request {
-                    Some(request) => {
-                        let mut unregistration_requests = vec![request];
-
-                        while let Ok(req) = rx.try_recv() {
-                            unregistration_requests.push(req);
-                        }
-
-                        let Some(runtime) = name_server_runtime_inner.upgrade() else {
-                            info!("BatchUnregistrationService stopped because NameServer runtime was released");
-                            break;
-                        };
-                        runtime
-                            .route_info_manager()
-                            .un_register_broker_requests(unregistration_requests);
-                    }
-                    None => {
-                        info!("BatchUnregistrationService channel closed");
-                        break;
-                    }
-                }
-            }
+            request = tokio::time::timeout_at(deadline, rx.recv()) => match request {
+                Ok(Some(request)) => requests.push(request),
+                Ok(None) | Err(_) => break,
+            },
         }
+    }
+    requests
+}
+
+#[cfg(test)]
+mod tests {
+    use cheetah_string::CheetahString;
+
+    use super::*;
+
+    fn request(index: u16) -> BrokerUnregistrationRequest {
+        BrokerUnregistrationRequest::explicit(UnRegisterBrokerRequestHeader {
+            cluster_name: CheetahString::from_static_str("cluster"),
+            broker_addr: CheetahString::from_string(format!("127.0.0.1:{index}")),
+            broker_name: CheetahString::from_string(format!("broker-{index}")),
+            broker_id: u64::from(index),
+        })
+    }
+
+    #[tokio::test]
+    async fn batch_collection_obeys_size_limit() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        for index in 0..5 {
+            tx.send(request(index)).await.unwrap();
+        }
+        let first = rx.recv().await.unwrap();
+
+        let batch = collect_batch(first, &mut rx, &CancellationToken::new(), 2, Duration::from_secs(1)).await;
+
+        assert_eq!(batch.len(), 2);
+        assert_eq!(rx.len(), 3);
     }
 }

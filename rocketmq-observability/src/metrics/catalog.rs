@@ -1120,6 +1120,55 @@ pub const RUST_METRICS: &[MetricDescriptor] = &[
         source: MetricSource::NameServer,
     },
     MetricDescriptor {
+        name: metrics::NAMESRV_REGISTRATION_EVENTS_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{event}",
+        labels: &[labels::RESULT],
+        source: MetricSource::NameServer,
+    },
+    MetricDescriptor {
+        name: metrics::NAMESRV_REGISTRATION_DIRTY_TOPICS,
+        kind: MetricKind::Histogram,
+        unit: "{topic}",
+        labels: &[],
+        source: MetricSource::NameServer,
+    },
+    MetricDescriptor {
+        name: metrics::NAMESRV_UNREGISTRATION_EVENTS_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{event}",
+        labels: &[labels::RESULT],
+        source: MetricSource::NameServer,
+    },
+    MetricDescriptor {
+        name: metrics::NAMESRV_UNREGISTRATION_QUEUE_DEPTH,
+        kind: MetricKind::ObservableGauge,
+        unit: "{request}",
+        labels: &[],
+        source: MetricSource::NameServer,
+    },
+    MetricDescriptor {
+        name: metrics::NAMESRV_UNREGISTRATION_BATCH_SIZE,
+        kind: MetricKind::Histogram,
+        unit: "{request}",
+        labels: &[],
+        source: MetricSource::NameServer,
+    },
+    MetricDescriptor {
+        name: metrics::NAMESRV_EXPIRY_SCAN_BROKERS,
+        kind: MetricKind::Histogram,
+        unit: "{broker}",
+        labels: &[labels::RESULT],
+        source: MetricSource::NameServer,
+    },
+    MetricDescriptor {
+        name: metrics::NAMESRV_EXPIRY_SCAN_DURATION,
+        kind: MetricKind::Histogram,
+        unit: "us",
+        labels: &[labels::RESULT],
+        source: MetricSource::NameServer,
+    },
+    MetricDescriptor {
         name: metrics::CONTROLLER_ELECTION_TOTAL,
         kind: MetricKind::Counter,
         unit: "{election}",
@@ -1491,8 +1540,8 @@ mod tests {
             .collect::<HashSet<_>>();
 
         assert_eq!(JAVA_METRICS.len(), 94);
-        assert_eq!(RUST_METRICS.len(), 64);
-        assert_eq!(combined.len(), 158, "duplicate metric names across catalogs");
+        assert_eq!(RUST_METRICS.len(), 82);
+        assert_eq!(combined.len(), 176, "duplicate metric names across catalogs");
     }
 
     #[test]
