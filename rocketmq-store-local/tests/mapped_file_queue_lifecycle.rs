@@ -27,6 +27,8 @@ use rocketmq_store_local::mapped_file::queue_lifecycle::destroy_mapped_file_queu
 use rocketmq_store_local::mapped_file::queue_lifecycle::is_expired;
 use rocketmq_store_local::mapped_file::queue_lifecycle::mapped_files_after_removal;
 use rocketmq_store_local::mapped_file::queue_lifecycle::retry_delete_first_mapped_file;
+use rocketmq_store_local::mapped_file::queue_lifecycle::select_expired_mapped_files_by_offset;
+use rocketmq_store_local::mapped_file::queue_lifecycle::select_expired_mapped_files_by_time_before;
 use rocketmq_store_local::mapped_file::queue_lifecycle::shutdown_mapped_file_queue;
 use rocketmq_store_local::mapped_file::queue_lifecycle::swap_mapped_file_queue;
 use rocketmq_store_local::mapped_file::DefaultMappedFile;
@@ -211,6 +213,29 @@ fn offset_deletion_releases_selection_before_destroy() {
     assert!(!files[0].is_available());
     assert!(files[1].is_available());
     assert!(files[2].is_available());
+}
+
+#[test]
+fn managed_cleanup_selection_is_non_mutating_and_rejects_invalid_unit_sizes() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let files = vec![mapped_file(&temp_dir, 0, 20), mapped_file(&temp_dir, 20, 20)];
+    let mut unit = vec![0; 20];
+    unit[0..8].copy_from_slice(&5_i64.to_be_bytes());
+    assert!(files[0].append_message_bytes(&unit));
+
+    let selected = select_expired_mapped_files_by_offset(&files, 20, 10, 20);
+    assert_eq!(selected.len(), 1);
+    assert!(Arc::ptr_eq(&selected[0], &files[0]));
+    assert!(files.iter().all(|file| file.is_available()));
+
+    for unit_size in [-1, 0, 21] {
+        assert!(select_expired_mapped_files_by_offset(&files, 20, 10, unit_size).is_empty());
+    }
+
+    let selected = select_expired_mapped_files_by_time_before(&files, 0, true, 1, None, || 0);
+    assert_eq!(selected.len(), 1);
+    assert!(Arc::ptr_eq(&selected[0], &files[0]));
+    assert!(files.iter().all(|file| file.is_available()));
 }
 
 #[test]

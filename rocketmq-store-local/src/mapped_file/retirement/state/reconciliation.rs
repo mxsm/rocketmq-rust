@@ -356,6 +356,13 @@ impl ReconciledLifecycleSession {
     pub fn active_segment_paths(&self) -> impl Iterator<Item = &str> {
         self.state.active.keys().map(StoreRelativePath::as_str)
     }
+
+    pub(crate) fn active_segment_bindings(&self) -> impl Iterator<Item = (&str, u64)> {
+        self.state
+            .active
+            .iter()
+            .map(|(path, binding)| (path.as_str(), binding.expected_length))
+    }
 }
 
 /// Recovery plan paired with the exact root/session proof from which it was derived.

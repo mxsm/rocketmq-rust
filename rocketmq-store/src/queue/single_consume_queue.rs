@@ -39,6 +39,8 @@ use rocketmq_store_local::consume_queue::single::scan_recovery_records;
 use rocketmq_store_local::consume_queue::single::search_queue_offset_by_time;
 use rocketmq_store_local::consume_queue::single::ConsumeQueueTimeBoundary;
 use rocketmq_store_local::consume_queue::single::ConsumeQueueTruncatePlan;
+use rocketmq_store_local::mapped_file::ManagedLifecycleRuntime;
+use rocketmq_store_local::mapped_file::ManagedMappedFileQueueGeneration;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -87,6 +89,26 @@ pub struct ConsumeQueue {
 }
 
 impl ConsumeQueue {
+    pub(crate) fn install_reconciled_generations(
+        &self,
+        queue: ManagedMappedFileQueueGeneration<DefaultMappedFile>,
+        extension: Option<ManagedMappedFileQueueGeneration<DefaultMappedFile>>,
+        runtime: ManagedLifecycleRuntime,
+    ) -> bool {
+        if !self.mapped_file_queue.install_reconciled_generation(queue)
+            || !self.mapped_file_queue.bind_managed_runtime(runtime.clone())
+        {
+            return false;
+        }
+        match (self.consume_queue_ext.as_ref(), extension) {
+            (Some(extension_queue), Some(generation)) => {
+                extension_queue.install_reconciled_generation(generation, runtime)
+            }
+            (None, None) => true,
+            _ => false,
+        }
+    }
+
     #[inline]
     pub(crate) fn new(
         topic: CheetahString,
@@ -96,22 +118,81 @@ impl ConsumeQueue {
         context: ConsumeQueueStoreContext,
         queue_lookup: ConsumeQueueLookupHandle,
     ) -> Self {
+        Self::new_inner(
+            topic,
+            queue_id,
+            store_path,
+            mapped_file_size,
+            context,
+            queue_lookup,
+            None,
+        )
+    }
+
+    pub(crate) fn new_managed(
+        topic: CheetahString,
+        queue_id: i32,
+        store_path: CheetahString,
+        mapped_file_size: i32,
+        context: ConsumeQueueStoreContext,
+        queue_lookup: ConsumeQueueLookupHandle,
+        runtime: ManagedLifecycleRuntime,
+    ) -> Self {
+        Self::new_inner(
+            topic,
+            queue_id,
+            store_path,
+            mapped_file_size,
+            context,
+            queue_lookup,
+            Some(runtime),
+        )
+    }
+
+    fn new_inner(
+        topic: CheetahString,
+        queue_id: i32,
+        store_path: CheetahString,
+        mapped_file_size: i32,
+        context: ConsumeQueueStoreContext,
+        queue_lookup: ConsumeQueueLookupHandle,
+        managed_runtime: Option<ManagedLifecycleRuntime>,
+    ) -> Self {
         let message_store_config = context.message_store_config();
         let queue_dir = PathBuf::from(store_path.as_str())
             .join(topic.as_str())
             .join(queue_id.to_string());
-        let mapped_file_queue =
-            MappedFileQueue::new(queue_dir.to_string_lossy().to_string(), mapped_file_size as u64, None);
+        let mapped_file_queue = match managed_runtime.as_ref() {
+            Some(runtime) => MappedFileQueue::new_managed(
+                queue_dir.to_string_lossy().to_string(),
+                mapped_file_size as u64,
+                context.allocate_mapped_file_service(),
+                runtime.clone(),
+            ),
+            None => MappedFileQueue::new(queue_dir.to_string_lossy().to_string(), mapped_file_size as u64, None),
+        };
         let consume_queue_ext = if message_store_config.enable_consume_queue_ext {
-            Some(ConsumeQueueExt::new(
-                topic.clone(),
-                queue_id,
-                CheetahString::from_string(get_store_path_consume_queue_ext(
-                    message_store_config.store_path_root_dir.as_str(),
-                )),
-                message_store_config.mapped_file_size_consume_queue_ext as i32,
-                message_store_config.bit_map_length_consume_queue_ext as i32,
-            ))
+            let extension_path = CheetahString::from_string(get_store_path_consume_queue_ext(
+                message_store_config.store_path_root_dir.as_str(),
+            ));
+            Some(match managed_runtime.as_ref() {
+                Some(runtime) => ConsumeQueueExt::new_managed(
+                    topic.clone(),
+                    queue_id,
+                    extension_path,
+                    message_store_config.mapped_file_size_consume_queue_ext as i32,
+                    message_store_config.bit_map_length_consume_queue_ext as i32,
+                    context.allocate_mapped_file_service(),
+                    runtime.clone(),
+                ),
+                None => ConsumeQueueExt::new(
+                    topic.clone(),
+                    queue_id,
+                    extension_path,
+                    message_store_config.mapped_file_size_consume_queue_ext as i32,
+                    message_store_config.bit_map_length_consume_queue_ext as i32,
+                ),
+            })
         } else {
             None
         };

@@ -15,6 +15,7 @@
 use std::collections::BinaryHeap;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::fmt::Display;
 use std::fmt::Formatter;
 use std::path::Path;
@@ -51,6 +52,12 @@ use crate::mapped_file::allocation_policy::MappedFileWarmupConfig;
 use crate::mapped_file::allocation_request::MappedFileAllocationRequestKey;
 use crate::mapped_file::DefaultMappedFile;
 use crate::mapped_file::MappedFile;
+
+mod managed;
+
+use managed::ManagedAllocationContext;
+use managed::ManagedAllocationRequest;
+pub use managed::ManagedMappedFileAllocationError;
 
 /// Timeout for waiting on file allocation (matches Java: 5 seconds)
 const WAIT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -183,6 +190,12 @@ pub struct AllocateMappedFileService {
     /// Runtime-owner-derived executor for bounded shutdown cleanup I/O.
     cleanup_executor: Option<BlockingExecutor>,
 
+    /// Wave-B requests executed by the same Store-owned allocation worker.
+    managed_requests: Arc<Mutex<VecDeque<Arc<ManagedAllocationRequest>>>>,
+
+    /// Reconciled lifecycle authority installed before the allocation worker starts.
+    managed_context: Arc<RwLock<Option<ManagedAllocationContext>>>,
+
     /// Exception flag (set when allocation fails)
     has_exception: Arc<AtomicBool>,
 
@@ -234,6 +247,8 @@ impl Clone for AllocateMappedFileService {
             pending_cleanup: self.pending_cleanup.clone(),
             retired_directories: self.retired_directories.clone(),
             cleanup_executor: self.cleanup_executor.clone(),
+            managed_requests: self.managed_requests.clone(),
+            managed_context: self.managed_context.clone(),
             has_exception: self.has_exception.clone(),
             stopped: self.stopped.clone(),
             ever_started: self.ever_started.clone(),
@@ -315,6 +330,8 @@ impl AllocateMappedFileService {
             pending_cleanup: Arc::new(Mutex::new(HashMap::new())),
             retired_directories: Arc::new(RwLock::new(HashSet::new())),
             cleanup_executor,
+            managed_requests: Arc::new(Mutex::new(VecDeque::new())),
+            managed_context: Arc::new(RwLock::new(None)),
             has_exception,
             stopped,
             ever_started: Arc::new(AtomicBool::new(false)),
@@ -412,6 +429,7 @@ impl AllocateMappedFileService {
         let request_table = self.request_table.clone();
         let request_queue = self.request_queue.clone();
         let pending_cleanup = self.pending_cleanup.clone();
+        let managed_requests = self.managed_requests.clone();
         let has_exception = self.has_exception.clone();
         let stopped = self.stopped.clone();
         let transient_store_pool = self.transient_store_pool.clone();
@@ -433,6 +451,7 @@ impl AllocateMappedFileService {
                     request_table,
                     request_queue,
                     pending_cleanup,
+                    managed_requests,
                     has_exception,
                     stopped,
                     transient_store_pool,
@@ -459,6 +478,7 @@ impl AllocateMappedFileService {
         request_table: Arc<RwLock<HashMap<String, Arc<AllocateRequest>>>>,
         request_queue: Arc<RwLock<BinaryHeap<AllocationQueueEntry>>>,
         pending_cleanup: Arc<Mutex<PendingCleanupRegistry>>,
+        managed_requests: Arc<Mutex<VecDeque<Arc<ManagedAllocationRequest>>>>,
         has_exception: Arc<AtomicBool>,
         stopped: Arc<AtomicBool>,
         transient_store_pool: Option<Arc<TransientStorePool>>,
@@ -469,8 +489,12 @@ impl AllocateMappedFileService {
         info!("AllocateMappedFileService: service started");
 
         while !stopped.load(Ordering::Relaxed) {
-            while !stopped.load(Ordering::Relaxed)
-                && Self::mmap_operation(
+            while !stopped.load(Ordering::Relaxed) {
+                if let Some(request) = managed_requests.lock().pop_front() {
+                    request.execute();
+                    continue;
+                }
+                if !Self::mmap_operation(
                     &request_table,
                     &request_queue,
                     &pending_cleanup,
@@ -479,14 +503,16 @@ impl AllocateMappedFileService {
                     warm_mapped_file_config,
                     #[cfg(feature = "observability")]
                     &store_metrics,
-                )
-            {}
+                ) {
+                    break;
+                }
+            }
 
             if stopped.load(Ordering::Relaxed) {
                 break;
             }
 
-            if request_queue.read().is_empty() {
+            if request_queue.read().is_empty() && managed_requests.lock().is_empty() {
                 let (lock, condvar) = &*worker_wakeup;
                 let guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                 match condvar.wait_timeout(guard, Duration::from_millis(100)) {
@@ -1350,6 +1376,75 @@ impl AllocateMappedFileService {
         }
     }
 
+    /// Installs the reconciled Wave-B lifecycle authority before this worker starts.
+    ///
+    /// This is a local capability handoff, not a cryptographic gate. A second installation or an
+    /// installation after worker start is rejected so queues cannot switch lifecycle authorities
+    /// while allocation is live.
+    #[doc(hidden)]
+    pub fn install_managed_lifecycle(
+        &self,
+        runtime: crate::mapped_file::ManagedLifecycleRuntime,
+        store_root: PathBuf,
+    ) -> bool {
+        if self.ever_started.load(Ordering::Acquire) || self.worker_handle.lock().is_some() {
+            return false;
+        }
+        let mut context = self.managed_context.write();
+        if context.is_some() {
+            return false;
+        }
+        *context = Some(ManagedAllocationContext::new(runtime, store_root));
+        true
+    }
+
+    /// Creates exactly one managed segment on the Store-owned allocation worker.
+    ///
+    /// Managed requests are never speculative and are never automatically retried. A durable or
+    /// namespace failure recovery-fences the lifecycle runtime and is returned to the caller.
+    #[doc(hidden)]
+    pub fn put_managed_request_and_return_mapped_file_blocking(
+        &self,
+        queue: crate::mapped_file::ManagedMappedFileQueueGeneration<DefaultMappedFile>,
+        queue_path: &Path,
+        segment_offset: u64,
+        file_size: u64,
+    ) -> Result<Arc<DefaultMappedFile>, ManagedMappedFileAllocationError> {
+        if !self.is_started() {
+            return Err(ManagedMappedFileAllocationError::WorkerUnavailable);
+        }
+        let charged_bytes = usize::try_from(file_size)
+            .ok()
+            .filter(|size| *size > 0)
+            .ok_or(ManagedMappedFileAllocationError::InvalidFileSize(file_size))?;
+        let permit = self
+            .allocation_budget
+            .try_acquire(charged_bytes, BudgetClass::Data)
+            .map_err(ManagedMappedFileAllocationError::Budget)?;
+        let context = self
+            .managed_context
+            .read()
+            .clone()
+            .ok_or(ManagedMappedFileAllocationError::LifecycleUnavailable)?;
+        let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
+        let request = Arc::new(ManagedAllocationRequest::new(
+            context,
+            queue,
+            queue_path,
+            segment_offset,
+            file_size,
+            request_id,
+            self.transient_store_pool
+                .as_ref()
+                .filter(|_| self.transient_store_pool_enable)
+                .map(|pool| (**pool).clone()),
+            permit,
+        )?);
+        self.managed_requests.lock().push_back(Arc::clone(&request));
+        self.notify_worker();
+        request.wait(&self.worker_completed)
+    }
+
     fn checked_public_file_size(file_path: &str, file_size: u64) -> Result<i32, RocketMQError> {
         i32::try_from(file_size)
             .ok()
@@ -1385,6 +1480,9 @@ impl AllocateMappedFileService {
         let deadline = ShutdownDeadline::after(SHUTDOWN_CLEANUP_TIMEOUT);
 
         self.stopped.store(true, Ordering::Relaxed);
+        for request in self.managed_requests.lock().drain(..) {
+            request.cancel();
+        }
         self.notify_worker();
         let (_, condvar) = &*self.worker_wakeup;
         condvar.notify_all();

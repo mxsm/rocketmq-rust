@@ -74,11 +74,31 @@ impl LocalFileMessageStore {
         // publish even a partial in-memory view of the root.
         let store_root = Path::new(message_store_config.store_path_root_dir.as_str());
         let store_root_lease = StoreRootLease::acquire_unclassified(store_root, StoreOperation::Load)?;
-        let store_root_mode = store_root_lease.classify(StoreOperation::Load)?;
-        if store_root_mode == StoreRootMode::Managed {
-            let disposition = inspect_and_reconcile_managed_root(&store_root_lease)?;
-            return Err(wave_b_activation_fence(disposition));
+        let initial_outcome = store_root_lease.lifecycle_outcome(StoreOperation::Load)?;
+        if message_store_config.enable_mapped_file_lifecycle_wave_b {
+            validate_wave_b_configuration(&message_store_config)?;
         }
+        if message_store_config.enable_mapped_file_lifecycle_wave_b
+            && matches!(
+                initial_outcome,
+                rocketmq_store_local::mapped_file::ManagedLifecycleReadOutcome::LegacyAbsent
+                    | rocketmq_store_local::mapped_file::ManagedLifecycleReadOutcome::RecoveryWriteRequired(
+                        rocketmq_store_local::mapped_file::ManagedLifecycleRecoveryReason::BootstrapResume
+                    )
+            )
+        {
+            store_root_lease.bootstrap_managed_lifecycle(StoreOperation::Load)?;
+        }
+        let store_root_mode = store_root_lease.classify(StoreOperation::Load)?;
+        let managed_lifecycle_activation = if store_root_mode == StoreRootMode::Managed {
+            let disposition = inspect_and_reconcile_managed_root(&store_root_lease)?;
+            if !message_store_config.enable_mapped_file_lifecycle_wave_b {
+                return Err(wave_b_activation_fence(disposition));
+            }
+            Some(require_wave_b_ready(disposition)?)
+        } else {
+            None
+        };
         let runtime_scope = StoreRuntimeScope::new(service_context.clone());
         let local_backend_config = message_store_config.normalized_local_backend_config();
         let cleanup_policy = LocalCleanupPolicy::new(local_backend_config.cleanup);
@@ -367,6 +387,8 @@ impl LocalFileMessageStore {
             scheduled_task_group: None,
             scheduled_tasks: None,
             mapped_file_retirement_service: None,
+            managed_lifecycle_activation,
+            managed_lifecycle_runtime: None,
             ha_update_master_group: Arc::new(StdMutex::new(None)),
             delay_level_table,
             max_delay_level,
@@ -466,6 +488,7 @@ impl LocalFileMessageStore {
             self.store_checkpoint
                 .clone()
                 .expect("store checkpoint is initialized with LocalFileMessageStore"),
+            self.allocate_mapped_file_service.as_ref().clone(),
         )
     }
 
@@ -786,7 +809,9 @@ impl LocalFileMessageStore {
             self.message_store_config
                 .timer_store_config
                 .validate()
-                .map_err(|error| StoreError::config(StoreOperation::Load, error.to_string()))?;
+                .map_err(|error| {
+                    StoreError::config(StoreOperation::Load, "invalid Timer Store configuration").with_source(error)
+                })?;
         }
 
         let enabled_rocksdb_options = Self::enabled_rocksdb_specific_options(self.message_store_config.as_ref());
@@ -930,13 +955,19 @@ impl LocalFileMessageStore {
         let completion = self.extended_timeline_completion_reconciler.as_ref().ok_or_else(|| {
             StoreError::invalid_state(StoreOperation::Admin, "Extended completion replay is not wired")
         })?;
-        let (source_cq_cursor, source_physical_cursor, format_fingerprint) = materializer
-            .snapshot_source_cursors()
-            .map_err(|error| StoreError::storage(StoreOperation::Read, error.to_string()))?;
+        let (source_cq_cursor, source_physical_cursor, format_fingerprint) =
+            materializer.snapshot_source_cursors().map_err(|error| {
+                StoreError::storage(StoreOperation::Read, "failed to read Extended Timeline source cursors")
+                    .with_source(error)
+            })?;
         let metrics = materializer.metrics();
-        let completion_cursor = completion
-            .completion_physical_cursor()
-            .map_err(|error| StoreError::storage(StoreOperation::Read, error.to_string()))?;
+        let completion_cursor = completion.completion_physical_cursor().map_err(|error| {
+            StoreError::storage(
+                StoreOperation::Read,
+                "failed to read Extended Timeline completion cursor",
+            )
+            .with_source(error)
+        })?;
         let replicated_final_end = self
             .commit_log
             .get_flushed_where()
@@ -974,14 +1005,17 @@ impl LocalFileMessageStore {
         let snapshot = self.extended_timeline_snapshot.as_ref().ok_or_else(|| {
             StoreError::unsupported(StoreOperation::Admin, "Extended Timeline snapshot is not enabled")
         })?;
-        let manifest = snapshot
-            .create()
-            .map_err(|error| StoreError::storage(StoreOperation::Admin, error.to_string()))?;
+        let manifest = snapshot.create().map_err(|error| {
+            StoreError::storage(StoreOperation::Admin, "failed to create Extended Timeline snapshot").with_source(error)
+        })?;
         self.extended_timeline_promotion_gate
             .as_ref()
             .ok_or_else(|| StoreError::invalid_state(StoreOperation::Admin, "Extended promotion gate is not wired"))?
             .mark_snapshot_installed(manifest.clone())
-            .map_err(|error| StoreError::invalid_state(StoreOperation::Admin, error.to_string()))?;
+            .map_err(|error| {
+                StoreError::invalid_state(StoreOperation::Admin, "failed to publish Extended Timeline snapshot")
+                    .with_source(error)
+            })?;
         Ok(manifest)
     }
 
@@ -995,7 +1029,10 @@ impl LocalFileMessageStore {
             .as_ref()
             .ok_or_else(|| StoreError::unsupported(StoreOperation::Admin, "Extended Timeline snapshot is not enabled"))?
             .release(manifest)
-            .map_err(|error| StoreError::storage(StoreOperation::Admin, error.to_string()))
+            .map_err(|error| {
+                StoreError::storage(StoreOperation::Admin, "failed to release Extended Timeline snapshot")
+                    .with_source(error)
+            })
     }
 
     pub(super) fn refresh_controller_confirm_offset_after_role_change(&self) {

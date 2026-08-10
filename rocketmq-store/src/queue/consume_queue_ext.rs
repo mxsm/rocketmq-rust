@@ -25,10 +25,13 @@ use rocketmq_store_local::consume_queue::extension::plan_cq_ext_append;
 use rocketmq_store_local::consume_queue::extension::scan_cq_ext_recovery;
 use rocketmq_store_local::consume_queue::extension::undecorate_cq_ext_address;
 use rocketmq_store_local::consume_queue::extension::CqExtAppendPlan;
+use rocketmq_store_local::mapped_file::ManagedLifecycleRuntime;
+use rocketmq_store_local::mapped_file::ManagedMappedFileQueueGeneration;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
 
+use crate::base::allocate_mapped_file_service::AllocateMappedFileService;
 use crate::consume_queue::cq_ext_unit::CqExtUnit;
 use crate::consume_queue::cq_ext_unit::MAX_EXT_UNIT_SIZE;
 use crate::consume_queue::mapped_file_queue::MappedFileQueue;
@@ -45,6 +48,15 @@ pub struct ConsumeQueueExt {
 }
 
 impl ConsumeQueueExt {
+    pub(crate) fn install_reconciled_generation(
+        &self,
+        generation: ManagedMappedFileQueueGeneration<DefaultMappedFile>,
+        runtime: ManagedLifecycleRuntime,
+    ) -> bool {
+        let queue = self.mapped_file_queue.lock();
+        queue.install_reconciled_generation(generation) && queue.bind_managed_runtime(runtime)
+    }
+
     pub fn new(
         topic: CheetahString,
         queue_id: i32,
@@ -59,6 +71,34 @@ impl ConsumeQueueExt {
             queue_dir.to_string_lossy().to_string(),
             mapped_file_size as u64,
             None,
+        )));
+        let _ = bit_map_length;
+        Self {
+            mapped_file_queue,
+            topic,
+            queue_id,
+            store_path,
+            mapped_file_size,
+        }
+    }
+
+    pub(crate) fn new_managed(
+        topic: CheetahString,
+        queue_id: i32,
+        store_path: CheetahString,
+        mapped_file_size: i32,
+        bit_map_length: i32,
+        allocate_mapped_file_service: AllocateMappedFileService,
+        runtime: ManagedLifecycleRuntime,
+    ) -> Self {
+        let queue_dir = PathBuf::from(store_path.as_str())
+            .join(topic.as_str())
+            .join(queue_id.to_string());
+        let mapped_file_queue = Arc::new(Mutex::new(MappedFileQueue::new_managed(
+            queue_dir.to_string_lossy().to_string(),
+            mapped_file_size as u64,
+            allocate_mapped_file_service,
+            runtime,
         )));
         let _ = bit_map_length;
         Self {

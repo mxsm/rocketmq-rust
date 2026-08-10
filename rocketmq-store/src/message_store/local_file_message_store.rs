@@ -252,11 +252,15 @@ use health::CommitLogWalPin;
 use health::CorrectLogicOffsetService;
 use lifecycle::FlushConsumeQueueService;
 use managed_recovery::inspect_and_reconcile_managed_root;
+use managed_recovery::require_wave_b_ready;
+use managed_recovery::validate_wave_b_configuration;
 use managed_recovery::wave_b_activation_fence;
 use mapped_file_retirement_service::MappedFileRetirementService;
 use read_path::estimate_in_mem_by_commit_offset;
 use read_path::is_the_batch_full;
 use recovery::BackgroundIndexRebuildService;
+use rocketmq_store_local::mapped_file::ManagedLifecycleRuntime;
+use rocketmq_store_local::mapped_file::PreparedManagedLifecycleActivation;
 use root_lock::StoreRootLease;
 use root_lock::StoreRootMode;
 use write_path::murmur3_x64_128_bytes;
@@ -613,6 +617,8 @@ pub struct LocalFileMessageStore {
     scheduled_task_group: Option<rocketmq_runtime::TaskGroup>,
     scheduled_tasks: Option<ScheduledTaskGroup>,
     mapped_file_retirement_service: Option<MappedFileRetirementService>,
+    managed_lifecycle_activation: Option<PreparedManagedLifecycleActivation>,
+    managed_lifecycle_runtime: Option<ManagedLifecycleRuntime>,
     ha_update_master_group: Arc<StdMutex<Option<rocketmq_runtime::TaskGroup>>>,
     delay_level_table: Arc<BTreeMap<i32 /* level */, i64 /* delay timeMillis */>>,
     max_delay_level: i32,

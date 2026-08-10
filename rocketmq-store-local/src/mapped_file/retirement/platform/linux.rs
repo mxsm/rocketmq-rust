@@ -121,7 +121,7 @@ impl NamespaceRoot {
                 "canonical and create-file paths have different parents",
             ));
         }
-        let parent = open_parent_strict(&self.file, parent_path)
+        let parent = open_or_create_parent_strict(&self.file, parent_path)
             .map_err(|error| IncarnationCreationError::namespace(IncarnationCreationStage::OpenParent, error))?;
         let metadata = parent
             .metadata()
@@ -425,6 +425,82 @@ fn open_parent_strict(root: &File, parent_path: &str) -> Result<File, NamespaceV
         ),
         Err(error) => Err(classify_io(NamespaceOperation::OpenParent, error).into_verification_error()),
     }
+}
+
+fn open_or_create_parent_strict(root: &File, parent_path: &str) -> Result<File, NamespaceVerificationError> {
+    let root_device = root
+        .metadata()
+        .map_err(|error| classify_io(NamespaceOperation::VerifyRoot, error).into_verification_error())?
+        .dev();
+    if parent_path.is_empty() {
+        return root
+            .try_clone()
+            .map_err(|error| classify_io(NamespaceOperation::OpenParent, error).into_verification_error());
+    }
+
+    let mut parent = root
+        .try_clone()
+        .map_err(|error| classify_io(NamespaceOperation::OpenParent, error).into_verification_error())?;
+    for component in parent_path.split('/') {
+        if component.is_empty() || component == "." || component == ".." {
+            return Err(NamespaceVerificationError::Rejected(
+                NamespacePolicyViolation::ParentEscapedRoot,
+            ));
+        }
+        let component = CString::new(component)
+            .map_err(|_| NamespaceVerificationError::Rejected(NamespacePolicyViolation::ParentEscapedRoot))?;
+        let next = match openat2(
+            &parent,
+            &component,
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+        ) {
+            Ok(next) => next,
+            Err(error) if error.raw_os_error() == Some(libc::ENOENT) => {
+                // SAFETY: `component` is one validated relative name and `parent` is a retained,
+                // verified directory handle beneath the Store root. mkdirat cannot traverse it.
+                let result = unsafe { libc::mkdirat(parent.as_raw_fd(), component.as_ptr(), 0o700) };
+                if result != 0 {
+                    let error = io::Error::last_os_error();
+                    if error.raw_os_error() != Some(libc::EEXIST) {
+                        return Err(classify_io(NamespaceOperation::OpenParent, error).into_verification_error());
+                    }
+                }
+                parent.sync_all().map_err(|error| {
+                    classify_io(NamespaceOperation::SyncParentOrHandle, error).into_verification_error()
+                })?;
+                openat2(
+                    &parent,
+                    &component,
+                    libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+                )
+                .map_err(|error| classify_io(NamespaceOperation::OpenParent, error).into_verification_error())?
+            }
+            Err(error) if error.raw_os_error() == Some(libc::ENOSYS) => {
+                return Err(NamespaceVerificationError::Unsupported {
+                    platform: "linux",
+                    reason: OPENAT2_UNAVAILABLE,
+                });
+            }
+            Err(error) if error.raw_os_error() == Some(libc::EXDEV) || error.raw_os_error() == Some(libc::ELOOP) => {
+                return Err(NamespaceVerificationError::Rejected(
+                    NamespacePolicyViolation::ParentEscapedRoot,
+                ));
+            }
+            Err(error) => {
+                return Err(classify_io(NamespaceOperation::OpenParent, error).into_verification_error());
+            }
+        };
+        let metadata = next
+            .metadata()
+            .map_err(|error| classify_io(NamespaceOperation::OpenParent, error).into_verification_error())?;
+        if !metadata.is_dir() || metadata.dev() != root_device {
+            return Err(NamespaceVerificationError::Rejected(
+                NamespacePolicyViolation::ParentEscapedRoot,
+            ));
+        }
+        parent = next;
+    }
+    Ok(parent)
 }
 
 fn openat2(parent: &File, path: &CString, flags: i32) -> io::Result<File> {

@@ -58,7 +58,12 @@ pub(crate) mod retirement;
 #[doc(hidden)]
 pub use retirement::activation::{
     prepare_managed_lifecycle_activation, ManagedLifecycleActivationError, ManagedLifecycleActivationErrorKind,
-    PreparedManagedLifecycleActivation,
+    ManagedQueueDescriptor, PreparedManagedLifecycleActivation,
+};
+#[doc(hidden)]
+pub use retirement::bootstrap::{
+    bootstrap_managed_lifecycle_under_exclusive_lock, InitialBootstrapCompletion, ManagedLifecycleBootstrapError,
+    ManagedLifecycleBootstrapErrorKind,
 };
 #[doc(hidden)]
 pub use retirement::registry::ManagedMappedFileQueueGeneration;

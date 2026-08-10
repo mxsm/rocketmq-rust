@@ -221,7 +221,7 @@ impl PlatformError {
         Self::Unsupported
     }
 
-    pub(super) const fn kind(&self) -> PlatformErrorKind {
+    pub(in crate::mapped_file::retirement) const fn kind(&self) -> PlatformErrorKind {
         match self {
             Self::Io { .. } => PlatformErrorKind::Io,
             #[cfg(windows)]

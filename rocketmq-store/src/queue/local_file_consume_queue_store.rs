@@ -40,14 +40,18 @@ use rocketmq_model::utils::queue_type_utils::QueueTypeUtils;
 use rocketmq_store_local::consume_queue::root::clamp_consume_queue_offset;
 use rocketmq_store_local::consume_queue::root::find_or_create_consume_queue as drive_find_or_create_consume_queue;
 use rocketmq_store_local::consume_queue::root::ConsumeQueueStoreRoot;
+use rocketmq_store_local::mapped_file::ManagedLifecycleRuntime;
+use rocketmq_store_local::mapped_file::ManagedMappedFileQueueGeneration;
 use tokio::sync::Semaphore;
 use tracing::error;
 use tracing::info;
 
+use crate::base::allocate_mapped_file_service::AllocateMappedFileService;
 use crate::base::dispatch_request::DispatchRequest;
 use crate::base::store_checkpoint::StoreCheckpoint;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::log_file::commit_log::CommitLogReadHandle;
+use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::queue::batch_consume_queue::BatchConsumeQueue;
 use crate::queue::consume_queue::ConsumeQueueTrait;
 use crate::queue::consume_queue_store::ConsumeQueueStoreTrait;
@@ -159,6 +163,7 @@ struct Inner {
     pub(crate) broker_config: Arc<StoreRuntimeConfig>,
     pub(crate) queue_offset_operator: QueueOffsetOperator,
     pub(crate) consume_queue_table: Arc<ConsumeQueueTable>,
+    managed_lifecycle_runtime: RwLock<Option<ManagedLifecycleRuntime>>,
     /// Serializes queue admission with destructive work for the same topic.
     topic_lifecycle_locks: parking_lot::Mutex<HashMap<CheetahString, Arc<RwLock<()>>>>,
 }
@@ -170,6 +175,7 @@ pub(crate) struct ConsumeQueueStoreContext {
     commit_log: CommitLogReadHandle,
     running_flags: Arc<RunningFlags>,
     store_checkpoint: Arc<StoreCheckpoint>,
+    allocate_mapped_file_service: AllocateMappedFileService,
 }
 
 impl ConsumeQueueStoreContext {
@@ -179,6 +185,7 @@ impl ConsumeQueueStoreContext {
         commit_log: CommitLogReadHandle,
         running_flags: Arc<RunningFlags>,
         store_checkpoint: Arc<StoreCheckpoint>,
+        allocate_mapped_file_service: AllocateMappedFileService,
     ) -> Self {
         Self {
             message_store_config,
@@ -186,6 +193,7 @@ impl ConsumeQueueStoreContext {
             commit_log,
             running_flags,
             store_checkpoint,
+            allocate_mapped_file_service,
         }
     }
 
@@ -207,6 +215,10 @@ impl ConsumeQueueStoreContext {
 
     pub(crate) fn store_checkpoint(&self) -> &StoreCheckpoint {
         self.store_checkpoint.as_ref()
+    }
+
+    pub(crate) fn allocate_mapped_file_service(&self) -> AllocateMappedFileService {
+        self.allocate_mapped_file_service.clone()
     }
 }
 
@@ -245,6 +257,89 @@ impl Inner {
 }
 
 impl ConsumeQueueStore {
+    pub(crate) fn bind_managed_lifecycle_runtime(&self, runtime: ManagedLifecycleRuntime) -> bool {
+        let mut installed = self.inner.managed_lifecycle_runtime.write();
+        if installed.is_some() {
+            return false;
+        }
+        *installed = Some(runtime);
+        true
+    }
+
+    pub(crate) fn accepts_reconciled_queue_type(&self, topic: &str, cq_type: CQType) -> bool {
+        self.queue_type_should_be(&CheetahString::from_string(topic.to_owned()), cq_type)
+    }
+
+    pub(crate) fn install_reconciled_simple_queue(
+        &self,
+        topic: &str,
+        queue_id: i32,
+        queue: ManagedMappedFileQueueGeneration<DefaultMappedFile>,
+        extension: Option<ManagedMappedFileQueueGeneration<DefaultMappedFile>>,
+        runtime: ManagedLifecycleRuntime,
+    ) -> bool {
+        let topic = CheetahString::from_string(topic.to_owned());
+        if !self.queue_type_should_be(&topic, CQType::SimpleCQ)
+            || self
+                .inner
+                .consume_queue_table
+                .lock()
+                .get(&topic)
+                .is_some_and(|queues| queues.contains_key(&queue_id))
+        {
+            return false;
+        }
+        let Some(context) = self.inner.context.read().clone() else {
+            return false;
+        };
+        let consume_queue = ConsumeQueue::new(
+            topic.clone(),
+            queue_id,
+            get_store_path_consume_queue(self.inner.message_store_config.store_path_root_dir.as_str()).into(),
+            self.inner.message_store_config.get_mapped_file_size_consume_queue(),
+            context,
+            self.lookup_handle(),
+        );
+        if !consume_queue.install_reconciled_generations(queue, extension, runtime) {
+            return false;
+        }
+        self.put_consume_queue(topic, queue_id, ArcConsumeQueue::new(Box::new(consume_queue)));
+        true
+    }
+
+    pub(crate) fn install_reconciled_batch_queue(
+        &self,
+        topic: &str,
+        queue_id: i32,
+        generation: ManagedMappedFileQueueGeneration<DefaultMappedFile>,
+        runtime: ManagedLifecycleRuntime,
+    ) -> bool {
+        let topic = CheetahString::from_string(topic.to_owned());
+        if !self.queue_type_should_be(&topic, CQType::BatchCQ)
+            || self
+                .inner
+                .consume_queue_table
+                .lock()
+                .get(&topic)
+                .is_some_and(|queues| queues.contains_key(&queue_id))
+        {
+            return false;
+        }
+        let consume_queue = BatchConsumeQueue::new(
+            topic.clone(),
+            queue_id,
+            get_store_path_batch_consume_queue(self.inner.message_store_config.store_path_root_dir.as_str()).into(),
+            self.inner.message_store_config.mapper_file_size_batch_consume_queue,
+            None,
+            Arc::clone(&self.inner.message_store_config),
+        );
+        if !consume_queue.install_reconciled_generation(generation, runtime) {
+            return false;
+        }
+        self.put_consume_queue(topic, queue_id, ArcConsumeQueue::new(Box::new(consume_queue)));
+        true
+    }
+
     fn topic_lifecycle_lock(&self, topic: &CheetahString) -> Arc<RwLock<()>> {
         self.inner
             .topic_lifecycle_locks
@@ -255,6 +350,7 @@ impl ConsumeQueueStore {
     }
 
     fn find_or_create_consume_queue_unfenced(&self, topic: &CheetahString, queue_id: i32) -> ArcConsumeQueue {
+        let managed_runtime = self.inner.managed_lifecycle_runtime.read().clone();
         drive_find_or_create_consume_queue(
             || {
                 self.inner
@@ -274,29 +370,54 @@ impl ConsumeQueueStore {
                 let cq_type = QueueTypeUtils::get_cq_type_arc_mut(topic_config.as_ref());
                 match cq_type {
                     CQType::SimpleCQ | CQType::RocksDBCQ => {
-                        let consume_queue = ConsumeQueue::new(
-                            topic.clone(),
-                            queue_id,
-                            CheetahString::from_string(get_store_path_consume_queue(
-                                self.inner.message_store_config.store_path_root_dir.as_str(),
-                            )),
-                            self.inner.message_store_config.get_mapped_file_size_consume_queue(),
-                            context,
-                            self.lookup_handle(),
-                        );
+                        let store_path = CheetahString::from_string(get_store_path_consume_queue(
+                            self.inner.message_store_config.store_path_root_dir.as_str(),
+                        ));
+                        let consume_queue = match managed_runtime.as_ref() {
+                            Some(runtime) => ConsumeQueue::new_managed(
+                                topic.clone(),
+                                queue_id,
+                                store_path,
+                                self.inner.message_store_config.get_mapped_file_size_consume_queue(),
+                                context,
+                                self.lookup_handle(),
+                                runtime.clone(),
+                            ),
+                            None => ConsumeQueue::new(
+                                topic.clone(),
+                                queue_id,
+                                store_path,
+                                self.inner.message_store_config.get_mapped_file_size_consume_queue(),
+                                context,
+                                self.lookup_handle(),
+                            ),
+                        };
                         ArcConsumeQueue::new(Box::new(consume_queue))
                     }
                     CQType::BatchCQ => {
-                        let consume_queue = BatchConsumeQueue::new(
-                            topic.clone(),
-                            queue_id,
-                            CheetahString::from_string(get_store_path_batch_consume_queue(
-                                self.inner.message_store_config.store_path_root_dir.as_str(),
-                            )),
-                            self.inner.message_store_config.mapper_file_size_batch_consume_queue,
-                            None,
-                            self.inner.message_store_config.clone(),
-                        );
+                        let store_path = CheetahString::from_string(get_store_path_batch_consume_queue(
+                            self.inner.message_store_config.store_path_root_dir.as_str(),
+                        ));
+                        let consume_queue = match managed_runtime.as_ref() {
+                            Some(runtime) => BatchConsumeQueue::new_managed(
+                                topic.clone(),
+                                queue_id,
+                                store_path,
+                                self.inner.message_store_config.mapper_file_size_batch_consume_queue,
+                                None,
+                                self.inner.message_store_config.clone(),
+                                context.allocate_mapped_file_service(),
+                                runtime.clone(),
+                            ),
+                            None => BatchConsumeQueue::new(
+                                topic.clone(),
+                                queue_id,
+                                store_path,
+                                self.inner.message_store_config.mapper_file_size_batch_consume_queue,
+                                None,
+                                self.inner.message_store_config.clone(),
+                            ),
+                        };
                         ArcConsumeQueue::new(Box::new(consume_queue))
                     }
                 }
@@ -783,6 +904,7 @@ impl ConsumeQueueStore {
                 broker_config,
                 queue_offset_operator: Default::default(),
                 consume_queue_table: Arc::new(Default::default()),
+                managed_lifecycle_runtime: RwLock::new(None),
                 topic_lifecycle_locks: parking_lot::Mutex::new(HashMap::new()),
             })),
         }

@@ -405,6 +405,24 @@ mod tests {
         assert!(!core.report(std::time::Instant::now(), 0, 0).recovery_required());
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn durable_creation_builds_a_new_queue_directory_under_the_retained_root() {
+        let mut fixture = Fixture::new_without_queue_directory();
+        let (mut core, queue) = fixture.core(0);
+        let request = ManagedIncarnationCreateRequest::new("consumequeue/topic-a/3", 0, 4096, [0x54; 16])
+            .expect("creation request is valid");
+
+        core.create_mapped_file(&queue, request)
+            .expect("managed creation builds missing queue directories safely");
+
+        assert!(fixture
+            .root
+            .path()
+            .join("consumequeue/topic-a/3/00000000000000000000")
+            .is_file());
+    }
+
     #[test]
     fn failure_after_allocate_advances_high_water_and_recovery_fences_creation() {
         let mut fixture = Fixture::new();
@@ -440,6 +458,14 @@ mod tests {
         fn new() -> Self {
             let root = tempfile::tempdir().expect("create temporary Store root");
             std::fs::create_dir(root.path().join("commitlog")).expect("create commitlog directory");
+            Self::from_root(root)
+        }
+
+        fn new_without_queue_directory() -> Self {
+            Self::from_root(tempfile::tempdir().expect("create temporary Store root"))
+        }
+
+        fn from_root(root: TempDir) -> Self {
             let handle = open_root_handle(root.path()).expect("open Store root handle");
             let namespace = VerifiedNamespaceRoot::open(handle, store_uuid()).expect("verify Store root");
             Self {

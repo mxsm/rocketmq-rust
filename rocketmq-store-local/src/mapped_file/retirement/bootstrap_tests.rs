@@ -12,12 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::executor::*;
 use super::plan::*;
 use super::proof::*;
 use super::types::*;
 
+#[path = "bootstrap_tests/executor.rs"]
+mod executor_flow;
+#[path = "bootstrap_tests/foundation.rs"]
+mod foundation;
 #[path = "bootstrap_tests/initial.rs"]
 mod initial;
+#[path = "bootstrap_tests/inventory.rs"]
+mod inventory_scan;
 #[path = "bootstrap_tests/support.rs"]
 mod support;
 #[path = "bootstrap_tests/switch.rs"]

@@ -28,8 +28,10 @@ use windows::Wdk::Storage::FileSystem::FileRenameInformationEx;
 use windows::Wdk::Storage::FileSystem::NtCreateFile;
 use windows::Wdk::Storage::FileSystem::NtSetInformationFile;
 use windows::Wdk::Storage::FileSystem::FILE_CREATE;
+use windows::Wdk::Storage::FileSystem::FILE_DIRECTORY_FILE;
 use windows::Wdk::Storage::FileSystem::FILE_NON_DIRECTORY_FILE;
 use windows::Wdk::Storage::FileSystem::FILE_OPEN;
+use windows::Wdk::Storage::FileSystem::FILE_OPEN_IF;
 use windows::Wdk::Storage::FileSystem::FILE_OPEN_REPARSE_POINT;
 use windows::Wdk::Storage::FileSystem::FILE_RENAME_INFORMATION;
 use windows::Wdk::Storage::FileSystem::FILE_SYNCHRONOUS_IO_NONALERT;
@@ -182,7 +184,7 @@ impl NamespaceRoot {
                 "canonical and create-file paths have different parents",
             ));
         }
-        let parent = open_parent(&self.file, parent_path)
+        let parent = open_or_create_parent(&self.file, parent_path)
             .map_err(|error| IncarnationCreationError::namespace(IncarnationCreationStage::OpenParent, error))?;
         require_missing(&parent, canonical_name, IncarnationCreationStage::VerifyNames)?;
         require_missing(&parent, create_name, IncarnationCreationStage::VerifyNames)?;
@@ -453,6 +455,111 @@ fn open_parent(root: &File, parent_path: &str) -> Result<File, NamespaceVerifica
         }
     }
     Ok(parent)
+}
+
+fn open_or_create_parent(root: &File, parent_path: &str) -> Result<File, NamespaceVerificationError> {
+    let mut parent = root
+        .try_clone()
+        .map_err(|error| classify_io(NamespaceOperation::OpenParent, error).into_verification_error())?;
+    if parent_path.is_empty() {
+        return Ok(parent);
+    }
+    for component in parent_path.split('/') {
+        if component.is_empty() || component == "." || component == ".." {
+            return Err(NamespaceVerificationError::Rejected(
+                NamespacePolicyViolation::ParentEscapedRoot,
+            ));
+        }
+        let next = open_or_create_directory_component(&parent, component)?;
+        let attributes =
+            query_attributes(&next, NamespaceOperation::OpenParent).map_err(BackendFailure::into_verification_error)?;
+        if attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0
+            || attributes.FileAttributes & FILE_ATTRIBUTE_DIRECTORY.0 == 0
+        {
+            return Err(NamespaceVerificationError::Rejected(
+                NamespacePolicyViolation::ParentEscapedRoot,
+            ));
+        }
+        let reopened = open_relative(&parent, component, true, NamespaceOperation::OpenParent)
+            .map_err(BackendFailure::into_verification_error)?
+            .ok_or_else(|| {
+                BackendFailure::retryable(
+                    NamespaceOperation::OpenParent,
+                    NamespaceFailureClass::NotFoundNeedsReconciliation,
+                    Some(ERROR_PATH_NOT_FOUND.0 as i32),
+                )
+                .into_verification_error()
+            })?;
+        let created_key = physical_key::capture(&next)
+            .map_err(|error| classify_io(NamespaceOperation::OpenParent, error).into_verification_error())?;
+        let reopened_key = physical_key::capture(&reopened)
+            .map_err(|error| classify_io(NamespaceOperation::OpenParent, error).into_verification_error())?;
+        if created_key != reopened_key {
+            return Err(NamespaceVerificationError::Rejected(
+                NamespacePolicyViolation::ParentEscapedRoot,
+            ));
+        }
+        parent = reopened;
+    }
+    Ok(parent)
+}
+
+fn open_or_create_directory_component(parent: &File, name: &str) -> Result<File, NamespaceVerificationError> {
+    let mut wide = name.encode_utf16().collect::<Vec<_>>();
+    let byte_length = wide
+        .len()
+        .checked_mul(size_of::<u16>())
+        .and_then(|value| u16::try_from(value).ok())
+        .ok_or(NamespaceVerificationError::Rejected(
+            NamespacePolicyViolation::ParentEscapedRoot,
+        ))?;
+    let unicode = UNICODE_STRING {
+        Length: byte_length,
+        MaximumLength: byte_length,
+        Buffer: PWSTR(wide.as_mut_ptr()),
+    };
+    let attributes = OBJECT_ATTRIBUTES {
+        Length: size_of::<OBJECT_ATTRIBUTES>() as u32,
+        RootDirectory: HANDLE(parent.as_raw_handle()),
+        ObjectName: &unicode,
+        Attributes: OBJ_DONT_REPARSE,
+        SecurityDescriptor: ptr::null(),
+        SecurityQualityOfService: ptr::null(),
+    };
+    let desired = FILE_ACCESS_RIGHTS(FILE_LIST_DIRECTORY.0 | FILE_TRAVERSE.0 | FILE_READ_ATTRIBUTES.0 | SYNCHRONIZE.0);
+    let share = FILE_SHARE_MODE(FILE_SHARE_READ.0 | FILE_SHARE_WRITE.0 | FILE_SHARE_DELETE.0);
+    let options =
+        NTCREATEFILE_CREATE_OPTIONS(FILE_OPEN_REPARSE_POINT.0 | FILE_SYNCHRONOUS_IO_NONALERT.0 | FILE_DIRECTORY_FILE.0);
+    let mut handle = HANDLE(ptr::null_mut());
+    let mut io_status = IO_STATUS_BLOCK::default();
+    // SAFETY: the retained parent handle and one-component UTF-16 name remain live for this
+    // synchronous call. The directory/open-reparse options prevent traversal through the child.
+    let status = unsafe {
+        NtCreateFile(
+            &mut handle,
+            desired,
+            &attributes,
+            &mut io_status,
+            None,
+            FILE_FLAGS_AND_ATTRIBUTES(0),
+            share,
+            FILE_OPEN_IF,
+            options,
+            None,
+            0,
+        )
+    };
+    if status.0 < 0 {
+        return Err(classify_io(NamespaceOperation::OpenParent, status_error(status)).into_verification_error());
+    }
+    if handle.is_invalid() {
+        return Err(
+            BackendFailure::failed(NamespaceOperation::OpenParent, NamespaceFailureClass::OtherIo, None)
+                .into_verification_error(),
+        );
+    }
+    // SAFETY: successful NtCreateFile returned unique ownership of a valid kernel handle.
+    Ok(unsafe { File::from_raw_handle(handle.0) })
 }
 
 fn open_relative(
@@ -736,6 +843,7 @@ fn is_information_class_unsupported(error: &windows::core::Error) -> bool {
 }
 
 fn is_status_information_class_unsupported(status: NTSTATUS) -> bool {
+    // SAFETY: `RtlNtStatusToDosError` accepts any NTSTATUS value and does not retain pointers.
     let code = unsafe { RtlNtStatusToDosError(status) };
     code == ERROR_INVALID_PARAMETER.0 || code == ERROR_NOT_SUPPORTED.0
 }

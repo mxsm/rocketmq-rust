@@ -176,12 +176,20 @@ pub fn delete_expired_mapped_files_by_time_before<N>(
 where
     N: FnMut() -> i64,
 {
-    let candidate_count = files.len().saturating_sub(1);
+    let candidates = select_expired_mapped_files_by_time_before(
+        files,
+        expired_time,
+        clean_immediately,
+        delete_file_batch_max,
+        pinned_file_offset,
+        &mut now_millis,
+    );
     let mut deleted_files = Vec::new();
-    let Ok(retention_millis) = u64::try_from(expired_time) else {
+    let candidate_count = candidates.len();
+    let Ok(delete_files_interval) = u64::try_from(delete_files_interval) else {
         warn!(
-            expired_time,
-            "negative mapped-file retention is invalid; skipping cleanup"
+            delete_files_interval,
+            "negative mapped-file delete interval is invalid; skipping cleanup"
         );
         return MappedFileQueueDeletion::new(0, deleted_files);
     };
@@ -192,20 +200,47 @@ where
         );
         return MappedFileQueueDeletion::new(0, deleted_files);
     };
-    let Ok(delete_files_interval) = u64::try_from(delete_files_interval) else {
+    for (index, mapped_file) in candidates.into_iter().enumerate() {
+        if !mapped_file.try_destroy(interval_forcibly).is_namespace_removed() {
+            break;
+        }
+        deleted_files.push(mapped_file);
+        if delete_files_interval > 0 && index + 1 < candidate_count {
+            thread::sleep(Duration::from_millis(delete_files_interval));
+        }
+    }
+
+    MappedFileQueueDeletion::new(deleted_files.len() as i32, deleted_files)
+}
+
+/// Selects an oldest-first retention prefix without performing namespace I/O.
+#[doc(hidden)]
+pub fn select_expired_mapped_files_by_time_before<N>(
+    files: &[Arc<DefaultMappedFile>],
+    expired_time: i64,
+    clean_immediately: bool,
+    delete_file_batch_max: i32,
+    pinned_file_offset: Option<u64>,
+    mut now_millis: N,
+) -> Vec<Arc<DefaultMappedFile>>
+where
+    N: FnMut() -> i64,
+{
+    let candidate_count = files.len().saturating_sub(1);
+    let mut candidates = Vec::new();
+    let Ok(retention_millis) = u64::try_from(expired_time) else {
         warn!(
-            delete_files_interval,
-            "negative mapped-file delete interval is invalid; skipping cleanup"
+            expired_time,
+            "negative mapped-file retention is invalid; skipping cleanup"
         );
-        return MappedFileQueueDeletion::new(0, deleted_files);
+        return candidates;
     };
     if delete_file_batch_max <= 0 {
         warn!(delete_file_batch_max, "mapped-file delete batch limit must be positive");
-        return MappedFileQueueDeletion::new(0, deleted_files);
+        return candidates;
     }
     let retention = Duration::from_millis(retention_millis);
-
-    for (index, mapped_file) in files.iter().enumerate().take(candidate_count) {
+    for mapped_file in files.iter().take(candidate_count) {
         if pinned_file_offset.is_some_and(|pinned| mapped_file.get_file_from_offset() >= pinned) {
             break;
         }
@@ -240,24 +275,15 @@ where
             };
             is_expired(modified, now, retention)
         };
-        if expired {
-            if mapped_file.try_destroy(interval_forcibly).is_namespace_removed() {
-                deleted_files.push(mapped_file.clone());
-                if deleted_files.len() >= delete_file_batch_max as usize {
-                    break;
-                }
-                if delete_files_interval > 0 && index + 1 < candidate_count {
-                    thread::sleep(Duration::from_millis(delete_files_interval));
-                }
-            } else {
-                break;
-            }
-        } else {
+        if !expired {
+            break;
+        }
+        candidates.push(Arc::clone(mapped_file));
+        if candidates.len() >= delete_file_batch_max as usize {
             break;
         }
     }
-
-    MappedFileQueueDeletion::new(deleted_files.len() as i32, deleted_files)
+    candidates
 }
 
 /// Destroys consume-queue files whose last physical offset precedes the retained offset.
@@ -268,34 +294,9 @@ pub fn delete_expired_mapped_files_by_offset(
     offset: i64,
     unit_size: i32,
 ) -> MappedFileQueueDeletion {
-    let candidate_count = files.len().saturating_sub(1);
     let mut deleted_files = Vec::new();
-
-    for mapped_file in files.iter().take(candidate_count) {
-        let mut destroy = false;
-        if let Some(result) = mapped_file.select_mapped_buffer((mapped_file_size - unit_size as u64) as i32, unit_size)
-        {
-            if let Some(buffer) = result.get_bytes_ref() {
-                if buffer.len() >= 8 {
-                    let max_offset_in_logic_queue = i64::from_be_bytes(buffer[0..8].try_into().unwrap_or([0; 8]));
-                    destroy = max_offset_in_logic_queue < offset;
-                    if destroy {
-                        info!(
-                            "physic min offset {}, logics in current mappedFile max offset {}, delete it",
-                            offset, max_offset_in_logic_queue
-                        );
-                    }
-                }
-            }
-        } else if !mapped_file.is_available() {
-            warn!("Found a hanged consume queue file, attempting to delete it.");
-            destroy = true;
-        } else {
-            warn!("this being not executed forever.");
-            break;
-        }
-
-        if destroy && mapped_file.try_destroy(1000 * 60).is_namespace_removed() {
+    for mapped_file in select_expired_mapped_files_by_offset(files, mapped_file_size, offset, unit_size) {
+        if mapped_file.try_destroy(1000 * 60).is_namespace_removed() {
             deleted_files.push(mapped_file.clone());
         } else {
             break;
@@ -303,6 +304,60 @@ pub fn delete_expired_mapped_files_by_offset(
     }
 
     MappedFileQueueDeletion::new(deleted_files.len() as i32, deleted_files)
+}
+
+/// Selects consume-queue retirement candidates without namespace mutation.
+#[doc(hidden)]
+pub fn select_expired_mapped_files_by_offset(
+    files: &[Arc<DefaultMappedFile>],
+    mapped_file_size: u64,
+    offset: i64,
+    unit_size: i32,
+) -> Vec<Arc<DefaultMappedFile>> {
+    let candidate_count = files.len().saturating_sub(1);
+    let mut candidates = Vec::new();
+    let Ok(unit_size) = u64::try_from(unit_size) else {
+        warn!(
+            unit_size,
+            "negative consume-queue unit size is invalid; skipping cleanup"
+        );
+        return candidates;
+    };
+    if unit_size == 0 || unit_size > mapped_file_size {
+        warn!(
+            unit_size,
+            mapped_file_size, "consume-queue unit size is out of range; skipping cleanup"
+        );
+        return candidates;
+    }
+    let Some(read_position) = mapped_file_size.checked_sub(unit_size) else {
+        return candidates;
+    };
+    let Ok(read_position) = i32::try_from(read_position) else {
+        warn!(
+            read_position,
+            "consume-queue cleanup read position exceeds the mapped-buffer API range"
+        );
+        return candidates;
+    };
+    let Ok(unit_size) = i32::try_from(unit_size) else {
+        warn!(unit_size, "consume-queue unit size exceeds the mapped-buffer API range");
+        return candidates;
+    };
+    for mapped_file in files.iter().take(candidate_count) {
+        let destroy = if let Some(result) = mapped_file.select_mapped_buffer(read_position, unit_size) {
+            result.get_bytes_ref().is_some_and(|buffer| {
+                buffer.len() >= 8 && i64::from_be_bytes(buffer[0..8].try_into().unwrap_or([0; 8])) < offset
+            })
+        } else {
+            !mapped_file.is_available()
+        };
+        if !destroy {
+            break;
+        }
+        candidates.push(Arc::clone(mapped_file));
+    }
+    candidates
 }
 
 /// Retries destruction of an unavailable first file.

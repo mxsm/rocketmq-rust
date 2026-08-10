@@ -50,7 +50,7 @@ pub(super) enum BootstrapPlanError {
     ArithmeticOverflow { field: &'static str },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum BootstrapRecord {
     StoreInitialized,
     BootstrapInstalled,
@@ -303,6 +303,20 @@ impl InitialMarkerVerificationEvidence {
         self.encoded_file == planned.encoded_file
             && self.file_crc32 == planned.file_crc32
             && self.slot0_stored_crc32 == planned.slot0_stored_crc32
+    }
+
+    pub(super) fn from_reopened_bytes(
+        encoded_file: [u8; ENABLED_MARKER_FILE_LENGTH],
+        planned: &PlannedInitialMarker,
+    ) -> Option<Self> {
+        if encoded_file != planned.encoded_file {
+            return None;
+        }
+        Some(Self {
+            encoded_file,
+            file_crc32: planned.file_crc32,
+            slot0_stored_crc32: planned.slot0_stored_crc32,
+        })
     }
 
     #[cfg(test)]

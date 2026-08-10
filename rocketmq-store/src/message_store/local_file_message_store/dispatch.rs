@@ -250,27 +250,6 @@ impl LocalFileMessageStore {
         self.consume_queue_store.replace_topic_queue_table(topic_queue_table);
     }
 
-    pub(super) fn delete_file(&mut self, file_name: String) {
-        let _ = self.delete_file_with_outcome(file_name);
-    }
-
-    pub(super) fn delete_file_with_outcome(&mut self, file_name: String) -> bool {
-        match fs::remove_file(PathBuf::from(file_name.as_str())) {
-            Ok(_) => {
-                info!("delete OK, file:{}", file_name);
-                true
-            }
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                info!("delete skipped because file is already absent: {}", file_name);
-                true
-            }
-            Err(err) => {
-                error!("delete error, file:{}, {:?}", file_name, err);
-                false
-            }
-        }
-    }
-
     pub fn set_message_arriving_listener(
         &mut self,
         message_arriving_listener: Option<Arc<Box<dyn MessageArrivingListener + Sync + Send + 'static>>>,
