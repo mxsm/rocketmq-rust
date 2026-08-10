@@ -43,6 +43,8 @@ const MAX_UNREGISTER_BATCH_TIME_MILLIS: u64 = 50;
 const MIN_EXPIRY_SAFETY_SCAN_INTERVAL_MILLIS: u64 = 30_000;
 const MAX_EXPIRY_SAFETY_SCAN_INTERVAL_MILLIS: u64 = 3_600_000;
 const MAX_MIN_BROKER_NOTIFY_CONCURRENCY: u64 = 128;
+const MAX_KV_MUTATION_QUEUE_CAPACITY: u64 = 1_000_000;
+const MAX_KV_MUTATION_BATCH_SIZE: u64 = 1024;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -104,6 +106,8 @@ pub(crate) enum NamesrvConfigKey {
     NamesrvWorkloadAdmissionObserveOnly,
     NamesrvWorkloadAdmissionTimeoutMillis,
     EnableRegistrationDelta,
+    KvMutationQueueCapacity,
+    KvMutationBatchSize,
     UnregisterBrokerBatchSize,
     UnregisterBrokerBatchTimeMillis,
     ExpiryIndexMode,
@@ -149,6 +153,8 @@ impl NamesrvConfigKey {
             "namesrvWorkloadAdmissionObserveOnly" => Self::NamesrvWorkloadAdmissionObserveOnly,
             "namesrvWorkloadAdmissionTimeoutMillis" => Self::NamesrvWorkloadAdmissionTimeoutMillis,
             "enableRegistrationDelta" => Self::EnableRegistrationDelta,
+            "kvMutationQueueCapacity" => Self::KvMutationQueueCapacity,
+            "kvMutationBatchSize" => Self::KvMutationBatchSize,
             "unRegisterBrokerBatchSize" => Self::UnregisterBrokerBatchSize,
             "unRegisterBrokerBatchTimeMillis" => Self::UnregisterBrokerBatchTimeMillis,
             "expiryIndexMode" => Self::ExpiryIndexMode,
@@ -207,6 +213,8 @@ impl NamesrvConfigKey {
             | Self::NamesrvRouteResponseCacheShards => ConfigMutability::RestartRequired,
             Self::NamesrvWorkloadAdmissionTimeoutMillis
             | Self::EnableRegistrationDelta
+            | Self::KvMutationQueueCapacity
+            | Self::KvMutationBatchSize
             | Self::UnregisterBrokerBatchSize
             | Self::UnregisterBrokerBatchTimeMillis
             | Self::ExpiryIndexMode
@@ -277,6 +285,12 @@ pub(crate) fn validate_namesrv_property(key: NamesrvConfigKey, value: &str) -> R
         }
         NamesrvConfigKey::UnregisterBrokerBatchSize => {
             parse_bounded_u64(key, value, 1, MAX_UNREGISTER_BATCH_SIZE)?;
+        }
+        NamesrvConfigKey::KvMutationQueueCapacity => {
+            parse_bounded_u64(key, value, 1, MAX_KV_MUTATION_QUEUE_CAPACITY)?;
+        }
+        NamesrvConfigKey::KvMutationBatchSize => {
+            parse_bounded_u64(key, value, 1, MAX_KV_MUTATION_BATCH_SIZE)?;
         }
         NamesrvConfigKey::UnregisterBrokerBatchTimeMillis => {
             parse_bounded_u64(key, value, 1, MAX_UNREGISTER_BATCH_TIME_MILLIS)?;
@@ -352,6 +366,8 @@ impl NamesrvConfigKey {
             Self::NamesrvWorkloadAdmissionObserveOnly => "namesrvWorkloadAdmissionObserveOnly",
             Self::NamesrvWorkloadAdmissionTimeoutMillis => "namesrvWorkloadAdmissionTimeoutMillis",
             Self::EnableRegistrationDelta => "enableRegistrationDelta",
+            Self::KvMutationQueueCapacity => "kvMutationQueueCapacity",
+            Self::KvMutationBatchSize => "kvMutationBatchSize",
             Self::UnregisterBrokerBatchSize => "unRegisterBrokerBatchSize",
             Self::UnregisterBrokerBatchTimeMillis => "unRegisterBrokerBatchTimeMillis",
             Self::ExpiryIndexMode => "expiryIndexMode",
@@ -514,6 +530,14 @@ mod defaults {
         8
     }
 
+    pub fn kv_mutation_queue_capacity() -> usize {
+        1024
+    }
+
+    pub fn kv_mutation_batch_size() -> usize {
+        100
+    }
+
     pub fn config_black_list() -> String {
         "configBlackList;configStorePath;kvConfigPath".to_string()
     }
@@ -594,6 +618,12 @@ pub struct NamesrvConfig {
 
     #[serde(alias = "enableRegistrationDelta", default)]
     pub enable_registration_delta: bool,
+
+    #[serde(alias = "kvMutationQueueCapacity", default = "defaults::kv_mutation_queue_capacity")]
+    pub kv_mutation_queue_capacity: usize,
+
+    #[serde(alias = "kvMutationBatchSize", default = "defaults::kv_mutation_batch_size")]
+    pub kv_mutation_batch_size: usize,
 
     #[serde(
         alias = "unRegisterBrokerBatchSize",
@@ -720,6 +750,8 @@ impl Default for NamesrvConfig {
             namesrv_workload_admission_observe_only: true,
             namesrv_workload_admission_timeout_millis: defaults::namesrv_workload_admission_timeout_millis(),
             enable_registration_delta: false,
+            kv_mutation_queue_capacity: defaults::kv_mutation_queue_capacity(),
+            kv_mutation_batch_size: defaults::kv_mutation_batch_size(),
             unregister_broker_batch_size: defaults::unregister_broker_batch_size(),
             unregister_broker_batch_time_millis: defaults::unregister_broker_batch_time_millis(),
             expiry_index_mode: ExpiryIndexMode::Off,
@@ -818,6 +850,14 @@ impl NamesrvConfig {
         json_map.insert(
             "enableRegistrationDelta".to_string(),
             Value::String(self.enable_registration_delta.to_string()),
+        );
+        json_map.insert(
+            "kvMutationQueueCapacity".to_string(),
+            Value::String(self.kv_mutation_queue_capacity.to_string()),
+        );
+        json_map.insert(
+            "kvMutationBatchSize".to_string(),
+            Value::String(self.kv_mutation_batch_size.to_string()),
         );
         json_map.insert(
             "unRegisterBrokerBatchSize".to_string(),
@@ -1025,6 +1065,14 @@ impl NamesrvConfig {
                     self.enable_registration_delta =
                         value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
+                "kvMutationQueueCapacity" => {
+                    self.kv_mutation_queue_capacity =
+                        value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
+                }
+                "kvMutationBatchSize" => {
+                    self.kv_mutation_batch_size =
+                        value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
+                }
                 "unRegisterBrokerBatchSize" => {
                     self.unregister_broker_batch_size =
                         value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
@@ -1173,6 +1221,14 @@ impl NamesrvConfig {
             (
                 NamesrvConfigKey::NamesrvWorkloadAdmissionTimeoutMillis,
                 self.namesrv_workload_admission_timeout_millis.to_string(),
+            ),
+            (
+                NamesrvConfigKey::KvMutationQueueCapacity,
+                self.kv_mutation_queue_capacity.to_string(),
+            ),
+            (
+                NamesrvConfigKey::KvMutationBatchSize,
+                self.kv_mutation_batch_size.to_string(),
             ),
             (
                 NamesrvConfigKey::UnregisterBrokerBatchSize,
@@ -1361,6 +1417,8 @@ mod tests {
         assert!(config.namesrv_workload_admission_observe_only);
         assert_eq!(config.namesrv_workload_admission_timeout_millis, 100);
         assert!(!config.enable_registration_delta);
+        assert_eq!(config.kv_mutation_queue_capacity, 1024);
+        assert_eq!(config.kv_mutation_batch_size, 100);
         assert_eq!(config.unregister_broker_batch_size, 100);
         assert_eq!(config.unregister_broker_batch_time_millis, 2);
         assert_eq!(config.expiry_index_mode, ExpiryIndexMode::Off);
@@ -1424,6 +1482,11 @@ mod tests {
             CheetahString::from("500"),
         );
         properties.insert(
+            CheetahString::from("kvMutationQueueCapacity"),
+            CheetahString::from("2048"),
+        );
+        properties.insert(CheetahString::from("kvMutationBatchSize"), CheetahString::from("64"));
+        properties.insert(
             CheetahString::from("clientRequestThreadPoolNums"),
             CheetahString::from("10"),
         );
@@ -1483,6 +1546,8 @@ mod tests {
         assert!(!config.namesrv_workload_admission_enable);
         assert!(!config.namesrv_workload_admission_observe_only);
         assert_eq!(config.namesrv_workload_admission_timeout_millis, 500);
+        assert_eq!(config.kv_mutation_queue_capacity, 2048);
+        assert_eq!(config.kv_mutation_batch_size, 64);
         assert_eq!(config.client_request_thread_pool_nums, 10);
         assert_eq!(config.default_thread_pool_nums, 20);
         assert_eq!(config.client_request_thread_pool_queue_capacity, 10000);
@@ -1523,6 +1588,14 @@ mod tests {
         assert_eq!(
             parsed["routeFreshnessSampleInterval"].as_str().unwrap(),
             config.route_freshness_sample_interval.to_string()
+        );
+        assert_eq!(
+            parsed["kvMutationQueueCapacity"].as_str().unwrap(),
+            config.kv_mutation_queue_capacity.to_string()
+        );
+        assert_eq!(
+            parsed["kvMutationBatchSize"].as_str().unwrap(),
+            config.kv_mutation_batch_size.to_string()
         );
         assert_eq!(
             parsed["returnOrderTopicConfigToBroker"].as_str().unwrap(),
@@ -1664,6 +1737,10 @@ productEnvName = "useRouteInfoManagerV2"
             (NamesrvConfigKey::ExpiryIndexMode, "enabled"),
             (NamesrvConfigKey::ExpirySafetyScanInterval, "29999"),
             (NamesrvConfigKey::MinBrokerNotifyConcurrency, "129"),
+            (NamesrvConfigKey::KvMutationQueueCapacity, "0"),
+            (NamesrvConfigKey::KvMutationQueueCapacity, "1000001"),
+            (NamesrvConfigKey::KvMutationBatchSize, "0"),
+            (NamesrvConfigKey::KvMutationBatchSize, "1025"),
         ] {
             assert!(validate_namesrv_property(key, value).is_err(), "{key:?}={value}");
             assert_eq!(key.mutability(), ConfigMutability::RestartRequired);

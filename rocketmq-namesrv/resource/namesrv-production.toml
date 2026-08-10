@@ -92,6 +92,11 @@ unRegisterBrokerQueueCapacity = 5000
 # digests remain aligned.
 enableRegistrationDelta = false
 
+# Bounded durable-before-publish KV mutation service. Both settings are
+# restart-required. Accepted commands are additionally capped at 16 MiB.
+kvMutationQueueCapacity = 1024
+kvMutationBatchSize = 100
+
 # Bound each unregister mutation slice by both count and collection time. Queue
 # saturation falls back to one synchronous fenced cleanup rather than dropping
 # route removal.

@@ -171,6 +171,17 @@ fn apply_to_snapshot(
             | "namesrvRouteResponseCacheMaxEntries"
             | "namesrvRouteResponseCacheMaxSingleResponseBytes"
             | "namesrvRouteResponseCacheShards"
+            | "namesrvWorkloadAdmissionEnable"
+            | "namesrvWorkloadAdmissionObserveOnly"
+            | "namesrvWorkloadAdmissionTimeoutMillis"
+            | "enableRegistrationDelta"
+            | "kvMutationQueueCapacity"
+            | "kvMutationBatchSize"
+            | "unRegisterBrokerBatchSize"
+            | "unRegisterBrokerBatchTimeMillis"
+            | "expiryIndexMode"
+            | "expirySafetyScanInterval"
+            | "minBrokerNotifyConcurrency"
             | "returnOrderTopicConfigToBroker"
             | "clientRequestThreadPoolNums"
             | "defaultThreadPoolNums"
@@ -279,6 +290,61 @@ fn format_runtime_config(config_snapshot: &NameServerRuntimeConfig) -> RocketMQR
         &mut entries,
         "namesrvRouteResponseCacheShards",
         name_server_config.namesrv_route_response_cache_shards,
+    );
+    push_config_entry(
+        &mut entries,
+        "namesrvWorkloadAdmissionEnable",
+        name_server_config.namesrv_workload_admission_enable,
+    );
+    push_config_entry(
+        &mut entries,
+        "namesrvWorkloadAdmissionObserveOnly",
+        name_server_config.namesrv_workload_admission_observe_only,
+    );
+    push_config_entry(
+        &mut entries,
+        "namesrvWorkloadAdmissionTimeoutMillis",
+        name_server_config.namesrv_workload_admission_timeout_millis,
+    );
+    push_config_entry(
+        &mut entries,
+        "enableRegistrationDelta",
+        name_server_config.enable_registration_delta,
+    );
+    push_config_entry(
+        &mut entries,
+        "kvMutationQueueCapacity",
+        name_server_config.kv_mutation_queue_capacity,
+    );
+    push_config_entry(
+        &mut entries,
+        "kvMutationBatchSize",
+        name_server_config.kv_mutation_batch_size,
+    );
+    push_config_entry(
+        &mut entries,
+        "unRegisterBrokerBatchSize",
+        name_server_config.unregister_broker_batch_size,
+    );
+    push_config_entry(
+        &mut entries,
+        "unRegisterBrokerBatchTimeMillis",
+        name_server_config.unregister_broker_batch_time_millis,
+    );
+    push_config_entry(
+        &mut entries,
+        "expiryIndexMode",
+        name_server_config.expiry_index_mode.as_str(),
+    );
+    push_config_entry(
+        &mut entries,
+        "expirySafetyScanInterval",
+        name_server_config.expiry_safety_scan_interval,
+    );
+    push_config_entry(
+        &mut entries,
+        "minBrokerNotifyConcurrency",
+        name_server_config.min_broker_notify_concurrency,
     );
     push_config_entry(
         &mut entries,

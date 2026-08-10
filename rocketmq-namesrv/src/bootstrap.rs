@@ -20,6 +20,7 @@ use std::collections::HashMap;
 use std::future::Future;
 #[cfg(feature = "embedded-controller")]
 use std::net::IpAddr;
+use std::path::PathBuf;
 use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -74,6 +75,7 @@ use tracing::info;
 use tracing::instrument;
 use tracing::warn;
 
+use crate::kvconfig::persistence::DEFAULT_KV_MUTATION_MAX_PENDING_BYTES;
 use crate::processor::workload_admission::NameServerWorkloadAdmission;
 use crate::processor::ClientRequestProcessor;
 use crate::processor::ClusterTestRequestProcessor;
@@ -453,6 +455,7 @@ impl NameServerRuntime {
     fn validate_runtime_config(&self) -> RocketMQResult<()> {
         let namesrv_config = self.inner.name_server_config();
         namesrv_config.validate_domains()?;
+        self.inner.kvconfig_manager().validate_persistence_owner()?;
 
         #[cfg(not(feature = "embedded-controller"))]
         if namesrv_config.enable_controller_in_namesrv {
@@ -502,9 +505,8 @@ impl NameServerRuntime {
 
     async fn load_config(&mut self) -> RocketMQResult<()> {
         // KVConfigManager is now always initialized
-        self.inner.kvconfig_manager().load().map_err(|e| {
-            error!("KV config load failed: {}", e);
-            RocketMQError::storage_read_failed("kv_config", format!("Configuration load error: {}", e))
+        self.inner.kvconfig_manager().load().inspect_err(|error| {
+            error!(error_kind = ?error.kind(), "KV config load failed");
         })?;
         debug!("KV configuration loaded successfully");
 
@@ -1190,6 +1192,10 @@ impl Builder {
         let expiry_index_mode = name_server_config.expiry_index_mode;
         let expiry_safety_scan_interval = name_server_config.expiry_safety_scan_interval;
         let min_broker_notify_concurrency = name_server_config.min_broker_notify_concurrency;
+        let kv_mutation_queue_capacity = name_server_config.kv_mutation_queue_capacity;
+        let kv_mutation_batch_size = name_server_config.kv_mutation_batch_size;
+        let kv_config_target = PathBuf::from(&name_server_config.kv_config_path);
+        let kv_mutation_context = service_context.component("namesrv.kv-mutation");
         let route_response_cache = Arc::new(RouteResponseCache::from_namesrv_config(&name_server_config));
         let workload_admission = Arc::new(NameServerWorkloadAdmission::from_namesrv_config(&name_server_config));
         let initial_config = Arc::new(NameServerRuntimeConfig {
@@ -1225,7 +1231,15 @@ impl Builder {
                 route_info_manager: Arc::new(route_info_manager),
                 route_response_cache: Arc::clone(&route_response_cache),
                 workload_admission: Arc::clone(&workload_admission),
-                kvconfig_manager: Arc::new(KVConfigManager::new(runtime_handle.clone(), metadata_io.clone())),
+                kvconfig_manager: Arc::new(KVConfigManager::new(
+                    runtime_handle.clone(),
+                    metadata_io.clone(),
+                    &kv_mutation_context,
+                    kv_config_target.clone(),
+                    kv_mutation_queue_capacity,
+                    kv_mutation_batch_size,
+                    DEFAULT_KV_MUTATION_MAX_PENDING_BYTES,
+                )),
                 remoting_client,
                 broker_housekeeping_service: Arc::new(BrokerHousekeepingService::new(runtime_handle)),
                 #[cfg(feature = "embedded-controller")]
@@ -1523,6 +1537,61 @@ impl NameServerRuntimeInner {
             &mut entries,
             "namesrvRouteResponseCacheShards",
             name_server_config.namesrv_route_response_cache_shards,
+        );
+        push_config_entry(
+            &mut entries,
+            "namesrvWorkloadAdmissionEnable",
+            name_server_config.namesrv_workload_admission_enable,
+        );
+        push_config_entry(
+            &mut entries,
+            "namesrvWorkloadAdmissionObserveOnly",
+            name_server_config.namesrv_workload_admission_observe_only,
+        );
+        push_config_entry(
+            &mut entries,
+            "namesrvWorkloadAdmissionTimeoutMillis",
+            name_server_config.namesrv_workload_admission_timeout_millis,
+        );
+        push_config_entry(
+            &mut entries,
+            "enableRegistrationDelta",
+            name_server_config.enable_registration_delta,
+        );
+        push_config_entry(
+            &mut entries,
+            "kvMutationQueueCapacity",
+            name_server_config.kv_mutation_queue_capacity,
+        );
+        push_config_entry(
+            &mut entries,
+            "kvMutationBatchSize",
+            name_server_config.kv_mutation_batch_size,
+        );
+        push_config_entry(
+            &mut entries,
+            "unRegisterBrokerBatchSize",
+            name_server_config.unregister_broker_batch_size,
+        );
+        push_config_entry(
+            &mut entries,
+            "unRegisterBrokerBatchTimeMillis",
+            name_server_config.unregister_broker_batch_time_millis,
+        );
+        push_config_entry(
+            &mut entries,
+            "expiryIndexMode",
+            name_server_config.expiry_index_mode.as_str(),
+        );
+        push_config_entry(
+            &mut entries,
+            "expirySafetyScanInterval",
+            name_server_config.expiry_safety_scan_interval,
+        );
+        push_config_entry(
+            &mut entries,
+            "minBrokerNotifyConcurrency",
+            name_server_config.min_broker_notify_concurrency,
         );
         push_config_entry(
             &mut entries,
