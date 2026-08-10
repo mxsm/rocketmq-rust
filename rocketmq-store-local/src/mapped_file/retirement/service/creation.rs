@@ -214,7 +214,7 @@ impl ManagedLifecycleRuntime {
         request: ManagedIncarnationCreateRequest,
     ) -> Result<ManagedIncarnationCreation, ManagedIncarnationCreationError> {
         let mut inner = self.inner.lock();
-        if !inner.accepting {
+        if inner.admission != super::RuntimeAdmission::Running {
             return Err(ManagedIncarnationCreationError::new(
                 ManagedIncarnationCreationErrorKind::AdmissionClosed,
                 ManagedIncarnationCreationErrorSource::AdmissionClosed,

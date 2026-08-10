@@ -133,6 +133,39 @@ impl MappedFileRetirementService<ManagedLifecycleRuntime> {
             RetirementServiceConfig::default(),
         )
     }
+
+    pub(super) async fn destroy_all_and_await(&mut self) -> Result<RetirementServiceBatch, StoreError> {
+        self.accepting.store(false, Ordering::Release);
+        if self.driver.has_retirement_backlog() {
+            let existing = self
+                .drain_pending(None, "mapped-file-store-destroy-retry-drain", StoreOperation::Admin)
+                .await?;
+            if self.driver.has_retirement_backlog() {
+                return Ok(existing);
+            }
+        }
+        let driver = self.driver.clone();
+        self.runtime_scope
+            .spawn_io("mapped-file-store-destroy-submit", move || {
+                driver.submit_store_destroy_retirements()
+            })
+            .await
+            .map_err(|source| {
+                StoreError::new(StoreErrorKind::Storage, StoreOperation::Admin)
+                    .in_component(StoreComponent::MappedFile)
+                    .with_detail("failed to execute managed Store-destroy retirement submission")
+                    .with_source(source)
+            })?
+            .map_err(|source| {
+                StoreError::new(StoreErrorKind::Storage, StoreOperation::Admin)
+                    .in_component(StoreComponent::MappedFile)
+                    .with_detail("managed Store-destroy retirement submission failed closed")
+                    .with_source(source)
+            })?;
+
+        self.drain_pending(None, "mapped-file-store-destroy-drain", StoreOperation::Admin)
+            .await
+    }
 }
 
 impl<D: RetirementBatchDriver> MappedFileRetirementService<D> {
@@ -237,6 +270,16 @@ impl<D: RetirementBatchDriver> MappedFileRetirementService<D> {
             }
         }
 
+        self.drain_pending(first_error, "mapped-file-retirement-drain", StoreOperation::Shutdown)
+            .await
+    }
+
+    async fn drain_pending(
+        &mut self,
+        mut first_error: Option<StoreError>,
+        task_name: &'static str,
+        operation: StoreOperation,
+    ) -> Result<RetirementServiceBatch, StoreError> {
         let deadline = ShutdownDeadline::after(self.config.drain_timeout);
         let batch_size = self.config.batch_size;
         let mut latest = self.driver.snapshot();
@@ -244,9 +287,7 @@ impl<D: RetirementBatchDriver> MappedFileRetirementService<D> {
             let driver = self.driver.clone();
             match self
                 .runtime_scope
-                .spawn_io_until("mapped-file-retirement-drain", deadline, move || {
-                    driver.drive_drain_batch(batch_size)
-                })
+                .spawn_io_until(task_name, deadline, move || driver.drive_drain_batch(batch_size))
                 .await
             {
                 Ok(report) => {
@@ -259,7 +300,7 @@ impl<D: RetirementBatchDriver> MappedFileRetirementService<D> {
                 Err(error) => {
                     if first_error.is_none() {
                         first_error = Some(
-                            StoreError::new(StoreErrorKind::Timeout, StoreOperation::Shutdown)
+                            StoreError::new(StoreErrorKind::Timeout, operation)
                                 .in_component(StoreComponent::MappedFile)
                                 .with_detail("managed mapped-file retirement drain failed")
                                 .with_source(error),

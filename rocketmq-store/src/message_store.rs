@@ -175,6 +175,10 @@ macro_rules! message_store_methods {
         }
     }
 
+    async fn destroy_gracefully(&mut self) -> Result<bool, StoreError> {
+        delegate_store_async!(self, destroy_gracefully())
+    }
+
     fn destroy(&mut self) {
         delegate_store!(self, destroy());
     }

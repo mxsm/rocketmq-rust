@@ -282,8 +282,21 @@ pub trait BackendOps: Send + Sync + 'static {
     /// Shut down this message store through the legacy unit-returning compatibility adapter.
     async fn shutdown(&mut self);
 
-    /// Destroy this message store.
-    /// Generally, all persistent files should be removed after invocation.
+    /// Durably destroys every managed mapped-file segment after shutdown.
+    ///
+    /// Returns `true` only after all tracked segment retirements reach `Completed`. Implementations
+    /// that have not activated the managed lifecycle return `false` without namespace mutation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed storage error when durable submission, replay state, or namespace retirement
+    /// requires recovery before the operation can continue.
+    async fn destroy_gracefully(&mut self) -> Result<bool, StoreError>;
+
+    /// Requests destruction through the legacy synchronous compatibility adapter.
+    ///
+    /// This adapter cannot await durable ledger and namespace work. Managed callers should use
+    /// [`Self::destroy_gracefully`].
     fn destroy(&mut self);
     /*
     /// Store a message into the store in async manner.

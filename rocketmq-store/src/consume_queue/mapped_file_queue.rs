@@ -220,10 +220,14 @@ impl MappedFileGeneration {
         };
         let next = Arc::new(MappedFileGenerationState::Managed {
             generation: generation.clone(),
-            runtime: Some(runtime),
+            runtime: Some(runtime.clone()),
         });
         let previous = self.state.compare_and_swap(&current, next);
-        Arc::ptr_eq(&previous, &current)
+        let installed = Arc::ptr_eq(&previous, &current);
+        if installed {
+            runtime.track_queue_generation(generation);
+        }
+        installed
     }
 }
 

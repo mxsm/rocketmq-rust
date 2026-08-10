@@ -577,6 +577,12 @@ impl BackendOps for RocksDBMessageStore {
         }
     }
 
+    async fn destroy_gracefully(&mut self) -> Result<bool, StoreError> {
+        let destroyed = self.local_file_store.destroy_gracefully().await?;
+        self.close_rocksdb();
+        Ok(destroyed)
+    }
+
     fn destroy(&mut self) {
         self.local_file_store.destroy();
         self.close_rocksdb();

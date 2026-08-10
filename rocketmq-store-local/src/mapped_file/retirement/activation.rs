@@ -220,7 +220,7 @@ impl PreparedManagedLifecycleActivation {
             None => self.store_root = Some(store_root.to_path_buf()),
         }
 
-        let segments = match self
+        let mut segments = match self
             .session
             .take_active_segments_in_directory(directory, configured_file_size)
         {
@@ -233,6 +233,29 @@ impl PreparedManagedLifecycleActivation {
                 ));
             }
         };
+        let namespace_root = VerifiedNamespaceRoot::from_reconciled_session(&self.session).map_err(|source| {
+            self.staging_failed = true;
+            ManagedLifecycleActivationError::new(
+                ManagedLifecycleActivationErrorKind::Namespace,
+                ManagedLifecycleActivationSource::Namespace(source),
+            )
+        })?;
+        for segment in &mut segments {
+            let writable = namespace_root
+                .open_active_segment(
+                    segment.canonical_path(),
+                    segment.physical_key(),
+                    segment.expected_length(),
+                )
+                .map_err(|source| {
+                    self.staging_failed = true;
+                    ManagedLifecycleActivationError::new(
+                        ManagedLifecycleActivationErrorKind::Namespace,
+                        ManagedLifecycleActivationSource::Namespace(source),
+                    )
+                })?;
+            segment.replace_retained_file(writable);
+        }
         let generation = match load_reconciled_mapped_file_queue(store_root, segments) {
             Ok(generation) => generation,
             Err(source) => {

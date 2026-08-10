@@ -252,7 +252,28 @@ struct ManagedLifecycleRuntimeInner {
     // Retains the exclusive Store-root lease and replay proof for the writer's lifetime.
     _session: super::state::reconciliation::ReconciledLifecycleSession,
     core: ManagedRetirementCore<FileLedgerIo, VerifiedNamespaceRoot, DefaultMappedFile>,
-    accepting: bool,
+    admission: RuntimeAdmission,
+    queue_generations: Vec<ManagedMappedFileQueueGeneration<DefaultMappedFile>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RuntimeAdmission {
+    Running,
+    Shutdown,
+    StoreDestroy,
+}
+
+impl RuntimeAdmission {
+    fn enter_store_destroy(&mut self) -> bool {
+        match self {
+            Self::Running => false,
+            Self::Shutdown => {
+                *self = Self::StoreDestroy;
+                true
+            }
+            Self::StoreDestroy => true,
+        }
+    }
 }
 
 impl std::fmt::Debug for ManagedLifecycleRuntime {
@@ -262,7 +283,7 @@ impl std::fmt::Debug for ManagedLifecycleRuntime {
             .debug_struct("ManagedLifecycleRuntime")
             .field("pending_tickets", &inner.core.registry.retained_identity_count())
             .field("recovery_required", &inner.core.recovery_required)
-            .field("accepting", &inner.accepting)
+            .field("admission", &inner.admission)
             .finish_non_exhaustive()
     }
 }
@@ -285,7 +306,8 @@ impl ManagedLifecycleRuntime {
             inner: Arc::new(Mutex::new(ManagedLifecycleRuntimeInner {
                 _session: session,
                 core,
-                accepting: true,
+                admission: RuntimeAdmission::Running,
+                queue_generations: Vec::new(),
             })),
         }
     }
@@ -296,7 +318,26 @@ impl ManagedLifecycleRuntime {
     /// receipt. Admission remains controlled by the runtime when allocation is attempted.
     #[must_use]
     pub fn empty_queue_generation(&self) -> ManagedMappedFileQueueGeneration<DefaultMappedFile> {
-        ManagedMappedFileQueueGeneration::new_write_disabled()
+        let generation = ManagedMappedFileQueueGeneration::new_write_disabled();
+        self.track_queue_generation(&generation);
+        generation
+    }
+
+    /// Registers a reconciled queue generation with this runtime's Store-wide lifecycle owner.
+    ///
+    /// Registration is process-local and idempotent. Durable publication and replay validation
+    /// remain prerequisites performed by activation before this method is called.
+    #[doc(hidden)]
+    pub fn track_queue_generation(&self, generation: &ManagedMappedFileQueueGeneration<DefaultMappedFile>) {
+        let mut inner = self.inner.lock();
+        if inner
+            .queue_generations
+            .iter()
+            .any(|tracked| tracked.same_queue_as(generation))
+        {
+            return;
+        }
+        inner.queue_generations.push(generation.clone());
     }
 
     /// Executes at most `max_actions` durable or namespace transitions synchronously.
@@ -318,7 +359,42 @@ impl ManagedLifecycleRuntime {
 
     /// Stops admission of new durable intents while preserving replayable backlog authority.
     pub fn begin_shutdown(&self) {
-        self.inner.lock().accepting = false;
+        self.inner.lock().admission = RuntimeAdmission::Shutdown;
+    }
+
+    /// Durably submits every currently active member of every tracked managed queue.
+    ///
+    /// The simple lifecycle gate permits only `Shutdown -> StoreDestroy`; retries remain in
+    /// `StoreDestroy`. This function performs blocking ledger I/O and must run inside one Store
+    /// storage-IO operation.
+    pub fn submit_store_destroy_retirements(&self) -> Result<usize, ManagedRetirementSubmissionError> {
+        let mut inner = self.inner.lock();
+        if !inner.admission.enter_store_destroy() {
+            return Err(ManagedRetirementSubmissionError::admission_closed());
+        }
+        let generations = inner.queue_generations.clone();
+        inner
+            .core
+            .submit_store_destroy_at(&generations, store_destroy_nonce, Instant::now())
+    }
+
+    /// Returns whether every tracked queue member completed namespace retirement.
+    #[must_use]
+    pub fn store_destroy_complete(&self) -> bool {
+        let inner = self.inner.lock();
+        !inner.core.recovery_required
+            && inner.core.backlog.is_empty()
+            && inner
+                .queue_generations
+                .iter()
+                .all(|generation| generation.snapshot().is_empty())
+    }
+
+    /// Returns whether a prior retirement submission still owns unfinished durable work.
+    #[must_use]
+    pub fn has_retirement_backlog(&self) -> bool {
+        let inner = self.inner.lock();
+        inner.core.recovery_required || !inner.core.backlog.is_empty()
     }
 
     /// Executes one bounded drain batch without waiting for retry backoff.
@@ -342,7 +418,7 @@ impl ManagedLifecycleRuntime {
         retirement_nonce: [u8; 16],
     ) -> Result<ManagedRetirementSubmission, ManagedRetirementSubmissionError> {
         let mut inner = self.inner.lock();
-        if !inner.accepting {
+        if inner.admission != RuntimeAdmission::Running {
             return Err(ManagedRetirementSubmissionError::admission_closed());
         }
         inner
@@ -363,6 +439,19 @@ fn unix_time_ns() -> u64 {
         .unwrap_or_default()
         .as_nanos();
     u64::try_from(nanos).unwrap_or(u64::MAX)
+}
+
+fn store_destroy_nonce() -> [u8; 16] {
+    static NEXT_NONCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+    let sequence = NEXT_NONCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let mut nonce = [0u8; 16];
+    nonce[..8].copy_from_slice(&sequence.to_le_bytes());
+    nonce[8..].copy_from_slice(&unix_time_ns().to_le_bytes());
+    if nonce == [0; 16] {
+        nonce[0] = 1;
+    }
+    nonce
 }
 
 pub(super) trait NamespaceDriver<I: LedgerIo, O> {
@@ -582,6 +671,26 @@ impl<I: LedgerIo, D: NamespaceDriver<I, O>, O> ManagedRetirementCore<I, D, O> {
                 }
             },
         }
+    }
+
+    fn submit_store_destroy_at<F>(
+        &mut self,
+        generations: &[ManagedMappedFileQueueGeneration<O>],
+        mut next_nonce: F,
+        now: Instant,
+    ) -> Result<usize, ManagedRetirementSubmissionError>
+    where
+        F: FnMut() -> [u8; 16],
+    {
+        let mut submitted = 0usize;
+        for generation in generations {
+            let owners = generation.snapshot();
+            for owner in owners.iter() {
+                self.submit_at(generation, owner, RetirementReason::StoreDestroy, next_nonce(), now)?;
+                submitted = submitted.saturating_add(1);
+            }
+        }
+        Ok(submitted)
     }
 
     fn push_work(&mut self, work: PendingRetirement<O>, now: Instant) {

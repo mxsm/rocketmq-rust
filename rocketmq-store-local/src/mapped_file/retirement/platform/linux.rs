@@ -33,6 +33,7 @@ use super::types::NamespaceRetirementRequest;
 use super::types::NamespaceTransition;
 use super::types::NamespaceVerificationError;
 use crate::mapped_file::retirement::identity::PhysicalFileKey;
+use crate::mapped_file::retirement::identity::StoreRelativePath;
 use crate::mapped_file::retirement::writer::AllocatedIncarnationReceipt;
 use crate::mapped_file::retirement::writer::BoundIncarnationReceipt;
 
@@ -107,6 +108,60 @@ impl NamespaceRoot {
             canonical: None,
             tombstone: None,
         })
+    }
+
+    pub(super) fn open_active_segment(
+        &self,
+        path: &StoreRelativePath,
+        expected_key: PhysicalFileKey,
+        expected_length: u64,
+    ) -> Result<File, NamespaceVerificationError> {
+        if !matches!(expected_key, PhysicalFileKey::Unix(_)) {
+            return Err(NamespaceVerificationError::Rejected(
+                NamespacePolicyViolation::PhysicalKeyPlatformMismatch,
+            ));
+        }
+        let (parent_path, file_name) = split_parent(path.as_str());
+        let parent = open_parent_strict(&self.file, parent_path)?;
+        let parent_metadata = parent
+            .metadata()
+            .map_err(|error| classify_io(NamespaceOperation::OpenParent, error).into_verification_error())?;
+        if !parent_metadata.is_dir() || parent_metadata.dev() != self.device {
+            return Err(NamespaceVerificationError::Rejected(
+                NamespacePolicyViolation::ParentEscapedRoot,
+            ));
+        }
+        let file_name = CString::new(file_name)
+            .map_err(|_| NamespaceVerificationError::Rejected(NamespacePolicyViolation::ParentEscapedRoot))?;
+        let file = openat2(&parent, &file_name, libc::O_RDWR | libc::O_CLOEXEC | libc::O_NOFOLLOW)
+            .map_err(|error| classify_io(NamespaceOperation::VerifyCanonical, error).into_verification_error())?;
+        let metadata = file
+            .metadata()
+            .map_err(|error| classify_io(NamespaceOperation::VerifyCanonical, error).into_verification_error())?;
+        if !metadata.is_file() || metadata.dev() != self.device {
+            return Err(NamespaceVerificationError::Rejected(
+                NamespacePolicyViolation::UnexpectedEntryType {
+                    entry: NamespaceEntry::Canonical,
+                },
+            ));
+        }
+        if metadata.len() != expected_length {
+            return Err(NamespaceVerificationError::Rejected(
+                NamespacePolicyViolation::ExpectedLengthMismatch {
+                    entry: NamespaceEntry::Canonical,
+                    expected: expected_length,
+                    actual: metadata.len(),
+                },
+            ));
+        }
+        let actual_key = physical_key::capture(&file)
+            .map_err(|error| classify_io(NamespaceOperation::VerifyCanonical, error).into_verification_error())?;
+        if actual_key != expected_key {
+            return Err(NamespaceVerificationError::Rejected(
+                NamespacePolicyViolation::NamespaceChangedDuringVerification,
+            ));
+        }
+        Ok(file)
     }
 
     pub(super) fn create_incarnation_temp(

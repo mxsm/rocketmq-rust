@@ -322,6 +322,125 @@ async fn wave_b_managed_store_bootstraps_starts_and_creates_first_queue_segments
 
 #[cfg(any(target_os = "linux", windows))]
 #[tokio::test]
+async fn wave_b_normal_shutdown_preserves_segments_until_explicit_durable_destroy() {
+    let temp_dir = tempdir().expect("temporary managed Store root");
+    let mut store = new_configured_test_store(
+        &temp_dir,
+        MessageStoreConfig {
+            enable_mapped_file_lifecycle_wave_b: true,
+            message_index_enable: false,
+            timer_wheel_enable: false,
+            enable_consume_queue_ext: false,
+            duplication_enable: true,
+            flush_disk_type: FlushDiskType::AsyncFlush,
+            mapped_file_size_commit_log: 16 * 1024,
+            mapped_file_size_consume_queue: 20 * 100,
+            ..MessageStoreConfig::default()
+        },
+    );
+    let topic = CheetahString::from_static_str("wave-b-explicit-store-destroy");
+    let commitlog = temp_dir.path().join("commitlog/00000000000000000000");
+    let consume_queue = temp_dir
+        .path()
+        .join("consumequeue/wave-b-explicit-store-destroy/0/00000000000000000000");
+
+    store.init().await.expect("initialize managed Store");
+    assert!(store.load().await, "reconcile and activate managed Store");
+    store.start().await.expect("start fully activated managed Store");
+    let result = store
+        .put_message(build_test_message(&topic, Bytes::from_static(b"managed-destroy")))
+        .await;
+    assert_eq!(result.put_message_status(), PutMessageStatus::PutOk);
+    for _ in 0..100 {
+        if store.get_max_offset_in_queue(&topic, 0) == 1 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    let error = BackendOps::destroy_gracefully(&mut store)
+        .await
+        .expect_err("explicit destroy must wait for ordinary shutdown");
+    assert_eq!(error.kind(), StoreErrorKind::Internal);
+    assert!(commitlog.is_file());
+    assert!(consume_queue.is_file());
+
+    store.shutdown().await;
+    assert!(commitlog.is_file(), "ordinary shutdown must preserve CommitLog data");
+    assert!(
+        consume_queue.is_file(),
+        "ordinary shutdown must preserve consume-queue data"
+    );
+
+    assert!(BackendOps::destroy_gracefully(&mut store)
+        .await
+        .expect("explicit managed Store destroy completes"));
+    assert_eq!(store.store_root_lease_state, StoreRootLeaseState::Destroyed);
+    assert!(!commitlog.exists());
+    assert!(!consume_queue.exists());
+    assert!(
+        temp_dir.path().join(".rocketmq-lifecycle").is_dir(),
+        "durable lifecycle evidence remains as the audit trail"
+    );
+    assert!(BackendOps::destroy_gracefully(&mut store)
+        .await
+        .expect("completed managed Store destroy is idempotent"));
+}
+
+#[cfg(any(target_os = "linux", windows))]
+#[tokio::test]
+async fn wave_b_normal_shutdown_replays_the_same_segments_on_restart() {
+    let temp_dir = tempdir().expect("temporary managed Store root");
+    let config = || MessageStoreConfig {
+        enable_mapped_file_lifecycle_wave_b: true,
+        message_index_enable: false,
+        timer_wheel_enable: false,
+        enable_consume_queue_ext: false,
+        duplication_enable: true,
+        flush_disk_type: FlushDiskType::AsyncFlush,
+        mapped_file_size_commit_log: 16 * 1024,
+        mapped_file_size_consume_queue: 20 * 100,
+        ..MessageStoreConfig::default()
+    };
+    let topic = CheetahString::from_static_str("wave-b-restart-preserves-data");
+    let commitlog = temp_dir.path().join("commitlog/00000000000000000000");
+    let consume_queue = temp_dir
+        .path()
+        .join("consumequeue/wave-b-restart-preserves-data/0/00000000000000000000");
+
+    let mut first = new_configured_test_store(&temp_dir, config());
+    first.init().await.expect("initialize first managed Store");
+    assert!(first.load().await, "activate first managed Store");
+    first.start().await.expect("start first managed Store");
+    let result = first
+        .put_message(build_test_message(&topic, Bytes::from_static(b"managed-restart")))
+        .await;
+    assert_eq!(result.put_message_status(), PutMessageStatus::PutOk);
+    for _ in 0..100 {
+        if first.get_max_offset_in_queue(&topic, 0) == 1 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    first.shutdown().await;
+    drop(first);
+
+    let mut reopened = new_configured_test_store(&temp_dir, config());
+    reopened.init().await.expect("initialize reopened managed Store");
+    assert!(reopened.load().await, "replay and load reopened managed Store");
+    assert_eq!(reopened.get_max_offset_in_queue(&topic, 0), 1);
+    assert!(commitlog.is_file());
+    assert!(consume_queue.is_file());
+
+    reopened.start().await.expect("start reopened managed Store");
+    reopened.shutdown().await;
+    assert!(BackendOps::destroy_gracefully(&mut reopened)
+        .await
+        .expect("durably destroy reopened managed Store"));
+}
+
+#[cfg(any(target_os = "linux", windows))]
+#[tokio::test]
 async fn wave_b_managed_truncation_durably_retires_the_tail_segment() {
     let temp_dir = tempdir().expect("temporary managed Store root");
     let mut store = new_configured_test_store(
@@ -545,6 +664,23 @@ async fn destroy_store_is_write_disabled_and_retries_without_namespace_mutation(
 
     drop(store);
     drop(new_configured_test_store(&temp_dir, MessageStoreConfig::default()));
+}
+
+#[tokio::test]
+async fn graceful_destroy_keeps_legacy_store_namespace_write_disabled() {
+    let temp_dir = tempdir().unwrap();
+    let mut store = new_configured_test_store(&temp_dir, MessageStoreConfig::default());
+    let root = temp_dir.path();
+    let commitlog = root.join("commitlog/00000000000000000000");
+    fs::create_dir_all(commitlog.parent().expect("commitlog parent")).expect("commitlog directory");
+    fs::write(&commitlog, b"legacy-segment-must-remain").expect("legacy segment");
+    store.set_lifecycle_state(LocalStoreState::Shutdown);
+
+    assert!(!BackendOps::destroy_gracefully(&mut store)
+        .await
+        .expect("legacy graceful destroy remains write-disabled"));
+    assert_eq!(store.store_root_lease_state, StoreRootLeaseState::DestroyRetryPending);
+    assert_eq!(fs::read(&commitlog).unwrap(), b"legacy-segment-must-remain");
 }
 
 #[test]

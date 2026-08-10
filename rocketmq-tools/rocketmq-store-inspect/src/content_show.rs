@@ -13,10 +13,11 @@
 // limitations under the License.
 
 use std::borrow::Cow;
-use std::fs;
+use std::fs::File;
+use std::io::BufReader;
+use std::io::Read;
 use std::path::PathBuf;
 
-use bytes::Buf;
 use bytes::Bytes;
 use cheetah_string::CheetahString;
 use rocketmq_error::RocketMQError;
@@ -26,8 +27,6 @@ use rocketmq_store::CommitLogRecord;
 use rocketmq_store::CommitLogRecordBodyMode;
 use rocketmq_store::CommitLogRecordChecksum;
 use rocketmq_store::CommitLogRecordOutcome;
-use rocketmq_store::DefaultMappedFile;
-use rocketmq_store::MappedFile;
 use tabled::Table;
 use tabled::Tabled;
 
@@ -44,10 +43,13 @@ pub fn print_content(from: Option<u32>, to: Option<u32>, path: Option<PathBuf>) 
     }
 
     let path_display = path.to_string_lossy().to_string();
-    let file_metadata = fs::metadata(&path)
+    let file = File::open(&path)
+        .map_err(|error| RocketMQError::storage_read_failed(path_display.clone(), error.to_string()))?;
+    let file_metadata = file
+        .metadata()
         .map_err(|error| RocketMQError::storage_read_failed(path_display.clone(), error.to_string()))?;
     println!("file size: {}B", file_metadata.len());
-    let mapped_file = DefaultMappedFile::new(CheetahString::from(path_display), file_metadata.len());
+    let mut reader = BufReader::new(file);
     // read message number
     let mut counter = 0;
     let mut current_pos = 0usize;
@@ -56,22 +58,30 @@ pub fn print_content(from: Option<u32>, to: Option<u32>, path: Option<PathBuf>) 
         if counter >= to {
             break;
         }
-        let Some(mut size_bytes) = mapped_file.get_bytes(current_pos, 4) else {
+        let mut size_bytes = [0_u8; 4];
+        if reader.read_exact(&mut size_bytes).is_err() {
             break;
-        };
-        let size = size_bytes.get_i32();
+        }
+        let size = i32::from_be_bytes(size_bytes);
         if size <= 0 {
+            break;
+        }
+        let size = size as usize;
+        if size < size_bytes.len() || size as u64 > file_metadata.len().saturating_sub(current_pos as u64) {
+            break;
+        }
+        let mut message = vec![0_u8; size];
+        message[..size_bytes.len()].copy_from_slice(&size_bytes);
+        if reader.read_exact(&mut message[size_bytes.len()..]).is_err() {
             break;
         }
         counter += 1;
         if counter < from {
-            current_pos += size as usize;
+            current_pos += size;
             continue;
         }
-        let Some(msg_bytes) = mapped_file.get_bytes(current_pos, size as usize) else {
-            break;
-        };
-        current_pos += size as usize;
+        current_pos += size;
+        let msg_bytes = Bytes::from(message);
         if let Ok(CommitLogRecordOutcome::Message(record)) =
             decode_commit_log_record(&msg_bytes, CommitLogRecordBodyMode::Skip, &InspectionChecksum)
         {
