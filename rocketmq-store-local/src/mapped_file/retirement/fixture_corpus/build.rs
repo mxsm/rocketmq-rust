@@ -34,8 +34,11 @@ use crate::mapped_file::retirement::sidecar::RetirementStage;
 use crate::mapped_file::retirement::sidecar::SnapshotEntry;
 use crate::mapped_file::retirement::sidecar::SnapshotMode;
 
+#[path = "test_cases/edges.rs"]
 mod edges;
+#[path = "test_cases/frontiers.rs"]
 mod frontiers;
+#[path = "test_cases/samples.rs"]
 mod samples;
 
 use edges::add_edge_cases;
