@@ -15,6 +15,8 @@
 use std::fs::File;
 use std::io;
 
+use super::identity::StoreRelativePath;
+
 mod creation;
 #[allow(dead_code, reason = "M3 stages the namespace engine before Wave-B reaper wiring")]
 mod engine;
@@ -261,6 +263,19 @@ impl VerifiedNamespaceRoot {
             store_uuid: session.writer_frontier().store_uuid(),
             native,
         })
+    }
+
+    /// Opens one replay-authorized active segment for writable mapping from the retained root.
+    ///
+    /// The native backend performs strict handle-relative, no-follow resolution and revalidates
+    /// the exact physical key and durable length before returning the handle.
+    pub(in crate::mapped_file::retirement) fn open_active_segment(
+        &self,
+        path: &StoreRelativePath,
+        physical_key: PhysicalFileKey,
+        expected_length: u64,
+    ) -> Result<File, NamespaceVerificationError> {
+        self.native.open_active_segment(path, physical_key, expected_length)
     }
 
     pub(crate) fn reserve(

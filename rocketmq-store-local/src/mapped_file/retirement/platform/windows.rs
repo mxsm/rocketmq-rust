@@ -94,6 +94,7 @@ use super::types::NamespaceRetirementRequest;
 use super::types::NamespaceTransition;
 use super::types::NamespaceVerificationError;
 use crate::mapped_file::retirement::identity::PhysicalFileKey;
+use crate::mapped_file::retirement::identity::StoreRelativePath;
 use crate::mapped_file::retirement::writer::AllocatedIncarnationReceipt;
 use crate::mapped_file::retirement::writer::BoundIncarnationReceipt;
 
@@ -163,6 +164,58 @@ impl NamespaceRoot {
             canonical: None,
             tombstone: None,
         })
+    }
+
+    pub(super) fn open_active_segment(
+        &self,
+        path: &StoreRelativePath,
+        expected_key: PhysicalFileKey,
+        expected_length: u64,
+    ) -> Result<File, NamespaceVerificationError> {
+        if !self.writer_qualified {
+            return Err(NamespaceVerificationError::Unsupported {
+                platform: "windows",
+                reason: UNQUALIFIED_WRITER_REASON,
+            });
+        }
+        if !matches!(expected_key, PhysicalFileKey::Windows(_)) {
+            return Err(NamespaceVerificationError::Rejected(
+                NamespacePolicyViolation::PhysicalKeyPlatformMismatch,
+            ));
+        }
+        let (parent_path, file_name) = split_parent(path.as_str());
+        let parent = open_parent(&self.file, parent_path)?;
+        let file = open_writable_relative(&parent, file_name, FILE_OPEN, false)
+            .map_err(|error| classify_io(NamespaceOperation::VerifyCanonical, error).into_verification_error())?;
+        let attributes = query_attributes(&file, NamespaceOperation::VerifyCanonical)
+            .map_err(BackendFailure::into_verification_error)?;
+        if attributes.FileAttributes & (FILE_ATTRIBUTE_DIRECTORY.0 | FILE_ATTRIBUTE_REPARSE_POINT.0) != 0 {
+            return Err(NamespaceVerificationError::Rejected(
+                NamespacePolicyViolation::UnexpectedEntryType {
+                    entry: NamespaceEntry::Canonical,
+                },
+            ));
+        }
+        let metadata = file
+            .metadata()
+            .map_err(|error| classify_io(NamespaceOperation::VerifyCanonical, error).into_verification_error())?;
+        if metadata.len() != expected_length {
+            return Err(NamespaceVerificationError::Rejected(
+                NamespacePolicyViolation::ExpectedLengthMismatch {
+                    entry: NamespaceEntry::Canonical,
+                    expected: expected_length,
+                    actual: metadata.len(),
+                },
+            ));
+        }
+        let actual_key = physical_key::capture(&file)
+            .map_err(|error| classify_io(NamespaceOperation::VerifyCanonical, error).into_verification_error())?;
+        if actual_key != expected_key {
+            return Err(NamespaceVerificationError::Rejected(
+                NamespacePolicyViolation::NamespaceChangedDuringVerification,
+            ));
+        }
+        Ok(file)
     }
 
     pub(super) fn create_incarnation_temp(
@@ -640,6 +693,15 @@ fn open_created_relative(
     name: &str,
     disposition: windows::Wdk::Storage::FileSystem::NTCREATEFILE_CREATE_DISPOSITION,
 ) -> io::Result<File> {
+    open_writable_relative(parent, name, disposition, true)
+}
+
+fn open_writable_relative(
+    parent: &File,
+    name: &str,
+    disposition: windows::Wdk::Storage::FileSystem::NTCREATEFILE_CREATE_DISPOSITION,
+    request_delete_access: bool,
+) -> io::Result<File> {
     let mut wide = name.encode_utf16().collect::<Vec<_>>();
     let byte_length = wide
         .len()
@@ -659,8 +721,11 @@ fn open_created_relative(
         SecurityDescriptor: ptr::null(),
         SecurityQualityOfService: ptr::null(),
     };
-    let desired =
-        FILE_ACCESS_RIGHTS(DELETE.0 | FILE_READ_DATA.0 | FILE_WRITE_DATA.0 | FILE_READ_ATTRIBUTES.0 | SYNCHRONIZE.0);
+    let mut desired = FILE_READ_DATA.0 | FILE_WRITE_DATA.0 | FILE_READ_ATTRIBUTES.0 | SYNCHRONIZE.0;
+    if request_delete_access {
+        desired |= DELETE.0;
+    }
+    let desired = FILE_ACCESS_RIGHTS(desired);
     let share = FILE_SHARE_MODE(FILE_SHARE_READ.0 | FILE_SHARE_WRITE.0 | FILE_SHARE_DELETE.0);
     let options = FILE_OPEN_REPARSE_POINT.0 | FILE_SYNCHRONOUS_IO_NONALERT.0 | FILE_NON_DIRECTORY_FILE.0;
     let mut handle = HANDLE(ptr::null_mut());

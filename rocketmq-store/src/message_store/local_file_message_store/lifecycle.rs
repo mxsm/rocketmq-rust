@@ -892,6 +892,52 @@ impl LocalFileMessageStore {
         }
     }
 
+    /// Durably retires every managed mapped-file segment after ordinary Store shutdown.
+    ///
+    /// Lifecycle sidecars remain as the replayable audit trail. Legacy configurations continue to
+    /// fail closed through [`Self::destroy_store_with_outcome`].
+    pub(super) async fn destroy_store_gracefully(&mut self) -> Result<bool, StoreError> {
+        if self.store_root_lease_state == StoreRootLeaseState::Destroyed {
+            return Ok(true);
+        }
+        if self.lifecycle_state() != LocalStoreState::Shutdown {
+            return Err(StoreError::invalid_state(
+                StoreOperation::Admin,
+                "managed Store destroy requires ordinary shutdown to complete first",
+            ));
+        }
+        if !self.message_store_config.enable_mapped_file_lifecycle_wave_b {
+            self.store_root_lease_state = StoreRootLeaseState::DestroyRetryPending;
+            return Ok(false);
+        }
+        if let Err(error) = self.validate_current_root_mode(StoreOperation::Admin) {
+            self.store_root_lease_state = StoreRootLeaseState::DestroyRetryPending;
+            return Err(error);
+        }
+        let Some(runtime) = self.managed_lifecycle_runtime.clone() else {
+            self.store_root_lease_state = StoreRootLeaseState::DestroyRetryPending;
+            return Err(StoreError::invalid_state(
+                StoreOperation::Admin,
+                "managed lifecycle runtime is unavailable after shutdown",
+            ));
+        };
+        let Some(service) = self.mapped_file_retirement_service.as_mut() else {
+            self.store_root_lease_state = StoreRootLeaseState::DestroyRetryPending;
+            return Err(StoreError::invalid_state(
+                StoreOperation::Admin,
+                "managed mapped-file retirement service is unavailable after shutdown",
+            ));
+        };
+
+        self.store_root_lease_state = StoreRootLeaseState::DestroyRetryPending;
+        let report = service.destroy_all_and_await().await?;
+        let complete = report.pending_tickets == 0 && !report.recovery_required && runtime.store_destroy_complete();
+        if complete {
+            self.store_root_lease_state = StoreRootLeaseState::Destroyed;
+        }
+        Ok(complete)
+    }
+
     /// Attempts an explicit Store-level destroy without bypassing mapped-file retirement.
     ///
     /// Wave-B enables durable per-segment retirement, but whole-Store destruction remains disabled

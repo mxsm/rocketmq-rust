@@ -351,6 +351,10 @@ impl<T> ManagedMappedFileQueueGeneration<T> {
         self.slot.snapshot()
     }
 
+    pub(in crate::mapped_file::retirement) fn same_queue_as(&self, other: &Self) -> bool {
+        self.slot.identity.same_as(&other.slot.identity)
+    }
+
     pub(in crate::mapped_file::retirement) fn queue_identity(&self) -> QueueIdentity {
         self.slot.identity.clone()
     }

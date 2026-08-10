@@ -450,6 +450,10 @@ impl ReconciledSegmentFile {
         self.binding.incarnation
     }
 
+    pub(in crate::mapped_file::retirement) fn replace_retained_file(&mut self, file: std::fs::File) {
+        self.file = file;
+    }
+
     pub(in crate::mapped_file) fn into_parts(self) -> (StoreRelativePath, PublishedIncarnationBinding, std::fs::File) {
         (self.relative_path, self.binding, self.file)
     }

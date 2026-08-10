@@ -212,6 +212,65 @@ fn new_retirement_is_durable_before_the_single_queue_handoff() {
     assert!(!report.recovery_required());
 }
 
+#[test]
+fn store_destroy_submits_every_active_member_through_the_existing_retirement_pipeline() {
+    let registry = RetirementRegistry::new_for_test(store_uuid(), 0);
+    let first_owner = Arc::new(TestOwner);
+    let second_owner = Arc::new(TestOwner);
+    let second_incarnation = FileIncarnationId::new(store_uuid(), 2).expect("second incarnation is nonzero");
+    let second_path = StoreRelativePath::new("commitlog/00000000000000001024").expect("second path is canonical");
+    let queue = ManagedMappedFileQueueGeneration::from_reconciled_members(vec![
+        ManagedQueueMember::new(
+            Arc::clone(&first_owner),
+            incarnation(),
+            physical_key(),
+            canonical_path(),
+            0,
+            FILE_LENGTH,
+            1,
+        )
+        .expect("first managed member is valid"),
+        ManagedQueueMember::new(
+            Arc::clone(&second_owner),
+            second_incarnation,
+            PhysicalFileKey::unix(7, 12),
+            second_path,
+            FILE_LENGTH,
+            FILE_LENGTH,
+            2,
+        )
+        .expect("second managed member is valid"),
+    ])
+    .expect("managed queue generation is valid");
+    queue
+        .register_reconciled_members(&registry)
+        .expect("published identities are registered");
+    let writer = ManagedLedgerWriter::for_test(ModelLedgerIo::empty(), store_uuid(), BOOTSTRAP_ID, 4, 1, 1, 0, true, 1)
+        .expect("managed writer cursor is valid");
+    let started = Instant::now();
+    let mut core = ManagedRetirementCore::new(registry, writer, ImmediateAbsence, Vec::new(), started);
+    let mut nonce = 0x90u8;
+
+    let submitted = core
+        .submit_store_destroy_at(
+            std::slice::from_ref(&queue),
+            || {
+                let current = [nonce; 16];
+                nonce = nonce.wrapping_add(1);
+                current
+            },
+            started,
+        )
+        .expect("Store destroy submits every active member");
+
+    assert_eq!(submitted, 2);
+    assert!(queue.snapshot().is_empty());
+    let report = core.drive_batch_at(4, started, 323);
+    assert_eq!(report.completed(), 2);
+    assert_eq!(report.pending_tickets(), 0);
+    assert!(!report.recovery_required());
+}
+
 struct RetryableNamespace;
 
 impl NamespaceDriver<ModelLedgerIo, TestOwner> for RetryableNamespace {
@@ -256,4 +315,19 @@ fn retryable_namespace_work_is_owned_and_backed_off() {
     assert_eq!(before_backoff.attempted(), 0);
     assert_eq!(before_backoff.pending_tickets(), 1);
     assert!(!core.registry().needs_recovery());
+}
+
+#[test]
+fn store_destroy_admission_requires_completed_shutdown() {
+    let mut running = RuntimeAdmission::Running;
+    assert!(!running.enter_store_destroy());
+    assert_eq!(running, RuntimeAdmission::Running);
+
+    let mut shutdown = RuntimeAdmission::Shutdown;
+    assert!(shutdown.enter_store_destroy());
+    assert_eq!(shutdown, RuntimeAdmission::StoreDestroy);
+    assert!(
+        shutdown.enter_store_destroy(),
+        "Store-destroy retries remain idempotent"
+    );
 }

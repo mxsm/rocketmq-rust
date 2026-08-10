@@ -801,6 +801,10 @@ impl BackendOps for LocalFileMessageStore {
         self.shutdown_store().await;
     }
 
+    async fn destroy_gracefully(&mut self) -> Result<bool, StoreError> {
+        self.destroy_store_gracefully().await
+    }
+
     fn destroy(&mut self) {
         self.destroy_store();
     }
