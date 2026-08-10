@@ -278,10 +278,9 @@ async fn collect_batch(
             _ = shutdown_token.cancelled(), if !shutdown_token.is_cancelled() => {
                 rx.close();
             }
-            _ = tokio::time::sleep_until(deadline) => break,
-            request = rx.recv() => match request {
-                Some(request) => requests.push(request),
-                None => break,
+            request = tokio::time::timeout_at(deadline, rx.recv()) => match request {
+                Ok(Some(request)) => requests.push(request),
+                Ok(None) | Err(_) => break,
             },
         }
     }
