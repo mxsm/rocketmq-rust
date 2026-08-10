@@ -82,6 +82,10 @@ use crate::route_info::broker_housekeeping_service::BrokerHousekeepingService;
 use crate::KVConfigManager;
 use crate::NamesrvConfig;
 
+use self::config_apply::classify_runtime_updates;
+use crate::config::ConfigMutability;
+
+pub(crate) mod config_apply;
 mod lifecycle;
 mod signals;
 
@@ -436,6 +440,7 @@ impl NameServerRuntime {
 
     fn validate_runtime_config(&self) -> RocketMQResult<()> {
         let namesrv_config = self.inner.name_server_config();
+        namesrv_config.validate_domains()?;
 
         #[cfg(not(feature = "embedded-controller"))]
         if namesrv_config.enable_controller_in_namesrv {
@@ -1083,7 +1088,10 @@ impl Builder {
             .expect("clamped nameserver remoting client budgets must be valid"),
         );
 
-        let unregister_broker_queue_capacity = name_server_config.unregister_broker_queue_capacity as usize;
+        // Invalid values are rejected by `validate_runtime_config` before the
+        // listener starts. Keep construction itself panic-free so startup can
+        // return that typed error instead of panicking in `mpsc::channel`.
+        let unregister_broker_queue_capacity = name_server_config.unregister_broker_queue_capacity().unwrap_or(1);
         let initial_config = Arc::new(NameServerRuntimeConfig {
             name_server_config: Arc::new(name_server_config),
             tokio_client_config: Arc::new(tokio_client_config),
@@ -1454,13 +1462,27 @@ impl NameServerRuntimeInner {
 
     pub fn update_runtime_config(&self, updates: HashMap<CheetahString, CheetahString>) -> RocketMQResult<()> {
         let _update_guard = self.config_update_lock.lock();
+        let classified = classify_runtime_updates(updates)?;
+        let restart_required = classified
+            .iter()
+            .filter(|update| update.mutability == ConfigMutability::RestartRequired)
+            .map(|update| update.key.as_str())
+            .collect::<Vec<_>>();
+        if !restart_required.is_empty() {
+            return Err(RocketMQError::nameserver_config_invalid(format!(
+                "configuration changes require a restart: {}",
+                restart_required.join(",")
+            )));
+        }
         let current = self.config_snapshot();
         let mut name_server_config = (*current.name_server_config).clone();
         let mut tokio_client_config = (*current.tokio_client_config).clone();
         let mut server_config = (*current.server_config).clone();
         let mut namesrv_updates = HashMap::new();
 
-        for (key, value) in updates {
+        for update in classified {
+            let key = update.key;
+            let value = update.value;
             crate::config::reject_removed_route_manager_key(key.as_str())?;
             crate::config::reject_removed_transport_client_key(key.as_str())?;
             match key.as_str() {
@@ -1843,11 +1865,9 @@ mod tests {
             .expect_err("aggregate runtime update must reject an embedded Controller topology change");
         assert!(matches!(
             aggregate_error,
-            RocketMQError::ConfigInvalidValue {
-                key: "enableControllerInNamesrv",
-                ..
-            }
+            RocketMQError::Tools(rocketmq_error::ToolsError::NameServerConfigInvalid { .. })
         ));
+        assert!(aggregate_error.to_string().contains("require a restart"));
         assert!(Arc::ptr_eq(&before, &runtime.config_snapshot()));
 
         let namesrv_error = runtime
@@ -1866,49 +1886,44 @@ mod tests {
     #[test]
     fn runtime_config_concurrent_readers_only_observe_complete_snapshots() {
         let namesrv_config = NamesrvConfig {
+            enable_all_topic_list: true,
             enable_topic_list: true,
             ..NamesrvConfig::default()
         };
-        let server_config = ServerConfig {
-            listen_port: 10000,
-            ..ServerConfig::default()
-        };
         let bootstrap = Builder::new(test_service_context(), TelemetryHandle::noop())
             .set_name_server_config(namesrv_config)
-            .set_server_config(server_config)
             .build();
         let runtime = bootstrap.runtime_inner();
 
-        let writer =
-            |runtime: Arc<NameServerRuntimeInner>, listen_port: &'static str, enable_topic_list: &'static str| {
-                std::thread::spawn(move || {
-                    for _ in 0..500 {
-                        runtime
-                            .update_runtime_config(HashMap::from([
-                                (
-                                    CheetahString::from_static_str("listenPort"),
-                                    CheetahString::from_static_str(listen_port),
-                                ),
-                                (
-                                    CheetahString::from_static_str("enableTopicList"),
-                                    CheetahString::from_static_str(enable_topic_list),
-                                ),
-                            ]))
-                            .expect("valid snapshot update should succeed");
-                    }
-                })
-            };
+        let writer = |runtime: Arc<NameServerRuntimeInner>, enable_all: &'static str, enable_topic: &'static str| {
+            std::thread::spawn(move || {
+                for _ in 0..500 {
+                    runtime
+                        .update_runtime_config(HashMap::from([
+                            (
+                                CheetahString::from_static_str("enableAllTopicList"),
+                                CheetahString::from_static_str(enable_all),
+                            ),
+                            (
+                                CheetahString::from_static_str("enableTopicList"),
+                                CheetahString::from_static_str(enable_topic),
+                            ),
+                        ]))
+                        .expect("valid snapshot update should succeed");
+                }
+            })
+        };
 
-        let first_writer = writer(Arc::clone(&runtime), "20001", "false");
-        let second_writer = writer(Arc::clone(&runtime), "20002", "true");
+        let first_writer = writer(Arc::clone(&runtime), "false", "false");
+        let second_writer = writer(Arc::clone(&runtime), "true", "false");
         for _ in 0..10_000 {
             let snapshot = runtime.config_snapshot();
             let observed = (
-                snapshot.server_config.listen_port,
+                snapshot.name_server_config.enable_all_topic_list,
                 snapshot.name_server_config.enable_topic_list,
             );
             assert!(
-                matches!(observed, (10000, true) | (20001, false) | (20002, true)),
+                matches!(observed, (true, true) | (false, false) | (true, false)),
                 "reader observed a torn runtime configuration: {observed:?}"
             );
         }

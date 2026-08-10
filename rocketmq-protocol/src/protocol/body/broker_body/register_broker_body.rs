@@ -45,6 +45,33 @@ pub struct RegisterBrokerBody {
     pub filter_server_list: Vec<CheetahString>,
 }
 
+/// Resource limits applied while decoding a broker registration body.
+///
+/// The defaults retain compatibility with large RocketMQ deployments while
+/// bounding allocations before data supplied by the peer is trusted.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RegisterBrokerDecodeLimits {
+    pub max_wire_bytes: usize,
+    pub max_decompressed_bytes: usize,
+    pub max_topic_count: usize,
+    pub max_mapping_count: usize,
+    pub max_filter_server_count: usize,
+    pub max_single_entry_bytes: usize,
+}
+
+impl Default for RegisterBrokerDecodeLimits {
+    fn default() -> Self {
+        Self {
+            max_wire_bytes: 16 * 1024 * 1024,
+            max_decompressed_bytes: 64 * 1024 * 1024,
+            max_topic_count: 100_000,
+            max_mapping_count: 100_000,
+            max_filter_server_count: 10_000,
+            max_single_entry_bytes: 1024 * 1024,
+        }
+    }
+}
+
 impl RegisterBrokerBody {
     pub fn new(
         topic_config_serialize_wrapper: TopicConfigAndMappingSerializeWrapper,
@@ -181,202 +208,220 @@ impl RegisterBrokerBody {
         compressed: bool,
         broker_version: RocketMqVersion,
     ) -> rocketmq_error::RocketMQResult<RegisterBrokerBody> {
-        // Fast path: non-compressed data
-        if !compressed {
-            return serde_json::from_slice::<RegisterBrokerBody>(bytes.as_ref()).map_err(|e| {
-                error!("Failed to decode RegisterBrokerBody: {:?}", e);
-                rocketmq_error::RocketMQError::request_body_invalid(
-                    "decode",
-                    format!("Failed to decode RegisterBrokerBody: {:?}", e),
-                )
-            });
+        Self::decode_with_limits(bytes, compressed, broker_version, RegisterBrokerDecodeLimits::default())
+    }
+
+    pub fn decode_with_limits(
+        bytes: &Bytes,
+        compressed: bool,
+        broker_version: RocketMqVersion,
+        limits: RegisterBrokerDecodeLimits,
+    ) -> rocketmq_error::RocketMQResult<RegisterBrokerBody> {
+        if bytes.len() > limits.max_wire_bytes {
+            return Err(invalid_registration(format!(
+                "registration body exceeds wire limit: {} > {} bytes",
+                bytes.len(),
+                limits.max_wire_bytes
+            )));
         }
 
-        let mut register_broker_body = RegisterBrokerBody::default();
+        // Fast path: non-compressed data
+        if !compressed {
+            let body = serde_json::from_slice::<RegisterBrokerBody>(bytes.as_ref()).map_err(|e| {
+                error!("Failed to decode RegisterBrokerBody: {:?}", e);
+                invalid_registration(format!("Failed to decode RegisterBrokerBody: {e}"))
+            })?;
+            validate_decoded_body(&body, limits)?;
+            return Ok(body);
+        }
 
         // Decompress data
-        let mut decoder = DeflateDecoder::new(bytes.as_ref());
-        // Pre-allocate with estimated size to reduce reallocations
-        let mut decompressed = Vec::with_capacity(bytes.len() * 2);
+        let decoder = DeflateDecoder::new(bytes.as_ref());
+        let read_limit = u64::try_from(limits.max_decompressed_bytes)
+            .unwrap_or(u64::MAX)
+            .saturating_add(1);
+        let mut limited_decoder = decoder.take(read_limit);
+        let initial_capacity = bytes.len().saturating_mul(2).min(limits.max_decompressed_bytes);
+        let mut decompressed = Vec::new();
+        decompressed
+            .try_reserve(initial_capacity)
+            .map_err(|e| invalid_registration(format!("unable to reserve decompression buffer: {e}")))?;
 
-        if let Err(e) = decoder.read_to_end(&mut decompressed) {
+        if let Err(e) = limited_decoder.read_to_end(&mut decompressed) {
             error!("Failed to decompress RegisterBrokerBody: {:?}", e);
-            return Err(rocketmq_error::RocketMQError::request_body_invalid(
-                "decompress",
-                format!("Failed to decompress RegisterBrokerBody: {:?}", e),
-            ));
+            return Err(invalid_registration(format!(
+                "Failed to decompress RegisterBrokerBody: {e}"
+            )));
+        }
+        if decompressed.len() > limits.max_decompressed_bytes {
+            return Err(invalid_registration(format!(
+                "registration body exceeds decompressed limit: {} > {} bytes",
+                decompressed.len(),
+                limits.max_decompressed_bytes
+            )));
         }
 
         let mut buf = Bytes::from(decompressed);
 
         // 1. Decode DataVersion
-        if buf.remaining() < 4 {
-            error!("Insufficient data for DataVersion length");
-            return Err(rocketmq_error::RocketMQError::request_body_invalid(
-                "decode",
-                "Insufficient data for DataVersion length",
-            ));
-        }
-        let data_version_length = buf.get_i32() as usize;
-        if buf.remaining() < data_version_length {
-            let msg = format!(
-                "Insufficient data for DataVersion (expected: {}, remaining: {})",
-                data_version_length,
-                buf.remaining()
-            );
-            error!("{}", msg);
-            return Err(rocketmq_error::RocketMQError::request_body_invalid("decode", msg));
-        }
-
-        let data_version_bytes = buf.split_to(data_version_length);
+        let data_version_bytes = read_entry(&mut buf, "DataVersion", limits.max_single_entry_bytes)?;
         let data_version = DataVersion::decode(data_version_bytes.as_ref()).map_err(|e| {
             error!("Failed to decode DataVersion: {:?}", e);
-            rocketmq_error::RocketMQError::request_body_invalid(
-                "decode",
-                format!("Failed to decode DataVersion: {:?}", e),
-            )
+            invalid_registration(format!("Failed to decode DataVersion: {e}"))
         })?;
 
+        // 2. Decode TopicConfig table
+        let topic_config_number = read_count(&mut buf, "topic config", limits.max_topic_count)?;
+        debug!("{} topic configs to extract", topic_config_number);
+        let mut topic_config_table = HashMap::new();
+        topic_config_table
+            .try_reserve(topic_config_number)
+            .map_err(|e| invalid_registration(format!("unable to reserve topic config table: {e}")))?;
+
+        for i in 0..topic_config_number {
+            let topic_config_bytes = read_entry(&mut buf, "topic config", limits.max_single_entry_bytes)?;
+            let topic_config_text = std::str::from_utf8(topic_config_bytes.as_ref())
+                .map_err(|e| invalid_registration(format!("topic config {i} is not valid UTF-8: {e}")))?;
+            let mut topic_config = TopicConfig::default();
+            if !topic_config.decode(topic_config_text) {
+                return Err(invalid_registration(format!(
+                    "topic config {i} has an invalid wire representation"
+                )));
+            }
+            let Some(topic_name) = topic_config.topic_name.clone().filter(|name| !name.is_empty()) else {
+                return Err(invalid_registration(format!("topic config {i} has no topic name")));
+            };
+            topic_config_table.insert(topic_name, topic_config);
+        }
+
+        // 3. Decode filter server list
+        let filter_server_list_json = read_entry(&mut buf, "filter server list", limits.max_single_entry_bytes)?;
+        let filter_server_list = serde_json::from_slice::<Vec<CheetahString>>(filter_server_list_json.as_ref())
+            .map_err(|e| invalid_registration(format!("Failed to parse filter server list: {e}")))?;
+        if filter_server_list.len() > limits.max_filter_server_count {
+            return Err(invalid_registration(format!(
+                "filter server count exceeds limit: {} > {}",
+                filter_server_list.len(),
+                limits.max_filter_server_count
+            )));
+        }
+
+        // 4. Decode TopicQueueMappingInfo (V5.0.0+)
+        let mut topic_queue_mapping_info_map = HashMap::new();
+        if broker_version >= RocketMqVersion::V5_0_0 {
+            let topic_queue_mapping_num = read_count(&mut buf, "queue mapping", limits.max_mapping_count)?;
+            topic_queue_mapping_info_map
+                .try_reserve(topic_queue_mapping_num)
+                .map_err(|e| invalid_registration(format!("unable to reserve queue mapping table: {e}")))?;
+
+            for i in 0..topic_queue_mapping_num {
+                let buffer = read_entry(&mut buf, "queue mapping", limits.max_single_entry_bytes)?;
+                let info = TopicQueueMappingInfo::decode(buffer.as_ref())
+                    .map_err(|e| invalid_registration(format!("Failed to decode queue mapping {i}: {e}")))?;
+                let Some(topic) = info.topic.clone().filter(|topic| !topic.is_empty()) else {
+                    return Err(invalid_registration(format!("queue mapping {i} has no topic name")));
+                };
+                topic_queue_mapping_info_map.insert(topic, info);
+            }
+        }
+
+        if broker_version >= RocketMqVersion::V5_0_0 && buf.has_remaining() {
+            return Err(invalid_registration(format!(
+                "registration body contains {} trailing bytes",
+                buf.remaining()
+            )));
+        }
+
+        let mut register_broker_body = RegisterBrokerBody::default();
         register_broker_body.topic_config_serialize_wrapper.mapping_data_version = data_version.clone();
-        // set in topic_config_serialize_wrapper
         register_broker_body
             .topic_config_serialize_wrapper
             .topic_config_serialize_wrapper
             .data_version = data_version;
-
-        // 2. Decode TopicConfig table
-        if buf.remaining() < 4 {
-            error!("Insufficient data for topic config count");
-            return Err(rocketmq_error::RocketMQError::request_body_invalid(
-                "decode",
-                "Insufficient data for topic config count",
-            ));
-        }
-        let topic_config_number = buf.get_i32();
-        debug!("{} topic configs to extract", topic_config_number);
-
-        for i in 0..topic_config_number {
-            if buf.remaining() < 4 {
-                error!("Insufficient data for topic config {} length", i);
-                break;
-            }
-            let topic_config_length = buf.get_i32() as usize;
-
-            if buf.remaining() < topic_config_length {
-                error!(
-                    "Insufficient data for topic config {} (expected: {}, remaining: {})",
-                    i,
-                    topic_config_length,
-                    buf.remaining()
-                );
-                break;
-            }
-
-            let topic_config_bytes = buf.split_to(topic_config_length);
-
-            // Avoid unnecessary allocation by using from_utf8 directly
-            match std::str::from_utf8(&topic_config_bytes) {
-                Ok(topic_config_json) => {
-                    let mut topic_config = TopicConfig::default();
-                    topic_config.decode(topic_config_json);
-                    if let Some(topic_name) = &topic_config.topic_name {
-                        register_broker_body
-                            .topic_config_serialize_wrapper
-                            .topic_config_serialize_wrapper
-                            .topic_config_table
-                            .insert(topic_name.clone(), topic_config);
-                    }
-                }
-                Err(_) => {
-                    // Fallback to lossy conversion
-                    let topic_config_json = String::from_utf8_lossy(&topic_config_bytes);
-                    let mut topic_config = TopicConfig::default();
-                    topic_config.decode(&topic_config_json);
-                    if let Some(topic_name) = &topic_config.topic_name {
-                        register_broker_body
-                            .topic_config_serialize_wrapper
-                            .topic_config_serialize_wrapper
-                            .topic_config_table
-                            .insert(topic_name.clone(), topic_config);
-                    }
-                }
-            }
-        }
-
-        // 3. Decode filter server list
-        if buf.remaining() < 4 {
-            error!("Insufficient data for filter server list length");
-            return Err(rocketmq_error::RocketMQError::request_body_invalid(
-                "decode",
-                "Insufficient data for filter server list length",
-            ));
-        }
-        let filter_server_list_json_length = buf.get_i32() as usize;
-
-        if buf.remaining() < filter_server_list_json_length {
-            let msg = format!(
-                "Insufficient data for filter server list (expected: {}, remaining: {})",
-                filter_server_list_json_length,
-                buf.remaining()
-            );
-            error!("{}", msg);
-            return Err(rocketmq_error::RocketMQError::request_body_invalid("decode", msg));
-        }
-
-        let filter_server_list_json = buf.split_to(filter_server_list_json_length);
-        match serde_json::from_slice::<Vec<CheetahString>>(filter_server_list_json.as_ref()) {
-            Ok(list) => register_broker_body.filter_server_list = list,
-            Err(e) => {
-                error!(
-                    "Failed to parse filter server list: {:?}, json: {}",
-                    e,
-                    String::from_utf8_lossy(filter_server_list_json.as_ref())
-                );
-            }
-        }
-
-        // 4. Decode TopicQueueMappingInfo (V5.0.0+)
-        if broker_version >= RocketMqVersion::V5_0_0 && buf.remaining() >= 4 {
-            let topic_queue_mapping_num = buf.get_i32();
-            // Pre-allocate with shard count for better performance
-            let mut topic_queue_mapping_info_map = HashMap::with_capacity(topic_queue_mapping_num as usize);
-
-            for i in 0..topic_queue_mapping_num {
-                if buf.remaining() < 4 {
-                    error!("Insufficient data for queue mapping {} length", i);
-                    break;
-                }
-                let mapping_json_len = buf.get_i32() as usize;
-
-                if buf.remaining() < mapping_json_len {
-                    error!(
-                        "Insufficient data for queue mapping {} (expected: {}, remaining: {})",
-                        i,
-                        mapping_json_len,
-                        buf.remaining()
-                    );
-                    break;
-                }
-
-                let buffer = buf.split_to(mapping_json_len);
-                match TopicQueueMappingInfo::decode(buffer.as_ref()) {
-                    Ok(info) => {
-                        if let Some(topic) = &info.topic {
-                            topic_queue_mapping_info_map.insert(topic.clone(), info);
-                        }
-                    }
-                    Err(e) => {
-                        error!("Failed to decode TopicQueueMappingInfo {}: {:?}", i, e);
-                    }
-                }
-            }
-            register_broker_body
-                .topic_config_serialize_wrapper
-                .topic_queue_mapping_info_map = topic_queue_mapping_info_map;
-        }
+        register_broker_body
+            .topic_config_serialize_wrapper
+            .topic_config_serialize_wrapper
+            .topic_config_table = topic_config_table;
+        register_broker_body
+            .topic_config_serialize_wrapper
+            .topic_queue_mapping_info_map = topic_queue_mapping_info_map;
+        register_broker_body.filter_server_list = filter_server_list;
 
         Ok(register_broker_body)
     }
+}
+
+fn invalid_registration(reason: impl Into<String>) -> rocketmq_error::RocketMQError {
+    rocketmq_error::RocketMQError::request_body_invalid("decode_register_broker_body", reason)
+}
+
+fn read_count(buf: &mut Bytes, field: &str, maximum: usize) -> rocketmq_error::RocketMQResult<usize> {
+    let count = read_i32(buf, &format!("{field} count"))?;
+    let count =
+        usize::try_from(count).map_err(|_| invalid_registration(format!("{field} count must not be negative")))?;
+    if count > maximum {
+        return Err(invalid_registration(format!(
+            "{field} count exceeds limit: {count} > {maximum}"
+        )));
+    }
+    Ok(count)
+}
+
+fn read_entry(buf: &mut Bytes, field: &str, maximum: usize) -> rocketmq_error::RocketMQResult<Bytes> {
+    let length = read_i32(buf, &format!("{field} length"))?;
+    let length =
+        usize::try_from(length).map_err(|_| invalid_registration(format!("{field} length must not be negative")))?;
+    if length > maximum {
+        return Err(invalid_registration(format!(
+            "{field} length exceeds limit: {length} > {maximum}"
+        )));
+    }
+    if buf.remaining() < length {
+        return Err(invalid_registration(format!(
+            "insufficient data for {field}: expected {length}, remaining {}",
+            buf.remaining()
+        )));
+    }
+    Ok(buf.split_to(length))
+}
+
+fn read_i32(buf: &mut Bytes, field: &str) -> rocketmq_error::RocketMQResult<i32> {
+    if buf.remaining() < std::mem::size_of::<i32>() {
+        return Err(invalid_registration(format!("insufficient data for {field}")));
+    }
+    Ok(buf.get_i32())
+}
+
+fn validate_decoded_body(
+    body: &RegisterBrokerBody,
+    limits: RegisterBrokerDecodeLimits,
+) -> rocketmq_error::RocketMQResult<()> {
+    let topic_count = body
+        .topic_config_serialize_wrapper
+        .topic_config_serialize_wrapper
+        .topic_config_table
+        .len();
+    if topic_count > limits.max_topic_count {
+        return Err(invalid_registration(format!(
+            "topic config count exceeds limit: {topic_count} > {}",
+            limits.max_topic_count
+        )));
+    }
+    let mapping_count = body.topic_config_serialize_wrapper.topic_queue_mapping_info_map.len();
+    if mapping_count > limits.max_mapping_count {
+        return Err(invalid_registration(format!(
+            "queue mapping count exceeds limit: {mapping_count} > {}",
+            limits.max_mapping_count
+        )));
+    }
+    if body.filter_server_list.len() > limits.max_filter_server_count {
+        return Err(invalid_registration(format!(
+            "filter server count exceeds limit: {} > {}",
+            body.filter_server_list.len(),
+            limits.max_filter_server_count
+        )));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
