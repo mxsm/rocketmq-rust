@@ -13,6 +13,8 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::io;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -44,6 +46,26 @@ type Key = CheetahString;
 type Value = CheetahString;
 /// Type alias for the configuration map structure
 type ConfigMap = HashMap<Key, Value>;
+type ConfigTable = dashmap::DashMap<Namespace, ConfigMap>;
+
+fn load_config_table_with(
+    config_path: &Path,
+    read: impl FnOnce(&Path) -> io::Result<String>,
+) -> RocketMQResult<Option<ConfigTable>> {
+    let content = match read(config_path) {
+        Ok(content) if content.is_empty() => return Ok(None),
+        Ok(content) => content,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(rocketmq_error::RocketMQError::IO(io::Error::new(
+                error.kind(),
+                format!("failed to read KV config at {}: {error}", config_path.display()),
+            )));
+        }
+    };
+
+    Ok(KVConfigSerializeWrapper::decode(content.as_bytes())?.config_table)
+}
 
 /// Threshold for triggering automatic persistence (number of pending changes)
 const AUTO_PERSIST_THRESHOLD: usize = 100;
@@ -136,31 +158,24 @@ impl KVConfigManager {
     /// - `Err(RocketMQError)` if deserialization fails
     pub fn load(&self) -> RocketMQResult<()> {
         let namesrv_config = self.name_server_runtime_inner.name_server_config();
-        let config_path = namesrv_config.kv_config_path.as_str();
+        let config_path = Path::new(namesrv_config.kv_config_path.as_str());
+        let config_table =
+            load_config_table_with(config_path, |path| std::fs::read_to_string(path)).inspect_err(|error| {
+                error!(
+                    path = %config_path.display(),
+                    error_kind = ?error.kind(),
+                    "Failed to load KV config"
+                );
+            })?;
 
-        let content = match file_utils::file_to_string(config_path) {
-            Ok(content) if !content.is_empty() => content,
-            Ok(_) => {
-                debug!("KV config file is empty, skipping load");
-                return Ok(());
-            }
-            Err(_) => {
-                debug!("KV config file not found, skipping load");
-                return Ok(());
-            }
-        };
-
-        let wrapper = KVConfigSerializeWrapper::decode(content.as_bytes()).map_err(|e| {
-            error!("Failed to decode KV config: {}", e);
-            e
-        })?;
-
-        if let Some(config_table) = wrapper.config_table {
+        if let Some(config_table) = config_table {
             let entry_count = config_table.len();
             for (namespace, kv_map) in config_table {
                 self.config_table.insert(namespace, kv_map);
             }
             info!("Loaded {} namespace(s) from KV config file", entry_count);
+        } else {
+            debug!("KV config file is missing or empty, starting with an empty table");
         }
 
         // Reset pending changes after successful load
@@ -303,17 +318,11 @@ impl KVConfigManager {
         // Increment pending changes counter
         self.pending_changes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-        if is_new {
-            debug!(
-                "Created new KV config: namespace={}, key={}, value={}",
-                namespace, key, value
-            );
-        } else {
-            debug!(
-                "Updated KV config: namespace={}, key={}, value={}",
-                namespace, key, value
-            );
-        }
+        debug!(
+            operation = "put",
+            outcome = if is_new { "created" } else { "updated" },
+            "KV config mutated"
+        );
 
         self.persist_until(deadline).await?;
         Ok(())
@@ -343,19 +352,20 @@ impl KVConfigManager {
             .get_mut(namespace)
             .and_then(|mut table| table.remove(key));
 
-        if let Some(value) = deleted_value {
+        if deleted_value.is_some() {
             // Increment pending changes counter
             self.pending_changes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-            debug!(
-                "Deleted KV config: namespace={}, key={}, value={}",
-                namespace, key, value
-            );
+            debug!(operation = "delete", outcome = "deleted", "KV config mutated");
 
             self.persist_until(deadline).await?;
             Ok(true)
         } else {
-            debug!("KV config not found for deletion: namespace={}, key={}", namespace, key);
+            debug!(
+                operation = "delete",
+                outcome = "not-found",
+                "KV config mutation skipped"
+            );
             Ok(false)
         }
     }
@@ -395,7 +405,11 @@ impl KVConfigManager {
         self.pending_changes
             .fetch_add(count, std::sync::atomic::Ordering::Relaxed);
 
-        debug!("Batch updated {} KV configs in namespace={}", count, namespace);
+        debug!(
+            operation = "batch-put",
+            changed_entries = count,
+            "KV config batch mutated"
+        );
 
         self.persist_until(deadline).await?;
         Ok(count)
@@ -436,8 +450,9 @@ impl KVConfigManager {
                 .fetch_add(deleted_count, std::sync::atomic::Ordering::Relaxed);
 
             debug!(
-                "Batch deleted {} KV configs from namespace={}",
-                deleted_count, namespace
+                operation = "batch-delete",
+                changed_entries = deleted_count,
+                "KV config batch mutated"
             );
 
             self.persist_until(deadline).await?;
@@ -463,12 +478,20 @@ impl KVConfigManager {
             self.pending_changes
                 .fetch_add(count, std::sync::atomic::Ordering::Relaxed);
 
-            info!("Deleted namespace={} with {} configs", namespace, count);
+            info!(
+                operation = "delete-namespace",
+                changed_entries = count,
+                "KV namespace deleted"
+            );
 
             self.persist_until(deadline).await?;
             Ok(count)
         } else {
-            debug!("Namespace not found for deletion: {}", namespace);
+            debug!(
+                operation = "delete-namespace",
+                outcome = "not-found",
+                "KV namespace mutation skipped"
+            );
             Ok(0)
         }
     }
@@ -491,7 +514,7 @@ impl KVConfigManager {
             match table.encode() {
                 Ok(encoded) => Some(encoded),
                 Err(e) => {
-                    error!("Failed to encode KV table for namespace {}: {}", namespace, e);
+                    error!(operation = "encode-namespace", error = %e, "Failed to encode KV table");
                     None
                 }
             }
@@ -568,11 +591,79 @@ impl KVConfigManager {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::io;
+    use std::path::Path;
     use std::sync::Arc;
 
     use cheetah_string::CheetahString;
+    use rocketmq_error::RocketMQError;
 
     use super::*;
+
+    #[test]
+    fn missing_kv_file_loads_as_an_empty_table() {
+        let loaded = load_config_table_with(Path::new("missing.json"), |_| {
+            Err(io::Error::new(io::ErrorKind::NotFound, "missing"))
+        })
+        .expect("a missing KV file is a valid first startup");
+
+        assert!(loaded.is_none());
+    }
+
+    #[test]
+    fn empty_kv_file_loads_as_an_empty_table() {
+        let loaded = load_config_table_with(Path::new("empty.json"), |_| Ok(String::new()))
+            .expect("an empty KV file should load successfully");
+
+        assert!(loaded.is_none());
+    }
+
+    #[test]
+    fn kv_load_preserves_permission_errors() {
+        let error = load_config_table_with(Path::new("protected.json"), |_| {
+            Err(io::Error::new(io::ErrorKind::PermissionDenied, "denied"))
+        })
+        .expect_err("permission failures must not be treated as a missing file");
+
+        match error {
+            RocketMQError::IO(source) => {
+                assert_eq!(source.kind(), io::ErrorKind::PermissionDenied);
+                assert!(source.to_string().contains("read KV config"));
+                assert!(source.to_string().contains("protected.json"));
+            }
+            other => panic!("expected an I/O error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn corrupt_kv_json_fails_load() {
+        let error = load_config_table_with(Path::new("corrupt.json"), |_| Ok("{not-json".to_string()))
+            .expect_err("corrupt persisted KV data must fail closed");
+
+        assert!(matches!(error, RocketMQError::Serialization(_)));
+    }
+
+    #[test]
+    fn java_config_table_fixture_is_compatible() {
+        let fixture = include_str!("../../tests/fixtures/kv/java-config-table.json");
+        let loaded = load_config_table_with(Path::new("java-config-table.json"), |_| Ok(fixture.to_string()))
+            .expect("Java KV fixture should decode")
+            .expect("Java KV fixture should contain configTable");
+
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(
+            loaded
+                .get("ORDER_TOPIC_CONFIG")
+                .and_then(|namespace| namespace.get("orders-eu").cloned()),
+            Some(CheetahString::from_static_str("broker-a:4;broker-b:4"))
+        );
+        assert_eq!(
+            loaded
+                .get("PROJECT_CONFIG")
+                .and_then(|namespace| namespace.get("tenant-unicode").cloned()),
+            Some(CheetahString::from_static_str("生产"))
+        );
+    }
 
     /// Tests for the internal config_table (DashMap) operations
     /// These tests don't require full KVConfigManager setup
