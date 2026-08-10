@@ -774,6 +774,30 @@ pub fn validate_namesrv_config_source(source: &str) -> RocketMQResult<()> {
     Ok(())
 }
 
+#[must_use]
+pub fn is_tls_config_key(key: &str) -> bool {
+    matches!(
+        key,
+        "tls.enable"
+            | "tls.test.mode.enable"
+            | "tls.config.file"
+            | "tls.server.mode"
+            | "tls.server.need.client.auth"
+            | "tls.server.keyPath"
+            | "tls.server.keyPassword"
+            | "tls.server.certPath"
+            | "tls.server.authClient"
+            | "tls.server.trustCertPath"
+            | "tls.client.keyPath"
+            | "tls.client.keyPassword"
+            | "tls.client.certPath"
+            | "tls.client.authServer"
+            | "tls.client.trustCertPath"
+            | "tls.ciphers"
+            | "tls.protocols"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use std::env;
@@ -1074,28 +1098,4 @@ productEnvName = "useRouteInfoManagerV2"
             RocketMQError::Tools(rocketmq_error::ToolsError::NameServerConfigInvalid { .. })
         ));
     }
-}
-
-#[must_use]
-pub fn is_tls_config_key(key: &str) -> bool {
-    matches!(
-        key,
-        "tls.enable"
-            | "tls.test.mode.enable"
-            | "tls.config.file"
-            | "tls.server.mode"
-            | "tls.server.need.client.auth"
-            | "tls.server.keyPath"
-            | "tls.server.keyPassword"
-            | "tls.server.certPath"
-            | "tls.server.authClient"
-            | "tls.server.trustCertPath"
-            | "tls.client.keyPath"
-            | "tls.client.keyPassword"
-            | "tls.client.certPath"
-            | "tls.client.authServer"
-            | "tls.client.trustCertPath"
-            | "tls.ciphers"
-            | "tls.protocols"
-    )
 }

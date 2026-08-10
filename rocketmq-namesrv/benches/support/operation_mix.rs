@@ -42,7 +42,7 @@ pub(crate) struct OperationCounts {
 impl OperationMix {
     pub(crate) const fn operation_at(self, index: usize) -> Operation {
         match self {
-            Self::NinetyTen if index % 10 == 0 => Operation::Write,
+            Self::NinetyTen if index.is_multiple_of(10) => Operation::Write,
             Self::NinetyTen => Operation::Read,
         }
     }
