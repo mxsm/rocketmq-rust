@@ -36,7 +36,7 @@ use crate::bootstrap::InFlightRequestTracker;
 use crate::processor::default_request_processor::DefaultRequestProcessor;
 use crate::security::classify_namesrv_request;
 
-mod client_request_processor;
+pub(crate) mod client_request_processor;
 mod cluster_test_request_processor;
 pub mod default_request_processor;
 

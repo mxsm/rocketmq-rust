@@ -1462,6 +1462,16 @@ impl NameServerRuntimeInner {
         );
         push_config_entry(
             &mut entries,
+            "namesrvTypedZoneRouteEnable",
+            name_server_config.namesrv_typed_zone_route_enable,
+        );
+        push_config_entry(
+            &mut entries,
+            "namesrvTypedZoneRouteShadow",
+            name_server_config.namesrv_typed_zone_route_shadow,
+        );
+        push_config_entry(
+            &mut entries,
             "returnOrderTopicConfigToBroker",
             name_server_config.return_order_topic_config_to_broker,
         );
@@ -1681,6 +1691,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::net::SocketAddr;
     use std::net::TcpListener;
     use std::str;
     use std::sync::atomic::AtomicBool;
@@ -1694,6 +1705,7 @@ mod tests {
     use rocketmq_model::common::constant::PermName;
     use rocketmq_model::common::mix_all::string_to_properties;
     use rocketmq_model::common::mix_all::MASTER_ID;
+    use rocketmq_model::common::mix_all::ZONE_MODE;
     use rocketmq_model::common::mix_all::ZONE_NAME;
     use rocketmq_model::common::TopicSysFlag;
     use rocketmq_model::utils::crc32_utils;
@@ -1734,6 +1746,7 @@ mod tests {
     use rocketmq_protocol::protocol::RemotingSerializable;
     use rocketmq_runtime::RuntimeContext;
     use rocketmq_transport::api::v1::ConnectionState;
+    use rocketmq_transport::api::v1::RPCHook;
     use rocketmq_transport::api::v1::RequestProcessor;
     use rocketmq_transport::api::v1::ServerConfig;
     use rocketmq_transport::api::v1::TlsMode;
@@ -4467,5 +4480,71 @@ mod tests {
             .unwrap();
         let after_route = TopicRouteData::decode(after.body().expect("route response should include a body")).unwrap();
         assert_eq!(after_route.order_topic_conf.as_ref(), Some(&order_conf));
+    }
+
+    #[tokio::test]
+    async fn typed_zone_route_encodes_once_without_hook_decode() {
+        let (namesrv_config, _namesrv_root) = isolated_namesrv_config(NamesrvConfig {
+            namesrv_typed_zone_route_enable: true,
+            ..NamesrvConfig::default()
+        });
+        let bootstrap = build_bootstrap_with_config(namesrv_config);
+        let harness = LocalRequestHarness::new(test_task_group("namesrv-typed-zone-test"))
+            .await
+            .unwrap();
+        let topic_wrapper =
+            || topic_config_wrapper(&[("typed-zone-topic", 0, PermName::PERM_READ | PermName::PERM_WRITE)]);
+        register_test_broker(
+            &bootstrap,
+            &CheetahString::from_static_str("typed-zone-cluster"),
+            &CheetahString::from_static_str("typed-zone-broker-a"),
+            &CheetahString::from_static_str("10.0.0.31:10911"),
+            MASTER_ID,
+            &CheetahString::from_static_str("zone-a"),
+            false,
+            topic_wrapper(),
+        )
+        .await;
+        register_test_broker(
+            &bootstrap,
+            &CheetahString::from_static_str("typed-zone-cluster"),
+            &CheetahString::from_static_str("typed-zone-broker-b"),
+            &CheetahString::from_static_str("10.0.0.32:10911"),
+            MASTER_ID,
+            &CheetahString::from_static_str("zone-b"),
+            false,
+            topic_wrapper(),
+        )
+        .await;
+        let mut processor =
+            ClientRequestProcessor::new(NameServerRuntimeHandle::new(&bootstrap.name_server_runtime.inner));
+        let mut request = RemotingCommand::create_request_command(
+            RequestCode::GetRouteinfoByTopic,
+            GetRouteInfoRequestHeader::new(CheetahString::from_static_str("typed-zone-topic"), Some(true)),
+        );
+        request.make_custom_header_to_net();
+        request
+            .add_ext_field(ZONE_MODE, "true")
+            .add_ext_field(ZONE_NAME, "zone-a");
+        crate::processor::client_request_processor::reset_route_encode_count();
+        crate::route::zone_route_rpc_hook::reset_zone_hook_decode_count();
+
+        let mut response = processor
+            .process_request(harness.channel(), harness.context(), &mut request)
+            .await
+            .unwrap()
+            .unwrap();
+        ZoneRouteRPCHook
+            .do_after_response(SocketAddr::from(([127, 0, 0, 1], 10911)), &request, &mut response)
+            .unwrap();
+
+        assert_eq!(crate::processor::client_request_processor::route_encode_count(), 1);
+        assert_eq!(crate::route::zone_route_rpc_hook::zone_hook_decode_count(), 0);
+        let route = TopicRouteData::decode(response.body().expect("route response should include a body")).unwrap();
+        assert_eq!(route.broker_datas.len(), 1);
+        assert_eq!(
+            route.broker_datas[0].zone_name().map(CheetahString::as_str),
+            Some("zone-a")
+        );
     }
 }

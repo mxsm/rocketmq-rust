@@ -164,6 +164,8 @@ fn apply_to_snapshot(
             | "clusterTest"
             | "orderMessageEnable"
             | "routeFreshnessSampleInterval"
+            | "namesrvTypedZoneRouteEnable"
+            | "namesrvTypedZoneRouteShadow"
             | "returnOrderTopicConfigToBroker"
             | "clientRequestThreadPoolNums"
             | "defaultThreadPoolNums"
@@ -237,6 +239,16 @@ fn format_runtime_config(config_snapshot: &NameServerRuntimeConfig) -> RocketMQR
         &mut entries,
         "routeFreshnessSampleInterval",
         name_server_config.route_freshness_sample_interval,
+    );
+    push_config_entry(
+        &mut entries,
+        "namesrvTypedZoneRouteEnable",
+        name_server_config.namesrv_typed_zone_route_enable,
+    );
+    push_config_entry(
+        &mut entries,
+        "namesrvTypedZoneRouteShadow",
+        name_server_config.namesrv_typed_zone_route_shadow,
     );
     push_config_entry(
         &mut entries,

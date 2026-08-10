@@ -15,6 +15,9 @@
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
+#[cfg(test)]
+use std::sync::atomic::AtomicU64;
+
 use cheetah_string::CheetahString;
 use rocketmq_model::common::FAQUrl;
 use rocketmq_model::version::RocketMqVersion;
@@ -34,6 +37,14 @@ use tracing::warn;
 
 use crate::bootstrap::NameServerRuntimeHandle;
 use crate::processor::NAMESPACE_ORDER_TOPIC_CONFIG;
+use crate::route::zone_filter::filter_route_by_zone;
+use crate::route::zone_filter::ZoneRequest;
+use crate::route::zone_filter::TYPED_ZONE_ROUTE_ENABLED;
+use crate::route::zone_filter::TYPED_ZONE_ROUTE_MARKER;
+use crate::route::zone_filter::TYPED_ZONE_ROUTE_SHADOW;
+
+#[cfg(test)]
+static ROUTE_ENCODE_COUNT: AtomicU64 = AtomicU64::new(0);
 
 /// Client request processor for handling route info queries
 pub struct ClientRequestProcessor {
@@ -162,11 +173,25 @@ impl ClientRequestProcessor {
         } else {
             topic_route_view.route_data().as_ref()
         };
+        let zone_request = ZoneRequest::from_command(request);
+        let typed_zone_filtered = route_config.namesrv_typed_zone_route_enable && zone_request.is_enabled();
+        let filtered_route;
+        let topic_route_data = if route_config.namesrv_typed_zone_route_enable {
+            request.add_ext_field(TYPED_ZONE_ROUTE_MARKER, TYPED_ZONE_ROUTE_ENABLED);
+            filtered_route = filter_route_by_zone(topic_route_data, &zone_request);
+            filtered_route.as_ref()
+        } else {
+            if route_config.namesrv_typed_zone_route_shadow {
+                request.add_ext_field(TYPED_ZONE_ROUTE_MARKER, TYPED_ZONE_ROUTE_SHADOW);
+            }
+            topic_route_data
+        };
 
-        let content = match encode_topic_route_response(
+        let content = match encode_topic_route_response_for_zone(
             topic_route_data,
             request.version(),
             request_header.accept_standard_json_only,
+            typed_zone_filtered,
         ) {
             Ok(content) => content,
             Err(error) => {
@@ -186,11 +211,34 @@ pub(crate) fn encode_topic_route_response(
     request_version: i32,
     accept_standard_json_only: Option<bool>,
 ) -> rocketmq_error::RocketMQResult<Vec<u8>> {
-    if should_use_standard_json(request_version, accept_standard_json_only) {
+    encode_topic_route_response_for_zone(topic_route_data, request_version, accept_standard_json_only, false)
+}
+
+pub(crate) fn encode_topic_route_response_for_zone(
+    topic_route_data: &TopicRouteData,
+    request_version: i32,
+    accept_standard_json_only: Option<bool>,
+    force_java_zone_legacy_json: bool,
+) -> rocketmq_error::RocketMQResult<Vec<u8>> {
+    #[cfg(test)]
+    ROUTE_ENCODE_COUNT.fetch_add(1, Ordering::Relaxed);
+    if force_java_zone_legacy_json {
+        topic_route_data.encode()
+    } else if should_use_standard_json(request_version, accept_standard_json_only) {
         topic_route_data.encode_standard_json()
     } else {
         topic_route_data.encode()
     }
+}
+
+#[cfg(test)]
+pub(crate) fn reset_route_encode_count() {
+    ROUTE_ENCODE_COUNT.store(0, Ordering::Relaxed);
+}
+
+#[cfg(test)]
+pub(crate) fn route_encode_count() -> u64 {
+    ROUTE_ENCODE_COUNT.load(Ordering::Relaxed)
 }
 
 pub(crate) fn should_use_standard_json(request_version: i32, accept_standard_json_only: Option<bool>) -> bool {
@@ -254,6 +302,17 @@ mod tests {
 
         let encoded =
             encode_topic_route_response(&topic_route_data, RocketMqVersion::V4_9_3 as i32, Some(false)).unwrap();
+
+        assert_eq!(encoded, topic_route_data.encode().unwrap());
+    }
+
+    #[test]
+    fn java_zone_mode_forces_legacy_encoder_for_modern_requests() {
+        let topic_route_data = sample_topic_route_data();
+
+        let encoded =
+            encode_topic_route_response_for_zone(&topic_route_data, RocketMqVersion::V4_9_4 as i32, Some(true), true)
+                .unwrap();
 
         assert_eq!(encoded, topic_route_data.encode().unwrap());
     }

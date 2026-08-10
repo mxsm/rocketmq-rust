@@ -51,6 +51,8 @@ pub(crate) enum NamesrvConfigKey {
     ClusterTest,
     OrderMessageEnable,
     RouteFreshnessSampleInterval,
+    NamesrvTypedZoneRouteEnable,
+    NamesrvTypedZoneRouteShadow,
     ReturnOrderTopicConfigToBroker,
     ClientRequestThreadPoolNums,
     DefaultThreadPoolNums,
@@ -80,6 +82,8 @@ impl NamesrvConfigKey {
             "clusterTest" => Self::ClusterTest,
             "orderMessageEnable" => Self::OrderMessageEnable,
             "routeFreshnessSampleInterval" => Self::RouteFreshnessSampleInterval,
+            "namesrvTypedZoneRouteEnable" => Self::NamesrvTypedZoneRouteEnable,
+            "namesrvTypedZoneRouteShadow" => Self::NamesrvTypedZoneRouteShadow,
             "returnOrderTopicConfigToBroker" => Self::ReturnOrderTopicConfigToBroker,
             "clientRequestThreadPoolNums" => Self::ClientRequestThreadPoolNums,
             "defaultThreadPoolNums" => Self::DefaultThreadPoolNums,
@@ -105,6 +109,8 @@ impl NamesrvConfigKey {
         match self {
             Self::OrderMessageEnable
             | Self::RouteFreshnessSampleInterval
+            | Self::NamesrvTypedZoneRouteEnable
+            | Self::NamesrvTypedZoneRouteShadow
             | Self::ReturnOrderTopicConfigToBroker
             | Self::SupportActingMaster
             | Self::EnableAllTopicList
@@ -168,6 +174,8 @@ pub(crate) fn validate_namesrv_property(key: NamesrvConfigKey, value: &str) -> R
         }
         NamesrvConfigKey::ClusterTest
         | NamesrvConfigKey::OrderMessageEnable
+        | NamesrvConfigKey::NamesrvTypedZoneRouteEnable
+        | NamesrvConfigKey::NamesrvTypedZoneRouteShadow
         | NamesrvConfigKey::ReturnOrderTopicConfigToBroker
         | NamesrvConfigKey::SupportActingMaster
         | NamesrvConfigKey::EnableAllTopicList
@@ -204,6 +212,8 @@ impl NamesrvConfigKey {
             Self::ClusterTest => "clusterTest",
             Self::OrderMessageEnable => "orderMessageEnable",
             Self::RouteFreshnessSampleInterval => "routeFreshnessSampleInterval",
+            Self::NamesrvTypedZoneRouteEnable => "namesrvTypedZoneRouteEnable",
+            Self::NamesrvTypedZoneRouteShadow => "namesrvTypedZoneRouteShadow",
             Self::ReturnOrderTopicConfigToBroker => "returnOrderTopicConfigToBroker",
             Self::ClientRequestThreadPoolNums => "clientRequestThreadPoolNums",
             Self::DefaultThreadPoolNums => "defaultThreadPoolNums",
@@ -339,6 +349,12 @@ pub struct NamesrvConfig {
     )]
     pub route_freshness_sample_interval: u64,
 
+    #[serde(alias = "namesrvTypedZoneRouteEnable", default)]
+    pub namesrv_typed_zone_route_enable: bool,
+
+    #[serde(alias = "namesrvTypedZoneRouteShadow", default)]
+    pub namesrv_typed_zone_route_shadow: bool,
+
     #[serde(
         alias = "returnOrderTopicConfigToBroker",
         default = "defaults::return_order_topic_config_to_broker"
@@ -425,6 +441,8 @@ impl Default for NamesrvConfig {
             cluster_test: false,
             order_message_enable: false,
             route_freshness_sample_interval: defaults::route_freshness_sample_interval(),
+            namesrv_typed_zone_route_enable: false,
+            namesrv_typed_zone_route_shadow: false,
             return_order_topic_config_to_broker: true,
             client_request_thread_pool_nums: 8,
             default_thread_pool_nums: 16,
@@ -474,6 +492,14 @@ impl NamesrvConfig {
         json_map.insert(
             "routeFreshnessSampleInterval".to_string(),
             Value::String(self.route_freshness_sample_interval.to_string()),
+        );
+        json_map.insert(
+            "namesrvTypedZoneRouteEnable".to_string(),
+            Value::String(self.namesrv_typed_zone_route_enable.to_string()),
+        );
+        json_map.insert(
+            "namesrvTypedZoneRouteShadow".to_string(),
+            Value::String(self.namesrv_typed_zone_route_shadow.to_string()),
         );
         json_map.insert(
             "returnOrderTopicConfigToBroker".to_string(),
@@ -616,6 +642,14 @@ impl NamesrvConfig {
                 "routeFreshnessSampleInterval" => {
                     self.route_freshness_sample_interval =
                         value.parse().map_err(|_| invalid_value(&key, "expected an integer"))?
+                }
+                "namesrvTypedZoneRouteEnable" => {
+                    self.namesrv_typed_zone_route_enable =
+                        value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
+                }
+                "namesrvTypedZoneRouteShadow" => {
+                    self.namesrv_typed_zone_route_shadow =
+                        value.parse().map_err(|_| invalid_value(&key, "expected a boolean"))?
                 }
                 "returnOrderTopicConfigToBroker" => {
                     self.return_order_topic_config_to_broker =
@@ -875,6 +909,8 @@ mod tests {
         assert!(!config.cluster_test);
         assert!(!config.order_message_enable);
         assert_eq!(config.route_freshness_sample_interval, 1000);
+        assert!(!config.namesrv_typed_zone_route_enable);
+        assert!(!config.namesrv_typed_zone_route_shadow);
         assert!(config.return_order_topic_config_to_broker);
         assert_eq!(config.client_request_thread_pool_nums, 8);
         assert_eq!(config.default_thread_pool_nums, 16);
