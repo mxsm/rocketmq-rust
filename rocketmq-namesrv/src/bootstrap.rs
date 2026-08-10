@@ -1240,6 +1240,7 @@ impl Builder {
                     kv_mutation_queue_capacity,
                     kv_mutation_batch_size,
                     DEFAULT_KV_MUTATION_MAX_PENDING_BYTES,
+                    namesrv_metrics.clone(),
                 )),
                 remoting_client,
                 broker_housekeeping_service: Arc::new(BrokerHousekeepingService::new(runtime_handle)),

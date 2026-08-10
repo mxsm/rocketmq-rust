@@ -38,6 +38,7 @@ pub(crate) struct BrokerUnregistrationRequest {
     pub(crate) header: UnRegisterBrokerRequestHeader,
     pub(crate) expected_channel_id: Option<ChannelId>,
     pub(crate) expected_generation: Option<BrokerGeneration>,
+    enqueued_at: Instant,
 }
 
 impl BrokerUnregistrationRequest {
@@ -46,6 +47,7 @@ impl BrokerUnregistrationRequest {
             header,
             expected_channel_id: None,
             expected_generation: None,
+            enqueued_at: Instant::now(),
         }
     }
 
@@ -58,6 +60,7 @@ impl BrokerUnregistrationRequest {
             header,
             expected_channel_id: Some(channel_id),
             expected_generation: Some(generation),
+            enqueued_at: Instant::now(),
         }
     }
 
@@ -239,6 +242,13 @@ async fn run_batch_unregistration_service(
         };
 
         let unregistration_requests = collect_batch(first_request, rx, &shutdown_token, batch_size, batch_time).await;
+        if let Some(oldest_age) = unregistration_requests
+            .iter()
+            .map(|request| request.enqueued_at.elapsed())
+            .max()
+        {
+            metrics.record_unregistration_oldest_age(oldest_age);
+        }
 
         let pending_keys = unregistration_requests
             .iter()

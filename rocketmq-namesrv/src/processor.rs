@@ -20,6 +20,8 @@ use rocketmq_auth::AuthRuntime;
 use rocketmq_error::RocketMQError;
 use rocketmq_observability::metrics::namesrv::NameServerAdmissionOutcome;
 use rocketmq_observability::metrics::namesrv::NameServerMetrics;
+use rocketmq_observability::metrics::namesrv::NameServerRequestOutcome;
+use rocketmq_observability::metrics::namesrv::NameServerSecurityEvent;
 use rocketmq_observability::metrics::namesrv::NameServerWorkloadClass;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
@@ -161,6 +163,7 @@ impl RequestProcessor for NameServerRequestProcessor {
         ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let request_started = Instant::now();
         let _in_flight_guard = self
             .in_flight_requests
             .as_ref()
@@ -170,6 +173,7 @@ impl RequestProcessor for NameServerRequestProcessor {
             Some(request_class) => request_class,
             None => {
                 let error = RocketMQError::authentication_failed("request code is not authorized by NameServer");
+                self.metrics.record_security_event(NameServerSecurityEvent::AuthDenied);
                 return Ok(Some(command_from_error_with_remark_and_opaque(
                     &error,
                     "NameServer request is not authorized",
@@ -177,6 +181,7 @@ impl RequestProcessor for NameServerRequestProcessor {
                 )));
             }
         };
+        let metric_class = metric_workload_class(WorkloadAdmissionClass::from(request_class));
         if let Some(auth_runtime) = &self.auth_runtime {
             if auth_runtime.check_remoting(&ctx, request).await.is_err() {
                 tracing::warn!(
@@ -187,6 +192,13 @@ impl RequestProcessor for NameServerRequestProcessor {
                 );
                 let error =
                     RocketMQError::authentication_failed("NameServer request authentication or authorization failed");
+                self.metrics.record_security_event(NameServerSecurityEvent::AuthDenied);
+                self.metrics.record_request(
+                    metric_class,
+                    NameServerRequestOutcome::Rejected,
+                    request_started.elapsed(),
+                    0,
+                );
                 return Ok(Some(command_from_error_with_remark_and_opaque(
                     &error,
                     error.to_string(),
@@ -243,7 +255,15 @@ impl RequestProcessor for NameServerRequestProcessor {
                                 rocketmq_observability::metrics::namesrv::NameServerRouteErrorKind::Rejected,
                             );
                         }
-                        return Ok(Some(workload_admission_rejection_response(rejection, request.opaque())));
+                        let response = workload_admission_rejection_response(rejection, request.opaque());
+                        let response_bytes = response.body().map_or(0, bytes::Bytes::len);
+                        self.metrics.record_request(
+                            metric_class,
+                            NameServerRequestOutcome::Rejected,
+                            request_started.elapsed(),
+                            response_bytes,
+                        );
+                        return Ok(Some(response));
                     }
                 }
             }
@@ -286,6 +306,24 @@ impl RequestProcessor for NameServerRequestProcessor {
                 Ok(_) => {}
             }
         }
+        let (request_outcome, response_bytes) = match &response {
+            Ok(Some(command))
+                if command.code() == rocketmq_protocol::code::response_code::ResponseCode::Success as i32 =>
+            {
+                (
+                    NameServerRequestOutcome::Success,
+                    command.body().map_or(0, bytes::Bytes::len),
+                )
+            }
+            Ok(Some(command)) => (
+                NameServerRequestOutcome::Rejected,
+                command.body().map_or(0, bytes::Bytes::len),
+            ),
+            Ok(None) => (NameServerRequestOutcome::Success, 0),
+            Err(_) => (NameServerRequestOutcome::Error, 0),
+        };
+        self.metrics
+            .record_request(metric_class, request_outcome, request_started.elapsed(), response_bytes);
         drop(_admission_lease);
         if had_admission_lease {
             if let Some(admission) = &self.workload_admission {
@@ -317,13 +355,17 @@ fn record_admission_metric(
     class: WorkloadAdmissionClass,
     outcome: NameServerAdmissionOutcome,
 ) {
-    let metric_class = match class {
+    let metric_class = metric_workload_class(class);
+    let (inflight, waiting) = admission.class_counts(class);
+    metrics.record_workload_admission(metric_class, outcome, inflight, waiting);
+}
+
+fn metric_workload_class(class: WorkloadAdmissionClass) -> NameServerWorkloadClass {
+    match class {
         WorkloadAdmissionClass::RouteRead => NameServerWorkloadClass::RouteRead,
         WorkloadAdmissionClass::BrokerControl => NameServerWorkloadClass::BrokerControl,
         WorkloadAdmissionClass::Admin => NameServerWorkloadClass::Admin,
-    };
-    let (inflight, waiting) = admission.class_counts(class);
-    metrics.record_workload_admission(metric_class, outcome, inflight, waiting);
+    }
 }
 
 fn workload_admission_rejection_response(

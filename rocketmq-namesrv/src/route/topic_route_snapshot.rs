@@ -18,6 +18,8 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::OnceLock;
+use std::time::Duration;
+use std::time::Instant;
 
 use arc_swap::ArcSwapOption;
 use dashmap::DashMap;
@@ -118,21 +120,31 @@ pub(crate) struct RouteMutationCoordinator {
     mutation_gate: Mutex<()>,
     snapshots: DashMap<RouteTopicName, Arc<ArcSwapOption<TopicRouteSnapshot>>>,
     next_version: AtomicU64,
+    metrics: rocketmq_observability::metrics::namesrv::NameServerMetrics,
 }
 
 impl RouteMutationCoordinator {
     pub(crate) fn new() -> Self {
+        Self::with_metrics(rocketmq_observability::metrics::namesrv::NameServerMetrics::noop())
+    }
+
+    pub(crate) fn with_metrics(metrics: rocketmq_observability::metrics::namesrv::NameServerMetrics) -> Self {
         Self {
             mutation_gate: Mutex::new(()),
             snapshots: DashMap::new(),
             next_version: AtomicU64::new(0),
+            metrics,
         }
     }
 
     pub(crate) fn begin_mutation(&self) -> RouteMutationGuard<'_> {
+        let wait_started = Instant::now();
+        let gate = self.mutation_gate.lock();
+        self.metrics.record_mutation_wait(wait_started.elapsed());
         RouteMutationGuard {
             coordinator: self,
-            _gate: self.mutation_gate.lock(),
+            _gate: gate,
+            hold_started: Instant::now(),
         }
     }
 
@@ -163,6 +175,7 @@ impl Default for RouteMutationCoordinator {
 pub(crate) struct RouteMutationGuard<'a> {
     coordinator: &'a RouteMutationCoordinator,
     _gate: MutexGuard<'a, ()>,
+    hold_started: Instant,
 }
 
 pub(crate) struct ManagementReadGuard<'a> {
@@ -170,6 +183,10 @@ pub(crate) struct ManagementReadGuard<'a> {
 }
 
 impl RouteMutationGuard<'_> {
+    pub(crate) fn record_snapshot_rebuild(&self, elapsed: Duration, present: bool) {
+        self.coordinator.metrics.record_snapshot_rebuild(elapsed, present);
+    }
+
     /// Publishes a complete route, or an explicit absence, while the mutation gate is held.
     pub(crate) fn publish(&self, topic: TopicName, route_data: Option<TopicRouteData>) -> u64 {
         let version = self.coordinator.next_version.fetch_add(1, Ordering::Relaxed) + 1;
@@ -194,6 +211,14 @@ impl RouteMutationGuard<'_> {
             self.coordinator.snapshots.remove(&topic);
         }
         version
+    }
+}
+
+impl Drop for RouteMutationGuard<'_> {
+    fn drop(&mut self) {
+        self.coordinator
+            .metrics
+            .record_mutation_hold(self.hold_started.elapsed());
     }
 }
 

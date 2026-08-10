@@ -32,6 +32,8 @@ use std::sync::Arc;
 
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_observability::metrics::namesrv::NameServerKvEvent;
+use rocketmq_observability::metrics::namesrv::NameServerMetrics;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::MetadataDeadline;
@@ -205,10 +207,11 @@ struct MutationServiceInner {
     finished: Notify,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(crate) struct KvMutationService {
     sender: mpsc::Sender<MutationEnvelope>,
     inner: Arc<MutationServiceInner>,
+    metrics: NameServerMetrics,
 }
 
 impl KvMutationService {
@@ -220,6 +223,7 @@ impl KvMutationService {
         queue_capacity: usize,
         batch_size: usize,
         max_pending_bytes: usize,
+        metrics: NameServerMetrics,
     ) -> RuntimeResult<Self> {
         let (sender, receiver) = mpsc::channel(queue_capacity);
         let inner = Arc::new(MutationServiceInner {
@@ -238,6 +242,7 @@ impl KvMutationService {
         let service = Self {
             sender,
             inner: Arc::clone(&inner),
+            metrics: metrics.clone(),
         };
         let task_group = service_context.task_group().clone();
         let owner_cancellation = task_group.cancellation_token();
@@ -251,6 +256,7 @@ impl KvMutationService {
                 target,
                 batch_size,
                 owner_cancellation,
+                metrics,
             ),
         )?;
         Ok(service)
@@ -263,20 +269,30 @@ impl KvMutationService {
             }));
         }
         if !self.inner.accepting.load(Ordering::Acquire) {
+            self.metrics.record_kv_event(NameServerKvEvent::Closed);
             return Err(crate::runtime_to_rocketmq_error(MetadataIoError::Closed));
         }
 
         let estimated_bytes = mutation.estimated_bytes();
-        reserve_pending_bytes(&self.inner, estimated_bytes)?;
+        if let Err(error) = reserve_pending_bytes(&self.inner, estimated_bytes) {
+            self.metrics.record_kv_event(NameServerKvEvent::ByteLimit);
+            return Err(error);
+        }
         let permit = match self.sender.try_reserve() {
             Ok(permit) => permit,
             Err(error) => {
                 self.inner.pending_bytes.fetch_sub(estimated_bytes, Ordering::AcqRel);
                 let metadata_error = match error {
-                    mpsc::error::TrySendError::Closed(_) => MetadataIoError::Closed,
-                    mpsc::error::TrySendError::Full(_) => MetadataIoError::QueueFull {
-                        limit: self.sender.max_capacity(),
-                    },
+                    mpsc::error::TrySendError::Closed(_) => {
+                        self.metrics.record_kv_event(NameServerKvEvent::Closed);
+                        MetadataIoError::Closed
+                    }
+                    mpsc::error::TrySendError::Full(_) => {
+                        self.metrics.record_kv_event(NameServerKvEvent::QueueFull);
+                        MetadataIoError::QueueFull {
+                            limit: self.sender.max_capacity(),
+                        }
+                    }
                 };
                 return Err(crate::runtime_to_rocketmq_error(metadata_error));
             }
@@ -292,6 +308,8 @@ impl KvMutationService {
             deadline,
             completion,
         });
+        self.metrics.record_kv_event(NameServerKvEvent::Queued);
+        record_kv_snapshot(&self.metrics, &self.inner);
         Ok(KvMutationReceipt {
             requested_generation,
             completion: receiver,
@@ -386,6 +404,7 @@ async fn run_worker(
     target: PathBuf,
     batch_size: usize,
     owner_cancellation: CancellationToken,
+    metrics: NameServerMetrics,
 ) {
     let mut draining = false;
     loop {
@@ -420,12 +439,14 @@ async fn run_worker(
                 Err(mpsc::error::TryRecvError::Empty | mpsc::error::TryRecvError::Disconnected) => break,
             }
         }
-        process_batch(&inner, &config_table, &metadata_io, &target, batch).await;
+        process_batch(&inner, &config_table, &metadata_io, &target, batch, &metrics).await;
         tokio::task::yield_now().await;
     }
 
     inner.accepting.store(false, Ordering::Release);
     inner.worker_finished.store(true, Ordering::Release);
+    metrics.record_kv_event(NameServerKvEvent::Drained);
+    record_kv_snapshot(&metrics, &inner);
     inner.finished.notify_waiters();
 }
 
@@ -440,7 +461,9 @@ async fn process_batch(
     metadata_io: &MetadataIoActor,
     target: &PathBuf,
     batch: Vec<MutationEnvelope>,
+    metrics: &NameServerMetrics,
 ) {
+    let batch_size = batch.len();
     let mut candidate = snapshot_table(config_table);
     let mut touched_namespaces = HashSet::new();
     let mut force_persist = false;
@@ -465,10 +488,13 @@ async fn process_batch(
 
     let changed = outcomes.iter().any(|outcome| outcome.changed_entries > 0);
     if changed || force_persist {
+        let persist_started = std::time::Instant::now();
         let bytes = match serialize_candidate(&candidate) {
             Ok(bytes) => bytes,
             Err(error) => {
+                metrics.record_kv_persist(persist_started.elapsed(), false, batch_size);
                 finish_batch_with_error(inner, batch, KvCommitError::Serialization(error.to_string().into()));
+                record_kv_snapshot(metrics, inner);
                 return;
             }
         };
@@ -476,9 +502,12 @@ async fn process_batch(
             .submit_next_durable(KV_RESOURCE, target, bytes, deadline)
             .await
         {
+            metrics.record_kv_persist(persist_started.elapsed(), false, batch_size);
             finish_batch_with_error(inner, batch, KvCommitError::Metadata(error));
+            record_kv_snapshot(metrics, inner);
             return;
         }
+        metrics.record_kv_persist(persist_started.elapsed(), true, batch_size);
         inner.persist_count.fetch_add(1, Ordering::Relaxed);
     }
 
@@ -502,6 +531,20 @@ async fn process_batch(
         let _ = command.completion.send(Ok(receipt));
         finish_command(inner, command.estimated_bytes);
     }
+    record_kv_snapshot(metrics, inner);
+}
+
+fn record_kv_snapshot(metrics: &NameServerMetrics, inner: &MutationServiceInner) {
+    if !metrics.is_enabled() {
+        return;
+    }
+    metrics.record_kv_snapshot(
+        inner.desired_generation.load(Ordering::Acquire),
+        inner.durable_generation.load(Ordering::Acquire),
+        inner.applied_generation.load(Ordering::Acquire),
+        inner.pending_commands.load(Ordering::Acquire),
+        inner.pending_bytes.load(Ordering::Acquire),
+    );
 }
 
 fn finish_batch_with_error(inner: &MutationServiceInner, batch: Vec<MutationEnvelope>, error: KvCommitError) {
@@ -657,6 +700,7 @@ mod tests {
             queue_capacity,
             batch_size,
             1024 * 1024,
+            NameServerMetrics::noop(),
         )
         .expect("KV mutation service should start");
         (context, actor, service, root)

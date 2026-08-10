@@ -1,0 +1,103 @@
+groups:
+  - name: rocketmq-namesrv-availability
+    rules:
+      - alert: RocketMQNameServerDown
+        expr: up{job=~".*namesrv.*"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: RocketMQ NameServer target is down
+          description: The NameServer scrape target has been unavailable for one minute.
+      - alert: RocketMQNameServerRouteP99High
+        expr: histogram_quantile(0.99, sum by (le) (rate(rocketmq_namesrv_route_end_to_end_latency_bucket[5m]))) > 50000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: NameServer route p99 exceeds 50 ms
+          description: Route response-sent latency is above the rollout budget for five minutes.
+      - alert: RocketMQNameServerSystemBusy
+        expr: sum(increase(rocketmq_namesrv_workload_admission_events_total{result=~"rejected|timeout"}[5m])) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: NameServer is rejecting requests
+          description: Bounded semantic admission returned SystemBusy or timed out.
+  - name: rocketmq-namesrv-state
+    rules:
+      - alert: RocketMQNameServerUnregistrationFallback
+        expr: sum(increase(rocketmq_namesrv_unregistration_events_total{result="synchronous-fallback"}[5m])) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: NameServer unregister queue is saturated or closed
+          description: Broker cleanup used the synchronous no-drop fallback.
+      - alert: RocketMQNameServerUnregistrationStale
+        expr: max(rocketmq_namesrv_unregistration_oldest_age) > 5000
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: NameServer broker cleanup is delayed
+          description: The oldest pending unregister operation exceeds five seconds.
+      - alert: RocketMQNameServerExpiryIndexMismatch
+        expr: sum(increase(rocketmq_namesrv_expiry_events_total{result="index-mismatch"}[10m])) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: NameServer expiry index diverged from the safety scan
+          description: Keep expiryIndexMode in shadow/off until the mismatch is understood.
+      - alert: RocketMQNameServerKvGenerationGap
+        expr: max(rocketmq_namesrv_kv_generation{state="desired"}) - max(rocketmq_namesrv_kv_generation{state="applied"}) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: NameServer KV durable generation is not converging
+          description: Accepted KV changes have not reached applied memory for one minute.
+      - alert: RocketMQNameServerKvPersistFailure
+        expr: sum(increase(rocketmq_namesrv_kv_persist_latency_count{result="failed"}[5m])) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: NameServer KV persistence failed
+          description: Memory was intentionally left at the previous durable generation.
+  - name: rocketmq-namesrv-security-capacity
+    rules:
+      - alert: RocketMQNameServerAuthDeniedSpike
+        expr: sum(rate(rocketmq_namesrv_security_events_total{operation="auth",result="denied"}[5m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: NameServer authentication denials increased
+          description: Verify credentials and check for unauthorized access attempts.
+      - alert: RocketMQNameServerTlsReloadFailure
+        expr: sum(increase(rocketmq_namesrv_security_events_total{operation="tls-reload",result="failed"}[10m])) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: NameServer TLS reload failed
+          description: Keep the prior TLS context active and inspect certificate deployment.
+      - alert: RocketMQNameServerRouteCacheBudget
+        expr: max(rocketmq_namesrv_route_cache_bytes) > 67108864
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: NameServer route cache exceeds the default 64 MiB budget
+          description: Check the configured byte budget and cache eviction behavior.
+      - alert: RocketMQNameServerRssBudget
+        expr: max(process_resident_memory_bytes{job=~".*namesrv.*"}) > 4294967296
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: NameServer RSS exceeds the default 4 GiB guardrail
+          description: Compare RSS, route cache bytes, connection count, and registration bursts.

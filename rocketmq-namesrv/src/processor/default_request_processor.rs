@@ -15,6 +15,7 @@
 use core::str;
 use std::collections::HashMap;
 use std::time::Duration;
+use std::time::Instant;
 
 use cheetah_string::CheetahString;
 use rocketmq_model::common::mix_all;
@@ -267,6 +268,8 @@ impl DefaultRequestProcessor {
 
         let mut response_command = RemotingCommand::create_response_command();
         let broker_version = RocketMqVersion::try_from(request.version() as u32)?;
+        let decode_started = Instant::now();
+        let wire_bytes = request.body().map_or(0, bytes::Bytes::len);
         let topic_config_wrapper;
         let mut filter_server_list = Vec::new();
         if broker_version >= RocketMqVersion::V3_0_11 {
@@ -281,6 +284,13 @@ impl DefaultRequestProcessor {
         } else {
             topic_config_wrapper = extract_register_topic_config_from_request(request)?;
         }
+        self.name_server_runtime_inner
+            .route_info_manager()
+            .record_registration_decode(
+                wire_bytes,
+                (!request_header.compressed).then_some(wire_bytes),
+                decode_started.elapsed(),
+            );
         let heartbeat_timeout_millis = request_header
             .heartbeat_timeout_millis
             .map(u64::try_from)

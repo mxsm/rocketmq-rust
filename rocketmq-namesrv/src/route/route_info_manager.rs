@@ -161,7 +161,7 @@ impl RouteInfoManager {
             broker_live_table: BrokerLiveTable::with_capacity_and_expiry_index(256, expiry_index_mode),
             filter_server_table: FilterServerTable::with_capacity(128),
             topic_queue_mapping_info_table: TopicQueueMappingInfoTable::with_capacity(256),
-            route_mutations: RouteMutationCoordinator::new(),
+            route_mutations: RouteMutationCoordinator::with_metrics(metrics.clone()),
 
             name_server_runtime_inner,
             un_register_service,
@@ -239,8 +239,11 @@ impl RouteInfoManager {
 
     fn publish_topic_route_snapshots(&self, mutation: &RouteMutationGuard<'_>, affected_topics: HashSet<TopicName>) {
         for topic in affected_topics {
+            let rebuild_started = std::time::Instant::now();
             let route_data = self.build_topic_route_data(topic.as_str());
+            let present = route_data.is_some();
             mutation.publish(topic, route_data);
+            mutation.record_snapshot_rebuild(rebuild_started.elapsed(), present);
         }
     }
 
@@ -1648,6 +1651,16 @@ impl RouteInfoManager {
         self.broker_live_table.len()
     }
 
+    pub(crate) fn record_registration_decode(
+        &self,
+        wire_bytes: usize,
+        decoded_bytes: Option<usize>,
+        elapsed: std::time::Duration,
+    ) {
+        self.metrics
+            .record_registration_decode(wire_bytes, decoded_bytes, elapsed);
+    }
+
     pub(crate) fn route_freshness_millis(&self, route: &TopicRouteData) -> Option<u64> {
         let now = current_millis();
         route
@@ -1739,12 +1752,19 @@ impl RouteInfoManager {
                 .map(|(broker, _)| broker.as_ref())
                 .collect::<HashSet<_>>();
             if full_set != indexed_set {
+                self.metrics.record_expiry_event(
+                    rocketmq_observability::metrics::namesrv::NameServerExpiryEvent::IndexMismatch,
+                );
                 warn!(
                     full_scan_count = full_set.len(),
                     indexed_count = indexed_set.len(),
                     "broker expiry shadow index diverged from the authoritative full scan"
                 );
             }
+        }
+        if safety_scan_due {
+            self.metrics
+                .record_expiry_event(rocketmq_observability::metrics::namesrv::NameServerExpiryEvent::SafetyReconcile);
         }
         let examined = if expiry_mode != crate::config::ExpiryIndexMode::Active || safety_scan_due {
             self.active_broker_count()

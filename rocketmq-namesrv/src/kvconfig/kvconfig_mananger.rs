@@ -102,6 +102,7 @@ impl KVConfigManager {
         queue_capacity: usize,
         batch_size: usize,
         max_pending_bytes: usize,
+        metrics: rocketmq_observability::metrics::namesrv::NameServerMetrics,
     ) -> Self {
         let config_table = Arc::new(dashmap::DashMap::with_capacity(64));
         let mutation_service = metadata_io
@@ -117,6 +118,7 @@ impl KVConfigManager {
                     queue_capacity,
                     batch_size,
                     max_pending_bytes,
+                    metrics,
                 )
                 .map_err(|error| Arc::<str>::from(error.to_string()))
             });
