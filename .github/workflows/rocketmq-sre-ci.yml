@@ -94,7 +94,7 @@ jobs:
         run: ./rocketmq-sre/scripts/phase01-kind-smoke.ps1 -ValidateOnly
 
       - name: Set up Rust 1.95
-        uses: dtolnay/rust-toolchain@1.100.0
+        uses: dtolnay/rust-toolchain@1.95.0
         with:
           components: rustfmt, clippy
 
@@ -178,7 +178,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Set up Rust 1.95
-        uses: dtolnay/rust-toolchain@1.100.0
+        uses: dtolnay/rust-toolchain@1.95.0
 
       - name: Check workspace
         run: cargo check --manifest-path rocketmq-sre/Cargo.toml --locked --workspace
