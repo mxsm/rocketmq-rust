@@ -21,6 +21,10 @@ const LOCAL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_LOCAL_COMMAND_QUEUE_CAPACITY: usize = 1_024;
 const DEFAULT_LOCAL_COMMAND_QUEUE_MAX_BYTES: usize = 16 * 1024 * 1024;
 const DEFAULT_LOCAL_COMMAND_QUEUE_MAX_AGE_MILLIS: u64 = 1_000;
+const DEFAULT_LOCAL_IO_MAX_INFLIGHT: usize = 16;
+const DEFAULT_LOCAL_CONTROL_RESERVE: usize = 2;
+const DEFAULT_LOCAL_LONG_POLL_MAX_INFLIGHT: usize = 256;
+const DEFAULT_LOCAL_EXECUTION_LANE_IDLE_TIMEOUT_MILLIS: u64 = 30_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
@@ -34,6 +38,10 @@ pub struct LocalConfig {
     pub command_queue_capacity: usize,
     pub command_queue_max_bytes: usize,
     pub command_queue_max_age_millis: u64,
+    pub io_max_inflight: usize,
+    pub control_reserve: usize,
+    pub long_poll_max_inflight: usize,
+    pub execution_lane_idle_timeout_millis: u64,
 }
 
 impl LocalConfig {
@@ -43,6 +51,10 @@ impl LocalConfig {
 
     pub fn command_queue_max_age(&self) -> Duration {
         Duration::from_millis(self.command_queue_max_age_millis)
+    }
+
+    pub fn execution_lane_idle_timeout(&self) -> Duration {
+        Duration::from_millis(self.execution_lane_idle_timeout_millis)
     }
 }
 
@@ -58,6 +70,10 @@ impl Default for LocalConfig {
             command_queue_capacity: DEFAULT_LOCAL_COMMAND_QUEUE_CAPACITY,
             command_queue_max_bytes: DEFAULT_LOCAL_COMMAND_QUEUE_MAX_BYTES,
             command_queue_max_age_millis: DEFAULT_LOCAL_COMMAND_QUEUE_MAX_AGE_MILLIS,
+            io_max_inflight: DEFAULT_LOCAL_IO_MAX_INFLIGHT,
+            control_reserve: DEFAULT_LOCAL_CONTROL_RESERVE,
+            long_poll_max_inflight: DEFAULT_LOCAL_LONG_POLL_MAX_INFLIGHT,
+            execution_lane_idle_timeout_millis: DEFAULT_LOCAL_EXECUTION_LANE_IDLE_TIMEOUT_MILLIS,
         }
     }
 }
