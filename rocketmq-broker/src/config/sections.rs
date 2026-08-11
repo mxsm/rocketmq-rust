@@ -455,47 +455,44 @@ fn validate_high_availability(
     network: &NetworkConfig,
     identity: &IdentityConfig,
 ) -> Result<HighAvailabilityConfig, BrokerConfigError> {
-    if !store.compatibility_profile.is_legacy() {
-        if store.min_in_sync_replicas == 0 {
-            return Err(BrokerConfigError::invalid(
-                ConfigSection::HighAvailability,
-                "store.minInSyncReplicas",
-                "must be at least 1 for JAVA_5_5 and DURABILITY_STRICT profiles",
-            ));
-        }
-        let in_sync_replicas = usize::try_from(store.in_sync_replicas).map_err(|_| {
-            BrokerConfigError::invalid(
-                ConfigSection::HighAvailability,
-                "store.inSyncReplicas",
-                "must be positive",
-            )
-        })?;
-        if store.min_in_sync_replicas > in_sync_replicas || in_sync_replicas > store.total_replicas {
-            return Err(BrokerConfigError::invalid(
-                ConfigSection::HighAvailability,
-                "store.minInSyncReplicas",
-                "must satisfy minInSyncReplicas <= inSyncReplicas <= totalReplicas",
-            ));
-        }
-        let replica_ack_required = store.broker_role == BrokerRole::SyncMaster
-            || store.all_ack_in_sync_state_set
-            || store.min_in_sync_replicas > 1;
-        if replica_ack_required && store.slave_timeout == 0 {
-            return Err(BrokerConfigError::invalid(
-                ConfigSection::HighAvailability,
-                "store.slaveTimeout",
-                "must be greater than zero when replica acknowledgement is required",
-            ));
-        }
-        if (broker.enable_controller_mode || store.enable_auto_in_sync_replicas)
-            && store.ha_max_time_slave_not_catchup == 0
-        {
-            return Err(BrokerConfigError::invalid(
-                ConfigSection::HighAvailability,
-                "store.haMaxTimeSlaveNotCatchup",
-                "must be greater than zero when Controller or automatic in-sync replicas are enabled",
-            ));
-        }
+    if store.min_in_sync_replicas == 0 {
+        return Err(BrokerConfigError::invalid(
+            ConfigSection::HighAvailability,
+            "store.minInSyncReplicas",
+            "must be at least 1",
+        ));
+    }
+    let in_sync_replicas = usize::try_from(store.in_sync_replicas).map_err(|_| {
+        BrokerConfigError::invalid(
+            ConfigSection::HighAvailability,
+            "store.inSyncReplicas",
+            "must be positive",
+        )
+    })?;
+    if store.min_in_sync_replicas > in_sync_replicas || in_sync_replicas > store.total_replicas {
+        return Err(BrokerConfigError::invalid(
+            ConfigSection::HighAvailability,
+            "store.minInSyncReplicas",
+            "must satisfy minInSyncReplicas <= inSyncReplicas <= totalReplicas",
+        ));
+    }
+    let replica_ack_required = store.broker_role == BrokerRole::SyncMaster
+        || store.all_ack_in_sync_state_set
+        || store.min_in_sync_replicas > 1;
+    if replica_ack_required && store.slave_timeout == 0 {
+        return Err(BrokerConfigError::invalid(
+            ConfigSection::HighAvailability,
+            "store.slaveTimeout",
+            "must be greater than zero when replica acknowledgement is required",
+        ));
+    }
+    if (broker.enable_controller_mode || store.enable_auto_in_sync_replicas) && store.ha_max_time_slave_not_catchup == 0
+    {
+        return Err(BrokerConfigError::invalid(
+            ConfigSection::HighAvailability,
+            "store.haMaxTimeSlaveNotCatchup",
+            "must be greater than zero when Controller or automatic in-sync replicas are enabled",
+        ));
     }
     let listen_port = u32::try_from(store.ha_listen_port)
         .ok()
@@ -569,8 +566,7 @@ fn validate_storage(broker: &BrokerConfig, store: &MessageStoreConfig) -> Result
             "must be greater than zero when transientStorePoolEnable is true",
         ));
     }
-    if !store.compatibility_profile.is_legacy()
-        && store.flush_disk_type == FlushDiskType::AsyncFlush
+    if store.flush_disk_type == FlushDiskType::AsyncFlush
         && (store.flush_commit_log_least_pages == 0
             || store.flush_consume_queue_least_pages == 0
             || store.flush_consume_queue_thorough_interval == 0)
@@ -578,7 +574,7 @@ fn validate_storage(broker: &BrokerConfig, store: &MessageStoreConfig) -> Result
         return Err(BrokerConfigError::invalid(
             ConfigSection::Storage,
             "store.flushDiskType",
-            "ASYNC_FLUSH requires non-zero CommitLog and ConsumeQueue flush thresholds in this profile",
+            "ASYNC_FLUSH requires non-zero CommitLog and ConsumeQueue flush thresholds",
         ));
     }
     if broker.store_path_root_dir.trim().is_empty() {

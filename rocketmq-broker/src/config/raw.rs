@@ -12,7 +12,6 @@
 // limitations under the License.
 
 use std::path::Path;
-use std::sync::Once;
 
 use cheetah_string::CheetahString;
 use config::Config;
@@ -20,9 +19,7 @@ use config::File;
 use rocketmq_observability::LoggingOverrides;
 use rocketmq_observability::ReloadConfig;
 use rocketmq_store::MessageStoreConfig;
-use rocketmq_store::StoreCompatibilityProfile;
 use serde::Deserialize;
-use tracing::warn;
 
 use super::broker_config::BrokerConfig;
 use super::error::BrokerConfigError;
@@ -39,10 +36,6 @@ pub struct RawBrokerConfig {
     store: MessageStoreConfig,
     logging: RawLoggingConfig,
     log_filter: Option<String>,
-    #[serde(skip)]
-    store_markers: StoreOwnershipMarkers,
-    #[serde(skip)]
-    warn_implicit_store_profile: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -82,18 +75,6 @@ struct ServerOwnershipMarkers {
 struct StoreOwnershipMarkers {
     enable_controller_mode: Option<bool>,
     duplication_enable: Option<bool>,
-    compatibility_profile: Option<StoreCompatibilityProfile>,
-    max_recovery_commit_log_files: Option<usize>,
-    flush_commit_log_least_pages: Option<i32>,
-    commit_commit_log_least_pages: Option<i32>,
-    flush_consume_queue_least_pages: Option<usize>,
-    flush_consume_queue_thorough_interval: Option<usize>,
-    flush_disk_type: Option<rocketmq_store::FlushDiskType>,
-    slave_timeout: Option<usize>,
-    transient_store_pool_size: Option<usize>,
-    min_in_sync_replicas: Option<usize>,
-    ha_max_time_slave_not_catchup: Option<usize>,
-    all_ack_in_sync_state_set: Option<bool>,
 }
 
 impl CanonicalOwnershipMarkers {
@@ -123,62 +104,6 @@ impl CanonicalOwnershipMarkers {
     }
 }
 
-impl StoreOwnershipMarkers {
-    fn all_explicit(store: &MessageStoreConfig) -> Self {
-        Self {
-            enable_controller_mode: Some(store.enable_controller_mode),
-            duplication_enable: Some(store.duplication_enable),
-            compatibility_profile: Some(store.compatibility_profile),
-            max_recovery_commit_log_files: Some(store.max_recovery_commit_log_files),
-            flush_commit_log_least_pages: Some(store.flush_commit_log_least_pages),
-            commit_commit_log_least_pages: Some(store.commit_commit_log_least_pages),
-            flush_consume_queue_least_pages: Some(store.flush_consume_queue_least_pages),
-            flush_consume_queue_thorough_interval: Some(store.flush_consume_queue_thorough_interval),
-            flush_disk_type: Some(store.flush_disk_type),
-            slave_timeout: Some(store.slave_timeout),
-            transient_store_pool_size: Some(store.transient_store_pool_size),
-            min_in_sync_replicas: Some(store.min_in_sync_replicas),
-            ha_max_time_slave_not_catchup: Some(store.ha_max_time_slave_not_catchup),
-            all_ack_in_sync_state_set: Some(store.all_ack_in_sync_state_set),
-        }
-    }
-}
-
-fn apply_store_profile_defaults(store: &mut MessageStoreConfig, markers: &StoreOwnershipMarkers) {
-    if store.compatibility_profile.is_legacy() {
-        return;
-    }
-    let preset = MessageStoreConfig::for_compatibility_profile(store.compatibility_profile);
-    macro_rules! apply_when_omitted {
-        ($field:ident) => {
-            if markers.$field.is_none() {
-                store.$field = preset.$field;
-            }
-        };
-    }
-    apply_when_omitted!(max_recovery_commit_log_files);
-    apply_when_omitted!(flush_commit_log_least_pages);
-    apply_when_omitted!(commit_commit_log_least_pages);
-    apply_when_omitted!(flush_consume_queue_least_pages);
-    apply_when_omitted!(flush_consume_queue_thorough_interval);
-    apply_when_omitted!(flush_disk_type);
-    apply_when_omitted!(slave_timeout);
-    apply_when_omitted!(transient_store_pool_size);
-    apply_when_omitted!(min_in_sync_replicas);
-    apply_when_omitted!(ha_max_time_slave_not_catchup);
-    apply_when_omitted!(all_ack_in_sync_state_set);
-}
-
-fn warn_implicit_legacy_profile_once() {
-    static WARNING: Once = Once::new();
-    WARNING.call_once(|| {
-        warn!(
-            "store.compatibilityProfile is omitted; preserving LEGACY_RUST defaults for this release. Set \
-             JAVA_5_5 or DURABILITY_STRICT explicitly after reviewing durability and RPO behavior"
-        );
-    });
-}
-
 impl RawBrokerConfig {
     pub fn load(path: impl AsRef<Path>) -> Result<Self, BrokerConfigError> {
         let path = path.as_ref();
@@ -189,7 +114,7 @@ impl RawBrokerConfig {
                 path: path.to_path_buf(),
                 source,
             })?;
-        let mut raw: Self = loaded
+        let raw = loaded
             .clone()
             .try_deserialize()
             .map_err(|source| BrokerConfigError::Load {
@@ -202,18 +127,14 @@ impl RawBrokerConfig {
                 source,
             })?;
         ownership.validate()?;
-        raw.warn_implicit_store_profile = ownership.store.compatibility_profile.is_none();
-        raw.store_markers = ownership.store;
         Ok(raw)
     }
 
     #[must_use]
     pub fn from_parts(broker: BrokerConfig, store: MessageStoreConfig) -> Self {
-        let store_markers = StoreOwnershipMarkers::all_explicit(&store);
         Self {
             broker,
             store,
-            store_markers,
             ..Self::default()
         }
     }
@@ -246,10 +167,6 @@ impl RawBrokerConfig {
     }
 
     pub(crate) fn into_normalized_parts(mut self) -> (BrokerConfig, MessageStoreConfig, LoggingOverrides) {
-        if self.warn_implicit_store_profile {
-            warn_implicit_legacy_profile_once();
-        }
-        apply_store_profile_defaults(&mut self.store, &self.store_markers);
         normalize_config_parts(&mut self.broker, &mut self.store);
         let logging = self.logging_overrides();
         (self.broker, self.store, logging)

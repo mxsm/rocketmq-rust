@@ -26,7 +26,6 @@ brokerId = 1
 bindAddress = "127.0.0.1"
 
 [store]
-compatibilityProfile = "JAVA_5_5"
 brokerRole = "SLAVE"
 flushDiskType = "ASYNC_FLUSH"
 deleteWhen = 4
