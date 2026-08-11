@@ -27,7 +27,14 @@ use parking_lot::Mutex;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::common::time_utils::current_millis;
+use rocketmq_runtime::BudgetDimension;
+use rocketmq_runtime::BudgetLimit;
+use rocketmq_runtime::BudgetSnapshot;
 use rocketmq_runtime::ChildServiceContext;
+use rocketmq_runtime::FullPolicy;
+use rocketmq_runtime::ResourceBudget;
+use rocketmq_runtime::ResourceBudgetTree;
+use rocketmq_runtime::ResourcePermit;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
@@ -92,6 +99,7 @@ pub(crate) struct FastFailureTask {
     created_timestamp_millis: u64,
     opaque: i32,
     state: AtomicU8,
+    pending_permit: Mutex<Option<ResourcePermit>>,
     response_tx: Mutex<Option<oneshot::Sender<Option<RemotingCommand>>>>,
 }
 
@@ -100,6 +108,7 @@ impl FastFailureTask {
         id: u64,
         opaque: i32,
         created_timestamp_millis: u64,
+        pending_permit: ResourcePermit,
         response_tx: oneshot::Sender<Option<RemotingCommand>>,
     ) -> Self {
         Self {
@@ -107,6 +116,7 @@ impl FastFailureTask {
             created_timestamp_millis,
             opaque,
             state: AtomicU8::new(TASK_STATE_PENDING),
+            pending_permit: Mutex::new(Some(pending_permit)),
             response_tx: Mutex::new(Some(response_tx)),
         }
     }
@@ -122,7 +132,8 @@ impl FastFailureTask {
     }
 
     fn mark_running(&self) -> bool {
-        self.state
+        if self
+            .state
             .compare_exchange(
                 TASK_STATE_PENDING,
                 TASK_STATE_RUNNING,
@@ -130,6 +141,12 @@ impl FastFailureTask {
                 Ordering::Acquire,
             )
             .is_ok()
+        {
+            self.release_pending_permit();
+            return true;
+        }
+
+        false
     }
 
     fn complete(&self, response: Option<RemotingCommand>) -> bool {
@@ -161,6 +178,7 @@ impl FastFailureTask {
             )
             .is_ok()
         {
+            self.release_pending_permit();
             self.send_response(Some(response));
             return true;
         }
@@ -172,6 +190,17 @@ impl FastFailureTask {
         if let Some(response_tx) = self.response_tx.lock().take() {
             let _ = response_tx.send(response);
         }
+    }
+
+    fn release_pending_permit(&self) {
+        self.pending_permit.lock().take();
+    }
+
+    fn response_closed(&self) -> bool {
+        self.response_tx
+            .lock()
+            .as_ref()
+            .is_none_or(tokio::sync::oneshot::Sender::is_closed)
     }
 }
 
@@ -275,9 +304,10 @@ impl FastFailureQueue {
                     tasks.pop_front();
                 }
                 TASK_STATE_PENDING => {
-                    let expired = max_wait_millis.is_none_or(|max_wait_millis| {
-                        now_millis.saturating_sub(front.created_timestamp_millis()) >= max_wait_millis
-                    });
+                    let expired = front.response_closed()
+                        || max_wait_millis.is_none_or(|max_wait_millis| {
+                            now_millis.saturating_sub(front.created_timestamp_millis()) >= max_wait_millis
+                        });
                     if !expired {
                         return None;
                     }
@@ -295,6 +325,23 @@ impl FastFailureQueue {
                 }
             }
         }
+    }
+
+    fn cancel_all_pending(&self) -> usize {
+        let tasks = self.tasks.lock().drain(..).collect::<Vec<_>>();
+        let mut canceled = 0;
+        for task in tasks {
+            let response = system_busy_response(
+                task.opaque,
+                "[BROKER_SHUTDOWN]",
+                current_millis().saturating_sub(task.created_timestamp_millis()),
+                self.pending_count(),
+            );
+            if self.cancel_pending(&task, response) {
+                canceled += 1;
+            }
+        }
+        canceled
     }
 }
 
@@ -365,6 +412,7 @@ struct BrokerFastFailureInner {
     broker_config: Arc<BrokerConfig>,
     service_context: ChildServiceContext,
     queues: FastFailureQueues,
+    pending_budget: ResourceBudget,
     next_task_id: AtomicU64,
     running: AtomicBool,
     lifecycle: Mutex<FastFailureLifecycle>,
@@ -388,11 +436,22 @@ impl BrokerFastFailure {
         broker_config: Arc<BrokerConfig>,
         service_context: ChildServiceContext,
     ) -> Self {
+        let pending_budget = ResourceBudgetTree::new(
+            "broker.fast-failure.pending",
+            BudgetLimit::new(
+                broker_config.broker_fast_failure_pending_max_count,
+                broker_config.broker_fast_failure_pending_max_bytes,
+                FullPolicy::Reject,
+            ),
+        )
+        .expect("validated Broker fast-failure limits must produce a resource budget")
+        .root();
         Self {
             inner: Arc::new(BrokerFastFailureInner {
                 broker_config,
                 service_context,
                 queues: FastFailureQueues::new(),
+                pending_budget,
                 next_task_id: AtomicU64::new(0),
                 running: AtomicBool::new(false),
                 lifecycle: Mutex::new(FastFailureLifecycle::default()),
@@ -475,6 +534,9 @@ impl BrokerFastFailure {
 
     pub(crate) async fn shutdown_with_report(&self) -> Option<ShutdownReport> {
         self.inner.running.store(false, Ordering::Release);
+        for kind in ALL_QUEUE_KINDS {
+            self.inner.queues.get(kind).cancel_all_pending();
+        }
         let task_group = {
             let mut lifecycle = self.inner.lifecycle.lock();
             lifecycle.scheduled_tasks.take();
@@ -526,30 +588,70 @@ impl BrokerFastFailure {
             .collect()
     }
 
+    pub(crate) fn pending_budget_snapshot(&self) -> BudgetSnapshot {
+        self.inner.pending_budget.snapshot()
+    }
+
+    pub(crate) fn try_enqueue(
+        &self,
+        kind: FastFailureQueueKind,
+        opaque: i32,
+        retained_bytes: usize,
+    ) -> Result<(Arc<FastFailureTask>, oneshot::Receiver<Option<RemotingCommand>>), RemotingCommand> {
+        self.try_enqueue_with_timestamp(kind, opaque, retained_bytes, current_millis())
+    }
+
+    #[cfg(test)]
     pub(crate) fn enqueue(
         &self,
         kind: FastFailureQueueKind,
         opaque: i32,
     ) -> (Arc<FastFailureTask>, oneshot::Receiver<Option<RemotingCommand>>) {
-        self.enqueue_with_timestamp(kind, opaque, current_millis())
+        match self.try_enqueue(kind, opaque, 1) {
+            Ok(admitted) => admitted,
+            Err(_) => panic!("test fast-failure request should fit the configured pending budget"),
+        }
     }
 
+    #[cfg(test)]
     fn enqueue_with_timestamp(
         &self,
         kind: FastFailureQueueKind,
         opaque: i32,
         created_timestamp_millis: u64,
     ) -> (Arc<FastFailureTask>, oneshot::Receiver<Option<RemotingCommand>>) {
+        match self.try_enqueue_with_timestamp(kind, opaque, 1, created_timestamp_millis) {
+            Ok(admitted) => admitted,
+            Err(_) => panic!("test fast-failure request should fit the configured pending budget"),
+        }
+    }
+
+    fn try_enqueue_with_timestamp(
+        &self,
+        kind: FastFailureQueueKind,
+        opaque: i32,
+        retained_bytes: usize,
+        created_timestamp_millis: u64,
+    ) -> Result<(Arc<FastFailureTask>, oneshot::Receiver<Option<RemotingCommand>>), RemotingCommand> {
+        let pending_permit = self
+            .inner
+            .pending_budget
+            .try_acquire_data(retained_bytes)
+            .map_err(|error| {
+                let usage = self.inner.pending_budget.snapshot();
+                pending_budget_busy_response(opaque, kind, retained_bytes, &usage, error.dimension())
+            })?;
         let (response_tx, response_rx) = oneshot::channel();
         let task_id = self.inner.next_task_id.fetch_add(1, Ordering::AcqRel);
         let task = Arc::new(FastFailureTask::new(
             task_id,
             opaque,
             created_timestamp_millis,
+            pending_permit,
             response_tx,
         ));
         self.inner.queues.get(kind).enqueue(task.clone());
-        (task, response_rx)
+        Ok((task, response_rx))
     }
 
     pub(crate) async fn acquire_permit(&self, kind: FastFailureQueueKind) -> Option<OwnedSemaphorePermit> {
@@ -667,6 +769,26 @@ fn system_busy_response(
     .set_opaque(opaque)
 }
 
+fn pending_budget_busy_response(
+    opaque: i32,
+    kind: FastFailureQueueKind,
+    retained_bytes: usize,
+    usage: &BudgetSnapshot,
+    dimension: BudgetDimension,
+) -> RemotingCommand {
+    RemotingCommand::create_response_command_with_code_remark(
+        ResponseCode::SystemBusy,
+        format!(
+            "[PENDING_BUDGET]broker busy, retry later, queue: {}, exhausted: {dimension:?}, request bytes: \
+             {retained_bytes}, pending count: {}, pending bytes: {}",
+            kind.name(),
+            usage.current_count,
+            usage.current_bytes
+        ),
+    )
+    .set_opaque(opaque)
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::AtomicBool;
@@ -687,6 +809,90 @@ mod tests {
             wait_time_mills_in_admin_broker_queue: wait_millis,
             ..BrokerConfig::default()
         })
+    }
+
+    fn config_with_pending_budget(max_count: usize, max_bytes: usize) -> Arc<BrokerConfig> {
+        Arc::new(BrokerConfig {
+            broker_fast_failure_pending_max_count: max_count,
+            broker_fast_failure_pending_max_bytes: max_bytes,
+            ..BrokerConfig::default()
+        })
+    }
+
+    fn expect_admitted(
+        result: Result<(Arc<FastFailureTask>, oneshot::Receiver<Option<RemotingCommand>>), RemotingCommand>,
+    ) -> (Arc<FastFailureTask>, oneshot::Receiver<Option<RemotingCommand>>) {
+        match result {
+            Ok(admitted) => admitted,
+            Err(_) => panic!("request should fit the configured pending budget"),
+        }
+    }
+
+    fn expect_rejected(
+        result: Result<(Arc<FastFailureTask>, oneshot::Receiver<Option<RemotingCommand>>), RemotingCommand>,
+    ) -> RemotingCommand {
+        match result {
+            Ok(_) => panic!("request should exceed the configured pending budget"),
+            Err(response) => response,
+        }
+    }
+
+    #[tokio::test]
+    async fn pending_budget_rejects_count_before_creating_another_task() {
+        let fast_failure = BrokerFastFailure::new(config_with_pending_budget(1, 1_024));
+        let (task, _response_rx) = expect_admitted(fast_failure.try_enqueue(FastFailureQueueKind::Send, 1, 128));
+
+        let response = expect_rejected(fast_failure.try_enqueue(FastFailureQueueKind::Send, 2, 128));
+        let usage = fast_failure.pending_budget_snapshot();
+
+        assert_eq!(response.code(), ResponseCode::SystemBusy.to_i32());
+        assert_eq!(response.opaque(), 2);
+        assert!(response.remark().is_some_and(|remark| remark.contains("Count")));
+        assert_eq!(usage.current_count, 1);
+        assert_eq!(usage.current_bytes, 128);
+        assert_eq!(usage.rejected_count, 1);
+
+        assert!(fast_failure.cancel(
+            FastFailureQueueKind::Send,
+            &task,
+            system_busy_response(1, "[TEST]", 0, 0),
+        ));
+        assert_eq!(fast_failure.pending_budget_snapshot().current_count, 0);
+    }
+
+    #[tokio::test]
+    async fn pending_budget_rejects_bytes_and_releases_on_running() {
+        let fast_failure = BrokerFastFailure::new(config_with_pending_budget(4, 256));
+        let (task, response_rx) = expect_admitted(fast_failure.try_enqueue(FastFailureQueueKind::Pull, 3, 192));
+
+        let response = expect_rejected(fast_failure.try_enqueue(FastFailureQueueKind::Pull, 4, 65));
+        assert!(response.remark().is_some_and(|remark| remark.contains("Bytes")));
+        assert_eq!(fast_failure.pending_budget_snapshot().current_bytes, 192);
+
+        assert!(fast_failure.try_mark_running(FastFailureQueueKind::Pull, &task));
+        assert_eq!(fast_failure.pending_budget_snapshot().current_count, 0);
+        assert_eq!(fast_failure.pending_budget_snapshot().current_bytes, 0);
+        fast_failure.complete(FastFailureQueueKind::Pull, &task, None);
+        assert!(response_rx.await.expect("completion response").is_none());
+    }
+
+    #[tokio::test]
+    async fn closed_response_and_shutdown_release_pending_budget() {
+        let fast_failure = BrokerFastFailure::new(config_with_pending_budget(2, 512));
+        let (_closed_task, closed_rx) = expect_admitted(fast_failure.try_enqueue(FastFailureQueueKind::Ack, 5, 128));
+        drop(closed_rx);
+        fast_failure.clean_expired_request();
+        assert_eq!(fast_failure.pending_budget_snapshot().current_count, 0);
+
+        let (_shutdown_task, shutdown_rx) =
+            expect_admitted(fast_failure.try_enqueue(FastFailureQueueKind::Ack, 6, 128));
+        fast_failure.shutdown().await;
+        let response = shutdown_rx.await.expect("shutdown response").expect("shutdown command");
+        assert!(response
+            .remark()
+            .is_some_and(|remark| remark.starts_with("[BROKER_SHUTDOWN]")));
+        assert_eq!(fast_failure.pending_budget_snapshot().current_count, 0);
+        assert_eq!(fast_failure.pending_budget_snapshot().current_bytes, 0);
     }
 
     #[tokio::test]
@@ -716,6 +922,8 @@ mod tests {
         assert!(response
             .remark()
             .is_some_and(|remark| remark.starts_with("[TIMEOUT_CLEAN_QUEUE]")));
+        assert_eq!(fast_failure.pending_budget_snapshot().current_count, 0);
+        assert_eq!(fast_failure.pending_budget_snapshot().current_bytes, 0);
     }
 
     #[tokio::test]

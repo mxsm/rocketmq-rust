@@ -653,6 +653,14 @@ mod defaults {
         true
     }
 
+    pub const fn broker_fast_failure_pending_max_count() -> usize {
+        4_096
+    }
+
+    pub const fn broker_fast_failure_pending_max_bytes() -> usize {
+        64 * 1024 * 1024
+    }
+
     pub const fn send_request_executor_detached_enable() -> bool {
         false
     }
@@ -918,6 +926,12 @@ pub struct BrokerConfig {
 
     #[serde(default = "defaults::broker_fast_failure_enable")]
     pub broker_fast_failure_enable: bool,
+
+    #[serde(default = "defaults::broker_fast_failure_pending_max_count")]
+    pub broker_fast_failure_pending_max_count: usize,
+
+    #[serde(default = "defaults::broker_fast_failure_pending_max_bytes")]
+    pub broker_fast_failure_pending_max_bytes: usize,
 
     #[serde(default = "defaults::send_request_executor_detached_enable")]
     pub send_request_executor_detached_enable: bool,
@@ -1454,6 +1468,8 @@ impl Default for BrokerConfig {
             register_name_server_period: 1000 * 30,
             send_heartbeat_timeout_millis: 1000,
             broker_fast_failure_enable: defaults::broker_fast_failure_enable(),
+            broker_fast_failure_pending_max_count: defaults::broker_fast_failure_pending_max_count(),
+            broker_fast_failure_pending_max_bytes: defaults::broker_fast_failure_pending_max_bytes(),
             send_request_executor_detached_enable: defaults::send_request_executor_detached_enable(),
             wait_time_mills_in_send_queue: defaults::wait_time_mills_in_send_queue(),
             sync_flush_backlog_reject_depth: defaults::sync_flush_backlog_reject_depth(),
@@ -1867,6 +1883,14 @@ impl BrokerConfig {
         properties.insert(
             "brokerFastFailureEnable".into(),
             self.broker_fast_failure_enable.to_string().into(),
+        );
+        properties.insert(
+            "brokerFastFailurePendingMaxCount".into(),
+            self.broker_fast_failure_pending_max_count.to_string().into(),
+        );
+        properties.insert(
+            "brokerFastFailurePendingMaxBytes".into(),
+            self.broker_fast_failure_pending_max_bytes.to_string().into(),
         );
         properties.insert(
             "sendRequestExecutorDetachedEnable".into(),
@@ -2384,6 +2408,8 @@ mod tests {
         let config = BrokerConfig::default();
 
         assert!(config.broker_fast_failure_enable);
+        assert_eq!(config.broker_fast_failure_pending_max_count, 4_096);
+        assert_eq!(config.broker_fast_failure_pending_max_bytes, 64 * 1024 * 1024);
         assert!(!config.async_topic_create_persist_enable);
         assert!(!config.send_request_executor_detached_enable);
         assert_eq!(config.wait_time_mills_in_send_queue, 200);
@@ -2554,6 +2580,18 @@ mod tests {
         );
         assert_eq!(
             properties
+                .get("brokerFastFailurePendingMaxCount")
+                .map(|value| value.as_str()),
+            Some("4096")
+        );
+        assert_eq!(
+            properties
+                .get("brokerFastFailurePendingMaxBytes")
+                .map(|value| value.as_str()),
+            Some("67108864")
+        );
+        assert_eq!(
+            properties
                 .get("sendRequestExecutorDetachedEnable")
                 .map(|value| value.as_str()),
             Some("false")
@@ -2673,6 +2711,8 @@ mod tests {
         let config: BrokerConfig = serde_json::from_str(
             r#"{
                 "brokerFastFailureEnable": false,
+                "brokerFastFailurePendingMaxCount": 17,
+                "brokerFastFailurePendingMaxBytes": 65537,
                 "asyncTopicCreatePersistEnable": true,
                 "sendRequestExecutorDetachedEnable": true,
                 "waitTimeMillsInSendQueue": 201,
@@ -2692,6 +2732,8 @@ mod tests {
         .expect("broker config should deserialize Java fast failure keys");
 
         assert!(!config.broker_fast_failure_enable);
+        assert_eq!(config.broker_fast_failure_pending_max_count, 17);
+        assert_eq!(config.broker_fast_failure_pending_max_bytes, 65_537);
         assert!(config.async_topic_create_persist_enable);
         assert!(config.send_request_executor_detached_enable);
         assert_eq!(config.wait_time_mills_in_send_queue, 201);

@@ -645,7 +645,11 @@ pub mod bench_support {
             broker_config,
             service_context,
         );
-        let (_task, response_rx) = service.enqueue(crate::latency::broker_fast_failure::FastFailureQueueKind::Send, 77);
+        let (_task, response_rx) =
+            match service.try_enqueue(crate::latency::broker_fast_failure::FastFailureQueueKind::Send, 77, 1) {
+                Ok(admitted) => admitted,
+                Err(_) => panic!("lifecycle probe request should fit the default pending budget"),
+            };
         service.start_with_schedule(Duration::ZERO, Duration::from_millis(1));
 
         let mut snapshots = service.schedule_snapshot();

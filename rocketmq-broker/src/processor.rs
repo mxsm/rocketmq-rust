@@ -458,8 +458,12 @@ where
         }
 
         let opaque = request.opaque();
+        let retained_bytes = estimate_fast_failure_retained_bytes(request);
+        let (task, response_rx) = match broker_fast_failure.try_enqueue(queue_kind, opaque, retained_bytes) {
+            Ok(admitted) => admitted,
+            Err(response) => return Ok(Some(response)),
+        };
         let queued_request = request.clone();
-        let (task, response_rx) = broker_fast_failure.enqueue(queue_kind, opaque);
         let broker_fast_failure = broker_fast_failure.clone();
         let detach_response = should_detach_fast_failure_response(
             queue_kind,
@@ -620,6 +624,26 @@ where
     }
 }
 
+fn estimate_fast_failure_retained_bytes(request: &RemotingCommand) -> usize {
+    let mut retained_bytes = std::mem::size_of::<RemotingCommand>();
+    retained_bytes = retained_bytes.saturating_add(request.body().map_or(0, bytes::Bytes::len));
+    retained_bytes = retained_bytes.saturating_add(request.remark().map_or(0, |remark| remark.len()));
+    if let Some(ext_fields) = request.ext_fields() {
+        retained_bytes = retained_bytes.saturating_add(
+            ext_fields
+                .iter()
+                .map(|(key, value)| {
+                    std::mem::size_of_val(key)
+                        .saturating_add(std::mem::size_of_val(value))
+                        .saturating_add(key.len())
+                        .saturating_add(value.len())
+                })
+                .fold(0usize, usize::saturating_add),
+        );
+    }
+    retained_bytes.max(1)
+}
+
 fn should_detach_fast_failure_response(
     queue_kind: FastFailureQueueKind,
     send_request_executor_detached_enabled: bool,
@@ -740,6 +764,20 @@ mod tests {
             fast_failure_queue_kind(RequestCode::BatchAckMessage as i32, false),
             Some(FastFailureQueueKind::Ack)
         );
+    }
+
+    #[test]
+    fn fast_failure_retained_bytes_include_body_remark_and_extension_fields() {
+        let base = RemotingCommand::create_remoting_command(RequestCode::SendMessage).set_opaque(1);
+        let base_bytes = estimate_fast_failure_retained_bytes(&base);
+        let request = RemotingCommand::new_request(RequestCode::SendMessage, bytes::Bytes::from(vec![1; 1_024]))
+            .set_opaque(2)
+            .set_remark("busy-budget-test")
+            .set_ext_fields(std::collections::HashMap::from([("topic".into(), "orders".into())]));
+
+        let retained_bytes = estimate_fast_failure_retained_bytes(&request);
+
+        assert!(retained_bytes >= base_bytes + 1_024 + "busy-budget-test".len() + "topic".len() + "orders".len());
     }
 
     #[test]

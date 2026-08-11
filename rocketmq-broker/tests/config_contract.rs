@@ -121,6 +121,41 @@ fn omitted_store_fields_use_the_production_defaults() {
 }
 
 #[test]
+fn fast_failure_pending_budget_defaults_and_explicit_values_cross_validation() {
+    let default = ValidatedBrokerConfig::try_from_parts(BrokerConfig::default(), MessageStoreConfig::default())
+        .expect("default fast-failure pending budget should validate");
+    assert_eq!(default.broker().broker_fast_failure_pending_max_count, 4_096);
+    assert_eq!(default.broker().broker_fast_failure_pending_max_bytes, 64 * 1024 * 1024);
+
+    let raw = load_inline_config(
+        "[broker]\nbrokerFastFailurePendingMaxCount = 17\nbrokerFastFailurePendingMaxBytes = 65537\n",
+    )
+    .expect("explicit fast-failure budget should deserialize");
+    let explicit = ValidatedBrokerConfig::try_from(raw).expect("explicit fast-failure budget should validate");
+    assert_eq!(explicit.broker().broker_fast_failure_pending_max_count, 17);
+    assert_eq!(explicit.broker().broker_fast_failure_pending_max_bytes, 65_537);
+}
+
+#[test]
+fn zero_fast_failure_pending_budget_fails_before_broker_startup() {
+    for broker in [
+        BrokerConfig {
+            broker_fast_failure_pending_max_count: 0,
+            ..BrokerConfig::default()
+        },
+        BrokerConfig {
+            broker_fast_failure_pending_max_bytes: 0,
+            ..BrokerConfig::default()
+        },
+    ] {
+        assert_invalid_section(
+            ValidatedBrokerConfig::try_from_parts(broker, MessageStoreConfig::default()),
+            ConfigSection::Resources,
+        );
+    }
+}
+
+#[test]
 fn explicit_store_overrides_remain_authoritative() {
     let raw = load_inline_config("[store]\nflushDiskType = \"SYNC_FLUSH\"\nallAckInSyncStateSet = true\n")
         .expect("explicit durability overrides should deserialize");

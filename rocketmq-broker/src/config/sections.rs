@@ -747,6 +747,20 @@ fn validate_security(broker: &BrokerConfig) -> Result<SecurityConfig, BrokerConf
 }
 
 fn validate_resources(broker: &BrokerConfig, store: &MessageStoreConfig) -> Result<ResourceConfig, BrokerConfigError> {
+    if broker.broker_fast_failure_pending_max_count == 0 {
+        return Err(BrokerConfigError::invalid(
+            ConfigSection::Resources,
+            "broker.brokerFastFailurePendingMaxCount",
+            "must be greater than zero",
+        ));
+    }
+    if broker.broker_fast_failure_pending_max_bytes == 0 {
+        return Err(BrokerConfigError::invalid(
+            ConfigSection::Resources,
+            "broker.brokerFastFailurePendingMaxBytes",
+            "must be greater than zero",
+        ));
+    }
     if broker.max_lite_subscription_count == 0 {
         return Err(BrokerConfigError::invalid(
             ConfigSection::Resources,
@@ -1036,5 +1050,31 @@ mod tests {
         let error = validate_resources(&broker, &store).expect_err("undersized timer queue must fail startup");
 
         assert!(error.to_string().contains("store.timerPipelineBudget"));
+    }
+
+    #[test]
+    fn resource_validation_rejects_zero_fast_failure_pending_count() {
+        let broker = BrokerConfig {
+            broker_fast_failure_pending_max_count: 0,
+            ..BrokerConfig::default()
+        };
+
+        let error = validate_resources(&broker, &MessageStoreConfig::default())
+            .expect_err("zero fast-failure pending count must fail startup");
+
+        assert!(error.to_string().contains("broker.brokerFastFailurePendingMaxCount"));
+    }
+
+    #[test]
+    fn resource_validation_rejects_zero_fast_failure_pending_bytes() {
+        let broker = BrokerConfig {
+            broker_fast_failure_pending_max_bytes: 0,
+            ..BrokerConfig::default()
+        };
+
+        let error = validate_resources(&broker, &MessageStoreConfig::default())
+            .expect_err("zero fast-failure pending bytes must fail startup");
+
+        assert!(error.to_string().contains("broker.brokerFastFailurePendingMaxBytes"));
     }
 }
