@@ -475,6 +475,10 @@ mod defaults {
         32
     }
 
+    pub fn enable_async_reput() -> bool {
+        true
+    }
+
     pub const fn max_checksum_range() -> usize {
         1024 * 1024 * 1024
     }
@@ -1167,7 +1171,9 @@ pub struct MessageStoreConfig {
     #[serde(default)]
     pub dispatch_cq_cache_num: usize,
 
-    #[serde(default)]
+    /// Enables required ordered-lane execution for Reput derived state. Set to `false` for the
+    /// serial operational rollback path.
+    #[serde(default = "defaults::enable_async_reput")]
     pub enable_async_reput: bool,
 
     #[serde(default)]
@@ -1579,7 +1585,7 @@ impl Default for MessageStoreConfig {
             max_batch_delete_files_num: 0,
             dispatch_cq_threads: 0,
             dispatch_cq_cache_num: 0,
-            enable_async_reput: false,
+            enable_async_reput: true,
             recheck_reput_offset_from_cq: false,
             max_topic_length: 0,
             auto_message_version_on_topic_len: true,
@@ -2633,16 +2639,21 @@ mod tests {
         assert_eq!(config.min_in_sync_replicas, 1);
         assert_eq!(config.ha_max_time_slave_not_catchup, 15_000);
         assert!(!config.all_ack_in_sync_state_set);
+        assert!(config.enable_async_reput);
+        assert_eq!(config.get_properties()["enableAsyncReput"], "true");
     }
 
     #[test]
     fn serde_requires_an_explicit_wave_b_opt_in() -> Result<(), serde_json::Error> {
         let legacy: MessageStoreConfig = serde_json::from_str("{}")?;
         let enabled: MessageStoreConfig = serde_json::from_str(r#"{"enableMappedFileLifecycleWaveB":true}"#)?;
+        let serial_reput: MessageStoreConfig = serde_json::from_str(r#"{"enableAsyncReput":false}"#)?;
 
         assert!(!legacy.enable_mapped_file_lifecycle_wave_b);
+        assert!(legacy.enable_async_reput);
         assert!(enabled.enable_mapped_file_lifecycle_wave_b);
         assert_eq!(enabled.get_properties()["enableMappedFileLifecycleWaveB"], "true");
+        assert!(!serial_reput.enable_async_reput);
         Ok(())
     }
 

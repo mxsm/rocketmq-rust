@@ -55,6 +55,10 @@ impl CommitLogDispatcherCompaction {
 }
 
 impl CommitLogDispatcher for CommitLogDispatcherCompaction {
+    fn supports_parallel_dispatch(&self) -> bool {
+        true
+    }
+
     fn dispatch(&self, dispatch_request: &mut DispatchRequest) {
         if !dispatch_request.success
             || dispatch_request.msg_size <= 0

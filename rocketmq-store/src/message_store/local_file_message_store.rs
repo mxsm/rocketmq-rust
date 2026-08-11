@@ -229,6 +229,7 @@ mod managed_recovery;
 mod mapped_file_retirement_service;
 mod read_path;
 mod recovery;
+mod reput_pipeline;
 mod root_lock;
 mod write_path;
 

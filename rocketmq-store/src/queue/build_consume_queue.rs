@@ -33,6 +33,10 @@ impl CommitLogDispatcherBuildConsumeQueue {
 }
 
 impl CommitLogDispatcher for CommitLogDispatcherBuildConsumeQueue {
+    fn supports_parallel_dispatch(&self) -> bool {
+        true
+    }
+
     fn dispatch(&self, dispatch_request: &mut DispatchRequest) {
         let tran_type = MessageSysFlag::get_transaction_value(dispatch_request.sys_flag);
         let eligible = matches!(

@@ -300,6 +300,7 @@ impl LocalFileMessageStore {
         let runtime_context = self.reput_runtime_context();
         self.reput_message_service
             .run_once(
+                &self.runtime_scope,
                 self.commit_log.read_handle(),
                 self.composition.reput(),
                 self.dispatcher.handle(),
@@ -313,6 +314,7 @@ impl LocalFileMessageStore {
 pub struct CommitLogDispatcherDefault {
     pub(super) dispatcher_vec: Vec<Arc<dyn CommitLogDispatcher>>,
     published: Arc<ArcSwap<Vec<Arc<dyn CommitLogDispatcher>>>>,
+    published_frontier: Arc<AtomicI64>,
 }
 
 impl Default for CommitLogDispatcherDefault {
@@ -324,6 +326,7 @@ impl Default for CommitLogDispatcherDefault {
 #[derive(Clone)]
 pub(crate) struct CommitLogDispatchHandle {
     published: Arc<ArcSwap<Vec<Arc<dyn CommitLogDispatcher>>>>,
+    published_frontier: Arc<AtomicI64>,
 }
 
 impl CommitLogDispatcherDefault {
@@ -336,6 +339,7 @@ impl CommitLogDispatcherDefault {
         Self {
             dispatcher_vec,
             published,
+            published_frontier: Arc::new(AtomicI64::new(-1)),
         }
     }
 
@@ -343,6 +347,7 @@ impl CommitLogDispatcherDefault {
     pub(crate) fn handle(&self) -> CommitLogDispatchHandle {
         CommitLogDispatchHandle {
             published: Arc::clone(&self.published),
+            published_frontier: Arc::clone(&self.published_frontier),
         }
     }
 
@@ -369,6 +374,28 @@ impl CommitLogDispatcherDefault {
             .iter()
             .filter_map(|dispatcher| dispatcher.dispatch_progress_offset(commit_log_min_offset))
             .min()
+    }
+
+    #[inline]
+    pub fn published_dispatch_offset(&self) -> i64 {
+        self.published_frontier.load(Ordering::Acquire)
+    }
+}
+
+impl CommitLogDispatchHandle {
+    #[inline]
+    pub(super) fn snapshot(&self) -> Arc<Vec<Arc<dyn CommitLogDispatcher>>> {
+        self.published.load_full()
+    }
+
+    #[inline]
+    pub(super) fn publish_frontier(&self, offset: i64) {
+        self.published_frontier.fetch_max(offset, Ordering::Release);
+    }
+
+    #[inline]
+    pub(super) fn published_frontier(&self) -> i64 {
+        self.published_frontier.load(Ordering::Acquire)
     }
 }
 
@@ -521,12 +548,18 @@ impl ReputMessageService {
             .reput_from_offset
             .get_or_insert_with(|| Arc::new(AtomicI64::new(0)))
             .clone();
+        let dispatch_pipeline = super::reput_pipeline::ReputDispatchPipeline::new(
+            dispatcher.clone(),
+            runtime_scope,
+            runtime_context.message_store_config.enable_async_reput,
+            reput_read_max_bytes(runtime_context.message_store_config.as_ref()),
+        );
 
         let mut inner = ReputMessageServiceInner {
             reput_from_offset,
             commit_log,
             policy,
-            dispatcher: dispatcher.clone(),
+            dispatch_pipeline: dispatch_pipeline.clone(),
             notify_message_arrive_in_batch,
             runtime_context: runtime_context.clone(),
         };
@@ -624,7 +657,7 @@ impl ReputMessageService {
                 tokio::select! {
                     Some(mut batch) = dispatch_rx.recv() => {
                         dispatch_reput_batch(
-                            &dispatcher,
+                            &dispatch_pipeline,
                             &runtime_context,
                             notify_message_arrive_in_batch,
                             &mut batch,
@@ -637,7 +670,7 @@ impl ReputMessageService {
                         // Process remaining messages in channel before shutdown
                         while let Ok(mut batch) = dispatch_rx.try_recv() {
                             dispatch_reput_batch(
-                                &dispatcher,
+                                &dispatch_pipeline,
                                 &runtime_context,
                                 notify_message_arrive_in_batch,
                                 &mut batch,
@@ -700,6 +733,7 @@ impl ReputMessageService {
 
     pub async fn run_once(
         &mut self,
+        runtime_scope: &StoreRuntimeScope,
         commit_log: CommitLogReadHandle,
         policy: ReputPolicy,
         dispatcher: CommitLogDispatchHandle,
@@ -722,11 +756,17 @@ impl ReputMessageService {
                 .reput_from_offset
                 .get_or_insert_with(|| Arc::new(AtomicI64::new(0)))
                 .clone();
+            let dispatch_pipeline = super::reput_pipeline::ReputDispatchPipeline::new(
+                dispatcher,
+                runtime_scope,
+                runtime_context.message_store_config.enable_async_reput,
+                reput_read_max_bytes(runtime_context.message_store_config.as_ref()),
+            );
             self.inner = Some(ReputMessageServiceInner {
                 reput_from_offset,
                 commit_log,
                 policy,
-                dispatcher,
+                dispatch_pipeline,
                 notify_message_arrive_in_batch,
                 runtime_context,
             });
@@ -794,7 +834,7 @@ pub(super) struct ReputMessageServiceInner {
     pub(super) reput_from_offset: Arc<AtomicI64>,
     pub(super) commit_log: CommitLogReadHandle,
     pub(super) policy: ReputPolicy,
-    pub(super) dispatcher: CommitLogDispatchHandle,
+    pub(super) dispatch_pipeline: super::reput_pipeline::ReputDispatchPipeline,
     pub(super) notify_message_arrive_in_batch: bool,
     pub(super) runtime_context: ReputRuntimeContext,
 }
@@ -802,7 +842,7 @@ pub(super) struct ReputMessageServiceInner {
 const MIN_REPUT_READ_BYTES: usize = 1024 * 1024;
 const COMMIT_LOG_RECORD_OVERHEAD_BUDGET: i32 = 64 * 1024;
 
-fn reput_read_max_bytes(config: &MessageStoreConfig) -> usize {
+pub(super) fn reput_read_max_bytes(config: &MessageStoreConfig) -> usize {
     let max_message_size = config.max_message_size.max(0);
     let max_record_size = if i32::MAX - max_message_size >= COMMIT_LOG_RECORD_OVERHEAD_BUDGET {
         max_message_size + COMMIT_LOG_RECORD_OVERHEAD_BUDGET
@@ -839,14 +879,14 @@ fn reput_record_is_complete(bytes: &Bytes) -> bool {
 }
 
 async fn dispatch_reput_batch(
-    dispatcher: &CommitLogDispatchHandle,
+    dispatch_pipeline: &super::reput_pipeline::ReputDispatchPipeline,
     runtime_context: &ReputRuntimeContext,
     notify_message_arrive_in_batch: bool,
     dispatch_batch: &mut [DispatchRequest],
 ) {
     let batch_size = dispatch_batch.len();
     let started = Instant::now();
-    dispatcher.dispatch_batch_async(dispatch_batch).await;
+    dispatch_pipeline.dispatch_batch(dispatch_batch).await;
     runtime_context
         .store_stats_service
         .record_reput_dispatch_batch(batch_size, started.elapsed());
@@ -940,7 +980,7 @@ impl ReputMessageServiceInner {
                             // Dispatch batch when reaching threshold or at end
                             if dispatch_batch.len() >= 32 {
                                 dispatch_reput_batch(
-                                    &self.dispatcher,
+                                    &self.dispatch_pipeline,
                                     &self.runtime_context,
                                     self.notify_message_arrive_in_batch,
                                     &mut dispatch_batch,
@@ -982,7 +1022,7 @@ impl ReputMessageServiceInner {
         // Dispatch remaining messages in batch
         if !dispatch_batch.is_empty() {
             dispatch_reput_batch(
-                &self.dispatcher,
+                &self.dispatch_pipeline,
                 &self.runtime_context,
                 self.notify_message_arrive_in_batch,
                 &mut dispatch_batch,

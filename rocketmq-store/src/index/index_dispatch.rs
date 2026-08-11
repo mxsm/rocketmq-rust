@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use rocketmq_store_local::index::dispatch::IndexDispatchRoot;
 
+use crate::base::commit_log_dispatcher::CommitLogDispatchExecution;
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
 use crate::base::dispatch_request::DispatchRequest;
 use crate::config::message_store_config::MessageStoreConfig;
@@ -44,6 +45,14 @@ impl CommitLogDispatcherBuildIndex {
 }
 
 impl CommitLogDispatcher for CommitLogDispatcherBuildIndex {
+    fn supports_parallel_dispatch(&self) -> bool {
+        true
+    }
+
+    fn dispatch_execution(&self) -> CommitLogDispatchExecution {
+        CommitLogDispatchExecution::Blocking
+    }
+
     fn dispatch(&self, dispatch_request: &mut DispatchRequest) {
         let enabled = self.root.adapter().message_store_config.message_index_enable;
         self.root.dispatch(enabled, dispatch_request, |adapter, request| {
