@@ -75,7 +75,7 @@ pub struct ProxyContextWithPrincipal<P> {
     client_version: Option<String>,
     namespace: Option<String>,
     connection_id: Option<String>,
-    deadline: Option<Duration>,
+    deadline_at: Option<Instant>,
     received_at: Instant,
     authenticated_principal: Option<P>,
 }
@@ -96,7 +96,7 @@ impl<P> ProxyContextWithPrincipal<P> {
             client_version: self.client_version.clone(),
             namespace: self.namespace.clone(),
             connection_id: self.connection_id.clone(),
-            deadline: self.deadline,
+            deadline_at: self.deadline_at,
             received_at: self.received_at,
             authenticated_principal: None,
         }
@@ -105,6 +105,8 @@ impl<P> ProxyContextWithPrincipal<P> {
     pub fn from_grpc_request<T>(rpc_name: &'static str, request: &Request<T>) -> ProxyResult<Self> {
         let metadata = request.metadata();
         let deadline = parse_grpc_timeout_metadata(metadata)?;
+        let received_at = Instant::now();
+        let deadline_at = deadline.map(|timeout| received_at.checked_add(timeout).unwrap_or(received_at));
 
         Ok(Self {
             request_id: Uuid::new_v4().to_string(),
@@ -120,8 +122,8 @@ impl<P> ProxyContextWithPrincipal<P> {
             client_version: metadata_string(metadata, "x-mq-client-version"),
             namespace: metadata_string(metadata, "x-mq-namespace"),
             connection_id: metadata_string(metadata, "x-mq-channel-id"),
-            deadline,
-            received_at: Instant::now(),
+            deadline_at,
+            received_at,
             authenticated_principal: None,
         })
     }
@@ -149,7 +151,7 @@ impl<P> ProxyContextWithPrincipal<P> {
             client_version: Some(request.version().to_string()),
             namespace: remoting_ext_field(request, "namespace"),
             connection_id: Some(channel.connection_id().to_owned()),
-            deadline: None,
+            deadline_at: None,
             received_at: Instant::now(),
             authenticated_principal: None,
         }
@@ -166,7 +168,7 @@ impl<P> ProxyContextWithPrincipal<P> {
             client_version: None,
             namespace: None,
             connection_id: None,
-            deadline: None,
+            deadline_at: None,
             received_at: Instant::now(),
             authenticated_principal: None,
         }
@@ -213,7 +215,13 @@ impl<P> ProxyContextWithPrincipal<P> {
     }
 
     pub fn deadline(&self) -> Option<Duration> {
-        self.deadline
+        self.deadline_at
+            .map(|deadline| deadline.saturating_duration_since(Instant::now()))
+    }
+
+    /// Returns the immutable request deadline captured at ingress.
+    pub fn deadline_at(&self) -> Option<Instant> {
+        self.deadline_at
     }
 
     pub fn received_at(&self) -> Instant {
@@ -281,6 +289,7 @@ mod tests {
     use std::collections::HashMap;
     use std::net::SocketAddr;
     use std::time::Duration;
+    use std::time::Instant;
 
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     use rocketmq_transport::api::v1::ConnectionContext;
@@ -351,6 +360,26 @@ mod tests {
         let error = ProxyContext::from_grpc_request("QueryRoute", &request).expect_err("context should reject timeout");
         assert!(matches!(error, ProxyError::InvalidMetadata { .. }));
         assert!(error.to_string().contains("grpc-timeout"));
+    }
+
+    #[test]
+    fn proxy_context_freezes_grpc_timeout_as_an_absolute_deadline() {
+        let mut request = Request::new(());
+        request
+            .metadata_mut()
+            .insert("grpc-timeout", "1S".parse().expect("timeout metadata"));
+        let before = Instant::now();
+
+        let context =
+            ProxyContext::from_grpc_request("ReceiveMessage", &request).expect("context should freeze the timeout");
+        let after = Instant::now();
+        let deadline_at = context.deadline_at().expect("absolute deadline");
+
+        assert!(deadline_at >= before + Duration::from_secs(1));
+        assert!(deadline_at <= after + Duration::from_secs(1));
+        assert!(context
+            .deadline()
+            .is_some_and(|remaining| { !remaining.is_zero() && remaining <= Duration::from_secs(1) }));
     }
 
     #[test]

@@ -129,24 +129,33 @@ use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::LocalConfig;
+use crate::execution::run_local_execution;
+use crate::execution::LocalCommandHandler;
+use crate::execution::LocalExecutionPolicy;
 use crate::message::message_ext_to_core;
 use crate::message::message_properties_from_core;
 use crate::service::LocalServiceManager;
 
+const LOCAL_LONG_POLL_TIMEOUT_MARGIN: Duration = Duration::from_millis(500);
+
 #[derive(Clone)]
 pub struct LocalBrokerFacadeClient {
     sender: mpsc::Sender<QueuedLocalBrokerCommand>,
+    count_budget: Arc<Semaphore>,
     byte_budget: Arc<Semaphore>,
     broker_name: String,
 }
 
-struct QueuedLocalBrokerCommand {
-    command: LocalBrokerCommand,
-    enqueued_at: Instant,
-    _byte_permit: OwnedSemaphorePermit,
+pub(crate) struct QueuedLocalBrokerCommand {
+    pub(crate) command: LocalBrokerCommand,
+    pub(crate) enqueued_at: Instant,
+    pub(crate) deadline_at: Option<Instant>,
+    pub(crate) timeout_budget: Option<Duration>,
+    pub(crate) _count_permit: OwnedSemaphorePermit,
+    pub(crate) _byte_permit: OwnedSemaphorePermit,
 }
 
-enum LocalBrokerCommand {
+pub(crate) enum LocalBrokerCommand {
     QueryRoute {
         topic: ResourceIdentity,
         reply: oneshot::Sender<ProxyResult<TopicRouteData>>,
@@ -186,17 +195,38 @@ enum LocalBrokerCommand {
     },
     ProcessRemoting {
         request: RemotingCommand,
+        timeout: Duration,
         reply: oneshot::Sender<ProxyResult<RemotingCommand>>,
     },
 }
 
 impl QueuedLocalBrokerCommand {
-    fn is_expired(&self, now: Instant, max_queue_age: Duration) -> bool {
+    pub(crate) fn is_expired(&self, now: Instant, max_queue_age: Duration) -> bool {
         now.saturating_duration_since(self.enqueued_at) >= max_queue_age
+    }
+
+    pub(crate) fn deadline_expired(&self, now: Instant) -> bool {
+        self.deadline_at.is_some_and(|deadline| now >= deadline)
+    }
+
+    pub(crate) fn apply_remaining_deadline(&mut self, now: Instant) {
+        let Some(deadline_at) = self.deadline_at else {
+            return;
+        };
+        if let LocalBrokerCommand::ProcessRemoting { timeout, .. } = &mut self.command {
+            *timeout = deadline_at.saturating_duration_since(now);
+        }
     }
 }
 
 impl LocalBrokerCommand {
+    fn timeout(&self) -> Option<Duration> {
+        match self {
+            Self::ProcessRemoting { timeout, .. } => Some(*timeout),
+            _ => None,
+        }
+    }
+
     fn estimated_bytes(&self) -> usize {
         let base = std::mem::size_of::<Self>();
         match self {
@@ -275,31 +305,53 @@ impl LocalBrokerCommand {
         .max(1)
     }
 
-    fn reject_overload(self) {
+    pub(crate) fn reject_overload(self) {
+        self.reject_with(local_queue_overloaded());
+    }
+
+    pub(crate) fn reject_unavailable(self) {
+        self.reject_with_transport("local broker command execution is unavailable".to_owned());
+    }
+
+    pub(crate) fn reject_with_transport(self, message: String) {
+        self.reject_with(ProxyError::Transport { message });
+    }
+
+    pub(crate) fn reject_timeout(self, timeout: Duration) {
+        self.reject_with(
+            RocketMQError::Timeout {
+                operation: "local broker command queue",
+                timeout_ms: timeout.as_millis().min(u128::from(u64::MAX)) as u64,
+            }
+            .into(),
+        );
+    }
+
+    fn reject_with(self, error: ProxyError) {
         match self {
             Self::QueryRoute { reply, .. } => {
-                let _ = reply.send(Err(local_queue_overloaded()));
+                let _ = reply.send(Err(error));
             }
             Self::QueryTopicMessageType { reply, .. } => {
-                let _ = reply.send(Err(local_queue_overloaded()));
+                let _ = reply.send(Err(error));
             }
             Self::QuerySubscriptionGroup { reply, .. } => {
-                let _ = reply.send(Err(local_queue_overloaded()));
+                let _ = reply.send(Err(error));
             }
             Self::QueryAssignment { reply, .. } => {
-                let _ = reply.send(Err(local_queue_overloaded()));
+                let _ = reply.send(Err(error));
             }
             Self::SendMessage { reply, .. } => {
-                let _ = reply.send(Err(local_queue_overloaded()));
+                let _ = reply.send(Err(error));
             }
             Self::RecallMessage { reply, .. } => {
-                let _ = reply.send(Err(local_queue_overloaded()));
+                let _ = reply.send(Err(error));
             }
             Self::EndTransaction { reply, .. } => {
-                let _ = reply.send(Err(local_queue_overloaded()));
+                let _ = reply.send(Err(error));
             }
             Self::ProcessRemoting { reply, .. } => {
-                let _ = reply.send(Err(local_queue_overloaded()));
+                let _ = reply.send(Err(error));
             }
         }
     }
@@ -325,6 +377,21 @@ fn validate_local_queue_config(config: &LocalConfig) -> ProxyResult<()> {
             message: "local command queue maximum age must be greater than zero".to_owned(),
         });
     }
+    if config.control_reserve == 0 || config.io_max_inflight <= config.control_reserve {
+        return Err(ProxyError::Transport {
+            message: "local io_max_inflight must be greater than a nonzero control_reserve".to_owned(),
+        });
+    }
+    if config.long_poll_max_inflight == 0 {
+        return Err(ProxyError::Transport {
+            message: "local long_poll_max_inflight must be greater than zero".to_owned(),
+        });
+    }
+    if config.execution_lane_idle_timeout().is_zero() {
+        return Err(ProxyError::Transport {
+            message: "local execution lane idle timeout must be greater than zero".to_owned(),
+        });
+    }
     Ok(())
 }
 
@@ -337,6 +404,7 @@ impl LocalBrokerFacadeClient {
         validate_local_queue_config(&config)?;
         let broker_config = build_broker_config(&config);
         let (sender, receiver) = mpsc::channel(config.command_queue_capacity);
+        let count_budget = Arc::new(Semaphore::new(config.command_queue_capacity));
         let byte_budget = Arc::new(Semaphore::new(config.command_queue_max_bytes));
         let max_queue_age = config.command_queue_max_age();
         let broker_name = config.broker_name.clone();
@@ -352,15 +420,26 @@ impl LocalBrokerFacadeClient {
             })?;
         let shutdown_context = service_context.clone();
         let cancellation = worker_context.task_group().cancellation_token();
+        let lane_context = worker_context.component("command-lanes");
         worker_context
             .spawn_service("proxy.local.worker", async move {
-                run_local_broker_worker(config, facade, receiver, cancellation, shutdown_context, max_queue_age).await;
+                run_local_broker_worker(
+                    config,
+                    facade,
+                    receiver,
+                    cancellation,
+                    shutdown_context,
+                    lane_context,
+                    max_queue_age,
+                )
+                .await;
             })
             .map_err(|error| ProxyError::Transport {
                 message: format!("failed to spawn proxy local worker: {error}"),
             })?;
         Ok(Self {
             sender,
+            count_budget,
             byte_budget,
             broker_name,
         })
@@ -411,8 +490,22 @@ impl LocalBrokerFacadeClient {
     }
 
     pub async fn process_remoting(&self, request: RemotingCommand) -> ProxyResult<RemotingCommand> {
-        self.execute(|reply| LocalBrokerCommand::ProcessRemoting { request, reply })
+        self.process_remoting_with_timeout(request, Duration::from_secs(3))
             .await
+    }
+
+    pub async fn process_remoting_with_timeout(
+        &self,
+        mut request: RemotingCommand,
+        timeout: Duration,
+    ) -> ProxyResult<RemotingCommand> {
+        request.make_custom_header_to_net();
+        self.execute(|reply| LocalBrokerCommand::ProcessRemoting {
+            request,
+            timeout,
+            reply,
+        })
+        .await
     }
 
     pub async fn send_message(
@@ -477,13 +570,22 @@ impl LocalBrokerFacadeClient {
         let (reply_tx, reply_rx) = oneshot::channel();
         let command = build(reply_tx);
         let estimated_bytes = command.estimated_bytes();
+        let count_permit = Arc::clone(&self.count_budget)
+            .try_acquire_owned()
+            .map_err(|_| local_queue_overloaded())?;
         let byte_permits = u32::try_from(estimated_bytes).map_err(|_| local_queue_overloaded())?;
         let byte_permit = Arc::clone(&self.byte_budget)
             .try_acquire_many_owned(byte_permits)
             .map_err(|_| local_queue_overloaded())?;
+        let timeout_budget = command.timeout();
+        let enqueued_at = Instant::now();
+        let deadline_at = timeout_budget.map(|timeout| enqueued_at.checked_add(timeout).unwrap_or(enqueued_at));
         let queued = QueuedLocalBrokerCommand {
             command,
-            enqueued_at: Instant::now(),
+            enqueued_at,
+            deadline_at,
+            timeout_budget,
+            _count_permit: count_permit,
             _byte_permit: byte_permit,
         };
         match self.sender.try_send(queued) {
@@ -696,18 +798,18 @@ impl LocalConsumerService {
 impl ConsumerService for LocalConsumerService {
     fn receive_message<'a>(
         &'a self,
-        _context: &'a ProxyContext,
+        context: &'a ProxyContext,
         request: &'a ReceiveMessageRequest,
     ) -> ProxyServiceFuture<'a, ReceiveMessagePlan> {
-        Box::pin(async move { receive_message_via_broker(&self.client, request).await })
+        Box::pin(async move { receive_message_via_broker(&self.client, request, context.deadline()).await })
     }
 
     fn pull_message<'a>(
         &'a self,
-        _context: &'a ProxyContext,
+        context: &'a ProxyContext,
         request: &'a PullMessageRequest,
     ) -> ProxyServiceFuture<'a, PullMessagePlan> {
-        Box::pin(async move { pull_message_via_broker(&self.client, request).await })
+        Box::pin(async move { pull_message_via_broker(&self.client, request, context.deadline()).await })
     }
 
     fn ack_message<'a>(
@@ -802,6 +904,7 @@ async fn run_local_broker_worker(
     mut receiver: mpsc::Receiver<QueuedLocalBrokerCommand>,
     cancellation: CancellationToken,
     shutdown_context: ChildServiceContext,
+    lane_context: ChildServiceContext,
     max_queue_age: Duration,
 ) {
     let initialization = tokio::select! {
@@ -849,52 +952,44 @@ async fn run_local_broker_worker(
         }
     };
 
-    loop {
-        let queued = tokio::select! {
-            biased;
-            () = cancellation.cancelled() => {
-                drain_local_commands(
-                    &facade,
-                    startup_error.as_deref(),
-                    &mut receiver,
-                    max_queue_age,
-                    shutdown_deadline(&shutdown_context, &config),
-                )
-                .await;
-                break;
-            },
-            command = receiver.recv() => match command {
-                Some(command) => command,
-                None => break,
-            },
-        };
-        if queued.is_expired(Instant::now(), max_queue_age) {
-            queued.command.reject_overload();
-            continue;
-        }
-        let QueuedLocalBrokerCommand {
-            command,
-            enqueued_at: _,
-            _byte_permit,
-        } = queued;
-        tokio::select! {
-            biased;
-            () = cancellation.cancelled() => break,
-            () = handle_local_broker_command(&facade, startup_error.as_deref(), command) => {}
-        }
-    }
+    let policy = LocalExecutionPolicy::from_config(&config);
+    let shutdown_timeout = config.shutdown_timeout();
+    let facade = Arc::new(facade);
+    let handler = Arc::new(BrokerLocalCommandHandler {
+        facade: facade.clone(),
+        startup_error: startup_error.map(Arc::<str>::from),
+    });
+    run_local_execution(
+        policy,
+        receiver,
+        cancellation,
+        shutdown_context.clone(),
+        lane_context,
+        handler.clone(),
+        shutdown_timeout,
+    )
+    .await;
+    drop(handler);
 
-    if cancellation.is_cancelled() {
-        drain_local_commands(
-            &facade,
-            startup_error.as_deref(),
-            &mut receiver,
-            max_queue_age,
-            shutdown_deadline(&shutdown_context, &config),
-        )
-        .await;
+    match Arc::try_unwrap(facade) {
+        Ok(mut facade) => {
+            shutdown_local_broker(&mut facade, shutdown_deadline(&shutdown_context, &config)).await;
+        }
+        Err(_) => {
+            tracing::error!("proxy local command lanes retained the embedded Broker facade during shutdown");
+        }
     }
-    shutdown_local_broker(&mut facade, shutdown_deadline(&shutdown_context, &config)).await;
+}
+
+struct BrokerLocalCommandHandler {
+    facade: Arc<ProxyBrokerFacade>,
+    startup_error: Option<Arc<str>>,
+}
+
+impl LocalCommandHandler for BrokerLocalCommandHandler {
+    async fn handle(&self, command: LocalBrokerCommand) {
+        handle_local_broker_command(&self.facade, self.startup_error.as_deref(), command).await;
+    }
 }
 
 fn shutdown_deadline(shutdown_context: &ChildServiceContext, config: &LocalConfig) -> ShutdownDeadline {
@@ -923,6 +1018,9 @@ async fn drain_local_commands(
         let QueuedLocalBrokerCommand {
             command,
             enqueued_at: _,
+            deadline_at: _,
+            timeout_budget: _,
+            _count_permit,
             _byte_permit,
         } = queued;
         if tokio::time::timeout(
@@ -1044,13 +1142,20 @@ async fn handle_local_broker_command(
             };
             let _ = reply.send(result);
         }
-        LocalBrokerCommand::ProcessRemoting { request, reply } => {
+        LocalBrokerCommand::ProcessRemoting {
+            request,
+            timeout,
+            reply,
+        } => {
             let result = if let Some(message) = startup_error {
                 Err(ProxyError::Transport {
                     message: message.to_owned(),
                 })
             } else {
-                facade.process_request(request).await.map_err(Into::into)
+                facade
+                    .process_request_with_timeout(request, timeout)
+                    .await
+                    .map_err(Into::into)
             };
             let _ = reply.send(result);
         }
@@ -1226,10 +1331,14 @@ async fn end_transaction(
 async fn receive_message_via_broker(
     client: &LocalBrokerFacadeClient,
     request: &ReceiveMessageRequest,
+    caller_deadline: Option<Duration>,
 ) -> ProxyResult<ReceiveMessagePlan> {
     let header = build_pop_request_header(client.broker_name(), request);
     let response = client
-        .process_remoting(RemotingCommand::create_request_command(RequestCode::PopMessage, header))
+        .process_remoting_with_timeout(
+            RemotingCommand::create_request_command(RequestCode::PopMessage, header),
+            local_long_poll_timeout(request.long_polling_timeout, caller_deadline),
+        )
         .await?;
     process_pop_response(
         response,
@@ -1242,15 +1351,21 @@ async fn receive_message_via_broker(
 async fn pull_message_via_broker(
     client: &LocalBrokerFacadeClient,
     request: &PullMessageRequest,
+    caller_deadline: Option<Duration>,
 ) -> ProxyResult<PullMessagePlan> {
     let header = build_pull_request_header(client.broker_name(), request);
     let response = client
-        .process_remoting(RemotingCommand::create_request_command(
-            RequestCode::PullMessage,
-            header,
-        ))
+        .process_remoting_with_timeout(
+            RemotingCommand::create_request_command(RequestCode::PullMessage, header),
+            local_long_poll_timeout(request.long_polling_timeout, caller_deadline),
+        )
         .await?;
     process_pull_response(response)
+}
+
+fn local_long_poll_timeout(long_polling_timeout: Duration, caller_deadline: Option<Duration>) -> Duration {
+    let broker_timeout = long_polling_timeout.saturating_add(LOCAL_LONG_POLL_TIMEOUT_MARGIN);
+    caller_deadline.map_or(broker_timeout, |deadline| deadline.min(broker_timeout))
 }
 
 async fn ack_message_via_broker(
@@ -2207,8 +2322,10 @@ mod tests {
     use super::build_pull_request_header;
     use super::build_send_message_request;
     use super::convert_topic_message_type;
+    use super::local_long_poll_timeout;
     use super::parse_receipt_handle;
     use super::transaction_resolution_flag;
+    use super::validate_local_queue_config;
     use super::LocalBrokerFacadeClient;
     use crate::LocalConfig;
 
@@ -2354,6 +2471,52 @@ mod tests {
         );
     }
 
+    #[test]
+    fn local_long_poll_timeout_adds_margin_without_extending_the_caller_deadline() {
+        assert_eq!(
+            local_long_poll_timeout(Duration::from_secs(15), None),
+            Duration::from_millis(15_500)
+        );
+        assert_eq!(
+            local_long_poll_timeout(Duration::from_secs(15), Some(Duration::from_secs(10))),
+            Duration::from_secs(10)
+        );
+        assert_eq!(
+            local_long_poll_timeout(Duration::from_secs(15), Some(Duration::from_secs(20))),
+            Duration::from_millis(15_500)
+        );
+    }
+
+    #[test]
+    fn local_execution_config_rejects_invalid_concurrency_limits() {
+        let cases = [
+            LocalConfig {
+                control_reserve: 0,
+                ..LocalConfig::default()
+            },
+            LocalConfig {
+                io_max_inflight: 2,
+                control_reserve: 2,
+                ..LocalConfig::default()
+            },
+            LocalConfig {
+                long_poll_max_inflight: 0,
+                ..LocalConfig::default()
+            },
+            LocalConfig {
+                execution_lane_idle_timeout_millis: 0,
+                ..LocalConfig::default()
+            },
+        ];
+
+        for config in cases {
+            assert!(matches!(
+                validate_local_queue_config(&config),
+                Err(ProxyError::Transport { .. })
+            ));
+        }
+    }
+
     #[tokio::test]
     async fn local_command_queue_is_bounded_by_count_and_bytes() {
         let runtime =
@@ -2391,6 +2554,7 @@ mod tests {
         let (sender, _receiver) = tokio::sync::mpsc::channel(1);
         let client = LocalBrokerFacadeClient {
             sender,
+            count_budget: Arc::new(tokio::sync::Semaphore::new(1)),
             byte_budget: Arc::new(tokio::sync::Semaphore::new(4_096)),
             broker_name: "broker-a".to_owned(),
         };
@@ -2422,6 +2586,10 @@ mod tests {
         let permit = byte_budget
             .try_acquire_owned()
             .expect("test byte permit should be available");
+        let count_budget = Arc::new(tokio::sync::Semaphore::new(1));
+        let count_permit = count_budget
+            .try_acquire_owned()
+            .expect("test count permit should be available");
         let enqueued_at = Instant::now();
         let queued = super::QueuedLocalBrokerCommand {
             command: super::LocalBrokerCommand::QueryRoute {
@@ -2429,6 +2597,9 @@ mod tests {
                 reply,
             },
             enqueued_at,
+            deadline_at: None,
+            timeout_budget: None,
+            _count_permit: count_permit,
             _byte_permit: permit,
         };
 
@@ -2488,7 +2659,7 @@ mod tests {
         let deadline = ShutdownDeadline::after(Duration::from_secs(5));
         let report = service.task_group().shutdown_until(deadline).await;
         assert!(report.is_healthy(), "{}", report.to_json());
-        assert!(report.to_json().contains("embedded-broker-store"));
+        assert!(report.to_json().contains("command-lanes"), "{}", report.to_json());
         assert_eq!(service.task_group().task_count(), 0);
     }
 }
