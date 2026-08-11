@@ -429,28 +429,28 @@ impl NameServerRuntime {
         self.validate_state(&[RuntimeState::Created], "initialize")?;
         self.validate_runtime_config()?;
 
-        info!("Phase 1/5: Loading configuration...");
+        info!("Loading persisted state");
         if let Err(e) = self.load_config().await {
             error!("Initialization failed during config load: {}", e);
             return Err(e);
         }
 
-        info!("Phase 2/5: Initializing authentication and authorization...");
+        info!("Configuring authentication and authorization");
         self.initialize_auth_runtime().await?;
 
-        info!("Phase 3/5: Initializing network server...");
+        info!("Preparing remoting server");
         self.initialize_network_components();
 
-        info!("Phase 4/5: Registering RPC hooks...");
+        info!("Registering RPC hooks");
         self.initialize_rpc_hooks();
 
-        info!("Phase 5/5: Starting scheduled tasks...");
+        info!("Starting broker health monitoring");
         self.start_schedule_service()?;
 
         // Transition to Initialized state
         self.transition_to(RuntimeState::Initialized)?;
 
-        info!("Initialization completed successfully");
+        info!("NameServer runtime initialized");
         Ok(())
     }
 
