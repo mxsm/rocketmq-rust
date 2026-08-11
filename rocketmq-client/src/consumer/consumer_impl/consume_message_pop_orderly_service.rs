@@ -12,11 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::future::Future;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::sync::atomic::AtomicBool;
-use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -42,14 +40,13 @@ use rocketmq_runtime::ScheduledTaskControl;
 use rocketmq_runtime::ScheduledTaskSnapshot;
 use serde::Serialize;
 use tokio::sync::Semaphore;
-use tokio_util::sync::CancellationToken;
-use tokio_util::task::TaskTracker;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
 
 use crate::base::client_config::ClientConfig;
 use crate::consumer::ack_result::AckResult;
+use crate::consumer::consumer_impl::bounded_consume_scheduler::BoundedConsumeScheduler;
 use crate::consumer::consumer_impl::consume_message_service::ConsumeMessageServiceTrait;
 use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
 use crate::consumer::consumer_impl::pop_process_queue::PopProcessQueue;
@@ -61,7 +58,6 @@ use crate::consumer::listener::message_listener_orderly::ArcMessageListenerOrder
 use crate::consumer::message_queue_lock::MessageQueueLock;
 use crate::runtime::schedule_client_fixed_delay_controlled_task_with_context;
 use crate::runtime::spawn_client_blocking_io_with_context;
-use crate::runtime::spawn_client_task_with_context;
 use crate::runtime::ClientRuntime;
 use crate::runtime::ClientScheduledTaskHandle;
 use rocketmq_runtime::ChildServiceContext;
@@ -82,10 +78,10 @@ pub struct ConsumeMessagePopOrderlyService {
     pub(crate) stopped: Arc<AtomicBool>,
     pub(crate) active_tasks: Arc<AtomicUsize>,
     pub(crate) lock_refresh_task: Arc<Mutex<Option<PopOrderlyTaskHandle>>>,
-    pop_orderly_task_tracker: TaskTracker,
-    force_stop_token: CancellationToken,
-    submitted_tasks: Arc<AtomicU64>,
+    consume_scheduler: BoundedConsumeScheduler<ConsumeRequest>,
 }
+
+const POP_ORDERLY_SCHEDULER_CAPACITY: usize = 4_096;
 
 pub(crate) struct PopOrderlyTaskHandle(ClientScheduledTaskHandle);
 
@@ -99,16 +95,6 @@ impl PopOrderlyTaskHandle {
             );
         }
         report.is_healthy()
-    }
-
-    fn abort(self) {
-        let report = self.0.shutdown_now();
-        if !report.is_healthy() {
-            warn!(
-                report = %report.to_json(),
-                "pop orderly lock refresh task shutdown_now report is unhealthy"
-            );
-        }
     }
 
     fn task_count(&self) -> usize {
@@ -131,32 +117,6 @@ pub struct PopOrderlyLockRefreshLifecycleProbe {
     pub scheduled_failures: u64,
     pub shutdown_elapsed_us: u128,
     pub healthy: bool,
-}
-
-fn spawn_tracked_pop_orderly_task<F>(
-    service_context: &ChildServiceContext,
-    thread_name: &'static str,
-    tracker: &TaskTracker,
-    force_stop_token: &CancellationToken,
-    submitted_tasks: &Arc<AtomicU64>,
-    task: F,
-) where
-    F: Future<Output = ()> + Send + 'static,
-{
-    submitted_tasks.fetch_add(1, Ordering::Relaxed);
-    let force_stop_token = force_stop_token.clone();
-    let tracked_task = tracker.track_future(async move {
-        tokio::select! {
-            biased;
-            _ = force_stop_token.cancelled() => {}
-            _ = task => {}
-        }
-    });
-
-    if let Err(error) = spawn_client_task_with_context(service_context, thread_name, tracked_task) {
-        warn!("Failed to spawn {} background task: {}", thread_name, error);
-        warn!("Failed to track {} background task", thread_name);
-    }
 }
 
 /// Default callback implementation for acknowledgment operations
@@ -232,9 +192,8 @@ impl ConsumeMessagePopOrderlyService {
             stopped: Arc::new(AtomicBool::new(false)),
             active_tasks: Arc::new(AtomicUsize::new(0)),
             lock_refresh_task: Arc::new(Mutex::new(None)),
-            pop_orderly_task_tracker: TaskTracker::new(),
-            force_stop_token: CancellationToken::new(),
-            submitted_tasks: Arc::new(AtomicU64::new(0)),
+            consume_scheduler: BoundedConsumeScheduler::new(POP_ORDERLY_SCHEDULER_CAPACITY)
+                .expect("the fixed POP orderly scheduler capacity must be non-zero"),
         }
     }
 
@@ -347,69 +306,45 @@ impl ConsumeMessagePopOrderlyService {
         }
     }
 
-    fn submit_consume_request(&self, this: Arc<Self>, mut request: ConsumeRequest, force: bool) {
+    async fn submit_consume_request(&self, _this: Arc<Self>, request: ConsumeRequest, force: bool) {
         if !force && !self.consume_request_set.insert(request.clone()) {
             return;
         }
-
-        let stopped = self.stopped.clone();
-        let active_tasks = self.active_tasks.clone();
-        let concurrency_limiter = self.concurrency_limiter.clone();
-
-        spawn_tracked_pop_orderly_task(
-            &self.service_context,
-            "rocketmq-client-pop-orderly-consume",
-            &self.pop_orderly_task_tracker,
-            &self.force_stop_token,
-            &self.submitted_tasks,
-            async move {
-                if stopped.load(Ordering::Acquire) {
-                    return;
-                }
-
-                let _permit = match concurrency_limiter.acquire().await {
-                    Ok(permit) => permit,
-                    Err(_) => return,
-                };
-
-                active_tasks.fetch_add(1, Ordering::SeqCst);
-
-                struct TaskGuard(Arc<AtomicUsize>);
-                impl Drop for TaskGuard {
-                    fn drop(&mut self) {
-                        self.0.fetch_sub(1, Ordering::SeqCst);
-                    }
-                }
-                let _guard = TaskGuard(active_tasks);
-
-                request.run(this).await;
-            },
-        );
+        if let Err(error) = self.consume_scheduler.schedule(request).await {
+            let request = error.into_item();
+            self.consume_request_set.remove(&request);
+            request.process_queue.dec_found_msg(request.msgs.len());
+            warn!(
+                "POP orderly consume request rejected during shutdown, group={}, mq={}, msgs={}",
+                self.consumer_group,
+                request.message_queue,
+                request.msgs.len()
+            );
+        }
     }
 
-    fn submit_consume_request_later(&self, this: Arc<Self>, request: ConsumeRequest, mut suspend_time_millis: u64) {
+    async fn submit_consume_request_later(
+        &self,
+        _this: Arc<Self>,
+        request: ConsumeRequest,
+        mut suspend_time_millis: u64,
+    ) {
         suspend_time_millis = suspend_time_millis.clamp(10, 30_000);
-
-        let stopped = self.stopped.clone();
-        let consume_request_set = self.consume_request_set.clone();
-
-        spawn_tracked_pop_orderly_task(
-            &self.service_context,
-            "rocketmq-client-pop-orderly-consume-delay",
-            &self.pop_orderly_task_tracker,
-            &self.force_stop_token,
-            &self.submitted_tasks,
-            async move {
-                tokio::time::sleep(Duration::from_millis(suspend_time_millis)).await;
-
-                if stopped.load(Ordering::Acquire) {
-                    return;
-                }
-
-                consume_request_set.insert(request.clone());
-                this.submit_consume_request(this.clone(), request, true);
-            },
-        );
+        if let Err(error) = self
+            .consume_scheduler
+            .schedule_after(request, Duration::from_millis(suspend_time_millis))
+            .await
+        {
+            let request = error.into_item();
+            self.consume_request_set.remove(&request);
+            request.process_queue.dec_found_msg(request.msgs.len());
+            warn!(
+                "POP orderly retry rejected during shutdown, group={}, mq={}, msgs={}",
+                self.consumer_group,
+                request.message_queue,
+                request.msgs.len()
+            );
+        }
     }
 
     async fn unlock_all_message_queues(&self) {
@@ -603,12 +538,41 @@ impl ConsumeMessagePopOrderlyService {
 }
 
 impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
-    fn start(&self, _this: Arc<Self>) {
-        if self.consumer_config.message_model != MessageModel::Clustering {
-            return;
+    fn start(&self, this: Arc<Self>) {
+        let worker_service = Arc::clone(&this);
+        if let Err(error) = self.consume_scheduler.start(
+            &self.service_context,
+            self.consumer_config.consume_thread_max.max(1) as usize,
+            move |mut request| {
+                let service = Arc::clone(&worker_service);
+                async move {
+                    if service.stopped.load(Ordering::Acquire) {
+                        return;
+                    }
+                    let limiter = Arc::clone(&service.concurrency_limiter);
+                    let permit = match limiter.acquire_owned().await {
+                        Ok(permit) => permit,
+                        Err(_) => return,
+                    };
+                    service.active_tasks.fetch_add(1, Ordering::SeqCst);
+                    struct ActiveTaskGuard(Arc<AtomicUsize>);
+                    impl Drop for ActiveTaskGuard {
+                        fn drop(&mut self) {
+                            self.0.fetch_sub(1, Ordering::SeqCst);
+                        }
+                    }
+                    let _active = ActiveTaskGuard(Arc::clone(&service.active_tasks));
+                    request.run(Arc::clone(&service)).await;
+                    drop(permit);
+                }
+            },
+        ) {
+            error!("Failed to start bounded POP orderly consume scheduler: {error}");
         }
 
-        self.start_lock_refresh_with_schedule(Duration::from_secs(1), Duration::from_millis(20_000));
+        if self.consumer_config.message_model == MessageModel::Clustering {
+            self.start_lock_refresh_with_schedule(Duration::from_secs(1), Duration::from_millis(20_000));
+        }
     }
 
     async fn shutdown(&self, await_terminate_millis: u64) {
@@ -620,7 +584,6 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
         self.stopped.store(true, Ordering::Release);
 
         self.concurrency_limiter.close();
-        self.pop_orderly_task_tracker.close();
 
         let lock_refresh_task = { self.lock_refresh_task.lock().take() };
         if let Some(task) = lock_refresh_task {
@@ -635,29 +598,12 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
 
         let timeout = Duration::from_millis(await_terminate_millis);
         let start_time = Instant::now();
-
-        match tokio::time::timeout(timeout, self.pop_orderly_task_tracker.wait()).await {
-            Ok(()) => {}
-            Err(_) => {
-                warn!(
-                    "{} ConsumeMessagePopOrderlyService shutdown timeout, {} active consume tasks, {} submitted \
-                     tasks; forcing remaining task futures to stop",
-                    self.consumer_group,
-                    self.active_tasks.load(Ordering::Acquire),
-                    self.submitted_tasks.load(Ordering::Acquire)
-                );
-                self.force_stop_token.cancel();
-                if tokio::time::timeout(Duration::from_secs(1), self.pop_orderly_task_tracker.wait())
-                    .await
-                    .is_err()
-                {
-                    warn!(
-                        "{} ConsumeMessagePopOrderlyService force stop timed out, {} active consume tasks remain",
-                        self.consumer_group,
-                        self.active_tasks.load(Ordering::Acquire)
-                    );
-                }
-            }
+        if !self.consume_scheduler.shutdown(timeout).await {
+            warn!(
+                "{} ConsumeMessagePopOrderlyService scheduler shutdown timed out, {} active tasks remain",
+                self.consumer_group,
+                self.active_tasks.load(Ordering::Acquire)
+            );
         }
 
         while self.active_tasks.load(Ordering::Acquire) > 0 {
@@ -805,7 +751,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
     ) {
         let arc_msgs: Vec<Arc<MessageExt>> = msgs.into_iter().map(Arc::new).collect();
         let request = ConsumeRequest::new(Arc::new(process_queue.clone()), message_queue.clone(), arc_msgs);
-        this.submit_consume_request(this.clone(), request, false);
+        this.submit_consume_request(this.clone(), request, false).await;
     }
 }
 
@@ -855,29 +801,29 @@ impl ConsumeRequest {
         let msgs = &mut self.msgs;
 
         if msgs.is_empty() {
-            consume_message_pop_orderly_service.submit_consume_request_later(
-                consume_message_pop_orderly_service.clone(),
-                self.clone(),
-                1000,
-            );
+            consume_message_pop_orderly_service
+                .submit_consume_request_later(consume_message_pop_orderly_service.clone(), self.clone(), 1000)
+                .await;
             return;
         }
 
         let suspend = consume_message_pop_orderly_service.check_reconsume_times(msgs).await;
         if suspend {
-            consume_message_pop_orderly_service.submit_consume_request_later(
-                consume_message_pop_orderly_service.clone(),
-                self.clone(),
-                consume_message_pop_orderly_service
-                    .consumer_config
-                    .suspend_current_queue_time_millis,
-            );
+            consume_message_pop_orderly_service
+                .submit_consume_request_later(
+                    consume_message_pop_orderly_service.clone(),
+                    self.clone(),
+                    consume_message_pop_orderly_service
+                        .consumer_config
+                        .suspend_current_queue_time_millis,
+                )
+                .await;
             return;
         }
 
         let begin_timestamp = Instant::now();
         let listener = consume_message_pop_orderly_service.message_listener.clone();
-        let msgs_cloned: Vec<MessageExt> = msgs.iter().map(|m| m.as_ref().clone()).collect();
+        let msgs_for_blocking = msgs.clone();
         let process_span = crate::consumer::consumer_impl::observability::consumer_process_span(
             &consume_message_pop_orderly_service.telemetry_handle,
             msgs.iter().map(|msg| msg.as_ref()),
@@ -894,7 +840,7 @@ impl ConsumeRequest {
             "client.pop_orderly.consume",
             move || {
                 let _entered = process_span_for_blocking.enter();
-                let msg_refs: Vec<&MessageExt> = msgs_cloned.iter().collect();
+                let msg_refs: Vec<&MessageExt> = msgs_for_blocking.iter().map(|message| message.as_ref()).collect();
                 let mut ctx = ConsumeOrderlyContext::new(mq);
                 let result = listener.consume_message(&msg_refs, &mut ctx);
                 (result, ctx)
@@ -926,11 +872,9 @@ impl ConsumeRequest {
 
         if continue_consume {
             drop(_guard);
-            consume_message_pop_orderly_service.submit_consume_request(
-                consume_message_pop_orderly_service.clone(),
-                self.clone(),
-                false,
-            );
+            consume_message_pop_orderly_service
+                .submit_consume_request(consume_message_pop_orderly_service.clone(), self.clone(), false)
+                .await;
         } else {
             let suspend_time = if context.get_suspend_current_queue_time_millis() > 0 {
                 context.get_suspend_current_queue_time_millis() as u64
@@ -940,11 +884,9 @@ impl ConsumeRequest {
                     .suspend_current_queue_time_millis
             };
             drop(_guard);
-            consume_message_pop_orderly_service.submit_consume_request_later(
-                consume_message_pop_orderly_service.clone(),
-                self.clone(),
-                suspend_time,
-            );
+            consume_message_pop_orderly_service
+                .submit_consume_request_later(consume_message_pop_orderly_service.clone(), self.clone(), suspend_time)
+                .await;
         }
     }
 }
@@ -1060,16 +1002,7 @@ pub async fn run_pop_orderly_lock_refresh_lifecycle_probe(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::future::pending;
     use std::sync::Arc;
-
-    struct DropFlag(Arc<AtomicBool>);
-
-    impl Drop for DropFlag {
-        fn drop(&mut self) {
-            self.0.store(true, Ordering::Release);
-        }
-    }
 
     fn listener() -> ArcMessageListenerOrderly {
         Arc::new(|_msgs: &[&MessageExt], _context: &mut ConsumeOrderlyContext| Ok(ConsumeOrderlyStatus::Success))
@@ -1166,69 +1099,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tracked_pop_orderly_task_shutdown_waits_for_completion() {
-        let tracker = TaskTracker::new();
-        let token = CancellationToken::new();
-        let submitted = Arc::new(AtomicU64::new(0));
-        let completed = Arc::new(AtomicBool::new(false));
-        let completed_in_task = completed.clone();
-
-        spawn_tracked_pop_orderly_task(
-            &test_context(),
-            "rocketmq-client-pop-orderly-tracker-test",
-            &tracker,
-            &token,
-            &submitted,
-            async move {
-                completed_in_task.store(true, Ordering::Release);
-            },
-        );
-        tracker.close();
-
-        tokio::time::timeout(Duration::from_secs(1), tracker.wait())
-            .await
-            .expect("tracked task should finish before timeout");
-
-        assert!(completed.load(Ordering::Acquire));
-        assert_eq!(submitted.load(Ordering::Acquire), 1);
-    }
-
-    #[tokio::test]
-    async fn tracked_pop_orderly_task_force_stop_cancels_pending_task() {
-        let tracker = TaskTracker::new();
-        let token = CancellationToken::new();
-        let submitted = Arc::new(AtomicU64::new(0));
-        let dropped = Arc::new(AtomicBool::new(false));
-        let dropped_in_task = dropped.clone();
-
-        spawn_tracked_pop_orderly_task(
-            &test_context(),
-            "rocketmq-client-pop-orderly-tracker-test",
-            &tracker,
-            &token,
-            &submitted,
-            async move {
-                let _drop_flag = DropFlag(dropped_in_task);
-                pending::<()>().await;
-            },
-        );
-        tracker.close();
-
-        assert!(tokio::time::timeout(Duration::from_millis(20), tracker.wait())
-            .await
-            .is_err());
-
-        token.cancel();
-
-        tokio::time::timeout(Duration::from_secs(1), tracker.wait())
-            .await
-            .expect("force stop should release pending tracked task");
-
-        assert!(dropped.load(Ordering::Acquire));
-        assert_eq!(submitted.load(Ordering::Acquire), 1);
-    }
-
-    #[tokio::test]
     async fn pop_orderly_lock_refresh_lifecycle_probe_reports_self_stop() {
         let probe =
             run_pop_orderly_lock_refresh_lifecycle_probe(crate::runtime::test_client_runtime("pop-orderly-probe"))
@@ -1239,39 +1109,6 @@ mod tests {
         assert_eq!(probe.task_count_after_shutdown, 0, "{probe:?}");
         assert_eq!(probe.scheduled_overlaps, 0, "{probe:?}");
         assert_eq!(probe.scheduled_failures, 0, "{probe:?}");
-    }
-
-    #[test]
-    fn start_without_tokio_runtime_does_not_spawn_panic() {
-        let service = new_service(Some(new_default_impl()));
-        let this = Arc::new(new_service(None));
-
-        service.start(this);
-        service.stopped.store(true, Ordering::Release);
-        let handle = { service.lock_refresh_task.lock().take() };
-        if let Some(handle) = handle {
-            handle.abort();
-        }
-    }
-
-    #[test]
-    fn submit_consume_request_without_tokio_runtime_does_not_spawn_panic() {
-        let service = new_service(None);
-        let this = Arc::new(new_service(None));
-        service.stopped.store(true, Ordering::Release);
-
-        ConsumeMessagePopOrderlyService::submit_consume_request(&service, this, consume_request(), true);
-        std::thread::sleep(Duration::from_millis(20));
-    }
-
-    #[test]
-    fn submit_consume_request_later_without_tokio_runtime_does_not_spawn_panic() {
-        let service = Arc::new(new_service(None));
-        let this = service.clone();
-
-        service.submit_consume_request_later(this, consume_request(), 10);
-        service.stopped.store(true, Ordering::Release);
-        std::thread::sleep(Duration::from_millis(30));
     }
 
     #[test]

@@ -12,9 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::future::Future;
 use std::sync::atomic::AtomicBool;
-use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -36,8 +34,6 @@ use rocketmq_protocol::protocol::body::consume_message_directly_result::ConsumeM
 use rocketmq_protocol::protocol::header::extra_info_util::ExtraInfoUtil;
 use rocketmq_runtime::common::time_utils::current_millis;
 use tokio::sync::Semaphore;
-use tokio_util::sync::CancellationToken;
-use tokio_util::task::TaskTracker;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -45,6 +41,7 @@ use tracing::warn;
 use crate::base::client_config::ClientConfig;
 use crate::consumer::ack_callback::AckCallback;
 use crate::consumer::ack_result::AckResult;
+use crate::consumer::consumer_impl::bounded_consume_scheduler::BoundedConsumeScheduler;
 use crate::consumer::consumer_impl::consume_message_service::ConsumeMessageServiceTrait;
 use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
 use crate::consumer::consumer_impl::pop_process_queue::PopProcessQueue;
@@ -56,33 +53,9 @@ use crate::consumer::listener::consume_return_type::ConsumeReturnType;
 use crate::consumer::listener::message_listener_concurrently::ArcMessageListenerConcurrently;
 use crate::hook::consume_message_context::ConsumeMessageContext;
 use crate::runtime::spawn_client_blocking_io_with_context;
-use crate::runtime::spawn_client_task_with_context;
 use rocketmq_runtime::ChildServiceContext;
 
-fn spawn_tracked_pop_concurrent_task<F>(
-    service_context: &ChildServiceContext,
-    thread_name: &'static str,
-    tracker: &TaskTracker,
-    force_stop_token: &CancellationToken,
-    submitted_tasks: &Arc<AtomicU64>,
-    task: F,
-) where
-    F: Future<Output = ()> + Send + 'static,
-{
-    submitted_tasks.fetch_add(1, Ordering::Relaxed);
-    let force_stop_token = force_stop_token.clone();
-    let tracked_task = tracker.track_future(async move {
-        tokio::select! {
-            biased;
-            _ = force_stop_token.cancelled() => {}
-            _ = task => {}
-        }
-    });
-
-    if let Err(error) = spawn_client_task_with_context(service_context, thread_name, tracked_task) {
-        warn!("Failed to spawn {} background task: {}", thread_name, error);
-    }
-}
+const POP_CONCURRENT_SCHEDULER_CAPACITY: usize = 4_096;
 
 pub struct ConsumeMessagePopConcurrentlyService {
     service_context: ChildServiceContext,
@@ -97,9 +70,7 @@ pub struct ConsumeMessagePopConcurrentlyService {
     pub(crate) active_tasks: Arc<AtomicUsize>,
     pub(crate) concurrency_limiter: Arc<Semaphore>,
     pub(crate) max_concurrency: Arc<AtomicUsize>,
-    pop_task_tracker: TaskTracker,
-    force_stop_token: CancellationToken,
-    submitted_tasks: Arc<AtomicU64>,
+    consume_scheduler: BoundedConsumeScheduler<ConsumeRequest>,
 }
 
 impl ConsumeMessagePopConcurrentlyService {
@@ -127,9 +98,8 @@ impl ConsumeMessagePopConcurrentlyService {
             active_tasks: Arc::new(AtomicUsize::new(0)),
             concurrency_limiter: Arc::new(Semaphore::new(consume_thread as usize)),
             max_concurrency: Arc::new(AtomicUsize::new(consume_thread as usize)),
-            pop_task_tracker: TaskTracker::new(),
-            force_stop_token: CancellationToken::new(),
-            submitted_tasks: Arc::new(AtomicU64::new(0)),
+            consume_scheduler: BoundedConsumeScheduler::new(POP_CONCURRENT_SCHEDULER_CAPACITY)
+                .expect("the fixed POP consume scheduler capacity must be non-zero"),
         }
     }
 
@@ -161,7 +131,30 @@ impl ConsumeMessagePopConcurrentlyService {
 }
 
 impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
-    fn start(&self, _this: Arc<Self>) {}
+    fn start(&self, this: Arc<Self>) {
+        let worker_service = Arc::clone(&this);
+        if let Err(error) = self.consume_scheduler.start(
+            &self.service_context,
+            self.consumer_config.consume_thread_max.max(1) as usize,
+            move |request| {
+                let service = Arc::clone(&worker_service);
+                async move {
+                    if service.stopped.load(Ordering::Acquire) {
+                        return;
+                    }
+                    let limiter = Arc::clone(&service.concurrency_limiter);
+                    let permit = match limiter.acquire_owned().await {
+                        Ok(permit) => permit,
+                        Err(_) => return,
+                    };
+                    request.run(Arc::clone(&service)).await;
+                    drop(permit);
+                }
+            },
+        ) {
+            error!("Failed to start bounded POP concurrent consume scheduler: {error}");
+        }
+    }
 
     async fn shutdown(&self, await_terminate_millis: u64) {
         info!(
@@ -171,31 +164,13 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
 
         self.stopped.store(true, Ordering::Release);
         self.concurrency_limiter.close();
-        self.pop_task_tracker.close();
-
         let timeout = Duration::from_millis(await_terminate_millis);
-        match tokio::time::timeout(timeout, self.pop_task_tracker.wait()).await {
-            Ok(()) => {}
-            Err(_) => {
-                warn!(
-                    "{} ConsumeMessagePopConcurrentlyService shutdown timeout, {} active consume tasks, {} submitted \
-                     tasks; forcing remaining task futures to stop",
-                    self.consumer_group,
-                    self.active_tasks.load(Ordering::Acquire),
-                    self.submitted_tasks.load(Ordering::Acquire)
-                );
-                self.force_stop_token.cancel();
-                if tokio::time::timeout(Duration::from_secs(1), self.pop_task_tracker.wait())
-                    .await
-                    .is_err()
-                {
-                    warn!(
-                        "{} ConsumeMessagePopConcurrentlyService force stop timed out, {} active consume tasks remain",
-                        self.consumer_group,
-                        self.active_tasks.load(Ordering::Acquire)
-                    );
-                }
-            }
+        if !self.consume_scheduler.shutdown(timeout).await {
+            warn!(
+                "{} ConsumeMessagePopConcurrentlyService scheduler shutdown timed out, {} active tasks remain",
+                self.consumer_group,
+                self.active_tasks.load(Ordering::Acquire)
+            );
         }
 
         info!(
@@ -333,90 +308,31 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
 
     async fn submit_pop_consume_request(
         &self,
-        this: Arc<Self>,
+        _this: Arc<Self>,
         msgs: Vec<MessageExt>,
         process_queue: &PopProcessQueue,
         message_queue: &MessageQueue,
     ) {
         let consume_batch_size = self.consumer_config.consume_message_batch_max_size.max(1);
-        if msgs.len() <= consume_batch_size as usize {
+        for chunk in msgs.chunks(consume_batch_size as usize).map(<[MessageExt]>::to_vec) {
             let request = ConsumeRequest::new(
-                msgs,
+                chunk,
                 Arc::new(process_queue.clone()),
                 message_queue.clone(),
                 self.consumer_group.clone(),
                 self.message_listener.clone(),
                 self.consumer_impl(),
             );
-            let limiter = self.concurrency_limiter.clone();
-            let stopped = self.stopped.clone();
-            spawn_tracked_pop_concurrent_task(
-                &self.service_context,
-                "rocketmq-client-pop-concurrent-consume",
-                &self.pop_task_tracker,
-                &self.force_stop_token,
-                &self.submitted_tasks,
-                async move {
-                    if stopped.load(Ordering::Acquire) {
-                        return;
-                    }
-
-                    let permit = match limiter.acquire().await {
-                        Ok(p) => p,
-                        Err(_) => {
-                            warn!("Failed to acquire permit, semaphore closed");
-                            return;
-                        }
-                    };
-
-                    request.run(this).await;
-                    drop(permit);
-                },
-            );
-        } else {
-            let consumer_group = self.consumer_group.clone();
-            let message_listener = self.message_listener.clone();
-            let default_impl = self.consumer_impl();
-            let limiter = self.concurrency_limiter.clone();
-            let stopped = self.stopped.clone();
-            msgs.chunks(consume_batch_size as usize)
-                .map(|t| t.to_vec())
-                .for_each(|chunk| {
-                    let consume_request = ConsumeRequest::new(
-                        chunk,
-                        Arc::new(process_queue.clone()),
-                        message_queue.clone(),
-                        consumer_group.clone(),
-                        message_listener.clone(),
-                        default_impl.clone(),
-                    );
-                    let pop_service = this.clone();
-                    let limiter_clone = limiter.clone();
-                    let stopped_clone = stopped.clone();
-                    spawn_tracked_pop_concurrent_task(
-                        &self.service_context,
-                        "rocketmq-client-pop-concurrent-consume",
-                        &self.pop_task_tracker,
-                        &self.force_stop_token,
-                        &self.submitted_tasks,
-                        async move {
-                            if stopped_clone.load(Ordering::Acquire) {
-                                return;
-                            }
-
-                            let permit = match limiter_clone.acquire().await {
-                                Ok(p) => p,
-                                Err(_) => {
-                                    warn!("Failed to acquire permit, semaphore closed");
-                                    return;
-                                }
-                            };
-
-                            consume_request.run(pop_service).await;
-                            drop(permit);
-                        },
-                    );
-                });
+            if let Err(error) = self.consume_scheduler.schedule(request).await {
+                let request = error.into_item();
+                request.process_queue.inc_found_msg(request.msgs.len());
+                warn!(
+                    "POP concurrent consume request rejected during shutdown, group={}, mq={}, msgs={}",
+                    self.consumer_group,
+                    request.message_queue,
+                    request.msgs.len()
+                );
+            }
         }
     }
 }
@@ -425,36 +341,33 @@ impl ConsumeMessagePopConcurrentlyService {
     /// Submit consume request after 5 seconds delay for retry
     async fn submit_pop_consume_request_later(
         &self,
-        this: Arc<Self>,
+        _this: Arc<Self>,
         msgs: Vec<MessageExt>,
         process_queue: Arc<PopProcessQueue>,
         message_queue: MessageQueue,
     ) {
-        let stopped = self.stopped.clone();
-
-        spawn_tracked_pop_concurrent_task(
-            &self.service_context,
-            "rocketmq-client-pop-concurrent-consume-delay",
-            &self.pop_task_tracker,
-            &self.force_stop_token,
-            &self.submitted_tasks,
-            async move {
-                if stopped.load(Ordering::Acquire) {
-                    warn!("Service stopped, discard delayed consume request for {}", message_queue);
-                    return;
-                }
-
-                tokio::time::sleep(Duration::from_millis(5000)).await;
-
-                if stopped.load(Ordering::Acquire) {
-                    warn!("Service stopped, discard delayed consume request for {}", message_queue);
-                    return;
-                }
-
-                this.submit_pop_consume_request(this.clone(), msgs, &process_queue, &message_queue)
-                    .await;
-            },
+        let request = ConsumeRequest::new(
+            msgs,
+            process_queue,
+            message_queue,
+            self.consumer_group.clone(),
+            self.message_listener.clone(),
+            self.consumer_impl(),
         );
+        if let Err(error) = self
+            .consume_scheduler
+            .schedule_after(request, Duration::from_secs(5))
+            .await
+        {
+            let request = error.into_item();
+            request.process_queue.inc_found_msg(request.msgs.len());
+            warn!(
+                "POP concurrent retry rejected during shutdown, group={}, mq={}, msgs={}",
+                self.consumer_group,
+                request.message_queue,
+                request.msgs.len()
+            );
+        }
     }
 
     async fn process_consume_result(
@@ -765,11 +678,11 @@ impl ConsumeRequest {
         }
 
         let listener = self.message_listener.clone();
-        let msgs_cloned: Vec<MessageExt> = self.msgs.iter().map(|m| m.as_ref().clone()).collect();
+        let msgs_for_blocking = self.msgs.clone();
         let process_span = crate::consumer::consumer_impl::observability::consumer_process_span(
             &consume_message_concurrently_service.telemetry_handle,
-            msgs_cloned.iter(),
-            msgs_cloned.len(),
+            self.msgs.iter().map(|message| message.as_ref()),
+            self.msgs.len(),
             self.consumer_group.as_str(),
             &self.message_queue,
             "pop_concurrent",
@@ -785,7 +698,7 @@ impl ConsumeRequest {
             "client.pop_concurrent.consume",
             move || {
                 let _entered = process_span_for_blocking.enter();
-                let msgs_refs: Vec<&MessageExt> = msgs_cloned.iter().collect();
+                let msgs_refs: Vec<&MessageExt> = msgs_for_blocking.iter().map(|message| message.as_ref()).collect();
                 let result = listener.consume_message(&msgs_refs, &context);
                 (result, context)
             },
@@ -960,7 +873,6 @@ fn classify_pop_consume_return_type(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::future::pending;
 
     fn message_queue() -> MessageQueue {
         MessageQueue::from_parts("topic", "broker-a", 0)
@@ -1027,14 +939,6 @@ mod tests {
             CheetahString::from_string(extra_info),
         );
         message
-    }
-
-    struct DropFlag(Arc<AtomicBool>);
-
-    impl Drop for DropFlag {
-        fn drop(&mut self) {
-            self.0.store(true, Ordering::Release);
-        }
     }
 
     #[test]
@@ -1111,52 +1015,6 @@ mod tests {
         service.dec_core_pool_size();
 
         assert_eq!(service.get_core_pool_size(), 2);
-    }
-
-    #[test]
-    fn submit_single_pop_consume_request_without_tokio_runtime_does_not_spawn_panic() {
-        let service = new_service(None);
-        service.stopped.store(true, Ordering::Release);
-
-        futures::executor::block_on(service.submit_pop_consume_request(
-            Arc::new(new_service(None)),
-            vec![pop_message()],
-            &PopProcessQueue::new(),
-            &message_queue(),
-        ));
-        std::thread::sleep(Duration::from_millis(30));
-    }
-
-    #[test]
-    fn submit_split_pop_consume_request_without_tokio_runtime_does_not_spawn_panic() {
-        let config = ConsumerConfig {
-            consume_message_batch_max_size: 1,
-            ..Default::default()
-        };
-        let service = new_service_with_config(config);
-        service.stopped.store(true, Ordering::Release);
-
-        futures::executor::block_on(service.submit_pop_consume_request(
-            Arc::new(new_service(None)),
-            vec![pop_message(), pop_message()],
-            &PopProcessQueue::new(),
-            &message_queue(),
-        ));
-        std::thread::sleep(Duration::from_millis(30));
-    }
-
-    #[test]
-    fn submit_pop_consume_request_later_without_tokio_runtime_does_not_spawn_panic() {
-        let service = new_service(None);
-        service.stopped.store(true, Ordering::Release);
-
-        futures::executor::block_on(service.submit_pop_consume_request_later(
-            Arc::new(new_service(None)),
-            vec![pop_message()],
-            Arc::new(PopProcessQueue::new()),
-            message_queue(),
-        ));
-        std::thread::sleep(Duration::from_millis(30));
     }
 
     #[test]
@@ -1238,69 +1096,6 @@ mod tests {
         service.shutdown(100).await;
 
         assert!(service.concurrency_limiter.is_closed());
-    }
-
-    #[tokio::test]
-    async fn tracked_pop_concurrent_task_shutdown_waits_for_completion() {
-        let tracker = TaskTracker::new();
-        let token = CancellationToken::new();
-        let submitted = Arc::new(AtomicU64::new(0));
-        let completed = Arc::new(AtomicBool::new(false));
-        let completed_in_task = completed.clone();
-
-        spawn_tracked_pop_concurrent_task(
-            &test_context(),
-            "rocketmq-client-pop-concurrent-tracker-test",
-            &tracker,
-            &token,
-            &submitted,
-            async move {
-                completed_in_task.store(true, Ordering::Release);
-            },
-        );
-        tracker.close();
-
-        tokio::time::timeout(Duration::from_secs(1), tracker.wait())
-            .await
-            .expect("tracked task should finish before timeout");
-
-        assert!(completed.load(Ordering::Acquire));
-        assert_eq!(submitted.load(Ordering::Acquire), 1);
-    }
-
-    #[tokio::test]
-    async fn tracked_pop_concurrent_task_force_stop_cancels_pending_task() {
-        let tracker = TaskTracker::new();
-        let token = CancellationToken::new();
-        let submitted = Arc::new(AtomicU64::new(0));
-        let dropped = Arc::new(AtomicBool::new(false));
-        let dropped_in_task = dropped.clone();
-
-        spawn_tracked_pop_concurrent_task(
-            &test_context(),
-            "rocketmq-client-pop-concurrent-tracker-test",
-            &tracker,
-            &token,
-            &submitted,
-            async move {
-                let _drop_flag = DropFlag(dropped_in_task);
-                pending::<()>().await;
-            },
-        );
-        tracker.close();
-
-        assert!(tokio::time::timeout(Duration::from_millis(20), tracker.wait())
-            .await
-            .is_err());
-
-        token.cancel();
-
-        tokio::time::timeout(Duration::from_secs(1), tracker.wait())
-            .await
-            .expect("force stop should release pending tracked task");
-
-        assert!(dropped.load(Ordering::Acquire));
-        assert_eq!(submitted.load(Ordering::Acquire), 1);
     }
 
     #[tokio::test]

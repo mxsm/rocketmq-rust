@@ -15,6 +15,7 @@
 use std::sync::LazyLock;
 
 pub(crate) mod assigned_message_queue;
+pub(crate) mod bounded_consume_scheduler;
 pub(crate) mod consume_message_concurrently_service;
 pub(crate) mod consume_message_orderly_service;
 pub(crate) mod consume_message_pop_concurrently_service;

@@ -548,6 +548,23 @@ impl DefaultLitePullConsumer {
         <Self as MessagePoll>::set_pull_thread_nums(self, pull_thread_nums).await;
     }
 
+    /// Sets the maximum number of concurrent broker pull RPCs before startup.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `pull_thread_nums` is zero or the consumer has
+    /// already started.
+    pub async fn try_set_pull_thread_nums(&self, pull_thread_nums: usize) -> RocketMQResult<()> {
+        if pull_thread_nums == 0 {
+            return Err(crate::mq_client_err!("pullThreadNums must be greater than 0"));
+        }
+        if let Some(impl_) = self.default_lite_pull_consumer_impl.get() {
+            impl_.try_set_pull_thread_nums(pull_thread_nums)?;
+        }
+        self.update_consumer_config(|config| config.pull_thread_nums = pull_thread_nums);
+        Ok(())
+    }
+
     /// Returns the all-queue pull threshold.
     pub async fn pull_threshold_for_all(&self) -> i64 {
         <Self as MessagePoll>::pull_threshold_for_all(self).await
@@ -1505,9 +1522,8 @@ impl MessagePoll for DefaultLitePullConsumer {
     }
 
     async fn set_pull_thread_nums(&self, pull_thread_nums: usize) {
-        self.update_consumer_config(|config| config.pull_thread_nums = pull_thread_nums);
-        if let Some(impl_) = self.default_lite_pull_consumer_impl.get() {
-            impl_.set_pull_thread_nums(pull_thread_nums);
+        if let Err(error) = self.try_set_pull_thread_nums(pull_thread_nums).await {
+            tracing::warn!("Ignoring invalid pullThreadNums update: {error}");
         }
     }
 

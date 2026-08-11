@@ -97,6 +97,14 @@ impl AssignmentEntry {
         self.task.lock().await.is_some()
     }
 
+    pub(super) async fn owns_task_generation(&self, generation: u64) -> bool {
+        self.task
+            .lock()
+            .await
+            .as_ref()
+            .is_some_and(|task| task.generation == generation)
+    }
+
     pub(super) async fn take_task(&self) -> Option<LitePullTaskHandle> {
         self.task.lock().await.take().map(|task| task.handle)
     }

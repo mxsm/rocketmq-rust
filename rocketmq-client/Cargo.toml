@@ -212,6 +212,10 @@ name = "lite_pull_assignment_registry_tests"
 required-features = ["test-support"]
 
 [[test]]
+name = "lite_pull_concurrency_contract_tests"
+required-features = ["test-support"]
+
+[[test]]
 name = "pull_message_service_test"
 required-features = ["test-support"]
 

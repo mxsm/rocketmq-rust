@@ -18,6 +18,8 @@ use std::future::Future;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::AtomicU64;
+#[cfg(any(test, feature = "test-support"))]
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
@@ -29,6 +31,10 @@ use std::time::Instant;
 
 use arc_swap::ArcSwap;
 use cheetah_string::CheetahString;
+#[cfg(any(test, feature = "test-support"))]
+use futures::stream::FuturesUnordered;
+#[cfg(any(test, feature = "test-support"))]
+use futures::StreamExt;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
@@ -55,7 +61,9 @@ use rocketmq_runtime::ResourceBudget;
 use rocketmq_transport::api::v1::RPCHook;
 use serde::Serialize;
 use tokio::sync::Mutex;
+use tokio::sync::OwnedSemaphorePermit;
 use tokio::sync::RwLock;
+use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use tracing::info;
@@ -313,6 +321,21 @@ fn lite_pull_request_sub_version(subscription_data: &SubscriptionData) -> i64 {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Debug, Clone, Serialize)]
+pub struct LitePullConcurrencyContractProbe {
+    pub configured_limit: usize,
+    pub queues: usize,
+    pub peak_inflight: usize,
+    pub cancelled_waiter_released: bool,
+    pub runtime_mutation_rejected: bool,
+}
+
+struct AssignmentPullContext {
+    entry: Arc<AssignmentEntry>,
+    generation: u64,
+}
+
 /// Core implementation of lite pull consumer.
 pub struct DefaultLitePullConsumerImpl {
     service_context: ChildServiceContext,
@@ -332,6 +355,7 @@ pub struct DefaultLitePullConsumerImpl {
     client_instance: StdRwLock<Option<Arc<MQClientInstance>>>,
     rebalance_impl: Arc<RebalanceLitePullImpl>,
     pull_api_wrapper: StdRwLock<Option<Arc<PullAPIWrapper>>>,
+    pull_concurrency_limiter: ArcSwap<Semaphore>,
     offset_store: StdRwLock<Option<Arc<OffsetStore>>>,
     rpc_hook: StdRwLock<Option<Arc<dyn RPCHook>>>,
 
@@ -403,6 +427,7 @@ impl DefaultLitePullConsumerImpl {
     {
         let client_config = client_config.as_ref().clone();
         let consumer_config = consumer_config.as_ref().clone();
+        let pull_thread_nums = consumer_config.pull_thread_nums;
         let consume_requests = Self::build_consume_request_queue(&consumer_config, &client_runtime.resource_budget())?;
         let rebalance_config = consumer_config.to_consumer_config();
 
@@ -419,6 +444,7 @@ impl DefaultLitePullConsumerImpl {
             client_instance: StdRwLock::new(None),
             rebalance_impl: Arc::new(RebalanceLitePullImpl::new(rebalance_config)),
             pull_api_wrapper: StdRwLock::new(None),
+            pull_concurrency_limiter: ArcSwap::from_pointee(Semaphore::new(pull_thread_nums)),
             offset_store: StdRwLock::new(None),
             rpc_hook: StdRwLock::new(None),
             assigned_message_queue: Arc::new(AssignedMessageQueue::new()),
@@ -672,6 +698,10 @@ impl DefaultLitePullConsumerImpl {
                 "pullBatchSize must be in [1, 1024], current value: {}",
                 config.pull_batch_size
             )));
+        }
+
+        if config.pull_thread_nums == 0 {
+            return Err(crate::mq_client_err!("pullThreadNums must be greater than 0"));
         }
 
         if config.pull_threshold_for_queue < 1 || config.pull_threshold_for_queue > 65535 {
@@ -1483,6 +1513,7 @@ impl DefaultLitePullConsumerImpl {
         let assignment_cancellation = entry.cancellation();
         let task_generation = entry.next_task_generation();
         let assignment_entry = Arc::downgrade(&entry);
+        let assignment_entry_for_task = Arc::clone(&entry);
         let (start_task_tx, start_task_rx) = tokio::sync::oneshot::channel();
         let assigned_mq = self.assigned_message_queue.clone();
         let mq_clone = mq.clone();
@@ -1531,7 +1562,11 @@ impl DefaultLitePullConsumerImpl {
                         continue;
                     }
 
-                    match default_impl.pull_inner(&mq_clone, &pq).await {
+                    let assignment = AssignmentPullContext {
+                        entry: Arc::clone(&assignment_entry_for_task),
+                        generation: task_generation,
+                    };
+                    match default_impl.pull_inner(&mq_clone, &pq, Some(&assignment)).await {
                         Ok(delay) => {
                             if delay > 0
                                 && !sleep_or_assignment_cancel(
@@ -1597,6 +1632,7 @@ impl DefaultLitePullConsumerImpl {
         &self,
         mq: &MessageQueue,
         process_queue: &Arc<crate::consumer::consumer_impl::process_queue::ProcessQueue>,
+        assignment: Option<&AssignmentPullContext>,
     ) -> RocketMQResult<u64> {
         struct NoopPullCallback;
 
@@ -1627,6 +1663,9 @@ impl DefaultLitePullConsumerImpl {
         let pull_api_wrapper = self
             .component_snapshot(&self.pull_api_wrapper)
             .ok_or_else(|| crate::mq_client_err!("PullAPIWrapper is not initialized"))?;
+        let Some(pull_permit) = self.acquire_pull_permit(mq, assignment).await? else {
+            return Ok(0);
+        };
         let mut pull_result = pull_api_wrapper
             .pull_kernel_impl(
                 mq,
@@ -1645,6 +1684,7 @@ impl DefaultLitePullConsumerImpl {
             )
             .await?
             .ok_or_else(|| crate::mq_client_err!("Synchronous lite pull returned no result"))?;
+        drop(pull_permit);
 
         pull_api_wrapper.process_pull_result(mq, &mut pull_result, &subscription_data);
 
@@ -2737,9 +2777,62 @@ impl DefaultLitePullConsumerImpl {
         self.consumer_config.load().pull_thread_nums
     }
 
-    /// Updates the configured number of pull worker threads.
-    pub fn set_pull_thread_nums(&self, pull_thread_nums: usize) {
+    /// Updates the configured number of concurrent pull RPCs before startup.
+    pub fn try_set_pull_thread_nums(&self, pull_thread_nums: usize) -> RocketMQResult<()> {
+        if pull_thread_nums == 0 {
+            return Err(crate::mq_client_err!("pullThreadNums must be greater than 0"));
+        }
+        if self.service_state() != ServiceState::CreateJust {
+            return Err(crate::mq_client_err!(
+                "pullThreadNums can not be changed after the lite pull consumer has started."
+            ));
+        }
         self.update_consumer_config(|config| config.pull_thread_nums = pull_thread_nums);
+        self.pull_concurrency_limiter
+            .store(Arc::new(Semaphore::new(pull_thread_nums)));
+        Ok(())
+    }
+
+    async fn acquire_pull_permit(
+        &self,
+        message_queue: &MessageQueue,
+        assignment: Option<&AssignmentPullContext>,
+    ) -> RocketMQResult<Option<OwnedSemaphorePermit>> {
+        let limiter = self.pull_concurrency_limiter.load_full();
+        let permit = if let Some(assignment) = assignment {
+            let cancellation = assignment.entry.cancellation();
+            tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => return Ok(None),
+                permit = limiter.acquire_owned() => permit,
+            }
+        } else {
+            limiter.acquire_owned().await
+        }
+        .map_err(|_| crate::mq_client_err!("Lite pull concurrency limiter is closed"))?;
+
+        if let Some(assignment) = assignment {
+            if !self
+                .assignment_registry
+                .is_current(message_queue, &assignment.entry)
+                .await
+                || !assignment.entry.owns_task_generation(assignment.generation).await
+            {
+                return Ok(None);
+            }
+        }
+
+        Ok(Some(permit))
+    }
+
+    /// Compatibility setter for callers that do not consume configuration errors.
+    ///
+    /// Prefer [`Self::try_set_pull_thread_nums`] when configuration failure must
+    /// be reported to the caller.
+    pub fn set_pull_thread_nums(&self, pull_thread_nums: usize) {
+        if let Err(error) = self.try_set_pull_thread_nums(pull_thread_nums) {
+            warn!("Ignoring invalid pullThreadNums update: {error}");
+        }
     }
 
     /// Returns the total cached-message threshold across all queues.
@@ -2833,6 +2926,116 @@ impl DefaultLitePullConsumerImpl {
 
         self.consume_requests
             .retain(|request| request.message_queue != *message_queue);
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub async fn run_lite_pull_concurrency_contract_probe(
+    client_runtime: Arc<ClientRuntime>,
+    configured_limit: usize,
+    queues: usize,
+) -> LitePullConcurrencyContractProbe {
+    let configured_limit = configured_limit.max(1);
+    let queues = queues.max(configured_limit);
+    let consumer = Arc::new(DefaultLitePullConsumerImpl::new(
+        client_runtime,
+        Arc::new(ClientConfig::default()),
+        Arc::new(LitePullConsumerConfig {
+            consumer_group: CheetahString::from_static_str("lite_pull_concurrency_contract_probe_group"),
+            pull_thread_nums: configured_limit,
+            ..Default::default()
+        }),
+    ));
+    let message_queue = MessageQueue::from_parts("probe-topic", "probe-broker", 0);
+    let active = Arc::new(AtomicUsize::new(0));
+    let peak = Arc::new(AtomicUsize::new(0));
+    let changed = Arc::new(tokio::sync::Notify::new());
+    let releases = Arc::new(Semaphore::new(0));
+    let pulls = (0..queues)
+        .map(|_| {
+            let consumer = Arc::clone(&consumer);
+            let message_queue = message_queue.clone();
+            let active = Arc::clone(&active);
+            let peak = Arc::clone(&peak);
+            let changed = Arc::clone(&changed);
+            let releases = Arc::clone(&releases);
+            async move {
+                let _permit = consumer
+                    .acquire_pull_permit(&message_queue, None)
+                    .await
+                    .expect("probe limiter should stay open")
+                    .expect("unassigned probe acquisition returns a permit");
+                let now_active = active.fetch_add(1, Ordering::AcqRel) + 1;
+                let mut observed = peak.load(Ordering::Acquire);
+                while now_active > observed {
+                    match peak.compare_exchange_weak(observed, now_active, Ordering::AcqRel, Ordering::Acquire) {
+                        Ok(_) => break,
+                        Err(current) => observed = current,
+                    }
+                }
+                changed.notify_waiters();
+                let release = releases.acquire().await.expect("probe release semaphore stays open");
+                release.forget();
+                active.fetch_sub(1, Ordering::AcqRel);
+                changed.notify_waiters();
+            }
+        })
+        .collect::<FuturesUnordered<_>>();
+
+    let drive = async move {
+        let mut pulls = pulls;
+        while pulls.next().await.is_some() {}
+    };
+    let control = async {
+        loop {
+            let notified = changed.notified();
+            if peak.load(Ordering::Acquire) >= configured_limit {
+                break;
+            }
+            notified.await;
+        }
+        releases.add_permits(queues);
+    };
+    tokio::join!(drive, control);
+
+    let held = futures::future::join_all((0..configured_limit).map(|_| {
+        let consumer = Arc::clone(&consumer);
+        let message_queue = message_queue.clone();
+        async move {
+            consumer
+                .acquire_pull_permit(&message_queue, None)
+                .await
+                .expect("probe limiter should stay open")
+                .expect("probe should acquire configured permits")
+        }
+    }))
+    .await;
+    let entry = consumer
+        .assignment_registry
+        .ensure(message_queue.clone())
+        .await
+        .expect("probe assignment registry should be open");
+    let assignment = AssignmentPullContext { entry, generation: 1 };
+    let waiting = consumer.acquire_pull_permit(&message_queue, Some(&assignment));
+    tokio::pin!(waiting);
+    tokio::select! {
+        result = &mut waiting => panic!("probe waiter completed before assignment cancellation: {result:?}"),
+        () = tokio::task::yield_now() => {}
+    }
+    consumer.assignment_registry.remove(&message_queue).await;
+    let cancelled_waiter_released = waiting.await.ok().flatten().is_none();
+    drop(held);
+
+    consumer.set_service_state(ServiceState::Running);
+    let runtime_mutation_rejected = consumer.try_set_pull_thread_nums(configured_limit + 1).is_err();
+
+    LitePullConcurrencyContractProbe {
+        configured_limit,
+        queues,
+        peak_inflight: peak.load(Ordering::Acquire),
+        cancelled_waiter_released,
+        runtime_mutation_rejected,
     }
 }
 
@@ -3479,6 +3682,99 @@ mod tests {
             "Long polling mode, the consumer consumerTimeoutMillisWhenSuspend must greater than \
              brokerSuspendMaxTimeMillis"
         ));
+    }
+
+    #[test]
+    fn check_config_rejects_zero_pull_thread_nums() {
+        let impl_ = DefaultLitePullConsumerImpl::new(
+            crate::runtime::test_client_runtime("lite-pull-zero-concurrency-test"),
+            Arc::new(ClientConfig::default()),
+            Arc::new(LitePullConsumerConfig {
+                consumer_group: CheetahString::from_static_str("lite_pull_zero_concurrency_group"),
+                pull_thread_nums: 0,
+                ..Default::default()
+            }),
+        );
+
+        let error = impl_
+            .check_config()
+            .expect_err("zero concurrent pull RPCs cannot make progress");
+
+        assert!(error.to_string().contains("pullThreadNums must be greater than 0"));
+    }
+
+    #[tokio::test]
+    async fn pull_concurrency_permit_is_bounded_and_assignment_cancellation_aware() {
+        let impl_ = DefaultLitePullConsumerImpl::new(
+            crate::runtime::test_client_runtime("lite-pull-concurrency-permit-test"),
+            Arc::new(ClientConfig::default()),
+            Arc::new(LitePullConsumerConfig {
+                consumer_group: CheetahString::from_static_str("lite_pull_concurrency_permit_group"),
+                pull_thread_nums: 2,
+                ..Default::default()
+            }),
+        );
+        let mq = MessageQueue::from_parts("topic", "broker", 0);
+        let entry = impl_
+            .assignment_registry
+            .ensure(mq.clone())
+            .await
+            .expect("assignment registry should be open");
+        let first = impl_
+            .acquire_pull_permit(&mq, None)
+            .await
+            .expect("first permit acquisition should succeed")
+            .expect("first permit should exist");
+        let second = impl_
+            .acquire_pull_permit(&mq, None)
+            .await
+            .expect("second permit acquisition should succeed")
+            .expect("second permit should exist");
+        assert_eq!(impl_.pull_concurrency_limiter.load().available_permits(), 0);
+
+        let assignment = AssignmentPullContext { entry, generation: 1 };
+        let waiting = impl_.acquire_pull_permit(&mq, Some(&assignment));
+        tokio::pin!(waiting);
+        tokio::select! {
+            result = &mut waiting => panic!("third acquisition completed before capacity or cancellation: {result:?}"),
+            () = tokio::task::yield_now() => {}
+        }
+
+        impl_.assignment_registry.remove(&mq).await;
+        assert!(waiting
+            .await
+            .expect("assignment cancellation is not an acquisition error")
+            .is_none());
+        drop(first);
+        drop(second);
+        assert_eq!(impl_.pull_concurrency_limiter.load().available_permits(), 2);
+    }
+
+    #[test]
+    fn pull_thread_nums_updates_before_start_and_rejects_runtime_mutation() {
+        let impl_ = DefaultLitePullConsumerImpl::new(
+            crate::runtime::test_client_runtime("lite-pull-concurrency-config-test"),
+            Arc::new(ClientConfig::default()),
+            Arc::new(LitePullConsumerConfig {
+                consumer_group: CheetahString::from_static_str("lite_pull_concurrency_config_group"),
+                ..Default::default()
+            }),
+        );
+
+        impl_
+            .try_set_pull_thread_nums(3)
+            .expect("pre-start concurrency update should succeed");
+        assert_eq!(impl_.pull_thread_nums(), 3);
+        assert_eq!(impl_.pull_concurrency_limiter.load().available_permits(), 3);
+
+        impl_.set_service_state(ServiceState::Running);
+        let error = impl_
+            .try_set_pull_thread_nums(4)
+            .expect_err("running concurrency update should be rejected");
+        assert!(error
+            .to_string()
+            .contains("pullThreadNums can not be changed after the lite pull consumer has started"));
+        assert_eq!(impl_.pull_thread_nums(), 3);
     }
 
     #[test]
@@ -4410,7 +4706,7 @@ mod tests {
         process_queue.put_message(&queued_messages).await;
 
         let delay = impl_
-            .pull_inner(&mq, &process_queue)
+            .pull_inner(&mq, &process_queue, None)
             .await
             .expect("flow control should return a delay without broker access");
 
