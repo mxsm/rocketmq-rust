@@ -19,6 +19,13 @@ use super::request_builder::notification_request;
 use super::response_decoder::notify_result_from_response;
 use super::*;
 
+fn pop_background_task_cancelled(actual: impl Into<String>) -> RocketMQError {
+    RocketMQError::ClientInvalidState {
+        expected: "active client POP request",
+        actual: actual.into(),
+    }
+}
+
 pub struct ConsumerClient<'a> {
     api: &'a MQClientAPIImpl,
 }
@@ -37,6 +44,66 @@ impl ConsumerClient<'_> {
 }
 
 impl MQClientAPIImpl {
+    pub(super) fn spawn_pop_callback_task<PC, F>(
+        service_context: &ChildServiceContext,
+        tracker: &TaskTracker,
+        shutdown_token: &CancellationToken,
+        request: F,
+        pop_callback: PC,
+    ) where
+        PC: PopCallback + 'static,
+        F: Future<Output = rocketmq_error::RocketMQResult<PopResult>> + Send + 'static,
+    {
+        let callback = Arc::new(std::sync::Mutex::new(Some(pop_callback)));
+        if shutdown_token.is_cancelled() {
+            if let Some(mut callback) = callback
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take()
+            {
+                callback.on_error(pop_background_task_cancelled("client API is shutting down"));
+            }
+            return;
+        }
+
+        let task_callback = callback.clone();
+        let shutdown_token = shutdown_token.clone();
+        let tracked_task = tracker.track_future(async move {
+            let outcome = tokio::select! {
+                biased;
+                _ = shutdown_token.cancelled() => {
+                    Err(pop_background_task_cancelled("client API shutdown cancelled the POP request"))
+                }
+                outcome = request => outcome,
+            };
+            let callback = task_callback
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take();
+            let Some(mut callback) = callback else {
+                return;
+            };
+            match outcome {
+                Ok(pop_result) => callback.on_success(pop_result).await,
+                Err(error) => callback.on_error(error),
+            }
+        });
+
+        if let Err(error) =
+            spawn_client_task_with_context(service_context, "rocketmq-client-pop-message-async", tracked_task)
+        {
+            if let Some(mut callback) = callback
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take()
+            {
+                callback.on_error(pop_background_task_cancelled(format!(
+                    "failed to spawn client POP task: {error}"
+                )));
+            }
+        }
+    }
+
     #[must_use]
     pub fn consumer_client(&self) -> ConsumerClient<'_> {
         ConsumerClient { api: self }
@@ -1105,75 +1172,61 @@ impl MQClientAPIImpl {
     }
 
     pub async fn pop_message_async<PC>(
-        &self,
+        self: Arc<Self>,
         broker_name: &CheetahString,
         addr: &CheetahString,
         request_header: PopMessageRequestHeader,
         timeout_millis: u64,
-        mut pop_callback: PC,
+        pop_callback: PC,
     ) -> rocketmq_error::RocketMQResult<()>
     where
         PC: PopCallback + 'static,
     {
+        let service_context = self.service_context.clone();
+        let tracker = self.background_tasks.clone();
+        let shutdown_token = self.background_shutdown.clone();
+        let broker_name = broker_name.clone();
+        let addr = addr.clone();
         let topic = request_header.topic.clone();
         let order = request_header.order.unwrap_or_default();
         let request = RemotingCommand::create_request_command(RequestCode::PopMessage, request_header);
-        match self
-            .remoting_client
-            .invoke_request(Some(addr), request, timeout_millis)
-            .await
-        {
-            Ok(response) => {
-                let result = self.process_pop_response(broker_name, response, &topic, order);
-                match result {
-                    Ok(pop_result) => {
-                        pop_callback.on_success(pop_result).await;
-                    }
-                    Err(e) => {
-                        pop_callback.on_error(e);
-                    }
-                }
-            }
-            Err(e) => {
-                pop_callback.on_error(e);
-            }
-        }
+        let request_task = async move {
+            let response = self
+                .remoting_client
+                .invoke_request(Some(&addr), request, timeout_millis)
+                .await?;
+            self.process_pop_response(&broker_name, response, &topic, order)
+        };
+        Self::spawn_pop_callback_task(&service_context, &tracker, &shutdown_token, request_task, pop_callback);
         Ok(())
     }
 
     pub async fn pop_lite_message_async<PC>(
-        &self,
+        self: Arc<Self>,
         broker_name: &CheetahString,
         addr: &CheetahString,
         request_header: PopLiteMessageRequestHeader,
         timeout_millis: u64,
-        mut pop_callback: PC,
+        pop_callback: PC,
     ) -> rocketmq_error::RocketMQResult<()>
     where
         PC: PopCallback + 'static,
     {
+        let service_context = self.service_context.clone();
+        let tracker = self.background_tasks.clone();
+        let shutdown_token = self.background_shutdown.clone();
+        let broker_name = broker_name.clone();
+        let addr = addr.clone();
         let bind_topic = request_header.topic.clone();
         let request = RemotingCommand::create_request_command(RequestCode::PopLiteMessage, request_header);
-        match self
-            .remoting_client
-            .invoke_request(Some(addr), request, timeout_millis)
-            .await
-        {
-            Ok(response) => {
-                let result = self.process_pop_lite_response(broker_name, response, &bind_topic);
-                match result {
-                    Ok(pop_result) => {
-                        pop_callback.on_success(pop_result).await;
-                    }
-                    Err(e) => {
-                        pop_callback.on_error(e);
-                    }
-                }
-            }
-            Err(e) => {
-                pop_callback.on_error(e);
-            }
-        }
+        let request_task = async move {
+            let response = self
+                .remoting_client
+                .invoke_request(Some(&addr), request, timeout_millis)
+                .await?;
+            self.process_pop_lite_response(&broker_name, response, &bind_topic)
+        };
+        Self::spawn_pop_callback_task(&service_context, &tracker, &shutdown_token, request_task, pop_callback);
         Ok(())
     }
 
