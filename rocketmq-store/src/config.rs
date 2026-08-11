@@ -14,7 +14,6 @@
 
 pub mod flush_disk_type;
 pub mod message_store_config;
-pub mod store_compatibility_profile;
 pub(crate) mod store_path_config_helper;
 pub mod store_runtime_config;
 pub mod timer_store_config;

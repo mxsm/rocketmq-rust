@@ -46,7 +46,6 @@ defaultTopicQueueNums = 8
 timerWheelEnable = false
 
 [store]
-compatibilityProfile = "JAVA_5_5"
 storePathRootDir = "/opt/data/rocketmq/store"
 brokerRole = "ASYNC_MASTER"
 flushDiskType = "ASYNC_FLUSH"

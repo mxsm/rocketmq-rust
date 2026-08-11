@@ -33,7 +33,6 @@ use super::timer_store_config::TimerStoreConfig;
 
 use crate::base::store_enum::StoreType;
 use crate::config::flush_disk_type::FlushDiskType;
-use crate::config::store_compatibility_profile::StoreCompatibilityProfile;
 use crate::queue::single_consume_queue::CQ_STORE_UNIT_SIZE;
 
 static USER_HOME: LazyLock<PathBuf> = LazyLock::new(|| dirs::home_dir().unwrap());
@@ -224,6 +223,10 @@ mod defaults {
         200
     }
 
+    pub fn max_recovery_commit_log_files() -> usize {
+        30
+    }
+
     pub fn recovery_mode() -> RecoveryMode {
         RecoveryMode::default()
     }
@@ -288,6 +291,18 @@ mod defaults {
         4
     }
 
+    pub fn flush_commit_log_least_pages() -> i32 {
+        4
+    }
+
+    pub fn flush_consume_queue_least_pages() -> usize {
+        2
+    }
+
+    pub fn flush_consume_queue_thorough_interval() -> usize {
+        60_000
+    }
+
     pub fn flush_commit_log_thorough_interval() -> i32 {
         1000 * 10 // 10 seconds
     }
@@ -337,7 +352,15 @@ mod defaults {
     }
 
     pub fn flush_disk_type() -> FlushDiskType {
-        FlushDiskType::SyncFlush
+        FlushDiskType::AsyncFlush
+    }
+
+    pub fn slave_timeout() -> usize {
+        3_000
+    }
+
+    pub fn transient_store_pool_size() -> usize {
+        5
     }
 
     pub fn sync_flush_timeout() -> u64 {
@@ -382,6 +405,14 @@ mod defaults {
 
     pub fn in_sync_replicas() -> i32 {
         1
+    }
+
+    pub fn min_in_sync_replicas() -> usize {
+        1
+    }
+
+    pub fn ha_max_time_slave_not_catchup() -> usize {
+        15_000
     }
 
     pub fn topic_queue_lock_num() -> usize {
@@ -643,9 +674,6 @@ pub fn bounded_local_file_consume_queue_recovery_parallelism(
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MessageStoreConfig {
-    #[serde(default)]
-    pub compatibility_profile: StoreCompatibilityProfile,
-
     #[serde(default = "defaults::store_path_root_dir")]
     pub store_path_root_dir: CheetahString,
 
@@ -860,7 +888,7 @@ pub struct MessageStoreConfig {
     #[serde(default = "defaults::commit_interval_commit_log")]
     pub commit_interval_commit_log: u64,
 
-    #[serde(default)]
+    #[serde(default = "defaults::max_recovery_commit_log_files")]
     pub max_recovery_commit_log_files: usize,
 
     #[serde(default = "defaults::recovery_mode")]
@@ -917,7 +945,7 @@ pub struct MessageStoreConfig {
     #[serde(default)]
     pub check_crc_on_recover: bool,
 
-    #[serde(default)]
+    #[serde(default = "defaults::flush_commit_log_least_pages")]
     pub flush_commit_log_least_pages: i32,
 
     #[serde(default = "defaults::commit_commit_log_least_pages")]
@@ -926,7 +954,7 @@ pub struct MessageStoreConfig {
     #[serde(default)]
     pub flush_least_pages_when_warm_mapped_file: usize,
 
-    #[serde(default)]
+    #[serde(default = "defaults::flush_consume_queue_least_pages")]
     pub flush_consume_queue_least_pages: usize,
 
     #[serde(default = "defaults::flush_commit_log_thorough_interval")]
@@ -935,7 +963,7 @@ pub struct MessageStoreConfig {
     #[serde(default = "defaults::commit_commit_log_thorough_interval")]
     pub commit_commit_log_thorough_interval: u64,
 
-    #[serde(default)]
+    #[serde(default = "defaults::flush_consume_queue_thorough_interval")]
     pub flush_consume_queue_thorough_interval: usize,
 
     #[serde(default = "defaults::max_transfer_bytes_on_message_in_memory")]
@@ -1001,7 +1029,7 @@ pub struct MessageStoreConfig {
     #[serde(default)]
     pub put_message_timeout: usize,
 
-    #[serde(default)]
+    #[serde(default = "defaults::slave_timeout")]
     pub slave_timeout: usize,
 
     #[serde(default = "defaults::message_delay_level")]
@@ -1085,7 +1113,7 @@ pub struct MessageStoreConfig {
     #[serde(default)]
     pub transient_store_pool_enable: bool,
 
-    #[serde(default)]
+    #[serde(default = "defaults::transient_store_pool_size")]
     pub transient_store_pool_size: usize,
 
     #[serde(default)]
@@ -1224,7 +1252,7 @@ pub struct MessageStoreConfig {
     #[serde(default = "defaults::in_sync_replicas")]
     pub in_sync_replicas: i32,
 
-    #[serde(default)]
+    #[serde(default = "defaults::min_in_sync_replicas")]
     pub min_in_sync_replicas: usize,
 
     #[serde(default)]
@@ -1239,7 +1267,7 @@ pub struct MessageStoreConfig {
     #[serde(default = "defaults::topic_queue_lock_num")]
     pub max_ha_transfer_byte_in_second: usize,
 
-    #[serde(default)]
+    #[serde(default = "defaults::ha_max_time_slave_not_catchup")]
     pub ha_max_time_slave_not_catchup: usize,
 
     #[serde(default)]
@@ -1387,7 +1415,6 @@ impl Default for MessageStoreConfig {
     fn default() -> Self {
         let store_path_root_dir = USER_HOME.clone().join("store").to_string_lossy().to_string();
         Self {
-            compatibility_profile: StoreCompatibilityProfile::LegacyRust,
             store_path_root_dir: store_path_root_dir.into(),
             store_path_commit_log: None,
             store_path_dledger_commit_log: None,
@@ -1461,7 +1488,7 @@ impl Default for MessageStoreConfig {
             bit_map_length_consume_queue_ext: 64,
             flush_interval_commit_log: 500,
             commit_interval_commit_log: 200,
-            max_recovery_commit_log_files: 0,
+            max_recovery_commit_log_files: 30,
             recovery_mode: RecoveryMode::default(),
             disk_space_warning_level_ratio: 90,
             disk_space_clean_forcibly_ratio: 85,
@@ -1480,13 +1507,13 @@ impl Default for MessageStoreConfig {
             put_msg_index_hight_water: 600000,
             max_message_size: 1024 * 1024 * 4,
             check_crc_on_recover: false,
-            flush_commit_log_least_pages: 0,
+            flush_commit_log_least_pages: 4,
             commit_commit_log_least_pages: 4,
             flush_least_pages_when_warm_mapped_file: 0,
-            flush_consume_queue_least_pages: 0,
+            flush_consume_queue_least_pages: 2,
             flush_commit_log_thorough_interval: 1000 * 10,
             commit_commit_log_thorough_interval: 200,
-            flush_consume_queue_thorough_interval: 0,
+            flush_consume_queue_thorough_interval: 60_000,
             max_transfer_bytes_on_message_in_memory: 1024 * 256,
             max_transfer_count_on_message_in_memory: 32,
             max_transfer_bytes_on_message_in_disk: 1024 * 64,
@@ -1505,10 +1532,10 @@ impl Default for MessageStoreConfig {
             ha_master_address: None,
             ha_max_gap_not_in_sync: 0,
             broker_role: Default::default(),
-            flush_disk_type: FlushDiskType::SyncFlush,
+            flush_disk_type: FlushDiskType::AsyncFlush,
             sync_flush_timeout: 1000 * 5,
             put_message_timeout: 0,
-            slave_timeout: 0,
+            slave_timeout: 3_000,
             message_delay_level: "1s 5s 10s 30s 1m 2m 3m 4m 5m 6m 7m 8m 9m 10m 20m 30m 1h 2h".to_string(),
             flush_delay_offset_interval: 10_000,
             clean_file_forcibly_enable: true,
@@ -1534,7 +1561,7 @@ impl Default for MessageStoreConfig {
             os_page_cache_busy_timeout_mills: 1000,
             default_query_max_num: 32,
             transient_store_pool_enable: false,
-            transient_store_pool_size: 0,
+            transient_store_pool_size: 5,
             fast_fail_if_no_buffer_in_store_pool: false,
             enable_dledger_commit_log: false,
             dledger_group: None,
@@ -1579,12 +1606,12 @@ impl Default for MessageStoreConfig {
             pull_batch_max_message_count: 0,
             total_replicas: 1,
             in_sync_replicas: 1,
-            min_in_sync_replicas: 0,
+            min_in_sync_replicas: 1,
             all_ack_in_sync_state_set: false,
             enable_auto_in_sync_replicas: false,
             ha_flow_control_enable: false,
             max_ha_transfer_byte_in_second: 100 * 1024 * 1024,
-            ha_max_time_slave_not_catchup: 0,
+            ha_max_time_slave_not_catchup: 15_000,
             sync_master_flush_offset_when_startup: false,
             max_checksum_range: defaults::max_checksum_range(),
             replicas_per_disk_partition: 0,
@@ -1636,35 +1663,6 @@ impl Default for MessageStoreConfig {
 }
 
 impl MessageStoreConfig {
-    /// Builds Store defaults for an explicit compatibility profile.
-    #[must_use]
-    pub fn for_compatibility_profile(profile: StoreCompatibilityProfile) -> Self {
-        let mut config = Self {
-            compatibility_profile: profile,
-            ..Self::default()
-        };
-        match profile {
-            StoreCompatibilityProfile::LegacyRust => {}
-            StoreCompatibilityProfile::Java55 | StoreCompatibilityProfile::DurabilityStrict => {
-                config.max_recovery_commit_log_files = 30;
-                config.flush_commit_log_least_pages = 4;
-                config.commit_commit_log_least_pages = 4;
-                config.flush_consume_queue_least_pages = 2;
-                config.flush_consume_queue_thorough_interval = 60_000;
-                config.flush_disk_type = FlushDiskType::AsyncFlush;
-                config.slave_timeout = 3_000;
-                config.transient_store_pool_size = 5;
-                config.min_in_sync_replicas = 1;
-                config.ha_max_time_slave_not_catchup = 15_000;
-            }
-        }
-        if profile == StoreCompatibilityProfile::DurabilityStrict {
-            config.flush_disk_type = FlushDiskType::SyncFlush;
-            config.all_ack_in_sync_state_set = true;
-        }
-        config
-    }
-
     /// Returns the validated Java-compatible timer admission policy.
     ///
     /// # Errors
@@ -1855,10 +1853,6 @@ impl MessageStoreConfig {
 
     pub fn get_properties(&self) -> HashMap<CheetahString, CheetahString> {
         let mut properties: HashMap<String, String> = HashMap::new();
-        properties.insert(
-            "compatibilityProfile".to_string(),
-            self.compatibility_profile.to_string(),
-        );
         properties.insert(
             "storePathRootDir".to_string(),
             self.store_path_root_dir.clone().to_string(),
@@ -2613,7 +2607,6 @@ mod tests {
     use super::LinuxTransferEngine;
     use super::MessageStoreConfig;
     use super::RecoveryMode;
-    use super::StoreCompatibilityProfile;
     use super::LOCAL_FILE_CONSUME_QUEUE_RECOVERY_PARALLELISM_SAFETY_CAP;
 
     #[test]
@@ -2626,16 +2619,8 @@ mod tests {
     }
 
     #[test]
-    fn legacy_profile_preserves_historical_defaults() {
-        let config = MessageStoreConfig::for_compatibility_profile(StoreCompatibilityProfile::LegacyRust);
-
-        assert_eq!(config, MessageStoreConfig::default());
-        assert_eq!(config.get_properties()["compatibilityProfile"], "LEGACY_RUST");
-    }
-
-    #[test]
-    fn java55_profile_matches_store_defaults_contract() {
-        let config = MessageStoreConfig::for_compatibility_profile(StoreCompatibilityProfile::Java55);
+    fn production_defaults_match_the_store_contract() {
+        let config = MessageStoreConfig::default();
 
         assert_eq!(config.max_recovery_commit_log_files, 30);
         assert_eq!(config.flush_commit_log_least_pages, 4);
@@ -2648,16 +2633,6 @@ mod tests {
         assert_eq!(config.min_in_sync_replicas, 1);
         assert_eq!(config.ha_max_time_slave_not_catchup, 15_000);
         assert!(!config.all_ack_in_sync_state_set);
-    }
-
-    #[test]
-    fn strict_profile_adds_sync_flush_and_all_ack() {
-        let config = MessageStoreConfig::for_compatibility_profile(StoreCompatibilityProfile::DurabilityStrict);
-
-        assert_eq!(config.flush_disk_type, FlushDiskType::SyncFlush);
-        assert!(config.all_ack_in_sync_state_set);
-        assert_eq!(config.slave_timeout, 3_000);
-        assert_eq!(config.min_in_sync_replicas, 1);
     }
 
     #[test]

@@ -23,7 +23,6 @@ brokerClusterName = "DefaultCluster-mxsm"
 brokerId = 1
 
 [store]
-compatibilityProfile = "JAVA_5_5"
 brokerRole = "SLAVE"
 flushDiskType = "ASYNC_FLUSH"
 deleteWhen = 4

@@ -414,7 +414,6 @@ fn print_important_broker_config(config: &BrokerConfig) {
 /// Print important message store configuration items
 fn print_important_message_store_config(config: &MessageStoreConfig) {
     println!("  MessageStoreConfig:");
-    println!("    compatibilityProfile: {}", config.compatibility_profile);
     println!("    storePathRootDir: {}", config.store_path_root_dir);
     println!("    storePathCommitLog: {:?}", config.store_path_commit_log);
     println!("    deleteWhen: {}", config.delete_when);
