@@ -14,7 +14,6 @@
 
 use std::collections::HashMap;
 
-use bytes::Bytes;
 use cheetah_string::CheetahString;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_single::Message;
@@ -24,7 +23,7 @@ use rocketmq_proxy_core::ProxyMessageExt;
 pub(crate) fn message_to_core(message: &Message) -> ProxyMessage {
     let mut core = ProxyMessage::default();
     core.set_topic(message.topic().to_string());
-    core.set_body(message.body().map(|body| body.to_vec()));
+    core.set_body_bytes(message.body());
     core.set_flag(message.flag());
     core.set_properties(
         message
@@ -69,7 +68,7 @@ pub(crate) fn message_from_core(message: &ProxyMessage) -> Message {
             .map(|(key, value)| (CheetahString::from(key.as_str()), CheetahString::from(value.as_str())))
             .collect::<HashMap<_, _>>(),
     );
-    facade.set_body(message.body().map(Bytes::copy_from_slice));
+    facade.set_body(message.body_bytes().cloned());
     *facade.transaction_id_mut() = message.transaction_id().map(CheetahString::from);
     facade
 }

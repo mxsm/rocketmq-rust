@@ -15,18 +15,20 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 
+use bytes::Bytes;
+
 /// Provider-neutral message payload passed across the Proxy Core boundary.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProxyMessage {
     topic: String,
     flag: i32,
     properties: HashMap<String, String>,
-    body: Option<Vec<u8>>,
+    body: Option<Bytes>,
     transaction_id: Option<String>,
 }
 
 impl ProxyMessage {
-    pub fn new(topic: impl Into<String>, body: impl Into<Vec<u8>>) -> Self {
+    pub fn new(topic: impl Into<String>, body: impl Into<Bytes>) -> Self {
         Self {
             topic: topic.into(),
             body: Some(body.into()),
@@ -74,8 +76,35 @@ impl ProxyMessage {
         self.body.as_deref()
     }
 
+    pub fn body_bytes(&self) -> Option<&Bytes> {
+        self.body.as_ref()
+    }
+
     pub fn set_body(&mut self, body: Option<Vec<u8>>) {
+        self.body = body.map(Bytes::from);
+    }
+
+    pub fn set_body_bytes(&mut self, body: Option<Bytes>) {
         self.body = body;
+    }
+
+    pub fn take_body(&mut self) -> Option<Bytes> {
+        self.body.take()
+    }
+
+    pub(crate) fn retained_bytes(&self) -> usize {
+        let property_table_bytes = self
+            .properties
+            .capacity()
+            .saturating_mul(std::mem::size_of::<(String, String)>().saturating_add(2 * std::mem::size_of::<usize>()));
+        self.properties.iter().fold(
+            std::mem::size_of_val(self)
+                .saturating_add(self.topic.capacity())
+                .saturating_add(self.body.as_ref().map_or(0, Bytes::len))
+                .saturating_add(self.transaction_id.as_ref().map_or(0, String::capacity))
+                .saturating_add(property_table_bytes),
+            |retained, (key, value)| retained.saturating_add(key.capacity()).saturating_add(value.capacity()),
+        )
     }
 
     pub fn transaction_id(&self) -> Option<&str> {
@@ -136,6 +165,10 @@ impl ProxyMessageExt {
 
     pub fn body(&self) -> Option<&[u8]> {
         self.message.body()
+    }
+
+    pub fn body_bytes(&self) -> Option<&Bytes> {
+        self.message.body_bytes()
     }
 
     pub fn properties(&self) -> &HashMap<String, String> {
@@ -204,5 +237,12 @@ impl ProxyMessageExt {
 
     pub fn prepared_transaction_offset(&self) -> i64 {
         self.prepared_transaction_offset
+    }
+
+    pub(crate) fn retained_bytes(&self) -> usize {
+        std::mem::size_of_val(self)
+            .saturating_add(self.message.retained_bytes())
+            .saturating_add(self.broker_name.capacity())
+            .saturating_add(self.msg_id.capacity())
     }
 }

@@ -21,6 +21,7 @@ use std::time::Duration;
 
 use rocketmq_runtime::BudgetCapacity;
 use rocketmq_runtime::BudgetLimit;
+use rocketmq_runtime::BudgetSnapshot;
 use rocketmq_runtime::BudgetedQueue;
 use rocketmq_runtime::FullPolicy;
 use rocketmq_runtime::ProcessMemoryLimit;
@@ -40,6 +41,7 @@ pub struct ExecutionGuards {
     route: ResourceBudget,
     producer: ResourceBudget,
     consumer: ResourceBudget,
+    consumer_response: ResourceBudget,
     client_manager: ResourceBudget,
     telemetry_parent: ResourceBudget,
     telemetry_limits: TelemetryQueueLimits,
@@ -66,6 +68,16 @@ impl ExecutionGuards {
     }
 
     pub fn try_from_config(config: &RuntimeConfig) -> ProxyResult<Self> {
+        if config.consumer_response_permits == 0 {
+            return Err(ProxyError::invalid_metadata(
+                "consumerResponsePermits must be greater than zero",
+            ));
+        }
+        if config.consumer_response_bytes == 0 {
+            return Err(ProxyError::invalid_metadata(
+                "consumerResponseBytes must be greater than zero",
+            ));
+        }
         let process_limit = if config.process_memory_limit_bytes == 0 {
             ProcessMemoryLimit::detect()
         } else {
@@ -77,11 +89,16 @@ impl ExecutionGuards {
             .map_err(|error| ProxyError::invalid_metadata(error.to_string()))?;
         let managed_bytes = usize::try_from(managed_bytes).unwrap_or(usize::MAX);
         let telemetry_bytes = config.telemetry_queue_bytes.min(managed_bytes.saturating_sub(1)).max(1);
+        let consumer_response_bytes = config
+            .consumer_response_bytes
+            .min(managed_bytes.saturating_sub(1))
+            .max(1);
         let control_reserve_bytes = (managed_bytes / 16).max(1).min(telemetry_bytes);
         let data_permits = config
             .route_permits
             .saturating_add(config.producer_permits)
-            .saturating_add(config.consumer_permits);
+            .saturating_add(config.consumer_permits)
+            .saturating_add(config.consumer_response_permits);
         let control_permits = config
             .client_manager_permits
             .saturating_add(config.telemetry_queue_capacity);
@@ -115,6 +132,13 @@ impl ExecutionGuards {
             config.consumer_rate_per_second,
             managed_bytes,
         )?;
+        let consumer_response = execution_budget(
+            &root,
+            "consumer-response",
+            config.consumer_response_permits,
+            0,
+            consumer_response_bytes,
+        )?;
         let client_manager = execution_budget(
             &root,
             "client-manager",
@@ -144,6 +168,7 @@ impl ExecutionGuards {
             route,
             producer,
             consumer,
+            consumer_response,
             client_manager,
             telemetry_parent,
             telemetry_limits,
@@ -160,6 +185,15 @@ impl ExecutionGuards {
 
     pub fn try_consumer(&self, retained_bytes: usize) -> ProxyResult<ResourcePermit> {
         self.acquire_data(&self.consumer, "consumer", retained_bytes)
+    }
+
+    pub fn try_consumer_response(&self, retained_bytes: usize) -> ProxyResult<ResourcePermit> {
+        self.acquire_data(&self.consumer_response, "consumer-response", retained_bytes.max(1))
+    }
+
+    #[must_use]
+    pub fn consumer_response_snapshot(&self) -> BudgetSnapshot {
+        self.consumer_response.snapshot()
     }
 
     pub fn try_client_manager(&self, retained_bytes: usize) -> ProxyResult<ResourcePermit> {
@@ -281,6 +315,42 @@ mod tests {
                 .try_route(1)
                 .expect("producer rate must not affect route admission"),
         );
+    }
+
+    #[test]
+    fn consumer_response_count_and_bytes_are_independent_hard_limits() {
+        let guards = ExecutionGuards::from_config(&RuntimeConfig {
+            consumer_response_permits: 1,
+            consumer_response_bytes: 4,
+            process_memory_limit_bytes: 64 * 1024 * 1024,
+            ..RuntimeConfig::default()
+        });
+
+        let permit = guards.try_consumer_response(4).expect("first response permit");
+        assert!(matches!(
+            guards.try_consumer_response(1),
+            Err(ProxyError::TooManyRequests { .. })
+        ));
+        drop(permit);
+        assert!(matches!(
+            guards.try_consumer_response(5),
+            Err(ProxyError::TooManyRequests { .. })
+        ));
+        drop(guards.try_consumer_response(4).expect("released response permit"));
+    }
+
+    #[test]
+    fn zero_consumer_response_limits_are_rejected() {
+        assert!(ExecutionGuards::try_from_config(&RuntimeConfig {
+            consumer_response_permits: 0,
+            ..RuntimeConfig::default()
+        })
+        .is_err());
+        assert!(ExecutionGuards::try_from_config(&RuntimeConfig {
+            consumer_response_bytes: 0,
+            ..RuntimeConfig::default()
+        })
+        .is_err());
     }
 
     #[test]

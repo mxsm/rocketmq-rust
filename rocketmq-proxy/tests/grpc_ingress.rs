@@ -509,7 +509,7 @@ async fn receive_message_integration_streams_delivery_message_and_status() {
     ));
     match responses[1].as_ref().expect("message item").content.as_ref() {
         Some(v2::receive_message_response::Content::Message(message)) => {
-            assert_eq!(message.body, b"integration-body");
+            assert_eq!(message.body.as_ref(), b"integration-body");
             assert_eq!(
                 message
                     .system_properties
@@ -944,7 +944,7 @@ fn send_message_request(topic: &str, message_id: &str) -> Request<v2::SendMessag
                 body_encoding: v2::Encoding::Identity as i32,
                 ..Default::default()
             }),
-            body: Bytes::from_static(b"integration-body").to_vec(),
+            body: Bytes::from_static(b"integration-body"),
         }],
     });
     request

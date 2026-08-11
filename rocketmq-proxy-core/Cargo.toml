@@ -41,6 +41,7 @@ thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 uuid.workspace = true
+bytes.workspace = true
 
 prost = "0.14"
 prost-types = "0.14"

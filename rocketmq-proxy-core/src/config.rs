@@ -121,6 +121,10 @@ pub struct RuntimeConfig {
     pub route_permits: usize,
     pub producer_permits: usize,
     pub consumer_permits: usize,
+    /// Maximum number of gRPC consumer response streams retaining broker results.
+    pub consumer_response_permits: usize,
+    /// Maximum retained bytes across gRPC consumer response streams.
+    pub consumer_response_bytes: usize,
     pub client_manager_permits: usize,
     /// Optional route request rate. Zero disables the QPS limiter.
     pub route_rate_per_second: u64,
@@ -144,6 +148,8 @@ impl Default for RuntimeConfig {
             route_permits: 512,
             producer_permits: 1024,
             consumer_permits: 1024,
+            consumer_response_permits: 1024,
+            consumer_response_bytes: 64 * 1024 * 1024,
             client_manager_permits: 512,
             route_rate_per_second: 0,
             producer_rate_per_second: 0,
@@ -245,6 +251,8 @@ mod tests {
         assert_eq!(default.producer_rate_per_second, 0);
         assert_eq!(default.consumer_rate_per_second, 0);
         assert_eq!(default.client_manager_rate_per_second, 0);
+        assert_eq!(default.consumer_response_permits, 1024);
+        assert_eq!(default.consumer_response_bytes, 64 * 1024 * 1024);
 
         let config = RuntimeConfig {
             route_permits: 7,
