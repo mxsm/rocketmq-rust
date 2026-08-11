@@ -49,6 +49,12 @@ use crate::hook::filter_message_hook::FilterMessageHook;
 use crate::implementation::communication_mode::CommunicationMode;
 use crate::implementation::mq_client_api_impl::MQClientAPIImpl;
 
+const POP_REQUEST_TIMEOUT_MARGIN_MILLIS: u64 = 500;
+
+fn pop_request_timeout_millis(poll_timeout_millis: u64) -> u64 {
+    poll_timeout_millis.saturating_add(POP_REQUEST_TIMEOUT_MARGIN_MILLIS)
+}
+
 fn is_inner_batch_message(message: &MessageExt) -> bool {
     MessageSysFlag::check(message.sys_flag, MessageSysFlag::INNER_BATCH_FLAG)
         && MessageSysFlag::check(message.sys_flag, MessageSysFlag::NEED_UNWRAP_FLAG)
@@ -475,7 +481,7 @@ impl PullAPIWrapper {
                     mq.broker_name(),
                     &find_broker_result.broker_addr,
                     request_header,
-                    timeout,
+                    pop_request_timeout_millis(timeout),
                     pop_callback,
                 )
                 .await
@@ -591,6 +597,12 @@ mod tests {
     use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 
     use super::*;
+
+    #[test]
+    fn pop_rpc_timeout_keeps_a_safety_margin_after_long_poll() {
+        assert_eq!(pop_request_timeout_millis(15_000), 15_500);
+        assert_eq!(pop_request_timeout_millis(u64::MAX), u64::MAX);
+    }
     use crate::base::client_config::ClientConfig;
     use crate::consumer::pull_result::PullResult;
 

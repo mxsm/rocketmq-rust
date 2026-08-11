@@ -93,6 +93,29 @@ impl Drop for DropFlag {
     }
 }
 
+struct RecordingPopCallback {
+    calls: Arc<AtomicUsize>,
+    errors: Arc<AtomicUsize>,
+    completed: Option<tokio::sync::oneshot::Sender<()>>,
+}
+
+impl PopCallback for RecordingPopCallback {
+    async fn on_success(&mut self, _pop_result: PopResult) {
+        self.calls.fetch_add(1, AtomicOrdering::AcqRel);
+        if let Some(completed) = self.completed.take() {
+            let _ = completed.send(());
+        }
+    }
+
+    fn on_error(&mut self, _error: RocketMQError) {
+        self.calls.fetch_add(1, AtomicOrdering::AcqRel);
+        self.errors.fetch_add(1, AtomicOrdering::AcqRel);
+        if let Some(completed) = self.completed.take() {
+            let _ = completed.send(());
+        }
+    }
+}
+
 struct CountingAfterSendHook {
     calls: Arc<AtomicUsize>,
 }
@@ -733,6 +756,75 @@ async fn api_background_task_shutdown_token_cancels_pending_task() {
         .expect("shutdown token should release pending API background task");
 
     assert!(dropped.load(AtomicOrdering::Acquire));
+}
+
+#[tokio::test]
+async fn pop_callback_task_does_not_wait_for_the_remoting_future() {
+    let tracker = TaskTracker::new();
+    let token = CancellationToken::new();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let errors = Arc::new(AtomicUsize::new(0));
+    let (release, released) = tokio::sync::oneshot::channel();
+    let (completed, completion) = tokio::sync::oneshot::channel();
+
+    MQClientAPIImpl::spawn_pop_callback_task(
+        &crate::runtime::test_service_context("client-pop-background-test").component("api-background"),
+        &tracker,
+        &token,
+        async move {
+            released.await.expect("test should release blocked POP request");
+            Ok(PopResult::default())
+        },
+        RecordingPopCallback {
+            calls: calls.clone(),
+            errors: errors.clone(),
+            completed: Some(completed),
+        },
+    );
+
+    assert_eq!(calls.load(AtomicOrdering::Acquire), 0);
+    release.send(()).expect("blocked POP request should still be alive");
+    tokio::time::timeout(Duration::from_secs(1), completion)
+        .await
+        .expect("POP callback should complete")
+        .expect("POP callback completion sender should remain alive");
+    tracker.close();
+    tracker.wait().await;
+
+    assert_eq!(calls.load(AtomicOrdering::Acquire), 1);
+    assert_eq!(errors.load(AtomicOrdering::Acquire), 0);
+}
+
+#[tokio::test]
+async fn pop_callback_task_completes_once_when_shutdown_cancels_the_request() {
+    let tracker = TaskTracker::new();
+    let token = CancellationToken::new();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let errors = Arc::new(AtomicUsize::new(0));
+    let (completed, completion) = tokio::sync::oneshot::channel();
+
+    MQClientAPIImpl::spawn_pop_callback_task(
+        &crate::runtime::test_service_context("client-pop-cancel-test").component("api-background"),
+        &tracker,
+        &token,
+        pending::<rocketmq_error::RocketMQResult<PopResult>>(),
+        RecordingPopCallback {
+            calls: calls.clone(),
+            errors: errors.clone(),
+            completed: Some(completed),
+        },
+    );
+    token.cancel();
+
+    tokio::time::timeout(Duration::from_secs(1), completion)
+        .await
+        .expect("cancelled POP callback should complete")
+        .expect("cancelled POP callback sender should remain alive");
+    tracker.close();
+    tracker.wait().await;
+
+    assert_eq!(calls.load(AtomicOrdering::Acquire), 1);
+    assert_eq!(errors.load(AtomicOrdering::Acquire), 1);
 }
 
 #[cfg(feature = "admin-mutation")]

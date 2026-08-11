@@ -69,6 +69,9 @@ const DEFAULT_MAX_PULL_SHARDS: usize = 8;
 /// Default shutdown timeout in milliseconds
 const DEFAULT_SHUTDOWN_TIMEOUT_MS: u64 = 1000;
 
+/// Bounded delay before retrying a POP scheduler admission rejected by the immediate queue.
+const POP_REQUEUE_DELAY_MS: u64 = 10;
+
 type BoxedMessageRequest = Box<dyn MessageRequest + Send + 'static>;
 type MessageRequestQueue = BudgetedQueue<BoxedMessageRequest>;
 
@@ -333,9 +336,9 @@ impl DelayedSchedulePayload {
         }
     }
 
-    async fn execute(self, stopped: &AtomicBool) {
+    async fn execute(self, stopped: &AtomicBool) -> Option<Self> {
         if stopped.load(Ordering::Acquire) {
-            return;
+            return None;
         }
 
         match self {
@@ -345,16 +348,35 @@ impl DelayedSchedulePayload {
                 } else {
                     warn!("PullMessageService not started");
                 }
+                None
             }
             Self::Pop { request, tx } => {
                 if let Some(tx) = tx {
                     let retained_bytes = request.retained_bytes();
-                    if let Err(error) = tx.try_push_data(Box::new(request), retained_bytes) {
-                        warn!("Failed to send pop request: {:?}", error);
+                    match tx.try_push_data(Box::new(request), retained_bytes) {
+                        Ok(_) => None,
+                        Err(error) => {
+                            warn!("POP request queue rejected a delayed request; retrying: {:?}", error);
+                            match error.into_item().into_any().downcast::<PopRequest>() {
+                                Ok(request) => Some(Self::Pop {
+                                    request: *request,
+                                    tx: Some(tx),
+                                }),
+                                Err(_) => {
+                                    error!("POP request queue returned an unexpected request type");
+                                    None
+                                }
+                            }
+                        }
                     }
+                } else {
+                    None
                 }
             }
-            Self::Task(task) => task(),
+            Self::Task(task) => {
+                task();
+                None
+            }
         }
     }
 }
@@ -489,8 +511,22 @@ async fn drain_expired_delayed_requests(
     let now = TokioInstant::now();
     while delayed_queue.peek().is_some_and(|entry| entry.deadline <= now) {
         let entry = delayed_queue.pop().expect("entry should exist after peek");
-        metrics.record_expired();
-        entry.payload.execute(stopped).await;
+        let DelayedQueueEntry {
+            sequence,
+            payload,
+            _permit,
+            ..
+        } = entry;
+        if let Some(payload) = payload.execute(stopped).await {
+            delayed_queue.push(DelayedQueueEntry {
+                deadline: TokioInstant::now() + Duration::from_millis(POP_REQUEUE_DELAY_MS),
+                sequence,
+                payload,
+                _permit,
+            });
+        } else {
+            metrics.record_expired();
+        }
     }
 }
 
@@ -1010,11 +1046,15 @@ impl PullMessageService {
         let tx = self.tx.read().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
         if let Some(tx) = tx {
             let retained_bytes = pop_request.retained_bytes();
-            if let Err(e) = tx.try_push_data(Box::new(pop_request), retained_bytes) {
-                error!(
-                    "executePopPullRequestImmediately messageRequestQueue.put error: {:?}",
-                    e
+            if let Err(error) = tx.try_push_data(Box::new(pop_request), retained_bytes) {
+                warn!(
+                    "executePopPullRequestImmediately queue admission failed; retrying with delay: {:?}",
+                    error
                 );
+                match error.into_item().into_any().downcast::<PopRequest>() {
+                    Ok(pop_request) => self.execute_pop_pull_request_later(*pop_request, POP_REQUEUE_DELAY_MS),
+                    Err(_) => error!("POP request queue returned an unexpected request type"),
+                }
             }
         } else {
             warn!("PullMessageService not started");
@@ -1267,6 +1307,42 @@ fn pull_message_service_shutdown_signal_failed() -> RocketMQError {
 mod tests {
     use super::*;
     use rocketmq_error::ErrorKind;
+
+    fn test_pop_request(queue_id: i32) -> PopRequest {
+        PopRequest::new(
+            CheetahString::from_static_str("topic"),
+            CheetahString::from_static_str("group"),
+            rocketmq_model::common::message::message_queue::MessageQueue::from_parts("topic", "broker-a", queue_id),
+            crate::consumer::consumer_impl::pop_process_queue::PopProcessQueue::new(),
+            0,
+        )
+    }
+
+    #[tokio::test]
+    async fn rejected_delayed_pop_payload_returns_the_original_request_for_retry() {
+        let service = PullMessageService::with_capacity_and_shards(1, 1);
+        let queue = service
+            .build_request_queue::<BoxedMessageRequest>("pop-retry-overload", FullPolicy::Reject)
+            .expect("POP retry queue");
+        let first = test_pop_request(0);
+        queue
+            .try_push_data(Box::new(first), std::mem::size_of::<PopRequest>())
+            .expect("first POP request should fill the queue");
+
+        let retry = DelayedSchedulePayload::Pop {
+            request: test_pop_request(1),
+            tx: Some(queue.clone()),
+        }
+        .execute(&AtomicBool::new(false))
+        .await;
+
+        let Some(DelayedSchedulePayload::Pop { request, tx }) = retry else {
+            panic!("rejected POP request should be returned");
+        };
+        assert_eq!(request.get_message_queue().queue_id(), 1);
+        assert!(tx.is_some());
+        assert_eq!(queue.snapshot().depth, 1);
+    }
 
     #[test]
     fn overload_rejects_excess_pull_worker_requests() {
