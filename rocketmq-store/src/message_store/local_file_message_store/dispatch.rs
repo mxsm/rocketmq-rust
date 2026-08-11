@@ -799,6 +799,45 @@ pub(super) struct ReputMessageServiceInner {
     pub(super) runtime_context: ReputRuntimeContext,
 }
 
+const MIN_REPUT_READ_BYTES: usize = 1024 * 1024;
+const COMMIT_LOG_RECORD_OVERHEAD_BUDGET: i32 = 64 * 1024;
+
+fn reput_read_max_bytes(config: &MessageStoreConfig) -> usize {
+    let max_message_size = config.max_message_size.max(0);
+    let max_record_size = if i32::MAX - max_message_size >= COMMIT_LOG_RECORD_OVERHEAD_BUDGET {
+        max_message_size + COMMIT_LOG_RECORD_OVERHEAD_BUDGET
+    } else {
+        i32::MAX
+    };
+    usize::try_from(max_record_size)
+        .unwrap_or(MIN_REPUT_READ_BYTES)
+        .max(MIN_REPUT_READ_BYTES)
+}
+
+fn reput_record_is_complete(bytes: &Bytes) -> bool {
+    let Some(total_size) = bytes
+        .get(..4)
+        .and_then(|value| <[u8; 4]>::try_from(value).ok())
+        .map(i32::from_be_bytes)
+    else {
+        return false;
+    };
+    if total_size < 8 {
+        return true;
+    }
+    let Some(magic_code) = bytes
+        .get(4..8)
+        .and_then(|value| <[u8; 4]>::try_from(value).ok())
+        .map(i32::from_be_bytes)
+    else {
+        return false;
+    };
+    if magic_code == commit_log::BLANK_MAGIC_CODE {
+        return true;
+    }
+    usize::try_from(total_size).map_or(true, |total_size| total_size <= bytes.len())
+}
+
 async fn dispatch_reput_batch(
     dispatcher: &CommitLogDispatchHandle,
     runtime_context: &ReputRuntimeContext,
@@ -836,7 +875,10 @@ impl ReputMessageServiceInner {
         let mut dispatch_batch: Vec<DispatchRequest> = Vec::with_capacity(64);
 
         while do_next && self.is_commit_log_available() {
-            let Some(mut result) = self.commit_log.get_data(self.reput_from_offset.load(Ordering::Acquire)) else {
+            let Some(mut result) = self.commit_log.get_data_bounded(
+                self.reput_from_offset.load(Ordering::Acquire),
+                reput_read_max_bytes(self.runtime_context.message_store_config.as_ref()),
+            ) else {
                 break;
             };
             self.reput_from_offset
@@ -850,6 +892,9 @@ impl ReputMessageServiceInner {
                     warn!("commitlog data is missing bytes during reput dispatch");
                     break;
                 };
+                if !reput_record_is_complete(bytes) {
+                    break;
+                }
                 let dispatch_request = commit_log::check_message_and_return_size(
                     bytes,
                     false,
@@ -1008,9 +1053,10 @@ impl ReputMessageServiceInner {
 
         let mut dispatch_batch: Vec<DispatchRequest> = Vec::with_capacity(64);
 
-        let mut result = self
-            .commit_log
-            .get_data(self.reput_from_offset.load(Ordering::Acquire))?;
+        let mut result = self.commit_log.get_data_bounded(
+            self.reput_from_offset.load(Ordering::Acquire),
+            reput_read_max_bytes(self.runtime_context.message_store_config.as_ref()),
+        )?;
         self.reput_from_offset
             .store(result.start_offset() as i64, Ordering::Release);
         let mut read_size = 0i32;
@@ -1023,6 +1069,9 @@ impl ReputMessageServiceInner {
                 warn!("commitlog data is missing bytes during batch reput dispatch");
                 break;
             };
+            if !reput_record_is_complete(bytes) {
+                break;
+            }
             let dispatch_request = commit_log::check_message_and_return_size(
                 bytes,
                 false,
@@ -1104,5 +1153,42 @@ impl ReputMessageServiceInner {
         } else {
             Some(dispatch_batch)
         }
+    }
+}
+
+#[cfg(test)]
+mod bounded_reput_read_tests {
+    use super::*;
+
+    #[test]
+    fn read_budget_covers_one_maximum_encoded_message() {
+        let config = MessageStoreConfig {
+            max_message_size: 4 * 1024 * 1024,
+            ..MessageStoreConfig::default()
+        };
+
+        assert_eq!(
+            reput_read_max_bytes(&config),
+            config.max_message_size as usize + COMMIT_LOG_RECORD_OVERHEAD_BUDGET as usize
+        );
+    }
+
+    #[test]
+    fn partial_message_waits_for_the_next_bounded_read() {
+        let mut frame = Vec::new();
+        frame.extend_from_slice(&16i32.to_be_bytes());
+        frame.extend_from_slice(&commit_log::MESSAGE_MAGIC_CODE.to_be_bytes());
+        frame.extend_from_slice(&[0; 4]);
+
+        assert!(!reput_record_is_complete(&Bytes::from(frame)));
+    }
+
+    #[test]
+    fn blank_marker_only_requires_its_header() {
+        let mut frame = Vec::new();
+        frame.extend_from_slice(&(16 * 1024 * 1024i32).to_be_bytes());
+        frame.extend_from_slice(&commit_log::BLANK_MAGIC_CODE.to_be_bytes());
+
+        assert!(reput_record_is_complete(&Bytes::from(frame)));
     }
 }

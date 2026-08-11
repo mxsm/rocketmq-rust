@@ -110,6 +110,12 @@ pub struct MappedFileMetrics {
     /// Number of times data was not in page cache (disk I/O required)
     cache_misses: AtomicU64,
 
+    /// Bytes copied while materializing mapped-file read selections.
+    selection_copy_bytes_total: AtomicU64,
+
+    /// Bytes compared while attaching copied selections to mapped-file owners.
+    selection_compare_bytes_total: AtomicU64,
+
     /// Number of mapped file warm-up operations.
     warm_operations: AtomicU64,
 
@@ -175,6 +181,8 @@ impl MappedFileMetrics {
             zero_copy_reads: AtomicU64::new(0),
             cache_hits: AtomicU64::new(0),
             cache_misses: AtomicU64::new(0),
+            selection_copy_bytes_total: AtomicU64::new(0),
+            selection_compare_bytes_total: AtomicU64::new(0),
             warm_operations: AtomicU64::new(0),
             warm_bytes: AtomicU64::new(0),
             total_warm_time_ms: AtomicU64::new(0),
@@ -268,6 +276,20 @@ impl MappedFileMetrics {
         self.cache_misses.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Records bytes copied into an owned mapped-file read selection.
+    #[inline]
+    pub(crate) fn record_selection_copy(&self, bytes: usize) {
+        self.selection_copy_bytes_total
+            .fetch_add(bytes as u64, Ordering::Relaxed);
+    }
+
+    /// Records bytes compared while validating a mapped-file selection attachment.
+    #[inline]
+    pub(crate) fn record_selection_compare(&self, bytes: usize) {
+        self.selection_compare_bytes_total
+            .fetch_add(bytes as u64, Ordering::Relaxed);
+    }
+
     /// Records a mapped file warm-up operation.
     #[inline]
     pub fn record_warm(&self, bytes: usize) {
@@ -340,6 +362,18 @@ impl MappedFileMetrics {
     #[inline]
     pub fn cache_misses(&self) -> u64 {
         self.cache_misses.load(Ordering::Relaxed)
+    }
+
+    /// Returns bytes copied into owned mapped-file read selections.
+    #[inline]
+    pub fn selection_copy_bytes_total(&self) -> u64 {
+        self.selection_copy_bytes_total.load(Ordering::Relaxed)
+    }
+
+    /// Returns bytes compared while attaching selections to mapped-file owners.
+    #[inline]
+    pub fn selection_compare_bytes_total(&self) -> u64 {
+        self.selection_compare_bytes_total.load(Ordering::Relaxed)
     }
 
     /// Returns total warm-up operations.
@@ -533,6 +567,8 @@ impl MappedFileMetrics {
         self.zero_copy_reads.store(0, Ordering::Relaxed);
         self.cache_hits.store(0, Ordering::Relaxed);
         self.cache_misses.store(0, Ordering::Relaxed);
+        self.selection_copy_bytes_total.store(0, Ordering::Relaxed);
+        self.selection_compare_bytes_total.store(0, Ordering::Relaxed);
         self.warm_operations.store(0, Ordering::Relaxed);
         self.warm_bytes.store(0, Ordering::Relaxed);
         self.total_warm_time_ms.store(0, Ordering::Relaxed);
@@ -549,7 +585,8 @@ impl MappedFileMetrics {
     /// A multi-line string with human-readable metrics
     pub fn summary(&self) -> String {
         format!(
-            "MappedFile Metrics:\nWrites: {} ({:.2} writes/sec, {:.2} MB/s)\nReads: {} ({:.1}% zero-copy)\nFlushes: \
+            "MappedFile Metrics:\nWrites: {} ({:.2} writes/sec, {:.2} MB/s)\nReads: {} ({:.1}% zero-copy), \
+             selection copy/compare: {}/{} bytes\nFlushes: \
              {} (avg: {:?})\nCache Hit Rate: {:.1}%\nAvg Write Size: {:.1} bytes\nWarm: {} ops, {} bytes, total {} \
              ms, last {} ms\nSwap: {} ops, clean: {} ops\nPhysical owners: {} mappings / {} bytes, {} files; drops: {} \
              mappings, {} files; detach: {}",
@@ -558,6 +595,8 @@ impl MappedFileMetrics {
             self.write_throughput_mb_per_sec(),
             self.total_reads(),
             self.zero_copy_read_percentage(),
+            self.selection_copy_bytes_total(),
+            self.selection_compare_bytes_total(),
             self.total_flushes(),
             self.avg_flush_duration(),
             self.cache_hit_rate(),
@@ -620,6 +659,20 @@ mod tests {
         // Use approximate comparison for floating point
         let percentage = metrics.zero_copy_read_percentage();
         assert!((percentage - 66.666).abs() < 0.01);
+    }
+
+    #[test]
+    fn selection_copy_and_compare_bytes_are_counted_and_reset() {
+        let mut metrics = MappedFileMetrics::new();
+        metrics.record_selection_copy(256);
+        metrics.record_selection_compare(128);
+
+        assert_eq!(metrics.selection_copy_bytes_total(), 256);
+        assert_eq!(metrics.selection_compare_bytes_total(), 128);
+
+        metrics.reset();
+        assert_eq!(metrics.selection_copy_bytes_total(), 0);
+        assert_eq!(metrics.selection_compare_bytes_total(), 0);
     }
 
     #[test]
