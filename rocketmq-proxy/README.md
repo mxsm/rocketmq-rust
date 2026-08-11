@@ -217,7 +217,13 @@ storeRootDir = "store/proxy/local-broker"
 routePermits = 512
 producerPermits = 1024
 consumerPermits = 1024
+consumerResponsePermits = 1024
+consumerResponseBytes = 67108864
 clientManagerPermits = 512
+routeRatePerSecond = 0
+producerRatePerSecond = 0
+consumerRatePerSecond = 0
+clientManagerRatePerSecond = 0
 
 [session]
 clientTtlMs = 60000
@@ -244,6 +250,9 @@ aclFileWatchEnabled = false
 | `remoting.listenAddr` | `0.0.0.0:8080` | Remoting bind address when enabled. |
 | `cluster.namesrvAddr` | unset | NameServer address used by cluster mode. |
 | `cluster.routeCacheTtlMs` | `5000` | Route cache TTL used by cluster clients. |
+| `runtime.consumerResponsePermits` | `1024` | Maximum concurrent Receive/Pull response streams retaining broker results. |
+| `runtime.consumerResponseBytes` | `67108864` | Hard retained-byte budget shared by Receive/Pull response streams. |
+| `runtime.*RatePerSecond` | `0` | Optional per-boundary QPS limits; zero disables rate limiting without changing inflight permits. |
 | `cluster.metadataCacheTtlMs` | `5000` | Metadata cache TTL used by cluster clients and auth metadata refresh. |
 | `enableAclRpcHookForClusterMode` | `false` | Adds the proxy inner credentials as an ACL RPC hook for cluster calls. |
 | `runtime.*Permits` | varies | Per-area concurrency guards for route, producer, consumer, and client-manager RPCs. |

@@ -489,41 +489,146 @@ pub fn build_send_message_response(plan: &SendMessagePlan, request: &SendMessage
     }
 }
 
-pub fn build_receive_message_responses(plan: &ReceiveMessagePlan) -> Vec<v2::ReceiveMessageResponse> {
-    let mut responses = Vec::new();
-    if let Some(delivery_timestamp) = plan.delivery_timestamp_ms.and_then(timestamp_from_epoch_millis) {
-        responses.push(v2::ReceiveMessageResponse {
-            content: Some(v2::receive_message_response::Content::DeliveryTimestamp(
-                delivery_timestamp,
-            )),
-        });
+pub struct ReceiveMessageResponseIter {
+    delivery_timestamp: Option<prost_types::Timestamp>,
+    messages: std::vec::IntoIter<ReceivedMessage>,
+    status: Option<v2::Status>,
+}
+
+impl Iterator for ReceiveMessageResponseIter {
+    type Item = v2::ReceiveMessageResponse;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(delivery_timestamp) = self.delivery_timestamp.take() {
+            return Some(v2::ReceiveMessageResponse {
+                content: Some(v2::receive_message_response::Content::DeliveryTimestamp(
+                    delivery_timestamp,
+                )),
+            });
+        }
+        if let Some(message) = self.messages.next() {
+            return Some(build_receive_message_response(&message));
+        }
+        self.status.take().map(|status| v2::ReceiveMessageResponse {
+            content: Some(v2::receive_message_response::Content::Status(status)),
+        })
     }
-    responses.extend(plan.messages.iter().map(build_receive_message_response));
-    responses.push(v2::ReceiveMessageResponse {
-        content: Some(v2::receive_message_response::Content::Status(
-            plan.status.clone().into(),
-        )),
-    });
-    responses
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = usize::from(self.delivery_timestamp.is_some())
+            .saturating_add(self.messages.len())
+            .saturating_add(usize::from(self.status.is_some()));
+        (remaining, Some(remaining))
+    }
+}
+
+impl ExactSizeIterator for ReceiveMessageResponseIter {}
+
+pub struct PullMessageResponseIter {
+    messages: std::vec::IntoIter<ProxyMessageExt>,
+    next_offset: Option<i64>,
+    status: Option<v2::Status>,
+}
+
+impl Iterator for PullMessageResponseIter {
+    type Item = v2::PullMessageResponse;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(message) = self.messages.next() {
+            return Some(v2::PullMessageResponse {
+                content: Some(v2::pull_message_response::Content::Message(build_message_from_ext(
+                    &message, None,
+                ))),
+            });
+        }
+        if let Some(next_offset) = self.next_offset.take() {
+            return Some(v2::PullMessageResponse {
+                content: Some(v2::pull_message_response::Content::NextOffset(next_offset)),
+            });
+        }
+        self.status.take().map(|status| v2::PullMessageResponse {
+            content: Some(v2::pull_message_response::Content::Status(status)),
+        })
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self
+            .messages
+            .len()
+            .saturating_add(usize::from(self.next_offset.is_some()))
+            .saturating_add(usize::from(self.status.is_some()));
+        (remaining, Some(remaining))
+    }
+}
+
+impl ExactSizeIterator for PullMessageResponseIter {}
+
+pub fn receive_message_response_iter(plan: ReceiveMessagePlan) -> ReceiveMessageResponseIter {
+    ReceiveMessageResponseIter {
+        delivery_timestamp: plan.delivery_timestamp_ms.and_then(timestamp_from_epoch_millis),
+        messages: plan.messages.into_iter(),
+        status: Some(plan.status.into()),
+    }
+}
+
+pub fn pull_message_response_iter(plan: PullMessagePlan) -> PullMessageResponseIter {
+    PullMessageResponseIter {
+        messages: plan.messages.into_iter(),
+        next_offset: Some(plan.next_offset),
+        status: Some(plan.status.into()),
+    }
+}
+
+pub fn error_receive_message_response_iter(status: v2::Status) -> ReceiveMessageResponseIter {
+    ReceiveMessageResponseIter {
+        delivery_timestamp: None,
+        messages: Vec::new().into_iter(),
+        status: Some(status),
+    }
+}
+
+pub fn error_pull_message_response_iter(status: v2::Status) -> PullMessageResponseIter {
+    PullMessageResponseIter {
+        messages: Vec::new().into_iter(),
+        next_offset: None,
+        status: Some(status),
+    }
+}
+
+#[must_use]
+pub fn receive_message_response_retained_bytes(plan: &ReceiveMessagePlan) -> usize {
+    plan.messages.iter().fold(
+        std::mem::size_of_val(plan)
+            .saturating_add(
+                plan.messages
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<ReceivedMessage>()),
+            )
+            .saturating_add(plan.status.message().len()),
+        |retained, message| retained.saturating_add(message.message.retained_bytes()),
+    )
+}
+
+#[must_use]
+pub fn pull_message_response_retained_bytes(plan: &PullMessagePlan) -> usize {
+    plan.messages.iter().fold(
+        std::mem::size_of_val(plan)
+            .saturating_add(
+                plan.messages
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<ProxyMessageExt>()),
+            )
+            .saturating_add(plan.status.message().len()),
+        |retained, message| retained.saturating_add(message.retained_bytes()),
+    )
+}
+
+pub fn build_receive_message_responses(plan: &ReceiveMessagePlan) -> Vec<v2::ReceiveMessageResponse> {
+    receive_message_response_iter(plan.clone()).collect()
 }
 
 pub fn build_pull_message_responses(plan: &PullMessagePlan) -> Vec<v2::PullMessageResponse> {
-    let mut responses = plan
-        .messages
-        .iter()
-        .map(|message| v2::PullMessageResponse {
-            content: Some(v2::pull_message_response::Content::Message(build_message_from_ext(
-                message, None,
-            ))),
-        })
-        .collect::<Vec<_>>();
-    responses.push(v2::PullMessageResponse {
-        content: Some(v2::pull_message_response::Content::NextOffset(plan.next_offset)),
-    });
-    responses.push(v2::PullMessageResponse {
-        content: Some(v2::pull_message_response::Content::Status(plan.status.clone().into())),
-    });
-    responses
+    pull_message_response_iter(plan.clone()).collect()
 }
 
 pub fn build_ack_message_response(plan: &AckMessagePlan) -> v2::AckMessageResponse {
@@ -1162,7 +1267,7 @@ fn build_message_from_ext(message: &ProxyMessageExt, invisible_duration: Option<
         topic: Some(resource_from_topic_name(message.topic())),
         user_properties: build_user_properties(message),
         system_properties: Some(build_message_system_properties(message, invisible_duration)),
-        body: message.body().unwrap_or_default().to_vec(),
+        body: message.body_bytes().cloned().unwrap_or_default(),
     }
 }
 
@@ -1652,7 +1757,7 @@ mod tests {
                     trace_context: Some("trace-a".to_owned()),
                     ..Default::default()
                 }),
-                body: b"hello".to_vec(),
+                body: bytes::Bytes::from_static(b"hello"),
             }],
         }
     }
@@ -1685,11 +1790,9 @@ mod tests {
 
     #[test]
     fn send_message_maps_wire_properties_to_core_dto() {
-        let mapped = build_send_message_request(
-            &grpc_context(),
-            &send_request(HashMap::from([("custom".to_owned(), "value".to_owned())])),
-        )
-        .expect("send request");
+        let request = send_request(HashMap::from([("custom".to_owned(), "value".to_owned())]));
+        let wire_body_ptr = request.messages[0].body.as_ptr();
+        let mapped = build_send_message_request(&grpc_context(), &request).expect("send request");
         let message = &mapped.messages[0].message;
 
         assert_eq!(message.topic(), "ns%TopicA");
@@ -1697,6 +1800,41 @@ mod tests {
         assert_eq!(message.property(PROPERTY_KEYS), Some("KeyA KeyB"));
         assert_eq!(message.property(PROPERTY_SHARDING_KEY), Some("group-a"));
         assert_eq!(message.property("custom"), Some("value"));
+        assert_eq!(message.body_bytes().expect("mapped body").as_ptr(), wire_body_ptr);
+    }
+
+    #[test]
+    fn receive_response_iterator_is_lazy_ordered_and_shares_body_storage() {
+        let body = bytes::Bytes::from_static(b"shared-body");
+        let body_ptr = body.as_ptr();
+        let plan = ReceiveMessagePlan {
+            status: ProxyStatusMapper::ok_payload(),
+            delivery_timestamp_ms: Some(1_710_000_000_000),
+            messages: vec![ReceivedMessage {
+                message: ProxyMessageExt {
+                    message: ProxyMessage::new("TopicA", body),
+                    ..ProxyMessageExt::default()
+                },
+                invisible_duration: Duration::from_secs(30),
+            }],
+        };
+
+        let mut responses = receive_message_response_iter(plan);
+        assert_eq!(responses.len(), 3);
+        assert!(matches!(
+            responses.next().expect("delivery timestamp").content,
+            Some(v2::receive_message_response::Content::DeliveryTimestamp(_))
+        ));
+        let message = match responses.next().expect("message").content {
+            Some(v2::receive_message_response::Content::Message(message)) => message,
+            other => panic!("expected message frame, got {other:?}"),
+        };
+        assert_eq!(message.body.as_ptr(), body_ptr);
+        assert!(matches!(
+            responses.next().expect("status").content,
+            Some(v2::receive_message_response::Content::Status(_))
+        ));
+        assert!(responses.next().is_none());
     }
 
     #[test]

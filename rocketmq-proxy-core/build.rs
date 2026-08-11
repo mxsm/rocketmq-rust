@@ -16,7 +16,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=proto/definition.proto");
     println!("cargo:rerun-if-changed=proto/service.proto");
 
-    tonic_prost_build::configure().compile_protos(&["proto/service.proto"], &["proto"])?;
+    tonic_prost_build::configure()
+        .bytes(".apache.rocketmq.v2.Message.body")
+        .compile_protos(&["proto/service.proto"], &["proto"])?;
 
     Ok(())
 }

@@ -211,7 +211,13 @@ storeRootDir = "store/proxy/local-broker"
 routePermits = 512
 producerPermits = 1024
 consumerPermits = 1024
+consumerResponsePermits = 1024
+consumerResponseBytes = 67108864
 clientManagerPermits = 512
+routeRatePerSecond = 0
+producerRatePerSecond = 0
+consumerRatePerSecond = 0
+clientManagerRatePerSecond = 0
 
 [session]
 clientTtlMs = 60000
@@ -238,6 +244,9 @@ aclFileWatchEnabled = false
 | `remoting.listenAddr` | `0.0.0.0:8080` | remoting 启用时的绑定地址。 |
 | `cluster.namesrvAddr` | 未设置 | Cluster 模式使用的 NameServer 地址。 |
 | `cluster.routeCacheTtlMs` | `5000` | Cluster client 使用的路由缓存 TTL。 |
+| `runtime.consumerResponsePermits` | `1024` | 最多允许同时保留 Broker 结果的 Receive/Pull 响应流数量。 |
+| `runtime.consumerResponseBytes` | `67108864` | Receive/Pull 响应流共享的保留字节硬上限。 |
+| `runtime.*RatePerSecond` | `0` | 各边界可选 QPS 限制；零表示关闭速率限制，不改变 inflight 并发上限。 |
 | `cluster.metadataCacheTtlMs` | `5000` | Cluster client 和 auth metadata 刷新使用的元数据缓存 TTL。 |
 | `enableAclRpcHookForClusterMode` | `false` | 为 cluster 调用添加 proxy 内部凭证 ACL RPC hook。 |
 | `runtime.*Permits` | 不同字段不同 | route、producer、consumer、client-manager RPC 的并发保护。 |

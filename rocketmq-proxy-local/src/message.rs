@@ -23,7 +23,7 @@ pub(crate) fn message_ext_to_core(message: &MessageExt) -> ProxyMessageExt {
     let inner = message.message_inner();
     let mut core = ProxyMessage::default();
     core.set_topic(inner.topic().to_string());
-    core.set_body(inner.body().map(|body| body.to_vec()));
+    core.set_body_bytes(inner.body());
     core.set_flag(inner.flag());
     core.set_properties(
         inner

@@ -41,7 +41,7 @@ fn delay_request(deliver_ms: u64) -> v2::SendMessageRequest {
                 }),
                 ..Default::default()
             }),
-            body: b"timer".to_vec(),
+            body: bytes::Bytes::from_static(b"timer"),
         }],
     }
 }

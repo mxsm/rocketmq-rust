@@ -14,12 +14,15 @@
 
 use std::pin::Pin;
 use std::sync::Arc;
+use std::task::Context as TaskContext;
+use std::task::Poll;
 use std::time::Duration;
 use std::time::SystemTime;
 
 use futures::stream;
 use futures::Stream;
 use futures::StreamExt;
+use rocketmq_runtime::ResourcePermit;
 use rocketmq_runtime::TaskGroup;
 use tonic::Request;
 use tonic::Response;
@@ -55,8 +58,45 @@ use rocketmq_proxy_core::ingress::grpc::service::ReapSchedule;
 
 type ResponseStream<T> = Pin<Box<dyn Stream<Item = Result<T, Status>> + Send + 'static>>;
 
+struct GuardedItemsStream<I> {
+    items: I,
+    permit: Option<ResourcePermit>,
+    observation: Option<RequestObservation>,
+}
+
+impl<I> Stream for GuardedItemsStream<I>
+where
+    I: Iterator + Unpin,
+{
+    type Item = Result<I::Item, Status>;
+
+    fn poll_next(mut self: Pin<&mut Self>, _context: &mut TaskContext<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.as_mut().get_mut();
+        match this.items.next() {
+            Some(item) => Poll::Ready(Some(Ok(item))),
+            None => {
+                this.permit.take();
+                this.observation.take();
+                Poll::Ready(None)
+            }
+        }
+    }
+}
+
 const RECEIPT_RENEWAL_CLAIM_LEASE: Duration = Duration::from_secs(5);
 const RECEIPT_RENEWAL_EXPIRY_MARGIN: Duration = Duration::from_millis(250);
+
+fn receive_message_error_stream_plan(status: v2::Status) -> (v2::Status, usize, adapter::ReceiveMessageResponseIter) {
+    let retained_bytes = std::mem::size_of::<v2::ReceiveMessageResponse>().saturating_add(status.message.len());
+    let responses = adapter::error_receive_message_response_iter(status.clone());
+    (status, retained_bytes, responses)
+}
+
+fn pull_message_error_stream_plan(status: v2::Status) -> (v2::Status, usize, adapter::PullMessageResponseIter) {
+    let retained_bytes = std::mem::size_of::<v2::PullMessageResponse>().saturating_add(status.message.len());
+    let responses = adapter::error_pull_message_response_iter(status.clone());
+    (status, retained_bytes, responses)
+}
 
 fn renewal_attempt_timeout(invisible_duration: Duration) -> Duration {
     Duration::from_millis(invisible_duration.as_millis().saturating_div(4).clamp(250, 3_000) as u64)
@@ -67,7 +107,6 @@ fn renewal_retry_delay(invisible_duration: Duration) -> Duration {
 }
 
 mod observation;
-mod stream_status;
 
 use observation::RequestObservation;
 use observation::TelemetryStreamState;
@@ -194,6 +233,11 @@ impl<P> ProxyGrpcService<P> {
         self.metrics.snapshot(&self.sessions, auth)
     }
 
+    #[must_use]
+    pub fn consumer_response_budget_snapshot(&self) -> rocketmq_runtime::BudgetSnapshot {
+        self.guards.consumer_response_snapshot()
+    }
+
     fn context<T>(&self, rpc_name: &'static str, request: &Request<T>) -> Result<ProxyContext, Status> {
         ProxyContext::from_grpc_request(rpc_name, request).map_err(|error| ProxyStatusMapper::to_tonic_status(&error))
     }
@@ -210,6 +254,23 @@ impl<P> ProxyGrpcService<P> {
         T: Send + 'static,
     {
         Box::pin(stream::iter(items.into_iter().map(Ok)))
+    }
+
+    fn guarded_items_stream<T, I>(
+        &self,
+        items: I,
+        permit: ResourcePermit,
+        observation: RequestObservation,
+    ) -> ResponseStream<T>
+    where
+        T: Send + 'static,
+        I: Iterator<Item = T> + Send + Unpin + 'static,
+    {
+        Box::pin(GuardedItemsStream {
+            items,
+            permit: Some(permit),
+            observation: Some(observation),
+        })
     }
 
     async fn begin_observation(
@@ -1007,7 +1068,7 @@ where
             Ok(state) => state,
             Err(response) => return response,
         };
-        let responses = async {
+        let (status, retained_bytes, responses) = async {
             match self
                 .validate_client_context(&context)
                 .and_then(|_| adapter::build_receive_message_request(&request))
@@ -1027,30 +1088,39 @@ where
                             {
                                 Ok(plan) => {
                                     self.track_received_receipt_handles(&context, &input, &plan);
-                                    adapter::build_receive_message_responses(&plan)
+                                    let status = plan.status.clone().into();
+                                    let retained_bytes = adapter::receive_message_response_retained_bytes(&plan);
+                                    (status, retained_bytes, adapter::receive_message_response_iter(plan))
                                 }
-                                Err(error) => {
-                                    adapter::error_receive_message_responses(ProxyStatusMapper::from_error(&error))
-                                }
+                                Err(error) => receive_message_error_stream_plan(ProxyStatusMapper::from_error(&error)),
                             }
                         }
-                        Err(error) => adapter::error_receive_message_responses(ProxyStatusMapper::from_error(&error)),
+                        Err(error) => receive_message_error_stream_plan(ProxyStatusMapper::from_error(&error)),
                     },
-                    Err(error) => adapter::error_receive_message_responses(ProxyStatusMapper::from_error(&error)),
+                    Err(error) => receive_message_error_stream_plan(ProxyStatusMapper::from_error(&error)),
                 },
-                Err(error) => adapter::error_receive_message_responses(ProxyStatusMapper::from_error(&error)),
+                Err(error) => receive_message_error_stream_plan(ProxyStatusMapper::from_error(&error)),
             }
         }
         .instrument(observation.span())
         .await;
 
-        let status = responses
-            .last()
-            .and_then(stream_status::receive_message)
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(ProxyStatusMapper::ok);
+        let response_permit = match self.guards.try_consumer_response(retained_bytes) {
+            Ok(permit) => permit,
+            Err(error) => {
+                let status = ProxyStatusMapper::from_error(&error);
+                self.finish_stream_payload(&observation, &status).await;
+                return Ok(Response::new(
+                    self.items_stream(adapter::error_receive_message_responses(status)),
+                ));
+            }
+        };
         self.finish_stream_payload(&observation, &status).await;
-        Ok(Response::new(self.items_stream(responses)))
+        Ok(Response::new(self.guarded_items_stream(
+            responses,
+            response_permit,
+            observation,
+        )))
     }
 
     async fn ack_message(
@@ -1175,7 +1245,7 @@ where
             Ok(state) => state,
             Err(response) => return response,
         };
-        let responses = async {
+        let (status, retained_bytes, responses) = async {
             match adapter::build_pull_message_request(&request) {
                 Ok(input) => match self
                     .validate_client_context(&context)
@@ -1188,29 +1258,40 @@ where
                         Ok(()) => {
                             self.sessions.upsert_from_context(&context);
                             match self.processor.pull_message(&context.without_principal(), input).await {
-                                Ok(plan) => adapter::build_pull_message_responses(&plan),
-                                Err(error) => {
-                                    adapter::error_pull_message_responses(ProxyStatusMapper::from_error(&error))
+                                Ok(plan) => {
+                                    let status = plan.status.clone().into();
+                                    let retained_bytes = adapter::pull_message_response_retained_bytes(&plan);
+                                    (status, retained_bytes, adapter::pull_message_response_iter(plan))
                                 }
+                                Err(error) => pull_message_error_stream_plan(ProxyStatusMapper::from_error(&error)),
                             }
                         }
-                        Err(error) => adapter::error_pull_message_responses(ProxyStatusMapper::from_error(&error)),
+                        Err(error) => pull_message_error_stream_plan(ProxyStatusMapper::from_error(&error)),
                     },
-                    Err(error) => adapter::error_pull_message_responses(ProxyStatusMapper::from_error(&error)),
+                    Err(error) => pull_message_error_stream_plan(ProxyStatusMapper::from_error(&error)),
                 },
-                Err(error) => adapter::error_pull_message_responses(ProxyStatusMapper::from_error(&error)),
+                Err(error) => pull_message_error_stream_plan(ProxyStatusMapper::from_error(&error)),
             }
         }
         .instrument(observation.span())
         .await;
 
-        let status = responses
-            .last()
-            .and_then(stream_status::pull_message)
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(ProxyStatusMapper::ok);
+        let response_permit = match self.guards.try_consumer_response(retained_bytes) {
+            Ok(permit) => permit,
+            Err(error) => {
+                let status = ProxyStatusMapper::from_error(&error);
+                self.finish_stream_payload(&observation, &status).await;
+                return Ok(Response::new(
+                    self.items_stream(adapter::error_pull_message_responses(status)),
+                ));
+            }
+        };
         self.finish_stream_payload(&observation, &status).await;
-        Ok(Response::new(self.items_stream(responses)))
+        Ok(Response::new(self.guarded_items_stream(
+            responses,
+            response_permit,
+            observation,
+        )))
     }
 
     async fn update_offset(
@@ -2107,6 +2188,24 @@ mod tests {
         consumer_service: Arc<dyn crate::service::ConsumerService>,
         transaction_service: Arc<dyn crate::service::TransactionService>,
     ) -> ProxyGrpcService<DefaultMessagingProcessor> {
+        test_service_with_config_and_all_services(
+            ProxyConfig::default(),
+            route_service,
+            metadata_service,
+            message_service,
+            consumer_service,
+            transaction_service,
+        )
+    }
+
+    fn test_service_with_config_and_all_services(
+        config: ProxyConfig,
+        route_service: StaticRouteService,
+        metadata_service: StaticMetadataService,
+        message_service: Arc<dyn crate::service::MessageService>,
+        consumer_service: Arc<dyn crate::service::ConsumerService>,
+        transaction_service: Arc<dyn crate::service::TransactionService>,
+    ) -> ProxyGrpcService<DefaultMessagingProcessor> {
         let manager = ClusterServiceManager::with_services(
             Arc::new(route_service),
             Arc::new(metadata_service),
@@ -2116,11 +2215,7 @@ mod tests {
             transaction_service,
         );
         let processor = Arc::new(DefaultMessagingProcessor::new(Arc::new(manager)));
-        ProxyGrpcService::new(
-            Arc::new(ProxyConfig::default()),
-            processor,
-            ClientSessionRegistry::default(),
-        )
+        ProxyGrpcService::new(Arc::new(config), processor, ClientSessionRegistry::default())
     }
 
     fn test_service_with_services(
@@ -2136,6 +2231,45 @@ mod tests {
             consumer_service,
             Arc::new(DefaultTransactionService),
         )
+    }
+
+    fn receive_message_request(client_id: &'static str) -> Request<v2::ReceiveMessageRequest> {
+        let mut request = Request::new(v2::ReceiveMessageRequest {
+            group: Some(v2::Resource {
+                resource_namespace: String::new(),
+                name: "GroupA".to_owned(),
+            }),
+            message_queue: Some(v2::MessageQueue {
+                topic: Some(v2::Resource {
+                    resource_namespace: String::new(),
+                    name: "TopicA".to_owned(),
+                }),
+                id: 3,
+                permission: v2::Permission::ReadWrite as i32,
+                broker: Some(v2::Broker {
+                    name: "broker-a".to_owned(),
+                    id: 0,
+                    endpoints: Some(v2::Endpoints {
+                        scheme: v2::AddressScheme::IPv4 as i32,
+                        addresses: vec![v2::Address {
+                            host: "127.0.0.1".to_owned(),
+                            port: 10911,
+                        }],
+                    }),
+                }),
+                accept_message_types: vec![v2::MessageType::Normal as i32],
+            }),
+            filter_expression: None,
+            batch_size: 1,
+            invisible_duration: Some(prost_types::Duration { seconds: 30, nanos: 0 }),
+            auto_renew: false,
+            long_polling_timeout: Some(prost_types::Duration { seconds: 1, nanos: 0 }),
+            attempt_id: None,
+        });
+        request
+            .metadata_mut()
+            .insert("x-mq-client-id", MetadataValue::from_static(client_id));
+        request
     }
 
     const AUTH_TEST_DATETIME: &str = "20260322T010203Z";
@@ -2622,7 +2756,7 @@ mod tests {
                     body_encoding: v2::Encoding::Identity as i32,
                     ..Default::default()
                 }),
-                body: Bytes::from_static(b"hello").to_vec(),
+                body: Bytes::from_static(b"hello"),
             }],
         });
         request
@@ -2680,7 +2814,7 @@ mod tests {
                     message_type: v2::MessageType::Transaction as i32,
                     ..Default::default()
                 }),
-                body: Bytes::from_static(b"hello").to_vec(),
+                body: Bytes::from_static(b"hello"),
             }],
         });
         request
@@ -2738,7 +2872,7 @@ mod tests {
                         orphaned_transaction_recovery_duration: Some(prost_types::Duration { seconds: 0, nanos: 0 }),
                         ..Default::default()
                     }),
-                    body: Bytes::from_static(b"hello").to_vec(),
+                    body: Bytes::from_static(b"hello"),
                 },
                 orphaned_transaction_recovery_duration: Some(std::time::Duration::ZERO),
             });
@@ -2782,7 +2916,7 @@ mod tests {
                         body_encoding: v2::Encoding::Identity as i32,
                         ..Default::default()
                     }),
-                    body: Bytes::from_static(b"hello").to_vec(),
+                    body: Bytes::from_static(b"hello"),
                 },
                 v2::Message {
                     topic: Some(v2::Resource {
@@ -2795,7 +2929,7 @@ mod tests {
                         body_encoding: v2::Encoding::Identity as i32,
                         ..Default::default()
                     }),
-                    body: Bytes::from_static(b"world").to_vec(),
+                    body: Bytes::from_static(b"world"),
                 },
             ],
         });
@@ -2830,7 +2964,7 @@ mod tests {
                         body_encoding: v2::Encoding::Identity as i32,
                         ..Default::default()
                     }),
-                    body: Bytes::from_static(b"hello").to_vec(),
+                    body: Bytes::from_static(b"hello"),
                 },
                 v2::Message {
                     topic: Some(v2::Resource {
@@ -2843,7 +2977,7 @@ mod tests {
                         body_encoding: v2::Encoding::Identity as i32,
                         ..Default::default()
                     }),
-                    body: Bytes::from_static(b"world").to_vec(),
+                    body: Bytes::from_static(b"world"),
                 },
             ],
         });
@@ -2924,6 +3058,64 @@ mod tests {
             },
             v2::Code::Ok as i32
         );
+    }
+
+    #[tokio::test]
+    async fn receive_stream_holds_response_budget_and_drain_admission_until_drop() {
+        let mut config = ProxyConfig::default();
+        config.runtime.consumer_response_permits = 1;
+        config.runtime.consumer_response_bytes = 1024 * 1024;
+        let service = test_service_with_config_and_all_services(
+            config,
+            StaticRouteService::default(),
+            StaticMetadataService::default(),
+            Arc::new(StaticMessageService::with_send_status(SendStatus::SendOk)),
+            Arc::new(TestConsumerService::default()),
+            Arc::new(DefaultTransactionService),
+        );
+
+        let first = service
+            .receive_message(receive_message_request("stream-a"))
+            .await
+            .expect("first response stream")
+            .into_inner();
+        assert_eq!(service.drain.snapshot(&service.sessions).pending.rpc_in_flight, 1);
+        let occupied = service.consumer_response_budget_snapshot();
+        assert_eq!(occupied.current_count, 1);
+        assert!(occupied.current_bytes > 0);
+
+        let mut rejected = service
+            .receive_message(receive_message_request("stream-b"))
+            .await
+            .expect("budget rejection response")
+            .into_inner();
+        let rejection = rejected.next().await.expect("status frame").expect("valid frame");
+        assert_eq!(
+            match rejection.content.expect("status content") {
+                v2::receive_message_response::Content::Status(status) => status.code,
+                other => panic!("expected status frame, got {other:?}"),
+            },
+            v2::Code::TooManyRequests as i32
+        );
+        assert_eq!(service.consumer_response_budget_snapshot().rejected_count, 1);
+
+        drop(first);
+        assert_eq!(service.drain.snapshot(&service.sessions).pending.rpc_in_flight, 0);
+        assert_eq!(service.consumer_response_budget_snapshot().current_count, 0);
+        let mut after_drop = service
+            .receive_message(receive_message_request("stream-c"))
+            .await
+            .expect("response stream after release")
+            .into_inner();
+        assert!(matches!(
+            after_drop
+                .next()
+                .await
+                .expect("first frame")
+                .expect("valid frame")
+                .content,
+            Some(v2::receive_message_response::Content::DeliveryTimestamp(_))
+        ));
     }
 
     #[tokio::test]
@@ -3475,7 +3667,7 @@ mod tests {
                 message_id: "msg-1".to_owned(),
                 ..Default::default()
             }),
-            body: Bytes::from_static(b"hello").to_vec(),
+            body: Bytes::from_static(b"hello"),
         };
         let receiver = service
             .guards
@@ -3567,7 +3759,7 @@ mod tests {
                 message_id: "msg-1".to_owned(),
                 ..Default::default()
             }),
-            body: Bytes::from_static(b"hello").to_vec(),
+            body: Bytes::from_static(b"hello"),
         };
         assert!(service.send_verify_message_command("client-a", "nonce-verify", verify_message));
 
@@ -3947,7 +4139,7 @@ mod tests {
                     message_type: v2::MessageType::Transaction as i32,
                     ..Default::default()
                 }),
-                body: Bytes::from_static(b"hello").to_vec(),
+                body: Bytes::from_static(b"hello"),
             }],
         });
         send_request

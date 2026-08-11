@@ -38,3 +38,19 @@ fn generated_client_and_server_api_are_available_from_core() {
     assert_eq!(v2::Code::Ok as i32, 20_000);
     assert_eq!(v2::Status::default().code, 0);
 }
+
+#[test]
+fn generated_message_body_uses_shared_bytes_without_changing_wire_shape() {
+    fn assert_bytes(_: &bytes::Bytes) {}
+
+    let message = v2::Message {
+        body: bytes::Bytes::from_static(b"body"),
+        ..v2::Message::default()
+    };
+    assert_bytes(&message.body);
+
+    let encoded = message.encode_to_vec();
+    assert_eq!(encoded, b"\x22\x04body");
+    let decoded = v2::Message::decode(encoded.as_slice()).expect("decode message");
+    assert_eq!(decoded.body, bytes::Bytes::from_static(b"body"));
+}

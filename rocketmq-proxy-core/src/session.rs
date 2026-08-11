@@ -1641,7 +1641,7 @@ mod tests {
                     message_id: message_id.to_owned(),
                     ..Default::default()
                 }),
-                body: b"hello".to_vec(),
+                body: bytes::Bytes::from_static(b"hello"),
             },
             orphaned_transaction_recovery_duration: None,
         }

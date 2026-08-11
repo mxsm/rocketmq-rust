@@ -4420,6 +4420,7 @@ dependencies = [
 name = "rocketmq-proxy-core"
 version = "1.0.0"
 dependencies = [
+ "bytes",
  "dashmap",
  "prost",
  "prost-types",
