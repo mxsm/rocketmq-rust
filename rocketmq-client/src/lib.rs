@@ -283,17 +283,23 @@ mod cluster_session {
             timeout_millis: u64,
         ) -> rocketmq_error::RocketMQResult<crate::consumer::ack_result::AckResult> {
             let _operation = self.operation().await;
-            let (sender, receiver) = tokio::sync::oneshot::channel();
             self.inner
                 .get_mq_client_api_impl()?
-                .ack_message_async(broker_addr, request, timeout_millis, OwnedAckCallback::new(sender))
-                .await?;
-            receiver.await.unwrap_or_else(|source| {
-                Err(rocketmq_error::RocketMQError::internal(
-                    "receive client ack callback result",
-                    source,
-                ))
-            })
+                .ack_message(broker_addr, request, timeout_millis)
+                .await
+        }
+
+        pub async fn batch_ack_message(
+            &self,
+            broker_addr: &CheetahString,
+            request: rocketmq_protocol::protocol::body::batch_ack_message_request_body::BatchAckMessageRequestBody,
+            timeout_millis: u64,
+        ) -> rocketmq_error::RocketMQResult<crate::consumer::ack_result::AckResult> {
+            let _operation = self.operation().await;
+            self.inner
+                .get_mq_client_api_impl()?
+                .batch_ack_message(broker_addr, request, timeout_millis)
+                .await
         }
 
         pub async fn change_invisible_time(

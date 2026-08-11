@@ -42,6 +42,8 @@ use rocketmq_model::common::sys_flag::pull_sys_flag::PullSysFlag;
 use rocketmq_model::common::FAQUrl;
 use rocketmq_observability::metrics::client::ClientMetrics;
 use rocketmq_observability::TelemetryHandle;
+use rocketmq_protocol::protocol::body::batch_ack_builder::build_batch_ack_requests;
+use rocketmq_protocol::protocol::body::batch_ack_builder::BatchAckInput;
 use rocketmq_protocol::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
 use rocketmq_protocol::protocol::body::consumer_running_info::ConsumerRunningInfo;
 use rocketmq_protocol::protocol::body::pop_process_queue_info::PopProcessQueueInfo;
@@ -1832,73 +1834,116 @@ impl DefaultMQPushConsumerImpl {
     }
 
     pub(crate) async fn ack_async(&self, message: &MessageExt, consumer_group: &CheetahString) {
+        if let Err(error) = self.ack_message_result(message, consumer_group).await {
+            error!("ackAsync error: {}", error);
+        }
+    }
+
+    pub(crate) async fn ack_batch_async(
+        &self,
+        messages: &[Arc<MessageExt>],
+        consumer_group: &CheetahString,
+    ) -> Vec<(usize, rocketmq_error::RocketMQResult<AckResult>)> {
+        let pop_ck = CheetahString::from_static_str(MessageConst::PROPERTY_POP_CK);
+        let receipt_handles = messages
+            .iter()
+            .map(|message| message.property(&pop_ck).unwrap_or_default())
+            .collect::<Vec<_>>();
+        let inputs = messages
+            .iter()
+            .zip(&receipt_handles)
+            .enumerate()
+            .map(|(entry_index, (message, receipt_handle))| BatchAckInput {
+                entry_index,
+                consumer_group,
+                topic: message.topic().as_str(),
+                receipt_handle,
+            })
+            .collect::<Vec<_>>();
+        let built = build_batch_ack_requests(&inputs);
+        let mut results = Vec::with_capacity(messages.len());
+
+        for failure in built.failures {
+            let result = self
+                .ack_message_result(&messages[failure.entry_index], consumer_group)
+                .await;
+            results.push((failure.entry_index, result));
+        }
+
+        for request in built.requests {
+            let Some(first_ack) = request.body.acks.first() else {
+                continue;
+            };
+            let topic = first_ack.topic.clone();
+            let ack_consumer_group = first_ack.consumer_group.clone();
+            let retry = first_ack.retry.clone();
+            let queue_id = first_ack.queue_id;
+            let batch_result = async {
+                let route_topic = CheetahString::from_string(ExtraInfoUtil::get_real_topic_with_retry(
+                    &topic,
+                    &ack_consumer_group,
+                    &retry,
+                )?);
+                let (client_instance, broker_addr) = self
+                    .resolve_ack_broker_address(&request.broker_name, &route_topic, queue_id)
+                    .await?;
+                let api = client_instance
+                    .mq_client_api_impl
+                    .load_full()
+                    .ok_or_else(|| RocketMQError::not_initialized("MQClientAPIImpl"))?;
+                api.batch_ack_message(&broker_addr, request.body, ASYNC_TIMEOUT).await
+            }
+            .await;
+
+            match batch_result {
+                Ok(ack_result) => {
+                    results.extend(
+                        request
+                            .entry_indexes
+                            .into_iter()
+                            .map(|entry_index| (entry_index, Ok(ack_result.clone()))),
+                    );
+                }
+                Err(batch_error) => {
+                    warn!(
+                        "BatchAck failed for broker {}, falling back to {} single ACKs: {}",
+                        request.broker_name,
+                        request.entry_indexes.len(),
+                        batch_error
+                    );
+                    for entry_index in request.entry_indexes {
+                        let result = self.ack_message_result(&messages[entry_index], consumer_group).await;
+                        results.push((entry_index, result));
+                    }
+                }
+            }
+        }
+
+        results.sort_by_key(|(entry_index, _)| *entry_index);
+        results
+    }
+
+    async fn ack_message_result(
+        &self,
+        message: &MessageExt,
+        consumer_group: &CheetahString,
+    ) -> rocketmq_error::RocketMQResult<AckResult> {
         let extra_info = message
             .property(&CheetahString::from_static_str(MessageConst::PROPERTY_POP_CK))
             .unwrap_or_default();
-        let extra_info_strs = ExtraInfoUtil::split(extra_info.as_str());
-        /*        if extra_info_strs.is_err() {
-            error!("ackAsync error: {}", extra_info_strs.unwrap_err());
-            return;
-        }
-        let extra_info_strs = extra_info_strs.unwrap();*/
-        let queue_id = ExtraInfoUtil::get_queue_id(extra_info_strs.as_slice());
-        let queue_id = match queue_id {
-            Ok(queue_id) => queue_id,
-            Err(e) => {
-                error!("ackAsync error: {}", e);
-                return;
-            }
-        };
-        let queue_offset = ExtraInfoUtil::get_queue_offset(extra_info_strs.as_slice());
-        let queue_offset = match queue_offset {
-            Ok(queue_offset) => queue_offset,
-            Err(e) => {
-                error!("ackAsync error: {}", e);
-                return;
-            }
-        };
-        let broker_name =
-            CheetahString::from(ExtraInfoUtil::get_broker_name(extra_info_strs.as_slice()).unwrap_or_default());
+        let parsed = ExtraInfoUtil::parse_ack_extra_info(&extra_info)?;
+        let queue_id = parsed.queue_id;
+        let queue_offset = parsed.queue_offset;
+        let broker_name = CheetahString::from(parsed.broker_name);
         let topic = message.topic();
-
-        let Some(client_instance) = self.get_mq_client_factory() else {
-            error!("ackAsync error: MQClientInstance is not initialized");
-            return;
-        };
-        let des_broker_name =
-            if !broker_name.is_empty() && broker_name.starts_with(mix_all::LOGICAL_QUEUE_MOCK_BROKER_PREFIX) {
-                let mq = self
-                    .client_config_snapshot()
-                    .queue_with_resolved_namespace(MessageQueue::from_parts(topic, broker_name.clone(), queue_id));
-                client_instance.get_broker_name_from_message_queue(&mq).await
-            } else {
-                broker_name.clone()
-            };
-
-        let mut find_broker_result = client_instance
-            .find_broker_address_in_subscribe(&des_broker_name, mix_all::MASTER_ID, true)
-            .await;
-        if find_broker_result.is_none() {
-            client_instance
-                .update_topic_route_info_from_name_server_topic(topic)
-                .await;
-            find_broker_result = client_instance
-                .find_broker_address_in_subscribe(&des_broker_name, mix_all::MASTER_ID, true)
-                .await;
-        }
-        if find_broker_result.is_none() {
-            error!("The broker[{}] not exist", des_broker_name);
-            return;
-        }
-        let Some(find_broker_result) = find_broker_result else {
-            error!("The broker[{}] not exist", des_broker_name);
-            return;
-        };
+        let (client_instance, broker_addr) = self.resolve_ack_broker_address(&broker_name, topic, queue_id).await?;
         let request_header = AckMessageRequestHeader {
             consumer_group: consumer_group.clone(),
-            topic: CheetahString::from_string(
-                ExtraInfoUtil::get_real_topic(extra_info_strs.as_slice(), topic, consumer_group).unwrap_or_default(),
-            ),
+            topic: CheetahString::from_string(ExtraInfoUtil::get_real_topic_with_retry(
+                topic,
+                consumer_group,
+                parsed.retry,
+            )?),
             queue_id,
             extra_info,
             offset: queue_offset,
@@ -1911,30 +1956,47 @@ impl DefaultMQPushConsumerImpl {
                 lo: None,
             }),
         };
-        struct DefaultAckCallback;
-        impl AckCallback for DefaultAckCallback {
-            fn on_success(&self, _ack_result: AckResult) {}
-
-            fn on_exception(&self, _e: rocketmq_error::RocketMQError) {}
-        }
-        let Some(mq_client_api_impl) = client_instance.mq_client_api_impl.load_full() else {
-            error!("ackAsync error: MQClientAPIImpl is not initialized");
-            return;
-        };
-        match mq_client_api_impl
-            .ack_message_async(
-                &find_broker_result.broker_addr,
-                request_header,
-                ASYNC_TIMEOUT,
-                DefaultAckCallback,
-            )
+        client_instance
+            .mq_client_api_impl
+            .load_full()
+            .ok_or_else(|| RocketMQError::not_initialized("MQClientAPIImpl"))?
+            .ack_message(&broker_addr, request_header, ASYNC_TIMEOUT)
             .await
-        {
-            Ok(_) => {}
-            Err(e) => {
-                error!("ackAsync error: {}", e);
-            }
+    }
+
+    async fn resolve_ack_broker_address(
+        &self,
+        broker_name: &CheetahString,
+        topic: &CheetahString,
+        queue_id: i32,
+    ) -> rocketmq_error::RocketMQResult<(Arc<MQClientInstance>, CheetahString)> {
+        let client_instance = self
+            .get_mq_client_factory()
+            .ok_or_else(|| RocketMQError::not_initialized("MQClientInstance"))?;
+        let destination_broker =
+            if !broker_name.is_empty() && broker_name.starts_with(mix_all::LOGICAL_QUEUE_MOCK_BROKER_PREFIX) {
+                let queue = self
+                    .client_config_snapshot()
+                    .queue_with_resolved_namespace(MessageQueue::from_parts(topic, broker_name.clone(), queue_id));
+                client_instance.get_broker_name_from_message_queue(&queue).await
+            } else {
+                broker_name.clone()
+            };
+        let mut broker = client_instance
+            .find_broker_address_in_subscribe(&destination_broker, mix_all::MASTER_ID, true)
+            .await;
+        if broker.is_none() {
+            client_instance
+                .update_topic_route_info_from_name_server_topic(topic)
+                .await;
+            broker = client_instance
+                .find_broker_address_in_subscribe(&destination_broker, mix_all::MASTER_ID, true)
+                .await;
         }
+        let broker = broker.ok_or_else(|| RocketMQError::BrokerNotFound {
+            name: destination_broker.to_string(),
+        })?;
+        Ok((client_instance, broker.broker_addr))
     }
 
     pub(crate) async fn change_pop_invisible_time_async(

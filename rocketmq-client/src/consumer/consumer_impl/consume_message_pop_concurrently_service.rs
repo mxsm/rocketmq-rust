@@ -492,18 +492,29 @@ impl ConsumeMessagePopConcurrentlyService {
         }
 
         if ack_index >= 0 {
-            for i in 0..=ack_index {
-                let msg = &consume_request.msgs[i as usize];
-                if let Some(default_mqpush_consumer_impl) = self.consumer_impl() {
-                    default_mqpush_consumer_impl
-                        .ack_async(msg.as_ref(), &self.consumer_group)
-                        .await;
-                } else {
-                    warn!(
-                        "pop consume ack skipped: DefaultMQPushConsumerImpl is not initialized, group={}, mq={}",
-                        self.consumer_group, consume_request.message_queue
-                    );
+            let acked_messages = &consume_request.msgs[..=ack_index as usize];
+            if let Some(default_mqpush_consumer_impl) = self.consumer_impl() {
+                for (entry_index, result) in default_mqpush_consumer_impl
+                    .ack_batch_async(acked_messages, &self.consumer_group)
+                    .await
+                {
+                    if let Err(error) = result {
+                        warn!(
+                            "pop consume ACK failed and will rely on redelivery: group={}, mq={}, msg_id={}, error={}",
+                            self.consumer_group,
+                            consume_request.message_queue,
+                            acked_messages[entry_index].msg_id,
+                            error
+                        );
+                    }
                 }
+            } else {
+                warn!(
+                    "pop consume ack skipped: DefaultMQPushConsumerImpl is not initialized, group={}, mq={}",
+                    self.consumer_group, consume_request.message_queue
+                );
+            }
+            for _ in acked_messages {
                 consume_request.process_queue.ack();
             }
         }

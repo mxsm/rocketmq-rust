@@ -509,12 +509,6 @@ impl ConsumeMessagePopOrderlyService {
         }
     }
 
-    async fn ack_message(&self, msg: &MessageExt) {
-        if let Some(impl_) = self.consumer_impl() {
-            impl_.ack_async(msg, &self.consumer_group).await;
-        }
-    }
-
     async fn change_invisible_time(&self, msg: &MessageExt, invisible_time: u64) {
         if let Some(impl_) = self.consumer_impl() {
             if let Some(extra_info) = msg.property(&CheetahString::from_static_str("POP_CK")) {
@@ -556,9 +550,7 @@ impl ConsumeMessagePopOrderlyService {
 
         match status {
             ConsumeOrderlyStatus::Success => {
-                for msg in msgs {
-                    self.ack_message(msg.as_ref()).await;
-                }
+                self.ack_messages(msgs).await;
                 true
             }
             ConsumeOrderlyStatus::SuspendCurrentQueueAMoment => {
@@ -574,9 +566,7 @@ impl ConsumeMessagePopOrderlyService {
             }
             #[allow(deprecated)]
             ConsumeOrderlyStatus::Commit => {
-                for msg in msgs {
-                    self.ack_message(msg.as_ref()).await;
-                }
+                self.ack_messages(msgs).await;
                 true
             }
             #[allow(deprecated)]
@@ -589,6 +579,24 @@ impl ConsumeMessagePopOrderlyService {
                     self.change_invisible_time(msg.as_ref(), 1000).await;
                 }
                 false
+            }
+        }
+    }
+
+    async fn ack_messages(&self, messages: &[Arc<MessageExt>]) {
+        let Some(impl_) = self.consumer_impl() else {
+            warn!(
+                "pop orderly ACK skipped: consumer is not initialized, group={}",
+                self.consumer_group
+            );
+            return;
+        };
+        for (entry_index, result) in impl_.ack_batch_async(messages, &self.consumer_group).await {
+            if let Err(error) = result {
+                warn!(
+                    "pop orderly ACK failed and will rely on redelivery: group={}, msg_id={}, error={}",
+                    self.consumer_group, messages[entry_index].msg_id, error
+                );
             }
         }
     }

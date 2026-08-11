@@ -54,6 +54,9 @@ use rocketmq_model::result::PullStatus;
 use rocketmq_model::result::SendResult;
 use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
 use rocketmq_protocol::protocol::body::acl_info::AclInfo;
+use rocketmq_protocol::protocol::body::batch_ack_builder::build_batch_ack_requests;
+use rocketmq_protocol::protocol::body::batch_ack_builder::BatchAckInput;
+use rocketmq_protocol::protocol::body::batch_ack_message_request_body::BatchAckMessageRequestBody;
 use rocketmq_protocol::protocol::body::broker_body::cluster_info::ClusterInfo;
 use rocketmq_protocol::protocol::body::request::lock_batch_request_body::LockBatchRequestBody;
 use rocketmq_protocol::protocol::body::response::lock_batch_response_body::LockBatchResponseBody;
@@ -269,6 +272,13 @@ trait ClusterClientIo: Send + Sync {
         &self,
         broker_addr: &CheetahString,
         request: AckMessageRequestHeader,
+        timeout_millis: u64,
+    ) -> Result<AckResult, RocketMQError>;
+
+    async fn batch_ack_message(
+        &self,
+        broker_addr: &CheetahString,
+        request: BatchAckMessageRequestBody,
         timeout_millis: u64,
     ) -> Result<AckResult, RocketMQError>;
 
@@ -501,6 +511,15 @@ impl ClusterClientIo for ClientInstanceHandle {
         timeout_millis: u64,
     ) -> Result<AckResult, RocketMQError> {
         self.ack_message(broker_addr, request, timeout_millis).await
+    }
+
+    async fn batch_ack_message(
+        &self,
+        broker_addr: &CheetahString,
+        request: BatchAckMessageRequestBody,
+        timeout_millis: u64,
+    ) -> Result<AckResult, RocketMQError> {
+        self.batch_ack_message(broker_addr, request, timeout_millis).await
     }
 
     async fn change_invisible_time(
@@ -1791,13 +1810,112 @@ async fn ack_message_inner(
 ) -> ProxyResult<Vec<AckMessageResultEntry>> {
     let timeout_ms = effective_request_timeout_ms(config.mq_client_api_timeout_ms, deadline);
     let client = state.client(config).await?;
-    let mut results = Vec::with_capacity(request.entries.len());
+    let group_name = request.group.to_string();
+    let topics = request
+        .entries
+        .iter()
+        .map(|entry| entry.lite_topic.clone().unwrap_or_else(|| request.topic.to_string()))
+        .collect::<Vec<_>>();
+    let batch_inputs = request
+        .entries
+        .iter()
+        .zip(&topics)
+        .enumerate()
+        .filter(|(_, (entry, _))| entry.lite_topic.is_none())
+        .map(|(entry_index, (entry, topic))| BatchAckInput {
+            entry_index,
+            consumer_group: group_name.as_str(),
+            topic,
+            receipt_handle: entry.receipt_handle.as_str(),
+        })
+        .collect::<Vec<_>>();
+    let built = build_batch_ack_requests(&batch_inputs);
+    let mut statuses = std::iter::repeat_with(|| None)
+        .take(request.entries.len())
+        .collect::<Vec<Option<ProxyPayloadStatus>>>();
+    let mut fallback_indexes = request
+        .entries
+        .iter()
+        .enumerate()
+        .filter_map(|(index, entry)| entry.lite_topic.is_some().then_some(index))
+        .chain(built.failures.into_iter().map(|failure| failure.entry_index))
+        .collect::<Vec<_>>();
 
-    for entry in &request.entries {
-        results.push(ack_message_entry(client.as_ref(), &request.group, &request.topic, entry, timeout_ms).await);
+    for batch_request in built.requests {
+        let Some(first_ack) = batch_request.body.acks.first() else {
+            continue;
+        };
+        let topic = first_ack.topic.clone();
+        let ack_consumer_group = first_ack.consumer_group.clone();
+        let retry = first_ack.retry.clone();
+        let queue_id = first_ack.queue_id;
+        let batch_result = async {
+            let route_topic = CheetahString::from_string(ExtraInfoUtil::get_real_topic_with_retry(
+                &topic,
+                &ack_consumer_group,
+                &retry,
+            )?);
+            let actual_broker_name =
+                resolve_subscription_broker_name(client.as_ref(), &route_topic, &batch_request.broker_name, queue_id)
+                    .await;
+            let broker_addr = find_subscribe_broker_addr(client.as_ref(), &actual_broker_name, &route_topic)
+                .await
+                .ok_or_else(|| RocketMQError::BrokerNotFound {
+                    name: actual_broker_name.to_string(),
+                })?;
+            client
+                .batch_ack_message(&broker_addr, batch_request.body, timeout_ms)
+                .await
+        }
+        .await;
+
+        match batch_result {
+            Ok(ack_result) => {
+                let status = ack_status_to_payload(&ack_result);
+                for index in batch_request.entry_indexes {
+                    statuses[index] = Some(status.clone());
+                }
+            }
+            Err(error) => {
+                tracing::warn!(
+                    broker = %batch_request.broker_name,
+                    entries = batch_request.entry_indexes.len(),
+                    error = %error,
+                    "cluster BatchAck failed; falling back to single ACK"
+                );
+                fallback_indexes.extend(batch_request.entry_indexes);
+            }
+        }
     }
 
-    Ok(results)
+    fallback_indexes.sort_unstable();
+    fallback_indexes.dedup();
+    for index in fallback_indexes {
+        statuses[index] = Some(
+            ack_message_entry_inner(
+                client.as_ref(),
+                &request.group,
+                &request.topic,
+                &request.entries[index],
+                timeout_ms,
+            )
+            .await
+            .unwrap_or_else(|error| ProxyStatusMapper::from_error_payload(&error)),
+        );
+    }
+
+    Ok(request
+        .entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| AckMessageResultEntry {
+            message_id: entry.message_id.clone(),
+            receipt_handle: entry.receipt_handle.clone(),
+            status: statuses[index].take().unwrap_or_else(|| {
+                ProxyStatusMapper::from_payload_code(v2::Code::InternalError, "ACK result was not produced")
+            }),
+        })
+        .collect())
 }
 
 async fn forward_message_to_dead_letter_queue_inner(
@@ -2116,25 +2234,6 @@ async fn resolve_broker_target(
         broker_name,
         broker_addr,
     })
-}
-
-async fn ack_message_entry(
-    client: &dyn ClusterClientIo,
-    group: &ResourceIdentity,
-    topic: &ResourceIdentity,
-    entry: &AckMessageEntry,
-    timeout_ms: u64,
-) -> AckMessageResultEntry {
-    let status = match ack_message_entry_inner(client, group, topic, entry, timeout_ms).await {
-        Ok(status) => status,
-        Err(error) => ProxyStatusMapper::from_error_payload(&error),
-    };
-
-    AckMessageResultEntry {
-        message_id: entry.message_id.clone(),
-        receipt_handle: entry.receipt_handle.clone(),
-        status,
-    }
 }
 
 async fn ack_message_entry_inner(

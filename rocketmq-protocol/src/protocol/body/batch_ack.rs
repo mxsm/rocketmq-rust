@@ -20,7 +20,7 @@ use serde::Deserializer;
 use serde::Serialize;
 use serde::Serializer;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct BatchAck {
     #[serde(rename = "c", alias = "consumerGroup")]
     pub consumer_group: CheetahString,
@@ -50,6 +50,7 @@ pub struct BatchAck {
     pub bit_set: SerializableBitVec,
 }
 
+#[derive(Debug)]
 pub struct SerializableBitVec(pub BitVec<u64, Lsb0>);
 
 impl Serialize for SerializableBitVec {

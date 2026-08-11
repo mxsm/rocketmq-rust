@@ -18,7 +18,7 @@ use serde::Serialize;
 
 use crate::protocol::body::batch_ack::BatchAck;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BatchAckMessageRequestBody {
     pub broker_name: CheetahString,

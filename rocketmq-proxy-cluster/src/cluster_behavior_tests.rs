@@ -149,6 +149,13 @@ impl ScriptedClientIo {
             .push_back(Ok(result));
     }
 
+    fn push_ack_error(&self, message: &str) {
+        self.acks
+            .lock()
+            .expect("ack script lock poisoned")
+            .push_back(Err(RocketMQError::IllegalArgument(message.to_owned())));
+    }
+
     fn fail_broker_lookup_times(&self, count: usize) {
         self.broker_lookup_misses.store(count, Ordering::Release);
     }
@@ -261,6 +268,17 @@ impl ClusterClientIo for ScriptedClientIo {
         self.record("client.ack");
         self.ack_calls.fetch_add(1, Ordering::AcqRel);
         Self::scripted(&self.acks, "ack_message")
+    }
+
+    async fn batch_ack_message(
+        &self,
+        _broker_addr: &CheetahString,
+        _request: BatchAckMessageRequestBody,
+        _timeout_millis: u64,
+    ) -> Result<AckResult, RocketMQError> {
+        self.record("client.batch-ack");
+        self.ack_calls.fetch_add(1, Ordering::AcqRel);
+        Self::scripted(&self.acks, "batch_ack_message")
     }
 
     async fn change_invisible_time(
@@ -676,6 +694,115 @@ fn ack_request(group: &str) -> AckMessageRequest {
             lite_topic: None,
         }],
     }
+}
+
+fn batch_ack_request(group: &str, count: usize) -> AckMessageRequest {
+    AckMessageRequest {
+        group: ResourceIdentity::new("", group),
+        topic: ResourceIdentity::new("", "TopicA"),
+        entries: (0..count)
+            .map(|offset| AckMessageEntry {
+                message_id: format!("message-{offset}"),
+                receipt_handle: ExtraInfoUtil::build_extra_info_with_offset(
+                    100,
+                    1,
+                    30_000,
+                    0,
+                    "TopicA",
+                    "broker-a",
+                    0,
+                    100 + offset as i64,
+                ),
+                lite_topic: None,
+            })
+            .collect(),
+    }
+}
+
+#[tokio::test]
+async fn compatible_ack_entries_use_one_broker_batch() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let client = Arc::new(ScriptedClientIo::new(events.clone()));
+    client.push_ack(AckResult::default());
+    let factory = Arc::new(ScriptedProducerFactory {
+        events: events.clone(),
+        send_results: Arc::new(Mutex::new(VecDeque::new())),
+        start_control: None,
+    });
+
+    run_test_worker(client.clone(), factory, |executor, cancellation| async move {
+        let results = executor
+            .ack_message(batch_ack_request("GroupA", 32), Some(Duration::from_secs(1)))
+            .await
+            .expect("batch ACK command");
+        assert_eq!(results.len(), 32);
+        assert!(results.iter().all(|result| result.status.is_ok()));
+        assert_eq!(client.ack_calls.load(Ordering::Acquire), 1);
+        assert_eq!(
+            events
+                .lock()
+                .expect("event log lock poisoned")
+                .iter()
+                .filter(|event| **event == "client.batch-ack")
+                .count(),
+            1
+        );
+        cancellation.cancel();
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn failed_batch_falls_back_once_per_entry() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let client = Arc::new(ScriptedClientIo::new(events.clone()));
+    client.push_ack_error("batch unavailable");
+    client.push_ack(AckResult::default());
+    client.push_ack(AckResult::default());
+    let factory = Arc::new(ScriptedProducerFactory {
+        events,
+        send_results: Arc::new(Mutex::new(VecDeque::new())),
+        start_control: None,
+    });
+
+    run_test_worker(client.clone(), factory, |executor, cancellation| async move {
+        let results = executor
+            .ack_message(batch_ack_request("GroupA", 2), Some(Duration::from_secs(1)))
+            .await
+            .expect("fallback ACK command");
+        assert!(results.iter().all(|result| result.status.is_ok()));
+        assert_eq!(client.ack_calls.load(Ordering::Acquire), 3);
+        cancellation.cancel();
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn malformed_receipt_failure_is_mapped_to_only_that_entry() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let client = Arc::new(ScriptedClientIo::new(events.clone()));
+    client.push_ack(AckResult::default());
+    let factory = Arc::new(ScriptedProducerFactory {
+        events,
+        send_results: Arc::new(Mutex::new(VecDeque::new())),
+        start_control: None,
+    });
+    let mut request = batch_ack_request("GroupA", 2);
+    request.entries[1].receipt_handle = "malformed".to_owned();
+
+    run_test_worker(client.clone(), factory, |executor, cancellation| async move {
+        let results = executor
+            .ack_message(request, Some(Duration::from_secs(1)))
+            .await
+            .expect("partially valid ACK command");
+        assert_eq!(results.len(), 2);
+        assert!(results[0].status.is_ok());
+        assert!(!results[1].status.is_ok());
+        assert_eq!(results[1].status.code(), v2::Code::InvalidReceiptHandle as i32);
+        assert_eq!(client.ack_calls.load(Ordering::Acquire), 1);
+        cancellation.cancel();
+    })
+    .await;
 }
 
 async fn wait_until(mut condition: impl FnMut() -> bool) {
