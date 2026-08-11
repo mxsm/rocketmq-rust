@@ -171,6 +171,13 @@ fn benchmark_service_context() -> ChildServiceContext {
 }
 
 fn new_bench_store(flush_disk_type: FlushDiskType) -> BenchStore {
+    new_bench_store_with_mapped_file_size(flush_disk_type, 1024 * 1024 * 256)
+}
+
+fn new_bench_store_with_mapped_file_size(
+    flush_disk_type: FlushDiskType,
+    mapped_file_size_commit_log: usize,
+) -> BenchStore {
     let temp_dir = TempDir::new().expect("create temp dir for benchmark");
     let mut message_store_config = MessageStoreConfig {
         store_path_root_dir: temp_dir.path().to_string_lossy().to_string().into(),
@@ -178,7 +185,7 @@ fn new_bench_store(flush_disk_type: FlushDiskType) -> BenchStore {
         ha_listen_port: 0,
         ..MessageStoreConfig::default()
     };
-    message_store_config.mapped_file_size_commit_log = 1024 * 1024 * 256;
+    message_store_config.mapped_file_size_commit_log = mapped_file_size_commit_log;
 
     let mut store = LocalFileMessageStore::new(
         Arc::new(message_store_config),
@@ -196,6 +203,49 @@ fn new_bench_store(flush_disk_type: FlushDiskType) -> BenchStore {
         store,
         _temp_dir: temp_dir,
     }
+}
+
+fn bench_bounded_bulk_read(c: &mut Criterion) {
+    const MAPPED_FILE_SIZE: usize = 64 * 1024 * 1024;
+    const TRANSFER_SIZE: usize = 256 * 1024;
+
+    let mut group = c.benchmark_group("mapped_file/bounded_bulk_read");
+    group.sample_size(10);
+    group.throughput(Throughput::Bytes(TRANSFER_SIZE as u64));
+    group.bench_function("64MiB_active_file_256KiB_transfer", |b| {
+        let runtime = Runtime::new().expect("create runtime");
+        let mut bench_store = new_bench_store_with_mapped_file_size(FlushDiskType::AsyncFlush, MAPPED_FILE_SIZE);
+        runtime.block_on(async {
+            bench_store.store.init().await.expect("init bulk read benchmark store");
+            let payload = vec![0x5a; MAPPED_FILE_SIZE];
+            assert!(bench_store
+                .store
+                .get_commit_log_mut()
+                .append_data(0, &payload, 0, payload.len() as i32)
+                .await
+                .expect("append bulk read benchmark payload"));
+        });
+
+        b.iter_custom(|iters| {
+            let before = bench_store.store.get_commit_log().selection_stats();
+            let started = Instant::now();
+            for _ in 0..iters {
+                let selections = bench_store
+                    .store
+                    .get_commit_log()
+                    .get_bulk_data(0, TRANSFER_SIZE as i32)
+                    .expect("select bounded bulk data");
+                black_box(selections);
+            }
+            let elapsed = started.elapsed();
+            let after = bench_store.store.get_commit_log().selection_stats();
+            let expected_bytes = iters.saturating_mul(TRANSFER_SIZE as u64);
+            assert_eq!(after.copied_bytes - before.copied_bytes, expected_bytes);
+            assert_eq!(after.compared_bytes - before.compared_bytes, expected_bytes);
+            elapsed
+        });
+    });
+    group.finish();
 }
 
 fn create_test_message(topic: &str, queue_id: i32, body_size: usize, key_seed: u64) -> MessageExtBrokerInner {
@@ -329,6 +379,11 @@ fn write_commit_log_lock_profile_artifact() {
     .expect("CommitLog lock profile report should be written");
 }
 
+fn ensure_commit_log_lock_profile_artifact() {
+    static ARTIFACT: OnceLock<()> = OnceLock::new();
+    ARTIFACT.get_or_init(write_commit_log_lock_profile_artifact);
+}
+
 fn bench_async_flush_single_message(c: &mut Criterion) {
     let mut group = c.benchmark_group("phase5/async_flush_single_message");
     group.sample_size(20);
@@ -400,8 +455,6 @@ fn bench_async_flush_multi_queue(c: &mut Criterion) {
 }
 
 fn bench_commit_log_lock_profile_contention(c: &mut Criterion) {
-    write_commit_log_lock_profile_artifact();
-
     let mut group = c.benchmark_group("phase5/commit_log_lock_profile_contention");
     group.sample_size(10);
 
@@ -410,6 +463,7 @@ fn bench_commit_log_lock_profile_contention(c: &mut Criterion) {
             scenario.queue_count as u64 * scenario.messages_per_queue,
         ));
         group.bench_with_input(BenchmarkId::from_parameter(scenario.name), &scenario, |b, &scenario| {
+            ensure_commit_log_lock_profile_artifact();
             let runtime = Runtime::new().expect("create runtime");
             let mut bench_store = new_bench_store(scenario.flush_disk_type);
             runtime.block_on(start_store_if_needed(&mut bench_store, scenario.flush_disk_type));
@@ -513,5 +567,6 @@ criterion_group!(
     bench_commit_log_lock_profile_contention,
     bench_reput_once_after_batch,
     bench_sync_flush_tail_latency_baseline,
+    bench_bounded_bulk_read,
 );
 criterion_main!(benches);

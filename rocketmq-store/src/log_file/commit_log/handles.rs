@@ -105,6 +105,10 @@ impl CommitLogReadHandle {
         self.mapped_file_queue.get_data(offset)
     }
 
+    pub(crate) fn get_data_bounded(&self, offset: i64, max_bytes: usize) -> Option<SelectMappedBufferResult> {
+        self.mapped_file_queue.get_data_bounded(offset, max_bytes)
+    }
+
     pub(crate) fn get_max_offset(&self) -> i64 {
         self.mapped_file_queue.get_max_offset()
     }

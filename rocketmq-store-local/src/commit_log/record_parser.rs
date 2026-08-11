@@ -316,6 +316,13 @@ pub fn decode_commit_log_record<C: CommitLogRecordChecksum>(
         });
     }
     let declared_len = declared_size as usize;
+    let magic_code = top_level_i32(input, 4, CommitLogRecordField::MagicCode).map_err(|mut error| {
+        error.declared_size = Some(declared_size);
+        error
+    })?;
+    if magic_code == BLANK_MAGIC_CODE {
+        return Ok(CommitLogRecordOutcome::Blank { declared_size });
+    }
     if input.len() < declared_len {
         return Err(CommitLogRecordError {
             declared_size: Some(declared_size),
@@ -325,13 +332,6 @@ pub fn decode_commit_log_record<C: CommitLogRecordChecksum>(
                 remaining: input.len(),
             },
         });
-    }
-    let magic_code = top_level_i32(input, 4, CommitLogRecordField::MagicCode).map_err(|mut error| {
-        error.declared_size = Some(declared_size);
-        error
-    })?;
-    if magic_code == BLANK_MAGIC_CODE {
-        return Ok(CommitLogRecordOutcome::Blank { declared_size });
     }
     let version = match magic_code {
         MESSAGE_MAGIC_CODE => CommitLogRecordVersion::V1,
@@ -457,6 +457,7 @@ mod tests {
     use super::CommitLogRecordChecksum;
     use super::CommitLogRecordOutcome;
     use super::CommitLogRecordVersion;
+    use super::BLANK_MAGIC_CODE;
     use super::MESSAGE_MAGIC_CODE;
     use super::MESSAGE_MAGIC_CODE_V2;
 
@@ -576,6 +577,25 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(checksum.calls.get(), 1);
+    }
+
+    #[test]
+    fn blank_marker_decodes_from_header_without_materializing_file_tail() {
+        let mut input = BytesMut::with_capacity(8);
+        input.put_i32(16 * 1024 * 1024);
+        input.put_i32(BLANK_MAGIC_CODE);
+        let checksum = SpyChecksum { calls: Cell::new(0) };
+
+        let outcome = decode_commit_log_record(&input.freeze(), CommitLogRecordBodyMode::Skip, &checksum)
+            .expect("blank marker header should decode");
+
+        assert!(matches!(
+            outcome,
+            CommitLogRecordOutcome::Blank {
+                declared_size: 16_777_216
+            }
+        ));
+        assert_eq!(checksum.calls.get(), 0);
     }
 
     #[test]

@@ -2375,6 +2375,11 @@ impl CommitLog {
         self.read_handle().get_bulk_data(offset, size)
     }
 
+    /// Returns cumulative heap-copy and attachment-comparison bytes for mapped-file selections.
+    pub fn selection_stats(&self) -> crate::consume_queue::mapped_file_queue::MappedFileSelectionStats {
+        self.mapped_file_queue.selection_stats()
+    }
+
     pub fn select_segments(
         &self,
         offset: i64,
@@ -3913,6 +3918,10 @@ mod tests {
             })
             .collect();
         assert_eq!(combined, b"CDEFghij");
+
+        let selection_stats = store.get_commit_log().selection_stats();
+        assert_eq!(selection_stats.copied_bytes, 8);
+        assert_eq!(selection_stats.compared_bytes, 8);
 
         let _ = fs::remove_dir_all(temp_root);
     }

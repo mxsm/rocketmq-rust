@@ -61,10 +61,12 @@ use rocketmq_store_local::mapped_file::queue_metrics::mapped_file_queue_lazy_mma
 use rocketmq_store_local::mapped_file::queue_metrics::mapped_file_queue_max_offset;
 use rocketmq_store_local::mapped_file::queue_metrics::mapped_file_queue_max_wrote_position;
 use rocketmq_store_local::mapped_file::queue_metrics::mapped_file_queue_min_offset;
+use rocketmq_store_local::mapped_file::queue_metrics::mapped_file_queue_selection_stats;
 use rocketmq_store_local::mapped_file::queue_metrics::mapped_file_queue_should_roll;
 use rocketmq_store_local::mapped_file::queue_metrics::mapped_file_queue_total_size;
 use rocketmq_store_local::mapped_file::queue_metrics::mapped_file_queue_warmup_stats;
 pub use rocketmq_store_local::mapped_file::queue_metrics::MappedFileIoStats;
+pub use rocketmq_store_local::mapped_file::queue_metrics::MappedFileSelectionStats;
 pub use rocketmq_store_local::mapped_file::queue_metrics::MappedFileWarmupStats;
 use rocketmq_store_local::mapped_file::queue_state::MappedFileQueueRuntimeState;
 use rocketmq_store_local::mapped_file::queue_storage::MappedFileQueueStorage;
@@ -316,6 +318,24 @@ impl MappedFileQueueReadHandle {
         result
     }
 
+    pub(crate) fn get_data_bounded(&self, offset: i64, max_bytes: usize) -> Option<SelectMappedBufferResult> {
+        if max_bytes == 0 {
+            return None;
+        }
+        let mapped_file = self.find_mapped_file_by_offset(offset, offset == 0)?;
+        let position = (offset % self.mapped_file_size as i64) as i32;
+        let readable = mapped_file.get_read_position().checked_sub(position)?;
+        if readable <= 0 {
+            return None;
+        }
+        let size = usize::try_from(readable).ok()?.min(max_bytes).min(i32::MAX as usize) as i32;
+        let mut result = mapped_file.select_mapped_buffer(position, size);
+        if let Some(result) = result.as_mut() {
+            result.try_attach_mapped_file(mapped_file);
+        }
+        result
+    }
+
     pub(crate) fn get_message(&self, offset: i64, size: i32) -> Option<SelectMappedBufferResult> {
         let mapped_file = self.find_mapped_file_by_offset(offset, offset == 0)?;
         let position = (offset % self.mapped_file_size as i64) as i32;
@@ -339,18 +359,13 @@ impl MappedFileQueueReadHandle {
         while remaining > 0 {
             let mapped_file = self.find_mapped_file_by_offset(current_offset, current_offset == offset)?;
             let pos = (current_offset % mapped_file_size) as i32;
-            let mut result = mapped_file.select_mapped_buffer_with_position(pos)?;
+            let readable = mapped_file.get_read_position().checked_sub(pos)?;
+            if readable <= 0 {
+                return None;
+            }
+            let take = usize::try_from(readable).ok()?.min(remaining);
+            let mut result = mapped_file.select_mapped_buffer(pos, take as i32)?;
             result.try_attach_mapped_file(mapped_file);
-
-            let readable = result.size().max(0) as usize;
-            if readable == 0 {
-                return None;
-            }
-
-            let take = readable.min(remaining);
-            if take < readable && !result.try_truncate(take) {
-                return None;
-            }
 
             results.push(result);
             current_offset += take as i64;
@@ -1023,6 +1038,11 @@ impl MappedFileQueue {
     pub fn io_stats(&self) -> MappedFileIoStats {
         let mapped_files = self.storage.mapped_files().snapshot();
         mapped_file_queue_io_stats(mapped_files.as_ref())
+    }
+
+    pub fn selection_stats(&self) -> MappedFileSelectionStats {
+        let mapped_files = self.storage.mapped_files().snapshot();
+        mapped_file_queue_selection_stats(mapped_files.as_ref())
     }
 
     pub fn lazy_mmap_stats(&self) -> LazyMmapStats {

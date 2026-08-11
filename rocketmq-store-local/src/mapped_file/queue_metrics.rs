@@ -44,6 +44,15 @@ pub struct MappedFileIoStats {
     pub bytes_read: u64,
 }
 
+/// Aggregate materialization costs from one mapped-file queue generation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MappedFileSelectionStats {
+    /// Bytes copied into owned read selections.
+    pub copied_bytes: u64,
+    /// Bytes compared while attaching selections to mapped-file owners.
+    pub compared_bytes: u64,
+}
+
 /// Aggregates I/O metrics from the current mapped-file snapshot.
 #[doc(hidden)]
 pub fn mapped_file_queue_io_stats(files: &[Arc<DefaultMappedFile>]) -> MappedFileIoStats {
@@ -57,6 +66,22 @@ pub fn mapped_file_queue_io_stats(files: &[Arc<DefaultMappedFile>]) -> MappedFil
         stats.flush_operations = stats.flush_operations.saturating_add(metrics.total_flushes());
         stats.read_operations = stats.read_operations.saturating_add(metrics.total_reads());
         stats.bytes_read = stats.bytes_read.saturating_add(metrics.total_bytes_read());
+    }
+    stats
+}
+
+/// Aggregates read-selection materialization metrics from the current mapped-file snapshot.
+#[doc(hidden)]
+pub fn mapped_file_queue_selection_stats(files: &[Arc<DefaultMappedFile>]) -> MappedFileSelectionStats {
+    let mut stats = MappedFileSelectionStats::default();
+    for mapped_file in files {
+        let Some(metrics) = mapped_file.get_metrics() else {
+            continue;
+        };
+        stats.copied_bytes = stats.copied_bytes.saturating_add(metrics.selection_copy_bytes_total());
+        stats.compared_bytes = stats
+            .compared_bytes
+            .saturating_add(metrics.selection_compare_bytes_total());
     }
     stats
 }

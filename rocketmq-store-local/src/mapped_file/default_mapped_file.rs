@@ -1016,7 +1016,13 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
 
         let _writer = self.write_state.lock();
         let generation = self.try_get_read_generation(admission, MappedFileOperation::Read)?;
-        Ok(generation.with_slice(|mapped| mapped.get(pos..end).map(Bytes::copy_from_slice)))
+        let copied = generation.with_slice(|mapped| mapped.get(pos..end).map(Bytes::copy_from_slice));
+        if copied.is_some() {
+            if let Some(metrics) = self.metrics.as_ref() {
+                metrics.record_selection_copy(size);
+            }
+        }
+        Ok(copied)
     }
 
     fn try_copy_range(
@@ -1213,7 +1219,11 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
 
         let _writer = self.write_state.lock();
         let generation = self.try_get_read_generation(admission, MappedFileOperation::Read)?;
-        Ok(generation.with_slice(|mapped| mapped.get(start..end) == Some(snapshot)))
+        let matches = generation.with_slice(|mapped| mapped.get(start..end) == Some(snapshot));
+        if let Some(metrics) = self.metrics.as_ref() {
+            metrics.record_selection_compare(snapshot.len());
+        }
+        Ok(matches)
     }
 
     /// Extracts the file offset from the given file name.
