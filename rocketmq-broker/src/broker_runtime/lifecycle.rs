@@ -299,12 +299,19 @@ impl BrokerRuntime {
         } else {
             MessageStoreShutdownOutcome::TimedOut
         };
+        let message_store_shutdown_completed =
+            matches!(&message_store_outcome, MessageStoreShutdownOutcome::Completed(_));
         record_message_store_shutdown_outcome(
             &mut shutdown_report,
             &progress,
             message_store_outcome,
             started.elapsed(),
         );
+        if message_store_shutdown_completed {
+            // A completed shutdown is the ownership boundary for the Store root lease. Retain the
+            // owner after failures or timeouts so a later shutdown attempt can finish durably.
+            self.composition.state.message_store.take();
+        }
 
         if let Some(hook) = self.lifecycle.shutdown_hook.clone() {
             let hook_result = if let Some(service_context) = self.composition.state.service_context.as_ref() {
