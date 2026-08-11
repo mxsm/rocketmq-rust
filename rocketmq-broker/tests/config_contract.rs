@@ -25,7 +25,9 @@ use rocketmq_broker::config::transaction::ConfigUpdateTransaction;
 use rocketmq_broker::config::validated::ConfigGeneration;
 use rocketmq_broker::config::validated::ValidatedBrokerConfig;
 use rocketmq_runtime::MemoryLimitSource;
+use rocketmq_store::FlushDiskType;
 use rocketmq_store::MessageStoreConfig;
+use rocketmq_store::StoreCompatibilityProfile;
 use rocketmq_store_api::TimerStoreMode;
 
 fn fixture(name: &str) -> PathBuf {
@@ -97,6 +99,111 @@ fn canonical_fixture_crosses_the_raw_and_validated_boundary() {
     assert!(!sections.telemetry().trace_exporter().is_enable());
     assert_eq!(validated.logging().logging.filter.as_deref(), Some("info"));
     assert!(validated.logging().logging.reload.enabled);
+    assert_eq!(
+        validated.store().compatibility_profile,
+        StoreCompatibilityProfile::Java55
+    );
+    assert_eq!(validated.store().max_recovery_commit_log_files, 30);
+    assert_eq!(validated.store().flush_consume_queue_least_pages, 2);
+}
+
+#[test]
+fn omitted_profile_preserves_legacy_rust_defaults() {
+    let raw = load_inline_config("[store]\n").expect("legacy config should deserialize");
+    let validated = ValidatedBrokerConfig::try_from(raw).expect("legacy config should validate");
+    let legacy = MessageStoreConfig::default();
+
+    assert_eq!(
+        validated.store().compatibility_profile,
+        StoreCompatibilityProfile::LegacyRust
+    );
+    assert_eq!(validated.store().flush_disk_type, legacy.flush_disk_type);
+    assert_eq!(
+        validated.store().max_recovery_commit_log_files,
+        legacy.max_recovery_commit_log_files
+    );
+    assert_eq!(
+        validated.store().flush_commit_log_least_pages,
+        legacy.flush_commit_log_least_pages
+    );
+    assert_eq!(validated.store().min_in_sync_replicas, legacy.min_in_sync_replicas);
+}
+
+#[test]
+fn java55_profile_applies_only_to_omitted_fields() {
+    let raw = load_inline_config("[store]\ncompatibilityProfile = \"JAVA_5_5\"\nflushDiskType = \"SYNC_FLUSH\"\n")
+        .expect("Java profile should deserialize");
+    let validated = ValidatedBrokerConfig::try_from(raw).expect("Java profile should validate");
+    let store = validated.store();
+
+    assert_eq!(store.compatibility_profile, StoreCompatibilityProfile::Java55);
+    assert_eq!(store.flush_disk_type, FlushDiskType::SyncFlush);
+    assert_eq!(store.max_recovery_commit_log_files, 30);
+    assert_eq!(store.flush_commit_log_least_pages, 4);
+    assert_eq!(store.commit_commit_log_least_pages, 4);
+    assert_eq!(store.flush_consume_queue_least_pages, 2);
+    assert_eq!(store.flush_consume_queue_thorough_interval, 60_000);
+    assert_eq!(store.slave_timeout, 3_000);
+    assert_eq!(store.transient_store_pool_size, 5);
+    assert_eq!(store.min_in_sync_replicas, 1);
+    assert_eq!(store.ha_max_time_slave_not_catchup, 15_000);
+}
+
+#[test]
+fn explicit_zero_is_not_overwritten_by_a_profile() {
+    let raw = load_inline_config("[store]\ncompatibilityProfile = \"JAVA_5_5\"\nflushCommitLogLeastPages = 0\n")
+        .expect("explicit zero should deserialize");
+
+    assert_invalid_section(ValidatedBrokerConfig::try_from(raw), ConfigSection::Storage);
+}
+
+#[test]
+fn strict_profile_enables_sync_flush_and_all_ack() {
+    let raw = load_inline_config("[store]\ncompatibilityProfile = \"DURABILITY_STRICT\"\n")
+        .expect("strict profile should deserialize");
+    let validated = ValidatedBrokerConfig::try_from(raw).expect("strict profile should validate");
+
+    assert_eq!(
+        validated.store().compatibility_profile,
+        StoreCompatibilityProfile::DurabilityStrict
+    );
+    assert_eq!(validated.store().flush_disk_type, FlushDiskType::SyncFlush);
+    assert!(validated.store().all_ack_in_sync_state_set);
+}
+
+#[test]
+fn unknown_store_profile_is_rejected_during_deserialization() {
+    let error = load_inline_config("[store]\ncompatibilityProfile = \"JAVA_6\"\n")
+        .expect_err("unknown profile must fail before validation");
+
+    assert!(error.to_string().contains("JAVA_6"));
+}
+
+#[test]
+fn dledger_configuration_is_rejected_at_the_validated_boundary() {
+    let store = MessageStoreConfig {
+        enable_dledger_commit_log: true,
+        ..MessageStoreConfig::default()
+    };
+
+    assert_invalid_section(
+        ValidatedBrokerConfig::try_from_parts(BrokerConfig::default(), store),
+        ConfigSection::Storage,
+    );
+}
+
+#[test]
+fn enabled_transient_pool_requires_at_least_one_buffer() {
+    let store = MessageStoreConfig {
+        transient_store_pool_enable: true,
+        transient_store_pool_size: 0,
+        ..MessageStoreConfig::default()
+    };
+
+    assert_invalid_section(
+        ValidatedBrokerConfig::try_from_parts(BrokerConfig::default(), store),
+        ConfigSection::Storage,
+    );
 }
 
 #[test]
@@ -316,6 +423,7 @@ fn rendered_deployment_sources_use_the_canonical_section_layout() {
         assert!(source.contains("    [broker]"));
         assert!(source.contains("    [broker.brokerIdentity]"));
         assert!(source.contains("    [store]"));
+        assert!(source.contains("    compatibilityProfile = \"JAVA_5_5\""));
     }
 }
 

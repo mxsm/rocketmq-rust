@@ -3885,6 +3885,15 @@
         },
         {
           "category": "stable",
+          "declaration": "pub use crate::config::store_compatibility_profile::StoreCompatibilityProfile",
+          "identity": "rocketmq-store/src/public_api.rs:pub use crate::config::store_compatibility_profile::StoreCompatibilityProfile",
+          "owner": "store",
+          "path": "rocketmq-store/src/public_api.rs",
+          "rationale": "explicit compatibility contract for store defaults and durability",
+          "removal_condition": "retain while compatibility profiles are part of broker configuration"
+        },
+        {
+          "category": "stable",
           "declaration": "pub use crate::config::message_store_config::bounded_local_file_consume_queue_recovery_parallelism",
           "identity": "rocketmq-store/src/public_api.rs:pub use crate::config::message_store_config::bounded_local_file_consume_queue_recovery_parallelism",
           "owner": "store",
