@@ -2795,6 +2795,7 @@ mod tests {
     use super::ClusterWorkerState;
     use super::RocketmqClusterClient;
     use super::TelemetryHandle;
+    use crate::cluster::cluster_admission::ClusterCommandClass;
     use crate::config::ClusterConfig;
     use rocketmq_model::common::message::message_queue::MessageQueue;
     use rocketmq_proxy_core::ProxyError;
@@ -2957,6 +2958,7 @@ mod tests {
             max_queue_age: Duration::from_secs(1),
             io_max_inflight: 2,
             control_reserve: 1,
+            long_poll_max_inflight: 2,
             lane_idle_timeout: Duration::from_secs(1),
         })
         .expect("count budget");
@@ -3000,6 +3002,7 @@ mod tests {
             max_queue_age: Duration::from_secs(1),
             io_max_inflight: 2,
             control_reserve: 1,
+            long_poll_max_inflight: 2,
             lane_idle_timeout: Duration::from_secs(1),
         })
         .expect("byte budget");
@@ -3031,6 +3034,82 @@ mod tests {
             }
         ));
         assert_eq!(byte_lanes.root_budget.snapshot().current_bytes, 0);
+
+        let long_poll_lanes = ClusterExecutionLanes::new(ClusterExecutionPolicy {
+            capacity_count: 2,
+            capacity_bytes: 4 * 1024,
+            max_queue_age: Duration::from_secs(1),
+            io_max_inflight: 2,
+            control_reserve: 1,
+            long_poll_max_inflight: 2,
+            lane_idle_timeout: Duration::from_secs(1),
+        })
+        .expect("long-poll budget");
+        for _ in 0..2 {
+            let (reply, _receiver) = oneshot::channel();
+            long_poll_lanes
+                .enqueue(
+                    ClusterCommand::PullMessage {
+                        request: PullMessageRequest {
+                            group: ResourceIdentity::new("", "GroupA"),
+                            target: MessageQueueTarget {
+                                topic: ResourceIdentity::new("", "TopicA"),
+                                queue_id: 0,
+                                broker_name: Some("broker-a".to_owned()),
+                                broker_addr: Some("127.0.0.1:10911".to_owned()),
+                            },
+                            offset: 0,
+                            batch_size: 1,
+                            filter_expression: rocketmq_proxy_core::ConsumerFilterExpression {
+                                expression_type: "TAG".to_owned(),
+                                expression: "*".to_owned(),
+                            },
+                            long_polling_timeout: Duration::from_secs(1),
+                        },
+                        deadline: Some(Duration::from_secs(2)),
+                        reply,
+                    },
+                    CancellationToken::new(),
+                    &config,
+                )
+                .expect("long poll is admitted");
+        }
+        let (reply, _receiver) = oneshot::channel();
+        let long_poll_error = long_poll_lanes
+            .enqueue(
+                ClusterCommand::PullMessage {
+                    request: PullMessageRequest {
+                        group: ResourceIdentity::new("", "GroupA"),
+                        target: MessageQueueTarget {
+                            topic: ResourceIdentity::new("", "TopicA"),
+                            queue_id: 0,
+                            broker_name: Some("broker-a".to_owned()),
+                            broker_addr: Some("127.0.0.1:10911".to_owned()),
+                        },
+                        offset: 0,
+                        batch_size: 1,
+                        filter_expression: rocketmq_proxy_core::ConsumerFilterExpression {
+                            expression_type: "TAG".to_owned(),
+                            expression: "*".to_owned(),
+                        },
+                        long_polling_timeout: Duration::from_secs(1),
+                    },
+                    deadline: Some(Duration::from_secs(2)),
+                    reply,
+                },
+                CancellationToken::new(),
+                &config,
+            )
+            .expect_err("third long poll exceeds the independent count budget");
+        assert!(matches!(
+            long_poll_error,
+            ProxyError::TooManyRequests {
+                resource: "proxy-cluster-command-queue"
+            }
+        ));
+        assert_eq!(long_poll_lanes.root_budget.snapshot().current_count, 0);
+        assert_eq!(long_poll_lanes.long_poll_budget.snapshot().current_count, 2);
+        assert_eq!(long_poll_lanes.snapshot().long_poll_queued_and_active, 2);
     }
 
     #[test]
@@ -3048,6 +3127,10 @@ mod tests {
             },
             ClusterConfig {
                 control_reserve: 0,
+                ..Default::default()
+            },
+            ClusterConfig {
+                long_poll_max_inflight: 0,
                 ..Default::default()
             },
             ClusterConfig {
@@ -3069,7 +3152,7 @@ mod tests {
     }
 
     #[test]
-    fn related_consumer_commands_share_a_fifo_lane() {
+    fn consumer_poll_control_and_offset_commands_use_separate_lanes() {
         let group = ResourceIdentity::new("tenant-a", "GroupA");
         let topic = ResourceIdentity::new("tenant-a", "TopicA");
         let target = MessageQueueTarget {
@@ -3116,8 +3199,12 @@ mod tests {
         };
 
         let config = ClusterConfig::default();
-        assert_eq!(pull.ordering_key(&config), ack.ordering_key(&config));
-        assert_eq!(pull.ordering_key(&config), update_offset.ordering_key(&config));
+        assert_eq!(pull.class(), ClusterCommandClass::LongPoll);
+        assert_eq!(ack.class(), ClusterCommandClass::Control);
+        assert_eq!(update_offset.class(), ClusterCommandClass::Control);
+        assert_ne!(pull.ordering_key(&config), ack.ordering_key(&config));
+        assert_ne!(pull.ordering_key(&config), update_offset.ordering_key(&config));
+        assert_ne!(ack.ordering_key(&config), update_offset.ordering_key(&config));
     }
 
     #[tokio::test]
@@ -3131,6 +3218,7 @@ mod tests {
                 max_queue_age: Duration::from_millis(1),
                 io_max_inflight: 2,
                 control_reserve: 1,
+                long_poll_max_inflight: 2,
                 lane_idle_timeout: Duration::from_secs(1),
             })
             .expect("expiry lanes"),

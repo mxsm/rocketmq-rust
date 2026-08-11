@@ -666,6 +666,18 @@ fn pull_request(group: &str) -> PullMessageRequest {
     }
 }
 
+fn ack_request(group: &str) -> AckMessageRequest {
+    AckMessageRequest {
+        group: ResourceIdentity::new("", group),
+        topic: ResourceIdentity::new("", "TopicA"),
+        entries: vec![AckMessageEntry {
+            message_id: "message-id".to_owned(),
+            receipt_handle: ExtraInfoUtil::build_extra_info_with_offset(0, 1, 30_000, 0, "TopicA", "broker-a", 0, 7),
+            lite_topic: None,
+        }],
+    }
+}
+
 async fn wait_until(mut condition: impl FnMut() -> bool) {
     tokio::time::timeout(Duration::from_millis(250), async {
         while !condition() {
@@ -846,7 +858,7 @@ async fn distinct_consumer_keys_reach_remote_io_concurrently() {
 }
 
 #[tokio::test]
-async fn data_saturation_preserves_readiness_capacity_and_releases_all_permits() {
+async fn long_poll_saturation_preserves_short_data_and_control_capacity() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let (client, first_pull_entered) = ScriptedClientIo::blocking_pull(events.clone());
     client.push_pull(PullOutcome::new(
@@ -856,6 +868,15 @@ async fn data_saturation_preserves_readiness_capacity_and_releases_all_permits()
         21,
         None::<Vec<MessageExt>>,
     ));
+    client.push_pull(PullOutcome::new(
+        PullStatus::NoNewMsg,
+        22,
+        1,
+        32,
+        None::<Vec<MessageExt>>,
+    ));
+    client.push_route(TopicRouteData::default());
+    client.push_ack(AckResult::default());
     let client = Arc::new(client);
     let factory = Arc::new(ScriptedProducerFactory {
         events,
@@ -869,6 +890,7 @@ async fn data_saturation_preserves_readiness_capacity_and_releases_all_permits()
         max_queue_age: Duration::from_secs(2),
         io_max_inflight: 2,
         control_reserve: 1,
+        long_poll_max_inflight: 1,
         lane_idle_timeout: Duration::from_secs(1),
     };
 
@@ -884,24 +906,21 @@ async fn data_saturation_preserves_readiness_capacity_and_releases_all_permits()
                 let checks = async {
                     wait_until(|| {
                         let snapshot = executor.lanes.snapshot();
-                        snapshot.queued_and_active == 2 && snapshot.current_inflight == 1
+                        snapshot.long_poll_queued_and_active == 2 && snapshot.current_long_poll_inflight == 1
                     })
                     .await;
-                    let data_error = executor
+                    executor
                         .query_route(ResourceIdentity::new("", "DataOverflow"))
                         .await
-                        .expect_err("data capacity is saturated");
-                    assert!(matches!(data_error, ProxyError::TooManyRequests { .. }));
-
-                    let readiness_error = executor
-                        .readiness_check()
+                        .expect("short-data request must not wait behind long polling");
+                    let ack = executor
+                        .ack_message(ack_request("GroupA"), Some(Duration::from_secs(1)))
                         .await
-                        .expect_err("scripted readiness returns a remote error");
-                    assert!(
-                        !matches!(readiness_error, ProxyError::TooManyRequests { .. }),
-                        "control reserve must admit readiness"
-                    );
-                    assert_eq!(client.readiness_calls.load(Ordering::Acquire), 1);
+                        .expect("control request must not wait behind long polling");
+                    assert_eq!(ack.len(), 1);
+                    assert!(ack[0].status.is_ok());
+                    assert_eq!(client.route_calls.load(Ordering::Acquire), 1);
+                    assert_eq!(client.ack_calls.load(Ordering::Acquire), 1);
                     cancellation.cancel();
                 };
                 let (second, ()) = tokio::join!(second, checks);
@@ -912,7 +931,10 @@ async fn data_saturation_preserves_readiness_capacity_and_releases_all_permits()
             assert!(second.is_err(), "shutdown cancels the queued data command");
             wait_until(|| {
                 let snapshot = executor.lanes.snapshot();
-                snapshot.current_inflight == 0 && snapshot.queued_and_active == 0 && snapshot.active_keys == 0
+                snapshot.current_inflight == 0
+                    && snapshot.current_long_poll_inflight == 0
+                    && snapshot.queued_and_active == 0
+                    && snapshot.active_keys == 0
             })
             .await;
             assert_eq!(executor.lanes.snapshot().oldest_queued_age_ms, None);
@@ -939,6 +961,7 @@ async fn idle_key_lane_is_reclaimed_without_leaking_budget_or_tasks() {
         max_queue_age: Duration::from_secs(1),
         io_max_inflight: 2,
         control_reserve: 1,
+        long_poll_max_inflight: 2,
         lane_idle_timeout: Duration::from_millis(10),
     };
 
@@ -976,7 +999,7 @@ async fn idle_key_lane_is_reclaimed_without_leaking_budget_or_tasks() {
 }
 
 #[tokio::test]
-async fn active_command_holds_its_global_admission_permit() {
+async fn active_long_poll_uses_only_the_long_poll_budget() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let (client, pull_entered) = ScriptedClientIo::blocking_pull(events.clone());
     client.push_pull(PullOutcome::new(
@@ -986,6 +1009,7 @@ async fn active_command_holds_its_global_admission_permit() {
         11,
         None::<Vec<MessageExt>>,
     ));
+    client.push_route(TopicRouteData::default());
     let client = Arc::new(client);
     let factory = Arc::new(ScriptedProducerFactory {
         events,
@@ -999,6 +1023,7 @@ async fn active_command_holds_its_global_admission_permit() {
         max_queue_age: Duration::from_secs(1),
         io_max_inflight: 2,
         control_reserve: 1,
+        long_poll_max_inflight: 1,
         lane_idle_timeout: Duration::from_secs(1),
     };
 
@@ -1021,30 +1046,26 @@ async fn active_command_holds_its_global_admission_permit() {
             let probe = async {
                 let pull_started = pull_entered.await;
                 assert!(pull_started.is_ok(), "pull operation was entered");
-                let route_result = executor
+                let snapshot = executor.lanes.snapshot();
+                assert_eq!(snapshot.long_poll_queued_and_active, 1);
+                assert_eq!(snapshot.current_long_poll_inflight, 1);
+                assert_eq!(executor.lanes.root_budget.snapshot().current_count, 0);
+                executor
                     .query_route(ResourceIdentity::new("", "IndependentTopic"))
-                    .await;
-                assert!(
-                    route_result.is_err(),
-                    "the one-command global budget remains reserved while pull is active"
-                );
-                let Some(error) = route_result.err() else {
-                    std::process::abort();
-                };
+                    .await
+                    .expect("short-data admission remains available during long polling");
                 if let Some(block) = &client.pull_block {
                     block.notify_one();
                 }
-                error
             };
-            let (pull_result, admission_error) = tokio::join!(pull, probe);
+            let (pull_result, ()) = tokio::join!(pull, probe);
             assert!(pull_result.is_ok(), "blocked pull result");
             cancellation.cancel();
-            assert!(matches!(
-                admission_error,
-                ProxyError::TooManyRequests {
-                    resource: "proxy-cluster-command-queue"
-                }
-            ));
+            wait_until(|| {
+                let snapshot = executor.lanes.snapshot();
+                snapshot.current_long_poll_inflight == 0 && snapshot.long_poll_queued_and_active == 0
+            })
+            .await;
         },
     )
     .await;
