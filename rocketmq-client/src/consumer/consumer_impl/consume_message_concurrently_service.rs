@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use std::future::Future;
-use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -38,12 +37,12 @@ use rocketmq_runtime::common::time_utils::current_millis;
 use serde::Serialize;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
-use tokio_util::task::TaskTracker;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
 
 use crate::base::client_config::ClientConfig;
+use crate::consumer::consumer_impl::bounded_consume_scheduler::BoundedConsumeScheduler;
 use crate::consumer::consumer_impl::consume_message_service::ConsumeMessageServiceTrait;
 use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
 use crate::consumer::consumer_impl::pop_process_queue::PopProcessQueue;
@@ -55,7 +54,6 @@ use crate::consumer::listener::consume_return_type::ConsumeReturnType;
 use crate::consumer::listener::message_listener_concurrently::ArcMessageListenerConcurrently;
 use crate::hook::consume_message_context::ConsumeMessageContext;
 use crate::runtime::spawn_client_blocking_io_with_context;
-use crate::runtime::spawn_client_task_with_context;
 use crate::runtime::spawn_client_tracked_task_with_context;
 use crate::runtime::ClientTrackedTaskHandle;
 use rocketmq_runtime::ChildServiceContext;
@@ -80,10 +78,10 @@ pub struct ConsumeMessageConcurrentlyService {
     shutdown_token: CancellationToken,
     /// Background task matching Java's cleanExpireMsgExecutors lifecycle.
     clean_expire_task_handle: Arc<Mutex<Option<ConcurrentTaskHandle>>>,
-    consume_task_tracker: TaskTracker,
-    force_stop_token: CancellationToken,
-    submitted_tasks: Arc<AtomicU64>,
+    consume_scheduler: BoundedConsumeScheduler<ConsumeRequest>,
 }
+
+const CONSUME_SCHEDULER_CAPACITY: usize = 4_096;
 
 enum ConcurrentTaskHandle {
     Tracked(ClientTrackedTaskHandle),
@@ -101,20 +99,6 @@ impl ConcurrentTaskHandle {
                     );
                 }
                 report.is_healthy()
-            }
-        }
-    }
-
-    fn abort(self) {
-        match self {
-            Self::Tracked(handle) => {
-                let report = handle.shutdown_now();
-                if !report.is_healthy() {
-                    warn!(
-                        report = %report.to_json(),
-                        "concurrent clean-expire task immediate shutdown report is unhealthy"
-                    );
-                }
             }
         }
     }
@@ -151,33 +135,6 @@ where
     }
 }
 
-fn spawn_tracked_concurrent_task<F>(
-    service_context: &ChildServiceContext,
-    thread_name: &'static str,
-    tracker: &TaskTracker,
-    force_stop_token: &CancellationToken,
-    submitted_tasks: &Arc<AtomicU64>,
-    task: F,
-) where
-    F: Future<Output = ()> + Send + 'static,
-{
-    submitted_tasks.fetch_add(1, Ordering::Relaxed);
-    let force_stop_token = force_stop_token.clone();
-    let tracked_task = tracker.track_future(async move {
-        let mut task = Box::pin(task);
-        tokio::select! {
-            biased;
-            _ = force_stop_token.cancelled() => {}
-            _ = &mut task => {}
-        }
-    });
-
-    if let Err(error) = spawn_client_task_with_context(service_context, thread_name, tracked_task) {
-        warn!("Failed to spawn {} background task: {}", thread_name, error);
-        warn!("Failed to track {} background task", thread_name);
-    }
-}
-
 impl ConsumeMessageConcurrentlyService {
     pub fn new(
         service_context: ChildServiceContext,
@@ -203,9 +160,8 @@ impl ConsumeMessageConcurrentlyService {
             max_concurrency: Arc::new(AtomicUsize::new(core_pool_size)),
             shutdown_token: CancellationToken::new(),
             clean_expire_task_handle: Arc::new(Mutex::new(None)),
-            consume_task_tracker: TaskTracker::new(),
-            force_stop_token: CancellationToken::new(),
-            submitted_tasks: Arc::new(AtomicU64::new(0)),
+            consume_scheduler: BoundedConsumeScheduler::new(CONSUME_SCHEDULER_CAPACITY)
+                .expect("the fixed consume scheduler capacity must be non-zero"),
         }
     }
 
@@ -344,7 +300,8 @@ impl ConsumeMessageConcurrentlyService {
                         this,
                         consume_request.process_queue.clone(),
                         consume_request.message_queue.clone(),
-                    );
+                    )
+                    .await;
                 }
             }
         }
@@ -373,29 +330,36 @@ impl ConsumeMessageConcurrentlyService {
         }
     }
 
-    fn submit_consume_request_later(
+    async fn submit_consume_request_later(
         &self,
         msgs: Vec<Arc<MessageExt>>,
-        this: Arc<Self>,
+        _this: Arc<Self>,
         process_queue: Arc<ProcessQueue>,
         message_queue: MessageQueue,
     ) {
-        let shutdown_token = self.shutdown_token.clone();
-        spawn_tracked_concurrent_task(
-            &self.service_context,
-            "rocketmq-client-concurrent-consume-delay",
-            &self.consume_task_tracker,
-            &self.force_stop_token,
-            &self.submitted_tasks,
-            async move {
-                tokio::select! {
-                    _ = shutdown_token.cancelled() => return,
-                    _ = tokio::time::sleep(Duration::from_secs(5)) => {}
-                }
-                this.submit_consume_request(this.clone(), msgs, process_queue, message_queue, true)
-                    .await;
-            },
-        );
+        let request = ConsumeRequest {
+            msgs,
+            message_listener: self.message_listener.clone(),
+            process_queue: process_queue.clone(),
+            message_queue: message_queue.clone(),
+            dispatch_to_consume: true,
+            consumer_group: self.consumer_group.clone(),
+            default_mqpush_consumer_impl: self.consumer_impl(),
+        };
+        if let Err(error) = self
+            .consume_scheduler
+            .schedule_after(request, Duration::from_secs(5))
+            .await
+        {
+            let request = error.into_item();
+            request.process_queue.set_consuming(false);
+            warn!(
+                "concurrent consume retry rejected during shutdown, group={}, mq={}, msgs={}",
+                self.consumer_group,
+                request.message_queue,
+                request.msgs.len()
+            );
+        }
     }
 
     pub async fn send_message_back(&self, msg: &mut MessageExt, context: &ConsumeConcurrentlyContext) -> bool {
@@ -423,6 +387,33 @@ impl ConsumeMessageConcurrentlyService {
 
 impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
     fn start(&self, this: Arc<Self>) {
+        let worker_service = Arc::clone(&this);
+        if let Err(error) = self.consume_scheduler.start(
+            &self.service_context,
+            self.consumer_config.consume_thread_max.max(1) as usize,
+            move |mut request| {
+                let service = Arc::clone(&worker_service);
+                async move {
+                    if service.shutdown_token.is_cancelled() {
+                        return;
+                    }
+                    let limiter = Arc::clone(&service.consume_semaphore);
+                    let permit = tokio::select! {
+                        biased;
+                        _ = service.shutdown_token.cancelled() => return,
+                        permit = limiter.acquire_owned() => match permit {
+                            Ok(permit) => permit,
+                            Err(_) => return,
+                        }
+                    };
+                    request.run(Arc::clone(&service)).await;
+                    drop(permit);
+                }
+            },
+        ) {
+            error!("Failed to start bounded concurrent consume scheduler: {error}");
+        }
+
         let shutdown_token = self.shutdown_token.clone();
         let service_context = this.service_context.clone();
         let handle = spawn_concurrent_lifecycle_task(
@@ -448,7 +439,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
 
     async fn shutdown(&self, await_terminate_millis: u64) {
         self.shutdown_token.cancel();
-        self.consume_task_tracker.close();
+        self.consume_semaphore.close();
         let shutdown_timeout = Duration::from_millis(await_terminate_millis);
         let clean_expire_handle = { self.clean_expire_task_handle.lock().take() };
         if let Some(handle) = clean_expire_handle {
@@ -460,25 +451,13 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
             }
         }
 
-        match tokio::time::timeout(shutdown_timeout, self.consume_task_tracker.wait()).await {
-            Ok(()) => {
-                info!("ConsumeMessageConcurrentlyService shutdown gracefully");
-            }
-            Err(_elapsed) => {
-                warn!(
-                    "ConsumeMessageConcurrentlyService shutdown timed out after {}ms; {} submitted consume tasks may \
-                     still be running",
-                    await_terminate_millis,
-                    self.submitted_tasks.load(Ordering::Acquire)
-                );
-                self.force_stop_token.cancel();
-                if tokio::time::timeout(Duration::from_secs(1), self.consume_task_tracker.wait())
-                    .await
-                    .is_err()
-                {
-                    warn!("ConsumeMessageConcurrentlyService force stop timed out");
-                }
-            }
+        if self.consume_scheduler.shutdown(shutdown_timeout).await {
+            info!("ConsumeMessageConcurrentlyService shutdown gracefully");
+        } else {
+            warn!(
+                "ConsumeMessageConcurrentlyService scheduler did not stop within {}ms",
+                await_terminate_millis
+            );
         }
     }
 
@@ -600,7 +579,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
 
     async fn submit_consume_request(
         &self,
-        this: Arc<Self>,
+        _this: Arc<Self>,
         msgs: Vec<Arc<MessageExt>>,
         process_queue: Arc<ProcessQueue>,
         message_queue: MessageQueue,
@@ -617,19 +596,16 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
 
         let consume_batch_size = self.consumer_config.consume_message_batch_max_size;
         if msgs.len() <= consume_batch_size as usize {
-            self.spawn_consume_task(this, msgs, process_queue, message_queue, dispatch_to_consume);
+            self.schedule_consume_request(msgs, process_queue, message_queue, dispatch_to_consume)
+                .await;
         } else {
-            msgs.chunks(consume_batch_size as usize)
-                .map(|chunk| chunk.to_vec())
-                .for_each(|chunk| {
-                    self.spawn_consume_task(
-                        this.clone(),
-                        chunk,
-                        process_queue.clone(),
-                        message_queue.clone(),
-                        dispatch_to_consume,
-                    );
-                });
+            for chunk in msgs
+                .chunks(consume_batch_size as usize)
+                .map(<[Arc<MessageExt>]>::to_vec)
+            {
+                self.schedule_consume_request(chunk, process_queue.clone(), message_queue.clone(), dispatch_to_consume)
+                    .await;
+            }
         }
     }
 
@@ -645,52 +621,36 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
 }
 
 impl ConsumeMessageConcurrentlyService {
-    /// Attempts to acquire a semaphore permit and, if successful, spawns a consume task on the
-    /// current Tokio runtime.  When all `consume_thread_max` permits are in use the request is
-    /// retried after 5 s, matching the Java SDK's `RejectedExecutionException` path.
-    fn spawn_consume_task(
+    async fn schedule_consume_request(
         &self,
-        this: Arc<Self>,
         msgs: Vec<Arc<MessageExt>>,
         process_queue: Arc<ProcessQueue>,
         message_queue: MessageQueue,
         dispatch_to_consume: bool,
     ) {
         if self.shutdown_token.is_cancelled() {
+            process_queue.set_consuming(false);
             return;
         }
 
-        match Arc::clone(&self.consume_semaphore).try_acquire_owned() {
-            Ok(permit) => {
-                let mut consume_request = ConsumeRequest {
-                    msgs,
-                    message_listener: self.message_listener.clone(),
-                    process_queue,
-                    message_queue,
-                    dispatch_to_consume,
-                    consumer_group: self.consumer_group.clone(),
-                    default_mqpush_consumer_impl: self.consumer_impl(),
-                };
-                spawn_tracked_concurrent_task(
-                    &self.service_context,
-                    "rocketmq-client-concurrent-consume",
-                    &self.consume_task_tracker,
-                    &self.force_stop_token,
-                    &self.submitted_tasks,
-                    async move {
-                        let _permit = permit;
-                        consume_request.run(this).await;
-                    },
-                );
-            }
-            Err(_saturated) => {
-                warn!(
-                    "consume semaphore saturated for group {}; will retry {} message(s) in 5 s",
-                    self.consumer_group,
-                    msgs.len()
-                );
-                self.submit_consume_request_later(msgs, this, process_queue, message_queue);
-            }
+        let request = ConsumeRequest {
+            msgs,
+            message_listener: self.message_listener.clone(),
+            process_queue: process_queue.clone(),
+            message_queue: message_queue.clone(),
+            dispatch_to_consume,
+            consumer_group: self.consumer_group.clone(),
+            default_mqpush_consumer_impl: self.consumer_impl(),
+        };
+        if let Err(error) = self.consume_scheduler.schedule(request).await {
+            let request = error.into_item();
+            request.process_queue.set_consuming(false);
+            warn!(
+                "concurrent consume request rejected during shutdown, group={}, mq={}, msgs={}",
+                self.consumer_group,
+                request.message_queue,
+                request.msgs.len()
+            );
         }
     }
 }
@@ -1274,104 +1234,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tracked_concurrent_task_shutdown_waits_for_completion() {
-        let tracker = TaskTracker::new();
-        let token = CancellationToken::new();
-        let submitted = Arc::new(AtomicU64::new(0));
-        let completed = Arc::new(AtomicBool::new(false));
-        let completed_in_task = completed.clone();
-
-        spawn_tracked_concurrent_task(
-            &test_context(),
-            "rocketmq-client-concurrent-tracker-test",
-            &tracker,
-            &token,
-            &submitted,
-            async move {
-                completed_in_task.store(true, Ordering::Release);
-            },
-        );
-        tracker.close();
-
-        tokio::time::timeout(Duration::from_secs(1), tracker.wait())
-            .await
-            .expect("tracked task should finish before timeout");
-
-        assert!(completed.load(Ordering::Acquire));
-        assert_eq!(submitted.load(Ordering::Acquire), 1);
-    }
-
-    #[tokio::test]
-    async fn tracked_concurrent_task_force_stop_cancels_pending_task() {
-        let tracker = TaskTracker::new();
-        let token = CancellationToken::new();
-        let submitted = Arc::new(AtomicU64::new(0));
-        let dropped = Arc::new(AtomicBool::new(false));
-        let dropped_in_task = dropped.clone();
-
-        spawn_tracked_concurrent_task(
-            &test_context(),
-            "rocketmq-client-concurrent-tracker-test",
-            &tracker,
-            &token,
-            &submitted,
-            async move {
-                let _drop_flag = DropFlag(dropped_in_task);
-                pending::<()>().await;
-            },
-        );
-        tracker.close();
-
-        assert!(tokio::time::timeout(Duration::from_millis(20), tracker.wait())
-            .await
-            .is_err());
-
-        token.cancel();
-
-        tokio::time::timeout(Duration::from_secs(1), tracker.wait())
-            .await
-            .expect("force stop should release pending tracked task");
-
-        assert!(dropped.load(Ordering::Acquire));
-        assert_eq!(submitted.load(Ordering::Acquire), 1);
-    }
-
-    #[test]
-    fn start_without_tokio_runtime_does_not_spawn_panic() {
-        let service = new_service(None);
-
-        service.start(Arc::new(new_service(None)));
-
+    async fn start_and_shutdown_use_the_injected_runtime_context() {
+        let service = Arc::new(new_service(None));
+        service.start(Arc::clone(&service));
         assert!(service.clean_expire_task_handle.lock().is_some());
-        service.shutdown_token.cancel();
-        let handle = { service.clean_expire_task_handle.lock().take() };
-        if let Some(handle) = handle {
-            handle.abort();
-        }
-    }
-
-    #[test]
-    fn submit_consume_request_later_without_tokio_runtime_does_not_spawn_panic() {
-        let service = new_service(None);
-        let this = Arc::new(new_service(None));
-
-        service.submit_consume_request_later(vec![], this, Arc::new(ProcessQueue::new()), message_queue());
-        service.shutdown_token.cancel();
-        std::thread::sleep(Duration::from_millis(30));
-    }
-
-    #[test]
-    fn spawn_consume_task_without_tokio_runtime_does_not_spawn_panic() {
-        let service = new_service(None);
-
-        service.spawn_consume_task(
-            Arc::new(new_service(None)),
-            vec![Arc::new(MessageExt::default())],
-            Arc::new(ProcessQueue::new()),
-            message_queue(),
-            true,
-        );
-        std::thread::sleep(Duration::from_millis(30));
+        assert_eq!(service.consume_scheduler.task_count(), 65);
+        service.shutdown(100).await;
+        assert_eq!(service.consume_scheduler.task_count(), 0);
     }
 
     #[tokio::test]

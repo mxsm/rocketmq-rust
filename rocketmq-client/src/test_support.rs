@@ -27,7 +27,8 @@ pub use crate::consumer::consumer_impl::consume_message_pop_orderly_service::{
     run_pop_orderly_lock_refresh_lifecycle_probe, PopOrderlyLockRefreshLifecycleProbe,
 };
 pub use crate::consumer::consumer_impl::default_lite_pull_consumer_impl::{
-    run_lite_pull_assignment_registry_probe, run_lite_pull_task_lifecycle_probe, LitePullAssignmentRegistryProbe,
+    run_lite_pull_assignment_registry_probe, run_lite_pull_concurrency_contract_probe,
+    run_lite_pull_task_lifecycle_probe, LitePullAssignmentRegistryProbe, LitePullConcurrencyContractProbe,
     LitePullTaskLifecycleProbe,
 };
 pub use crate::consumer::consumer_impl::process_queue::{
