@@ -1118,6 +1118,10 @@ async fn broker_shutdown_cancels_scheduled_store_lease_before_store_lock_release
         report.message_store.present && report.message_store.healthy,
         "{report:?}"
     );
+    assert!(
+        runtime.composition.state.message_store().is_none(),
+        "a healthy shutdown should release the runtime's final message-store owner"
+    );
     let mut restarted = BrokerRuntime::new(
         Arc::new(BrokerConfig {
             store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
@@ -2548,6 +2552,20 @@ async fn initialize_controller_mode_broker(runtime: &mut BrokerRuntime, broker_l
     assert!(
         runtime.initial_rpc_hooks(),
         "{broker_label} rpc hooks should initialize"
+    );
+}
+
+async fn shutdown_controller_mode_broker_for_rejoin(runtime: &mut BrokerRuntime, broker_label: &str) {
+    let report = runtime
+        .shutdown_basic_service_until(ShutdownDeadline::after(Duration::from_secs(120)))
+        .await;
+    assert!(
+        report.message_store.present && report.message_store.healthy,
+        "{broker_label} message store should shut down before same-path rejoin: {report:?}"
+    );
+    assert!(
+        runtime.composition.state.message_store().is_none(),
+        "{broker_label} should release its message-store owner before same-path rejoin"
     );
 }
 
@@ -5811,7 +5829,7 @@ async fn three_controller_two_broker_controller_mode_failover_and_rejoin() {
     };
 
     if broker_a_is_master {
-        broker_a.shutdown().await;
+        shutdown_controller_mode_broker_for_rejoin(&mut broker_a, "broker A").await;
         broker_b
             .composition
             .state
@@ -5819,7 +5837,7 @@ async fn three_controller_two_broker_controller_mode_failover_and_rejoin() {
             .send_heartbeat()
             .await;
     } else {
-        broker_b.shutdown().await;
+        shutdown_controller_mode_broker_for_rejoin(&mut broker_b, "broker B").await;
         broker_a
             .composition
             .state
@@ -6149,7 +6167,7 @@ async fn three_controller_two_broker_controller_mode_failover_reregisters_namesr
     };
 
     if broker_a_is_master {
-        broker_a.shutdown().await;
+        shutdown_controller_mode_broker_for_rejoin(&mut broker_a, "broker A").await;
         broker_b
             .composition
             .state
@@ -6157,7 +6175,7 @@ async fn three_controller_two_broker_controller_mode_failover_reregisters_namesr
             .send_heartbeat()
             .await;
     } else {
-        broker_b.shutdown().await;
+        shutdown_controller_mode_broker_for_rejoin(&mut broker_b, "broker B").await;
         broker_a
             .composition
             .state
