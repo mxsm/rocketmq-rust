@@ -83,6 +83,7 @@ use crate::mapped_file::retirement::identity::PhysicalFileKey;
 use crate::mapped_file::retirement::state::reconciliation::ReconciledSegmentFile;
 use crate::mapped_file::MappedFileLifecycleSnapshot;
 use crate::mapped_file::MappedFileOperation;
+use crate::mapped_file::MappedReadRange;
 use crate::utils::ffi::advise_memory;
 use crate::utils::ffi::get_page_size;
 use crate::utils::ffi::lock_memory_region;
@@ -513,6 +514,35 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         MappedReadLease::try_new(generation, admission, offset, len)
             .map(Some)
             .map_err(|_| MappedFileError::out_of_bounds(offset, len, self.raw_core.file_size()))
+    }
+
+    /// Acquires an immutable mapped range with authoritative global and file-local coordinates.
+    ///
+    /// Active writable segments return `Ok(None)`. Once a segment is sealed, the returned range
+    /// keeps its exact mapping generation and read admission alive until the final derived range
+    /// is dropped.
+    ///
+    /// # Errors
+    ///
+    /// Returns a lifecycle error after close, or [`MappedFileError::OutOfBounds`] when the range
+    /// or its absolute offset cannot be represented safely.
+    pub fn try_mapped_read_range(
+        &self,
+        offset: usize,
+        len: usize,
+    ) -> MappedFileResult<Option<MappedReadRange<M::ReadOnly>>> {
+        let file_offset = u64::try_from(offset)
+            .map_err(|_| MappedFileError::out_of_bounds(offset, len, self.raw_core.file_size()))?;
+        let file_from_offset = self.physical_owners.storage.lock().file_from_offset();
+        let start_offset = file_from_offset
+            .checked_add(file_offset)
+            .ok_or_else(|| MappedFileError::out_of_bounds(offset, len, self.raw_core.file_size()))?;
+        let Some(lease) = self.try_mapped_read_lease(offset, len)? else {
+            return Ok(None);
+        };
+        MappedReadRange::try_new(lease, start_offset, file_offset, self.metrics.clone())
+            .map(Some)
+            .ok_or_else(|| MappedFileError::out_of_bounds(offset, len, self.raw_core.file_size()))
     }
 
     #[inline]
@@ -1518,6 +1548,27 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
                 .fetch_add(1, Ordering::AcqRel);
 
             let is_in_cache = self.record_cache_residency_admitted(&admission, pos as i64, size as usize);
+            if let Some(generation) = self.physical_owners.mapping.load_read_only() {
+                let file_offset = pos as u64;
+                let start_offset = self
+                    .physical_owners
+                    .storage
+                    .lock()
+                    .file_from_offset()
+                    .checked_add(file_offset)
+                    .ok_or_else(|| {
+                        MappedFileError::out_of_bounds(pos as usize, size as usize, self.raw_core.file_size())
+                    })?;
+                let range =
+                    MappedReadLease::try_new(generation, admission, pos as usize, size as usize).map_err(|_| {
+                        MappedFileError::out_of_bounds(pos as usize, size as usize, self.raw_core.file_size())
+                    })?;
+                let range = MappedReadRange::try_new(range, start_offset, file_offset, self.metrics.clone())
+                    .ok_or_else(|| {
+                        MappedFileError::out_of_bounds(pos as usize, size as usize, self.raw_core.file_size())
+                    })?;
+                return Ok(SelectMappedBufferResult::from_mapped_range(range, is_in_cache));
+            }
             Ok(self
                 .copy_range_admitted(&admission, pos as usize, size as usize, None)?
                 .and_then(|bytes| {
@@ -1885,6 +1936,20 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
         self.mapped_byte_buffer_access_count_since_last_swap
             .fetch_add(1, Ordering::AcqRel);
         let is_in_cache = self.record_cache_residency_admitted(&admission, pos as i64, size as usize);
+
+        if let Some(generation) = self.physical_owners.mapping.load_read_only() {
+            let file_offset = pos as u64;
+            let start_offset = self.get_file_from_offset().checked_add(file_offset).ok_or_else(|| {
+                MappedFileError::out_of_bounds(pos as usize, size as usize, self.raw_core.file_size())
+            })?;
+            let range = MappedReadLease::try_new(generation, admission, pos as usize, size as usize)
+                .map_err(|_| MappedFileError::out_of_bounds(pos as usize, size as usize, self.raw_core.file_size()))?;
+            let range =
+                MappedReadRange::try_new(range, start_offset, file_offset, self.metrics.clone()).ok_or_else(|| {
+                    MappedFileError::out_of_bounds(pos as usize, size as usize, self.raw_core.file_size())
+                })?;
+            return Ok(SelectMappedBufferResult::from_mapped_range(range, is_in_cache));
+        }
 
         Ok(self
             .copy_range_admitted(&admission, pos as usize, size as usize, None)?

@@ -30,6 +30,7 @@ mod mapped_buffer;
 mod mapped_file_error;
 mod memory;
 mod metrics;
+mod read_range;
 mod select_result;
 
 pub mod io_uring_impl;
@@ -136,6 +137,7 @@ pub use memory::ReadOnlyMappedMemory;
 pub type MmapRegionSlice = MappedReadLease<NativeReadOnlyMappedMemory>;
 pub use metrics::MappedFileMetrics;
 pub use raw::MappedFileRawCore;
+pub use read_range::MappedReadRange;
 pub use select_result::SelectMappedBufferCacheState;
 pub use select_result::SelectMappedBufferResult;
 pub use select_result::SelectMappedBufferSourceKind;
