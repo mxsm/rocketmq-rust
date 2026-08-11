@@ -32,7 +32,6 @@ impl DefaultMQProducerImpl {
         let retry_times = Self::get_retry_times(runtime, ctx.communication_mode);
         let mut retry_state = RetryState::new(retry_times);
         let mut last_broker_name: Option<CheetahString> = None;
-        let send_result: Option<SendResult> = None;
 
         for attempt in 0..retry_times {
             let reset_index = attempt > 0;
@@ -79,6 +78,9 @@ impl DefaultMQProducerImpl {
 
                     // Check if need to retry based on send status
                     if Self::should_retry_on_result(runtime, &result, ctx.communication_mode) {
+                        if let Some(result) = result {
+                            retry_state.record_send_result(result);
+                        }
                         retry_state.set_error(mq_client_err!("Send status not OK"));
                         continue;
                     }
@@ -101,8 +103,8 @@ impl DefaultMQProducerImpl {
         }
 
         // All retries exhausted
-        if send_result.is_some() {
-            return Ok(send_result);
+        if let Some(send_result) = retry_state.take_last_send_result() {
+            return Ok(Some(send_result));
         }
 
         Err(retry_state.build_failure_error(topic, ctx.elapsed() as u128))

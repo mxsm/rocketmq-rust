@@ -284,6 +284,7 @@ struct RetryState {
     times_total: u32,
     brokers_sent: Vec<String>,
     last_error: Option<rocketmq_error::RocketMQError>,
+    last_send_result: Option<SendResult>,
 }
 
 impl RetryState {
@@ -292,6 +293,7 @@ impl RetryState {
             times_total,
             brokers_sent: vec![String::new(); times_total as usize],
             last_error: None,
+            last_send_result: None,
         }
     }
 
@@ -303,6 +305,14 @@ impl RetryState {
 
     fn set_error(&mut self, error: rocketmq_error::RocketMQError) {
         self.last_error = Some(error);
+    }
+
+    fn record_send_result(&mut self, result: SendResult) {
+        self.last_send_result = Some(result);
+    }
+
+    fn take_last_send_result(&mut self) -> Option<SendResult> {
+        self.last_send_result.take()
     }
 
     fn build_failure_error(&self, topic: &CheetahString, elapsed_ms: u128) -> rocketmq_error::RocketMQError {

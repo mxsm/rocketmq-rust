@@ -572,22 +572,14 @@ where
         message_ext.message_ext_inner.message.set_properties(ori_props);
         let cleanup_policy = cleanup_policy_utils::get_delete_policy(Some(&topic_config));
 
-        if cleanup_policy == CleanupPolicy::COMPACTION {
-            if let Some(value) = message_ext
-                .message_ext_inner
-                .message
-                .properties()
-                .as_map()
-                .get(MessageConst::PROPERTY_KEYS)
-            {
-                if value.trim().is_empty() {
-                    return Ok(Some(
-                        response
-                            .set_code(ResponseCode::MessageIllegal)
-                            .set_remark("Required message key is missing"),
-                    ));
-                }
-            }
+        if cleanup_policy == CleanupPolicy::COMPACTION
+            && !has_valid_compaction_key(message_ext.message_ext_inner.message.properties().as_map())
+        {
+            return Ok(Some(
+                response
+                    .set_code(ResponseCode::MessageIllegal)
+                    .set_remark("Required message key is missing"),
+            ));
         }
         message_ext.tags_code = MessageExtBrokerInner::tags_string2tags_code(
             &topic_config.topic_filter_type,
@@ -1739,9 +1731,7 @@ where
     {
         //check broker permission
         let policy = self.context.policy.snapshot();
-        if !PermName::is_writeable(policy.broker_permission)
-            && self.context.topics.is_order_topic(request_header.topic.as_str())
-        {
+        if broker_send_permission_denied(policy.broker_permission) {
             response.with_code(ResponseCode::NoPermission);
             response.with_remark(format!(
                 "the broker[{}] sending message is forbidden",
@@ -1880,15 +1870,29 @@ fn message_body_limit_violation(request: &RemotingCommand, configured_max_messag
         .then(|| format!("message body size {body_size} exceeds the configured maximum {max_message_size} bytes"))
 }
 
+fn broker_send_permission_denied(broker_permission: u32) -> bool {
+    !PermName::is_writeable(broker_permission)
+}
+
+fn has_valid_compaction_key(properties: &HashMap<CheetahString, CheetahString>) -> bool {
+    properties
+        .get(MessageConst::PROPERTY_KEYS)
+        .is_some_and(|value| !value.trim().is_empty())
+}
+
 fn message_store_not_initialized() -> RocketMQError {
     RocketMQError::not_initialized("message_store")
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::future::Future;
 
     use crate::config::broker_config::BrokerConfig;
+    use cheetah_string::CheetahString;
+    use rocketmq_model::common::constant::PermName;
+    use rocketmq_model::common::message::MessageConst;
     use rocketmq_protocol::code::request_code::RequestCode;
     use rocketmq_protocol::code::response_code::RemotingSysResponseCode;
     use rocketmq_protocol::code::response_code::ResponseCode;
@@ -1907,7 +1911,9 @@ mod tests {
     use crate::send_message_constants::error_messages;
 
     use super::append_message_with_store;
+    use super::broker_send_permission_denied;
     use super::has_registered_send_message_hooks;
+    use super::has_valid_compaction_key;
     use super::map_put_status_to_response;
     use super::map_store_api_error;
     use super::message_body_limit_violation;
@@ -2012,6 +2018,41 @@ mod tests {
             assert!(message_body_limit_violation(&exact, max_message_size).is_none());
             assert!(message_body_limit_violation(&oversized, max_message_size).is_some());
         }
+    }
+
+    #[test]
+    fn broker_write_permission_rejects_every_send_request_shape() {
+        for request_code in [
+            RequestCode::SendMessage,
+            RequestCode::SendMessageV2,
+            RequestCode::SendBatchMessage,
+        ] {
+            assert!(
+                broker_send_permission_denied(PermName::PERM_READ),
+                "{request_code:?} must be rejected by the shared pre-send check"
+            );
+            assert!(
+                !broker_send_permission_denied(PermName::PERM_READ | PermName::PERM_WRITE),
+                "{request_code:?} must be accepted when write permission is present"
+            );
+        }
+    }
+
+    #[test]
+    fn compaction_message_requires_non_blank_key() {
+        let key = CheetahString::from_static_str(MessageConst::PROPERTY_KEYS);
+
+        assert!(!has_valid_compaction_key(&HashMap::new()));
+        for invalid in ["", " ", "\t\r\n"] {
+            assert!(!has_valid_compaction_key(&HashMap::from([(
+                key.clone(),
+                CheetahString::from_string(invalid.to_string()),
+            )])));
+        }
+        assert!(has_valid_compaction_key(&HashMap::from([(
+            key,
+            CheetahString::from_static_str("business-key"),
+        )])));
     }
 
     #[test]

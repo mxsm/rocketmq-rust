@@ -387,6 +387,25 @@ impl TransactionListener for NoopTransactionListener {
     }
 }
 
+struct ThreadRecordingTransactionListener {
+    thread_id: Arc<std::sync::Mutex<Option<std::thread::ThreadId>>>,
+}
+
+impl TransactionListener for ThreadRecordingTransactionListener {
+    fn execute_local_transaction(
+        &self,
+        _msg: &dyn MessageTrait,
+        _arg: Option<&(dyn Any + Send + Sync)>,
+    ) -> LocalTransactionState {
+        *self.thread_id.lock().expect("thread id lock should not be poisoned") = Some(std::thread::current().id());
+        LocalTransactionState::CommitMessage
+    }
+
+    fn check_local_transaction(&self, _msg: &MessageExt) -> LocalTransactionState {
+        LocalTransactionState::Unknown
+    }
+}
+
 struct CapturingSendHook {
     exception_message: Arc<std::sync::Mutex<Option<String>>>,
 }
@@ -638,6 +657,30 @@ fn send_timeout_for_attempt_caps_only_retryable_attempts_like_java() {
         DefaultMQProducerImpl::send_timeout_for_attempt(&runtime, 3_000, 0, 3),
         3_000
     );
+}
+
+#[test]
+fn last_retryable_send_result_is_preserved() {
+    let first = SendResult::new(
+        SendStatus::FlushDiskTimeout,
+        Some(CheetahString::from_static_str("first-id")),
+        Some("first-offset-id".to_string()),
+        Some(MessageQueue::from_parts("TopicTest", "broker-a", 0)),
+        11,
+    );
+    let last = SendResult::new(
+        SendStatus::FlushSlaveTimeout,
+        Some(CheetahString::from_static_str("last-id")),
+        Some("last-offset-id".to_string()),
+        Some(MessageQueue::from_parts("TopicTest", "broker-b", 1)),
+        22,
+    );
+    let mut retry_state = RetryState::new(2);
+
+    retry_state.record_send_result(first);
+    retry_state.record_send_result(last.clone());
+
+    assert_eq!(retry_state.take_last_send_result(), Some(last));
 }
 
 #[test]
@@ -1156,6 +1199,34 @@ fn local_transaction_listener_panic_becomes_unknown_like_java() {
     assert!(remark
         .as_ref()
         .is_some_and(|remark| remark.as_str().contains("local transaction boom")));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn initial_transaction_listener_uses_owned_blocking_lane() {
+    let producer = running_producer_without_client();
+    let caller_thread = std::thread::current().id();
+    let listener_thread = Arc::new(std::sync::Mutex::new(None));
+    let listener: ArcTransactionListener = Arc::new(ThreadRecordingTransactionListener {
+        thread_id: Arc::clone(&listener_thread),
+    });
+    let msg = Arc::new(
+        Message::builder()
+            .topic("TopicTest")
+            .body_slice(b"transaction")
+            .build_unchecked(),
+    );
+
+    let (state, remark) = producer.execute_local_transaction_listener(listener, msg, None).await;
+
+    assert_eq!(state, LocalTransactionState::CommitMessage);
+    assert!(remark.is_none());
+    assert_ne!(
+        listener_thread
+            .lock()
+            .expect("thread id lock should not be poisoned")
+            .expect("listener should record its thread"),
+        caller_thread
+    );
 }
 
 #[test]
