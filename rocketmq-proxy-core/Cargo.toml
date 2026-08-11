@@ -49,3 +49,6 @@ tonic-prost = "0.14"
 
 [build-dependencies]
 tonic-prost-build = "0.14.6"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }

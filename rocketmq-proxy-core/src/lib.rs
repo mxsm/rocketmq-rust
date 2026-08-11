@@ -32,6 +32,7 @@ pub mod ingress;
 pub mod message;
 pub mod processor;
 pub mod proto;
+pub mod receipt_renewal;
 #[deprecated(
     since = "1.1.0",
     note = "use rocketmq_proxy_core::ingress::remoting; this compatibility path will be removed in 2.0.0"
@@ -73,7 +74,9 @@ pub use ingress::remoting::RemotingStatusMapper;
 pub use message::ProxyMessage;
 pub use message::ProxyMessageExt;
 pub use processor::*;
+pub use receipt_renewal::ReceiptRenewalMetricsSnapshot;
 pub use session::build_lite_subscription_sync_request;
+pub use session::ClaimedReceiptHandle;
 pub use session::ClientSession;
 pub use session::ClientSessionRegistry;
 pub use session::ClientSettingsSnapshot;

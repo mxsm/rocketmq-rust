@@ -55,6 +55,17 @@ use rocketmq_proxy_core::ingress::grpc::service::ReapSchedule;
 
 type ResponseStream<T> = Pin<Box<dyn Stream<Item = Result<T, Status>> + Send + 'static>>;
 
+const RECEIPT_RENEWAL_CLAIM_LEASE: Duration = Duration::from_secs(5);
+const RECEIPT_RENEWAL_EXPIRY_MARGIN: Duration = Duration::from_millis(250);
+
+fn renewal_attempt_timeout(invisible_duration: Duration) -> Duration {
+    Duration::from_millis(invisible_duration.as_millis().saturating_div(4).clamp(250, 3_000) as u64)
+}
+
+fn renewal_retry_delay(invisible_duration: Duration) -> Duration {
+    Duration::from_millis(invisible_duration.as_millis().saturating_div(4).clamp(100, 1_000) as u64)
+}
+
 mod observation;
 mod stream_status;
 
@@ -435,13 +446,22 @@ impl<P> ProxyGrpcService<P> {
         F: std::future::Future<Output = ()> + Send,
         P: MessagingProcessor + 'static,
     {
-        let service = self.clone();
-        housekeeping::run_housekeeping_until(self.housekeeping_interval(), shutdown, task_group, move || {
-            let service = service.clone();
+        let housekeeping_service = self.clone();
+        let renewal_service = self.clone();
+        housekeeping::run_housekeeping_until(
+            self.housekeeping_interval(),
+            shutdown,
+            task_group,
+            move || {
+                let service = housekeeping_service.clone();
+                async move {
+                    service.run_housekeeping_once().await;
+                }
+            },
             async move {
-                service.run_housekeeping_once().await;
-            }
-        })
+                renewal_service.run_receipt_renewal_loop().await;
+            },
+        )
         .await
     }
 
@@ -450,9 +470,18 @@ impl<P> ProxyGrpcService<P> {
         P: MessagingProcessor + 'static,
     {
         self.reap_session_state();
-        self.renew_due_receipt_handles().await;
         self.dispatch_due_prepared_transaction_recoveries();
         self.schedule_next_reap();
+    }
+
+    async fn run_receipt_renewal_loop(&self)
+    where
+        P: MessagingProcessor + 'static,
+    {
+        loop {
+            self.sessions.wait_for_receipt_renewal().await;
+            self.renew_due_receipt_handles().await;
+        }
     }
 
     fn housekeeping_interval(&self) -> Duration {
@@ -636,7 +665,10 @@ where
     }
 
     async fn renew_due_receipt_handles(&self) {
-        let due_handles = self.sessions.receipt_handles_due_for_renewal(SystemTime::now());
+        let due_handles = self.sessions.claim_due_receipt_handles(
+            self.config.session.auto_renew_max_inflight(),
+            RECEIPT_RENEWAL_CLAIM_LEASE,
+        );
         if due_handles.is_empty() {
             return;
         }
@@ -644,17 +676,18 @@ where
         let processor = Arc::clone(&self.processor);
         let sessions = self.sessions.clone();
         stream::iter(due_handles)
-            .for_each_concurrent(Some(32), move |tracked| {
+            .for_each_concurrent(Some(self.config.session.auto_renew_max_inflight()), move |claim| {
                 let processor = Arc::clone(&processor);
                 let sessions = sessions.clone();
                 async move {
-                    if tracked.cancellation.is_cancelled() {
-                        let _ = sessions.remove_receipt_handle(
-                            tracked.client_id.as_str(),
-                            &tracked.group,
-                            &tracked.topic,
-                            tracked.message_id.as_str(),
-                        );
+                    if !sessions.receipt_renewal_claim_is_current(&claim) {
+                        return;
+                    }
+
+                    let tracked = &claim.tracked;
+                    let remaining_visibility = claim.remaining_visibility();
+                    if remaining_visibility <= RECEIPT_RENEWAL_EXPIRY_MARGIN {
+                        let _ = sessions.retry_receipt_handle_renewal(&claim, remaining_visibility);
                         return;
                     }
 
@@ -670,41 +703,36 @@ where
                         suspend: None,
                     };
 
-                    match processor
-                        .change_invisible_duration(&context.without_principal(), renew_request.clone())
-                        .await
+                    let attempt_timeout = renewal_attempt_timeout(tracked.invisible_duration)
+                        .min(remaining_visibility.saturating_sub(RECEIPT_RENEWAL_EXPIRY_MARGIN));
+                    match tokio::time::timeout(
+                        attempt_timeout,
+                        processor.change_invisible_duration(&context.without_principal(), renew_request.clone()),
+                    )
+                    .await
                     {
-                        Ok(plan) if plan.status.is_ok() => {
+                        Ok(Ok(plan)) if plan.status.is_ok() => {
                             let next_receipt_handle = if plan.receipt_handle.is_empty() {
                                 renew_request.receipt_handle
                             } else {
                                 plan.receipt_handle
                             };
-                            let _ = sessions.update_receipt_handle(
-                                tracked.client_id.as_str(),
-                                &tracked.group,
-                                &tracked.topic,
-                                tracked.message_id.as_str(),
+                            let _ = sessions.complete_receipt_handle_renewal(
+                                &claim,
                                 next_receipt_handle.as_str(),
                                 renew_request.invisible_duration,
                             );
                         }
-                        Ok(plan) if plan.status.code() == v2::Code::InvalidReceiptHandle as i32 => {
-                            let _ = sessions.remove_receipt_handle(
-                                tracked.client_id.as_str(),
-                                &tracked.group,
-                                &tracked.topic,
-                                tracked.message_id.as_str(),
-                            );
+                        Ok(Ok(plan)) if plan.status.code() == v2::Code::InvalidReceiptHandle as i32 => {
+                            let _ = sessions.invalidate_receipt_handle_renewal(&claim);
                         }
-                        Ok(_) | Err(_) => {
-                            let _ = sessions.mark_receipt_handle_renew_attempted(
-                                tracked.client_id.as_str(),
-                                &tracked.group,
-                                &tracked.topic,
-                                tracked.message_id.as_str(),
-                                tracked.invisible_duration,
+                        Ok(Ok(_)) | Ok(Err(_)) | Err(_) => {
+                            let delay = renewal_retry_delay(tracked.invisible_duration).min(
+                                claim
+                                    .remaining_visibility()
+                                    .saturating_sub(RECEIPT_RENEWAL_EXPIRY_MARGIN),
                             );
+                            let _ = sessions.retry_receipt_handle_renewal(&claim, delay);
                         }
                     }
                 }
@@ -1662,6 +1690,7 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
     use std::sync::Mutex;
+    use std::time::Duration;
 
     use async_trait::async_trait;
     use bytes::Bytes;
@@ -1752,6 +1781,8 @@ mod tests {
     struct TestConsumerService {
         dlq_requests: Mutex<Vec<ForwardMessageToDeadLetterQueueRequest>>,
         updated_offsets: Mutex<Vec<UpdateOffsetRequest>>,
+        change_invisible_requests: Mutex<Vec<ChangeInvisibleDurationRequest>>,
+        change_invisible_called: tokio::sync::Notify,
     }
 
     #[derive(Default)]
@@ -1960,6 +1991,11 @@ mod tests {
             request: &'a ChangeInvisibleDurationRequest,
         ) -> rocketmq_proxy_core::ProxyServiceFuture<'a, ChangeInvisibleDurationPlan> {
             Box::pin(async move {
+                self.change_invisible_requests
+                    .lock()
+                    .expect("change invisible requests mutex poisoned")
+                    .push(request.clone());
+                self.change_invisible_called.notify_one();
                 Ok(ChangeInvisibleDurationPlan {
                     status: ProxyStatusMapper::ok_payload(),
                     receipt_handle: format!("{}-renewed", request.receipt_handle),
@@ -3699,6 +3735,59 @@ mod tests {
             .expect("receipt handle should be tracked");
         assert_eq!(tracked.receipt_handle, "receipt-handle");
         tracked.cancellation.cancel();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn auto_renew_loop_wakes_at_half_of_the_invisible_window() {
+        let consumer = Arc::new(TestConsumerService::default());
+        let service = test_service_with_services(
+            StaticRouteService::default(),
+            StaticMetadataService::default(),
+            Arc::new(StaticMessageService::with_send_status(SendStatus::SendOk)),
+            consumer.clone(),
+        );
+        service
+            .sessions
+            .track_receipt_handle(crate::session::ReceiptHandleRegistration {
+                client_id: "client-a".to_owned(),
+                group: ResourceIdentity::new("", "GroupA"),
+                topic: ResourceIdentity::new("", "TopicA"),
+                message_id: "msg-1".to_owned(),
+                receipt_handle: "handle-1".to_owned(),
+                invisible_duration: Duration::from_secs(15),
+            });
+        let renewal_called = consumer.change_invisible_called.notified();
+        let renewal_task = {
+            let service = service.clone();
+            tokio::spawn(async move { service.run_receipt_renewal_loop().await })
+        };
+        tokio::task::yield_now().await;
+
+        tokio::time::advance(Duration::from_millis(7_499)).await;
+        tokio::task::yield_now().await;
+        assert!(consumer
+            .change_invisible_requests
+            .lock()
+            .expect("change invisible requests mutex poisoned")
+            .is_empty());
+
+        tokio::time::advance(Duration::from_millis(1)).await;
+        renewal_called.await;
+        tokio::task::yield_now().await;
+        let tracked = service
+            .sessions
+            .tracked_receipt_handle(
+                "client-a",
+                &ResourceIdentity::new("", "GroupA"),
+                &ResourceIdentity::new("", "TopicA"),
+                "msg-1",
+            )
+            .expect("renewed receipt handle");
+        assert_eq!(tracked.receipt_handle, "handle-1-renewed");
+        assert_eq!(service.sessions.receipt_renewal_metrics_snapshot().successes, 1);
+
+        renewal_task.abort();
+        let _ = renewal_task.await;
     }
 
     #[tokio::test]

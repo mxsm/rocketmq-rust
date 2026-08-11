@@ -81,16 +81,18 @@ pub fn housekeeping_interval(config: &SessionConfig) -> Duration {
     Duration::from_millis(min_ttl.as_millis().saturating_div(2).clamp(1_000, 30_000) as u64)
 }
 
-pub async fn run_housekeeping_until<F, C, CFut>(
+pub async fn run_housekeeping_until<F, C, CFut, R>(
     interval: Duration,
     shutdown: F,
     task_group: TaskGroup,
     run_once: C,
+    renewal_loop: R,
 ) -> GrpcHousekeepingRunReport
 where
     F: Future<Output = ()> + Send,
     C: Fn() -> CFut + Clone + Send + Sync + 'static,
     CFut: Future<Output = ()> + Send + 'static,
+    R: Future<Output = ()> + Send,
 {
     let scheduled_tasks = ScheduledTaskGroup::new(task_group.clone());
     let schedule_result = scheduled_tasks.schedule_fixed_rate_no_overlap(
@@ -102,7 +104,11 @@ where
         // provider-specific logging or metrics without Core knowing about it.
     }
 
-    shutdown.await;
+    tokio::select! {
+        biased;
+        () = shutdown => {}
+        () = renewal_loop => {}
+    }
     let schedule_snapshot = scheduled_tasks.snapshot();
     let shutdown_report = task_group.shutdown(Duration::from_secs(5)).await;
     GrpcHousekeepingRunReport {
