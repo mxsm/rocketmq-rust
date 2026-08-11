@@ -277,16 +277,23 @@ pub fn count_inner_msg_num(bytes: Option<Bytes>) -> u32 {
 
 pub fn encode_messages(messages: &[Message]) -> Bytes {
     let mut bytes = BytesMut::new();
-    //let mut all_size = 0;
     for message in messages {
-        let message_bytes = encode_message(message);
-        //all_size += message_bytes.len();
-        bytes.put_slice(&message_bytes);
+        encode_message_into(message, &mut bytes);
     }
     bytes.freeze()
 }
 
 pub fn encode_message(message: &Message) -> Bytes {
+    let mut bytes = BytesMut::new();
+    encode_message_into(message, &mut bytes);
+    bytes.freeze()
+}
+
+/// Encodes one producer message directly into an existing aggregate buffer.
+///
+/// This uses the same Java-compatible batch wire layout as [`encode_message`] while avoiding a
+/// temporary allocation for every message in a batch.
+pub fn encode_message_into(message: &Message, bytes: &mut BytesMut) {
     let empty_body = Bytes::new();
     let body = message.get_body().unwrap_or(&empty_body);
     let body_len = body.len();
@@ -301,7 +308,7 @@ pub fn encode_message(message: &Message) -> Bytes {
              + 4 + body_len // 4 BODY
              + 2 + properties_length;
 
-    let mut bytes = BytesMut::with_capacity(store_size);
+    bytes.reserve(store_size);
 
     // 1 TOTALSIZE
     bytes.put_i32(store_size as i32);
@@ -322,8 +329,6 @@ pub fn encode_message(message: &Message) -> Bytes {
     // 6 PROPERTIES
     bytes.put_i16(properties_length as i16);
     bytes.put_slice(properties_bytes);
-
-    bytes.freeze()
 }
 
 pub fn decodes_batch(byte_buffer: &mut Bytes, read_body: bool, decompress_body: bool) -> Vec<MessageExt> {
@@ -889,6 +894,28 @@ mod tests {
         message_ext.set_queue_offset(queue_offset);
         message_ext.set_commit_log_offset(queue_offset * 1024);
         message_ext
+    }
+
+    #[test]
+    fn encode_messages_matches_concatenated_single_message_wire_bytes() {
+        let messages = vec![
+            Message::builder()
+                .topic("BatchTopic")
+                .tags("TagA")
+                .body_slice(b"first")
+                .build_unchecked(),
+            Message::builder()
+                .topic("BatchTopic")
+                .keys(vec!["key-a".to_string(), "key-b".to_string()])
+                .body_slice(b"second-message")
+                .build_unchecked(),
+        ];
+        let mut expected = BytesMut::new();
+        for message in &messages {
+            expected.put_slice(&encode_message(message));
+        }
+
+        assert_eq!(encode_messages(&messages), expected.freeze());
     }
 
     #[test]

@@ -564,6 +564,11 @@ impl Display for Message {
 #[allow(unused_variables)]
 impl MessageTrait for Message {
     #[inline]
+    fn into_message(self) -> Message {
+        self
+    }
+
+    #[inline]
     fn put_property(&mut self, key: CheetahString, value: CheetahString) {
         self.properties.as_map_mut().insert(key, value);
     }

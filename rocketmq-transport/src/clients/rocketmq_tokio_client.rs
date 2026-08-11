@@ -1226,6 +1226,17 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
 }
 
 impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
+    fn record_nameserver_outcome(&self, addr: Option<&CheetahString>, latency: Duration, success: bool) {
+        let Some(addr) = addr else {
+            return;
+        };
+        if success {
+            self.latency_tracker.record_success(addr, latency);
+        } else {
+            self.latency_tracker.record_error(addr);
+        }
+    }
+
     async fn invoke_oneway_until(
         &self,
         addr: &CheetahString,
@@ -1233,18 +1244,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
         deadline: RequestDeadline,
         permit: Option<ResourcePermit>,
     ) -> RocketMQResult<()> {
-        let started_at = time::Instant::now();
-        let result = self.invoke_oneway_until_inner(addr, request, deadline, permit).await;
-        let latency = started_at.elapsed();
-        match &result {
-            Ok(()) => {
-                self.latency_tracker.record_success(addr, latency);
-            }
-            Err(_) => {
-                self.latency_tracker.record_error(addr);
-            }
-        }
-        result
+        self.invoke_oneway_until_inner(addr, request, deadline, permit).await
     }
 
     async fn invoke_oneway_until_inner(
@@ -1344,29 +1344,40 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
                 })
             }
             RequestTarget::NameServer => {
-                deadline.ensure_before_send("<nameserver>")?;
-                let Some(mut client) = self.get_and_create_client_until(None, deadline).await? else {
-                    return Err(RocketMQError::network_connection_failed(
-                        "<nameserver>",
-                        "one-way nameserver client unavailable",
-                    ));
-                };
-                let endpoint = CheetahString::from_string(client.remote_address().to_string());
-                let mut request = request;
-                if let Some(hooks) = self.cmd_handler.hook_snapshot() {
-                    request.make_custom_header_to_net();
-                    self.cmd_handler.do_before_rpc_hooks_with_snapshot(
-                        Some(hooks.as_ref()),
-                        client.remote_address(),
-                        Some(&mut request),
-                    )?;
+                let started_at = time::Instant::now();
+                let result = async {
+                    deadline.ensure_before_send("<nameserver>")?;
+                    let Some(mut client) = self.get_and_create_client_until(None, deadline).await? else {
+                        return Err(RocketMQError::network_connection_failed(
+                            "<nameserver>",
+                            "one-way nameserver client unavailable",
+                        ));
+                    };
+                    let endpoint = CheetahString::from_string(client.remote_address().to_string());
+                    let mut request = request;
+                    if let Some(hooks) = self.cmd_handler.hook_snapshot() {
+                        request.make_custom_header_to_net();
+                        self.cmd_handler.do_before_rpc_hooks_with_snapshot(
+                            Some(hooks.as_ref()),
+                            client.remote_address(),
+                            Some(&mut request),
+                        )?;
+                    }
+                    request.mark_oneway_rpc_ref();
+                    client.send_until(request, deadline).await?;
+                    Ok(SendReceipt {
+                        endpoint,
+                        written_at_millis: current_millis(),
+                    })
                 }
-                request.mark_oneway_rpc_ref();
-                client.send_until(request, deadline).await?;
-                Ok(SendReceipt {
-                    endpoint,
-                    written_at_millis: current_millis(),
-                })
+                .await;
+                let metric_addr = result
+                    .as_ref()
+                    .ok()
+                    .map(|receipt| receipt.endpoint.clone())
+                    .or_else(|| self.namesrv_addr_choosed.read().clone());
+                self.record_nameserver_outcome(metric_addr.as_ref(), started_at.elapsed(), result.is_ok());
+                result
             }
         }
     }
@@ -1424,7 +1435,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
         request: RemotingCommand,
         deadline: RequestDeadline,
     ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
-        // Record start time for latency tracking
+        let nameserver_request = addr.is_none();
         let start = time::Instant::now();
         let timeout_millis = deadline.budget_millis();
         let target = addr.map_or_else(|| "<nameserver>".to_string(), ToString::to_string);
@@ -1451,8 +1462,10 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
             }
 
             // Record connection error
-            if let Some(ref addr) = target_addr {
-                self.latency_tracker.record_error(addr);
+            if nameserver_request {
+                if let Some(ref addr) = target_addr {
+                    self.latency_tracker.record_error(addr);
+                }
             }
 
             RocketMQError::network_connection_failed(target.clone(), "Failed to connect")
@@ -1464,6 +1477,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
 
         let mut request = request;
         let remote_address = client.remote_address();
+        let nameserver_metric_addr = nameserver_request.then(|| CheetahString::from_string(remote_address.to_string()));
         deadline.ensure_before_send(remote_address.to_string())?;
         let hooks = self.cmd_handler.hook_snapshot();
         let request_for_after = if let Some(hooks) = hooks {
@@ -1500,9 +1514,8 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
                     }
                 }
 
+                self.record_nameserver_outcome(nameserver_metric_addr.as_ref(), latency, true);
                 if let Some(ref addr) = target_addr {
-                    self.latency_tracker.record_success(addr, latency);
-
                     debug!(
                         remote_addr = %addr,
                         elapsed_ms = latency.as_millis() as u64,
@@ -1521,9 +1534,8 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
                         self.connection_tables.remove(addr);
                     }
                 }
+                self.record_nameserver_outcome(nameserver_metric_addr.as_ref(), latency, false);
                 if let Some(ref addr) = target_addr {
-                    self.latency_tracker.record_error(addr);
-
                     warn!(
                         remote_addr = %addr,
                         elapsed_ms = latency.as_millis() as u64,
@@ -1997,6 +2009,104 @@ mod tests {
         assert_eq!(hook.before_count.load(Ordering::SeqCst), 1);
         assert_eq!(hook.after_count.load(Ordering::SeqCst), 0);
 
+        server.await.expect("server task");
+        client.shutdown();
+    }
+
+    #[tokio::test]
+    async fn explicit_broker_requests_do_not_update_nameserver_latency() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("accept client");
+            let mut connection = Connection::new(socket);
+            let request = connection
+                .receive_command()
+                .await
+                .expect("request frame")
+                .expect("request command");
+            connection
+                .send_command(
+                    RemotingCommand::create_response_command_with_code(ResponseCode::Success)
+                        .set_opaque(request.opaque()),
+                )
+                .await
+                .expect("send response");
+            connection
+                .receive_command()
+                .await
+                .expect("oneway frame")
+                .expect("oneway command");
+        });
+        let client = TransportClient::build_for_test(
+            Arc::new(TransportClientConfig::default()),
+            DefaultRequestProcessor,
+            test_service_context("explicit-broker-latency-test"),
+        );
+        let target = CheetahString::from_string(addr.to_string());
+
+        client
+            .invoke_request(
+                Some(&target),
+                RemotingCommand::create_remoting_command(RequestCode::GetBrokerClusterInfo),
+                3_000,
+            )
+            .await
+            .expect("explicit Broker request");
+        client
+            .invoke_request_oneway(
+                &target,
+                RemotingCommand::create_remoting_command(RequestCode::GetBrokerClusterInfo),
+                3_000,
+            )
+            .await
+            .expect("explicit Broker oneway");
+
+        assert_eq!(client.latency_tracker.get_p99(&target), None);
+        assert_eq!(client.latency_tracker.get_error_count(&target), 0);
+        server.await.expect("server task");
+        client.shutdown();
+    }
+
+    #[tokio::test]
+    async fn nameserver_request_updates_latency_and_failover_state() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("accept client");
+            let mut connection = Connection::new(socket);
+            let request = connection
+                .receive_command()
+                .await
+                .expect("request frame")
+                .expect("request command");
+            connection
+                .send_command(
+                    RemotingCommand::create_response_command_with_code(ResponseCode::Success)
+                        .set_opaque(request.opaque()),
+                )
+                .await
+                .expect("send response");
+        });
+        let client = TransportClient::build_for_test(
+            Arc::new(TransportClientConfig::default()),
+            DefaultRequestProcessor,
+            test_service_context("nameserver-latency-test"),
+        );
+        let target = CheetahString::from_string(addr.to_string());
+        client.update_name_server_address_list_sync(vec![target.clone()]);
+
+        client
+            .invoke_request(
+                None,
+                RemotingCommand::create_remoting_command(RequestCode::GetBrokerClusterInfo),
+                3_000,
+            )
+            .await
+            .expect("NameServer request");
+
+        assert!(client.latency_tracker.get_p99(&target).is_some());
+        assert_eq!(client.latency_tracker.get_error_count(&target), 0);
         server.await.expect("server task");
         client.shutdown();
     }

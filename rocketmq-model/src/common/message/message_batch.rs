@@ -74,24 +74,7 @@ impl MessageBatch {
             ));
         }
 
-        let mut message_list = Vec::with_capacity(messages.len());
-        for msg in messages {
-            if let Some(m) = msg.as_any().downcast_ref::<Message>() {
-                message_list.push(m.clone());
-            } else {
-                let mut m = Message::default();
-                m.set_topic(msg.topic().clone());
-                if let Some(body) = msg.get_body() {
-                    m.set_body(Some(body.clone()));
-                }
-                m.set_flag(msg.get_flag());
-                if let Some(transaction_id) = msg.transaction_id() {
-                    m.set_transaction_id(transaction_id.clone());
-                }
-                m.set_properties(msg.get_properties().clone());
-                message_list.push(m);
-            }
-        }
+        let message_list = messages.into_iter().map(MessageTrait::into_message).collect();
 
         Self::generate_from_messages(message_list)
     }
@@ -308,6 +291,18 @@ mod tests {
         assert_eq!(batch.messages.len(), 2);
         assert_eq!(batch.len(), 2);
         assert!(!batch.is_empty());
+    }
+
+    #[test]
+    fn generate_from_vec_moves_concrete_message_body_storage() {
+        let mut message = create_test_message("topic1");
+        let body = Bytes::from(vec![b'x'; 128]);
+        let body_ptr = body.as_ptr();
+        message.set_body(Some(body));
+
+        let batch = MessageBatch::generate_from_vec(vec![message]).expect("batch should build");
+
+        assert_eq!(batch.messages[0].get_body().expect("message body").as_ptr(), body_ptr);
     }
 
     #[test]

@@ -54,7 +54,16 @@ pub(super) fn enrich_send_message_request_properties(
     region_id: &str,
     trace_on: bool,
 ) -> HashMap<CheetahString, CheetahString> {
-    let mut properties = string_to_message_properties(request_header.properties.as_ref());
+    let properties = string_to_message_properties(request_header.properties.as_ref());
+    enrich_parsed_send_message_request_properties(request_header, properties, region_id, trace_on)
+}
+
+pub(super) fn enrich_parsed_send_message_request_properties(
+    request_header: &mut SendMessageRequestHeader,
+    mut properties: HashMap<CheetahString, CheetahString>,
+    region_id: &str,
+    trace_on: bool,
+) -> HashMap<CheetahString, CheetahString> {
     properties.insert(
         CheetahString::from_static_str(MessageConst::PROPERTY_MSG_REGION),
         CheetahString::from_slice(region_id),
