@@ -24,6 +24,14 @@ use memmap2::MmapMut;
 use rocketmq_store::MappedBuffer;
 use tempfile::NamedTempFile;
 
+const MAPPED_BUFFER_SIZE: usize = 1024 * 1024;
+const RANDOM_WRITE_COUNT: usize = 1000;
+
+fn sequential_write_bytes_per_iteration(buffer_size: usize, write_size: usize) -> u64 {
+    assert!(write_size > 0, "write size must be non-zero");
+    (0..buffer_size.saturating_sub(write_size)).step_by(write_size).count() as u64 * write_size as u64
+}
+
 /// Create a test mmap of specified size
 fn create_test_mmap(size: usize) -> (NamedTempFile, MmapMut) {
     let mut file = NamedTempFile::new().unwrap();
@@ -41,14 +49,17 @@ fn bench_sequential_write(c: &mut Criterion) {
     let mut group = c.benchmark_group("sequential_write");
 
     for size in [64, 256, 1024, 4096, 16384].iter() {
-        group.throughput(Throughput::Bytes(*size as u64));
+        group.throughput(Throughput::Bytes(sequential_write_bytes_per_iteration(
+            MAPPED_BUFFER_SIZE,
+            *size,
+        )));
         group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, &size| {
-            let (_file, mmap) = create_test_mmap(1024 * 1024);
-            let buffer = MappedBuffer::from_mmap(mmap, 0, 1024 * 1024).unwrap();
+            let (_file, mmap) = create_test_mmap(MAPPED_BUFFER_SIZE);
+            let buffer = MappedBuffer::from_mmap(mmap, 0, MAPPED_BUFFER_SIZE).unwrap();
             let data = vec![0xAAu8; size];
 
             b.iter(|| {
-                for offset in (0..1024 * 1024 - size).step_by(size) {
+                for offset in (0..MAPPED_BUFFER_SIZE - size).step_by(size) {
                     buffer.write(offset, &data).unwrap();
                 }
             });
@@ -63,14 +74,16 @@ fn bench_random_write(c: &mut Criterion) {
     let mut group = c.benchmark_group("random_write");
     let size = 1024;
 
-    group.throughput(Throughput::Bytes(size as u64));
+    group.throughput(Throughput::Bytes((size * RANDOM_WRITE_COUNT) as u64));
     group.bench_function("random_1kb", |b| {
-        let (_file, mmap) = create_test_mmap(1024 * 1024);
-        let buffer = MappedBuffer::from_mmap(mmap, 0, 1024 * 1024).unwrap();
+        let (_file, mmap) = create_test_mmap(MAPPED_BUFFER_SIZE);
+        let buffer = MappedBuffer::from_mmap(mmap, 0, MAPPED_BUFFER_SIZE).unwrap();
         let data = vec![0xBBu8; size];
 
         // Pre-generate random offsets
-        let offsets: Vec<usize> = (0..1000).map(|i| (i * 113) % (1024 * 1024 - size)).collect();
+        let offsets: Vec<usize> = (0..RANDOM_WRITE_COUNT)
+            .map(|i| (i * 113) % (MAPPED_BUFFER_SIZE - size))
+            .collect();
 
         b.iter(|| {
             for &offset in &offsets {
