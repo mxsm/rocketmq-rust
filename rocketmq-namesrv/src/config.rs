@@ -895,7 +895,7 @@ impl Default for NamesrvConfig {
             need_wait_for_service: false,
             wait_seconds_for_service: 45,
             delete_topic_with_broker_registration: false,
-            allow_insecure_public_listener: false,
+            allow_insecure_public_listener: true,
             auth_config: AuthConfig::default(),
             config_black_list: "configBlackList;configStorePath;kvConfigPath".to_string(),
         }
