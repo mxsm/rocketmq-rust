@@ -42,6 +42,7 @@ use crate::codec::remoting_command_codec::RemotingCommandCodec;
 use crate::codec::remoting_command_codec::SessionCommandDecoder;
 use crate::deadline::RequestDeadline;
 use crate::file_region::FileRegion;
+use crate::file_region::FileRegionSequence;
 use crate::file_region::FileTransferMode;
 use crate::telemetry::TransportTelemetry;
 use crate::write_strategy::FrameWriteMode;
@@ -945,24 +946,52 @@ impl Connection {
         body: FileRegion,
         deadline: RequestDeadline,
     ) -> rocketmq_error::RocketMQResult<()> {
+        self.send_file_regions_command(command_without_body, FileRegionSequence::single(body), deadline)
+            .await
+    }
+
+    /// Sends one command whose body is an ordered sequence of leased file regions.
+    pub async fn send_file_regions_command(
+        &mut self,
+        command_without_body: RemotingCommand,
+        body: FileRegionSequence,
+        deadline: RequestDeadline,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        self.send_file_regions_inner(command_without_body, body, Some(deadline))
+            .await
+    }
+
+    /// Sends a server response backed by ordered file regions under the writer's own stall bound.
+    pub async fn send_file_regions_response(
+        &mut self,
+        command_without_body: RemotingCommand,
+        body: FileRegionSequence,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        self.send_file_regions_inner(command_without_body, body, None).await
+    }
+
+    async fn send_file_regions_inner(
+        &mut self,
+        command_without_body: RemotingCommand,
+        body: FileRegionSequence,
+        deadline: Option<RequestDeadline>,
+    ) -> rocketmq_error::RocketMQResult<()> {
         let target = "transport-file-region-writer".to_string();
-        deadline.ensure_before_send(target.clone())?;
+        if let Some(deadline) = deadline {
+            deadline.ensure_before_send(target.clone())?;
+        }
         let class = self
             .response_class()
             .unwrap_or_else(|| AdmissionClass::for_request_code(command_without_body.code()));
         let body_len = usize::try_from(body.len()).map_err(|_| {
-            rocketmq_error::RocketMQError::illegal_argument("file region length exceeds this platform's usize")
+            rocketmq_error::RocketMQError::illegal_argument("file region sequence length exceeds this platform's usize")
         })?;
         let head = EncodedFrameHead::from_command_and_body_len(command_without_body, body_len)?;
-        deadline.ensure_before_send(target.clone())?;
-        self.send_payload(
-            OutboundPayload::FileFrame { head, body },
-            class,
-            None,
-            Some(deadline),
-            target,
-        )
-        .await
+        if let Some(deadline) = deadline {
+            deadline.ensure_before_send(target.clone())?;
+        }
+        self.send_payload(OutboundPayload::FileFrame { head, body }, class, None, deadline, target)
+            .await
     }
 
     /// Sends one command while transferring an existing process-budget

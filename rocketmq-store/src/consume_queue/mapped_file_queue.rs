@@ -346,6 +346,18 @@ impl MappedFileQueueReadHandle {
         result
     }
 
+    pub(crate) fn get_message_for_transfer(&self, offset: i64, size: i32) -> Option<SelectMappedBufferResult> {
+        if offset < 0 || size <= 0 {
+            return None;
+        }
+        let mapped_file = self.find_mapped_file_by_offset(offset, offset == 0)?;
+        let position = usize::try_from(offset % self.mapped_file_size as i64).ok()?;
+        mapped_file
+            .try_file_range_selection(position, size as usize)
+            .ok()
+            .flatten()
+    }
+
     pub(crate) fn get_bulk_data(&self, offset: i64, size: i32) -> Option<Vec<SelectMappedBufferResult>> {
         if size <= 0 {
             return Some(Vec::new());
@@ -369,6 +381,38 @@ impl MappedFileQueueReadHandle {
 
             results.push(result);
             current_offset += take as i64;
+            remaining -= take;
+        }
+
+        Some(results)
+    }
+
+    pub(crate) fn get_bulk_transfer_data(&self, offset: i64, size: i32) -> Option<Vec<SelectMappedBufferResult>> {
+        if offset < 0 {
+            return None;
+        }
+        if size <= 0 {
+            return Some(Vec::new());
+        }
+
+        let mapped_file_size = self.mapped_file_size as i64;
+        let mut current_offset = offset;
+        let mut remaining = size as usize;
+        let mut results = Vec::new();
+
+        while remaining > 0 {
+            let mapped_file = self.find_mapped_file_by_offset(current_offset, current_offset == offset)?;
+            let position = usize::try_from(current_offset % mapped_file_size).ok()?;
+            let readable = usize::try_from(mapped_file.get_read_position())
+                .ok()?
+                .checked_sub(position)?;
+            if readable == 0 {
+                return None;
+            }
+            let take = readable.min(remaining);
+            let result = mapped_file.try_file_range_selection(position, take).ok().flatten()?;
+            results.push(result);
+            current_offset = current_offset.checked_add(take as i64)?;
             remaining -= take;
         }
 

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::any::Any;
+use std::fs::File;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -40,11 +41,15 @@ use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::ArcMessageFilter;
 use rocketmq_store::BrokerReadStore;
 use rocketmq_store::BrokerStatsManager;
+use rocketmq_store::FileRangeTransferHandle;
 use rocketmq_store::GetMessageResult;
 use rocketmq_store::GetMessageStatus;
 use rocketmq_store::StatsType;
 use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ConnectionHandlerContext;
+use rocketmq_transport::api::v1::FileRegion;
+use rocketmq_transport::api::v1::FileRegionLease;
+use rocketmq_transport::api::v1::FileRegionSequence;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
@@ -64,6 +69,29 @@ pub struct DefaultPullMessageResultHandler<MS: BrokerReadStore> {
     context: Arc<PullMessageProcessorContext<MS>>,
     consume_message_hook_list: Arc<Vec<Box<dyn ConsumeMessageHook>>>,
     broker_metrics_manager: Option<Arc<BrokerMetricsManager>>,
+}
+
+struct PullFileRegionLease {
+    handle: FileRangeTransferHandle,
+}
+
+impl FileRegionLease for PullFileRegionLease {
+    fn file(&self) -> &File {
+        self.handle.file()
+    }
+}
+
+fn pull_file_regions(get_message_result: &GetMessageResult) -> Option<FileRegionSequence> {
+    let mut regions = Vec::with_capacity(get_message_result.message_mapped_list().len());
+    for selected in get_message_result.message_mapped_list() {
+        let range = selected.file_range()?;
+        let position = range.position();
+        let len = u64::try_from(range.len()).ok()?;
+        let handle = range.try_transfer_handle().ok()?;
+        let region = FileRegion::try_new(Arc::new(PullFileRegionLease { handle }), position, len).ok()?;
+        regions.push(region);
+    }
+    FileRegionSequence::try_new(regions).ok()
 }
 
 impl<MS: BrokerReadStore> DefaultPullMessageResultHandler<MS> {
@@ -202,7 +230,13 @@ impl<MS: BrokerReadStore> PullMessageResultHandler for DefaultPullMessageResultH
                     }
                     Some(response)
                 } else {
-                    //zero copy transfer
+                    if let Some(regions) = pull_file_regions(&get_message_result) {
+                        if let Err(error) = channel.send_file_regions_response(response, regions).await {
+                            warn!(%error, "Failed to send owner-backed pull response");
+                        }
+                        return None;
+                    }
+
                     if let Some(header_bytes) =
                         response.encode_header_with_body_length(get_message_result.buffer_total_size() as usize)
                     {
@@ -643,5 +677,42 @@ impl<MS: BrokerReadStore> DefaultPullMessageResultHandler<MS> {
                 proxy_pull_broadcast,
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rocketmq_store::DefaultMappedFile;
+    use rocketmq_store::MappedFile;
+
+    #[test]
+    fn pull_file_regions_preserve_multiple_store_ranges_without_snapshots() {
+        let directory = tempfile::tempdir().expect("temporary pull range directory");
+        let path = directory.path().join("00000000000000000000");
+        let mapped_file = DefaultMappedFile::try_new(CheetahString::from(path.to_string_lossy().into_owned()), 64)
+            .expect("mapped file");
+        assert!(mapped_file.append_message_bytes(b"ordered-regions"));
+
+        let first = mapped_file
+            .try_file_range_selection(0, 8)
+            .expect("first selection")
+            .expect("first range");
+        let second = mapped_file
+            .try_file_range_selection(8, 7)
+            .expect("second selection")
+            .expect("second range");
+        assert!(!first.has_byte_snapshot());
+        assert!(!second.has_byte_snapshot());
+
+        let mut result = GetMessageResult::new_result_size(2);
+        result.add_message(first, 0, 1);
+        result.add_message(second, 1, 1);
+        let regions = pull_file_regions(&result).expect("owner-backed region sequence");
+        assert_eq!(regions.len(), 15);
+        assert!(result
+            .message_mapped_list()
+            .iter()
+            .all(|selected| !selected.has_byte_snapshot()));
     }
 }

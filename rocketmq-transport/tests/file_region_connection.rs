@@ -24,6 +24,7 @@ use rocketmq_runtime::RuntimeOwner;
 use rocketmq_transport::api::v1::file_transfer_snapshot;
 use rocketmq_transport::api::v1::ConnectionState;
 use rocketmq_transport::api::v1::FileRegion;
+use rocketmq_transport::api::v1::FileRegionSequence;
 use rocketmq_transport::api::v1::FileTransferMode;
 use rocketmq_transport::api::v1::RequestDeadline;
 use rocketmq_transport::test_support::Connection;
@@ -85,6 +86,38 @@ fn portable_file_region_round_trips_with_nonzero_offset() {
 
     let after = file_transfer_snapshot();
     assert!(after.portable_bytes.saturating_sub(before.portable_bytes) >= expected_bytes);
+}
+
+#[test]
+fn portable_file_region_sequence_round_trips_as_one_frame() {
+    let owner = runtime_owner();
+    let blocking = owner
+        .root_context()
+        .component("file-region-sequence")
+        .storage_io()
+        .clone();
+    let (_first_file, first) = region_with_prefix(11, b"ordered-");
+    let (_second_file, second) = region_with_prefix(7, b"regions");
+    let body = FileRegionSequence::try_new(vec![first, second]).expect("valid region sequence");
+
+    owner.block_on(async move {
+        let (client, accepted) = tcp_pair().await;
+        let mut sender = Connection::new(client).with_file_region_io(blocking, FileTransferMode::Portable);
+        let mut receiver = Connection::new(accepted);
+        let (sent, received) = tokio::join!(
+            sender.send_file_regions_command(
+                RemotingCommand::create_remoting_command(328),
+                body,
+                RequestDeadline::after(Duration::from_secs(5)),
+            ),
+            receiver.receive_command()
+        );
+
+        sent.expect("portable region sequence should send");
+        let received = received.expect("peer frame").expect("decoded peer frame");
+        assert_eq!(received.code(), 328);
+        assert_eq!(received.body().expect("sequence body").as_ref(), b"ordered-regions");
+    });
 }
 
 #[test]

@@ -50,6 +50,57 @@ pub struct FileRegion {
     sendfile_supported: Arc<OnceLock<bool>>,
 }
 
+/// Ordered external body regions written as one RocketMQ frame.
+#[derive(Clone, Debug)]
+pub struct FileRegionSequence {
+    regions: Vec<FileRegion>,
+    len: u64,
+}
+
+impl FileRegionSequence {
+    /// Validates a non-empty ordered region sequence and its aggregate length.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed argument error when no region is supplied or the aggregate length
+    /// overflows `u64`.
+    pub fn try_new(regions: Vec<FileRegion>) -> RocketMQResult<Self> {
+        if regions.is_empty() {
+            return Err(RocketMQError::illegal_argument(
+                "file region sequence must contain at least one region",
+            ));
+        }
+        let len = regions.iter().try_fold(0_u64, |total, region| {
+            total
+                .checked_add(region.len())
+                .ok_or_else(|| RocketMQError::illegal_argument("file region sequence length overflowed u64"))
+        })?;
+        Ok(Self { regions, len })
+    }
+
+    pub(crate) fn single(region: FileRegion) -> Self {
+        Self {
+            len: region.len(),
+            regions: vec![region],
+        }
+    }
+
+    #[inline]
+    pub const fn len(&self) -> u64 {
+        self.len
+    }
+
+    #[inline]
+    pub const fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    #[inline]
+    pub(crate) fn regions(&self) -> &[FileRegion] {
+        &self.regions
+    }
+}
+
 impl std::fmt::Debug for FileRegion {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter

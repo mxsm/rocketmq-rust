@@ -220,6 +220,8 @@ pub use crate::transfer::error::TransferError;
 pub use crate::transfer::planner::TransferPlanInput;
 pub use crate::transfer::planner::TransferPlanner;
 pub use crate::transfer::planner::DEFAULT_TRANSFER_BATCH_SIZE;
+pub use crate::transfer::segment::FileRangeLease;
+pub use crate::transfer::segment::FileRangeTransferHandle;
 pub use crate::transfer::segment::SegmentLease;
 pub use crate::transfer::segment::TransferCacheState;
 

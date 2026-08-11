@@ -70,6 +70,7 @@ pub use crate::dispatch::ResponseSink;
 pub use crate::dispatch::ResponseSinkError;
 pub use crate::file_region::FileRegion;
 pub use crate::file_region::FileRegionLease;
+pub use crate::file_region::FileRegionSequence;
 pub use crate::file_region::FileTransferMode;
 pub use crate::file_region_writer::file_transfer_snapshot;
 pub use crate::file_region_writer::FileTransferSnapshot;

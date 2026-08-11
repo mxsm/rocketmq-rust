@@ -24,6 +24,7 @@ use bytes::Bytes;
 use bytes::BytesMut;
 use futures_util::StreamExt;
 use rocketmq_runtime::common::time_utils::current_millis;
+use rocketmq_runtime::BlockingExecutor;
 use tokio::io::AsyncWrite;
 use tokio::net::tcp::OwnedReadHalf;
 use tokio::net::tcp::OwnedWriteHalf;
@@ -296,6 +297,7 @@ impl HAConnection for DefaultHAConnection {
             self.message_store_config.clone(),
             connection_runtime,
             self.next_transfer_from_where.clone(),
+            self.runtime_scope.storage_io(),
         )
         .await?;
 
@@ -594,6 +596,7 @@ impl ReadSocketService {
 /// Write Socket Service
 pub struct WriteSocketService {
     writer: HaTransferEngine<OwnedWriteHalf>,
+    storage_io: BlockingExecutor,
     client_address: String,
     connection_context: DefaultHAConnectionContext,
     current_state: Arc<RwLock<HAConnectionState>>,
@@ -628,6 +631,7 @@ impl WriteSocketService {
         message_store_config: Arc<MessageStoreConfig>,
         connection_runtime: HAConnectionRuntimeHandle,
         next_transfer_from_where: Arc<AtomicI64>,
+        storage_io: BlockingExecutor,
     ) -> Result<Self, HAConnectionError> {
         let enable_controller_mode = message_store_config.enable_controller_mode;
         let preference = transfer_engine_preference(&message_store_config);
@@ -661,6 +665,7 @@ impl WriteSocketService {
         let writer = HaTransferEngine::from_selection(writer, selection.engine);
         Ok(Self {
             writer,
+            storage_io,
             client_address,
             connection_context,
             current_state,
@@ -915,6 +920,22 @@ impl WriteSocketService {
     }
 
     async fn send_data(&mut self, mut batch: TransferBatch) -> HAConnectionResult<()> {
+        let requires_materialization = match self.writer.kind() {
+            TransferEngineKind::Bytes | TransferEngineKind::Vectored | TransferEngineKind::IoUring => {
+                batch.segments.iter().any(|segment| segment.as_bytes().is_none())
+            }
+            TransferEngineKind::Sendfile => {
+                batch.segments.iter().any(|segment| segment.as_file_range().is_none())
+                    && batch.segments.iter().any(|segment| segment.as_bytes().is_none())
+            }
+        };
+        if requires_materialization {
+            batch = self
+                .storage_io
+                .spawn_io("ha-materialize-file-ranges", move || batch.into_bytes_backed())
+                .await
+                .map_err(|error| HAConnectionError::Service(error.to_string()))??;
+        }
         let confirm_offset = self.connection_context.replica_store().get_confirm_offset();
         let header_bytes = encode_transfer_header(
             &mut self.byte_buffer_header,

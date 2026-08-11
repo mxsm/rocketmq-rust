@@ -24,6 +24,7 @@ use super::MappedFileOperation;
 use super::MappedMemory;
 use super::MappedReadRange;
 use super::NativeMappedMemory;
+use crate::transfer::segment::FileRangeLease;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SelectMappedBufferSourceKind {
@@ -42,6 +43,7 @@ pub(crate) type SelectMappedBufferTransferParts<M> = (
     u64,
     Option<Bytes>,
     Option<MappedReadRange<<M as MappedMemory>::ReadOnly>>,
+    Option<FileRangeLease>,
     i32,
     Option<(MappedFileLease, Arc<DefaultMappedFile<M>>)>,
     u64,
@@ -64,6 +66,7 @@ pub struct SelectMappedBufferResult<M: MappedMemory = NativeMappedMemory> {
     start_offset: u64,
     bytes: OnceLock<Bytes>,
     mapped_range: Option<MappedReadRange<M::ReadOnly>>,
+    file_range: Option<FileRangeLease>,
     /// The size.
     size: i32,
     /// The mapped file and the admission lease protecting it.
@@ -86,6 +89,7 @@ impl<M: MappedMemory> Default for SelectMappedBufferResult<M> {
             start_offset: 0,
             bytes: OnceLock::new(),
             mapped_range: None,
+            file_range: None,
             size: 0,
             mapped_source: None,
             is_in_cache: true,
@@ -121,6 +125,7 @@ impl<M: MappedMemory> SelectMappedBufferResult<M> {
             start_offset,
             bytes: OnceLock::from(bytes),
             mapped_range: None,
+            file_range: None,
             size,
             mapped_source: None,
             is_in_cache,
@@ -141,6 +146,29 @@ impl<M: MappedMemory> SelectMappedBufferResult<M> {
             start_offset: range.start_offset(),
             bytes: OnceLock::new(),
             mapped_range: Some(range),
+            file_range: None,
+            size,
+            mapped_source: None,
+            is_in_cache,
+            source_kind: SelectMappedBufferSourceKind::MappedFile,
+            file_offset,
+            cache_state: SelectMappedBufferCacheState::from_residency(is_in_cache),
+        })
+    }
+
+    /// Creates a selection backed by an admission-fenced file range.
+    pub(crate) fn from_file_range(
+        start_offset: u64,
+        file_offset: u64,
+        range: FileRangeLease,
+        is_in_cache: bool,
+    ) -> Option<Self> {
+        let size = i32::try_from(range.len()).ok()?;
+        Some(Self {
+            start_offset,
+            bytes: OnceLock::new(),
+            mapped_range: None,
+            file_range: Some(range),
             size,
             mapped_source: None,
             is_in_cache,
@@ -175,7 +203,7 @@ impl<M: MappedMemory> SelectMappedBufferResult<M> {
     /// The immutable byte snapshot remains available when the mapped file can no longer be held,
     /// so callers can safely fall back to the copied representation.
     pub fn try_attach_mapped_file(&mut self, mapped_file: Arc<DefaultMappedFile<M>>) -> bool {
-        if self.mapped_range.is_some() || self.mapped_source.is_some() {
+        if self.mapped_range.is_some() || self.file_range.is_some() || self.mapped_source.is_some() {
             return false;
         }
         let Some(bytes) = self.bytes.get() else {
@@ -241,10 +269,12 @@ impl<M: MappedMemory> SelectMappedBufferResult<M> {
         if let Some(bytes) = self.bytes.get() {
             return bytes.as_ref();
         }
-        self.mapped_range
-            .as_ref()
-            .map(MappedReadRange::as_slice)
-            .expect("selected mapped buffers must own bytes or an immutable mapped range")
+        if let Some(range) = self.mapped_range.as_ref() {
+            return range.as_slice();
+        }
+        self.get_bytes_ref()
+            .map(Bytes::as_ref)
+            .expect("selected mapped buffers must own bytes, an immutable mapped range, or a readable file range")
     }
 
     #[inline]
@@ -259,14 +289,25 @@ impl<M: MappedMemory> SelectMappedBufferResult<M> {
         if let Some(bytes) = self.bytes.get() {
             return Some(bytes);
         }
-        let range = self.mapped_range.as_ref()?;
-        Some(self.bytes.get_or_init(|| range.to_bytes()))
+        if let Some(range) = self.mapped_range.as_ref() {
+            return Some(self.bytes.get_or_init(|| range.to_bytes()));
+        }
+        let range = self.file_range.as_ref()?;
+        let bytes = range.to_bytes().ok()?;
+        let _ = self.bytes.set(bytes);
+        self.bytes.get()
     }
 
     /// Returns whether the authoritative payload is still an owner-backed mapped range.
     #[inline]
     pub fn is_range_backed(&self) -> bool {
-        self.mapped_range.is_some()
+        self.mapped_range.is_some() || self.file_range.is_some()
+    }
+
+    /// Returns the admission-fenced file range when no compatibility conversion has detached it.
+    #[inline]
+    pub fn file_range(&self) -> Option<FileRangeLease> {
+        self.file_range.clone()
     }
 
     /// Returns whether an owned compatibility snapshot has already been materialized.
@@ -281,11 +322,17 @@ impl<M: MappedMemory> SelectMappedBufferResult<M> {
             self.source_kind = SelectMappedBufferSourceKind::Bytes;
         }
         let range_fallback = if self.bytes.get().is_none() {
-            self.mapped_range.as_ref().map(MappedReadRange::to_bytes)
+            self.mapped_range
+                .as_ref()
+                .map(MappedReadRange::to_bytes)
+                .or_else(|| self.file_range.as_ref().and_then(|range| range.to_bytes().ok()))
         } else {
             None
         };
         if self.mapped_range.take().is_some() {
+            self.source_kind = SelectMappedBufferSourceKind::Bytes;
+        }
+        if self.file_range.take().is_some() {
             self.source_kind = SelectMappedBufferSourceKind::Bytes;
         }
         if self.bytes.get().is_none() {
@@ -303,9 +350,15 @@ impl<M: MappedMemory> SelectMappedBufferResult<M> {
             if let Some(range) = self.mapped_range.take() {
                 let _ = self.bytes.set(range.to_bytes());
                 self.source_kind = SelectMappedBufferSourceKind::Bytes;
+            } else if let Some(range) = self.file_range.take() {
+                if let Ok(bytes) = range.to_bytes() {
+                    let _ = self.bytes.set(bytes);
+                    self.source_kind = SelectMappedBufferSourceKind::Bytes;
+                }
             }
         }
         self.mapped_range.take();
+        self.file_range.take();
         self.mapped_source.take();
         self.source_kind = SelectMappedBufferSourceKind::Bytes;
         self.bytes.take()
@@ -324,6 +377,13 @@ impl<M: MappedMemory> SelectMappedBufferResult<M> {
             self.mapped_range = Some(truncated);
             truncated_any = true;
         }
+        if let Some(range) = self.file_range.as_mut() {
+            if new_len > range.len() {
+                return false;
+            }
+            range.truncate_to(new_len);
+            truncated_any = true;
+        }
         if let Some(bytes) = self.bytes.get_mut() {
             if new_len > bytes.len() {
                 return false;
@@ -339,8 +399,8 @@ impl<M: MappedMemory> SelectMappedBufferResult<M> {
     }
 
     pub fn is_in_mem(&self) -> bool {
-        if self.mapped_range.is_some() {
-            return true;
+        if self.mapped_range.is_some() || self.file_range.is_some() {
+            return self.is_in_cache;
         }
         match self.mapped_source.as_ref() {
             None => true,
@@ -358,6 +418,7 @@ impl<M: MappedMemory> SelectMappedBufferResult<M> {
             self.start_offset,
             self.bytes.take(),
             self.mapped_range.take(),
+            self.file_range.take(),
             self.size,
             self.mapped_source.take(),
             self.file_offset,

@@ -235,9 +235,15 @@ pub(crate) fn batch_body_chunks(batch: &TransferBatch) -> TransferResult<Vec<Byt
 
     let mut chunks = Vec::with_capacity(batch.segments.len());
     for segment in &batch.segments {
-        let bytes = segment.as_bytes().ok_or(TransferError::UnsupportedSegmentSource(
-            "byte-backed segment required for bytes or vectored HA transfer",
-        ))?;
+        let bytes = match segment.as_bytes() {
+            Some(bytes) => bytes,
+            None => segment
+                .as_file_range()
+                .ok_or(TransferError::UnsupportedSegmentSource(
+                    "HA segment has neither bytes nor a file range",
+                ))?
+                .to_bytes()?,
+        };
         let len = bytes.len().min(remaining);
         if len > 0 {
             chunks.push(bytes.slice(..len));

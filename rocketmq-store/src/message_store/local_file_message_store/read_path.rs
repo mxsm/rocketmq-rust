@@ -242,7 +242,15 @@ impl LocalFileMessageStore {
                                 }
                             }
 
-                            let Some(select_result) = self.commit_log.get_message(offset_py, size_py) else {
+                            let requires_payload = message_filter
+                                .as_ref()
+                                .is_some_and(|filter| filter.requires_commit_log_payload());
+                            let selected = if requires_payload {
+                                self.commit_log.get_message(offset_py, size_py)
+                            } else {
+                                self.commit_log.get_message_for_transfer(offset_py, size_py)
+                            };
+                            let Some(select_result) = selected else {
                                 if get_result_ref.buffer_total_size() == 0 {
                                     status = GetMessageStatus::MessageWasRemoving;
                                 }
@@ -257,7 +265,8 @@ impl LocalFileMessageStore {
                             }
 
                             if let Some(filter) = message_filter.as_ref() {
-                                if !filter.is_matched_by_commit_log(Some(select_result.get_buffer()), None) {
+                                let message = requires_payload.then(|| select_result.get_buffer());
+                                if !filter.is_matched_by_commit_log(message, None) {
                                     if get_result_ref.buffer_total_size() == 0 {
                                         status = GetMessageStatus::NoMatchedMessage;
                                     }

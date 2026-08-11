@@ -22,6 +22,10 @@ pub struct ExpressionForRetryMessageFilter;
 
 #[allow(unused_variables)]
 impl MessageFilter for ExpressionForRetryMessageFilter {
+    fn requires_commit_log_payload(&self) -> bool {
+        false
+    }
+
     fn is_matched_by_consume_queue(&self, tags_code: Option<i64>, cq_ext_unit: Option<&CqExtUnit>) -> bool {
         true
     }
