@@ -122,6 +122,14 @@ pub struct RuntimeConfig {
     pub producer_permits: usize,
     pub consumer_permits: usize,
     pub client_manager_permits: usize,
+    /// Optional route request rate. Zero disables the QPS limiter.
+    pub route_rate_per_second: u64,
+    /// Optional producer request rate. Zero disables the QPS limiter.
+    pub producer_rate_per_second: u64,
+    /// Optional consumer request rate. Zero disables the QPS limiter.
+    pub consumer_rate_per_second: u64,
+    /// Optional client-manager request rate. Zero disables the QPS limiter.
+    pub client_manager_rate_per_second: u64,
     /// Process/Pod hard memory limit. Zero selects automatic detection.
     pub process_memory_limit_bytes: u64,
     pub telemetry_queue_capacity: usize,
@@ -137,6 +145,10 @@ impl Default for RuntimeConfig {
             producer_permits: 1024,
             consumer_permits: 1024,
             client_manager_permits: 512,
+            route_rate_per_second: 0,
+            producer_rate_per_second: 0,
+            consumer_rate_per_second: 0,
+            client_manager_rate_per_second: 0,
             process_memory_limit_bytes: 0,
             telemetry_queue_capacity: 1024,
             telemetry_queue_bytes: 16 * 1024 * 1024,
@@ -224,5 +236,28 @@ mod tests {
             1
         );
         assert_eq!(config.max_long_polling_timeout(), Duration::from_millis(10));
+    }
+
+    #[test]
+    fn runtime_rates_default_to_disabled_and_remain_independent() {
+        let default = RuntimeConfig::default();
+        assert_eq!(default.route_rate_per_second, 0);
+        assert_eq!(default.producer_rate_per_second, 0);
+        assert_eq!(default.consumer_rate_per_second, 0);
+        assert_eq!(default.client_manager_rate_per_second, 0);
+
+        let config = RuntimeConfig {
+            route_permits: 7,
+            producer_rate_per_second: 20_000,
+            consumer_rate_per_second: 30_000,
+            client_manager_rate_per_second: 40_000,
+            ..RuntimeConfig::default()
+        };
+
+        assert_eq!(config.route_permits, 7);
+        assert_eq!(config.route_rate_per_second, 0);
+        assert_eq!(config.producer_rate_per_second, 20_000);
+        assert_eq!(config.consumer_rate_per_second, 30_000);
+        assert_eq!(config.client_manager_rate_per_second, 40_000);
     }
 }
