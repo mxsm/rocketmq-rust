@@ -61,22 +61,28 @@ impl DefaultMQProducerImpl {
             .await
             .map_err(|e| mq_client_err!(format!("send message in transaction error, {}", e)))?
             .ok_or_else(|| mq_client_err!("send result is none"))?;
+
+        if send_result.send_status == SendStatus::SendOk {
+            if let Some(ref transaction_id) = send_result.transaction_id {
+                msg.put_user_property(
+                    CheetahString::from_static_str(MessageConst::PROPERTY_TRANSACTION_ID),
+                    CheetahString::from_string(transaction_id.to_owned()),
+                )
+                .map_err(|e| mq_client_err!(e.to_string()))?;
+            }
+            let transaction_id = msg.property(&CheetahString::from_static_str(
+                MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
+            ));
+            if let Some(transaction_id) = transaction_id {
+                msg.set_transaction_id(transaction_id);
+            }
+        }
+
+        let msg = Arc::new(msg);
         let (local_transaction_state, local_exception) = match send_result.send_status {
             SendStatus::SendOk => {
-                if let Some(ref transaction_id) = send_result.transaction_id {
-                    msg.put_user_property(
-                        CheetahString::from_static_str(MessageConst::PROPERTY_TRANSACTION_ID),
-                        CheetahString::from_string(transaction_id.to_owned()),
-                    )
-                    .map_err(|e| mq_client_err!(e.to_string()))?;
-                }
-                let transaction_id = msg.property(&CheetahString::from_static_str(
-                    MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
-                ));
-                if let Some(transaction_id) = transaction_id {
-                    msg.set_transaction_id(transaction_id);
-                }
-                Self::execute_local_transaction_branch(&transaction_listener, &msg, arg.as_deref())
+                self.execute_local_transaction_listener(transaction_listener, Arc::clone(&msg), arg)
+                    .await
             }
             SendStatus::FlushDiskTimeout | SendStatus::FlushSlaveTimeout | SendStatus::SlaveNotAvailable => {
                 (LocalTransactionState::RollbackMessage, None)
@@ -105,6 +111,31 @@ impl DefaultMQProducerImpl {
             send_result: Some(send_result),
         };
         Ok(transaction_send_result)
+    }
+
+    pub(super) async fn execute_local_transaction_listener<M>(
+        &self,
+        transaction_listener: ArcTransactionListener,
+        msg: Arc<M>,
+        arg: Option<Box<dyn Any + Send + Sync>>,
+    ) -> (LocalTransactionState, Option<CheetahString>)
+    where
+        M: MessageTrait + Send + Sync + 'static,
+    {
+        let task = move || Self::execute_local_transaction_branch(&transaction_listener, msg.as_ref(), arg.as_deref());
+
+        match spawn_client_blocking_io_with_context(&self.service_context, "client.transaction.execute", task).await {
+            Ok(result) => result,
+            Err(error) => {
+                tracing::error!(%error, "executeLocalTransactionBranch blocking task failed");
+                (
+                    LocalTransactionState::Unknown,
+                    Some(CheetahString::from_string(format!(
+                        "executeLocalTransactionBranch blocking task failed: {error}"
+                    ))),
+                )
+            }
+        }
     }
 
     pub(super) fn execute_local_transaction_branch(

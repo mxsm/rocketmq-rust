@@ -268,6 +268,7 @@ impl MQClientAPIImpl {
         let topic_publish_info_cloned = topic_publish_info.cloned();
         let instance_cloned = instance.clone();
         let mq_fault_strategy = producer.fault_strategy_snapshot();
+        let retry_response_codes = producer.producer_config_snapshot().retry_response_codes().clone();
         // Snapshot only the immutable hook capability and context data needed by the callback.
         let context_data = context.as_ref().map(|c| AsyncSendHookContext {
             producer_group: c.producer_group.as_ref().cloned(),
@@ -298,6 +299,7 @@ impl MQClientAPIImpl {
             topic_publish_info_cloned,
             instance_cloned,
             retry_times_when_send_failed,
+            retry_response_codes,
             context_data,
         )
         .await;
@@ -324,6 +326,7 @@ impl MQClientAPIImpl {
         topic_publish_info: Option<TopicPublishInfo>,
         instance: Option<Arc<MQClientInstance>>,
         retry_times_when_send_failed: u32,
+        retry_response_codes: HashSet<i32>,
         context_data: Option<AsyncSendHookContext>,
     ) {
         let begin_start_time_all = Instant::now();
@@ -361,7 +364,6 @@ impl MQClientAPIImpl {
                         ResponseCode::SlaveNotAvailable => SendStatus::SlaveNotAvailable,
                         ResponseCode::Success => SendStatus::SendOk,
                         _ => {
-                            // Non-success response: update fault and call callback with an error
                             mq_fault_strategy
                                 .update_fault_item(current_broker_name.clone(), cost, true, true)
                                 .await;
@@ -369,6 +371,33 @@ impl MQClientAPIImpl {
                                 response.code(),
                                 response.remark().map_or("".to_string(), |s| s.to_string())
                             );
+
+                            let retry_elapsed = (Instant::now() - begin_start_time_all).as_millis() as u64;
+                            let has_retry_budget = retry_count < retry_times_when_send_failed
+                                && retry_elapsed < timeout_millis
+                                && Self::should_retry_async_producer_send_error(&err_obj, &retry_response_codes);
+                            if has_retry_budget {
+                                retry_count += 1;
+                                if let Some((retry_addr, retry_broker_name)) = Self::select_async_retry_target(
+                                    &mq_fault_strategy,
+                                    topic_publish_info.as_ref(),
+                                    instance.as_ref(),
+                                    &current_broker_name,
+                                    &current_addr,
+                                )
+                                .await
+                                {
+                                    warn!(
+                                        "async send msg by retry {} times after broker response. topic={}, brokerAddr={}, brokerName={}",
+                                        retry_count, msg_topic, retry_addr, retry_broker_name
+                                    );
+                                    current_addr = retry_addr;
+                                    current_broker_name = retry_broker_name;
+                                    retry_request.set_retry_opaque(RemotingCommand::create_new_request_id());
+                                    continue;
+                                }
+                            }
+
                             Self::execute_async_send_hook_after(
                                 &context_data,
                                 None,
@@ -464,7 +493,7 @@ impl MQClientAPIImpl {
                     let retry_elapsed = (Instant::now() - begin_start_time_all).as_millis() as u64;
                     let has_retry_budget = retry_count < retry_times_when_send_failed
                         && retry_elapsed < timeout_millis
-                        && Self::should_retry_async_send_error(&e);
+                        && Self::should_retry_async_producer_send_error(&e, &retry_response_codes);
                     if has_retry_budget {
                         retry_count += 1;
                         if let Some((retry_addr, retry_broker_name)) = Self::select_async_retry_target(
@@ -505,8 +534,11 @@ impl MQClientAPIImpl {
         })
     }
 
-    pub(super) fn should_retry_async_send_error(error: &rocketmq_error::RocketMQError) -> bool {
-        crate::common::retry_decision::should_retry_async_send_error(error)
+    pub(super) fn should_retry_async_producer_send_error(
+        error: &rocketmq_error::RocketMQError,
+        retry_response_codes: &HashSet<i32>,
+    ) -> bool {
+        crate::common::retry_decision::producer_send_retry_decision(error, retry_response_codes).should_retry()
     }
 
     pub(super) async fn select_async_retry_target(

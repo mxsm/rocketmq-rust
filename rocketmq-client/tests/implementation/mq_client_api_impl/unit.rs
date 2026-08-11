@@ -1002,8 +1002,31 @@ fn async_send_retries_transient_network_failures_only() {
         "write failed",
     ));
 
-    assert!(MQClientAPIImpl::should_retry_async_send_error(&connection_failed));
-    assert!(MQClientAPIImpl::should_retry_async_send_error(&send_failed));
+    let retry_response_codes = HashSet::new();
+    assert!(MQClientAPIImpl::should_retry_async_producer_send_error(
+        &connection_failed,
+        &retry_response_codes,
+    ));
+    assert!(MQClientAPIImpl::should_retry_async_producer_send_error(
+        &send_failed,
+        &retry_response_codes,
+    ));
+}
+
+#[test]
+fn async_producer_send_uses_configured_response_code_allowlist() {
+    let retryable =
+        rocketmq_error::RocketMQError::broker_operation_failed("SEND_MESSAGE", ResponseCode::SystemBusy as i32, "busy");
+    let configured = HashSet::from([ResponseCode::SystemBusy as i32]);
+
+    assert!(MQClientAPIImpl::should_retry_async_producer_send_error(
+        &retryable,
+        &configured,
+    ));
+    assert!(!MQClientAPIImpl::should_retry_async_producer_send_error(
+        &retryable,
+        &HashSet::new(),
+    ));
 }
 
 #[test]
@@ -1021,11 +1044,22 @@ fn async_send_does_not_retry_timeout_backpressure_or_stopped_client() {
         limit: 1,
     });
 
-    assert!(!MQClientAPIImpl::should_retry_async_send_error(&timeout));
-    assert!(!MQClientAPIImpl::should_retry_async_send_error(&request_timeout));
-    assert!(!MQClientAPIImpl::should_retry_async_send_error(&too_many_requests));
-    assert!(!MQClientAPIImpl::should_retry_async_send_error(
+    let retry_response_codes = HashSet::new();
+    assert!(!MQClientAPIImpl::should_retry_async_producer_send_error(
+        &timeout,
+        &retry_response_codes,
+    ));
+    assert!(!MQClientAPIImpl::should_retry_async_producer_send_error(
+        &request_timeout,
+        &retry_response_codes,
+    ));
+    assert!(!MQClientAPIImpl::should_retry_async_producer_send_error(
+        &too_many_requests,
+        &retry_response_codes,
+    ));
+    assert!(!MQClientAPIImpl::should_retry_async_producer_send_error(
         &rocketmq_error::RocketMQError::ClientShuttingDown,
+        &retry_response_codes,
     ));
 }
 
