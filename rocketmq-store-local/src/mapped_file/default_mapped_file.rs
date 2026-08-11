@@ -84,6 +84,7 @@ use crate::mapped_file::retirement::state::reconciliation::ReconciledSegmentFile
 use crate::mapped_file::MappedFileLifecycleSnapshot;
 use crate::mapped_file::MappedFileOperation;
 use crate::mapped_file::MappedReadRange;
+use crate::transfer::segment::FileRangeLease;
 use crate::utils::ffi::advise_memory;
 use crate::utils::ffi::get_page_size;
 use crate::utils::ffi::lock_memory_region;
@@ -543,6 +544,51 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         MappedReadRange::try_new(lease, start_offset, file_offset, self.metrics.clone())
             .map(Some)
             .ok_or_else(|| MappedFileError::out_of_bounds(offset, len, self.raw_core.file_size()))
+    }
+
+    /// Selects an exact payload range backed by the canonical file owner.
+    ///
+    /// Unlike mapped slices, this capability is safe for the immutable published prefix of an
+    /// active append segment: the read admission prevents retirement while later appends remain
+    /// outside the checked range.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the range overflows, mapped-file admission is unavailable, or the
+    /// canonical file owner cannot be retained. An unpublished range returns `Ok(None)`.
+    pub fn try_file_range_selection(
+        &self,
+        offset: usize,
+        len: usize,
+    ) -> MappedFileResult<Option<SelectMappedBufferResult<M>>> {
+        let end = offset
+            .checked_add(len)
+            .ok_or_else(|| MappedFileError::out_of_bounds(offset, len, self.raw_core.file_size()))?;
+        let readable_position =
+            usize::try_from(self.get_read_position()).map_err(|_| MappedFileError::InvalidWritePosition {
+                position: self.get_read_position(),
+                capacity: self.raw_core.file_size(),
+            })?;
+        if end > readable_position {
+            return Ok(None);
+        }
+        let file_offset = u64::try_from(offset)
+            .map_err(|_| MappedFileError::out_of_bounds(offset, len, self.raw_core.file_size()))?;
+        let admission = self.acquire_owned(MappedFileOperation::Read)?;
+        let is_in_cache = self.record_cache_residency_admitted(&admission, offset as i64, len);
+        let owner = self.file_owner_admitted(&admission)?;
+        let range = FileRangeLease::try_from_mapped_file(owner, file_offset, len, admission)
+            .map_err(|error| MappedFileError::Custom(error.to_string()))?;
+        let start_offset = self
+            .get_file_from_offset()
+            .checked_add(file_offset)
+            .ok_or_else(|| MappedFileError::out_of_bounds(offset, len, self.raw_core.file_size()))?;
+        Ok(SelectMappedBufferResult::from_file_range(
+            start_offset,
+            file_offset,
+            range,
+            is_in_cache,
+        ))
     }
 
     #[inline]

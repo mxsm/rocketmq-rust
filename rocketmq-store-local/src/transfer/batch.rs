@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::io;
+
 use bytes::Bytes;
 
 use crate::transfer::segment::SegmentLease;
@@ -56,6 +58,43 @@ impl TransferBatch {
                 Some(Bytes::from(bytes))
             }
         }
+    }
+
+    /// Materializes only file-backed segments into exact byte ranges.
+    ///
+    /// Callers must run this operation on the storage I/O lane because positional file reads may
+    /// block. Existing byte-backed segments retain their shared buffers.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error when an exact file range cannot be read or a segment has no readable
+    /// backing source.
+    pub fn into_bytes_backed(self) -> io::Result<Self> {
+        let mut materialized = Vec::with_capacity(self.segments.len());
+        for segment in self.segments {
+            let bytes = match segment.as_bytes() {
+                Some(bytes) => bytes,
+                None => segment
+                    .as_file_range()
+                    .ok_or_else(|| io::Error::other("HA segment has neither bytes nor a file range"))?
+                    .to_bytes()?,
+            };
+            let bytes = bytes.slice(..segment.len().min(bytes.len()));
+            materialized.push(SegmentLease::from_bytes(
+                segment.segment().global_offset(),
+                segment.segment().position_in_file(),
+                bytes,
+                segment.segment().cache_state(),
+            ));
+        }
+        Ok(Self {
+            frame_header: self.frame_header,
+            segments: materialized,
+            total_body_len: self.total_body_len,
+            start_offset: self.start_offset,
+            next_offset: self.next_offset,
+            kind: self.kind,
+        })
     }
 }
 

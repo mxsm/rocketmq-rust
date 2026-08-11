@@ -59,6 +59,22 @@ impl ExpressionMessageFilter {
 
 #[allow(unused_variables)]
 impl MessageFilter for ExpressionMessageFilter {
+    fn requires_commit_log_payload(&self) -> bool {
+        let Some(subscription_data) = self.subscription_data.as_ref() else {
+            return false;
+        };
+        if subscription_data.class_filter_mode
+            || ExpressionType::is_tag_type(Some(subscription_data.expression_type.as_str()))
+        {
+            return false;
+        }
+        self.consumer_filter_data.as_ref().is_some_and(|filter| {
+            filter.expression().is_some()
+                && filter.expression_type().is_some()
+                && filter.compiled_expression().is_some()
+        })
+    }
+
     fn is_matched_by_consume_queue(&self, tags_code: Option<i64>, cq_ext_unit: Option<&CqExtUnit>) -> bool {
         if self.subscription_data.is_none() {
             return true;
@@ -309,6 +325,7 @@ mod tests {
         );
         let properties = HashMap::from([(CheetahString::from_slice("color"), CheetahString::from_slice("blue"))]);
 
+        assert!(filter.requires_commit_log_payload());
         assert!(filter.is_matched_by_commit_log(Some(&[]), Some(&properties)));
     }
 
@@ -354,6 +371,7 @@ mod tests {
         let subscription = FilterAPI::build_subscription_data(&topic, &CheetahString::from_static_str("blue"))
             .expect("tag subscription should build");
         let filter = ExpressionMessageFilter::new(Some(subscription), None, Arc::new(new_manager()));
+        assert!(!filter.requires_commit_log_payload());
 
         let mut store = new_store(&temp_root, &topic);
         store.init().await.expect("init store");

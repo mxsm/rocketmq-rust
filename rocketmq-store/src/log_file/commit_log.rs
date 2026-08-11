@@ -1003,6 +1003,10 @@ impl CommitLog {
         }
     }
 
+    pub(crate) fn get_message_for_transfer(&self, offset: i64, size: i32) -> Option<SelectMappedBufferResult> {
+        self.read_handle().get_message_for_transfer(offset, size)
+    }
+
     pub fn set_confirm_offset(&mut self, phy_offset: i64) {
         self.publish_confirm_offset(phy_offset);
     }
@@ -3962,6 +3966,7 @@ mod tests {
             .await
             .expect("append second chunk"));
 
+        let before = store.get_commit_log().selection_stats();
         let segments = store
             .get_commit_log()
             .select_segments(12, 8, false)
@@ -3971,13 +3976,17 @@ mod tests {
         assert_eq!(segments[0].segment().global_offset(), 12);
         assert_eq!(segments[0].segment().position_in_file(), 12);
         assert_eq!(segments[0].len(), 4);
-        assert_eq!(
-            segments[0].as_bytes().expect("segment bytes"),
-            Bytes::from_static(b"CDEF")
-        );
+        assert!(segments[0].as_bytes().is_none());
         let file_range = segments[0].as_file_range().expect("file range");
         assert_eq!(file_range.position(), 12);
         assert_eq!(file_range.len(), 4);
+        assert_eq!(
+            file_range.to_bytes().expect("exact fallback"),
+            Bytes::from_static(b"CDEF")
+        );
+        let after = store.get_commit_log().selection_stats();
+        assert_eq!(after.copied_bytes, before.copied_bytes);
+        assert_eq!(after.compared_bytes, before.compared_bytes);
 
         let _ = fs::remove_dir_all(temp_root);
     }

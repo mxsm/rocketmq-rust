@@ -106,7 +106,6 @@ struct FileRangeAliasInner {
 }
 
 impl FileRangeAliasInner {
-    #[cfg(any(unix, test))]
     #[inline]
     fn owner(&self) -> &FileOwner {
         self.owner
@@ -138,6 +137,20 @@ impl Drop for FileRangeAliasInner {
 pub struct FileRangeLease {
     aliases: Arc<FileRangeAliasInner>,
     range: CheckedFileRange,
+}
+
+/// Duplicated transfer descriptor that cannot outlive its mapped-file range guard.
+pub struct FileRangeTransferHandle {
+    file: File,
+    _range: FileRangeLease,
+}
+
+impl FileRangeTransferHandle {
+    /// Returns the duplicated descriptor protected by the retained mapped-file range admission.
+    #[inline]
+    pub fn file(&self) -> &File {
+        &self.file
+    }
 }
 
 /// Legacy type name for the checked owner-bearing range capability.
@@ -282,7 +295,7 @@ impl SegmentLease {
 
     /// Compatibility adapter for callers that already carry a separate global offset.
     pub fn from_select_result(global_offset: i64, result: NativeSelectMappedBufferResult) -> Option<Self> {
-        let (_start_offset, bytes, mapped_range, size, mapped_source, position_in_file, cache_state) =
+        let (_start_offset, bytes, mapped_range, file_range, size, mapped_source, position_in_file, cache_state) =
             result.into_transfer_parts();
         if size <= 0 {
             return None;
@@ -293,6 +306,34 @@ impl SegmentLease {
             .map(|(_lease, mapped_file)| mapped_file.get_file_from_offset())
             .unwrap_or_else(|| global_offset.saturating_sub(position_in_file as i64) as u64);
         let cache_state = cache_state.into();
+        if let Some(lease) = file_range {
+            return Some(Self {
+                segment: CommitLogSegment {
+                    global_offset,
+                    file_offset,
+                    position_in_file,
+                    len,
+                    source: SegmentSource::FileRange { lease },
+                    cache_state,
+                },
+                bytes,
+            });
+        }
+        if let Some(range) = mapped_range.as_ref() {
+            if let Ok(lease) = range.clone().try_into_file_range() {
+                return Some(Self {
+                    segment: CommitLogSegment {
+                        global_offset,
+                        file_offset: range.file_from_offset(),
+                        position_in_file: range.file_offset(),
+                        len,
+                        source: SegmentSource::FileRange { lease },
+                        cache_state,
+                    },
+                    bytes,
+                });
+            }
+        }
         let source = match mapped_source {
             Some((lease, mapped_file)) => match mapped_file.file_owner_admitted(&lease) {
                 Ok(owner) => match Self::try_from_file_owner_range(
@@ -451,6 +492,20 @@ impl FileRangeLease {
         })
     }
 
+    pub(crate) fn try_from_mapped_file(
+        owner: Arc<FileOwner>,
+        position: u64,
+        len: usize,
+        operation: MappedFileLease,
+    ) -> Result<Self, FileRangeError> {
+        Self::try_new(
+            owner,
+            position,
+            len,
+            FileRangeOperationLease::Mapped { _lease: operation },
+        )
+    }
+
     #[inline]
     pub fn position(&self) -> u64 {
         self.range.position()
@@ -464,6 +519,34 @@ impl FileRangeLease {
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.range.bounds.is_empty()
+    }
+
+    /// Copies exactly this checked range for compatibility engines that cannot consume file
+    /// regions directly.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error when the validated file range can no longer be read completely.
+    pub fn to_bytes(&self) -> io::Result<Bytes> {
+        let mut output = vec![0_u8; self.len()];
+        self.aliases.owner().read_exact_at(self.position(), &mut output)?;
+        Ok(Bytes::from(output))
+    }
+
+    /// Creates a descriptor adapter while retaining this range's admission and owner guard.
+    ///
+    /// The descriptor field intentionally precedes the range guard so Windows closes the duplicate
+    /// before releasing the final retirement admission.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error when the operating-system descriptor cannot be duplicated.
+    pub fn try_transfer_handle(&self) -> io::Result<FileRangeTransferHandle> {
+        let file = self.aliases.owner().try_clone_for_transfer()?;
+        Ok(FileRangeTransferHandle {
+            file,
+            _range: self.clone(),
+        })
     }
 
     /// Splits this capability at a relative byte offset.
@@ -495,7 +578,6 @@ impl FileRangeLease {
         Ok((self, right))
     }
 
-    #[cfg(unix)]
     #[inline]
     pub(crate) fn truncate_to(&mut self, maximum_len: usize) {
         let retained = self.len().min(maximum_len);

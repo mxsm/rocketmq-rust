@@ -97,6 +97,10 @@ impl CommitLogReadHandle {
         self.mapped_file_queue.get_message(offset, size)
     }
 
+    pub(crate) fn get_message_for_transfer(&self, offset: i64, size: i32) -> Option<SelectMappedBufferResult> {
+        self.mapped_file_queue.get_message_for_transfer(offset, size)
+    }
+
     pub(crate) fn get_bulk_data(&self, offset: i64, size: i32) -> Option<Vec<SelectMappedBufferResult>> {
         self.mapped_file_queue.get_bulk_data(offset, size)
     }
@@ -198,7 +202,7 @@ impl CommitLogReadHandle {
             max_bytes = max_bytes.min(mapped_file_size.saturating_sub(position_in_file));
         }
 
-        let Some(results) = self.get_bulk_data(offset, max_bytes as i32) else {
+        let Some(results) = self.mapped_file_queue.get_bulk_transfer_data(offset, max_bytes as i32) else {
             return Ok(Vec::new());
         };
         Ok(results.into_iter().filter_map(SegmentLease::from_selection).collect())

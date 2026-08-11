@@ -21,6 +21,15 @@ use crate::consume_queue::extension::CqExtUnit;
 
 /// A trait for filtering messages.
 pub trait MessageFilter: Send + Sync {
+    /// Reports whether commit-log payload bytes are required after consume-queue matching.
+    ///
+    /// Implementations that can decide entirely from consume-queue metadata should return
+    /// `false`, allowing the store to retain an owner-backed transfer range instead of creating a
+    /// payload snapshot.
+    fn requires_commit_log_payload(&self) -> bool {
+        true
+    }
+
     /// Checks if the message is matched by the consume queue.
     ///
     /// # Arguments

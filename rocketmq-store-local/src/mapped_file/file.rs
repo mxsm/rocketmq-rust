@@ -365,6 +365,10 @@ impl FileOwner {
         operation(self.handle.as_file())
     }
 
+    pub(crate) fn try_clone_for_transfer(&self) -> io::Result<File> {
+        self.handle.as_file().try_clone()
+    }
+
     /// Creates a writable mapping without exposing or cloning the owned file handle.
     ///
     /// # Safety
@@ -406,15 +410,26 @@ impl FileOwner {
         operation(self.handle.as_file(), len)
     }
 
+    pub(crate) fn read_exact_at(&self, mut offset: u64, mut output: &mut [u8]) -> io::Result<()> {
+        while !output.is_empty() {
+            let read = read_at(self.handle.as_file(), output, offset)?;
+            if read == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "mapped-file transfer range ended before its validated length",
+                ));
+            }
+            offset = offset
+                .checked_add(read as u64)
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "mapped-file read offset overflow"))?;
+            output = &mut output[read..];
+        }
+        Ok(())
+    }
+
     #[cfg(test)]
     pub(crate) fn read_exact_at_for_test(&self, offset: u64, output: &mut [u8]) -> io::Result<()> {
-        use std::io::Read;
-        use std::io::Seek;
-        use std::io::SeekFrom;
-
-        let mut file = self.handle.as_file();
-        file.seek(SeekFrom::Start(offset))?;
-        file.read_exact(output)
+        self.read_exact_at(offset, output)
     }
 
     /// Returns the current file length without exposing the handle.
@@ -483,6 +498,28 @@ impl FileOwner {
         }
         operation(out_fd, self.raw_fd(), offset, len)
     }
+}
+
+#[cfg(unix)]
+fn read_at(file: &File, output: &mut [u8], offset: u64) -> io::Result<usize> {
+    use std::os::unix::fs::FileExt;
+
+    file.read_at(output, offset)
+}
+
+#[cfg(windows)]
+fn read_at(file: &File, output: &mut [u8], offset: u64) -> io::Result<usize> {
+    use std::os::windows::fs::FileExt;
+
+    file.seek_read(output, offset)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn read_at(_file: &File, _output: &mut [u8], _offset: u64) -> io::Result<usize> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "positional mapped-file reads are unsupported on this platform",
+    ))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
