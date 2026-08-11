@@ -65,6 +65,10 @@ impl TimelineCompletionWake {
 }
 
 impl CommitLogDispatcher for TimelineCompletionWake {
+    fn supports_parallel_dispatch(&self) -> bool {
+        true
+    }
+
     fn dispatch(&self, request: &mut DispatchRequest) {
         if !request.success || request.commit_log_offset < 0 || request.msg_size <= 0 {
             return;

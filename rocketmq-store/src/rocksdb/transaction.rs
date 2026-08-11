@@ -18,6 +18,7 @@ use std::sync::Weak;
 use rocketmq_model::common::message::MessageConst;
 use tracing::warn;
 
+use crate::base::commit_log_dispatcher::CommitLogDispatchExecution;
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
 use crate::base::dispatch_request::DispatchRequest;
 use crate::config::message_store_config::MessageStoreConfig;
@@ -93,6 +94,14 @@ impl CommitLogDispatcherBuildRocksDbTrans {
 }
 
 impl CommitLogDispatcher for CommitLogDispatcherBuildRocksDbTrans {
+    fn supports_parallel_dispatch(&self) -> bool {
+        true
+    }
+
+    fn dispatch_execution(&self) -> CommitLogDispatchExecution {
+        CommitLogDispatchExecution::Blocking
+    }
+
     fn dispatch(&self, dispatch_request: &mut DispatchRequest) {
         if !self.message_store_config.trans_rocksdb_enable {
             return;

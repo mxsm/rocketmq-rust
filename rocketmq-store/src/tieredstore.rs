@@ -37,6 +37,7 @@ use rocketmq_tieredstore::TieredStoreConfig;
 use tracing::debug;
 use tracing::warn;
 
+use crate::base::commit_log_dispatcher::CommitLogDispatchExecution;
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
 use crate::base::dispatch_request::DispatchRequest;
 use crate::base::get_message_result::GetMessageResult;
@@ -400,6 +401,14 @@ impl<P> CommitLogDispatcher for TieredCommitLogDispatcher<P>
 where
     P: TieredStoreProvider,
 {
+    fn supports_parallel_dispatch(&self) -> bool {
+        true
+    }
+
+    fn dispatch_execution(&self) -> CommitLogDispatchExecution {
+        CommitLogDispatchExecution::Async
+    }
+
     fn dispatch(&self, dispatch_request: &mut DispatchRequest) {
         if !dispatch_request.success {
             return;

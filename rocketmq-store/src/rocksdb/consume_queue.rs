@@ -17,6 +17,7 @@ use std::sync::Weak;
 use tracing::error;
 use tracing::warn;
 
+use crate::base::commit_log_dispatcher::CommitLogDispatchExecution;
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
 use crate::base::dispatch_request::DispatchRequest;
 use crate::queue::local_file_consume_queue_store::ConsumeQueueStore;
@@ -104,6 +105,14 @@ impl CommitLogDispatcherBuildRocksDbConsumeQueue {
 }
 
 impl CommitLogDispatcher for CommitLogDispatcherBuildRocksDbConsumeQueue {
+    fn supports_parallel_dispatch(&self) -> bool {
+        true
+    }
+
+    fn dispatch_execution(&self) -> CommitLogDispatchExecution {
+        CommitLogDispatchExecution::Blocking
+    }
+
     fn dispatch(&self, dispatch_request: &mut DispatchRequest) {
         let Some(consume_queue_store) = self.consume_queue_store() else {
             warn!("RocksDB consume queue dispatcher skipped because store owner was dropped");

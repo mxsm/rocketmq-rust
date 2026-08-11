@@ -1086,13 +1086,20 @@ fn install_recording_arriving_listener(
 
 fn reput_inner_for_store(store: &LocalFileMessageStore) -> ReputMessageServiceInner {
     let policy = store.composition.reput();
+    let runtime_context = store.reput_runtime_context();
+    let dispatch_pipeline = super::reput_pipeline::ReputDispatchPipeline::new(
+        store.dispatcher.handle(),
+        &store.runtime_scope,
+        store.message_store_config.enable_async_reput,
+        super::dispatch::reput_read_max_bytes(store.message_store_config.as_ref()),
+    );
     ReputMessageServiceInner {
         reput_from_offset: Arc::new(AtomicI64::new(0)),
         commit_log: store.commit_log.read_handle(),
         policy,
-        dispatcher: store.dispatcher.handle(),
+        dispatch_pipeline,
         notify_message_arrive_in_batch: false,
-        runtime_context: store.reput_runtime_context(),
+        runtime_context,
     }
 }
 

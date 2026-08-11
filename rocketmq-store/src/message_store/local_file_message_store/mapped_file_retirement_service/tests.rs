@@ -123,7 +123,11 @@ async fn start_cancel_drain_and_await_uses_the_owned_runtime_boundaries() {
     assert_eq!(driver.drain_batch_limit.load(Ordering::Acquire), 1);
     assert_eq!(driver.shutdown_calls.load(Ordering::Acquire), 1);
     assert!(running_flags.is_writeable());
-    assert_eq!(scope.blocking_snapshot().blocking_still_running, 0);
+    assert!(!scope
+        .blocking_snapshot()
+        .tasks
+        .iter()
+        .any(|task| task.name == "mapped-file-retirement-batch"));
     assert!(service.task_group.is_none());
     assert!(service.scheduled_tasks.is_none());
 }

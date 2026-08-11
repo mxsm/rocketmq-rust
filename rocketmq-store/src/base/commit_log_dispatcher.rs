@@ -17,8 +17,32 @@ use std::pin::Pin;
 
 use crate::base::dispatch_request::DispatchRequest;
 
+/// Execution boundary required by one Reput derived-state lane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommitLogDispatchExecution {
+    /// The dispatcher is short, non-blocking work and may run on the coordinator task.
+    Inline,
+    /// The dispatcher performs synchronous storage I/O and must use the managed storage lane.
+    Blocking,
+    /// The dispatcher supplies an asynchronous, backpressure-aware implementation.
+    Async,
+}
+
 pub trait CommitLogDispatcher: Send + Sync + 'static {
     fn dispatch(&self, dispatch_request: &mut DispatchRequest);
+
+    /// Returns whether this dispatcher is independent of mutations made by sibling dispatchers.
+    ///
+    /// The ordered-lane coordinator only parallelizes a snapshot when every dispatcher opts in.
+    /// External dispatchers keep serial semantics unless they explicitly establish this invariant.
+    fn supports_parallel_dispatch(&self) -> bool {
+        false
+    }
+
+    /// Returns the execution boundary used by the ordered-lane coordinator.
+    fn dispatch_execution(&self) -> CommitLogDispatchExecution {
+        CommitLogDispatchExecution::Inline
+    }
 
     /// Dispatches one request while allowing bounded derived sinks to apply backpressure.
     fn dispatch_async<'a>(
