@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::time::Duration;
@@ -28,27 +27,23 @@ use rocketmq_runtime::FullPolicy;
 use rocketmq_runtime::ProcessMemoryLimit;
 use rocketmq_runtime::RateLimit;
 use rocketmq_runtime::ResourceBudgetTree;
-use rocketmq_store_api::decide_replication;
+use rocketmq_runtime::ResourcePermit;
 use rocketmq_store_api::AckPolicy;
-use rocketmq_store_api::HaRejectReason;
-use rocketmq_store_api::ReplicaAck;
 use rocketmq_store_api::ReplicationDecision;
-use rocketmq_store_api::ReplicationObservation;
-use rocketmq_store_api::SyncStateSet;
-use tokio::sync::Notify;
-use tokio::time::timeout;
 use tracing::error;
 use tracing::warn;
 
 use crate::base::message_status_enum::PutMessageStatus;
-use crate::ha::general_ha_service::GeneralHAService;
+use crate::ha::ack_frontier::AckFrontier;
 use crate::ha::general_ha_service::GeneralHAServiceReference;
-use crate::ha::ha_service::HAAckedReplicaSnapshot;
 use crate::ha::ha_service::HAService;
 use crate::log_file::group_commit_request::GroupCommitRequest;
 use crate::store_error::HAError;
 use crate::store_error::HAResult;
 pub(crate) use rocketmq_store_local::ha::replication::GroupTransferRuntimeInfo;
+
+const PROGRESS_SAFETY_RECHECK_INTERVAL: Duration = Duration::from_millis(100);
+const IDLE_WAIT_INTERVAL: Duration = Duration::from_secs(3600);
 
 pub struct GroupTransferService {
     inner: Arc<GroupTransferServiceInner>,
@@ -93,20 +88,11 @@ impl GroupTransferService {
 
     pub fn notify_transfer_some(&self) {
         self.inner.record_ack_notify();
-        if self
-            .inner
-            .notified
-            .1
-            .compare_exchange(
-                false,
-                true,
-                std::sync::atomic::Ordering::SeqCst,
-                std::sync::atomic::Ordering::SeqCst,
-            )
-            .is_ok()
-        {
-            self.inner.notified.0.notify_one();
-        }
+        self.service_manager.wakeup();
+    }
+
+    pub fn notify_transfer_progress(&self) {
+        self.service_manager.wakeup();
     }
 
     pub(crate) fn runtime_info(&self) -> GroupTransferRuntimeInfo {
@@ -116,7 +102,6 @@ impl GroupTransferService {
 
 struct GroupTransferServiceInner {
     ha_service: GeneralHAServiceReference,
-    notified: (Arc<Notify>, AtomicBool),
     ack_notify_count: AtomicU64,
     pending_requests: BudgetedQueue<PendingGroupTransfer>,
 }
@@ -144,7 +129,6 @@ impl GroupTransferServiceInner {
             .map_err(|error| HAError::operation("build HA group-transfer budget", error))?;
         Ok(GroupTransferServiceInner {
             ha_service,
-            notified: (Arc::new(Notify::new()), AtomicBool::new(false)),
             ack_notify_count: AtomicU64::new(0),
             pending_requests: BudgetedQueue::new(queue_budget),
         })
@@ -179,115 +163,124 @@ impl GroupTransferServiceInner {
         }
     }
 
-    async fn load_acked_replicas(ha_service: &GeneralHAService) -> Vec<HAAckedReplicaSnapshot> {
-        ha_service.snapshot_acked_replicas().await
-    }
-
-    fn decide_transfer(
-        ha_service: &GeneralHAService,
-        policy: AckPolicy,
-        next_offset: i64,
-        snapshots: &[HAAckedReplicaSnapshot],
-    ) -> ReplicationDecision {
-        let Some(authority) = ha_service.write_authority() else {
-            return ReplicationDecision::Reject(HaRejectReason::AuthorityMismatch);
-        };
-        let mut members = ha_service
-            .sync_state_set()
-            .unwrap_or_else(|| std::collections::HashSet::from([authority.broker_id()]));
-        let require_controller_ids = ha_service.is_auto_switch_enabled();
-        let replica_acks = snapshots
-            .iter()
-            .enumerate()
-            .filter_map(|(index, snapshot)| {
-                let broker_id = match snapshot.slave_broker_id {
-                    Some(broker_id) => broker_id,
-                    None if !require_controller_ids => i64::try_from(index).ok()?.checked_add(1)?,
-                    None => return None,
-                };
-                members.insert(broker_id);
-                ReplicaAck::try_new(broker_id, snapshot.slave_ack_offset).ok()
-            })
-            .collect::<Vec<_>>();
-        let Ok(sync_state_set) = SyncStateSet::try_new(members) else {
-            return ReplicationDecision::Reject(HaRejectReason::AuthorityMismatch);
-        };
-        let Ok(observation) = ReplicationObservation::try_new(
-            authority,
-            authority,
-            policy,
-            next_offset,
-            ha_service.local_durable_watermark().max(0),
-            replica_acks,
-            sync_state_set,
-        ) else {
-            return ReplicationDecision::Reject(HaRejectReason::AuthorityMismatch);
-        };
-        decide_replication(&observation)
-    }
-
-    async fn do_wait_transfer(&self) {
-        let ha_service = self.ha_service.upgrade();
-
-        while let Some(pending) = self.pending_requests.try_pop_budgeted() {
-            let (mut pending, _permit, _) = pending.into_parts();
-            let request = pending.request_mut();
-            let mut transfer_ok = false;
-            let deadline = request.get_deadline();
-            let policy = match AckPolicy::try_from_legacy(request.get_ack_nums(), mix_all::ALL_ACK_IN_SYNC_STATE_SET) {
+    fn drain_new_requests(&self, active: &mut Vec<ActiveGroupTransfer>) {
+        while let Some(budgeted) = self.pending_requests.try_pop_budgeted() {
+            let (mut pending, permit, _) = budgeted.into_parts();
+            let policy = match AckPolicy::try_from_legacy(
+                pending.request_mut().get_ack_nums(),
+                mix_all::ALL_ACK_IN_SYNC_STATE_SET,
+            ) {
                 Ok(policy) => policy,
                 Err(error) => {
                     warn!(error = %error, "HA group-transfer request has an invalid ACK policy");
-                    request.wakeup_customer(PutMessageStatus::FlushSlaveTimeout);
+                    pending
+                        .request_mut()
+                        .wakeup_customer(PutMessageStatus::FlushSlaveTimeout);
                     pending.complete();
                     continue;
                 }
             };
-            let mut index = 0;
-            while !transfer_ok && Instant::now() < deadline {
-                if index > 0
-                    && timeout(Duration::from_millis(1), self.notified.0.notified())
-                        .await
-                        .is_ok()
-                {
-                    let _ = self.notified.1.compare_exchange(
-                        true,
-                        false,
-                        std::sync::atomic::Ordering::SeqCst,
-                        std::sync::atomic::Ordering::SeqCst,
-                    );
-                }
-                index += 1;
-                let Some(ha_service) = ha_service.as_ref() else {
-                    break;
-                };
-                let acked_replicas = Self::load_acked_replicas(ha_service).await;
-                match Self::decide_transfer(ha_service, policy, request.get_next_offset(), &acked_replicas) {
-                    ReplicationDecision::Acknowledge(_) => transfer_ok = true,
-                    ReplicationDecision::Wait { .. } => {}
-                    ReplicationDecision::Reject(reason) => {
-                        warn!(
-                            ?reason,
-                            "HA group-transfer request was rejected by the canonical decision"
-                        );
-                        break;
-                    }
-                }
-            }
-            if !transfer_ok {
-                warn!(
-                    "transfer message to slave timeout, offset : {}, request acks: {}",
-                    request.get_next_offset(),
-                    request.get_ack_nums()
-                );
-            }
-            request.wakeup_customer(if transfer_ok {
-                PutMessageStatus::PutOk
-            } else {
-                PutMessageStatus::FlushSlaveTimeout
-            });
-            pending.complete();
+            active.push(ActiveGroupTransfer::admitted(pending, policy, permit));
         }
+    }
+
+    async fn evaluate_pending(&self, active: &mut Vec<ActiveGroupTransfer>) -> Option<Instant> {
+        self.drain_new_requests(active);
+        if active.is_empty() {
+            return None;
+        }
+
+        let frontier = match self.ha_service.upgrade() {
+            Some(ha_service) => {
+                let snapshots = ha_service.snapshot_acked_replicas().await;
+                AckFrontier::from_snapshots(
+                    ha_service.write_authority(),
+                    ha_service.sync_state_set(),
+                    ha_service.local_durable_watermark(),
+                    &snapshots,
+                    ha_service.is_auto_switch_enabled(),
+                )
+            }
+            None => AckFrontier::from_snapshots(None, None, 0, &[], false),
+        };
+        Self::resolve_pending(active, &frontier, Instant::now());
+        active.iter().map(ActiveGroupTransfer::deadline).min()
+    }
+
+    fn resolve_pending(active: &mut Vec<ActiveGroupTransfer>, frontier: &AckFrontier, now: Instant) {
+        active.retain_mut(|pending| {
+            if now >= pending.deadline() {
+                pending.complete(PutMessageStatus::FlushSlaveTimeout);
+                warn!(
+                    offset = pending.next_offset(),
+                    ack_nums = pending.ack_nums(),
+                    "transfer message to slave timed out"
+                );
+                return false;
+            }
+            match frontier.decide(pending.requested_authority(), pending.policy, pending.next_offset()) {
+                ReplicationDecision::Acknowledge(_) => {
+                    pending.complete(PutMessageStatus::PutOk);
+                    false
+                }
+                ReplicationDecision::Wait { .. } => true,
+                ReplicationDecision::Reject(reason) => {
+                    warn!(
+                        ?reason,
+                        offset = pending.next_offset(),
+                        "HA group-transfer request was rejected by the canonical decision"
+                    );
+                    pending.complete(PutMessageStatus::FlushSlaveTimeout);
+                    false
+                }
+            }
+        });
+    }
+}
+
+struct ActiveGroupTransfer {
+    pending: PendingGroupTransfer,
+    policy: AckPolicy,
+    _permit: Option<ResourcePermit>,
+}
+
+impl ActiveGroupTransfer {
+    fn admitted(pending: PendingGroupTransfer, policy: AckPolicy, permit: ResourcePermit) -> Self {
+        Self {
+            pending,
+            policy,
+            _permit: Some(permit),
+        }
+    }
+
+    #[cfg(test)]
+    fn unadmitted(pending: PendingGroupTransfer, policy: AckPolicy) -> Self {
+        Self {
+            pending,
+            policy,
+            _permit: None,
+        }
+    }
+
+    fn deadline(&self) -> Instant {
+        self.pending.request.get_deadline()
+    }
+
+    fn next_offset(&self) -> i64 {
+        self.pending.request.get_next_offset()
+    }
+
+    fn ack_nums(&self) -> i32 {
+        self.pending.request.get_ack_nums()
+    }
+
+    fn requested_authority(&self) -> Option<rocketmq_store_api::WriteAuthority> {
+        self.pending.request.requested_authority()
+    }
+
+    fn complete(&mut self, status: PutMessageStatus) {
+        self.pending.request_mut().wakeup_customer(status);
+        self.pending.complete();
     }
 }
 
@@ -327,11 +320,19 @@ impl ServiceTask for GroupTransferServiceInner {
     }
 
     async fn run(&self, context: &ServiceTaskContext) {
+        let mut active = Vec::new();
         while !context.is_stopped() {
-            context.wait_for_running(std::time::Duration::from_millis(10)).await;
-            self.on_wait_end().await;
-            self.do_wait_transfer().await;
+            let next_deadline = self.evaluate_pending(&mut active).await;
+            if context.is_stopped() {
+                break;
+            }
+            let wait = next_deadline
+                .map(|deadline| deadline.saturating_duration_since(Instant::now()))
+                .map(|until_deadline| until_deadline.min(PROGRESS_SAFETY_RECHECK_INTERVAL))
+                .unwrap_or(IDLE_WAIT_INTERVAL);
+            context.wait_for_running(wait).await;
         }
+        self.drain_new_requests(&mut active);
     }
 
     async fn on_wait_end(&self) {}
@@ -341,6 +342,7 @@ impl ServiceTask for GroupTransferServiceInner {
 mod tests {
     use super::*;
     use crate::ha::default_ha_service::DefaultHAService;
+    use crate::ha::general_ha_service::GeneralHAService;
     use crate::ha::test_support::new_test_message_store;
 
     fn new_test_ha_service() -> GeneralHAService {
@@ -373,6 +375,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn new_request_wakes_the_event_driven_service() {
+        let ha_service = new_test_ha_service();
+        let reference = GeneralHAServiceReference::new();
+        reference.bind(&ha_service).expect("bind general ha service");
+        let service = GroupTransferService::new(reference);
+        service.start().await.expect("start group transfer service");
+        let (request, response) = GroupCommitRequest::with_ack_nums(0, 5_000, 1);
+
+        service.put_request(request).await;
+
+        assert_eq!(
+            tokio::time::timeout(Duration::from_millis(250), response.wait_for_result())
+                .await
+                .expect("event-driven response")
+                .expect("group transfer status"),
+            PutMessageStatus::PutOk
+        );
+        service.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn shutdown_completes_active_and_queued_waiters() {
+        let ha_service = new_test_ha_service();
+        let reference = GeneralHAServiceReference::new();
+        reference.bind(&ha_service).expect("bind general ha service");
+        let service = GroupTransferService::new(reference);
+        service.start().await.expect("start group transfer service");
+        let (request, response) = GroupCommitRequest::with_ack_nums(128, 5_000, 2);
+        service.put_request(request).await;
+
+        service.shutdown().await;
+
+        assert_eq!(
+            tokio::time::timeout(Duration::from_millis(250), response.wait_for_result())
+                .await
+                .expect("shutdown response")
+                .expect("group transfer status"),
+            PutMessageStatus::FlushSlaveTimeout
+        );
+    }
+
+    #[tokio::test]
     async fn overload_rejects_excess_group_transfers_without_growing_the_queue() {
         let ha_service = new_test_ha_service();
         let reference = GeneralHAServiceReference::new();
@@ -394,7 +438,6 @@ mod tests {
             .expect("queue budget");
         let inner = GroupTransferServiceInner {
             ha_service: reference,
-            notified: (Arc::new(Notify::new()), AtomicBool::new(false)),
             ack_notify_count: AtomicU64::new(0),
             pending_requests: BudgetedQueue::new(queue_budget),
         };
@@ -425,7 +468,8 @@ mod tests {
         let (request, mut response) = GroupCommitRequest::with_ack_nums(128, 0, 2);
 
         inner.put_request(request).await;
-        inner.do_wait_transfer().await;
+        let mut active = Vec::new();
+        inner.evaluate_pending(&mut active).await;
 
         assert_eq!(
             response.wait_for_result_with_timeout().await.expect("timeout status"),
@@ -442,13 +486,53 @@ mod tests {
         let (request, mut response) = GroupCommitRequest::with_ack_nums(0, 5_000, 0);
 
         inner.put_request(request).await;
-        inner.do_wait_transfer().await;
+        let mut active = Vec::new();
+        inner.evaluate_pending(&mut active).await;
 
         assert_eq!(
             response.wait_for_result_with_timeout().await.expect("rejected status"),
             PutMessageStatus::FlushSlaveTimeout
         );
         assert_eq!(inner.runtime_info().pending_request_count, 0);
+    }
+
+    #[tokio::test]
+    async fn satisfied_low_offset_is_not_blocked_by_an_unsatisfied_high_offset() {
+        use rocketmq_store_api::MasterEpoch;
+        use rocketmq_store_api::ReplicaCount;
+        use rocketmq_store_api::WriteAuthority;
+
+        let authority =
+            WriteAuthority::try_new(0, MasterEpoch::try_from(1).expect("positive epoch")).expect("valid authority");
+        let frontier = AckFrontier::from_snapshots(
+            Some(authority),
+            Some(std::collections::HashSet::from([0, 1])),
+            200,
+            &[crate::ha::ha_service::HAAckedReplicaSnapshot {
+                slave_broker_id: Some(1),
+                slave_ack_offset: 120,
+            }],
+            true,
+        );
+        let policy = AckPolicy::ReplicaCount(ReplicaCount::try_new(2).expect("two replicas"));
+        let (high_request, _high_response) = GroupCommitRequest::with_ack_nums_and_authority(180, 5_000, 2, authority);
+        let (low_request, mut low_response) = GroupCommitRequest::with_ack_nums_and_authority(120, 5_000, 2, authority);
+        let mut active = vec![
+            ActiveGroupTransfer::unadmitted(PendingGroupTransfer::new(high_request), policy),
+            ActiveGroupTransfer::unadmitted(PendingGroupTransfer::new(low_request), policy),
+        ];
+
+        GroupTransferServiceInner::resolve_pending(&mut active, &frontier, Instant::now());
+
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].next_offset(), 180);
+        assert_eq!(
+            low_response
+                .wait_for_result_with_timeout()
+                .await
+                .expect("low offset status"),
+            PutMessageStatus::PutOk
+        );
     }
 
     #[test]

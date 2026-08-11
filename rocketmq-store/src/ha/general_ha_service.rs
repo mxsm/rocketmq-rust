@@ -280,6 +280,13 @@ impl HAService for GeneralHAService {
         }
     }
 
+    fn notify_transfer_progress(&self) {
+        match self {
+            GeneralHAService::DefaultHAService(service) => service.notify_transfer_progress(),
+            GeneralHAService::AutoSwitchHAService(service) => service.notify_transfer_progress(),
+        }
+    }
+
     async fn put_group_connection_state_request(&self, request: HAConnectionStateNotificationRequest) {
         match self {
             GeneralHAService::DefaultHAService(service) => service.put_group_connection_state_request(request).await,

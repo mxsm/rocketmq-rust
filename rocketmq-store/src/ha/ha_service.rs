@@ -119,6 +119,10 @@ pub trait RocketHAService: Sync {
     /// * `request` - The commit request
     async fn put_request(&self, request: GroupCommitRequest);
 
+    /// Wake pending group-transfer requests after local durability, membership, or authority
+    /// progress changes.
+    fn notify_transfer_progress(&self);
+
     /// Put a connection state notification request
     ///
     /// # Parameters
