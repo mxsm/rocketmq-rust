@@ -1295,19 +1295,21 @@ impl CommitLog {
             return PutMessageStatus::PutOk;
         }
         let next_offset = put_message_result.wrote_offset + put_message_result.wrote_bytes as i64;
-
-        let (request, mut response) = GroupCommitRequest::with_ack_nums(
-            next_offset,
-            self.message_store_config.slave_timeout as u64,
-            need_ack_nums,
-        );
         let Some(ha_service) = self.store_context.ha_service() else {
             error!("HA service is not initialized for commit-log replication");
             return PutMessageStatus::UnknownError;
         };
+        let Some(authority) = ha_service.write_authority() else {
+            error!("HA write authority is unavailable for commit-log replication");
+            return PutMessageStatus::FlushSlaveTimeout;
+        };
+        let (request, mut response) = GroupCommitRequest::with_ack_nums_and_authority(
+            next_offset,
+            self.message_store_config.slave_timeout as u64,
+            need_ack_nums,
+            authority,
+        );
         ha_service.put_request(request).await;
-        //Notify the HA service to handle the request
-        ha_service.get_wait_notify_object().notify_waiters();
         match response.wait_for_result_with_timeout().await {
             Ok(PutMessageStatus::FlushDiskTimeout) => PutMessageStatus::FlushSlaveTimeout,
             Ok(status) => status,
@@ -1333,6 +1335,12 @@ impl CommitLog {
 
         self.store_metrics
             .record_flush_latency(start_time.elapsed().as_millis() as u64);
+
+        if status == PutMessageStatus::PutOk {
+            if let Some(ha_service) = self.store_context.ha_service() {
+                ha_service.notify_transfer_progress();
+            }
+        }
 
         status
     }

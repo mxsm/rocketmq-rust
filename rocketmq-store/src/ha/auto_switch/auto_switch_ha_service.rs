@@ -102,6 +102,7 @@ impl AutoSwitchHAService {
         self.replication.set_local_broker_id(local_broker_id);
         self.delegate
             .set_ha_client_reported_broker_id((local_broker_id >= 0).then_some(local_broker_id));
+        self.delegate.notify_transfer_progress();
     }
 
     pub fn local_broker_id(&self) -> i64 {
@@ -124,6 +125,7 @@ impl AutoSwitchHAService {
         let current_confirm_offset = replica_store.get_confirm_offset_directly();
         let confirm_offset = self.compute_confirm_offset(current_confirm_offset, max_phy_offset);
         replica_store.publish_confirm_offset(confirm_offset);
+        self.delegate.notify_transfer_progress();
     }
 
     pub fn is_synchronizing_sync_state_set(&self) -> bool {
@@ -276,6 +278,7 @@ impl HAService for AutoSwitchHAService {
         self.replication.ensure_local_member();
         self.clear_master_target().await;
         self.refresh_confirm_offset_after_role_change();
+        self.delegate.notify_transfer_progress();
         Ok(true)
     }
 
@@ -301,6 +304,7 @@ impl HAService for AutoSwitchHAService {
         self.delegate.set_ha_client_reported_broker_id(slave_id);
         self.update_master_target(new_master_addr).await;
         self.refresh_confirm_offset_after_role_change();
+        self.delegate.notify_transfer_progress();
         Ok(true)
     }
 
@@ -332,6 +336,10 @@ impl HAService for AutoSwitchHAService {
 
     async fn put_request(&self, request: GroupCommitRequest) {
         self.delegate.put_request(request).await;
+    }
+
+    fn notify_transfer_progress(&self) {
+        self.delegate.notify_transfer_progress();
     }
 
     async fn put_group_connection_state_request(&self, request: HAConnectionStateNotificationRequest) {

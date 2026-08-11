@@ -21,6 +21,7 @@ use tracing::warn;
 use crate::base::message_status_enum::PutMessageStatus;
 use crate::store_error::StoreError;
 use crate::store_error::StoreOperation;
+use rocketmq_store_api::WriteAuthority;
 
 fn group_commit_invalid_state(reason: impl Into<String>) -> StoreError {
     StoreError::invalid_state(
@@ -81,6 +82,7 @@ pub struct GroupCommitRequest {
     next_offset: i64,
     flush_ok_sender: Option<oneshot::Sender<PutMessageStatus>>,
     ack_nums: i32,
+    requested_authority: Option<WriteAuthority>,
     created_at: Instant,
     deadline: Instant,
 }
@@ -98,16 +100,31 @@ impl GroupCommitRequest {
 
     /// Create a new GroupCommitRequest with timeout in milliseconds
     pub fn new(next_offset: i64, timeout_millis: u64) -> (Self, GroupCommitResponse) {
-        Self::create_request(next_offset, timeout_millis, 1)
+        Self::create_request(next_offset, timeout_millis, 1, None)
     }
 
     /// Create a new GroupCommitRequest with timeout and ack numbers
     pub fn with_ack_nums(next_offset: i64, timeout_millis: u64, ack_nums: i32) -> (Self, GroupCommitResponse) {
-        Self::create_request(next_offset, timeout_millis, ack_nums)
+        Self::create_request(next_offset, timeout_millis, ack_nums, None)
+    }
+
+    /// Creates a request bound to the write authority that accepted the append.
+    pub(crate) fn with_ack_nums_and_authority(
+        next_offset: i64,
+        timeout_millis: u64,
+        ack_nums: i32,
+        requested_authority: WriteAuthority,
+    ) -> (Self, GroupCommitResponse) {
+        Self::create_request(next_offset, timeout_millis, ack_nums, Some(requested_authority))
     }
 
     #[inline]
-    fn create_request(next_offset: i64, timeout_millis: u64, ack_nums: i32) -> (Self, GroupCommitResponse) {
+    fn create_request(
+        next_offset: i64,
+        timeout_millis: u64,
+        ack_nums: i32,
+        requested_authority: Option<WriteAuthority>,
+    ) -> (Self, GroupCommitResponse) {
         let (sender, receiver) = oneshot::channel();
         let created_at = Instant::now();
         let instant = created_at + Duration::from_millis(timeout_millis);
@@ -116,6 +133,7 @@ impl GroupCommitRequest {
                 next_offset,
                 flush_ok_sender: Some(sender),
                 ack_nums,
+                requested_authority,
                 created_at,
                 deadline: instant,
             },
@@ -134,6 +152,11 @@ impl GroupCommitRequest {
     /// Get the number of acknowledgments needed
     pub fn get_ack_nums(&self) -> i32 {
         self.ack_nums
+    }
+
+    /// Returns the authority that accepted this append when the caller supplied one.
+    pub(crate) fn requested_authority(&self) -> Option<WriteAuthority> {
+        self.requested_authority
     }
 
     /// Get when this request was created.
@@ -158,6 +181,7 @@ impl std::fmt::Debug for GroupCommitRequest {
         f.debug_struct("GroupCommitRequest")
             .field("next_offset", &self.next_offset)
             .field("ack_nums", &self.ack_nums)
+            .field("requested_authority", &self.requested_authority)
             .field("created_at", &self.created_at)
             .field("has_sender", &self.flush_ok_sender.is_some())
             .finish()

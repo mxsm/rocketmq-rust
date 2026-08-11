@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod ack_frontier;
 pub(crate) mod auto_switch;
 pub(crate) mod default_ha_client;
 mod default_ha_connection;

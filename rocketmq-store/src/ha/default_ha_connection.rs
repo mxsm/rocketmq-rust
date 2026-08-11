@@ -31,7 +31,6 @@ use tokio::net::TcpStream;
 use tokio::select;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
-use tokio::time::sleep;
 use tokio::time::timeout;
 use tokio_util::codec::FramedRead;
 use tracing::error;
@@ -467,9 +466,13 @@ impl ReadSocketService {
                     self.last_read_timestamp.store(current_millis(), Ordering::Relaxed);
                     self.slave_ack_offset.store(offset, Ordering::Relaxed);
 
-                    if self.slave_request_offset.load(Ordering::Acquire) < 0 {
-                        self.slave_request_offset.store(offset, Ordering::Release);
+                    if self
+                        .slave_request_offset
+                        .compare_exchange(-1, offset, Ordering::AcqRel, Ordering::Acquire)
+                        .is_ok()
+                    {
                         info!("slave[{}] request offset {}", self.client_address, offset);
+                        self.connection_context.notify_append_progress();
                     }
                     if let Some(broker_id) = broker_id.filter(|broker_id| *broker_id >= 0) {
                         self.connection_runtime.set_slave_broker_id(broker_id);
@@ -548,9 +551,13 @@ impl ReadSocketService {
                 ]);
                 self.process_position = pos;
                 self.slave_ack_offset.store(read_offset, Ordering::Relaxed);
-                if self.slave_request_offset.load(Ordering::Acquire) < 0 {
-                    self.slave_request_offset.store(read_offset, Ordering::Release);
+                if self
+                    .slave_request_offset
+                    .compare_exchange(-1, read_offset, Ordering::AcqRel, Ordering::Acquire)
+                    .is_ok()
+                {
                     info!("slave[{}] request offset {}", self.client_address, read_offset);
+                    self.connection_context.notify_append_progress();
                 }
 
                 self.connection_context.notify_transfer_some(read_offset).await;
@@ -599,6 +606,15 @@ pub struct WriteSocketService {
     last_write_timestamp: AtomicU64,
     last_print_timestamp: AtomicU64,
     last_write_over: AtomicBool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TransferStep {
+    Progress,
+    CaughtUp,
+    WaitingForReplica,
+    FlowControlled,
+    Retry,
 }
 
 impl WriteSocketService {
@@ -664,37 +680,21 @@ impl WriteSocketService {
         info!("{} service started", self.get_service_name());
 
         loop {
-            let select_result = timeout(SELECT_TIMEOUT, async {
-                tokio::select! {
-                    _ = shutdown_rx.recv() => {
-                        info!("Received shutdown signal");
-                         false
-                    }
-                    _ = tokio::task::yield_now() => {
-                         true
-                    }
-                }
-            })
-            .await;
-
-            match select_result {
-                Ok(false) => {
+            let step = match self.process_transfer().await {
+                Ok(step) => step,
+                Err(error) => {
+                    error!("Transfer error: {}", error);
                     break;
                 }
-                Ok(true) => {
-                    if let Err(e) = self.process_transfer().await {
-                        error!("Transfer error: {}", e);
-                        break;
-                    }
-                }
-                Err(_) => {
-                    if let Err(e) = self.process_transfer().await {
-                        error!("Transfer error: {}", e);
-                        break;
-                    }
-                }
-            }
+            };
             if self.is_stopped().await {
+                break;
+            }
+            if step == TransferStep::Progress {
+                continue;
+            }
+            if !self.wait_for_transfer_event(step, &mut shutdown_rx).await {
+                info!("Received shutdown signal");
                 break;
             }
         }
@@ -703,11 +703,10 @@ impl WriteSocketService {
         info!("{} service end", self.get_service_name());
     }
 
-    async fn process_transfer(&mut self) -> HAConnectionResult<()> {
+    async fn process_transfer(&mut self) -> HAConnectionResult<TransferStep> {
         let slave_request_offset = self.slave_request_offset.load(Ordering::Relaxed);
         if slave_request_offset == -1 {
-            sleep(Duration::from_millis(10)).await;
-            return Ok(());
+            return Ok(TransferStep::WaitingForReplica);
         }
 
         if self.next_transfer_from_where.load(Ordering::Relaxed) == -1 {
@@ -738,14 +737,14 @@ impl WriteSocketService {
 
             let heartbeat_interval = self.message_store_config.ha_send_heartbeat_interval;
 
-            if interval > heartbeat_interval {
+            if interval >= heartbeat_interval {
                 match self.send_heartbeat().await {
                     Ok(_) => {
                         self.last_write_over.store(true, Ordering::Relaxed);
                     }
                     Err(_) => {
                         self.last_write_over.store(false, Ordering::Relaxed);
-                        return Ok(());
+                        return Ok(TransferStep::Retry);
                     }
                 }
             }
@@ -756,7 +755,7 @@ impl WriteSocketService {
                 }
                 Err(_) => {
                     self.last_write_over.store(false, Ordering::Relaxed);
-                    return Ok(());
+                    return Ok(TransferStep::Retry);
                 }
             }
         }
@@ -766,12 +765,12 @@ impl WriteSocketService {
         if next_offset >= max_commit_log_offset {
             self.connection_context
                 .handle_runtime_connection_caught_up(&self.connection_runtime);
-            return Ok(());
+            return Ok(TransferStep::CaughtUp);
         }
 
         let configured_max_batch_size =
             effective_ha_transfer_batch_size(self.message_store_config.ha_transfer_batch_size);
-        let can_transfer_max_bytes = self.flow_monitor.can_transfer_max_byte_num() as usize;
+        let can_transfer_max_bytes = self.flow_monitor.can_transfer_max_byte_num().max(0) as usize;
         self.maybe_log_flow_control(
             next_offset,
             max_commit_log_offset,
@@ -801,9 +800,65 @@ impl WriteSocketService {
             self.next_transfer_from_where
                 .store(batch.next_offset, Ordering::Relaxed);
             self.send_data(batch).await?;
+            return Ok(TransferStep::Progress);
         }
 
-        Ok(())
+        Ok(TransferStep::FlowControlled)
+    }
+
+    async fn wait_for_transfer_event(
+        &self,
+        step: TransferStep,
+        shutdown_rx: &mut tokio::sync::broadcast::Receiver<()>,
+    ) -> bool {
+        let wait_duration = match step {
+            TransferStep::WaitingForReplica => Duration::from_secs(3600),
+            TransferStep::CaughtUp => self.heartbeat_wait_duration(),
+            TransferStep::FlowControlled => self.heartbeat_wait_duration().min(SELECT_TIMEOUT),
+            TransferStep::Retry => SELECT_TIMEOUT,
+            TransferStep::Progress => Duration::ZERO,
+        };
+        if wait_duration.is_zero() {
+            return true;
+        }
+
+        if matches!(step, TransferStep::WaitingForReplica | TransferStep::CaughtUp) {
+            let notifier = self.connection_context.append_notifier();
+            let notified = notifier.notified();
+            tokio::pin!(notified);
+            let _ = notified.as_mut().enable();
+            if self.transfer_became_ready(step) {
+                return true;
+            }
+            return timeout(wait_duration, async {
+                tokio::select! {
+                    _ = shutdown_rx.recv() => false,
+                    _ = &mut notified => true,
+                }
+            })
+            .await
+            .unwrap_or(true);
+        }
+
+        timeout(wait_duration, shutdown_rx.recv()).await.is_err()
+    }
+
+    fn transfer_became_ready(&self, step: TransferStep) -> bool {
+        transfer_became_ready(
+            step,
+            self.slave_request_offset.load(Ordering::Acquire),
+            self.next_transfer_from_where.load(Ordering::Acquire),
+            self.connection_context.replica_store().get_max_phy_offset(),
+        )
+    }
+
+    fn heartbeat_wait_duration(&self) -> Duration {
+        let elapsed = current_millis().saturating_sub(self.last_write_timestamp.load(Ordering::Relaxed));
+        Duration::from_millis(
+            self.message_store_config
+                .ha_send_heartbeat_interval
+                .saturating_sub(elapsed),
+        )
     }
 
     fn maybe_log_flow_control(
@@ -899,6 +954,19 @@ impl WriteSocketService {
     }
 }
 
+fn transfer_became_ready(
+    step: TransferStep,
+    slave_request_offset: i64,
+    next_transfer_offset: i64,
+    max_commit_log_offset: i64,
+) -> bool {
+    match step {
+        TransferStep::WaitingForReplica => slave_request_offset >= 0,
+        TransferStep::CaughtUp => next_transfer_offset < max_commit_log_offset,
+        TransferStep::Progress | TransferStep::FlowControlled | TransferStep::Retry => true,
+    }
+}
+
 fn transfer_engine_preference(message_store_config: &MessageStoreConfig) -> TransferEnginePreference {
     match message_store_config.effective_linux_transfer_engine() {
         LinuxTransferEngine::Auto => TransferEnginePreference::Auto,
@@ -988,6 +1056,13 @@ mod tests {
     #[test]
     fn non_zero_configured_ha_transfer_batch_size_is_preserved() {
         assert_eq!(effective_ha_transfer_batch_size(64 * 1024), 64 * 1024);
+    }
+
+    #[test]
+    fn post_registration_offset_recheck_prevents_lost_append_wakeup() {
+        assert!(transfer_became_ready(TransferStep::CaughtUp, 0, 128, 129));
+        assert!(transfer_became_ready(TransferStep::WaitingForReplica, 128, -1, 0));
+        assert!(!transfer_became_ready(TransferStep::CaughtUp, 0, 128, 128));
     }
 
     #[test]

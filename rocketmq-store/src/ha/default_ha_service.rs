@@ -154,6 +154,14 @@ impl DefaultHAConnectionContext {
         self.inner.ha_transfer_metrics.clone()
     }
 
+    pub(crate) fn append_notifier(&self) -> Arc<Notify> {
+        Arc::clone(&self.inner.wait_notify_object)
+    }
+
+    pub(crate) fn notify_append_progress(&self) {
+        self.inner.wait_notify_object.notify_waiters();
+    }
+
     pub(crate) async fn notify_transfer_some(&self, offset: i64) {
         self.inner.replication_progress.record_ack(offset);
         if let Some(service) = self.inner.group_transfer_service.get().and_then(Weak::upgrade) {
@@ -175,10 +183,16 @@ impl DefaultHAConnectionContext {
         if let Some(replication) = self.inner.auto_switch_replication.get() {
             self.handle_auto_switch_connection_added(replication, slave_broker_id, slave_ack_offset);
         }
+        if let Some(service) = self.inner.group_transfer_service.get().and_then(Weak::upgrade) {
+            service.notify_transfer_progress();
+        }
     }
 
     pub(crate) async fn remove_runtime_connection(&self, connection: &HAConnectionRuntimeHandle) {
         self.handle_runtime_connection_removed(connection);
+        if let Some(service) = self.inner.group_transfer_service.get().and_then(Weak::upgrade) {
+            service.notify_transfer_progress();
+        }
 
         if let Some(service) = self.inner.state_notification_service.get().and_then(Weak::upgrade) {
             let connection_state = connection.current_state().await;
@@ -687,6 +701,12 @@ impl HAService for DefaultHAService {
         }
     }
 
+    fn notify_transfer_progress(&self) {
+        if let Some(group_transfer_service) = &self.group_transfer_service {
+            group_transfer_service.notify_transfer_progress();
+        }
+    }
+
     async fn put_group_connection_state_request(&self, request: HAConnectionStateNotificationRequest) {
         if let Some(ref ha_connection_state_notification_service) = self.ha_connection_state_notification_service {
             ha_connection_state_notification_service.set_request(request).await;
@@ -1003,6 +1023,24 @@ mod tests {
         );
 
         assert_eq!(service.ha_transfer_metrics().snapshot().fallback_total, 1);
+        let _ = std::fs::remove_dir_all(temp_root);
+    }
+
+    #[tokio::test]
+    async fn append_progress_wakes_registered_connection_writer() {
+        let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-default-ha-append-wake-{}", current_millis()));
+        let store = new_test_message_store(&temp_root, false);
+        let service = new_default_ha_service(&store);
+        let notifier = service.connection_context.append_notifier();
+        let notified = notifier.notified();
+        tokio::pin!(notified);
+        let _ = notified.as_mut().enable();
+
+        service.connection_context.notify_append_progress();
+
+        tokio::time::timeout(Duration::from_millis(100), &mut notified)
+            .await
+            .expect("append notification");
         let _ = std::fs::remove_dir_all(temp_root);
     }
 

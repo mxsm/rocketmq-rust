@@ -54,6 +54,7 @@ use super::PutMessageContext;
 use super::PutMessageResult;
 use super::PutMessageStatus;
 use crate::base::message_result::AppendMessageResult;
+use crate::ha::ha_service::HAService;
 
 const APPEND_WORKER_NAME: &str = "commitlog-append-sequencer";
 const APPEND_WORKER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
@@ -491,6 +492,11 @@ impl CommitLogAppendProcessor {
         }
         let committed_requests = completions.iter().filter(|completion| completion.committed()).count();
         self.flush.wakeup_after_append_batch(committed_requests);
+        if committed_requests > 0 {
+            if let Some(ha_service) = self.store_context.ha_service() {
+                ha_service.get_wait_notify_object().notify_waiters();
+            }
+        }
         for (completion, permit) in completions.into_iter().zip(permits) {
             completion.complete();
             drop(permit);
