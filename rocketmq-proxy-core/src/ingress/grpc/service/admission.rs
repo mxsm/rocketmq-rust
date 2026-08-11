@@ -94,10 +94,34 @@ impl ExecutionGuards {
         .map_err(|error| ProxyError::invalid_metadata(error.to_string()))?;
         let root = tree.root();
 
-        let route = execution_budget(&root, "route", config.route_permits, managed_bytes)?;
-        let producer = execution_budget(&root, "producer", config.producer_permits, managed_bytes)?;
-        let consumer = execution_budget(&root, "consumer", config.consumer_permits, managed_bytes)?;
-        let client_manager = execution_budget(&root, "client-manager", config.client_manager_permits, managed_bytes)?;
+        let route = execution_budget(
+            &root,
+            "route",
+            config.route_permits,
+            config.route_rate_per_second,
+            managed_bytes,
+        )?;
+        let producer = execution_budget(
+            &root,
+            "producer",
+            config.producer_permits,
+            config.producer_rate_per_second,
+            managed_bytes,
+        )?;
+        let consumer = execution_budget(
+            &root,
+            "consumer",
+            config.consumer_permits,
+            config.consumer_rate_per_second,
+            managed_bytes,
+        )?;
+        let client_manager = execution_budget(
+            &root,
+            "client-manager",
+            config.client_manager_permits,
+            config.client_manager_rate_per_second,
+            managed_bytes,
+        )?;
         let telemetry_limits = TelemetryQueueLimits {
             count: config.telemetry_queue_capacity,
             bytes: telemetry_bytes,
@@ -193,16 +217,15 @@ fn execution_budget(
     root: &ResourceBudget,
     name: &'static str,
     permits: usize,
+    rate_per_second: u64,
     managed_bytes: usize,
 ) -> ProxyResult<ResourceBudget> {
-    root.child(
-        name,
-        BudgetLimit::new(permits, managed_bytes.max(1), FullPolicy::Reject).with_rate(RateLimit::new(
-            u64::try_from(permits).unwrap_or(u64::MAX).max(1),
-            u64::try_from(permits).unwrap_or(u64::MAX).max(1),
-        )),
-    )
-    .map_err(|error| ProxyError::invalid_metadata(error.to_string()))
+    let mut limit = BudgetLimit::new(permits, managed_bytes.max(1), FullPolicy::Reject);
+    if rate_per_second > 0 {
+        limit = limit.with_rate(RateLimit::new(rate_per_second, rate_per_second));
+    }
+    root.child(name, limit)
+        .map_err(|error| ProxyError::invalid_metadata(error.to_string()))
 }
 
 #[cfg(test)]
@@ -219,6 +242,89 @@ mod tests {
         let _permit = guards.try_route(0).expect("first route permit");
 
         assert!(matches!(guards.try_route(0), Err(ProxyError::TooManyRequests { .. })));
+    }
+
+    #[test]
+    fn inflight_permits_do_not_impose_an_implicit_request_rate() {
+        let guards = ExecutionGuards::from_config(&RuntimeConfig {
+            producer_permits: 1,
+            producer_rate_per_second: 0,
+            process_memory_limit_bytes: 64 * 1024 * 1024,
+            ..RuntimeConfig::default()
+        });
+
+        for _ in 0..4_096 {
+            let permit = guards
+                .try_producer(1)
+                .expect("sequential request should not be rate limited");
+            drop(permit);
+        }
+    }
+
+    #[test]
+    fn explicit_request_rate_is_enforced_independently_from_inflight() {
+        let guards = ExecutionGuards::from_config(&RuntimeConfig {
+            producer_permits: 8,
+            producer_rate_per_second: 2,
+            process_memory_limit_bytes: 64 * 1024 * 1024,
+            ..RuntimeConfig::default()
+        });
+
+        drop(guards.try_producer(1).expect("first rate token"));
+        drop(guards.try_producer(1).expect("second rate token"));
+        assert!(matches!(
+            guards.try_producer(1),
+            Err(ProxyError::TooManyRequests { .. })
+        ));
+        drop(
+            guards
+                .try_route(1)
+                .expect("producer rate must not affect route admission"),
+        );
+    }
+
+    #[test]
+    fn each_execution_boundary_uses_its_own_explicit_rate() {
+        let guards = ExecutionGuards::from_config(&RuntimeConfig {
+            route_rate_per_second: 11,
+            producer_rate_per_second: 12,
+            consumer_rate_per_second: 13,
+            client_manager_rate_per_second: 14,
+            process_memory_limit_bytes: 64 * 1024 * 1024,
+            ..RuntimeConfig::default()
+        });
+
+        assert_eq!(
+            guards.route.limit().capacity.rate.map(|rate| rate.permits_per_second),
+            Some(11)
+        );
+        assert_eq!(
+            guards
+                .producer
+                .limit()
+                .capacity
+                .rate
+                .map(|rate| rate.permits_per_second),
+            Some(12)
+        );
+        assert_eq!(
+            guards
+                .consumer
+                .limit()
+                .capacity
+                .rate
+                .map(|rate| rate.permits_per_second),
+            Some(13)
+        );
+        assert_eq!(
+            guards
+                .client_manager
+                .limit()
+                .capacity
+                .rate
+                .map(|rate| rate.permits_per_second),
+            Some(14)
+        );
     }
 
     #[test]
