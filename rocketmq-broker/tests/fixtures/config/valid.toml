@@ -16,6 +16,7 @@ brokerClusterName = "ConfigContract"
 brokerId = 0
 
 [store]
+compatibilityProfile = "JAVA_5_5"
 haListenAddress = "127.0.0.1"
 haListenPort = 10912
 storePathRootDir = "./target/config-contract/store"

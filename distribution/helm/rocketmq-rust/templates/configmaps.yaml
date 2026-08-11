@@ -60,6 +60,7 @@ data:
 
 {{- end }}
     [store]
+    compatibilityProfile = "JAVA_5_5"
     haListenAddress = "0.0.0.0"
     haListenPort = 10912
     storePathRootDir = "/var/lib/rocketmq/store"

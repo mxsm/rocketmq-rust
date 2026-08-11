@@ -70,6 +70,7 @@ pub use crate::capability::StoreHealthSnapshot;
 pub use crate::config::flush_disk_type::FlushDiskType;
 pub use crate::config::message_store_config::bounded_local_file_consume_queue_recovery_parallelism;
 pub use crate::config::message_store_config::MessageStoreConfig;
+pub use crate::config::store_compatibility_profile::StoreCompatibilityProfile;
 pub use crate::config::store_runtime_config::StoreRuntimeConfig;
 pub use crate::config::timer_store_config::TimerStoreConfig;
 pub use crate::config::timer_store_config::TimerStoreConfigError;

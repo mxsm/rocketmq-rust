@@ -33,6 +33,7 @@ use super::timer_store_config::TimerStoreConfig;
 
 use crate::base::store_enum::StoreType;
 use crate::config::flush_disk_type::FlushDiskType;
+use crate::config::store_compatibility_profile::StoreCompatibilityProfile;
 use crate::queue::single_consume_queue::CQ_STORE_UNIT_SIZE;
 
 static USER_HOME: LazyLock<PathBuf> = LazyLock::new(|| dirs::home_dir().unwrap());
@@ -642,6 +643,9 @@ pub fn bounded_local_file_consume_queue_recovery_parallelism(
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MessageStoreConfig {
+    #[serde(default)]
+    pub compatibility_profile: StoreCompatibilityProfile,
+
     #[serde(default = "defaults::store_path_root_dir")]
     pub store_path_root_dir: CheetahString,
 
@@ -1383,6 +1387,7 @@ impl Default for MessageStoreConfig {
     fn default() -> Self {
         let store_path_root_dir = USER_HOME.clone().join("store").to_string_lossy().to_string();
         Self {
+            compatibility_profile: StoreCompatibilityProfile::LegacyRust,
             store_path_root_dir: store_path_root_dir.into(),
             store_path_commit_log: None,
             store_path_dledger_commit_log: None,
@@ -1631,6 +1636,35 @@ impl Default for MessageStoreConfig {
 }
 
 impl MessageStoreConfig {
+    /// Builds Store defaults for an explicit compatibility profile.
+    #[must_use]
+    pub fn for_compatibility_profile(profile: StoreCompatibilityProfile) -> Self {
+        let mut config = Self {
+            compatibility_profile: profile,
+            ..Self::default()
+        };
+        match profile {
+            StoreCompatibilityProfile::LegacyRust => {}
+            StoreCompatibilityProfile::Java55 | StoreCompatibilityProfile::DurabilityStrict => {
+                config.max_recovery_commit_log_files = 30;
+                config.flush_commit_log_least_pages = 4;
+                config.commit_commit_log_least_pages = 4;
+                config.flush_consume_queue_least_pages = 2;
+                config.flush_consume_queue_thorough_interval = 60_000;
+                config.flush_disk_type = FlushDiskType::AsyncFlush;
+                config.slave_timeout = 3_000;
+                config.transient_store_pool_size = 5;
+                config.min_in_sync_replicas = 1;
+                config.ha_max_time_slave_not_catchup = 15_000;
+            }
+        }
+        if profile == StoreCompatibilityProfile::DurabilityStrict {
+            config.flush_disk_type = FlushDiskType::SyncFlush;
+            config.all_ack_in_sync_state_set = true;
+        }
+        config
+    }
+
     /// Returns the validated Java-compatible timer admission policy.
     ///
     /// # Errors
@@ -1821,6 +1855,10 @@ impl MessageStoreConfig {
 
     pub fn get_properties(&self) -> HashMap<CheetahString, CheetahString> {
         let mut properties: HashMap<String, String> = HashMap::new();
+        properties.insert(
+            "compatibilityProfile".to_string(),
+            self.compatibility_profile.to_string(),
+        );
         properties.insert(
             "storePathRootDir".to_string(),
             self.store_path_root_dir.clone().to_string(),
@@ -2567,6 +2605,7 @@ impl MessageStoreConfig {
 #[cfg(test)]
 mod tests {
     use super::bounded_local_file_consume_queue_recovery_parallelism;
+    use super::FlushDiskType;
     use super::LinuxMappedFileWarmMode;
     use super::LinuxMemoryLockMode;
     use super::LinuxRecoveryFadviseMode;
@@ -2574,6 +2613,7 @@ mod tests {
     use super::LinuxTransferEngine;
     use super::MessageStoreConfig;
     use super::RecoveryMode;
+    use super::StoreCompatibilityProfile;
     use super::LOCAL_FILE_CONSUME_QUEUE_RECOVERY_PARALLELISM_SAFETY_CAP;
 
     #[test]
@@ -2583,6 +2623,41 @@ mod tests {
         assert_eq!(config.max_checksum_range, 1024 * 1024 * 1024);
         assert!(!config.enable_mapped_file_lifecycle_wave_b);
         assert_eq!(config.get_properties()["enableMappedFileLifecycleWaveB"], "false");
+    }
+
+    #[test]
+    fn legacy_profile_preserves_historical_defaults() {
+        let config = MessageStoreConfig::for_compatibility_profile(StoreCompatibilityProfile::LegacyRust);
+
+        assert_eq!(config, MessageStoreConfig::default());
+        assert_eq!(config.get_properties()["compatibilityProfile"], "LEGACY_RUST");
+    }
+
+    #[test]
+    fn java55_profile_matches_store_defaults_contract() {
+        let config = MessageStoreConfig::for_compatibility_profile(StoreCompatibilityProfile::Java55);
+
+        assert_eq!(config.max_recovery_commit_log_files, 30);
+        assert_eq!(config.flush_commit_log_least_pages, 4);
+        assert_eq!(config.commit_commit_log_least_pages, 4);
+        assert_eq!(config.flush_consume_queue_least_pages, 2);
+        assert_eq!(config.flush_consume_queue_thorough_interval, 60_000);
+        assert_eq!(config.flush_disk_type, FlushDiskType::AsyncFlush);
+        assert_eq!(config.slave_timeout, 3_000);
+        assert_eq!(config.transient_store_pool_size, 5);
+        assert_eq!(config.min_in_sync_replicas, 1);
+        assert_eq!(config.ha_max_time_slave_not_catchup, 15_000);
+        assert!(!config.all_ack_in_sync_state_set);
+    }
+
+    #[test]
+    fn strict_profile_adds_sync_flush_and_all_ack() {
+        let config = MessageStoreConfig::for_compatibility_profile(StoreCompatibilityProfile::DurabilityStrict);
+
+        assert_eq!(config.flush_disk_type, FlushDiskType::SyncFlush);
+        assert!(config.all_ack_in_sync_state_set);
+        assert_eq!(config.slave_timeout, 3_000);
+        assert_eq!(config.min_in_sync_replicas, 1);
     }
 
     #[test]

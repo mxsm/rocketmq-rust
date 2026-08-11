@@ -414,10 +414,18 @@ fn print_important_broker_config(config: &BrokerConfig) {
 /// Print important message store configuration items
 fn print_important_message_store_config(config: &MessageStoreConfig) {
     println!("  MessageStoreConfig:");
+    println!("    compatibilityProfile: {}", config.compatibility_profile);
     println!("    storePathRootDir: {}", config.store_path_root_dir);
     println!("    storePathCommitLog: {:?}", config.store_path_commit_log);
     println!("    deleteWhen: {}", config.delete_when);
     println!("    flushDiskType: {:?}", config.flush_disk_type);
+    println!("    flushCommitLogLeastPages: {}", config.flush_commit_log_least_pages);
+    println!(
+        "    flushConsumeQueueLeastPages: {}",
+        config.flush_consume_queue_least_pages
+    );
+    println!("    slaveTimeout: {}", config.slave_timeout);
+    println!("    minInSyncReplicas: {}", config.min_in_sync_replicas);
     #[cfg(feature = "tieredstore")]
     print_important_tieredstore_config(config);
 }
@@ -450,13 +458,11 @@ fn print_all_broker_config(config: &BrokerConfig) {
 /// Print all message store configuration items
 fn print_all_message_store_config(config: &MessageStoreConfig) {
     println!("  MessageStoreConfig:");
-    // Message store config doesn't implement get_properties yet
-    // Print key fields manually
-    println!("    storePathRootDir: {}", config.store_path_root_dir);
-    println!("    storePathCommitLog: {:?}", config.store_path_commit_log);
-    println!("    deleteWhen: {}", config.delete_when);
-    println!("    flushDiskType: {:?}", config.flush_disk_type);
-    println!("    commitLogFileSize: {}", config.mapped_file_size_commit_log);
+    let mut properties = config.get_properties().into_iter().collect::<Vec<_>>();
+    properties.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+    for (key, value) in properties {
+        println!("    {}: {}", key, value);
+    }
     #[cfg(feature = "tieredstore")]
     print_all_tieredstore_config(config);
 }

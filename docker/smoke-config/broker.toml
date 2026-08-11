@@ -17,6 +17,7 @@ brokerId = 0
 bindAddress = "127.0.0.1"
 
 [store]
+compatibilityProfile = "JAVA_5_5"
 storePathRootDir = "/var/lib/rocketmq/broker"
 haListenAddress = "127.0.0.1"
 haListenPort = 10912
