@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use bytes::Bytes;
 
@@ -21,6 +22,7 @@ use super::DefaultMappedFile;
 use super::MappedFile;
 use super::MappedFileOperation;
 use super::MappedMemory;
+use super::MappedReadRange;
 use super::NativeMappedMemory;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +41,7 @@ pub enum SelectMappedBufferCacheState {
 pub(crate) type SelectMappedBufferTransferParts<M> = (
     u64,
     Option<Bytes>,
+    Option<MappedReadRange<<M as MappedMemory>::ReadOnly>>,
     i32,
     Option<(MappedFileLease, Arc<DefaultMappedFile<M>>)>,
     u64,
@@ -59,7 +62,8 @@ impl SelectMappedBufferCacheState {
 pub struct SelectMappedBufferResult<M: MappedMemory = NativeMappedMemory> {
     /// The start offset.
     start_offset: u64,
-    bytes: Option<Bytes>,
+    bytes: OnceLock<Bytes>,
+    mapped_range: Option<MappedReadRange<M::ReadOnly>>,
     /// The size.
     size: i32,
     /// The mapped file and the admission lease protecting it.
@@ -80,7 +84,8 @@ impl<M: MappedMemory> Default for SelectMappedBufferResult<M> {
     fn default() -> Self {
         Self {
             start_offset: 0,
-            bytes: None,
+            bytes: OnceLock::new(),
+            mapped_range: None,
             size: 0,
             mapped_source: None,
             is_in_cache: true,
@@ -114,13 +119,34 @@ impl<M: MappedMemory> SelectMappedBufferResult<M> {
         let size = i32::try_from(bytes.len()).ok()?;
         Some(Self {
             start_offset,
-            bytes: Some(bytes),
+            bytes: OnceLock::from(bytes),
+            mapped_range: None,
             size,
             mapped_source: None,
             is_in_cache,
             source_kind: SelectMappedBufferSourceKind::Bytes,
             file_offset,
             cache_state,
+        })
+    }
+
+    /// Creates a selection backed directly by an immutable mapped range.
+    ///
+    /// No payload snapshot is allocated until a compatibility caller explicitly requests owned
+    /// [`Bytes`].
+    pub fn from_mapped_range(range: MappedReadRange<M::ReadOnly>, is_in_cache: bool) -> Option<Self> {
+        let size = i32::try_from(range.len()).ok()?;
+        let file_offset = range.file_offset();
+        Some(Self {
+            start_offset: range.start_offset(),
+            bytes: OnceLock::new(),
+            mapped_range: Some(range),
+            size,
+            mapped_source: None,
+            is_in_cache,
+            source_kind: SelectMappedBufferSourceKind::MappedFile,
+            file_offset,
+            cache_state: SelectMappedBufferCacheState::from_residency(is_in_cache),
         })
     }
 
@@ -149,10 +175,10 @@ impl<M: MappedMemory> SelectMappedBufferResult<M> {
     /// The immutable byte snapshot remains available when the mapped file can no longer be held,
     /// so callers can safely fall back to the copied representation.
     pub fn try_attach_mapped_file(&mut self, mapped_file: Arc<DefaultMappedFile<M>>) -> bool {
-        if self.mapped_source.is_some() {
+        if self.mapped_range.is_some() || self.mapped_source.is_some() {
             return false;
         }
-        let Some(bytes) = self.bytes.as_ref() else {
+        let Some(bytes) = self.bytes.get() else {
             return false;
         };
         let Ok(size) = usize::try_from(self.size) else {
@@ -209,22 +235,44 @@ impl<M: MappedMemory> SelectMappedBufferResult<M> {
     ///
     /// # Panics
     ///
-    /// Panics when an internal producer constructs a selection without its required immutable
-    /// byte snapshot.
+    /// Panics when an internal producer constructs a selection without either an immutable byte
+    /// snapshot or an owner-backed mapped range.
     pub fn get_buffer(&self) -> &[u8] {
-        self.bytes
-            .as_deref()
-            .expect("selected mapped buffers must own an immutable byte snapshot")
+        if let Some(bytes) = self.bytes.get() {
+            return bytes.as_ref();
+        }
+        self.mapped_range
+            .as_ref()
+            .map(MappedReadRange::as_slice)
+            .expect("selected mapped buffers must own bytes or an immutable mapped range")
     }
 
     #[inline]
     pub fn get_bytes(&self) -> Option<Bytes> {
-        self.bytes.clone()
+        self.get_bytes_ref().cloned()
     }
 
+    /// Returns an immutable byte snapshot, materializing and caching an exact fallback when this
+    /// selection is range-backed.
     #[inline]
     pub fn get_bytes_ref(&self) -> Option<&Bytes> {
-        self.bytes.as_ref()
+        if let Some(bytes) = self.bytes.get() {
+            return Some(bytes);
+        }
+        let range = self.mapped_range.as_ref()?;
+        Some(self.bytes.get_or_init(|| range.to_bytes()))
+    }
+
+    /// Returns whether the authoritative payload is still an owner-backed mapped range.
+    #[inline]
+    pub fn is_range_backed(&self) -> bool {
+        self.mapped_range.is_some()
+    }
+
+    /// Returns whether an owned compatibility snapshot has already been materialized.
+    #[inline]
+    pub fn has_byte_snapshot(&self) -> bool {
+        self.bytes.get().is_some()
     }
 
     #[inline]
@@ -232,12 +280,34 @@ impl<M: MappedMemory> SelectMappedBufferResult<M> {
         if self.mapped_source.take().is_some() {
             self.source_kind = SelectMappedBufferSourceKind::Bytes;
         }
-        self.bytes.as_mut()
+        let range_fallback = if self.bytes.get().is_none() {
+            self.mapped_range.as_ref().map(MappedReadRange::to_bytes)
+        } else {
+            None
+        };
+        if self.mapped_range.take().is_some() {
+            self.source_kind = SelectMappedBufferSourceKind::Bytes;
+        }
+        if self.bytes.get().is_none() {
+            if let Some(bytes) = range_fallback {
+                let _ = self.bytes.set(bytes);
+            }
+        }
+        self.bytes.get_mut()
     }
 
     /// Removes and returns the immutable byte snapshot.
     #[inline]
     pub fn take(&mut self) -> Option<Bytes> {
+        if self.bytes.get().is_none() {
+            if let Some(range) = self.mapped_range.take() {
+                let _ = self.bytes.set(range.to_bytes());
+                self.source_kind = SelectMappedBufferSourceKind::Bytes;
+            }
+        }
+        self.mapped_range.take();
+        self.mapped_source.take();
+        self.source_kind = SelectMappedBufferSourceKind::Bytes;
         self.bytes.take()
     }
 
@@ -246,18 +316,32 @@ impl<M: MappedMemory> SelectMappedBufferResult<M> {
         let Ok(size) = i32::try_from(new_len) else {
             return false;
         };
-        let Some(bytes) = self.bytes.as_mut() else {
-            return false;
-        };
-        if new_len > bytes.len() {
+        let mut truncated_any = false;
+        if let Some(range) = self.mapped_range.as_ref() {
+            let Some(truncated) = range.slice(0, new_len) else {
+                return false;
+            };
+            self.mapped_range = Some(truncated);
+            truncated_any = true;
+        }
+        if let Some(bytes) = self.bytes.get_mut() {
+            if new_len > bytes.len() {
+                return false;
+            }
+            bytes.truncate(new_len);
+            truncated_any = true;
+        }
+        if !truncated_any {
             return false;
         }
-        bytes.truncate(new_len);
         self.size = size;
         true
     }
 
     pub fn is_in_mem(&self) -> bool {
+        if self.mapped_range.is_some() {
+            return true;
+        }
         match self.mapped_source.as_ref() {
             None => true,
             Some((_lease, inner)) => {
@@ -273,6 +357,7 @@ impl<M: MappedMemory> SelectMappedBufferResult<M> {
         (
             self.start_offset,
             self.bytes.take(),
+            self.mapped_range.take(),
             self.size,
             self.mapped_source.take(),
             self.file_offset,

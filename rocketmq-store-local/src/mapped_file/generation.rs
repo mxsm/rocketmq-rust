@@ -332,6 +332,11 @@ impl<R: ReadOnlyMappedMemory> MappedReadLease<R> {
         self.inner.generation().id()
     }
 
+    #[inline]
+    pub(crate) fn file_owner(&self) -> Arc<FileOwner> {
+        Arc::clone(self.inner.generation().file_owner())
+    }
+
     /// Returns the mapped range length.
     #[inline]
     pub fn len(&self) -> usize {

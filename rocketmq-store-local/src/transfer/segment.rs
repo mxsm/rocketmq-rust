@@ -26,7 +26,9 @@ use crate::mapped_file::lifecycle::MappedFileLease;
 use crate::mapped_file::DefaultMappedFile;
 use crate::mapped_file::MappedFile;
 use crate::mapped_file::MappedFileMetrics;
+use crate::mapped_file::MappedReadRange;
 use crate::mapped_file::NativeMappedMemory;
+use crate::mapped_file::NativeReadOnlyMappedMemory;
 use crate::mapped_file::SelectMappedBufferCacheState;
 use crate::mapped_file::SelectMappedBufferResult;
 
@@ -73,6 +75,9 @@ struct CheckedFileRange {
 enum FileRangeOperationLease {
     Mapped {
         _lease: MappedFileLease,
+    },
+    MappedRead {
+        _range: MappedReadRange<NativeReadOnlyMappedMemory>,
     },
     Standalone,
     #[cfg(test)]
@@ -277,7 +282,8 @@ impl SegmentLease {
 
     /// Compatibility adapter for callers that already carry a separate global offset.
     pub fn from_select_result(global_offset: i64, result: NativeSelectMappedBufferResult) -> Option<Self> {
-        let (_start_offset, bytes, size, mapped_source, position_in_file, cache_state) = result.into_transfer_parts();
+        let (_start_offset, bytes, mapped_range, size, mapped_source, position_in_file, cache_state) =
+            result.into_transfer_parts();
         if size <= 0 {
             return None;
         }
@@ -315,6 +321,7 @@ impl SegmentLease {
             None => SegmentSource::Bytes,
         };
 
+        let bytes = bytes.or_else(|| mapped_range.map(|range| range.to_bytes()));
         Some(Self {
             segment: CommitLogSegment {
                 global_offset,
@@ -532,6 +539,24 @@ impl FileRangeLease {
     #[cfg(test)]
     fn read_exact_for_test(&self, output: &mut [u8]) -> io::Result<()> {
         self.aliases.owner().read_exact_at_for_test(self.position(), output)
+    }
+}
+
+impl MappedReadRange<NativeReadOnlyMappedMemory> {
+    /// Converts this mapped range into a checked file-transfer range without copying payload.
+    ///
+    /// The returned capability retains this range's generation and read admission, so native
+    /// transfer cannot outlive the mapped-file lifecycle protection.
+    pub fn try_into_file_range(self) -> Result<FileRangeLease, FileRangeError> {
+        let owner = self.file_owner();
+        let position = self.file_offset();
+        let len = self.len();
+        FileRangeLease::try_new(
+            owner,
+            position,
+            len,
+            FileRangeOperationLease::MappedRead { _range: self },
+        )
     }
 }
 
