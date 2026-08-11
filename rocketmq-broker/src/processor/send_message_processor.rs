@@ -52,7 +52,6 @@ use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::code::response_code::ResponseCode::SystemError;
 use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
 use rocketmq_protocol::common::message::message_decoder::message_properties_to_string;
-#[cfg(feature = "otel-traces")]
 use rocketmq_protocol::common::message::message_decoder::string_to_message_properties;
 use rocketmq_protocol::protocol::header::consumer_send_msg_back_request_header::ConsumerSendMsgBackRequestHeader;
 use rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header::parse_request_header;
@@ -104,12 +103,17 @@ mod message_builder;
 use capability::SendMessagePolicy;
 use capability::SendMessageProcessorContext;
 use message_builder::clear_reserved_properties;
-use message_builder::enrich_send_message_request_properties;
+use message_builder::enrich_parsed_send_message_request_properties;
 use message_builder::recall_handle_topic_and_timestamp;
 use message_builder::should_create_uniq_key;
 
 pub struct SendMessageProcessor<MS: BrokerWriteStore, TS> {
     inner: Arc<Inner<MS, TS>>,
+}
+
+struct ParsedSendRequest {
+    header: SendMessageRequestHeader,
+    properties: HashMap<CheetahString, CheetahString>,
 }
 
 impl<MS: BrokerWriteStore, TS> Clone for SendMessageProcessor<MS, TS> {
@@ -131,8 +135,8 @@ where
         ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let receive_span = self.receive_span_with_remote_parent(request);
-        self.process_request_mut(channel, ctx, request)
+        let (receive_span, parsed_request) = self.receive_span_and_request(request);
+        self.process_request_mut(channel, ctx, request, parsed_request)
             .instrument(receive_span)
             .await
     }
@@ -188,49 +192,54 @@ where
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut processor = self.clone();
-        let receive_span = self.receive_span_with_remote_parent(request);
+        let (receive_span, parsed_request) = self.receive_span_and_request(request);
         processor
-            .process_request_mut(channel, ctx, request)
+            .process_request_mut(channel, ctx, request, parsed_request)
             .instrument(receive_span)
             .await
     }
 
-    fn receive_span_with_remote_parent(&self, request: &RemotingCommand) -> tracing::Span {
+    fn receive_span_and_request(&self, request: &RemotingCommand) -> (tracing::Span, Option<ParsedSendRequest>) {
         let span = rocketmq_observability::trace::broker::receive_send_span(
             &self.inner.context.telemetry,
             request.code(),
             request.opaque(),
         );
+        let request_code = RequestCode::from(request.code());
+        let parsed_request = matches!(
+            request_code,
+            RequestCode::SendMessage | RequestCode::SendMessageV2 | RequestCode::SendBatchMessage
+        )
+        .then(|| {
+            parse_request_header(request, request_code).ok().map(|header| {
+                let properties = string_to_message_properties(header.properties.as_ref());
+                ParsedSendRequest { header, properties }
+            })
+        })
+        .flatten();
         #[cfg(feature = "otel-traces")]
         {
-            let request_code = RequestCode::from(request.code());
-            if matches!(
-                request_code,
-                RequestCode::SendMessage | RequestCode::SendMessageV2 | RequestCode::SendBatchMessage
-            ) {
-                if let Ok(header) = parse_request_header(request, request_code) {
-                    let properties = string_to_message_properties(header.properties.as_ref());
-                    if let Err(error) = rocketmq_observability::set_span_parent_from_properties_with_handle(
+            if let Some(parsed_request) = parsed_request.as_ref() {
+                if let Err(error) = rocketmq_observability::set_span_parent_from_properties_with_handle(
+                    &self.inner.context.telemetry,
+                    &span,
+                    &parsed_request.properties,
+                ) {
+                    rocketmq_observability::record_span_parent_assignment_error(
                         &self.inner.context.telemetry,
-                        &span,
-                        &properties,
-                    ) {
-                        rocketmq_observability::record_span_parent_assignment_error(
-                            &self.inner.context.telemetry,
-                            "broker.receive_send",
-                            error,
-                        );
-                    }
-                    rocketmq_observability::trace::record_message_properties_with_handle(
-                        &self.inner.context.telemetry,
-                        &span,
-                        &properties,
-                        request.body().map(|body| body.len()),
+                        "broker.receive_send",
+                        error,
                     );
                 }
+                rocketmq_observability::trace::record_message_properties_with_handle(
+                    &self.inner.context.telemetry,
+                    &span,
+                    &parsed_request.properties,
+                    request.body().map(|body| body.len()),
+                );
             }
         }
-        span
+        (span, parsed_request)
     }
 
     async fn process_request_mut(
@@ -238,6 +247,7 @@ where
         channel: Channel,
         ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
+        parsed_request: Option<ParsedSendRequest>,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
         debug!("SendMessageProcessor received request code: {:?}", request_code);
@@ -245,7 +255,10 @@ where
             RequestCode::SendMessage
             | RequestCode::SendMessageV2
             | RequestCode::SendBatchMessage
-            | RequestCode::ConsumerSendMsgBack => self.process_request_inner(channel, ctx, request_code, request).await,
+            | RequestCode::ConsumerSendMsgBack => {
+                self.process_request_inner_with_parsed_request(channel, ctx, request_code, request, parsed_request)
+                    .await
+            }
             _ => {
                 warn!("SendMessageProcessor received unknown request code: {:?}", request_code);
                 let response = request_code_not_supported_with_remark_and_opaque(
@@ -272,14 +285,36 @@ where
     pub async fn process_request_inner(
         &mut self,
         channel: Channel,
+        ctx: ConnectionHandlerContext,
+        request_code: RequestCode,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        self.process_request_inner_with_parsed_request(channel, ctx, request_code, request, None)
+            .await
+    }
+
+    async fn process_request_inner_with_parsed_request(
+        &mut self,
+        channel: Channel,
         mut ctx: ConnectionHandlerContext,
         request_code: RequestCode,
         request: &mut RemotingCommand,
+        parsed_request: Option<ParsedSendRequest>,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         match request_code {
             RequestCode::ConsumerSendMsgBack => self.inner.consumer_send_msg_back(&channel, &ctx, request).await,
             _ => {
-                let mut request_header = parse_request_header(request, request_code)?;
+                let ParsedSendRequest {
+                    header: mut request_header,
+                    properties: parsed_properties,
+                } = match parsed_request {
+                    Some(parsed_request) => parsed_request,
+                    None => {
+                        let header = parse_request_header(request, request_code)?;
+                        let properties = string_to_message_properties(header.properties.as_ref());
+                        ParsedSendRequest { header, properties }
+                    }
+                };
                 let mapping_context = self
                     .inner
                     .context
@@ -291,9 +326,13 @@ where
                     return Ok(rewrite_result);
                 }
 
-                let (send_message_context, mut request_properties) =
-                    self.inner
-                        .build_msg_context(&channel, &ctx, &mut request_header, request);
+                let (send_message_context, mut request_properties) = self.inner.build_msg_context_with_properties(
+                    &channel,
+                    &ctx,
+                    &mut request_header,
+                    request,
+                    parsed_properties,
+                );
                 self.inner.execute_send_message_hook_before(&send_message_context);
                 clear_reserved_properties(&mut request_header, &mut request_properties);
 
@@ -1391,17 +1430,17 @@ where
         response: Option<&mut RemotingCommand>,
         context: &mut SendMessageContext,
     ) {
-        for hook in self.send_message_hook_vec.iter() {
-            if let Some(ref response) = response {
-                if let Ok(ref header) = response.decode_command_custom_header::<SendMessageResponseHeader>() {
-                    context.msg_id = header.msg_id().clone();
-                    context.queue_id = Some(header.queue_id());
-                    context.queue_offset = Some(header.queue_offset());
-                    context.code = response.code();
-                    context.error_msg = response.remark().cloned().unwrap_or_default();
-                }
+        if let Some(response) = response {
+            if let Ok(header) = response.decode_command_custom_header::<SendMessageResponseHeader>() {
+                context.msg_id = header.msg_id().clone();
+                context.queue_id = Some(header.queue_id());
+                context.queue_offset = Some(header.queue_offset());
+                context.code = response.code();
+                context.error_msg = response.remark().cloned().unwrap_or_default();
             }
+        }
 
+        for hook in self.send_message_hook_vec.iter() {
             hook.send_message_after(context);
         }
     }
@@ -1675,9 +1714,21 @@ where
     pub(crate) fn build_msg_context(
         &self,
         channel: &Channel,
+        ctx: &ConnectionHandlerContext,
+        request_header: &mut SendMessageRequestHeader,
+        request: &RemotingCommand,
+    ) -> (SendMessageContext, HashMap<CheetahString, CheetahString>) {
+        let properties = string_to_message_properties(request_header.properties.as_ref());
+        self.build_msg_context_with_properties(channel, ctx, request_header, request, properties)
+    }
+
+    fn build_msg_context_with_properties(
+        &self,
+        channel: &Channel,
         _ctx: &ConnectionHandlerContext,
         request_header: &mut SendMessageRequestHeader,
         request: &RemotingCommand,
+        properties: HashMap<CheetahString, CheetahString>,
     ) -> (SendMessageContext, HashMap<CheetahString, CheetahString>) {
         let namespace = NamespaceUtil::get_namespace_from_resource(request_header.topic.as_str());
         let policy = self.context.policy.snapshot();
@@ -1703,7 +1754,12 @@ where
                 send_message_context.commercial_owner(value.clone());
             }
         }
-        let properties = enrich_send_message_request_properties(request_header, region_id.as_str(), policy.trace_on);
+        let properties = enrich_parsed_send_message_request_properties(
+            request_header,
+            properties,
+            region_id.as_str(),
+            policy.trace_on,
+        );
 
         if let Some(unique_key) = properties.get(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX) {
             send_message_context.msg_unique_key = CheetahString::from_slice(unique_key);
@@ -1934,9 +1990,18 @@ mod tests {
         let record_with_handle = concat!("record_message_properties", "_with_handle");
         let late_record_with_handle = concat!("record_current_message_properties", "_with_handle");
 
+        assert_eq!(production.matches("receive_span_and_request(request)").count(), 2);
         assert_eq!(
-            production.matches("receive_span_with_remote_parent(request)").count(),
+            production
+                .matches("parse_request_header(request, request_code)")
+                .count(),
             2
+        );
+        assert_eq!(
+            production
+                .matches("decode_command_custom_header::<SendMessageResponseHeader>()")
+                .count(),
+            1
         );
         assert_eq!(production.matches(parent_with_handle).count(), 1);
         assert_eq!(production.matches(late_parent_with_handle).count(), 0);

@@ -306,6 +306,29 @@ pub trait MessageTrait: Any + Display + Debug {
     /// Takes ownership of the message body, leaving it empty.
     fn take_body(&mut self) -> Option<Bytes>;
 
+    /// Converts this value into the concrete producer message representation.
+    ///
+    /// Implementations that already own a [`message_single::Message`] should override this method
+    /// so the body and property map can be moved without cloning. The default keeps custom message
+    /// implementations source-compatible and normalizes their public fields into a producer
+    /// message.
+    fn into_message(self) -> message_single::Message
+    where
+        Self: Sized,
+    {
+        let mut message = message_single::Message::default();
+        message.set_topic(self.topic().clone());
+        if let Some(body) = self.get_body() {
+            message.set_body(Some(body.clone()));
+        }
+        message.set_flag(self.get_flag());
+        if let Some(transaction_id) = self.transaction_id() {
+            message.set_transaction_id(transaction_id.clone());
+        }
+        message.set_properties(self.get_properties().clone());
+        message
+    }
+
     /// Returns a reference to the message as a trait object.
     fn as_any(&self) -> &dyn Any;
 

@@ -975,27 +975,11 @@ fn split_send_results(send_result: &SendResult, count: usize) -> rocketmq_error:
 }
 
 fn build_message_batch(
-    messages: Vec<Box<dyn MessageTrait + Send + Sync + 'static>>,
+    messages: Vec<Message>,
     aggregate_key: &AggregateKey,
     keys: &HashSet<String>,
 ) -> rocketmq_error::RocketMQResult<MessageBatch> {
-    let mut concrete_messages = Vec::with_capacity(messages.len());
-    for boxed_msg in messages {
-        if let Some(msg) = boxed_msg.as_any().downcast_ref::<Message>() {
-            concrete_messages.push(msg.clone());
-        } else {
-            let mut msg = Message::default();
-            msg.set_topic(boxed_msg.topic().clone());
-            if let Some(body) = boxed_msg.get_body() {
-                msg.set_body(Some(body.clone()));
-            }
-            msg.set_flag(boxed_msg.get_flag());
-            msg.set_properties(boxed_msg.get_properties().clone());
-            concrete_messages.push(msg);
-        }
-    }
-
-    let mut batch = MessageBatch::generate_from_messages(concrete_messages)?;
+    let mut batch = MessageBatch::generate_from_messages(messages)?;
     batch.set_topic(aggregate_key.topic.clone());
     batch.set_wait_store_msg_ok(aggregate_key.wait_store_msg_ok);
     if let Some(tag) = aggregate_key.tag.as_ref() {
@@ -1703,7 +1687,7 @@ impl Hash for AggregateKey {
 
 struct MessageAccumulation {
     default_mq_producer: DefaultMQProducer,
-    messages: Vec<Box<dyn MessageTrait + Send + Sync + 'static>>,
+    messages: Vec<Message>,
     resource_permits: Vec<ResourcePermit>,
     send_callbacks: Vec<ArcSendCallback>,
     keys: HashSet<String>,
@@ -1901,7 +1885,7 @@ impl MessageAccumulation {
         }
 
         // Add message to batch
-        self.messages.push(Box::new(msg));
+        self.messages.push(msg.into_message());
         if let Some(resource_permit) = resource_permit {
             self.resource_permits.push(resource_permit);
         }

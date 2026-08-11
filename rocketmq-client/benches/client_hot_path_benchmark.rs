@@ -28,6 +28,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use bytes::Bytes;
+use bytes::BytesMut;
 use cheetah_string::CheetahString;
 use criterion::criterion_group;
 use criterion::criterion_main;
@@ -235,6 +236,15 @@ fn build_producer_batch_messages(batch_size: usize, body_size: usize) -> Vec<Mes
         .collect()
 }
 
+fn encode_batch_with_per_message_temporaries(messages: &[Message]) -> Bytes {
+    let mut aggregate = BytesMut::new();
+    for message in messages {
+        let encoded = rocketmq_protocol::common::message::message_decoder::encode_message(message);
+        aggregate.extend_from_slice(&encoded);
+    }
+    aggregate.freeze()
+}
+
 fn bench_producer_batch_encode(c: &mut Criterion) {
     let mut group = c.benchmark_group("producer_batch_encode");
 
@@ -244,12 +254,12 @@ fn bench_producer_batch_encode(c: &mut Criterion) {
 
         let messages = build_producer_batch_messages(batch_size, body_size);
         group.bench_with_input(
-            BenchmarkId::new("generate_from_messages", format!("{batch_size}x{body_size}")),
+            BenchmarkId::new("generate_from_vec_owned", format!("{batch_size}x{body_size}")),
             &messages,
             |b, messages| {
                 b.iter_batched(
                     || messages.clone(),
-                    |messages| black_box(MessageBatch::generate_from_messages(messages).unwrap()),
+                    |messages| black_box(MessageBatch::generate_from_vec(messages).unwrap()),
                     BatchSize::SmallInput,
                 )
             },
@@ -257,7 +267,12 @@ fn bench_producer_batch_encode(c: &mut Criterion) {
 
         let batch = MessageBatch::generate_from_messages(messages).unwrap();
         group.bench_with_input(
-            BenchmarkId::new("encode", format!("{batch_size}x{body_size}")),
+            BenchmarkId::new("encode_per_message_temporaries", format!("{batch_size}x{body_size}")),
+            &batch,
+            |b, batch| b.iter(|| black_box(encode_batch_with_per_message_temporaries(&batch.messages))),
+        );
+        group.bench_with_input(
+            BenchmarkId::new("encode_aggregate_buffer", format!("{batch_size}x{body_size}")),
             &batch,
             |b, batch| {
                 b.iter(|| {
