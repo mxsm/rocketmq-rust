@@ -40,6 +40,8 @@ use rocketmq_observability::TelemetryHandle;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
+use rocketmq_protocol::protocol::body::batch_ack_builder::build_batch_ack_requests;
+use rocketmq_protocol::protocol::body::batch_ack_builder::BatchAckInput;
 use rocketmq_protocol::protocol::body::query_assignment_request_body::QueryAssignmentRequestBody;
 use rocketmq_protocol::protocol::body::query_assignment_response_body::QueryAssignmentResponseBody;
 use rocketmq_protocol::protocol::header::ack_message_request_header::AckMessageRequestHeader;
@@ -1372,19 +1374,95 @@ async fn ack_message_via_broker(
     client: &LocalBrokerFacadeClient,
     request: &AckMessageRequest,
 ) -> ProxyResult<Vec<AckMessageResultEntry>> {
-    let mut results = Vec::with_capacity(request.entries.len());
-    for entry in &request.entries {
-        let status = match ack_message_entry_via_broker(client, request, entry).await {
+    let group_name = request.group.to_string();
+    let topics = request
+        .entries
+        .iter()
+        .map(|entry| entry.lite_topic.clone().unwrap_or_else(|| request.topic.to_string()))
+        .collect::<Vec<_>>();
+    let batch_inputs = request
+        .entries
+        .iter()
+        .zip(&topics)
+        .enumerate()
+        .filter(|(_, (entry, _))| entry.lite_topic.is_none())
+        .map(|(entry_index, (entry, topic))| BatchAckInput {
+            entry_index,
+            consumer_group: group_name.as_str(),
+            topic,
+            receipt_handle: entry.receipt_handle.as_str(),
+        })
+        .collect::<Vec<_>>();
+    let built = build_batch_ack_requests(&batch_inputs);
+    let mut statuses = std::iter::repeat_with(|| None)
+        .take(request.entries.len())
+        .collect::<Vec<Option<rocketmq_proxy_core::ProxyPayloadStatus>>>();
+
+    let mut fallback_indexes = request
+        .entries
+        .iter()
+        .enumerate()
+        .filter_map(|(index, entry)| entry.lite_topic.is_some().then_some(index))
+        .chain(built.failures.into_iter().map(|failure| failure.entry_index))
+        .collect::<Vec<_>>();
+
+    for batch_request in built.requests {
+        let command = RemotingCommand::new_request(RequestCode::BatchAckMessage, batch_request.body.encode()?);
+        match client.process_remoting(command).await {
+            Ok(response) => {
+                let status = if ResponseCode::from(response.code()) == ResponseCode::Success {
+                    ProxyStatusMapper::ok_payload()
+                } else {
+                    invalid_receipt_handle_status()
+                };
+                for index in batch_request.entry_indexes {
+                    statuses[index] = Some(status.clone());
+                }
+            }
+            Err(error) => {
+                tracing::warn!(
+                    broker = %batch_request.broker_name,
+                    entries = batch_request.entry_indexes.len(),
+                    error = %error,
+                    "local BatchAck failed; falling back to single ACK"
+                );
+                fallback_indexes.extend(batch_request.entry_indexes);
+            }
+        }
+    }
+
+    fallback_indexes.sort_unstable();
+    fallback_indexes.dedup();
+    for index in fallback_indexes {
+        let status = match ack_message_entry_via_broker(client, request, &request.entries[index]).await {
             Ok(status) => status,
             Err(error) => ProxyStatusMapper::from_error_payload(&error),
         };
-        results.push(AckMessageResultEntry {
+        statuses[index] = Some(status);
+    }
+
+    Ok(request
+        .entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| AckMessageResultEntry {
             message_id: entry.message_id.clone(),
             receipt_handle: entry.receipt_handle.clone(),
-            status,
-        });
-    }
-    Ok(results)
+            status: statuses[index].take().unwrap_or_else(|| {
+                ProxyStatusMapper::from_payload_code(
+                    rocketmq_proxy_core::proto::v2::Code::InternalError,
+                    "ACK result was not produced",
+                )
+            }),
+        })
+        .collect())
+}
+
+fn invalid_receipt_handle_status() -> rocketmq_proxy_core::ProxyPayloadStatus {
+    ProxyStatusMapper::from_payload_code(
+        rocketmq_proxy_core::proto::v2::Code::InvalidReceiptHandle,
+        "receipt handle has expired or message no longer exists",
+    )
 }
 
 async fn ack_message_entry_via_broker(
@@ -1420,10 +1498,7 @@ async fn ack_message_entry_via_broker(
     Ok(if ResponseCode::from(response.code()) == ResponseCode::Success {
         ProxyStatusMapper::ok_payload()
     } else {
-        ProxyStatusMapper::from_payload_code(
-            rocketmq_proxy_core::proto::v2::Code::InvalidReceiptHandle,
-            "receipt handle has expired or message no longer exists",
-        )
+        invalid_receipt_handle_status()
     })
 }
 

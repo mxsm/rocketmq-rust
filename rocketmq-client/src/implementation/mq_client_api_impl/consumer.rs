@@ -1593,6 +1593,16 @@ impl MQClientAPIImpl {
             .await
     }
 
+    pub async fn ack_message(
+        &self,
+        addr: &CheetahString,
+        request_header: AckMessageRequestHeader,
+        timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<AckResult> {
+        self.ack_message_inner(addr, Some(request_header), None, timeout_millis)
+            .await
+    }
+
     pub async fn ack_lite_message_async(
         &self,
         addr: &CheetahString,
@@ -1615,6 +1625,16 @@ impl MQClientAPIImpl {
             .await
     }
 
+    pub async fn batch_ack_message(
+        &self,
+        addr: &CheetahString,
+        request_body: BatchAckMessageRequestBody,
+        timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<AckResult> {
+        self.ack_message_inner(addr, None, Some(request_body), timeout_millis)
+            .await
+    }
+
     pub(self) async fn ack_message_async_inner(
         &self,
         addr: &CheetahString,
@@ -1623,6 +1643,29 @@ impl MQClientAPIImpl {
         timeout_millis: u64,
         ack_callback: impl AckCallback,
     ) -> rocketmq_error::RocketMQResult<()> {
+        match self
+            .ack_message_inner(addr, request_header, request_body, timeout_millis)
+            .await
+        {
+            Ok(ack_result) => {
+                ack_callback.on_success(ack_result);
+                Ok(())
+            }
+            Err(error) => {
+                let propagated = mq_client_err!(error.to_string());
+                ack_callback.on_exception(error);
+                Err(propagated)
+            }
+        }
+    }
+
+    async fn ack_message_inner(
+        &self,
+        addr: &CheetahString,
+        request_header: Option<AckMessageRequestHeader>,
+        request_body: Option<BatchAckMessageRequestBody>,
+        timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<AckResult> {
         let request = if let Some(header) = request_header {
             RemotingCommand::create_request_command(RequestCode::AckMessage, header)
         } else {
@@ -1630,30 +1673,21 @@ impl MQClientAPIImpl {
                 request_body.ok_or_else(|| mq_client_err!("BatchAckMessage request body is required".to_string()))?;
             RemotingCommand::new_request(RequestCode::BatchAckMessage, body.encode()?)
         };
-        match self
+        let response = self
             .remoting_client
             .invoke_request(Some(addr), request, timeout_millis)
-            .await
-        {
-            Ok(response) => {
-                let response_code = ResponseCode::from(response.code());
-                let ack_result = if response_code == ResponseCode::Success {
-                    AckResult {
-                        status: AckStatus::Ok,
-                        ..Default::default()
-                    }
-                } else {
-                    AckResult {
-                        status: AckStatus::NotExist,
-                        ..Default::default()
-                    }
-                };
-                ack_callback.on_success(ack_result);
+            .await?;
+        let response_code = ResponseCode::from(response.code());
+        Ok(if response_code == ResponseCode::Success {
+            AckResult {
+                status: AckStatus::Ok,
+                ..Default::default()
             }
-            Err(e) => {
-                ack_callback.on_exception(e);
+        } else {
+            AckResult {
+                status: AckStatus::NotExist,
+                ..Default::default()
             }
-        }
-        Ok(())
+        })
     }
 }

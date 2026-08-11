@@ -26,6 +26,7 @@ pub mod consumer_connection;
 
 pub mod acl_info;
 pub mod batch_ack;
+pub mod batch_ack_builder;
 pub mod batch_ack_message_request_body;
 pub mod broker_replicas_info;
 pub mod broker_stats_item;

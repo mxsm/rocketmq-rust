@@ -24,6 +24,18 @@ use rocketmq_model::common::key_builder::KeyBuilder;
 
 pub struct ExtraInfoUtil;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AckExtraInfo<'a> {
+    pub ck_queue_offset: i64,
+    pub pop_time: i64,
+    pub invisible_time: i64,
+    pub revive_queue_id: i32,
+    pub retry: &'a str,
+    pub broker_name: &'a str,
+    pub queue_id: i32,
+    pub queue_offset: i64,
+}
+
 const NORMAL_TOPIC: &str = "0";
 const RETRY_TOPIC: &str = "1";
 const RETRY_TOPIC_V2: &str = "2";
@@ -35,6 +47,55 @@ fn illegal_argument(message: impl Into<String>) -> RocketMQError {
 }
 
 impl ExtraInfoUtil {
+    /// Parses the fixed POP receipt-handle prefix without allocating its fields.
+    pub fn parse_ack_extra_info(extra_info: &str) -> RocketMQResult<AckExtraInfo<'_>> {
+        let mut parts = extra_info.split(KEY_SEPARATOR);
+        let mut next = |name: &str| {
+            parts
+                .next()
+                .ok_or_else(|| illegal_argument(format!("parse POP receipt handle: missing {name}")))
+        };
+
+        let ck_queue_offset = next("checkpoint queue offset")?
+            .parse::<i64>()
+            .map_err(|_| illegal_argument("parse ck_queue_offset error"))?;
+        let pop_time = next("pop time")?
+            .parse::<i64>()
+            .map_err(|_| illegal_argument("parse pop_time error"))?;
+        let invisible_time = next("invisible time")?
+            .parse::<i64>()
+            .map_err(|_| illegal_argument("parse invisible_time error"))?;
+        let revive_queue_id = next("revive queue id")?
+            .parse::<i32>()
+            .map_err(|_| illegal_argument("parse revive_qid error"))?;
+        let retry = next("retry marker")?;
+        let broker_name = next("broker name")?;
+        let queue_id = next("queue id")?
+            .parse::<i32>()
+            .map_err(|_| illegal_argument("parse queue_id error"))?;
+        let queue_offset = next("queue offset")?
+            .parse::<i64>()
+            .map_err(|_| illegal_argument("parse queue_offset error"))?;
+
+        if broker_name.trim().is_empty() {
+            return Err(illegal_argument("parse POP receipt handle: broker name is blank"));
+        }
+        if !matches!(retry, NORMAL_TOPIC | RETRY_TOPIC | RETRY_TOPIC_V2) {
+            return Err(illegal_argument("parse POP receipt handle: invalid retry marker"));
+        }
+
+        Ok(AckExtraInfo {
+            ck_queue_offset,
+            pop_time,
+            invisible_time,
+            revive_queue_id,
+            retry,
+            broker_name,
+            queue_id,
+            queue_offset,
+        })
+    }
+
     /// Split the extra info string using the key separator
     pub fn split(extra_info: &str) -> Vec<String> {
         extra_info.split(KEY_SEPARATOR).map(|s| s.to_string()).collect()
