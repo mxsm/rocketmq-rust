@@ -28,6 +28,7 @@ use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_proxy_core::MessageQueueTarget;
 use rocketmq_proxy_core::ProxyError;
 use rocketmq_proxy_core::ProxyResult;
+use rocketmq_proxy_core::ReceiveTarget;
 use rocketmq_proxy_core::ResourceIdentity;
 use rocketmq_runtime::BudgetCapacity;
 use rocketmq_runtime::BudgetLimit;
@@ -50,7 +51,8 @@ use crate::config::ClusterExecutionDiagnostics;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ClusterCommandClass {
     Control,
-    Data,
+    ShortData,
+    LongPoll,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -99,11 +101,13 @@ struct ClusterExecutionCounters {
 pub(super) struct ClusterExecutionLanes {
     registry: Mutex<HashMap<ClusterOrderingKey, RegisteredLane>>,
     pub(super) root_budget: ResourceBudget,
+    pub(super) long_poll_budget: ResourceBudget,
     policy: ClusterExecutionPolicy,
     next_generation: AtomicU64,
     closed: AtomicBool,
     total_inflight: Arc<Semaphore>,
     data_inflight: Arc<Semaphore>,
+    long_poll_inflight: Arc<Semaphore>,
     counters: Arc<ClusterExecutionCounters>,
     active_lane_tasks: AtomicUsize,
     lane_tasks_idle: Notify,
@@ -118,15 +122,24 @@ impl ClusterExecutionLanes {
         let tree = ResourceBudgetTree::new("proxy-cluster-commands", limit).map_err(|error| ProxyError::Transport {
             message: format!("invalid proxy cluster command budget: {error}"),
         })?;
+        let long_poll_tree = ResourceBudgetTree::new(
+            "proxy-cluster-long-polls",
+            BudgetLimit::new(policy.capacity_count, policy.capacity_bytes, FullPolicy::Reject),
+        )
+        .map_err(|error| ProxyError::Transport {
+            message: format!("invalid proxy cluster long-poll budget: {error}"),
+        })?;
         let root_budget = tree.root();
         Ok(Self {
             registry: Mutex::new(HashMap::new()),
             root_budget,
+            long_poll_budget: long_poll_tree.root(),
             policy,
             next_generation: AtomicU64::new(1),
             closed: AtomicBool::new(false),
             total_inflight: Arc::new(Semaphore::new(policy.io_max_inflight)),
             data_inflight: Arc::new(Semaphore::new(policy.io_max_inflight - policy.control_reserve)),
+            long_poll_inflight: Arc::new(Semaphore::new(policy.long_poll_max_inflight)),
             counters: Arc::new(ClusterExecutionCounters::default()),
             active_lane_tasks: AtomicUsize::new(0),
             lane_tasks_idle: Notify::new(),
@@ -166,20 +179,28 @@ impl ClusterExecutionLanes {
             Some(registered) => (registered.clone(), false),
             None => {
                 let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
-                let queue = self
-                    .root_budget
-                    .child(
-                        format!("key-{generation}"),
-                        BudgetLimit::new(
-                            self.policy.capacity_count,
-                            self.policy.capacity_bytes,
-                            FullPolicy::Reject,
-                        )
-                        .with_control_reserve(BudgetCapacity::new(
-                            self.policy.control_reserve,
-                            self.policy.control_reserve_bytes(),
-                        )),
+                let parent_budget = match class {
+                    ClusterCommandClass::LongPoll => &self.long_poll_budget,
+                    ClusterCommandClass::Control | ClusterCommandClass::ShortData => &self.root_budget,
+                };
+                let lane_limit = match class {
+                    ClusterCommandClass::LongPoll => BudgetLimit::new(
+                        self.policy.capacity_count,
+                        self.policy.capacity_bytes,
+                        FullPolicy::Reject,
+                    ),
+                    ClusterCommandClass::Control | ClusterCommandClass::ShortData => BudgetLimit::new(
+                        self.policy.capacity_count,
+                        self.policy.capacity_bytes,
+                        FullPolicy::Reject,
                     )
+                    .with_control_reserve(BudgetCapacity::new(
+                        self.policy.control_reserve,
+                        self.policy.control_reserve_bytes(),
+                    )),
+                };
+                let queue = parent_budget
+                    .child(format!("key-{generation}"), lane_limit)
                     .map(BudgetedQueue::new)
                     .map_err(|error| ProxyError::Transport {
                         message: format!("invalid proxy cluster keyed lane budget: {error}"),
@@ -192,7 +213,9 @@ impl ClusterExecutionLanes {
 
         let push_result = match class {
             ClusterCommandClass::Control => registered.queue.try_push_control(queued, retained_bytes),
-            ClusterCommandClass::Data => registered.queue.try_push_data(queued, retained_bytes),
+            ClusterCommandClass::ShortData | ClusterCommandClass::LongPoll => {
+                registered.queue.try_push_data(queued, retained_bytes)
+            }
         };
         match push_result {
             Ok(_) => {
@@ -215,7 +238,10 @@ impl ClusterExecutionLanes {
                 }
                 self.counters.rejected.fetch_add(1, Ordering::Relaxed);
                 let snapshot = registered.queue.snapshot();
-                let root_snapshot = self.root_budget.snapshot();
+                let root_snapshot = match class {
+                    ClusterCommandClass::LongPoll => self.long_poll_budget.snapshot(),
+                    ClusterCommandClass::Control | ClusterCommandClass::ShortData => self.root_budget.snapshot(),
+                };
                 tracing::warn!(
                     depth = snapshot.depth,
                     retained_bytes = snapshot.retained_bytes,
@@ -279,6 +305,7 @@ impl ClusterExecutionLanes {
 
     pub(super) fn snapshot(&self) -> ClusterExecutionDiagnostics {
         let budget = self.root_budget.snapshot();
+        let long_poll_budget = self.long_poll_budget.snapshot();
         let registry = self.registry.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let active_keys = registry.len();
         let oldest_queued_age_ms = registry
@@ -289,11 +316,18 @@ impl ClusterExecutionLanes {
         ClusterExecutionDiagnostics {
             active_keys,
             active_lane_tasks: self.active_lane_tasks.load(Ordering::Acquire),
-            queued_and_active: budget.current_count,
-            retained_bytes: budget.current_bytes,
+            queued_and_active: budget.current_count.saturating_add(long_poll_budget.current_count),
+            retained_bytes: budget.current_bytes.saturating_add(long_poll_budget.current_bytes),
+            long_poll_queued_and_active: long_poll_budget.current_count,
+            long_poll_retained_bytes: long_poll_budget.current_bytes,
             oldest_queued_age_ms,
             current_inflight: self.counters.current_inflight.load(Ordering::Relaxed),
             max_inflight: self.counters.max_inflight.load(Ordering::Relaxed),
+            current_long_poll_inflight: self
+                .policy
+                .long_poll_max_inflight
+                .saturating_sub(self.long_poll_inflight.available_permits()),
+            long_poll_max_inflight: self.policy.long_poll_max_inflight,
             admitted: self.counters.admitted.load(Ordering::Relaxed),
             rejected: self.counters.rejected.load(Ordering::Relaxed),
             timed_out: self.counters.timed_out.load(Ordering::Relaxed),
@@ -304,16 +338,29 @@ impl ClusterExecutionLanes {
     }
 
     pub(super) async fn acquire_inflight(&self, class: ClusterCommandClass) -> Option<ClusterInflightPermit> {
-        let data = match class {
-            ClusterCommandClass::Control => None,
-            ClusterCommandClass::Data => Some(self.data_inflight.clone().acquire_owned().await.ok()?),
+        let (data, total, long_poll) = match class {
+            ClusterCommandClass::Control => (
+                None,
+                Some(self.total_inflight.clone().acquire_owned().await.ok()?),
+                None,
+            ),
+            ClusterCommandClass::ShortData => (
+                Some(self.data_inflight.clone().acquire_owned().await.ok()?),
+                Some(self.total_inflight.clone().acquire_owned().await.ok()?),
+                None,
+            ),
+            ClusterCommandClass::LongPoll => (
+                None,
+                None,
+                Some(self.long_poll_inflight.clone().acquire_owned().await.ok()?),
+            ),
         };
-        let total = self.total_inflight.clone().acquire_owned().await.ok()?;
         let current = self.counters.current_inflight.fetch_add(1, Ordering::AcqRel) + 1;
         self.counters.max_inflight.fetch_max(current, Ordering::Relaxed);
         Some(ClusterInflightPermit {
             _data: data,
             _total: total,
+            _long_poll: long_poll,
             counters: self.counters.clone(),
         })
     }
@@ -365,7 +412,8 @@ impl Drop for ClusterExecutionLanes {
 
 pub(super) struct ClusterInflightPermit {
     _data: Option<OwnedSemaphorePermit>,
-    _total: OwnedSemaphorePermit,
+    _total: Option<OwnedSemaphorePermit>,
+    _long_poll: Option<OwnedSemaphorePermit>,
     counters: Arc<ClusterExecutionCounters>,
 }
 
@@ -382,6 +430,7 @@ pub(super) struct ClusterExecutionPolicy {
     pub(super) max_queue_age: Duration,
     pub(super) io_max_inflight: usize,
     pub(super) control_reserve: usize,
+    pub(super) long_poll_max_inflight: usize,
     pub(super) lane_idle_timeout: Duration,
 }
 
@@ -399,6 +448,7 @@ impl ClusterExecutionPolicy {
             max_queue_age: config.command_queue_max_age(),
             io_max_inflight: config.io_max_inflight,
             control_reserve: config.control_reserve,
+            long_poll_max_inflight: config.long_poll_max_inflight,
             lane_idle_timeout: config.execution_lane_idle_timeout(),
         }
     }
@@ -416,6 +466,11 @@ impl ClusterExecutionPolicy {
         }
         if self.control_reserve == 0 {
             return Err(invalid_execution_policy("control_reserve must be greater than zero"));
+        }
+        if self.long_poll_max_inflight == 0 {
+            return Err(invalid_execution_policy(
+                "long_poll_max_inflight must be greater than zero",
+            ));
         }
         if self.max_queue_age.is_zero() {
             return Err(invalid_execution_policy(
@@ -457,8 +512,15 @@ pub(super) struct QueuedClusterCommand {
 impl ClusterCommand {
     pub(super) fn class(&self) -> ClusterCommandClass {
         match self {
-            Self::ReadinessCheck { .. } => ClusterCommandClass::Control,
-            _ => ClusterCommandClass::Data,
+            Self::ReadinessCheck { .. }
+            | Self::AckMessage { .. }
+            | Self::ForwardMessageToDeadLetterQueue { .. }
+            | Self::ChangeInvisibleDuration { .. }
+            | Self::UpdateOffset { .. }
+            | Self::GetOffset { .. }
+            | Self::QueryOffset { .. } => ClusterCommandClass::Control,
+            Self::ReceiveMessage { .. } | Self::PullMessage { .. } => ClusterCommandClass::LongPoll,
+            _ => ClusterCommandClass::ShortData,
         }
     }
 
@@ -506,25 +568,27 @@ impl ClusterCommand {
                     .unwrap_or_else(|| build_proxy_producer_group(config, client_id.as_deref(), request_id.as_str()))],
             ),
             Self::ReceiveMessage { request, .. } => {
-                resource_ordering_key("consumer", [&request.group, &request.target.topic])
+                receive_target_ordering_key("consumer-poll", &request.group, &request.target)
             }
             Self::PullMessage { request, .. } => {
-                resource_ordering_key("consumer", [&request.group, &request.target.topic])
+                target_ordering_key("consumer-poll", Some(&request.group), &request.target)
             }
-            Self::AckMessage { request, .. } => resource_ordering_key("consumer", [&request.group, &request.topic]),
+            Self::AckMessage { request, .. } => {
+                resource_ordering_key("consumer-control", [&request.group, &request.topic])
+            }
             Self::ForwardMessageToDeadLetterQueue { request, .. } => {
-                resource_ordering_key("consumer", [&request.group, &request.topic])
+                resource_ordering_key("consumer-control", [&request.group, &request.topic])
             }
             Self::ChangeInvisibleDuration { request, .. } => {
-                resource_ordering_key("consumer", [&request.group, &request.topic])
+                resource_ordering_key("consumer-control", [&request.group, &request.topic])
             }
             Self::UpdateOffset { request, .. } => {
-                resource_ordering_key("consumer", [&request.group, &request.target.topic])
+                target_ordering_key("consumer-offset", Some(&request.group), &request.target)
             }
             Self::GetOffset { request, .. } => {
-                resource_ordering_key("consumer", [&request.group, &request.target.topic])
+                target_ordering_key("consumer-offset", Some(&request.group), &request.target)
             }
-            Self::QueryOffset { request, .. } => target_ordering_key("queue-offset", None, &request.target),
+            Self::QueryOffset { request, .. } => target_ordering_key("consumer-offset", None, &request.target),
             Self::LockBatchMq { request, .. } => ClusterOrderingKey::new(
                 "consumer-lock",
                 [
@@ -822,6 +886,22 @@ fn target_ordering_key(
         components.push(group.namespace().to_owned());
         components.push(group.name().to_owned());
     }
+    components.push(target.topic.namespace().to_owned());
+    components.push(target.topic.name().to_owned());
+    components.push(target.queue_id.to_string());
+    components.push(target.broker_name.clone().unwrap_or_default());
+    components.push(target.broker_addr.clone().unwrap_or_default());
+    ClusterOrderingKey::new(domain, components)
+}
+
+fn receive_target_ordering_key(
+    domain: &'static str,
+    group: &ResourceIdentity,
+    target: &ReceiveTarget,
+) -> ClusterOrderingKey {
+    let mut components = Vec::with_capacity(8);
+    components.push(group.namespace().to_owned());
+    components.push(group.name().to_owned());
     components.push(target.topic.namespace().to_owned());
     components.push(target.topic.name().to_owned());
     components.push(target.queue_id.to_string());

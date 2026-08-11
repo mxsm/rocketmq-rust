@@ -67,6 +67,7 @@ pub fn run_cluster_admission_microprobe(
         max_queue_age: Duration::from_secs(30),
         io_max_inflight: 16,
         control_reserve,
+        long_poll_max_inflight: 256,
         lane_idle_timeout: Duration::from_secs(30),
     };
     let lanes = ClusterExecutionLanes::new(policy)?;
@@ -166,6 +167,7 @@ pub fn run_cluster_mixed_execution_probe(
         max_queue_age: Duration::from_secs(30),
         io_max_inflight: unrelated_key_count.saturating_add(control_reserve).max(3),
         control_reserve,
+        long_poll_max_inflight: 256,
         lane_idle_timeout: Duration::from_secs(30),
     };
     let lanes = ClusterExecutionLanes::new(policy)?;

@@ -25,9 +25,13 @@ pub struct ClusterExecutionDiagnostics {
     pub active_lane_tasks: usize,
     pub queued_and_active: usize,
     pub retained_bytes: usize,
+    pub long_poll_queued_and_active: usize,
+    pub long_poll_retained_bytes: usize,
     pub oldest_queued_age_ms: Option<u64>,
     pub current_inflight: usize,
     pub max_inflight: usize,
+    pub current_long_poll_inflight: usize,
+    pub long_poll_max_inflight: usize,
     pub admitted: u64,
     pub rejected: u64,
     pub timed_out: u64,
@@ -55,6 +59,7 @@ pub struct ClusterConfig {
     pub command_queue_max_age_ms: u64,
     pub io_max_inflight: usize,
     pub control_reserve: usize,
+    pub long_poll_max_inflight: usize,
     pub execution_lane_idle_timeout_ms: u64,
 }
 
@@ -76,6 +81,7 @@ impl Default for ClusterConfig {
             command_queue_max_age_ms: 30_000,
             io_max_inflight: 16,
             control_reserve: 2,
+            long_poll_max_inflight: 256,
             execution_lane_idle_timeout_ms: 30_000,
         }
     }
