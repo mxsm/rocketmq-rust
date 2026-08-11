@@ -28,6 +28,9 @@ use crate::error::ProxyError;
 use crate::error::ProxyResult;
 use crate::ingress::grpc::service::admission::estimated_protobuf_retained_bytes;
 use crate::proto::v2;
+use crate::receipt_renewal::ReceiptRenewalMetricsSnapshot;
+use crate::receipt_renewal::ReceiptRenewalSchedule;
+use crate::receipt_renewal::ReceiptRenewalToken;
 use crate::ResourceIdentity;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -114,6 +117,29 @@ pub struct TrackedReceiptHandle {
     pub last_touched: SystemTime,
     pub next_renew_at: SystemTime,
     pub cancellation: CancellationToken,
+}
+
+/// One generation-aware receipt-handle renewal claimed from the deadline scheduler.
+#[derive(Debug, Clone)]
+pub struct ClaimedReceiptHandle {
+    /// Immutable receipt state captured for this renewal attempt.
+    pub tracked: TrackedReceiptHandle,
+    key: ReceiptHandleKey,
+    token: ReceiptRenewalToken,
+    due_at: tokio::time::Instant,
+    expires_at: tokio::time::Instant,
+}
+
+impl ClaimedReceiptHandle {
+    /// Returns how late this claim started relative to its renewal deadline.
+    pub fn due_lag(&self) -> Duration {
+        tokio::time::Instant::now().saturating_duration_since(self.due_at)
+    }
+
+    /// Returns the remaining invisible window at the current monotonic time.
+    pub fn remaining_visibility(&self) -> Duration {
+        self.expires_at.saturating_duration_since(tokio::time::Instant::now())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -332,6 +358,7 @@ impl From<&TrackedReceiptHandle> for ReceiptHandleKey {
 pub struct ClientSessionRegistry<C = ()> {
     sessions: Arc<DashMap<String, ClientSession>>,
     receipt_handles: Arc<DashMap<ReceiptHandleKey, TrackedReceiptHandle>>,
+    receipt_renewals: ReceiptRenewalSchedule<ReceiptHandleKey>,
     lite_subscriptions: Arc<DashMap<LiteSubscriptionKey, LiteSubscriptionSnapshot>>,
     prepared_transactions: Arc<DashMap<PreparedTransactionKey, PreparedTransactionHandle>>,
     telemetry_links: Arc<DashMap<String, TelemetryLink>>,
@@ -347,6 +374,7 @@ impl<C> Default for ClientSessionRegistry<C> {
         Self {
             sessions: Arc::default(),
             receipt_handles: Arc::default(),
+            receipt_renewals: ReceiptRenewalSchedule::default(),
             lite_subscriptions: Arc::default(),
             prepared_transactions: Arc::default(),
             telemetry_links: Arc::default(),
@@ -916,21 +944,24 @@ impl<C> ClientSessionRegistry<C> {
 
     pub fn track_receipt_handle(&self, registration: ReceiptHandleRegistration) -> TrackedReceiptHandle {
         let now = SystemTime::now();
+        let invisible_duration = registration.invisible_duration;
         let tracked = TrackedReceiptHandle {
             client_id: registration.client_id,
             group: registration.group,
             topic: registration.topic,
             message_id: registration.message_id,
             receipt_handle: registration.receipt_handle,
-            invisible_duration: registration.invisible_duration,
+            invisible_duration,
             last_touched: now,
-            next_renew_at: renew_at(now, registration.invisible_duration),
+            next_renew_at: renew_at(now, invisible_duration),
             cancellation: CancellationToken::new(),
         };
         let key = ReceiptHandleKey::from(&tracked);
         if let Some((_, previous)) = self.receipt_handles.remove(&key) {
             previous.cancellation.cancel();
         }
+        let (deadline, expires_at) = renewal_window(tokio::time::Instant::now(), invisible_duration);
+        self.receipt_renewals.schedule(key.clone(), deadline, expires_at);
         self.receipt_handles.insert(key, tracked.clone());
         tracked
     }
@@ -958,10 +989,14 @@ impl<C> ClientSessionRegistry<C> {
         let key = self.resolve_receipt_handle_key(client_id, group, topic, message_id, None)?;
         let mut tracked = self.receipt_handles.get_mut(&key)?;
         let now = SystemTime::now();
+        tracked.cancellation.cancel();
         tracked.receipt_handle = new_receipt_handle.to_owned();
         tracked.invisible_duration = invisible_duration;
         tracked.last_touched = now;
         tracked.next_renew_at = renew_at(now, invisible_duration);
+        tracked.cancellation = CancellationToken::new();
+        let (deadline, expires_at) = renewal_window(tokio::time::Instant::now(), invisible_duration);
+        self.receipt_renewals.schedule(key, deadline, expires_at);
         Some(tracked.clone())
     }
 
@@ -978,10 +1013,14 @@ impl<C> ClientSessionRegistry<C> {
         let key = self.resolve_receipt_handle_key(client_id, group, topic, message_id, Some(current_receipt_handle))?;
         let mut tracked = self.receipt_handles.get_mut(&key)?;
         let now = SystemTime::now();
+        tracked.cancellation.cancel();
         tracked.receipt_handle = new_receipt_handle.to_owned();
         tracked.invisible_duration = invisible_duration;
         tracked.last_touched = now;
         tracked.next_renew_at = renew_at(now, invisible_duration);
+        tracked.cancellation = CancellationToken::new();
+        let (deadline, expires_at) = renewal_window(tokio::time::Instant::now(), invisible_duration);
+        self.receipt_renewals.schedule(key, deadline, expires_at);
         Some(tracked.clone())
     }
 
@@ -995,7 +1034,10 @@ impl<C> ClientSessionRegistry<C> {
     ) -> Option<TrackedReceiptHandle> {
         let key = self.resolve_receipt_handle_key(client_id, group, topic, message_id, None)?;
         let mut tracked = self.receipt_handles.get_mut(&key)?;
-        tracked.next_renew_at = renew_at(SystemTime::now(), invisible_duration);
+        let now = SystemTime::now();
+        tracked.next_renew_at = renew_at(now, invisible_duration);
+        let (deadline, expires_at) = renewal_window(tokio::time::Instant::now(), invisible_duration);
+        self.receipt_renewals.schedule(key, deadline, expires_at);
         Some(tracked.clone())
     }
 
@@ -1114,6 +1156,118 @@ impl<C> ClientSessionRegistry<C> {
             .filter(|entry| entry.next_renew_at <= now)
             .map(|entry| entry.clone())
             .collect()
+    }
+
+    /// Waits until the earliest live receipt renewal is due or the schedule changes.
+    pub async fn wait_for_receipt_renewal(&self) {
+        self.receipt_renewals.wait_until_due().await;
+    }
+
+    /// Claims at most `limit` due receipts and installs `lease` before returning them.
+    pub fn claim_due_receipt_handles(&self, limit: usize, lease: Duration) -> Vec<ClaimedReceiptHandle> {
+        let batch = self
+            .receipt_renewals
+            .claim_due(tokio::time::Instant::now(), limit.max(1), lease);
+        for key in batch.expired {
+            if let Some((_, tracked)) = self.receipt_handles.remove(&key) {
+                tracked.cancellation.cancel();
+            }
+        }
+
+        batch
+            .claims
+            .into_iter()
+            .filter_map(|claim| {
+                let tracked = self.receipt_handles.get(&claim.key).map(|entry| entry.clone());
+                match tracked {
+                    Some(tracked) if !tracked.cancellation.is_cancelled() => Some(ClaimedReceiptHandle {
+                        tracked,
+                        key: claim.key,
+                        token: claim.token,
+                        due_at: claim.due_at,
+                        expires_at: claim.expires_at,
+                    }),
+                    _ => {
+                        let _ = self.receipt_renewals.remove_claim(&claim.key, claim.token, false);
+                        None
+                    }
+                }
+            })
+            .collect()
+    }
+
+    /// Returns whether a claimed renewal still refers to the current receipt generation.
+    pub fn receipt_renewal_claim_is_current(&self, claim: &ClaimedReceiptHandle) -> bool {
+        if claim.tracked.cancellation.is_cancelled() || !self.receipt_renewals.is_current(&claim.key, claim.token) {
+            return false;
+        }
+        self.receipt_handles
+            .get(&claim.key)
+            .is_some_and(|tracked| tracked.receipt_handle == claim.tracked.receipt_handle)
+    }
+
+    /// Applies a successful renewal only when the claimed generation is still current.
+    pub fn complete_receipt_handle_renewal(
+        &self,
+        claim: &ClaimedReceiptHandle,
+        new_receipt_handle: &str,
+        invisible_duration: Duration,
+    ) -> bool {
+        let (deadline, expires_at) = renewal_window(tokio::time::Instant::now(), invisible_duration);
+        if !self
+            .receipt_renewals
+            .reschedule_claim(&claim.key, claim.token, deadline, expires_at, false)
+        {
+            return false;
+        }
+        let Some(mut tracked) = self.receipt_handles.get_mut(&claim.key) else {
+            let _ = self.receipt_renewals.remove(&claim.key);
+            return false;
+        };
+        if tracked.receipt_handle != claim.tracked.receipt_handle {
+            return false;
+        }
+        tracked.cancellation.cancel();
+        let now = SystemTime::now();
+        tracked.receipt_handle = new_receipt_handle.to_owned();
+        tracked.invisible_duration = invisible_duration;
+        tracked.last_touched = now;
+        tracked.next_renew_at = renew_at(now, invisible_duration);
+        tracked.cancellation = CancellationToken::new();
+        true
+    }
+
+    /// Reschedules a transient renewal failure if its claim is still current.
+    pub fn retry_receipt_handle_renewal(&self, claim: &ClaimedReceiptHandle, delay: Duration) -> bool {
+        let now = tokio::time::Instant::now();
+        let deadline = now.checked_add(delay).unwrap_or(claim.expires_at).min(claim.expires_at);
+        if !self
+            .receipt_renewals
+            .reschedule_claim(&claim.key, claim.token, deadline, claim.expires_at, true)
+        {
+            return false;
+        }
+        if let Some(mut tracked) = self.receipt_handles.get_mut(&claim.key) {
+            let wall_now = SystemTime::now();
+            tracked.next_renew_at = wall_now.checked_add(delay).unwrap_or(wall_now);
+        }
+        true
+    }
+
+    /// Removes an invalid receipt only when the response matches the claimed generation.
+    pub fn invalidate_receipt_handle_renewal(&self, claim: &ClaimedReceiptHandle) -> bool {
+        if !self.receipt_renewals.remove_claim(&claim.key, claim.token, true) {
+            return false;
+        }
+        self.receipt_handles.remove(&claim.key).is_some_and(|(_, tracked)| {
+            tracked.cancellation.cancel();
+            true
+        })
+    }
+
+    /// Returns current receipt-renewal scheduler counters.
+    pub fn receipt_renewal_metrics_snapshot(&self) -> ReceiptRenewalMetricsSnapshot {
+        self.receipt_renewals.metrics_snapshot()
     }
 
     pub fn lite_subscription_count(&self) -> usize {
@@ -1261,6 +1415,7 @@ impl<C> ClientSessionRegistry<C> {
     }
 
     fn remove_receipt_handle_by_key(&self, key: &ReceiptHandleKey) -> Option<TrackedReceiptHandle> {
+        let _ = self.receipt_renewals.remove(key);
         self.receipt_handles.remove(key).map(|(_, tracked)| {
             tracked.cancellation.cancel();
             tracked
@@ -1326,6 +1481,15 @@ fn is_expired(instant: SystemTime, now: SystemTime, ttl: Duration) -> bool {
 
 fn renew_at(now: SystemTime, invisible_duration: Duration) -> SystemTime {
     now.checked_add(auto_renew_interval(invisible_duration)).unwrap_or(now)
+}
+
+fn renewal_window(
+    now: tokio::time::Instant,
+    invisible_duration: Duration,
+) -> (tokio::time::Instant, tokio::time::Instant) {
+    let expires_at = now.checked_add(invisible_duration).unwrap_or(now);
+    let deadline = now.checked_add(auto_renew_interval(invisible_duration)).unwrap_or(now);
+    (deadline.min(expires_at), expires_at)
 }
 
 fn auto_renew_interval(invisible_duration: Duration) -> Duration {

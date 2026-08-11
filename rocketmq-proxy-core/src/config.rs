@@ -153,6 +153,7 @@ pub struct SessionConfig {
     pub client_ttl_ms: u64,
     pub receipt_handle_ttl_ms: u64,
     pub auto_renew_enabled: bool,
+    pub auto_renew_max_inflight: usize,
     pub min_long_polling_timeout_ms: u64,
     pub max_long_polling_timeout_ms: u64,
 }
@@ -163,6 +164,7 @@ impl Default for SessionConfig {
             client_ttl_ms: 60_000,
             receipt_handle_ttl_ms: 5 * 60_000,
             auto_renew_enabled: true,
+            auto_renew_max_inflight: 32,
             min_long_polling_timeout_ms: 5_000,
             max_long_polling_timeout_ms: 20_000,
         }
@@ -176,6 +178,10 @@ impl SessionConfig {
 
     pub fn receipt_handle_ttl(&self) -> Duration {
         Duration::from_millis(self.receipt_handle_ttl_ms.max(1))
+    }
+
+    pub fn auto_renew_max_inflight(&self) -> usize {
+        self.auto_renew_max_inflight.max(1)
     }
 
     pub fn min_long_polling_timeout(&self) -> Duration {
@@ -209,6 +215,14 @@ mod tests {
 
         assert_eq!(config.client_ttl(), Duration::from_millis(1));
         assert_eq!(config.receipt_handle_ttl(), Duration::from_millis(1));
+        assert_eq!(
+            SessionConfig {
+                auto_renew_max_inflight: 0,
+                ..SessionConfig::default()
+            }
+            .auto_renew_max_inflight(),
+            1
+        );
         assert_eq!(config.max_long_polling_timeout(), Duration::from_millis(10));
     }
 }
