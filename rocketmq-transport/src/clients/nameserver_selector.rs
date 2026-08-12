@@ -269,6 +269,11 @@ impl LatencyTracker {
         let metrics = self.metrics.read();
         metrics.get(addr).map(|m| m.is_healthy()).unwrap_or(true) // Unknown = healthy
     }
+
+    /// Removes state for an endpoint after its retired session has drained.
+    pub(crate) fn remove(&self, addr: &CheetahString) {
+        self.metrics.write().remove(addr);
+    }
 }
 
 impl Default for LatencyTracker {

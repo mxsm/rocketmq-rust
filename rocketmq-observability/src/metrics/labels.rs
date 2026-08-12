@@ -76,6 +76,7 @@ impl MetricLabelPolicy {
     pub fn normalize_metric_label_with_outcome<'a>(&self, key: &str, value: &'a str) -> (Cow<'a, str>, bool) {
         match key {
             "address"
+            | "address_family"
             | "aggregation"
             | "broker_set"
             | "cluster"
@@ -84,6 +85,7 @@ impl MetricLabelPolicy {
             | "dledger_operation"
             | "election_result"
             | "file_type"
+            | "freshness"
             | "invocation_status"
             | "is_long_polling"
             | "is_retry"
@@ -103,11 +105,13 @@ impl MetricLabelPolicy {
             | "request_code"
             | "request_handle_status"
             | "request_type"
+            | "reason"
             | "response_code"
             | "result"
             | "revive_message_type"
             | "storage_medium"
             | "storage_type"
+            | "source_kind"
             | "success"
             | "timer_bound_s"
             | "version" => (Cow::Borrowed(value), false),
@@ -312,6 +316,10 @@ mod tests {
 
         for key in [
             "protocol_type",
+            "source_kind",
+            "address_family",
+            "freshness",
+            "reason",
             "request_code",
             "response_code",
             "is_long_polling",
@@ -333,6 +341,16 @@ mod tests {
         }
 
         assert_eq!(guard.dropped_labels(), 0);
+    }
+
+    #[test]
+    fn nameserver_discovery_rejects_endpoint_identity_as_a_label_key() {
+        let mut guard = LabelGuard::default();
+
+        for key in ["fqdn", "ip", "pod", "namespace", "nameserver_endpoint"] {
+            assert_eq!(guard.normalize_metric_label(key, "namesrv-0.default.svc"), "other");
+        }
+        assert_eq!(guard.dropped_labels(), 5);
     }
 
     #[test]

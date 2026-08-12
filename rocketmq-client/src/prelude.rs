@@ -22,4 +22,6 @@ pub use crate::DefaultMQPushConsumer;
 pub use crate::MessageRecall;
 pub use crate::MessageSend;
 pub use crate::NameServerDiscoveryConfig;
+pub use crate::NameServerDiscoveryFreshness;
+pub use crate::NameServerDiscoveryStatus;
 pub use crate::NameServerSource;

@@ -26,4 +26,8 @@ pub use config::NameServerSource;
 pub(crate) use snapshot::EndpointSnapshot;
 #[cfg(feature = "nameserver-dns-discovery")]
 pub(crate) use snapshot::Freshness;
+pub use snapshot::NameServerDiscoveryErrorCategory;
+pub use snapshot::NameServerDiscoveryFreshness;
+pub use snapshot::NameServerDiscoverySourceKind;
+pub use snapshot::NameServerDiscoveryStatus;
 pub use snapshot::ResolvedNameServerEndpoint;

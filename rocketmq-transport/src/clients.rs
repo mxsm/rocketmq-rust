@@ -15,6 +15,7 @@
 pub(crate) use client::TransportSession;
 
 mod client;
+pub mod nameserver_endpoint;
 pub(crate) mod nameserver_failover;
 pub(crate) mod nameserver_selector;
 pub mod reconnect;

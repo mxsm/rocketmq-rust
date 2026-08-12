@@ -26,6 +26,9 @@ async fn dns_discovery_initializes_and_cancels_inflight_refresh_without_leaking_
     assert_eq!(probe.initial_generation, 1);
     assert!(probe.initial_fresh);
     assert_eq!(probe.initial_task_count, 1);
+    assert_eq!(probe.status_ipv4_endpoint_count, 1);
+    assert_eq!(probe.status_ipv6_endpoint_count, 0);
+    assert!(!probe.status_has_error);
     assert_eq!(probe.publish_count, 1);
     assert_eq!(probe.task_count_after_shutdown, 0);
 }

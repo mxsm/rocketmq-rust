@@ -251,6 +251,7 @@ use rocketmq_protocol::protocol::header::reset_master_flush_offset_header::Reset
 use rocketmq_protocol::protocol::header::reset_offset_request_header::ResetOffsetRequestHeader;
 #[cfg(feature = "admin-mutation")]
 use rocketmq_protocol::protocol::header::resume_check_half_message_request_header::ResumeCheckHalfMessageRequestHeader;
+use rocketmq_transport::api::v1::ConnectTarget;
 use rocketmq_transport::api::v1::ConnectionNetEvent;
 use rocketmq_transport::api::v1::DefaultTopAddressing;
 use rocketmq_transport::api::v1::HeartbeatV2Result;

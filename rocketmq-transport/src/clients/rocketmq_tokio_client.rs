@@ -16,10 +16,12 @@ use std::collections::HashSet;
 use std::future::Future;
 use std::ops::Deref;
 use std::sync::atomic::AtomicU64;
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
+use arc_swap::ArcSwap;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use parking_lot::Mutex;
@@ -46,10 +48,15 @@ use tracing::warn;
 use crate::base::connection_net_event::ConnectionNetEvent;
 use crate::base::pending_request_table::PendingRequestTable;
 use crate::base::pending_request_table::PendingRequestUsage;
+use crate::clients::client::SessionConnectTarget;
+use crate::clients::nameserver_endpoint::diff_name_server_endpoints;
+use crate::clients::nameserver_endpoint::ConnectTarget;
+use crate::clients::nameserver_endpoint::NameServerEndpoint;
 use crate::clients::nameserver_failover::build_nameserver_failover_candidates;
 use crate::clients::nameserver_selector::LatencyTracker;
 use crate::clients::reconnect::CircuitAdmission;
 use crate::clients::reconnect::CircuitBreaker;
+use crate::clients::reconnect::CircuitState;
 use crate::clients::TransportSession;
 use crate::deadline::RequestDeadline;
 use crate::error_helpers::remote_error;
@@ -63,6 +70,7 @@ use crate::runtime::config::client_config::TransportClientConfig;
 use crate::runtime::processor::RequestProcessor;
 use crate::runtime::RPCHook;
 use crate::security::TransportSecurity;
+use crate::telemetry::TransportNameServerFailoverReason;
 use crate::telemetry::TransportTelemetry;
 use crate::tls::TlsConfig;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
@@ -155,11 +163,12 @@ pub struct TransportClient<PR = DefaultRequestProcessor> {
     /// One lifecycle-owned connection attempt per endpoint during cold bursts.
     connect_flights: Arc<DashMap<CheetahString, Arc<ConnectFlight<PR>>>>,
     connect_attempts: Arc<AtomicU64>,
+    namesrv_draining_count: Arc<AtomicUsize>,
 
     /// List of all nameserver addresses (in priority order)
     ///
     /// Updated via `update_name_server_address_list()`
-    namesrv_addr_list: Arc<RwLock<Vec<CheetahString>>>,
+    namesrv_endpoints: Arc<ArcSwap<Vec<NameServerEndpoint>>>,
 
     /// Currently selected nameserver (cached for fast path)
     ///
@@ -340,6 +349,14 @@ struct ConnectFlight<PR> {
     changed: tokio::sync::Notify,
 }
 
+struct DrainingEndpointGuard(Arc<AtomicUsize>);
+
+impl Drop for DrainingEndpointGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 impl<PR> ConnectFlight<PR>
 where
     PR: RequestProcessor + Sync + Clone + 'static,
@@ -435,6 +452,10 @@ pub struct ClientSnapshot {
     pub connect_flight_count: usize,
     pub configured_name_server_count: usize,
     pub available_name_server_count: usize,
+    pub healthy_name_server_count: usize,
+    pub probing_name_server_count: usize,
+    pub draining_name_server_count: usize,
+    pub circuit_open_name_server_count: usize,
     pub pending: PendingUsage,
 }
 
@@ -453,7 +474,8 @@ impl<PR> Clone for TransportClient<PR> {
             connection_tables: self.connection_tables.clone(),
             connect_flights: self.connect_flights.clone(),
             connect_attempts: self.connect_attempts.clone(),
-            namesrv_addr_list: self.namesrv_addr_list.clone(),
+            namesrv_draining_count: self.namesrv_draining_count.clone(),
+            namesrv_endpoints: self.namesrv_endpoints.clone(),
             namesrv_addr_choosed: self.namesrv_addr_choosed.clone(),
             available_namesrv_addr_set: self.available_namesrv_addr_set.clone(),
             latency_tracker: self.latency_tracker.clone(),
@@ -524,7 +546,8 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
             connection_tables: Arc::new(DashMap::with_capacity(64)),
             connect_flights: Arc::new(DashMap::with_capacity(64)),
             connect_attempts: Arc::new(AtomicU64::new(0)),
-            namesrv_addr_list: Arc::new(RwLock::new(Default::default())),
+            namesrv_draining_count: Arc::new(AtomicUsize::new(0)),
+            namesrv_endpoints: Arc::new(ArcSwap::from_pointee(Vec::new())),
             namesrv_addr_choosed: Arc::new(RwLock::new(Default::default())),
             available_namesrv_addr_set: Arc::new(RwLock::new(Default::default())),
             latency_tracker: LatencyTracker::new(),
@@ -560,11 +583,38 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
 
     #[must_use]
     pub fn snapshot(&self) -> ClientSnapshot {
+        let endpoints = self.namesrv_endpoints.load();
+        let identities = endpoints
+            .iter()
+            .map(|endpoint| endpoint.identity())
+            .collect::<HashSet<_>>();
+        let healthy_name_server_count = identities
+            .iter()
+            .filter(|identity| {
+                self.connection_tables
+                    .get(**identity)
+                    .is_some_and(|session| session.connection().is_healthy())
+                    && self.latency_tracker.is_healthy(identity)
+            })
+            .count();
+        let (probing_name_server_count, circuit_open_name_server_count) = self
+            .circuit_breakers
+            .iter()
+            .filter(|entry| identities.contains(entry.key()))
+            .fold((0, 0), |(probing, open), entry| match entry.state() {
+                CircuitState::Closed => (probing, open),
+                CircuitState::HalfOpen => (probing + 1, open),
+                CircuitState::Open => (probing, open + 1),
+            });
         ClientSnapshot {
             connection_count: self.connection_tables.len(),
             connect_flight_count: self.connect_flights.len(),
-            configured_name_server_count: self.namesrv_addr_list.read().len(),
+            configured_name_server_count: self.namesrv_endpoints.load().len(),
             available_name_server_count: self.available_namesrv_addr_set.read().len(),
+            healthy_name_server_count,
+            probing_name_server_count,
+            draining_name_server_count: self.namesrv_draining_count.load(Ordering::Acquire),
+            circuit_open_name_server_count,
             pending: self.cmd_handler.response_table.usage().into(),
         }
     }
@@ -574,35 +624,78 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
             return;
         }
 
-        let update = {
-            let current = self.namesrv_addr_list.read();
-            current.is_empty() || addrs.len() != current.len() || addrs.iter().any(|addr| !current.contains(addr))
-        };
-
-        if !update {
-            return;
-        }
-
-        info!(
-            "name server address updated. NEW : {:?} , OLD: {:?}",
-            addrs,
-            self.namesrv_addr_list.read().as_slice()
-        );
-
         use rand::seq::SliceRandom;
         let mut shuffled = addrs.clone();
         shuffled.shuffle(&mut rand::rng());
+        let endpoints = shuffled
+            .into_iter()
+            .filter_map(|address| match NameServerEndpoint::legacy(address.clone()) {
+                Ok(endpoint) => Some(endpoint),
+                Err(error) => {
+                    warn!(%address, ?error, "ignored invalid legacy NameServer endpoint");
+                    None
+                }
+            })
+            .collect();
+        self.apply_name_server_endpoint_snapshot_sync(endpoints, Duration::from_secs(30));
+    }
 
-        *self.namesrv_addr_list.write() = shuffled;
+    /// Atomically applies resolved NameServer targets and starts bounded retirement for removals.
+    pub fn update_name_server_connect_targets_sync(&self, targets: Vec<ConnectTarget>, drain_timeout: Duration) {
+        let endpoints = targets.into_iter().map(NameServerEndpoint::resolved).collect();
+        self.apply_name_server_endpoint_snapshot_sync(endpoints, drain_timeout);
+    }
 
-        let stale_addr = self.namesrv_addr_choosed.read().clone();
-        if let Some(namesrv_addr) = stale_addr {
-            if !addrs.contains(&namesrv_addr) {
+    /// Atomically publishes a complete selector snapshot.
+    pub fn apply_name_server_endpoint_snapshot_sync(
+        &self,
+        endpoints: Vec<NameServerEndpoint>,
+        drain_timeout: Duration,
+    ) {
+        let current = self.namesrv_endpoints.load_full();
+        let diff = diff_name_server_endpoints(&current, &endpoints);
+        if diff.added.is_empty() && diff.removed.is_empty() {
+            return;
+        }
+
+        let old_count = current.len();
+        self.namesrv_endpoints.store(Arc::new(endpoints));
+        info!(
+            added = diff.added.len(),
+            unchanged = diff.unchanged.len(),
+            removed = diff.removed.len(),
+            old_count,
+            new_count = self.namesrv_endpoints.load().len(),
+            "NameServer endpoint snapshot updated"
+        );
+
+        for endpoint in diff.removed {
+            let identity = endpoint.identity().clone();
+            self.available_namesrv_addr_set.write().remove(&identity);
+            if self.namesrv_addr_choosed.read().as_ref() == Some(&identity) {
                 self.namesrv_addr_choosed.write().take();
-
-                self.connection_tables.remove(&namesrv_addr);
+            }
+            self.connect_flights.remove(&identity);
+            if let Some((_, session)) = self.connection_tables.remove(&identity) {
+                self.start_removed_endpoint_drain(identity, session, drain_timeout);
             }
         }
+    }
+
+    fn name_server_identity_list(&self) -> Vec<CheetahString> {
+        self.namesrv_endpoints
+            .load()
+            .iter()
+            .map(|endpoint| endpoint.identity().clone())
+            .collect()
+    }
+
+    fn name_server_endpoint(&self, identity: &CheetahString) -> Option<NameServerEndpoint> {
+        self.namesrv_endpoints
+            .load()
+            .iter()
+            .find(|endpoint| endpoint.identity() == identity)
+            .cloned()
     }
 
     fn get_or_create_worker_task_group(&self) -> Option<TaskGroup> {
@@ -647,6 +740,35 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
                 );
                 None
             }
+        }
+    }
+
+    fn start_removed_endpoint_drain(
+        &self,
+        identity: CheetahString,
+        session: TransportSession<PR>,
+        drain_timeout: Duration,
+    ) {
+        session.begin_drain();
+        self.namesrv_draining_count.fetch_add(1, Ordering::AcqRel);
+        let drain_guard = DrainingEndpointGuard(self.namesrv_draining_count.clone());
+        self.telemetry
+            .record_nameserver_failover(TransportNameServerFailoverReason::Draining);
+        let latency_tracker = self.latency_tracker.clone();
+        let circuit_breakers = self.circuit_breakers.clone();
+        let cleanup_identity = identity.clone();
+        let task_name = format!("rocketmq.transport.nameserver-drain.{identity}");
+        let spawned = self.spawn_worker_task(task_name, async move {
+            let _drain_guard = drain_guard;
+            let report = session.drain_and_close(drain_timeout).await;
+            latency_tracker.remove(&cleanup_identity);
+            circuit_breakers.remove(&cleanup_identity);
+            if !report.is_healthy() {
+                warn!(report = %report.to_json(), "removed NameServer endpoint drain was unhealthy");
+            }
+        });
+        if spawned.is_none() {
+            warn!("removed NameServer endpoint drain could not be scheduled because the client is shutting down");
         }
     }
 }
@@ -699,10 +821,12 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
                     return Ok(Some(client.value().clone()));
                 }
                 debug!("Cached nameserver {} is unhealthy, selecting new one", addr);
+                self.telemetry
+                    .record_nameserver_failover(TransportNameServerFailoverReason::Unhealthy);
             }
         }
 
-        let addr_list = self.namesrv_addr_list.read().clone();
+        let addr_list = self.name_server_identity_list();
 
         if addr_list.is_empty() {
             warn!("No nameservers configured in namesrv_addr_list");
@@ -723,7 +847,11 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
                         half_open_probe_selected = true;
                         true
                     }
-                    CircuitAdmission::Probe | CircuitAdmission::Rejected => false,
+                    CircuitAdmission::Probe | CircuitAdmission::Rejected => {
+                        self.telemetry
+                            .record_nameserver_failover(TransportNameServerFailoverReason::CircuitOpen);
+                        false
+                    }
                 }
             });
         candidates.sort_by_key(|address| {
@@ -757,6 +885,8 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
                 }
                 Ok(None) => {}
                 Err(error) => {
+                    self.telemetry
+                        .record_nameserver_failover(TransportNameServerFailoverReason::ConnectFailure);
                     self.latency_tracker.record_error(&selected_addr);
                     last_error = Some(error);
                 }
@@ -891,12 +1021,17 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
             let client = self.clone();
             let flight_for_task = flight.clone();
             let target = addr.clone();
+            let configured_nameserver = self.name_server_endpoint(addr);
             let connect_timeout = self.tokio_client_config.connect.timeout;
             let target_for_task = target.clone();
             let spawned = self.spawn_worker_task(format!("rocketmq.transport.connect.{target}"), async move {
                 client.connect_attempts.fetch_add(1, Ordering::Relaxed);
                 let result = client
-                    .connect_endpoint_until(&target_for_task, RequestDeadline::after(connect_timeout))
+                    .connect_endpoint_until(
+                        &target_for_task,
+                        configured_nameserver,
+                        RequestDeadline::after(connect_timeout),
+                    )
                     .await;
                 flight_for_task.complete(result);
                 client.connect_flights.remove(&target_for_task);
@@ -912,6 +1047,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
     async fn connect_endpoint_until(
         &self,
         addr: &CheetahString,
+        configured_nameserver: Option<NameServerEndpoint>,
         deadline: RequestDeadline,
     ) -> RocketMQResult<Option<TransportSession<PR>>> {
         deadline.ensure_before_send(addr.to_string())?;
@@ -939,13 +1075,19 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
             return Ok(None);
         }
 
-        let addr_inner = addr.to_string();
+        let session_target = match configured_nameserver.as_ref() {
+            Some(endpoint) => match endpoint.connect_target() {
+                Some(target) => SessionConnectTarget::Resolved(target.clone()),
+                None => SessionConnectTarget::Legacy(endpoint.compatibility_address().to_string()),
+            },
+            None => SessionConnectTarget::Legacy(addr.to_string()),
+        };
         let tls_config = self.tokio_client_config.tls.clone();
 
         let transport_security = self.transport_security.clone();
-        let connect_result = TransportSession::connect_with_service_context_until_and_telemetry(
+        let connect_result = TransportSession::connect_target_with_service_context_until_and_telemetry(
             &self.service_context,
-            addr_inner,
+            session_target,
             self.cmd_handler.clone(),
             self.tx.as_ref(),
             tls_config,
@@ -960,6 +1102,11 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
 
         match connect_result {
             Ok(new_client) => {
+                if configured_nameserver.is_some() && self.name_server_endpoint(addr).is_none() {
+                    new_client.begin_drain();
+                    let _ = new_client.close_with_report(Duration::from_secs(1)).await;
+                    return Ok(None);
+                }
                 // Connection successful - record success in circuit breaker
                 breaker.record_success();
                 self.circuit_breakers.insert(addr.clone(), breaker);
@@ -1025,7 +1172,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
     /// T+3s:  Next scan begins...
     /// ```
     async fn scan_available_name_srv(&self) {
-        let addr_list = self.namesrv_addr_list.read().clone();
+        let addr_list = self.name_server_identity_list();
 
         if addr_list.is_empty() {
             debug!("No nameservers configured, skipping availability scan");
@@ -1143,7 +1290,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
             connections.push(ConnectionShutdownReport { addr, report });
         }
 
-        self.namesrv_addr_list.write().clear();
+        self.namesrv_endpoints.store(Arc::new(Vec::new()));
         self.namesrv_addr_choosed.write().take();
         self.available_namesrv_addr_set.write().clear();
 
@@ -1246,7 +1393,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
         }
         self.connection_tables.clear();
         self.connect_flights.clear();
-        self.namesrv_addr_list.write().clear();
+        self.namesrv_endpoints.store(Arc::new(Vec::new()));
         self.namesrv_addr_choosed.write().take();
         self.available_namesrv_addr_set.write().clear();
 
@@ -1342,7 +1489,11 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
     }
 
     pub fn get_name_server_address_list(&self) -> Vec<CheetahString> {
-        self.namesrv_addr_list.read().clone()
+        self.namesrv_endpoints
+            .load()
+            .iter()
+            .map(NameServerEndpoint::compatibility_address)
+            .collect()
     }
 
     pub fn get_available_name_srv_list(&self) -> Vec<CheetahString> {
@@ -1408,11 +1559,11 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
                     })
                 }
                 .await;
-                let metric_addr = result
-                    .as_ref()
-                    .ok()
-                    .map(|receipt| receipt.endpoint.clone())
-                    .or_else(|| self.namesrv_addr_choosed.read().clone());
+                let metric_addr = self
+                    .namesrv_addr_choosed
+                    .read()
+                    .clone()
+                    .or_else(|| result.as_ref().ok().map(|receipt| receipt.endpoint.clone()));
                 self.record_nameserver_outcome(metric_addr.as_ref(), started_at.elapsed(), result.is_ok());
                 result
             }
@@ -1483,7 +1634,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
 
         let mut client = self.get_and_create_client_until(addr, deadline).await?.ok_or_else(|| {
             if target == "<nameserver>" {
-                let configured_list = self.namesrv_addr_list.read().clone();
+                let configured_list = self.name_server_identity_list();
                 let available_set = self.available_namesrv_addr_set.read().clone();
                 let cached_choice = self.namesrv_addr_choosed.read().clone();
                 error!(
@@ -1514,7 +1665,12 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
 
         let mut request = request;
         let remote_address = client.remote_address();
-        let nameserver_metric_addr = nameserver_request.then(|| CheetahString::from_string(remote_address.to_string()));
+        let nameserver_metric_addr = nameserver_request.then(|| {
+            self.namesrv_addr_choosed
+                .read()
+                .clone()
+                .unwrap_or_else(|| CheetahString::from_string(remote_address.to_string()))
+        });
         deadline.ensure_before_send(remote_address.to_string())?;
         let hooks = self.cmd_handler.hook_snapshot();
         let request_for_after = if let Some(hooks) = hooks {
@@ -2168,6 +2324,174 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unchanged_resolved_endpoint_reuses_connection_and_identity_state() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind listener");
+        let socket_addr = listener.local_addr().expect("listener addr");
+        let (release_server, server_release) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("accept client");
+            let mut connection = Connection::new(socket);
+            for _ in 0..2 {
+                let request = connection
+                    .receive_command()
+                    .await
+                    .expect("request frame")
+                    .expect("request command");
+                connection
+                    .send_command(
+                        RemotingCommand::create_response_command_with_code(ResponseCode::Success)
+                            .set_opaque(request.opaque()),
+                    )
+                    .await
+                    .expect("send response");
+            }
+            server_release.await.expect("release server connection");
+        });
+        let client = TransportClient::build_for_test(
+            Arc::new(TransportClientConfig::default()),
+            DefaultRequestProcessor,
+            test_service_context("nameserver-unchanged-endpoint-test"),
+        );
+        let target = ConnectTarget::new(socket_addr, "namesrv.default.svc:9876").unwrap();
+        let identity = target.identity();
+        client.update_name_server_connect_targets_sync(vec![target.clone()], Duration::from_secs(1));
+
+        for _ in 0..2 {
+            client
+                .invoke_request(
+                    None,
+                    RemotingCommand::create_remoting_command(RequestCode::GetBrokerClusterInfo),
+                    3_000,
+                )
+                .await
+                .expect("NameServer request");
+            client.update_name_server_connect_targets_sync(vec![target.clone()], Duration::from_secs(1));
+        }
+
+        assert_eq!(client.connect_attempts.load(Ordering::Relaxed), 1);
+        assert!(client.connection_tables.contains_key(&identity));
+        assert!(client.latency_tracker.get_p99(&identity).is_some());
+        let snapshot = client.snapshot();
+        assert_eq!(snapshot.healthy_name_server_count, 1);
+        assert_eq!(snapshot.probing_name_server_count, 0);
+        assert_eq!(snapshot.draining_name_server_count, 0);
+        assert_eq!(snapshot.circuit_open_name_server_count, 0);
+        release_server.send(()).expect("release server");
+        server.await.expect("server task");
+        client.shutdown();
+    }
+
+    #[tokio::test]
+    async fn same_socket_with_new_authority_does_not_reuse_the_old_session() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind listener");
+        let socket_addr = listener.local_addr().expect("listener addr");
+        let server = tokio::spawn(async move {
+            for _ in 0..2 {
+                let (socket, _) = listener.accept().await.expect("accept client");
+                let mut connection = Connection::new(socket);
+                let request = connection
+                    .receive_command()
+                    .await
+                    .expect("request frame")
+                    .expect("request command");
+                connection
+                    .send_command(
+                        RemotingCommand::create_response_command_with_code(ResponseCode::Success)
+                            .set_opaque(request.opaque()),
+                    )
+                    .await
+                    .expect("send response");
+            }
+        });
+        let client = TransportClient::build_for_test(
+            Arc::new(TransportClientConfig::default()),
+            DefaultRequestProcessor,
+            test_service_context("nameserver-authority-isolation-test"),
+        );
+        let first = ConnectTarget::new(socket_addr, "namesrv-a.default.svc:9876").unwrap();
+        let second = ConnectTarget::new(socket_addr, "namesrv-b.default.svc:9876").unwrap();
+        client.update_name_server_connect_targets_sync(vec![first.clone()], Duration::from_secs(1));
+        client
+            .invoke_request(
+                None,
+                RemotingCommand::create_remoting_command(RequestCode::GetBrokerClusterInfo),
+                3_000,
+            )
+            .await
+            .expect("first authority request");
+
+        client.update_name_server_connect_targets_sync(vec![second.clone()], Duration::from_secs(1));
+        client
+            .invoke_request(
+                None,
+                RemotingCommand::create_remoting_command(RequestCode::GetBrokerClusterInfo),
+                3_000,
+            )
+            .await
+            .expect("second authority request");
+
+        assert_eq!(client.connect_attempts.load(Ordering::Relaxed), 2);
+        assert!(!client.connection_tables.contains_key(&first.identity()));
+        assert!(client.connection_tables.contains_key(&second.identity()));
+        assert!(client.latency_tracker.get_p99(&second.identity()).is_some());
+        server.await.expect("server task");
+        client.shutdown();
+    }
+
+    #[tokio::test]
+    async fn removed_endpoint_rejects_new_work_and_closes_after_drain_timeout() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind listener");
+        let socket_addr = listener.local_addr().expect("listener addr");
+        let (request_received, request_started) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("accept client");
+            let mut connection = Connection::new(socket);
+            connection
+                .receive_command()
+                .await
+                .expect("request frame")
+                .expect("request command");
+            request_received.send(()).expect("signal request");
+            let trailing = time::timeout(Duration::from_secs(1), connection.receive_command())
+                .await
+                .expect("drain timeout should close the socket");
+            assert!(trailing.is_none(), "drained connection should reach EOF");
+        });
+        let client = Arc::new(TransportClient::build_for_test(
+            Arc::new(TransportClientConfig::default()),
+            DefaultRequestProcessor,
+            test_service_context("nameserver-drain-timeout-test"),
+        ));
+        let target = ConnectTarget::new(socket_addr, "namesrv.default.svc:9876").unwrap();
+        let identity = target.identity();
+        client.update_name_server_connect_targets_sync(vec![target], Duration::from_millis(25));
+        let request_client = client.clone();
+        let request = tokio::spawn(async move {
+            request_client
+                .invoke_request(
+                    None,
+                    RemotingCommand::create_remoting_command(RequestCode::GetBrokerClusterInfo),
+                    3_000,
+                )
+                .await
+        });
+        request_started.await.expect("request should reach server");
+
+        client.update_name_server_connect_targets_sync(Vec::new(), Duration::from_millis(25));
+
+        assert!(client.get_name_server_address_list().is_empty());
+        assert!(!client.connection_tables.contains_key(&identity));
+        assert!(time::timeout(Duration::from_secs(1), request)
+            .await
+            .unwrap()
+            .unwrap()
+            .is_err());
+        server.await.expect("server task");
+        let report = client.shutdown_with_report(Duration::from_secs(1)).await;
+        assert!(report.is_healthy(), "{report:?}");
+    }
+
+    #[tokio::test]
     async fn nameserver_connect_failure_tries_next_candidate_within_deadline() {
         let closed_listener = TcpListener::bind("127.0.0.1:0").await.expect("bind closed endpoint");
         let closed_addr = closed_listener.local_addr().expect("closed endpoint address");
@@ -2197,10 +2521,13 @@ mod tests {
             DefaultRequestProcessor,
             test_service_context("nameserver-connect-failover-test"),
         );
-        *client.namesrv_addr_list.write() = vec![
-            CheetahString::from_string(closed_addr.to_string()),
-            CheetahString::from_string(healthy_addr.to_string()),
-        ];
+        client.apply_name_server_endpoint_snapshot_sync(
+            vec![
+                NameServerEndpoint::legacy(closed_addr.to_string()).unwrap(),
+                NameServerEndpoint::legacy(healthy_addr.to_string()).unwrap(),
+            ],
+            Duration::from_secs(30),
+        );
 
         let response = client
             .invoke_request(
@@ -2237,10 +2564,13 @@ mod tests {
             DefaultRequestProcessor,
             test_service_context("nameserver-no-write-retry-test"),
         );
-        *client.namesrv_addr_list.write() = vec![
-            CheetahString::from_string(first_addr.to_string()),
-            CheetahString::from_string(second_addr.to_string()),
-        ];
+        client.apply_name_server_endpoint_snapshot_sync(
+            vec![
+                NameServerEndpoint::legacy(first_addr.to_string()).unwrap(),
+                NameServerEndpoint::legacy(second_addr.to_string()).unwrap(),
+            ],
+            Duration::from_secs(30),
+        );
 
         assert!(client
             .invoke_request(

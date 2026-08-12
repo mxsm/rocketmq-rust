@@ -181,6 +181,12 @@ mod cluster_session {
             self.inner.start().await
         }
 
+        /// Returns low-cardinality NameServer discovery state without endpoint identities.
+        pub async fn nameserver_discovery_status(&self) -> Option<crate::NameServerDiscoveryStatus> {
+            let _operation = self.operation().await;
+            self.inner.nameserver_discovery_status().await
+        }
+
         pub async fn topic_route(
             &self,
             topic: &str,

@@ -493,6 +493,37 @@ impl MQClientInstance {
         &self.client_metrics
     }
 
+    /// Returns a read-only discovery status without endpoint names or addresses.
+    pub async fn nameserver_discovery_status(&self) -> Option<crate::nameserver_discovery::NameServerDiscoveryStatus> {
+        #[cfg(feature = "nameserver-dns-discovery")]
+        {
+            let status = self
+                .nameserver_discovery_supervisor
+                .lock()
+                .await
+                .as_ref()
+                .map(|supervisor| supervisor.status());
+            status.map(|status| {
+                let transport = self
+                    .mq_client_api_impl
+                    .load_full()
+                    .map(|api| api.get_remoting_client().snapshot())
+                    .unwrap_or_default();
+                status.with_transport_counts(
+                    transport.healthy_name_server_count,
+                    transport.probing_name_server_count,
+                    transport.draining_name_server_count,
+                    transport.circuit_open_name_server_count,
+                )
+            })
+        }
+
+        #[cfg(not(feature = "nameserver-dns-discovery"))]
+        {
+            None
+        }
+    }
+
     pub(crate) fn request_future_holder(&self) -> Arc<RequestFutureHolder> {
         Arc::clone(&self.request_future_holder)
     }
@@ -814,19 +845,30 @@ impl MQClientInstance {
             let Some(api) = self.mq_client_api_impl.load_full() else {
                 return Err(mq_client_err!("mq_client_api_impl is None"));
             };
+            let drain_timeout = config.drain_timeout();
             let publisher = Arc::new(
                 move |endpoints: Arc<[crate::nameserver_discovery::ResolvedNameServerEndpoint]>| {
-                    let addresses = endpoints
+                    let targets = endpoints
                         .iter()
-                        .map(|endpoint| CheetahString::from(endpoint.socket_addr().to_string()))
-                        .collect();
-                    api.update_name_server_targets_sync(addresses);
+                        .filter_map(|endpoint| {
+                            rocketmq_transport::api::v1::ConnectTarget::new(
+                                endpoint.socket_addr(),
+                                endpoint.authority().as_str(),
+                            )
+                            .map_err(|error| {
+                                warn!(?error, "ignored invalid resolved NameServer connect target");
+                            })
+                            .ok()
+                        })
+                        .collect::<Vec<_>>();
+                    api.update_name_server_connect_targets_sync(targets, drain_timeout);
                 },
             );
             let supervisor = NameServerDiscoverySupervisor::start_dns(
                 config,
                 &self.service_context,
                 self.client_id.as_str(),
+                self.client_metrics.clone(),
                 publisher,
             )
             .await?;

@@ -13,6 +13,8 @@
 // limitations under the License.
 
 #[cfg(feature = "nameserver-dns-discovery")]
+use std::net::IpAddr;
+#[cfg(feature = "nameserver-dns-discovery")]
 use std::sync::Arc;
 #[cfg(feature = "nameserver-dns-discovery")]
 use std::time::Duration;
@@ -23,6 +25,12 @@ use arc_swap::ArcSwap;
 use rocketmq_error::RocketMQError;
 #[cfg(feature = "nameserver-dns-discovery")]
 use rocketmq_error::RocketMQResult;
+#[cfg(feature = "nameserver-dns-discovery")]
+use rocketmq_observability::metrics::client::ClientMetrics;
+#[cfg(feature = "nameserver-dns-discovery")]
+use rocketmq_observability::metrics::client::NameServerDiscoveryFreshness as MetricFreshness;
+#[cfg(feature = "nameserver-dns-discovery")]
+use rocketmq_observability::metrics::client::NameServerDiscoveryRefreshResult;
 #[cfg(feature = "nameserver-dns-discovery")]
 use rocketmq_runtime::ChildServiceContext;
 #[cfg(feature = "nameserver-dns-discovery")]
@@ -44,6 +52,12 @@ use super::EndpointSnapshot;
 use super::Freshness;
 #[cfg(feature = "nameserver-dns-discovery")]
 use super::NameServerDiscoveryConfig;
+#[cfg(feature = "nameserver-dns-discovery")]
+use super::NameServerDiscoveryErrorCategory;
+#[cfg(feature = "nameserver-dns-discovery")]
+use super::NameServerDiscoveryFreshness;
+#[cfg(feature = "nameserver-dns-discovery")]
+use super::NameServerDiscoveryStatus;
 #[cfg(feature = "nameserver-dns-discovery")]
 use super::ResolvedNameServerEndpoint;
 #[cfg(feature = "nameserver-dns-discovery")]
@@ -67,6 +81,8 @@ pub(crate) struct NameServerDiscoverySupervisor {
     #[cfg(feature = "nameserver-dns-discovery")]
     state: Arc<ArcSwap<EndpointSnapshot>>,
     #[cfg(feature = "nameserver-dns-discovery")]
+    loop_status: Arc<ArcSwap<DiscoveryLoopStatus>>,
+    #[cfg(feature = "nameserver-dns-discovery")]
     task_handle: ClientAdaptiveTaskHandle,
 }
 
@@ -76,10 +92,11 @@ impl NameServerDiscoverySupervisor {
         config: NameServerDiscoveryConfig,
         parent: &ChildServiceContext,
         client_id: &str,
+        metrics: ClientMetrics,
         publish: EndpointPublisher,
     ) -> RocketMQResult<Arc<Self>> {
         let resolver = Arc::new(HickoryDnsLookup::new().map_err(initial_resolution_error)?);
-        Self::start_with_resolver(config, parent, client_id, resolver, publish).await
+        Self::start_with_resolver(config, parent, client_id, resolver, metrics, publish).await
     }
 
     #[cfg(feature = "nameserver-dns-discovery")]
@@ -88,29 +105,47 @@ impl NameServerDiscoverySupervisor {
         parent: &ChildServiceContext,
         client_id: &str,
         resolver: Arc<dyn DnsLookup>,
+        metrics: ClientMetrics,
         publish: EndpointPublisher,
     ) -> RocketMQResult<Arc<Self>> {
-        let initial = resolve_dns(resolver.as_ref(), &config)
-            .await
-            .map_err(initial_resolution_error)?;
+        let initial = match resolve_dns(resolver.as_ref(), &config).await {
+            Ok(initial) => {
+                metrics.record_nameserver_discovery_refresh(NameServerDiscoveryRefreshResult::Success);
+                initial
+            }
+            Err(error) => {
+                metrics.record_nameserver_discovery_refresh(NameServerDiscoveryRefreshResult::Error);
+                return Err(initial_resolution_error(error));
+            }
+        };
         let now = Instant::now();
         let initial_snapshot = success_snapshot(&EndpointSnapshot::unavailable(now), initial.clone(), now);
         let initial_endpoints = initial_snapshot.endpoints.clone();
+        record_snapshot_metrics(&metrics, &initial_snapshot, now);
         let state = Arc::new(ArcSwap::from_pointee(initial_snapshot));
 
         let client_id = Arc::<str>::from(client_id);
         let initial_delay = jittered_refresh(initial.ttl, &client_id);
+        let loop_status = Arc::new(ArcSwap::from_pointee(DiscoveryLoopStatus {
+            last_success: now,
+            next_refresh_at: now + initial_delay,
+            last_error: None,
+        }));
         let refresh_state = Arc::new(tokio::sync::Mutex::new(RefreshLoopState {
             retry_attempt: 0,
             last_success: now,
         }));
         let task_state = state.clone();
+        let task_loop_status = loop_status.clone();
+        let task_metrics = metrics.clone();
         let refresh_publisher = publish.clone();
         let task_handle =
             spawn_client_adaptive_task_with_context(parent, "nameserver-discovery.refresh", initial_delay, move || {
                 let resolver = resolver.clone();
                 let config = config.clone();
                 let state = task_state.clone();
+                let loop_status = task_loop_status.clone();
+                let metrics = task_metrics.clone();
                 let refresh_state = refresh_state.clone();
                 let publish = refresh_publisher.clone();
                 let client_id = client_id.clone();
@@ -127,9 +162,17 @@ impl NameServerDiscoverySupervisor {
                             if changed {
                                 publish(state.load().endpoints.clone());
                             }
+                            let delay = jittered_refresh(resolved.ttl, &client_id);
+                            metrics.record_nameserver_discovery_refresh(NameServerDiscoveryRefreshResult::Success);
+                            record_snapshot_metrics(&metrics, state.load().as_ref(), now);
+                            loop_status.store(Arc::new(DiscoveryLoopStatus {
+                                last_success: now,
+                                next_refresh_at: now + delay,
+                                last_error: None,
+                            }));
                             refresh_state.last_success = now;
                             refresh_state.retry_attempt = 0;
-                            ClientAdaptiveTaskControl::ContinueAfter(jittered_refresh(resolved.ttl, &client_id))
+                            ClientAdaptiveTaskControl::ContinueAfter(delay)
                         }
                         Err(error) => {
                             let current = state.load_full();
@@ -146,6 +189,13 @@ impl NameServerDiscoverySupervisor {
                                 "NameServer DNS refresh failed; retained bounded last-known-good state"
                             );
                             let delay = retry_delay(&client_id, refresh_state.retry_attempt);
+                            metrics.record_nameserver_discovery_refresh(NameServerDiscoveryRefreshResult::Error);
+                            record_snapshot_metrics(&metrics, state.load().as_ref(), now);
+                            loop_status.store(Arc::new(DiscoveryLoopStatus {
+                                last_success: refresh_state.last_success,
+                                next_refresh_at: now + delay,
+                                last_error: Some(error.kind()),
+                            }));
                             refresh_state.retry_attempt = refresh_state.retry_attempt.saturating_add(1);
                             ClientAdaptiveTaskControl::ContinueAfter(delay)
                         }
@@ -153,7 +203,11 @@ impl NameServerDiscoverySupervisor {
                 }
             })
             .map_err(|error| RocketMQError::internal("spawn NameServer discovery refresh task", error))?;
-        let supervisor = Arc::new(Self { state, task_handle });
+        let supervisor = Arc::new(Self {
+            state,
+            loop_status,
+            task_handle,
+        });
         publish(initial_endpoints);
 
         Ok(supervisor)
@@ -167,6 +221,24 @@ impl NameServerDiscoverySupervisor {
     #[cfg(feature = "nameserver-dns-discovery")]
     pub(crate) fn task_count(&self) -> usize {
         self.task_handle.task_count()
+    }
+
+    #[cfg(feature = "nameserver-dns-discovery")]
+    pub(crate) fn status(&self) -> NameServerDiscoveryStatus {
+        let now = Instant::now();
+        let snapshot = self.state.load_full();
+        let loop_status = self.loop_status.load_full();
+        let (ipv4_endpoint_count, ipv6_endpoint_count) = endpoint_family_counts(&snapshot);
+        NameServerDiscoveryStatus::new(
+            snapshot.generation,
+            public_freshness(snapshot.freshness),
+            now.saturating_duration_since(loop_status.last_success),
+            now.saturating_duration_since(snapshot.resolved_at),
+            ipv4_endpoint_count,
+            ipv6_endpoint_count,
+            loop_status.next_refresh_at.saturating_duration_since(now),
+            loop_status.last_error.map(public_error_category),
+        )
     }
 
     pub(crate) async fn shutdown(&self) {
@@ -184,6 +256,64 @@ impl NameServerDiscoverySupervisor {
 struct RefreshLoopState {
     retry_attempt: u32,
     last_success: Instant,
+}
+
+#[cfg(feature = "nameserver-dns-discovery")]
+struct DiscoveryLoopStatus {
+    last_success: Instant,
+    next_refresh_at: Instant,
+    last_error: Option<super::dns::DnsErrorKind>,
+}
+
+#[cfg(feature = "nameserver-dns-discovery")]
+fn endpoint_family_counts(snapshot: &EndpointSnapshot) -> (usize, usize) {
+    snapshot
+        .endpoints
+        .iter()
+        .fold((0, 0), |(ipv4, ipv6), endpoint| match endpoint.socket_addr().ip() {
+            IpAddr::V4(_) => (ipv4 + 1, ipv6),
+            IpAddr::V6(_) => (ipv4, ipv6 + 1),
+        })
+}
+
+#[cfg(feature = "nameserver-dns-discovery")]
+fn public_freshness(freshness: Freshness) -> NameServerDiscoveryFreshness {
+    match freshness {
+        Freshness::Fresh => NameServerDiscoveryFreshness::Fresh,
+        Freshness::Stale => NameServerDiscoveryFreshness::Stale,
+        Freshness::Unavailable => NameServerDiscoveryFreshness::Unavailable,
+    }
+}
+
+#[cfg(feature = "nameserver-dns-discovery")]
+fn metric_freshness(freshness: Freshness) -> MetricFreshness {
+    match freshness {
+        Freshness::Fresh => MetricFreshness::Fresh,
+        Freshness::Stale => MetricFreshness::Stale,
+        Freshness::Unavailable => MetricFreshness::Unavailable,
+    }
+}
+
+#[cfg(feature = "nameserver-dns-discovery")]
+fn public_error_category(kind: super::dns::DnsErrorKind) -> NameServerDiscoveryErrorCategory {
+    match kind {
+        super::dns::DnsErrorKind::Empty => NameServerDiscoveryErrorCategory::Empty,
+        super::dns::DnsErrorKind::NxDomain => NameServerDiscoveryErrorCategory::NxDomain,
+        super::dns::DnsErrorKind::ServFail => NameServerDiscoveryErrorCategory::ServFail,
+        super::dns::DnsErrorKind::Timeout => NameServerDiscoveryErrorCategory::Timeout,
+        super::dns::DnsErrorKind::Other => NameServerDiscoveryErrorCategory::Other,
+    }
+}
+
+#[cfg(feature = "nameserver-dns-discovery")]
+fn record_snapshot_metrics(metrics: &ClientMetrics, snapshot: &EndpointSnapshot, now: Instant) {
+    let (ipv4, ipv6) = endpoint_family_counts(snapshot);
+    metrics.record_nameserver_discovery_snapshot(
+        metric_freshness(snapshot.freshness),
+        ipv4 as u64,
+        ipv6 as u64,
+        now.saturating_duration_since(snapshot.resolved_at),
+    );
 }
 
 #[cfg(feature = "nameserver-dns-discovery")]
@@ -276,6 +406,9 @@ pub struct NameServerDiscoveryLifecycleProbe {
     pub initial_generation: u64,
     pub initial_fresh: bool,
     pub initial_task_count: usize,
+    pub status_ipv4_endpoint_count: usize,
+    pub status_ipv6_endpoint_count: usize,
+    pub status_has_error: bool,
     pub publish_count: usize,
     pub task_count_after_shutdown: usize,
 }
@@ -331,6 +464,7 @@ pub async fn run_nameserver_discovery_lifecycle_probe(
         &service_context,
         "probe-client",
         resolver.clone(),
+        ClientMetrics::noop(),
         Arc::new(move |_| {
             publish_count.fetch_add(1, Ordering::AcqRel);
         }),
@@ -341,6 +475,7 @@ pub async fn run_nameserver_discovery_lifecycle_probe(
     let initial_generation = initial.generation;
     let initial_fresh = initial.freshness == Freshness::Fresh;
     let initial_task_count = supervisor.task_count();
+    let status = supervisor.status();
 
     tokio::time::timeout(Duration::from_secs(1), async {
         loop {
@@ -358,6 +493,9 @@ pub async fn run_nameserver_discovery_lifecycle_probe(
         initial_generation,
         initial_fresh,
         initial_task_count,
+        status_ipv4_endpoint_count: status.ipv4_endpoint_count(),
+        status_ipv6_endpoint_count: status.ipv6_endpoint_count(),
+        status_has_error: status.last_error_category().is_some(),
         publish_count: published.load(Ordering::Acquire),
         task_count_after_shutdown: supervisor.task_count(),
     }
@@ -544,6 +682,7 @@ mod tests {
             &crate::runtime::test_service_context("nameserver-discovery-shutdown-test"),
             "client-a",
             resolver.clone(),
+            ClientMetrics::noop(),
             Arc::new(move |_| {
                 publish_count.fetch_add(1, Ordering::AcqRel);
             }),
@@ -554,6 +693,13 @@ mod tests {
         assert_eq!(supervisor.snapshot().generation, 1);
         assert_eq!(supervisor.snapshot().freshness, Freshness::Fresh);
         assert_eq!(supervisor.task_count(), 1);
+        let status = supervisor.status();
+        assert_eq!(status.source_kind(), super::super::NameServerDiscoverySourceKind::Dns);
+        assert_eq!(status.generation(), 1);
+        assert_eq!(status.freshness(), NameServerDiscoveryFreshness::Fresh);
+        assert_eq!(status.ipv4_endpoint_count(), 1);
+        assert_eq!(status.ipv6_endpoint_count(), 0);
+        assert_eq!(status.last_error_category(), None);
         tokio::time::timeout(Duration::from_secs(1), resolver.wait_for_refresh())
             .await
             .expect("refresh lookup should start");
@@ -574,6 +720,7 @@ mod tests {
             &parent,
             "client-a",
             Arc::new(AlwaysFailingLookup),
+            ClientMetrics::noop(),
             Arc::new(|_| {}),
         )
         .await;

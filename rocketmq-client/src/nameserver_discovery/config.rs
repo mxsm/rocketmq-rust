@@ -25,6 +25,7 @@ use crate::config_support::name_server_target::parse_legacy_namesrv_addr;
 const DEFAULT_MIN_REFRESH: Duration = Duration::from_secs(5);
 const DEFAULT_MAX_REFRESH: Duration = Duration::from_secs(60);
 const DEFAULT_STALE_MAX: Duration = Duration::from_secs(5 * 60);
+const DEFAULT_DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_ENDPOINT_LIMIT: usize = 64;
 const MAX_ENDPOINT_LIMIT: usize = 64;
 
@@ -133,6 +134,7 @@ pub struct NameServerDiscoveryConfig {
     min_refresh: Duration,
     max_refresh: Duration,
     stale_max: Duration,
+    drain_timeout: Duration,
     endpoint_limit: usize,
 }
 
@@ -145,6 +147,7 @@ impl NameServerDiscoveryConfig {
             min_refresh: DEFAULT_MIN_REFRESH,
             max_refresh: DEFAULT_MAX_REFRESH,
             stale_max: DEFAULT_STALE_MAX,
+            drain_timeout: DEFAULT_DRAIN_TIMEOUT,
             endpoint_limit: DEFAULT_ENDPOINT_LIMIT,
         }
     }
@@ -173,6 +176,19 @@ impl NameServerDiscoveryConfig {
             ));
         }
         self.stale_max = stale_max;
+        Ok(self)
+    }
+
+    /// Sets how long a removed endpoint may finish already in-flight work.
+    pub fn with_drain_timeout(mut self, drain_timeout: Duration) -> RocketMQResult<Self> {
+        if drain_timeout.is_zero() {
+            return Err(invalid_config(
+                "nameserver_discovery.drain_timeout",
+                "0",
+                "must be non-zero",
+            ));
+        }
+        self.drain_timeout = drain_timeout;
         Ok(self)
     }
 
@@ -211,6 +227,11 @@ impl NameServerDiscoveryConfig {
     }
 
     #[must_use]
+    pub(crate) fn drain_timeout(&self) -> Duration {
+        self.drain_timeout
+    }
+
+    #[must_use]
     pub(crate) fn endpoint_limit(&self) -> usize {
         self.endpoint_limit
     }
@@ -242,10 +263,11 @@ impl NameServerDiscoveryConfig {
             NameServerSource::Dns { host, port } => format!("dns:{}:{}", host.as_str(), port.get()),
         };
         format!(
-            "{source}|refresh={}-{}|stale={}|limit={}",
+            "{source}|refresh={}-{}|stale={}|drain={}|limit={}",
             self.min_refresh.as_millis(),
             self.max_refresh.as_millis(),
             self.stale_max.as_millis(),
+            self.drain_timeout.as_millis(),
             self.endpoint_limit
         )
     }

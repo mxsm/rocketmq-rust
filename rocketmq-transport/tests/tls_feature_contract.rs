@@ -18,6 +18,18 @@ use rocketmq_transport::api::v1::TlsConfig;
 use rocketmq_transport::api::v1::TlsMode;
 use rocketmq_transport::api::v1::TlsServerRuntime;
 
+#[test]
+fn resolved_nameserver_preserves_fqdn_for_tls_server_identity() {
+    let target = rocketmq_transport::api::v1::ConnectTarget::new(
+        "10.0.0.7:9876".parse().unwrap(),
+        "namesrv.default.svc.cluster.local:9876",
+    )
+    .unwrap();
+
+    assert_eq!(target.tls_server_name(), "namesrv.default.svc.cluster.local");
+    assert_ne!(target.tls_server_name(), target.socket_addr().ip().to_string());
+}
+
 #[tokio::test]
 async fn tls_runtime_preserves_default_permissive_mode() {
     let context = rocketmq_runtime::RuntimeContext::from_current("tls-feature-contract");
