@@ -138,6 +138,15 @@ class KubernetesAssetsGuardTests(unittest.TestCase):
         result = self.run_guard(expect_success=False)
         self.assertIn("five-second Kubernetes recovery election window", result.stderr)
 
+    def test_strict_controller_ha_durability_regression_is_rejected(self) -> None:
+        self.mutate_text(
+            "distribution/helm/rocketmq-rust/values-production-controller-ha.yaml",
+            "flushDiskType: SYNC_FLUSH",
+            "flushDiskType: ASYNC_FLUSH",
+        )
+        result = self.run_guard(expect_success=False)
+        self.assertIn("durability contract", result.stderr)
+
     def test_controller_ordinal_config_path_regression_is_rejected(self) -> None:
         self.mutate_text(
             "distribution/kubernetes/base/manifest.yaml",

@@ -485,6 +485,26 @@ def validate_source_assets(guard: Guard) -> None:
         "deploymentProfile: production-controller-ha" in production_values,
         "production Helm profile selection drifted",
     )
+    strict_durability = (
+        "flushDiskType: SYNC_FLUSH",
+        "totalReplicas: 3",
+        "inSyncReplicas: 3",
+        "minInSyncReplicas: 2",
+        "allAckInSyncStateSet: true",
+        "slaveTimeoutMillis: 3000",
+        "maxSlaveLagMillis: 15000",
+        "cleanElection: true",
+    )
+    for snippet in strict_durability:
+        guard.require(snippet in values, f"default Controller HA durability contract missing {snippet}")
+        guard.require(snippet in production_values, f"production Controller HA durability contract missing {snippet}")
+    for snippet in (
+        "flushDiskType = {{ $.Values.services.broker.durability.flushDiskType | quote }}",
+        "allAckInSyncStateSet = {{ $.Values.services.broker.durability.allAckInSyncStateSet }}",
+        "enableAutoInSyncReplicas = false",
+        "enableElectUncleanMaster = false",
+    ):
+        guard.require(snippet in controller_config_template, f"strict HA rendered configuration missing {snippet}")
     for service in EXPECTED_SERVICES:
         repository = f"repository: rocketmq-rust/{service}"
         guard.require(repository in values, f"default Helm local repository missing for {service}")

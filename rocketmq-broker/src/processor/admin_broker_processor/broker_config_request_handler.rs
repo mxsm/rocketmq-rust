@@ -25,6 +25,7 @@ use rocketmq_model::common::mix_all;
 use rocketmq_model::common::mq_version::CURRENT_VERSION;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_protocol::protocol::body::kv_table::KVTable;
 use rocketmq_protocol::protocol::header::export_rocksdb_config_to_json_request_header::ExportRocksdbConfigToJsonRequestHeader;
 #[cfg(feature = "rocksdb_store")]
@@ -732,6 +733,14 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
         if let Some(ha) = message_store.get_ha_runtime_info() {
             runtime_info.insert("haDiagnosticsSupported".to_string(), "true".to_string());
             runtime_info.insert(
+                "storeConfirmOffset".to_string(),
+                message_store.get_confirm_offset().max(0).to_string(),
+            );
+            runtime_info.insert(
+                "haLegalInSyncAckOffset".to_string(),
+                legal_in_sync_ack_offset(&ha).to_string(),
+            );
+            runtime_info.insert(
                 "haRole".to_string(),
                 if ha.master { "master" } else { "replica" }.to_string(),
             );
@@ -1033,6 +1042,17 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
     }
 }
 
+fn legal_in_sync_ack_offset(runtime: &HARuntimeInfo) -> u64 {
+    runtime
+        .ha_connection_info
+        .iter()
+        .filter(|connection| connection.in_sync)
+        .map(|connection| connection.slave_ack_offset)
+        .chain(std::iter::once(runtime.master_commit_log_max_offset))
+        .min()
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -1040,6 +1060,8 @@ mod tests {
     use std::fs;
     use std::sync::Arc;
     use std::time::SystemTime;
+
+    use super::legal_in_sync_ack_offset;
 
     use crate::config::broker_config::BrokerConfig;
     #[cfg(feature = "rocksdb_store")]
@@ -1054,6 +1076,7 @@ mod tests {
     use rocketmq_model::common::message::MessageConst;
     use rocketmq_protocol::code::request_code::RequestCode;
     use rocketmq_protocol::code::response_code::ResponseCode;
+    use rocketmq_protocol::protocol::body::ha_runtime_info::HARuntimeInfo;
     use rocketmq_protocol::protocol::header::export_rocksdb_config_to_json_request_header::ExportRocksdbConfigToJsonRequestHeader;
     use rocketmq_protocol::protocol::header::get_broker_config_response_header::GetBrokerConfigResponseHeader;
     use rocketmq_protocol::protocol::header::update_broker_config_request_header::UpdateBrokerConfigRequestHeader;
@@ -1254,6 +1277,8 @@ mod tests {
             Some("1")
         );
         assert_eq!(initial.get("storeWriteable").map(|value| value.as_str()), Some("true"));
+        assert!(initial.contains_key("storeConfirmOffset"));
+        assert!(initial.contains_key("haLegalInSyncAckOffset"));
         assert_eq!(
             initial.get("sreLogFilterControlSupported").map(|value| value.as_str()),
             Some("false")
@@ -1277,6 +1302,36 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[test]
+    fn legal_in_sync_ack_uses_the_slowest_in_sync_replica() {
+        use rocketmq_protocol::protocol::body::ha_connection_runtime_info::HAConnectionRuntimeInfo;
+
+        let runtime = HARuntimeInfo {
+            master: true,
+            master_commit_log_max_offset: 300,
+            ha_connection_info: vec![
+                HAConnectionRuntimeInfo {
+                    slave_ack_offset: 240,
+                    in_sync: true,
+                    ..Default::default()
+                },
+                HAConnectionRuntimeInfo {
+                    slave_ack_offset: 180,
+                    in_sync: true,
+                    ..Default::default()
+                },
+                HAConnectionRuntimeInfo {
+                    slave_ack_offset: 20,
+                    in_sync: false,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        assert_eq!(legal_in_sync_ack_offset(&runtime), 180);
     }
 
     #[tokio::test]

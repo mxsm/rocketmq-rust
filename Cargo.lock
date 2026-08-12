@@ -4270,6 +4270,7 @@ dependencies = [
  "prost",
  "protoc-bin-vendored",
  "rocketmq-auth",
+ "rocketmq-client-rust",
  "rocketmq-error",
  "rocketmq-model",
  "rocketmq-observability",

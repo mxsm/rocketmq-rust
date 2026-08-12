@@ -144,6 +144,7 @@ pub use qualification::ConfirmOffsetAuditReport;
 pub use qualification::ConfirmOffsetViolation;
 pub use qualification::ConfirmOffsetViolationKind;
 pub use qualification::DurabilityEvidence;
+pub use qualification::FailoverEvidenceBinding;
 pub use qualification::FailoverMilestone;
 pub use qualification::FailoverMilestoneRecord;
 pub use qualification::FailoverQualificationReport;

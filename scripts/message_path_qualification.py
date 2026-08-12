@@ -783,6 +783,27 @@ def validate_final_evidence(
     ):
         if rpo.get(key) != expected:
             findings.append(f"RPO evidence {key} differs")
+    if not DIGEST_RE.fullmatch(str(rpo.get("ledger_sha256", ""))):
+        findings.append("RPO evidence does not bind a PutOk ledger digest")
+    messages = rpo.get("put_ok_messages", {})
+    if messages.get("put_ok_count", 0) < 10_000 or messages.get("recovered_once_count") != messages.get("put_ok_count"):
+        findings.append("RPO evidence did not recover at least 10,000 PutOk messages")
+    for key in (
+        "missing_count",
+        "duplicate_count",
+        "unexpected_count",
+        "payload_mismatch_count",
+        "offset_mismatch_count",
+    ):
+        if messages.get(key) != 0:
+            findings.append(f"RPO evidence {key} must be zero")
+    if messages.get("rpo_zero") is not True or messages.get("exact_recovery") is not True:
+        findings.append("RPO evidence did not prove exact RPO=0 recovery")
+    confirm = rpo.get("confirm_offset", {})
+    if confirm.get("valid") is not True or confirm.get("observations", 0) <= 0 or confirm.get("violation_count") != 0:
+        findings.append("RPO confirmOffset evidence is missing or invalid")
+    if rpo.get("repetitions", 0) < 5:
+        findings.append("RPO evidence contains fewer than five clean failovers")
 
     if soak.get("schema_version") != 1 or soak.get("artifact_kind") != "rocketmq_message_path_soak_report":
         findings.append("soak report contract is invalid")
