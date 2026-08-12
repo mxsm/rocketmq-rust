@@ -575,7 +575,7 @@ impl<MS: BrokerReadWriteStore> LiteManagerProcessor<MS> {
         }
 
         Ok(Some(
-            RemotingCommand::create_response_command().set_opaque(request.opaque()),
+            RemotingCommand::create_success_response_command().set_opaque(request.opaque()),
         ))
     }
 

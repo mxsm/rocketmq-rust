@@ -438,7 +438,7 @@ where
                 error_msg,
             )));
         }
-        let mut response = RemotingCommand::create_response_command();
+        let mut response = RemotingCommand::create_success_response_command();
         self.append_ack(Some(request_header), &mut response, None, &channel, None)
             .await?;
         Ok(Some(response))
@@ -462,7 +462,7 @@ where
                 ResponseCode::NoMessage,
             )));
         }
-        let mut response = RemotingCommand::create_response_command();
+        let mut response = RemotingCommand::create_success_response_command();
         let broker_name = &req_body.broker_name;
         for ack in req_body.acks {
             self.append_ack(None, &mut response, Some(ack), &_channel, Some(broker_name))

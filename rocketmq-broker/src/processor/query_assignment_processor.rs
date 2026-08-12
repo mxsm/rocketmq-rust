@@ -315,7 +315,7 @@ impl QueryAssignmentProcessor {
             message_queue_assignments: assignments,
         };
         Ok(Some(
-            RemotingCommand::create_response_command().set_body(body.encode()?),
+            RemotingCommand::create_success_response_command().set_body(body.encode()?),
         ))
     }
 

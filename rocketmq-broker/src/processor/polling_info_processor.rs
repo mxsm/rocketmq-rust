@@ -104,7 +104,7 @@ impl PollingInfoProcessor {
         channel: Channel,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let mut response = RemotingCommand::create_response_command();
+        let mut response = RemotingCommand::create_java_default_error_response_command();
 
         // Decode request header
         let request_header = request
@@ -203,10 +203,8 @@ impl PollingInfoProcessor {
         let polling_num = self.get_polling_num(&key);
 
         let response_header = PollingInfoResponseHeader { polling_num };
-        let final_response = response
-            .set_command_custom_header(response_header)
-            .set_code(ResponseCode::Success)
-            .set_opaque(request.opaque());
+        let final_response =
+            RemotingCommand::create_success_response_command_with_header(response_header).set_opaque(request.opaque());
 
         Ok(Some(final_response))
     }

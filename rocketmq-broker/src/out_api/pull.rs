@@ -159,7 +159,7 @@ mod tests {
             ..Default::default()
         };
         let mut command =
-            RemotingCommand::create_response_command_with_header(header).set_code(ResponseCode::PullNotFound);
+            RemotingCommand::create_response_command_with_code_and_header(ResponseCode::PullNotFound, header);
         command.make_custom_header_to_net();
 
         let response = process_pull_response(command, &"127.0.0.1:10911".into()).expect("pull response should map");

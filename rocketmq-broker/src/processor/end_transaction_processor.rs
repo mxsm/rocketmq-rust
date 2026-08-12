@@ -455,7 +455,7 @@ where
         // params: &(String, i64, i64),
         request_header: &EndTransactionRequestHeader,
     ) -> RemotingCommand {
-        let mut command = RemotingCommand::create_response_command();
+        let mut command = RemotingCommand::create_success_response_command();
         if let Some(message_ext) = message_ext {
             let pgroup_read =
                 message_ext.property(&CheetahString::from_static_str(MessageConst::PROPERTY_PRODUCER_GROUP));
@@ -522,7 +522,7 @@ fn build_put_message_response(
     topic: &CheetahString,
     put_message_result: PutMessageResult,
 ) -> RemotingCommand {
-    let mut response = RemotingCommand::create_response_command();
+    let mut response = RemotingCommand::create_success_response_command();
     match put_message_result.put_message_status() {
         PutMessageStatus::PutOk
         | PutMessageStatus::FlushDiskTimeout
@@ -800,6 +800,31 @@ mod tests {
         );
         assert_eq!(ResponseCode::from(timer_disabled.code()), ResponseCode::SystemError);
         assert!(timer_disabled.remark().is_some_and(|remark| remark.contains("false")));
+    }
+
+    #[test]
+    fn end_transaction_put_ok_returns_explicit_success() {
+        let policy = EndTransactionPolicy {
+            transaction_timeout: 1,
+            max_message_size: 4_321,
+            timer_congest_num_each_slot: 77,
+            timer_max_delay_sec: 88,
+            timer_wheel_enable: false,
+        };
+        let broker_stats_manager = BrokerStatsManager::new(
+            Arc::new(rocketmq_store::StoreRuntimeConfig::default()),
+            crate::test_task_group("broker-stats"),
+        );
+
+        let response = build_put_message_response(
+            &policy,
+            &broker_stats_manager,
+            &CheetahString::from_static_str("transaction-topic"),
+            PutMessageResult::new_default(PutMessageStatus::PutOk),
+        );
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        assert!(response.remark().is_none());
     }
 
     #[test]

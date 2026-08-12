@@ -254,7 +254,8 @@ where
         ctx: &ConnectionHandlerContext,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
-        let mut response = RemotingCommand::create_response_command_with_header(RecallMessageResponseHeader::default());
+        let mut response =
+            RemotingCommand::create_success_response_command_with_header(RecallMessageResponseHeader::default());
         response.set_opaque_mut(request.opaque());
 
         let region_id = self.context.policy.region_id.clone();
@@ -612,9 +613,10 @@ mod tests {
     #[test]
     fn recall_response_keeps_region_field() {
         for serialize_type in [SerializeType::JSON, SerializeType::ROCKETMQ] {
-            let mut response =
-                RemotingCommand::create_response_command_with_header(RecallMessageResponseHeader::new("msg-id"))
-                    .set_serialize_type(serialize_type);
+            let mut response = RemotingCommand::create_success_response_command_with_header(
+                RecallMessageResponseHeader::new("msg-id"),
+            )
+            .set_serialize_type(serialize_type);
             add_recall_response_region(&mut response, CheetahString::from_static_str("region-c"));
             let mut encoded = bytes::BytesMut::new();
 

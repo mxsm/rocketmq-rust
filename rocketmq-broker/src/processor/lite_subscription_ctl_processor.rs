@@ -239,7 +239,7 @@ impl<MS: BrokerStorePort> LiteSubscriptionCtlProcessor<MS> {
         }
 
         Ok(Some(
-            RemotingCommand::create_response_command().set_opaque(request.opaque()),
+            RemotingCommand::create_success_response_command().set_opaque(request.opaque()),
         ))
     }
 }
