@@ -217,13 +217,19 @@ impl LatencyTracker {
 
         let metrics = self.metrics.read();
 
-        // Find best candidate with metrics
+        // Prefer healthy measured endpoints, then cold endpoints, and retain one unhealthy endpoint
+        // only as a last resort so an isolated endpoint can eventually reach circuit-breaker recovery.
         let mut best: Option<(&CheetahString, u64)> = None;
+        let mut first_cold = None;
+        let mut first_unhealthy = None;
 
         for addr in candidates {
             if let Some(m) = metrics.get(addr) {
                 if !m.is_healthy() {
-                    continue; // Skip unhealthy nameservers
+                    if first_unhealthy.is_none() {
+                        first_unhealthy = Some(addr);
+                    }
+                    continue;
                 }
 
                 let score = m.score();
@@ -234,11 +240,12 @@ impl LatencyTracker {
                     }
                     _ => {}
                 }
+            } else if first_cold.is_none() {
+                first_cold = Some(addr);
             }
         }
 
-        // Return best with metrics, or first candidate as fallback
-        best.map(|(addr, _)| addr).or_else(|| candidates.first())
+        best.map(|(addr, _)| addr).or(first_cold).or(first_unhealthy)
     }
 
     /// Gets P99 latency for a nameserver.
@@ -334,5 +341,30 @@ mod tests {
 
         // Should select addr1 (lowest latency + healthy)
         assert_eq!(best, Some(&addr1));
+    }
+
+    #[test]
+    fn unhealthy_first_candidate_does_not_hide_cold_backup() {
+        let tracker = LatencyTracker::new();
+        let unhealthy = CheetahString::from_static_str("127.0.0.1:9876");
+        let cold = CheetahString::from_static_str("127.0.0.1:9877");
+        tracker.record_error(&unhealthy);
+        tracker.record_error(&unhealthy);
+        tracker.record_error(&unhealthy);
+
+        let candidates = vec![unhealthy, cold.clone()];
+
+        assert_eq!(tracker.select_best(&candidates), Some(&cold));
+    }
+
+    #[test]
+    fn isolated_unhealthy_candidate_remains_available_for_recovery_probe() {
+        let tracker = LatencyTracker::new();
+        let unhealthy = CheetahString::from_static_str("127.0.0.1:9876");
+        tracker.record_error(&unhealthy);
+        tracker.record_error(&unhealthy);
+        tracker.record_error(&unhealthy);
+
+        assert_eq!(tracker.select_best(std::slice::from_ref(&unhealthy)), Some(&unhealthy));
     }
 }
