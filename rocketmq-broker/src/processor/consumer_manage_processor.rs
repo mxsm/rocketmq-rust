@@ -166,7 +166,7 @@ where
         ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let response = RemotingCommand::create_response_command();
+        let response = RemotingCommand::create_success_response_command();
         let request_header = request.decode_command_custom_header::<GetConsumerListByGroupRequestHeader>()?;
         let consumer_group_info = self.consumer_view.client_ids_if_present(&request_header.consumer_group);
 
@@ -225,7 +225,7 @@ where
         let group = request_header.consumer_group.as_ref();
         let queue_id = request_header.queue_id;
         let offset = request_header.commit_offset;
-        let response = RemotingCommand::create_response_command();
+        let response = RemotingCommand::create_success_response_command();
         if !self.subscription_group_lookup.contains_subscription_group(group) {
             return Ok(Some(
                 response
@@ -299,7 +299,7 @@ where
             request_header.topic.as_ref(),
             request_header.queue_id,
         );
-        let mut response = RemotingCommand::create_response_command();
+        let mut response = RemotingCommand::create_success_response_command();
         let mut response_header = QueryConsumerOffsetResponseHeader::default();
         if offset >= 0 {
             response_header.offset = Some(offset);
@@ -518,7 +518,7 @@ where
                 }
             }
         }
-        let mut response = RemotingCommand::create_response_command();
+        let mut response = RemotingCommand::create_success_response_command();
         let mut response_header = QueryConsumerOffsetResponseHeader { offset: None };
         if offset >= 0 {
             response_header.offset = Some(offset);

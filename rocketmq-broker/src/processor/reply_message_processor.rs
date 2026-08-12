@@ -216,7 +216,7 @@ where
         send_message_context: &mut SendMessageContext,
         request_header: SendMessageRequestHeader,
     ) -> RemotingCommand {
-        let mut response = RemotingCommand::create_response_command().set_opaque(request.opaque());
+        let mut response = RemotingCommand::create_success_response_command().set_opaque(request.opaque());
 
         // Keep one coherent policy generation for the request admission decision.
         let (region_id, trace_on, start_timstamp, store_reply_message_enable) = {
@@ -652,7 +652,7 @@ mod tests {
     #[test]
     fn reply_response_keeps_region_and_trace_fields() {
         for serialize_type in [SerializeType::JSON, SerializeType::ROCKETMQ] {
-            let mut response = RemotingCommand::create_response_command().set_serialize_type(serialize_type);
+            let mut response = RemotingCommand::create_success_response_command().set_serialize_type(serialize_type);
             add_reply_response_metadata(&mut response, "region-b", false);
             let mut encoded = bytes::BytesMut::new();
 

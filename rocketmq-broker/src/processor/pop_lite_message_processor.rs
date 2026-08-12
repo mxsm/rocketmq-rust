@@ -627,7 +627,7 @@ impl<MS: BrokerReadWriteStore> PopLiteMessageProcessor<MS> {
             order_count_info: (fetched_count > 0).then_some(order_count_info).flatten(),
         };
         let mut response =
-            RemotingCommand::create_response_command_with_header(response_header).set_opaque(request.opaque());
+            RemotingCommand::create_success_response_command_with_header(response_header).set_opaque(request.opaque());
 
         match body {
             Some(body) => {

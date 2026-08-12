@@ -110,7 +110,7 @@ mod tests {
     #[test]
     fn send_response_maps_success_to_model_result() {
         let header = SendMessageResponseHeader::new("offset-id".into(), 2, 17, None, None, None);
-        let mut command = RemotingCommand::create_response_command_with_header(header).set_code(ResponseCode::Success);
+        let mut command = RemotingCommand::create_success_response_command_with_header(header);
         command.make_custom_header_to_net();
 
         let result = process_send_response(&"broker-a".into(), "client-id".into(), 2, "topic-a".into(), &command)

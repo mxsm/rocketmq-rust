@@ -311,7 +311,7 @@ where
         }
         let channel = ctx.channel();
 
-        let mut response = RemotingCommand::create_response_command();
+        let mut response = RemotingCommand::create_java_default_error_response_command();
         let request_header = request.decode_command_custom_header::<NotificationRequestHeader>()?;
 
         response.set_opaque_mut(request.opaque());
@@ -471,10 +471,13 @@ where
             }
         }
 
-        response.set_code_ref(ResponseCode::Success);
-        response.set_command_custom_header_ref(NotificationResponseHeader { has_msg, polling_full });
-
-        Ok(Some(response))
+        Ok(Some(
+            RemotingCommand::create_success_response_command_with_header(NotificationResponseHeader {
+                has_msg,
+                polling_full,
+            })
+            .set_opaque(request.opaque()),
+        ))
     }
 }
 

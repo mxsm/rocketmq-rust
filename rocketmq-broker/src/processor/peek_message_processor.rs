@@ -217,8 +217,9 @@ impl<MS: BrokerReadWriteStore> PeekMessageProcessor<MS> {
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let begin_time_mills = self.context.message_store.now();
 
-        let mut response = RemotingCommand::create_response_command_with_header(PopMessageResponseHeader::default())
-            .set_opaque(request.opaque());
+        let mut response =
+            RemotingCommand::create_success_response_command_with_header(PopMessageResponseHeader::default())
+                .set_opaque(request.opaque());
 
         // Decode request header
         let request_header = match request.decode_command_custom_header::<PeekMessageRequestHeader>() {

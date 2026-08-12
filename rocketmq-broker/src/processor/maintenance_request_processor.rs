@@ -20,7 +20,6 @@ use rocketmq_auth::AuthRuntime;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::code::request_code::RequestCode;
-use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::body::release_checkpoint::MaintenanceCapabilitiesResponse;
 use rocketmq_protocol::protocol::body::release_checkpoint::MaintenanceStoreCapabilities;
 use rocketmq_protocol::protocol::body::release_checkpoint::ReleaseCheckpointArtifact;
@@ -238,9 +237,7 @@ fn required_body<'a>(request: &'a RemotingCommand, operation: &'static str) -> R
 
 fn encode_success<T: serde::Serialize>(value: &T, operation: &'static str) -> RocketMQResult<RemotingCommand> {
     let body = serde_json::to_vec(value).map_err(|error| RocketMQError::internal(operation, error))?;
-    Ok(RemotingCommand::create_response_command()
-        .set_code(ResponseCode::Success)
-        .set_body(body))
+    Ok(RemotingCommand::create_success_response_command().set_body(body))
 }
 
 fn checkpoint_error(error: impl std::error::Error + Send + Sync + 'static) -> RocketMQError {

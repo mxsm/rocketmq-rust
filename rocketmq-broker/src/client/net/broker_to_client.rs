@@ -203,7 +203,7 @@ impl Broker2Client {
         is_force: bool,
         is_c: bool,
     ) -> RemotingCommand {
-        let mut response = RemotingCommand::create_response_command();
+        let mut response = RemotingCommand::create_java_default_error_response_command();
 
         // Check if topic exists
         let topic_config = broker_inner.topic_config_manager().select_topic_config(topic);
@@ -361,10 +361,8 @@ impl Broker2Client {
             return response;
         }
 
-        response.set_code_ref(ResponseCode::Success);
         let res_body = ResetOffsetBody { offset_table };
-        response.set_body_mut_ref(res_body.encode());
-        response
+        RemotingCommand::create_success_response_command().set_body(res_body.encode())
     }
 
     /// Get consumer status from connected clients.
@@ -384,7 +382,7 @@ impl Broker2Client {
         group: &CheetahString,
         origin_client_id: Option<&CheetahString>,
     ) -> RemotingCommand {
-        let mut result = RemotingCommand::create_response_command();
+        let mut result = RemotingCommand::create_java_default_error_response_command();
 
         let request_header = GetConsumerStatusRequestHeader::new(topic.clone(), group.clone());
         let request = RemotingCommand::create_request_command(RequestCode::GetConsumerStatusFromClient, request_header);
@@ -465,12 +463,10 @@ impl Broker2Client {
             }
         }
 
-        result.set_code_ref(ResponseCode::Success);
         let res_body = GetConsumerStatusBody {
             message_queue_table: HashMap::new(),
             consumer_table: consumer_status_table,
         };
-        result.set_body_mut_ref(res_body.encode());
-        result
+        RemotingCommand::create_success_response_command().set_body(res_body.encode())
     }
 }

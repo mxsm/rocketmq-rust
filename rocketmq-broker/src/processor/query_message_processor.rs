@@ -217,7 +217,8 @@ where
         _ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let mut response = RemotingCommand::create_response_command_with_header(QueryMessageResponseHeader::default());
+        let mut response =
+            RemotingCommand::create_success_response_command_with_header(QueryMessageResponseHeader::default());
         let mut request_header = request.decode_command_custom_header::<QueryMessageRequestHeader>()?;
         response.set_opaque_mut(request.opaque());
         let Some(ext_fields) = request.ext_fields() else {
@@ -297,7 +298,7 @@ where
         _ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let mut response = RemotingCommand::create_response_command();
+        let mut response = RemotingCommand::create_success_response_command();
         let request_header = request.decode_command_custom_header::<ViewMessageRequestHeader>()?;
 
         let select_mapped_buffer_result = match self.query_store.select_message_by_offset(request_header.offset) {

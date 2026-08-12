@@ -1072,7 +1072,8 @@ where
         request: &RemotingCommand,
         request_header: &SendMessageRequestHeader,
     ) -> RemotingCommand {
-        let mut response = RemotingCommand::create_response_command_with_header(SendMessageResponseHeader::default());
+        let mut response =
+            RemotingCommand::create_success_response_command_with_header(SendMessageResponseHeader::default());
         let policy = self.inner.context.policy.snapshot();
         // set opaque
         response.with_opaque(request.opaque());
@@ -1646,7 +1647,7 @@ where
                         metrics.inc_send_to_dlq_messages(inner_topic.as_str(), request_header.group.as_str(), 1);
                     }
                 }
-                (RemotingCommand::create_response_command(), true)
+                (RemotingCommand::create_success_response_command(), true)
             }
 
             _ => (
@@ -2035,14 +2036,9 @@ mod tests {
     #[test]
     fn send_response_keeps_region_and_trace_fields() {
         for serialize_type in [SerializeType::JSON, SerializeType::ROCKETMQ] {
-            let mut response = RemotingCommand::create_response_command_with_header(SendMessageResponseHeader::new(
-                CheetahString::from_static_str("msg-id"),
-                0,
-                0,
-                None,
-                None,
-                None,
-            ))
+            let mut response = RemotingCommand::create_success_response_command_with_header(
+                SendMessageResponseHeader::new(CheetahString::from_static_str("msg-id"), 0, 0, None, None, None),
+            )
             .set_serialize_type(serialize_type);
             add_send_response_metadata(&mut response, CheetahString::from_static_str("region-a"), true);
             let mut encoded = bytes::BytesMut::new();
@@ -2487,7 +2483,7 @@ mod tests {
         ];
 
         for (legacy, expected_code, expected_remark) in cases {
-            let mut response = RemotingCommand::create_response_command();
+            let mut response = RemotingCommand::create_success_response_command();
 
             map_put_status_to_response(legacy, &mut response);
 

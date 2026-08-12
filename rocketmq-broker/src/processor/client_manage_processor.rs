@@ -152,7 +152,7 @@ where
         &self,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let response = RemotingCommand::create_response_command();
+        let response = RemotingCommand::create_success_response_command();
         let Some(body) = request.body() else {
             return Ok(Some(response));
         };
@@ -222,7 +222,7 @@ where
             );
         }
 
-        Ok(Some(RemotingCommand::create_response_command()))
+        Ok(Some(RemotingCommand::create_success_response_command()))
     }
 
     async fn heart_beat(
@@ -311,7 +311,7 @@ where
             self.producer_registration
                 .register_producer(&producer_data.group_name, &client_channel_info);
         }
-        let mut response_command = RemotingCommand::create_response_command();
+        let mut response_command = RemotingCommand::create_success_response_command();
         response_command.ensure_ext_fields_initialized();
         response_command.add_ext_field(IS_SUPPORT_HEART_BEAT_V2.to_string(), true.to_string());
         response_command.add_ext_field(IS_SUB_CHANGE.to_string(), true.to_string());
@@ -413,7 +413,7 @@ where
             self.producer_registration
                 .register_producer(&producer_data.group_name, &client_channel_info);
         }
-        let mut response_command = RemotingCommand::create_response_command();
+        let mut response_command = RemotingCommand::create_success_response_command();
         response_command.ensure_ext_fields_initialized();
         response_command.add_ext_field(IS_SUPPORT_HEART_BEAT_V2.to_string(), true.to_string());
         response_command.add_ext_field(IS_SUB_CHANGE.to_string(), is_sub_change.to_string());

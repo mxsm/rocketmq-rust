@@ -712,9 +712,10 @@ pub(super) fn rewrite_response_for_static_topic(
     response_header.offset_delta = Some(current_item.compute_offset_delta());
 
     if code != ResponseCode::Success {
-        Ok(Some(
-            RemotingCommand::create_response_command_with_header(response_header.clone()).set_code(response_code),
-        ))
+        Ok(Some(RemotingCommand::create_response_command_with_code_and_header(
+            response_code,
+            response_header.clone(),
+        )))
     } else {
         Ok(None)
     }
@@ -767,7 +768,7 @@ where
         broker_allow_suspend: bool,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let begin_time_mills = current_millis();
-        let mut response = RemotingCommand::create_response_command();
+        let mut response = RemotingCommand::create_java_default_error_response_command();
         response.set_opaque_mut(request.opaque());
         let mut request_header =
             request.decode_required_header_fast::<PullMessageRequestHeader>("decode pull-message request header")?;
@@ -1499,7 +1500,7 @@ mod tests {
                 ..PullMessageResponseHeader::default()
             };
 
-            let response = match rewrite_response_for_static_topic(
+            let mut response = match rewrite_response_for_static_topic(
                 &request_header,
                 &mut response_header,
                 &mut mapping_context,
@@ -1510,6 +1511,31 @@ mod tests {
             };
 
             assert_eq!(response.code(), response_code as i32);
+            let encoded_header = response
+                .read_custom_header_mut::<PullMessageResponseHeader>()
+                .expect("rewritten pull response should retain its typed header");
+            assert_eq!(
+                (
+                    encoded_header.suggest_which_broker_id,
+                    encoded_header.next_begin_offset,
+                    encoded_header.min_offset,
+                    encoded_header.max_offset,
+                    encoded_header.offset_delta,
+                    encoded_header.topic_sys_flag,
+                    encoded_header.group_sys_flag,
+                    encoded_header.forbidden_type,
+                ),
+                (
+                    response_header.suggest_which_broker_id,
+                    response_header.next_begin_offset,
+                    response_header.min_offset,
+                    response_header.max_offset,
+                    response_header.offset_delta,
+                    response_header.topic_sys_flag,
+                    response_header.group_sys_flag,
+                    response_header.forbidden_type,
+                )
+            );
         }
     }
 
@@ -1685,9 +1711,10 @@ mod tests {
         let processor = new_processor(Arc::clone(&context));
         let request_header = request_with_subscription("topic-a", "group-a", "color = 'blue'", 11);
 
-        let result = match processor
-            .get_subscription_data_with_flag(&request_header, &RemotingCommand::create_response_command())
-        {
+        let result = match processor.get_subscription_data_with_flag(
+            &request_header,
+            &RemotingCommand::create_java_default_error_response_command(),
+        ) {
             Ok(result) => result,
             Err(_) => panic!("subscription with flag should parse"),
         };
@@ -1727,9 +1754,10 @@ mod tests {
         let processor = new_processor(Arc::clone(&context));
         let request_header = request_with_subscription("topic-a", "group-a", "color = 'blue'", 11);
 
-        let result = match processor
-            .get_subscription_data_with_flag(&request_header, &RemotingCommand::create_response_command())
-        {
+        let result = match processor.get_subscription_data_with_flag(
+            &request_header,
+            &RemotingCommand::create_java_default_error_response_command(),
+        ) {
             Ok(result) => result,
             Err(_) => panic!("subscription with flag should parse"),
         };
@@ -1761,7 +1789,7 @@ mod tests {
         let response = match processor.get_subscription_data_without_flag(
             &request_header,
             &SubscriptionGroupConfig::new("group-a".into()),
-            &RemotingCommand::create_response_command(),
+            &RemotingCommand::create_java_default_error_response_command(),
             &mut response_header,
         ) {
             Ok(_) => panic!("missing consumer filter data should be rejected"),
@@ -1799,7 +1827,7 @@ mod tests {
         let response = match processor.get_subscription_data_without_flag(
             &request_header,
             &SubscriptionGroupConfig::new("group-a".into()),
-            &RemotingCommand::create_response_command(),
+            &RemotingCommand::create_java_default_error_response_command(),
             &mut response_header,
         ) {
             Ok(_) => panic!("stale consumer filter data should be rejected"),

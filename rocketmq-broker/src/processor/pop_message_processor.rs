@@ -659,7 +659,7 @@ where
                 .await
             };
         }
-        let mut final_response = RemotingCommand::create_response_command();
+        let mut final_response = RemotingCommand::create_success_response_command();
         final_response.set_opaque_mut(opaque);
         if !get_message_result.message_mapped_list().is_empty() {
             get_message_result.set_status(Some(GetMessageStatus::Found));

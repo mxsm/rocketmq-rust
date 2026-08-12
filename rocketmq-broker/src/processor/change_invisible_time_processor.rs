@@ -388,7 +388,7 @@ where
             revive_qid,
             invisible_time: request_header.invisible_time,
         };
-        Ok(Some(RemotingCommand::create_response_command_with_header(
+        Ok(Some(RemotingCommand::create_success_response_command_with_header(
             response_header,
         )))
     }
@@ -523,7 +523,7 @@ where
             request_header.queue_id,
         );
         if old_offset > request_header.offset {
-            return Ok(Some(RemotingCommand::create_response_command()));
+            return Ok(Some(RemotingCommand::create_success_response_command()));
         }
         while !self
             .context
@@ -541,7 +541,7 @@ where
             request_header.queue_id,
         );
         if old_offset > request_header.offset {
-            return Ok(Some(RemotingCommand::create_response_command()));
+            return Ok(Some(RemotingCommand::create_success_response_command()));
         }
         let next_visible_time = current_millis() + request_header.invisible_time as u64;
         let updated = self.context.consumer_order_info.update_next_visible_time(
@@ -572,7 +572,7 @@ where
                 "consumer order info is not available",
             )));
         }
-        Ok(Some(RemotingCommand::create_response_command_with_header(
+        Ok(Some(RemotingCommand::create_success_response_command_with_header(
             response_header,
         )))
     }
