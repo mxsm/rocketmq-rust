@@ -30,6 +30,9 @@ services:
       pullPolicy: Never
   namesrv:
     replicas: 3
+    discovery:
+      enabled: true
+      mode: dns
     image:
       repository: rocketmq-rust/namesrv
       tag: local

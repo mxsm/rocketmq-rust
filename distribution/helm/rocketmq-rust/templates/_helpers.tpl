@@ -232,11 +232,15 @@ rocketmq.apache.org/service: {{ .service }}
 {{- end -}}
 
 {{- define "rocketmq.namesrvAddresses" -}}
+{{- if .Values.services.namesrv.discovery.enabled -}}
+rocketmq-namesrv-discovery.{{ .Release.Namespace }}.svc.cluster.local:9876
+{{- else -}}
 {{- $addresses := list -}}
 {{- range $ordinal := until (int .Values.services.namesrv.replicas) -}}
   {{- $addresses = append $addresses (printf "rocketmq-namesrv-%d.rocketmq-namesrv-headless.%s.svc.cluster.local:9876" $ordinal $.Release.Namespace) -}}
 {{- end -}}
 {{ join ";" $addresses }}
+{{- end -}}
 {{- end -}}
 
 {{- define "rocketmq.controllerAddresses" -}}

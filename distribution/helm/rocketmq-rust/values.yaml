@@ -84,6 +84,9 @@ services:
       limits: {cpu: 4000m, memory: 8Gi}
   namesrv:
     replicas: 3
+    discovery:
+      enabled: false
+      mode: dns
     image:
       repository: rocketmq-rust/namesrv
       tag: local

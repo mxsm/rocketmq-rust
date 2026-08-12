@@ -40,6 +40,10 @@ class KubernetesAssetsGuardTests(unittest.TestCase):
             REPO_ROOT / "scripts" / "kubernetes-assets-contract.ps1",
             self.root / "scripts" / "kubernetes-assets-contract.ps1",
         )
+        shutil.copy2(
+            REPO_ROOT / "scripts" / "kind-architecture-refactor-e2e.ps1",
+            self.root / "scripts" / "kind-architecture-refactor-e2e.ps1",
+        )
         (self.root / ".github" / "workflows").mkdir(parents=True)
         shutil.copy2(
             REPO_ROOT / ".github" / "workflows" / "kubernetes-assets-ci.yml",
@@ -71,8 +75,51 @@ class KubernetesAssetsGuardTests(unittest.TestCase):
         self.assertIn(old, source)
         path.write_text(source.replace(old, new, count), encoding="utf-8")
 
+    def mutate_document_text(self, relative: str, kind: str, name: str, old: str, new: str) -> None:
+        path = self.root / relative
+        source = path.read_text(encoding="utf-8")
+        marker = f"kind: {kind}\nmetadata:\n  name: {name}\n"
+        start = source.index(marker)
+        end = source.find("\n---", start)
+        self.assertNotEqual(end, -1)
+        document = source[start:end]
+        self.assertIn(old, document)
+        updated = document.replace(old, new, 1)
+        path.write_text(source[:start] + updated + source[end:], encoding="utf-8")
+
     def test_repository_contract_passes(self) -> None:
         self.run_guard(expect_success=True)
+
+    def test_nameserver_discovery_must_remain_opt_in_by_default(self) -> None:
+        self.mutate_text(
+            "distribution/helm/rocketmq-rust/values.yaml",
+            "discovery:\n      enabled: false\n      mode: dns",
+            "discovery:\n      enabled: true\n      mode: dns",
+        )
+        result = self.run_guard(expect_success=False)
+        self.assertIn("discovery disabled", result.stderr)
+
+    def test_nameserver_discovery_service_must_exclude_not_ready_pods(self) -> None:
+        self.mutate_document_text(
+            "distribution/kubernetes/base/manifest.yaml",
+            "Service",
+            "rocketmq-namesrv-discovery",
+            "  publishNotReadyAddresses: false",
+            "  publishNotReadyAddresses: true",
+        )
+        result = self.run_guard(expect_success=False)
+        self.assertIn("NameServer discovery Service", result.stderr)
+
+    def test_legacy_nameserver_headless_service_keeps_stable_identity_contract(self) -> None:
+        self.mutate_document_text(
+            "distribution/kubernetes/base/manifest.yaml",
+            "Service",
+            "rocketmq-namesrv-headless",
+            "  publishNotReadyAddresses: true",
+            "  publishNotReadyAddresses: false",
+        )
+        result = self.run_guard(expect_success=False)
+        self.assertIn("legacy NameServer Service", result.stderr)
 
     def test_controller_quorum_drift_is_rejected(self) -> None:
         path = self.root / "distribution/kubernetes/deployment-policy.json"

@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 
-EXPECTED_RESOURCE_COUNT = 44
+EXPECTED_RESOURCE_COUNT = 45
 LOCAL_IMAGE_TAG = "local"
 CONTROLLER_SERVICE_IPS = ("10.96.0.201", "10.96.0.202", "10.96.0.203")
 EXPECTED_CONTAINER_AUXILIARY_PORTS = {
@@ -359,6 +359,7 @@ def validate_source_assets(guard: Guard) -> None:
         "distribution/helm/rocketmq-rust/Chart.yaml",
         "distribution/helm/rocketmq-rust/values.yaml",
         "distribution/helm/rocketmq-rust/values.schema.json",
+        "distribution/helm/rocketmq-rust/values-dev-single.yaml",
         "distribution/helm/rocketmq-rust/values-production-controller-ha.yaml",
         "distribution/helm/rocketmq-rust/templates/_helpers.tpl",
         "distribution/helm/rocketmq-rust/templates/configmaps.yaml",
@@ -369,6 +370,7 @@ def validate_source_assets(guard: Guard) -> None:
         "distribution/kubernetes/overlays/secure/kustomization.yaml",
         "distribution/kubernetes/README.md",
         "scripts/kubernetes-assets-contract.ps1",
+        "scripts/kind-architecture-refactor-e2e.ps1",
         ".github/workflows/kubernetes-assets-ci.yml",
     ]
     for relative in required:
@@ -385,7 +387,17 @@ def validate_source_assets(guard: Guard) -> None:
         re.search(r"(?i)\$iswindows\b", contract_script) is None,
         "asset contract must not assign or reference reserved $IsWindows",
     )
+    kind_e2e = guard.read("scripts/kind-architecture-refactor-e2e.ps1")
+    for snippet in (
+        "rocketmq-namesrv-discovery.$Namespace.svc.cluster.local:9876",
+        "discovery: { enabled: true, mode: dns }",
+        "Wait-NameServerDiscoveryEndpoints",
+        "nameserver_ready_only_discovery",
+    ):
+        guard.require(snippet in kind_e2e, f"Kind NameServer discovery acceptance contract missing {snippet}")
 
+    services_template = guard.read("distribution/helm/rocketmq-rust/templates/services.yaml")
+    helpers_template = guard.read("distribution/helm/rocketmq-rust/templates/_helpers.tpl")
     chart_sources = "\n".join(
         guard.read(f"distribution/helm/rocketmq-rust/templates/{name}")
         for name in (
@@ -427,9 +439,34 @@ def validate_source_assets(guard: Guard) -> None:
         "production-controller-ha requires one unique Controller peer Service IP per Controller replica" in chart_sources,
         "Controller peer Service IP cardinality must fail closed",
     )
+    for snippet in (
+        "name: rocketmq-namesrv-discovery",
+        "clusterIP: None",
+        "publishNotReadyAddresses: false",
+        "name: remoting",
+        "port: 9876",
+        "targetPort: 9876",
+    ):
+        guard.require(snippet in services_template, f"NameServer discovery Service contract missing {snippet}")
+    guard.require(
+        "name: rocketmq-{{ $service }}-headless" in services_template
+        and "publishNotReadyAddresses: true" in services_template,
+        "legacy StatefulSet headless Services must retain publishNotReadyAddresses=true",
+    )
+    guard.require(
+        ".Values.services.namesrv.discovery.enabled" in helpers_template
+        and "rocketmq-namesrv-discovery.{{ .Release.Namespace }}.svc.cluster.local:9876" in helpers_template,
+        "NameServer address helper must retain the opt-in discovery FQDN",
+    )
 
     values = guard.read("distribution/helm/rocketmq-rust/values.yaml")
+    development_values = guard.read("distribution/helm/rocketmq-rust/values-dev-single.yaml")
     production_values = guard.read("distribution/helm/rocketmq-rust/values-production-controller-ha.yaml")
+    default_discovery = "discovery:\n      enabled: false\n      mode: dns"
+    production_discovery = "discovery:\n      enabled: true\n      mode: dns"
+    guard.require(default_discovery in values, "default Helm values must keep NameServer discovery disabled")
+    guard.require(default_discovery in development_values, "development Helm values must keep NameServer discovery disabled")
+    guard.require(production_discovery in production_values, "production render fixture must opt in to NameServer discovery")
     guard.require(
         "Local rendering fixture" in production_values,
         "production Helm values must remain explicitly labeled as a local rendering fixture",
@@ -454,6 +491,27 @@ def validate_source_assets(guard: Guard) -> None:
     services_schema = schema.get("properties", {}).get("services", {})
     guard.require(services_schema.get("additionalProperties") is False, "Helm service schema must reject unknown services")
     guard.require(set(services_schema.get("required", [])) == set(EXPECTED_SERVICES), "Helm schema must require five services")
+    discovery_schema = (
+        schema.get("definitions", {})
+        .get("namesrv", {})
+        .get("properties", {})
+        .get("discovery", {})
+    )
+    guard.require(discovery_schema.get("type") == "object", "NameServer discovery schema must be an object")
+    guard.require(discovery_schema.get("additionalProperties") is False, "NameServer discovery schema must reject unknown fields")
+    guard.require(
+        set(discovery_schema.get("required", [])) == {"enabled", "mode"},
+        "NameServer discovery schema must require enabled and mode",
+    )
+    discovery_properties = discovery_schema.get("properties", {})
+    guard.require(
+        discovery_properties.get("enabled", {}).get("type") == "boolean",
+        "NameServer discovery enabled schema must be boolean",
+    )
+    guard.require(
+        discovery_properties.get("mode", {}).get("enum") == ["dns"],
+        "NameServer discovery mode schema must allow only dns",
+    )
 
     base_kustomization = guard.read("distribution/kubernetes/base/kustomization.yaml")
     secure_overlay = guard.read("distribution/kubernetes/overlays/secure/kustomization.yaml")
@@ -627,6 +685,36 @@ def validate_render(guard: Guard, label: str, text: str) -> dict[str, Any]:
             re.search(r"(?m)^\s+(?:port|targetPort):\s*8088\s*$", service_document.text) is None,
             f"{label}: health port 8088 must not be exposed through a Service",
         )
+
+    legacy_namesrv_service = find_document(documents, "Service", "rocketmq-namesrv-headless")
+    guard.require(legacy_namesrv_service is not None, f"{label}: legacy NameServer headless Service missing")
+    if legacy_namesrv_service is not None:
+        guard.require("clusterIP: None" in legacy_namesrv_service.text, f"{label}: legacy NameServer Service must remain headless")
+        guard.require(
+            "publishNotReadyAddresses: true" in legacy_namesrv_service.text,
+            f"{label}: legacy NameServer Service must continue publishing StatefulSet identities",
+        )
+
+    discovery_service = find_document(documents, "Service", "rocketmq-namesrv-discovery")
+    guard.require(discovery_service is not None, f"{label}: readiness-filtered NameServer discovery Service missing")
+    if discovery_service is not None:
+        for snippet in (
+            "clusterIP: None",
+            "publishNotReadyAddresses: false",
+            "name: remoting",
+            "port: 9876",
+            "targetPort: 9876",
+            "rocketmq.apache.org/service: namesrv",
+        ):
+            guard.require(snippet in discovery_service.text, f"{label}: NameServer discovery Service missing {snippet}")
+        guard.require(
+            "app.kubernetes.io/name: rocketmq-namesrv" in discovery_service.text,
+            f"{label}: NameServer discovery Service selector drifted",
+        )
+    guard.require(
+        "rocketmq-namesrv-discovery.rocketmq.svc.cluster.local:9876" in text,
+        f"{label}: opt-in NameServer discovery FQDN missing from rendered configuration",
+    )
 
     controller_config = find_document(documents, "ConfigMap", "rocketmq-controller-config")
     guard.require(controller_config is not None, f"{label}: Controller config map missing")

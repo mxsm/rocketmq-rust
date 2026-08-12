@@ -60,7 +60,7 @@ $FaultDriverImage = "rocketmq-rust/fault-driver:$RunId"
 $Topic = "ArchitectureRefactorFaultMatrix"
 $MessageKey = "fault-$RunId"
 $MessageBody = "M11-11 acknowledged durability probe $RunId"
-$NamesrvAddress = "rocketmq-namesrv-0.rocketmq-namesrv-headless.$Namespace.svc.cluster.local:9876"
+$NamesrvAddress = "rocketmq-namesrv-discovery.$Namespace.svc.cluster.local:9876"
 
 function Require-Command {
     param([Parameter(Mandatory)][string]$Name)
@@ -219,6 +219,7 @@ services:
       limits: { cpu: 2000m, memory: 4Gi }
   namesrv:
     replicas: 3
+    discovery: { enabled: true, mode: dns }
     image: { repository: $($repositories['namesrv']), digest: $(Get-ImageDigest $Images['namesrv']), pullPolicy: Never }
     persistence: { storageClassName: $StorageClass, size: 1Gi }
     resources:
@@ -568,6 +569,36 @@ function Set-StatefulSetReplicas {
         Start-Sleep -Seconds 3
     } while ([DateTimeOffset]::UtcNow -lt $deadline)
     throw "statefulset/$Name did not reach $Replicas ready replicas before the deadline"
+}
+
+function Wait-NameServerDiscoveryEndpoints {
+    param(
+        [Parameter(Mandatory)][ValidateRange(0, 32)][int]$Expected,
+        [ValidateRange(1, 600)][int]$TimeoutSeconds = 180
+    )
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSeconds)
+    do {
+        $slices = ((Invoke-Native kubectl @(
+            '-n',
+            $Namespace,
+            'get',
+            'endpointslice',
+            '-l',
+            'kubernetes.io/service-name=rocketmq-namesrv-discovery',
+            '-o',
+            'json'
+        )).Output | ConvertFrom-Json)
+        $ready = @(
+            $slices.items |
+                ForEach-Object { $_.endpoints } |
+                Where-Object { $_.conditions.ready -eq $true -and @($_.addresses).Count -gt 0 }
+        ).Count
+        if ($ready -eq $Expected) {
+            return [pscustomobject]@{ Count = $ready; Output = ($slices | ConvertTo-Json -Depth 20) }
+        }
+        Start-Sleep -Seconds 2
+    } while ([DateTimeOffset]::UtcNow -lt $deadline)
+    throw "rocketmq-namesrv-discovery did not converge to $Expected ready endpoints before the deadline"
 }
 
 function Get-ControllerLeadershipSnapshot {
@@ -1142,6 +1173,40 @@ spec: { selector: { app.kubernetes.io/name: otel-collector }, ports: [{ name: ot
     $ack = Send-AcknowledgedMessage
     $before = Query-AcknowledgedMessage $ack.Id
 
+    $discoveryService = (Invoke-Native kubectl @('-n', $Namespace, 'get', 'service/rocketmq-namesrv-discovery', '-o', 'json')).Output | ConvertFrom-Json
+    $legacyNamesrvService = (Invoke-Native kubectl @('-n', $Namespace, 'get', 'service/rocketmq-namesrv-headless', '-o', 'json')).Output | ConvertFrom-Json
+    $initialDiscovery = Wait-NameServerDiscoveryEndpoints 3
+    try {
+        $scaleDownDiscovery = Set-StatefulSetReplicas 'rocketmq-namesrv' 2
+        $scaledDownDiscovery = Wait-NameServerDiscoveryEndpoints 2
+        $scaledDownRoute = Invoke-RouteProbe -AllowFailure
+    } finally {
+        $restoreDiscovery = Set-StatefulSetReplicas 'rocketmq-namesrv' 3
+        $restoredDiscovery = Wait-NameServerDiscoveryEndpoints 3
+    }
+    $nameserverDiscoveryAcceptance = [ordered]@{
+        discovery_service_is_headless = $discoveryService.spec.clusterIP -eq 'None'
+        discovery_excludes_not_ready_addresses = $discoveryService.spec.publishNotReadyAddresses -ne $true
+        legacy_service_keeps_stable_identities = $legacyNamesrvService.spec.publishNotReadyAddresses -eq $true
+        ready_endpoints_scaled_from_three_to_two = $initialDiscovery.Count -eq 3 -and $scaledDownDiscovery.Count -eq 2
+        route_discovery_remained_available = $scaledDownRoute.ExitCode -eq 0
+        ready_endpoints_restored_to_three = $restoredDiscovery.Count -eq 3
+    }
+    foreach ($assertion in $nameserverDiscoveryAcceptance.GetEnumerator()) {
+        Assert-True ($assertion.Value -eq $true) "nameserver_ready_only_discovery.$($assertion.Key)"
+    }
+    $nameserverDiscoveryAcceptanceEvidence = ([ordered]@{
+        assertions = $nameserverDiscoveryAcceptance
+        discovery_service = ($discoveryService | ConvertTo-Json -Depth 20)
+        legacy_service = ($legacyNamesrvService | ConvertTo-Json -Depth 20)
+        initial_endpoints = $initialDiscovery.Output
+        scale_down_status = $scaleDownDiscovery.Output
+        scaled_down_endpoints = $scaledDownDiscovery.Output
+        route_probe = "exit=$($scaledDownRoute.ExitCode)`n$($scaledDownRoute.Output)"
+        restore_status = $restoreDiscovery.Output
+        restored_endpoints = $restoredDiscovery.Output
+    } | ConvertTo-Json -Depth 30)
+
     $rolloutTimer = [Diagnostics.Stopwatch]::StartNew()
     Set-ServiceImages $CandidateImages $CandidateImageCommit "$($RunId.ToLowerInvariant())-candidate"
     $afterUpgrade = Query-AcknowledgedMessage $ack.Id
@@ -1255,13 +1320,14 @@ spec: { selector: { app.kubernetes.io/name: otel-collector }, ports: [{ name: ot
     }
     $namesrvRestored = ((Invoke-Native kubectl @('-n', $Namespace, 'get', 'statefulset/rocketmq-namesrv', '-o', 'json')).Output | ConvertFrom-Json).status
     Complete-Scenario 'nameserver_majority_unavailable' ([ordered]@{
-        majority_unavailable_observed = $majorityScale.State.status.readyReplicas -eq 1
+        majority_unavailable_observed = $majorityScale.State.status.readyReplicas -eq 1 -and
+            @($nameserverDiscoveryAcceptance.Values | Where-Object { $_ -ne $true }).Count -eq 0
         cached_route_data_plane_bounded = $majorityTimer.Elapsed.TotalSeconds -lt 120
         failure_mode_typed_or_bounded = $majorityRoute.ExitCode -ge 0
         acknowledged_message_visible = $majorityMessage.QueueOffset -eq $before.QueueOffset
-        nameserver_replicas_restored = $namesrvRestored.readyReplicas -eq 3
+        nameserver_replicas_restored = $namesrvRestored.readyReplicas -eq 3 -and $restoredDiscovery.Count -eq 3
     }) ([ordered]@{
-        scale_down_status = $majorityScale.Output
+        scale_down_status = "$nameserverDiscoveryAcceptanceEvidence`n$($majorityScale.Output)"
         cached_route_probe = $majorityMessage.Output
         fresh_route_probe = "exit=$($majorityRoute.ExitCode)`n$($majorityRoute.Output)"
         message_after = $majorityMessage.Output
