@@ -20,6 +20,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::process::Stdio;
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use rocketmq_store_rocksdb::column_family::RocksDbColumnFamily;
@@ -27,6 +28,7 @@ use rocketmq_store_rocksdb::config::RocksDbConfig;
 use rocketmq_store_rocksdb::config::RocksDbConfigSource;
 use rocketmq_store_rocksdb::store::KeyValueStore;
 use rocketmq_store_rocksdb::store::RocksDbStore;
+use rocketmq_store_rocksdb::RocksDbResourceBudget;
 use tempfile::TempDir;
 
 const WAL_CRASH_ROOT_ENV: &str = "ROCKETMQ_ROCKSDB_WAL_CRASH_ROOT";
@@ -90,6 +92,13 @@ fn config_projection_is_owned_without_store_facade_types() {
     assert_eq!(consume_queue.checkpoint_interval_ms, 60_000);
     assert_eq!(consume_queue.backup_interval_ms, 3_600_000);
     assert_eq!(consume_queue.backup_dir.as_deref(), Some(source.backup.as_path()));
+    assert_eq!(consume_queue.block_cache_budget_bytes, 1024 * 1024 * 1024);
+    assert_eq!(consume_queue.write_buffer_budget_bytes, 512 * 1024 * 1024);
+    assert_eq!(message.block_cache_budget_bytes, consume_queue.block_cache_budget_bytes);
+    assert_eq!(
+        message.write_buffer_budget_bytes,
+        consume_queue.write_buffer_budget_bytes
+    );
 }
 
 #[test]
@@ -122,6 +131,54 @@ fn native_store_snapshot_and_reopen_preserve_column_family_data() {
             .as_deref(),
         Some(b"value".as_slice())
     );
+}
+
+#[test]
+fn multiple_databases_share_one_cache_and_write_buffer_budget() {
+    let root = TempDir::new().expect("create test root");
+    let block_cache_budget = 8 * 1024 * 1024;
+    let write_buffer_budget = 4 * 1024 * 1024;
+    let budget = Arc::new(
+        RocksDbResourceBudget::new(block_cache_budget, write_buffer_budget).expect("create shared resource budget"),
+    );
+    let first_config = RocksDbConfig {
+        enabled: true,
+        path: root.path().join("first"),
+        block_cache_budget_bytes: block_cache_budget,
+        write_buffer_budget_bytes: write_buffer_budget,
+        ..RocksDbConfig::default()
+    };
+    let second_config = RocksDbConfig {
+        path: root.path().join("second"),
+        ..first_config.clone()
+    };
+    let first = RocksDbStore::open_with_metrics_and_resource_budget(
+        first_config,
+        rocketmq_observability::metrics::rocksdb::RocksDbMetricsRecorder::noop(),
+        Arc::clone(&budget),
+    )
+    .expect("open first database");
+    let second = RocksDbStore::open_with_metrics_and_resource_budget(
+        second_config,
+        rocketmq_observability::metrics::rocksdb::RocksDbMetricsRecorder::noop(),
+        Arc::clone(&budget),
+    )
+    .expect("open second database");
+
+    assert!(Arc::ptr_eq(&first.resource_budget(), &second.resource_budget()));
+    assert!(Arc::ptr_eq(&first.resource_budget(), &budget));
+    assert_eq!(budget.block_cache_budget_bytes(), block_cache_budget);
+    assert_eq!(budget.write_buffer_budget_bytes(), write_buffer_budget);
+
+    let default_cf = RocksDbColumnFamily::Default.name();
+    first
+        .put_cf(default_cf, b"first", b"value")
+        .expect("write first database");
+    second
+        .put_cf(default_cf, b"second", b"value")
+        .expect("write second database");
+    assert!(budget.block_cache_usage_bytes() <= block_cache_budget);
+    assert!(budget.write_buffer_usage_bytes() <= write_buffer_budget);
 }
 
 #[test]

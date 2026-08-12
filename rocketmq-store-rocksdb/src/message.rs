@@ -29,6 +29,7 @@ use crate::key::deal_time_to_hour_stamps;
 use crate::key::IndexRocksDbKey;
 use crate::key::TimerRocksDbKey;
 use crate::key::TransRocksDbKey;
+use crate::resource_budget::RocksDbResourceBudget;
 use crate::store::KeyValueStore;
 use crate::store::RocksDbStore;
 use crate::value::IndexRocksDbValue;
@@ -60,8 +61,21 @@ impl MessageRocksDbStorage {
         config: RocksDbConfig,
         metrics: rocketmq_observability::metrics::rocksdb::RocksDbMetricsRecorder,
     ) -> Result<Self, RocketMQError> {
+        let resource_budget = Arc::new(RocksDbResourceBudget::from_config(&config)?);
+        Self::open_with_metrics_and_resource_budget(config, metrics, resource_budget)
+    }
+
+    pub fn open_with_metrics_and_resource_budget(
+        config: RocksDbConfig,
+        metrics: rocketmq_observability::metrics::rocksdb::RocksDbMetricsRecorder,
+        resource_budget: Arc<RocksDbResourceBudget>,
+    ) -> Result<Self, RocketMQError> {
         Ok(Self {
-            store: Arc::new(RocksDbStore::open_with_metrics(config, metrics)?),
+            store: Arc::new(RocksDbStore::open_with_metrics_and_resource_budget(
+                config,
+                metrics,
+                resource_budget,
+            )?),
             timer_delete_cache: Mutex::new(TimerDeleteCache::new(TIMER_DELETE_CACHE_CAPACITY)),
         })
     }

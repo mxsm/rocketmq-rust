@@ -19,6 +19,7 @@ pub(crate) mod engine;
 pub(crate) mod error;
 pub(crate) mod index;
 pub(crate) mod java_compat;
+pub(crate) mod payload_cursor;
 pub(crate) mod pipeline;
 pub(crate) mod request;
 pub(crate) mod role;

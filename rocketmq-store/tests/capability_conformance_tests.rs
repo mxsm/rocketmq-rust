@@ -348,6 +348,10 @@ async fn rocksdb_backend_conforms_to_the_canonical_lifecycle() {
     let mut store = RocksDbDerivedStore::open(&config, RocksDbMessageStoreOptions::default(), context)
         .expect("open RocksDB derived store");
 
+    let consume_queue_budget = store.rocksdb_store().resource_budget();
+    let message_budget = store.message_rocksdb_storage().store_arc().resource_budget();
+    assert!(std::sync::Arc::ptr_eq(&consume_queue_budget, &message_budget));
+
     assert!(store.load().await.expect("RocksDB store load"));
     store.start().await.expect("RocksDB store start");
     store.start().await.expect("idempotent RocksDB store start");

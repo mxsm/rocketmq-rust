@@ -21,6 +21,8 @@ use crate::config::RocksDbCompressionType;
 use crate::config::RocksDbConfig;
 use crate::config::RocksDbDataBlockIndexType;
 use crate::config::RocksDbWalRecoveryMode;
+use crate::config::DEFAULT_ROCKSDB_WRITE_BUFFER_BUDGET_BYTES;
+use crate::resource_budget::RocksDbResourceBudget;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RocksDbWriteProfile {
@@ -33,6 +35,14 @@ pub struct RocksDbOptionsFactory;
 
 impl RocksDbOptionsFactory {
     pub fn db_options(config: &RocksDbConfig) -> Result<::rocksdb::Options, RocketMQError> {
+        let resource_budget = RocksDbResourceBudget::from_config(config)?;
+        Self::db_options_with_resource_budget(config, &resource_budget)
+    }
+
+    pub fn db_options_with_resource_budget(
+        config: &RocksDbConfig,
+        resource_budget: &RocksDbResourceBudget,
+    ) -> Result<::rocksdb::Options, RocketMQError> {
         config.validate()?;
         let mut options = ::rocksdb::Options::default();
         options.create_if_missing(true);
@@ -44,6 +54,7 @@ impl RocksDbOptionsFactory {
         options.set_atomic_flush(true);
         options.set_write_buffer_size(config.write_buffer_size);
         options.set_max_write_buffer_number(config.max_write_buffer_number);
+        options.set_write_buffer_manager(resource_budget.write_buffer_manager());
         options.set_compression_type(to_rocksdb_compression(config.compression_type));
         options.set_bottommost_compression_type(to_rocksdb_compression(config.bottommost_compression_type));
         options.set_compaction_style(to_rocksdb_compaction_style(config.compaction_style));
@@ -73,6 +84,15 @@ impl RocksDbOptionsFactory {
     }
 
     pub fn cf_options(config: &RocksDbColumnFamilyConfig) -> Result<::rocksdb::Options, RocketMQError> {
+        let resource_budget =
+            RocksDbResourceBudget::new(config.block_cache_size, DEFAULT_ROCKSDB_WRITE_BUFFER_BUDGET_BYTES)?;
+        Self::cf_options_with_resource_budget(config, &resource_budget)
+    }
+
+    pub fn cf_options_with_resource_budget(
+        config: &RocksDbColumnFamilyConfig,
+        resource_budget: &RocksDbResourceBudget,
+    ) -> Result<::rocksdb::Options, RocketMQError> {
         config.validate()?;
         let mut options = ::rocksdb::Options::default();
         options.set_write_buffer_size(config.write_buffer_size);
@@ -118,7 +138,7 @@ impl RocksDbOptionsFactory {
             block_options.set_metadata_block_size(metadata_block_size);
         }
         block_options.set_bloom_filter(config.bloom_filter_bits, false);
-        block_options.set_block_cache(&::rocksdb::Cache::new_lru_cache(config.block_cache_size));
+        block_options.set_block_cache(resource_budget.block_cache());
         block_options.set_cache_index_and_filter_blocks(config.cache_index_and_filter_blocks);
         block_options.set_pin_l0_filter_and_index_blocks_in_cache(config.pin_l0_filter_and_index_blocks_in_cache);
         block_options.set_pin_top_level_index_and_filter(config.pin_top_level_index_and_filter);

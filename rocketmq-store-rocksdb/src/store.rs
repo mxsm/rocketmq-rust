@@ -34,6 +34,7 @@ use crate::iterator::RocksDbRangeScanOptions;
 use crate::iterator::RocksDbScanItem;
 use crate::iterator::RocksDbScanOptions;
 use crate::options::RocksDbOptionsFactory;
+use crate::resource_budget::RocksDbResourceBudget;
 use crate::runtime::RocksDbRuntimeScope;
 use crate::snapshot::RocksDbSnapshot;
 use rocketmq_observability::metrics::rocksdb::RocksDbMetrics;
@@ -79,6 +80,7 @@ pub struct RocksDbStore {
     db: Arc<::rocksdb::DB>,
     path: PathBuf,
     db_options: ::rocksdb::Options,
+    resource_budget: Arc<RocksDbResourceBudget>,
     state: AtomicU8,
     write_options: ::rocksdb::WriteOptions,
     metrics: Arc<RocksDbMetricsCollector>,
@@ -94,8 +96,27 @@ impl RocksDbStore {
         config: RocksDbConfig,
         otel_metrics: RocksDbMetricsRecorder,
     ) -> Result<Self, RocketMQError> {
-        let db_options = RocksDbOptionsFactory::db_options(&config)?;
-        Self::open_with_column_families(config.clone(), db_options, config.column_families, otel_metrics)
+        let resource_budget = Arc::new(RocksDbResourceBudget::from_config(&config)?);
+        Self::open_with_metrics_and_resource_budget(config, otel_metrics, resource_budget)
+    }
+
+    /// Opens a database using a caller-owned native-memory budget.
+    ///
+    /// Reusing the same budget across database instances makes their block
+    /// cache and memtables obey one process-level limit.
+    pub fn open_with_metrics_and_resource_budget(
+        config: RocksDbConfig,
+        otel_metrics: RocksDbMetricsRecorder,
+        resource_budget: Arc<RocksDbResourceBudget>,
+    ) -> Result<Self, RocketMQError> {
+        let db_options = RocksDbOptionsFactory::db_options_with_resource_budget(&config, resource_budget.as_ref())?;
+        Self::open_with_column_families(
+            config.clone(),
+            db_options,
+            config.column_families,
+            otel_metrics,
+            resource_budget,
+        )
     }
 
     pub fn open_with_existing_column_families(config: RocksDbConfig) -> Result<Self, RocketMQError> {
@@ -106,9 +127,10 @@ impl RocksDbStore {
         config: RocksDbConfig,
         otel_metrics: RocksDbMetricsRecorder,
     ) -> Result<Self, RocketMQError> {
-        let db_options = RocksDbOptionsFactory::db_options(&config)?;
+        let resource_budget = Arc::new(RocksDbResourceBudget::from_config(&config)?);
+        let db_options = RocksDbOptionsFactory::db_options_with_resource_budget(&config, resource_budget.as_ref())?;
         let column_families = merge_existing_column_families(&config, &db_options)?;
-        Self::open_with_column_families(config, db_options, column_families, otel_metrics)
+        Self::open_with_column_families(config, db_options, column_families, otel_metrics, resource_budget)
     }
 
     fn open_with_column_families(
@@ -116,12 +138,13 @@ impl RocksDbStore {
         db_options: ::rocksdb::Options,
         column_families: Vec<RocksDbColumnFamilyConfig>,
         otel_metrics: RocksDbMetricsRecorder,
+        resource_budget: Arc<RocksDbResourceBudget>,
     ) -> Result<Self, RocketMQError> {
         let path = config.path.clone();
         let descriptors = column_families
             .iter()
             .map(|column_family| {
-                RocksDbOptionsFactory::cf_options(column_family)
+                RocksDbOptionsFactory::cf_options_with_resource_budget(column_family, resource_budget.as_ref())
                     .map(|options| ::rocksdb::ColumnFamilyDescriptor::new(column_family.name.clone(), options))
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -136,6 +159,7 @@ impl RocksDbStore {
             db: Arc::new(db),
             path,
             db_options,
+            resource_budget,
             state: AtomicU8::new(RocksDbStoreState::Open.as_u8()),
             write_options: RocksDbOptionsFactory::write_options(config.write_profile()),
             metrics: Arc::new(RocksDbMetricsCollector::default()),
@@ -148,13 +172,19 @@ impl RocksDbStore {
         &self.path
     }
 
+    /// Returns the native-memory budget shared by this database and its column families.
+    pub fn resource_budget(&self) -> Arc<RocksDbResourceBudget> {
+        Arc::clone(&self.resource_budget)
+    }
+
     pub fn create_cf_if_missing(&self, column_family: RocksDbColumnFamilyConfig) -> Result<(), RocketMQError> {
         self.ensure_open()?;
         if self.db.cf_handle(&column_family.name).is_some() {
             return Ok(());
         }
         column_family.validate()?;
-        let options = RocksDbOptionsFactory::cf_options(&column_family)?;
+        let options =
+            RocksDbOptionsFactory::cf_options_with_resource_budget(&column_family, self.resource_budget.as_ref())?;
         let result = self
             .db
             .create_cf(&column_family.name, &options)
