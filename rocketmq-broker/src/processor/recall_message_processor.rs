@@ -56,6 +56,10 @@ use crate::topic::manager::topic_config_manager::TopicConfigManager;
 
 const RECALL_MESSAGE_TAG: &str = "_RECALL_TAG_";
 
+fn add_recall_response_region(response: &mut RemotingCommand, region_id: CheetahString) {
+    response.add_ext_field(MessageConst::PROPERTY_MSG_REGION, region_id);
+}
+
 #[derive(Clone)]
 pub(crate) struct RecallMessagePolicy {
     region_id: CheetahString,
@@ -254,7 +258,7 @@ where
         response.set_opaque_mut(request.opaque());
 
         let region_id = self.context.policy.region_id.clone();
-        response.add_ext_field(MessageConst::PROPERTY_MSG_REGION, region_id);
+        add_recall_response_region(&mut response, region_id);
 
         let request_header = request.decode_command_custom_header::<RecallMessageRequestHeader>()?;
 
@@ -602,7 +606,34 @@ fn recall_response_header_missing() -> RocketMQError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rocketmq_protocol::protocol::SerializeType;
     use rocketmq_store::StorePorts;
+
+    #[test]
+    fn recall_response_keeps_region_field() {
+        for serialize_type in [SerializeType::JSON, SerializeType::ROCKETMQ] {
+            let mut response =
+                RemotingCommand::create_response_command_with_header(RecallMessageResponseHeader::new("msg-id"))
+                    .set_serialize_type(serialize_type);
+            add_recall_response_region(&mut response, CheetahString::from_static_str("region-c"));
+            let mut encoded = bytes::BytesMut::new();
+
+            response
+                .try_fast_header_encode(&mut encoded)
+                .expect("recall response should encode");
+            let decoded = RemotingCommand::decode(&mut encoded)
+                .expect("recall response should decode")
+                .expect("recall response frame should be complete");
+
+            assert_eq!(
+                decoded
+                    .ext_fields()
+                    .and_then(|fields| fields.get(MessageConst::PROPERTY_MSG_REGION))
+                    .map(CheetahString::as_str),
+                Some("region-c")
+            );
+        }
+    }
 
     #[test]
     fn test_recall_message_tag_constant() {

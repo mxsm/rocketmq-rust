@@ -1647,6 +1647,8 @@ mod tests {
     use rocketmq_model::common::message::message_queue_assignment::MessageQueueAssignment;
     use rocketmq_model::common::message::message_single::Message;
     use rocketmq_model::common::message::MessageConst;
+    use rocketmq_model::common::mix_all::IS_SUB_CHANGE;
+    use rocketmq_model::common::mix_all::IS_SUPPORT_HEART_BEAT_V2;
     use rocketmq_model::result::SendResult;
     use rocketmq_model::result::SendStatus;
     use rocketmq_protocol::code::request_code::RequestCode;
@@ -2227,6 +2229,17 @@ mod tests {
 
         let heartbeat_response = dispatcher.dispatch(&test_context(), &heartbeat_request).await;
         assert_eq!(ResponseCode::from(heartbeat_response.code()), ResponseCode::Success);
+        let heartbeat_ext_fields = heartbeat_response.ext_fields().expect("heartbeat response ext fields");
+        assert_eq!(
+            heartbeat_ext_fields
+                .get(IS_SUPPORT_HEART_BEAT_V2)
+                .map(CheetahString::as_str),
+            Some("true")
+        );
+        assert_eq!(
+            heartbeat_ext_fields.get(IS_SUB_CHANGE).map(CheetahString::as_str),
+            Some("true")
+        );
         assert_eq!(sessions.consumer_client_ids("GroupA"), vec!["client-a".to_owned()]);
 
         let mut get_request = RemotingCommand::create_request_command(

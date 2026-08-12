@@ -50,6 +50,12 @@ use crate::transaction::transactional_message_service::TransactionalMessageServi
 
 const PUSH_REPLY_MESSAGE_TO_CLIENT_TIMEOUT_MILLIS: u64 = 10_000;
 
+fn add_reply_response_metadata(response: &mut RemotingCommand, region_id: &str, trace_on: bool) {
+    response
+        .add_ext_field(MessageConst::PROPERTY_MSG_REGION, region_id)
+        .add_ext_field(MessageConst::PROPERTY_TRACE_SWITCH, trace_on.to_string());
+}
+
 fn push_reply_call_failed_remark(sender_id: &str) -> String {
     format!("push reply message to {sender_id}fail.")
 }
@@ -223,9 +229,7 @@ where
             )
         };
 
-        response
-            .add_ext_field(MessageConst::PROPERTY_MSG_REGION, region_id.as_str())
-            .add_ext_field(MessageConst::PROPERTY_TRACE_SWITCH, trace_on.to_string());
+        add_reply_response_metadata(&mut response, region_id.as_str(), trace_on);
 
         if current_millis() < start_timstamp {
             return response
@@ -636,11 +640,42 @@ mod tests {
     use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
     use rocketmq_model::common::message::MessageConst;
     use rocketmq_model::common::message::MessageTrait;
+    use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+    use rocketmq_protocol::protocol::SerializeType;
 
+    use super::add_reply_response_metadata;
     use super::get_correlation_id_with_fallback;
     use super::push_reply_call_failed_remark;
     use super::PushReplyResult;
     use super::PUSH_REPLY_MESSAGE_TO_CLIENT_TIMEOUT_MILLIS;
+
+    #[test]
+    fn reply_response_keeps_region_and_trace_fields() {
+        for serialize_type in [SerializeType::JSON, SerializeType::ROCKETMQ] {
+            let mut response = RemotingCommand::create_response_command().set_serialize_type(serialize_type);
+            add_reply_response_metadata(&mut response, "region-b", false);
+            let mut encoded = bytes::BytesMut::new();
+
+            response
+                .try_fast_header_encode(&mut encoded)
+                .expect("reply response should encode");
+            let decoded = RemotingCommand::decode(&mut encoded)
+                .expect("reply response should decode")
+                .expect("reply response frame should be complete");
+
+            let fields = decoded.ext_fields().expect("reply response ext fields");
+            assert_eq!(
+                fields.get(MessageConst::PROPERTY_MSG_REGION).map(CheetahString::as_str),
+                Some("region-b")
+            );
+            assert_eq!(
+                fields
+                    .get(MessageConst::PROPERTY_TRACE_SWITCH)
+                    .map(CheetahString::as_str),
+                Some("false")
+            );
+        }
+    }
 
     #[test]
     fn test_get_correlation_id_with_fallback_new_property() {
