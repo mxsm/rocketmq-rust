@@ -137,13 +137,14 @@ impl ClientPool {
 
     pub fn get_or_create(
         &self,
-        client_config: ClientConfig,
+        mut client_config: ClientConfig,
         rpc_hook: Option<Arc<dyn RPCHook>>,
     ) -> rocketmq_error::RocketMQResult<PooledClient> {
         let _admission = self.inner.admission.read();
         if self.inner.closed.load(Ordering::Acquire) {
             return Err(mq_client_err!("ClientRuntime is shutting down"));
         }
+        client_config.normalize_namesrv_addr()?;
         let client_id = CheetahString::from_string(client_config.build_mq_client_id());
         let identity = ClientPoolIdentity::new(&client_config, rpc_hook.as_ref());
 
@@ -270,5 +271,65 @@ impl ClientPool {
             }
             let _ = tokio::time::timeout(deadline.remaining(), instance.shutdown()).await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use cheetah_string::CheetahString;
+    use rocketmq_error::RocketMQError;
+
+    use super::*;
+
+    #[test]
+    fn invalid_nameserver_address_is_rejected_before_pool_admission() {
+        let runtime = crate::runtime::test_client_runtime("invalid-nameserver-pool-test");
+        let config = ClientConfig {
+            namesrv_addr: Some(CheetahString::from_static_str("missing-port")),
+            ..Default::default()
+        };
+
+        let error = match runtime.pool().get_or_create(config, None) {
+            Ok(_) => panic!("invalid NameServer address must be rejected"),
+            Err(error) => error,
+        };
+
+        assert!(matches!(
+            error,
+            RocketMQError::ConfigInvalidValue {
+                key: "namesrv_addr",
+                ..
+            }
+        ));
+        assert_eq!(runtime.pool().instance_count(), 0);
+    }
+
+    #[test]
+    fn canonical_nameserver_address_drives_pool_identity() {
+        let runtime = crate::runtime::test_client_runtime("canonical-nameserver-pool-test");
+        let first_config = ClientConfig {
+            namesrv_addr: Some(CheetahString::from_static_str(" NS-A:9876 ; ns-a:9876 ")),
+            ..Default::default()
+        };
+        let first = runtime
+            .pool()
+            .get_or_create(first_config, None)
+            .expect("first pooled client");
+
+        let equivalent_config = ClientConfig {
+            namesrv_addr: Some(CheetahString::from_static_str("ns-a:9876")),
+            ..Default::default()
+        };
+        let equivalent = runtime
+            .pool()
+            .get_or_create(equivalent_config, None)
+            .expect("equivalent canonical target must share the pool entry");
+        assert!(Arc::ptr_eq(first.instance(), equivalent.instance()));
+
+        let different_config = ClientConfig {
+            namesrv_addr: Some(CheetahString::from_static_str("ns-b:9876")),
+            ..Default::default()
+        };
+        assert!(runtime.pool().get_or_create(different_config, None).is_err());
     }
 }

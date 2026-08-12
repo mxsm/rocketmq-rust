@@ -58,7 +58,7 @@ impl MQClientAPIImpl {
         MQClientAPIImpl {
             service_context,
             remoting_client: Arc::new(default_client),
-            top_addressing: Arc::new(Box::new(DefaultTopAddressing::new(
+            top_addressing: RwLock::new(Arc::new(DefaultTopAddressing::new(
                 mix_all::get_ws_addr().into(),
                 client_config.unit_name.clone(),
             ))),
@@ -100,7 +100,8 @@ impl MQClientAPIImpl {
     }
 
     pub async fn fetch_name_server_addr(&self) -> Option<String> {
-        let addrs = self.top_addressing.fetch_ns_addr().await;
+        let top_addressing = self.top_addressing.read().await.clone();
+        let addrs = top_addressing.fetch_ns_addr().await;
 
         if let Some(addrs) = addrs.as_ref().filter(|addr| !addr.is_empty()) {
             if update_cached_name_server_addr(&self.name_srv_addr, addrs, |addrs| {
@@ -136,7 +137,20 @@ impl MQClientAPIImpl {
             .split(";")
             .map(CheetahString::from_slice)
             .collect::<Vec<CheetahString>>();
+        self.update_name_server_targets_sync(addr_vec);
+    }
+
+    pub(crate) fn update_name_server_targets_sync(&self, addr_vec: Vec<CheetahString>) {
         self.remoting_client.update_name_server_address_list_sync(addr_vec);
+    }
+
+    pub(crate) async fn configure_top_addressing(&self, domain: &str, subgroup: &str) {
+        let addressing = Arc::new(DefaultTopAddressing::from_domain_and_subgroup(
+            domain,
+            subgroup,
+            self.client_config.unit_name.clone(),
+        ));
+        *self.top_addressing.write().await = addressing;
     }
 
     pub async fn invoke(

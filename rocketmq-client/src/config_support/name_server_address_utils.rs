@@ -13,10 +13,21 @@
 // limitations under the License.
 
 use std::env;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 use rocketmq_model::common::mix_all;
+use tracing::warn;
 
 const INSTANCE_PREFIX: &str = "MQ_INST_";
+static LEGACY_PROPERTY_WARNING_EMITTED: AtomicBool = AtomicBool::new(false);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NameServerAddressSource {
+    JavaProperty,
+    LegacyRustProperty,
+    Environment,
+}
 
 fn is_word_char(value: char) -> bool {
     value.is_ascii_alphanumeric() || value == '_'
@@ -26,9 +37,35 @@ pub struct NameServerAddressUtils;
 
 impl NameServerAddressUtils {
     pub fn get_name_server_addresses() -> Option<String> {
-        env::var(mix_all::NAMESRV_ADDR_PROPERTY)
-            .or_else(|_| env::var(mix_all::NAMESRV_ADDR_ENV))
-            .ok()
+        let java_property = env::var(mix_all::NAMESRV_ADDR_PROPERTY).ok();
+        let legacy_property = env::var(mix_all::LEGACY_NAMESRV_ADDR_PROPERTY).ok();
+        let environment = env::var(mix_all::NAMESRV_ADDR_ENV).ok();
+        let selected = Self::select_name_server_address(
+            java_property.as_deref(),
+            legacy_property.as_deref(),
+            environment.as_deref(),
+        );
+        if matches!(selected, Some((_, NameServerAddressSource::LegacyRustProperty)))
+            && !LEGACY_PROPERTY_WARNING_EMITTED.swap(true, Ordering::AcqRel)
+        {
+            warn!(
+                key = mix_all::LEGACY_NAMESRV_ADDR_PROPERTY,
+                replacement = mix_all::NAMESRV_ADDR_PROPERTY,
+                "legacy NameServer address property is deprecated"
+            );
+        }
+        selected.map(|(value, _)| value.to_owned())
+    }
+
+    fn select_name_server_address<'a>(
+        java_property: Option<&'a str>,
+        legacy_property: Option<&'a str>,
+        environment: Option<&'a str>,
+    ) -> Option<(&'a str, NameServerAddressSource)> {
+        java_property
+            .map(|value| (value, NameServerAddressSource::JavaProperty))
+            .or_else(|| legacy_property.map(|value| (value, NameServerAddressSource::LegacyRustProperty)))
+            .or_else(|| environment.map(|value| (value, NameServerAddressSource::Environment)))
     }
 
     pub fn is_name_srv_endpoint(name_srv_addr: &str) -> bool {
@@ -134,5 +171,21 @@ mod tests {
         assert!(NameServerAddressUtils::is_name_srv_endpoint("http://127.0.0.1:9876"));
         assert!(!NameServerAddressUtils::is_name_srv_endpoint("127.0.0.1:9876"));
         assert!(!NameServerAddressUtils::is_name_srv_endpoint("https://127.0.0.1:9876"));
+    }
+
+    #[test]
+    fn address_source_priority_matches_java_and_preserves_legacy_rust_key() {
+        assert_eq!(
+            NameServerAddressUtils::select_name_server_address(Some("java"), Some("legacy"), Some("env")),
+            Some(("java", NameServerAddressSource::JavaProperty))
+        );
+        assert_eq!(
+            NameServerAddressUtils::select_name_server_address(None, Some("legacy"), Some("env")),
+            Some(("legacy", NameServerAddressSource::LegacyRustProperty))
+        );
+        assert_eq!(
+            NameServerAddressUtils::select_name_server_address(None, None, Some("env")),
+            Some(("env", NameServerAddressSource::Environment))
+        );
     }
 }

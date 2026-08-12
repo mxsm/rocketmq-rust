@@ -46,7 +46,9 @@ use tracing::warn;
 use crate::base::connection_net_event::ConnectionNetEvent;
 use crate::base::pending_request_table::PendingRequestTable;
 use crate::base::pending_request_table::PendingRequestUsage;
+use crate::clients::nameserver_failover::build_nameserver_failover_candidates;
 use crate::clients::nameserver_selector::LatencyTracker;
+use crate::clients::reconnect::CircuitAdmission;
 use crate::clients::reconnect::CircuitBreaker;
 use crate::clients::TransportSession;
 use crate::deadline::RequestDeadline;
@@ -469,6 +471,8 @@ impl<PR> Clone for TransportClient<PR> {
 }
 
 impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
+    const NAMESERVER_SCAN_INTERVAL: Duration = Duration::from_secs(30);
+
     pub fn builder(
         tokio_client_config: Arc<TransportClientConfig>,
         processor: PR,
@@ -705,32 +709,65 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
             return Ok(None);
         }
 
-        // Use latency tracker to select best nameserver
-        let selected_addr = match self.latency_tracker.select_best(&addr_list) {
-            Some(addr) => addr,
-            None => {
-                let available = self.available_namesrv_addr_set.read().clone();
-                error!(
-                    "Failed to select healthy nameserver. Available list: {:?}, Available set: {:?}",
-                    addr_list, available
-                );
-                return Ok(None);
+        let available = self.available_namesrv_addr_set.read().clone();
+        let mut half_open_probe_selected = false;
+        let mut candidates =
+            build_nameserver_failover_candidates(&addr_list, &available, &self.latency_tracker, |address| {
+                let mut breaker = self
+                    .circuit_breakers
+                    .entry(address.clone())
+                    .or_insert_with(CircuitBreaker::default_breaker);
+                match breaker.connection_admission() {
+                    CircuitAdmission::Regular => true,
+                    CircuitAdmission::Probe if !half_open_probe_selected => {
+                        half_open_probe_selected = true;
+                        true
+                    }
+                    CircuitAdmission::Probe | CircuitAdmission::Rejected => false,
+                }
+            });
+        candidates.sort_by_key(|address| {
+            self.connection_tables
+                .get(address)
+                .is_none_or(|session| !session.connection().is_healthy())
+        });
+        if candidates.is_empty() {
+            error!(
+                "Failed to select healthy nameserver. Available list: {:?}, Available set: {:?}",
+                addr_list, available
+            );
+            return Ok(None);
+        }
+
+        let mut last_error = None;
+        for selected_addr in candidates {
+            deadline.ensure_before_send(selected_addr.to_string())?;
+            info!(
+                "Selected nameserver: {} (P99: {:?}, errors: {})",
+                selected_addr,
+                self.latency_tracker
+                    .get_p99(&selected_addr)
+                    .unwrap_or(Duration::from_secs(0)),
+                self.latency_tracker.get_error_count(&selected_addr)
+            );
+            match self.create_client_until(&selected_addr, deadline).await {
+                Ok(Some(client)) => {
+                    self.namesrv_addr_choosed.write().replace(selected_addr);
+                    return Ok(Some(client));
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    self.latency_tracker.record_error(&selected_addr);
+                    last_error = Some(error);
+                }
             }
-        };
+        }
 
-        info!(
-            "Selected nameserver: {} (P99: {:?}, errors: {})",
-            selected_addr,
-            self.latency_tracker
-                .get_p99(selected_addr)
-                .unwrap_or(Duration::from_secs(0)),
-            self.latency_tracker.get_error_count(selected_addr)
-        );
-
-        // Update cached selection
-        self.namesrv_addr_choosed.write().replace(selected_addr.clone());
-
-        self.create_client_until(selected_addr, deadline).await
+        self.namesrv_addr_choosed.write().take();
+        match last_error {
+            Some(error) => Err(error),
+            None => Ok(None),
+        }
     }
 
     /// Get existing healthy client or create new connection.
@@ -1142,7 +1179,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
             task_group
         };
 
-        let connect_scan_interval = self.tokio_client_config.connect.timeout;
+        let connect_scan_interval = Self::NAMESERVER_SCAN_INTERVAL;
         let token = self.shutdown_token.clone();
         let mut background_tasks_started = 0;
 
@@ -1707,6 +1744,25 @@ mod tests {
         assert_eq!(task_group.lifecycle_state(), TaskGroupLifecycleState::ShutdownCompleted);
     }
 
+    #[test]
+    fn nameserver_scan_interval_is_independent_from_connect_timeout() {
+        let config = TransportClientConfig {
+            connect: ConnectConfig {
+                timeout: Duration::from_millis(7),
+            },
+            ..Default::default()
+        };
+
+        assert_ne!(
+            TransportClient::<DefaultRequestProcessor>::NAMESERVER_SCAN_INTERVAL,
+            config.connect.timeout
+        );
+        assert_eq!(
+            TransportClient::<DefaultRequestProcessor>::NAMESERVER_SCAN_INTERVAL,
+            Duration::from_secs(30)
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn concurrent_nameserver_updates_publish_complete_owned_snapshots() {
         let client = Arc::new(TransportClient::build_for_test(
@@ -2108,6 +2164,100 @@ mod tests {
         assert!(client.latency_tracker.get_p99(&target).is_some());
         assert_eq!(client.latency_tracker.get_error_count(&target), 0);
         server.await.expect("server task");
+        client.shutdown();
+    }
+
+    #[tokio::test]
+    async fn nameserver_connect_failure_tries_next_candidate_within_deadline() {
+        let closed_listener = TcpListener::bind("127.0.0.1:0").await.expect("bind closed endpoint");
+        let closed_addr = closed_listener.local_addr().expect("closed endpoint address");
+        drop(closed_listener);
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind healthy endpoint");
+        let healthy_addr = listener.local_addr().expect("healthy endpoint address");
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("accept fallback client");
+            let mut connection = Connection::new(socket);
+            let request = connection
+                .receive_command()
+                .await
+                .expect("request frame")
+                .expect("request command");
+            connection
+                .send_command(
+                    RemotingCommand::create_response_command_with_code(ResponseCode::Success)
+                        .set_opaque(request.opaque()),
+                )
+                .await
+                .expect("send response");
+        });
+
+        let client = TransportClient::build_for_test(
+            Arc::new(TransportClientConfig::default()),
+            DefaultRequestProcessor,
+            test_service_context("nameserver-connect-failover-test"),
+        );
+        *client.namesrv_addr_list.write() = vec![
+            CheetahString::from_string(closed_addr.to_string()),
+            CheetahString::from_string(healthy_addr.to_string()),
+        ];
+
+        let response = client
+            .invoke_request(
+                None,
+                RemotingCommand::create_remoting_command(RequestCode::GetBrokerClusterInfo),
+                3_000,
+            )
+            .await
+            .expect("second NameServer should satisfy the request");
+
+        assert_eq!(response.code(), ResponseCode::Success.to_i32());
+        server.await.expect("fallback server task");
+        client.shutdown();
+    }
+
+    #[tokio::test]
+    async fn request_failure_after_write_does_not_retry_another_nameserver() {
+        let first_listener = TcpListener::bind("127.0.0.1:0").await.expect("bind first endpoint");
+        let first_addr = first_listener.local_addr().expect("first endpoint address");
+        let second_listener = TcpListener::bind("127.0.0.1:0").await.expect("bind second endpoint");
+        let second_addr = second_listener.local_addr().expect("second endpoint address");
+        let first_server = tokio::spawn(async move {
+            let (socket, _) = first_listener.accept().await.expect("accept first client");
+            let mut connection = Connection::new(socket);
+            connection
+                .receive_command()
+                .await
+                .expect("request frame")
+                .expect("request command");
+        });
+
+        let client = TransportClient::build_for_test(
+            Arc::new(TransportClientConfig::default()),
+            DefaultRequestProcessor,
+            test_service_context("nameserver-no-write-retry-test"),
+        );
+        *client.namesrv_addr_list.write() = vec![
+            CheetahString::from_string(first_addr.to_string()),
+            CheetahString::from_string(second_addr.to_string()),
+        ];
+
+        assert!(client
+            .invoke_request(
+                None,
+                RemotingCommand::create_remoting_command(RequestCode::GetBrokerClusterInfo),
+                1_000,
+            )
+            .await
+            .is_err());
+        assert!(
+            time::timeout(Duration::from_millis(100), second_listener.accept())
+                .await
+                .is_err(),
+            "the second NameServer must not receive a replay after request bytes were written"
+        );
+
+        first_server.await.expect("first server task");
         client.shutdown();
     }
 

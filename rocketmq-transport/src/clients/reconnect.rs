@@ -50,6 +50,13 @@ pub enum CircuitState {
     HalfOpen,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CircuitAdmission {
+    Regular,
+    Probe,
+    Rejected,
+}
+
 /// Circuit breaker for connection management.
 #[derive(Debug, Clone)]
 pub struct CircuitBreaker {
@@ -107,9 +114,13 @@ impl CircuitBreaker {
     /// * `true` - Request allowed (CLOSED or HALF_OPEN)
     /// * `false` - Request blocked (OPEN and timeout not elapsed)
     pub fn allow_request(&mut self) -> bool {
+        self.connection_admission() != CircuitAdmission::Rejected
+    }
+
+    pub(crate) fn connection_admission(&mut self) -> CircuitAdmission {
         match self.state {
-            CircuitState::Closed => true,
-            CircuitState::HalfOpen => true,
+            CircuitState::Closed => CircuitAdmission::Regular,
+            CircuitState::HalfOpen => CircuitAdmission::Probe,
             CircuitState::Open => {
                 // Check if timeout elapsed
                 if let Some(opened_at) = self.opened_at {
@@ -118,12 +129,12 @@ impl CircuitBreaker {
                         self.state = CircuitState::HalfOpen;
                         self.success_count = 0;
                         self.failure_count = 0;
-                        true
+                        CircuitAdmission::Probe
                     } else {
-                        false // Still open, reject request
+                        CircuitAdmission::Rejected
                     }
                 } else {
-                    false
+                    CircuitAdmission::Rejected
                 }
             }
         }
