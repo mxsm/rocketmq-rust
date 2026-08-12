@@ -16,11 +16,13 @@ use std::future::Future;
 use std::marker::PhantomData;
 use std::net::SocketAddr;
 use std::pin::Pin;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::clients::nameserver_endpoint::ConnectTarget;
 use crate::config::TlsConfig;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
@@ -76,11 +78,27 @@ pub(crate) struct TransportSession<PR> {
     transport_security: Arc<TransportSecurity>,
     peer: PeerInfo,
     last_used_millis: Arc<AtomicU64>,
+    accepting_requests: Arc<AtomicBool>,
     _processor: PhantomData<fn() -> PR>,
 }
 
 type ConnectedClientSession = (Channel, PendingRequestOwner, SessionHandle, SocketAddr, bool);
 type ClientConnectFuture = Pin<Box<dyn Future<Output = RocketMQResult<ConnectedClientSession>> + Send>>;
+
+#[derive(Clone)]
+pub(crate) enum SessionConnectTarget {
+    Legacy(String),
+    Resolved(ConnectTarget),
+}
+
+impl SessionConnectTarget {
+    fn error_identity(&self) -> String {
+        match self {
+            Self::Legacy(address) => address.clone(),
+            Self::Resolved(target) => target.identity().to_string(),
+        }
+    }
+}
 
 struct ClientTaskLifecycle {
     task_group: TaskGroup,
@@ -173,7 +191,7 @@ impl<PR> Drop for TransportSession<PR> {
 // The explicit parameters are independently owned connection capabilities moved into one task.
 #[allow(clippy::too_many_arguments)]
 fn connect<PR>(
-    addr: String,
+    target: SessionConnectTarget,
     cmd_handler: Arc<RemotingGeneralHandler<PR>>,
     tx: Option<tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
     _notify: broadcast::Receiver<()>,
@@ -189,14 +207,30 @@ where
     PR: RequestProcessor + Sync + Clone + 'static,
 {
     Box::pin(async move {
-        let connected = crate::client::connect_with_config_and_telemetry(
-            addr.as_str(),
-            &tls_config,
-            FrameLimits::legacy_compatibility(),
-            deadline,
-            telemetry,
-        )
-        .await?;
+        let error_identity = target.error_identity();
+        let connected = match target {
+            SessionConnectTarget::Legacy(address) => {
+                crate::client::connect_with_config_and_telemetry(
+                    address.as_str(),
+                    &tls_config,
+                    FrameLimits::legacy_compatibility(),
+                    deadline,
+                    telemetry,
+                )
+                .await?
+            }
+            SessionConnectTarget::Resolved(target) => {
+                crate::client::connect_target_with_config_options_and_telemetry(
+                    &target,
+                    &tls_config,
+                    FrameLimits::legacy_compatibility(),
+                    crate::config::SocketOptions::default(),
+                    deadline,
+                    telemetry,
+                )
+                .await?
+            }
+        };
         let (connection, local_addr, remote_address, negotiated_tls) = connected.into_parts_with_tls();
         let (ready, connected_session) = tokio::sync::oneshot::channel();
         let transport_handler = Arc::new(ClientInner {
@@ -226,7 +260,7 @@ where
         let (channel, pending_request_owner, session) = deadline
             .timeout(connected_session)
             .await
-            .map_err(|_| RocketMQError::network_connection_timeout(addr.clone(), deadline.budget_millis()))?
+            .map_err(|_| RocketMQError::network_connection_timeout(error_identity, deadline.budget_millis()))?
             .map_err(|_| remote_error("transport client session ended before connection setup"))?;
         if let Some(tx) = tx {
             let _ = tx.send(ConnectionNetEvent::CONNECTED(channel.remote_address()));
@@ -260,6 +294,7 @@ where
         .await
     }
 
+    #[cfg(test)]
     pub(crate) async fn connect_with_service_context_until_and_telemetry(
         context: &ChildServiceContext,
         addr: String,
@@ -269,9 +304,30 @@ where
         deadline: RequestDeadline,
         telemetry: TransportTelemetry,
     ) -> RocketMQResult<TransportSession<PR>> {
+        Self::connect_target_with_service_context_until_and_telemetry(
+            context,
+            SessionConnectTarget::Legacy(addr),
+            cmd_handler,
+            tx,
+            tls_config,
+            deadline,
+            telemetry,
+        )
+        .await
+    }
+
+    pub(crate) async fn connect_target_with_service_context_until_and_telemetry(
+        context: &ChildServiceContext,
+        target: SessionConnectTarget,
+        cmd_handler: Arc<RemotingGeneralHandler<PR>>,
+        tx: Option<&tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
+        tls_config: TlsConfig,
+        deadline: RequestDeadline,
+        telemetry: TransportTelemetry,
+    ) -> RocketMQResult<TransportSession<PR>> {
         let (task_group, operation) = new_client_connection_task_group_with_service_context(context);
         Self::connect_with_task_group(
-            addr,
+            target,
             cmd_handler,
             tx,
             tls_config,
@@ -287,7 +343,7 @@ where
     // The explicit parameters preserve the task-group, TLS, event, and telemetry ownership boundary.
     #[allow(clippy::too_many_arguments)]
     async fn connect_with_task_group(
-        addr: String,
+        target: SessionConnectTarget,
         cmd_handler: Arc<RemotingGeneralHandler<PR>>,
         tx: Option<&tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
         tls_config: TlsConfig,
@@ -306,7 +362,7 @@ where
         });
         let pending_requests = cmd_handler.response_table.clone();
         let (channel, pending_request_owner, session, remote_address, negotiated_tls) = connect(
-            addr,
+            target,
             cmd_handler,
             tx.cloned(),
             receiver,
@@ -329,6 +385,7 @@ where
             transport_security: Arc::new(TransportSecurity::development_insecure_loopback(None, None)),
             peer: PeerInfo::new(remote_address, negotiated_tls),
             last_used_millis: Arc::new(AtomicU64::new(current_millis())),
+            accepting_requests: Arc::new(AtomicBool::new(true)),
             _processor: PhantomData,
         })
     }
@@ -343,6 +400,12 @@ where
         request: &mut RemotingCommand,
         deadline: RequestDeadline,
     ) -> RocketMQResult<()> {
+        if !self.accepting_requests.load(Ordering::Acquire) {
+            return Err(RocketMQError::network_connection_failed(
+                self.peer.address().to_string(),
+                "connection is draining and no longer accepts new requests",
+            ));
+        }
         self.last_used_millis.store(current_millis(), Ordering::Release);
         let transport_security = &self.transport_security;
         let target = self.peer.address().to_string();
@@ -542,6 +605,7 @@ where
 
     /// Gracefully stop this client connection and return the task shutdown report.
     pub async fn close_with_report(&self, timeout: Duration) -> rocketmq_runtime::ShutdownReport {
+        self.accepting_requests.store(false, Ordering::Release);
         let _ = self.notify_shutdown.send(());
         let _ = self.session.retire().await;
         let active_before = self.task_lifecycle.operation.active_task_count();
@@ -584,6 +648,7 @@ where
 
     pub(crate) fn retire_after_timeout(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         Box::pin(async move {
+            self.accepting_requests.store(false, Ordering::Release);
             self.session.abort();
             let _ = self.notify_shutdown.send(());
             self.task_lifecycle.operation.cancel();
@@ -591,6 +656,22 @@ where
                 RocketMQError::network_connection_failed("client", "connection retired after request timeout")
             });
         })
+    }
+
+    pub(crate) fn begin_drain(&self) {
+        self.accepting_requests.store(false, Ordering::Release);
+        self.pending_requests.retire_owner(&self.pending_request_owner);
+    }
+
+    pub(crate) async fn drain_and_close(&self, timeout: Duration) -> rocketmq_runtime::ShutdownReport {
+        self.begin_drain();
+        let deadline = tokio::time::Instant::now() + timeout;
+        let _ = self
+            .pending_requests
+            .wait_owner_empty(&self.pending_request_owner, timeout)
+            .await;
+        self.close_with_report(deadline.saturating_duration_since(tokio::time::Instant::now()))
+            .await
     }
 }
 

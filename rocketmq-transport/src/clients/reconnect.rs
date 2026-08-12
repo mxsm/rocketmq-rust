@@ -188,8 +188,7 @@ impl CircuitBreaker {
     }
 
     /// Gets the current circuit state.
-    #[cfg(test)]
-    pub fn state(&self) -> CircuitState {
+    pub(crate) fn state(&self) -> CircuitState {
         self.state
     }
 }

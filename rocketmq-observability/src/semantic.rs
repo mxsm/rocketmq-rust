@@ -124,6 +124,11 @@ pub mod metrics {
     pub const CLIENT_ONEWAY_EGRESS_OLDEST_AGE: &str = "rocketmq_client_oneway_egress_oldest_age";
     pub const CLIENT_ONEWAY_EGRESS_WAITERS: &str = "rocketmq_client_oneway_egress_waiters";
     pub const CLIENT_ONEWAY_EGRESS_EVENTS_TOTAL: &str = "rocketmq_client_oneway_egress_events_total";
+    pub const CLIENT_NAMESRV_DISCOVERY_REFRESH_TOTAL: &str = "rocketmq_client_namesrv_discovery_refresh_total";
+    pub const CLIENT_NAMESRV_DISCOVERY_ENDPOINT_COUNT: &str = "rocketmq_client_namesrv_discovery_endpoint_count";
+    pub const CLIENT_NAMESRV_DISCOVERY_FRESHNESS: &str = "rocketmq_client_namesrv_discovery_freshness";
+    pub const CLIENT_NAMESRV_DISCOVERY_SNAPSHOT_AGE: &str = "rocketmq_client_namesrv_discovery_snapshot_age";
+    pub const CLIENT_NAMESRV_FAILOVER_TOTAL: &str = "rocketmq_client_namesrv_failover_total";
     pub const NAMESRV_ROUTE_REQUEST_TOTAL: &str = "rocketmq_namesrv_route_request_total";
     pub const NAMESRV_ROUTE_REQUEST_LATENCY: &str = "rocketmq_namesrv_route_request_latency";
     pub const NAMESRV_BROKER_REGISTRATIONS: &str = "rocketmq_namesrv_broker_registrations";
@@ -265,6 +270,9 @@ pub mod labels {
     pub const LABEL_KEY: &str = "label_key";
     pub const SERVICE: &str = "service";
     pub const SOURCE: &str = "source";
+    pub const SOURCE_KIND: &str = "source_kind";
+    pub const ADDRESS_FAMILY: &str = "address_family";
+    pub const FRESHNESS: &str = "freshness";
     pub const RELEASE_COMMIT: &str = "release_commit";
     pub const RELEASE_NONCE: &str = "release_nonce";
     pub const OPERATION_KIND: &str = "operation_kind";

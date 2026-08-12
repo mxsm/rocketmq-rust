@@ -31,6 +31,7 @@ use crate::base::pending_request_table::materialize_and_estimate_remoting_comman
 use crate::base::pending_request_table::PendingRequestLimits;
 use crate::base::pending_request_table::PendingRequestTable;
 use crate::base::pending_request_table::PendingRequestUsage;
+use crate::clients::nameserver_endpoint::ConnectTarget;
 use crate::codec::remoting_command_codec::FrameLimits;
 use crate::config::SocketOptions;
 use crate::config::TlsConfig;
@@ -126,6 +127,47 @@ pub async fn connect_with_config_options_and_telemetry(
     deadline: RequestDeadline,
     telemetry: TransportTelemetry,
 ) -> RocketMQResult<ConnectedTransport> {
+    connect_legacy_address_with_options_and_telemetry(
+        address,
+        tls_config,
+        frame_limits,
+        socket_options,
+        deadline,
+        telemetry,
+    )
+    .await
+}
+
+/// Connects to a physical socket while preserving a distinct logical TLS authority.
+pub async fn connect_target_with_config_options_and_telemetry(
+    target: &ConnectTarget,
+    tls_config: &TlsConfig,
+    frame_limits: FrameLimits,
+    socket_options: SocketOptions,
+    deadline: RequestDeadline,
+    telemetry: TransportTelemetry,
+) -> RocketMQResult<ConnectedTransport> {
+    connect_physical_with_options_and_telemetry(
+        target.socket_addr(),
+        target.authority(),
+        target.tls_server_name(),
+        tls_config,
+        frame_limits,
+        socket_options,
+        deadline,
+        telemetry,
+    )
+    .await
+}
+
+async fn connect_legacy_address_with_options_and_telemetry(
+    address: &str,
+    tls_config: &TlsConfig,
+    frame_limits: FrameLimits,
+    socket_options: SocketOptions,
+    deadline: RequestDeadline,
+    telemetry: TransportTelemetry,
+) -> RocketMQResult<ConnectedTransport> {
     let stream = deadline
         .timeout(tokio::net::TcpStream::connect(address))
         .await
@@ -152,6 +194,60 @@ pub async fn connect_with_config_options_and_telemetry(
         #[cfg(not(feature = "tls"))]
         {
             let _ = stream;
+            return Err(tls_disabled_error());
+        }
+    } else {
+        Connection::new_with_limits(stream, frame_limits).with_telemetry(telemetry)
+    };
+    Ok(ConnectedTransport {
+        connection,
+        local_addr,
+        remote_addr,
+        negotiated_tls,
+        socket_nodelay,
+    })
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "physical address, logical authority, TLS identity, and socket policy are independent connection inputs"
+)]
+async fn connect_physical_with_options_and_telemetry(
+    socket_addr: SocketAddr,
+    authority: &str,
+    tls_server_name: &str,
+    tls_config: &TlsConfig,
+    frame_limits: FrameLimits,
+    socket_options: SocketOptions,
+    deadline: RequestDeadline,
+    telemetry: TransportTelemetry,
+) -> RocketMQResult<ConnectedTransport> {
+    let stream = deadline
+        .timeout(tokio::net::TcpStream::connect(socket_addr))
+        .await
+        .map_err(|_| RocketMQError::network_connection_timeout(authority, deadline.budget_millis()))??;
+    socket_options
+        .apply(&stream)
+        .map_err(|error| RocketMQError::network_connection_failed(authority, error.to_string()))?;
+    let socket_nodelay = stream
+        .nodelay()
+        .map_err(|error| RocketMQError::network_connection_failed(authority, error.to_string()))?;
+    let local_addr = stream.local_addr()?;
+    let remote_addr = stream.peer_addr()?;
+    let negotiated_tls = tls_config.enable;
+    let connection = if negotiated_tls {
+        #[cfg(feature = "tls")]
+        {
+            let tls_stream = deadline
+                .timeout(connect_tls_stream(stream, tls_server_name, tls_config))
+                .await
+                .map_err(|_| RocketMQError::network_connection_timeout(authority, deadline.budget_millis()))??;
+            Connection::new_with_tls_stream_and_limits(tls_stream, frame_limits).with_telemetry(telemetry)
+        }
+        #[cfg(not(feature = "tls"))]
+        {
+            let _ = stream;
+            let _ = tls_server_name;
             return Err(tls_disabled_error());
         }
     } else {

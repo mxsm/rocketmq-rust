@@ -92,6 +92,7 @@ pub struct PendingRequestOwner {
     table_id: u64,
     id: u64,
     accepting: Arc<AtomicBool>,
+    completion: Arc<tokio::sync::Notify>,
 }
 
 impl PendingRequestOwner {
@@ -100,6 +101,7 @@ impl PendingRequestOwner {
             table_id,
             id,
             accepting: Arc::new(AtomicBool::new(true)),
+            completion: Arc::new(tokio::sync::Notify::new()),
         }
     }
 
@@ -462,6 +464,42 @@ impl PendingRequestTable {
         completed
     }
 
+    /// Stops one connection owner from registering new requests without completing in-flight work.
+    pub(crate) fn retire_owner(&self, owner: &PendingRequestOwner) {
+        if owner.table_id == self.inner.table_id {
+            owner.retire();
+        }
+    }
+
+    /// Returns the current in-flight request count for one connection owner.
+    pub(crate) fn owner_len(&self, owner: &PendingRequestOwner) -> usize {
+        if owner.table_id != self.inner.table_id {
+            return 0;
+        }
+        self.inner
+            .entries
+            .iter()
+            .filter(|entry| entry.key().owner_id == owner.id)
+            .count()
+    }
+
+    /// Waits until an owner's already-registered requests finish or the deadline expires.
+    pub(crate) async fn wait_owner_empty(&self, owner: &PendingRequestOwner, timeout: Duration) -> bool {
+        if owner.table_id != self.inner.table_id {
+            return true;
+        }
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let notified = owner.completion.notified();
+            if self.owner_len(owner) == 0 {
+                return true;
+            }
+            if tokio::time::timeout_at(deadline, notified).await.is_err() {
+                return self.owner_len(owner) == 0;
+            }
+        }
+    }
+
     /// Compatibility adapter that retires and completes every active owner.
     pub fn close_all<F>(&self, mut cause: F) -> usize
     where
@@ -556,17 +594,25 @@ impl PendingRequestTable {
     }
 
     fn take_token(&self, token: PendingRequestToken) -> Option<PendingRequest> {
-        match self.inner.entries.entry(token.key) {
+        let pending = match self.inner.entries.entry(token.key) {
             Entry::Occupied(entry) if entry.get().reservation == token.reservation => Some(entry.remove()),
             Entry::Occupied(_) | Entry::Vacant(_) => None,
+        };
+        if let Some(pending) = &pending {
+            pending.owner.completion.notify_one();
         }
+        pending
     }
 
     fn take_key(&self, key: PendingRequestKey) -> Option<PendingRequest> {
-        match self.inner.entries.entry(key) {
+        let pending = match self.inner.entries.entry(key) {
             Entry::Occupied(entry) => Some(entry.remove()),
             Entry::Vacant(_) => None,
+        };
+        if let Some(pending) = &pending {
+            pending.owner.completion.notify_one();
         }
+        pending
     }
 }
 

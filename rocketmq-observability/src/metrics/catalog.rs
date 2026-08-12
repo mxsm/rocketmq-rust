@@ -157,6 +157,10 @@ const MCP_OPERATION_RESULT_LABELS: &[&str] = &[labels::OPERATION_KIND, labels::O
 const RUNTIME_TASK_LABELS: &[&str] = &[labels::COMPONENT, labels::TASK_TYPE];
 const RUNTIME_BLOCKING_LABELS: &[&str] = &[labels::COMPONENT, labels::BLOCKING_LANE];
 const RUNTIME_LIFECYCLE_LABELS: &[&str] = &[labels::COMPONENT, labels::STATE, labels::RESULT, labels::REASON];
+const CLIENT_NAMESRV_REFRESH_LABELS: &[&str] = &[labels::SOURCE_KIND, labels::RESULT];
+const CLIENT_NAMESRV_ENDPOINT_LABELS: &[&str] = &[labels::SOURCE_KIND, labels::ADDRESS_FAMILY];
+const CLIENT_NAMESRV_STATE_LABELS: &[&str] = &[labels::SOURCE_KIND, labels::FRESHNESS];
+const CLIENT_NAMESRV_FAILOVER_LABELS: &[&str] = &[labels::REASON];
 
 pub const JAVA_METRICS: &[MetricDescriptor] = &[
     MetricDescriptor {
@@ -1001,6 +1005,41 @@ pub const RUST_METRICS: &[MetricDescriptor] = &[
         source: MetricSource::Client,
     },
     MetricDescriptor {
+        name: metrics::CLIENT_NAMESRV_DISCOVERY_REFRESH_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{refresh}",
+        labels: CLIENT_NAMESRV_REFRESH_LABELS,
+        source: MetricSource::Client,
+    },
+    MetricDescriptor {
+        name: metrics::CLIENT_NAMESRV_DISCOVERY_ENDPOINT_COUNT,
+        kind: MetricKind::Gauge,
+        unit: "{endpoint}",
+        labels: CLIENT_NAMESRV_ENDPOINT_LABELS,
+        source: MetricSource::Client,
+    },
+    MetricDescriptor {
+        name: metrics::CLIENT_NAMESRV_DISCOVERY_FRESHNESS,
+        kind: MetricKind::Gauge,
+        unit: "1",
+        labels: CLIENT_NAMESRV_STATE_LABELS,
+        source: MetricSource::Client,
+    },
+    MetricDescriptor {
+        name: metrics::CLIENT_NAMESRV_DISCOVERY_SNAPSHOT_AGE,
+        kind: MetricKind::Gauge,
+        unit: "s",
+        labels: CLIENT_NAMESRV_STATE_LABELS,
+        source: MetricSource::Client,
+    },
+    MetricDescriptor {
+        name: metrics::CLIENT_NAMESRV_FAILOVER_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{failover}",
+        labels: CLIENT_NAMESRV_FAILOVER_LABELS,
+        source: MetricSource::Client,
+    },
+    MetricDescriptor {
         name: metrics::NAMESRV_ROUTE_REQUEST_TOTAL,
         kind: MetricKind::Counter,
         unit: "{request}",
@@ -1548,6 +1587,36 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn client_nameserver_metrics_expose_only_low_cardinality_labels() {
+        let metric_names = [
+            metrics::CLIENT_NAMESRV_DISCOVERY_REFRESH_TOTAL,
+            metrics::CLIENT_NAMESRV_DISCOVERY_ENDPOINT_COUNT,
+            metrics::CLIENT_NAMESRV_DISCOVERY_FRESHNESS,
+            metrics::CLIENT_NAMESRV_DISCOVERY_SNAPSHOT_AGE,
+            metrics::CLIENT_NAMESRV_FAILOVER_TOTAL,
+        ];
+        let forbidden = [
+            labels::ADDRESS,
+            labels::TOPIC,
+            labels::GROUP,
+            labels::CONSUMER_GROUP,
+            "fqdn",
+            "ip",
+            "pod",
+            "namespace",
+        ];
+
+        for name in metric_names {
+            let descriptor = RUST_METRICS
+                .iter()
+                .find(|descriptor| descriptor.name == name)
+                .expect("client NameServer metric descriptor");
+            assert_eq!(descriptor.source, MetricSource::Client);
+            assert!(descriptor.labels.iter().all(|label| !forbidden.contains(label)));
+        }
+    }
+
     const EXPECTED_JAVA_METRIC_NAMES: &[&str] = &[
         "active_broker_num",
         "dledger_disk_usage",
@@ -1666,8 +1735,8 @@ mod tests {
             .collect::<HashSet<_>>();
 
         assert_eq!(JAVA_METRICS.len(), 94);
-        assert_eq!(RUST_METRICS.len(), 100);
-        assert_eq!(combined.len(), 194, "duplicate metric names across catalogs");
+        assert_eq!(RUST_METRICS.len(), 105);
+        assert_eq!(combined.len(), 199, "duplicate metric names across catalogs");
     }
 
     #[test]

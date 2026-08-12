@@ -19,6 +19,8 @@
 pub struct TransportTelemetry {
     #[cfg(feature = "observability")]
     remoting: rocketmq_observability::metrics::remoting::RemotingMetrics,
+    #[cfg(feature = "observability")]
+    client: rocketmq_observability::metrics::client::ClientMetrics,
     #[cfg(any(feature = "observability", feature = "observability-traces"))]
     handle: Option<rocketmq_observability::TelemetryHandle>,
 }
@@ -37,6 +39,8 @@ impl TransportTelemetry {
         Self {
             #[cfg(feature = "observability")]
             remoting: rocketmq_observability::metrics::remoting::RemotingMetrics::from_handle(telemetry),
+            #[cfg(feature = "observability")]
+            client: rocketmq_observability::metrics::client::ClientMetrics::from_handle(telemetry),
             handle: Some(telemetry.clone()),
         }
     }
@@ -116,6 +120,28 @@ impl TransportTelemetry {
     }
 
     #[inline]
+    pub(crate) fn record_nameserver_failover(&self, reason: TransportNameServerFailoverReason) {
+        #[cfg(feature = "observability")]
+        self.client.record_nameserver_failover(match reason {
+            TransportNameServerFailoverReason::ConnectFailure => {
+                rocketmq_observability::metrics::client::NameServerFailoverReason::ConnectFailure
+            }
+            TransportNameServerFailoverReason::Unhealthy => {
+                rocketmq_observability::metrics::client::NameServerFailoverReason::Unhealthy
+            }
+            TransportNameServerFailoverReason::CircuitOpen => {
+                rocketmq_observability::metrics::client::NameServerFailoverReason::CircuitOpen
+            }
+            TransportNameServerFailoverReason::Draining => {
+                rocketmq_observability::metrics::client::NameServerFailoverReason::Draining
+            }
+        });
+
+        #[cfg(not(feature = "observability"))]
+        let _ = reason;
+    }
+
+    #[inline]
     pub(crate) fn request_guard(
         &self,
         request_code: i32,
@@ -140,6 +166,14 @@ impl TransportTelemetry {
             TransportRequestMetricsGuard {}
         }
     }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum TransportNameServerFailoverReason {
+    ConnectFailure,
+    Unhealthy,
+    CircuitOpen,
+    Draining,
 }
 
 pub(crate) struct TransportRequestMetricsGuard {
@@ -190,6 +224,7 @@ impl TransportRequestMetricsGuard {
 
 #[cfg(test)]
 mod tests {
+    use super::TransportNameServerFailoverReason;
     use super::TransportTelemetry;
 
     #[test]
@@ -200,6 +235,7 @@ mod tests {
         telemetry.record_outbound_written_plaintext_bytes(128);
         telemetry.record_lifecycle_event("connected", "queued");
         telemetry.record_lifecycle_listener_latency(std::time::Duration::from_millis(1), "connected");
+        telemetry.record_nameserver_failover(TransportNameServerFailoverReason::ConnectFailure);
         assert!(telemetry.request_span(10, 1).is_disabled());
         let mut guard = telemetry.request_guard(10, 64, false);
         guard.complete_response(0);

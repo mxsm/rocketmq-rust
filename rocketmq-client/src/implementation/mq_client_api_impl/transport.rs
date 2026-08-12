@@ -144,6 +144,11 @@ impl MQClientAPIImpl {
         self.remoting_client.update_name_server_address_list_sync(addr_vec);
     }
 
+    pub(crate) fn update_name_server_connect_targets_sync(&self, targets: Vec<ConnectTarget>, drain_timeout: Duration) {
+        self.remoting_client
+            .update_name_server_connect_targets_sync(targets, drain_timeout);
+    }
+
     pub(crate) async fn configure_top_addressing(&self, domain: &str, subgroup: &str) {
         let addressing = Arc::new(DefaultTopAddressing::from_domain_and_subgroup(
             domain,
