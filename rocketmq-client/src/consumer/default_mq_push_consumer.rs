@@ -29,6 +29,7 @@ use rocketmq_runtime::common::util_all;
 use rocketmq_transport::api::v1::RPCHook;
 
 use crate::base::client_config::ClientConfig;
+use crate::base::client_options::ClientOptions;
 use crate::base::query_result::QueryResult;
 use crate::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrategy;
 use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
@@ -1394,11 +1395,22 @@ impl DefaultMQPushConsumer {
         client_config: ClientConfig,
         consumer_config: ConsumerConfig,
     ) -> DefaultMQPushConsumer {
+        Self::new_with_options(client_runtime, ClientOptions::legacy(client_config), consumer_config)
+    }
+
+    pub(crate) fn new_with_options(
+        client_runtime: Arc<ClientRuntime>,
+        options: ClientOptions,
+        consumer_config: ConsumerConfig,
+    ) -> DefaultMQPushConsumer {
         let rpc_hook = consumer_config.rpc_hook.clone();
+        let client_config = options.client_config().clone();
+        let nameserver_discovery = options.nameserver_discovery().cloned();
         let consumer_config = Arc::new(ArcSwap::from_pointee(consumer_config));
-        let default_mqpush_consumer_impl = Arc::new(DefaultMQPushConsumerImpl::new_with_config_store(
+        let default_mqpush_consumer_impl = Arc::new(DefaultMQPushConsumerImpl::new_with_config_store_and_discovery(
             Arc::clone(&client_runtime),
             client_config.clone(),
+            nameserver_discovery,
             consumer_config.clone(),
             rpc_hook,
         ));

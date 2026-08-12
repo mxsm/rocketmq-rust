@@ -21,17 +21,20 @@ use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_transport::api::v1::RPCHook;
 
 use crate::base::client_config::ClientConfig;
+use crate::base::client_options::ClientOptions;
 use crate::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrategy;
 use crate::consumer::default_mq_push_consumer::ConsumerConfig;
 use crate::consumer::default_mq_push_consumer::ConsumerTuningProfile;
 use crate::consumer::default_mq_push_consumer::DefaultMQPushConsumer;
 use crate::consumer::message_queue_listener::ArcMessageQueueListener;
+use crate::nameserver_discovery::NameServerDiscoveryConfig;
 use crate::runtime::ClientRuntime;
 use crate::trace::trace_dispatcher::ArcTraceDispatcher;
 
 pub struct DefaultMQPushConsumerBuilder {
     client_runtime: Arc<ClientRuntime>,
     client_config: ClientConfig,
+    nameserver_discovery: Option<NameServerDiscoveryConfig>,
     consumer_group: Option<CheetahString>,
     message_model: Option<MessageModel>,
     consume_from_where: Option<ConsumeFromWhere>,
@@ -74,6 +77,7 @@ impl DefaultMQPushConsumerBuilder {
         Self {
             client_runtime,
             client_config: ClientConfig::default(),
+            nameserver_discovery: None,
             consumer_group: None,
             message_model: None,
             consume_from_where: None,
@@ -120,6 +124,20 @@ impl DefaultMQPushConsumerBuilder {
     #[inline]
     pub fn client_config(mut self, client_config: ClientConfig) -> Self {
         self.client_config = client_config;
+        self.nameserver_discovery = None;
+        self
+    }
+
+    #[inline]
+    pub fn client_options(mut self, options: ClientOptions) -> Self {
+        self.client_config = options.client_config().clone();
+        self.nameserver_discovery = options.nameserver_discovery().cloned();
+        self
+    }
+
+    #[inline]
+    pub fn nameserver_discovery(mut self, discovery: NameServerDiscoveryConfig) -> Self {
+        self.nameserver_discovery = Some(discovery);
         self
     }
 
@@ -419,7 +437,11 @@ impl DefaultMQPushConsumerBuilder {
         }
         consumer_config.rpc_hook = self.rpc_hook.clone();
 
-        DefaultMQPushConsumer::new(self.client_runtime, self.client_config, consumer_config)
+        DefaultMQPushConsumer::new_with_options(
+            self.client_runtime,
+            ClientOptions::from_parts(self.client_config, self.nameserver_discovery),
+            consumer_config,
+        )
     }
 }
 

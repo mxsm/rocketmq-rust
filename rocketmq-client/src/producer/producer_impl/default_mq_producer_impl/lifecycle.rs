@@ -25,13 +25,30 @@ impl DefaultMQProducerImpl {
         producer_config: ProducerConfig,
         rpc_hook: Option<Arc<dyn RPCHook>>,
     ) -> Self {
+        Self::new_with_options(
+            client_runtime,
+            ClientOptions::legacy(client_config),
+            producer_config,
+            rpc_hook,
+        )
+    }
+
+    pub(crate) fn new_with_options(
+        client_runtime: Arc<ClientRuntime>,
+        options: ClientOptions,
+        producer_config: ProducerConfig,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
+    ) -> Self {
         let service_context = client_runtime.component(format!("producer-{}", producer_config.producer_group()));
         let client_pool = client_runtime.pool().clone();
+        let client_config = options.client_config().clone();
+        let nameserver_discovery = options.nameserver_discovery().cloned();
         Self::new_with_runtime(
             Some(client_runtime),
             Some(client_pool),
             service_context,
             client_config,
+            nameserver_discovery,
             producer_config,
             rpc_hook,
         )
@@ -43,7 +60,15 @@ impl DefaultMQProducerImpl {
         producer_config: ProducerConfig,
         rpc_hook: Option<Arc<dyn RPCHook>>,
     ) -> Self {
-        Self::new_with_runtime(None, None, service_context, client_config, producer_config, rpc_hook)
+        Self::new_with_runtime(
+            None,
+            None,
+            service_context,
+            client_config,
+            None,
+            producer_config,
+            rpc_hook,
+        )
     }
 
     pub(super) fn new_with_runtime(
@@ -51,6 +76,7 @@ impl DefaultMQProducerImpl {
         client_pool: Option<ClientPool>,
         service_context: ChildServiceContext,
         client_config: ClientConfig,
+        nameserver_discovery: Option<NameServerDiscoveryConfig>,
         producer_config: ProducerConfig,
         rpc_hook: Option<Arc<dyn RPCHook>>,
     ) -> Self {
@@ -79,6 +105,7 @@ impl DefaultMQProducerImpl {
             service_context,
             client_pool,
             client_pool_token: ParkingLotMutex::new(None),
+            nameserver_discovery,
             request_future_holder,
             runtime: ArcSwap::from_pointee(runtime),
             config_update: ParkingLotMutex::new(()),
@@ -788,7 +815,8 @@ impl DefaultMQProducerImpl {
                 .client_pool
                 .as_ref()
                 .ok_or_else(|| mq_client_err!("internal producer must be pre-bound to its MQClientInstance"))?;
-            let pooled = client_pool.get_or_create(runtime.client_config.clone(), self.rpc_hook.read().clone())?;
+            let options = ClientOptions::from_parts(runtime.client_config.clone(), self.nameserver_discovery.clone());
+            let pooled = client_pool.get_or_create_with_options(options, self.rpc_hook.read().clone())?;
             let (instance, token) = pooled.into_parts();
             *self.client_pool_token.lock() = Some(token);
             instance

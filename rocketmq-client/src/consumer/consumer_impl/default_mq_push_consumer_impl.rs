@@ -68,6 +68,7 @@ use tracing::info;
 use tracing::warn;
 
 use crate::base::client_config::ClientConfig;
+use crate::base::client_options::ClientOptions;
 use crate::base::query_result::QueryResult;
 use crate::base::validators::Validators;
 use crate::consumer::ack_callback::AckCallback;
@@ -105,6 +106,7 @@ use crate::hook::filter_message_hook::FilterMessageHook;
 use crate::implementation::communication_mode::CommunicationMode;
 use crate::implementation::mq_client_manager::ClientPool;
 use crate::implementation::mq_client_manager::ClientPoolToken;
+use crate::nameserver_discovery::NameServerDiscoveryConfig;
 use crate::runtime::ClientRuntime;
 
 const PULL_TIME_DELAY_MILLS_WHEN_CACHE_FLOW_CONTROL: u64 = 50;
@@ -127,6 +129,7 @@ pub struct DefaultMQPushConsumerImpl {
     telemetry_handle: TelemetryHandle,
     client_metrics: ClientMetrics,
     client_pool_token: Mutex<Option<ClientPoolToken>>,
+    nameserver_discovery: Option<NameServerDiscoveryConfig>,
     pub(crate) global_lock: Arc<Mutex<()>>,
     lifecycle_transition: Mutex<()>,
     pub(crate) pull_time_delay_mills_when_exception: u64,
@@ -165,6 +168,16 @@ impl DefaultMQPushConsumerImpl {
         consumer_config: ConsumerConfig,
         rpc_hook: Option<Arc<dyn RPCHook>>,
     ) -> Self {
+        Self::new_with_discovery(client_runtime, client_config, None, consumer_config, rpc_hook)
+    }
+
+    fn new_with_discovery(
+        client_runtime: Arc<ClientRuntime>,
+        client_config: ClientConfig,
+        nameserver_discovery: Option<NameServerDiscoveryConfig>,
+        consumer_config: ConsumerConfig,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
+    ) -> Self {
         let service_context = client_runtime.component(format!("push-consumer-{}", consumer_config.consumer_group));
         let consumer_config = Arc::new(ArcSwap::from_pointee(consumer_config));
         let rebalance_consumer_config = (*consumer_config.load_full()).clone();
@@ -174,6 +187,7 @@ impl DefaultMQPushConsumerImpl {
             telemetry_handle: client_runtime.telemetry_handle().clone(),
             client_metrics: client_runtime.client_metrics().clone(),
             client_pool_token: Mutex::new(None),
+            nameserver_discovery,
             global_lock: Arc::new(Default::default()),
             lifecycle_transition: Mutex::new(()),
             pull_time_delay_mills_when_exception: 3_000,
@@ -213,6 +227,25 @@ impl DefaultMQPushConsumerImpl {
     ) -> Self {
         let initial_config = (*consumer_config.load_full()).clone();
         let mut this = Self::new(client_runtime, client_config, initial_config, rpc_hook);
+        this.consumer_config = consumer_config;
+        this
+    }
+
+    pub(crate) fn new_with_config_store_and_discovery(
+        client_runtime: Arc<ClientRuntime>,
+        client_config: ClientConfig,
+        nameserver_discovery: Option<NameServerDiscoveryConfig>,
+        consumer_config: Arc<ArcSwap<ConsumerConfig>>,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
+    ) -> Self {
+        let initial_config = (*consumer_config.load_full()).clone();
+        let mut this = Self::new_with_discovery(
+            client_runtime,
+            client_config,
+            nameserver_discovery,
+            initial_config,
+            rpc_hook,
+        );
         this.consumer_config = consumer_config;
         this
     }
@@ -401,9 +434,11 @@ impl DefaultMQPushConsumerImpl {
                     });
                 }
                 let client_config = self.client_config_snapshot();
+                let options =
+                    ClientOptions::from_parts(client_config.as_ref().clone(), self.nameserver_discovery.clone());
                 let pooled = self
                     .client_pool
-                    .get_or_create(client_config.as_ref().clone(), self.rpc_hook.clone())?;
+                    .get_or_create_with_options(options, self.rpc_hook.clone())?;
                 let (client_instance, token) = pooled.into_parts();
                 *self.client_pool_token.lock().await = Some(token);
                 self.set_component(&self.client_instance, Some(client_instance.clone()));

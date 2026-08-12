@@ -84,6 +84,7 @@ mod implementation;
 mod latency;
 mod legacy;
 mod lock;
+mod nameserver_discovery;
 pub mod prelude;
 mod producer;
 mod public_api;

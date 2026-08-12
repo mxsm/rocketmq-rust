@@ -38,6 +38,7 @@ observability = [
 ]
 observability-metrics = ["rocketmq-observability/otel-metrics", "rocketmq-transport/observability"]
 otlp-traces = ["observability", "rocketmq-observability/otlp-traces"]
+nameserver-dns-discovery = ["dep:hickory-resolver"]
 test-support = []
 
 [dependencies]
@@ -72,6 +73,7 @@ smallvec    = { workspace = true }
 
 futures        = { workspace = true }
 cheetah-string = { workspace = true }
+hickory-resolver = { workspace = true, optional = true }
 
 [dev-dependencies]
 rocketmq-transport = { workspace = true, features = ["test-support"] }

@@ -58,6 +58,10 @@ pub use crate::implementation::mq_client_api_factory::{
 pub use crate::latency::latency_fault_tolerance_impl::{
     run_latency_fault_detector_lifecycle_probe, LatencyFaultDetectorLifecycleProbe,
 };
+#[cfg(feature = "nameserver-dns-discovery")]
+pub use crate::nameserver_discovery::supervisor::{
+    run_nameserver_discovery_lifecycle_probe, NameServerDiscoveryLifecycleProbe,
+};
 pub use crate::producer::produce_accumulator::{
     run_produce_accumulator_guard_lifecycle_probe, ProduceAccumulatorGuardLifecycleProbe,
 };

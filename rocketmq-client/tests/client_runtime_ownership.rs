@@ -18,8 +18,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rocketmq_client_rust::ClientConfig;
+use rocketmq_client_rust::ClientOptions;
 use rocketmq_client_rust::ClientRuntime;
 use rocketmq_client_rust::ClientRuntimeConfig;
+use rocketmq_client_rust::NameServerDiscoveryConfig;
+use rocketmq_client_rust::NameServerSource;
 use rocketmq_client_rust::TelemetryHandle;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
@@ -237,6 +240,95 @@ fn client_pool_rejects_conflicting_configuration_for_the_same_client_id() {
     owner
         .shutdown_runtime_blocking()
         .expect("runtime should shut down cleanly");
+}
+
+#[test]
+fn discovery_identity_controls_runtime_local_pool_reuse() {
+    let owner = runtime_owner("client-runtime-discovery-identity");
+    let runtime = client_runtime(&owner, TelemetryHandle::noop());
+    let client_config = ClientConfig {
+        namesrv_addr: None,
+        ..Default::default()
+    };
+    let first_discovery =
+        NameServerDiscoveryConfig::new(NameServerSource::dns("namesrv-a.default.svc", 9876).expect("first DNS source"));
+    let equivalent_discovery = NameServerDiscoveryConfig::new(
+        NameServerSource::dns("NameSrv-A.Default.Svc.", 9876).expect("equivalent DNS source"),
+    );
+    let different_discovery = NameServerDiscoveryConfig::new(
+        NameServerSource::dns("namesrv-b.default.svc", 9876).expect("different DNS source"),
+    );
+
+    let first = runtime
+        .pool()
+        .get_or_create_with_options(
+            ClientOptions::legacy(client_config.clone()).with_nameserver_discovery(first_discovery),
+            None,
+        )
+        .expect("first discovery lease");
+    let equivalent = runtime
+        .pool()
+        .get_or_create_with_options(
+            ClientOptions::legacy(client_config.clone()).with_nameserver_discovery(equivalent_discovery),
+            None,
+        )
+        .expect("equivalent discovery lease");
+    assert!(Arc::ptr_eq(first.instance(), equivalent.instance()));
+
+    assert!(
+        runtime
+            .pool()
+            .get_or_create_with_options(
+                ClientOptions::legacy(client_config).with_nameserver_discovery(different_discovery),
+                None,
+            )
+            .is_err(),
+        "a different discovery fingerprint must not share the client-id owner"
+    );
+
+    owner.block_on(async {
+        assert!(!runtime.pool().release(first.into_parts().1).await);
+        assert!(runtime.pool().release(equivalent.into_parts().1).await);
+        let report = runtime.shutdown().await;
+        assert!(report.is_healthy(), "{}", report.to_json());
+    });
+    owner
+        .shutdown_runtime_blocking()
+        .expect("runtime should shut down cleanly");
+}
+
+#[cfg(not(feature = "nameserver-dns-discovery"))]
+#[test]
+fn typed_dns_discovery_requires_its_opt_in_feature_before_client_start() {
+    let owner = runtime_owner("client-runtime-dns-feature-boundary");
+    let runtime = client_runtime(&owner, TelemetryHandle::noop());
+    let options = ClientOptions::legacy(ClientConfig {
+        namesrv_addr: None,
+        ..Default::default()
+    })
+    .with_nameserver_discovery(NameServerDiscoveryConfig::new(
+        NameServerSource::dns("namesrv.default.svc", 9876).unwrap(),
+    ));
+    let lease = runtime
+        .pool()
+        .get_or_create_with_options(options, None)
+        .expect("typed client should be allocated before lifecycle validation");
+
+    owner.block_on(async {
+        let error = lease
+            .instance()
+            .start()
+            .await
+            .expect_err("DNS discovery must reject start when the feature is disabled");
+        assert!(matches!(
+            error,
+            rocketmq_error::RocketMQError::ConfigInvalidValue { .. }
+        ));
+        assert!(runtime.pool().release(lease.into_parts().1).await);
+        let report = runtime.shutdown().await;
+        assert!(report.is_healthy(), "{}", report.to_json());
+    });
+    owner.shutdown_runtime_blocking().unwrap();
 }
 
 #[test]

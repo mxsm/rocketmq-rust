@@ -22,13 +22,14 @@ use rocketmq_model::common::mix_all;
 use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_transport::api::v1::RPCHook;
 
-use crate::base::client_config::ClientConfig;
+use crate::base::client_options::ClientOptions;
 use crate::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrategy;
 use crate::consumer::consumer_impl::default_lite_pull_consumer_impl::default_lite_pull_consume_timestamp;
 use crate::consumer::consumer_impl::default_lite_pull_consumer_impl::validate_lite_pull_consume_from_where;
 use crate::consumer::consumer_impl::default_lite_pull_consumer_impl::LitePullConsumerConfig;
 use crate::consumer::default_lite_pull_consumer::DefaultLitePullConsumer;
 use crate::consumer::rebalance_strategy::allocate_message_queue_averagely::AllocateMessageQueueAveragely;
+use crate::nameserver_discovery::NameServerDiscoveryConfig;
 use crate::runtime::ClientRuntime;
 use crate::trace::trace_dispatcher::TraceDispatcher;
 
@@ -50,6 +51,7 @@ pub(crate) const MIN_AUTOCOMMIT_INTERVAL_MILLIS: u64 = 1000;
 /// ```
 pub struct DefaultLitePullConsumerBuilder {
     client_runtime: Arc<ClientRuntime>,
+    client_options: Option<ClientOptions>,
     // Client configuration
     name_server_addr: Option<CheetahString>,
     client_ip: Option<CheetahString>,
@@ -109,6 +111,7 @@ impl DefaultLitePullConsumerBuilder {
     pub fn new(client_runtime: Arc<ClientRuntime>) -> Self {
         Self {
             client_runtime,
+            client_options: None,
             name_server_addr: None,
             client_ip: None,
             instance_name: None,
@@ -156,6 +159,19 @@ impl DefaultLitePullConsumerBuilder {
     /// ```
     pub fn name_server_addr(mut self, addr: impl Into<CheetahString>) -> Self {
         self.name_server_addr = Some(addr.into());
+        self
+    }
+
+    /// Sets the complete client options, including typed NameServer discovery.
+    pub fn client_options(mut self, options: ClientOptions) -> Self {
+        self.client_options = Some(options);
+        self
+    }
+
+    /// Sets typed NameServer discovery on the current client options.
+    pub fn nameserver_discovery(mut self, discovery: NameServerDiscoveryConfig) -> Self {
+        let options = self.client_options.take().unwrap_or_default();
+        self.client_options = Some(options.with_nameserver_discovery(discovery));
         self
     }
 
@@ -377,7 +393,9 @@ impl DefaultLitePullConsumerBuilder {
         };
         validate_lite_pull_consume_from_where(self.consume_from_where)?;
 
-        let mut client_config = ClientConfig::default();
+        let options = self.client_options.unwrap_or_default();
+        let mut client_config = options.client_config().clone();
+        let nameserver_discovery = options.nameserver_discovery().cloned();
         client_config.set_enable_stream_request_type(true);
         if let Some(name_server_addr) = self.name_server_addr {
             client_config.set_namesrv_addr(name_server_addr);
@@ -424,9 +442,9 @@ impl DefaultLitePullConsumerBuilder {
             message_request_mode: self.message_request_mode,
         };
 
-        Ok(DefaultLitePullConsumer::new(
+        Ok(DefaultLitePullConsumer::new_with_options(
             self.client_runtime,
-            client_config,
+            ClientOptions::from_parts(client_config, nameserver_discovery),
             consumer_config,
             self.rpc_hook,
             self.trace_dispatcher,

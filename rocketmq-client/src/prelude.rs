@@ -15,8 +15,11 @@
 //! Minimal imports for common Client producer and consumer use cases.
 
 pub use crate::ClientConfig;
+pub use crate::ClientOptions;
 pub use crate::DefaultLitePullConsumer;
 pub use crate::DefaultMQProducer;
 pub use crate::DefaultMQPushConsumer;
 pub use crate::MessageRecall;
 pub use crate::MessageSend;
+pub use crate::NameServerDiscoveryConfig;
+pub use crate::NameServerSource;

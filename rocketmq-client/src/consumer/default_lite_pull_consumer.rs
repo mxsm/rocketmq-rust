@@ -35,6 +35,7 @@ use tokio::sync::OnceCell;
 use tokio::sync::RwLock;
 
 use crate::base::client_config::ClientConfig;
+use crate::base::client_options::ClientOptions;
 use crate::base::query_result::QueryResult;
 use crate::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrategy;
 use crate::consumer::consumer_impl::default_lite_pull_consumer_impl::validate_lite_pull_consume_from_where;
@@ -52,6 +53,7 @@ use crate::consumer::mq_consumer::MQConsumer;
 use crate::consumer::mq_consumer_inner::MQConsumerInner;
 use crate::consumer::store::offset_store::OffsetStore;
 use crate::consumer::topic_message_queue_change_listener::TopicMessageQueueChangeListener;
+use crate::nameserver_discovery::NameServerDiscoveryConfig;
 use crate::runtime::ClientRuntime;
 use crate::session::ClientSession;
 use crate::session::ClientSessionProvider;
@@ -151,6 +153,7 @@ pub struct DefaultLitePullConsumer {
     session: ClientSession,
     /// Client configuration (network, instance name, etc.)
     client_config: Arc<ArcSwap<ClientConfig>>,
+    nameserver_discovery: Option<NameServerDiscoveryConfig>,
 
     /// Consumer-specific configuration (pull batch size, flow control, etc.)
     consumer_config: Arc<ArcSwap<LitePullConsumerConfig>>,
@@ -190,9 +193,30 @@ impl DefaultLitePullConsumer {
         enable_msg_trace: bool,
         custom_trace_topic: Option<CheetahString>,
     ) -> Self {
+        Self::new_with_options(
+            client_runtime,
+            ClientOptions::legacy(client_config),
+            consumer_config,
+            rpc_hook,
+            trace_dispatcher,
+            enable_msg_trace,
+            custom_trace_topic,
+        )
+    }
+
+    pub(crate) fn new_with_options(
+        client_runtime: Arc<ClientRuntime>,
+        options: ClientOptions,
+        consumer_config: LitePullConsumerConfig,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
+        trace_dispatcher: Option<Arc<dyn TraceDispatcher + Send + Sync>>,
+        enable_msg_trace: bool,
+        custom_trace_topic: Option<CheetahString>,
+    ) -> Self {
         Self {
             session: ClientSession::new(client_runtime),
-            client_config: Arc::new(ArcSwap::from_pointee(client_config)),
+            client_config: Arc::new(ArcSwap::from_pointee(options.client_config().clone())),
+            nameserver_discovery: options.nameserver_discovery().cloned(),
             consumer_config: Arc::new(ArcSwap::from_pointee(consumer_config)),
             default_lite_pull_consumer_impl: Arc::new(OnceCell::new()),
             rpc_hook,
@@ -1072,9 +1096,12 @@ impl DefaultLitePullConsumer {
     async fn get_or_init_impl(&self) -> RocketMQResult<&Arc<DefaultLitePullConsumerImpl>> {
         self.default_lite_pull_consumer_impl
             .get_or_try_init(|| async {
-                let impl_ = Arc::new(DefaultLitePullConsumerImpl::try_new(
+                let impl_ = Arc::new(DefaultLitePullConsumerImpl::try_new_with_options(
                     self.session.runtime(),
-                    self.client_config_snapshot(),
+                    ClientOptions::from_parts(
+                        self.client_config_snapshot().as_ref().clone(),
+                        self.nameserver_discovery.clone(),
+                    ),
                     self.consumer_config_snapshot(),
                 )?);
                 impl_.bind_self();

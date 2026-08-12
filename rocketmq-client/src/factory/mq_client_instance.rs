@@ -96,6 +96,9 @@ use crate::implementation::communication_mode::CommunicationMode;
 use crate::implementation::find_broker_result::FindBrokerResult;
 use crate::implementation::mq_admin_impl::MQAdminImpl;
 use crate::implementation::mq_client_api_impl::MQClientAPIImpl;
+use crate::nameserver_discovery::supervisor::NameServerDiscoverySupervisor;
+use crate::nameserver_discovery::NameServerDiscoveryConfig;
+use crate::nameserver_discovery::NameServerSource;
 use crate::producer::default_mq_producer::DefaultMQProducer;
 use crate::producer::default_mq_producer::ProducerConfig;
 use crate::producer::producer_impl::mq_producer_inner::MQProducerInnerImpl;
@@ -197,6 +200,8 @@ pub struct MQClientInstance {
     client_metrics: ClientMetrics,
     request_future_holder: Arc<RequestFutureHolder>,
     pub(crate) client_config: Arc<ClientConfig>,
+    nameserver_discovery_config: Option<NameServerDiscoveryConfig>,
+    nameserver_discovery_supervisor: Mutex<Option<Arc<NameServerDiscoverySupervisor>>>,
     pub(crate) client_id: CheetahString,
     boot_timestamp: u64,
     /**
@@ -312,6 +317,32 @@ impl MQClientInstance {
 
     pub(crate) fn new_arc_with_resource_budget(
         client_config: ClientConfig,
+        instance_generation: u64,
+        client_id: impl Into<CheetahString>,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
+        service_context: ChildServiceContext,
+        request_future_holder: Arc<RequestFutureHolder>,
+        resource_budget: ResourceBudget,
+        telemetry_handle: TelemetryHandle,
+        client_metrics: ClientMetrics,
+    ) -> Arc<MQClientInstance> {
+        Self::new_arc_with_resource_budget_and_discovery(
+            client_config,
+            None,
+            instance_generation,
+            client_id,
+            rpc_hook,
+            service_context,
+            request_future_holder,
+            resource_budget,
+            telemetry_handle,
+            client_metrics,
+        )
+    }
+
+    pub(crate) fn new_arc_with_resource_budget_and_discovery(
+        client_config: ClientConfig,
+        nameserver_discovery_config: Option<NameServerDiscoveryConfig>,
         _instance_generation: u64,
         client_id: impl Into<CheetahString>,
         rpc_hook: Option<Arc<dyn RPCHook>>,
@@ -365,6 +396,8 @@ impl MQClientInstance {
             client_metrics,
             request_future_holder,
             client_config: shared_config,
+            nameserver_discovery_config,
+            nameserver_discovery_supervisor: Mutex::new(None),
             client_id,
             boot_timestamp: current_millis(),
             producer_table,
@@ -583,8 +616,9 @@ impl MQClientInstance {
         match self.service_state() {
             ServiceState::CreateJust => {
                 self.set_service_state(ServiceState::StartFailed);
+                self.start_nameserver_discovery().await?;
                 // If not specified,looking address from name remoting_server
-                if self.client_config.namesrv_addr.is_none() {
+                if self.nameserver_discovery_config.is_none() && self.client_config.namesrv_addr.is_none() {
                     let Some(mq_client_api_impl) = self.mq_client_api_impl.load_full() else {
                         return Err(mq_client_err!("mq_client_api_impl is None"));
                     };
@@ -638,6 +672,7 @@ impl MQClientInstance {
                     "MQClientInstance shutdown called but state is {:?}, ignoring shutdown request",
                     self.service_state()
                 );
+                self.shutdown_nameserver_discovery().await;
                 if let Some(mq_client_api_impl) = self.mq_client_api_impl.load_full() {
                     if !mq_client_api_impl
                         .shutdown_background_tasks(Duration::from_secs(1))
@@ -667,6 +702,8 @@ impl MQClientInstance {
                 );
             }
         }
+
+        self.shutdown_nameserver_discovery().await;
 
         info!("MQClientInstance[{}] shutting down rebalance service", self.client_id);
         if let Err(e) = self.rebalance_service.shutdown(3000).await {
@@ -753,6 +790,56 @@ impl MQClientInstance {
         self.set_service_state(ServiceState::ShutdownAlready);
 
         info!("MQClientInstance[{}] shutdown completed successfully", self.client_id);
+    }
+
+    async fn start_nameserver_discovery(&self) -> RocketMQResult<()> {
+        let Some(config) = self.nameserver_discovery_config.clone() else {
+            return Ok(());
+        };
+        if matches!(config.source(), NameServerSource::Static(_)) {
+            return Ok(());
+        }
+
+        #[cfg(not(feature = "nameserver-dns-discovery"))]
+        {
+            return Err(RocketMQError::ConfigInvalidValue {
+                key: "nameserver_discovery.dns",
+                value: "enabled".to_string(),
+                reason: "requires the nameserver-dns-discovery Cargo feature".to_string(),
+            });
+        }
+
+        #[cfg(feature = "nameserver-dns-discovery")]
+        {
+            let Some(api) = self.mq_client_api_impl.load_full() else {
+                return Err(mq_client_err!("mq_client_api_impl is None"));
+            };
+            let publisher = Arc::new(
+                move |endpoints: Arc<[crate::nameserver_discovery::ResolvedNameServerEndpoint]>| {
+                    let addresses = endpoints
+                        .iter()
+                        .map(|endpoint| CheetahString::from(endpoint.socket_addr().to_string()))
+                        .collect();
+                    api.update_name_server_targets_sync(addresses);
+                },
+            );
+            let supervisor = NameServerDiscoverySupervisor::start_dns(
+                config,
+                &self.service_context,
+                self.client_id.as_str(),
+                publisher,
+            )
+            .await?;
+            *self.nameserver_discovery_supervisor.lock().await = Some(supervisor);
+            Ok(())
+        }
+    }
+
+    async fn shutdown_nameserver_discovery(&self) {
+        let supervisor = self.nameserver_discovery_supervisor.lock().await.take();
+        if let Some(supervisor) = supervisor {
+            supervisor.shutdown().await;
+        }
     }
 
     async fn shutdown_connection_event_listener(&self, timeout: Duration) {

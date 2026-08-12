@@ -15,10 +15,19 @@
 #![recursion_limit = "256"]
 
 use rocketmq_client_rust::ClientConfig;
+use rocketmq_client_rust::ClientOptions;
+use rocketmq_client_rust::ClientRuntime;
 use rocketmq_client_rust::ClientRuntimeConfig;
+use rocketmq_client_rust::DefaultLitePullConsumer;
 use rocketmq_client_rust::DefaultMQProducer;
 use rocketmq_client_rust::DefaultMQPushConsumer;
 use rocketmq_client_rust::MQClientException;
+use rocketmq_client_rust::NameServerDiscoveryConfig;
+use rocketmq_client_rust::NameServerSource;
+use rocketmq_client_rust::TelemetryHandle;
+use rocketmq_client_rust::TransactionMQProducer;
+use rocketmq_runtime::RuntimeConfig;
+use rocketmq_runtime::RuntimeOwner;
 
 #[test]
 fn client_consumers_use_only_intentional_root_exports() {
@@ -50,7 +59,32 @@ fn client_consumers_use_only_intentional_root_exports() {
     }
 
     let _ = ClientConfig::default();
-    let _ = ClientRuntimeConfig::default();
+    let discovery =
+        NameServerDiscoveryConfig::new(NameServerSource::dns("namesrv.default.svc", 9876).expect("public DNS source"));
+    let options = ClientOptions::legacy(ClientConfig {
+        namesrv_addr: None,
+        ..Default::default()
+    })
+    .with_nameserver_discovery(discovery.clone());
+    assert!(options.nameserver_discovery().is_some());
+
+    let owner = RuntimeOwner::new(RuntimeConfig::server_default("public-api-contract")).unwrap();
+    let runtime = ClientRuntime::try_new(
+        owner.root_context().component("client"),
+        ClientRuntimeConfig::default(),
+        TelemetryHandle::noop(),
+    )
+    .unwrap();
+    let _ = DefaultMQProducer::builder(runtime.clone()).client_options(options.clone());
+    let _ = TransactionMQProducer::builder(runtime.clone()).nameserver_discovery(discovery.clone());
+    let _ = DefaultMQPushConsumer::builder(runtime.clone()).client_options(options.clone());
+    let _ = DefaultLitePullConsumer::builder(runtime.clone()).nameserver_discovery(discovery);
+    owner.block_on(async {
+        let report = runtime.shutdown().await;
+        assert!(report.is_healthy(), "{}", report.to_json());
+    });
+    owner.shutdown_runtime_blocking().unwrap();
+
     let _: Option<DefaultMQProducer> = None;
     let _: Option<DefaultMQPushConsumer> = None;
     let _: Option<MQClientException> = None;

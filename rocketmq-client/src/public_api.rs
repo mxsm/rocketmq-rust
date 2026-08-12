@@ -53,6 +53,7 @@ pub use crate::admin::TopicConfigPatchOutcome;
 #[cfg(feature = "admin-read")]
 pub use crate::admin::TopicConfigVersioned;
 pub use crate::base::client_config::ClientConfig;
+pub use crate::base::client_options::ClientOptions;
 pub use crate::cluster_session::{
     client_config_for_managed_domain, rpc_hook_from_outbound_signer, ClientInstanceHandle, ClientRpcHook,
 };
@@ -63,6 +64,11 @@ pub use crate::consumer::DefaultLitePullConsumer;
 pub use crate::consumer::DefaultMQPushConsumer;
 pub use crate::consumer::MessagePoll;
 pub use crate::consumer::SubscriptionControl;
+pub use crate::nameserver_discovery::DnsName;
+pub use crate::nameserver_discovery::NameServerAuthority;
+pub use crate::nameserver_discovery::NameServerDiscoveryConfig;
+pub use crate::nameserver_discovery::NameServerSource;
+pub use crate::nameserver_discovery::ResolvedNameServerEndpoint;
 pub use crate::producer::DefaultMQProducer;
 pub use crate::producer::MessageQuery;
 pub use crate::producer::MessageRecall;
