@@ -122,7 +122,7 @@ def positive_int(value: Any) -> bool:
 
 def validate_policy(policy: dict[str, Any]) -> list[str]:
     findings: list[str] = []
-    expected = {"schema_version", "artifact_kind", "comparison_thresholds", "modes"}
+    expected = {"schema_version", "artifact_kind", "comparison_thresholds", "stability_thresholds", "modes"}
     if set(policy) != expected:
         findings.append(f"policy keys must be exactly {sorted(expected)}")
     if policy.get("schema_version") != 1:
@@ -142,6 +142,19 @@ def validate_policy(policy: dict[str, Any]) -> list[str]:
             value = thresholds.get(key)
             if not isinstance(value, (int, float)) or isinstance(value, bool) or not 0 < float(value) <= 100:
                 findings.append(f"comparison_thresholds.{key} must be >0 and <=100")
+
+    stability = policy.get("stability_thresholds")
+    expected_stability = {
+        "maximum_throughput_normalized_mad_percent",
+        "maximum_p99_latency_normalized_mad_percent",
+    }
+    if not isinstance(stability, dict) or set(stability) != expected_stability:
+        findings.append("stability_thresholds has an invalid shape")
+    else:
+        for key in expected_stability:
+            value = stability.get(key)
+            if not isinstance(value, (int, float)) or isinstance(value, bool) or not 0 < float(value) <= 100:
+                findings.append(f"stability_thresholds.{key} must be >0 and <=100")
 
     modes = policy.get("modes")
     if not isinstance(modes, dict) or set(modes) != {"smoke", "release"}:
@@ -421,12 +434,14 @@ def measurement_identity(
 def aggregate_samples(samples: list[dict[str, Any]]) -> dict[str, float]:
     throughputs = [float(item["result"]["throughput_messages_per_second"]) for item in samples]
     payload_rates = [float(item["result"]["payload_mib_per_second"]) for item in samples]
-    p99_values = [float(item["result"]["latency_us"]["p99"]) for item in samples]
-    return {
+    result = {
         "throughput_messages_per_second_median": statistics.median(throughputs),
         "payload_mib_per_second_median": statistics.median(payload_rates),
-        "p99_latency_us_median": statistics.median(p99_values),
     }
+    for percentile in ("p50", "p95", "p99", "p999", "average"):
+        values = [float(item["result"]["latency_us"][percentile]) for item in samples]
+        result[f"{percentile}_latency_us_median"] = statistics.median(values)
+    return result
 
 
 def run_qualification(

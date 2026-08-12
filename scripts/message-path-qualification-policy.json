@@ -5,6 +5,10 @@
     "maximum_throughput_regression_percent": 10.0,
     "maximum_p99_latency_regression_percent": 15.0
   },
+  "stability_thresholds": {
+    "maximum_throughput_normalized_mad_percent": 10.0,
+    "maximum_p99_latency_normalized_mad_percent": 15.0
+  },
   "modes": {
     "smoke": {
       "minimum_repetitions": 1,
