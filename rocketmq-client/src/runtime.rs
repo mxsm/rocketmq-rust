@@ -439,6 +439,62 @@ where
     })
 }
 
+pub(crate) enum ClientAdaptiveTaskControl {
+    ContinueAfter(Duration),
+    Stop,
+}
+
+pub(crate) struct ClientAdaptiveTaskHandle {
+    task_group: TaskGroup,
+}
+
+impl ClientAdaptiveTaskHandle {
+    pub(crate) fn task_count(&self) -> usize {
+        self.task_group.task_count()
+    }
+
+    pub(crate) async fn shutdown(&self, timeout: Duration) -> ShutdownReport {
+        self.task_group.shutdown(timeout).await
+    }
+}
+
+pub(crate) fn spawn_client_adaptive_task_with_context<F, Fut>(
+    context: &ChildServiceContext,
+    task_name: &'static str,
+    initial_delay: Duration,
+    mut task: F,
+) -> io::Result<ClientAdaptiveTaskHandle>
+where
+    F: FnMut() -> Fut + Send + 'static,
+    Fut: Future<Output = ClientAdaptiveTaskControl> + Send + 'static,
+{
+    let component = context.try_component(task_name).map_err(io::Error::other)?;
+    let task_group = component.task_group().clone();
+    let cancellation = task_group.cancellation_token();
+    task_group
+        .spawn_service(task_name, async move {
+            let mut delay = initial_delay;
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = cancellation.cancelled() => break,
+                    _ = tokio::time::sleep(delay) => {}
+                }
+                let control = tokio::select! {
+                    biased;
+                    _ = cancellation.cancelled() => break,
+                    control = task() => control,
+                };
+                match control {
+                    ClientAdaptiveTaskControl::ContinueAfter(next_delay) => delay = next_delay,
+                    ClientAdaptiveTaskControl::Stop => break,
+                }
+            }
+        })
+        .map_err(io::Error::other)?;
+    Ok(ClientAdaptiveTaskHandle { task_group })
+}
+
 struct ClientTrackedTaskCompletion {
     completion_tx: Option<std_mpsc::Sender<()>>,
 }

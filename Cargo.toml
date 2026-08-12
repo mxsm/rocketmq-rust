@@ -161,6 +161,7 @@ uuid = { version = "1.23.3", features = [
 
 
 futures = "0.3"
+hickory-resolver = { version = "0.26.1", default-features = false, features = ["system-config", "tokio"] }
 
 cheetah-string = { version = "3.0.0", features = ["serde", "bytes", "simd"] }
 

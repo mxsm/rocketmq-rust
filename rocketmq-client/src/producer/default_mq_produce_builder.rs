@@ -21,6 +21,8 @@ use rocketmq_protocol::common::compression::compressor::Compressor;
 use rocketmq_transport::api::v1::RPCHook;
 
 use crate::base::client_config::ClientConfig;
+use crate::base::client_options::ClientOptions;
+use crate::nameserver_discovery::NameServerDiscoveryConfig;
 use crate::producer::default_mq_producer::DefaultMQProducer;
 use crate::producer::produce_accumulator::ProduceAccumulator;
 use crate::runtime::ClientRuntime;
@@ -30,6 +32,7 @@ use crate::trace::trace_dispatcher::ArcTraceDispatcher;
 pub struct DefaultMQProducerBuilder {
     client_runtime: Arc<ClientRuntime>,
     client_config: ClientConfig,
+    nameserver_discovery: Option<NameServerDiscoveryConfig>,
     retry_response_codes: Option<HashSet<i32>>,
     producer_group: Option<CheetahString>,
     topics: Option<Vec<CheetahString>>,
@@ -63,6 +66,7 @@ impl DefaultMQProducerBuilder {
         Self {
             client_runtime,
             client_config: ClientConfig::default(),
+            nameserver_discovery: None,
             retry_response_codes: None,
             producer_group: None,
             topics: None,
@@ -94,6 +98,22 @@ impl DefaultMQProducerBuilder {
     #[inline]
     pub fn client_config(mut self, client_config: ClientConfig) -> Self {
         self.client_config = client_config;
+        self.nameserver_discovery = None;
+        self
+    }
+
+    /// Sets the complete client options, including typed NameServer discovery.
+    #[inline]
+    pub fn client_options(mut self, options: ClientOptions) -> Self {
+        self.client_config = options.client_config().clone();
+        self.nameserver_discovery = options.nameserver_discovery().cloned();
+        self
+    }
+
+    /// Sets typed NameServer discovery while retaining the current client configuration.
+    #[inline]
+    pub fn nameserver_discovery(mut self, discovery: NameServerDiscoveryConfig) -> Self {
+        self.nameserver_discovery = Some(discovery);
         self
     }
 
@@ -354,12 +374,16 @@ impl DefaultMQProducerBuilder {
         }
 
         // Create and set the producer implementation
-        let producer_impl = crate::producer::producer_impl::default_mq_producer_impl::DefaultMQProducerImpl::new(
-            self.client_runtime,
-            mq_producer.client_config_snapshot().as_ref().clone(),
-            mq_producer.producer_config_snapshot().as_ref().clone(),
-            mq_producer.rpc_hook(),
-        );
+        let producer_impl =
+            crate::producer::producer_impl::default_mq_producer_impl::DefaultMQProducerImpl::new_with_options(
+                self.client_runtime,
+                ClientOptions::from_parts(
+                    mq_producer.client_config_snapshot().as_ref().clone(),
+                    self.nameserver_discovery,
+                ),
+                mq_producer.producer_config_snapshot().as_ref().clone(),
+                mq_producer.rpc_hook(),
+            );
         mq_producer.set_default_mqproducer_impl(producer_impl);
 
         mq_producer

@@ -12,16 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod access_channel;
-pub mod client_config;
-pub mod client_config_builder;
-pub mod client_config_validation;
-pub mod client_options;
-pub mod mq_admin;
-pub mod mq_client_admin;
-pub mod query_result;
-pub mod validators;
+mod config;
+#[cfg(feature = "nameserver-dns-discovery")]
+pub(crate) mod dns;
+mod snapshot;
+pub(crate) mod supervisor;
 
-pub use mq_admin::MQAdmin;
-pub use mq_client_admin::MqClientAdmin;
-pub use mq_client_admin::MqClientAdminInner;
+pub use config::DnsName;
+pub use config::NameServerAuthority;
+pub use config::NameServerDiscoveryConfig;
+pub use config::NameServerSource;
+#[cfg(feature = "nameserver-dns-discovery")]
+pub(crate) use snapshot::EndpointSnapshot;
+#[cfg(feature = "nameserver-dns-discovery")]
+pub(crate) use snapshot::Freshness;
+pub use snapshot::ResolvedNameServerEndpoint;

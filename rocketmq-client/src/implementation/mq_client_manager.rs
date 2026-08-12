@@ -29,7 +29,9 @@ use rocketmq_transport::api::v1::RPCHook;
 use tracing::info;
 
 use crate::base::client_config::ClientConfig;
+use crate::base::client_options::ClientOptions;
 use crate::factory::mq_client_instance::MQClientInstance;
+use crate::nameserver_discovery::NameServerDiscoveryConfig;
 use crate::producer::produce_accumulator::ProduceAccumulator;
 use crate::producer::request_future_holder::RequestFutureHolder;
 
@@ -43,6 +45,7 @@ struct ClientPoolEntry {
 #[derive(Clone, Eq, PartialEq)]
 struct ClientPoolIdentity {
     namesrv_addr: Option<CheetahString>,
+    discovery_fingerprint: Option<CheetahString>,
     use_tls: bool,
     vip_channel_enabled: bool,
     api_timeout_millis: u64,
@@ -50,9 +53,14 @@ struct ClientPoolIdentity {
 }
 
 impl ClientPoolIdentity {
-    fn new(client_config: &ClientConfig, rpc_hook: Option<&Arc<dyn RPCHook>>) -> Self {
+    fn new(
+        client_config: &ClientConfig,
+        discovery: Option<&NameServerDiscoveryConfig>,
+        rpc_hook: Option<&Arc<dyn RPCHook>>,
+    ) -> Self {
         Self {
             namesrv_addr: client_config.namesrv_addr.clone(),
+            discovery_fingerprint: discovery.map(|config| CheetahString::from_string(config.fingerprint())),
             use_tls: client_config.use_tls,
             vip_channel_enabled: client_config.vip_channel_enabled,
             api_timeout_millis: client_config.mq_client_api_timeout,
@@ -137,16 +145,24 @@ impl ClientPool {
 
     pub fn get_or_create(
         &self,
-        mut client_config: ClientConfig,
+        client_config: ClientConfig,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
+    ) -> rocketmq_error::RocketMQResult<PooledClient> {
+        self.get_or_create_with_options(ClientOptions::legacy(client_config), rpc_hook)
+    }
+
+    pub fn get_or_create_with_options(
+        &self,
+        options: ClientOptions,
         rpc_hook: Option<Arc<dyn RPCHook>>,
     ) -> rocketmq_error::RocketMQResult<PooledClient> {
         let _admission = self.inner.admission.read();
         if self.inner.closed.load(Ordering::Acquire) {
             return Err(mq_client_err!("ClientRuntime is shutting down"));
         }
-        client_config.normalize_namesrv_addr()?;
+        let (client_config, discovery) = options.into_normalized_parts()?;
         let client_id = CheetahString::from_string(client_config.build_mq_client_id());
-        let identity = ClientPoolIdentity::new(&client_config, rpc_hook.as_ref());
+        let identity = ClientPoolIdentity::new(&client_config, discovery.as_ref(), rpc_hook.as_ref());
 
         let mut entry = self.inner.factory_table.entry(client_id.clone()).or_insert_with(|| {
             let generation = self.inner.next_generation.fetch_add(1, Ordering::AcqRel) + 1;
@@ -155,8 +171,9 @@ impl ClientPool {
                 generation,
                 "Created new MQClientInstance in ClientPool"
             );
-            let instance = MQClientInstance::new_arc_with_resource_budget(
+            let instance = MQClientInstance::new_arc_with_resource_budget_and_discovery(
                 client_config,
+                discovery,
                 generation,
                 client_id.clone(),
                 rpc_hook,

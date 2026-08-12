@@ -70,6 +70,7 @@ use tracing::info;
 use tracing::warn;
 
 use crate::base::client_config::ClientConfig;
+use crate::base::client_options::ClientOptions;
 use crate::base::query_result::QueryResult;
 use crate::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrategy;
 use crate::consumer::consumer_impl::assigned_message_queue::AssignedMessageQueue;
@@ -95,6 +96,7 @@ use crate::hook::filter_message_hook::FilterMessageHook;
 use crate::implementation::communication_mode::CommunicationMode;
 use crate::implementation::mq_client_manager::ClientPool;
 use crate::implementation::mq_client_manager::ClientPoolToken;
+use crate::nameserver_discovery::NameServerDiscoveryConfig;
 use crate::runtime::spawn_client_task_with_context;
 use crate::runtime::spawn_client_tracked_task_with_context;
 use crate::runtime::ClientRuntime;
@@ -341,6 +343,7 @@ pub struct DefaultLitePullConsumerImpl {
     service_context: ChildServiceContext,
     client_pool: ClientPool,
     client_pool_token: Mutex<Option<ClientPoolToken>>,
+    nameserver_discovery: Option<NameServerDiscoveryConfig>,
     // Configuration
     pub(crate) client_config: ArcSwap<ClientConfig>,
     consumer_config: ArcSwap<LitePullConsumerConfig>,
@@ -425,7 +428,23 @@ impl DefaultLitePullConsumerImpl {
         C: AsRef<ClientConfig>,
         L: AsRef<LitePullConsumerConfig>,
     {
-        let client_config = client_config.as_ref().clone();
+        Self::try_new_with_options(
+            client_runtime,
+            ClientOptions::legacy(client_config.as_ref().clone()),
+            consumer_config,
+        )
+    }
+
+    pub(crate) fn try_new_with_options<L>(
+        client_runtime: Arc<ClientRuntime>,
+        options: ClientOptions,
+        consumer_config: L,
+    ) -> RocketMQResult<Self>
+    where
+        L: AsRef<LitePullConsumerConfig>,
+    {
+        let client_config = options.client_config().clone();
+        let nameserver_discovery = options.nameserver_discovery().cloned();
         let consumer_config = consumer_config.as_ref().clone();
         let pull_thread_nums = consumer_config.pull_thread_nums;
         let consume_requests = Self::build_consume_request_queue(&consumer_config, &client_runtime.resource_budget())?;
@@ -435,6 +454,7 @@ impl DefaultLitePullConsumerImpl {
             service_context: client_runtime.component(format!("lite-consumer-{}", consumer_config.consumer_group)),
             client_pool: client_runtime.pool().clone(),
             client_pool_token: Mutex::new(None),
+            nameserver_discovery,
             client_config: ArcSwap::from_pointee(client_config),
             consumer_config: ArcSwap::from_pointee(consumer_config),
             lifecycle_transition: Mutex::new(()),
@@ -946,9 +966,11 @@ impl DefaultLitePullConsumerImpl {
                 }
 
                 let client_config = self.client_config.load_full();
+                let options =
+                    ClientOptions::from_parts(client_config.as_ref().clone(), self.nameserver_discovery.clone());
                 let pooled = self
                     .client_pool
-                    .get_or_create(client_config.as_ref().clone(), self.rpc_hook_snapshot())?;
+                    .get_or_create_with_options(options, self.rpc_hook_snapshot())?;
                 let (client_instance, token) = pooled.into_parts();
                 *self.client_pool_token.lock().await = Some(token);
                 *self

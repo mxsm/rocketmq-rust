@@ -72,6 +72,7 @@ use tokio_util::task::TaskTracker;
 use tracing::warn;
 
 use crate::base::client_config::ClientConfig;
+use crate::base::client_options::ClientOptions;
 use crate::base::query_result::QueryResult;
 use crate::base::validators::Validators;
 use crate::common::client_error_code::ClientErrorCode;
@@ -92,6 +93,7 @@ use crate::implementation::mq_client_manager::ClientPoolToken;
 use crate::latency::mq_fault_strategy::MQFaultStrategy;
 use crate::latency::resolver::Resolver;
 use crate::latency::service_detector::ServiceDetector;
+use crate::nameserver_discovery::NameServerDiscoveryConfig;
 use crate::producer::default_mq_producer::ProducerConfig;
 use crate::producer::default_mq_producer::MIN_BACK_PRESSURE_FOR_ASYNC_SEND_NUM;
 use crate::producer::default_mq_producer::MIN_BACK_PRESSURE_FOR_ASYNC_SEND_SIZE;
@@ -352,6 +354,7 @@ pub struct DefaultMQProducerImpl {
     service_context: ChildServiceContext,
     client_pool: Option<ClientPool>,
     client_pool_token: ParkingLotMutex<Option<ClientPoolToken>>,
+    nameserver_discovery: Option<NameServerDiscoveryConfig>,
     request_future_holder: Arc<RequestFutureHolder>,
     // ===== Immutable configuration =====
     runtime: ArcSwap<ProducerRuntimeSnapshot>,
