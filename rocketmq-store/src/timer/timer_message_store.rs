@@ -22,7 +22,6 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
-use bytes::Bytes;
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
 use parking_lot::RwLock;
@@ -82,6 +81,8 @@ use crate::timer::error::QuarantineManifest;
 use crate::timer::error::QuarantineRecord;
 use crate::timer::error::TimerWorkResult;
 use crate::timer::java_compat::JavaCompatEngine;
+use crate::timer::payload_cursor::TimerPayloadCursor;
+use crate::timer::payload_cursor::TimerPayloadCursorError;
 use crate::timer::pipeline::TimerPipeline;
 use crate::timer::pipeline::TimerPipelineDiagnostics;
 use crate::timer::role::TimerRoleState;
@@ -577,24 +578,25 @@ impl TimerMessageStore {
                 retained_bytes = retained_bytes.saturating_add(run_bytes);
                 continue;
             };
-            let mut contiguous = Vec::with_capacity(run_bytes);
-            for segment in segments {
-                contiguous.extend_from_slice(segment.get_buffer());
-            }
-            if contiguous.len() != run_bytes {
+            let mut payload_cursor = TimerPayloadCursor::new(segments);
+            if payload_cursor.remaining() != run_bytes {
                 output.extend((run_start..cursor).map(|_| Err(TimerPayloadReadError::ShortRead)));
                 retained_bytes = retained_bytes.saturating_add(run_bytes);
                 continue;
             }
-            let mut relative = 0usize;
             for (_, size) in &locators[run_start..cursor] {
                 let size = *size as usize;
-                let mut bytes = Bytes::copy_from_slice(&contiguous[relative..relative + size]);
-                output.push(
-                    MessageDecoder::decode(&mut bytes, true, false, false, false, false)
-                        .ok_or(TimerPayloadReadError::Decode),
-                );
-                relative += size;
+                let result = payload_cursor
+                    .take_frame(size)
+                    .map_err(|error| match error {
+                        TimerPayloadCursorError::InvalidFrameSize => TimerPayloadReadError::InvalidLocator,
+                        TimerPayloadCursorError::ShortRead => TimerPayloadReadError::ShortRead,
+                    })
+                    .and_then(|mut bytes| {
+                        MessageDecoder::decode(&mut bytes, true, false, false, false, false)
+                            .ok_or(TimerPayloadReadError::Decode)
+                    });
+                output.push(result);
             }
             retained_bytes = retained_bytes.saturating_add(run_bytes);
         }

@@ -33,6 +33,7 @@ use crate::index::RocksDbIndexBuildConfig;
 use crate::index::RocksDbIndexBuildService;
 use crate::maintenance::RocksDbMaintenanceService;
 use crate::message::MessageRocksDbStorage;
+use crate::resource_budget::RocksDbResourceBudget;
 use crate::runtime::RocksDbRuntimeScope;
 use crate::store::RocksDbStore;
 use crate::timer::RocksDbTimerBuildConfig;
@@ -189,16 +190,19 @@ impl RocksDbDerivedStore {
 
         let rocksdb_config = RocksDbConfig::consume_queue_from_message_store_config(source);
         rocksdb_config.validate()?;
-        let rocksdb_store = Arc::new(RocksDbStore::open_with_metrics(
+        let resource_budget = Arc::new(RocksDbResourceBudget::from_config(&rocksdb_config)?);
+        let rocksdb_store = Arc::new(RocksDbStore::open_with_metrics_and_resource_budget(
             rocksdb_config.clone(),
             metrics.clone(),
+            Arc::clone(&resource_budget),
         )?);
         let consume_queue_store = RocksDbConsumeQueueStore::new(Arc::clone(&rocksdb_store));
         let message_rocksdb_config = RocksDbConfig::message_from_message_store_config(source);
         message_rocksdb_config.validate()?;
-        let message_rocksdb_storage = Arc::new(MessageRocksDbStorage::open_with_metrics(
+        let message_rocksdb_storage = Arc::new(MessageRocksDbStorage::open_with_metrics_and_resource_budget(
             message_rocksdb_config.clone(),
             metrics,
+            resource_budget,
         )?);
         let rocksdb_maintenance_service = RocksDbMaintenanceService::new(
             Arc::clone(&rocksdb_store),
@@ -254,6 +258,10 @@ impl RocksDbDerivedStore {
 
     pub fn rocksdb_store(&self) -> Arc<RocksDbStore> {
         Arc::clone(&self.rocksdb_store)
+    }
+
+    pub fn resource_budget(&self) -> Arc<RocksDbResourceBudget> {
+        self.rocksdb_store.resource_budget()
     }
 
     pub const fn consume_queue_store(&self) -> &RocksDbConsumeQueueStore {

@@ -281,6 +281,7 @@ mod rocksdb_api {
     pub use crate::rocksdb::message::TIMER_TIMELINE_CHECKPOINT;
     pub use crate::rocksdb::options::RocksDbOptionsFactory;
     pub use crate::rocksdb::options::RocksDbWriteProfile;
+    pub use crate::rocksdb::resource_budget::RocksDbResourceBudget;
     pub use crate::rocksdb::runtime::RocksDbRuntimeScope;
     pub use crate::rocksdb::snapshot::RocksDbSnapshot;
     pub use crate::rocksdb::store::KeyValueStore;

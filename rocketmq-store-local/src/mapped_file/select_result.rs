@@ -83,6 +83,14 @@ pub struct SelectMappedBufferResult<M: MappedMemory = NativeMappedMemory> {
     cache_state: SelectMappedBufferCacheState,
 }
 
+struct SelectMappedBufferOwner<M: MappedMemory>(SelectMappedBufferResult<M>);
+
+impl<M: MappedMemory> AsRef<[u8]> for SelectMappedBufferOwner<M> {
+    fn as_ref(&self) -> &[u8] {
+        self.0.get_buffer()
+    }
+}
+
 impl<M: MappedMemory> Default for SelectMappedBufferResult<M> {
     fn default() -> Self {
         Self {
@@ -280,6 +288,16 @@ impl<M: MappedMemory> SelectMappedBufferResult<M> {
     #[inline]
     pub fn get_bytes(&self) -> Option<Bytes> {
         self.get_bytes_ref().cloned()
+    }
+
+    /// Converts this selection into immutable bytes while retaining its owner.
+    ///
+    /// Mapped selections keep their read lease and mapping generation inside
+    /// the returned value, so this conversion does not copy payload bytes.
+    /// File-range-only fallbacks may still materialize their exact selected
+    /// range when first read.
+    pub fn into_owner_bytes(self) -> Bytes {
+        Bytes::from_owner(SelectMappedBufferOwner(self))
     }
 
     /// Returns an immutable byte snapshot, materializing and caching an exact fallback when this
@@ -526,6 +544,29 @@ mod tests {
         assert_eq!(mapped_file.lifecycle_snapshot().active_leases, 1);
 
         drop(selected);
+        assert_eq!(mapped_file.lifecycle_snapshot().active_leases, 0);
+    }
+
+    #[test]
+    fn owner_bytes_keep_mapped_range_alive_without_snapshot_copy() {
+        let (_directory, mapped_file) = mapped_file();
+        assert!(mapped_file.append_message_bytes(b"mapped"));
+        assert!(mapped_file.try_seal_readable().expect("seal read-only generation"));
+        let selected = mapped_file
+            .select_mapped_buffer(0, 6)
+            .expect("mapped range should be selectable");
+        assert!(selected.is_range_backed());
+        assert!(!selected.has_byte_snapshot());
+        let selected_pointer = selected.get_buffer().as_ptr();
+
+        let bytes = selected.into_owner_bytes();
+
+        assert_eq!(bytes.as_ptr(), selected_pointer);
+        assert_eq!(bytes.as_ref(), b"mapped");
+        MappedFile::shutdown(mapped_file.as_ref(), u64::MAX);
+        assert_eq!(bytes.as_ref(), b"mapped");
+        assert_eq!(mapped_file.lifecycle_snapshot().active_leases, 1);
+        drop(bytes);
         assert_eq!(mapped_file.lifecycle_snapshot().active_leases, 0);
     }
 }

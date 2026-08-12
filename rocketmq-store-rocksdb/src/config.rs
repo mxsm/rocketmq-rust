@@ -34,6 +34,14 @@ pub trait RocksDbConfigSource {
     fn rocksdb_backup_interval_ms(&self) -> usize;
 
     fn rocksdb_backup_dir(&self) -> Option<&str>;
+
+    fn rocksdb_block_cache_budget_bytes(&self) -> usize {
+        DEFAULT_ROCKSDB_BLOCK_CACHE_BUDGET_BYTES
+    }
+
+    fn rocksdb_write_buffer_budget_bytes(&self) -> usize {
+        DEFAULT_ROCKSDB_WRITE_BUFFER_BUDGET_BYTES
+    }
 }
 
 const ROCKSDB_MESSAGE_DIRECTORY: &str = "rocksdbstore";
@@ -44,6 +52,8 @@ const GB: usize = 1024 * MB;
 const KB_U64: u64 = 1024;
 const MB_U64: u64 = 1024 * KB_U64;
 const GB_U64: u64 = 1024 * MB_U64;
+pub const DEFAULT_ROCKSDB_BLOCK_CACHE_BUDGET_BYTES: usize = GB;
+pub const DEFAULT_ROCKSDB_WRITE_BUFFER_BUDGET_BYTES: usize = 512 * MB;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum RocksDbCompressionType {
@@ -382,6 +392,8 @@ pub struct RocksDbConfig {
     pub write_buffer_size: usize,
     pub max_write_buffer_number: i32,
     pub block_cache_size: usize,
+    pub block_cache_budget_bytes: usize,
+    pub write_buffer_budget_bytes: usize,
     pub block_size: usize,
     pub bloom_filter_bits: f64,
     pub compression_type: RocksDbCompressionType,
@@ -424,6 +436,8 @@ impl Default for RocksDbConfig {
             write_buffer_size: 128 * 1024 * 1024,
             max_write_buffer_number: 4,
             block_cache_size: 1024 * 1024 * 1024,
+            block_cache_budget_bytes: DEFAULT_ROCKSDB_BLOCK_CACHE_BUDGET_BYTES,
+            write_buffer_budget_bytes: DEFAULT_ROCKSDB_WRITE_BUFFER_BUDGET_BYTES,
             block_size: 32 * 1024,
             bloom_filter_bits: 16.0,
             compression_type: RocksDbCompressionType::Lz4,
@@ -565,6 +579,8 @@ impl RocksDbConfig {
         S: RocksDbConfigSource + ?Sized,
     {
         Self {
+            block_cache_budget_bytes: message_store_config.rocksdb_block_cache_budget_bytes(),
+            write_buffer_budget_bytes: message_store_config.rocksdb_write_buffer_budget_bytes(),
             flush_interval_ms: message_store_config.mem_table_flush_interval_ms(),
             compaction_interval_ms: message_store_config
                 .clean_rocksdb_dirty_cq_interval_min()
@@ -589,6 +605,20 @@ impl RocksDbConfig {
                 key: "rocksdb.write_buffer_size",
                 value: self.write_buffer_size.to_string(),
                 reason: "write buffer size must be greater than zero".to_string(),
+            });
+        }
+        if self.block_cache_budget_bytes == 0 {
+            return Err(RocketMQError::ConfigInvalidValue {
+                key: "rocksdb.block_cache_budget_bytes",
+                value: self.block_cache_budget_bytes.to_string(),
+                reason: "shared block-cache budget must be greater than zero".to_string(),
+            });
+        }
+        if self.write_buffer_budget_bytes == 0 {
+            return Err(RocketMQError::ConfigInvalidValue {
+                key: "rocksdb.write_buffer_budget_bytes",
+                value: self.write_buffer_budget_bytes.to_string(),
+                reason: "shared write-buffer budget must be greater than zero".to_string(),
             });
         }
         for column_family in &self.column_families {

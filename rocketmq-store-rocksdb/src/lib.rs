@@ -27,6 +27,7 @@ pub mod message;
 pub mod message_store;
 pub mod options;
 pub mod release_checkpoint;
+pub mod resource_budget;
 #[doc(hidden)]
 pub mod runtime;
 pub mod snapshot;
@@ -38,4 +39,5 @@ pub mod value;
 pub use config::RocksDbConfig;
 pub use error::RocksDbErrorKind;
 pub use error::RocksDbResultExt;
+pub use resource_budget::RocksDbResourceBudget;
 pub use store::RocksDbStore;

@@ -55,4 +55,12 @@ impl RocksDbConfigSource for MessageStoreConfig {
     fn rocksdb_backup_dir(&self) -> Option<&str> {
         self.rocksdb_backup_dir.as_ref().map(|path| path.as_str())
     }
+
+    fn rocksdb_block_cache_budget_bytes(&self) -> usize {
+        self.rocksdb_block_cache_budget_bytes
+    }
+
+    fn rocksdb_write_buffer_budget_bytes(&self) -> usize {
+        self.rocksdb_write_buffer_budget_bytes
+    }
 }

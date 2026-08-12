@@ -167,6 +167,14 @@ mod defaults {
         32 * 1024 * 1024
     }
 
+    pub fn rocksdb_block_cache_budget_bytes() -> usize {
+        1024 * 1024 * 1024
+    }
+
+    pub fn rocksdb_write_buffer_budget_bytes() -> usize {
+        512 * 1024 * 1024
+    }
+
     pub fn timer_recall_to_time_wheel_enable() -> bool {
         true
     }
@@ -1363,6 +1371,12 @@ pub struct MessageStoreConfig {
     #[serde(default)]
     pub rocksdb_backup_dir: Option<CheetahString>,
 
+    #[serde(default = "defaults::rocksdb_block_cache_budget_bytes")]
+    pub rocksdb_block_cache_budget_bytes: usize,
+
+    #[serde(default = "defaults::rocksdb_write_buffer_budget_bytes")]
+    pub rocksdb_write_buffer_budget_bytes: usize,
+
     #[serde(default)]
     pub real_time_persist_rocksdb_config: bool,
 
@@ -1647,6 +1661,8 @@ impl Default for MessageStoreConfig {
             rocksdb_checkpoint_interval_ms: 0,
             rocksdb_backup_interval_ms: 0,
             rocksdb_backup_dir: None,
+            rocksdb_block_cache_budget_bytes: defaults::rocksdb_block_cache_budget_bytes(),
+            rocksdb_write_buffer_budget_bytes: defaults::rocksdb_write_buffer_budget_bytes(),
             real_time_persist_rocksdb_config: false,
             enable_rocksdb_log: false,
             topic_queue_lock_num: 32,
@@ -2585,6 +2601,14 @@ impl MessageStoreConfig {
                 .map_or_else(String::new, ToString::to_string),
         );
         properties.insert(
+            "rocksdbBlockCacheBudgetBytes".into(),
+            self.rocksdb_block_cache_budget_bytes.to_string(),
+        );
+        properties.insert(
+            "rocksdbWriteBufferBudgetBytes".into(),
+            self.rocksdb_write_buffer_budget_bytes.to_string(),
+        );
+        properties.insert(
             "realTimePersistRocksdbConfig".into(),
             self.real_time_persist_rocksdb_config.to_string(),
         );
@@ -2944,6 +2968,8 @@ mod tests {
         assert_eq!(config.max_rocksdb_index_query_days, 7);
         assert_eq!(config.pop_rocksdb_block_cache_size, 256 * 1024 * 1024);
         assert_eq!(config.pop_rocksdb_write_buffer_size, 32 * 1024 * 1024);
+        assert_eq!(config.rocksdb_block_cache_budget_bytes, 1024 * 1024 * 1024);
+        assert_eq!(config.rocksdb_write_buffer_budget_bytes, 512 * 1024 * 1024);
         assert!(config.use_separate_store_path_for_rocksdb_cq);
 
         let properties = config.get_properties();
@@ -2990,6 +3016,14 @@ mod tests {
         assert_eq!(properties["rocksdbCheckpointIntervalMs"], "0");
         assert_eq!(properties["rocksdbBackupIntervalMs"], "0");
         assert_eq!(properties["rocksdbBackupDir"], "");
+        assert_eq!(
+            properties["rocksdbBlockCacheBudgetBytes"],
+            (1024 * 1024 * 1024).to_string()
+        );
+        assert_eq!(
+            properties["rocksdbWriteBufferBudgetBytes"],
+            (512 * 1024 * 1024).to_string()
+        );
     }
 
     #[test]
@@ -2998,7 +3032,9 @@ mod tests {
             r#"{
                 "rocksdbCheckpointIntervalMs": 60000,
                 "rocksdbBackupIntervalMs": 3600000,
-                "rocksdbBackupDir": "store/backup"
+                "rocksdbBackupDir": "store/backup",
+                "rocksdbBlockCacheBudgetBytes": 268435456,
+                "rocksdbWriteBufferBudgetBytes": 134217728
             }"#,
         )?;
 
@@ -3008,6 +3044,8 @@ mod tests {
             config.rocksdb_backup_dir.as_ref().map(|path| path.as_str()),
             Some("store/backup")
         );
+        assert_eq!(config.rocksdb_block_cache_budget_bytes, 256 * 1024 * 1024);
+        assert_eq!(config.rocksdb_write_buffer_budget_bytes, 128 * 1024 * 1024);
         Ok(())
     }
 
