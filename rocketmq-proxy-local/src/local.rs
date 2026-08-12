@@ -24,6 +24,7 @@ use rocketmq_error::RocketMQError;
 use rocketmq_model::common::attribute::topic_message_type::TopicMessageType;
 use rocketmq_model::common::boundary_type::BoundaryType;
 use rocketmq_model::common::filter::expression_type::ExpressionType;
+use rocketmq_model::common::message::message_batch::MessageBatch;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_id::MessageId;
 use rocketmq_model::common::message::message_queue::MessageQueue;
@@ -42,12 +43,14 @@ use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
 use rocketmq_protocol::protocol::body::batch_ack_builder::build_batch_ack_requests;
 use rocketmq_protocol::protocol::body::batch_ack_builder::BatchAckInput;
+use rocketmq_protocol::protocol::body::lite_subscription_ctl_request_body::LiteSubscriptionCtlRequestBody;
 use rocketmq_protocol::protocol::body::query_assignment_request_body::QueryAssignmentRequestBody;
 use rocketmq_protocol::protocol::body::query_assignment_response_body::QueryAssignmentResponseBody;
 use rocketmq_protocol::protocol::header::ack_message_request_header::AckMessageRequestHeader;
 use rocketmq_protocol::protocol::header::change_invisible_time_request_header::ChangeInvisibleTimeRequestHeader;
 use rocketmq_protocol::protocol::header::change_invisible_time_response_header::ChangeInvisibleTimeResponseHeader;
 use rocketmq_protocol::protocol::header::consumer_send_msg_back_request_header::ConsumerSendMsgBackRequestHeader;
+use rocketmq_protocol::protocol::header::empty_header::EmptyHeader;
 use rocketmq_protocol::protocol::header::end_transaction_request_header::EndTransactionRequestHeader;
 use rocketmq_protocol::protocol::header::extra_info_util::ExtraInfoUtil;
 use rocketmq_protocol::protocol::header::get_max_offset_request_header::GetMaxOffsetRequestHeader;
@@ -86,6 +89,7 @@ use rocketmq_proxy_core::ForwardMessageToDeadLetterQueuePlan;
 use rocketmq_proxy_core::ForwardMessageToDeadLetterQueueRequest;
 use rocketmq_proxy_core::GetOffsetPlan;
 use rocketmq_proxy_core::GetOffsetRequest;
+use rocketmq_proxy_core::LiteSubscriptionSyncRequest;
 use rocketmq_proxy_core::MessageService;
 use rocketmq_proxy_core::MetadataService;
 use rocketmq_proxy_core::ProxyContext;
@@ -135,6 +139,7 @@ use crate::execution::run_local_execution;
 use crate::execution::LocalCommandHandler;
 use crate::execution::LocalExecutionPolicy;
 use crate::message::message_ext_to_core;
+use crate::message::message_from_core;
 use crate::message::message_properties_from_core;
 use crate::service::LocalServiceManager;
 
@@ -798,6 +803,15 @@ impl LocalConsumerService {
 }
 
 impl ConsumerService for LocalConsumerService {
+    fn sync_lite_subscription<'a>(
+        &'a self,
+        _context: &'a ProxyContext,
+        client_id: &'a str,
+        request: &'a LiteSubscriptionSyncRequest,
+    ) -> ProxyServiceFuture<'a, ()> {
+        Box::pin(async move { sync_lite_subscription_via_broker(&self.client, client_id, request).await })
+    }
+
     fn receive_message<'a>(
         &'a self,
         context: &'a ProxyContext,
@@ -1215,11 +1229,103 @@ async fn send_message(
 ) -> ProxyResult<Vec<SendMessageResultEntry>> {
     let producer_group = build_local_proxy_producer_group(client_id.as_deref(), request_id.as_str());
     let broker_name = facade.broker_config().broker_identity.broker_name.clone();
-    let mut results = Vec::with_capacity(request.messages.len());
-    for entry in request.messages {
+    let entries = request.messages;
+    if compatible_batch_entries(&entries) {
+        return Ok(send_compatible_batch(facade, &broker_name, producer_group.as_str(), entries).await);
+    }
+    let mut results = Vec::with_capacity(entries.len());
+    for entry in entries {
         results.push(send_message_entry(facade, &broker_name, producer_group.as_str(), entry).await);
     }
     Ok(results)
+}
+
+async fn sync_lite_subscription_via_broker(
+    client: &LocalBrokerFacadeClient,
+    client_id: &str,
+    request: &LiteSubscriptionSyncRequest,
+) -> ProxyResult<()> {
+    let mut body = LiteSubscriptionCtlRequestBody::new();
+    body.set_subscription_set(vec![request.broker_dto(client_id)?]);
+    let command = RemotingCommand::create_request_command(RequestCode::LiteSubscriptionCtl, EmptyHeader {})
+        .set_body(body.encode()?);
+    let response = client.process_remoting(command).await?;
+    if ResponseCode::from(response.code()) != ResponseCode::Success {
+        return Err(broker_operation_error("syncLiteSubscription", &response).into());
+    }
+    Ok(())
+}
+
+fn compatible_batch_entries(entries: &[SendMessageEntry]) -> bool {
+    let Some(first) = entries.first() else {
+        return false;
+    };
+    entries.len() > 1
+        && entries.iter().all(|entry| {
+            entry.topic == first.topic
+                && entry.queue_id == first.queue_id
+                && !entry.message.properties().keys().any(|key| {
+                    matches!(
+                        key.as_str(),
+                        MessageConst::PROPERTY_SHARDING_KEY
+                            | MessageConst::PROPERTY_TIMER_DELIVER_MS
+                            | MessageConst::PROPERTY_TRANSACTION_PREPARED
+                            | MessageConst::PROPERTY_LITE_TOPIC
+                            | MessageConst::PROPERTY_PRIORITY
+                    )
+                })
+        })
+}
+
+async fn send_compatible_batch(
+    facade: &ProxyBrokerFacade,
+    broker_name: &CheetahString,
+    producer_group: &str,
+    entries: Vec<SendMessageEntry>,
+) -> Vec<SendMessageResultEntry> {
+    let result = async {
+        let request = build_send_batch_message_request(broker_name, producer_group, &entries)?;
+        let response = facade.process_request(request).await?;
+        build_send_result(entries[0].topic.clone(), broker_name, response)
+    }
+    .await;
+    match result {
+        Ok(result) => split_batch_send_result(result, &entries),
+        Err(error) => entries
+            .iter()
+            .map(|_| SendMessageResultEntry {
+                status: ProxyStatusMapper::from_error_payload(&error),
+                send_result: None,
+            })
+            .collect(),
+    }
+}
+
+fn split_batch_send_result(result: SendResult, entries: &[SendMessageEntry]) -> Vec<SendMessageResultEntry> {
+    let broker_ids = result
+        .msg_id
+        .as_ref()
+        .map(|value| value.split_char(',').map(str::to_owned).collect::<Vec<_>>())
+        .filter(|ids| ids.len() == entries.len());
+    entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            let mut item = result.clone();
+            item.queue_offset = result.queue_offset.saturating_add(index as u64);
+            item.msg_id = Some(CheetahString::from(
+                broker_ids
+                    .as_ref()
+                    .and_then(|ids| ids.get(index))
+                    .map(String::as_str)
+                    .unwrap_or(entry.client_message_id.as_str()),
+            ));
+            SendMessageResultEntry {
+                status: ProxyStatusMapper::from_send_result_payload(&item),
+                send_result: Some(item),
+            }
+        })
+        .collect()
 }
 
 async fn send_message_entry(
@@ -1791,6 +1897,47 @@ fn build_send_message_request(
     })?;
     let mut command = RemotingCommand::create_request_command(RequestCode::SendMessage, header)
         .set_body(bytes::Bytes::copy_from_slice(body));
+    command.make_custom_header_to_net();
+    Ok(command)
+}
+
+fn build_send_batch_message_request(
+    broker_name: &CheetahString,
+    producer_group: &str,
+    entries: &[SendMessageEntry],
+) -> ProxyResult<RemotingCommand> {
+    let first = entries
+        .first()
+        .ok_or_else(|| RocketMQError::request_body_invalid("sendMessage", "batch must contain at least one message"))?;
+    let messages = entries
+        .iter()
+        .map(|entry| message_from_core(&entry.message))
+        .collect::<Result<Vec<_>, _>>()?;
+    let batch = MessageBatch::generate_from_messages(messages)?;
+    let body = MessageDecoder::encode_messages(&batch.messages);
+    let header = SendMessageRequestHeader {
+        producer_group: CheetahString::from(producer_group),
+        topic: CheetahString::from(first.topic.to_string()),
+        default_topic: CheetahString::from_static_str(TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC),
+        default_topic_queue_nums: 8,
+        queue_id: first.queue_id.unwrap_or(-1),
+        sys_flag: MessageSysFlag::TRANSACTION_NOT_TYPE,
+        born_timestamp: current_millis() as i64,
+        flag: 0,
+        properties: None,
+        reconsume_times: None,
+        unit_mode: Some(false),
+        batch: Some(true),
+        max_reconsume_times: None,
+        topic_request_header: Some(TopicRequestHeader {
+            rpc_request_header: Some(RpcRequestHeader {
+                broker_name: Some(broker_name.clone()),
+                ..Default::default()
+            }),
+            lo: None,
+        }),
+    };
+    let mut command = RemotingCommand::create_request_command(RequestCode::SendBatchMessage, header).set_body(body);
     command.make_custom_header_to_net();
     Ok(command)
 }
@@ -2373,7 +2520,11 @@ mod tests {
     use cheetah_string::CheetahString;
     use rocketmq_error::RocketMQError;
     use rocketmq_model::common::attribute::topic_message_type::TopicMessageType;
+    use rocketmq_model::common::message::MessageConst;
+    use rocketmq_model::result::SendResult;
+    use rocketmq_model::result::SendStatus;
     use rocketmq_observability::TelemetryHandle;
+    use rocketmq_protocol::code::request_code::RequestCode;
     use rocketmq_protocol::code::response_code::ResponseCode;
     use rocketmq_protocol::protocol::header::extra_info_util::ExtraInfoUtil;
     use rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
@@ -2395,14 +2546,67 @@ mod tests {
     use super::build_local_proxy_producer_group;
     use super::build_pop_request_header;
     use super::build_pull_request_header;
+    use super::build_send_batch_message_request;
     use super::build_send_message_request;
+    use super::compatible_batch_entries;
     use super::convert_topic_message_type;
     use super::local_long_poll_timeout;
     use super::parse_receipt_handle;
+    use super::split_batch_send_result;
     use super::transaction_resolution_flag;
     use super::validate_local_queue_config;
     use super::LocalBrokerFacadeClient;
     use crate::LocalConfig;
+
+    fn batch_entry(id: &str) -> SendMessageEntry {
+        SendMessageEntry {
+            topic: ResourceIdentity::new("", "TopicA"),
+            client_message_id: id.to_owned(),
+            message: ProxyMessage::new("TopicA", id.as_bytes().to_vec()),
+            queue_id: None,
+        }
+    }
+
+    #[test]
+    fn compatible_entries_build_one_local_batch_request() {
+        let entries = vec![batch_entry("a"), batch_entry("b")];
+        assert!(compatible_batch_entries(&entries));
+
+        let command = build_send_batch_message_request(&"broker-a".into(), "group-a", &entries).expect("batch command");
+        assert_eq!(RequestCode::from(command.code()), RequestCode::SendBatchMessage);
+        let header = command
+            .decode_command_custom_header::<SendMessageRequestHeader>()
+            .expect("batch header");
+        assert_eq!(header.batch, Some(true));
+        assert!(command.body().is_some_and(|body| !body.is_empty()));
+
+        let mut fifo = entries;
+        fifo[0]
+            .message
+            .put_property(MessageConst::PROPERTY_SHARDING_KEY, "group");
+        assert!(!compatible_batch_entries(&fifo));
+    }
+
+    #[test]
+    fn local_batch_result_preserves_per_entry_ids_and_offsets() {
+        let entries = vec![batch_entry("client-a"), batch_entry("client-b")];
+        let result = SendResult::new(
+            SendStatus::SendOk,
+            Some(CheetahString::from("broker-a,broker-b")),
+            None,
+            None,
+            8,
+        );
+
+        let split = split_batch_send_result(result, &entries);
+
+        assert_eq!(split.len(), 2);
+        assert_eq!(
+            split[0].send_result.as_ref().expect("first").msg_id.as_deref(),
+            Some("broker-a")
+        );
+        assert_eq!(split[1].send_result.as_ref().expect("second").queue_offset, 9);
+    }
 
     fn available_local_broker_port() -> u16 {
         loop {

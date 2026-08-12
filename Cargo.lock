@@ -4362,6 +4362,7 @@ dependencies = [
  "config",
  "criterion",
  "dashmap",
+ "flate2",
  "futures",
  "hex",
  "hmac",

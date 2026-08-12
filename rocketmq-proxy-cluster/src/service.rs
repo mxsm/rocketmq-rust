@@ -36,6 +36,7 @@ use rocketmq_proxy_core::ForwardMessageToDeadLetterQueuePlan;
 use rocketmq_proxy_core::ForwardMessageToDeadLetterQueueRequest;
 use rocketmq_proxy_core::GetOffsetPlan;
 use rocketmq_proxy_core::GetOffsetRequest;
+use rocketmq_proxy_core::LiteSubscriptionSyncRequest;
 use rocketmq_proxy_core::MessageService;
 use rocketmq_proxy_core::MetadataService;
 use rocketmq_proxy_core::ProxyContext;
@@ -194,6 +195,15 @@ impl ClusterConsumerService {
 }
 
 impl ConsumerService for ClusterConsumerService {
+    fn sync_lite_subscription<'a>(
+        &'a self,
+        _context: &'a ProxyContext,
+        client_id: &'a str,
+        request: &'a LiteSubscriptionSyncRequest,
+    ) -> ProxyServiceFuture<'a, ()> {
+        Box::pin(async move { self.client.sync_lite_subscription(client_id, request).await })
+    }
+
     fn receive_message<'a>(
         &'a self,
         context: &'a ProxyContext,

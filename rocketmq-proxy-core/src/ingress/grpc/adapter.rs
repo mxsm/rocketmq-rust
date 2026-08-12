@@ -83,7 +83,9 @@ use crate::status::ProxyStatusMapper;
 const PROPERTY_DLQ_ORIGIN_MESSAGE_ID: &str = "DLQ_ORIGIN_MESSAGE_ID";
 const PROPERTY_DLQ_ORIGIN_TOPIC: &str = "DLQ_ORIGIN_TOPIC";
 const PROPERTY_KEYS: &str = "KEYS";
+const PROPERTY_LITE_TOPIC: &str = "__LITE_TOPIC";
 const PROPERTY_POP_CK: &str = "POP_CK";
+const PROPERTY_PRIORITY: &str = "_SYS_MSG_PRIORITY_";
 const PROPERTY_SHARDING_KEY: &str = "__SHARDINGKEY";
 const PROPERTY_TAGS: &str = "TAGS";
 const PROPERTY_TIMER_DELIVER_MS: &str = "TIMER_DELIVER_MS";
@@ -1015,6 +1017,14 @@ fn build_send_message_entry(config: &GrpcConfig, message: &v2::Message, now_ms: 
     if message.body.is_empty() {
         return Err(rocketmq_error::RocketMQError::illegal_argument("message body must not be empty").into());
     }
+    if message.body.len() > config.max_message_body_size {
+        return Err(rocketmq_error::RocketMQError::illegal_argument(format!(
+            "message body size {} exceeds the configured maximum {} bytes",
+            message.body.len(),
+            config.max_message_body_size
+        ))
+        .into());
+    }
 
     let effective_type = infer_message_type(system)?;
     let mut rocketmq_message = build_rocketmq_message(&topic, message, system, &client_message_id)?;
@@ -1099,8 +1109,22 @@ fn infer_message_type(system: &v2::SystemProperties) -> ProxyResult<ProxyTopicMe
 
             Ok(ProxyTopicMessageType::Transaction)
         }
-        v2::MessageType::Lite => Err(ProxyError::not_implemented("SendMessage(lite-topic)")),
-        v2::MessageType::Priority => Err(ProxyError::not_implemented("SendMessage(priority)")),
+        v2::MessageType::Lite => {
+            if has_message_group || has_delivery_timestamp || system.priority.is_some() {
+                return Err(ProxyError::message_property_conflict(
+                    "lite message does not support FIFO, delay, or priority properties",
+                ));
+            }
+            Ok(ProxyTopicMessageType::Lite)
+        }
+        v2::MessageType::Priority => {
+            if has_message_group || has_delivery_timestamp || system.lite_topic.is_some() {
+                return Err(ProxyError::message_property_conflict(
+                    "priority message does not support FIFO, delay, or lite-topic properties",
+                ));
+            }
+            Ok(ProxyTopicMessageType::Priority)
+        }
     }
 }
 
@@ -1192,9 +1216,28 @@ fn apply_message_type(
             message.put_property(PROPERTY_TRANSACTION_PREPARED, "true");
             Ok(())
         }
-        ProxyTopicMessageType::Mixed => Err(ProxyError::not_implemented("SendMessage(mixed-type topic)")),
-        ProxyTopicMessageType::Lite => Err(ProxyError::not_implemented("SendMessage(lite-topic)")),
-        ProxyTopicMessageType::Priority => Err(ProxyError::not_implemented("SendMessage(priority)")),
+        ProxyTopicMessageType::Mixed => Ok(()),
+        ProxyTopicMessageType::Lite => {
+            let lite_topic = system
+                .lite_topic
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    ProxyError::message_property_conflict("lite message requires systemProperties.liteTopic")
+                })?;
+            message.put_property(PROPERTY_LITE_TOPIC, lite_topic);
+            Ok(())
+        }
+        ProxyTopicMessageType::Priority => {
+            let priority = system.priority.filter(|priority| *priority >= 0).ok_or_else(|| {
+                ProxyError::message_property_conflict(
+                    "priority message requires a non-negative systemProperties.priority",
+                )
+            })?;
+            message.put_property(PROPERTY_PRIORITY, priority.to_string());
+            Ok(())
+        }
         ProxyTopicMessageType::Unspecified => Ok(()),
     }
 }
@@ -1307,8 +1350,10 @@ fn build_message_system_properties(
         trace_context: message_ext.property(PROPERTY_TRACE_CONTEXT).map(ToOwned::to_owned),
         orphaned_transaction_recovery_duration: None,
         dead_letter_queue: dead_letter_queue(message_ext),
-        lite_topic: None,
-        priority: None,
+        lite_topic: message_ext.property(PROPERTY_LITE_TOPIC).map(ToOwned::to_owned),
+        priority: message_ext
+            .property(PROPERTY_PRIORITY)
+            .and_then(|value| value.parse().ok()),
     }
 }
 
@@ -1404,6 +1449,12 @@ fn dead_letter_queue(message: &ProxyMessageExt) -> Option<v2::DeadLetterQueue> {
 }
 
 fn received_message_type(message: &ProxyMessageExt) -> v2::MessageType {
+    if message.property(PROPERTY_PRIORITY).is_some() {
+        return v2::MessageType::Priority;
+    }
+    if message.property(PROPERTY_LITE_TOPIC).is_some() {
+        return v2::MessageType::Lite;
+    }
     if message.property(PROPERTY_SHARDING_KEY).is_some() {
         return v2::MessageType::Fifo;
     }
@@ -1801,6 +1852,53 @@ mod tests {
         assert_eq!(message.property(PROPERTY_SHARDING_KEY), Some("group-a"));
         assert_eq!(message.property("custom"), Some("value"));
         assert_eq!(message.body_bytes().expect("mapped body").as_ptr(), wire_body_ptr);
+    }
+
+    #[test]
+    fn send_message_maps_priority_to_reserved_property() {
+        let mut request = send_request(HashMap::new());
+        let system = request.messages[0]
+            .system_properties
+            .as_mut()
+            .expect("system properties");
+        system.message_type = v2::MessageType::Priority as i32;
+        system.priority = Some(7);
+        system.message_group = None;
+
+        let mapped = build_send_message_request(&grpc_context(), &request).expect("priority request");
+
+        assert_eq!(mapped.messages[0].message.property(PROPERTY_PRIORITY), Some("7"));
+    }
+
+    #[test]
+    fn send_message_maps_lite_topic_to_reserved_property() {
+        let mut request = send_request(HashMap::new());
+        let system = request.messages[0]
+            .system_properties
+            .as_mut()
+            .expect("system properties");
+        system.message_type = v2::MessageType::Lite as i32;
+        system.lite_topic = Some("child".to_owned());
+        system.message_group = None;
+
+        let mapped = build_send_message_request(&grpc_context(), &request).expect("lite request");
+
+        assert_eq!(mapped.messages[0].message.property(PROPERTY_LITE_TOPIC), Some("child"));
+    }
+
+    #[test]
+    fn send_message_rejects_missing_priority_and_lite_topic() {
+        for message_type in [v2::MessageType::Priority, v2::MessageType::Lite] {
+            let mut request = send_request(HashMap::new());
+            let system = request.messages[0]
+                .system_properties
+                .as_mut()
+                .expect("system properties");
+            system.message_type = message_type as i32;
+            system.message_group = None;
+
+            assert!(build_send_message_request(&grpc_context(), &request).is_err());
+        }
     }
 
     #[test]

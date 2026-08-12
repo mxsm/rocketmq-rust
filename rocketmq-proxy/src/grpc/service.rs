@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::io::Read;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::Context as TaskContext;
@@ -22,6 +23,8 @@ use std::time::SystemTime;
 use futures::stream;
 use futures::Stream;
 use futures::StreamExt;
+use rocketmq_runtime::BlockingExecutor;
+use rocketmq_runtime::BlockingKind;
 use rocketmq_runtime::ResourcePermit;
 use rocketmq_runtime::TaskGroup;
 use tonic::Request;
@@ -134,6 +137,7 @@ pub struct ProxyGrpcService<P> {
     hooks: ProxyHookChain,
     metrics: ProxyMetrics,
     drain: rocketmq_proxy_core::ProxyDrainController,
+    cpu_crypto: Option<BlockingExecutor>,
 }
 
 pub type ProxyHousekeepingRunReport = housekeeping::GrpcHousekeepingRunReport;
@@ -150,6 +154,7 @@ impl<P> Clone for ProxyGrpcService<P> {
             hooks: self.hooks.clone(),
             metrics: self.metrics.clone(),
             drain: self.drain.clone(),
+            cpu_crypto: self.cpu_crypto.clone(),
         }
     }
 }
@@ -178,6 +183,7 @@ impl<P> ProxyGrpcService<P> {
             hooks: ProxyHookChain::default(),
             metrics: ProxyMetrics::default(),
             drain: rocketmq_proxy_core::ProxyDrainController::default(),
+            cpu_crypto: None,
         }
     }
 
@@ -223,6 +229,39 @@ impl<P> ProxyGrpcService<P> {
     pub fn with_drain_controller(mut self, drain: rocketmq_proxy_core::ProxyDrainController) -> Self {
         self.drain = drain;
         self
+    }
+
+    pub fn with_cpu_crypto_executor(mut self, executor: BlockingExecutor) -> Self {
+        self.cpu_crypto = Some(executor);
+        self
+    }
+
+    async fn normalize_send_body_encodings(
+        &self,
+        request: v2::SendMessageRequest,
+    ) -> ProxyResult<v2::SendMessageRequest> {
+        let needs_gzip = request.messages.iter().any(|message| {
+            message.system_properties.as_ref().is_some_and(|properties| {
+                v2::Encoding::try_from(properties.body_encoding).unwrap_or(v2::Encoding::Unspecified)
+                    == v2::Encoding::Gzip
+            })
+        });
+        if !needs_gzip {
+            return Ok(request);
+        }
+
+        let Some(executor) = self.cpu_crypto.clone() else {
+            return Err(ProxyError::not_implemented("SendMessage(gzip executor unavailable)"));
+        };
+        let max_body_size = self.config.grpc.max_message_body_size;
+        executor
+            .spawn("proxy.grpc.decode_gzip", BlockingKind::CpuBound, move || {
+                decode_gzip_message_bodies(request, max_body_size)
+            })
+            .await
+            .map_err(|error| ProxyError::Transport {
+                message: format!("gzip decode task failed: {error}"),
+            })?
     }
 
     pub fn metrics_snapshot(&self) -> ProxyMetricsSnapshot {
@@ -845,6 +884,37 @@ where
     }
 }
 
+fn decode_gzip_message_bodies(
+    mut request: v2::SendMessageRequest,
+    max_body_size: usize,
+) -> ProxyResult<v2::SendMessageRequest> {
+    for message in &mut request.messages {
+        let Some(system) = message.system_properties.as_mut() else {
+            continue;
+        };
+        let encoding = v2::Encoding::try_from(system.body_encoding).unwrap_or(v2::Encoding::Unspecified);
+        if encoding != v2::Encoding::Gzip {
+            continue;
+        }
+
+        let mut decoded = Vec::with_capacity(message.body.len().min(max_body_size));
+        let decoder = flate2::read::GzDecoder::new(message.body.as_ref());
+        let limit = u64::try_from(max_body_size).unwrap_or(u64::MAX).saturating_add(1);
+        decoder.take(limit).read_to_end(&mut decoded).map_err(|error| {
+            rocketmq_error::RocketMQError::illegal_argument(format!("invalid gzip message body: {error}"))
+        })?;
+        if decoded.len() > max_body_size {
+            return Err(rocketmq_error::RocketMQError::illegal_argument(format!(
+                "decoded message body exceeds the configured maximum {max_body_size} bytes"
+            ))
+            .into());
+        }
+        message.body = decoded.into();
+        system.body_encoding = v2::Encoding::Identity as i32;
+    }
+    Ok(request)
+}
+
 fn proxy_span_outcome(outcome: &ProxyRequestOutcome) -> rocketmq_observability::trace::proxy::ProxySpanOutcome {
     match outcome {
         ProxyRequestOutcome::Payload(status) if status.is_ok() => {
@@ -963,40 +1033,44 @@ where
         };
 
         let response = async {
-            match self
-                .validate_client_context(&context)
-                .and_then(|_| adapter::build_send_message_request(&context, &request))
+            if let Err(error) = self.validate_client_context(&context) {
+                return adapter::error_send_message_response(ProxyStatusMapper::from_error(&error));
+            }
+            let _permit = match self.guards.try_producer(estimated_protobuf_retained_bytes(&request)) {
+                Ok(permit) => permit,
+                Err(error) => return adapter::error_send_message_response(ProxyStatusMapper::from_error(&error)),
+            };
+            let request = match self.normalize_send_body_encodings(request).await {
+                Ok(request) => request,
+                Err(error) => return adapter::error_send_message_response(ProxyStatusMapper::from_error(&error)),
+            };
+            let input = match adapter::build_send_message_request_with_config(
+                &self.config.grpc,
+                &context.without_principal(),
+                &request,
+            ) {
+                Ok(input) => input,
+                Err(error) => return adapter::error_send_message_response(ProxyStatusMapper::from_error(&error)),
+            };
+            if let Err(error) = self
+                .authorize_contexts(&context, principal.as_ref(), &auth::send_message_contexts(&input))
+                .await
             {
-                Ok(input) => match self
-                    .authorize_contexts(&context, principal.as_ref(), &auth::send_message_contexts(&input))
-                    .await
-                {
-                    Ok(()) => match self.guards.try_producer(estimated_protobuf_retained_bytes(&request)) {
-                        Ok(_permit) => match self
-                            .processor
-                            .send_message(&context.without_principal(), input.clone())
-                            .await
-                        {
-                            Ok(plan) => {
-                                if let Some(producer_group) =
-                                    self.processor.transaction_producer_group(&context.without_principal())
-                                {
-                                    self.track_prepared_transactions(
-                                        &context,
-                                        producer_group.as_str(),
-                                        &request,
-                                        &input,
-                                        &plan,
-                                    );
-                                }
-                                adapter::build_send_message_response(&plan, &input)
-                            }
-                            Err(error) => adapter::error_send_message_response(ProxyStatusMapper::from_error(&error)),
-                        },
-                        Err(error) => adapter::error_send_message_response(ProxyStatusMapper::from_error(&error)),
-                    },
-                    Err(error) => adapter::error_send_message_response(ProxyStatusMapper::from_error(&error)),
-                },
+                return adapter::error_send_message_response(ProxyStatusMapper::from_error(&error));
+            }
+            match self
+                .processor
+                .send_message(&context.without_principal(), input.clone())
+                .await
+            {
+                Ok(plan) => {
+                    if let Some(producer_group) =
+                        self.processor.transaction_producer_group(&context.without_principal())
+                    {
+                        self.track_prepared_transactions(&context, producer_group.as_str(), &request, &input, &plan);
+                    }
+                    adapter::build_send_message_response(&plan, &input)
+                }
                 Err(error) => adapter::error_send_message_response(ProxyStatusMapper::from_error(&error)),
             }
         }
@@ -1746,10 +1820,24 @@ where
                         Ok(()) => {
                             self.sessions.upsert_from_context(&context);
                             let settings = self.sessions.settings_for_client(client_id);
-                            self.sessions
-                                .sync_lite_subscription(client_id, input, settings.as_ref())
-                                .map(|_| ProxyStatusMapper::ok())
-                                .unwrap_or_else(|error| ProxyStatusMapper::from_error(&error))
+                            match self
+                                .sessions
+                                .validate_lite_subscription_sync(client_id, &input, settings.as_ref())
+                            {
+                                Ok(()) => match self
+                                    .processor
+                                    .sync_lite_subscription(&context.without_principal(), client_id, input.clone())
+                                    .await
+                                {
+                                    Ok(()) => self
+                                        .sessions
+                                        .sync_lite_subscription(client_id, input, settings.as_ref())
+                                        .map(|_| ProxyStatusMapper::ok())
+                                        .unwrap_or_else(|error| ProxyStatusMapper::from_error(&error)),
+                                    Err(error) => ProxyStatusMapper::from_error(&error),
+                                },
+                                Err(error) => ProxyStatusMapper::from_error(&error),
+                            }
                         }
                         Err(error) => ProxyStatusMapper::from_error(&error),
                     },
@@ -1769,6 +1857,7 @@ where
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::io::Write;
     use std::sync::Arc;
     use std::sync::Mutex;
     use std::time::Duration;
@@ -1797,6 +1886,7 @@ mod tests {
     use tonic::metadata::MetadataValue;
     use tonic::Request;
 
+    use super::decode_gzip_message_bodies;
     use super::ProxyGrpcService;
     use super::DEFAULT_CONSUMER_CUSTOMIZED_BACKOFF_MS;
     use super::DEFAULT_CONSUMER_MAX_ATTEMPTS;
@@ -1851,6 +1941,55 @@ mod tests {
     use crate::session::TelemetryCommandKind;
     use crate::status::ProxyPayloadStatus;
     use crate::status::ProxyStatusMapper;
+
+    fn gzip_body(body: &[u8]) -> Bytes {
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        encoder.write_all(body).expect("write gzip body");
+        Bytes::from(encoder.finish().expect("finish gzip body"))
+    }
+
+    #[test]
+    fn gzip_message_body_decodes_to_identity_with_a_hard_limit() {
+        let request = v2::SendMessageRequest {
+            messages: vec![v2::Message {
+                system_properties: Some(v2::SystemProperties {
+                    body_encoding: v2::Encoding::Gzip as i32,
+                    ..Default::default()
+                }),
+                body: gzip_body(b"hello"),
+                ..Default::default()
+            }],
+        };
+
+        let decoded = decode_gzip_message_bodies(request, 5).expect("decode gzip");
+
+        assert_eq!(decoded.messages[0].body.as_ref(), b"hello");
+        assert_eq!(
+            decoded.messages[0]
+                .system_properties
+                .as_ref()
+                .expect("system properties")
+                .body_encoding,
+            v2::Encoding::Identity as i32
+        );
+    }
+
+    #[test]
+    fn gzip_message_body_rejects_invalid_and_oversized_payloads() {
+        let request_with = |body: Bytes| v2::SendMessageRequest {
+            messages: vec![v2::Message {
+                system_properties: Some(v2::SystemProperties {
+                    body_encoding: v2::Encoding::Gzip as i32,
+                    ..Default::default()
+                }),
+                body,
+                ..Default::default()
+            }],
+        };
+
+        assert!(decode_gzip_message_bodies(request_with(Bytes::from_static(b"invalid")), 16).is_err());
+        assert!(decode_gzip_message_bodies(request_with(gzip_body(b"too large")), 4).is_err());
+    }
     use crate::PreparedTransactionRegistration;
     use rocketmq_proxy_core::ProxyContext as CoreProxyContext;
     use rocketmq_proxy_core::ProxyMessage;

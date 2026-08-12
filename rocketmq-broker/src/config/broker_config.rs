@@ -378,6 +378,14 @@ mod defaults {
         20
     }
 
+    pub fn pop_from_retry_probability_for_priority() -> i32 {
+        0
+    }
+
+    pub fn priority_order_asc() -> bool {
+        true
+    }
+
     pub fn pop_consumer_fs_service_init() -> bool {
         true
     }
@@ -1137,6 +1145,12 @@ pub struct BrokerConfig {
     #[serde(default = "defaults::pop_from_retry_probability")]
     pub pop_from_retry_probability: i32,
 
+    #[serde(default = "defaults::pop_from_retry_probability_for_priority")]
+    pub pop_from_retry_probability_for_priority: i32,
+
+    #[serde(default = "defaults::priority_order_asc")]
+    pub priority_order_asc: bool,
+
     #[serde(default = "defaults::pop_consumer_fs_service_init")]
     pub pop_consumer_fs_service_init: bool,
 
@@ -1535,6 +1549,8 @@ impl Default for BrokerConfig {
             enable_retry_topic_v2: false,
             retrieve_message_from_pop_retry_topic_v1: true,
             pop_from_retry_probability: 20,
+            pop_from_retry_probability_for_priority: 0,
+            priority_order_asc: true,
             pop_consumer_fs_service_init: true,
             pop_consumer_kv_service_log: false,
             pop_consumer_kv_service_init: false,
@@ -1698,6 +1714,15 @@ impl BrokerConfig {
             "defaultPopShareQueueNum".into(),
             self.default_pop_share_queue_num.to_string().into(),
         );
+        properties.insert(
+            "popFromRetryProbability".into(),
+            self.pop_from_retry_probability.to_string().into(),
+        );
+        properties.insert(
+            "popFromRetryProbabilityForPriority".into(),
+            self.pop_from_retry_probability_for_priority.to_string().into(),
+        );
+        properties.insert("priorityOrderAsc".into(), self.priority_order_asc.to_string().into());
         properties.insert(
             "serverLoadBalancerEnable".into(),
             self.server_load_balancer_enable.to_string().into(),
@@ -2529,6 +2554,23 @@ mod tests {
         assert_eq!(
             properties.get("liteLagLatencyTopK").map(|value| value.as_str()),
             Some("50")
+        );
+    }
+
+    #[test]
+    fn get_properties_contains_priority_delivery_keys() {
+        let config = BrokerConfig::default();
+        let properties = config.get_properties();
+
+        assert_eq!(
+            properties
+                .get("popFromRetryProbabilityForPriority")
+                .map(|value| value.as_str()),
+            Some("0")
+        );
+        assert_eq!(
+            properties.get("priorityOrderAsc").map(|value| value.as_str()),
+            Some("true")
         );
     }
 

@@ -15,7 +15,10 @@
 use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
+use rocketmq_error::RocketMQError;
 use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_single::Message;
+use rocketmq_model::common::message::MessageTrait;
 use rocketmq_proxy_core::ProxyMessage;
 use rocketmq_proxy_core::ProxyMessageExt;
 
@@ -60,4 +63,23 @@ pub(crate) fn message_properties_from_core(message: &ProxyMessage) -> HashMap<Ch
         .iter()
         .map(|(key, value)| (CheetahString::from(key.as_str()), CheetahString::from(value.as_str())))
         .collect()
+}
+
+pub(crate) fn message_from_core(message: &ProxyMessage) -> Result<Message, RocketMQError> {
+    let body = message.body_bytes().cloned().ok_or_else(|| {
+        RocketMQError::request_body_invalid(
+            "sendMessage",
+            format!("message body is missing for topic '{}'", message.topic()),
+        )
+    })?;
+    let mut model = Message::builder()
+        .topic(message.topic())
+        .body(body)
+        .flag_bits(message.flag())
+        .build()?;
+    model.set_properties(message_properties_from_core(message));
+    if let Some(transaction_id) = message.transaction_id() {
+        model.set_transaction_id(CheetahString::from(transaction_id));
+    }
+    Ok(model)
 }

@@ -29,6 +29,7 @@ use crate::contracts::SubscriptionGroupMetadata;
 use crate::error::ProxyResult;
 use crate::message::ProxyMessage;
 use crate::message::ProxyMessageExt;
+use crate::session::LiteSubscriptionSyncRequest;
 use crate::status::ProxyPayloadStatus;
 use crate::ResourceIdentity;
 
@@ -302,6 +303,15 @@ pub trait MessagingProcessor: Send + Sync {
         None
     }
 
+    fn sync_lite_subscription(
+        &self,
+        _context: &ProxyContext,
+        _client_id: &str,
+        _request: LiteSubscriptionSyncRequest,
+    ) -> impl Future<Output = ProxyResult<()>> + Send {
+        async { Ok(()) }
+    }
+
     fn query_route(
         &self,
         context: &ProxyContext,
@@ -389,6 +399,13 @@ pub trait MessagingProcessor: Send + Sync {
 pub trait MessagingProcessorPlugin: Send + Sync {
     fn transaction_producer_group(&self, context: &ProxyContext) -> Option<String>;
 
+    fn sync_lite_subscription<'a>(
+        &'a self,
+        context: &'a ProxyContext,
+        client_id: &'a str,
+        request: LiteSubscriptionSyncRequest,
+    ) -> ProxyServiceFuture<'a, ()>;
+
     fn query_route<'a>(
         &'a self,
         context: &'a ProxyContext,
@@ -474,6 +491,17 @@ where
 {
     fn transaction_producer_group(&self, context: &ProxyContext) -> Option<String> {
         MessagingProcessor::transaction_producer_group(self, context)
+    }
+
+    fn sync_lite_subscription<'a>(
+        &'a self,
+        context: &'a ProxyContext,
+        client_id: &'a str,
+        request: LiteSubscriptionSyncRequest,
+    ) -> ProxyServiceFuture<'a, ()> {
+        Box::pin(MessagingProcessor::sync_lite_subscription(
+            self, context, client_id, request,
+        ))
     }
 
     fn query_route<'a>(
@@ -603,6 +631,18 @@ impl MessagingProcessor for DefaultMessagingProcessor {
         self.service_manager
             .transaction_service()
             .transaction_producer_group(context)
+    }
+
+    async fn sync_lite_subscription(
+        &self,
+        context: &ProxyContext,
+        client_id: &str,
+        request: LiteSubscriptionSyncRequest,
+    ) -> ProxyResult<()> {
+        self.service_manager
+            .consumer_service()
+            .sync_lite_subscription(context, client_id, &request)
+            .await
     }
 
     async fn query_route(&self, context: &ProxyContext, request: QueryRouteRequest) -> ProxyResult<QueryRoutePlan> {

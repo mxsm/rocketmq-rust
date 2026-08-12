@@ -38,6 +38,7 @@ use rocketmq_proxy_core::ForwardMessageToDeadLetterQueuePlan;
 use rocketmq_proxy_core::ForwardMessageToDeadLetterQueueRequest;
 use rocketmq_proxy_core::GetOffsetPlan;
 use rocketmq_proxy_core::GetOffsetRequest;
+use rocketmq_proxy_core::LiteSubscriptionSyncRequest;
 use rocketmq_proxy_core::ProxyError;
 use rocketmq_proxy_core::ProxyResult;
 use rocketmq_proxy_core::ProxyTopicMessageType;
@@ -92,6 +93,11 @@ struct ClusterExecutionRuntime {
 
 pub(super) enum ClusterCommand {
     ReadinessCheck {
+        reply: oneshot::Sender<ProxyResult<()>>,
+    },
+    SyncLiteSubscription {
+        client_id: String,
+        request: LiteSubscriptionSyncRequest,
         reply: oneshot::Sender<ProxyResult<()>>,
     },
     QueryRoute {
@@ -310,6 +316,19 @@ impl ClusterTaskExecutor {
 
     pub(super) async fn readiness_check(&self) -> ProxyResult<()> {
         self.execute(|reply| ClusterCommand::ReadinessCheck { reply }).await
+    }
+
+    pub(super) async fn sync_lite_subscription(
+        &self,
+        client_id: String,
+        request: LiteSubscriptionSyncRequest,
+    ) -> ProxyResult<()> {
+        self.execute(|reply| ClusterCommand::SyncLiteSubscription {
+            client_id,
+            request,
+            reply,
+        })
+        .await
     }
 
     pub(super) async fn query_route(&self, topic: ResourceIdentity) -> ProxyResult<TopicRouteData> {

@@ -18,6 +18,9 @@ use std::time::Duration;
 use std::time::SystemTime;
 
 use dashmap::DashMap;
+use rocketmq_model::common::lite::LiteSubscriptionAction as BrokerLiteSubscriptionAction;
+use rocketmq_model::common::lite::LiteSubscriptionDTO;
+use rocketmq_model::common::lite::OffsetOption as BrokerOffsetOption;
 use rocketmq_model::lite::get_parent_and_lite_topic;
 use rocketmq_model::lite::to_lmq_name;
 use rocketmq_runtime::BudgetedQueue;
@@ -150,6 +153,45 @@ pub struct LiteSubscriptionSyncRequest {
     pub lite_topic_set: BTreeSet<String>,
     pub version: Option<i64>,
     pub offset_option: Option<v2::OffsetOption>,
+}
+
+impl LiteSubscriptionSyncRequest {
+    pub fn broker_dto(&self, client_id: &str) -> ProxyResult<LiteSubscriptionDTO> {
+        let action = match self.action {
+            v2::LiteSubscriptionAction::PartialAdd => BrokerLiteSubscriptionAction::PartialAdd,
+            v2::LiteSubscriptionAction::PartialRemove => BrokerLiteSubscriptionAction::PartialRemove,
+            v2::LiteSubscriptionAction::CompleteAdd => BrokerLiteSubscriptionAction::CompleteAdd,
+            v2::LiteSubscriptionAction::CompleteRemove => BrokerLiteSubscriptionAction::CompleteRemove,
+        };
+        let mut dto = LiteSubscriptionDTO::new()
+            .with_action(action)
+            .with_client_id(client_id.into())
+            .with_group(self.group.to_string().into())
+            .with_topic(self.topic.to_string().into())
+            .with_lite_topic_set(self.lite_topic_set.iter().map(|value| value.as_str().into()).collect())
+            .with_version(self.version.unwrap_or_default());
+        if let Some(option) = self
+            .offset_option
+            .as_ref()
+            .and_then(|option| option.offset_type.as_ref())
+        {
+            let model = match option {
+                v2::offset_option::OffsetType::Policy(policy) => {
+                    if !(0..=2).contains(policy) {
+                        return Err(ProxyError::illegal_lite_topic(format!(
+                            "unknown lite offset policy: {policy}"
+                        )));
+                    }
+                    BrokerOffsetOption::policy(i64::from(*policy))
+                }
+                v2::offset_option::OffsetType::Offset(offset) => BrokerOffsetOption::offset(*offset),
+                v2::offset_option::OffsetType::TailN(tail) => BrokerOffsetOption::tail_n(*tail),
+                v2::offset_option::OffsetType::Timestamp(timestamp) => BrokerOffsetOption::timestamp(*timestamp),
+            };
+            dto.set_offset_option(model);
+        }
+        Ok(dto)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -524,7 +566,7 @@ impl<C> ClientSessionRegistry<C> {
         request: LiteSubscriptionSyncRequest,
         settings: Option<&ClientSettingsSnapshot>,
     ) -> ProxyResult<LiteSubscriptionSnapshot> {
-        validate_lite_subscription_request(&request, settings)?;
+        self.validate_lite_subscription_sync(client_id, &request, settings)?;
 
         let key = LiteSubscriptionKey::new(client_id.to_owned(), request.group.clone(), request.topic.clone());
         let mut current = self
@@ -579,6 +621,28 @@ impl<C> ClientSessionRegistry<C> {
         }
 
         Ok(current)
+    }
+
+    pub fn validate_lite_subscription_sync(
+        &self,
+        client_id: &str,
+        request: &LiteSubscriptionSyncRequest,
+        settings: Option<&ClientSettingsSnapshot>,
+    ) -> ProxyResult<()> {
+        validate_lite_subscription_request(request, settings)?;
+        let key = LiteSubscriptionKey::new(client_id.to_owned(), request.group.clone(), request.topic.clone());
+        let current = self
+            .lite_subscriptions
+            .get(&key)
+            .map(|entry| entry.lite_topic_set.clone())
+            .unwrap_or_default();
+        let resulting_count = match request.action {
+            v2::LiteSubscriptionAction::PartialAdd => current.union(&request.lite_topic_set).count(),
+            v2::LiteSubscriptionAction::PartialRemove => current.difference(&request.lite_topic_set).count(),
+            v2::LiteSubscriptionAction::CompleteAdd => request.lite_topic_set.len(),
+            v2::LiteSubscriptionAction::CompleteRemove => 0,
+        };
+        ensure_lite_subscription_quota(resulting_count, settings)
     }
 
     pub fn lite_subscription(

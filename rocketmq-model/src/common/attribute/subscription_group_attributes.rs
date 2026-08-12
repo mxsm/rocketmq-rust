@@ -17,6 +17,7 @@ pub const LITE_SUB_RESET_OFFSET_EXCLUSIVE_ATTRIBUTE_NAME: &str = "lite.sub.reset
 pub const LITE_SUB_RESET_OFFSET_UNSUBSCRIBE_ATTRIBUTE_NAME: &str = "lite.sub.reset.offset.unsubscribe";
 pub const LITE_SUB_CLIENT_QUOTA_ATTRIBUTE_NAME: &str = "lite.sub.client.quota";
 pub const LITE_SUB_CLIENT_MAX_EVENT_COUNT_ATTRIBUTE_NAME: &str = "lite.sub.client.max.event.cnt";
+pub const PRIORITY_FACTOR_ATTRIBUTE_NAME: &str = "priority.factor";
 
 pub struct SubscriptionGroupAttributes {}
 
@@ -90,6 +91,19 @@ impl SubscriptionGroupAttributes {
         })
     }
 
+    pub fn priority_factor_attribute() -> &'static LongRangeAttribute {
+        static INSTANCE: OnceLock<LongRangeAttribute> = OnceLock::new();
+        INSTANCE.get_or_init(|| {
+            LongRangeAttribute::new(
+                CheetahString::from_static_str(PRIORITY_FACTOR_ATTRIBUTE_NAME),
+                true,
+                0,
+                100,
+                100,
+            )
+        })
+    }
+
     #[allow(clippy::redundant_closure)]
     pub fn all() -> &'static HashMap<CheetahString, Arc<dyn Attribute>> {
         static ALL: OnceLock<HashMap<CheetahString, Arc<dyn Attribute>>> = OnceLock::new();
@@ -101,6 +115,7 @@ impl SubscriptionGroupAttributes {
             let lite_sub_reset_offset_unsubscribe = Self::lite_sub_reset_offset_unsubscribe_attribute();
             let lite_sub_client_quota = Self::lite_sub_client_quota_attribute();
             let lite_sub_client_max_event_count = Self::lite_sub_client_max_event_count_attribute();
+            let priority_factor = Self::priority_factor_attribute();
 
             all.insert(
                 lite_bind_topic.name().clone(),
@@ -125,6 +140,10 @@ impl SubscriptionGroupAttributes {
             all.insert(
                 lite_sub_client_max_event_count.name().clone(),
                 Arc::new(lite_sub_client_max_event_count.clone()) as Arc<dyn Attribute>,
+            );
+            all.insert(
+                priority_factor.name().clone(),
+                Arc::new(priority_factor.clone()) as Arc<dyn Attribute>,
             );
 
             all
@@ -152,6 +171,7 @@ mod tests {
         assert!(all.contains_key(&CheetahString::from_static_str(
             LITE_SUB_CLIENT_MAX_EVENT_COUNT_ATTRIBUTE_NAME
         )));
+        assert!(all.contains_key(&CheetahString::from_static_str(PRIORITY_FACTOR_ATTRIBUTE_NAME)));
     }
 
     #[test]
@@ -190,5 +210,14 @@ mod tests {
         assert_eq!(attribute.default_value(), 400);
         assert_eq!(attribute.min(), 10);
         assert_eq!(attribute.max(), i64::MAX);
+    }
+
+    #[test]
+    fn priority_factor_attribute_uses_business_compatible_defaults() {
+        let attribute = SubscriptionGroupAttributes::priority_factor_attribute();
+
+        assert_eq!(attribute.default_value(), 100);
+        assert_eq!(attribute.min(), 0);
+        assert_eq!(attribute.max(), 100);
     }
 }

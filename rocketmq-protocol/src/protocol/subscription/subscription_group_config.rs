@@ -22,6 +22,7 @@ use rocketmq_model::common::attribute::subscription_group_attributes::LITE_SUB_C
 use rocketmq_model::common::attribute::subscription_group_attributes::LITE_SUB_MODEL_ATTRIBUTE_NAME;
 use rocketmq_model::common::attribute::subscription_group_attributes::LITE_SUB_RESET_OFFSET_EXCLUSIVE_ATTRIBUTE_NAME;
 use rocketmq_model::common::attribute::subscription_group_attributes::LITE_SUB_RESET_OFFSET_UNSUBSCRIBE_ATTRIBUTE_NAME;
+use rocketmq_model::common::attribute::subscription_group_attributes::PRIORITY_FACTOR_ATTRIBUTE_NAME;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -221,6 +222,14 @@ impl SubscriptionGroupConfig {
     }
 
     #[inline]
+    pub fn priority_factor(&self) -> i32 {
+        self.attributes
+            .get(&CheetahString::from_static_str(PRIORITY_FACTOR_ATTRIBUTE_NAME))
+            .and_then(|value| value.parse::<i32>().ok())
+            .unwrap_or(100)
+    }
+
+    #[inline]
     pub fn set_group_name(&mut self, group_name: CheetahString) {
         self.group_name = group_name;
     }
@@ -398,6 +407,7 @@ mod subscription_group_config_tests {
         assert_eq!(config.max_client_event_count(), -1);
         assert!(!config.reset_offset_in_exclusive_mode());
         assert!(!config.reset_offset_on_unsubscribe());
+        assert_eq!(config.priority_factor(), 100);
     }
 
     #[test]
@@ -424,6 +434,10 @@ mod subscription_group_config_tests {
                 CheetahString::from_static_str(LITE_SUB_RESET_OFFSET_UNSUBSCRIBE_ATTRIBUTE_NAME),
                 CheetahString::from_static_str("true"),
             ),
+            (
+                CheetahString::from_static_str(PRIORITY_FACTOR_ATTRIBUTE_NAME),
+                CheetahString::from_static_str("25"),
+            ),
         ]));
 
         assert_eq!(config.lite_sub_client_quota(), 128);
@@ -431,5 +445,6 @@ mod subscription_group_config_tests {
         assert_eq!(config.max_client_event_count(), 256);
         assert!(config.reset_offset_in_exclusive_mode());
         assert!(config.reset_offset_on_unsubscribe());
+        assert_eq!(config.priority_factor(), 25);
     }
 }
