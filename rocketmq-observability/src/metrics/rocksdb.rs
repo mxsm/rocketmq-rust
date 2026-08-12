@@ -210,6 +210,20 @@ impl RocksDbMetricsRecorder {
         #[cfg(not(feature = "otel-metrics"))]
         let _ = source;
     }
+
+    /// Registers one low-cardinality native-memory budget for soak qualification.
+    pub fn register_resource_cache<F>(&self, budget: &'static str, source: F)
+    where
+        F: Fn() -> crate::metrics::resource::ResourceCacheSnapshot + Send + Sync + 'static,
+    {
+        #[cfg(feature = "otel-metrics")]
+        if let Some(meter) = self.telemetry.meter() {
+            crate::metrics::resource::register_cache_observers(&meter, "store", budget, source);
+        }
+
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = (budget, source);
+    }
 }
 
 #[cfg(not(feature = "otel-metrics"))]

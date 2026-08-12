@@ -191,6 +191,20 @@ impl RocksDbDerivedStore {
         let rocksdb_config = RocksDbConfig::consume_queue_from_message_store_config(source);
         rocksdb_config.validate()?;
         let resource_budget = Arc::new(RocksDbResourceBudget::from_config(&rocksdb_config)?);
+        let block_cache_budget = Arc::clone(&resource_budget);
+        metrics.register_resource_cache("rocksdb-block-cache", move || {
+            rocketmq_observability::metrics::resource::ResourceCacheSnapshot {
+                usage_bytes: block_cache_budget.block_cache_usage_bytes() as u64,
+                budget_bytes: block_cache_budget.block_cache_budget_bytes() as u64,
+            }
+        });
+        let write_buffer_budget = Arc::clone(&resource_budget);
+        metrics.register_resource_cache("rocksdb-write-buffer", move || {
+            rocketmq_observability::metrics::resource::ResourceCacheSnapshot {
+                usage_bytes: write_buffer_budget.write_buffer_usage_bytes() as u64,
+                budget_bytes: write_buffer_budget.write_buffer_budget_bytes() as u64,
+            }
+        });
         let rocksdb_store = Arc::new(RocksDbStore::open_with_metrics_and_resource_budget(
             rocksdb_config.clone(),
             metrics.clone(),

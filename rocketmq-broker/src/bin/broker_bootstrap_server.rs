@@ -169,9 +169,12 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         }
         return Err(error).context("failed to start broker lifecycle boundary");
     }
-    if let Err(error) =
-        rocketmq_observability::start_runtime_diagnostics_endpoint_from_env(&service_context, RuntimeComponent::Broker)
-            .await
+    if let Err(error) = rocketmq_observability::start_runtime_diagnostics_endpoint_from_env_with_telemetry(
+        &service_context,
+        RuntimeComponent::Broker,
+        &telemetry_guard.handle(),
+    )
+    .await
     {
         lifecycle.mark_failed();
         let request = lifecycle.request_shutdown(ShutdownReason::Internal);

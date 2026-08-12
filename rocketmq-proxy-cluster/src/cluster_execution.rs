@@ -214,6 +214,7 @@ impl ClusterTaskExecutor {
         telemetry_handle: TelemetryHandle,
     ) -> ProxyResult<Self> {
         let worker_context = service_context.component("command-worker");
+        let execution_telemetry = telemetry_handle.clone();
         let client_runtime = ClientRuntime::try_new(
             worker_context.component("client-runtime"),
             ClientRuntimeConfig::default(),
@@ -231,6 +232,7 @@ impl ClusterTaskExecutor {
             Arc::new(DefaultClusterClientFactory),
             Arc::new(DefaultClusterProducerFactory),
             policy,
+            execution_telemetry,
         )
         .map(|(executor, _)| executor)
     }
@@ -261,6 +263,7 @@ impl ClusterTaskExecutor {
             client_factory,
             producer_factory,
             policy,
+            rocketmq_observability::TelemetryHandle::noop(),
         )
     }
 
@@ -278,8 +281,43 @@ impl ClusterTaskExecutor {
         client_factory: Arc<dyn ClusterClientFactory>,
         producer_factory: Arc<dyn ClusterProducerFactory>,
         policy: ClusterExecutionPolicy,
+        telemetry: rocketmq_observability::TelemetryHandle,
     ) -> ProxyResult<(Self, tokio_util::sync::CancellationToken)> {
         let lanes = Arc::new(ClusterExecutionLanes::new(policy)?);
+        let source = Arc::clone(&lanes);
+        let long_poll_source = Arc::clone(&lanes);
+        let lane_capacity_items = config.command_queue_capacity as u64;
+        let lane_capacity_bytes = config.command_queue_max_bytes as u64;
+        let aggregate_capacity_items = lane_capacity_items.saturating_mul(2);
+        let aggregate_capacity_bytes = lane_capacity_bytes.saturating_mul(2);
+        let resource_metrics = rocketmq_observability::metrics::resource::ResourceStabilityMetrics::from_handle(
+            &telemetry,
+            rocketmq_observability::PROXY_METER_SCOPE,
+        );
+        resource_metrics.register_queue("proxy-cluster", "commands", "aggregate", move || {
+            let snapshot = source.snapshot();
+            rocketmq_observability::metrics::resource::ResourceQueueSnapshot {
+                items: snapshot.queued_and_active as u64,
+                bytes: snapshot.retained_bytes as u64,
+                oldest_age_millis: snapshot.oldest_queued_age_ms.unwrap_or_default(),
+                capacity_items: aggregate_capacity_items,
+                capacity_bytes: aggregate_capacity_bytes,
+                active: snapshot.current_inflight as u64,
+                rejected_total: snapshot.rejected,
+            }
+        });
+        resource_metrics.register_queue("proxy-cluster", "commands", "long-poll", move || {
+            let snapshot = long_poll_source.snapshot();
+            rocketmq_observability::metrics::resource::ResourceQueueSnapshot {
+                items: snapshot.long_poll_queued_and_active as u64,
+                bytes: snapshot.long_poll_retained_bytes as u64,
+                oldest_age_millis: snapshot.oldest_queued_age_ms.unwrap_or_default(),
+                capacity_items: lane_capacity_items,
+                capacity_bytes: lane_capacity_bytes,
+                active: snapshot.current_long_poll_inflight as u64,
+                rejected_total: snapshot.rejected,
+            }
+        });
         let cancellation = worker_context.task_group().cancellation_token();
         let runtime = Arc::new(ClusterExecutionRuntime {
             config: config.clone(),

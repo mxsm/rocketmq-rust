@@ -28,13 +28,14 @@ rust-version.workspace = true
 [features]
 default = []
 bench-support = []
-observability = ["rocketmq-client-rust/observability-metrics"]
+observability = ["rocketmq-client-rust/observability-metrics", "rocketmq-observability/otel-metrics"]
 observability-traces = ["rocketmq-client-rust/observability"]
 
 [dependencies]
 rocketmq-client-rust = { workspace = true, features = ["admin-mutation"] }
 rocketmq-error = { workspace = true }
 rocketmq-model = { workspace = true }
+rocketmq-observability = { workspace = true }
 rocketmq-proxy-core = { workspace = true }
 rocketmq-protocol = { workspace = true }
 rocketmq-runtime = { workspace = true }

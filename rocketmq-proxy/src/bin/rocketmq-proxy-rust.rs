@@ -158,9 +158,12 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         )
         .await;
     }
-    if let Err(error) =
-        rocketmq_observability::start_runtime_diagnostics_endpoint_from_env(&service_context, RuntimeComponent::Proxy)
-            .await
+    if let Err(error) = rocketmq_observability::start_runtime_diagnostics_endpoint_from_env_with_telemetry(
+        &service_context,
+        RuntimeComponent::Proxy,
+        &telemetry_guard.handle(),
+    )
+    .await
     {
         lifecycle.mark_failed();
         let request = lifecycle.request_shutdown(ShutdownReason::Internal);

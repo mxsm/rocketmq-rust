@@ -8,6 +8,9 @@
     "artifact_kind",
     "status",
     "monotonic_growth_detected",
+    "profile",
+    "started_at",
+    "finished_at",
     "duration_seconds",
     "release_identity",
     "sampling",
@@ -20,7 +23,10 @@
     "artifact_kind": { "const": "rocketmq_message_path_soak_report" },
     "status": { "enum": ["pass", "fail"] },
     "monotonic_growth_detected": { "type": "boolean" },
-    "duration_seconds": { "type": "integer", "minimum": 21600 },
+    "profile": { "enum": ["smoke", "full"] },
+    "started_at": { "type": "string" },
+    "finished_at": { "type": "string" },
+    "duration_seconds": { "type": "integer", "minimum": 60 },
     "release_identity": {
       "type": "object",
       "required": [
@@ -49,7 +55,20 @@
       "minItems": 1,
       "items": {
         "type": "object",
-        "required": ["metric", "scope", "status", "raw_artifact_sha256"]
+        "required": [
+          "metric",
+          "scope",
+          "kind",
+          "status",
+          "first_window_median",
+          "last_window_median",
+          "p95",
+          "p99",
+          "max",
+          "theil_sen_slope_per_hour",
+          "kendall_tau",
+          "raw_artifact_sha256"
+        ]
       }
     },
     "artifacts": { "type": "array", "minItems": 1 }

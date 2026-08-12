@@ -157,6 +157,8 @@ const MCP_OPERATION_RESULT_LABELS: &[&str] = &[labels::OPERATION_KIND, labels::O
 const RUNTIME_TASK_LABELS: &[&str] = &[labels::COMPONENT, labels::TASK_TYPE];
 const RUNTIME_BLOCKING_LABELS: &[&str] = &[labels::COMPONENT, labels::BLOCKING_LANE];
 const RUNTIME_LIFECYCLE_LABELS: &[&str] = &[labels::COMPONENT, labels::STATE, labels::RESULT, labels::REASON];
+const RESOURCE_QUEUE_LABELS: &[&str] = &[labels::COMPONENT, labels::BUDGET, labels::LANE];
+const RESOURCE_CACHE_LABELS: &[&str] = &[labels::COMPONENT, labels::BUDGET, labels::LANE];
 const CLIENT_NAMESRV_REFRESH_LABELS: &[&str] = &[labels::SOURCE_KIND, labels::RESULT];
 const CLIENT_NAMESRV_ENDPOINT_LABELS: &[&str] = &[labels::SOURCE_KIND, labels::ADDRESS_FAMILY];
 const CLIENT_NAMESRV_STATE_LABELS: &[&str] = &[labels::SOURCE_KIND, labels::FRESHNESS];
@@ -1571,6 +1573,83 @@ pub const RUST_METRICS: &[MetricDescriptor] = &[
         labels: RUNTIME_LIFECYCLE_LABELS,
         source: MetricSource::Runtime,
     },
+    MetricDescriptor {
+        name: metrics::RESOURCE_QUEUE_ITEMS,
+        kind: MetricKind::ObservableGauge,
+        unit: "{item}",
+        labels: RESOURCE_QUEUE_LABELS,
+        source: MetricSource::Runtime,
+    },
+    MetricDescriptor {
+        name: metrics::RESOURCE_QUEUE_BYTES,
+        kind: MetricKind::ObservableGauge,
+        unit: "By",
+        labels: RESOURCE_QUEUE_LABELS,
+        source: MetricSource::Runtime,
+    },
+    MetricDescriptor {
+        name: metrics::RESOURCE_QUEUE_OLDEST_AGE_MILLIS,
+        kind: MetricKind::ObservableGauge,
+        unit: "ms",
+        labels: RESOURCE_QUEUE_LABELS,
+        source: MetricSource::Runtime,
+    },
+    MetricDescriptor {
+        name: metrics::RESOURCE_QUEUE_CAPACITY_ITEMS,
+        kind: MetricKind::ObservableGauge,
+        unit: "{item}",
+        labels: RESOURCE_QUEUE_LABELS,
+        source: MetricSource::Runtime,
+    },
+    MetricDescriptor {
+        name: metrics::RESOURCE_QUEUE_CAPACITY_BYTES,
+        kind: MetricKind::ObservableGauge,
+        unit: "By",
+        labels: RESOURCE_QUEUE_LABELS,
+        source: MetricSource::Runtime,
+    },
+    MetricDescriptor {
+        name: metrics::RESOURCE_QUEUE_ACTIVE,
+        kind: MetricKind::ObservableGauge,
+        unit: "{operation}",
+        labels: RESOURCE_QUEUE_LABELS,
+        source: MetricSource::Runtime,
+    },
+    MetricDescriptor {
+        name: metrics::RESOURCE_QUEUE_REJECTED_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{rejection}",
+        labels: RESOURCE_QUEUE_LABELS,
+        source: MetricSource::Runtime,
+    },
+    MetricDescriptor {
+        name: metrics::RESOURCE_CACHE_USAGE_BYTES,
+        kind: MetricKind::ObservableGauge,
+        unit: "By",
+        labels: RESOURCE_CACHE_LABELS,
+        source: MetricSource::Runtime,
+    },
+    MetricDescriptor {
+        name: metrics::RESOURCE_CACHE_BUDGET_BYTES,
+        kind: MetricKind::ObservableGauge,
+        unit: "By",
+        labels: RESOURCE_CACHE_LABELS,
+        source: MetricSource::Runtime,
+    },
+    MetricDescriptor {
+        name: metrics::RECEIPT_RENEWAL_DUE_LAG_MICROS,
+        kind: MetricKind::ObservableGauge,
+        unit: "us",
+        labels: &[labels::COMPONENT],
+        source: MetricSource::Runtime,
+    },
+    MetricDescriptor {
+        name: metrics::RECEIPT_RENEWAL_EXPIRED_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{receipt}",
+        labels: &[labels::COMPONENT],
+        source: MetricSource::Runtime,
+    },
 ];
 
 pub const fn java_metrics() -> &'static [MetricDescriptor] {
@@ -1735,8 +1814,8 @@ mod tests {
             .collect::<HashSet<_>>();
 
         assert_eq!(JAVA_METRICS.len(), 94);
-        assert_eq!(RUST_METRICS.len(), 105);
-        assert_eq!(combined.len(), 199, "duplicate metric names across catalogs");
+        assert_eq!(RUST_METRICS.len(), 116);
+        assert_eq!(combined.len(), 210, "duplicate metric names across catalogs");
     }
 
     #[test]

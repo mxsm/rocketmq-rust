@@ -1201,7 +1201,19 @@ impl Builder {
         let kv_mutation_batch_size = name_server_config.kv_mutation_batch_size;
         let kv_config_target = PathBuf::from(&name_server_config.kv_config_path);
         let kv_mutation_context = service_context.component("namesrv.kv-mutation");
+        let route_response_cache_budget = name_server_config.namesrv_route_response_cache_max_bytes.max(1);
         let route_response_cache = Arc::new(RouteResponseCache::from_namesrv_config(&name_server_config));
+        let route_response_cache_metrics = Arc::clone(&route_response_cache);
+        rocketmq_observability::metrics::resource::ResourceStabilityMetrics::from_handle(
+            &self.telemetry,
+            rocketmq_observability::NAMESRV_METER_SCOPE,
+        )
+        .register_cache("namesrv", "route-response-cache", move || {
+            rocketmq_observability::metrics::resource::ResourceCacheSnapshot {
+                usage_bytes: route_response_cache_metrics.stats().weighted_size,
+                budget_bytes: route_response_cache_budget,
+            }
+        });
         let workload_admission = Arc::new(NameServerWorkloadAdmission::from_namesrv_config(&name_server_config));
         let initial_config = Arc::new(NameServerRuntimeConfig {
             name_server_config: Arc::new(name_server_config),

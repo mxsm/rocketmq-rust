@@ -1130,8 +1130,11 @@ impl BrokerRuntime {
 
         let should_start_time = Arc::new(AtomicU64::new(0));
         let pop_inflight_message_counter = PopInflightMessageCounter::new(should_start_time);
-        let broker_fast_failure =
-            BrokerFastFailure::new_with_service_context(broker_config.clone(), service_context.clone());
+        let broker_fast_failure = BrokerFastFailure::new_with_service_context_and_telemetry(
+            broker_config.clone(),
+            service_context.clone(),
+            telemetry_handle.clone(),
+        );
         #[cfg(feature = "rocksdb_store")]
         let rocksdb_config_managers =
             open_broker_rocksdb_config_managers(broker_config.as_ref(), message_store_config.as_ref());

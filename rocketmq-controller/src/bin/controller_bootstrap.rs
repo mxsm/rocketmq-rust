@@ -206,9 +206,10 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
             ControllerError::ConfigError(format!("failed to start Controller lifecycle boundary: {error}")).into(),
         );
     }
-    if let Err(error) = rocketmq_observability::start_runtime_diagnostics_endpoint_from_env(
+    if let Err(error) = rocketmq_observability::start_runtime_diagnostics_endpoint_from_env_with_telemetry(
         &service_context,
         RuntimeComponent::Controller,
+        &telemetry_handle,
     )
     .await
     {

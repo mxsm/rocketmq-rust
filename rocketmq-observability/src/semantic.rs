@@ -215,6 +215,17 @@ pub mod metrics {
     pub const RUNTIME_BLOCKING_RUNNING: &str = "rocketmq_runtime_blocking_running";
     pub const RUNTIME_BLOCKING_TIMEOUTS: &str = "rocketmq_runtime_blocking_timeouts";
     pub const RUNTIME_LIFECYCLE_TRANSITIONS_TOTAL: &str = "rocketmq_runtime_lifecycle_transitions_total";
+    pub const RESOURCE_QUEUE_ITEMS: &str = "rocketmq_resource_queue_items";
+    pub const RESOURCE_QUEUE_BYTES: &str = "rocketmq_resource_queue_bytes";
+    pub const RESOURCE_QUEUE_OLDEST_AGE_MILLIS: &str = "rocketmq_resource_queue_oldest_age_millis";
+    pub const RESOURCE_QUEUE_CAPACITY_ITEMS: &str = "rocketmq_resource_queue_capacity_items";
+    pub const RESOURCE_QUEUE_CAPACITY_BYTES: &str = "rocketmq_resource_queue_capacity_bytes";
+    pub const RESOURCE_QUEUE_ACTIVE: &str = "rocketmq_resource_queue_active";
+    pub const RESOURCE_QUEUE_REJECTED_TOTAL: &str = "rocketmq_resource_queue_rejected_total";
+    pub const RESOURCE_CACHE_USAGE_BYTES: &str = "rocketmq_resource_cache_usage_bytes";
+    pub const RESOURCE_CACHE_BUDGET_BYTES: &str = "rocketmq_resource_cache_budget_bytes";
+    pub const RECEIPT_RENEWAL_DUE_LAG_MICROS: &str = "rocketmq_receipt_renewal_due_lag_micros";
+    pub const RECEIPT_RENEWAL_EXPIRED_TOTAL: &str = "rocketmq_receipt_renewal_expired_total";
 }
 
 pub mod labels {
@@ -279,6 +290,8 @@ pub mod labels {
     pub const COMPONENT: &str = "component";
     pub const TASK_TYPE: &str = "task_type";
     pub const BLOCKING_LANE: &str = "blocking_lane";
+    pub const BUDGET: &str = "budget";
+    pub const LANE: &str = "lane";
 }
 
 /// Stable event identifiers consumed by structured-log exporters and guards.

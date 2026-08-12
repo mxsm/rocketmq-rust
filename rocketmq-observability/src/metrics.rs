@@ -38,6 +38,7 @@ pub mod pop_revive_message_type;
 pub mod proxy;
 pub mod release_identity;
 pub mod remoting;
+pub mod resource;
 pub mod rocksdb;
 pub mod runtime;
 pub mod store;

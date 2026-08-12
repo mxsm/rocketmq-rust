@@ -189,9 +189,10 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         }
         return Err(error).context("failed to start NameServer lifecycle boundary");
     }
-    if let Err(error) = rocketmq_observability::start_runtime_diagnostics_endpoint_from_env(
+    if let Err(error) = rocketmq_observability::start_runtime_diagnostics_endpoint_from_env_with_telemetry(
         &service_context,
         RuntimeComponent::NameServer,
+        &telemetry_guard.handle(),
     )
     .await
     {

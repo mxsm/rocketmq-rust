@@ -354,9 +354,13 @@ class MessagePathQualificationTest(unittest.TestCase):
                 },
                 "confirm_offset": {"valid": True, "observations": 10, "violation_count": 0},
             }
+            raw_samples = root / "raw-samples.ndjson"
+            raw_samples.write_text('{"sample":1}\n', encoding="utf-8")
+            raw_digest = qualification.sha256_file(raw_samples)
             soak = {
                 "schema_version": 1,
                 "artifact_kind": "rocketmq_message_path_soak_report",
+                "profile": "full",
                 "status": "pass",
                 "monotonic_growth_detected": False,
                 "duration_seconds": 21600,
@@ -369,8 +373,19 @@ class MessagePathQualificationTest(unittest.TestCase):
                     "durability_contract": "strict",
                 },
                 "sampling": {"coverage_percent": 99.9, "max_gap_seconds": 60},
-                "pods": [{"restarts": 0, "oom_killed": False}],
-                "series": [{"status": "pass", "raw_artifact_sha256": "sha256:" + "5" * 64}],
+                "workload": {
+                    "attempted": 10000,
+                    "put_ok": 10000,
+                    "consumed": 10000,
+                    "send_failures": 0,
+                    "consume_failures": 0,
+                    "missing": 0,
+                    "duplicates": 0,
+                    "corrupt": 0,
+                },
+                "pods": [{"name": "broker-0", "uid": "pod-uid", "restarts": 0, "oom_killed": False}],
+                "series": [{"status": "pass", "raw_artifact_sha256": "sha256:" + raw_digest}],
+                "artifacts": [{"path": raw_samples.name, "sha256": raw_digest}],
             }
             paths = {}
             for name, value in (("comparison", comparison), ("fault", fault), ("rpo", rpo), ("soak", soak)):
