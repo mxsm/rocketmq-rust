@@ -19,7 +19,7 @@ spec:
     matchLabels:
       app.kubernetes.io/instance: {{ .Release.Name }}
       app.kubernetes.io/part-of: rocketmq-rust
-      rocketmq.apache.org/metrics: "true"
+      rocketmqrust.com/metrics: "true"
   endpoints:
     - port: metrics
       path: {{ .Values.metrics.path | quote }}

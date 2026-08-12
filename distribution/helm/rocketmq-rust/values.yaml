@@ -49,7 +49,7 @@ metrics:
   networkPolicy:
     enabled: true
     scraperNamespaceLabels:
-      rocketmq.apache.org/observability: "true"
+      rocketmqrust.com/observability: "true"
     scraperPodLabels:
       app.kubernetes.io/name: prometheus
 
@@ -58,8 +58,8 @@ namespace:
 
 networkPolicy:
   enabled: true
-  clientNamespaceLabel: rocketmq.apache.org/client-access
-  observabilityNamespaceLabel: rocketmq.apache.org/observability
+  clientNamespaceLabel: rocketmqrust.com/client-access
+  observabilityNamespaceLabel: rocketmqrust.com/observability
 
 services:
   broker:

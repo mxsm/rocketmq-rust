@@ -35,8 +35,8 @@ use crate::sources::common::SourceOutput;
 use crate::sources::common::pseudonymize_identifier;
 use crate::sources::kubernetes::KubernetesSource;
 
-const SERVICE_LABEL: &str = "rocketmq.apache.org/service";
-const BROKER_NAME_LABEL: &str = "rocketmq.apache.org/broker-name";
+const SERVICE_LABEL: &str = "rocketmqrust.com/service";
+const BROKER_NAME_LABEL: &str = "rocketmqrust.com/broker-name";
 
 #[derive(Deserialize)]
 struct KubernetesWire<T> {

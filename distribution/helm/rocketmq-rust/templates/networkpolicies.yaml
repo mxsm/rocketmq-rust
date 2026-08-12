@@ -64,7 +64,7 @@ metadata:
 spec:
   podSelector:
     matchExpressions:
-      - key: rocketmq.apache.org/service
+      - key: rocketmqrust.com/service
         operator: In
         values: [broker, namesrv, controller, proxy]
   policyTypes: [Ingress]
@@ -75,7 +75,7 @@ spec:
               {{ .Values.networkPolicy.clientNamespaceLabel }}: "true"
           podSelector:
             matchLabels:
-              rocketmq.apache.org/sre-connector: "true"
+              rocketmqrust.com/sre-connector: "true"
       ports:
         - {protocol: TCP, port: {{ .Values.global.runtimeDiagnostics.port }}}
 ---
@@ -88,19 +88,19 @@ metadata:
 spec:
   podSelector:
     matchLabels:
-      rocketmq.apache.org/service: controller
+      rocketmqrust.com/service: controller
   policyTypes: [Ingress, Egress]
   ingress:
     - from:
         - podSelector:
             matchLabels:
-              rocketmq.apache.org/service: controller
+              rocketmqrust.com/service: controller
       ports:
         - {protocol: TCP, port: 60110}
     - from:
         - podSelector:
             matchLabels:
-              rocketmq.apache.org/service: broker
+              rocketmqrust.com/service: broker
         - namespaceSelector:
             matchLabels:
               {{ .Values.networkPolicy.clientNamespaceLabel }}: "true"
@@ -110,13 +110,13 @@ spec:
     - to:
         - podSelector:
             matchLabels:
-              rocketmq.apache.org/service: controller
+              rocketmqrust.com/service: controller
       ports:
         - {protocol: TCP, port: 60110}
     - to:
         - podSelector:
             matchLabels:
-              rocketmq.apache.org/service: broker
+              rocketmqrust.com/service: broker
       ports:
         - {protocol: TCP, port: 10911}
 ---
@@ -128,25 +128,25 @@ metadata:
 spec:
   podSelector:
     matchLabels:
-      rocketmq.apache.org/service: broker
+      rocketmqrust.com/service: broker
   policyTypes: [Ingress, Egress]
   ingress:
     - from:
         - podSelector:
             matchLabels:
-              rocketmq.apache.org/service: broker
+              rocketmqrust.com/service: broker
       ports:
         - {protocol: TCP, port: 10912}
     - from:
         - podSelector:
             matchLabels:
-              rocketmq.apache.org/service: controller
+              rocketmqrust.com/service: controller
         - podSelector:
             matchLabels:
-              rocketmq.apache.org/service: proxy
+              rocketmqrust.com/service: proxy
         - podSelector:
             matchLabels:
-              rocketmq.apache.org/service: mcp
+              rocketmqrust.com/service: mcp
         - namespaceSelector:
             matchLabels:
               {{ .Values.networkPolicy.clientNamespaceLabel }}: "true"
@@ -156,19 +156,19 @@ spec:
     - to:
         - podSelector:
             matchLabels:
-              rocketmq.apache.org/service: broker
+              rocketmqrust.com/service: broker
       ports:
         - {protocol: TCP, port: 10912}
     - to:
         - podSelector:
             matchLabels:
-              rocketmq.apache.org/service: namesrv
+              rocketmqrust.com/service: namesrv
       ports:
         - {protocol: TCP, port: 9876}
     - to:
         - podSelector:
             matchLabels:
-              rocketmq.apache.org/service: controller
+              rocketmqrust.com/service: controller
       ports:
         - {protocol: TCP, port: 60109}
 ---
@@ -180,19 +180,19 @@ metadata:
 spec:
   podSelector:
     matchLabels:
-      rocketmq.apache.org/service: namesrv
+      rocketmqrust.com/service: namesrv
   policyTypes: [Ingress]
   ingress:
     - from:
         - podSelector:
             matchLabels:
-              rocketmq.apache.org/service: broker
+              rocketmqrust.com/service: broker
         - podSelector:
             matchLabels:
-              rocketmq.apache.org/service: proxy
+              rocketmqrust.com/service: proxy
         - podSelector:
             matchLabels:
-              rocketmq.apache.org/service: mcp
+              rocketmqrust.com/service: mcp
         - namespaceSelector:
             matchLabels:
               {{ .Values.networkPolicy.clientNamespaceLabel }}: "true"
@@ -207,7 +207,7 @@ metadata:
 spec:
   podSelector:
     matchLabels:
-      rocketmq.apache.org/service: proxy
+      rocketmqrust.com/service: proxy
   policyTypes: [Ingress, Egress]
   ingress:
     - from:
@@ -221,13 +221,13 @@ spec:
     - to:
         - podSelector:
             matchLabels:
-              rocketmq.apache.org/service: namesrv
+              rocketmqrust.com/service: namesrv
       ports:
         - {protocol: TCP, port: 9876}
     - to:
         - podSelector:
             matchLabels:
-              rocketmq.apache.org/service: broker
+              rocketmqrust.com/service: broker
       ports:
         - {protocol: TCP, port: 10911}
 ---
@@ -239,7 +239,7 @@ metadata:
 spec:
   podSelector:
     matchLabels:
-      rocketmq.apache.org/service: mcp
+      rocketmqrust.com/service: mcp
   policyTypes: [Ingress, Egress]
   ingress:
     - from:
@@ -252,13 +252,13 @@ spec:
     - to:
         - podSelector:
             matchLabels:
-              rocketmq.apache.org/service: namesrv
+              rocketmqrust.com/service: namesrv
       ports:
         - {protocol: TCP, port: 9876}
     - to:
         - podSelector:
             matchLabels:
-              rocketmq.apache.org/service: broker
+              rocketmqrust.com/service: broker
       ports:
         - {protocol: TCP, port: 10911}
     - to:

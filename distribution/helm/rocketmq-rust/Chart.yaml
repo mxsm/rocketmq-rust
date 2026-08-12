@@ -6,5 +6,5 @@ version: 0.1.0
 appVersion: "0.1.0"
 kubeVersion: ">=1.32.0-0"
 annotations:
-  rocketmq.apache.org/architecture-milestone: P0-04
-  rocketmq.apache.org/image-policy: local-tag-or-immutable-digest
+  rocketmqrust.com/architecture-milestone: P0-04
+  rocketmqrust.com/image-policy: local-tag-or-immutable-digest

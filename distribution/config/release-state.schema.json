@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://rocketmq.apache.org/schemas/release-state-v1.json",
+  "$id": "https://rocketmqrust.com/schemas/release-state-v1.json",
   "title": "RocketMQ Rust ReleaseState",
   "type": "object",
   "additionalProperties": false,

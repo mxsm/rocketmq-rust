@@ -452,7 +452,7 @@ metadata:
 {{ include "rocketmq.labels" (dict "root" . "service" "mcp") | indent 4 }}
   annotations:
     helm.sh/resource-policy: keep
-    rocketmq.apache.org/persisted-format: mcp-audit-v1
+    rocketmqrust.com/persisted-format: mcp-audit-v1
 spec:
   accessModes: [ReadWriteOnce]
   storageClassName: {{ required "services.mcp.persistence.storageClassName is required" .Values.services.mcp.persistence.storageClassName | quote }}

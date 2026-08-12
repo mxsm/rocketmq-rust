@@ -184,7 +184,7 @@ fn feature_manifest(item: &Value) -> BTreeMap<String, bool> {
     let mut features = BTreeMap::new();
     if let Some(labels) = item.pointer("/metadata/labels").and_then(Value::as_object) {
         for (key, value) in labels {
-            let Some(feature) = key.strip_prefix("rocketmq.apache.org/feature-") else {
+            let Some(feature) = key.strip_prefix("rocketmqrust.com/feature-") else {
                 continue;
             };
             if !valid_token(feature) {
@@ -202,7 +202,7 @@ fn feature_manifest(item: &Value) -> BTreeMap<String, bool> {
         }
     }
     if let Some(csv) = item
-        .pointer("/metadata/annotations/rocketmq.apache.org~1features")
+        .pointer("/metadata/annotations/rocketmqrust.com~1features")
         .and_then(Value::as_str)
     {
         for feature in csv
@@ -223,13 +223,13 @@ fn release_summary(item: &Value) -> Map<String, Value> {
         ("version", "/metadata/labels/app.kubernetes.io~1version"),
         (
             "config_generation",
-            "/metadata/annotations/rocketmq.apache.org~1config-generation",
+            "/metadata/annotations/rocketmqrust.com~1config-generation",
         ),
         (
             "rollout_revision",
             "/metadata/annotations/deployment.kubernetes.io~1revision",
         ),
-        ("release_id", "/metadata/annotations/rocketmq.apache.org~1release-id"),
+        ("release_id", "/metadata/annotations/rocketmqrust.com~1release-id"),
     ];
     for (name, pointer) in candidates {
         if let Some(value) = item
@@ -286,12 +286,12 @@ mod tests {
                 "namespace": "rocketmq",
                 "generation": 4,
                 "labels": {
-                    "rocketmq.apache.org/cluster": "local",
-                    "rocketmq.apache.org/feature-tiered-store": "enabled"
+                    "rocketmqrust.com/cluster": "local",
+                    "rocketmqrust.com/feature-tiered-store": "enabled"
                 },
                 "annotations": {
                     "deployment.kubernetes.io/revision": "7",
-                    "rocketmq.apache.org/features": "tls,controller"
+                    "rocketmqrust.com/features": "tls,controller"
                 }
             },
             "spec": {
@@ -309,7 +309,7 @@ mod tests {
                 "availableReplicas": 3
             }
         });
-        let projected = project_deployment(&raw, &BTreeSet::from(["rocketmq.apache.org/cluster".to_owned()]));
+        let projected = project_deployment(&raw, &BTreeSet::from(["rocketmqrust.com/cluster".to_owned()]));
         assert_eq!(projected["rollout_state"], "ready");
         assert_eq!(projected["image_digests"], json!([digest]));
         assert_eq!(projected["feature_manifest"]["tiered-store"], true);

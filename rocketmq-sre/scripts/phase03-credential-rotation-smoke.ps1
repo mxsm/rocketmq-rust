@@ -145,8 +145,8 @@ function New-CredentialSecretResource(
             name = $Name
             namespace = $namespace
             annotations = [ordered]@{
-                'rocketmq.apache.org/sre-credential-set' = $credentialSet
-                'rocketmq.apache.org/sre-credential-version' = $Version
+                'rocketmqrust.com/sre-credential-set' = $credentialSet
+                'rocketmqrust.com/sre-credential-version' = $Version
             }
         }
         type = 'Opaque'
@@ -466,11 +466,11 @@ try {
             name = $selectorName
             namespace = $namespace
             annotations = [ordered]@{
-                'rocketmq.apache.org/sre-credential-set' = $credentialSet
-                'rocketmq.apache.org/sre-active-credential-version' = 'v1'
-                'rocketmq.apache.org/sre-active-credential-ref' =
+                'rocketmqrust.com/sre-credential-set' = $credentialSet
+                'rocketmqrust.com/sre-active-credential-version' = 'v1'
+                'rocketmqrust.com/sre-active-credential-ref' =
                     "kubernetes://$namespace/$activeSecretName"
-                'rocketmq.apache.org/sre-candidate-probe-healthy' = 'false'
+                'rocketmqrust.com/sre-candidate-probe-healthy' = 'false'
             }
         }
         data = [ordered]@{

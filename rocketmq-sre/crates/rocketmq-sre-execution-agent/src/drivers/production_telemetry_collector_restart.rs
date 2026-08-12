@@ -30,10 +30,10 @@ use super::TelemetryCollectorRestartOneWrite;
 use super::TelemetryCollectorRestartState;
 use crate::ExecutionAgentError;
 
-const OPERATION_ANNOTATION: &str = "rocketmq.apache.org/sre-collector-restart-operation";
-const EXECUTION_ANNOTATION: &str = "rocketmq.apache.org/sre-collector-restart-execution";
-const PLAN_STEP_ANNOTATION: &str = "rocketmq.apache.org/sre-collector-restart-plan-step";
-const EXPECTED_UID_ANNOTATION: &str = "rocketmq.apache.org/sre-collector-restart-expected-uid";
+const OPERATION_ANNOTATION: &str = "rocketmqrust.com/sre-collector-restart-operation";
+const EXECUTION_ANNOTATION: &str = "rocketmqrust.com/sre-collector-restart-execution";
+const PLAN_STEP_ANNOTATION: &str = "rocketmqrust.com/sre-collector-restart-plan-step";
+const EXPECTED_UID_ANNOTATION: &str = "rocketmqrust.com/sre-collector-restart-expected-uid";
 
 /// Production typed Kubernetes client for one allowlisted Collector rollout.
 #[derive(Clone)]

@@ -43,8 +43,8 @@
     ],
     "otel_endpoint": "http://otel-collector.observability.svc.cluster.local:4317",
     "otel_port": 4317,
-    "client_namespace_label": "rocketmq.apache.org/client-access",
-    "observability_namespace_label": "rocketmq.apache.org/observability"
+    "client_namespace_label": "rocketmqrust.com/client-access",
+    "observability_namespace_label": "rocketmqrust.com/observability"
   },
   "topology": {
     "default_key": "kubernetes.io/hostname",

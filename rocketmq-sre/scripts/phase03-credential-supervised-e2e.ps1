@@ -324,8 +324,8 @@ try {
                 name = $secretSpec.Name
                 namespace = $namespace
                 annotations = [ordered]@{
-                    'rocketmq.apache.org/sre-credential-set' = $credentialSet
-                    'rocketmq.apache.org/sre-credential-version' = $secretSpec.Version
+                    'rocketmqrust.com/sre-credential-set' = $credentialSet
+                    'rocketmqrust.com/sre-credential-version' = $secretSpec.Version
                 }
             }
             immutable = $true
@@ -343,11 +343,11 @@ try {
             name = $selector
             namespace = $namespace
             annotations = [ordered]@{
-                'rocketmq.apache.org/sre-credential-set' = $credentialSet
-                'rocketmq.apache.org/sre-active-credential-version' = 'v1'
-                'rocketmq.apache.org/sre-active-credential-ref' =
+                'rocketmqrust.com/sre-credential-set' = $credentialSet
+                'rocketmqrust.com/sre-active-credential-version' = 'v1'
+                'rocketmqrust.com/sre-active-credential-ref' =
                     "kubernetes://$namespace/$activeSecret"
-                'rocketmq.apache.org/sre-candidate-probe-healthy' = 'false'
+                'rocketmqrust.com/sre-candidate-probe-healthy' = 'false'
             }
         }
         data = [ordered]@{
@@ -409,9 +409,9 @@ try {
     }
     $annotations = $selectorView.metadata.annotations
     if (
-        $annotations.'rocketmq.apache.org/sre-active-credential-version' -ne 'v2' -or
-        $annotations.'rocketmq.apache.org/sre-retiring-credential-version' -ne 'v1' -or
-        $annotations.'rocketmq.apache.org/sre-candidate-probe-healthy' -ne 'true'
+        $annotations.'rocketmqrust.com/sre-active-credential-version' -ne 'v2' -or
+        $annotations.'rocketmqrust.com/sre-retiring-credential-version' -ne 'v1' -or
+        $annotations.'rocketmqrust.com/sre-candidate-probe-healthy' -ne 'true'
     ) {
         throw 'The supervised execution did not leave the expected bounded overlap state.'
     }

@@ -43,7 +43,7 @@ spec:
       labels:
         app.kubernetes.io/name: rocketmq-sre-executor
         app.kubernetes.io/part-of: rocketmq-sre
-        rocketmq.apache.org/execution-role: executor
+        rocketmqrust.com/execution-role: executor
     spec:
       serviceAccountName: sre-executor
       automountServiceAccountToken: false
@@ -134,7 +134,7 @@ spec:
       labels:
         app.kubernetes.io/name: rocketmq-sre-execution-agent
         app.kubernetes.io/part-of: rocketmq-sre
-        rocketmq.apache.org/execution-role: agent
+        rocketmqrust.com/execution-role: agent
     spec:
       serviceAccountName: sre-execution-agent
       automountServiceAccountToken: true

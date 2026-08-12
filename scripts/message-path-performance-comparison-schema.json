@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://rocketmq.apache.org/schemas/message-path-performance-comparison-v2.json",
+  "$id": "https://rocketmqrust.com/schemas/message-path-performance-comparison-v2.json",
   "title": "RocketMQ Rust message-path performance comparison",
   "type": "object",
   "additionalProperties": false,

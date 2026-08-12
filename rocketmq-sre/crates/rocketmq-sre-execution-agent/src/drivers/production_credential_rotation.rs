@@ -51,17 +51,17 @@ use crate::config::CredentialRotationTarget;
 
 mod journal;
 
-const CREDENTIAL_SET_ANNOTATION: &str = "rocketmq.apache.org/sre-credential-set";
-const ACTIVE_VERSION_ANNOTATION: &str = "rocketmq.apache.org/sre-active-credential-version";
-const ACTIVE_SECRET_REF_ANNOTATION: &str = "rocketmq.apache.org/sre-active-credential-ref";
-const RETIRING_VERSION_ANNOTATION: &str = "rocketmq.apache.org/sre-retiring-credential-version";
-const RETIRING_SECRET_REF_ANNOTATION: &str = "rocketmq.apache.org/sre-retiring-credential-ref";
-const OVERLAP_DEADLINE_ANNOTATION: &str = "rocketmq.apache.org/sre-credential-overlap-deadline";
-const PROBE_HEALTHY_ANNOTATION: &str = "rocketmq.apache.org/sre-candidate-probe-healthy";
-const OPERATION_ANNOTATION: &str = "rocketmq.apache.org/sre-credential-operation";
-const EXECUTION_ANNOTATION: &str = "rocketmq.apache.org/sre-credential-execution";
-const PLAN_STEP_ANNOTATION: &str = "rocketmq.apache.org/sre-credential-plan-step";
-const CREDENTIAL_VERSION_ANNOTATION: &str = "rocketmq.apache.org/sre-credential-version";
+const CREDENTIAL_SET_ANNOTATION: &str = "rocketmqrust.com/sre-credential-set";
+const ACTIVE_VERSION_ANNOTATION: &str = "rocketmqrust.com/sre-active-credential-version";
+const ACTIVE_SECRET_REF_ANNOTATION: &str = "rocketmqrust.com/sre-active-credential-ref";
+const RETIRING_VERSION_ANNOTATION: &str = "rocketmqrust.com/sre-retiring-credential-version";
+const RETIRING_SECRET_REF_ANNOTATION: &str = "rocketmqrust.com/sre-retiring-credential-ref";
+const OVERLAP_DEADLINE_ANNOTATION: &str = "rocketmqrust.com/sre-credential-overlap-deadline";
+const PROBE_HEALTHY_ANNOTATION: &str = "rocketmqrust.com/sre-candidate-probe-healthy";
+const OPERATION_ANNOTATION: &str = "rocketmqrust.com/sre-credential-operation";
+const EXECUTION_ANNOTATION: &str = "rocketmqrust.com/sre-credential-execution";
+const PLAN_STEP_ANNOTATION: &str = "rocketmqrust.com/sre-credential-plan-step";
+const CREDENTIAL_VERSION_ANNOTATION: &str = "rocketmqrust.com/sre-credential-version";
 const ACCESS_KEY_DATA: &str = "access-key";
 const SECRET_KEY_DATA: &str = "secret-key";
 const SECURITY_TOKEN_DATA: &str = "security-token";

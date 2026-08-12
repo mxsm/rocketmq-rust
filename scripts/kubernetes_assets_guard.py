@@ -734,7 +734,7 @@ def validate_render(guard: Guard, label: str, text: str) -> dict[str, Any]:
             "name: remoting",
             "port: 9876",
             "targetPort: 9876",
-            "rocketmq.apache.org/service: namesrv",
+            "rocketmqrust.com/service: namesrv",
         ):
             guard.require(snippet in discovery_service.text, f"{label}: NameServer discovery Service missing {snippet}")
         guard.require(

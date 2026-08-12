@@ -39,14 +39,14 @@ use super::ProxyImageCanaryWrite;
 use crate::ExecutionAgentError;
 
 const CANARY_SUFFIX: &str = "-sre-canary";
-const CANARY_LABEL: &str = "rocketmq.apache.org/sre-canary-operation";
-const OPERATION_ANNOTATION: &str = "rocketmq.apache.org/sre-canary-operation";
-const EXECUTION_ANNOTATION: &str = "rocketmq.apache.org/sre-canary-execution";
-const PLAN_STEP_ANNOTATION: &str = "rocketmq.apache.org/sre-canary-plan-step";
-const BASE_GENERATION_ANNOTATION: &str = "rocketmq.apache.org/sre-canary-base-generation";
-const ORIGINAL_REPLICAS_ANNOTATION: &str = "rocketmq.apache.org/sre-canary-original-replicas";
-const PREVIOUS_IMAGE_ANNOTATION: &str = "rocketmq.apache.org/sre-canary-previous-image";
-const IMAGE_DIGEST_ANNOTATION: &str = "rocketmq.apache.org/sre-canary-image-digest";
+const CANARY_LABEL: &str = "rocketmqrust.com/sre-canary-operation";
+const OPERATION_ANNOTATION: &str = "rocketmqrust.com/sre-canary-operation";
+const EXECUTION_ANNOTATION: &str = "rocketmqrust.com/sre-canary-execution";
+const PLAN_STEP_ANNOTATION: &str = "rocketmqrust.com/sre-canary-plan-step";
+const BASE_GENERATION_ANNOTATION: &str = "rocketmqrust.com/sre-canary-base-generation";
+const ORIGINAL_REPLICAS_ANNOTATION: &str = "rocketmqrust.com/sre-canary-original-replicas";
+const PREVIOUS_IMAGE_ANNOTATION: &str = "rocketmqrust.com/sre-canary-previous-image";
+const IMAGE_DIGEST_ANNOTATION: &str = "rocketmqrust.com/sre-canary-image-digest";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct CanaryBeforeState {

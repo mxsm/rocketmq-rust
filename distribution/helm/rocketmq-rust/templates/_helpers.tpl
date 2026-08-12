@@ -140,8 +140,8 @@ app.kubernetes.io/instance: {{ .root.Release.Name }}
 app.kubernetes.io/part-of: {{ include "rocketmq.partOf" . }}
 app.kubernetes.io/managed-by: {{ .root.Release.Service }}
 app.kubernetes.io/version: {{ .root.Chart.AppVersion | quote }}
-rocketmq.apache.org/service: {{ .service }}
-rocketmq.apache.org/architecture-milestone: P0-05
+rocketmqrust.com/service: {{ .service }}
+rocketmqrust.com/architecture-milestone: P0-05
 {{- end -}}
 
 {{/* Shared pre-bind lifecycle and security contract. The health port is kubelet-only and is not exposed by Services. */}}
@@ -172,11 +172,11 @@ rocketmq.apache.org/architecture-milestone: P0-05
 {{- end -}}
 
 {{- define "rocketmq.releaseAnnotations" -}}
-rocketmq.apache.org/release-commit: {{ .Values.releaseIdentity.commit | quote }}
-rocketmq.apache.org/release-nonce: {{ .Values.releaseIdentity.nonce | quote }}
-rocketmq.apache.org/release-config-digest: {{ .Values.releaseIdentity.configDigest | quote }}
-rocketmq.apache.org/release-secret-version: {{ .Values.releaseIdentity.secretVersion | quote }}
-rocketmq.apache.org/storage-generation: {{ .Values.releaseIdentity.storageGeneration | quote }}
+rocketmqrust.com/release-commit: {{ .Values.releaseIdentity.commit | quote }}
+rocketmqrust.com/release-nonce: {{ .Values.releaseIdentity.nonce | quote }}
+rocketmqrust.com/release-config-digest: {{ .Values.releaseIdentity.configDigest | quote }}
+rocketmqrust.com/release-secret-version: {{ .Values.releaseIdentity.secretVersion | quote }}
+rocketmqrust.com/storage-generation: {{ .Values.releaseIdentity.storageGeneration | quote }}
 {{- end -}}
 
 {{/* Protected diagnostics are separate from the anonymous health listener and disabled by default. */}}
@@ -218,7 +218,7 @@ livenessProbe:
 {{- define "rocketmq.selectorLabels" -}}
 app.kubernetes.io/name: {{ include "rocketmq.serviceName" . }}
 app.kubernetes.io/instance: {{ .root.Release.Name }}
-rocketmq.apache.org/service: {{ .service }}
+rocketmqrust.com/service: {{ .service }}
 {{- end -}}
 
 {{- define "rocketmq.image" -}}

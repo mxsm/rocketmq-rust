@@ -213,8 +213,8 @@ namespace:
   create: false
 networkPolicy:
   enabled: true
-  clientNamespaceLabel: rocketmq.apache.org/client-access
-  observabilityNamespaceLabel: rocketmq.apache.org/observability
+  clientNamespaceLabel: rocketmqrust.com/client-access
+  observabilityNamespaceLabel: rocketmqrust.com/observability
 services:
   broker:
     replicas: 3
@@ -396,14 +396,14 @@ kind: Job
 metadata:
   name: $job
   namespace: $Namespace
-  labels: { rocketmq.apache.org/live-fault: proxy-slow-backend }
+  labels: { rocketmqrust.com/live-fault: proxy-slow-backend }
 spec:
   backoffLimit: 0
   ttlSecondsAfterFinished: 300
   activeDeadlineSeconds: 180
   template:
     metadata:
-      labels: { rocketmq.apache.org/live-fault: proxy-slow-backend }
+      labels: { rocketmqrust.com/live-fault: proxy-slow-backend }
     spec:
       restartPolicy: Never
       automountServiceAccountToken: false
@@ -473,14 +473,14 @@ kind: Job
 metadata:
   name: $job
   namespace: $Namespace
-  labels: { rocketmq.apache.org/live-fault: controller-snapshot }
+  labels: { rocketmqrust.com/live-fault: controller-snapshot }
 spec:
   backoffLimit: 0
   ttlSecondsAfterFinished: 300
   activeDeadlineSeconds: 240
   template:
     metadata:
-      labels: { rocketmq.apache.org/live-fault: controller-snapshot }
+      labels: { rocketmqrust.com/live-fault: controller-snapshot }
     spec:
       restartPolicy: Never
       automountServiceAccountToken: false
@@ -1013,8 +1013,8 @@ function Set-ServiceImages {
                 template = [ordered]@{
                     metadata = [ordered]@{
                         annotations = [ordered]@{
-                            'rocketmq.apache.org/release-commit' = $ReleaseCommit
-                            'rocketmq.apache.org/release-nonce' = $ReleaseNonce
+                            'rocketmqrust.com/release-commit' = $ReleaseCommit
+                            'rocketmqrust.com/release-nonce' = $ReleaseNonce
                         }
                     }
                     spec = [ordered]@{
@@ -1047,8 +1047,8 @@ function Set-ServiceImages {
             template = [ordered]@{
                 metadata = [ordered]@{
                     annotations = [ordered]@{
-                        'rocketmq.apache.org/release-commit' = $ReleaseCommit
-                        'rocketmq.apache.org/release-nonce' = $ReleaseNonce
+                        'rocketmqrust.com/release-commit' = $ReleaseCommit
+                        'rocketmqrust.com/release-nonce' = $ReleaseNonce
                     }
                 }
                 spec = [ordered]@{
@@ -1112,8 +1112,8 @@ function Set-ServiceImages {
                 template = [ordered]@{
                     metadata = [ordered]@{
                         annotations = [ordered]@{
-                            'rocketmq.apache.org/release-commit' = $ReleaseCommit
-                            'rocketmq.apache.org/release-nonce' = $ReleaseNonce
+                            'rocketmqrust.com/release-commit' = $ReleaseCommit
+                            'rocketmqrust.com/release-nonce' = $ReleaseNonce
                         }
                     }
                     spec = [ordered]@{
@@ -1252,7 +1252,7 @@ nodes:
     [IO.File]::WriteAllText($rocketmqNamespacePath, "apiVersion: v1`nkind: Namespace`nmetadata:`n  name: $Namespace`n", [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText($observabilityNamespacePath, "apiVersion: v1`nkind: Namespace`nmetadata:`n  name: observability`n", [Text.UTF8Encoding]::new($false))
     Invoke-Native kubectl @('apply', '-f', $rocketmqNamespacePath) | Out-Null
-    Invoke-Native kubectl @('label', 'namespace', $Namespace, 'rocketmq.apache.org/client-access=true', '--overwrite') | Out-Null
+    Invoke-Native kubectl @('label', 'namespace', $Namespace, 'rocketmqrust.com/client-access=true', '--overwrite') | Out-Null
     Invoke-Native kubectl @('apply', '-f', $observabilityNamespacePath) | Out-Null
     Invoke-Native kubectl @('-n', $Namespace, 'apply', '-f', $RuntimeSecretManifest) | Out-Null
     Invoke-Native kubectl @('-n', $Namespace, 'apply', '-f', $BaselineDriverSecretManifest) | Out-Null
@@ -1260,7 +1260,7 @@ nodes:
     foreach ($secret in @('rocketmq-runtime-secrets', 'rocketmq-fault-driver-baseline', 'rocketmq-fault-driver-rotated')) {
         Invoke-Native kubectl @('-n', $Namespace, 'get', 'secret', $secret) | Out-Null
     }
-    Invoke-Native kubectl @('label', 'namespace', 'observability', 'rocketmq.apache.org/observability=true', '--overwrite') | Out-Null
+    Invoke-Native kubectl @('label', 'namespace', 'observability', 'rocketmqrust.com/observability=true', '--overwrite') | Out-Null
     $collectorManifest = @"
 apiVersion: v1
 kind: ConfigMap
@@ -1378,15 +1378,15 @@ spec: { selector: { app.kubernetes.io/name: otel-collector }, ports: [{ name: ot
         rollback_status = $afterRollback.Output; pvc_uids = $pvcAfterUpgrade
     })
 
-    $evictionProxyPod = Wait-ReadyWorkerPod -Selector 'rocketmq.apache.org/service=proxy' -WorkerNames $workerNames
+    $evictionProxyPod = Wait-ReadyWorkerPod -Selector 'rocketmqrust.com/service=proxy' -WorkerNames $workerNames
     Assert-True ($null -ne $evictionProxyPod) 'a ready Proxy pod must exist before node eviction'
-    $proxyPodsBeforeEviction = ((Invoke-Native kubectl @('-n', $Namespace, 'get', 'pods', '-l', 'rocketmq.apache.org/service=proxy', '-o', 'json')).Output | ConvertFrom-Json).items
+    $proxyPodsBeforeEviction = ((Invoke-Native kubectl @('-n', $Namespace, 'get', 'pods', '-l', 'rocketmqrust.com/service=proxy', '-o', 'json')).Output | ConvertFrom-Json).items
     $evictionNode = $evictionProxyPod.spec.nodeName
     $evictionProxyUid = $evictionProxyPod.metadata.uid
     $proxyUidsBeforeEviction = @($proxyPodsBeforeEviction | ForEach-Object { $_.metadata.uid })
-    $drain = Invoke-Native kubectl @('drain', $evictionNode, '--pod-selector=rocketmq.apache.org/service=proxy', '--ignore-daemonsets', '--delete-emptydir-data', '--timeout=180s')
+    $drain = Invoke-Native kubectl @('drain', $evictionNode, '--pod-selector=rocketmqrust.com/service=proxy', '--ignore-daemonsets', '--delete-emptydir-data', '--timeout=180s')
     Wait-Workloads
-    $proxyPodsAfterEviction = ((Invoke-Native kubectl @('-n', $Namespace, 'get', 'pods', '-l', 'rocketmq.apache.org/service=proxy', '-o', 'json')).Output | ConvertFrom-Json).items
+    $proxyPodsAfterEviction = ((Invoke-Native kubectl @('-n', $Namespace, 'get', 'pods', '-l', 'rocketmqrust.com/service=proxy', '-o', 'json')).Output | ConvertFrom-Json).items
     $evictionReplacementProxyPod = $proxyPodsAfterEviction |
         Where-Object {
             $proxyUidsBeforeEviction -notcontains $_.metadata.uid -and
@@ -1498,9 +1498,9 @@ spec: { selector: { app.kubernetes.io/name: otel-collector }, ports: [{ name: ot
         collector_recovered = $collectorRecovery.ExitCode -eq 0; slo_budget_satisfied = $outageStart.Elapsed.TotalSeconds -lt 30
     }) ([ordered]@{ collector_scale = $collectorDown.Output; message_during_outage = $duringOutage.Output; telemetry_metrics = $telemetryLogs; collector_recovery = $collectorRecovery.Output; slo_report = "message query seconds=$($outageStart.Elapsed.TotalSeconds) budget=30" })
 
-    $pressureProxyPod = Wait-ReadyWorkerPod -Selector 'rocketmq.apache.org/service=proxy' -WorkerNames $workerNames
+    $pressureProxyPod = Wait-ReadyWorkerPod -Selector 'rocketmqrust.com/service=proxy' -WorkerNames $workerNames
     Assert-True ($null -ne $pressureProxyPod) 'a ready Proxy pod must exist before disk-pressure injection'
-    $proxyPodsBeforePressure = ((Invoke-Native kubectl @('-n', $Namespace, 'get', 'pods', '-l', 'rocketmq.apache.org/service=proxy', '-o', 'json')).Output | ConvertFrom-Json).items
+    $proxyPodsBeforePressure = ((Invoke-Native kubectl @('-n', $Namespace, 'get', 'pods', '-l', 'rocketmqrust.com/service=proxy', '-o', 'json')).Output | ConvertFrom-Json).items
     $pressureNode = $pressureProxyPod.spec.nodeName
     $pressureProxyUid = $pressureProxyPod.metadata.uid
     $proxyUidsBeforePressure = @($proxyPodsBeforePressure | ForEach-Object { $_.metadata.uid })
@@ -1509,16 +1509,16 @@ spec: { selector: { app.kubernetes.io/name: otel-collector }, ports: [{ name: ot
         'taint',
         'node',
         $pressureNode,
-        'rocketmq.apache.org/simulated-disk-pressure=true:NoSchedule',
+        'rocketmqrust.com/simulated-disk-pressure=true:NoSchedule',
         '--overwrite'
     )
     $pressureStatusDuring = (Invoke-Native kubectl @('get', 'node', $pressureNode, '-o', 'json')).Output
     Assert-True (
-        $pressureStatusDuring -match 'rocketmq.apache.org/simulated-disk-pressure'
+        $pressureStatusDuring -match 'rocketmqrust.com/simulated-disk-pressure'
     ) 'stable disk-pressure simulation taint must be observable before deleting the Proxy pod'
     Invoke-Native kubectl @('-n', $Namespace, 'delete', 'pod', $pressureProxyPod.metadata.name, '--wait=false') | Out-Null
     Wait-Workloads
-    $proxyPodsAfterPressure = ((Invoke-Native kubectl @('-n', $Namespace, 'get', 'pods', '-l', 'rocketmq.apache.org/service=proxy', '-o', 'json')).Output | ConvertFrom-Json).items
+    $proxyPodsAfterPressure = ((Invoke-Native kubectl @('-n', $Namespace, 'get', 'pods', '-l', 'rocketmqrust.com/service=proxy', '-o', 'json')).Output | ConvertFrom-Json).items
     $replacementProxyPod = $proxyPodsAfterPressure |
         Where-Object {
             $proxyUidsBeforePressure -notcontains $_.metadata.uid -and
@@ -1527,7 +1527,7 @@ spec: { selector: { app.kubernetes.io/name: otel-collector }, ports: [{ name: ot
             @($_.status.conditions | Where-Object { $_.type -eq 'Ready' -and $_.status -eq 'True' }).Count -eq 1
         } |
         Select-Object -First 1
-    $podPlacement = (Invoke-Native kubectl @('-n', $Namespace, 'get', 'pods', '-l', 'rocketmq.apache.org/service=proxy', '-o', 'wide')).Output
+    $podPlacement = (Invoke-Native kubectl @('-n', $Namespace, 'get', 'pods', '-l', 'rocketmqrust.com/service=proxy', '-o', 'wide')).Output
     $afterPressure = Query-AcknowledgedMessage $ack.Id
     $taintCleanup = Invoke-Native kubectl @(
         'taint',
@@ -1542,16 +1542,16 @@ spec: { selector: { app.kubernetes.io/name: otel-collector }, ports: [{ name: ot
         'taint',
         'node',
         $pressureNode,
-        'rocketmq.apache.org/simulated-disk-pressure:NoSchedule-'
+        'rocketmqrust.com/simulated-disk-pressure:NoSchedule-'
     ) -AllowFailure
     Assert-True (
         $simulationTaintCleanup.ExitCode -eq 0 -or $simulationTaintCleanup.Output -match 'not found'
     ) 'simulated disk-pressure taint cleanup must be idempotent'
     $pressureStatus = (Invoke-Native kubectl @('get', 'node', $pressureNode, '-o', 'json')).Output
     Complete-Scenario 'disk_pressure' ([ordered]@{
-        disk_pressure_taint_observed = $taint.ExitCode -eq 0 -and $simulationTaint.ExitCode -eq 0 -and $pressureStatusDuring -match 'rocketmq.apache.org/simulated-disk-pressure'
+        disk_pressure_taint_observed = $taint.ExitCode -eq 0 -and $simulationTaint.ExitCode -eq 0 -and $pressureStatusDuring -match 'rocketmqrust.com/simulated-disk-pressure'
         stateless_pod_rescheduled = $null -ne $replacementProxyPod
-        acknowledged_message_visible = $true; pvc_uid_set_preserved = $InitialPvcUids -eq (Get-PvcUidSet); taint_removed = $pressureStatus -notmatch 'node.kubernetes.io/disk-pressure' -and $pressureStatus -notmatch 'rocketmq.apache.org/simulated-disk-pressure'
+        acknowledged_message_visible = $true; pvc_uid_set_preserved = $InitialPvcUids -eq (Get-PvcUidSet); taint_removed = $pressureStatus -notmatch 'node.kubernetes.io/disk-pressure' -and $pressureStatus -notmatch 'rocketmqrust.com/simulated-disk-pressure'
     }) ([ordered]@{
         taint_status = "$($taint.Output)`n$($simulationTaint.Output)`n$pressureStatusDuring"
         pod_reschedule = "deletedUid=$pressureProxyUid replacementUid=$($replacementProxyPod.metadata.uid)`n$podPlacement"
@@ -1651,7 +1651,7 @@ spec: { selector: { app.kubernetes.io/name: otel-collector }, ports: [{ name: ot
     }
     $null = Wait-ControllerPodRecreatedAndReady -Ordinal $failureLeaderOrdinal -PreviousUid $failureLeaderState.metadata.uid
     $leadershipAfterFailure = Wait-ControllerLeadershipStable
-    $controllerStatus = (Invoke-Native kubectl @('-n', $Namespace, 'get', 'pods', '-l', 'rocketmq.apache.org/service=controller', '-o', 'wide')).Output
+    $controllerStatus = (Invoke-Native kubectl @('-n', $Namespace, 'get', 'pods', '-l', 'rocketmqrust.com/service=controller', '-o', 'wide')).Output
     $controllerState = ((Invoke-Native kubectl @('-n', $Namespace, 'get', 'statefulset/rocketmq-controller', '-o', 'json')).Output | ConvertFrom-Json).status
     $afterLeader = Query-AcknowledgedMessage $ack.Id
     Complete-Scenario 'controller_leader_failure' ([ordered]@{
@@ -1871,7 +1871,7 @@ spec: { selector: { app.kubernetes.io/name: otel-collector }, ports: [{ name: ot
     })
 
     $proxyPods = @(((Invoke-Native kubectl @(
-        '-n', $Namespace, 'get', 'pods', '-l', 'rocketmq.apache.org/service=proxy', '-o', 'json'
+        '-n', $Namespace, 'get', 'pods', '-l', 'rocketmqrust.com/service=proxy', '-o', 'json'
     )).Output | ConvertFrom-Json).items)
     Assert-True ($proxyPods.Count -eq 2) 'live Proxy overload requires both Proxy replicas'
     $proxyMaster = (Wait-LiveSingleMaster -Namespace $Namespace).Master
@@ -1914,7 +1914,7 @@ spec: { selector: { app.kubernetes.io/name: otel-collector }, ports: [{ name: ot
         -Endpoint "rocketmq-proxy.$Namespace.svc.cluster.local:8080" `
         -Arguments @('message', 'sendMessage', '-t', $Topic, '-p', 'proxy-recovered', '-k', "proxy-recovered-$LiveFaultToken")
     $proxyPodsAfter = @(((Invoke-Native kubectl @(
-        '-n', $Namespace, 'get', 'pods', '-l', 'rocketmq.apache.org/service=proxy', '-o', 'json'
+        '-n', $Namespace, 'get', 'pods', '-l', 'rocketmqrust.com/service=proxy', '-o', 'json'
     )).Output | ConvertFrom-Json).items)
     $sendSequences = @([regex]::Matches($proxyLoad.Output, 'send-sequence=(\d+)') | ForEach-Object {
         [int]$_.Groups[1].Value
@@ -1938,7 +1938,7 @@ spec: { selector: { app.kubernetes.io/name: otel-collector }, ports: [{ name: ot
     })
 
     $preRotation = Query-AcknowledgedMessage $ack.Id
-    $brokerUidsBeforeRotation = ((Invoke-Native kubectl @('-n', $Namespace, 'get', 'pods', '-l', 'rocketmq.apache.org/service=broker', '-o', 'json')).Output | ConvertFrom-Json).items |
+    $brokerUidsBeforeRotation = ((Invoke-Native kubectl @('-n', $Namespace, 'get', 'pods', '-l', 'rocketmqrust.com/service=broker', '-o', 'json')).Output | ConvertFrom-Json).items |
         ForEach-Object { "$($_.metadata.name)=$($_.metadata.uid)" } |
         Sort-Object
     $rotationResult = $null
@@ -1970,7 +1970,7 @@ spec: { selector: { app.kubernetes.io/name: otel-collector }, ports: [{ name: ot
     if ($null -ne $rotationFailure) { throw $rotationFailure }
     $newAllowed = Convert-MessageQueryEvidence $rotationResult.Allowed
     $restored = Convert-MessageQueryEvidence $rollbackResult.Allowed
-    $brokerUidsAfterRotation = ((Invoke-Native kubectl @('-n', $Namespace, 'get', 'pods', '-l', 'rocketmq.apache.org/service=broker', '-o', 'json')).Output | ConvertFrom-Json).items |
+    $brokerUidsAfterRotation = ((Invoke-Native kubectl @('-n', $Namespace, 'get', 'pods', '-l', 'rocketmqrust.com/service=broker', '-o', 'json')).Output | ConvertFrom-Json).items |
         ForEach-Object { "$($_.metadata.name)=$($_.metadata.uid)" } |
         Sort-Object
     $brokerPodsUnchanged = ($brokerUidsBeforeRotation -join "`n") -eq ($brokerUidsAfterRotation -join "`n")
@@ -2023,7 +2023,7 @@ spec: { selector: { app.kubernetes.io/name: otel-collector }, ports: [{ name: ot
     $finalNodes = ((Invoke-Native kubectl @('get', 'nodes', '-o', 'json')).Output | ConvertFrom-Json).items
     $diskPressureTaintKeys = @(
         'node.kubernetes.io/disk-pressure',
-        'rocketmq.apache.org/simulated-disk-pressure'
+        'rocketmqrust.com/simulated-disk-pressure'
     )
     $nodesClean = @(
         $finalNodes | Where-Object {
@@ -2102,7 +2102,7 @@ spec: { selector: { app.kubernetes.io/name: otel-collector }, ports: [{ name: ot
         foreach ($node in @($cleanupNodes)) {
             Invoke-Native kubectl @('uncordon', $node.metadata.name) -AllowFailure | Out-Null
             Invoke-Native kubectl @('taint', 'node', $node.metadata.name, 'node.kubernetes.io/disk-pressure:NoSchedule-') -AllowFailure | Out-Null
-            Invoke-Native kubectl @('taint', 'node', $node.metadata.name, 'rocketmq.apache.org/simulated-disk-pressure:NoSchedule-') -AllowFailure | Out-Null
+            Invoke-Native kubectl @('taint', 'node', $node.metadata.name, 'rocketmqrust.com/simulated-disk-pressure:NoSchedule-') -AllowFailure | Out-Null
             Clear-NodeNetworkImpairment $node.metadata.name | Out-Null
         }
         Invoke-Native kubectl @(

@@ -6,7 +6,7 @@ metadata:
   labels:
     app.kubernetes.io/name: rocketmq-rust
     app.kubernetes.io/instance: rocketmq
-    rocketmq.apache.org/service: mcp
+    rocketmqrust.com/service: mcp
 data:
   mcp.toml: |-
     [server]

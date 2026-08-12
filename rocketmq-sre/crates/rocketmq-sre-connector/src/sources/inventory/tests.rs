@@ -172,9 +172,9 @@ fn fixture_forms_only_verified_topic_storage_path_and_reports_client_gap() {
                 "name": "broker-0",
                 "namespace": "rocketmq",
                 "labels": {
-                    "rocketmq.apache.org/cluster": "local",
-                    "rocketmq.apache.org/service": "broker",
-                    "rocketmq.apache.org/broker-name": "broker-a"
+                    "rocketmqrust.com/cluster": "local",
+                    "rocketmqrust.com/service": "broker",
+                    "rocketmqrust.com/broker-name": "broker-a"
                 },
                 "phase": "Running",
                 "node_name": "worker-a.internal",
@@ -192,7 +192,7 @@ fn fixture_forms_only_verified_topic_storage_path_and_reports_client_gap() {
             "namespace": "rocketmq",
             "items": [{
                 "name": "worker-a.internal",
-                "labels": {"rocketmq.apache.org/cluster": "local"},
+                "labels": {"rocketmqrust.com/cluster": "local"},
                 "unschedulable": false,
                 "pod_capacity": "110",
                 "pod_allocatable": "110",
@@ -210,7 +210,7 @@ fn fixture_forms_only_verified_topic_storage_path_and_reports_client_gap() {
             "items": [{
                 "name": "broker-data-0",
                 "namespace": "rocketmq",
-                "labels": {"rocketmq.apache.org/cluster": "local"},
+                "labels": {"rocketmqrust.com/cluster": "local"},
                 "phase": "Bound",
                 "storage_class": "rocketmq-retain",
                 "access_modes": ["ReadWriteOnce"],
