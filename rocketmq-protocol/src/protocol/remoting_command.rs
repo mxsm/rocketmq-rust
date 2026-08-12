@@ -1135,9 +1135,7 @@ impl RemotingCommand {
     }
 
     pub fn add_ext_field(&mut self, key: impl Into<CheetahString>, value: impl Into<CheetahString>) -> &mut Self {
-        if let Some(ext) = self.ext_fields.as_map_mut() {
-            ext.insert(key.into(), value.into());
-        }
+        self.ext_fields.get_or_insert_map().insert(key.into(), value.into());
         self
     }
 
@@ -1285,9 +1283,10 @@ impl RemotingCommand {
 
     #[inline]
     pub fn add_ext_field_if_not_exist(&mut self, key: impl Into<CheetahString>, value: impl Into<CheetahString>) {
-        if let Some(ext) = self.ext_fields.as_map_mut() {
-            ext.entry(key.into()).or_insert(value.into());
-        }
+        self.ext_fields
+            .get_or_insert_map()
+            .entry(key.into())
+            .or_insert(value.into());
     }
 
     /// Ensures the extension fields map is initialized.
@@ -1471,6 +1470,117 @@ mod tests {
              extFields\":{},\"serializeTypeCurrentRPC\":\"JSON\"}",
             serde_json::to_string(&command).unwrap()
         );
+    }
+
+    #[test]
+    fn add_ext_field_initializes_absent() {
+        let mut command = RemotingCommand::create_response_command();
+        assert!(command.ext_fields.is_absent());
+
+        command.add_ext_field("key", "value");
+
+        assert_eq!(
+            command
+                .ext_fields()
+                .and_then(|fields| fields.get("key"))
+                .map(CheetahString::as_str),
+            Some("value")
+        );
+    }
+
+    #[test]
+    fn add_ext_field_if_not_exist_initializes_absent() {
+        let mut command = RemotingCommand::create_response_command();
+        assert!(command.ext_fields.is_absent());
+
+        command.add_ext_field_if_not_exist("key", "first");
+        command.add_ext_field_if_not_exist("key", "second");
+
+        assert_eq!(
+            command
+                .ext_fields()
+                .and_then(|fields| fields.get("key"))
+                .map(CheetahString::as_str),
+            Some("first")
+        );
+    }
+
+    #[test]
+    fn add_ext_field_preserves_materialized_fields() {
+        let mut command = RemotingCommand::create_response_command().set_ext_fields(HashMap::from([(
+            CheetahString::from_static_str("existing"),
+            CheetahString::from_static_str("preserved"),
+        )]));
+
+        command.add_ext_field("added", "value");
+
+        let fields = command.ext_fields().expect("extension fields should exist");
+        assert_eq!(fields.get("existing").map(CheetahString::as_str), Some("preserved"));
+        assert_eq!(fields.get("added").map(CheetahString::as_str), Some("value"));
+    }
+
+    #[test]
+    fn add_ext_field_preserves_json_raw_fields() {
+        let mut header = json_header_with_ext_fields(r#"{"existing":"preserved"}"#);
+        let header_length = header.len();
+        let mut command = RemotingCommand::header_decode(&mut header, header_length, SerializeType::JSON)
+            .unwrap()
+            .unwrap();
+        assert!(command.ext_fields.is_json_raw());
+
+        command.add_ext_field("added", "value");
+
+        let fields = command.ext_fields().expect("extension fields should exist");
+        assert_eq!(fields.get("existing").map(CheetahString::as_str), Some("preserved"));
+        assert_eq!(fields.get("added").map(CheetahString::as_str), Some("value"));
+    }
+
+    #[test]
+    fn add_ext_field_preserves_rocketmq_raw_fields() {
+        let mut source = RemotingCommand::create_response_command()
+            .set_serialize_type(SerializeType::ROCKETMQ)
+            .set_ext_fields(HashMap::from([(
+                CheetahString::from_static_str("existing"),
+                CheetahString::from_static_str("preserved"),
+            )]));
+        let mut encoded = BytesMut::new();
+        source.try_fast_header_encode(&mut encoded).unwrap();
+        let mut command = RemotingCommand::decode(&mut encoded).unwrap().unwrap();
+        assert!(command.ext_fields.is_rocketmq_raw());
+
+        command.add_ext_field("added", "value");
+
+        let fields = command.ext_fields().expect("extension fields should exist");
+        assert_eq!(fields.get("existing").map(CheetahString::as_str), Some("preserved"));
+        assert_eq!(fields.get("added").map(CheetahString::as_str), Some("value"));
+    }
+
+    #[test]
+    fn add_ext_field_coexists_with_typed_header() {
+        for serialize_type in [SerializeType::JSON, SerializeType::ROCKETMQ] {
+            let mut command = RemotingCommand::create_response_command_with_header(TestCustomHeader { value: 7 })
+                .set_serialize_type(serialize_type);
+            command.add_ext_field("dynamic", "preserved");
+            let mut encoded = BytesMut::new();
+
+            command.try_fast_header_encode(&mut encoded).unwrap();
+            let decoded = RemotingCommand::decode(&mut encoded).unwrap().unwrap();
+
+            assert_eq!(
+                decoded
+                    .ext_fields()
+                    .and_then(|fields| fields.get("value"))
+                    .map(CheetahString::as_str),
+                Some("7")
+            );
+            assert_eq!(
+                decoded
+                    .ext_fields()
+                    .and_then(|fields| fields.get("dynamic"))
+                    .map(CheetahString::as_str),
+                Some("preserved")
+            );
+        }
     }
 
     #[test]

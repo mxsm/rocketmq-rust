@@ -117,6 +117,14 @@ struct ParsedSendRequest {
     properties: HashMap<CheetahString, CheetahString>,
 }
 
+fn add_send_response_metadata(response: &mut RemotingCommand, region_id: CheetahString, trace_on: bool) {
+    response.add_ext_field(MessageConst::PROPERTY_MSG_REGION, region_id);
+    response.add_ext_field(
+        MessageConst::PROPERTY_TRACE_SWITCH,
+        CheetahString::from_static_str(if trace_on { "true" } else { "false" }),
+    );
+}
+
 impl<MS: BrokerWriteStore, TS> Clone for SendMessageProcessor<MS, TS> {
     fn clone(&self) -> Self {
         Self {
@@ -1068,11 +1076,7 @@ where
         let policy = self.inner.context.policy.snapshot();
         // set opaque
         response.with_opaque(request.opaque());
-        response.add_ext_field(MessageConst::PROPERTY_MSG_REGION, policy.region_id.clone());
-        response.add_ext_field(
-            MessageConst::PROPERTY_TRACE_SWITCH,
-            CheetahString::from_static_str(if policy.trace_on { "true" } else { "false" }),
-        );
+        add_send_response_metadata(&mut response, policy.region_id.clone(), policy.trace_on);
         let start_timestamp = policy.start_accept_send_request_time_stamp;
         let store_now = self.inner.context.store.now().unwrap_or_default();
         if store_now < (start_timestamp as u64) {
@@ -1998,7 +2002,9 @@ mod tests {
     use rocketmq_protocol::code::request_code::RequestCode;
     use rocketmq_protocol::code::response_code::RemotingSysResponseCode;
     use rocketmq_protocol::code::response_code::ResponseCode;
+    use rocketmq_protocol::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+    use rocketmq_protocol::protocol::SerializeType;
     use rocketmq_store::store_append_receipt;
     use rocketmq_store::PutMessageResult;
     use rocketmq_store::PutMessageStatus;
@@ -2012,6 +2018,7 @@ mod tests {
     use crate::mqtrace::send_message_hook::SendMessageHook;
     use crate::send_message_constants::error_messages;
 
+    use super::add_send_response_metadata;
     use super::append_message_with_store;
     use super::apply_topic_delivery_properties;
     use super::broker_send_permission_denied;
@@ -2024,6 +2031,42 @@ mod tests {
     use super::store_health_reject_remark;
     use super::store_health_reject_remark_from;
     use super::sync_flush_backlog_reject_remark;
+
+    #[test]
+    fn send_response_keeps_region_and_trace_fields() {
+        for serialize_type in [SerializeType::JSON, SerializeType::ROCKETMQ] {
+            let mut response = RemotingCommand::create_response_command_with_header(SendMessageResponseHeader::new(
+                CheetahString::from_static_str("msg-id"),
+                0,
+                0,
+                None,
+                None,
+                None,
+            ))
+            .set_serialize_type(serialize_type);
+            add_send_response_metadata(&mut response, CheetahString::from_static_str("region-a"), true);
+            let mut encoded = bytes::BytesMut::new();
+
+            response
+                .try_fast_header_encode(&mut encoded)
+                .expect("send response should encode");
+            let decoded = RemotingCommand::decode(&mut encoded)
+                .expect("send response should decode")
+                .expect("send response frame should be complete");
+
+            let fields = decoded.ext_fields().expect("send response ext fields");
+            assert_eq!(
+                fields.get(MessageConst::PROPERTY_MSG_REGION).map(CheetahString::as_str),
+                Some("region-a")
+            );
+            assert_eq!(
+                fields
+                    .get(MessageConst::PROPERTY_TRACE_SWITCH)
+                    .map(CheetahString::as_str),
+                Some("true")
+            );
+        }
+    }
 
     #[test]
     fn broker_receive_spans_bind_remote_parent_before_instrumentation() {

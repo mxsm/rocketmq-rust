@@ -633,6 +633,12 @@ mod tests {
         let ext_fields = response.ext_fields().expect("ext fields should exist");
         assert_eq!(
             ext_fields
+                .get(&CheetahString::from_static_str(IS_SUPPORT_HEART_BEAT_V2))
+                .map(|value| value.as_str()),
+            Some("true")
+        );
+        assert_eq!(
+            ext_fields
                 .get(&CheetahString::from_static_str(IS_SUB_CHANGE))
                 .map(|value| value.as_str()),
             Some("true")
