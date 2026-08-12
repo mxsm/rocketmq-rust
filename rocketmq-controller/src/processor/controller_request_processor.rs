@@ -310,11 +310,7 @@ impl ControllerRequestProcessor {
         };
         let body = serde_json::to_vec(&response)
             .map_err(|error| RocketMQError::internal("encode maintenance capabilities", error))?;
-        Ok(Some(
-            RemotingCommand::create_response_command()
-                .set_code(ResponseCode::Success)
-                .set_body(body),
-        ))
+        Ok(Some(RemotingCommand::create_success_response_command().set_body(body)))
     }
 
     async fn handle_create_release_snapshot(
@@ -336,11 +332,7 @@ impl ControllerRequestProcessor {
             .await?;
         let body = serde_json::to_vec(&snapshot.manifest)
             .map_err(|error| RocketMQError::internal("encode Controller release snapshot manifest", error))?;
-        Ok(Some(
-            RemotingCommand::create_response_command()
-                .set_code(ResponseCode::Success)
-                .set_body(body),
-        ))
+        Ok(Some(RemotingCommand::create_success_response_command().set_body(body)))
     }
 
     async fn handle_verify_release_snapshot(
@@ -357,11 +349,7 @@ impl ControllerRequestProcessor {
             .await?;
         let body = serde_json::to_vec(&manifest)
             .map_err(|error| RocketMQError::internal("encode verified Controller snapshot manifest", error))?;
-        Ok(Some(
-            RemotingCommand::create_response_command()
-                .set_code(ResponseCode::Success)
-                .set_body(body),
-        ))
+        Ok(Some(RemotingCommand::create_success_response_command().set_body(body)))
     }
 
     async fn handle_restore_verify(
@@ -379,11 +367,7 @@ impl ControllerRequestProcessor {
             .await?;
         let body = serde_json::to_vec(&verification)
             .map_err(|error| RocketMQError::internal("encode Controller restore-verification proof", error))?;
-        Ok(Some(
-            RemotingCommand::create_response_command()
-                .set_code(ResponseCode::Success)
-                .set_body(body),
-        ))
+        Ok(Some(RemotingCommand::create_success_response_command().set_body(body)))
     }
 
     /// Handle ALTER_SYNC_STATE_SET request
@@ -631,7 +615,7 @@ impl ControllerRequestProcessor {
                 return controller_manager.controller().get_sync_state_data(&broker_names).await;
             }
         }
-        Ok(Some(RemotingCommand::create_response_command()))
+        Ok(Some(RemotingCommand::create_success_response_command()))
     }
 
     /// Handle UPDATE_CONTROLLER_CONFIG request
@@ -683,7 +667,7 @@ impl ControllerRequestProcessor {
         controller_manager.update_config(properties).await?;
 
         // Return success
-        Ok(Some(RemotingCommand::create_response_command()))
+        Ok(Some(RemotingCommand::create_success_response_command()))
     }
     // Helper function to parse properties
     async fn parse_properties_from_string(body: &[u8]) -> RocketMQResult<HashMap<String, String>> {
@@ -725,7 +709,7 @@ impl ControllerRequestProcessor {
         let controller_config = self.controller_manager()?.controller_config();
         let config_string = controller_config.to_properties_string();
 
-        let response = RemotingCommand::create_response_command().set_body(config_string.into_bytes());
+        let response = RemotingCommand::create_success_response_command().set_body(config_string.into_bytes());
         Ok(Some(response))
     }
 

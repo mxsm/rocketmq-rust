@@ -318,12 +318,10 @@ mod tests {
 
     #[test]
     fn election_outcome_is_bounded_and_does_not_expose_response_codes() {
-        let success = Ok(Some(
-            RemotingCommand::create_response_command().set_code(ResponseCode::Success),
-        ));
-        let rejected = Ok(Some(
-            RemotingCommand::create_response_command().set_code(ResponseCode::ControllerElectMasterFailed),
-        ));
+        let success = Ok(Some(RemotingCommand::create_success_response_command()));
+        let rejected = Ok(Some(RemotingCommand::create_response_command_with_code(
+            ResponseCode::ControllerElectMasterFailed,
+        )));
         let unavailable = Ok(None);
 
         assert_eq!(election_outcome(&success), "success");

@@ -612,7 +612,7 @@ where
                 .collect(),
         );
 
-        let mut response = RemotingCommand::create_response_command().set_opaque(request.opaque());
+        let mut response = RemotingCommand::create_success_response_command().set_opaque(request.opaque());
         response.add_ext_field(IS_SUPPORT_HEART_BEAT_V2, true.to_string());
         response.add_ext_field(IS_SUB_CHANGE, changed.to_string());
         response
@@ -628,7 +628,7 @@ where
             header.producer_group.as_deref(),
             header.consumer_group.as_deref(),
         );
-        RemotingCommand::create_response_command().set_opaque(request.opaque())
+        RemotingCommand::create_success_response_command().set_opaque(request.opaque())
     }
 
     async fn dispatch_get_consumer_list_by_group(&self, request: &RemotingCommand) -> RemotingCommand {
@@ -1559,7 +1559,7 @@ fn response_with_header<H>(
 where
     H: CommandCustomHeader + Send + Sync + 'static,
 {
-    let mut response = RemotingCommand::create_response_command_with_header(header).set_code(code);
+    let mut response = RemotingCommand::create_response_command_with_code_and_header(code, header);
     if let Some(remark) = remark {
         response = response.set_remark(remark);
     }
@@ -1700,6 +1700,7 @@ mod tests {
     use rocketmq_transport::test_support::LocalRequestHarness;
     use tokio::time::timeout;
 
+    use super::response_with_header;
     use super::ProxyRemotingBackend;
     use super::ProxyRemotingDispatcher;
     use super::ProxyRequestProcessor;
@@ -2229,6 +2230,7 @@ mod tests {
 
         let heartbeat_response = dispatcher.dispatch(&test_context(), &heartbeat_request).await;
         assert_eq!(ResponseCode::from(heartbeat_response.code()), ResponseCode::Success);
+        assert_eq!(heartbeat_response.opaque(), heartbeat_request.opaque());
         let heartbeat_ext_fields = heartbeat_response.ext_fields().expect("heartbeat response ext fields");
         assert_eq!(
             heartbeat_ext_fields
@@ -2366,7 +2368,29 @@ mod tests {
         unregister_request.make_custom_header_to_net();
         let response = dispatcher.dispatch(&test_context(), &unregister_request).await;
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        assert_eq!(response.opaque(), unregister_request.opaque());
         assert!(sessions.consumer_client_ids("GroupA").is_empty());
+    }
+
+    #[test]
+    fn response_with_header_preserves_explicit_contract() {
+        let response = response_with_header(
+            42,
+            ResponseCode::QueryNotFound,
+            QueryConsumerOffsetResponseHeader { offset: Some(7) },
+            Some("offset unavailable".to_owned()),
+            Some(Bytes::from_static(b"body")),
+        );
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::QueryNotFound);
+        assert!(response.is_response_type());
+        assert_eq!(response.opaque(), 42);
+        assert_eq!(response.remark().map(CheetahString::as_str), Some("offset unavailable"));
+        assert_eq!(response.body().map(Bytes::as_ref), Some(b"body".as_slice()));
+        let header = response
+            .decode_command_custom_header::<QueryConsumerOffsetResponseHeader>()
+            .expect("query offset response header");
+        assert_eq!(header.offset, Some(7));
     }
 
     #[tokio::test]

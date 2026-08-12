@@ -338,12 +338,12 @@ impl OpenRaftController {
         T: CommandCustomHeader + Sync + Send + 'static,
     {
         let (_events, header, body, response_code, remark) = result.into_parts();
-        let mut response = RemotingCommand::create_response_command().set_code(response_code);
+        let mut response = match header {
+            Some(header) => RemotingCommand::create_response_command_with_code_and_header(response_code, header),
+            None => RemotingCommand::create_response_command_with_code(response_code),
+        };
         if let Some(remark) = remark {
             response = response.set_remark(remark);
-        }
-        if let Some(header) = header {
-            response = response.set_command_custom_header(header);
         }
         if let Some(body) = body {
             response = response.set_body(body);
@@ -353,7 +353,7 @@ impl OpenRaftController {
 
     fn command_from_result_without_header(&self, result: EventControllerResult<()>) -> RemotingCommand {
         let (_events, _header, body, response_code, remark) = result.into_parts();
-        let mut response = RemotingCommand::create_response_command().set_code(response_code);
+        let mut response = RemotingCommand::create_response_command_with_code(response_code);
         if let Some(remark) = remark {
             response = response.set_remark(remark);
         }
@@ -1087,9 +1087,7 @@ impl Controller for OpenRaftController {
             }
         }
 
-        let mut command = RemotingCommand::create_response_command()
-            .set_code(ResponseCode::Success)
-            .set_command_custom_header(register_header.clone());
+        let mut command = RemotingCommand::create_success_response_command_with_header(register_header.clone());
         if let Some(body) = replica_info.body().cloned() {
             if let Ok(sync_state_set) = SyncStateSet::decode(body.as_ref()) {
                 register_header.sync_state_set_epoch = Some(sync_state_set.get_sync_state_set_epoch());
@@ -1274,9 +1272,9 @@ impl Controller for OpenRaftController {
                 applied_log_index,
             }
         };
-        Ok(Some(
-            RemotingCommand::create_response_command().set_command_custom_header(controller_metadata_info),
-        ))
+        Ok(Some(RemotingCommand::create_success_response_command_with_header(
+            controller_metadata_info,
+        )))
     }
 
     async fn get_sync_state_data(&self, broker_names: &[CheetahString]) -> RocketMQResult<Option<RemotingCommand>> {
