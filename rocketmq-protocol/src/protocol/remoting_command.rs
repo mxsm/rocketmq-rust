@@ -41,6 +41,7 @@ use crate::protocol::header_codec::BinaryHeaderFields;
 use crate::protocol::header_codec::HeaderCodecError;
 use crate::protocol::header_codec::JsonHeaderFields;
 use crate::protocol::header_field_merge::merge_header_and_dynamic;
+use crate::protocol::remoting_command_defaults::application_remoting_command_defaults;
 use crate::protocol::LanguageCode;
 use crate::rocketmq_serializable::RocketMQSerializable;
 
@@ -186,6 +187,11 @@ impl Default for RemotingCommand {
 }
 
 impl RemotingCommand {
+    fn with_application_defaults() -> Self {
+        let defaults = application_remoting_command_defaults();
+        Self::with_resolved_defaults(defaults.version(), defaults.serialize_type())
+    }
+
     /// Constructs a command from defaults resolved by the owning facade.
     ///
     /// The protocol crate deliberately does not read process environment or configuration files.
@@ -216,19 +222,15 @@ impl RemotingCommand {
 
 impl RemotingCommand {
     pub fn new_request(code: impl Into<i32>, body: impl Into<Bytes>) -> Self {
-        Self::default().set_code(code).set_body(body)
+        Self::with_application_defaults().set_code(code).set_body(body)
     }
 
     pub fn create_request_command<T>(code: impl Into<i32>, header: T) -> Self
     where
         T: CommandCustomHeader + Sync + Send + 'static,
     {
-        Self::create_request_command_with_defaults(
-            code,
-            header,
-            rocketmq_model::version::CURRENT_VERSION as i32,
-            SerializeType::JSON,
-        )
+        let defaults = application_remoting_command_defaults();
+        Self::create_request_command_with_defaults(code, header, defaults.version(), defaults.serialize_type())
     }
 
     /// Creates a request using defaults resolved by the transport/facade owner.
@@ -247,7 +249,7 @@ impl RemotingCommand {
     }
 
     pub fn create_remoting_command(code: impl Into<i32>) -> Self {
-        let command = Self::default();
+        let command = Self::with_application_defaults();
         command.set_code(code.into())
     }
 
@@ -256,24 +258,24 @@ impl RemotingCommand {
     }
 
     pub fn create_response_command_with_code(code: impl Into<i32>) -> Self {
-        Self::default().set_code(code).mark_response_type()
+        Self::with_application_defaults().set_code(code).mark_response_type()
     }
 
     pub fn create_response_command_with_code_remark(code: impl Into<i32>, remark: impl Into<CheetahString>) -> Self {
-        Self::default()
+        Self::with_application_defaults()
             .set_code(code)
             .set_remark_option(Some(remark.into()))
             .mark_response_type()
     }
 
     pub fn create_response_command() -> Self {
-        Self::default()
+        Self::with_application_defaults()
             .set_code(RemotingSysResponseCode::Success)
             .mark_response_type()
     }
 
     pub fn create_response_command_with_header(header: impl CommandCustomHeader + Sync + Send + 'static) -> Self {
-        Self::default()
+        Self::with_application_defaults()
             .set_code(RemotingSysResponseCode::Success)
             .set_command_custom_header(header)
             .mark_response_type()
@@ -1467,8 +1469,11 @@ mod tests {
             .set_remark_option(Some("remark".to_string()));
 
         assert_eq!(
-            "{\"code\":1,\"language\":\"JAVA\",\"version\":0,\"opaque\":1,\"flag\":1,\"remark\":\"remark\",\"\
-             extFields\":{},\"serializeTypeCurrentRPC\":\"JSON\"}",
+            format!(
+                "{{\"code\":1,\"language\":\"JAVA\",\"version\":{},\"opaque\":1,\"flag\":1,\"remark\":\"remark\",\
+                 \"extFields\":{{}},\"serializeTypeCurrentRPC\":\"JSON\"}}",
+                crate::version::CURRENT_VERSION as i32
+            ),
             serde_json::to_string(&command).unwrap()
         );
     }

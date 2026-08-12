@@ -47,6 +47,7 @@ pub mod namespace_util;
 pub mod namesrv;
 pub mod remoting_command;
 pub mod remoting_command_compat;
+pub mod remoting_command_defaults;
 pub mod request_source;
 pub mod request_type;
 pub mod rocketmq_serializable;
