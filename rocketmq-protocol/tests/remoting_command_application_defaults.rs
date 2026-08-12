@@ -29,9 +29,14 @@ fn business_factories_share_immutable_application_defaults() {
         RemotingCommand::create_request_command(11, EmptyHeader {}),
         RemotingCommand::create_remoting_command(12),
         RemotingCommand::create_response_command(),
+        RemotingCommand::create_success_response_command(),
         RemotingCommand::create_response_command_with_code(1),
+        RemotingCommand::create_response_command_with_code_and_header(1, EmptyHeader {}),
         RemotingCommand::create_response_command_with_code_remark(1, "error"),
         RemotingCommand::create_response_command_with_header(EmptyHeader {}),
+        RemotingCommand::create_success_response_command_with_header(EmptyHeader {}),
+        RemotingCommand::create_java_default_error_response_command(),
+        RemotingCommand::create_java_default_error_response_command_with_header(EmptyHeader {}),
     ];
 
     for command in commands {

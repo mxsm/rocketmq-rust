@@ -55,7 +55,8 @@ impl RpcClientUtils {
     pub fn create_command_for_rpc_response(mut rpc_response: RpcResponse) -> RemotingCommand {
         let mut cmd = match rpc_response.header.take() {
             None => RemotingCommand::create_response_command_with_code(rpc_response.code),
-            Some(value) => RemotingCommand::create_response_command().set_command_custom_header_boxed(value),
+            Some(value) => RemotingCommand::create_response_command_with_code(rpc_response.code)
+                .set_command_custom_header_boxed(value),
         };
         match rpc_response.exception {
             None => {}
@@ -171,5 +172,24 @@ mod tests {
                 .topic,
             CheetahString::from_static_str("owned-topic")
         );
+    }
+
+    #[test]
+    fn rpc_response_with_header_preserves_response_code() {
+        let response = RpcResponse::new(
+            17,
+            Box::new(GetRouteInfoRequestHeader::new("owned-topic", Some(true))),
+            None,
+        );
+
+        let command = RpcClientUtils::create_command_for_rpc_response(response);
+
+        assert_eq!(command.code(), 17);
+        assert!(command.is_response_type());
+        let header = command
+            .read_custom_header_ref::<GetRouteInfoRequestHeader>()
+            .expect("RPC response should retain its typed header");
+        assert_eq!(header.topic.as_str(), "owned-topic");
+        assert_eq!(header.accept_standard_json_only, Some(true));
     }
 }
