@@ -99,9 +99,13 @@ class MessagePathQualificationTest(unittest.TestCase):
             "repetitions": 1,
             "output_dir": output_dir,
             "command_timeout_seconds": 30,
-            "performance_comparison": None,
-            "fault_evidence": None,
-            "soak_report": None,
+            "subject_role": None,
+            "subject_commit": None,
+            "artifact_manifest": None,
+            "deployment_digest": None,
+            "target_id": None,
+            "cluster_uid": None,
+            "effective_config": None,
         }
         values.update(overrides)
         return argparse.Namespace(**values)
@@ -155,7 +159,8 @@ class MessagePathQualificationTest(unittest.TestCase):
                 report, report_path = qualification.run_qualification(self.policy, args, executor)
 
             self.assertEqual("pass", report["status"])
-            self.assertFalse(report["release_qualified"])
+            self.assertTrue(report["measurement_qualified"])
+            self.assertEqual("rocketmq_message_path_measurement_set", report["artifact_kind"])
             self.assertEqual(4, len(report["workloads"]))
             self.assertEqual(4, len(executor.calls))
             self.assertTrue(report_path.is_file())
@@ -173,10 +178,10 @@ class MessagePathQualificationTest(unittest.TestCase):
                 report, _ = qualification.run_qualification(self.policy, args, executor)
 
             self.assertEqual("fail", report["status"])
-            self.assertFalse(report["release_qualified"])
+            self.assertFalse(report["measurement_qualified"])
             self.assertIn("exit code 2", report["failures"][0])
 
-    def test_release_cannot_run_without_external_evidence(self) -> None:
+    def test_release_measurement_requires_immutable_identity_before_execution(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             executor = FakeExecutor()
             args = self.args(
@@ -194,22 +199,36 @@ class MessagePathQualificationTest(unittest.TestCase):
                 report, _ = qualification.run_qualification(self.policy, args, executor)
 
             self.assertEqual("fail", report["status"])
-            self.assertFalse(report["release_qualified"])
+            self.assertFalse(report["measurement_qualified"])
             self.assertEqual(0, len(executor.calls))
-            self.assertEqual(3, len(report["failures"]))
+            self.assertTrue(any("artifact-manifest" in finding for finding in report["failures"]))
+            self.assertTrue(any("deployment-digest" in finding for finding in report["failures"]))
+            self.assertTrue(any("target-id" in finding for finding in report["failures"]))
 
     def test_comparison_requires_matching_contract_and_thresholds(self) -> None:
         policy_hash = qualification.canonical_sha256(self.policy)
         baseline = {
-            "schema_version": 1,
-            "artifact_kind": "rocketmq_message_path_qualification_report",
+            "schema_version": 2,
+            "artifact_kind": "rocketmq_message_path_measurement_set",
             "status": "pass",
-            "mode": "smoke",
-            "release_qualified": False,
+            "mode": "release",
+            "measurement_qualified": True,
             "policy_sha256": policy_hash,
             "business_contract": "java-equivalent-message-semantics",
             "durability_contract": "async-flush-single-replica",
+            "subject": {
+                "role": "baseline",
+                "commit": "a" * 40,
+                "artifact_manifest_sha256": "sha256:" + "1" * 64,
+                "deployment_digest": "sha256:" + "2" * 64,
+            },
             "environment": {"hardware_id": "sha256:test"},
+            "target": {
+                "target_id": "target-a",
+                "cluster_uid": "cluster-a",
+                "effective_config_sha256": "sha256:" + "3" * 64,
+            },
+            "repetitions_per_workload": 5,
             "workloads": [
                 {
                     "id": "sync-128b",
@@ -222,6 +241,9 @@ class MessagePathQualificationTest(unittest.TestCase):
             ],
         }
         candidate = copy.deepcopy(baseline)
+        candidate["subject"]["role"] = "candidate"
+        candidate["subject"]["commit"] = "b" * 40
+        candidate["subject"]["deployment_digest"] = "sha256:" + "4" * 64
         candidate["workloads"][0]["aggregate"]["throughput_messages_per_second_median"] = 950.0
         candidate["workloads"][0]["aggregate"]["p99_latency_us_median"] = 1100.0
 
@@ -234,10 +256,125 @@ class MessagePathQualificationTest(unittest.TestCase):
         self.assertTrue(any("throughput regression" in finding for finding in failed["failures"]))
 
         candidate = copy.deepcopy(baseline)
+        candidate["subject"]["role"] = "candidate"
+        candidate["subject"]["commit"] = "b" * 40
+        candidate["subject"]["deployment_digest"] = "sha256:" + "4" * 64
         candidate["durability_contract"] = "sync-flush-required-replica-acks"
         mismatched = qualification.compare_reports(self.policy, baseline, candidate)
         self.assertEqual("fail", mismatched["status"])
         self.assertTrue(any("durability contracts differ" in finding for finding in mismatched["failures"]))
+
+    def test_comparison_rejects_unbound_status_only_document(self) -> None:
+        result = qualification.compare_reports(self.policy, {"status": "pass"}, {"status": "pass"})
+
+        self.assertEqual("fail", result["status"])
+        self.assertFalse(result["release_comparison_qualified"])
+        self.assertTrue(any("contract is invalid" in finding for finding in result["failures"]))
+
+    def test_final_qualification_rejects_candidate_and_soak_binding_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            candidate = {
+                "schema_version": 2,
+                "artifact_kind": "rocketmq_message_path_measurement_set",
+                "status": "pass",
+                "measurement_qualified": True,
+                "mode": "release",
+                "policy_sha256": qualification.canonical_sha256(self.policy),
+                "business_contract": "java-equivalent-message-semantics",
+                "durability_contract": "strict",
+                "subject": {
+                    "role": "candidate",
+                    "commit": "b" * 40,
+                    "artifact_manifest_sha256": "sha256:" + "1" * 64,
+                    "deployment_digest": "sha256:" + "2" * 64,
+                },
+                "environment": {"hardware_id": "sha256:" + "3" * 64},
+                "target": {
+                    "target_id": "target-a",
+                    "cluster_uid": "cluster-a",
+                    "effective_config_sha256": "sha256:" + "4" * 64,
+                },
+                "repetitions_per_workload": 5,
+                "workloads": [],
+            }
+            candidate_path = root / "candidate.json"
+            candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
+            candidate_hash = "sha256:" + qualification.sha256_file(candidate_path)
+            comparison = {
+                "schema_version": 2,
+                "artifact_kind": "rocketmq_message_path_comparison",
+                "status": "pass",
+                "release_comparison_qualified": True,
+                "durability_contract": "strict",
+                "candidate": {
+                    "report_sha256": candidate_hash,
+                    "commit": "b" * 40,
+                    "deployment_digest": "sha256:" + "2" * 64,
+                    "target_id": "target-a",
+                    "cluster_uid": "cluster-a",
+                    "effective_config_sha256": "sha256:" + "4" * 64,
+                },
+            }
+            fault = {
+                "candidate_commit": "b" * 40,
+                "dynamic_execution": True,
+                "fixture": False,
+                "release_identity": {
+                    "deployment_digest": "sha256:" + "2" * 64,
+                    "target_id": "target-a",
+                    "cluster_uid": "cluster-a",
+                    "effective_config_sha256": "sha256:" + "4" * 64,
+                    "durability_contract": "strict",
+                },
+            }
+            rpo = {
+                "schema_version": 1,
+                "artifact_kind": "controller_failover_qualification_evidence",
+                "status": "pass",
+                "strict_qualification_passed": True,
+                "candidate_commit": "b" * 40,
+                "deployment_digest": "sha256:" + "2" * 64,
+                "target_id": "target-a",
+                "cluster_uid": "cluster-a",
+                "effective_config_sha256": "sha256:" + "4" * 64,
+                "durability_contract": "strict",
+            }
+            soak = {
+                "schema_version": 1,
+                "artifact_kind": "rocketmq_message_path_soak_report",
+                "status": "pass",
+                "monotonic_growth_detected": False,
+                "duration_seconds": 21600,
+                "release_identity": {
+                    "commit": "b" * 40,
+                    "deployment_digest": "sha256:" + "2" * 64,
+                    "target_id": "wrong-target",
+                    "cluster_uid": "cluster-a",
+                    "effective_config_sha256": "sha256:" + "4" * 64,
+                    "durability_contract": "strict",
+                },
+                "sampling": {"coverage_percent": 99.9, "max_gap_seconds": 60},
+                "pods": [{"restarts": 0, "oom_killed": False}],
+                "series": [{"status": "pass", "raw_artifact_sha256": "sha256:" + "5" * 64}],
+            }
+            paths = {}
+            for name, value in (("comparison", comparison), ("fault", fault), ("rpo", rpo), ("soak", soak)):
+                path = root / f"{name}.json"
+                path.write_text(json.dumps(value), encoding="utf-8")
+                paths[name] = path
+            args = argparse.Namespace(
+                candidate_commit="b" * 40,
+                candidate_measurement=candidate_path,
+                performance_comparison=paths["comparison"],
+                fault_evidence=paths["fault"],
+                rpo_evidence=paths["rpo"],
+                soak_report=paths["soak"],
+            )
+
+            findings, _, _ = qualification.validate_final_evidence(self.policy, args)
+
+            self.assertIn("soak release identity target_id differs", findings)
 
 
 if __name__ == "__main__":
