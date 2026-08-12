@@ -145,7 +145,7 @@ mod tests {
         let config = ClientConfig::default();
         let hook = NamespaceRpcHook::new(config);
         let request = RemotingCommand::create_remoting_command(1);
-        let mut response = RemotingCommand::create_response_command();
+        let mut response = RemotingCommand::create_success_response_command();
         let addr: SocketAddr = "127.0.0.1:8080".parse().unwrap();
 
         let result = hook.do_after_response(addr, &request, &mut response);

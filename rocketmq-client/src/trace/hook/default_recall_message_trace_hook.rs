@@ -185,10 +185,10 @@ mod tests {
             CheetahString::from_static_str(MessageConst::PROPERTY_MSG_REGION),
             CheetahString::from_static_str("DefaultRegion"),
         );
-        let mut response =
-            RemotingCommand::create_response_command_with_header(RecallMessageResponseHeader::new("MSG_ID_001"))
-                .set_ext_fields(ext_fields);
-        response.set_code_ref(ResponseCode::Success);
+        let mut response = RemotingCommand::create_success_response_command_with_header(
+            RecallMessageResponseHeader::new("MSG_ID_001"),
+        )
+        .set_ext_fields(ext_fields);
 
         hook.do_after_response("127.0.0.1:10911".parse().expect("socket addr"), &request, &mut response)
             .expect("recall hook");

@@ -1019,7 +1019,7 @@ fn consumer_send_message_back_header_preserves_broker_name_when_java_passes_valu
 
 #[test]
 fn notify_result_from_response_maps_polling_full_like_java() {
-    let mut response = RemotingCommand::create_response_command_with_header(NotificationResponseHeader {
+    let mut response = RemotingCommand::create_success_response_command_with_header(NotificationResponseHeader {
         has_msg: true,
         polling_full: true,
     });

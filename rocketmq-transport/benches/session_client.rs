@@ -57,7 +57,8 @@ async fn echo_server(single_request: bool) -> (SocketAddr, Arc<AtomicUsize>, Can
                     sessions.spawn(async move {
                         let mut connection = Connection::new(socket);
                         while let Some(Ok(request)) = connection.receive_command().await {
-                            let response = RemotingCommand::create_response_command().set_opaque(request.opaque());
+                            let response =
+                                RemotingCommand::create_success_response_command().set_opaque(request.opaque());
                             if connection.send_command(response).await.is_err() {
                                 break;
                             }

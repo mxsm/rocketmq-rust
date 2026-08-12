@@ -170,14 +170,14 @@ impl PendingHotPathHarness {
         let (sender, _receiver) = tokio::sync::oneshot::channel::<rocketmq_error::RocketMQResult<RemotingCommand>>();
         let legacy = Box::new(Mutex::new(Some(sender)));
         if let Some(sender) = legacy.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() {
-            let _ = sender.send(Ok(RemotingCommand::create_response_command()));
+            let _ = sender.send(Ok(RemotingCommand::create_success_response_command()));
         }
         black_box(legacy);
     }
 
     pub fn concrete_oneshot_completion(&self) {
         let (sender, _receiver) = tokio::sync::oneshot::channel::<rocketmq_error::RocketMQResult<RemotingCommand>>();
-        let _ = sender.send(Ok(RemotingCommand::create_response_command()));
+        let _ = sender.send(Ok(RemotingCommand::create_success_response_command()));
     }
 
     pub fn concrete_register_complete(&self) {
@@ -195,7 +195,7 @@ impl PendingHotPathHarness {
         assert!(self.table.complete_response_for_owner(
             &self.owner,
             opaque,
-            RemotingCommand::create_response_command().set_opaque(opaque),
+            RemotingCommand::create_success_response_command().set_opaque(opaque),
         ));
         black_box(guard);
     }

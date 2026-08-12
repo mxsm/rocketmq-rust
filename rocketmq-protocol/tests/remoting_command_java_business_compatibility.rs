@@ -36,7 +36,7 @@ fn round_trip(mut command: RemotingCommand) -> RemotingCommand {
 #[test]
 fn add_ext_field_on_absent_matches_java() {
     for serialize_type in [SerializeType::JSON, SerializeType::ROCKETMQ] {
-        let mut command = RemotingCommand::create_response_command().set_serialize_type(serialize_type);
+        let mut command = RemotingCommand::create_success_response_command().set_serialize_type(serialize_type);
         assert!(command.ext_fields().is_none());
 
         command.add_ext_field("regionId", "DefaultRegion");
@@ -55,7 +55,7 @@ fn add_ext_field_on_absent_matches_java() {
 #[test]
 fn add_ext_field_if_not_exist_on_absent_matches_java() {
     for serialize_type in [SerializeType::JSON, SerializeType::ROCKETMQ] {
-        let mut command = RemotingCommand::create_response_command().set_serialize_type(serialize_type);
+        let mut command = RemotingCommand::create_success_response_command().set_serialize_type(serialize_type);
         assert!(command.ext_fields().is_none());
 
         command.add_ext_field_if_not_exist("traceOn", "true");
@@ -101,7 +101,7 @@ fn node_js_language_code_matches_java() {
     assert_eq!(LanguageCode::get_code_from_name("NODE_JS"), Some(LanguageCode::NODE_JS));
 
     for serialize_type in [SerializeType::JSON, SerializeType::ROCKETMQ] {
-        let command = RemotingCommand::create_response_command()
+        let command = RemotingCommand::create_success_response_command()
             .set_language(LanguageCode::NODE_JS)
             .set_serialize_type(serialize_type);
         let decoded = round_trip(command);

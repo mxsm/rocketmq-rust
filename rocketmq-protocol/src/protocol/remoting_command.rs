@@ -1518,7 +1518,7 @@ mod tests {
 
     #[test]
     fn add_ext_field_initializes_absent() {
-        let mut command = RemotingCommand::create_response_command();
+        let mut command = RemotingCommand::create_success_response_command();
         assert!(command.ext_fields.is_absent());
 
         command.add_ext_field("key", "value");
@@ -1534,7 +1534,7 @@ mod tests {
 
     #[test]
     fn add_ext_field_if_not_exist_initializes_absent() {
-        let mut command = RemotingCommand::create_response_command();
+        let mut command = RemotingCommand::create_success_response_command();
         assert!(command.ext_fields.is_absent());
 
         command.add_ext_field_if_not_exist("key", "first");
@@ -1551,7 +1551,7 @@ mod tests {
 
     #[test]
     fn add_ext_field_preserves_materialized_fields() {
-        let mut command = RemotingCommand::create_response_command().set_ext_fields(HashMap::from([(
+        let mut command = RemotingCommand::create_success_response_command().set_ext_fields(HashMap::from([(
             CheetahString::from_static_str("existing"),
             CheetahString::from_static_str("preserved"),
         )]));
@@ -1581,7 +1581,7 @@ mod tests {
 
     #[test]
     fn add_ext_field_preserves_rocketmq_raw_fields() {
-        let mut source = RemotingCommand::create_response_command()
+        let mut source = RemotingCommand::create_success_response_command()
             .set_serialize_type(SerializeType::ROCKETMQ)
             .set_ext_fields(HashMap::from([(
                 CheetahString::from_static_str("existing"),
@@ -1602,8 +1602,9 @@ mod tests {
     #[test]
     fn add_ext_field_coexists_with_typed_header() {
         for serialize_type in [SerializeType::JSON, SerializeType::ROCKETMQ] {
-            let mut command = RemotingCommand::create_response_command_with_header(TestCustomHeader { value: 7 })
-                .set_serialize_type(serialize_type);
+            let mut command =
+                RemotingCommand::create_success_response_command_with_header(TestCustomHeader { value: 7 })
+                    .set_serialize_type(serialize_type);
             command.add_ext_field("dynamic", "preserved");
             let mut encoded = BytesMut::new();
 
@@ -1741,7 +1742,7 @@ mod tests {
 
         for serialize_type in [SerializeType::JSON, SerializeType::ROCKETMQ] {
             let header = SendMessageResponseHeader::new("typed".into(), 1, 2, None, None, None);
-            let mut command = RemotingCommand::create_response_command_with_header(header)
+            let mut command = RemotingCommand::create_success_response_command_with_header(header)
                 .set_serialize_type(serialize_type)
                 .set_ext_fields(HashMap::from([("msgId".into(), "dynamic".into())]));
             let mut destination = BytesMut::from(&b"prefix"[..]);
@@ -1772,7 +1773,7 @@ mod tests {
             Some("batch-a".into()),
             None,
         );
-        let mut command = RemotingCommand::create_response_command_with_header(header)
+        let mut command = RemotingCommand::create_success_response_command_with_header(header)
             .set_language(LanguageCode::GO)
             .set_version(501)
             .set_opaque(7)
@@ -1801,7 +1802,7 @@ mod tests {
         use crate::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
 
         let header = SendMessageResponseHeader::new("msg".into(), 1, 2, Some(CheetahString::new()), None, None);
-        let mut materialized = RemotingCommand::create_response_command_with_header(header);
+        let mut materialized = RemotingCommand::create_success_response_command_with_header(header);
         materialized.try_make_custom_header_to_net().unwrap();
         assert_eq!(
             materialized
@@ -1812,8 +1813,8 @@ mod tests {
         );
 
         let header = SendMessageResponseHeader::new("msg".into(), 1, 2, Some(CheetahString::new()), None, None);
-        let mut command =
-            RemotingCommand::create_response_command_with_header(header).set_serialize_type(SerializeType::ROCKETMQ);
+        let mut command = RemotingCommand::create_success_response_command_with_header(header)
+            .set_serialize_type(SerializeType::ROCKETMQ);
         let mut encoded = BytesMut::new();
         command.try_fast_header_encode(&mut encoded).unwrap();
         let decoded = RemotingCommand::decode(&mut encoded).unwrap().unwrap();
