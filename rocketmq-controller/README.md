@@ -20,8 +20,8 @@ The crate exposes both a library API and the `rocketmq-controller-rust` binary.
 | Broker coordination | Broker registration, heartbeats, inactive broker scanning, master election, sync-state-set management, broker ID allocation, broker cleanup, and role-change notifications. |
 | Metadata management | Broker replica metadata, topic/config metadata, controller metadata queries, sync-state snapshots, and Java-compatible controller response models. |
 | Request processing | Broker-facing remoting request processor for controller request codes such as elect-master, alter-sync-state-set, get-replica-info, broker heartbeat, and register broker. |
-| Storage | Memory backend for tests, file backend enabled by default, and optional RocksDB backend through the `storage-rocksdb` feature. |
-| Observability | Controller metrics manager, request/election/DLedger-style counters and latencies, plus optional OpenTelemetry, OTLP, and Prometheus exporters. |
+| Storage | RocksDB enabled by default, an opt-in file backend, and an in-memory backend for tests. |
+| Observability | Controller request, election, heartbeat, and latency metrics, plus optional OpenTelemetry, OTLP, and Prometheus exporters. |
 
 ## Architecture
 
@@ -48,7 +48,8 @@ The binary requires a non-empty `rocketmqHome` value after configuration loading
 | [`src/metadata`](src/metadata) | Broker, topic, config, and replica metadata stores. |
 | [`src/heartbeat`](src/heartbeat) | Broker identity, live-info tracking, and default heartbeat manager. |
 | [`src/event`](src/event) | Replicated controller event models and event serialization. |
-| [`src/storage`](src/storage) | Storage backend abstraction, default file backend, optional RocksDB backend, and in-memory backend for tests. |
+| [`src/storage`](src/storage) | Storage backend abstraction, default RocksDB backend, opt-in file backend, and in-memory backend for tests. |
+| [`src/qualification.rs`](src/qualification.rs) | T0-T5 failover timeline, `PutOk` recovery audit, confirm-offset boundary audit, and machine-readable qualification report. |
 | [`src/metrics`](src/metrics) | Controller metric constants, request/election status enums, and metrics manager. |
 | [`proto`](proto) | gRPC protobuf definitions for controller and OpenRaft RPCs. |
 | [`examples`](examples) | Runnable examples for single-node raft, three-node raft, manager usage, metrics, and CLI parsing. |
@@ -59,8 +60,8 @@ The binary requires a non-empty `rocketmqHome` value after configuration loading
 - Stable Rust `1.95.0` is the workspace minimum and the repository build toolchain.
 - Build this crate with the pinned repository toolchain from [`../rust-toolchain.toml`](../rust-toolchain.toml).
 - `ROCKETMQ_HOME` or `rocketmqHome` must be set before starting the controller binary.
-- Use `storageBackend = "File"` with the default feature set. Use `storageBackend = "RocksDB"` only when building with
-  `storage-rocksdb`.
+- The default feature set enables RocksDB and the default configuration uses `storageBackend = "RocksDB"`.
+- Use `storageBackend = "File"` only when building with the opt-in `storage-file` feature.
 
 ## Build
 
@@ -120,7 +121,7 @@ controllerPeers = []
 electionTimeoutMs = 1000
 heartbeatIntervalMs = 300
 storagePath = "/opt/rocketmq/controller/node-1"
-storageBackend = "File"
+storageBackend = "RocksDB"
 enableElectUncleanMasterLocal = false
 
 [[raftPeers]]
@@ -222,8 +223,8 @@ async fn main() -> Result<()> {
 
 | Feature | Default | Purpose |
 |---------|---------|---------|
-| `storage-file` | Yes | Enables the file-based controller storage backend. |
-| `storage-rocksdb` | No | Enables the RocksDB storage backend for `storageBackend = "RocksDB"`. |
+| `storage-file` | No | Enables the file-based controller storage backend for `storageBackend = "File"`. |
+| `storage-rocksdb` | Yes | Enables the default RocksDB backend for `storageBackend = "RocksDB"`. |
 | `metrics` | No | Enables controller metrics integration through `rocketmq-observability`. |
 | `metrics-otlp` | No | Enables OTLP metrics export support. |
 | `metrics-prometheus` | No | Enables Prometheus metrics export support. |
@@ -248,20 +249,47 @@ Focused checks for this crate:
 cargo test -p rocketmq-controller --lib
 cargo test -p rocketmq-controller --tests --no-run
 cargo test -p rocketmq-controller --examples --no-run
+cargo test -p rocketmq-controller --test controller_failover_slo
 ```
 
 Workspace-level Rust validation is required from the repository root when Rust code changes:
 
 ```bash
-cargo fmt --all
+cargo fmt --all -- --check
 cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
 ```
+
+## Failover qualification
+
+Controller metadata consensus and message payload durability are separate boundaries. A metadata leader election alone
+does not prove message RPO=0. A strict RPO=0 result is accepted only when the tested broker path used synchronous local
+flush, completed the required replica acknowledgements, retained clean election, recovered every message for which the
+producer received `PutOk`, and kept `confirmOffset` monotonic and no greater than the legal in-sync acknowledgement.
+
+The qualification API records one failover as an ordered timeline:
+
+1. T0 fault injected
+2. T1 Controller leader elected
+3. T2 broker master elected
+4. T3 store write authority granted
+5. T4 NameServer route converged
+6. T5 producer first succeeded
+
+`FailoverQualificationReport` emits versioned JSON evidence and explicitly rejects incomplete or unsafe runs. It does
+not turn the configured election timeout into a measured RTO and does not claim a percentile from a single run. Use the
+end-to-end fault harness to collect repeated samples before publishing p50/p95/p99 or an SLO. The pinned OpenRaft alpha
+dependency must continue to pass linearizability, storage-fault, multi-node, and failover qualification gates before a
+release is promoted.
 
 ## Benchmarks
 
 ```bash
 cargo bench -p rocketmq-controller --bench controller_bench
 ```
+
+This benchmark measures deterministic Controller hot paths: replicated heartbeat application, Raft request encoding,
+and qualification evidence recording. Leader election and end-to-end RTO are integration/fault tests, not Criterion
+microbenchmarks.
 
 ## License
 
