@@ -91,9 +91,14 @@ tonic-prost-build   = "0.14.6"
 
 [dev-dependencies]
 criterion          = { version = "0.8", features = ["async_tokio"] }
+rocketmq-client-rust = { workspace = true }
 rocketmq-transport = { workspace = true, features = ["test-support"] }
 tempfile           = "3.27"
 tracing-subscriber = { workspace = true }
+
+[[example]]
+name = "controller-failover-qualification"
+path = "examples/controller_failover_qualification.rs"
 
 [[bench]]
 name    = "controller_bench"

@@ -461,6 +461,48 @@ pub struct DurabilityEvidence {
     pub clean_election: bool,
 }
 
+/// Immutable identities that bind one failover report to its source ledger and deployment.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FailoverEvidenceBinding {
+    pub run_id: String,
+    pub candidate_commit: String,
+    pub target: String,
+    pub effective_config_sha256: String,
+    pub durability_contract: String,
+    pub ledger_sha256: String,
+}
+
+impl FailoverEvidenceBinding {
+    fn rejection_reasons(&self) -> Vec<String> {
+        let mut reasons = Vec::new();
+        if self.run_id.is_empty()
+            || self.run_id.len() > 128
+            || !self
+                .run_id
+                .bytes()
+                .all(|value| value.is_ascii_alphanumeric() || matches!(value, b'-' | b'_' | b'.'))
+        {
+            reasons.push("run identity is missing or invalid".to_string());
+        }
+        if !is_lower_hex(&self.candidate_commit, 40) || self.candidate_commit.bytes().all(|value| value == b'0') {
+            reasons.push("candidate commit is not a non-zero full Git SHA".to_string());
+        }
+        if self.target.trim().is_empty() {
+            reasons.push("target identity is missing".to_string());
+        }
+        if !is_sha256(&self.effective_config_sha256) {
+            reasons.push("effective configuration digest is invalid".to_string());
+        }
+        if self.durability_contract != "strict-sync-required-ack-clean-election" {
+            reasons.push("durability contract is not the strict failover contract".to_string());
+        }
+        if !is_sha256(&self.ledger_sha256) {
+            reasons.push("PutOk ledger digest is invalid".to_string());
+        }
+        reasons
+    }
+}
+
 impl DurabilityEvidence {
     /// Returns whether the run was configured to make a strict RPO=0 claim meaningful.
     #[must_use]
@@ -475,6 +517,8 @@ pub struct FailoverQualificationReport {
     pub schema_version: u32,
     pub artifact_kind: String,
     pub scenario: String,
+    pub status: String,
+    pub binding: FailoverEvidenceBinding,
     pub durability: DurabilityEvidence,
     pub timeline: FailoverTimelineSnapshot,
     pub put_ok_messages: PutOkMessageAuditReport,
@@ -488,6 +532,7 @@ impl FailoverQualificationReport {
     #[must_use]
     pub fn new(
         scenario: impl Into<String>,
+        binding: FailoverEvidenceBinding,
         durability: DurabilityEvidence,
         timeline: FailoverTimelineSnapshot,
         put_ok_messages: PutOkMessageAuditReport,
@@ -515,11 +560,14 @@ impl FailoverQualificationReport {
         if confirm_offset.observations == 0 {
             rejection_reasons.push("no confirmOffset observations were recorded".to_string());
         }
+        rejection_reasons.extend(binding.rejection_reasons());
         let strict_qualification_passed = rejection_reasons.is_empty();
         Self {
             schema_version: 1,
             artifact_kind: "controller_failover_qualification_evidence".to_string(),
             scenario: scenario.into(),
+            status: if strict_qualification_passed { "pass" } else { "fail" }.to_string(),
+            binding,
             durability,
             timeline,
             put_ok_messages,
@@ -537,6 +585,19 @@ impl FailoverQualificationReport {
     pub fn to_pretty_json(&self) -> serde_json::Result<String> {
         serde_json::to_string_pretty(self)
     }
+}
+
+fn is_lower_hex(value: &str, length: usize) -> bool {
+    value.len() == length
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn is_sha256(value: &str) -> bool {
+    value
+        .strip_prefix("sha256:")
+        .is_some_and(|digest| is_lower_hex(digest, 64))
 }
 
 /// Errors caused by invalid qualification input or event ordering.

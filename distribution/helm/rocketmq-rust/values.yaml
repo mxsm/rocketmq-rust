@@ -67,6 +67,15 @@ services:
     replicaGroupName: rocketmq-broker
     autoCreateTopicEnable: false
     logFilterReloadEnabled: false
+    durability:
+      flushDiskType: SYNC_FLUSH
+      totalReplicas: 3
+      inSyncReplicas: 3
+      minInSyncReplicas: 2
+      allAckInSyncStateSet: true
+      slaveTimeoutMillis: 3000
+      maxSlaveLagMillis: 15000
+      cleanElection: true
     image:
       repository: rocketmq-rust/broker
       tag: local

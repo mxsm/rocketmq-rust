@@ -64,6 +64,14 @@ data:
     haListenPort = 10912
     storePathRootDir = "/var/lib/rocketmq/store"
     storePathBrokerIdentity = "/var/lib/rocketmq/store/brokerIdentity.json"
+    flushDiskType = {{ $.Values.services.broker.durability.flushDiskType | quote }}
+    totalReplicas = {{ $.Values.services.broker.durability.totalReplicas }}
+    inSyncReplicas = {{ $.Values.services.broker.durability.inSyncReplicas }}
+    minInSyncReplicas = {{ $.Values.services.broker.durability.minInSyncReplicas }}
+    allAckInSyncStateSet = {{ $.Values.services.broker.durability.allAckInSyncStateSet }}
+    enableAutoInSyncReplicas = false
+    slaveTimeout = {{ $.Values.services.broker.durability.slaveTimeoutMillis }}
+    haMaxTimeSlaveNotCatchup = {{ $.Values.services.broker.durability.maxSlaveLagMillis }}
 {{- end }}
 ---
 apiVersion: v1

@@ -540,6 +540,7 @@
         "replicaGroupName",
         "autoCreateTopicEnable",
         "logFilterReloadEnabled",
+        "durability",
         "image",
         "persistence",
         "pdb",
@@ -560,6 +561,30 @@
         },
         "logFilterReloadEnabled": {
           "type": "boolean"
+        },
+        "durability": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "flushDiskType",
+            "totalReplicas",
+            "inSyncReplicas",
+            "minInSyncReplicas",
+            "allAckInSyncStateSet",
+            "slaveTimeoutMillis",
+            "maxSlaveLagMillis",
+            "cleanElection"
+          ],
+          "properties": {
+            "flushDiskType": { "const": "SYNC_FLUSH" },
+            "totalReplicas": { "type": "integer", "minimum": 3, "maximum": 9 },
+            "inSyncReplicas": { "type": "integer", "minimum": 2, "maximum": 9 },
+            "minInSyncReplicas": { "type": "integer", "minimum": 2, "maximum": 9 },
+            "allAckInSyncStateSet": { "const": true },
+            "slaveTimeoutMillis": { "type": "integer", "minimum": 1, "maximum": 60000 },
+            "maxSlaveLagMillis": { "type": "integer", "minimum": 1, "maximum": 300000 },
+            "cleanElection": { "const": true }
+          }
         },
         "image": {
           "$ref": "#/definitions/image"

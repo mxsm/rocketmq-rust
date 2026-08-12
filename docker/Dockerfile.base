@@ -235,20 +235,29 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
 set -eux
 cargo build --locked --release --package rocketmq-admin-cli --bin rocketmq-admin-cli
 cargo build --locked --release --package rocketmq-proxy --example proxy_live_fault_driver
+cargo build --locked --release --package rocketmq-controller --example controller-failover-qualification
 install -D -m 0555 /workspace/target/release/rocketmq-admin-cli /opt/rocketmq-binaries/rocketmq-admin-cli
 install -D -m 0555 /workspace/target/release/examples/proxy_live_fault_driver /opt/rocketmq-binaries/proxy-live-fault-driver
+install -D -m 0555 /workspace/target/release/examples/controller-failover-qualification /opt/rocketmq-binaries/controller-failover-qualification
 EOF
 
 FROM runtime-base AS fault-driver
 
 COPY --from=fault-driver-builder --chmod=0555 /opt/rocketmq-binaries/rocketmq-admin-cli /usr/local/bin/rocketmq-admin-cli
 COPY --from=fault-driver-builder --chmod=0555 /opt/rocketmq-binaries/proxy-live-fault-driver /usr/local/bin/proxy-live-fault-driver
+COPY --from=fault-driver-builder --chmod=0555 /opt/rocketmq-binaries/controller-failover-qualification /usr/local/bin/controller-failover-qualification
 
 LABEL org.opencontainers.image.title="RocketMQ Rust architecture fault driver" \
     io.rocketmq.image.role="fault-driver-test-only" \
     io.rocketmq.image.production="forbidden"
 
 ENTRYPOINT ["/usr/local/bin/rocketmq-admin-cli"]
+
+# Test-only image used by clean-failover qualification. Production service targets do not
+# contain the client driver or its append-only evidence volume.
+FROM fault-driver AS qualification-driver
+
+ENTRYPOINT ["/usr/local/bin/controller-failover-qualification"]
 
 FROM service-runtime AS broker
 

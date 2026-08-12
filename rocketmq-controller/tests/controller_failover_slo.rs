@@ -19,6 +19,7 @@ use std::time::Duration;
 use rocketmq_controller::ConfirmOffsetAudit;
 use rocketmq_controller::ConfirmOffsetViolationKind;
 use rocketmq_controller::DurabilityEvidence;
+use rocketmq_controller::FailoverEvidenceBinding;
 use rocketmq_controller::FailoverMilestone;
 use rocketmq_controller::FailoverQualificationReport;
 use rocketmq_controller::FailoverTimeline;
@@ -39,6 +40,17 @@ fn complete_timeline() -> FailoverTimeline {
             .expect("record ordered milestone");
     }
     timeline
+}
+
+fn evidence_binding() -> FailoverEvidenceBinding {
+    FailoverEvidenceBinding {
+        run_id: "clean-failover-1".to_string(),
+        candidate_commit: "a".repeat(40),
+        target: "kind/rocketmq-system".to_string(),
+        effective_config_sha256: format!("sha256:{}", "b".repeat(64)),
+        durability_contract: "strict-sync-required-ack-clean-election".to_string(),
+        ledger_sha256: format!("sha256:{}", "c".repeat(64)),
+    }
 }
 
 #[test]
@@ -150,6 +162,7 @@ fn strict_report_requires_complete_timeline_durability_and_exact_recovery() {
 
     let report = FailoverQualificationReport::new(
         "clean-master-kill",
+        evidence_binding(),
         DurabilityEvidence {
             synchronous_local_flush: true,
             required_replica_acks: true,
@@ -172,6 +185,7 @@ fn strict_report_requires_complete_timeline_durability_and_exact_recovery() {
 fn async_or_unclean_runs_cannot_be_reported_as_strict_rpo_zero() {
     let report = FailoverQualificationReport::new(
         "async-unclean-negative-control",
+        evidence_binding(),
         DurabilityEvidence {
             synchronous_local_flush: false,
             required_replica_acks: false,
@@ -212,6 +226,7 @@ fn strict_settings_do_not_hide_missing_messages_or_authority_violations() {
 
     let report = FailoverQualificationReport::new(
         "strict-negative-control",
+        evidence_binding(),
         DurabilityEvidence {
             synchronous_local_flush: true,
             required_replica_acks: true,
@@ -233,4 +248,35 @@ fn strict_settings_do_not_hide_missing_messages_or_authority_violations() {
         .rejection_reasons
         .iter()
         .any(|reason| reason.contains("confirmOffset violated")));
+}
+
+#[test]
+fn strict_report_rejects_unbound_or_mismatched_evidence() {
+    let mut message_audit = PutOkMessageAudit::default();
+    message_audit.record_put_ok("message-a", 100).expect("record message");
+    message_audit.observe_recovered("message-a", 100);
+    let mut confirm_audit = ConfirmOffsetAudit::default();
+    confirm_audit.observe(1, 100, 100);
+    let mut binding = evidence_binding();
+    binding.ledger_sha256 = "sha256:not-a-digest".to_string();
+
+    let report = FailoverQualificationReport::new(
+        "invalid-binding",
+        binding,
+        DurabilityEvidence {
+            synchronous_local_flush: true,
+            required_replica_acks: true,
+            clean_election: true,
+        },
+        complete_timeline().snapshot(),
+        message_audit.report(),
+        confirm_audit.report(),
+    );
+
+    assert_eq!(report.status, "fail");
+    assert!(!report.strict_qualification_passed);
+    assert!(report
+        .rejection_reasons
+        .iter()
+        .any(|reason| reason.contains("ledger digest")));
 }

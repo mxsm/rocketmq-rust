@@ -87,5 +87,56 @@
     "detached_still_running_must_equal": 0,
     "artifact_hash": "sha256",
     "commit_and_image_digest_match_required": true
+  },
+  "put_ok_rpo_audit": {
+    "artifact_kind": "controller_failover_qualification_evidence",
+    "schema_version": 1,
+    "minimum_put_ok_messages": 10000,
+    "minimum_clean_failover_repetitions": 5,
+    "durability_contract": "strict-sync-required-ack-clean-election",
+    "required_identity_fields": [
+      "candidate_commit",
+      "deployment_digest",
+      "target_id",
+      "cluster_uid",
+      "effective_config_sha256",
+      "durability_contract",
+      "ledger_sha256"
+    ],
+    "required_ledger_fields": [
+      "sequence",
+      "audit_id",
+      "unique_key",
+      "broker_message_id",
+      "offset_message_id",
+      "broker_name",
+      "queue_id",
+      "queue_offset",
+      "commit_log_offset",
+      "store_size",
+      "end_offset",
+      "payload_sha256",
+      "put_ok_at_utc"
+    ],
+    "required_milestones": [
+      "fault_injected",
+      "controller_leader_elected",
+      "broker_master_elected",
+      "store_write_authority_granted",
+      "route_converged",
+      "producer_recovered"
+    ],
+    "pass_conditions": {
+      "missing_count": 0,
+      "duplicate_count": 0,
+      "unexpected_count": 0,
+      "payload_mismatch_count": 0,
+      "offset_mismatch_count": 0,
+      "confirm_offset_violations": 0,
+      "single_writable_master_required": true,
+      "ambiguous_sends_excluded_from_rpo_denominator": true,
+      "unclean_election_forbidden": true,
+      "dledger_supported": false
+    }
   }
 }

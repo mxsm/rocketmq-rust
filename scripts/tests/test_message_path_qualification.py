@@ -339,6 +339,20 @@ class MessagePathQualificationTest(unittest.TestCase):
                 "cluster_uid": "cluster-a",
                 "effective_config_sha256": "sha256:" + "4" * 64,
                 "durability_contract": "strict",
+                "ledger_sha256": "sha256:" + "6" * 64,
+                "repetitions": 5,
+                "put_ok_messages": {
+                    "put_ok_count": 10000,
+                    "recovered_once_count": 10000,
+                    "missing_count": 0,
+                    "duplicate_count": 0,
+                    "unexpected_count": 0,
+                    "payload_mismatch_count": 0,
+                    "offset_mismatch_count": 0,
+                    "rpo_zero": True,
+                    "exact_recovery": True,
+                },
+                "confirm_offset": {"valid": True, "observations": 10, "violation_count": 0},
             }
             soak = {
                 "schema_version": 1,
