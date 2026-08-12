@@ -43,6 +43,7 @@ use rocketmq_model::common::message::MessageTrait;
 use rocketmq_model::common::mix_all;
 use rocketmq_model::common::pop_ack_constants::PopAckConstants;
 use rocketmq_model::common::FAQUrl;
+use rocketmq_model::topic::TopicMessageType;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
@@ -492,11 +493,20 @@ where
         // only one type of retry topic is able to call popMsgFromQueue.
         //Determine whether to pull a message from the retry queue using a random number and a set
         // probability
-        let randomq = rand::rng().random_range(0..100);
-        let need_retry = randomq < policy.pop_from_retry_probability;
+        let random_sample = rand::rng().random_range(0..100);
+        let use_priority_mode = topic_config.get_topic_message_type() == TopicMessageType::Priority
+            && !request_header.order.unwrap_or(false)
+            && random_sample < subscription_group_config.priority_factor();
+        let retry_probability = if use_priority_mode {
+            policy.pop_from_retry_probability_for_priority
+        } else {
+            policy.pop_from_retry_probability
+        };
+        let need_retry = random_sample < retry_probability;
+        let randomq = if use_priority_mode { 0 } else { random_sample };
         let mut need_retry_v1 = false;
         if policy.enable_retry_topic_v2 && policy.retrieve_message_from_pop_retry_topic_v1 {
-            need_retry_v1 = randomq % 2 == 0;
+            need_retry_v1 = random_sample % 2 == 0;
         }
         let mut start_offset_info = String::with_capacity(64);
         let mut msg_offset_info = String::with_capacity(64);
@@ -528,6 +538,7 @@ where
                     &mut msg_offset_info,
                     &mut order_count_info,
                     randomq,
+                    use_priority_mode.then_some(policy.priority_order_asc),
                     rest_num,
                 )
                 .await
@@ -550,6 +561,7 @@ where
                     &mut msg_offset_info,
                     &mut order_count_info,
                     randomq,
+                    use_priority_mode.then_some(policy.priority_order_asc),
                     rest_num,
                 )
                 .await
@@ -571,6 +583,7 @@ where
                 &mut msg_offset_info,
                 &mut order_count_info,
                 randomq,
+                use_priority_mode.then_some(policy.priority_order_asc),
                 rest_num,
             )
             .await
@@ -617,6 +630,7 @@ where
                     &mut msg_offset_info,
                     &mut order_count_info,
                     randomq,
+                    use_priority_mode.then_some(policy.priority_order_asc),
                     rest_num,
                 )
                 .await
@@ -639,6 +653,7 @@ where
                     &mut msg_offset_info,
                     &mut order_count_info,
                     randomq,
+                    use_priority_mode.then_some(policy.priority_order_asc),
                     rest_num,
                 )
                 .await
@@ -758,10 +773,11 @@ where
         msg_offset_info: &mut String,
         order_count_info: &mut String,
         random_q: i32,
+        priority_order_asc: Option<bool>,
         mut rest_num: i64,
     ) -> i64 {
         for index in 0..topic_config.read_queue_nums {
-            let queue_id = (random_q + index as i32) % topic_config.read_queue_nums as i32;
+            let queue_id = pop_queue_id(index, topic_config.read_queue_nums, random_q, priority_order_asc);
             rest_num = self
                 .pop_msg_from_queue(
                     &topic_config.topic_name.clone().unwrap_or_default(),
@@ -802,6 +818,7 @@ where
         msg_offset_info: &mut String,
         order_count_info: &mut String,
         random_q: i32,
+        priority_order_asc: Option<bool>,
         rest_num: i64,
     ) -> i64 {
         let topic_config = self.context.topics.select_topic_config(topic);
@@ -821,6 +838,7 @@ where
             msg_offset_info,
             order_count_info,
             random_q,
+            priority_order_asc,
             rest_num,
         )
         .await
@@ -1668,6 +1686,17 @@ impl QueueLockManager {
     }
 }
 
+fn pop_queue_id(index: u32, read_queue_nums: u32, random_q: i32, priority_order_asc: Option<bool>) -> i32 {
+    if read_queue_nums == 0 {
+        return 0;
+    }
+    match priority_order_asc {
+        Some(true) => (read_queue_nums - 1 - index) as i32,
+        Some(false) => index as i32,
+        None => (random_q + index as i32).rem_euclid(read_queue_nums as i32),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -1685,6 +1714,24 @@ mod tests {
 
     use super::*;
     use crate::broker_runtime::BrokerRuntime;
+
+    #[test]
+    fn priority_pop_scans_highest_queue_first_by_default() {
+        let queues: Vec<i32> = (0..4).map(|index| pop_queue_id(index, 4, 73, Some(true))).collect();
+        assert_eq!(queues, vec![3, 2, 1, 0]);
+    }
+
+    #[test]
+    fn priority_pop_can_scan_lowest_queue_first() {
+        let queues: Vec<i32> = (0..4).map(|index| pop_queue_id(index, 4, 73, Some(false))).collect();
+        assert_eq!(queues, vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn normal_pop_keeps_random_rotation() {
+        let queues: Vec<i32> = (0..4).map(|index| pop_queue_id(index, 4, 2, None)).collect();
+        assert_eq!(queues, vec![2, 3, 0, 1]);
+    }
 
     fn temp_test_root(label: &str) -> PathBuf {
         let mut path = std::env::temp_dir();

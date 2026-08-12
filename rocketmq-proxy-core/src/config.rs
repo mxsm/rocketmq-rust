@@ -39,6 +39,8 @@ pub struct GrpcConfig {
     pub listen_addr: String,
     pub max_decoding_message_size: usize,
     pub max_encoding_message_size: usize,
+    /// Maximum uncompressed body size accepted for one message.
+    pub max_message_body_size: usize,
     pub concurrency_limit_per_connection: usize,
     pub use_endpoint_port_from_request: bool,
     /// Java-compatible delay admission horizon enforced before forwarding to a Broker.
@@ -53,6 +55,7 @@ impl Default for GrpcConfig {
             listen_addr: format!("0.0.0.0:{DEFAULT_PROXY_GRPC_PORT}"),
             max_decoding_message_size: 8 * 1024 * 1024,
             max_encoding_message_size: 8 * 1024 * 1024,
+            max_message_body_size: 4 * 1024 * 1024,
             concurrency_limit_per_connection: 256,
             use_endpoint_port_from_request: false,
             timer_max_delay_ms: 24 * 60 * 60 * 1_000,

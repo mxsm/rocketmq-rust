@@ -302,6 +302,20 @@ mod cluster_session {
                 .await
         }
 
+        #[cfg(feature = "admin-mutation")]
+        pub async fn sync_lite_subscription(
+            &self,
+            broker_addr: &CheetahString,
+            request: rocketmq_model::common::lite::LiteSubscriptionDTO,
+            timeout_millis: u64,
+        ) -> rocketmq_error::RocketMQResult<()> {
+            let _operation = self.operation().await;
+            self.inner
+                .get_mq_client_api_impl()?
+                .sync_lite_subscription_async(broker_addr, request, timeout_millis)
+                .await
+        }
+
         pub async fn change_invisible_time(
             &self,
             broker_name: &CheetahString,

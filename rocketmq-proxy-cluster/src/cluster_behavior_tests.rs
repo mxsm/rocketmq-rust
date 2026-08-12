@@ -588,6 +588,28 @@ impl ClusterProducerIo for ScriptedProducer {
     ) -> Result<Option<SendResult>, RocketMQError> {
         self.send(message, timeout_millis).await
     }
+
+    async fn send_batch(&mut self, _messages: Vec<Message>, _timeout_millis: u64) -> Result<SendResult, RocketMQError> {
+        self.events
+            .lock()
+            .expect("event log lock poisoned")
+            .push("producer.send_batch");
+        self.send_results
+            .lock()
+            .expect("send script lock poisoned")
+            .pop_front()
+            .unwrap_or_else(|| Err(unexpected_client_call("producer.send_batch")))?
+            .ok_or_else(|| unexpected_client_call("producer.send_batch.empty_result"))
+    }
+
+    async fn send_batch_to_queue(
+        &mut self,
+        messages: Vec<Message>,
+        _queue: MessageQueue,
+        timeout_millis: u64,
+    ) -> Result<SendResult, RocketMQError> {
+        self.send_batch(messages, timeout_millis).await
+    }
 }
 
 async fn run_test_worker<T, F, Fut>(

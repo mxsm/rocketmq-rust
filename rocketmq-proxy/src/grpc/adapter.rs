@@ -17,10 +17,8 @@
 pub use rocketmq_proxy_core::ingress::grpc::adapter::*;
 
 use crate::config::ProxyConfig;
-use crate::context::ProxyContext;
 use crate::processor::QueryAssignmentRequest;
 use crate::processor::QueryRouteRequest;
-use crate::processor::SendMessageRequest;
 use crate::proto::v2;
 use crate::ProxyResult;
 
@@ -38,13 +36,4 @@ pub fn build_query_assignment_request(
     request: &v2::QueryAssignmentRequest,
 ) -> ProxyResult<QueryAssignmentRequest> {
     rocketmq_proxy_core::ingress::grpc::adapter::build_query_assignment_request(&config.grpc, request)
-}
-
-/// Removes the facade-private principal proof before building a neutral Core request.
-pub fn build_send_message_request(
-    context: &ProxyContext,
-    request: &v2::SendMessageRequest,
-) -> ProxyResult<SendMessageRequest> {
-    let context = context.without_principal();
-    rocketmq_proxy_core::ingress::grpc::adapter::build_send_message_request(&context, request)
 }

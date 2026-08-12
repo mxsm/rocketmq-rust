@@ -39,6 +39,7 @@ use rocketmq_error::RocketMQError;
 use rocketmq_model::common::attribute::topic_message_type::TopicMessageType;
 use rocketmq_model::common::boundary_type::BoundaryType;
 use rocketmq_model::common::filter::expression_type::ExpressionType;
+use rocketmq_model::common::lite::LiteSubscriptionDTO;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_id::MessageId;
 use rocketmq_model::common::message::message_queue::MessageQueue;
@@ -90,6 +91,7 @@ use rocketmq_proxy_core::ForwardMessageToDeadLetterQueuePlan;
 use rocketmq_proxy_core::ForwardMessageToDeadLetterQueueRequest;
 use rocketmq_proxy_core::GetOffsetPlan;
 use rocketmq_proxy_core::GetOffsetRequest;
+use rocketmq_proxy_core::LiteSubscriptionSyncRequest;
 use rocketmq_proxy_core::MessageQueueTarget;
 use rocketmq_proxy_core::ProxyContext;
 use rocketmq_proxy_core::ProxyError;
@@ -140,6 +142,14 @@ pub trait ClusterClient: Send + Sync {
 
     /// Verifies that NameServer exposes at least one registered Broker route.
     async fn readiness_check(&self) -> ProxyResult<()> {
+        Ok(())
+    }
+
+    async fn sync_lite_subscription(
+        &self,
+        _client_id: &str,
+        _request: &LiteSubscriptionSyncRequest,
+    ) -> ProxyResult<()> {
         Ok(())
     }
 
@@ -228,6 +238,15 @@ trait ClusterClientIo: Send + Sync {
     async fn start(&self) -> Result<(), RocketMQError>;
 
     async fn shutdown(&self);
+
+    async fn sync_lite_subscription(
+        &self,
+        _broker_addr: &CheetahString,
+        _request: LiteSubscriptionDTO,
+        _timeout_millis: u64,
+    ) -> Result<(), RocketMQError> {
+        Ok(())
+    }
 
     async fn topic_route(&self, topic: &str, timeout_millis: u64) -> Result<Option<TopicRouteData>, RocketMQError>;
 
@@ -447,6 +466,15 @@ impl ClusterClientIo for ClientInstanceHandle {
 
     async fn shutdown(&self) {
         self.shutdown_owned().await;
+    }
+
+    async fn sync_lite_subscription(
+        &self,
+        broker_addr: &CheetahString,
+        request: LiteSubscriptionDTO,
+        timeout_millis: u64,
+    ) -> Result<(), RocketMQError> {
+        self.sync_lite_subscription(broker_addr, request, timeout_millis).await
     }
 
     async fn topic_route(&self, topic: &str, timeout_millis: u64) -> Result<Option<TopicRouteData>, RocketMQError> {
@@ -712,6 +740,15 @@ trait ClusterProducerIo: Send {
         queue: MessageQueue,
         timeout_millis: u64,
     ) -> Result<Option<SendResult>, RocketMQError>;
+
+    async fn send_batch(&mut self, messages: Vec<Message>, timeout_millis: u64) -> Result<SendResult, RocketMQError>;
+
+    async fn send_batch_to_queue(
+        &mut self,
+        messages: Vec<Message>,
+        queue: MessageQueue,
+        timeout_millis: u64,
+    ) -> Result<SendResult, RocketMQError>;
 }
 
 #[async_trait]
@@ -763,6 +800,20 @@ impl ClusterProducerIo for DefaultMQProducer {
         timeout_millis: u64,
     ) -> Result<Option<SendResult>, RocketMQError> {
         self.send_to_queue_with_timeout(message, queue, timeout_millis).await
+    }
+
+    async fn send_batch(&mut self, messages: Vec<Message>, timeout_millis: u64) -> Result<SendResult, RocketMQError> {
+        self.send_batch_with_timeout(messages, timeout_millis).await
+    }
+
+    async fn send_batch_to_queue(
+        &mut self,
+        messages: Vec<Message>,
+        queue: MessageQueue,
+        timeout_millis: u64,
+    ) -> Result<SendResult, RocketMQError> {
+        self.send_batch_to_queue_with_timeout(messages, queue, timeout_millis)
+            .await
     }
 }
 
@@ -844,6 +895,12 @@ impl ClusterClient for RocketmqClusterClient {
 
     async fn readiness_check(&self) -> ProxyResult<()> {
         self.executor.readiness_check().await
+    }
+
+    async fn sync_lite_subscription(&self, client_id: &str, request: &LiteSubscriptionSyncRequest) -> ProxyResult<()> {
+        self.executor
+            .sync_lite_subscription(client_id.to_owned(), request.clone())
+            .await
     }
 
     async fn query_route(&self, topic: &ResourceIdentity) -> ProxyResult<TopicRouteData> {
@@ -1231,6 +1288,13 @@ async fn handle_cluster_command(config: &ClusterConfig, state: &mut ClusterWorke
     match command {
         ClusterCommand::ReadinessCheck { reply } => {
             let _ = reply.send(cluster_readiness_inner(config, state).await);
+        }
+        ClusterCommand::SyncLiteSubscription {
+            client_id,
+            request,
+            reply,
+        } => {
+            let _ = reply.send(sync_lite_subscription_inner(config, state, client_id, request).await);
         }
         ClusterCommand::QueryRoute { topic, reply } => {
             let _ = reply.send(query_route_inner(config, state, topic).await);
@@ -1631,11 +1695,114 @@ async fn send_message_inner(
                 .collect());
         }
     };
-    let mut results = Vec::with_capacity(request.messages.len());
-    for entry in request.messages {
+    let entries = request.messages;
+    if compatible_batch_entries(&entries) {
+        return Ok(send_compatible_batch(producer, entries, timeout).await);
+    }
+    let mut results = Vec::with_capacity(entries.len());
+    for entry in entries {
         results.push(send_message_entry(producer, entry, timeout).await);
     }
     Ok(results)
+}
+
+async fn sync_lite_subscription_inner(
+    config: &ClusterConfig,
+    state: &mut ClusterWorkerState,
+    client_id: String,
+    request: LiteSubscriptionSyncRequest,
+) -> ProxyResult<()> {
+    let topic = request.topic.to_string();
+    let client = state.client(config).await?;
+    let route = fetch_topic_route(client.as_ref(), config, state, topic.as_str()).await?;
+    let broker_addrs = master_broker_addrs(&route);
+    if broker_addrs.is_empty() {
+        return Err(RocketMQError::BrokerNotFound { name: topic }.into());
+    }
+    for broker_addr in broker_addrs {
+        client
+            .sync_lite_subscription(
+                &broker_addr,
+                request.broker_dto(client_id.as_str())?,
+                config.mq_client_api_timeout_ms,
+            )
+            .await?;
+    }
+    Ok(())
+}
+
+fn compatible_batch_entries(entries: &[SendMessageEntry]) -> bool {
+    let Some(first) = entries.first() else {
+        return false;
+    };
+    entries.len() > 1
+        && entries.iter().all(|entry| {
+            entry.topic == first.topic
+                && entry.queue_id == first.queue_id
+                && !entry.message.properties().keys().any(|key| {
+                    matches!(
+                        key.as_str(),
+                        MessageConst::PROPERTY_SHARDING_KEY
+                            | MessageConst::PROPERTY_TIMER_DELIVER_MS
+                            | MessageConst::PROPERTY_TRANSACTION_PREPARED
+                            | MessageConst::PROPERTY_LITE_TOPIC
+                            | MessageConst::PROPERTY_PRIORITY
+                    )
+                })
+        })
+}
+
+async fn send_compatible_batch(
+    producer: &mut dyn ClusterProducerIo,
+    entries: Vec<SendMessageEntry>,
+    timeout: u64,
+) -> Vec<SendMessageResultEntry> {
+    let queue = match resolve_target_queue(producer, &entries[0]).await {
+        Ok(queue) => queue,
+        Err(error) => return entries.iter().map(|_| failure_send_result_entry(&error)).collect(),
+    };
+    let messages = entries
+        .iter()
+        .map(|entry| message_from_core(&entry.message))
+        .collect::<Vec<_>>();
+    let result = match queue {
+        Some(queue) => producer.send_batch_to_queue(messages, queue, timeout).await,
+        None => producer.send_batch(messages, timeout).await,
+    };
+    match result {
+        Ok(result) => split_batch_send_result(result, &entries),
+        Err(error) => {
+            let error = ProxyError::from(error);
+            entries.iter().map(|_| failure_send_result_entry(&error)).collect()
+        }
+    }
+}
+
+fn split_batch_send_result(result: SendResult, entries: &[SendMessageEntry]) -> Vec<SendMessageResultEntry> {
+    let broker_ids = result
+        .msg_id
+        .as_ref()
+        .map(|value| value.split_char(',').map(str::to_owned).collect::<Vec<_>>())
+        .filter(|ids| ids.len() == entries.len());
+    entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            let mut item = result.clone();
+            item.queue_offset = result.queue_offset.saturating_add(index as u64);
+            item.msg_id = Some(CheetahString::from(
+                broker_ids
+                    .as_ref()
+                    .and_then(|ids| ids.get(index))
+                    .map(String::as_str)
+                    .unwrap_or(entry.client_message_id.as_str()),
+            ));
+            SendMessageResultEntry {
+                status: ProxyStatusMapper::from_send_result_payload(&item),
+                send_result: Some(item),
+            }
+        })
+        .collect()
 }
 
 async fn recall_message_inner(
@@ -2828,6 +2995,22 @@ fn select_master_broker_addr(route: &TopicRouteData) -> Option<CheetahString> {
     })
 }
 
+fn master_broker_addrs(route: &TopicRouteData) -> Vec<CheetahString> {
+    route
+        .broker_datas
+        .iter()
+        .filter_map(|broker| {
+            broker
+                .broker_addrs()
+                .get(&MASTER_ID)
+                .cloned()
+                .or_else(|| broker.select_broker_addr())
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
 fn convert_topic_message_type(message_type: TopicMessageType) -> ProxyTopicMessageType {
     match message_type {
         TopicMessageType::Unspecified => ProxyTopicMessageType::Unspecified,
@@ -2860,6 +3043,9 @@ mod tests {
     use cheetah_string::CheetahString;
     use rocketmq_error::RocketMQError;
     use rocketmq_model::common::attribute::topic_message_type::TopicMessageType;
+    use rocketmq_model::common::message::MessageConst;
+    use rocketmq_model::result::SendResult;
+    use rocketmq_model::result::SendStatus;
     use rocketmq_protocol::protocol::body::broker_body::cluster_info::ClusterInfo;
     use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
     use rocketmq_protocol::protocol::route::route_data_view::QueueData;
@@ -2879,12 +3065,15 @@ mod tests {
     use super::build_send_producer;
     use super::cluster_client_config;
     use super::cluster_info_has_registered_broker;
+    use super::compatible_batch_entries;
     use super::convert_subscription_group;
     use super::convert_topic_message_type;
+    use super::master_broker_addrs;
     use super::run_cluster_lane;
     use super::select_auth_metadata_broker_addr;
     use super::select_master_broker_addr;
     use super::single_broker_and_topic;
+    use super::split_batch_send_result;
     use super::test_client_runtime;
     use super::CachedValue;
     use super::ClusterCommand;
@@ -2899,6 +3088,52 @@ mod tests {
     use rocketmq_model::common::message::message_queue::MessageQueue;
     use rocketmq_proxy_core::ProxyError;
     use rocketmq_proxy_core::ProxyTopicMessageType;
+
+    fn batch_entry(id: &str) -> SendMessageEntry {
+        SendMessageEntry {
+            topic: ResourceIdentity::new("", "TopicA"),
+            client_message_id: id.to_owned(),
+            message: ProxyMessage::new("TopicA", id.as_bytes().to_vec()),
+            queue_id: None,
+        }
+    }
+
+    #[test]
+    fn compatible_normal_entries_form_one_broker_batch() {
+        let entries = vec![batch_entry("a"), batch_entry("b")];
+        assert!(compatible_batch_entries(&entries));
+
+        let mut fifo = entries.clone();
+        fifo[0]
+            .message
+            .put_property(MessageConst::PROPERTY_SHARDING_KEY, "group");
+        assert!(!compatible_batch_entries(&fifo));
+    }
+
+    #[test]
+    fn batch_result_is_split_into_stable_per_entry_results() {
+        let entries = vec![batch_entry("client-a"), batch_entry("client-b")];
+        let result = SendResult::new(
+            SendStatus::SendOk,
+            Some(CheetahString::from("broker-a,broker-b")),
+            None,
+            None,
+            41,
+        );
+
+        let split = split_batch_send_result(result, &entries);
+
+        assert_eq!(split.len(), 2);
+        assert_eq!(
+            split[0].send_result.as_ref().expect("first result").msg_id.as_deref(),
+            Some("broker-a")
+        );
+        assert_eq!(
+            split[1].send_result.as_ref().expect("second result").msg_id.as_deref(),
+            Some("broker-b")
+        );
+        assert_eq!(split[1].send_result.as_ref().expect("second result").queue_offset, 42);
+    }
 
     #[test]
     fn cluster_client_prefers_master_broker_address() {
@@ -2917,6 +3152,33 @@ mod tests {
         };
 
         assert_eq!(select_master_broker_addr(&route).unwrap().as_str(), "127.0.0.1:10911");
+    }
+
+    #[test]
+    fn lite_subscription_sync_targets_every_topic_master() {
+        let broker = |name: &str, addr: &str| {
+            BrokerData::new(
+                CheetahString::from("cluster-a"),
+                CheetahString::from(name),
+                HashMap::from([(0_u64, CheetahString::from(addr))]),
+                None,
+            )
+        };
+        let route = TopicRouteData {
+            broker_datas: vec![
+                broker("broker-b", "127.0.0.2:10911"),
+                broker("broker-a", "127.0.0.1:10911"),
+            ],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            master_broker_addrs(&route),
+            vec![
+                CheetahString::from("127.0.0.1:10911"),
+                CheetahString::from("127.0.0.2:10911"),
+            ]
+        );
     }
 
     #[test]

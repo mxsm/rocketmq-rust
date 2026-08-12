@@ -378,7 +378,8 @@ where
             ProxyGrpcService::from_execution_guards(Arc::clone(&config), processor, session_registry, grpc_guards)
                 .with_drain_controller(drain.clone())
                 .with_hooks(hooks)
-                .with_metrics(metrics);
+                .with_metrics(metrics)
+                .with_cpu_crypto_executor(service_context.cpu_crypto().clone());
         Self {
             config,
             processor: processor_ref,

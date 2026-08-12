@@ -58,6 +58,7 @@ use crate::processor::SendMessageRequest;
 use crate::processor::SendMessageResultEntry;
 use crate::processor::UpdateOffsetPlan;
 use crate::processor::UpdateOffsetRequest;
+use crate::session::LiteSubscriptionSyncRequest;
 use crate::status::ProxyStatusMapper;
 use crate::ResourceIdentity;
 
@@ -150,6 +151,15 @@ pub trait MessageService: Send + Sync {
 
 /// Consumer operation contract shared by the ingress and backend adapters.
 pub trait ConsumerService: Send + Sync {
+    fn sync_lite_subscription<'a>(
+        &'a self,
+        _context: &'a ProxyContext,
+        _client_id: &'a str,
+        _request: &'a LiteSubscriptionSyncRequest,
+    ) -> ProxyServiceFuture<'a, ()> {
+        Box::pin(async { Ok(()) })
+    }
+
     fn receive_message<'a>(
         &'a self,
         context: &'a ProxyContext,

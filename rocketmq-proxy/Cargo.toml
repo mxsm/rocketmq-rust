@@ -68,6 +68,7 @@ dashmap        = { workspace = true }
 bytes          = { workspace = true }
 tracing        = { workspace = true }
 futures        = { workspace = true }
+flate2         = { workspace = true }
 uuid           = { workspace = true }
 cheetah-string = { workspace = true }
 thiserror      = { workspace = true }

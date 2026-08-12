@@ -513,6 +513,7 @@ impl ClusterCommand {
     pub(super) fn class(&self) -> ClusterCommandClass {
         match self {
             Self::ReadinessCheck { .. }
+            | Self::SyncLiteSubscription { .. }
             | Self::AckMessage { .. }
             | Self::ForwardMessageToDeadLetterQueue { .. }
             | Self::ChangeInvisibleDuration { .. }
@@ -527,6 +528,16 @@ impl ClusterCommand {
     pub(super) fn ordering_key(&self, config: &ClusterConfig) -> ClusterOrderingKey {
         match self {
             Self::ReadinessCheck { .. } => ClusterOrderingKey::singleton("readiness"),
+            Self::SyncLiteSubscription { client_id, request, .. } => ClusterOrderingKey::new(
+                "consumer-control",
+                [
+                    client_id.clone(),
+                    request.group.namespace().to_owned(),
+                    request.group.name().to_owned(),
+                    request.topic.namespace().to_owned(),
+                    request.topic.name().to_owned(),
+                ],
+            ),
             Self::QueryRoute { topic, .. } | Self::QueryTopicMessageType { topic, .. } => {
                 resource_ordering_key("topic", [topic])
             }
@@ -627,6 +638,7 @@ impl ClusterCommand {
             | Self::QueryOffset { deadline, .. }
             | Self::EndTransaction { deadline, .. } => *deadline,
             Self::ReadinessCheck { .. }
+            | Self::SyncLiteSubscription { .. }
             | Self::QueryRoute { .. }
             | Self::QueryAssignment { .. }
             | Self::QueryTopicMessageType { .. }
@@ -656,6 +668,7 @@ impl ClusterCommand {
                 *deadline = deadline.map(|value| value.saturating_sub(waited));
             }
             Self::ReadinessCheck { .. }
+            | Self::SyncLiteSubscription { .. }
             | Self::QueryRoute { .. }
             | Self::QueryAssignment { .. }
             | Self::QueryTopicMessageType { .. }
@@ -671,6 +684,12 @@ impl ClusterCommand {
     pub(super) fn retained_bytes(&self) -> usize {
         let dynamic = match self {
             Self::ReadinessCheck { .. } => 0,
+            Self::SyncLiteSubscription { client_id, request, .. } => {
+                client_id.len()
+                    + resource_identity_bytes(&request.topic)
+                    + resource_identity_bytes(&request.group)
+                    + request.lite_topic_set.iter().map(String::len).sum::<usize>()
+            }
             Self::QueryRoute { topic, .. } | Self::QueryTopicMessageType { topic, .. } => {
                 resource_identity_bytes(topic)
             }
@@ -803,6 +822,9 @@ impl ClusterCommand {
     pub(super) fn reject(self, error: ProxyError) {
         match self {
             Self::ReadinessCheck { reply } => {
+                let _ = reply.send(Err(error));
+            }
+            Self::SyncLiteSubscription { reply, .. } => {
                 let _ = reply.send(Err(error));
             }
             Self::QueryRoute { reply, .. } => {

@@ -32,7 +32,7 @@ observability = ["rocketmq-client-rust/observability-metrics"]
 observability-traces = ["rocketmq-client-rust/observability"]
 
 [dependencies]
-rocketmq-client-rust = { workspace = true }
+rocketmq-client-rust = { workspace = true, features = ["admin-mutation"] }
 rocketmq-error = { workspace = true }
 rocketmq-model = { workspace = true }
 rocketmq-proxy-core = { workspace = true }
