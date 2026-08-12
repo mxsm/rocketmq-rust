@@ -80,3 +80,28 @@ fn response_command_explicit_semantics() {
     assert_eq!(java_default_header.topic.as_str(), "topic-b");
     assert_eq!(java_default_header.accept_standard_json_only, None);
 }
+
+#[test]
+#[allow(
+    deprecated,
+    reason = "verifies compatibility aliases retain their legacy SUCCESS semantics during the deprecation window"
+)]
+fn deprecated_response_factory_aliases_preserve_legacy_success_semantics() {
+    let response = RemotingCommand::create_response_command();
+    assert_eq!(response.code(), RemotingSysResponseCode::Success as i32);
+    assert!(response.is_response_type());
+    assert!(response.remark().is_none());
+
+    let response_with_header = RemotingCommand::create_response_command_with_header(GetRouteInfoRequestHeader::new(
+        "legacy-topic",
+        Some(false),
+    ));
+    assert_eq!(response_with_header.code(), RemotingSysResponseCode::Success as i32);
+    assert!(response_with_header.is_response_type());
+    assert!(response_with_header.remark().is_none());
+    let header = response_with_header
+        .read_custom_header_ref::<GetRouteInfoRequestHeader>()
+        .expect("legacy response should retain its typed header");
+    assert_eq!(header.topic.as_str(), "legacy-topic");
+    assert_eq!(header.accept_standard_json_only, Some(false));
+}
