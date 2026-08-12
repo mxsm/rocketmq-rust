@@ -69,3 +69,9 @@ python scripts/message_path_qualification.py compare `
 ```
 
 The default gates reject throughput regression above 10% and p99 latency regression above 15%. Estimates and broker-free microbenchmarks are supporting analysis only; they are not accepted as release qualification.
+
+## Operational handoff
+
+Before promotion, review the [message-path delivery checklist](message-path-delivery-checklist.md). It distinguishes implemented behavior, local smoke evidence, and target-environment release qualification.
+
+Use the [message-path release and rollback runbook](message-path-rollback-runbook.md) for staged deployment, abort conditions, component-specific rollback, and post-rollback message auditing. Rollback restores the previous immutable binary and explicit configuration; it never relies on a legacy or Java compatibility profile and never rewrites message data or consumer offsets.
