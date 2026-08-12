@@ -307,7 +307,12 @@ impl RemotingCommand {
     /// Legacy ambiguous-success response factory.
     ///
     /// New code should call [`Self::create_success_response_command`] so the
-    /// response intent is visible during review.
+    /// response intent is visible during review. Call
+    /// [`Self::create_java_default_error_response_command`] when matching
+    /// Java's unset-response behavior instead.
+    #[deprecated(
+        note = "use create_success_response_command for SUCCESS or create_java_default_error_response_command for Java-compatible unset errors"
+    )]
     pub fn create_response_command() -> Self {
         Self::create_success_response_command()
     }
@@ -315,6 +320,11 @@ impl RemotingCommand {
     /// Legacy ambiguous-success typed-header response factory.
     ///
     /// New code should call [`Self::create_success_response_command_with_header`].
+    /// Call [`Self::create_java_default_error_response_command_with_header`]
+    /// when matching Java's unset-response behavior instead.
+    #[deprecated(
+        note = "use create_success_response_command_with_header for SUCCESS or create_java_default_error_response_command_with_header for Java-compatible unset errors"
+    )]
     pub fn create_response_command_with_header(header: impl CommandCustomHeader + Sync + Send + 'static) -> Self {
         Self::create_success_response_command_with_header(header)
     }
