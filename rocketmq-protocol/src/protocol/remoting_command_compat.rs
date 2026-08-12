@@ -24,6 +24,9 @@ use std::sync::OnceLock;
 
 use crate::protocol::command_custom_header::CommandCustomHeader;
 use crate::protocol::remoting_command::RemotingCommand;
+use crate::protocol::remoting_command_defaults::initialize_remoting_command_defaults;
+use crate::protocol::remoting_command_defaults::RemotingCommandDefaults;
+use crate::protocol::remoting_command_defaults::RemotingCommandDefaultsConflict;
 use crate::protocol::SerializeType;
 
 use super::remoting_command::REMOTING_VERSION_KEY;
@@ -75,6 +78,105 @@ static SERIALIZE_TYPE: LazyLock<SerializeType> = LazyLock::new(|| {
         })
         .unwrap_or(SerializeType::JSON)
 });
+
+/// An unsupported value selected for the process remoting serialization type.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InvalidRemotingSerializeType {
+    key: &'static str,
+    value: String,
+}
+
+impl InvalidRemotingSerializeType {
+    pub const fn key(&self) -> &'static str {
+        self.key
+    }
+
+    pub fn value(&self) -> &str {
+        &self.value
+    }
+}
+
+impl fmt::Display for InvalidRemotingSerializeType {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "invalid remoting serialization type for {}: {:?}; expected JSON or ROCKETMQ",
+            self.key, self.value
+        )
+    }
+}
+
+impl std::error::Error for InvalidRemotingSerializeType {}
+
+/// Failure while resolving or initializing process remoting defaults.
+#[derive(Debug, thiserror::Error)]
+pub enum RemotingDefaultsError {
+    #[error(transparent)]
+    InvalidSerializeType(#[from] InvalidRemotingSerializeType),
+    #[error(transparent)]
+    Conflict(#[from] RemotingCommandDefaultsConflict),
+}
+
+/// Resolves the serialization type with Java-compatible configuration precedence.
+///
+/// The property-style value takes precedence over the environment fallback.
+/// When neither value is configured, JSON is selected.
+///
+/// # Errors
+///
+/// Returns [`InvalidRemotingSerializeType`] when the selected value is not
+/// exactly `JSON` or `ROCKETMQ`.
+pub fn resolve_remoting_serialize_type(
+    property_value: Option<&str>,
+    environment_value: Option<&str>,
+) -> Result<SerializeType, InvalidRemotingSerializeType> {
+    let (key, value) = property_value
+        .map(|value| (SERIALIZE_TYPE_PROPERTY, value))
+        .or_else(|| environment_value.map(|value| (SERIALIZE_TYPE_ENV, value)))
+        .unwrap_or((SERIALIZE_TYPE_PROPERTY, "JSON"));
+
+    match value {
+        "JSON" => Ok(SerializeType::JSON),
+        "ROCKETMQ" => Ok(SerializeType::ROCKETMQ),
+        _ => Err(InvalidRemotingSerializeType {
+            key,
+            value: value.to_string(),
+        }),
+    }
+}
+
+fn read_environment_value(key: &'static str) -> Result<Option<String>, InvalidRemotingSerializeType> {
+    match std::env::var(key) {
+        Ok(value) => Ok(Some(value)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(value)) => Err(InvalidRemotingSerializeType {
+            key,
+            value: value.to_string_lossy().into_owned(),
+        }),
+    }
+}
+
+/// Initializes the immutable defaults used by all business command factories.
+///
+/// `rocketmq.serialize.type` takes precedence over
+/// `ROCKETMQ_SERIALIZE_TYPE`. Unsupported values fail startup instead of
+/// silently selecting JSON.
+///
+/// # Errors
+///
+/// Returns [`RemotingDefaultsError`] when configuration is invalid or a
+/// different process default was initialized earlier.
+pub fn initialize_remoting_defaults(version: i32) -> Result<(), RemotingDefaultsError> {
+    let property_value = read_environment_value(SERIALIZE_TYPE_PROPERTY)?;
+    let environment_value = if property_value.is_none() {
+        read_environment_value(SERIALIZE_TYPE_ENV)?
+    } else {
+        None
+    };
+    let serialize_type = resolve_remoting_serialize_type(property_value.as_deref(), environment_value.as_deref())?;
+    initialize_remoting_command_defaults(RemotingCommandDefaults::new(version, serialize_type))?;
+    Ok(())
+}
 
 fn resolve_remoting_version(cell: &OnceLock<i32>) -> i32 {
     *cell.get_or_init(|| {

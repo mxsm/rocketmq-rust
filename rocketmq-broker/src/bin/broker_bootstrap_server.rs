@@ -28,7 +28,7 @@ use rocketmq_broker::config::validated::ValidatedBrokerConfig;
 use rocketmq_broker::Builder;
 use rocketmq_model::common::mq_version::CURRENT_VERSION;
 use rocketmq_model::utils::env_utils::EnvUtils;
-use rocketmq_protocol::protocol::remoting_command_facade::initialize_remoting_version;
+use rocketmq_protocol::protocol::remoting_command_facade::initialize_remoting_defaults;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::RuntimeComponent;
 use rocketmq_runtime::RuntimeConfig;
@@ -92,8 +92,8 @@ fn broker_runtime_config() -> RuntimeConfig {
 }
 
 async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) -> Result<()> {
-    initialize_remoting_version(CURRENT_VERSION as i32)
-        .context("failed to initialize the immutable broker remoting version")?;
+    initialize_remoting_defaults(CURRENT_VERSION as i32)
+        .context("failed to initialize the immutable broker remoting defaults")?;
 
     // Parse and validate command line arguments
     let args = Args::parse();

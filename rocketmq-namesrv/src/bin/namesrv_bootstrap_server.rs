@@ -44,7 +44,7 @@ use rocketmq_namesrv::security::NameServerTransportPolicy;
 use rocketmq_namesrv::NamesrvConfig;
 #[cfg(feature = "embedded-controller")]
 use rocketmq_observability::MetricsExporterType;
-use rocketmq_protocol::protocol::remoting_command_facade::initialize_remoting_version;
+use rocketmq_protocol::protocol::remoting_command_facade::initialize_remoting_defaults;
 use rocketmq_runtime::common::parse_config_file;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::RuntimeComponent;
@@ -122,8 +122,8 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
     // Parse command line arguments first
     let args = Args::parse();
 
-    initialize_remoting_version(CURRENT_VERSION as i32)
-        .context("failed to initialize the immutable NameServer remoting version")?;
+    initialize_remoting_defaults(CURRENT_VERSION as i32)
+        .context("failed to initialize the immutable NameServer remoting defaults")?;
 
     // Parse and merge configurations
     let (namesrv_config, server_config, tokio_client_config, controller_config, logging_overrides) =

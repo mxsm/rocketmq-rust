@@ -22,6 +22,7 @@ use dashmap::DashMap;
 use parking_lot::RwLock;
 use rocketmq_observability::metrics::client::ClientMetrics;
 use rocketmq_observability::TelemetryHandle;
+use rocketmq_protocol::protocol::remoting_command_facade::initialize_remoting_defaults;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ResourceBudget;
 use rocketmq_runtime::ShutdownDeadline;
@@ -156,6 +157,13 @@ impl ClientPool {
         options: ClientOptions,
         rpc_hook: Option<Arc<dyn RPCHook>>,
     ) -> rocketmq_error::RocketMQResult<PooledClient> {
+        initialize_remoting_defaults(rocketmq_model::version::CURRENT_VERSION as i32).map_err(|error| {
+            rocketmq_error::RocketMQError::ConfigParseFailed {
+                key: "remoting.command.defaults",
+                reason: error.to_string(),
+            }
+        })?;
+
         let _admission = self.inner.admission.read();
         if self.inner.closed.load(Ordering::Acquire) {
             return Err(mq_client_err!("ClientRuntime is shutting down"));
