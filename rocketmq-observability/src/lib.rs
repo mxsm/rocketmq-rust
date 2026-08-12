@@ -117,6 +117,7 @@ pub use propagation::TRACEPARENT;
 pub use propagation::TRACESTATE;
 pub use runtime_diagnostics::start_runtime_diagnostics_endpoint;
 pub use runtime_diagnostics::start_runtime_diagnostics_endpoint_from_env;
+pub use runtime_diagnostics::start_runtime_diagnostics_endpoint_from_env_with_telemetry;
 pub use runtime_diagnostics::RuntimeDiagnosticsEndpointConfig;
 pub use runtime_diagnostics::RuntimeDiagnosticsEndpointHandle;
 pub use runtime_diagnostics::RUNTIME_DIAGNOSTICS_ALLOW_INSECURE_HTTP_ENV;

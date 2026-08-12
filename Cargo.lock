@@ -4520,6 +4520,7 @@ dependencies = [
  "rocketmq-client-rust",
  "rocketmq-error",
  "rocketmq-model",
+ "rocketmq-observability",
  "rocketmq-protocol",
  "rocketmq-proxy-core",
  "rocketmq-runtime",

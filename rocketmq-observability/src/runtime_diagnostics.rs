@@ -165,10 +165,30 @@ pub async fn start_runtime_diagnostics_endpoint_from_env(
     service_context: &ChildServiceContext,
     component: RuntimeComponent,
 ) -> Result<Option<RuntimeDiagnosticsEndpointHandle>, ObservabilityError> {
+    start_runtime_diagnostics_endpoint_from_env_with_telemetry(
+        service_context,
+        component,
+        &crate::TelemetryHandle::noop(),
+    )
+    .await
+}
+
+/// Starts the opt-in runtime diagnostics endpoint and records snapshots into
+/// the caller-owned telemetry pipeline.
+///
+/// # Errors
+///
+/// Returns a sanitized error when configuration, the initial token read, the
+/// listener bind, or lifecycle task registration fails.
+pub async fn start_runtime_diagnostics_endpoint_from_env_with_telemetry(
+    service_context: &ChildServiceContext,
+    component: RuntimeComponent,
+    telemetry: &crate::TelemetryHandle,
+) -> Result<Option<RuntimeDiagnosticsEndpointHandle>, ObservabilityError> {
     let Some(config) = RuntimeDiagnosticsEndpointConfig::from_env()? else {
         return Ok(None);
     };
-    start_runtime_diagnostics_endpoint(service_context, component, config)
+    start_runtime_diagnostics_endpoint_with_telemetry(service_context, component, config, telemetry)
         .await
         .map(Some)
 }
@@ -184,6 +204,21 @@ pub async fn start_runtime_diagnostics_endpoint(
     component: RuntimeComponent,
     config: RuntimeDiagnosticsEndpointConfig,
 ) -> Result<RuntimeDiagnosticsEndpointHandle, ObservabilityError> {
+    start_runtime_diagnostics_endpoint_with_telemetry(
+        service_context,
+        component,
+        config,
+        &crate::TelemetryHandle::noop(),
+    )
+    .await
+}
+
+async fn start_runtime_diagnostics_endpoint_with_telemetry(
+    service_context: &ChildServiceContext,
+    component: RuntimeComponent,
+    config: RuntimeDiagnosticsEndpointConfig,
+    telemetry: &crate::TelemetryHandle,
+) -> Result<RuntimeDiagnosticsEndpointHandle, ObservabilityError> {
     read_token(service_context, config.token_file.clone()).await?;
     let listener = TcpListener::bind(config.bind_addr)
         .await
@@ -193,25 +228,24 @@ pub async fn start_runtime_diagnostics_endpoint(
         .map_err(|_| ObservabilityError::invalid_config("runtime diagnostics listener address is unavailable"))?;
 
     let sampler_context = service_context.clone();
+    let runtime_metrics = crate::metrics::runtime::RuntimeMetricsRecorder::from_handle(telemetry, component);
+    let sampler_metrics = runtime_metrics.clone();
     service_context
         .scheduled_tasks("runtime-diagnostics.sampler")
         .schedule_fixed_delay(
             ScheduledTaskConfig::fixed_delay("runtime-diagnostics.sample", config.sample_interval),
             move || {
                 let sampler_context = sampler_context.clone();
+                let sampler_metrics = sampler_metrics.clone();
                 async move {
                     let view = sampler_context.diagnostics_view_v1(component);
-                    crate::metrics::runtime::record_snapshot(&view);
+                    sampler_metrics.record_snapshot(&view);
                 }
             },
         )
         .map_err(|_| ObservabilityError::invalid_config("runtime diagnostics sampler cannot start"))?;
 
-    crate::metrics::runtime::record_lifecycle(
-        component,
-        RuntimeLifecycleState::Starting,
-        RuntimeLifecycleReason::Startup,
-    );
+    runtime_metrics.record_lifecycle(RuntimeLifecycleState::Starting, RuntimeLifecycleReason::Startup);
 
     let server_context = service_context.clone();
     let server_cancellation = service_context.task_group().cancellation_token();
@@ -223,6 +257,7 @@ pub async fn start_runtime_diagnostics_endpoint(
                 component,
                 config.token_file,
                 server_cancellation,
+                runtime_metrics,
             )
             .await;
         })
@@ -243,6 +278,7 @@ async fn serve(
     component: RuntimeComponent,
     token_file: PathBuf,
     cancellation: tokio_util::sync::CancellationToken,
+    runtime_metrics: crate::metrics::runtime::RuntimeMetricsRecorder,
 ) {
     loop {
         tokio::select! {
@@ -250,7 +286,7 @@ async fn serve(
             accepted = listener.accept() => {
                 match accepted {
                     Ok((stream, _peer)) => {
-                        handle_connection(stream, &service_context, component, &token_file).await;
+                        handle_connection(stream, &service_context, component, &token_file, &runtime_metrics).await;
                     }
                     Err(error) => {
                         tracing::warn!(
@@ -271,9 +307,10 @@ async fn handle_connection(
     service_context: &ChildServiceContext,
     component: RuntimeComponent,
     token_file: &Path,
+    runtime_metrics: &crate::metrics::runtime::RuntimeMetricsRecorder,
 ) {
     let response = match tokio::time::timeout(REQUEST_TIMEOUT, read_request(&mut stream)).await {
-        Ok(Ok(request)) => route_request(&request, service_context, component, token_file).await,
+        Ok(Ok(request)) => route_request(&request, service_context, component, token_file, runtime_metrics).await,
         Ok(Err(status)) => error_response(status),
         Err(_) => error_response(HttpStatus::RequestTimeout),
     };
@@ -286,6 +323,7 @@ async fn route_request(
     service_context: &ChildServiceContext,
     component: RuntimeComponent,
     token_file: &Path,
+    runtime_metrics: &crate::metrics::runtime::RuntimeMetricsRecorder,
 ) -> Vec<u8> {
     let Ok(request) = ParsedRequest::parse(request) else {
         return error_response(HttpStatus::BadRequest);
@@ -311,7 +349,7 @@ async fn route_request(
     }
 
     let view = service_context.diagnostics_view_v1(component);
-    crate::metrics::runtime::record_snapshot(&view);
+    runtime_metrics.record_snapshot(&view);
     let envelope = RuntimeDiagnosticsEndpointEnvelopeV1 {
         schema_version: RUNTIME_DIAGNOSTICS_ENDPOINT_SCHEMA,
         source: "rocketmq_process",

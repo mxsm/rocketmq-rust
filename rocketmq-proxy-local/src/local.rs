@@ -13,6 +13,8 @@
 //  limitations under the License.
 
 use std::collections::HashMap;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -150,6 +152,7 @@ pub struct LocalBrokerFacadeClient {
     sender: mpsc::Sender<QueuedLocalBrokerCommand>,
     count_budget: Arc<Semaphore>,
     byte_budget: Arc<Semaphore>,
+    rejected: Arc<AtomicU64>,
     broker_name: String,
 }
 
@@ -413,6 +416,27 @@ impl LocalBrokerFacadeClient {
         let (sender, receiver) = mpsc::channel(config.command_queue_capacity);
         let count_budget = Arc::new(Semaphore::new(config.command_queue_capacity));
         let byte_budget = Arc::new(Semaphore::new(config.command_queue_max_bytes));
+        let rejected = Arc::new(AtomicU64::new(0));
+        let capacity_items = config.command_queue_capacity;
+        let capacity_bytes = config.command_queue_max_bytes;
+        let metric_count_budget = Arc::clone(&count_budget);
+        let metric_byte_budget = Arc::clone(&byte_budget);
+        let metric_rejected = Arc::clone(&rejected);
+        rocketmq_observability::metrics::resource::ResourceStabilityMetrics::from_handle(
+            &telemetry_handle,
+            rocketmq_observability::PROXY_METER_SCOPE,
+        )
+        .register_queue("proxy-local", "commands", "aggregate", move || {
+            rocketmq_observability::metrics::resource::ResourceQueueSnapshot {
+                items: capacity_items.saturating_sub(metric_count_budget.available_permits()) as u64,
+                bytes: capacity_bytes.saturating_sub(metric_byte_budget.available_permits()) as u64,
+                capacity_items: capacity_items as u64,
+                capacity_bytes: capacity_bytes as u64,
+                active: 0,
+                rejected_total: metric_rejected.load(Ordering::Relaxed),
+                ..rocketmq_observability::metrics::resource::ResourceQueueSnapshot::default()
+            }
+        });
         let max_queue_age = config.command_queue_max_age();
         let broker_name = config.broker_name.clone();
         let worker_context = service_context.component("command-worker");
@@ -448,6 +472,7 @@ impl LocalBrokerFacadeClient {
             sender,
             count_budget,
             byte_budget,
+            rejected,
             broker_name,
         })
     }
@@ -579,11 +604,11 @@ impl LocalBrokerFacadeClient {
         let estimated_bytes = command.estimated_bytes();
         let count_permit = Arc::clone(&self.count_budget)
             .try_acquire_owned()
-            .map_err(|_| local_queue_overloaded())?;
-        let byte_permits = u32::try_from(estimated_bytes).map_err(|_| local_queue_overloaded())?;
+            .map_err(|_| self.queue_overloaded())?;
+        let byte_permits = u32::try_from(estimated_bytes).map_err(|_| self.queue_overloaded())?;
         let byte_permit = Arc::clone(&self.byte_budget)
             .try_acquire_many_owned(byte_permits)
-            .map_err(|_| local_queue_overloaded())?;
+            .map_err(|_| self.queue_overloaded())?;
         let timeout_budget = command.timeout();
         let enqueued_at = Instant::now();
         let deadline_at = timeout_budget.map(|timeout| enqueued_at.checked_add(timeout).unwrap_or(enqueued_at));
@@ -597,7 +622,7 @@ impl LocalBrokerFacadeClient {
         };
         match self.sender.try_send(queued) {
             Ok(()) => {}
-            Err(TrySendError::Full(_)) => return Err(local_queue_overloaded()),
+            Err(TrySendError::Full(_)) => return Err(self.queue_overloaded()),
             Err(TrySendError::Closed(_)) => {
                 return Err(ProxyError::Transport {
                     message: "local broker worker is not available".to_owned(),
@@ -605,6 +630,11 @@ impl LocalBrokerFacadeClient {
             }
         }
         Ok(reply_rx)
+    }
+
+    fn queue_overloaded(&self) -> ProxyError {
+        self.rejected.fetch_add(1, Ordering::Relaxed);
+        local_queue_overloaded()
     }
 }
 
@@ -2835,6 +2865,7 @@ mod tests {
             sender,
             count_budget: Arc::new(tokio::sync::Semaphore::new(1)),
             byte_budget: Arc::new(tokio::sync::Semaphore::new(4_096)),
+            rejected: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             broker_name: "broker-a".to_owned(),
         };
         let _first_reply = client

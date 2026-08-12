@@ -262,6 +262,16 @@ impl FastFailureQueue {
         self.pending_count.load(Ordering::Acquire)
     }
 
+    fn oldest_pending_age_millis(&self, now_millis: u64) -> u64 {
+        self.tasks
+            .lock()
+            .iter()
+            .filter(|task| task.state() == TASK_STATE_PENDING)
+            .map(|task| now_millis.saturating_sub(task.created_timestamp_millis()))
+            .max()
+            .unwrap_or_default()
+    }
+
     fn clean_expired(&self, now_millis: u64, max_wait_millis: u64, batch_limit: usize) -> usize {
         self.clean_pending(now_millis, Some(max_wait_millis), batch_limit, "[TIMEOUT_CLEAN_QUEUE]")
     }
@@ -436,6 +446,20 @@ impl BrokerFastFailure {
         broker_config: Arc<BrokerConfig>,
         service_context: ChildServiceContext,
     ) -> Self {
+        Self::new_with_service_context_and_telemetry(
+            broker_config,
+            service_context,
+            rocketmq_observability::TelemetryHandle::noop(),
+        )
+    }
+
+    pub(crate) fn new_with_service_context_and_telemetry(
+        broker_config: Arc<BrokerConfig>,
+        service_context: ChildServiceContext,
+        telemetry: rocketmq_observability::TelemetryHandle,
+    ) -> Self {
+        let capacity_count = broker_config.broker_fast_failure_pending_max_count;
+        let capacity_bytes = broker_config.broker_fast_failure_pending_max_bytes;
         let pending_budget = ResourceBudgetTree::new(
             "broker.fast-failure.pending",
             BudgetLimit::new(
@@ -446,7 +470,7 @@ impl BrokerFastFailure {
         )
         .expect("validated Broker fast-failure limits must produce a resource budget")
         .root();
-        Self {
+        let this = Self {
             inner: Arc::new(BrokerFastFailureInner {
                 broker_config,
                 service_context,
@@ -459,7 +483,25 @@ impl BrokerFastFailure {
                 jstack_time_millis: AtomicI64::new(current_millis() as i64),
                 scan_batch_limit: DEFAULT_SCAN_BATCH_LIMIT,
             }),
-        }
+        };
+        let source = this.clone();
+        rocketmq_observability::metrics::resource::ResourceStabilityMetrics::from_handle(
+            &telemetry,
+            rocketmq_observability::BROKER_METER_SCOPE,
+        )
+        .register_queue("broker", "fast-failure", "aggregate", move || {
+            let budget = source.pending_budget_snapshot();
+            rocketmq_observability::metrics::resource::ResourceQueueSnapshot {
+                items: budget.current_count as u64,
+                bytes: budget.current_bytes as u64,
+                oldest_age_millis: source.oldest_pending_age_millis(),
+                capacity_items: capacity_count as u64,
+                capacity_bytes: capacity_bytes as u64,
+                active: source.running_count() as u64,
+                rejected_total: budget.rejected_count,
+            }
+        });
+        this
     }
 
     fn task_group(&self) -> TaskGroup {
@@ -590,6 +632,22 @@ impl BrokerFastFailure {
 
     pub(crate) fn pending_budget_snapshot(&self) -> BudgetSnapshot {
         self.inner.pending_budget.snapshot()
+    }
+
+    fn oldest_pending_age_millis(&self) -> u64 {
+        let now_millis = current_millis();
+        ALL_QUEUE_KINDS
+            .into_iter()
+            .map(|kind| self.inner.queues.get(kind).oldest_pending_age_millis(now_millis))
+            .max()
+            .unwrap_or_default()
+    }
+
+    fn running_count(&self) -> usize {
+        ALL_QUEUE_KINDS
+            .into_iter()
+            .map(|kind| self.inner.queues.get(kind).running_count.load(Ordering::Acquire))
+            .sum()
     }
 
     pub(crate) fn try_enqueue(

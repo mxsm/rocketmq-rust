@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "artifact_kind": "rocketmq_message_path_soak_policy",
+  "profiles": {
+    "smoke": {
+      "warmup_seconds": 0,
+      "observation_seconds": 60,
+      "cooldown_seconds": 15,
+      "sample_interval_seconds": 5,
+      "minimum_coverage_percent": 80.0,
+      "maximum_gap_seconds": 15
+    },
+    "full": {
+      "warmup_seconds": 1800,
+      "observation_seconds": 21600,
+      "cooldown_seconds": 900,
+      "sample_interval_seconds": 60,
+      "minimum_coverage_percent": 99.0,
+      "maximum_gap_seconds": 90
+    }
+  },
+  "windows": {
+    "comparison_seconds": 1800,
+    "cooldown_seconds": 300
+  },
+  "required_series": [
+    { "metric": "process_rss_bytes", "kind": "rss", "minimum_scopes": 1, "capacity_metric": "process_memory_limit_bytes" },
+    { "metric": "process_tasks", "kind": "task", "minimum_scopes": 1 },
+    { "metric": "process_threads", "kind": "task", "minimum_scopes": 1 },
+    { "metric": "process_open_fds", "kind": "fd", "minimum_scopes": 1 },
+    { "metric": "rocketmq_runtime_tasks", "kind": "task", "minimum_scopes": 1 },
+    { "metric": "rocketmq_resource_queue_items", "kind": "queue", "minimum_scopes": 1, "capacity_metric": "rocketmq_resource_queue_capacity_items" },
+    { "metric": "rocketmq_resource_queue_bytes", "kind": "queue", "minimum_scopes": 1, "capacity_metric": "rocketmq_resource_queue_capacity_bytes" },
+    { "metric": "rocketmq_resource_cache_usage_bytes", "kind": "cache", "minimum_scopes": 1, "capacity_metric": "rocketmq_resource_cache_budget_bytes" },
+    { "metric": "rocketmq_storage_flush_behind_bytes", "kind": "lag", "minimum_scopes": 1 },
+    { "metric": "rocketmq_storage_dispatch_behind_bytes", "kind": "lag", "minimum_scopes": 1 },
+    { "metric": "rocketmq_store_ha_replication_lag_bytes", "kind": "lag", "minimum_scopes": 1 },
+    { "metric": "rocketmq_receipt_renewal_due_lag_micros", "kind": "renewal", "minimum_scopes": 1 }
+  ],
+  "thresholds": {
+    "rss": {
+      "maximum_limit_ratio": 0.90,
+      "maximum_delta_ratio": 0.10,
+      "maximum_delta_bytes": 268435456,
+      "minimum_leak_slope_bytes_per_hour": 8388608,
+      "minimum_kendall_tau": 0.60
+    },
+    "task": {
+      "maximum_delta_ratio": 0.05,
+      "maximum_delta_absolute": 10,
+      "minimum_leak_slope_per_hour": 0.5,
+      "minimum_kendall_tau": 0.60
+    },
+    "fd": {
+      "maximum_delta_ratio": 0.05,
+      "maximum_delta_absolute": 32,
+      "minimum_leak_slope_per_hour": 1.0,
+      "minimum_kendall_tau": 0.60
+    },
+    "queue": {
+      "maximum_p99_capacity_ratio": 0.80,
+      "maximum_cooldown_ratio": 0.02
+    },
+    "cache": {
+      "maximum_budget_ratio": 1.0,
+      "maximum_delta_ratio": 0.05,
+      "maximum_delta_bytes": 16777216,
+      "minimum_leak_slope_budget_ratio_per_hour": 0.005,
+      "minimum_kendall_tau": 0.60
+    },
+    "lag": {
+      "maximum_sustained_bytes": 67108864,
+      "maximum_sustained_seconds": 600
+    },
+    "renewal": {
+      "maximum_due_lag_micros": 250000
+    }
+  }
+}

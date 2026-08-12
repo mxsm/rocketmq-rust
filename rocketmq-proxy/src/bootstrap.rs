@@ -231,10 +231,37 @@ impl ProxyRuntimeBuilder {
                 remoting_backend: self.remoting_backend,
                 context: None,
             },
-            None => default_service_manager_and_backend(&self.config, &service_context, telemetry)?,
+            None => default_service_manager_and_backend(&self.config, &service_context, telemetry.clone())?,
         };
         let auth_metadata_service = Some(backend.service_manager.metadata_service());
         let session_registry = self.session_registry.unwrap_or_default();
+        let resource_metrics = rocketmq_observability::metrics::resource::ResourceStabilityMetrics::from_handle(
+            &telemetry,
+            rocketmq_observability::PROXY_METER_SCOPE,
+        );
+        let response_guards = grpc_guards.clone();
+        let response_capacity_items = self.config.runtime.consumer_response_permits as u64;
+        let response_capacity_bytes = self.config.runtime.consumer_response_bytes as u64;
+        resource_metrics.register_queue("proxy-grpc", "consumer-response", "stream", move || {
+            let snapshot = response_guards.consumer_response_snapshot();
+            rocketmq_observability::metrics::resource::ResourceQueueSnapshot {
+                items: snapshot.current_count as u64,
+                bytes: snapshot.current_bytes as u64,
+                capacity_items: response_capacity_items,
+                capacity_bytes: response_capacity_bytes,
+                active: snapshot.current_count as u64,
+                rejected_total: snapshot.rejected_count,
+                ..rocketmq_observability::metrics::resource::ResourceQueueSnapshot::default()
+            }
+        });
+        let renewal_sessions = session_registry.clone();
+        resource_metrics.register_receipt_renewal("proxy-grpc", move || {
+            let snapshot = renewal_sessions.receipt_renewal_metrics_snapshot();
+            rocketmq_observability::metrics::resource::ReceiptRenewalSnapshot {
+                max_due_lag_micros: snapshot.max_due_lag_micros,
+                expired_before_renewal: snapshot.expired_before_renewal,
+            }
+        });
         let processor = Arc::new(DefaultMessagingProcessor::new(backend.service_manager));
         Ok(ProxyRuntime::from_processor_with_local_mode_support_and_guards(
             self.config,

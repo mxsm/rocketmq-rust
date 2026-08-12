@@ -807,6 +807,8 @@ def validate_final_evidence(
 
     if soak.get("schema_version") != 1 or soak.get("artifact_kind") != "rocketmq_message_path_soak_report":
         findings.append("soak report contract is invalid")
+    if soak.get("profile") != "full":
+        findings.append("soak report must use the full profile")
     if soak.get("status") != "pass" or soak.get("monotonic_growth_detected") is not False:
         findings.append("soak report must pass without monotonic resource growth")
     if soak.get("duration_seconds", 0) < policy["modes"]["release"]["minimum_soak_seconds"]:
@@ -827,12 +829,45 @@ def validate_final_evidence(
         findings.append("soak sampling coverage or maximum gap is outside the release contract")
     if not isinstance(soak.get("pods"), list) or not soak["pods"]:
         findings.append("soak report must include pod identity and restart evidence")
-    elif any(pod.get("restarts") != 0 or pod.get("oom_killed") is not False for pod in soak["pods"]):
+    elif any(
+        not pod.get("name")
+        or not pod.get("uid")
+        or pod.get("restarts") != 0
+        or pod.get("oom_killed") is not False
+        for pod in soak["pods"]
+    ):
         findings.append("soak report contains a restarted or OOM-killed pod")
     if not isinstance(soak.get("series"), list) or not soak["series"]:
         findings.append("soak report must include analyzed resource series")
     elif any(item.get("status") != "pass" or not DIGEST_RE.fullmatch(str(item.get("raw_artifact_sha256", ""))) for item in soak["series"]):
         findings.append("soak resource series must pass and bind raw artifact hashes")
+    workload = soak.get("workload", {})
+    attempted = workload.get("attempted") if isinstance(workload, dict) else None
+    if not isinstance(attempted, int) or attempted <= 0 or workload.get("put_ok") != attempted or workload.get("consumed") != attempted:
+        findings.append("soak workload must consume every PutOk message")
+    elif any(workload.get(key) != 0 for key in ("send_failures", "consume_failures", "missing", "duplicates", "corrupt")):
+        findings.append("soak workload contains failures, loss, duplicates, or corruption")
+    artifacts = soak.get("artifacts")
+    if not isinstance(artifacts, list) or not artifacts:
+        findings.append("soak report must include a raw artifact inventory")
+    else:
+        soak_root = paths["soak"].parent.resolve()
+        inventory_digests: set[str] = set()
+        for artifact in artifacts:
+            relative = Path(str(artifact.get("path", ""))) if isinstance(artifact, dict) else Path()
+            digest = str(artifact.get("sha256", "")) if isinstance(artifact, dict) else ""
+            if relative.is_absolute() or ".." in relative.parts or not re.fullmatch(r"[0-9a-f]{64}", digest):
+                findings.append("soak artifact inventory contains an invalid path or digest")
+                continue
+            artifact_path = (soak_root / relative).resolve()
+            if soak_root not in artifact_path.parents or not artifact_path.is_file() or sha256_file(artifact_path) != digest:
+                findings.append(f"soak artifact is missing or tampered: {relative.as_posix()}")
+                continue
+            inventory_digests.add("sha256:" + digest)
+        if isinstance(soak.get("series"), list) and any(
+            item.get("raw_artifact_sha256") not in inventory_digests for item in soak["series"]
+        ):
+            findings.append("soak resource series references a digest outside the artifact inventory")
     return findings, paths, documents
 
 
