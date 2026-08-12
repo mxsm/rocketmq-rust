@@ -284,8 +284,10 @@ mod tests {
     #[test]
     fn invalid_nameserver_address_is_rejected_before_pool_admission() {
         let runtime = crate::runtime::test_client_runtime("invalid-nameserver-pool-test");
-        let mut config = ClientConfig::default();
-        config.namesrv_addr = Some(CheetahString::from_static_str("missing-port"));
+        let config = ClientConfig {
+            namesrv_addr: Some(CheetahString::from_static_str("missing-port")),
+            ..Default::default()
+        };
 
         let error = match runtime.pool().get_or_create(config, None) {
             Ok(_) => panic!("invalid NameServer address must be rejected"),
@@ -305,23 +307,29 @@ mod tests {
     #[test]
     fn canonical_nameserver_address_drives_pool_identity() {
         let runtime = crate::runtime::test_client_runtime("canonical-nameserver-pool-test");
-        let mut first_config = ClientConfig::default();
-        first_config.namesrv_addr = Some(CheetahString::from_static_str(" NS-A:9876 ; ns-a:9876 "));
+        let first_config = ClientConfig {
+            namesrv_addr: Some(CheetahString::from_static_str(" NS-A:9876 ; ns-a:9876 ")),
+            ..Default::default()
+        };
         let first = runtime
             .pool()
             .get_or_create(first_config, None)
             .expect("first pooled client");
 
-        let mut equivalent_config = ClientConfig::default();
-        equivalent_config.namesrv_addr = Some(CheetahString::from_static_str("ns-a:9876"));
+        let equivalent_config = ClientConfig {
+            namesrv_addr: Some(CheetahString::from_static_str("ns-a:9876")),
+            ..Default::default()
+        };
         let equivalent = runtime
             .pool()
             .get_or_create(equivalent_config, None)
             .expect("equivalent canonical target must share the pool entry");
         assert!(Arc::ptr_eq(first.instance(), equivalent.instance()));
 
-        let mut different_config = ClientConfig::default();
-        different_config.namesrv_addr = Some(CheetahString::from_static_str("ns-b:9876"));
+        let different_config = ClientConfig {
+            namesrv_addr: Some(CheetahString::from_static_str("ns-b:9876")),
+            ..Default::default()
+        };
         assert!(runtime.pool().get_or_create(different_config, None).is_err());
     }
 }
