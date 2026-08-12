@@ -64,7 +64,7 @@ spec:
     - to:
         - namespaceSelector:
             matchLabels:
-              rocketmq.apache.org/observability: "true"
+              rocketmqrust.com/observability: "true"
           podSelector:
             matchLabels:
               app.kubernetes.io/name: otel-collector
@@ -80,35 +80,35 @@ metadata:
 spec:
   podSelector:
     matchLabels:
-      rocketmq.apache.org/service: controller
+      rocketmqrust.com/service: controller
   policyTypes: [Ingress, Egress]
   ingress:
     - from:
         - podSelector:
             matchLabels:
-              rocketmq.apache.org/service: controller
+              rocketmqrust.com/service: controller
       ports:
         - {protocol: TCP, port: 60110}
     - from:
         - podSelector:
             matchLabels:
-              rocketmq.apache.org/service: broker
+              rocketmqrust.com/service: broker
         - namespaceSelector:
             matchLabels:
-              rocketmq.apache.org/client-access: "true"
+              rocketmqrust.com/client-access: "true"
       ports:
         - {protocol: TCP, port: 60109}
   egress:
     - to:
         - podSelector:
             matchLabels:
-              rocketmq.apache.org/service: controller
+              rocketmqrust.com/service: controller
       ports:
         - {protocol: TCP, port: 60110}
     - to:
         - podSelector:
             matchLabels:
-              rocketmq.apache.org/service: broker
+              rocketmqrust.com/service: broker
       ports:
         - {protocol: TCP, port: 10911}
 ---
@@ -121,47 +121,47 @@ metadata:
 spec:
   podSelector:
     matchLabels:
-      rocketmq.apache.org/service: broker
+      rocketmqrust.com/service: broker
   policyTypes: [Ingress, Egress]
   ingress:
     - from:
         - podSelector:
             matchLabels:
-              rocketmq.apache.org/service: broker
+              rocketmqrust.com/service: broker
       ports:
         - {protocol: TCP, port: 10912}
     - from:
         - podSelector:
             matchLabels:
-              rocketmq.apache.org/service: controller
+              rocketmqrust.com/service: controller
         - podSelector:
             matchLabels:
-              rocketmq.apache.org/service: proxy
+              rocketmqrust.com/service: proxy
         - podSelector:
             matchLabels:
-              rocketmq.apache.org/service: mcp
+              rocketmqrust.com/service: mcp
         - namespaceSelector:
             matchLabels:
-              rocketmq.apache.org/client-access: "true"
+              rocketmqrust.com/client-access: "true"
       ports:
         - {protocol: TCP, port: 10911}
   egress:
     - to:
         - podSelector:
             matchLabels:
-              rocketmq.apache.org/service: broker
+              rocketmqrust.com/service: broker
       ports:
         - {protocol: TCP, port: 10912}
     - to:
         - podSelector:
             matchLabels:
-              rocketmq.apache.org/service: namesrv
+              rocketmqrust.com/service: namesrv
       ports:
         - {protocol: TCP, port: 9876}
     - to:
         - podSelector:
             matchLabels:
-              rocketmq.apache.org/service: controller
+              rocketmqrust.com/service: controller
       ports:
         - {protocol: TCP, port: 60109}
 ---
@@ -174,22 +174,22 @@ metadata:
 spec:
   podSelector:
     matchLabels:
-      rocketmq.apache.org/service: namesrv
+      rocketmqrust.com/service: namesrv
   policyTypes: [Ingress]
   ingress:
     - from:
         - podSelector:
             matchLabels:
-              rocketmq.apache.org/service: broker
+              rocketmqrust.com/service: broker
         - podSelector:
             matchLabels:
-              rocketmq.apache.org/service: proxy
+              rocketmqrust.com/service: proxy
         - podSelector:
             matchLabels:
-              rocketmq.apache.org/service: mcp
+              rocketmqrust.com/service: mcp
         - namespaceSelector:
             matchLabels:
-              rocketmq.apache.org/client-access: "true"
+              rocketmqrust.com/client-access: "true"
       ports:
         - {protocol: TCP, port: 9876}
 ---
@@ -202,13 +202,13 @@ metadata:
 spec:
   podSelector:
     matchLabels:
-      rocketmq.apache.org/service: proxy
+      rocketmqrust.com/service: proxy
   policyTypes: [Ingress, Egress]
   ingress:
     - from:
         - namespaceSelector:
             matchLabels:
-              rocketmq.apache.org/client-access: "true"
+              rocketmqrust.com/client-access: "true"
       ports:
         - {protocol: TCP, port: 8080}
         - {protocol: TCP, port: 8081}
@@ -216,13 +216,13 @@ spec:
     - to:
         - podSelector:
             matchLabels:
-              rocketmq.apache.org/service: namesrv
+              rocketmqrust.com/service: namesrv
       ports:
         - {protocol: TCP, port: 9876}
     - to:
         - podSelector:
             matchLabels:
-              rocketmq.apache.org/service: broker
+              rocketmqrust.com/service: broker
       ports:
         - {protocol: TCP, port: 10911}
 ---
@@ -235,26 +235,26 @@ metadata:
 spec:
   podSelector:
     matchLabels:
-      rocketmq.apache.org/service: mcp
+      rocketmqrust.com/service: mcp
   policyTypes: [Ingress, Egress]
   ingress:
     - from:
         - namespaceSelector:
             matchLabels:
-              rocketmq.apache.org/client-access: "true"
+              rocketmqrust.com/client-access: "true"
       ports:
         - {protocol: TCP, port: 8089}
   egress:
     - to:
         - podSelector:
             matchLabels:
-              rocketmq.apache.org/service: namesrv
+              rocketmqrust.com/service: namesrv
       ports:
         - {protocol: TCP, port: 9876}
     - to:
         - podSelector:
             matchLabels:
-              rocketmq.apache.org/service: broker
+              rocketmqrust.com/service: broker
       ports:
         - {protocol: TCP, port: 10911}
     - to:
@@ -282,7 +282,7 @@ spec:
     - from:
         - namespaceSelector:
             matchLabels:
-              rocketmq.apache.org/observability: "true"
+              rocketmqrust.com/observability: "true"
           podSelector:
             matchLabels:
               app.kubernetes.io/name: prometheus
@@ -302,15 +302,15 @@ metadata:
     app.kubernetes.io/part-of: rocketmq-rust
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
-    rocketmq.apache.org/service: broker
-    rocketmq.apache.org/architecture-milestone: P0-05
+    rocketmqrust.com/service: broker
+    rocketmqrust.com/architecture-milestone: P0-05
 spec:
   minAvailable: 2
   selector:
     matchLabels:
       app.kubernetes.io/name: rocketmq-broker
       app.kubernetes.io/instance: rocketmq
-      rocketmq.apache.org/service: broker
+      rocketmqrust.com/service: broker
 ---
 # Source: rocketmq-rust/templates/pdbs.yaml
 apiVersion: policy/v1
@@ -324,15 +324,15 @@ metadata:
     app.kubernetes.io/part-of: rocketmq-rust
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
-    rocketmq.apache.org/service: controller
-    rocketmq.apache.org/architecture-milestone: P0-05
+    rocketmqrust.com/service: controller
+    rocketmqrust.com/architecture-milestone: P0-05
 spec:
   minAvailable: 2
   selector:
     matchLabels:
       app.kubernetes.io/name: rocketmq-controller
       app.kubernetes.io/instance: rocketmq
-      rocketmq.apache.org/service: controller
+      rocketmqrust.com/service: controller
 ---
 # Source: rocketmq-rust/templates/pdbs.yaml
 apiVersion: policy/v1
@@ -346,15 +346,15 @@ metadata:
     app.kubernetes.io/part-of: rocketmq-rust
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
-    rocketmq.apache.org/service: mcp
-    rocketmq.apache.org/architecture-milestone: P0-05
+    rocketmqrust.com/service: mcp
+    rocketmqrust.com/architecture-milestone: P0-05
 spec:
   minAvailable: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: rocketmq-mcp
       app.kubernetes.io/instance: rocketmq
-      rocketmq.apache.org/service: mcp
+      rocketmqrust.com/service: mcp
 ---
 # Source: rocketmq-rust/templates/pdbs.yaml
 apiVersion: policy/v1
@@ -368,15 +368,15 @@ metadata:
     app.kubernetes.io/part-of: rocketmq-rust
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
-    rocketmq.apache.org/service: namesrv
-    rocketmq.apache.org/architecture-milestone: P0-05
+    rocketmqrust.com/service: namesrv
+    rocketmqrust.com/architecture-milestone: P0-05
 spec:
   minAvailable: 2
   selector:
     matchLabels:
       app.kubernetes.io/name: rocketmq-namesrv
       app.kubernetes.io/instance: rocketmq
-      rocketmq.apache.org/service: namesrv
+      rocketmqrust.com/service: namesrv
 ---
 # Source: rocketmq-rust/templates/pdbs.yaml
 apiVersion: policy/v1
@@ -390,15 +390,15 @@ metadata:
     app.kubernetes.io/part-of: rocketmq-rust
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
-    rocketmq.apache.org/service: proxy
-    rocketmq.apache.org/architecture-milestone: P0-05
+    rocketmqrust.com/service: proxy
+    rocketmqrust.com/architecture-milestone: P0-05
 spec:
   minAvailable: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: rocketmq-proxy
       app.kubernetes.io/instance: rocketmq
-      rocketmq.apache.org/service: proxy
+      rocketmqrust.com/service: proxy
 ---
 # Source: rocketmq-rust/templates/serviceaccount.yaml
 apiVersion: v1
@@ -408,7 +408,7 @@ metadata:
   namespace: rocketmq
   labels:
     app.kubernetes.io/part-of: rocketmq-rust
-    rocketmq.apache.org/architecture-milestone: P0-04
+    rocketmqrust.com/architecture-milestone: P0-04
 automountServiceAccountToken: false
 
 ---
@@ -424,11 +424,11 @@ metadata:
     app.kubernetes.io/part-of: rocketmq-rust
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
-    rocketmq.apache.org/service: maintenance
-    rocketmq.apache.org/architecture-milestone: P0-05
+    rocketmqrust.com/service: maintenance
+    rocketmqrust.com/architecture-milestone: P0-05
   annotations:
-    rocketmq.apache.org/maintenance-policy-version: "1"
-    rocketmq.apache.org/maintenance-policy-sha256: "951aca122bb23b78e29235aaf05b2dffe9422bf97636ce6ac04fddab969ba0ee"
+    rocketmqrust.com/maintenance-policy-version: "1"
+    rocketmqrust.com/maintenance-policy-sha256: "951aca122bb23b78e29235aaf05b2dffe9422bf97636ce6ac04fddab969ba0ee"
 immutable: true
 data:
   maintenance-policy.json: |
@@ -479,8 +479,8 @@ metadata:
     app.kubernetes.io/part-of: rocketmq-rust
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
-    rocketmq.apache.org/service: broker
-    rocketmq.apache.org/architecture-milestone: P0-05
+    rocketmqrust.com/service: broker
+    rocketmqrust.com/architecture-milestone: P0-05
 data:
   rocketmq-broker-0.toml: |-
     [broker]
@@ -588,8 +588,8 @@ metadata:
     app.kubernetes.io/part-of: rocketmq-rust
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
-    rocketmq.apache.org/service: namesrv
-    rocketmq.apache.org/architecture-milestone: P0-05
+    rocketmqrust.com/service: namesrv
+    rocketmqrust.com/architecture-milestone: P0-05
 data:
   namesrv.toml: |-
     rocketmqHome = "/var/lib/rocketmq/namesrv"
@@ -610,8 +610,8 @@ metadata:
     app.kubernetes.io/part-of: rocketmq-rust
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
-    rocketmq.apache.org/service: controller
-    rocketmq.apache.org/architecture-milestone: P0-05
+    rocketmqrust.com/service: controller
+    rocketmqrust.com/architecture-milestone: P0-05
 data:
   rocketmq-controller-0.toml: |-
     rocketmqHome = "/var/lib/rocketmq/controller"
@@ -824,8 +824,8 @@ metadata:
     app.kubernetes.io/part-of: rocketmq-rust
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
-    rocketmq.apache.org/service: proxy
-    rocketmq.apache.org/architecture-milestone: P0-05
+    rocketmqrust.com/service: proxy
+    rocketmqrust.com/architecture-milestone: P0-05
 data:
   proxy.toml: |-
     mode = "cluster"
@@ -862,8 +862,8 @@ metadata:
     app.kubernetes.io/part-of: rocketmq-rust
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
-    rocketmq.apache.org/service: mcp
-    rocketmq.apache.org/architecture-milestone: P0-05
+    rocketmqrust.com/service: mcp
+    rocketmqrust.com/architecture-milestone: P0-05
 data:
   mcp.toml: |-
     [server]
@@ -966,11 +966,11 @@ metadata:
     app.kubernetes.io/part-of: rocketmq-rust
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
-    rocketmq.apache.org/service: mcp
-    rocketmq.apache.org/architecture-milestone: P0-05
+    rocketmqrust.com/service: mcp
+    rocketmqrust.com/architecture-milestone: P0-05
   annotations:
     helm.sh/resource-policy: keep
-    rocketmq.apache.org/persisted-format: mcp-audit-v1
+    rocketmqrust.com/persisted-format: mcp-audit-v1
 spec:
   accessModes: [ReadWriteOnce]
   storageClassName: "rocketmq-retain"
@@ -990,15 +990,15 @@ metadata:
     app.kubernetes.io/part-of: rocketmq-rust
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
-    rocketmq.apache.org/service: broker
-    rocketmq.apache.org/architecture-milestone: P0-05
+    rocketmqrust.com/service: broker
+    rocketmqrust.com/architecture-milestone: P0-05
 spec:
   clusterIP: None
   publishNotReadyAddresses: true
   selector:
     app.kubernetes.io/name: rocketmq-broker
     app.kubernetes.io/instance: rocketmq
-    rocketmq.apache.org/service: broker
+    rocketmqrust.com/service: broker
   ports:
     - name: tcp-10911
       port: 10911
@@ -1021,14 +1021,14 @@ metadata:
     app.kubernetes.io/part-of: rocketmq-rust
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
-    rocketmq.apache.org/service: broker
-    rocketmq.apache.org/architecture-milestone: P0-05
+    rocketmqrust.com/service: broker
+    rocketmqrust.com/architecture-milestone: P0-05
 spec:
   type: ClusterIP
   selector:
     app.kubernetes.io/name: rocketmq-broker
     app.kubernetes.io/instance: rocketmq
-    rocketmq.apache.org/service: broker
+    rocketmqrust.com/service: broker
   ports:
     - name: tcp-10911
       port: 10911
@@ -1051,15 +1051,15 @@ metadata:
     app.kubernetes.io/part-of: rocketmq-rust
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
-    rocketmq.apache.org/service: controller
-    rocketmq.apache.org/architecture-milestone: P0-05
+    rocketmqrust.com/service: controller
+    rocketmqrust.com/architecture-milestone: P0-05
 spec:
   clusterIP: None
   publishNotReadyAddresses: true
   selector:
     app.kubernetes.io/name: rocketmq-controller
     app.kubernetes.io/instance: rocketmq
-    rocketmq.apache.org/service: controller
+    rocketmqrust.com/service: controller
   ports:
     - name: tcp-60109
       port: 60109
@@ -1082,14 +1082,14 @@ metadata:
     app.kubernetes.io/part-of: rocketmq-rust
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
-    rocketmq.apache.org/service: controller
-    rocketmq.apache.org/architecture-milestone: P0-05
+    rocketmqrust.com/service: controller
+    rocketmqrust.com/architecture-milestone: P0-05
 spec:
   type: ClusterIP
   selector:
     app.kubernetes.io/name: rocketmq-controller
     app.kubernetes.io/instance: rocketmq
-    rocketmq.apache.org/service: controller
+    rocketmqrust.com/service: controller
   ports:
     - name: tcp-60109
       port: 60109
@@ -1112,15 +1112,15 @@ metadata:
     app.kubernetes.io/part-of: rocketmq-rust
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
-    rocketmq.apache.org/service: namesrv
-    rocketmq.apache.org/architecture-milestone: P0-05
+    rocketmqrust.com/service: namesrv
+    rocketmqrust.com/architecture-milestone: P0-05
 spec:
   clusterIP: None
   publishNotReadyAddresses: true
   selector:
     app.kubernetes.io/name: rocketmq-namesrv
     app.kubernetes.io/instance: rocketmq
-    rocketmq.apache.org/service: namesrv
+    rocketmqrust.com/service: namesrv
   ports:
     - name: tcp-9876
       port: 9876
@@ -1139,14 +1139,14 @@ metadata:
     app.kubernetes.io/part-of: rocketmq-rust
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
-    rocketmq.apache.org/service: namesrv
-    rocketmq.apache.org/architecture-milestone: P0-05
+    rocketmqrust.com/service: namesrv
+    rocketmqrust.com/architecture-milestone: P0-05
 spec:
   type: ClusterIP
   selector:
     app.kubernetes.io/name: rocketmq-namesrv
     app.kubernetes.io/instance: rocketmq
-    rocketmq.apache.org/service: namesrv
+    rocketmqrust.com/service: namesrv
   ports:
     - name: tcp-9876
       port: 9876
@@ -1165,15 +1165,15 @@ metadata:
     app.kubernetes.io/part-of: rocketmq-rust
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
-    rocketmq.apache.org/service: namesrv
-    rocketmq.apache.org/architecture-milestone: P0-05
+    rocketmqrust.com/service: namesrv
+    rocketmqrust.com/architecture-milestone: P0-05
 spec:
   clusterIP: None
   publishNotReadyAddresses: false
   selector:
     app.kubernetes.io/name: rocketmq-namesrv
     app.kubernetes.io/instance: rocketmq
-    rocketmq.apache.org/service: namesrv
+    rocketmqrust.com/service: namesrv
   ports:
     - name: remoting
       port: 9876
@@ -1192,9 +1192,9 @@ metadata:
     app.kubernetes.io/part-of: rocketmq-rust
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
-    rocketmq.apache.org/service: controller
-    rocketmq.apache.org/architecture-milestone: P0-05
-    rocketmq.apache.org/controller-ordinal: "0"
+    rocketmqrust.com/service: controller
+    rocketmqrust.com/architecture-milestone: P0-05
+    rocketmqrust.com/controller-ordinal: "0"
 spec:
   type: ClusterIP
   clusterIP: 10.96.0.201
@@ -1217,9 +1217,9 @@ metadata:
     app.kubernetes.io/part-of: rocketmq-rust
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
-    rocketmq.apache.org/service: controller
-    rocketmq.apache.org/architecture-milestone: P0-05
-    rocketmq.apache.org/controller-ordinal: "1"
+    rocketmqrust.com/service: controller
+    rocketmqrust.com/architecture-milestone: P0-05
+    rocketmqrust.com/controller-ordinal: "1"
 spec:
   type: ClusterIP
   clusterIP: 10.96.0.202
@@ -1242,9 +1242,9 @@ metadata:
     app.kubernetes.io/part-of: rocketmq-rust
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
-    rocketmq.apache.org/service: controller
-    rocketmq.apache.org/architecture-milestone: P0-05
-    rocketmq.apache.org/controller-ordinal: "2"
+    rocketmqrust.com/service: controller
+    rocketmqrust.com/architecture-milestone: P0-05
+    rocketmqrust.com/controller-ordinal: "2"
 spec:
   type: ClusterIP
   clusterIP: 10.96.0.203
@@ -1267,14 +1267,14 @@ metadata:
     app.kubernetes.io/part-of: rocketmq-rust
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
-    rocketmq.apache.org/service: mcp
-    rocketmq.apache.org/architecture-milestone: P0-05
+    rocketmqrust.com/service: mcp
+    rocketmqrust.com/architecture-milestone: P0-05
 spec:
   type: ClusterIP
   selector:
     app.kubernetes.io/name: rocketmq-mcp
     app.kubernetes.io/instance: rocketmq
-    rocketmq.apache.org/service: mcp
+    rocketmqrust.com/service: mcp
   ports:
     - name: tcp-8089
       port: 8089
@@ -1293,14 +1293,14 @@ metadata:
     app.kubernetes.io/part-of: rocketmq-rust
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
-    rocketmq.apache.org/service: proxy
-    rocketmq.apache.org/architecture-milestone: P0-05
+    rocketmqrust.com/service: proxy
+    rocketmqrust.com/architecture-milestone: P0-05
 spec:
   type: ClusterIP
   selector:
     app.kubernetes.io/name: rocketmq-proxy
     app.kubernetes.io/instance: rocketmq
-    rocketmq.apache.org/service: proxy
+    rocketmqrust.com/service: proxy
   ports:
     - name: tcp-8080
       port: 8080
@@ -1323,15 +1323,15 @@ metadata:
     app.kubernetes.io/part-of: rocketmq-rust
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
-    rocketmq.apache.org/service: broker
-    rocketmq.apache.org/architecture-milestone: P0-05
-    rocketmq.apache.org/metrics: "true"
+    rocketmqrust.com/service: broker
+    rocketmqrust.com/architecture-milestone: P0-05
+    rocketmqrust.com/metrics: "true"
 spec:
   type: ClusterIP
   selector:
     app.kubernetes.io/name: rocketmq-broker
     app.kubernetes.io/instance: rocketmq
-    rocketmq.apache.org/service: broker
+    rocketmqrust.com/service: broker
   ports:
     - name: metrics
       port: 5557
@@ -1350,15 +1350,15 @@ metadata:
     app.kubernetes.io/part-of: rocketmq-rust
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
-    rocketmq.apache.org/service: namesrv
-    rocketmq.apache.org/architecture-milestone: P0-05
-    rocketmq.apache.org/metrics: "true"
+    rocketmqrust.com/service: namesrv
+    rocketmqrust.com/architecture-milestone: P0-05
+    rocketmqrust.com/metrics: "true"
 spec:
   type: ClusterIP
   selector:
     app.kubernetes.io/name: rocketmq-namesrv
     app.kubernetes.io/instance: rocketmq
-    rocketmq.apache.org/service: namesrv
+    rocketmqrust.com/service: namesrv
   ports:
     - name: metrics
       port: 5557
@@ -1377,15 +1377,15 @@ metadata:
     app.kubernetes.io/part-of: rocketmq-rust
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
-    rocketmq.apache.org/service: controller
-    rocketmq.apache.org/architecture-milestone: P0-05
-    rocketmq.apache.org/metrics: "true"
+    rocketmqrust.com/service: controller
+    rocketmqrust.com/architecture-milestone: P0-05
+    rocketmqrust.com/metrics: "true"
 spec:
   type: ClusterIP
   selector:
     app.kubernetes.io/name: rocketmq-controller
     app.kubernetes.io/instance: rocketmq
-    rocketmq.apache.org/service: controller
+    rocketmqrust.com/service: controller
   ports:
     - name: metrics
       port: 5557
@@ -1404,15 +1404,15 @@ metadata:
     app.kubernetes.io/part-of: rocketmq-rust
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
-    rocketmq.apache.org/service: proxy
-    rocketmq.apache.org/architecture-milestone: P0-05
-    rocketmq.apache.org/metrics: "true"
+    rocketmqrust.com/service: proxy
+    rocketmqrust.com/architecture-milestone: P0-05
+    rocketmqrust.com/metrics: "true"
 spec:
   type: ClusterIP
   selector:
     app.kubernetes.io/name: rocketmq-proxy
     app.kubernetes.io/instance: rocketmq
-    rocketmq.apache.org/service: proxy
+    rocketmqrust.com/service: proxy
   ports:
     - name: metrics
       port: 5557
@@ -1431,15 +1431,15 @@ metadata:
     app.kubernetes.io/part-of: rocketmq-rust
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
-    rocketmq.apache.org/service: mcp
-    rocketmq.apache.org/architecture-milestone: P0-05
-    rocketmq.apache.org/metrics: "true"
+    rocketmqrust.com/service: mcp
+    rocketmqrust.com/architecture-milestone: P0-05
+    rocketmqrust.com/metrics: "true"
 spec:
   type: ClusterIP
   selector:
     app.kubernetes.io/name: rocketmq-mcp
     app.kubernetes.io/instance: rocketmq
-    rocketmq.apache.org/service: mcp
+    rocketmqrust.com/service: mcp
   ports:
     - name: metrics
       port: 5557
@@ -1458,8 +1458,8 @@ metadata:
     app.kubernetes.io/part-of: rocketmq-rust
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
-    rocketmq.apache.org/service: proxy
-    rocketmq.apache.org/architecture-milestone: P0-05
+    rocketmqrust.com/service: proxy
+    rocketmqrust.com/architecture-milestone: P0-05
 spec:
   replicas: 2
   strategy:
@@ -1469,23 +1469,23 @@ spec:
     matchLabels:
       app.kubernetes.io/name: rocketmq-proxy
       app.kubernetes.io/instance: rocketmq
-      rocketmq.apache.org/service: proxy
+      rocketmqrust.com/service: proxy
   template:
     metadata:
       annotations:
-        rocketmq.apache.org/release-commit: "1111111111111111111111111111111111111111"
-        rocketmq.apache.org/release-nonce: "local-validation"
-        rocketmq.apache.org/release-config-digest: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
-        rocketmq.apache.org/release-secret-version: "local-reference-1"
-        rocketmq.apache.org/storage-generation: "1"
+        rocketmqrust.com/release-commit: "1111111111111111111111111111111111111111"
+        rocketmqrust.com/release-nonce: "local-validation"
+        rocketmqrust.com/release-config-digest: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        rocketmqrust.com/release-secret-version: "local-reference-1"
+        rocketmqrust.com/storage-generation: "1"
       labels:
         app.kubernetes.io/name: rocketmq-proxy
         app.kubernetes.io/instance: rocketmq
         app.kubernetes.io/part-of: rocketmq-rust
         app.kubernetes.io/managed-by: Helm
         app.kubernetes.io/version: "0.1.0"
-        rocketmq.apache.org/service: proxy
-        rocketmq.apache.org/architecture-milestone: P0-05
+        rocketmqrust.com/service: proxy
+        rocketmqrust.com/architecture-milestone: P0-05
     spec:
       serviceAccountName: rocketmq-runtime
       automountServiceAccountToken: false
@@ -1507,7 +1507,7 @@ spec:
                 matchLabels:
                   app.kubernetes.io/name: rocketmq-proxy
                   app.kubernetes.io/instance: rocketmq
-                  rocketmq.apache.org/service: proxy
+                  rocketmqrust.com/service: proxy
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: kubernetes.io/hostname
@@ -1516,7 +1516,7 @@ spec:
             matchLabels:
               app.kubernetes.io/name: rocketmq-proxy
               app.kubernetes.io/instance: rocketmq
-              rocketmq.apache.org/service: proxy
+              rocketmqrust.com/service: proxy
       containers:
         - name: proxy
           image: "rocketmq-rust/proxy:local"
@@ -1627,8 +1627,8 @@ metadata:
     app.kubernetes.io/part-of: rocketmq-rust
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
-    rocketmq.apache.org/service: mcp
-    rocketmq.apache.org/architecture-milestone: P0-05
+    rocketmqrust.com/service: mcp
+    rocketmqrust.com/architecture-milestone: P0-05
 spec:
   replicas: 1
   strategy:
@@ -1637,23 +1637,23 @@ spec:
     matchLabels:
       app.kubernetes.io/name: rocketmq-mcp
       app.kubernetes.io/instance: rocketmq
-      rocketmq.apache.org/service: mcp
+      rocketmqrust.com/service: mcp
   template:
     metadata:
       annotations:
-        rocketmq.apache.org/release-commit: "1111111111111111111111111111111111111111"
-        rocketmq.apache.org/release-nonce: "local-validation"
-        rocketmq.apache.org/release-config-digest: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
-        rocketmq.apache.org/release-secret-version: "local-reference-1"
-        rocketmq.apache.org/storage-generation: "1"
+        rocketmqrust.com/release-commit: "1111111111111111111111111111111111111111"
+        rocketmqrust.com/release-nonce: "local-validation"
+        rocketmqrust.com/release-config-digest: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        rocketmqrust.com/release-secret-version: "local-reference-1"
+        rocketmqrust.com/storage-generation: "1"
       labels:
         app.kubernetes.io/name: rocketmq-mcp
         app.kubernetes.io/instance: rocketmq
         app.kubernetes.io/part-of: rocketmq-rust
         app.kubernetes.io/managed-by: Helm
         app.kubernetes.io/version: "0.1.0"
-        rocketmq.apache.org/service: mcp
-        rocketmq.apache.org/architecture-milestone: P0-05
+        rocketmqrust.com/service: mcp
+        rocketmqrust.com/architecture-milestone: P0-05
     spec:
       serviceAccountName: rocketmq-runtime
       automountServiceAccountToken: false
@@ -1776,8 +1776,8 @@ metadata:
     app.kubernetes.io/part-of: rocketmq-rust
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
-    rocketmq.apache.org/service: broker
-    rocketmq.apache.org/architecture-milestone: P0-05
+    rocketmqrust.com/service: broker
+    rocketmqrust.com/architecture-milestone: P0-05
 spec:
   serviceName: rocketmq-broker-headless
   replicas: 3
@@ -1791,23 +1791,23 @@ spec:
     matchLabels:
       app.kubernetes.io/name: rocketmq-broker
       app.kubernetes.io/instance: rocketmq
-      rocketmq.apache.org/service: broker
+      rocketmqrust.com/service: broker
   template:
     metadata:
       annotations:
-        rocketmq.apache.org/release-commit: "1111111111111111111111111111111111111111"
-        rocketmq.apache.org/release-nonce: "local-validation"
-        rocketmq.apache.org/release-config-digest: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
-        rocketmq.apache.org/release-secret-version: "local-reference-1"
-        rocketmq.apache.org/storage-generation: "1"
+        rocketmqrust.com/release-commit: "1111111111111111111111111111111111111111"
+        rocketmqrust.com/release-nonce: "local-validation"
+        rocketmqrust.com/release-config-digest: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        rocketmqrust.com/release-secret-version: "local-reference-1"
+        rocketmqrust.com/storage-generation: "1"
       labels:
         app.kubernetes.io/name: rocketmq-broker
         app.kubernetes.io/instance: rocketmq
         app.kubernetes.io/part-of: rocketmq-rust
         app.kubernetes.io/managed-by: Helm
         app.kubernetes.io/version: "0.1.0"
-        rocketmq.apache.org/service: broker
-        rocketmq.apache.org/architecture-milestone: P0-05
+        rocketmqrust.com/service: broker
+        rocketmqrust.com/architecture-milestone: P0-05
     spec:
       serviceAccountName: rocketmq-runtime
       automountServiceAccountToken: false
@@ -1829,7 +1829,7 @@ spec:
                 matchLabels:
                   app.kubernetes.io/name: rocketmq-broker
                   app.kubernetes.io/instance: rocketmq
-                  rocketmq.apache.org/service: broker
+                  rocketmqrust.com/service: broker
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: kubernetes.io/hostname
@@ -1838,7 +1838,7 @@ spec:
             matchLabels:
               app.kubernetes.io/name: rocketmq-broker
               app.kubernetes.io/instance: rocketmq
-              rocketmq.apache.org/service: broker
+              rocketmqrust.com/service: broker
       containers:
         - name: broker
           image: "rocketmq-rust/broker:local"
@@ -1959,8 +1959,8 @@ spec:
           app.kubernetes.io/part-of: rocketmq-rust
           app.kubernetes.io/managed-by: Helm
           app.kubernetes.io/version: "0.1.0"
-          rocketmq.apache.org/service: broker
-          rocketmq.apache.org/architecture-milestone: P0-05
+          rocketmqrust.com/service: broker
+          rocketmqrust.com/architecture-milestone: P0-05
       spec:
         accessModes: [ReadWriteOnce]
         storageClassName: "rocketmq-retain"
@@ -1980,8 +1980,8 @@ metadata:
     app.kubernetes.io/part-of: rocketmq-rust
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
-    rocketmq.apache.org/service: namesrv
-    rocketmq.apache.org/architecture-milestone: P0-05
+    rocketmqrust.com/service: namesrv
+    rocketmqrust.com/architecture-milestone: P0-05
 spec:
   serviceName: rocketmq-namesrv-headless
   replicas: 3
@@ -1995,23 +1995,23 @@ spec:
     matchLabels:
       app.kubernetes.io/name: rocketmq-namesrv
       app.kubernetes.io/instance: rocketmq
-      rocketmq.apache.org/service: namesrv
+      rocketmqrust.com/service: namesrv
   template:
     metadata:
       annotations:
-        rocketmq.apache.org/release-commit: "1111111111111111111111111111111111111111"
-        rocketmq.apache.org/release-nonce: "local-validation"
-        rocketmq.apache.org/release-config-digest: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
-        rocketmq.apache.org/release-secret-version: "local-reference-1"
-        rocketmq.apache.org/storage-generation: "1"
+        rocketmqrust.com/release-commit: "1111111111111111111111111111111111111111"
+        rocketmqrust.com/release-nonce: "local-validation"
+        rocketmqrust.com/release-config-digest: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        rocketmqrust.com/release-secret-version: "local-reference-1"
+        rocketmqrust.com/storage-generation: "1"
       labels:
         app.kubernetes.io/name: rocketmq-namesrv
         app.kubernetes.io/instance: rocketmq
         app.kubernetes.io/part-of: rocketmq-rust
         app.kubernetes.io/managed-by: Helm
         app.kubernetes.io/version: "0.1.0"
-        rocketmq.apache.org/service: namesrv
-        rocketmq.apache.org/architecture-milestone: P0-05
+        rocketmqrust.com/service: namesrv
+        rocketmqrust.com/architecture-milestone: P0-05
     spec:
       serviceAccountName: rocketmq-runtime
       automountServiceAccountToken: false
@@ -2033,7 +2033,7 @@ spec:
                 matchLabels:
                   app.kubernetes.io/name: rocketmq-namesrv
                   app.kubernetes.io/instance: rocketmq
-                  rocketmq.apache.org/service: namesrv
+                  rocketmqrust.com/service: namesrv
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: kubernetes.io/hostname
@@ -2042,7 +2042,7 @@ spec:
             matchLabels:
               app.kubernetes.io/name: rocketmq-namesrv
               app.kubernetes.io/instance: rocketmq
-              rocketmq.apache.org/service: namesrv
+              rocketmqrust.com/service: namesrv
       containers:
         - name: namesrv
           image: "rocketmq-rust/namesrv:local"
@@ -2145,8 +2145,8 @@ spec:
           app.kubernetes.io/part-of: rocketmq-rust
           app.kubernetes.io/managed-by: Helm
           app.kubernetes.io/version: "0.1.0"
-          rocketmq.apache.org/service: namesrv
-          rocketmq.apache.org/architecture-milestone: P0-05
+          rocketmqrust.com/service: namesrv
+          rocketmqrust.com/architecture-milestone: P0-05
       spec:
         accessModes: [ReadWriteOnce]
         storageClassName: "rocketmq-retain"
@@ -2166,8 +2166,8 @@ metadata:
     app.kubernetes.io/part-of: rocketmq-rust
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "0.1.0"
-    rocketmq.apache.org/service: controller
-    rocketmq.apache.org/architecture-milestone: P0-05
+    rocketmqrust.com/service: controller
+    rocketmqrust.com/architecture-milestone: P0-05
 spec:
   serviceName: rocketmq-controller-headless
   replicas: 3
@@ -2181,23 +2181,23 @@ spec:
     matchLabels:
       app.kubernetes.io/name: rocketmq-controller
       app.kubernetes.io/instance: rocketmq
-      rocketmq.apache.org/service: controller
+      rocketmqrust.com/service: controller
   template:
     metadata:
       annotations:
-        rocketmq.apache.org/release-commit: "1111111111111111111111111111111111111111"
-        rocketmq.apache.org/release-nonce: "local-validation"
-        rocketmq.apache.org/release-config-digest: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
-        rocketmq.apache.org/release-secret-version: "local-reference-1"
-        rocketmq.apache.org/storage-generation: "1"
+        rocketmqrust.com/release-commit: "1111111111111111111111111111111111111111"
+        rocketmqrust.com/release-nonce: "local-validation"
+        rocketmqrust.com/release-config-digest: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        rocketmqrust.com/release-secret-version: "local-reference-1"
+        rocketmqrust.com/storage-generation: "1"
       labels:
         app.kubernetes.io/name: rocketmq-controller
         app.kubernetes.io/instance: rocketmq
         app.kubernetes.io/part-of: rocketmq-rust
         app.kubernetes.io/managed-by: Helm
         app.kubernetes.io/version: "0.1.0"
-        rocketmq.apache.org/service: controller
-        rocketmq.apache.org/architecture-milestone: P0-05
+        rocketmqrust.com/service: controller
+        rocketmqrust.com/architecture-milestone: P0-05
     spec:
       serviceAccountName: rocketmq-runtime
       automountServiceAccountToken: false
@@ -2219,7 +2219,7 @@ spec:
                 matchLabels:
                   app.kubernetes.io/name: rocketmq-controller
                   app.kubernetes.io/instance: rocketmq
-                  rocketmq.apache.org/service: controller
+                  rocketmqrust.com/service: controller
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: kubernetes.io/hostname
@@ -2228,7 +2228,7 @@ spec:
             matchLabels:
               app.kubernetes.io/name: rocketmq-controller
               app.kubernetes.io/instance: rocketmq
-              rocketmq.apache.org/service: controller
+              rocketmqrust.com/service: controller
         - maxSkew: 1
           topologyKey: topology.kubernetes.io/zone
           whenUnsatisfiable: ScheduleAnyway
@@ -2236,7 +2236,7 @@ spec:
             matchLabels:
               app.kubernetes.io/name: rocketmq-controller
               app.kubernetes.io/instance: rocketmq
-              rocketmq.apache.org/service: controller
+              rocketmqrust.com/service: controller
       containers:
         - name: controller
           image: "rocketmq-rust/controller:local"
@@ -2358,8 +2358,8 @@ spec:
           app.kubernetes.io/part-of: rocketmq-rust
           app.kubernetes.io/managed-by: Helm
           app.kubernetes.io/version: "0.1.0"
-          rocketmq.apache.org/service: controller
-          rocketmq.apache.org/architecture-milestone: P0-05
+          rocketmqrust.com/service: controller
+          rocketmqrust.com/architecture-milestone: P0-05
       spec:
         accessModes: [ReadWriteOnce]
         storageClassName: "rocketmq-retain"

@@ -117,7 +117,7 @@ impl KubernetesResource {
     fn query_scope(self, cluster: &str, namespace: &str) -> (&'static str, String) {
         match self {
             Self::Events | Self::ChangeTimeline => ("fieldSelector", format!("involvedObject.namespace={namespace}")),
-            _ => ("labelSelector", format!("rocketmq.apache.org/cluster={cluster}")),
+            _ => ("labelSelector", format!("rocketmqrust.com/cluster={cluster}")),
         }
     }
 }
@@ -168,7 +168,7 @@ impl KubernetesSource {
             .client
             .as_ref()
             .ok_or_else(|| ConnectorError::source("Kubernetes source is unavailable"))?;
-        require_label(&config.label_allowlist, "rocketmq.apache.org/cluster")?;
+        require_label(&config.label_allowlist, "rocketmqrust.com/cluster")?;
         validate_identifier(cluster, "cluster")?;
         let resource = KubernetesResource::parse(resource)?;
         let kind = resource.wire_kind();
@@ -480,7 +480,7 @@ mod tests {
         );
         assert_eq!(
             KubernetesResource::Deployments.query_scope("cluster-a", "rocketmq"),
-            ("labelSelector", "rocketmq.apache.org/cluster=cluster-a".to_owned())
+            ("labelSelector", "rocketmqrust.com/cluster=cluster-a".to_owned())
         );
     }
 
@@ -531,7 +531,7 @@ mod tests {
             ),
             ca_pem: Vec::new(),
             request_timeout: Duration::from_secs(5),
-            label_allowlist: BTreeSet::from(["rocketmq.apache.org/cluster".to_owned()]),
+            label_allowlist: BTreeSet::from(["rocketmqrust.com/cluster".to_owned()]),
         };
         let source = KubernetesSource::new(Some(config), b"test-scope").expect("Kubernetes source");
         let runtime = RuntimeContext::from_current("kubernetes-token-rotation-test");
@@ -582,7 +582,7 @@ mod tests {
                     "name": "broker-0",
                     "namespace": "rocketmq",
                     "labels": {
-                        "rocketmq.apache.org/cluster": "local",
+                        "rocketmqrust.com/cluster": "local",
                         "secret-label": "drop"
                     }
                 },
@@ -594,7 +594,7 @@ mod tests {
             &raw,
             KubernetesResource::Pods,
             10,
-            &BTreeSet::from(["rocketmq.apache.org/cluster".to_owned()]),
+            &BTreeSet::from(["rocketmqrust.com/cluster".to_owned()]),
             b"test-scope",
         );
         assert!(!truncated);
@@ -612,8 +612,8 @@ mod tests {
                     "name": "broker-0",
                     "namespace": "rocketmq",
                     "labels": {
-                        "rocketmq.apache.org/cluster": "local",
-                        "rocketmq.apache.org/service": "broker"
+                        "rocketmqrust.com/cluster": "local",
+                        "rocketmqrust.com/service": "broker"
                     }
                 },
                 "spec": {
@@ -632,8 +632,8 @@ mod tests {
             KubernetesResource::Pods,
             10,
             &BTreeSet::from([
-                "rocketmq.apache.org/cluster".to_owned(),
-                "rocketmq.apache.org/service".to_owned(),
+                "rocketmqrust.com/cluster".to_owned(),
+                "rocketmqrust.com/service".to_owned(),
             ]),
             b"test-scope",
         );
@@ -657,13 +657,13 @@ mod tests {
                 "metadata": {
                     "name": "rocketmq-broker",
                     "namespace": "rocketmq",
-                    "labels": {"rocketmq.apache.org/service": "broker"}
+                    "labels": {"rocketmqrust.com/service": "broker"}
                 },
                 "spec": {
                     "minAvailable": 2,
                     "selector": {
                         "matchLabels": {
-                            "rocketmq.apache.org/service": "broker",
+                            "rocketmqrust.com/service": "broker",
                             "private.example/tenant": "drop"
                         }
                     }
@@ -675,14 +675,11 @@ mod tests {
             &raw,
             KubernetesResource::PodDisruptionBudgets,
             10,
-            &BTreeSet::from(["rocketmq.apache.org/service".to_owned()]),
+            &BTreeSet::from(["rocketmqrust.com/service".to_owned()]),
             b"test-scope",
         );
         assert!(!truncated);
-        assert_eq!(
-            items[0]["selector_match_labels"]["rocketmq.apache.org/service"],
-            "broker"
-        );
+        assert_eq!(items[0]["selector_match_labels"]["rocketmqrust.com/service"], "broker");
         assert!(
             items[0]["selector_match_labels"]
                 .get("private.example/tenant")

@@ -188,9 +188,9 @@ class ProductionReleaseStateTests(unittest.TestCase):
             self.assertIn(field, values_schema)
             self.assertIn(field, helpers)
         for annotation in (
-            "rocketmq.apache.org/release-config-digest",
-            "rocketmq.apache.org/release-secret-version",
-            "rocketmq.apache.org/storage-generation",
+            "rocketmqrust.com/release-config-digest",
+            "rocketmqrust.com/release-secret-version",
+            "rocketmqrust.com/storage-generation",
         ):
             self.assertIn(annotation, helpers)
             self.assertEqual(

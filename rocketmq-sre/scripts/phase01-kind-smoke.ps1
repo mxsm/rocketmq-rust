@@ -52,7 +52,7 @@ function Assert-StaticContract {
     $dockerfileText = Get-Content -Raw -LiteralPath $dockerfile
     foreach ($contract in @(
         @{ Text = $manifest; Value = 'automountServiceAccountToken: false' }
-        @{ Text = $manifest; Value = 'rocketmq.apache.org/sre-probe: "true"' }
+        @{ Text = $manifest; Value = 'rocketmqrust.com/sre-probe: "true"' }
         @{ Text = $manifest; Value = 'rocketmq-rust/fault-driver:local' }
         @{ Text = $manifest; Value = 'rocketmq-rust/sre-probe:phase00-local' }
         @{ Text = $manifest; Value = 'ROCKETMQ_SRE_PROBE_MAX_MESSAGES, value: "10"' }

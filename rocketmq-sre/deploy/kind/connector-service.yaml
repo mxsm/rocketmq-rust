@@ -6,7 +6,7 @@ metadata:
 spec:
   selector:
     app.kubernetes.io/instance: rocketmq
-    rocketmq.apache.org/service: mcp
+    rocketmqrust.com/service: mcp
   ports:
     - name: connector-http
       port: 8091

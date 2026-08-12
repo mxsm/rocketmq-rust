@@ -9,7 +9,7 @@ metadata:
   labels:
     app.kubernetes.io/name: rocketmq-sre-phase01-live-probe
     app.kubernetes.io/part-of: rocketmq-sre
-    rocketmq.apache.org/sre-probe: "true"
+    rocketmqrust.com/sre-probe: "true"
 spec:
   backoffLimit: 0
   ttlSecondsAfterFinished: 600
@@ -19,7 +19,7 @@ spec:
       labels:
         app.kubernetes.io/name: rocketmq-sre-phase01-live-probe
         app.kubernetes.io/part-of: rocketmq-sre
-        rocketmq.apache.org/sre-probe: "true"
+        rocketmqrust.com/sre-probe: "true"
     spec:
       restartPolicy: Never
       automountServiceAccountToken: false

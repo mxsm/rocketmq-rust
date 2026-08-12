@@ -257,7 +257,7 @@ class FaultMatrixGuardTests(unittest.TestCase):
     def test_runner_that_drops_ready_proxy_wait_is_rejected(self) -> None:
         runner = self.root / "scripts" / "kind-architecture-refactor-e2e.ps1"
         source = runner.read_text(encoding="utf-8")
-        marker = "Wait-ReadyWorkerPod -Selector 'rocketmq.apache.org/service=proxy'"
+        marker = "Wait-ReadyWorkerPod -Selector 'rocketmqrust.com/service=proxy'"
         self.assertIn(marker, source)
         runner.write_text(source.replace(marker, "Get-UncheckedProxyPod"), encoding="utf-8")
         result = self.run_guard("--policy-only", expect_success=False)
@@ -278,8 +278,8 @@ class FaultMatrixGuardTests(unittest.TestCase):
         runner = self.root / "scripts" / "kind-architecture-refactor-e2e.ps1"
         source = runner.read_text(encoding="utf-8")
         markers = (
-            "rocketmq.apache.org/simulated-disk-pressure",
-            "$pressureStatusDuring -match 'rocketmq.apache.org/simulated-disk-pressure'",
+            "rocketmqrust.com/simulated-disk-pressure",
+            "$pressureStatusDuring -match 'rocketmqrust.com/simulated-disk-pressure'",
             "$_.key -in $diskPressureTaintKeys",
             "$taintCleanup.ExitCode -eq 0 -or $taintCleanup.Output -match 'not found'",
             "$simulationTaintCleanup.ExitCode -eq 0 -or $simulationTaintCleanup.Output -match 'not found'",
@@ -296,7 +296,7 @@ class FaultMatrixGuardTests(unittest.TestCase):
         runner = self.root / "scripts" / "kind-architecture-refactor-e2e.ps1"
         source = runner.read_text(encoding="utf-8")
         markers = (
-            "rocketmq.apache.org/service=controller",
+            "rocketmqrust.com/service=controller",
             "app.kubernetes.io/part-of=rocketmq-rust",
             "$null -eq $_.metadata.deletionTimestamp",
             "$readyFinalPods = @(",

@@ -62,7 +62,7 @@ paths:
   topic_queue_broker_store_kubernetes:
     required: Topic -> Queue -> Broker -> Store -> Pod/Node/PVC
     no_inference: true
-    broker_pod_join_requires_label: rocketmq.apache.org/broker-name
+    broker_pod_join_requires_label: rocketmqrust.com/broker-name
   client_connection_broker:
     required: Producer/Consumer -> Connection -> Broker
     status: available_when_observed

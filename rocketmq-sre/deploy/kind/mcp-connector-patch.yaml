@@ -2,7 +2,7 @@ spec:
   template:
     metadata:
       labels:
-        rocketmq.apache.org/sre-connector: "true"
+        rocketmqrust.com/sre-connector: "true"
     spec:
       serviceAccountName: rocketmq-sre-connector
       automountServiceAccountToken: false

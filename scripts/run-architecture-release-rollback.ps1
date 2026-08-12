@@ -794,7 +794,7 @@ function Save-JournalRecord {
                 namespace = $Namespace
                 labels = [ordered]@{
                     "app.kubernetes.io/managed-by" = "rocketmq-release-rollback"
-                    "rocketmq.apache.org/persistent-journal" = "true"
+                    "rocketmqrust.com/persistent-journal" = "true"
                 }
             }
             immutable = $false
@@ -856,7 +856,7 @@ function Acquire-RollbackLease {
                 namespace = $Namespace
                 annotations = [ordered]@{
                     $fenceAnnotation = [string]$FencingToken
-                    "rocketmq.apache.org/operation-id" = $OperationId
+                    "rocketmqrust.com/operation-id" = $OperationId
                 }
             }
             spec = [ordered]@{
@@ -881,7 +881,7 @@ function Acquire-RollbackLease {
         throw "checkpoint fencing token $FencingToken is stale; current Lease token is $currentFence"
     }
     if ($FencingToken -eq $currentFence) {
-        $leaseOperation = [string]$lease.metadata.annotations."rocketmq.apache.org/operation-id"
+        $leaseOperation = [string]$lease.metadata.annotations."rocketmqrust.com/operation-id"
         if ($leaseOperation -ne $OperationId) {
             throw "equal fencing token belongs to a different rollback operation"
         }
@@ -897,7 +897,7 @@ function Acquire-RollbackLease {
         -Force
     $lease.metadata.annotations | Add-Member `
         -MemberType NoteProperty `
-        -Name "rocketmq.apache.org/operation-id" `
+        -Name "rocketmqrust.com/operation-id" `
         -Value $OperationId `
         -Force
     $lease.spec.holderIdentity = $HolderIdentity

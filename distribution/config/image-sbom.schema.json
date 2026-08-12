@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://rocketmq.apache.org/schemas/local-image-sbom-v1.json",
+  "$id": "https://rocketmqrust.com/schemas/local-image-sbom-v1.json",
   "title": "RocketMQ Rust local image CycloneDX SBOM subset",
   "type": "object",
   "additionalProperties": true,

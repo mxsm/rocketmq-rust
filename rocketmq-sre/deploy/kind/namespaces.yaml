@@ -3,7 +3,7 @@ kind: Namespace
 metadata:
   name: rocketmq-system
   labels:
-    rocketmq.apache.org/client-access: "true"
+    rocketmqrust.com/client-access: "true"
     app.kubernetes.io/part-of: rocketmq-rust
     pod-security.kubernetes.io/enforce: restricted
     pod-security.kubernetes.io/enforce-version: latest
@@ -15,7 +15,7 @@ kind: Namespace
 metadata:
   name: rocketmq-dashboard
   labels:
-    rocketmq.apache.org/client-access: "true"
+    rocketmqrust.com/client-access: "true"
     app.kubernetes.io/part-of: rocketmq-rust
     pod-security.kubernetes.io/enforce: restricted
     pod-security.kubernetes.io/enforce-version: latest
@@ -32,4 +32,4 @@ kind: Namespace
 metadata:
   name: observability
   labels:
-    rocketmq.apache.org/observability: "true"
+    rocketmqrust.com/observability: "true"

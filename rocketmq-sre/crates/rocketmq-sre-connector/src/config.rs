@@ -732,9 +732,9 @@ fn load_source_limits(
             "app.kubernetes.io/name",
             "app.kubernetes.io/instance",
             "app.kubernetes.io/component",
-            "rocketmq.apache.org/cluster",
-            "rocketmq.apache.org/service",
-            "rocketmq.apache.org/broker-name",
+            "rocketmqrust.com/cluster",
+            "rocketmqrust.com/service",
+            "rocketmqrust.com/broker-name",
         ]
         .join(",")
     });
@@ -1055,9 +1055,9 @@ pub(crate) fn test_source_limits(max_concurrency: usize, max_bytes: usize) -> So
             "app.kubernetes.io/name".to_owned(),
             "app.kubernetes.io/instance".to_owned(),
             "app.kubernetes.io/component".to_owned(),
-            "rocketmq.apache.org/cluster".to_owned(),
-            "rocketmq.apache.org/service".to_owned(),
-            "rocketmq.apache.org/broker-name".to_owned(),
+            "rocketmqrust.com/cluster".to_owned(),
+            "rocketmqrust.com/service".to_owned(),
+            "rocketmqrust.com/broker-name".to_owned(),
         ]),
     }
 }

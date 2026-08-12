@@ -8,8 +8,8 @@ metadata:
   labels:
 {{ include "rocketmq.labels" (dict "root" . "service" "maintenance") | indent 4 }}
   annotations:
-    rocketmq.apache.org/maintenance-policy-version: {{ .Values.maintenance.version | quote }}
-    rocketmq.apache.org/maintenance-policy-sha256: {{ .Values.maintenance.sha256 | quote }}
+    rocketmqrust.com/maintenance-policy-version: {{ .Values.maintenance.version | quote }}
+    rocketmqrust.com/maintenance-policy-sha256: {{ .Values.maintenance.sha256 | quote }}
 immutable: true
 data:
   {{ .Values.maintenance.policyKey }}: |

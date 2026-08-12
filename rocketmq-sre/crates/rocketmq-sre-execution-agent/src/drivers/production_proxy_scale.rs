@@ -34,9 +34,9 @@ use super::ProxyScaleRestore;
 use super::ProxyScaleState;
 use crate::ExecutionAgentError;
 
-const OPERATION_ANNOTATION: &str = "rocketmq.apache.org/sre-scale-operation";
-const EXECUTION_ANNOTATION: &str = "rocketmq.apache.org/sre-scale-execution";
-const PLAN_STEP_ANNOTATION: &str = "rocketmq.apache.org/sre-scale-plan-step";
+const OPERATION_ANNOTATION: &str = "rocketmqrust.com/sre-scale-operation";
+const EXECUTION_ANNOTATION: &str = "rocketmqrust.com/sre-scale-execution";
+const PLAN_STEP_ANNOTATION: &str = "rocketmqrust.com/sre-scale-plan-step";
 
 /// Production typed Kubernetes client for exactly one-replica Proxy scaling.
 #[derive(Clone)]

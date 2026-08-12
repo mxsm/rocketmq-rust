@@ -13,7 +13,7 @@
     "name": "rocketmq-release-rollback",
     "duration_seconds": 60,
     "renew_interval_seconds": 20,
-    "fencing_annotation": "rocketmq.apache.org/fencing-token"
+    "fencing_annotation": "rocketmqrust.com/fencing-token"
   },
   "journal": {
     "api_version": "v1",

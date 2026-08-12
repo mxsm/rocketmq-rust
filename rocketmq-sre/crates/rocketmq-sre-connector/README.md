@@ -59,14 +59,14 @@ metadata is supplementary and is never used to guess a RocketMQ identity.
 | Topic | MCP/Admin bounded topic list | `not_production_verified` |
 | Queue | MCP topic description or Admin topic route | `partial` or `not_production_verified`; queue IDs are materialized only from the observed RocketMQ route count |
 | Consumer | MCP/Admin consumer-group list and observed topic association | `partial` or `not_production_verified` |
-| NameServer, Controller, Proxy | Kubernetes Pod with the repository's `rocketmq.apache.org/service` label | `not_production_verified` |
+| NameServer, Controller, Proxy | Kubernetes Pod with the repository's `rocketmqrust.com/service` label | `not_production_verified` |
 | Pod, Node, PVC, PDB | Kubernetes core/policy read APIs | `not_production_verified` |
 | Producer, per-client Connection | Read-only Admin broker producer table and consumer-connection query | `partial` or `not_production_verified`; raw client IDs and addresses are replaced with a tenant/cluster-scoped keyed pseudonym |
 
 `Topic -> Queue -> Broker -> Store` is formed from RocketMQ route/runtime
 observations. It is extended to `Pod -> Node/PVC` only when Kubernetes supplies
 the matching metadata. A Broker Pod joins the RocketMQ logical Broker only when
-it has an explicit `rocketmq.apache.org/broker-name` label; otherwise the Pod
+it has an explicit `rocketmqrust.com/broker-name` label; otherwise the Pod
 component remains a partial, Pod-scoped asset. The
 `Producer/Consumer -> Connection -> Broker` path is formed only from a
 successful read-only Admin observation that names both the client and Broker.
@@ -101,7 +101,7 @@ Optional evidence sources are enabled with:
   `ROCKETMQ_SRE_KUBERNETES_CA_PATH`, and a fixed namespace for Kubernetes
   Pod/Event/Node/PVC/PDB metadata. The identity must have only `get`/`list`
   access to those resources. Every query includes the mandatory
-  `rocketmq.apache.org/cluster=<cluster>` selector.
+  `rocketmqrust.com/cluster=<cluster>` selector.
 
 The Kubernetes token path must be an absolute path inside its dedicated
 read-only projected-volume mount. The Connector retains that configured path
@@ -113,8 +113,8 @@ file no larger than 64 KiB. A static
 `ROCKETMQ_SRE_KUBERNETES_ALLOW_ENV_TOKEN=true` and the Kubernetes API endpoint
 is loopback; that mode is for explicit local development only.
 
-The default label allowlist includes `rocketmq.apache.org/cluster`,
-`rocketmq.apache.org/service`, `rocketmq.apache.org/broker-name`, and the
+The default label allowlist includes `rocketmqrust.com/cluster`,
+`rocketmqrust.com/service`, `rocketmqrust.com/broker-name`, and the
 standard `app.kubernetes.io/*` identity labels. Custom allowlists must retain
 the cluster label or Kubernetes collection fails closed.
 

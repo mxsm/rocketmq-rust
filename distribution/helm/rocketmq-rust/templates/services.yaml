@@ -76,7 +76,7 @@ metadata:
   namespace: {{ $root.Release.Namespace }}
   labels:
 {{ include "rocketmq.labels" (dict "root" $root "service" "controller") | indent 4 }}
-    rocketmq.apache.org/controller-ordinal: {{ $ordinal | quote }}
+    rocketmqrust.com/controller-ordinal: {{ $ordinal | quote }}
 spec:
   type: ClusterIP
   clusterIP: {{ index $root.Values.services.controller.peerServiceClusterIPs $ordinal }}
@@ -125,7 +125,7 @@ metadata:
   namespace: {{ $root.Release.Namespace }}
   labels:
 {{ include "rocketmq.labels" (dict "root" $root "service" $service) | indent 4 }}
-    rocketmq.apache.org/metrics: "true"
+    rocketmqrust.com/metrics: "true"
 spec:
   type: ClusterIP
   selector:

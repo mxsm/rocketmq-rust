@@ -64,7 +64,7 @@ def create_checkout(path: Path, marker: str) -> str:
     path.mkdir()
     git("init", "--quiet", cwd=path)
     git("config", "user.name", "RocketMQ Rust Test", cwd=path)
-    git("config", "user.email", "test@rocketmq.apache.org", cwd=path)
+    git("config", "user.email", "test@rocketmqrust.com", cwd=path)
     (path / "marker.txt").write_text(marker + "\n", encoding="utf-8")
     git("add", "marker.txt", cwd=path)
     git("commit", "--quiet", "-m", marker, cwd=path)

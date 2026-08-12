@@ -307,7 +307,7 @@ async fn wait_for_fixture_pods(
     deployment_name: &str,
     replaced_uid: Option<&str>,
 ) -> Result<Vec<Pod>, ExecutionAgentError> {
-    let selector = format!("rocketmq.apache.org/sre-restart-fixture={deployment_name}");
+    let selector = format!("rocketmqrust.com/sre-restart-fixture={deployment_name}");
     for _ in 0..120 {
         let ready = pods
             .list(&ListParams::default().labels(&selector))
@@ -327,7 +327,7 @@ async fn wait_for_fixture_pods(
 }
 
 fn fixture_deployment(name: &str) -> Deployment {
-    let labels = BTreeMap::from([("rocketmq.apache.org/sre-restart-fixture".to_owned(), name.to_owned())]);
+    let labels = BTreeMap::from([("rocketmqrust.com/sre-restart-fixture".to_owned(), name.to_owned())]);
     Deployment {
         metadata: ObjectMeta {
             name: Some(name.to_owned()),
