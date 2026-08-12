@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rocketmq.apache.org/schemas/message-path-performance-comparison-v2.json",
+  "title": "RocketMQ Rust message-path performance comparison",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact_kind",
+    "generated_at",
+    "status",
+    "release_comparison_qualified",
+    "policy_sha256",
+    "durability_contract",
+    "hardware_id",
+    "target",
+    "baseline",
+    "candidate",
+    "failures",
+    "comparisons"
+  ],
+  "properties": {
+    "schema_version": { "const": 2 },
+    "artifact_kind": { "const": "rocketmq_message_path_comparison" },
+    "generated_at": { "type": "string", "minLength": 1 },
+    "status": { "enum": ["pass", "fail"] },
+    "release_comparison_qualified": { "type": "boolean" },
+    "policy_sha256": { "$ref": "#/$defs/digest" },
+    "durability_contract": { "type": "string", "minLength": 1 },
+    "hardware_id": { "$ref": "#/$defs/digest" },
+    "target": { "type": "object" },
+    "baseline": { "$ref": "#/$defs/binding" },
+    "candidate": { "$ref": "#/$defs/binding" },
+    "failures": { "type": "array", "items": { "type": "string" } },
+    "comparisons": { "type": "array", "items": { "type": "object" } }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "report_sha256",
+        "commit",
+        "artifact_manifest_sha256",
+        "deployment_digest",
+        "target_id",
+        "cluster_uid",
+        "effective_config_sha256"
+      ],
+      "properties": {
+        "report_sha256": { "$ref": "#/$defs/digest" },
+        "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "artifact_manifest_sha256": { "$ref": "#/$defs/digest" },
+        "deployment_digest": { "$ref": "#/$defs/digest" },
+        "target_id": { "type": "string", "minLength": 1 },
+        "cluster_uid": { "type": "string", "minLength": 1 },
+        "effective_config_sha256": { "$ref": "#/$defs/digest" }
+      }
+    }
+  }
+}

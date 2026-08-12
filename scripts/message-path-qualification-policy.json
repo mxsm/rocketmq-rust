@@ -53,6 +53,7 @@
       "required_external_evidence": [
         "performance_comparison",
         "fault_matrix",
+        "rpo",
         "soak"
       ],
       "minimum_soak_seconds": 21600,
