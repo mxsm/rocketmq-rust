@@ -18,6 +18,8 @@ use std::env;
 use std::path::PathBuf;
 
 use rocketmq_error::RocketMQError;
+use rocketmq_model::version::CURRENT_VERSION;
+use rocketmq_protocol::protocol::remoting_command_facade::initialize_remoting_defaults;
 #[cfg(test)]
 use rocketmq_proxy::GrpcConfig;
 use rocketmq_proxy::ProxyConfig;
@@ -90,6 +92,11 @@ fn proxy_runtime_error(action: &'static str) -> impl FnOnce(rocketmq_runtime::Ru
 }
 
 async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) -> ProxyResult<()> {
+    initialize_remoting_defaults(CURRENT_VERSION as i32).map_err(|error| RocketMQError::ConfigParseFailed {
+        key: "remoting.command.defaults",
+        reason: error.to_string(),
+    })?;
+
     let args = Args::parse()?;
     let mut config = match args.config_file {
         Some(ref path) => ProxyConfig::load_from_file(path)?,

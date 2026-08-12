@@ -2559,16 +2559,6 @@ impl MQClientAPIImpl {
         ))
     }
 
-    pub fn init_remoting_version() {
-        if let Err(error) = remoting_command_facade::initialize_remoting_version(CURRENT_VERSION as i32) {
-            warn!(
-                initialized = error.initialized(),
-                requested = error.requested(),
-                "client retained the remoting version selected earlier in process bootstrap"
-            );
-        }
-    }
-
     pub(crate) async fn get_all_topic_config(
         &self,
         addr: &CheetahString,

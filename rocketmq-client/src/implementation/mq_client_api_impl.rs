@@ -70,7 +70,6 @@ use rocketmq_model::common::message::message_queue_assignment::MessageQueueAssig
 use rocketmq_model::common::message::MessageConst;
 use rocketmq_model::common::message::MessageTrait;
 use rocketmq_model::common::mix_all;
-use rocketmq_model::common::mq_version::CURRENT_VERSION;
 use rocketmq_model::common::sys_flag::pull_sys_flag::PullSysFlag;
 use rocketmq_model::common::topic::TopicValidator;
 use rocketmq_model::utils::serde_json_utils::SerdeJsonUtils;
@@ -283,7 +282,6 @@ use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_protocol::protocol::remoting_command_facade;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::static_topic::topic_config_and_queue_mapping::TopicConfigAndQueueMapping;
 #[cfg(feature = "admin-mutation")]

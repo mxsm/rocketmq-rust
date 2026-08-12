@@ -29,8 +29,6 @@ impl MQClientAPIImpl {
         service_context: ChildServiceContext,
         telemetry_handle: rocketmq_observability::TelemetryHandle,
     ) -> Self {
-        Self::init_remoting_version();
-
         let mut remoting_config = (*tokio_client_config).clone();
         remoting_config.tls = client_config.tls_config.clone();
         remoting_config.tls.enable = client_config.use_tls;
