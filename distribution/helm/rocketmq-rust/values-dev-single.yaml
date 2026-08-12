@@ -29,6 +29,9 @@ services:
       minAvailable: 1
   namesrv:
     replicas: 1
+    discovery:
+      enabled: false
+      mode: dns
     image:
       repository: rocketmq-rust/namesrv
       tag: local

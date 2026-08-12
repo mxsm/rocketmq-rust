@@ -580,6 +580,7 @@
       "additionalProperties": false,
       "required": [
         "replicas",
+        "discovery",
         "image",
         "persistence",
         "pdb",
@@ -590,6 +591,25 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 9
+        },
+        "discovery": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "mode"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "dns"
+              ]
+            }
+          }
         },
         "image": {
           "$ref": "#/definitions/image"

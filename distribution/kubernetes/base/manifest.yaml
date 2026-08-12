@@ -488,7 +488,7 @@ data:
     brokerIp1 = "rocketmq-broker-0.rocketmq-broker-headless.rocketmq.svc.cluster.local"
     brokerIp2 = "rocketmq-broker-0.rocketmq-broker-headless.rocketmq.svc.cluster.local"
     storePathRootDir = "/var/lib/rocketmq/store"
-    namesrvAddr = "rocketmq-namesrv-0.rocketmq-namesrv-headless.rocketmq.svc.cluster.local:9876;rocketmq-namesrv-1.rocketmq-namesrv-headless.rocketmq.svc.cluster.local:9876;rocketmq-namesrv-2.rocketmq-namesrv-headless.rocketmq.svc.cluster.local:9876"
+    namesrvAddr = "rocketmq-namesrv-discovery.rocketmq.svc.cluster.local:9876"
     autoCreateTopicEnable = false
     enableControllerMode = true
     controllerAddr = "10.96.0.201:60109;10.96.0.202:60109;10.96.0.203:60109"
@@ -519,7 +519,7 @@ data:
     brokerIp1 = "rocketmq-broker-1.rocketmq-broker-headless.rocketmq.svc.cluster.local"
     brokerIp2 = "rocketmq-broker-1.rocketmq-broker-headless.rocketmq.svc.cluster.local"
     storePathRootDir = "/var/lib/rocketmq/store"
-    namesrvAddr = "rocketmq-namesrv-0.rocketmq-namesrv-headless.rocketmq.svc.cluster.local:9876;rocketmq-namesrv-1.rocketmq-namesrv-headless.rocketmq.svc.cluster.local:9876;rocketmq-namesrv-2.rocketmq-namesrv-headless.rocketmq.svc.cluster.local:9876"
+    namesrvAddr = "rocketmq-namesrv-discovery.rocketmq.svc.cluster.local:9876"
     autoCreateTopicEnable = false
     enableControllerMode = true
     controllerAddr = "10.96.0.201:60109;10.96.0.202:60109;10.96.0.203:60109"
@@ -550,7 +550,7 @@ data:
     brokerIp1 = "rocketmq-broker-2.rocketmq-broker-headless.rocketmq.svc.cluster.local"
     brokerIp2 = "rocketmq-broker-2.rocketmq-broker-headless.rocketmq.svc.cluster.local"
     storePathRootDir = "/var/lib/rocketmq/store"
-    namesrvAddr = "rocketmq-namesrv-0.rocketmq-namesrv-headless.rocketmq.svc.cluster.local:9876;rocketmq-namesrv-1.rocketmq-namesrv-headless.rocketmq.svc.cluster.local:9876;rocketmq-namesrv-2.rocketmq-namesrv-headless.rocketmq.svc.cluster.local:9876"
+    namesrvAddr = "rocketmq-namesrv-discovery.rocketmq.svc.cluster.local:9876"
     autoCreateTopicEnable = false
     enableControllerMode = true
     controllerAddr = "10.96.0.201:60109;10.96.0.202:60109;10.96.0.203:60109"
@@ -839,7 +839,7 @@ data:
     listenAddr = "0.0.0.0:8080"
 
     [cluster]
-    namesrvAddr = "rocketmq-namesrv-0.rocketmq-namesrv-headless.rocketmq.svc.cluster.local:9876;rocketmq-namesrv-1.rocketmq-namesrv-headless.rocketmq.svc.cluster.local:9876;rocketmq-namesrv-2.rocketmq-namesrv-headless.rocketmq.svc.cluster.local:9876"
+    namesrvAddr = "rocketmq-namesrv-discovery.rocketmq.svc.cluster.local:9876"
 
     [auth]
     clusterName = "RocketmqRust"
@@ -901,7 +901,7 @@ data:
 
     [[clusters]]
     name = "rocketmq-rust"
-    namesrv_addr = "rocketmq-namesrv-0.rocketmq-namesrv-headless.rocketmq.svc.cluster.local:9876;rocketmq-namesrv-1.rocketmq-namesrv-headless.rocketmq.svc.cluster.local:9876;rocketmq-namesrv-2.rocketmq-namesrv-headless.rocketmq.svc.cluster.local:9876"
+    namesrv_addr = "rocketmq-namesrv-discovery.rocketmq.svc.cluster.local:9876"
     default = true
 
     [security]
@@ -1149,6 +1149,33 @@ spec:
     rocketmq.apache.org/service: namesrv
   ports:
     - name: tcp-9876
+      port: 9876
+      targetPort: 9876
+      protocol: TCP
+---
+# Source: rocketmq-rust/templates/services.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: rocketmq-namesrv-discovery
+  namespace: rocketmq
+  labels:
+    app.kubernetes.io/name: rocketmq-namesrv
+    app.kubernetes.io/instance: rocketmq
+    app.kubernetes.io/part-of: rocketmq-rust
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    rocketmq.apache.org/service: namesrv
+    rocketmq.apache.org/architecture-milestone: P0-05
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: false
+  selector:
+    app.kubernetes.io/name: rocketmq-namesrv
+    app.kubernetes.io/instance: rocketmq
+    rocketmq.apache.org/service: namesrv
+  ports:
+    - name: remoting
       port: 9876
       targetPort: 9876
       protocol: TCP
