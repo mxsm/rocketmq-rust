@@ -401,7 +401,7 @@ mod tests {
             index_last_update_phyoffset: 987654321,
         };
 
-        let mut command = RemotingCommand::create_response_command_with_header(header);
+        let mut command = RemotingCommand::create_success_response_command_with_header(header);
         command.make_custom_header_to_net();
 
         let ext_fields = command.ext_fields().unwrap();
@@ -426,7 +426,7 @@ mod tests {
             index_last_update_phyoffset: 22222,
         };
 
-        let command = RemotingCommand::create_response_command_with_header(header);
+        let command = RemotingCommand::create_success_response_command_with_header(header);
 
         let extracted_header = command.read_custom_header_ref::<QueryMessageResponseHeader>().unwrap();
 
@@ -441,7 +441,7 @@ mod tests {
             index_last_update_phyoffset: 200,
         };
 
-        let mut command = RemotingCommand::create_response_command_with_header(header);
+        let mut command = RemotingCommand::create_success_response_command_with_header(header);
 
         if let Some(mut_header) = command.read_custom_header_mut::<QueryMessageResponseHeader>() {
             mut_header.index_last_update_timestamp = 300;
@@ -456,7 +456,7 @@ mod tests {
     #[test]
     fn test_default_usage_in_response_creation() {
         let header = QueryMessageResponseHeader::default();
-        let mut command = RemotingCommand::create_response_command_with_header(header);
+        let mut command = RemotingCommand::create_success_response_command_with_header(header);
 
         let extracted_header = command.read_custom_header_ref::<QueryMessageResponseHeader>().unwrap();
         assert_eq!(extracted_header.index_last_update_timestamp, 0);

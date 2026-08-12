@@ -511,9 +511,8 @@ mod tests {
 
     #[test]
     fn generation_is_bound_to_the_same_allowlisted_response_body() {
-        let mut response = RemotingCommand::create_response_command()
-            .set_code(ResponseCode::Success)
-            .set_command_custom_header(GetBrokerConfigResponseHeader {
+        let mut response =
+            RemotingCommand::create_success_response_command_with_header(GetBrokerConfigResponseHeader {
                 version: Some("{\"stateVersion\":0,\"timestamp\":6,\"counter\":7}".into()),
                 config_generation: 7,
             })
@@ -533,9 +532,7 @@ mod tests {
 
     #[test]
     fn legacy_response_remains_readable_without_claiming_a_generation() {
-        let response = RemotingCommand::create_response_command()
-            .set_code(ResponseCode::Success)
-            .set_body("sendMessageThreadPoolNums=32");
+        let response = RemotingCommand::create_success_response_command().set_body("sendMessageThreadPoolNums=32");
 
         let snapshot = broker_config_snapshot_from_response(&response).expect("legacy snapshot");
         assert_eq!(snapshot.generation, None);
@@ -545,9 +542,10 @@ mod tests {
     #[test]
     fn topic_config_response_binds_body_to_version() {
         let config = TopicConfig::with_queues("orders", 4, 6);
-        let mut response = RemotingCommand::create_response_command()
-            .set_code(ResponseCode::Success)
-            .set_command_custom_header(UpdateTopicConfigCasResponseHeader { topic_version: 9 })
+        let mut response =
+            RemotingCommand::create_success_response_command_with_header(UpdateTopicConfigCasResponseHeader {
+                topic_version: 9,
+            })
             .set_body(
                 serde_json::to_vec(&TopicConfigAndQueueMapping::new(config.clone(), None))
                     .expect("Topic response body"),
@@ -565,12 +563,12 @@ mod tests {
         let config = rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig::new(
             "orders-consumer".into(),
         );
-        let mut response = RemotingCommand::create_response_command()
-            .set_code(ResponseCode::Success)
-            .set_command_custom_header(UpdateSubscriptionGroupConfigCasResponseHeader {
+        let mut response = RemotingCommand::create_success_response_command_with_header(
+            UpdateSubscriptionGroupConfigCasResponseHeader {
                 subscription_group_version: 9,
-            })
-            .set_body(config.encode().expect("Subscription Group response body"));
+            },
+        )
+        .set_body(config.encode().expect("Subscription Group response body"));
         response.make_custom_header_to_net();
 
         let snapshot =
@@ -582,9 +580,10 @@ mod tests {
     #[cfg(feature = "admin-mutation")]
     #[test]
     fn topic_config_patch_response_distinguishes_commit_and_conflict() {
-        let mut applied = RemotingCommand::create_response_command()
-            .set_code(ResponseCode::Success)
-            .set_command_custom_header(UpdateTopicConfigCasResponseHeader { topic_version: 10 });
+        let mut applied =
+            RemotingCommand::create_success_response_command_with_header(UpdateTopicConfigCasResponseHeader {
+                topic_version: 10,
+            });
         applied.make_custom_header_to_net();
         assert_eq!(
             topic_config_patch_outcome_from_response(&applied, 9).expect("applied outcome"),
@@ -594,9 +593,10 @@ mod tests {
             }
         );
 
-        let mut conflict = RemotingCommand::create_response_command()
-            .set_code(ResponseCode::InvalidParameter)
-            .set_command_custom_header(UpdateTopicConfigCasResponseHeader { topic_version: 11 });
+        let mut conflict = RemotingCommand::create_response_command_with_code_and_header(
+            ResponseCode::InvalidParameter,
+            UpdateTopicConfigCasResponseHeader { topic_version: 11 },
+        );
         conflict.make_custom_header_to_net();
         assert_eq!(
             topic_config_patch_outcome_from_response(&conflict, 9).expect("conflict outcome"),
@@ -610,11 +610,11 @@ mod tests {
     #[cfg(feature = "admin-mutation")]
     #[test]
     fn subscription_group_patch_response_distinguishes_commit_and_conflict() {
-        let mut applied = RemotingCommand::create_response_command()
-            .set_code(ResponseCode::Success)
-            .set_command_custom_header(UpdateSubscriptionGroupConfigCasResponseHeader {
+        let mut applied = RemotingCommand::create_success_response_command_with_header(
+            UpdateSubscriptionGroupConfigCasResponseHeader {
                 subscription_group_version: 10,
-            });
+            },
+        );
         applied.make_custom_header_to_net();
         assert_eq!(
             subscription_group_config_patch_outcome_from_response(&applied, 9).expect("applied outcome"),
@@ -624,11 +624,12 @@ mod tests {
             }
         );
 
-        let mut conflict = RemotingCommand::create_response_command()
-            .set_code(ResponseCode::InvalidParameter)
-            .set_command_custom_header(UpdateSubscriptionGroupConfigCasResponseHeader {
+        let mut conflict = RemotingCommand::create_response_command_with_code_and_header(
+            ResponseCode::InvalidParameter,
+            UpdateSubscriptionGroupConfigCasResponseHeader {
                 subscription_group_version: 11,
-            });
+            },
+        );
         conflict.make_custom_header_to_net();
         assert_eq!(
             subscription_group_config_patch_outcome_from_response(&conflict, 9).expect("conflict outcome"),

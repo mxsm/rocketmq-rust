@@ -206,7 +206,7 @@ impl ConnectionHandler for RoundTripHandler {
         Box::pin(async move {
             let mut connection = session.connection();
             connection
-                .send_command(RemotingCommand::create_response_command().set_opaque(request.opaque()))
+                .send_command(RemotingCommand::create_success_response_command().set_opaque(request.opaque()))
                 .await
                 .expect("benchmark response");
         })

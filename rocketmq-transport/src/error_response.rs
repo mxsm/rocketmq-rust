@@ -217,7 +217,7 @@ mod tests {
     #[test]
     fn apply_error_to_response_preserves_existing_response_shape() {
         let response = apply_error_to_response(
-            RemotingCommand::create_response_command().set_opaque(23),
+            RemotingCommand::create_success_response_command().set_opaque(23),
             &RocketMQError::illegal_argument("bad field"),
             "bad field",
         );

@@ -159,7 +159,7 @@ impl ClientRemotingProcessor {
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let receive_time = current_millis();
-        let response = RemotingCommand::create_response_command().set_opaque(request.opaque());
+        let response = RemotingCommand::create_java_default_error_response_command().set_opaque(request.opaque());
         let request_header = match request.decode_command_custom_header::<ReplyMessageRequestHeader>() {
             Ok(header) => header,
             Err(error) => {
@@ -240,7 +240,9 @@ impl ClientRemotingProcessor {
         msg.reconsume_times = request_header.reconsume_times.unwrap_or(0);
         debug!("Receive reply message: {:?}", msg);
         self.process_reply_message(msg).await;
-        Ok(Some(response))
+        Ok(Some(
+            RemotingCommand::create_success_response_command().set_opaque(request.opaque()),
+        ))
     }
 
     async fn process_reply_message(&self, reply_msg: MessageExt) {
@@ -346,7 +348,7 @@ impl ClientRemotingProcessor {
         &mut self,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let response = RemotingCommand::create_response_command().set_opaque(request.opaque());
+        let response = RemotingCommand::create_java_default_error_response_command().set_opaque(request.opaque());
         let request_header = match request.decode_command_custom_header::<GetConsumerStatusRequestHeader>() {
             Ok(header) => header,
             Err(error) => {
@@ -365,7 +367,11 @@ impl ClientRemotingProcessor {
             Some(message_queue_table) => {
                 let mut body = GetConsumerStatusBody::new();
                 body.message_queue_table = message_queue_table;
-                Ok(Some(response.set_code(ResponseCode::Success).set_body(body.encode())))
+                Ok(Some(
+                    RemotingCommand::create_success_response_command()
+                        .set_opaque(request.opaque())
+                        .set_body(body.encode()),
+                ))
             }
             None => {
                 debug!(
@@ -374,8 +380,8 @@ impl ClientRemotingProcessor {
                     request_header.group
                 );
                 Ok(Some(
-                    response
-                        .set_code(ResponseCode::Success)
+                    RemotingCommand::create_success_response_command()
+                        .set_opaque(request.opaque())
                         .set_body(GetConsumerStatusBody::new().encode()),
                 ))
             }
@@ -386,7 +392,7 @@ impl ClientRemotingProcessor {
         &mut self,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let response = RemotingCommand::create_response_command().set_opaque(request.opaque());
+        let response = RemotingCommand::create_java_default_error_response_command().set_opaque(request.opaque());
         let request_header = match request.decode_command_custom_header::<GetConsumerRunningInfoRequestHeader>() {
             Ok(header) => header,
             Err(error) => {
@@ -407,7 +413,11 @@ impl ClientRemotingProcessor {
                     consumer_running_info.jstack = Some(Self::capture_rust_jstack());
                 }
                 let body = consumer_running_info.encode_java_compatible()?;
-                Ok(Some(response.set_code(ResponseCode::Success).set_body(body)))
+                Ok(Some(
+                    RemotingCommand::create_success_response_command()
+                        .set_opaque(request.opaque())
+                        .set_body(body),
+                ))
             }
             None => Ok(Some(response.set_code(ResponseCode::SystemError).set_remark(format!(
                 "The Consumer Group <{}> not exist in this consumer",
@@ -483,7 +493,7 @@ impl ClientRemotingProcessor {
         _ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let response = RemotingCommand::create_response_command().set_opaque(request.opaque());
+        let response = RemotingCommand::create_java_default_error_response_command().set_opaque(request.opaque());
         let request_header = match request.decode_command_custom_header::<ConsumeMessageDirectlyResultRequestHeader>() {
             Ok(header) => header,
             Err(error) => {
@@ -528,7 +538,11 @@ impl ClientRemotingProcessor {
             .await;
         if let Some(result) = result {
             match result.encode() {
-                Ok(body) => Ok(Some(response.set_code(ResponseCode::Success).set_body(body))),
+                Ok(body) => Ok(Some(
+                    RemotingCommand::create_success_response_command()
+                        .set_opaque(request.opaque())
+                        .set_body(body),
+                )),
                 Err(error) => {
                     warn!(
                         "encode ConsumeMessageDirectly result failed from {}; group={}: {:?}",
@@ -858,6 +872,7 @@ mod tests {
             .expect("malformed consume-direct callback should return an error response");
 
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::SystemError);
+        assert_eq!(response.opaque(), request.opaque());
         assert!(response
             .remark()
             .is_some_and(|remark| remark.contains("decode ConsumeMessageDirectly request header failed")));
@@ -886,6 +901,7 @@ mod tests {
             .expect("missing-body consume-direct callback should return an error response");
 
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::SystemError);
+        assert_eq!(response.opaque(), request.opaque());
         assert!(response
             .remark()
             .is_some_and(|remark| remark.contains("request body is empty")));
@@ -965,6 +981,7 @@ mod tests {
             .expect("malformed reply callback should return an error response");
 
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::SystemError);
+        assert_eq!(response.opaque(), request.opaque());
         assert!(response
             .remark()
             .is_some_and(|remark| remark.contains("decode reply message request header failed")));
@@ -990,6 +1007,7 @@ mod tests {
             .expect("missing body reply callback should return an error response");
 
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::SystemError);
+        assert_eq!(response.opaque(), request.opaque());
         assert!(response
             .remark()
             .is_some_and(|remark| remark.contains("compressed reply message body is missing")));
@@ -1026,6 +1044,8 @@ mod tests {
             .expect("reply callback should return success response");
 
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        assert_eq!(response.opaque(), request.opaque());
+        assert!(response.remark().is_none());
         let response_msg = request_future
             .get_response_msg()
             .expect("reply future should receive response");
@@ -1070,6 +1090,8 @@ mod tests {
             .expect("reply callback should return success response");
 
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        assert_eq!(response.opaque(), request.opaque());
+        assert!(response.remark().is_none());
         assert!(request_future.get_response_msg().is_some());
         assert!(
             request_future_holder

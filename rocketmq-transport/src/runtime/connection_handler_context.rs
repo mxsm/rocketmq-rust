@@ -108,7 +108,7 @@ impl ConnectionHandlerContextWrapper {
     ///
     /// ```ignore
     /// async fn handle_request(ctx: &ConnectionHandlerContext, request: RemotingCommand) {
-    ///     let response = RemotingCommand::create_response_command()
+    ///     let response = RemotingCommand::create_success_response_command()
     ///         .set_opaque(request.opaque());
     ///     ctx.write(response).await;
     /// }
