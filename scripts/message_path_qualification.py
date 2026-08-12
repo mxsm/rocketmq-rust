@@ -41,7 +41,7 @@ DEFAULT_OUTPUT_ROOT = ROOT / "target" / "message-path-qualification"
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{2,127}$")
 TOPIC_RE = re.compile(r"^[A-Za-z0-9_%.-]{1,127}$")
 SCENARIOS = {"sync", "async", "batch", "lite-pull"}
-EXTERNAL_EVIDENCE = {"performance_comparison", "fault_matrix", "rpo", "soak"}
+EXTERNAL_EVIDENCE = {"performance_comparison", "fault_matrix", "rpo", "soak", "rollback"}
 GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
@@ -719,6 +719,7 @@ def validate_final_evidence(
         "fault_matrix": evidence_path(args.fault_evidence, "run.json"),
         "rpo": evidence_path(args.rpo_evidence, "ack-failover-run.json"),
         "soak": evidence_path(args.soak_report, "soak-report.json"),
+        "rollback": evidence_path(args.rollback_evidence, "rollback-evidence.json"),
     }
     documents = {key: load_json(path) for key, path in paths.items()}
     candidate = documents["candidate_measurement"]
@@ -726,6 +727,7 @@ def validate_final_evidence(
     fault = documents["fault_matrix"]
     rpo = documents["rpo"]
     soak = documents["soak"]
+    rollback = documents["rollback"]
     findings = validate_measurement_set(policy, candidate, "candidate", expected_role="candidate")
     subject = candidate.get("subject", {})
     target = candidate.get("target", {})
@@ -868,6 +870,88 @@ def validate_final_evidence(
             item.get("raw_artifact_sha256") not in inventory_digests for item in soak["series"]
         ):
             findings.append("soak resource series references a digest outside the artifact inventory")
+
+    if rollback.get("schema_version") != 1 or rollback.get("artifact_kind") != "rocketmq_message_path_rollback_evidence":
+        findings.append("rollback evidence contract is invalid")
+    if (
+        rollback.get("status") != "pass"
+        or rollback.get("rehearsal_qualified") is not True
+        or rollback.get("dynamic_execution") is not True
+        or rollback.get("fixture") is not False
+    ):
+        findings.append("rollback evidence must be a qualified dynamic non-fixture rehearsal")
+    for key, expected in (
+        ("candidate_commit", expected_commit),
+        ("candidate_measurement_sha256", candidate_hash),
+        ("deployment_digest", expected_deployment),
+        ("target_id", expected_target),
+        ("cluster_uid", expected_cluster),
+        ("effective_config_sha256", expected_config),
+        ("durability_contract", expected_durability),
+    ):
+        if rollback.get(key) != expected:
+            findings.append(f"rollback evidence {key} differs")
+    baseline_release_id = rollback.get("baseline_release_id")
+    candidate_release_id = rollback.get("candidate_release_id")
+    if (
+        not isinstance(baseline_release_id, str)
+        or not baseline_release_id
+        or not isinstance(candidate_release_id, str)
+        or not candidate_release_id
+        or baseline_release_id == candidate_release_id
+    ):
+        findings.append("rollback evidence release identities are invalid")
+    steps = rollback.get("steps")
+    expected_directions = ("rollback", "forward")
+    if not isinstance(steps, list) or tuple(step.get("direction") for step in steps if isinstance(step, dict)) != expected_directions:
+        findings.append("rollback evidence must contain rollback and forward steps in order")
+    elif (
+        steps[0].get("target_release_id") != baseline_release_id
+        or steps[1].get("target_release_id") != candidate_release_id
+        or any(
+            step.get("status") != "pass" or not step.get("checkpoint_set_id") or not step.get("verified_at")
+            for step in steps
+        )
+    ):
+        findings.append("rollback evidence contains an incomplete transition step")
+    assertions = rollback.get("assertions")
+    required_assertions = {
+        "acknowledged_messages_preserved",
+        "consumer_offsets_preserved",
+        "wal_retained",
+        "persistent_volumes_reused",
+        "storage_generation_unchanged",
+        "candidate_restored",
+    }
+    if (
+        not isinstance(assertions, dict)
+        or set(assertions) != required_assertions
+        or any(value is not True for value in assertions.values())
+    ):
+        findings.append("rollback evidence did not prove every preservation and recovery assertion")
+    rollback_artifacts = rollback.get("artifacts")
+    if not isinstance(rollback_artifacts, list) or not rollback_artifacts:
+        findings.append("rollback evidence artifact inventory is missing")
+    else:
+        rollback_root = paths["rollback"].parent.resolve()
+        artifact_paths: set[str] = set()
+        for artifact in rollback_artifacts:
+            relative = Path(str(artifact.get("path", ""))) if isinstance(artifact, dict) else Path()
+            digest = str(artifact.get("sha256", "")) if isinstance(artifact, dict) else ""
+            artifact_path = (rollback_root / relative).resolve()
+            if (
+                relative.is_absolute()
+                or ".." in relative.parts
+                or not re.fullmatch(r"[0-9a-f]{64}", digest)
+                or rollback_root not in artifact_path.parents
+                or not artifact_path.is_file()
+                or sha256_file(artifact_path) != digest
+            ):
+                findings.append(f"rollback artifact is missing or tampered: {relative.as_posix()}")
+            elif relative.as_posix() in artifact_paths:
+                findings.append(f"rollback artifact is duplicated: {relative.as_posix()}")
+            else:
+                artifact_paths.add(relative.as_posix())
     return findings, paths, documents
 
 
@@ -954,6 +1038,7 @@ def main() -> int:
     qualify_parser.add_argument("--fault-evidence", type=Path, required=True)
     qualify_parser.add_argument("--rpo-evidence", type=Path, required=True)
     qualify_parser.add_argument("--soak-report", type=Path, required=True)
+    qualify_parser.add_argument("--rollback-evidence", type=Path, required=True)
     qualify_parser.add_argument("--run-id", default=f"message-path-release-{int(time.time())}")
     qualify_parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_ROOT)
 

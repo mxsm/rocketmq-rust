@@ -1,0 +1,167 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rocketmq.apache.org/schemas/message-path-release-evidence-v1.json",
+  "title": "RocketMQ Rust message-path release evidence",
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^(?!/)(?![A-Za-z]:)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._/-]+$"
+        },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "size_bytes": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "transition_step": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["direction", "status", "target_release_id", "checkpoint_set_id", "verified_at"],
+      "properties": {
+        "direction": { "enum": ["rollback", "forward"] },
+        "status": { "const": "pass" },
+        "target_release_id": { "type": "string", "minLength": 1 },
+        "checkpoint_set_id": { "type": "string", "minLength": 1 },
+        "verified_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "rollback_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "artifact_kind",
+        "generated_at",
+        "status",
+        "rehearsal_qualified",
+        "dynamic_execution",
+        "fixture",
+        "candidate_commit",
+        "candidate_measurement_sha256",
+        "deployment_digest",
+        "target_id",
+        "cluster_uid",
+        "effective_config_sha256",
+        "durability_contract",
+        "baseline_release_id",
+        "candidate_release_id",
+        "steps",
+        "assertions",
+        "artifacts"
+      ],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "artifact_kind": { "const": "rocketmq_message_path_rollback_evidence" },
+        "generated_at": { "type": "string", "format": "date-time" },
+        "status": { "const": "pass" },
+        "rehearsal_qualified": { "const": true },
+        "dynamic_execution": { "const": true },
+        "fixture": { "const": false },
+        "candidate_commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "candidate_measurement_sha256": { "$ref": "#/$defs/digest" },
+        "deployment_digest": { "$ref": "#/$defs/digest" },
+        "target_id": { "type": "string", "minLength": 1 },
+        "cluster_uid": { "type": "string", "minLength": 1 },
+        "effective_config_sha256": { "$ref": "#/$defs/digest" },
+        "durability_contract": { "type": "string", "minLength": 1 },
+        "baseline_release_id": { "type": "string", "minLength": 1 },
+        "candidate_release_id": { "type": "string", "minLength": 1 },
+        "steps": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "allOf": [
+                { "$ref": "#/$defs/transition_step" },
+                { "properties": { "direction": { "const": "rollback" } } }
+              ]
+            },
+            {
+              "allOf": [
+                { "$ref": "#/$defs/transition_step" },
+                { "properties": { "direction": { "const": "forward" } } }
+              ]
+            }
+          ],
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "assertions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "acknowledged_messages_preserved",
+            "consumer_offsets_preserved",
+            "wal_retained",
+            "persistent_volumes_reused",
+            "storage_generation_unchanged",
+            "candidate_restored"
+          ],
+          "properties": {
+            "acknowledged_messages_preserved": { "const": true },
+            "consumer_offsets_preserved": { "const": true },
+            "wal_retained": { "const": true },
+            "persistent_volumes_reused": { "const": true },
+            "storage_generation_unchanged": { "const": true },
+            "candidate_restored": { "const": true }
+          }
+        },
+        "artifacts": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/artifact" },
+          "minItems": 1
+        }
+      }
+    },
+    "artifact_inventory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "artifact_kind",
+        "generated_at",
+        "candidate_commit",
+        "release_qualified",
+        "bundle_sha256",
+        "qualification_report_sha256",
+        "artifact_count",
+        "artifacts",
+        "subject",
+        "target",
+        "durability_contract"
+      ],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "artifact_kind": { "const": "rocketmq_message_path_artifact_inventory" },
+        "generated_at": { "type": "string", "format": "date-time" },
+        "candidate_commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "release_qualified": { "const": true },
+        "bundle_sha256": { "$ref": "#/$defs/sha256" },
+        "qualification_report_sha256": { "$ref": "#/$defs/sha256" },
+        "artifact_count": { "type": "integer", "minimum": 1 },
+        "artifacts": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/artifact" },
+          "minItems": 1
+        },
+        "subject": { "type": "object" },
+        "target": { "type": "object" },
+        "durability_contract": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  "oneOf": [
+    { "$ref": "#/$defs/rollback_evidence" },
+    { "$ref": "#/$defs/artifact_inventory" }
+  ]
+}

@@ -58,7 +58,8 @@
         "performance_comparison",
         "fault_matrix",
         "rpo",
-        "soak"
+        "soak",
+        "rollback"
       ],
       "minimum_soak_seconds": 21600,
       "workloads": [
