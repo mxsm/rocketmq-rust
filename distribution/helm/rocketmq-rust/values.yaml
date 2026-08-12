@@ -104,6 +104,8 @@ services:
       limits: {cpu: 1000m, memory: 1Gi}
   controller:
     replicas: 3
+    snapshotLogsSinceLast: 5000
+    snapshotMaxLogEntriesToKeep: 1000
     peerServiceClusterIPs:
       - 10.96.0.201
       - 10.96.0.202

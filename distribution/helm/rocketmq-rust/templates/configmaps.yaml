@@ -120,6 +120,8 @@ data:
     listenAddr = "0.0.0.0:60109"
     electionTimeoutMs = 5000
     heartbeatIntervalMs = 300
+    snapshotLogsSinceLast = {{ $.Values.services.controller.snapshotLogsSinceLast }}
+    snapshotMaxLogEntriesToKeep = {{ $.Values.services.controller.snapshotMaxLogEntriesToKeep }}
     storagePath = "/var/lib/rocketmq/controller/node-{{ add $ordinal 1 }}"
     storageBackend = {{ $.Values.services.controller.storageBackend | quote }}
     enableElectUncleanMasterLocal = false

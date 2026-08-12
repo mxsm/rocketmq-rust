@@ -88,8 +88,8 @@ impl RaftNodeManager {
             heartbeat_interval: startup_config.heartbeat_interval_ms,
             election_timeout_min: startup_config.election_timeout_ms,
             election_timeout_max: startup_config.election_timeout_ms * 2,
-            max_in_snapshot_log_to_keep: 1000,
-            snapshot_policy: openraft::SnapshotPolicy::LogsSinceLast(5000),
+            max_in_snapshot_log_to_keep: startup_config.snapshot_max_log_entries_to_keep,
+            snapshot_policy: openraft::SnapshotPolicy::LogsSinceLast(startup_config.snapshot_logs_since_last.max(1)),
             allow_log_reversion: Some(true),
             ..Default::default()
         };

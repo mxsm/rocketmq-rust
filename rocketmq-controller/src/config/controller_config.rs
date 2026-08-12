@@ -60,6 +60,14 @@ pub enum StorageBackendType {
     Memory,
 }
 
+const fn default_snapshot_logs_since_last() -> u64 {
+    5000
+}
+
+const fn default_snapshot_max_log_entries_to_keep() -> u64 {
+    1000
+}
+
 impl fmt::Display for StorageBackendType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -250,6 +258,14 @@ pub struct ControllerConfig {
     /// Heartbeat interval (ms) used by Raft
     pub heartbeat_interval_ms: u64,
 
+    /// Number of applied Raft log entries between automatic snapshots.
+    #[serde(default = "default_snapshot_logs_since_last")]
+    pub snapshot_logs_since_last: u64,
+
+    /// Maximum number of log entries retained after a snapshot.
+    #[serde(default = "default_snapshot_max_log_entries_to_keep")]
+    pub snapshot_max_log_entries_to_keep: u64,
+
     /// Local storage path for controller artifacts
     pub storage_path: String,
 
@@ -304,6 +320,8 @@ impl Clone for ControllerConfig {
             controller_peers: self.controller_peers.clone(),
             election_timeout_ms: self.election_timeout_ms,
             heartbeat_interval_ms: self.heartbeat_interval_ms,
+            snapshot_logs_since_last: self.snapshot_logs_since_last,
+            snapshot_max_log_entries_to_keep: self.snapshot_max_log_entries_to_keep,
             storage_path: self.storage_path.clone(),
             storage_backend: self.storage_backend.clone(),
             enable_elect_unclean_master_local: self.enable_elect_unclean_master_local,
@@ -388,6 +406,8 @@ impl Default for ControllerConfig {
             controller_peers: Vec::new(),
             election_timeout_ms: 1000,
             heartbeat_interval_ms: 300,
+            snapshot_logs_since_last: 5000,
+            snapshot_max_log_entries_to_keep: 1000,
             storage_path: String::new(),
             storage_backend: StorageBackendType::RocksDB,
             enable_elect_unclean_master_local: false,
@@ -543,6 +563,18 @@ impl ControllerConfig {
         self
     }
 
+    /// Set the number of applied Raft log entries between snapshots.
+    pub fn with_snapshot_logs_since_last(mut self, entries: u64) -> Self {
+        self.snapshot_logs_since_last = entries;
+        self
+    }
+
+    /// Set the maximum number of log entries retained after a snapshot.
+    pub fn with_snapshot_max_log_entries_to_keep(mut self, entries: u64) -> Self {
+        self.snapshot_max_log_entries_to_keep = entries;
+        self
+    }
+
     /// Set local storage path for this node
     pub fn with_storage_path(mut self, path: impl Into<String>) -> Self {
         self.storage_path = path.into();
@@ -676,6 +708,14 @@ impl ControllerConfig {
             return Err("elect_master_max_retry_count must be greater than 0".to_string());
         }
 
+        if self.snapshot_logs_since_last == 0 {
+            return Err("snapshot_logs_since_last must be greater than 0".to_string());
+        }
+
+        if self.snapshot_max_log_entries_to_keep == 0 {
+            return Err("snapshot_max_log_entries_to_keep must be greater than 0".to_string());
+        }
+
         if self.authorization_enabled && !self.authentication_enabled {
             return Err("authorization_enabled requires authentication_enabled".to_string());
         }
@@ -800,6 +840,8 @@ impl ControllerConfig {
 
         write_property!("electionTimeoutMs={}", self.election_timeout_ms);
         write_property!("heartbeatIntervalMs={}", self.heartbeat_interval_ms);
+        write_property!("snapshotLogsSinceLast={}", self.snapshot_logs_since_last);
+        write_property!("snapshotMaxLogEntriesToKeep={}", self.snapshot_max_log_entries_to_keep);
         write_property!("storagePath={}", self.storage_path);
         write_property!("storageBackend={}", self.storage_backend);
         write_property!(
@@ -980,6 +1022,15 @@ impl ControllerConfig {
                     self.heartbeat_interval_ms = parse_update_value::<u64>("heartbeatIntervalMs", value)?;
                 }
 
+                "snapshotLogsSinceLast" => {
+                    self.snapshot_logs_since_last = parse_update_value::<u64>("snapshotLogsSinceLast", value)?;
+                }
+
+                "snapshotMaxLogEntriesToKeep" => {
+                    self.snapshot_max_log_entries_to_keep =
+                        parse_update_value::<u64>("snapshotMaxLogEntriesToKeep", value)?;
+                }
+
                 "storagePath" => {
                     self.storage_path = value.clone();
                 }
@@ -1035,6 +1086,8 @@ mod tests {
             "maintenancePolicyVersion",
             "maintenancePolicySha256",
             "maintenanceCheckpointRoot",
+            "snapshotLogsSinceLast",
+            "snapshotMaxLogEntriesToKeep",
         ] {
             object.remove(field);
         }
@@ -1047,6 +1100,8 @@ mod tests {
         assert!(config.auth_config_path.is_empty());
         assert!(config.acl_file.is_empty());
         assert_eq!(config.maintenance_policy_version, 0);
+        assert_eq!(config.snapshot_logs_since_last, 5000);
+        assert_eq!(config.snapshot_max_log_entries_to_keep, 1000);
         assert!(config.validate().is_ok());
     }
 
@@ -1114,6 +1169,25 @@ mod tests {
         let config = ControllerConfig::new();
 
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn snapshot_thresholds_are_positive_and_exported() {
+        let config = ControllerConfig::new()
+            .with_snapshot_logs_since_last(32)
+            .with_snapshot_max_log_entries_to_keep(16);
+
+        assert!(config.validate().is_ok());
+        let properties = config.to_properties_string();
+        assert!(properties.contains("snapshotLogsSinceLast=32"));
+        assert!(properties.contains("snapshotMaxLogEntriesToKeep=16"));
+
+        let mut invalid = config.clone();
+        invalid.snapshot_logs_since_last = 0;
+        assert!(invalid.validate().is_err());
+        invalid.snapshot_logs_since_last = 32;
+        invalid.snapshot_max_log_entries_to_keep = 0;
+        assert!(invalid.validate().is_err());
     }
 
     #[test]
