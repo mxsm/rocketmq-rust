@@ -235,6 +235,7 @@ def validate_policy(guard: Guard, policy: dict[str, Any]) -> None:
 
 def validate_sources(guard: Guard) -> None:
     runner = guard.read("scripts/kind-architecture-refactor-e2e.ps1")
+    live_faults = guard.read("scripts/kubernetes/live_faults.ps1")
     secret_generator = guard.read("scripts/new-m11-evidence-secrets.ps1")
     workflow = guard.read(".github/workflows/kubernetes-fault-matrix.yml")
     publication_verifier = guard.read("scripts/verify_service_image_publication.py")
@@ -288,18 +289,19 @@ def validate_sources(guard: Guard) -> None:
         "Set-StatefulSetReplicas 'rocketmq-namesrv' 1",
         "Set-StatefulSetReplicas 'rocketmq-controller' 1",
         "Set-NodeNetworkImpairment $networkNode @('delay', '200ms', '50ms', 'loss', '10%')",
-        "disk_full_state_rejects_new_writes_without_losing_acknowledged_data",
+        "Start-LiveBrokerDiskFull",
+        "Clear-LiveBrokerDiskFull",
         "i=0; : > /tmp/rocketmq/phase06-fsync.pids; while",
         "attempt=0; active=1; while",
         'case "$state" in ""|Z*)',
         "/tmp/rocketmq/phase06-fsync-",
-        "sync_master_without_slave_ack_returns_flush_slave_timeout",
-        "three_controller_two_broker_controller_mode_failover_and_rejoin",
-        "interrupted_snapshot_install_is_rejected_and_full_retry_recovers",
-        "unrelated_route_progresses_while_pull_is_blocked",
-        "same_consumer_key_is_fifo_without_serializing_distinct_keys",
-        "data_saturation_preserves_readiness_capacity_and_releases_all_permits",
-        "leaked=0 detached_still_running=0",
+        "Wait-LiveSingleMaster",
+        "Set-LivePodPortImpairment",
+        "Invoke-LiveControllerWriteBurst",
+        "Get-LiveSnapshotObservation",
+        "Invoke-LiveProxyMixedLoad",
+        "Get-LivePodMetrics",
+        "Assert-LiveFaultCleanup",
         "Invoke-Native docker @('pull', $image)",
         "'org.opencontainers.image.revision'",
         "@($revisions | Sort-Object -Unique)",
@@ -348,6 +350,20 @@ def validate_sources(guard: Guard) -> None:
         "semantic_query=$($rotationResult.DeniedSucceeded)",
     ):
         guard.require(marker in runner, f"fault runner contract marker missing: {marker}")
+    guard.require("Invoke-ModelTest" not in runner, "dynamic fault runner must not substitute Cargo model tests")
+    guard.require("Invoke-Native cargo" not in runner, "dynamic fault runner must not execute Cargo tests")
+    for marker in (
+        "function Start-LiveBrokerDiskFull",
+        "MaximumFillMiB",
+        "function Get-LiveBrokerRoleSnapshot",
+        "function Set-LivePodPortImpairment",
+        "match ip dport",
+        "function Get-LiveSnapshotObservation",
+        "function Wait-LiveSnapshotInstall",
+        "function Get-LivePodMetrics",
+        "function Assert-LiveFaultCleanup",
+    ):
+        guard.require(marker in live_faults, f"live Kubernetes fault helper contract missing: {marker}")
     minority_start = runner.find("$minorityPod =")
     minority_end = runner.find("$majorityScale =", minority_start)
     guard.require(

@@ -374,23 +374,23 @@
       "timeout_seconds": 420,
       "precondition": "Controller state has advanced beyond a recorded snapshot boundary",
       "injection": "restart a lagging follower while it is installing a Raft snapshot",
-      "observable": "snapshot transfer attempt, interrupted follower state, checksum/replay result, leader identity, and catch-up",
+      "observable": "snapshot transfer attempt, interrupted follower state, partial-install publication guard, leader identity, and catch-up",
       "rpo_seconds": 0,
       "rto_seconds": 180,
-      "abort_condition": "the follower applies a corrupt snapshot, leadership duplicates, or committed state regresses",
+      "abort_condition": "the follower publishes a partial snapshot, leadership duplicates, or committed state regresses",
       "cleanup": "allow the follower to restart and complete snapshot installation",
-      "cleanup_verification": "the follower catches up, checksum validation passes, and one leader remains",
+      "cleanup_verification": "the follower catches up without publishing partial state and one leader remains",
       "required_assertions": [
         "snapshot_install_started",
         "install_interrupted",
-        "corrupt_snapshot_rejected",
+        "partial_snapshot_not_published",
         "follower_caught_up",
         "single_leader_observed"
       ],
       "required_evidence": [
         "snapshot_before",
         "interruption_status",
-        "checksum_validation",
+        "snapshot_integrity",
         "snapshot_after",
         "leadership_status"
       ]

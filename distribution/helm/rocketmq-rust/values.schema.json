@@ -633,6 +633,8 @@
         "peerServiceClusterIPs",
         "autoInitializeCluster",
         "storageBackend",
+        "snapshotLogsSinceLast",
+        "snapshotMaxLogEntriesToKeep",
         "image",
         "persistence",
         "pdb",
@@ -662,6 +664,14 @@
             "Memory",
             "RocksDB"
           ]
+        },
+        "snapshotLogsSinceLast": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "snapshotMaxLogEntriesToKeep": {
+          "type": "integer",
+          "minimum": 1
         },
         "image": {
           "$ref": "#/definitions/image"

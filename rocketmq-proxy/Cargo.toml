@@ -63,6 +63,7 @@ tokio-util   = { workspace = true }
 
 serde  = { workspace = true }
 config = { workspace = true }
+chrono = "0.4.45"
 
 dashmap        = { workspace = true }
 bytes          = { workspace = true }
@@ -72,6 +73,9 @@ flate2         = { workspace = true }
 uuid           = { workspace = true }
 cheetah-string = { workspace = true }
 thiserror      = { workspace = true }
+hex            = "0.4"
+hmac           = "0.13.0"
+sha1           = "0.11"
 
 async-trait = "0.1"
 prost-types = "0.14"
@@ -80,9 +84,6 @@ tonic       = { version = "0.14.6", features = ["transport", "codegen"] }
 [dev-dependencies]
 rocketmq-transport = { workspace = true, features = ["test-support"] }
 tokio = { workspace = true, features = ["test-util"] }
-hex = "0.4"
-hmac = "0.13.0"
-sha1 = "0.11"
 criterion = { version = "0.8", features = ["html_reports"] }
 serde_json = { workspace = true }
 trybuild = "1.0.116"

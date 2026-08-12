@@ -42,6 +42,11 @@ class FaultMatrixGuardTests(unittest.TestCase):
             REPO_ROOT / "scripts" / "kind-architecture-refactor-e2e.ps1",
             self.root / "scripts" / "kind-architecture-refactor-e2e.ps1",
         )
+        (self.root / "scripts" / "kubernetes").mkdir(parents=True)
+        shutil.copy2(
+            REPO_ROOT / "scripts" / "kubernetes" / "live_faults.ps1",
+            self.root / "scripts" / "kubernetes" / "live_faults.ps1",
+        )
         shutil.copy2(
             REPO_ROOT / "scripts" / "new-m11-evidence-secrets.ps1",
             self.root / "scripts" / "new-m11-evidence-secrets.ps1",
@@ -474,17 +479,19 @@ class FaultMatrixGuardTests(unittest.TestCase):
         result = self.run_guard("--policy-only", expect_success=False)
         self.assertIn("leaderAfterOrdinal", result.stderr)
 
-    def test_ha_rto_excludes_model_test_compilation(self) -> None:
+    def test_ha_rto_uses_only_live_cluster_events(self) -> None:
         runner = self.root / "scripts" / "kind-architecture-refactor-e2e.ps1"
         source = runner.read_text(encoding="utf-8")
-        preparation_start = source.index("$haPreparationTimer = [Diagnostics.Stopwatch]::StartNew()")
-        rto_start = source.index("$haTimer = [Diagnostics.Stopwatch]::StartNew()", preparation_start)
-        execution_start = source.index("$haLagModel = Invoke-ModelTest", rto_start)
-        preparation = source[preparation_start:rto_start]
+        ha_start = source.index("$haBefore = Wait-LiveSingleMaster")
+        ha_end = source.index("Complete-Scenario 'ha_replication_lag'", ha_start)
+        ha_block = source[ha_start:ha_end]
 
-        self.assertEqual(preparation.count("'--no-run'"), 2)
-        self.assertLess(rto_start, execution_start)
-        self.assertIn("preparation_seconds_excluded", source[execution_start:])
+        self.assertIn("Set-LivePodPortImpairment", ha_block)
+        self.assertIn("-Port 10912", ha_block)
+        self.assertIn("delete', 'pod', $haOldMaster.Pod", ha_block)
+        self.assertIn("Wait-LiveSingleMaster", ha_block)
+        self.assertNotIn("cargo", ha_block.lower())
+        self.assertNotIn("Invoke-ModelTest", source)
 
 
 if __name__ == "__main__":

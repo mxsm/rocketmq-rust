@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "milestone": "M11-11",
-  "policy_sha256": "d6f52e68f830311286658748387798160d28f6fe78afcd432bf99c7a43cf2a1e",
+  "policy_sha256": "b1584a3f33f07c966bbc130a62cd324ddddfb17878594025d2c4ba15c60aa58d",
   "run_id": "fixture-m11-11-positive",
   "candidate_commit": "0123456789abcdef0123456789abcdef01234567",
   "started_at": "2026-07-17T01:00:00Z",
@@ -285,14 +285,14 @@
       "assertions": {
         "snapshot_install_started": true,
         "install_interrupted": true,
-        "corrupt_snapshot_rejected": true,
+        "partial_snapshot_not_published": true,
         "follower_caught_up": true,
         "single_leader_observed": true
       },
       "evidence": {
         "snapshot_before": "artifacts/snapshot_install_interruption.txt",
         "interruption_status": "artifacts/snapshot_install_interruption.txt",
-        "checksum_validation": "artifacts/snapshot_install_interruption.txt",
+        "snapshot_integrity": "artifacts/snapshot_install_interruption.txt",
         "snapshot_after": "artifacts/snapshot_install_interruption.txt",
         "leadership_status": "artifacts/snapshot_install_interruption.txt"
       }

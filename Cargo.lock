@@ -4473,6 +4473,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "cheetah-string",
+ "chrono",
  "config",
  "criterion",
  "dashmap",
