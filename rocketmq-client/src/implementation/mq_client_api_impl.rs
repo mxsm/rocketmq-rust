@@ -393,7 +393,7 @@ impl AsyncRetryRequest {
 pub struct MQClientAPIImpl {
     service_context: ChildServiceContext,
     remoting_client: Arc<RemotingClient<ClientRemotingProcessor>>,
-    top_addressing: Arc<Box<dyn TopAddressing>>,
+    top_addressing: RwLock<Arc<dyn TopAddressing>>,
     name_srv_addr: RwLock<Option<String>>,
     client_config: Arc<ClientConfig>,
     background_tasks: TaskTracker,

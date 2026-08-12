@@ -48,6 +48,11 @@ impl NameserverAccessConfig {
     pub fn namesrv_domain_subgroup(&self) -> &CheetahString {
         &self.namesrv_domain_subgroup
     }
+
+    #[inline]
+    pub fn has_namesrv_domain(&self) -> bool {
+        !self.namesrv_domain.is_empty()
+    }
 }
 
 #[cfg(test)]

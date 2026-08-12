@@ -423,7 +423,7 @@ impl MQClientInstance {
             instance.telemetry_handle.clone(),
         ));
 
-        if let Some(namesrv_addr) = client_config.namesrv_addr.as_deref() {
+        if let Some(namesrv_addr) = client_config.get_namesrv_addr().as_deref() {
             mq_client_api_impl.update_name_server_address_list_sync(namesrv_addr);
         }
 
@@ -2992,6 +2992,24 @@ mod tests {
             assert!(addrs.contains(&CheetahString::from_static_str("127.0.0.1:9876")));
             assert!(addrs.contains(&CheetahString::from_static_str("127.0.0.2:9876")));
         });
+    }
+
+    #[test]
+    fn new_arc_applies_java_http_nameserver_endpoint_normalization() {
+        let client_config = ClientConfig {
+            namesrv_addr: Some(CheetahString::from_static_str("http://NameSrv.Example:9876")),
+            ..Default::default()
+        };
+
+        let instance = test_instance(client_config, "http-endpoint-namesrv-test");
+        let api_impl = instance
+            .get_mq_client_api_impl()
+            .expect("MQClientInstance should initialize MQClientAPIImpl");
+
+        assert_eq!(
+            api_impl.get_name_server_address_list(),
+            vec![CheetahString::from_static_str("namesrv.example:9876")]
+        );
     }
 
     #[test]

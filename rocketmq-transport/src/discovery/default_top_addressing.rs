@@ -41,6 +41,17 @@ impl DefaultTopAddressing {
         }
     }
 
+    pub fn from_domain_and_subgroup(domain: &str, subgroup: &str, unit_name: Option<CheetahString>) -> Self {
+        let domain = domain.trim();
+        let subgroup = subgroup.trim();
+        let ws_addr = if domain.contains(':') {
+            format!("http://{domain}/rocketmq/{subgroup}")
+        } else {
+            format!("http://{domain}:8080/rocketmq/{subgroup}")
+        };
+        Self::new(ws_addr.into(), unit_name)
+    }
+
     /// Load custom top addressing implementations
     /// Note: Rust doesn't have Java's ServiceLoader, so this would need to be implemented
     /// using a plugin system or static registration
@@ -142,5 +153,31 @@ impl TopAddressing for DefaultTopAddressing {
         for top_addressing in &self.top_addressing_list {
             top_addressing.register_change_callback(change_callback.clone());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn domain_and_subgroup_constructor_controls_address_server_url() {
+        let addressing = DefaultTopAddressing::from_domain_and_subgroup(
+            "example.com",
+            "group-a",
+            Some(CheetahString::from_static_str("unit-a")),
+        );
+
+        assert_eq!(
+            addressing.build_url(),
+            "http://example.com:8080/rocketmq/group-a-unit-a?nofix=1"
+        );
+    }
+
+    #[test]
+    fn domain_with_explicit_port_is_not_given_a_second_port() {
+        let addressing = DefaultTopAddressing::from_domain_and_subgroup("example.com:9090", "group-a", None);
+
+        assert_eq!(addressing.build_url(), "http://example.com:9090/rocketmq/group-a");
     }
 }

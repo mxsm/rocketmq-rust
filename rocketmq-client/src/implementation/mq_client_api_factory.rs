@@ -187,8 +187,14 @@ impl MQClientAPIFactory {
 
     pub async fn apply_nameserver_access_config(&mut self) -> RocketMQResult<()> {
         validate_nameserver_access_config(&self.nameserver_access_config)?;
-        if !self.nameserver_access_config.namesrv_domain().is_empty() {
+        if self.nameserver_access_config.has_namesrv_domain() {
             for client in &self.clients {
+                client
+                    .configure_top_addressing(
+                        self.nameserver_access_config.namesrv_domain().as_str(),
+                        self.nameserver_access_config.namesrv_domain_subgroup().as_str(),
+                    )
+                    .await;
                 client.fetch_name_server_addr().await;
             }
             return Ok(());
@@ -203,7 +209,7 @@ impl MQClientAPIFactory {
 
     fn start_nameserver_domain_refresh(&mut self) {
         self.stop_nameserver_domain_refresh();
-        if self.nameserver_access_config.namesrv_domain().is_empty() {
+        if !self.nameserver_access_config.has_namesrv_domain() {
             return;
         }
 
