@@ -71,7 +71,7 @@ impl MessageRelatedHandler {
         if rewrite_result.is_some() {
             return Ok(rewrite_result);
         }
-        let response = RemotingCommand::create_response_command();
+        let response = RemotingCommand::create_java_default_error_response_command();
         let message_store = match broker_runtime_inner.message_store() {
             Some(store) => store,
             None => {
@@ -102,7 +102,9 @@ impl MessageRelatedHandler {
         };
         let response_header = SearchOffsetResponseHeader { offset };
 
-        Ok(Some(response.set_command_custom_header(response_header)))
+        Ok(Some(RemotingCommand::create_success_response_command_with_header(
+            response_header,
+        )))
     }
 
     pub async fn resume_check_half_message<MS: BrokerAdminStore>(
@@ -114,7 +116,7 @@ impl MessageRelatedHandler {
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<ResumeCheckHalfMessageRequestHeader>()?;
-        let response = RemotingCommand::create_response_command();
+        let response = RemotingCommand::create_java_default_error_response_command();
 
         let Some(msg_id) = request_header.msg_id.as_ref().filter(|msg_id| !msg_id.is_empty()) else {
             return Ok(Some(
@@ -168,7 +170,7 @@ impl MessageRelatedHandler {
         };
 
         if put_message_result.put_message_status() == PutMessageStatus::PutOk || put_message_result.is_ok() {
-            Ok(Some(response.set_code(ResponseCode::Success)))
+            Ok(Some(RemotingCommand::create_success_response_command()))
         } else {
             Ok(Some(
                 response
@@ -187,7 +189,7 @@ impl MessageRelatedHandler {
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<QueryConsumeQueueRequestHeader>()?;
-        let response = RemotingCommand::create_response_command().set_code(ResponseCode::Success);
+        let response = RemotingCommand::create_success_response_command();
         let Some(message_store) = broker_runtime_inner.message_store() else {
             return Ok(Some(
                 response
@@ -301,7 +303,7 @@ impl MessageRelatedHandler {
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let response = RemotingCommand::create_response_command();
+        let response = RemotingCommand::create_success_response_command();
         let Some(pop_message_processor) = broker_runtime_inner.pop_message_processor().cloned() else {
             return Ok(Some(response.set_code(ResponseCode::Success)));
         };
@@ -439,7 +441,7 @@ impl MessageRelatedHandler {
             }
         }
 
-        Ok(Some(RemotingCommand::create_response_command_with_header(
+        Ok(Some(RemotingCommand::create_success_response_command_with_header(
             SearchOffsetResponseHeader { offset },
         )))
     }

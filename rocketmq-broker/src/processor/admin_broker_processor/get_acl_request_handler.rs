@@ -42,7 +42,7 @@ impl GetAclRequestHandler {
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<GetAclRequestHeader>()?;
-        let mut response = RemotingCommand::create_response_command();
+        let response = RemotingCommand::create_java_default_error_response_command();
 
         if request_header.subject.is_empty() {
             return Ok(Some(
@@ -53,11 +53,10 @@ impl GetAclRequestHandler {
         }
 
         match self.auth_admin_service.get_acl(request_header.subject.as_str()).await {
-            Ok(Some(acl_info)) => {
-                response.set_body_mut_ref(acl_info.encode()?);
-                Ok(Some(response.set_code(ResponseCode::Success)))
-            }
-            Ok(None) => Ok(Some(response.set_code(ResponseCode::Success))),
+            Ok(Some(acl_info)) => Ok(Some(
+                RemotingCommand::create_success_response_command().set_body(acl_info.encode()?),
+            )),
+            Ok(None) => Ok(Some(RemotingCommand::create_success_response_command())),
             Err(error) => Ok(Some(map_error_response(response, error))),
         }
     }
@@ -226,6 +225,7 @@ mod tests {
             .expect("create acl should succeed")
             .expect("create acl should return response");
         assert_eq!(ResponseCode::from(create_response.code()), ResponseCode::Success);
+        assert!(create_response.remark().is_none());
 
         let mut update_request = RemotingCommand::create_request_command(
             RequestCode::AuthUpdateAcl,
@@ -252,6 +252,7 @@ mod tests {
             .expect("update acl should succeed")
             .expect("update acl should return response");
         assert_eq!(ResponseCode::from(update_response.code()), ResponseCode::Success);
+        assert!(update_response.remark().is_none());
 
         let mut get_request = RemotingCommand::create_request_command(
             RequestCode::AuthGetAcl,
@@ -266,6 +267,7 @@ mod tests {
             .expect("get acl should succeed")
             .expect("get acl should return response");
         assert_eq!(ResponseCode::from(get_response.code()), ResponseCode::Success);
+        assert!(get_response.remark().is_none());
         let body = AclInfo::decode(
             get_response
                 .take_body()
@@ -440,6 +442,7 @@ mod tests {
             .expect("empty user list should return a response");
         assert_eq!(ResponseCode::from(list_users_response.code()), ResponseCode::Success);
         assert!(list_users_response.body().is_none());
+        assert!(list_users_response.remark().is_none());
 
         let mut list_acl_request = RemotingCommand::create_request_command(
             RequestCode::AuthListAcl,
@@ -461,6 +464,7 @@ mod tests {
             .expect("empty acl list should return a response");
         assert_eq!(ResponseCode::from(list_acl_response.code()), ResponseCode::Success);
         assert!(list_acl_response.body().is_none());
+        assert!(list_acl_response.remark().is_none());
 
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }

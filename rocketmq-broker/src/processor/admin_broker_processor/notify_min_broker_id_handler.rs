@@ -20,7 +20,6 @@ use cheetah_string::CheetahString;
 use rocketmq_model::common::mix_all;
 use rocketmq_model::common::mix_all::MASTER_ID;
 use rocketmq_protocol::code::request_code::RequestCode;
-use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::namesrv::brokerid_change_request_header::NotifyMinBrokerIdChangeRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::tokio_lock::RocketMQTokioRwLock;
@@ -85,8 +84,7 @@ impl NotifyMinBrokerChangeIdHandler {
 
         self.update_min_broker(broker_runtime_inner, change_header).await?;
 
-        let response = RemotingCommand::create_response_command();
-        Ok(Some(response.set_code(ResponseCode::Success)))
+        Ok(Some(RemotingCommand::create_success_response_command()))
     }
 
     async fn update_min_broker<MS: BrokerAdminStore>(

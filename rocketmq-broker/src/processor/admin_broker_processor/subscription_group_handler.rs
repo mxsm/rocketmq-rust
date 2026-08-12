@@ -55,7 +55,7 @@ impl SubscriptionGroupHandler {
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let start_time = current_millis() as i64;
 
-        let mut response = RemotingCommand::create_response_command();
+        let mut response = RemotingCommand::create_success_response_command();
 
         info!(
             "AdminBrokerProcessor#updateAndCreateSubscriptionGroup called by {}",
@@ -96,7 +96,7 @@ impl SubscriptionGroupHandler {
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let response = RemotingCommand::create_response_command().set_opaque(request.opaque());
+        let response = RemotingCommand::create_java_default_error_response_command().set_opaque(request.opaque());
         let request_header =
             match request.decode_command_custom_header::<UpdateSubscriptionGroupConfigCasRequestHeader>() {
                 Ok(header) => header,
@@ -237,14 +237,15 @@ impl SubscriptionGroupHandler {
         };
 
         Ok(Some(
-            response
-                .set_command_custom_header(UpdateSubscriptionGroupConfigCasResponseHeader {
+            RemotingCommand::create_success_response_command_with_header(
+                UpdateSubscriptionGroupConfigCasResponseHeader {
                     subscription_group_version,
-                })
-                .set_code(ResponseCode::Success)
-                .set_remark(format!(
-                    "Subscription Group configuration patch committed, version={subscription_group_version}"
-                )),
+                },
+            )
+            .set_opaque(request.opaque())
+            .set_remark(format!(
+                "Subscription Group configuration patch committed, version={subscription_group_version}"
+            )),
         ))
     }
 
@@ -256,7 +257,7 @@ impl SubscriptionGroupHandler {
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let mut response = RemotingCommand::create_response_command();
+        let response = RemotingCommand::create_java_default_error_response_command();
         let request_header = request.decode_command_custom_header::<GetSubscriptionGroupConfigRequestHeader>()?;
         let group = &request_header.group;
         let group_config = broker_runtime_inner
@@ -264,13 +265,14 @@ impl SubscriptionGroupHandler {
             .select_subscription_group_config_with_version(group);
 
         match group_config {
-            Ok((config, subscription_group_version)) => {
-                response.set_body_mut_ref(config.encode()?);
-                response.set_command_custom_header_ref(UpdateSubscriptionGroupConfigCasResponseHeader {
-                    subscription_group_version,
-                });
-                Ok(Some(response.set_code(ResponseCode::Success)))
-            }
+            Ok((config, subscription_group_version)) => Ok(Some(
+                RemotingCommand::create_success_response_command_with_header(
+                    UpdateSubscriptionGroupConfigCasResponseHeader {
+                        subscription_group_version,
+                    },
+                )
+                .set_body(config.encode()?),
+            )),
             Err(SubscriptionGroupConfigCasError::GroupNotFound) => Ok(Some(
                 response
                     .set_code(ResponseCode::SubscriptionGroupNotExist)
@@ -308,7 +310,7 @@ impl SubscriptionGroupHandler {
             channel.remote_address()
         );
 
-        let response = RemotingCommand::create_response_command();
+        let response = RemotingCommand::create_java_default_error_response_command();
         let Some(body) = request.get_body() else {
             return Ok(Some(
                 response
@@ -329,7 +331,7 @@ impl SubscriptionGroupHandler {
         broker_runtime_inner
             .subscription_group_manager()
             .update_subscription_group_config_list(subscription_group_list.group_config_list);
-        Ok(Some(response.set_code(ResponseCode::Success)))
+        Ok(Some(RemotingCommand::create_success_response_command()))
     }
 
     pub async fn delete_subscription_group<MS: BrokerAdminStore>(
@@ -366,9 +368,7 @@ impl SubscriptionGroupHandler {
                 .clear_in_flight_message_num_by_group_name(&request_header.group_name);
         }
 
-        Ok(Some(
-            RemotingCommand::create_response_command().set_code(ResponseCode::Success),
-        ))
+        Ok(Some(RemotingCommand::create_success_response_command()))
     }
 
     pub async fn update_and_get_group_forbidden<MS: BrokerAdminStore>(
@@ -411,9 +411,7 @@ impl SubscriptionGroupHandler {
         );
         let body = GroupForbidden::new(request_header.topic, request_header.group, Some(readable));
         Ok(Some(
-            RemotingCommand::create_response_command()
-                .set_code(ResponseCode::Success)
-                .set_body(body.encode()?),
+            RemotingCommand::create_success_response_command().set_body(body.encode()?),
         ))
     }
 }
@@ -682,6 +680,7 @@ mod tests {
             },
         );
         request.make_custom_header_to_net();
+        let request_opaque = request.opaque();
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let response = handler
@@ -696,6 +695,15 @@ mod tests {
             .expect("Subscription Group CAS should run")
             .expect("Subscription Group CAS should return a response");
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        assert_eq!(response.opaque(), request_opaque);
+        let expected_remark = format!(
+            "Subscription Group configuration patch committed, version={}",
+            initial_version + 1
+        );
+        assert_eq!(
+            response.remark().map(CheetahString::as_str),
+            Some(expected_remark.as_str())
+        );
         let response_header = response
             .read_custom_header_ref::<UpdateSubscriptionGroupConfigCasResponseHeader>()
             .expect("success response should carry the committed version");

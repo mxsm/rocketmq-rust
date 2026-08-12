@@ -41,7 +41,7 @@ impl BrokerStatsHandler {
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let mut response = RemotingCommand::create_response_command();
+        let response = RemotingCommand::create_java_default_error_response_command();
         let request_header = request.decode_command_custom_header::<ViewBrokerStatsDataRequestHeader>()?;
 
         let stats_name = request_header.stats_name.as_str();
@@ -62,8 +62,7 @@ impl BrokerStatsHandler {
                 );
 
                 let body = broker_stats_data.encode()?;
-                response.set_body_mut_ref(body);
-                Ok(Some(response))
+                Ok(Some(RemotingCommand::create_success_response_command().set_body(body)))
             }
             None => Ok(Some(response.set_code(ResponseCode::SystemError).set_remark(format!(
                 "No stats data for statsName={}, statsKey={}",

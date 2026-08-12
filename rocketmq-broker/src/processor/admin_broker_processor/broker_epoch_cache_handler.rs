@@ -39,7 +39,7 @@ impl BrokerEpochCacheHandler {
         _request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let broker_config = broker_runtime_inner.broker_config();
-        let response = RemotingCommand::create_response_command();
+        let response = RemotingCommand::create_java_default_error_response_command();
 
         if !broker_config.enable_controller_mode {
             return Ok(Some(
@@ -82,6 +82,6 @@ impl BrokerEpochCacheHandler {
         );
 
         let cache = entry_code.encode().unwrap_or_default();
-        Ok(Some(response.set_body(cache).set_code(ResponseCode::Success)))
+        Ok(Some(RemotingCommand::create_success_response_command().set_body(cache)))
     }
 }

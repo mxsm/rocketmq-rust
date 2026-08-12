@@ -41,7 +41,7 @@ impl GetUserRequestHandler {
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<GetUserRequestHeader>()?;
-        let mut response = RemotingCommand::create_response_command();
+        let response = RemotingCommand::create_java_default_error_response_command();
 
         if request_header.username.is_empty() {
             return Ok(Some(
@@ -52,11 +52,10 @@ impl GetUserRequestHandler {
         }
 
         match self.auth_admin_service.get_user(request_header.username.as_str()).await {
-            Ok(Some(user_info)) => {
-                response.set_body_mut_ref(user_info.encode()?);
-                Ok(Some(response.set_code(ResponseCode::Success)))
-            }
-            Ok(None) => Ok(Some(response.set_code(ResponseCode::Success))),
+            Ok(Some(user_info)) => Ok(Some(
+                RemotingCommand::create_success_response_command().set_body(user_info.encode()?),
+            )),
+            Ok(None) => Ok(Some(RemotingCommand::create_success_response_command())),
             Err(error) => Ok(Some(map_error_response(response, error))),
         }
     }
