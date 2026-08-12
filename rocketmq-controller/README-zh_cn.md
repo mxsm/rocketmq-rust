@@ -18,8 +18,8 @@ Broker 心跳跟踪、Master 选举、副本元数据、Controller 请求处理�
 | Broker 协调 | Broker 注册、心跳、非活跃 Broker 扫描、Master 选举、sync-state-set 管理、Broker ID 分配、Broker 清理和角色变更通知。 |
 | 元数据管理 | Broker 副本元数据、Topic/Config 元数据、Controller 元数据查询、sync-state 快照，以及 Java 兼容的 Controller 响应模型。 |
 | 请求处理 | 面向 Broker 的 remoting 请求处理器，覆盖 elect-master、alter-sync-state-set、get-replica-info、broker heartbeat 和 register broker 等 Controller 请求码。 |
-| 存储 | 测试用 Memory backend、默认启用的 File backend，以及通过 `storage-rocksdb` feature 启用的 RocksDB backend。 |
-| 可观测性 | Controller metrics manager、请求/选举/DLedger 风格计数器和延迟指标，并支持可选 OpenTelemetry、OTLP 和 Prometheus exporter。 |
+| 存储 | 默认启用的 RocksDB backend、可选 File backend，以及测试用 Memory backend。 |
+| 可观测性 | Controller 请求、选举、心跳和延迟指标，并支持可选 OpenTelemetry、OTLP 和 Prometheus exporter。 |
 
 ## 架构
 
@@ -46,7 +46,8 @@ storage、snapshot，以及可选 metrics exporter。
 | [`src/metadata`](src/metadata) | Broker、Topic、Config 和 Replica metadata store。 |
 | [`src/heartbeat`](src/heartbeat) | Broker identity、live-info 跟踪和默认心跳管理器。 |
 | [`src/event`](src/event) | 复制的 Controller 事件模型和事件序列化。 |
-| [`src/storage`](src/storage) | Storage backend 抽象、默认 File backend、可选 RocksDB backend 和测试用内存 backend。 |
+| [`src/storage`](src/storage) | Storage backend 抽象、默认 RocksDB backend、可选 File backend 和测试用内存 backend。 |
+| [`src/qualification.rs`](src/qualification.rs) | T0-T5 故障切换时间线、`PutOk` 消息恢复审计、confirm-offset 边界审计与机器可读资格报告。 |
 | [`src/metrics`](src/metrics) | Controller metric 常量、请求/选举状态枚举和 metrics manager。 |
 | [`proto`](proto) | Controller 和 OpenRaft RPC 使用的 gRPC protobuf 定义。 |
 | [`examples`](examples) | 单节点 Raft、三节点 Raft、manager 使用、metrics 和 CLI 解析示例。 |
@@ -57,8 +58,8 @@ storage、snapshot，以及可选 metrics exporter。
 - workspace 最低 Rust 版本和仓库构建工具链均为 stable Rust `1.95.0`。
 - 请使用仓库根目录的 [`../rust-toolchain.toml`](../rust-toolchain.toml) 指定的固定 stable toolchain 构建。
 - 启动 Controller 二进制前，必须设置 `ROCKETMQ_HOME` 或在配置文件中设置 `rocketmqHome`。
-- 默认 feature 组合下请使用 `storageBackend = "File"`。只有在启用 `storage-rocksdb` feature 后，才使用
-  `storageBackend = "RocksDB"`。
+- 默认 feature 组合启用 RocksDB，默认配置使用 `storageBackend = "RocksDB"`。
+- 仅在启用可选 `storage-file` feature 时使用 `storageBackend = "File"`。
 
 ## 构建
 
@@ -117,7 +118,7 @@ controllerPeers = []
 electionTimeoutMs = 1000
 heartbeatIntervalMs = 300
 storagePath = "/opt/rocketmq/controller/node-1"
-storageBackend = "File"
+storageBackend = "RocksDB"
 enableElectUncleanMasterLocal = false
 
 [[raftPeers]]
@@ -219,8 +220,8 @@ async fn main() -> Result<()> {
 
 | Feature | 默认开启 | 用途 |
 |---------|----------|------|
-| `storage-file` | 是 | 启用基于文件的 Controller storage backend。 |
-| `storage-rocksdb` | 否 | 启用 RocksDB storage backend，用于 `storageBackend = "RocksDB"`。 |
+| `storage-file` | 否 | 启用 File backend，用于 `storageBackend = "File"`。 |
+| `storage-rocksdb` | 是 | 启用默认 RocksDB backend，用于 `storageBackend = "RocksDB"`。 |
 | `metrics` | 否 | 通过 `rocketmq-observability` 启用 Controller metrics 集成。 |
 | `metrics-otlp` | 否 | 启用 OTLP metrics export 支持。 |
 | `metrics-prometheus` | 否 | 启用 Prometheus metrics export 支持。 |
@@ -245,20 +246,38 @@ cargo run -p rocketmq-controller --example cli_usage -- -c ./controller-node1.to
 cargo test -p rocketmq-controller --lib
 cargo test -p rocketmq-controller --tests --no-run
 cargo test -p rocketmq-controller --examples --no-run
+cargo test -p rocketmq-controller --test controller_failover_slo
 ```
 
 当修改 Rust 代码时，需要从仓库根目录执行 workspace 级验证：
 
 ```bash
-cargo fmt --all
+cargo fmt --all -- --check
 cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
 ```
+
+## 故障切换资格验证
+
+Controller 元数据共识和消息 payload 持久性是两个不同边界。仅完成元数据 leader 选举不能证明消息
+RPO=0。只有测试链路同时采用同步本地刷盘、完成要求的副本 ACK、保持 clean election、恢复全部生产者已收到
+`PutOk` 的消息，并保证 `confirmOffset` 单调且不超过合法 in-sync ACK 时，才接受严格 RPO=0 结论。
+
+资格验证 API 按顺序记录一次故障切换：T0 注入故障、T1 Controller leader 选出、T2 broker master 选出、
+T3 store 写权限生效、T4 NameServer 路由收敛、T5 producer 首次发送成功。
+
+`FailoverQualificationReport` 输出带版本号的 JSON 证据，并明确拒绝不完整或不安全的运行结果。它不会把配置的
+选举超时当成实测 RTO，也不会从单次运行推导百分位。发布 p50/p95/p99 或 SLO 前，必须通过端到端故障注入
+harness 收集重复样本。当前固定的 OpenRaft alpha 依赖在发布前必须持续通过线性一致性、存储故障、多节点和故障
+切换资格验证门禁。
 
 ## Benchmarks
 
 ```bash
 cargo bench -p rocketmq-controller --bench controller_bench
 ```
+
+该 benchmark 测量确定性的 Controller 热路径：复制心跳应用、Raft 请求编码和资格证据记录。Leader 选举与
+端到端 RTO 属于集成/故障测试，不作为 Criterion 微基准。
 
 ## License
 
