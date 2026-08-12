@@ -1,0 +1,135 @@
+{
+  "schema_version": 1,
+  "artifact_kind": "rocketmq_message_path_qualification_policy",
+  "comparison_thresholds": {
+    "maximum_throughput_regression_percent": 10.0,
+    "maximum_p99_latency_regression_percent": 15.0
+  },
+  "modes": {
+    "smoke": {
+      "minimum_repetitions": 1,
+      "warmup_runs": 0,
+      "require_clean_git": false,
+      "required_external_evidence": [],
+      "workloads": [
+        {
+          "id": "sync-128b",
+          "scenario": "sync",
+          "message_count": 100,
+          "message_size_bytes": 128,
+          "batch_size": 1,
+          "timeout_ms": 30000
+        },
+        {
+          "id": "async-1k",
+          "scenario": "async",
+          "message_count": 200,
+          "message_size_bytes": 1024,
+          "batch_size": 1,
+          "timeout_ms": 30000
+        },
+        {
+          "id": "batch16-1k",
+          "scenario": "batch",
+          "message_count": 256,
+          "message_size_bytes": 1024,
+          "batch_size": 16,
+          "timeout_ms": 30000
+        },
+        {
+          "id": "lite-pull-1k",
+          "scenario": "lite-pull",
+          "message_count": 100,
+          "message_size_bytes": 1024,
+          "batch_size": 16,
+          "timeout_ms": 30000
+        }
+      ]
+    },
+    "release": {
+      "minimum_repetitions": 5,
+      "warmup_runs": 1,
+      "require_clean_git": true,
+      "required_external_evidence": [
+        "performance_comparison",
+        "fault_matrix",
+        "soak"
+      ],
+      "minimum_soak_seconds": 21600,
+      "workloads": [
+        {
+          "id": "sync-128b",
+          "scenario": "sync",
+          "message_count": 10000,
+          "message_size_bytes": 128,
+          "batch_size": 1,
+          "timeout_ms": 30000
+        },
+        {
+          "id": "sync-1k",
+          "scenario": "sync",
+          "message_count": 10000,
+          "message_size_bytes": 1024,
+          "batch_size": 1,
+          "timeout_ms": 30000
+        },
+        {
+          "id": "sync-128k",
+          "scenario": "sync",
+          "message_count": 1000,
+          "message_size_bytes": 131072,
+          "batch_size": 1,
+          "timeout_ms": 30000
+        },
+        {
+          "id": "sync-1m",
+          "scenario": "sync",
+          "message_count": 200,
+          "message_size_bytes": 1048576,
+          "batch_size": 1,
+          "timeout_ms": 60000
+        },
+        {
+          "id": "async-1k",
+          "scenario": "async",
+          "message_count": 20000,
+          "message_size_bytes": 1024,
+          "batch_size": 1,
+          "timeout_ms": 30000
+        },
+        {
+          "id": "batch16-1k",
+          "scenario": "batch",
+          "message_count": 32000,
+          "message_size_bytes": 1024,
+          "batch_size": 16,
+          "timeout_ms": 30000
+        },
+        {
+          "id": "batch16-16k",
+          "scenario": "batch",
+          "message_count": 8000,
+          "message_size_bytes": 16384,
+          "batch_size": 16,
+          "timeout_ms": 30000
+        },
+        {
+          "id": "lite-pull-1k",
+          "scenario": "lite-pull",
+          "message_count": 10000,
+          "message_size_bytes": 1024,
+          "batch_size": 32,
+          "timeout_ms": 30000
+        },
+        {
+          "id": "lite-pull-128k",
+          "scenario": "lite-pull",
+          "message_count": 1000,
+          "message_size_bytes": 131072,
+          "batch_size": 16,
+          "timeout_ms": 60000
+        }
+      ]
+    }
+  }
+}

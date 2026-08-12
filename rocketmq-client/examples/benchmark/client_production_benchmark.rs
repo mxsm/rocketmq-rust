@@ -17,7 +17,7 @@
 #[path = "../support/mod.rs"]
 mod support;
 
-use std::sync::atomic::AtomicU64;
+use std::path::PathBuf;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -26,6 +26,7 @@ use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+use parking_lot::Mutex;
 use rocketmq_client_rust::AclClientRPCHook;
 use rocketmq_client_rust::ClientRuntime;
 use rocketmq_client_rust::DefaultLitePullConsumer;
@@ -35,9 +36,11 @@ use rocketmq_client_rust::SendStatus;
 use rocketmq_client_rust::SessionCredentials;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_model::common::message::message_single::Message;
+use serde::Serialize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Scenario {
@@ -90,6 +93,13 @@ impl Operation {
             Self::Consume => "Consume",
         }
     }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Send => "send",
+            Self::Consume => "consume",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -106,6 +116,8 @@ struct Config {
     access_key: Option<String>,
     secret_key: Option<String>,
     security_token: Option<String>,
+    output_json: Option<PathBuf>,
+    run_id: String,
 }
 
 #[derive(Debug, Default)]
@@ -113,8 +125,55 @@ struct Stats {
     success_count: usize,
     send_failed_count: usize,
     response_failed_count: usize,
-    total_rt_ms: u128,
-    max_rt_ms: u128,
+    latency_us: Vec<u64>,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+struct LatencySummary {
+    samples: usize,
+    average: f64,
+    p50: u64,
+    p95: u64,
+    p99: u64,
+    p999: u64,
+    max: u64,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+struct BenchmarkTarget<'a> {
+    namesrv_addr: &'a str,
+    topic: &'a str,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+struct BenchmarkWorkload {
+    message_count: usize,
+    message_size_bytes: usize,
+    batch_size: usize,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+struct BenchmarkResult {
+    duration_us: u64,
+    success_count: usize,
+    send_failed_count: usize,
+    response_failed_count: usize,
+    throughput_messages_per_second: f64,
+    payload_mib_per_second: f64,
+    latency_us: LatencySummary,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+struct BenchmarkReport<'a> {
+    schema_version: u8,
+    artifact_kind: &'static str,
+    run_id: &'a str,
+    generated_at_epoch_ms: u128,
+    scenario: &'static str,
+    operation: &'static str,
+    target: BenchmarkTarget<'a>,
+    workload: BenchmarkWorkload,
+    result: BenchmarkResult,
 }
 
 #[tokio::main]
@@ -155,7 +214,10 @@ pub async fn main() -> RocketMQResult<()> {
         Scenario::LitePull => run_lite_pull(client_runtime, &config, &body).await?,
     };
 
-    print_complete_summary(stats, elapsed, config.scenario.operation());
+    print_complete_summary(&stats, elapsed, config.scenario.operation());
+    if let Some(output_json) = &config.output_json {
+        write_json_report(output_json, &config, &stats, elapsed)?;
+    }
     example_runtime.shutdown().await;
 
     Ok(())
@@ -185,10 +247,16 @@ fn build_lite_pull_consumer(
     client_runtime: Arc<ClientRuntime>,
     config: &Config,
 ) -> RocketMQResult<DefaultLitePullConsumer> {
+    let broker_suspend_ms = lite_pull_broker_suspend_ms(config.timeout_ms);
+    let pull_timeout_ms = broker_suspend_ms.saturating_add(1_000);
     let mut builder = DefaultLitePullConsumer::builder(client_runtime.clone())
         .consumer_group(unique_consumer_group())
         .name_server_addr(config.namesrv_addr.clone())
+        .consume_from_where(ConsumeFromWhere::ConsumeFromFirstOffset)
         .pull_batch_size(config.batch_size.min(i32::MAX as usize) as i32)
+        .broker_suspend_max_time_millis(broker_suspend_ms)
+        .consumer_timeout_millis_when_suspend(pull_timeout_ms)
+        .consumer_pull_timeout_millis(pull_timeout_ms)
         .poll_timeout_millis(config.timeout_ms.min(1_000))
         .auto_commit(false)
         .use_tls(config.use_tls);
@@ -204,6 +272,10 @@ fn build_lite_pull_consumer(
     }
 
     builder.build()
+}
+
+fn lite_pull_broker_suspend_ms(operation_timeout_ms: u64) -> u64 {
+    operation_timeout_ms.clamp(100, 1_000)
 }
 
 async fn run_sync(producer: &mut DefaultMQProducer, config: &Config, body: &[u8]) -> RocketMQResult<Stats> {
@@ -236,24 +308,25 @@ async fn run_async(producer: &mut DefaultMQProducer, config: &Config, body: &[u8
     let success_count = Arc::new(AtomicUsize::new(0));
     let send_failed_count = Arc::new(AtomicUsize::new(0));
     let response_failed_count = Arc::new(AtomicUsize::new(0));
-    let total_rt_ms = Arc::new(AtomicU64::new(0));
-    let max_rt_ms = Arc::new(AtomicU64::new(0));
+    let latency_us = Arc::new(Mutex::new(Vec::with_capacity(config.message_count)));
 
     for _ in 0..config.message_count {
         let begin = Instant::now();
         let success_count_inner = Arc::clone(&success_count);
         let send_failed_count_inner = Arc::clone(&send_failed_count);
         let response_failed_count_inner = Arc::clone(&response_failed_count);
-        let total_rt_ms_inner = Arc::clone(&total_rt_ms);
-        let max_rt_ms_inner = Arc::clone(&max_rt_ms);
+        let latency_us_inner = Arc::clone(&latency_us);
+        let completed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let completed_inner = Arc::clone(&completed);
 
         if let Err(error) = producer
             .send_with_callback_timeout(
                 message(&config.topic, "RustAsyncBenchmark", body),
                 move |result: Option<&SendResult>, error: Option<&RocketMQError>| {
-                    let elapsed_ms = elapsed_ms_u64(begin.elapsed());
-                    total_rt_ms_inner.fetch_add(elapsed_ms, Ordering::Relaxed);
-                    update_max(&max_rt_ms_inner, elapsed_ms);
+                    if completed_inner.swap(true, Ordering::AcqRel) {
+                        return;
+                    }
+                    latency_us_inner.lock().push(elapsed_us_u64(begin.elapsed()));
 
                     match (result, error) {
                         (Some(send_result), None) if send_result.send_status == SendStatus::SendOk => {
@@ -271,7 +344,10 @@ async fn run_async(producer: &mut DefaultMQProducer, config: &Config, body: &[u8
             )
             .await
         {
-            send_failed_count.fetch_add(1, Ordering::Relaxed);
+            if !completed.swap(true, Ordering::AcqRel) {
+                send_failed_count.fetch_add(1, Ordering::Relaxed);
+                latency_us.lock().push(elapsed_us_u64(begin.elapsed()));
+            }
             eprintln!("async send failed before callback: {error}");
         }
     }
@@ -285,15 +361,20 @@ async fn run_async(producer: &mut DefaultMQProducer, config: &Config, body: &[u8
 
     let observed = observed_count(&success_count, &send_failed_count, &response_failed_count);
     if observed < config.message_count {
-        send_failed_count.fetch_add(config.message_count - observed, Ordering::Relaxed);
+        let missing = config.message_count - observed;
+        send_failed_count.fetch_add(missing, Ordering::Relaxed);
+        latency_us.lock().extend(std::iter::repeat_n(
+            config.timeout_ms.saturating_mul(2).saturating_mul(1_000),
+            missing,
+        ));
     }
 
+    let latency_us = latency_us.lock().clone();
     Ok(Stats {
         success_count: success_count.load(Ordering::Relaxed),
         send_failed_count: send_failed_count.load(Ordering::Relaxed),
         response_failed_count: response_failed_count.load(Ordering::Relaxed),
-        total_rt_ms: total_rt_ms.load(Ordering::Relaxed) as u128,
-        max_rt_ms: max_rt_ms.load(Ordering::Relaxed) as u128,
+        latency_us,
     })
 }
 
@@ -337,25 +418,24 @@ async fn run_lite_pull(
     config: &Config,
     body: &[u8],
 ) -> RocketMQResult<(Stats, Duration)> {
-    const TAG: &str = "RustLitePullBenchmark";
+    let tag = format!("RustLitePullBenchmark-{}", config.run_id);
 
     let mut producer = build_producer(client_runtime.clone(), config)?;
     let consumer = build_lite_pull_consumer(client_runtime, config)?;
 
     producer.start().await?;
-    consumer.set_sub_expression_for_assign(&config.topic, TAG).await?;
+    consumer
+        .set_sub_expression_for_assign(&config.topic, tag.as_str())
+        .await?;
     consumer.start().await?;
 
     let queues = consumer.fetch_message_queues(&config.topic).await?;
     let queue = first_queue(queues)?;
-    consumer.assign(vec![queue.clone()]).await?;
-    let offset = producer.max_offset(&queue).await?.max(0);
-    consumer.seek(&queue, offset).await?;
-
-    seed_lite_pull_messages(&mut producer, config, body, TAG, &queue).await?;
+    seed_lite_pull_messages(&mut producer, config, body, tag.as_str(), &queue).await?;
+    consumer.assign(vec![queue]).await?;
 
     let start = Instant::now();
-    let stats = consume_lite_pull_messages(&consumer, config, TAG, start).await;
+    let stats = consume_lite_pull_messages(&consumer, config, tag.as_str(), start).await;
     let elapsed = start.elapsed();
 
     consumer.commit().await;
@@ -467,20 +547,14 @@ fn record_response_failure(stats: &mut Stats, elapsed: Duration) {
 }
 
 fn record_latency(stats: &mut Stats, elapsed: Duration) {
-    let elapsed_ms = elapsed.as_millis();
-    stats.total_rt_ms += elapsed_ms;
-    stats.max_rt_ms = stats.max_rt_ms.max(elapsed_ms);
+    stats.latency_us.push(elapsed_us_u64(elapsed));
 }
 
-fn print_complete_summary(stats: Stats, elapsed: Duration, operation: Operation) {
-    let total = stats.success_count + stats.send_failed_count;
+fn print_complete_summary(stats: &Stats, elapsed: Duration, operation: Operation) {
+    let total = stats.success_count + stats.send_failed_count + stats.response_failed_count;
     let elapsed_secs = elapsed.as_secs_f64().max(0.001);
     let tps = (stats.success_count as f64 / elapsed_secs).round() as u64;
-    let average_rt = if stats.success_count == 0 {
-        0.0
-    } else {
-        stats.total_rt_ms as f64 / stats.success_count as f64
-    };
+    let latency = latency_summary(&stats.latency_us);
     let label = operation.label();
 
     println!(
@@ -490,12 +564,94 @@ fn print_complete_summary(stats: Stats, elapsed: Duration, operation: Operation)
         total,
         label,
         tps,
-        stats.max_rt_ms,
-        average_rt,
+        latency.max as f64 / 1_000.0,
+        latency.average / 1_000.0,
         label,
         stats.send_failed_count,
         stats.response_failed_count
     );
+}
+
+fn write_json_report(path: &PathBuf, config: &Config, stats: &Stats, elapsed: Duration) -> RocketMQResult<()> {
+    if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| RocketMQError::internal("create benchmark report directory", error))?;
+    }
+    let report = benchmark_report(config, stats, elapsed);
+    let body = serde_json::to_vec_pretty(&report)
+        .map_err(|error| RocketMQError::internal("serialize benchmark report", error))?;
+    std::fs::write(path, body).map_err(|error| RocketMQError::internal("write benchmark report", error))
+}
+
+fn benchmark_report<'a>(config: &'a Config, stats: &Stats, elapsed: Duration) -> BenchmarkReport<'a> {
+    let elapsed_secs = elapsed.as_secs_f64().max(0.000_001);
+    let successful_bytes = stats.success_count.saturating_mul(config.message_size);
+    BenchmarkReport {
+        schema_version: 1,
+        artifact_kind: "rocketmq_message_path_measurement",
+        run_id: &config.run_id,
+        generated_at_epoch_ms: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_millis())
+            .unwrap_or_default(),
+        scenario: config.scenario.as_str(),
+        operation: config.scenario.operation().as_str(),
+        target: BenchmarkTarget {
+            namesrv_addr: &config.namesrv_addr,
+            topic: &config.topic,
+        },
+        workload: BenchmarkWorkload {
+            message_count: config.message_count,
+            message_size_bytes: config.message_size,
+            batch_size: config.batch_size,
+        },
+        result: BenchmarkResult {
+            duration_us: elapsed_us_u64(elapsed),
+            success_count: stats.success_count,
+            send_failed_count: stats.send_failed_count,
+            response_failed_count: stats.response_failed_count,
+            throughput_messages_per_second: stats.success_count as f64 / elapsed_secs,
+            payload_mib_per_second: successful_bytes as f64 / (1024.0 * 1024.0) / elapsed_secs,
+            latency_us: latency_summary(&stats.latency_us),
+        },
+    }
+}
+
+fn latency_summary(samples: &[u64]) -> LatencySummary {
+    if samples.is_empty() {
+        return LatencySummary {
+            samples: 0,
+            average: 0.0,
+            p50: 0,
+            p95: 0,
+            p99: 0,
+            p999: 0,
+            max: 0,
+        };
+    }
+
+    let mut sorted = samples.to_vec();
+    sorted.sort_unstable();
+    let total = sorted
+        .iter()
+        .fold(0_u128, |sum, value| sum.saturating_add(*value as u128));
+    LatencySummary {
+        samples: sorted.len(),
+        average: total as f64 / sorted.len() as f64,
+        p50: percentile(&sorted, 50, 100),
+        p95: percentile(&sorted, 95, 100),
+        p99: percentile(&sorted, 99, 100),
+        p999: percentile(&sorted, 999, 1_000),
+        max: sorted.last().copied().unwrap_or_default(),
+    }
+}
+
+fn percentile(sorted: &[u64], numerator: usize, denominator: usize) -> u64 {
+    if sorted.is_empty() || denominator == 0 {
+        return 0;
+    }
+    let rank = sorted.len().saturating_mul(numerator).saturating_add(denominator - 1) / denominator;
+    sorted[rank.clamp(1, sorted.len()) - 1]
 }
 
 fn observed_count(
@@ -508,18 +664,8 @@ fn observed_count(
         + response_failed_count.load(Ordering::Relaxed)
 }
 
-fn elapsed_ms_u64(elapsed: Duration) -> u64 {
-    elapsed.as_millis().try_into().unwrap_or(u64::MAX)
-}
-
-fn update_max(max_rt_ms: &AtomicU64, candidate: u64) {
-    let mut current = max_rt_ms.load(Ordering::Relaxed);
-    while candidate > current {
-        match max_rt_ms.compare_exchange_weak(current, candidate, Ordering::Relaxed, Ordering::Relaxed) {
-            Ok(_) => break,
-            Err(next) => current = next,
-        }
-    }
+fn elapsed_us_u64(elapsed: Duration) -> u64 {
+    elapsed.as_micros().try_into().unwrap_or(u64::MAX)
 }
 
 impl Config {
@@ -537,6 +683,8 @@ impl Config {
             access_key: env_non_empty("ROCKETMQ_ACL_ACCESS_KEY"),
             secret_key: env_non_empty("ROCKETMQ_ACL_SECRET_KEY"),
             security_token: env_non_empty("ROCKETMQ_ACL_SECURITY_TOKEN"),
+            output_json: None,
+            run_id: unique_run_id(),
         };
 
         let mut args = std::env::args().skip(1);
@@ -574,6 +722,10 @@ impl Config {
                 "--access-key" => config.access_key = Some(next_arg(&mut args, "--access-key")?),
                 "--secret-key" => config.secret_key = Some(next_arg(&mut args, "--secret-key")?),
                 "--security-token" => config.security_token = Some(next_arg(&mut args, "--security-token")?),
+                "--output-json" => {
+                    config.output_json = Some(PathBuf::from(next_arg(&mut args, "--output-json")?));
+                }
+                "--run-id" => config.run_id = next_arg(&mut args, "--run-id")?,
                 other => return Err(RocketMQError::illegal_argument(format!("unknown argument: {other}"))),
             }
         }
@@ -583,6 +735,16 @@ impl Config {
         }
         if config.topic.trim().is_empty() {
             return Err(RocketMQError::illegal_argument("--topic must not be blank"));
+        }
+        if config.run_id.trim().is_empty() {
+            return Err(RocketMQError::illegal_argument("--run-id must not be blank"));
+        }
+        if config
+            .output_json
+            .as_ref()
+            .is_some_and(|path| path.as_os_str().is_empty())
+        {
+            return Err(RocketMQError::illegal_argument("--output-json must not be blank"));
         }
         if config.access_key.is_some() != config.secret_key.is_some() {
             return Err(RocketMQError::illegal_argument(
@@ -651,4 +813,82 @@ fn unique_consumer_group() -> String {
         .map(|duration| duration.as_millis())
         .unwrap_or_default();
     format!("rocketmq-rust-benchmark-lite-pull-{millis}")
+}
+
+fn unique_run_id() -> String {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default();
+    format!("message-path-{millis}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_config() -> Config {
+        Config {
+            namesrv_addr: "127.0.0.1:19876".to_string(),
+            topic: "QualificationTopic".to_string(),
+            producer_group: "qualification-producer".to_string(),
+            scenario: Scenario::Sync,
+            message_count: 4,
+            message_size: 1_024,
+            batch_size: 1,
+            timeout_ms: 3_000,
+            use_tls: false,
+            access_key: None,
+            secret_key: None,
+            security_token: None,
+            output_json: None,
+            run_id: "qualification-run".to_string(),
+        }
+    }
+
+    #[test]
+    fn latency_summary_uses_nearest_rank_percentiles() {
+        let summary = latency_summary(&[100, 200, 300, 400, 500]);
+
+        assert_eq!(5, summary.samples);
+        assert_eq!(300, summary.p50);
+        assert_eq!(500, summary.p95);
+        assert_eq!(500, summary.p99);
+        assert_eq!(500, summary.p999);
+        assert_eq!(500, summary.max);
+        assert_eq!(300.0, summary.average);
+    }
+
+    #[test]
+    fn benchmark_report_has_stable_machine_readable_contract() {
+        let config = test_config();
+        let stats = Stats {
+            success_count: 4,
+            send_failed_count: 0,
+            response_failed_count: 0,
+            latency_us: vec![100, 200, 300, 400],
+        };
+
+        let report = benchmark_report(&config, &stats, Duration::from_secs(2));
+        let value = serde_json::to_value(report).expect("benchmark report should serialize");
+
+        assert_eq!(1, value["schema_version"]);
+        assert_eq!("rocketmq_message_path_measurement", value["artifact_kind"]);
+        assert_eq!("qualification-run", value["run_id"]);
+        assert_eq!("sync", value["scenario"]);
+        assert_eq!("send", value["operation"]);
+        assert_eq!(4, value["result"]["success_count"]);
+        assert_eq!(2.0, value["result"]["throughput_messages_per_second"]);
+        assert_eq!(400, value["result"]["latency_us"]["p95"]);
+    }
+
+    #[test]
+    fn lite_pull_uses_short_long_poll_with_rpc_safety_margin() {
+        let short_suspend = lite_pull_broker_suspend_ms(50);
+        let normal_suspend = lite_pull_broker_suspend_ms(30_000);
+
+        assert_eq!(100, short_suspend);
+        assert_eq!(1_000, normal_suspend);
+        assert!(normal_suspend.saturating_add(1_000) > normal_suspend);
+    }
 }

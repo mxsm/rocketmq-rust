@@ -24,6 +24,9 @@ param(
     [switch]$SkipJavaClientRustBroker,
     [switch]$SkipMixedMatrix,
     [switch]$RunProductionReadiness,
+    [switch]$RunMessagePathQualification,
+    [ValidateRange(1, 100)][int]$MessagePathQualificationRepetitions = 1,
+    [string]$MessagePathDurabilityContract = "async-flush-single-replica",
     [switch]$UseExistingJavaClasses,
     [bool]$EnableCreateTopicSmoke = $true,
     [switch]$EnableAclSmoke,
@@ -460,6 +463,10 @@ function Invoke-LoggedCommandUntilMatch {
                 -TimeoutSeconds $TimeoutSeconds `
                 -Environment $Environment
 
+            if ($DryRun) {
+                return ""
+            }
+
             $output = if (Test-Path $OutputFile) { Get-Content -Raw -Path $OutputFile } else { "" }
             $missingValues = @()
             foreach ($value in $RequiredValues) {
@@ -640,12 +647,11 @@ function Write-RustBrokerConfig {
     $rustBrokerDataRoot = Join-Path $dataRoot "rust-broker"
     New-Directory $rustBrokerDataRoot
     $content = @"
+[broker]
 namesrvAddr = "$namesrvAddr"
 brokerIp1 = "$NamesrvHost"
 listenPort = $BrokerPort
 storePathRootDir = "$($rustBrokerDataRoot -replace '\\','/')"
-storePathCommitLog = "$((Join-Path $rustBrokerDataRoot 'commitlog') -replace '\\','/')"
-mappedFileSizeCommitLog = 67108864
 enableControllerMode = false
 autoCreateTopicEnable = true
 autoCreateSubscriptionGroup = true
@@ -662,27 +668,36 @@ aclFile = $(ConvertTo-TomlBasicString ($rustAclFilePath -replace '\\','/'))
 innerClientAuthenticationCredentials = $(ConvertTo-TomlBasicString $innerCredentials)
 "@
     }
+    $content += @"
+
+[broker.brokerServerConfig]
+bindAddress = "0.0.0.0"
+"@
     if ($EnableTlsSmoke) {
         $content += @"
 
-tls.enable = true
-tls.test.mode.enable = true
-tls.server.mode = "permissive"
-tls.server.need.client.auth = "none"
-tls.server.authClient = false
-tls.client.authServer = false
+[broker.brokerServerConfig.tlsConfig]
+enable = true
+testModeEnable = true
+clientAuthServer = false
+
+[broker.brokerServerConfig.tlsConfig.server]
+mode = "permissive"
+needClientAuth = "none"
+authClient = false
 "@
     }
     $content += @"
 
-[brokerServerConfig]
-listenPort = $BrokerPort
-bindAddress = "0.0.0.0"
-
-[brokerIdentity]
+[broker.brokerIdentity]
 brokerName = "$BrokerName"
 brokerClusterName = "$ClusterName"
 brokerId = 0
+
+[store]
+storePathRootDir = "$($rustBrokerDataRoot -replace '\\','/')"
+storePathCommitLog = "$((Join-Path $rustBrokerDataRoot 'commitlog') -replace '\\','/')"
+mappedFileSizeCommitLog = 67108864
 "@
     Write-AsciiFile -Path $Path -Content $content
 }
@@ -948,9 +963,11 @@ function Start-RustTopology {
     }
     New-Directory $RocketMQHome
 
-    $rustNamesrvArgs = @(
-        "run", "-p", "rocketmq-namesrv", "--bin", "rocketmq-namesrv-rust", "--"
-    )
+    $rustNamesrvArgs = @("run")
+    if ($RunMessagePathQualification) {
+        $rustNamesrvArgs += "--release"
+    }
+    $rustNamesrvArgs += @("-p", "rocketmq-namesrv", "--bin", "rocketmq-namesrv-rust", "--")
     if ($EnableTlsSmoke) {
         $rustNamesrvArgs += @("-c", $rustNamesrvConfigPath)
     }
@@ -969,14 +986,20 @@ function Start-RustTopology {
         -Environment @{ ROCKETMQ_HOME = $RocketMQHome }
     Wait-ForTcpPort -EndpointHost $NamesrvHost -Port $NamesrvPort -TimeoutSeconds $StartupTimeoutSeconds
 
+    $rustBrokerArgs = @("run")
+    if ($RunMessagePathQualification) {
+        $rustBrokerArgs += "--release"
+    }
+    $rustBrokerArgs += @(
+        "-p", "rocketmq-broker", "--bin", "rocketmq-broker-rust", "--",
+        "-c", $rustBrokerConfig,
+        "-n", $namesrvAddr
+    )
+
     $script:processes += Start-LoggedProcess `
         -Name "rust-broker" `
         -FilePath "cargo" `
-        -ArgumentList @(
-            "run", "-p", "rocketmq-broker", "--bin", "rocketmq-broker-rust", "--",
-            "-c", $rustBrokerConfig,
-            "-n", $namesrvAddr
-        ) `
+        -ArgumentList $rustBrokerArgs `
         -WorkingDirectory $workspaceRoot `
         -LogPath (Join-Path $logRoot "rust-broker.log") `
         -Environment @{ ROCKETMQ_HOME = $RocketMQHome }
@@ -1014,6 +1037,40 @@ function Invoke-RustBrokerBackedSmoke {
         if (-not ($explicitOkLine -or $singleTestOkResult)) {
             throw "$Name-$testName did not report a single-test ok result. See $outputFile"
         }
+    }
+}
+
+function Invoke-MessagePathQualification {
+    $qualificationScript = Join-Path $PSScriptRoot "message_path_qualification.py"
+    $qualificationOutputRoot = Join-Path $runRoot "message-path-qualification"
+    $qualificationRunId = "functional-$runStamp-$PID"
+    $qualificationReport = Join-Path $qualificationOutputRoot (Join-Path $qualificationRunId "qualification-report.json")
+    $command = "python $(Format-CommandArgument $qualificationScript) run " +
+        "--mode smoke --namesrv $(Format-CommandArgument $namesrvAddr) " +
+        "--confirm-target $(Format-CommandArgument $namesrvAddr) --topic $(Format-CommandArgument $Topic) " +
+        "--durability-contract $(Format-CommandArgument $MessagePathDurabilityContract) " +
+        "--run-id $(Format-CommandArgument $qualificationRunId) " +
+        "--repetitions $MessagePathQualificationRepetitions " +
+        "--output-dir $(Format-CommandArgument $qualificationOutputRoot)"
+
+    Invoke-LoggedCommand `
+        -Name "message-path-qualification" `
+        -Command $command `
+        -WorkingDirectory $workspaceRoot `
+        -OutputFile (Join-Path $logRoot "message-path-qualification.log") `
+        -TimeoutSeconds $CommandTimeoutSeconds `
+        -Environment (Get-SmokeEnvironment)
+
+    "messagePathQualificationReport=$qualificationReport" | Add-Content -Path $summaryFile
+    if ($DryRun) {
+        return
+    }
+    if (-not (Test-Path $qualificationReport)) {
+        throw "Message-path qualification did not produce $qualificationReport"
+    }
+    $report = Get-Content -Raw -Path $qualificationReport | ConvertFrom-Json
+    if ($report.artifact_kind -ne "rocketmq_message_path_qualification_report" -or $report.status -ne "pass") {
+        throw "Message-path qualification report is not a passing report: $qualificationReport"
     }
 }
 
@@ -1146,6 +1203,10 @@ Initialize-OptionalGateFiles
 "aclAccessKey=$AclAccessKey" | Add-Content -Path $summaryFile
 "javaRuntimeHome=$javaRuntimeHome" | Add-Content -Path $summaryFile
 "enableTlsSmoke=$EnableTlsSmoke" | Add-Content -Path $summaryFile
+"runMessagePathQualification=$RunMessagePathQualification" | Add-Content -Path $summaryFile
+"messagePathQualificationRepetitions=$MessagePathQualificationRepetitions" | Add-Content -Path $summaryFile
+"messagePathDurabilityContract=$MessagePathDurabilityContract" | Add-Content -Path $summaryFile
+"rustTopologyBuildProfile=$(if ($RunMessagePathQualification) { 'release' } else { 'debug' })" | Add-Content -Path $summaryFile
 "dryRun=$DryRun" | Add-Content -Path $summaryFile
 "" | Add-Content -Path $summaryFile
 
@@ -1170,7 +1231,7 @@ try {
         Add-ExternalGate -Gates $externalGates -Gate "Rust client against Java broker skipped by -SkipRustClientJavaBroker"
     }
 
-    if ((-not $SkipRustClientRustBroker) -or (-not $SkipJavaClientRustBroker)) {
+    if ((-not $SkipRustClientRustBroker) -or (-not $SkipJavaClientRustBroker) -or $RunMessagePathQualification) {
         try {
             Start-RustTopology
             if (-not $SkipRustClientRustBroker) {
@@ -1183,6 +1244,11 @@ try {
             } else {
                 Add-ExternalGate -Gates $externalGates -Gate "Java client against Rust broker skipped by -SkipJavaClientRustBroker"
             }
+            if ($RunMessagePathQualification) {
+                Invoke-MessagePathQualification
+            } else {
+                Add-ExternalGate -Gates $externalGates -Gate "message-path qualification skipped; pass -RunMessagePathQualification"
+            }
         }
         finally {
             Stop-StartedProcesses
@@ -1190,6 +1256,7 @@ try {
     } else {
         Add-ExternalGate -Gates $externalGates -Gate "Rust client against Rust broker skipped by -SkipRustClientRustBroker"
         Add-ExternalGate -Gates $externalGates -Gate "Java client against Rust broker skipped by -SkipJavaClientRustBroker"
+        Add-ExternalGate -Gates $externalGates -Gate "message-path qualification skipped; pass -RunMessagePathQualification"
     }
 
     if (-not $SkipMixedMatrix) {

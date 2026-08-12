@@ -1733,24 +1733,8 @@ impl DefaultLitePullConsumerImpl {
                     )
                     .await;
                 if result_is_current && !messages.is_empty() {
-                    let dispatch_to_consume = process_queue.put_message(&messages).await;
-                    if dispatch_to_consume {
-                        let retry_offset = messages.first().map_or(pull_offset, |message| message.queue_offset);
-                        let cached_messages = messages.clone();
-                        if let Err(error) = self.enqueue_consume_request(LitePullConsumeRequest::new(
-                            messages,
-                            mq.clone(),
-                            process_queue.clone(),
-                        )) {
-                            self.consume_request_flow_control_times.fetch_add(1, Ordering::Relaxed);
-                            process_queue.remove_message(&cached_messages).await;
-                            process_queue.set_consuming(false);
-                            self.assigned_message_queue
-                                .update_pull_offset(mq, retry_offset, process_queue)
-                                .await;
-                            return Err(error);
-                        }
-                    }
+                    self.cache_lite_pull_batch(messages, mq, process_queue, pull_offset)
+                        .await?;
                 }
 
                 Ok(0)
@@ -1783,6 +1767,30 @@ impl DefaultLitePullConsumerImpl {
                     .await)
             }
         }
+    }
+
+    async fn cache_lite_pull_batch(
+        &self,
+        messages: Vec<Arc<MessageExt>>,
+        mq: &MessageQueue,
+        process_queue: &Arc<crate::consumer::consumer_impl::process_queue::ProcessQueue>,
+        pull_offset: i64,
+    ) -> RocketMQResult<()> {
+        let retry_offset = messages.first().map_or(pull_offset, |message| message.queue_offset);
+        let cached_messages = messages.clone();
+        process_queue.put_message(&messages).await;
+        if let Err(error) =
+            self.enqueue_consume_request(LitePullConsumeRequest::new(messages, mq.clone(), process_queue.clone()))
+        {
+            self.consume_request_flow_control_times.fetch_add(1, Ordering::Relaxed);
+            process_queue.remove_message(&cached_messages).await;
+            process_queue.set_consuming(false);
+            self.assigned_message_queue
+                .update_pull_offset(mq, retry_offset, process_queue)
+                .await;
+            return Err(error);
+        }
+        Ok(())
     }
 
     async fn assignment_operation(
@@ -4402,6 +4410,50 @@ mod tests {
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].queue_offset, 7);
         assert_eq!(impl_.assigned_message_queue.get_consume_offset(&mq).await, 8);
+    }
+
+    #[tokio::test]
+    async fn consecutive_lite_pull_batches_each_publish_a_poll_request() {
+        let impl_ = DefaultLitePullConsumerImpl::new(
+            crate::runtime::test_client_runtime("lite-pull-consecutive-batches-test"),
+            Arc::new(ClientConfig::default()),
+            Arc::new(LitePullConsumerConfig {
+                consumer_group: CheetahString::from_static_str("lite_pull_consecutive_batches_group"),
+                auto_commit: false,
+                ..Default::default()
+            }),
+        );
+        impl_.set_service_state(ServiceState::Running);
+
+        let mq = MessageQueue::from_parts("topic-consecutive-batches", "broker-a", 0);
+        impl_.assigned_message_queue.put(mq.clone()).await;
+        let process_queue = impl_
+            .assigned_message_queue
+            .get_process_queue(&mq)
+            .await
+            .expect("assigned queue should have a process queue");
+
+        for offset in [0_i64, 1] {
+            impl_
+                .cache_lite_pull_batch(
+                    vec![Arc::new(MessageExt {
+                        queue_offset: offset,
+                        ..Default::default()
+                    })],
+                    &mq,
+                    &process_queue,
+                    offset,
+                )
+                .await
+                .expect("each pull result should publish a poll request");
+        }
+
+        assert_eq!(impl_.consume_request_queue_snapshot().depth, 2);
+        let first = impl_.poll(0).await.expect("first batch should be pollable");
+        let second = impl_.poll(0).await.expect("second batch should be pollable");
+        assert_eq!(first[0].queue_offset, 0);
+        assert_eq!(second[0].queue_offset, 1);
+        assert_eq!(impl_.assigned_message_queue.get_consume_offset(&mq).await, 2);
     }
 
     #[test]
