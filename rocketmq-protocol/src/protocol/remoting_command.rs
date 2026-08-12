@@ -48,6 +48,7 @@ use crate::rocketmq_serializable::RocketMQSerializable;
 pub const SERIALIZE_TYPE_PROPERTY: &str = "rocketmq.serialize.type";
 pub const SERIALIZE_TYPE_ENV: &str = "ROCKETMQ_SERIALIZE_TYPE";
 pub const REMOTING_VERSION_KEY: &str = "rocketmq.remoting.version";
+const JAVA_DEFAULT_RESPONSE_REMARK: &str = "not set any response code";
 
 static REQUEST_ID: std::sync::LazyLock<Arc<AtomicI32>> = std::sync::LazyLock::new(|| Arc::new(AtomicI32::new(0)));
 
@@ -261,6 +262,14 @@ impl RemotingCommand {
         Self::with_application_defaults().set_code(code).mark_response_type()
     }
 
+    /// Creates a response with an explicit code and typed custom header.
+    pub fn create_response_command_with_code_and_header(
+        code: impl Into<i32>,
+        header: impl CommandCustomHeader + Sync + Send + 'static,
+    ) -> Self {
+        Self::create_response_command_with_code(code).set_command_custom_header(header)
+    }
+
     pub fn create_response_command_with_code_remark(code: impl Into<i32>, remark: impl Into<CheetahString>) -> Self {
         Self::with_application_defaults()
             .set_code(code)
@@ -268,17 +277,46 @@ impl RemotingCommand {
             .mark_response_type()
     }
 
-    pub fn create_response_command() -> Self {
-        Self::with_application_defaults()
-            .set_code(RemotingSysResponseCode::Success)
-            .mark_response_type()
+    /// Creates an explicitly successful response.
+    pub fn create_success_response_command() -> Self {
+        Self::create_response_command_with_code(RemotingSysResponseCode::Success)
     }
 
+    /// Creates an explicitly successful response with a typed custom header.
+    pub fn create_success_response_command_with_header(
+        header: impl CommandCustomHeader + Sync + Send + 'static,
+    ) -> Self {
+        Self::create_response_command_with_code_and_header(RemotingSysResponseCode::Success, header)
+    }
+
+    /// Creates the unset error response used by Java's typed-header factory.
+    pub fn create_java_default_error_response_command() -> Self {
+        Self::create_response_command_with_code_remark(
+            RemotingSysResponseCode::SystemError,
+            JAVA_DEFAULT_RESPONSE_REMARK,
+        )
+    }
+
+    /// Creates the unset Java-compatible error response with a typed header.
+    pub fn create_java_default_error_response_command_with_header(
+        header: impl CommandCustomHeader + Sync + Send + 'static,
+    ) -> Self {
+        Self::create_java_default_error_response_command().set_command_custom_header(header)
+    }
+
+    /// Legacy ambiguous-success response factory.
+    ///
+    /// New code should call [`Self::create_success_response_command`] so the
+    /// response intent is visible during review.
+    pub fn create_response_command() -> Self {
+        Self::create_success_response_command()
+    }
+
+    /// Legacy ambiguous-success typed-header response factory.
+    ///
+    /// New code should call [`Self::create_success_response_command_with_header`].
     pub fn create_response_command_with_header(header: impl CommandCustomHeader + Sync + Send + 'static) -> Self {
-        Self::with_application_defaults()
-            .set_code(RemotingSysResponseCode::Success)
-            .set_command_custom_header(header)
-            .mark_response_type()
+        Self::create_success_response_command_with_header(header)
     }
 
     pub fn set_command_custom_header<T>(mut self, command_custom_header: T) -> Self
