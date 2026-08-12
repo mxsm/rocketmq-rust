@@ -19,7 +19,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::config_support::name_server_address_utils::NameServerAddressUtils;
+use crate::config_support::name_server_target::parse_legacy_namesrv_addr;
+use crate::config_support::name_server_target::NormalizedNameServerTargets;
 use cheetah_string::CheetahString;
+use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
 use rocketmq_protocol::protocol::request_type::RequestType;
@@ -286,6 +289,9 @@ impl ClientConfig {
 
     #[inline]
     pub fn get_namesrv_addr(&self) -> Option<CheetahString> {
+        if let Ok(Some(targets)) = self.normalized_namesrv_targets() {
+            return Some(CheetahString::from_slice(targets.canonical()));
+        }
         if let Some(namesrv_addr) = self
             .namesrv_addr
             .as_ref()
@@ -296,6 +302,17 @@ impl ClientConfig {
         } else {
             self.namesrv_addr.clone()
         }
+    }
+
+    pub(crate) fn normalized_namesrv_targets(&self) -> RocketMQResult<Option<NormalizedNameServerTargets>> {
+        self.namesrv_addr.as_deref().map(parse_legacy_namesrv_addr).transpose()
+    }
+
+    pub(crate) fn normalize_namesrv_addr(&mut self) -> RocketMQResult<()> {
+        if let Some(targets) = self.normalized_namesrv_targets()? {
+            self.namesrv_addr = Some(CheetahString::from_slice(targets.canonical()));
+        }
+        Ok(())
     }
 
     // ============ Comprehensive Getters and Setters ============

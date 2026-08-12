@@ -13,3 +13,4 @@
 // limitations under the License.
 
 pub mod name_server_address_utils;
+pub(crate) mod name_server_target;
