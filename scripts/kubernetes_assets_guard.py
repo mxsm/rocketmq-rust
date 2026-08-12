@@ -90,6 +90,16 @@ EXPECTED_SERVICES: dict[str, dict[str, Any]] = {
     },
 }
 EXPECTED_TOOLS = {
+    "kind": (
+        "v0.27.0",
+        "a6875aaea358acf0ac07786b1a6755d08fd640f4c79b7a2e46681cc13f49a04b",
+        "445ee4263d5de090d60d049453d9691a2587a17cb349aa5ab8f402a47e3c2490",
+    ),
+    "kubectl": (
+        "v1.32.2",
+        "4f6a959dcc5b702135f8354cc7109b542a2933c46b808b248a214c1f69f817ea",
+        "cf51a1c6bf3b6ba6a5b549d1debf8aa6afb00c4c5a3d5d4bb1072f54cbe4390f",
+    ),
     "helm": (
         "v4.2.3",
         "e9b88b4ee95b18c706839c28d3a0220e5bc470e9cd9262410c90793c45ff8b7c",
