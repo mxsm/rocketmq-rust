@@ -437,6 +437,7 @@ fn language(value: &[u8]) -> Option<LanguageCode> {
         b"PHP" => LanguageCode::PHP,
         b"OMS" => LanguageCode::OMS,
         b"RUST" => LanguageCode::RUST,
+        b"NODE_JS" => LanguageCode::NODE_JS,
         _ => return None,
     })
 }
@@ -781,6 +782,16 @@ mod tests {
                 Some("id")
             );
         }
+    }
+
+    #[test]
+    fn decodes_node_js_language_on_fast_path() {
+        let input = br#"{"code":10,"language":"NODE_JS","version":501,"opaque":7,"flag":0,"remark":null,"extFields":null,"serializeTypeCurrentRPC":"JSON"}"#;
+
+        let command = decode(input).expect("NODE_JS JSON should use the fast parser");
+
+        assert_eq!(command.language, LanguageCode::NODE_JS);
+        assert_eq!(command.version, 501);
     }
 
     #[test]
