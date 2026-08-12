@@ -134,7 +134,7 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
         request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let response = RemotingCommand::create_response_command().set_opaque(request.opaque());
+        let response = RemotingCommand::create_java_default_error_response_command().set_opaque(request.opaque());
         let Some(body) = request.body() else {
             return Ok(Some(
                 response
@@ -228,15 +228,14 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
         };
 
         Ok(Some(
-            response
-                .set_command_custom_header(UpdateBrokerConfigResponseHeader {
-                    config_generation: generation.value(),
-                })
-                .set_code(ResponseCode::Success)
-                .set_remark(format!(
-                    "update broker config success, generation={}",
-                    generation.value()
-                )),
+            RemotingCommand::create_success_response_command_with_header(UpdateBrokerConfigResponseHeader {
+                config_generation: generation.value(),
+            })
+            .set_opaque(request.opaque())
+            .set_remark(format!(
+                "update broker config success, generation={}",
+                generation.value()
+            )),
         ))
     }
 
@@ -312,11 +311,15 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
             }
         };
         match control.apply(request).await {
-            Ok(resolved) => Ok(Some(response.set_code(ResponseCode::Success).set_remark(format!(
-                "log filter update success: effectiveFilter={}, baselineFilter={}",
-                resolved.filter(),
-                control.baseline().filter()
-            )))),
+            Ok(resolved) => Ok(Some(
+                RemotingCommand::create_success_response_command()
+                    .set_opaque(response.opaque())
+                    .set_remark(format!(
+                        "log filter update success: effectiveFilter={}, baselineFilter={}",
+                        resolved.filter(),
+                        control.baseline().filter()
+                    )),
+            )),
             Err(error) => {
                 tracing::error!(error = %error, "broker remote log filter update failed");
                 Ok(Some(response.set_code(ResponseCode::SystemError).set_remark(
@@ -333,7 +336,7 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let mut response = RemotingCommand::create_response_command();
+        let mut response = RemotingCommand::create_success_response_command();
         // broker config => broker config
         // default message store config => message store config
         let snapshot = self.broker_runtime_inner.runtime_config_snapshot();
@@ -374,7 +377,7 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let mut response = RemotingCommand::create_response_command();
+        let mut response = RemotingCommand::create_success_response_command();
         let runtime_info = self.prepare_runtime_info();
         let key_value_table = KVTable { table: runtime_info };
         response.set_body_mut_ref(serde_json::to_string(&key_value_table).unwrap());
@@ -388,7 +391,7 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let response = RemotingCommand::create_response_command();
+        let response = RemotingCommand::create_java_default_error_response_command();
         let Some(ext_fields) = request.get_ext_fields() else {
             return Ok(Some(
                 response
@@ -422,11 +425,10 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
         };
 
         match self.broker_runtime_inner.set_commitlog_read_mode(read_mode) {
-            Ok(()) => {
-                Ok(Some(response.set_code(ResponseCode::Success).set_remark(format!(
-                    "set commitlog readahead mode success, mode: {mode}"
-                ))))
-            }
+            Ok(()) => Ok(Some(
+                RemotingCommand::create_success_response_command()
+                    .set_remark(format!("set commitlog readahead mode success, mode: {mode}")),
+            )),
             Err(error) => Ok(Some(
                 response
                     .set_code(ResponseCode::SystemError)
@@ -442,7 +444,7 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let response = RemotingCommand::create_response_command();
+        let response = RemotingCommand::create_java_default_error_response_command();
         let request_header = request.decode_command_custom_header::<ExportRocksdbConfigToJsonRequestHeader>()?;
         let config_types = match request_header.fetch_config_type() {
             Ok(config_types) => config_types,
@@ -500,7 +502,7 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
             }
             if exported_count > 0 {
                 return Ok(Some(
-                    response.set_code(ResponseCode::Success).set_remark("export done."),
+                    RemotingCommand::create_success_response_command().set_remark("export done."),
                 ));
             }
         }
@@ -545,7 +547,7 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let response = RemotingCommand::create_response_command();
+        let response = RemotingCommand::create_java_default_error_response_command();
 
         if !self.broker_runtime_inner.message_store_config().is_timer_wheel_enable() {
             return Ok(Some(
@@ -599,9 +601,7 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
         timer_message_store.start();
 
         Ok(Some(
-            response
-                .set_code(ResponseCode::Success)
-                .set_remark("switch timer engine success"),
+            RemotingCommand::create_success_response_command().set_remark("switch timer engine success"),
         ))
     }
 
@@ -1437,6 +1437,7 @@ mod tests {
         )
         .set_body("maxClientEventCount=7");
         request.make_custom_header_to_net();
+        let request_opaque = request.opaque();
 
         let response = handler
             .update_broker_config(channel, ctx, RequestCode::UpdateBrokerConfigCas, &mut request)
@@ -1445,11 +1446,16 @@ mod tests {
             .expect("CAS update should return a response");
 
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        assert_eq!(response.opaque(), request_opaque);
         assert_eq!(
             response
                 .read_custom_header_ref::<UpdateBrokerConfigResponseHeader>()
                 .map(|header| header.config_generation),
             Some(2)
+        );
+        assert_eq!(
+            response.remark().map(CheetahString::as_str),
+            Some("update broker config success, generation=2")
         );
         assert_eq!(admin.broker_config().max_client_event_count, 7);
 

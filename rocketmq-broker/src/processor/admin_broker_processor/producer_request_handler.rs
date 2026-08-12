@@ -21,7 +21,7 @@ impl ProducerRequestHandler {
         _ctx: ConnectionHandlerContext,
         request: &RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let mut response = RemotingCommand::create_response_command();
+        let response = RemotingCommand::create_java_default_error_response_command();
         let request_header = request.decode_command_custom_header_fast::<GetProducerConnectionListRequestHeader>()?;
         let mut producer_connection = ProducerConnection::new();
 
@@ -37,15 +37,13 @@ impl ProducerRequestHandler {
                 producer_connection.connection_set_mut().insert(connection);
             }
             let body = producer_connection.encode()?;
-            response = response.set_body(body).set_code(ResponseCode::Success);
-            return Ok(Some(response));
+            return Ok(Some(RemotingCommand::create_success_response_command().set_body(body)));
         }
 
-        response = response.set_code(ResponseCode::SystemError).set_remark(format!(
+        Ok(Some(response.set_code(ResponseCode::SystemError).set_remark(format!(
             "the producer group[{}] not exist",
             request_header.producer_group()
-        ));
-        Ok(Some(response))
+        ))))
     }
 
     pub async fn get_all_producer_info(
@@ -53,11 +51,9 @@ impl ProducerRequestHandler {
         _ctx: ConnectionHandlerContext,
         _request: &RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let mut response = RemotingCommand::create_response_command();
         let producer_table_info = self.producer_registry.producer_table();
         let body = producer_table_info.encode()?;
-        response = response.set_body(body).set_code(ResponseCode::Success);
-        Ok(Some(response))
+        Ok(Some(RemotingCommand::create_success_response_command().set_body(body)))
     }
 }
 

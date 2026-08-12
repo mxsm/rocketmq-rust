@@ -14,7 +14,6 @@
 
 use rocketmq_model::common::mix_all::MASTER_ID;
 use rocketmq_protocol::code::request_code::RequestCode;
-use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::reset_master_flush_offset_header::ResetMasterFlushOffsetHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_store::BrokerAdminStore;
@@ -38,8 +37,6 @@ impl ResetMasterFlushOffsetHandler {
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let response = RemotingCommand::create_response_command();
-
         let broker_id = broker_runtime_inner.broker_config().broker_identity.broker_id;
         if broker_id != MASTER_ID {
             let request_header = request.decode_required_header::<ResetMasterFlushOffsetHeader>(
@@ -53,6 +50,6 @@ impl ResetMasterFlushOffsetHandler {
             }
         }
 
-        Ok(Some(response.set_code(ResponseCode::Success)))
+        Ok(Some(RemotingCommand::create_success_response_command()))
     }
 }

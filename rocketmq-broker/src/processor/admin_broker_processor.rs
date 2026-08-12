@@ -792,19 +792,19 @@ mod tests {
     #[test]
     fn auth_admin_error_response_maps_auth_and_config_errors_consistently() {
         let response = map_auth_admin_error_response(
-            RemotingCommand::create_response_command(),
+            RemotingCommand::create_java_default_error_response_command(),
             RocketMQError::user_not_found("alice"),
         );
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::UserNotExist);
 
         let response = map_auth_admin_error_response(
-            RemotingCommand::create_response_command(),
+            RemotingCommand::create_java_default_error_response_command(),
             RocketMQError::authentication_failed("bad credentials"),
         );
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::NoPermission);
 
         let response = map_auth_admin_error_response(
-            RemotingCommand::create_response_command(),
+            RemotingCommand::create_java_default_error_response_command(),
             RocketMQError::ConfigInvalidValue {
                 key: "auth.authorization",
                 value: "local".to_owned(),
@@ -814,19 +814,19 @@ mod tests {
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::InvalidParameter);
 
         let response = map_auth_admin_error_response(
-            RemotingCommand::create_response_command(),
+            RemotingCommand::create_java_default_error_response_command(),
             RocketMQError::auth_config_invalid("auth.authorization", "provider not ready"),
         );
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::InvalidParameter);
 
         let response = map_auth_admin_error_response(
-            RemotingCommand::create_response_command(),
+            RemotingCommand::create_java_default_error_response_command(),
             RocketMQError::auth_hot_reload_failed("conf/plain_acl.yml", "watcher task failed"),
         );
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::SystemError);
 
         let response = map_auth_admin_error_response(
-            RemotingCommand::create_response_command(),
+            RemotingCommand::create_java_default_error_response_command(),
             RocketMQError::request_body_invalid("decode", "malformed auth admin body"),
         );
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::InvalidParameter);

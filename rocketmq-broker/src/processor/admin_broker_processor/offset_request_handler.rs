@@ -70,7 +70,7 @@ impl OffsetRequestHandler {
             .unwrap()
             .get_max_offset_in_queue(topic.as_ref(), queue_id);
         let response_header = GetMaxOffsetResponseHeader { offset };
-        Ok(Some(RemotingCommand::create_response_command_with_header(
+        Ok(Some(RemotingCommand::create_success_response_command_with_header(
             response_header,
         )))
     }
@@ -103,7 +103,7 @@ impl OffsetRequestHandler {
             .unwrap()
             .get_min_offset_in_queue(topic.as_ref(), queue_id);
         let response_header = GetMinOffsetResponseHeader { offset };
-        Ok(Some(RemotingCommand::create_response_command_with_header(
+        Ok(Some(RemotingCommand::create_success_response_command_with_header(
             response_header,
         )))
     }
@@ -168,7 +168,7 @@ impl OffsetRequestHandler {
                 }
             }
         };
-        Ok(Some(RemotingCommand::create_response_command_with_header(
+        Ok(Some(RemotingCommand::create_success_response_command_with_header(
             GetMinOffsetResponseHeader {
                 offset: max_item.compute_static_queue_offset_loosely(max_physical_offset),
             },
@@ -235,7 +235,7 @@ impl OffsetRequestHandler {
                 }
             }
         };
-        Ok(Some(RemotingCommand::create_response_command_with_header(
+        Ok(Some(RemotingCommand::create_success_response_command_with_header(
             GetMaxOffsetResponseHeader {
                 offset: max_item.compute_static_queue_offset_strictly(max_physical_offset),
             },
@@ -250,7 +250,7 @@ impl OffsetRequestHandler {
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let mut response_command = RemotingCommand::create_response_command();
+        let response_command = RemotingCommand::create_java_default_error_response_command();
         let content = broker_runtime_inner.schedule_message_service().encode_pretty(false);
         if content.is_empty() {
             return Ok(Some(
@@ -259,8 +259,9 @@ impl OffsetRequestHandler {
                     .set_remark("No delay offset in this broker"),
             ));
         }
-        response_command.set_body_mut_ref(content.into_bytes());
-        Ok(Some(response_command))
+        Ok(Some(
+            RemotingCommand::create_success_response_command().set_body(content.into_bytes()),
+        ))
     }
 
     pub async fn get_earliest_msg_store_time<MS: BrokerAdminStore>(
@@ -288,7 +289,7 @@ impl OffsetRequestHandler {
             .message_store()
             .unwrap()
             .get_earliest_message_time(topic.as_ref(), queue_id);
-        Ok(Some(RemotingCommand::create_response_command_with_header(
+        Ok(Some(RemotingCommand::create_success_response_command_with_header(
             GetEarliestMsgStoretimeResponseHeader { timestamp },
         )))
     }
@@ -305,9 +306,7 @@ impl OffsetRequestHandler {
             .message_store()
             .unwrap()
             .clean_expired_consumer_queue();
-        Ok(Some(
-            RemotingCommand::create_response_command().set_code(ResponseCode::Success),
-        ))
+        Ok(Some(RemotingCommand::create_success_response_command()))
     }
 
     pub async fn delete_expired_commitlog<MS: BrokerAdminStore>(
@@ -322,9 +321,7 @@ impl OffsetRequestHandler {
             .message_store()
             .unwrap()
             .execute_delete_files_manually();
-        Ok(Some(
-            RemotingCommand::create_response_command().set_code(ResponseCode::Success),
-        ))
+        Ok(Some(RemotingCommand::create_success_response_command()))
     }
 
     pub async fn check_rocksdb_cq_write_progress(
@@ -353,7 +350,7 @@ impl OffsetRequestHandler {
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let mut response_command = RemotingCommand::create_response_command();
+        let response_command = RemotingCommand::create_java_default_error_response_command();
         let content = broker_runtime_inner.subscription_group_manager().encode_pretty(false);
         if content.is_empty() {
             error!(
@@ -366,8 +363,9 @@ impl OffsetRequestHandler {
                     .set_remark("No subscription group config in this broker"),
             ));
         }
-        response_command.set_body_mut_ref(content.into_bytes());
-        Ok(Some(response_command))
+        Ok(Some(
+            RemotingCommand::create_success_response_command().set_body(content.into_bytes()),
+        ))
     }
 
     async fn rewrite_get_earliest_request_for_static_topic<MS: BrokerAdminStore>(
@@ -440,7 +438,7 @@ impl OffsetRequestHandler {
             }
         };
 
-        Ok(Some(RemotingCommand::create_response_command_with_header(
+        Ok(Some(RemotingCommand::create_success_response_command_with_header(
             GetEarliestMsgStoretimeResponseHeader { timestamp },
         )))
     }

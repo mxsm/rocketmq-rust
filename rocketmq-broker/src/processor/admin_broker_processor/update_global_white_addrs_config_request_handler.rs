@@ -41,7 +41,7 @@ impl UpdateGlobalWhiteAddrsConfigRequestHandler {
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<UpdateGlobalWhiteAddrsConfigRequestHeader>()?;
-        let response = RemotingCommand::create_response_command();
+        let response = RemotingCommand::create_java_default_error_response_command();
         let global_white_addrs = parse_global_white_addrs(request_header.global_white_addrs.as_str());
 
         if global_white_addrs.is_empty() {
@@ -65,7 +65,7 @@ impl UpdateGlobalWhiteAddrsConfigRequestHandler {
             .update_global_white_remote_addresses(global_white_addrs)
             .await
         {
-            Ok(_) => Ok(Some(response.set_code(ResponseCode::Success))),
+            Ok(_) => Ok(Some(RemotingCommand::create_success_response_command())),
             Err(error) => Ok(Some(map_error_response(response, error))),
         }
     }

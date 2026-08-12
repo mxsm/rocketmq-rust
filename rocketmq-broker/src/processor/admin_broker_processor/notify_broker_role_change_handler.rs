@@ -42,7 +42,7 @@ impl NotifyBrokerRoleChangeHandler {
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let response = RemotingCommand::create_response_command();
+        let response = RemotingCommand::create_success_response_command();
 
         let request_header = match request.decode_command_custom_header::<NotifyBrokerRoleChangedRequestHeader>() {
             Ok(header) => header,

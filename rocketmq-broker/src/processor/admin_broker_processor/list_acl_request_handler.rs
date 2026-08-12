@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use rocketmq_error::RocketMQError;
 use rocketmq_protocol::code::request_code::RequestCode;
-use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::list_acl_request_header::ListAclRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingSerializable;
@@ -29,7 +28,7 @@ impl ListAclRequestHandler {
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<ListAclRequestHeader>()?;
-        let mut response = RemotingCommand::create_response_command();
+        let response = RemotingCommand::create_java_default_error_response_command();
 
         match self
             .auth_admin_service
@@ -40,10 +39,12 @@ impl ListAclRequestHandler {
             .await
         {
             Ok(acls) => {
-                if !acls.is_empty() {
-                    response.set_body_mut_ref(acls.encode()?);
-                }
-                Ok(Some(response.set_code(ResponseCode::Success)))
+                let success = RemotingCommand::create_success_response_command();
+                Ok(Some(if acls.is_empty() {
+                    success
+                } else {
+                    success.set_body(acls.encode()?)
+                }))
             }
             Err(error) => Ok(Some(map_error_response(response, error))),
         }

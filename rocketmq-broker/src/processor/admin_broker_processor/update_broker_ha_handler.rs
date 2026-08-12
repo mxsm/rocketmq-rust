@@ -44,7 +44,7 @@ impl UpdateBrokerHaHandler {
             .decode_command_custom_header::<ExchangeHAInfoRequestHeader>()
             .unwrap_or_default();
 
-        let mut response = RemotingCommand::create_response_command_with_header(ExchangeHaInfoResponseHeader {
+        let mut response = RemotingCommand::create_success_response_command_with_header(ExchangeHaInfoResponseHeader {
             master_ha_address: None,
             master_flush_offset: None,
             master_address: None,
@@ -100,6 +100,6 @@ impl UpdateBrokerHaHandler {
             response.add_ext_field("masterAddress", master_address);
         }
 
-        Ok(Some(response.set_code(ResponseCode::Success)))
+        Ok(Some(response))
     }
 }

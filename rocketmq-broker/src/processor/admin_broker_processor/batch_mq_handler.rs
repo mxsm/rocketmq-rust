@@ -112,7 +112,7 @@ impl BatchMqHandler {
             lock_ok_mq_set: lock_ok_mqset,
         };
         Ok(Some(
-            RemotingCommand::create_response_command()
+            RemotingCommand::create_success_response_command()
                 .set_body(response_body.encode().expect("lockBatchMQ encode error")),
         ))
     }
@@ -148,6 +148,6 @@ impl BatchMqHandler {
                 }
             }
         }
-        Ok(Some(RemotingCommand::create_response_command()))
+        Ok(Some(RemotingCommand::create_success_response_command()))
     }
 }

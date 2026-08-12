@@ -74,7 +74,7 @@ impl ConsumerRequestHandler {
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let mut response = RemotingCommand::create_response_command();
+        let response = RemotingCommand::create_java_default_error_response_command();
         let request_header = request.decode_command_custom_header::<GetConsumerConnectionListRequestHeader>()?;
         let consumer_group_info = broker_runtime_inner
             .consumer_manager()
@@ -99,8 +99,7 @@ impl ConsumerRequestHandler {
                     body_data.insert_connection(connection);
                 }
                 let body = body_data.encode()?;
-                response.set_body_mut_ref(body);
-                Ok(Some(response))
+                Ok(Some(RemotingCommand::create_success_response_command().set_body(body)))
             }
             None => Ok(Some(response.set_code(ResponseCode::ConsumerNotOnline).set_remark(
                 format!("the consumer group[{}] not online", request_header.get_consumer_group()),
@@ -116,7 +115,6 @@ impl ConsumerRequestHandler {
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let mut response = RemotingCommand::create_response_command();
         let request_header =
             request.decode_required_header::<GetConsumeStatsRequestHeader>("decode consume-stats request header")?;
         let mut consume_stats = ConsumeStats::new();
@@ -222,8 +220,7 @@ impl ConsumerRequestHandler {
             consume_stats.set_consume_tps(new_consume_tps);
         }
         let body = consume_stats.encode_java_compatible()?;
-        response.set_body_mut_ref(body);
-        Ok(Some(response))
+        Ok(Some(RemotingCommand::create_success_response_command().set_body(body)))
     }
 
     pub async fn get_broker_consume_stats<MS: BrokerAdminStore>(
@@ -278,9 +275,7 @@ impl ConsumerRequestHandler {
         };
 
         Ok(Some(
-            RemotingCommand::create_response_command()
-                .set_code(ResponseCode::Success)
-                .set_body(body.encode_java_compatible()?),
+            RemotingCommand::create_success_response_command().set_body(body.encode_java_compatible()?),
         ))
     }
 
@@ -315,8 +310,7 @@ impl ConsumerRequestHandler {
         }
 
         Ok(Some(
-            RemotingCommand::create_response_command()
-                .set_code(ResponseCode::Success)
+            RemotingCommand::create_success_response_command()
                 .set_body(QueryCorrectionOffsetBody { correction_offsets }.encode()?),
         ))
     }
@@ -335,18 +329,16 @@ impl ConsumerRequestHandler {
             .as_ref()
             .filter(|client_id| !client_id.is_empty())
         else {
-            return Ok(Some(
-                RemotingCommand::create_response_command()
-                    .set_code(ResponseCode::SystemError)
-                    .set_remark("clientId is missing"),
-            ));
+            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::SystemError,
+                "clientId is missing",
+            )));
         };
         let Some(msg_id) = request_header.msg_id.as_ref().filter(|msg_id| !msg_id.is_empty()) else {
-            return Ok(Some(
-                RemotingCommand::create_response_command()
-                    .set_code(ResponseCode::SystemError)
-                    .set_remark("msgId is missing"),
-            ));
+            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::SystemError,
+                "msgId is missing",
+            )));
         };
 
         request.ensure_ext_fields_initialized();
@@ -371,11 +363,10 @@ impl ConsumerRequestHandler {
         let message_id = match MessageDecoder::decode_message_id(msg_id.as_str()) {
             Ok(message_id) => message_id,
             Err(error) => {
-                return Ok(Some(
-                    RemotingCommand::create_response_command()
-                        .set_code(ResponseCode::SystemError)
-                        .set_remark(format!("invalid msgId: {error}")),
-                ));
+                return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                    ResponseCode::SystemError,
+                    format!("invalid msgId: {error}"),
+                )));
             }
         };
 
@@ -384,18 +375,16 @@ impl ConsumerRequestHandler {
             .unwrap()
             .select_one_message_by_offset(message_id.offset)
         else {
-            return Ok(Some(
-                RemotingCommand::create_response_command()
-                    .set_code(ResponseCode::SystemError)
-                    .set_remark("message not found by msgId"),
-            ));
+            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::SystemError,
+                "message not found by msgId",
+            )));
         };
         let Some(body) = select_result.get_bytes() else {
-            return Ok(Some(
-                RemotingCommand::create_response_command()
-                    .set_code(ResponseCode::SystemError)
-                    .set_remark("message bytes not available"),
-            ));
+            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::SystemError,
+                "message bytes not available",
+            )));
         };
         request.set_body_mut_ref(body);
 
@@ -498,11 +487,12 @@ impl ConsumerRequestHandler {
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let mut response = RemotingCommand::create_response_command();
+        let response = RemotingCommand::create_java_default_error_response_command();
         let content = broker_runtime_inner.consumer_offset_manager().encode();
         if !content.is_empty() {
-            response.set_body_mut_ref(content);
-            Ok(Some(response))
+            Ok(Some(
+                RemotingCommand::create_success_response_command().set_body(content),
+            ))
         } else {
             Ok(Some(
                 response
@@ -520,7 +510,7 @@ impl ConsumerRequestHandler {
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let mut response = RemotingCommand::create_response_command();
+        let response = RemotingCommand::create_java_default_error_response_command();
         let Some(query_assignment_processor) = broker_runtime_inner.query_assignment_processor() else {
             return Ok(Some(
                 response
@@ -543,8 +533,9 @@ impl ConsumerRequestHandler {
         }
 
         let body = MessageRequestModeSerializeWrapper::from_inner(message_request_mode_map);
-        response.set_body_mut_ref(body.encode()?);
-        Ok(Some(response.set_code(ResponseCode::Success)))
+        Ok(Some(
+            RemotingCommand::create_success_response_command().set_body(body.encode()?),
+        ))
     }
 
     pub async fn invoke_broker_to_reset_offset<MS: BrokerAdminStore>(
@@ -635,9 +626,7 @@ impl ConsumerRequestHandler {
         };
 
         Ok(Some(
-            RemotingCommand::create_response_command()
-                .set_body(response_body.encode()?)
-                .set_code(ResponseCode::Success),
+            RemotingCommand::create_success_response_command().set_body(response_body.encode()?),
         ))
     }
 
@@ -649,7 +638,7 @@ impl ConsumerRequestHandler {
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let mut response = RemotingCommand::create_response_command();
+        let response = RemotingCommand::create_java_default_error_response_command();
         let request_header = request.decode_command_custom_header::<QueryConsumeTimeSpanRequestHeader>()?;
         let topic = request_header.topic;
         let Some(topic_config) = broker_runtime_inner.topic_config_manager().select_topic_config(&topic) else {
@@ -708,13 +697,14 @@ impl ConsumerRequestHandler {
             time_span_set.push(queue_time_span);
         }
 
-        response.set_body_mut_ref(
-            QueryConsumeTimeSpanBody {
-                consume_time_span_set: time_span_set,
-            }
-            .encode()?,
-        );
-        Ok(Some(response.set_code(ResponseCode::Success)))
+        Ok(Some(
+            RemotingCommand::create_success_response_command().set_body(
+                QueryConsumeTimeSpanBody {
+                    consume_time_span_set: time_span_set,
+                }
+                .encode()?,
+            ),
+        ))
     }
 
     pub async fn clone_group_offset<MS: BrokerAdminStore>(
@@ -770,9 +760,7 @@ impl ConsumerRequestHandler {
             );
         }
 
-        Ok(Some(
-            RemotingCommand::create_response_command().set_code(ResponseCode::Success),
-        ))
+        Ok(Some(RemotingCommand::create_success_response_command()))
     }
 
     pub async fn get_consumer_running_info<MS: BrokerAdminStore>(
@@ -786,9 +774,10 @@ impl ConsumerRequestHandler {
         let request_header = match request.decode_command_custom_header::<GetConsumerRunningInfoRequestHeader>() {
             Ok(header) => header,
             Err(e) => {
-                let response = RemotingCommand::create_response_command()
-                    .set_code(ResponseCode::SystemError)
-                    .set_remark(format!("decode GetConsumerRunningInfoRequestHeader failed: {}", e));
+                let response = RemotingCommand::create_response_command_with_code_remark(
+                    ResponseCode::SystemError,
+                    format!("decode GetConsumerRunningInfoRequestHeader failed: {}", e),
+                );
                 return Ok(Some(response));
             }
         };
@@ -809,7 +798,7 @@ impl ConsumerRequestHandler {
         consumer_group: &str,
         client_id: &str,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let mut response = RemotingCommand::create_response_command();
+        let mut response = RemotingCommand::create_java_default_error_response_command();
 
         let client_channel_info = broker_runtime_inner
             .consumer_manager()
@@ -867,7 +856,7 @@ impl ConsumerRequestHandler {
         timestamp: i64,
         offset: Option<i64>,
     ) -> RemotingCommand {
-        let mut response = RemotingCommand::create_response_command().set_code(ResponseCode::Success);
+        let response = RemotingCommand::create_java_default_error_response_command();
 
         if broker_runtime_inner.message_store_config().broker_role == BrokerRole::Slave {
             return response
@@ -942,8 +931,7 @@ impl ConsumerRequestHandler {
             );
         }
 
-        response.set_body_mut_ref(body.encode());
-        response
+        RemotingCommand::create_success_response_command().set_body(body.encode())
     }
 
     async fn resolve_reset_offset<MS: BrokerAdminStore>(
@@ -954,7 +942,7 @@ impl ConsumerRequestHandler {
         timestamp: i64,
         offset: Option<i64>,
     ) -> Result<i64, RemotingCommand> {
-        let mut response = RemotingCommand::create_response_command().set_code(ResponseCode::Success);
+        let mut response = RemotingCommand::create_java_default_error_response_command();
         let message_store = broker_runtime_inner
             .message_store()
             .expect("message store should be initialized before admin request");

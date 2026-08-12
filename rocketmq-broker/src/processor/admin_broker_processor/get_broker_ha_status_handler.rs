@@ -36,7 +36,7 @@ impl GetBrokerHaStatusHandler {
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let response = RemotingCommand::create_response_command();
+        let response = RemotingCommand::create_java_default_error_response_command();
 
         let message_store = match broker_runtime_inner.message_store() {
             Some(store) => store,
@@ -61,7 +61,7 @@ impl GetBrokerHaStatusHandler {
         };
 
         match serde_json::to_vec(&ha_runtime_info) {
-            Ok(body) => Ok(Some(response.set_body(body).set_code(ResponseCode::Success))),
+            Ok(body) => Ok(Some(RemotingCommand::create_success_response_command().set_body(body))),
             Err(e) => Ok(Some(
                 response
                     .set_code(ResponseCode::SystemError)

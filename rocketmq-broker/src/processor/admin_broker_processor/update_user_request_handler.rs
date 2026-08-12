@@ -31,7 +31,7 @@ impl UpdateUserRequestHandler {
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<UpdateUserRequestHeader>()?;
 
-        let response = RemotingCommand::create_response_command();
+        let response = RemotingCommand::create_java_default_error_response_command();
 
         if request_header.username.is_empty() {
             return Ok(Some(
@@ -89,7 +89,7 @@ impl UpdateUserRequestHandler {
         }
 
         match self.auth_admin_service.update_user(user).await {
-            Ok(()) => Ok(Some(response.set_code(ResponseCode::Success))),
+            Ok(()) => Ok(Some(RemotingCommand::create_success_response_command())),
             Err(error) => Ok(Some(map_error_response(response, error))),
         }
     }

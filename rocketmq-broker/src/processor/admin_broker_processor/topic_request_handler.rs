@@ -134,7 +134,7 @@ impl TopicRequestHandler {
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let broker_runtime_inner = broker_config_request_handler.broker_runtime_inner();
-        let response = RemotingCommand::create_response_command();
+        let response = RemotingCommand::create_java_default_error_response_command();
         let request_header =
             request.decode_required_header::<CreateTopicRequestHeader>("decode create-topic request header")?;
         info!(
@@ -209,7 +209,7 @@ impl TopicRequestHandler {
                 topic.as_str(),
                 channel.remote_address(),
             );
-            return Ok(Some(response.set_code(ResponseCode::Success)));
+            return Ok(Some(RemotingCommand::create_success_response_command()));
         }
         let update = broker_runtime_inner
             .topic_config_manager()
@@ -219,7 +219,7 @@ impl TopicRequestHandler {
             .persist_and_register_topic_updates(vec![update.topic_config], update.data_version)
             .await?;
 
-        Ok(Some(response.set_code(ResponseCode::Success)))
+        Ok(Some(RemotingCommand::create_success_response_command()))
     }
 
     pub async fn update_topic_config_cas<MS: BrokerAdminStore>(
@@ -231,7 +231,7 @@ impl TopicRequestHandler {
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let broker_runtime_inner = broker_config_request_handler.broker_runtime_inner();
-        let response = RemotingCommand::create_response_command().set_opaque(request.opaque());
+        let response = RemotingCommand::create_java_default_error_response_command().set_opaque(request.opaque());
         let request_header = match request.decode_command_custom_header::<UpdateTopicConfigCasRequestHeader>() {
             Ok(header) => header,
             Err(_) => {
@@ -379,10 +379,11 @@ impl TopicRequestHandler {
             .await?;
 
         Ok(Some(
-            response
-                .set_command_custom_header(UpdateTopicConfigCasResponseHeader { topic_version })
-                .set_code(ResponseCode::Success)
-                .set_remark(format!("Topic configuration patch committed, version={topic_version}")),
+            RemotingCommand::create_success_response_command_with_header(UpdateTopicConfigCasResponseHeader {
+                topic_version,
+            })
+            .set_opaque(request.opaque())
+            .set_remark(format!("Topic configuration patch committed, version={topic_version}")),
         ))
     }
 
@@ -395,7 +396,7 @@ impl TopicRequestHandler {
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let broker_runtime_inner = broker_config_request_handler.broker_runtime_inner();
-        let response = RemotingCommand::create_response_command();
+        let response = RemotingCommand::create_java_default_error_response_command();
         let request_header = request.decode_command_custom_header::<CreateTopicRequestHeader>()?;
         info!(
             "Broker receive request to update or create static topic={}, caller address={}",
@@ -483,7 +484,7 @@ impl TopicRequestHandler {
             .persist_and_register_topic_updates(vec![update.topic_config], update.data_version)
             .await?;
 
-        Ok(Some(response.set_code(ResponseCode::Success)))
+        Ok(Some(RemotingCommand::create_success_response_command()))
     }
 
     pub async fn update_and_create_topic_list<MS: BrokerAdminStore>(
@@ -506,7 +507,7 @@ impl TopicRequestHandler {
             topic_names,
             channel.remote_address()
         );
-        let response = RemotingCommand::create_response_command();
+        let response = RemotingCommand::create_java_default_error_response_command();
         for topic_config in request_body.topic_config_list.iter() {
             let topic = topic_config.topic_name.as_ref().unwrap().as_str();
             let result = TopicValidator::validate_topic(topic);
@@ -545,7 +546,7 @@ impl TopicRequestHandler {
                     topic,
                     channel.remote_address(),
                 );
-                return Ok(Some(response.set_code(ResponseCode::Success)));
+                return Ok(Some(RemotingCommand::create_success_response_command()));
             }
         }
 
@@ -557,7 +558,7 @@ impl TopicRequestHandler {
         broker_config_request_handler
             .persist_and_register_topic_updates(topic_config_list, data_version)
             .await?;
-        Ok(Some(response.set_code(ResponseCode::Success)))
+        Ok(Some(RemotingCommand::create_success_response_command()))
     }
 
     pub async fn delete_topic<MS: BrokerAdminStore>(
@@ -568,7 +569,7 @@ impl TopicRequestHandler {
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let response = RemotingCommand::create_response_command();
+        let response = RemotingCommand::create_java_default_error_response_command();
         let request_header =
             request.decode_required_header::<DeleteTopicRequestHeader>("decode delete-topic request header")?;
         let topic = &request_header.topic;
@@ -643,7 +644,7 @@ impl TopicRequestHandler {
             .topic_config_coordinator()
             .persist_and_wait()
             .await?;
-        Ok(Some(response.set_code(ResponseCode::Success)))
+        Ok(Some(RemotingCommand::create_success_response_command()))
     }
 
     pub async fn get_all_topic_config<MS: BrokerAdminStore>(
@@ -654,7 +655,7 @@ impl TopicRequestHandler {
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let mut response = RemotingCommand::create_response_command();
+        let mut response = RemotingCommand::create_success_response_command();
         let (topic_config_table, topic_config_data_version) =
             broker_runtime_inner.topic_config_manager().metadata_snapshot();
         let topic_config_and_mapping_serialize_wrapper = TopicConfigAndMappingSerializeWrapper {
@@ -691,7 +692,7 @@ impl TopicRequestHandler {
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let mut response = RemotingCommand::create_response_command();
+        let mut response = RemotingCommand::create_success_response_command();
         let topics = TopicValidator::get_system_topic_set();
         let topic_list = TopicList {
             topic_list: topics,
@@ -709,7 +710,7 @@ impl TopicRequestHandler {
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let mut response = RemotingCommand::create_response_command();
+        let response = RemotingCommand::create_java_default_error_response_command();
         let request_header =
             request.decode_required_header::<GetTopicStatsRequestHeader>("decode get-topic-stats request header")?;
         let topic = request_header.topic.as_ref();
@@ -758,8 +759,9 @@ impl TopicRequestHandler {
             map.insert(message_queue, topic_offset);
         }
         topic_stats_table.set_offset_table(map);
-        response.set_body_mut_ref(topic_stats_table.encode().expect("encode TopicStatsTable failed"));
-        Ok(Some(response))
+        Ok(Some(RemotingCommand::create_success_response_command().set_body(
+            topic_stats_table.encode().expect("encode TopicStatsTable failed"),
+        )))
     }
 
     pub async fn get_topic_config<MS: BrokerAdminStore>(
@@ -770,7 +772,7 @@ impl TopicRequestHandler {
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let mut response = RemotingCommand::create_response_command();
+        let response = RemotingCommand::create_java_default_error_response_command();
         let request_header = request.decode_command_custom_header::<GetTopicConfigRequestHeader>()?;
         let topic = &request_header.topic;
         let (topic_config, topic_version) = match broker_runtime_inner
@@ -814,9 +816,12 @@ impl TopicRequestHandler {
         }
         let topic_config = (*topic_config).clone();
         let topic_config_and_queue_mapping = TopicConfigAndQueueMapping::new(topic_config, topic_queue_mapping_detail);
-        response.set_body_mut_ref(topic_config_and_queue_mapping.encode()?);
-        response.set_command_custom_header_ref(UpdateTopicConfigCasResponseHeader { topic_version });
-        Ok(Some(response))
+        Ok(Some(
+            RemotingCommand::create_success_response_command_with_header(UpdateTopicConfigCasResponseHeader {
+                topic_version,
+            })
+            .set_body(topic_config_and_queue_mapping.encode()?),
+        ))
     }
 
     pub async fn query_topic_consume_by_who<MS: BrokerAdminStore>(
@@ -827,7 +832,7 @@ impl TopicRequestHandler {
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let mut response = RemotingCommand::create_response_command();
+        let mut response = RemotingCommand::create_success_response_command();
         let request_header = request.decode_command_custom_header::<QueryTopicConsumeByWhoRequestHeader>()?;
         let topic = request_header.topic.as_ref();
         let mut groups = broker_runtime_inner
@@ -850,7 +855,7 @@ impl TopicRequestHandler {
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let mut response = RemotingCommand::create_response_command();
+        let mut response = RemotingCommand::create_success_response_command();
         let request_header = request.decode_required_header::<QueryTopicsByConsumerRequestHeader>(
             "decode query-topics-by-consumer request header",
         )?;
@@ -888,9 +893,7 @@ impl TopicRequestHandler {
             .message_store()
             .unwrap()
             .clean_unused_topic(&retain_topics);
-        Ok(Some(
-            RemotingCommand::create_response_command().set_code(ResponseCode::Success),
-        ))
+        Ok(Some(RemotingCommand::create_success_response_command()))
     }
 
     fn delete_topic_in_broker<MS: BrokerAdminStore>(
@@ -1108,6 +1111,7 @@ mod tests {
             },
         );
         request.make_custom_header_to_net();
+        let request_opaque = request.opaque();
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let response = handler
@@ -1122,6 +1126,11 @@ mod tests {
             .expect("Topic CAS should run")
             .expect("Topic CAS should return a response");
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        assert_eq!(response.opaque(), request_opaque);
+        assert_eq!(
+            response.remark().map(CheetahString::as_str),
+            Some("Topic configuration patch committed, version=1")
+        );
         let response_header = response
             .read_custom_header_ref::<UpdateTopicConfigCasResponseHeader>()
             .expect("success response should carry the committed version");
