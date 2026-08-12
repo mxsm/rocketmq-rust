@@ -72,6 +72,7 @@ const fn language_name(language: LanguageCode) -> &'static str {
         LanguageCode::PHP => "PHP",
         LanguageCode::OMS => "OMS",
         LanguageCode::RUST => "RUST",
+        LanguageCode::NODE_JS => "NODE_JS",
     }
 }
 

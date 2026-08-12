@@ -19,6 +19,7 @@
 
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
+use rocketmq_protocol::protocol::LanguageCode;
 use rocketmq_protocol::protocol::SerializeType;
 use rocketmq_protocol::RemotingCommand;
 
@@ -69,4 +70,49 @@ fn add_ext_field_if_not_exist_on_absent_matches_java() {
             Some("true")
         );
     }
+}
+
+#[test]
+fn node_js_language_code_matches_java() {
+    const EXISTING_CODES: [(u8, LanguageCode); 13] = [
+        (0, LanguageCode::JAVA),
+        (1, LanguageCode::CPP),
+        (2, LanguageCode::DOTNET),
+        (3, LanguageCode::PYTHON),
+        (4, LanguageCode::DELPHI),
+        (5, LanguageCode::ERLANG),
+        (6, LanguageCode::RUBY),
+        (7, LanguageCode::OTHER),
+        (8, LanguageCode::HTTP),
+        (9, LanguageCode::GO),
+        (10, LanguageCode::PHP),
+        (11, LanguageCode::OMS),
+        (12, LanguageCode::RUST),
+    ];
+
+    for (code, language) in EXISTING_CODES {
+        assert_eq!(language.get_code(), code);
+        assert_eq!(LanguageCode::value_of(code), Some(language));
+    }
+
+    assert_eq!(LanguageCode::NODE_JS.get_code(), 13);
+    assert_eq!(LanguageCode::value_of(13), Some(LanguageCode::NODE_JS));
+    assert_eq!(LanguageCode::value_of(14), Some(LanguageCode::OTHER));
+    assert_eq!(LanguageCode::get_code_from_name("NODE_JS"), Some(LanguageCode::NODE_JS));
+
+    for serialize_type in [SerializeType::JSON, SerializeType::ROCKETMQ] {
+        let command = RemotingCommand::create_response_command()
+            .set_language(LanguageCode::NODE_JS)
+            .set_serialize_type(serialize_type);
+        let decoded = round_trip(command);
+
+        assert_eq!(decoded.language(), LanguageCode::NODE_JS);
+        assert_eq!(decoded.get_serialize_type(), serialize_type);
+    }
+
+    let serde_fallback: RemotingCommand = serde_json::from_str(
+        r#"{"code":0,"language":"NODE_JS","version":0,"opaque":0,"flag":1,"remark":null,"serializeTypeCurrentRPC":"JSON"}"#,
+    )
+    .expect("serde fallback should recognize NODE_JS");
+    assert_eq!(serde_fallback.language(), LanguageCode::NODE_JS);
 }

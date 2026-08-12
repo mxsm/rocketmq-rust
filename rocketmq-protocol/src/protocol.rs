@@ -312,6 +312,8 @@ pub enum LanguageCode {
     OMS,
     #[default]
     RUST,
+    #[allow(non_camel_case_types, reason = "matches the Java remoting wire language name")]
+    NODE_JS,
 }
 
 impl fmt::Display for LanguageCode {
@@ -366,6 +368,7 @@ impl LanguageCode {
             10 => Self::PHP,
             11 => Self::OMS,
             12 => Self::RUST,
+            13 => Self::NODE_JS,
             _ => Self::OTHER,
         })
     }
@@ -389,6 +392,7 @@ impl LanguageCode {
             "PHP" => Some(Self::PHP),
             "OMS" => Some(Self::OMS),
             "RUST" => Some(Self::RUST),
+            "NODE_JS" => Some(Self::NODE_JS),
             _ => None,
         }
     }
