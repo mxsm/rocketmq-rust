@@ -387,8 +387,63 @@ class MessagePathQualificationTest(unittest.TestCase):
                 "series": [{"status": "pass", "raw_artifact_sha256": "sha256:" + raw_digest}],
                 "artifacts": [{"path": raw_samples.name, "sha256": raw_digest}],
             }
+            rollback_log = root / "rollback.log"
+            rollback_log.write_text("rollback passed\n", encoding="utf-8")
+            forward_log = root / "forward.log"
+            forward_log.write_text("forward passed\n", encoding="utf-8")
+            rollback = {
+                "schema_version": 1,
+                "artifact_kind": "rocketmq_message_path_rollback_evidence",
+                "status": "pass",
+                "rehearsal_qualified": True,
+                "dynamic_execution": True,
+                "fixture": False,
+                "candidate_commit": "b" * 40,
+                "candidate_measurement_sha256": "sha256:" + qualification.sha256_file(candidate_path),
+                "deployment_digest": "sha256:" + "2" * 64,
+                "target_id": "target-a",
+                "cluster_uid": "cluster-a",
+                "effective_config_sha256": "sha256:" + "4" * 64,
+                "durability_contract": "strict",
+                "steps": [
+                    {
+                        "direction": "rollback",
+                        "status": "pass",
+                        "target_release_id": "baseline",
+                        "checkpoint_set_id": "rollback-checkpoint",
+                        "verified_at": "2026-08-12T10:00:00Z",
+                    },
+                    {
+                        "direction": "forward",
+                        "status": "pass",
+                        "target_release_id": "candidate",
+                        "checkpoint_set_id": "forward-checkpoint",
+                        "verified_at": "2026-08-12T10:01:00Z",
+                    },
+                ],
+                "baseline_release_id": "baseline",
+                "candidate_release_id": "candidate",
+                "assertions": {
+                    "acknowledged_messages_preserved": True,
+                    "consumer_offsets_preserved": True,
+                    "wal_retained": True,
+                    "persistent_volumes_reused": True,
+                    "storage_generation_unchanged": True,
+                    "candidate_restored": True,
+                },
+                "artifacts": [
+                    {"path": rollback_log.name, "sha256": qualification.sha256_file(rollback_log)},
+                    {"path": forward_log.name, "sha256": qualification.sha256_file(forward_log)},
+                ],
+            }
             paths = {}
-            for name, value in (("comparison", comparison), ("fault", fault), ("rpo", rpo), ("soak", soak)):
+            for name, value in (
+                ("comparison", comparison),
+                ("fault", fault),
+                ("rpo", rpo),
+                ("soak", soak),
+                ("rollback", rollback),
+            ):
                 path = root / f"{name}.json"
                 path.write_text(json.dumps(value), encoding="utf-8")
                 paths[name] = path
@@ -399,11 +454,22 @@ class MessagePathQualificationTest(unittest.TestCase):
                 fault_evidence=paths["fault"],
                 rpo_evidence=paths["rpo"],
                 soak_report=paths["soak"],
+                rollback_evidence=paths["rollback"],
             )
 
             findings, _, _ = qualification.validate_final_evidence(self.policy, args)
 
             self.assertIn("soak release identity target_id differs", findings)
+
+            rollback["fixture"] = True
+            rollback["candidate_commit"] = "c" * 40
+            del rollback["assertions"]["wal_retained"]
+            paths["rollback"].write_text(json.dumps(rollback), encoding="utf-8")
+            findings, _, _ = qualification.validate_final_evidence(self.policy, args)
+
+            self.assertIn("rollback evidence must be a qualified dynamic non-fixture rehearsal", findings)
+            self.assertIn("rollback evidence candidate_commit differs", findings)
+            self.assertIn("rollback evidence did not prove every preservation and recovery assertion", findings)
 
 
 if __name__ == "__main__":
