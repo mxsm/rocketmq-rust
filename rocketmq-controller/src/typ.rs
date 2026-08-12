@@ -241,22 +241,72 @@ impl ControllerResponse {
     }
 
     pub fn into_remoting_command(self) -> RemotingCommand {
-        let mut command = RemotingCommand::create_response_command().set_code(self.response_code);
+        let mut command = match self.header {
+            Some(ControllerResponseHeader::ApplyBrokerId(header)) => {
+                RemotingCommand::create_response_command_with_code_and_header(self.response_code, header)
+            }
+            Some(ControllerResponseHeader::RegisterBroker(header)) => {
+                RemotingCommand::create_response_command_with_code_and_header(self.response_code, header)
+            }
+            Some(ControllerResponseHeader::AlterSyncStateSet(header)) => {
+                RemotingCommand::create_response_command_with_code_and_header(self.response_code, header)
+            }
+            Some(ControllerResponseHeader::ElectMaster(header)) => {
+                RemotingCommand::create_response_command_with_code_and_header(self.response_code, header)
+            }
+            None => RemotingCommand::create_response_command_with_code(self.response_code),
+        };
         if let Some(remark) = self.remark {
             command = command.set_remark(remark);
-        }
-        if let Some(header) = self.header {
-            command = match header {
-                ControllerResponseHeader::ApplyBrokerId(header) => command.set_command_custom_header(header),
-                ControllerResponseHeader::RegisterBroker(header) => command.set_command_custom_header(header),
-                ControllerResponseHeader::AlterSyncStateSet(header) => command.set_command_custom_header(header),
-                ControllerResponseHeader::ElectMaster(header) => command.set_command_custom_header(header),
-            };
         }
         if let Some(body) = self.body {
             command = command.set_body(Bytes::from(body));
         }
         command
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use cheetah_string::CheetahString;
+
+    use super::*;
+
+    #[test]
+    fn controller_response_preserves_success_contract() {
+        let command = ControllerResponse::success().into_remoting_command();
+
+        assert_eq!(ResponseCode::from(command.code()), ResponseCode::Success);
+        assert!(command.is_response_type());
+        assert!(command.remark().is_none());
+        assert!(command.body().is_none());
+    }
+
+    #[test]
+    fn controller_response_preserves_code_header_remark_and_body() {
+        let command = ControllerResponse::new(
+            ResponseCode::ControllerElectMasterFailed.into(),
+            Some("election rejected".to_owned()),
+            Some(ControllerResponseHeader::ApplyBrokerId(ApplyBrokerIdResponseHeader {
+                cluster_name: Some(CheetahString::from_static_str("cluster-a")),
+                broker_name: Some(CheetahString::from_static_str("broker-a")),
+            })),
+            Some(vec![1, 2, 3]),
+        )
+        .into_remoting_command();
+
+        assert_eq!(
+            ResponseCode::from(command.code()),
+            ResponseCode::ControllerElectMasterFailed
+        );
+        assert!(command.is_response_type());
+        assert_eq!(command.remark().map(CheetahString::as_str), Some("election rejected"));
+        assert_eq!(command.body().map(Bytes::as_ref), Some(&[1, 2, 3][..]));
+        let header = command
+            .read_custom_header_ref::<ApplyBrokerIdResponseHeader>()
+            .expect("controller response header");
+        assert_eq!(header.cluster_name.as_deref(), Some("cluster-a"));
+        assert_eq!(header.broker_name.as_deref(), Some("broker-a"));
     }
 }
 
