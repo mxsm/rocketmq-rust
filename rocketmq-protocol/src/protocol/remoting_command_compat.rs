@@ -27,6 +27,7 @@ use crate::protocol::remoting_command::RemotingCommand;
 use crate::protocol::remoting_command_defaults::initialize_remoting_command_defaults;
 use crate::protocol::remoting_command_defaults::RemotingCommandDefaults;
 use crate::protocol::remoting_command_defaults::RemotingCommandDefaultsConflict;
+use crate::protocol::remoting_command_defaults::RemotingCommandFactory;
 use crate::protocol::SerializeType;
 
 use super::remoting_command::REMOTING_VERSION_KEY;
@@ -215,30 +216,38 @@ pub fn initialize_remoting_version(version: i32) -> Result<(), RemotingVersionCo
     initialize_version(&REMOTING_VERSION, version)
 }
 
+fn compatibility_factory() -> RemotingCommandFactory {
+    RemotingCommandFactory::new(RemotingCommandDefaults::new(
+        resolve_remoting_version(&REMOTING_VERSION),
+        *SERIALIZE_TYPE,
+    ))
+}
+
 pub fn create_remoting_command(code: impl Into<i32>) -> RemotingCommand {
-    RemotingCommand::with_resolved_defaults(resolve_remoting_version(&REMOTING_VERSION), *SERIALIZE_TYPE).set_code(code)
+    compatibility_factory().create_remoting_command(code)
 }
 
 pub fn create_request_command<T>(code: impl Into<i32>, header: T) -> RemotingCommand
 where
     T: CommandCustomHeader + Sync + Send + 'static,
 {
-    RemotingCommand::create_request_command_with_defaults(
-        code,
-        header,
-        resolve_remoting_version(&REMOTING_VERSION),
-        *SERIALIZE_TYPE,
-    )
+    compatibility_factory().create_request_command(code, header)
 }
 
 pub fn create_response_command() -> RemotingCommand {
-    create_remoting_command(crate::code::response_code::RemotingSysResponseCode::Success).mark_response_type()
+    compatibility_factory().create_success_response_command()
 }
 
 #[cfg(test)]
 mod tests {
     use std::sync::OnceLock;
 
+    use crate::protocol::header::empty_header::EmptyHeader;
+
+    use super::compatibility_factory;
+    use super::create_remoting_command;
+    use super::create_request_command;
+    use super::create_response_command;
     use super::initialize_version;
     use super::RemotingVersionConflict;
 
@@ -264,5 +273,20 @@ mod tests {
             })
         );
         assert_eq!(version.get(), Some(&321));
+    }
+
+    #[test]
+    fn compatibility_constructors_share_factory_defaults() {
+        let expected_defaults = compatibility_factory().defaults();
+        let commands = [
+            create_remoting_command(10),
+            create_request_command(11, EmptyHeader {}),
+            create_response_command(),
+        ];
+
+        for command in commands {
+            assert_eq!(command.version(), expected_defaults.version());
+            assert_eq!(command.serialize_type(), expected_defaults.serialize_type());
+        }
     }
 }
