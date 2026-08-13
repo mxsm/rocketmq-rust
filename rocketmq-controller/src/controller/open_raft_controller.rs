@@ -84,6 +84,8 @@ use rocketmq_protocol::protocol::header::controller::register_broker_to_controll
 use rocketmq_protocol::protocol::header::get_meta_data_response_header::GetMetaDataResponseHeader;
 use rocketmq_protocol::protocol::header::namesrv::broker_request::BrokerHeartbeatRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_protocol::protocol::CommandCustomHeader;
 use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_runtime::common::time_utils::current_millis;
@@ -137,6 +139,7 @@ struct OpenRaftLifecycle {
 /// 3. Waits for gRPC server task to complete (with 10s timeout)
 pub struct OpenRaftController {
     config: ControllerConfigReader,
+    command_factory: RemotingCommandFactory,
     /// Serializes startup and shutdown transitions.
     lifecycle_lock: AsyncMutex<()>,
     /// Raft node and gRPC shutdown handle owned by the lifecycle transition.
@@ -155,11 +158,25 @@ pub struct OpenRaftController {
 
 impl OpenRaftController {
     pub fn new(config: ControllerConfigReader, service_context: ChildServiceContext) -> Self {
+        Self::new_with_remoting_command_factory(config, service_context, application_remoting_command_factory())
+    }
+
+    /// Creates a Controller with explicit immutable remoting defaults.
+    pub fn new_with_remoting_command_factory(
+        config: ControllerConfigReader,
+        service_context: ChildServiceContext,
+        command_factory: RemotingCommandFactory,
+    ) -> Self {
         let heartbeat_manager = Arc::new(DefaultBrokerHeartbeatManager::new(
             config.clone(),
             service_context.task_group().clone(),
         ));
-        Self::new_with_heartbeat(config, heartbeat_manager, service_context)
+        Self::new_with_heartbeat_and_remoting_command_factory(
+            config,
+            heartbeat_manager,
+            service_context,
+            command_factory,
+        )
     }
 
     pub fn new_with_heartbeat(
@@ -167,9 +184,31 @@ impl OpenRaftController {
         heartbeat_manager: Arc<DefaultBrokerHeartbeatManager>,
         service_context: ChildServiceContext,
     ) -> Self {
+        Self::new_with_heartbeat_and_remoting_command_factory(
+            config,
+            heartbeat_manager,
+            service_context,
+            application_remoting_command_factory(),
+        )
+    }
+
+    /// Creates a Controller that shares the supplied heartbeat manager and
+    /// uses explicit immutable remoting defaults.
+    pub fn new_with_heartbeat_and_remoting_command_factory(
+        config: ControllerConfigReader,
+        heartbeat_manager: Arc<DefaultBrokerHeartbeatManager>,
+        service_context: ChildServiceContext,
+        command_factory: RemotingCommandFactory,
+    ) -> Self {
         let metrics_manager =
             ControllerMetricsManager::new(config.clone(), &rocketmq_observability::TelemetryHandle::noop());
-        Self::new_with_heartbeat_and_metrics(config, heartbeat_manager, service_context, metrics_manager)
+        Self::new_with_heartbeat_metrics_and_remoting_command_factory(
+            config,
+            heartbeat_manager,
+            service_context,
+            metrics_manager,
+            command_factory,
+        )
     }
 
     pub(crate) fn new_with_heartbeat_and_metrics(
@@ -178,8 +217,25 @@ impl OpenRaftController {
         service_context: ChildServiceContext,
         metrics_manager: Arc<ControllerMetricsManager>,
     ) -> Self {
+        Self::new_with_heartbeat_metrics_and_remoting_command_factory(
+            config,
+            heartbeat_manager,
+            service_context,
+            metrics_manager,
+            application_remoting_command_factory(),
+        )
+    }
+
+    pub(crate) fn new_with_heartbeat_metrics_and_remoting_command_factory(
+        config: ControllerConfigReader,
+        heartbeat_manager: Arc<DefaultBrokerHeartbeatManager>,
+        service_context: ChildServiceContext,
+        metrics_manager: Arc<ControllerMetricsManager>,
+        command_factory: RemotingCommandFactory,
+    ) -> Self {
         Self {
             config,
+            command_factory,
             lifecycle_lock: AsyncMutex::new(()),
             lifecycle: Mutex::new(OpenRaftLifecycle::default()),
             task_group: Arc::new(Mutex::new(None)),
@@ -320,14 +376,14 @@ impl OpenRaftController {
     }
 
     fn not_leader_response(&self) -> Option<RemotingCommand> {
-        Some(RemotingCommand::create_response_command_with_code_remark(
+        Some(self.command_factory.create_response_command_with_code_remark(
             ResponseCode::ControllerNotLeader,
             "The controller is not in leader state",
         ))
     }
 
     fn not_started_response(&self) -> Option<RemotingCommand> {
-        Some(RemotingCommand::create_response_command_with_code_remark(
+        Some(self.command_factory.create_response_command_with_code_remark(
             ResponseCode::SystemError,
             "The controller raft node is not started",
         ))
@@ -339,8 +395,10 @@ impl OpenRaftController {
     {
         let (_events, header, body, response_code, remark) = result.into_parts();
         let mut response = match header {
-            Some(header) => RemotingCommand::create_response_command_with_code_and_header(response_code, header),
-            None => RemotingCommand::create_response_command_with_code(response_code),
+            Some(header) => self
+                .command_factory
+                .create_response_command_with_code_and_header(response_code, header),
+            None => self.command_factory.create_response_command_with_code(response_code),
         };
         if let Some(remark) = remark {
             response = response.set_remark(remark);
@@ -353,7 +411,7 @@ impl OpenRaftController {
 
     fn command_from_result_without_header(&self, result: EventControllerResult<()>) -> RemotingCommand {
         let (_events, _header, body, response_code, remark) = result.into_parts();
-        let mut response = RemotingCommand::create_response_command_with_code(response_code);
+        let mut response = self.command_factory.create_response_command_with_code(response_code);
         if let Some(remark) = remark {
             response = response.set_remark(remark);
         }
@@ -411,7 +469,9 @@ impl OpenRaftController {
         };
 
         let response = node.client_write(request).await?;
-        Ok(Some(response.data.into_remoting_command()))
+        Ok(Some(
+            response.data.into_remoting_command_with_factory(&self.command_factory),
+        ))
     }
 
     async fn write_internal_request(&self, request: ControllerRequest) -> RocketMQResult<Option<ControllerResponse>> {
@@ -432,14 +492,14 @@ impl OpenRaftController {
         request: &BrokerHeartbeatRequestHeader,
     ) -> RocketMQResult<Option<RemotingCommand>> {
         let Some(broker_id) = request.broker_id else {
-            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+            return Ok(Some(self.command_factory.create_response_command_with_code_remark(
                 ResponseCode::ControllerInvalidRequest,
                 "Heart beat with empty brokerId",
             )));
         };
 
         if broker_id < 0 {
-            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+            return Ok(Some(self.command_factory.create_response_command_with_code_remark(
                 ResponseCode::ControllerInvalidRequest,
                 "Heart beat with invalid brokerId",
             )));
@@ -480,8 +540,8 @@ impl OpenRaftController {
             })
             .await?
         {
-            Some(response) => Ok(Some(response.into_remoting_command())),
-            None => Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+            Some(response) => Ok(Some(response.into_remoting_command_with_factory(&self.command_factory))),
+            None => Ok(Some(self.command_factory.create_response_command_with_code_remark(
                 ResponseCode::Success,
                 "Heart beat success",
             ))),
@@ -1087,7 +1147,9 @@ impl Controller for OpenRaftController {
             }
         }
 
-        let mut command = RemotingCommand::create_success_response_command_with_header(register_header.clone());
+        let mut command = self
+            .command_factory
+            .create_success_response_command_with_header(register_header.clone());
         if let Some(body) = replica_info.body().cloned() {
             if let Ok(sync_state_set) = SyncStateSet::decode(body.as_ref()) {
                 register_header.sync_state_set_epoch = Some(sync_state_set.get_sync_state_set_epoch());
@@ -1113,7 +1175,7 @@ impl Controller for OpenRaftController {
 
     async fn apply_broker_id(&self, request: &ApplyBrokerIdRequestHeader) -> RocketMQResult<Option<RemotingCommand>> {
         if request.applied_broker_id < 0 {
-            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+            return Ok(Some(self.command_factory.create_response_command_with_code_remark(
                 ResponseCode::ControllerBrokerIdInvalid,
                 format!(
                     "Invalid broker ID: {}. Broker ID must be non-negative.",
@@ -1272,9 +1334,10 @@ impl Controller for OpenRaftController {
                 applied_log_index,
             }
         };
-        Ok(Some(RemotingCommand::create_success_response_command_with_header(
-            controller_metadata_info,
-        )))
+        Ok(Some(
+            self.command_factory
+                .create_success_response_command_with_header(controller_metadata_info),
+        ))
     }
 
     async fn get_sync_state_data(&self, broker_names: &[CheetahString]) -> RocketMQResult<Option<RemotingCommand>> {

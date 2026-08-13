@@ -28,6 +28,8 @@ use rocketmq_protocol::protocol::header::controller::apply_broker_id_response_he
 use rocketmq_protocol::protocol::header::controller::register_broker_to_controller_response_header::RegisterBrokerToControllerResponseHeader;
 use rocketmq_protocol::protocol::header::elect_master_response_header::ElectMasterResponseHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 
 /// Node ID type - represents a unique identifier for a controller node.
 pub type NodeId = u64;
@@ -241,20 +243,26 @@ impl ControllerResponse {
     }
 
     pub fn into_remoting_command(self) -> RemotingCommand {
+        self.into_remoting_command_with_factory(&application_remoting_command_factory())
+    }
+
+    /// Converts this replicated response with the immutable defaults owned by a
+    /// specific Controller instance.
+    pub fn into_remoting_command_with_factory(self, command_factory: &RemotingCommandFactory) -> RemotingCommand {
         let mut command = match self.header {
             Some(ControllerResponseHeader::ApplyBrokerId(header)) => {
-                RemotingCommand::create_response_command_with_code_and_header(self.response_code, header)
+                command_factory.create_response_command_with_code_and_header(self.response_code, header)
             }
             Some(ControllerResponseHeader::RegisterBroker(header)) => {
-                RemotingCommand::create_response_command_with_code_and_header(self.response_code, header)
+                command_factory.create_response_command_with_code_and_header(self.response_code, header)
             }
             Some(ControllerResponseHeader::AlterSyncStateSet(header)) => {
-                RemotingCommand::create_response_command_with_code_and_header(self.response_code, header)
+                command_factory.create_response_command_with_code_and_header(self.response_code, header)
             }
             Some(ControllerResponseHeader::ElectMaster(header)) => {
-                RemotingCommand::create_response_command_with_code_and_header(self.response_code, header)
+                command_factory.create_response_command_with_code_and_header(self.response_code, header)
             }
-            None => RemotingCommand::create_response_command_with_code(self.response_code),
+            None => command_factory.create_response_command_with_code(self.response_code),
         };
         if let Some(remark) = self.remark {
             command = command.set_remark(remark);
@@ -269,6 +277,8 @@ impl ControllerResponse {
 #[cfg(test)]
 mod tests {
     use cheetah_string::CheetahString;
+    use rocketmq_protocol::protocol::remoting_command_defaults::{RemotingCommandDefaults, RemotingCommandFactory};
+    use rocketmq_protocol::protocol::SerializeType;
 
     use super::*;
 
@@ -307,6 +317,20 @@ mod tests {
             .expect("controller response header");
         assert_eq!(header.cluster_name.as_deref(), Some("cluster-a"));
         assert_eq!(header.broker_name.as_deref(), Some("broker-a"));
+    }
+
+    #[test]
+    fn controller_response_uses_the_owning_command_factory() {
+        let json_factory = RemotingCommandFactory::new(RemotingCommandDefaults::new(664, SerializeType::JSON));
+        let binary_factory = RemotingCommandFactory::new(RemotingCommandDefaults::new(665, SerializeType::ROCKETMQ));
+
+        let json = ControllerResponse::success().into_remoting_command_with_factory(&json_factory);
+        let binary = ControllerResponse::success().into_remoting_command_with_factory(&binary_factory);
+
+        assert_eq!(json.version(), 664);
+        assert_eq!(json.serialize_type(), SerializeType::JSON);
+        assert_eq!(binary.version(), 665);
+        assert_eq!(binary.serialize_type(), SerializeType::ROCKETMQ);
     }
 }
 

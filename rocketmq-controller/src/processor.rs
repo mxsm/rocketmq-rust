@@ -21,6 +21,8 @@ use crate::processor::controller_request_processor::ControllerRequestProcessor;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use rocketmq_transport::api::v1::RejectRequestResponse;
@@ -57,15 +59,22 @@ impl rocketmq_transport::api::v1::RequestProcessor for ControllerRequestProcesso
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct ControllerServerRequestProcessor {
     default_request_processor: Option<ControllerRequestProcessorWrapper>,
+    command_factory: RemotingCommandFactory,
 }
 
 impl ControllerServerRequestProcessor {
     pub fn new() -> Self {
+        Self::new_with_remoting_command_factory(application_remoting_command_factory())
+    }
+
+    /// Creates the server processor with explicit immutable remoting defaults.
+    pub fn new_with_remoting_command_factory(command_factory: RemotingCommandFactory) -> Self {
         Self {
             default_request_processor: None,
+            command_factory,
         }
     }
 
@@ -83,7 +92,7 @@ impl rocketmq_transport::api::v1::RequestProcessor for ControllerServerRequestPr
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         match self.default_request_processor.as_mut() {
             None => {
-                let response_command = RemotingCommand::create_response_command_with_code_remark(
+                let response_command = self.command_factory.create_response_command_with_code_remark(
                     ResponseCode::SystemError,
                     format!("The request code {} is not supported.", request.code_ref()),
                 );
@@ -93,5 +102,61 @@ impl rocketmq_transport::api::v1::RequestProcessor for ControllerServerRequestPr
                 rocketmq_transport::api::v1::RequestProcessor::process_request(processor, channel, ctx, request).await
             }
         }
+    }
+}
+
+impl Default for ControllerServerRequestProcessor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::SocketAddr;
+
+    use rocketmq_protocol::protocol::remoting_command_defaults::{RemotingCommandDefaults, RemotingCommandFactory};
+    use rocketmq_protocol::protocol::SerializeType;
+    use rocketmq_runtime::RuntimeContext;
+    use rocketmq_transport::api::v1::ConnectionHandlerContextWrapper;
+    use rocketmq_transport::api::v1::RequestProcessor;
+    use rocketmq_transport::test_support::Connection;
+
+    use super::*;
+
+    async fn test_channel() -> Channel {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind local listener");
+        let local_addr = listener.local_addr().expect("local listener address");
+        let stream = std::net::TcpStream::connect(local_addr).expect("connect local listener");
+        stream.set_nonblocking(true).expect("set nonblocking");
+        drop(listener);
+        let connection = Connection::new(tokio::net::TcpStream::from_std(stream).expect("convert stream"));
+        let task_group = RuntimeContext::from_current("controller-server-processor-test")
+            .service_context("processor")
+            .task_group()
+            .clone();
+        rocketmq_transport::test_support::TestChannelBuilder::new(connection, task_group)
+            .addresses(local_addr, SocketAddr::from(([127, 0, 0, 1], 0)))
+            .build()
+            .expect("build channel")
+    }
+
+    #[tokio::test]
+    async fn unsupported_response_uses_the_injected_command_factory() {
+        let factory = RemotingCommandFactory::new(RemotingCommandDefaults::new(670, SerializeType::ROCKETMQ));
+        let mut processor = ControllerServerRequestProcessor::new_with_remoting_command_factory(factory);
+        let channel = test_channel().await;
+        let ctx = Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let mut request = factory.create_remoting_command(-44).set_opaque(91);
+
+        let response = processor
+            .process_request(channel, ctx, &mut request)
+            .await
+            .expect("unsupported request dispatch")
+            .expect("unsupported request response");
+
+        assert_eq!(response.version(), 670);
+        assert_eq!(response.serialize_type(), SerializeType::ROCKETMQ);
+        assert_eq!(response.opaque(), 91);
     }
 }

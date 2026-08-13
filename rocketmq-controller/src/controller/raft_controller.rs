@@ -35,6 +35,8 @@ use rocketmq_protocol::protocol::header::controller::get_replica_info_request_he
 use rocketmq_protocol::protocol::header::controller::register_broker_to_controller_request_header::RegisterBrokerToControllerRequestHeader;
 use rocketmq_protocol::protocol::header::namesrv::broker_request::BrokerHeartbeatRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_security_api::MaintenanceAuthorizationGrant;
 use tracing::info;
@@ -65,8 +67,25 @@ pub struct RaftController {
 impl RaftController {
     /// Create a new OpenRaft-based controller
     pub fn new_open_raft(config: ControllerConfigReader, service_context: ChildServiceContext) -> Self {
+        Self::new_open_raft_with_remoting_command_factory(
+            config,
+            service_context,
+            application_remoting_command_factory(),
+        )
+    }
+
+    /// Creates an OpenRaft Controller with explicit immutable remoting defaults.
+    pub fn new_open_raft_with_remoting_command_factory(
+        config: ControllerConfigReader,
+        service_context: ChildServiceContext,
+        command_factory: RemotingCommandFactory,
+    ) -> Self {
         Self {
-            inner: Arc::new(OpenRaftController::new(config, service_context)),
+            inner: Arc::new(OpenRaftController::new_with_remoting_command_factory(
+                config,
+                service_context,
+                command_factory,
+            )),
         }
     }
 
@@ -76,11 +95,28 @@ impl RaftController {
         heartbeat_manager: Arc<DefaultBrokerHeartbeatManager>,
         service_context: ChildServiceContext,
     ) -> Self {
+        Self::new_open_raft_with_heartbeat_and_remoting_command_factory(
+            config,
+            heartbeat_manager,
+            service_context,
+            application_remoting_command_factory(),
+        )
+    }
+
+    /// Creates an OpenRaft Controller that shares the supplied heartbeat
+    /// manager and uses explicit immutable remoting defaults.
+    pub fn new_open_raft_with_heartbeat_and_remoting_command_factory(
+        config: ControllerConfigReader,
+        heartbeat_manager: Arc<DefaultBrokerHeartbeatManager>,
+        service_context: ChildServiceContext,
+        command_factory: RemotingCommandFactory,
+    ) -> Self {
         Self {
-            inner: Arc::new(OpenRaftController::new_with_heartbeat(
+            inner: Arc::new(OpenRaftController::new_with_heartbeat_and_remoting_command_factory(
                 config,
                 heartbeat_manager,
                 service_context,
+                command_factory,
             )),
         }
     }
@@ -91,13 +127,32 @@ impl RaftController {
         service_context: ChildServiceContext,
         metrics_manager: Arc<ControllerMetricsManager>,
     ) -> Self {
+        Self::new_open_raft_with_heartbeat_metrics_and_remoting_command_factory(
+            config,
+            heartbeat_manager,
+            service_context,
+            metrics_manager,
+            application_remoting_command_factory(),
+        )
+    }
+
+    pub(crate) fn new_open_raft_with_heartbeat_metrics_and_remoting_command_factory(
+        config: ControllerConfigReader,
+        heartbeat_manager: Arc<DefaultBrokerHeartbeatManager>,
+        service_context: ChildServiceContext,
+        metrics_manager: Arc<ControllerMetricsManager>,
+        command_factory: RemotingCommandFactory,
+    ) -> Self {
         Self {
-            inner: Arc::new(OpenRaftController::new_with_heartbeat_and_metrics(
-                config,
-                heartbeat_manager,
-                service_context,
-                metrics_manager,
-            )),
+            inner: Arc::new(
+                OpenRaftController::new_with_heartbeat_metrics_and_remoting_command_factory(
+                    config,
+                    heartbeat_manager,
+                    service_context,
+                    metrics_manager,
+                    command_factory,
+                ),
+            ),
         }
     }
 

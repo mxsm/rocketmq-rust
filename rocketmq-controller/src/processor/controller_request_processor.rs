@@ -80,6 +80,7 @@ use rocketmq_protocol::protocol::header::controller::register_broker_to_controll
 use rocketmq_protocol::protocol::header::maintenance_request_header::MaintenanceRequestHeader;
 use rocketmq_protocol::protocol::header::namesrv::broker_request::BrokerHeartbeatRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_security_api::MaintenanceAuthorizationContext;
 use rocketmq_security_api::MaintenanceAuthorizationGrant;
@@ -106,6 +107,9 @@ pub struct ControllerRequestProcessor {
     /// Reference to the controller manager
     controller_manager: Weak<ControllerManager>,
 
+    /// Immutable wire defaults captured from the owning Controller manager.
+    command_factory: RemotingCommandFactory,
+
     /// Reference to the heartbeat manager
     heartbeat_manager: Arc<DefaultBrokerHeartbeatManager>,
 
@@ -130,9 +134,11 @@ impl ControllerRequestProcessor {
     pub fn new(controller_manager: Arc<ControllerManager>) -> Self {
         let heartbeat_manager = controller_manager.heartbeat_manager().clone();
         let config_blacklist = Arc::new(Self::init_config_blacklist(&controller_manager));
+        let command_factory = controller_manager.remoting_command_factory();
 
         Self {
             controller_manager: Arc::downgrade(&controller_manager),
+            command_factory,
             heartbeat_manager,
             config_blacklist,
         }
@@ -218,7 +224,7 @@ impl ControllerRequestProcessor {
             RequestCode::MaintenanceRestoreVerify => self.handle_restore_verify(channel, ctx, request).await,
             _ => {
                 let error_msg = format!("request type {} not supported", request.code());
-                Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                Ok(Some(self.command_factory.create_response_command_with_code_remark(
                     ResponseCode::RequestCodeNotSupported,
                     error_msg,
                 )))
@@ -310,7 +316,9 @@ impl ControllerRequestProcessor {
         };
         let body = serde_json::to_vec(&response)
             .map_err(|error| RocketMQError::internal("encode maintenance capabilities", error))?;
-        Ok(Some(RemotingCommand::create_success_response_command().set_body(body)))
+        Ok(Some(
+            self.command_factory.create_success_response_command().set_body(body),
+        ))
     }
 
     async fn handle_create_release_snapshot(
@@ -332,7 +340,9 @@ impl ControllerRequestProcessor {
             .await?;
         let body = serde_json::to_vec(&snapshot.manifest)
             .map_err(|error| RocketMQError::internal("encode Controller release snapshot manifest", error))?;
-        Ok(Some(RemotingCommand::create_success_response_command().set_body(body)))
+        Ok(Some(
+            self.command_factory.create_success_response_command().set_body(body),
+        ))
     }
 
     async fn handle_verify_release_snapshot(
@@ -349,7 +359,9 @@ impl ControllerRequestProcessor {
             .await?;
         let body = serde_json::to_vec(&manifest)
             .map_err(|error| RocketMQError::internal("encode verified Controller snapshot manifest", error))?;
-        Ok(Some(RemotingCommand::create_success_response_command().set_body(body)))
+        Ok(Some(
+            self.command_factory.create_success_response_command().set_body(body),
+        ))
     }
 
     async fn handle_restore_verify(
@@ -367,7 +379,9 @@ impl ControllerRequestProcessor {
             .await?;
         let body = serde_json::to_vec(&verification)
             .map_err(|error| RocketMQError::internal("encode Controller restore-verification proof", error))?;
-        Ok(Some(RemotingCommand::create_success_response_command().set_body(body)))
+        Ok(Some(
+            self.command_factory.create_success_response_command().set_body(body),
+        ))
     }
 
     /// Handle ALTER_SYNC_STATE_SET request
@@ -582,7 +596,7 @@ impl ControllerRequestProcessor {
                 .record_broker_heartbeat(&request_header)
                 .await
         } else {
-            Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+            Ok(Some(self.command_factory.create_response_command_with_code_remark(
                 ResponseCode::ControllerInvalidRequest,
                 "Heart beat with empty brokerId",
             )))
@@ -615,7 +629,7 @@ impl ControllerRequestProcessor {
                 return controller_manager.controller().get_sync_state_data(&broker_names).await;
             }
         }
-        Ok(Some(RemotingCommand::create_success_response_command()))
+        Ok(Some(self.command_factory.create_success_response_command()))
     }
 
     /// Handle UPDATE_CONTROLLER_CONFIG request
@@ -656,7 +670,7 @@ impl ControllerRequestProcessor {
         }
         // Validate against blacklist
         if self.validate_blacklist_config_exist(&properties) {
-            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+            return Ok(Some(self.command_factory.create_response_command_with_code_remark(
                 ResponseCode::NoPermission,
                 "Cannot update blacklisted configuration".to_string(),
             )));
@@ -667,7 +681,7 @@ impl ControllerRequestProcessor {
         controller_manager.update_config(properties).await?;
 
         // Return success
-        Ok(Some(RemotingCommand::create_success_response_command()))
+        Ok(Some(self.command_factory.create_success_response_command()))
     }
     // Helper function to parse properties
     async fn parse_properties_from_string(body: &[u8]) -> RocketMQResult<HashMap<String, String>> {
@@ -709,7 +723,10 @@ impl ControllerRequestProcessor {
         let controller_config = self.controller_manager()?.controller_config();
         let config_string = controller_config.to_properties_string();
 
-        let response = RemotingCommand::create_success_response_command().set_body(config_string.into_bytes());
+        let response = self
+            .command_factory
+            .create_success_response_command()
+            .set_body(config_string.into_bytes());
         Ok(Some(response))
     }
 
@@ -740,7 +757,7 @@ impl ControllerRequestProcessor {
             })?;
 
         if request_header.broker_name.is_empty() {
-            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+            return Ok(Some(self.command_factory.create_response_command_with_code_remark(
                 ResponseCode::ControllerInvalidRequest,
                 "broker_name cannot be empty",
             )));
@@ -785,7 +802,7 @@ impl ControllerRequestProcessor {
         // Validate cluster_name
         if request_header.cluster_name.is_empty() {
             warn!("GetNextBrokerId request rejected: cluster_name is empty");
-            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+            return Ok(Some(self.command_factory.create_response_command_with_code_remark(
                 ResponseCode::ControllerInvalidRequest,
                 "cluster_name cannot be empty".to_string(),
             )));
@@ -794,7 +811,7 @@ impl ControllerRequestProcessor {
         // Validate broker_name
         if request_header.broker_name.is_empty() {
             warn!("GetNextBrokerId request rejected: broker_name is empty");
-            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+            return Ok(Some(self.command_factory.create_response_command_with_code_remark(
                 ResponseCode::ControllerInvalidRequest,
                 "broker_name cannot be empty".to_string(),
             )));
@@ -885,7 +902,7 @@ impl ControllerRequestProcessor {
         // Validate cluster_name is not empty
         if request_header.cluster_name.is_empty() {
             warn!("ApplyBrokerId request rejected: cluster_name is empty");
-            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+            return Ok(Some(self.command_factory.create_response_command_with_code_remark(
                 ResponseCode::ControllerInvalidRequest,
                 "cluster_name cannot be empty".to_string(),
             )));
@@ -894,7 +911,7 @@ impl ControllerRequestProcessor {
         // Validate broker_name is not empty
         if request_header.broker_name.is_empty() {
             warn!("ApplyBrokerId request rejected: broker_name is empty");
-            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+            return Ok(Some(self.command_factory.create_response_command_with_code_remark(
                 ResponseCode::ControllerInvalidRequest,
                 "broker_name cannot be empty".to_string(),
             )));
@@ -906,7 +923,7 @@ impl ControllerRequestProcessor {
                 "ApplyBrokerId request rejected: invalid broker_id={} for broker={}",
                 request_header.applied_broker_id, request_header.broker_name
             );
-            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+            return Ok(Some(self.command_factory.create_response_command_with_code_remark(
                 ResponseCode::ControllerBrokerIdInvalid,
                 format!(
                     "Invalid broker ID: {}. Broker ID must be non-negative.",
@@ -984,7 +1001,7 @@ impl ControllerRequestProcessor {
         let broker_address = request_header.broker_address.clone().unwrap_or_default();
 
         if broker_name.is_empty() || cluster_name.is_empty() || broker_address.is_empty() {
-            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+            return Ok(Some(self.command_factory.create_response_command_with_code_remark(
                 ResponseCode::ControllerInvalidRequest,
                 "cluster_name, broker_name and broker_address cannot be empty",
             )));
@@ -1079,7 +1096,7 @@ impl ControllerRequestProcessor {
                 if let Some(name) = request_name {
                     self.record_request_metrics(name, RequestHandleStatus::Timeout, latency_us);
                 }
-                Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                Ok(Some(self.command_factory.create_response_command_with_code_remark(
                     ResponseCode::SystemError,
                     "Controller request timed out",
                 )))
