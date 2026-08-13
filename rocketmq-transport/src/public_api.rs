@@ -96,6 +96,7 @@ pub use crate::rpc::rpc_request_header::RpcRequestHeader;
 pub use crate::rpc::rpc_response::RpcResponse;
 pub use crate::rpc::topic_request_header::TopicRequestHeader;
 pub use crate::runtime::config::client_config::ConnectConfig;
+pub use crate::runtime::config::client_config::GoAwayPolicy;
 pub use crate::runtime::config::client_config::MaintenanceConfig;
 pub use crate::runtime::config::client_config::TransportClientConfig;
 pub use crate::runtime::connection_handler_context::ConnectionHandlerContext;

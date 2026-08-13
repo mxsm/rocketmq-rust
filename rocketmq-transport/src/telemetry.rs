@@ -142,6 +142,11 @@ impl TransportTelemetry {
     }
 
     #[inline]
+    pub(crate) fn record_go_away(&self, outcome: TransportGoAwayOutcome) {
+        self.record_lifecycle_event("go_away", outcome.as_str());
+    }
+
+    #[inline]
     pub(crate) fn request_guard(
         &self,
         request_code: i32,
@@ -174,6 +179,23 @@ pub(crate) enum TransportNameServerFailoverReason {
     Unhealthy,
     CircuitOpen,
     Draining,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum TransportGoAwayOutcome {
+    Received,
+    RetrySuccess,
+    RetryFailed,
+}
+
+impl TransportGoAwayOutcome {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Received => "received",
+            Self::RetrySuccess => "retry_success",
+            Self::RetryFailed => "retry_failed",
+        }
+    }
 }
 
 pub(crate) struct TransportRequestMetricsGuard {
@@ -224,6 +246,7 @@ impl TransportRequestMetricsGuard {
 
 #[cfg(test)]
 mod tests {
+    use super::TransportGoAwayOutcome;
     use super::TransportNameServerFailoverReason;
     use super::TransportTelemetry;
 
@@ -236,6 +259,7 @@ mod tests {
         telemetry.record_lifecycle_event("connected", "queued");
         telemetry.record_lifecycle_listener_latency(std::time::Duration::from_millis(1), "connected");
         telemetry.record_nameserver_failover(TransportNameServerFailoverReason::ConnectFailure);
+        telemetry.record_go_away(TransportGoAwayOutcome::Received);
         assert!(telemetry.request_span(10, 1).is_disabled());
         let mut guard = telemetry.request_guard(10, 64, false);
         guard.complete_response(0);

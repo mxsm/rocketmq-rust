@@ -29,6 +29,7 @@ use parking_lot::RwLock;
 use rocketmq_error::NetworkError;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_error::RpcClientError;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ResourcePermit;
@@ -65,15 +66,18 @@ use crate::remoting::inner::RemotingGeneralHandler;
 use crate::request_processor::default_request_processor::DefaultRequestProcessor;
 #[cfg(test)]
 use crate::runtime::config::client_config::ConnectConfig;
+use crate::runtime::config::client_config::GoAwayPolicy;
 #[cfg(test)]
 use crate::runtime::config::client_config::MaintenanceConfig;
 use crate::runtime::config::client_config::TransportClientConfig;
 use crate::runtime::processor::RequestProcessor;
 use crate::runtime::RPCHook;
 use crate::security::TransportSecurity;
+use crate::telemetry::TransportGoAwayOutcome;
 use crate::telemetry::TransportNameServerFailoverReason;
 use crate::telemetry::TransportTelemetry;
 use crate::tls::TlsConfig;
+use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
 /// High-performance async RocketMQ client with persistent endpoint sessions and auto-reconnection.
@@ -221,6 +225,7 @@ pub struct TransportClient<PR = DefaultRequestProcessor> {
 
     telemetry: TransportTelemetry,
     frame_limits: FrameLimits,
+    go_away_policy: GoAwayPolicy,
 }
 
 /// Builds a persistent endpoint client without exposing positional optional capabilities.
@@ -232,6 +237,7 @@ pub struct TransportClientBuilder<PR> {
     transport_security: Option<Arc<TransportSecurity>>,
     telemetry: TransportTelemetry,
     frame_limits: FrameLimits,
+    go_away_policy: GoAwayPolicy,
 }
 
 impl<PR> TransportClientBuilder<PR>
@@ -260,6 +266,13 @@ where
         Ok(self)
     }
 
+    /// Applies an explicit allowlist for one bounded `GO_AWAY` reconnect retry.
+    #[must_use]
+    pub fn go_away_policy(mut self, policy: GoAwayPolicy) -> Self {
+        self.go_away_policy = policy;
+        self
+    }
+
     pub fn build(self) -> RocketMQResult<TransportClient<PR>> {
         let mut client = TransportClient::build_inner(
             self.config,
@@ -268,6 +281,7 @@ where
             self.service_context,
             self.telemetry,
             self.frame_limits,
+            self.go_away_policy,
         )?;
         if let Some(transport_security) = self.transport_security {
             client = client.with_transport_security(transport_security);
@@ -347,6 +361,13 @@ where
     pub fn frame_limits(mut self, frame_limits: FrameLimits) -> RocketMQResult<Self> {
         self.transport = self.transport.frame_limits(frame_limits)?;
         Ok(self)
+    }
+
+    /// Applies an explicit allowlist for one bounded `GO_AWAY` reconnect retry.
+    #[must_use]
+    pub fn go_away_policy(mut self, policy: GoAwayPolicy) -> Self {
+        self.transport = self.transport.go_away_policy(policy);
+        self
     }
 
     pub fn build(self) -> RocketMQResult<RemotingClient<PR>> {
@@ -506,6 +527,7 @@ impl<PR> Clone for TransportClient<PR> {
             transport_security: self.transport_security.clone(),
             telemetry: self.telemetry.clone(),
             frame_limits: self.frame_limits,
+            go_away_policy: self.go_away_policy.clone(),
         }
     }
 }
@@ -526,6 +548,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
             transport_security: None,
             telemetry: TransportTelemetry::noop(),
             frame_limits: FrameLimits::java_compatibility(),
+            go_away_policy: GoAwayPolicy::default(),
         }
     }
 
@@ -547,6 +570,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
         service_context: ChildServiceContext,
         telemetry: TransportTelemetry,
         frame_limits: FrameLimits,
+        go_away_policy: GoAwayPolicy,
     ) -> RocketMQResult<Self> {
         frame_limits.validate()?;
         let process_budget = service_context.process_budget();
@@ -582,6 +606,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
             transport_security: None,
             telemetry,
             frame_limits,
+            go_away_policy,
         })
     }
 
@@ -1434,6 +1459,46 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
 }
 
 impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
+    const MAX_GO_AWAY_ATTEMPTS: usize = 2;
+
+    fn session_cache_identity(
+        &self,
+        requested_addr: Option<&CheetahString>,
+        session: &TransportSession<PR>,
+    ) -> CheetahString {
+        requested_addr
+            .cloned()
+            .or_else(|| {
+                self.connection_tables
+                    .iter()
+                    .find(|entry| entry.value().is_same_registry_session(session))
+                    .map(|entry| entry.key().clone())
+            })
+            .or_else(|| self.namesrv_addr_choosed.read().clone())
+            .unwrap_or_else(|| CheetahString::from_string(session.remote_address().to_string()))
+    }
+
+    fn remove_cached_session_if_matches(&self, identity: &CheetahString, expected: &TransportSession<PR>) -> bool {
+        self.connection_tables
+            .remove_if(identity, |_, current| current.is_same_registry_session(expected))
+            .is_some()
+    }
+
+    fn start_go_away_drain(&self, identity: CheetahString, session: TransportSession<PR>) {
+        session.begin_drain();
+        let drain_timeout = session.max_pending_request_age();
+        let task_name = format!("rocketmq.transport.go-away-drain.{identity}");
+        let spawned = self.spawn_worker_task(task_name, async move {
+            let report = session.drain_and_close(drain_timeout).await;
+            if !report.is_healthy() {
+                warn!(report = %report.to_json(), "GO_AWAY session drain was unhealthy");
+            }
+        });
+        if spawned.is_none() {
+            warn!(%identity, "GO_AWAY session drain could not be scheduled because the client is shutting down");
+        }
+    }
+
     fn record_nameserver_outcome(&self, addr: Option<&CheetahString>, latency: Duration, success: bool) {
         let Some(addr) = addr else {
             return;
@@ -1653,9 +1718,6 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
         let target = addr.map_or_else(|| "<nameserver>".to_string(), ToString::to_string);
         deadline.ensure_before_send(target.clone())?;
 
-        // Determine target address (for metrics recording)
-        let target_addr = addr.cloned().or_else(|| self.namesrv_addr_choosed.read().clone());
-
         let mut client = self.get_and_create_client_until(addr, deadline).await?.ok_or_else(|| {
             if target == "<nameserver>" {
                 let configured_list = self.name_server_identity_list();
@@ -1673,9 +1735,8 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
                 error!("Failed to get client for {}", target);
             }
 
-            // Record connection error
             if nameserver_request {
-                if let Some(ref addr) = target_addr {
+                if let Some(addr) = self.namesrv_addr_choosed.read().as_ref() {
                     self.latency_tracker.record_error(addr);
                 }
             }
@@ -1688,34 +1749,25 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
         }
 
         let mut request = request;
-        let remote_address = client.remote_address();
-        let nameserver_metric_addr = nameserver_request.then(|| {
-            self.namesrv_addr_choosed
-                .read()
-                .clone()
-                .unwrap_or_else(|| CheetahString::from_string(remote_address.to_string()))
-        });
-        deadline.ensure_before_send(remote_address.to_string())?;
+        let initial_remote_address = client.remote_address();
+        let initial_identity = self.session_cache_identity(addr, &client);
+        let nameserver_metric_addr = nameserver_request.then(|| initial_identity.clone());
+        deadline.ensure_before_send(initial_remote_address.to_string())?;
         let hooks = self.cmd_handler.hook_snapshot();
         let request_for_after = if let Some(hooks) = hooks {
             request.make_custom_header_to_net();
             self.cmd_handler.do_before_rpc_hooks_with_snapshot(
                 Some(hooks.as_ref()),
-                remote_address,
+                initial_remote_address,
                 Some(&mut request),
             )?;
-            deadline.ensure_before_send(remote_address.to_string())?;
+            deadline.ensure_before_send(initial_remote_address.to_string())?;
             Some((request.clone(), hooks))
         } else {
             None
         };
-
-        let send_result = client.send_read(request, deadline).await;
-
-        let latency = start.elapsed();
-
-        match send_result {
-            Ok(mut response) => {
+        let apply_final_hooks =
+            |mut response: RemotingCommand, remote_address: std::net::SocketAddr| -> RocketMQResult<RemotingCommand> {
                 if let Some((request, hooks)) = request_for_after.as_ref() {
                     self.cmd_handler.do_after_rpc_hooks_with_snapshot(
                         Some(hooks.as_ref()),
@@ -1723,46 +1775,127 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
                         request,
                         Some(&mut response),
                     )?;
-                    if deadline.is_expired() {
-                        return Err(RocketMQError::network_response_timeout(
-                            remote_address.to_string(),
-                            timeout_millis,
-                        ));
-                    }
                 }
+                if deadline.is_expired() {
+                    return Err(RocketMQError::network_response_timeout(
+                        remote_address.to_string(),
+                        timeout_millis,
+                    ));
+                }
+                Ok(response)
+            };
+        let retry_allowed = self.go_away_policy.allows_request(request.code()) && !request.is_oneway_rpc();
+        let retry_request = request.clone();
+        let mut attempted_retry = false;
 
-                self.record_nameserver_outcome(nameserver_metric_addr.as_ref(), latency, true);
-                if let Some(ref addr) = target_addr {
+        for attempt in 0..Self::MAX_GO_AWAY_ATTEMPTS {
+            let remote_address = client.remote_address();
+            let identity = self.session_cache_identity(addr, &client);
+            let mut attempt_request = retry_request.clone();
+            if attempt > 0 {
+                attempt_request.set_opaque_mut(RemotingCommand::get_and_add());
+            }
+
+            match client.send_read(attempt_request, deadline).await {
+                Ok(response) if response.code() == ResponseCode::GoAway.to_i32() => {
+                    self.telemetry.record_go_away(TransportGoAwayOutcome::Received);
+                    if !retry_allowed {
+                        let response = apply_final_hooks(response, remote_address)?;
+                        let latency = start.elapsed();
+                        self.record_nameserver_outcome(nameserver_metric_addr.as_ref(), latency, true);
+                        debug!(
+                            remote_addr = %identity,
+                            elapsed_ms = latency.as_millis() as u64,
+                            "request completed with GO_AWAY retry disabled"
+                        );
+                        return Ok(response);
+                    }
+                    self.remove_cached_session_if_matches(&identity, &client);
+                    self.start_go_away_drain(identity.clone(), client);
+
+                    if attempt + 1 == Self::MAX_GO_AWAY_ATTEMPTS {
+                        self.telemetry.record_go_away(TransportGoAwayOutcome::RetryFailed);
+                        self.record_nameserver_outcome(nameserver_metric_addr.as_ref(), start.elapsed(), false);
+                        return Err(RpcClientError::unexpected_response_code(
+                            response.code(),
+                            "GO_AWAY after replacement-connection retry",
+                        )
+                        .into());
+                    }
+
+                    attempted_retry = true;
+                    if let Err(error) = deadline.ensure_before_send(identity.to_string()) {
+                        self.telemetry.record_go_away(TransportGoAwayOutcome::RetryFailed);
+                        self.record_nameserver_outcome(nameserver_metric_addr.as_ref(), start.elapsed(), false);
+                        return Err(error);
+                    }
+                    let replacement = match self.get_and_create_client_until(addr, deadline).await {
+                        Ok(Some(replacement)) => Ok(replacement),
+                        Ok(None) => Err(RocketMQError::network_connection_failed(
+                            identity.to_string(),
+                            "GO_AWAY replacement connection unavailable",
+                        )),
+                        Err(error) => Err(error),
+                    };
+                    client = match replacement {
+                        Ok(replacement) => replacement,
+                        Err(error) => {
+                            self.telemetry.record_go_away(TransportGoAwayOutcome::RetryFailed);
+                            self.record_nameserver_outcome(nameserver_metric_addr.as_ref(), start.elapsed(), false);
+                            return Err(error);
+                        }
+                    };
+                }
+                Ok(response) => {
+                    let response = match apply_final_hooks(response, remote_address) {
+                        Ok(response) => response,
+                        Err(error) => {
+                            if attempted_retry {
+                                self.telemetry.record_go_away(TransportGoAwayOutcome::RetryFailed);
+                            }
+                            self.record_nameserver_outcome(nameserver_metric_addr.as_ref(), start.elapsed(), false);
+                            return Err(error);
+                        }
+                    };
+                    if attempted_retry {
+                        self.telemetry.record_go_away(TransportGoAwayOutcome::RetrySuccess);
+                    }
+                    let latency = start.elapsed();
+                    self.record_nameserver_outcome(nameserver_metric_addr.as_ref(), latency, true);
                     debug!(
-                        remote_addr = %addr,
+                        remote_addr = %identity,
                         elapsed_ms = latency.as_millis() as u64,
                         "request completed"
                     );
+                    return Ok(response);
                 }
-                Ok(response)
-            }
-            Err(err) => {
-                if matches!(
-                    err,
-                    RocketMQError::Network(NetworkError::WriteTimeout { .. } | NetworkError::ResponseTimeout { .. })
-                ) {
-                    client.retire_after_timeout().await;
-                    if let Some(ref addr) = target_addr {
-                        self.connection_tables.remove(addr);
+                Err(error) => {
+                    if matches!(
+                        error,
+                        RocketMQError::Network(
+                            NetworkError::WriteTimeout { .. } | NetworkError::ResponseTimeout { .. }
+                        )
+                    ) {
+                        client.retire_after_timeout().await;
+                        self.remove_cached_session_if_matches(&identity, &client);
                     }
-                }
-                self.record_nameserver_outcome(nameserver_metric_addr.as_ref(), latency, false);
-                if let Some(ref addr) = target_addr {
+                    if attempted_retry {
+                        self.telemetry.record_go_away(TransportGoAwayOutcome::RetryFailed);
+                    }
+                    let latency = start.elapsed();
+                    self.record_nameserver_outcome(nameserver_metric_addr.as_ref(), latency, false);
                     warn!(
-                        remote_addr = %addr,
+                        remote_addr = %identity,
                         elapsed_ms = latency.as_millis() as u64,
-                        error = ?err,
+                        error = ?error,
                         "request failed"
                     );
+                    return Err(error);
                 }
-                Err(err)
             }
         }
+
+        unreachable!("GO_AWAY attempt loop has a fixed non-zero bound")
     }
 
     pub async fn invoke_request_oneway_with_deadline(
@@ -2194,6 +2327,54 @@ mod tests {
 
         server.await.expect("server task");
         client.shutdown();
+    }
+
+    #[tokio::test]
+    async fn registry_token_distinguishes_replacements_and_same_port_nameserver_identities() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (first, _) = listener.accept().await.expect("accept first client");
+            let (second, _) = listener.accept().await.expect("accept replacement client");
+            let _connections = (first, second);
+            let _ = release_rx.await;
+        });
+
+        let client = TransportClient::build_for_test(
+            Arc::new(TransportClientConfig::default()),
+            DefaultRequestProcessor,
+            test_service_context("remoting-client-registry-token-test"),
+        );
+        let target = CheetahString::from_string(addr.to_string());
+        let first = client
+            .create_client(&target, Duration::from_secs(1))
+            .await
+            .expect("first client");
+        client.connection_tables.remove(&target);
+        let replacement = client
+            .create_client(&target, Duration::from_secs(1))
+            .await
+            .expect("replacement client");
+        client.connection_tables.remove(&target);
+
+        let first_identity = CheetahString::from_static_str("nameserver-a:9876");
+        let replacement_identity = CheetahString::from_static_str("nameserver-b:9876");
+        client.connection_tables.insert(first_identity.clone(), first.clone());
+        client
+            .connection_tables
+            .insert(replacement_identity.clone(), replacement.clone());
+
+        assert_eq!(client.session_cache_identity(None, &first), first_identity);
+        assert_eq!(client.session_cache_identity(None, &replacement), replacement_identity);
+        assert!(!client.remove_cached_session_if_matches(&replacement_identity, &first));
+        assert!(client.connection_tables.contains_key(&replacement_identity));
+        assert!(client.remove_cached_session_if_matches(&first_identity, &first));
+        assert!(client.connection_tables.contains_key(&replacement_identity));
+
+        client.shutdown();
+        let _ = release_tx.send(());
+        server.await.expect("server task");
     }
 
     #[tokio::test]
