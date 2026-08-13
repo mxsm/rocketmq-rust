@@ -350,10 +350,6 @@ Thanks to all our contributors! 🙏
   <img src="https://contrib.rocks/image?repo=mxsm/rocketmq-rust&anon=1" />
 </a>
 
-### Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=mxsm/rocketmq-rust&type=Date)](https://star-history.com/#mxsm/rocketmq-rust&Date)
-
 ## 📄 License
 
 RocketMQ-Rust is licensed under the **Apache License 2.0**.
@@ -375,4 +371,3 @@ See [LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2
 [codecov-image]: https://codecov.io/gh/mxsm/rocketmq-rust/branch/main/graph/badge.svg
 
 [codecov-url]: https://codecov.io/gh/mxsm/rocketmq-rust
-
