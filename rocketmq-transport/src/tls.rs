@@ -46,6 +46,7 @@ use tokio_rustls::rustls::pki_types::pem::PemObject;
 use tracing::debug;
 use tracing::warn;
 
+use crate::codec::remoting_command_codec::FrameLimits;
 use crate::connection::Connection;
 
 const TLS_HANDSHAKE_MAGIC_CODE: u8 = 0x16;
@@ -228,8 +229,19 @@ impl TlsServerRuntime {
         stream: TcpStream,
         remote_addr: SocketAddr,
     ) -> Option<NegotiatedConnection> {
+        self.negotiate_connection_with_limits(stream, remote_addr, FrameLimits::default())
+            .await
+    }
+
+    /// Negotiates a connection whose plaintext/TLS codec shares one explicit frame profile.
+    pub async fn negotiate_connection_with_limits(
+        &self,
+        stream: TcpStream,
+        remote_addr: SocketAddr,
+        frame_limits: FrameLimits,
+    ) -> Option<NegotiatedConnection> {
         let is_tls_handshake = self.detect_tls_handshake(&stream, remote_addr).await?;
-        self.negotiate_detected_connection(stream, remote_addr, is_tls_handshake)
+        self.negotiate_detected_connection_with_limits(stream, remote_addr, is_tls_handshake, frame_limits)
             .await
     }
 
@@ -243,12 +255,17 @@ impl TlsServerRuntime {
         }
     }
 
-    pub(crate) async fn negotiate_detected_connection(
+    pub(crate) async fn negotiate_detected_connection_with_limits(
         &self,
         stream: TcpStream,
         remote_addr: SocketAddr,
         is_tls_handshake: bool,
+        frame_limits: FrameLimits,
     ) -> Option<NegotiatedConnection> {
+        if let Err(error) = frame_limits.validate() {
+            warn!(%error, %remote_addr, "rejected invalid remoting frame profile");
+            return None;
+        }
         match self.mode {
             TlsMode::Disabled => {
                 if is_tls_handshake {
@@ -256,14 +273,14 @@ impl TlsServerRuntime {
                     None
                 } else {
                     Some(NegotiatedConnection {
-                        connection: Connection::new(stream),
+                        connection: Connection::new_with_limits(stream, frame_limits),
                         negotiated_tls: false,
                     })
                 }
             }
             TlsMode::Permissive => {
                 if is_tls_handshake {
-                    self.accept_tls(stream, remote_addr)
+                    self.accept_tls(stream, remote_addr, frame_limits)
                         .await
                         .map(|connection| NegotiatedConnection {
                             connection,
@@ -271,14 +288,14 @@ impl TlsServerRuntime {
                         })
                 } else {
                     Some(NegotiatedConnection {
-                        connection: Connection::new(stream),
+                        connection: Connection::new_with_limits(stream, frame_limits),
                         negotiated_tls: false,
                     })
                 }
             }
             TlsMode::Enforcing => {
                 if is_tls_handshake {
-                    self.accept_tls(stream, remote_addr)
+                    self.accept_tls(stream, remote_addr, frame_limits)
                         .await
                         .map(|connection| NegotiatedConnection {
                             connection,
@@ -294,6 +311,18 @@ impl TlsServerRuntime {
 
     pub async fn into_connection(&self, stream: TcpStream, remote_addr: SocketAddr) -> Option<Connection> {
         self.negotiate_connection(stream, remote_addr)
+            .await
+            .map(NegotiatedConnection::into_connection)
+    }
+
+    /// Negotiates and returns a connection with one explicit symmetric frame profile.
+    pub async fn into_connection_with_limits(
+        &self,
+        stream: TcpStream,
+        remote_addr: SocketAddr,
+        frame_limits: FrameLimits,
+    ) -> Option<Connection> {
+        self.negotiate_connection_with_limits(stream, remote_addr, frame_limits)
             .await
             .map(NegotiatedConnection::into_connection)
     }
@@ -372,10 +401,15 @@ impl TlsServerRuntime {
     }
 
     #[cfg(feature = "tls")]
-    async fn accept_tls(&self, stream: TcpStream, remote_addr: SocketAddr) -> Option<Connection> {
+    async fn accept_tls(
+        &self,
+        stream: TcpStream,
+        remote_addr: SocketAddr,
+        frame_limits: FrameLimits,
+    ) -> Option<Connection> {
         self.accept_stream(stream, remote_addr)
             .await
-            .map(Connection::new_with_tls_stream)
+            .map(|stream| Connection::new_with_tls_stream_and_limits(stream, frame_limits))
     }
 
     /// Performs a server-side TLS handshake with the atomically published acceptor generation.
@@ -403,7 +437,12 @@ impl TlsServerRuntime {
     }
 
     #[cfg(not(feature = "tls"))]
-    async fn accept_tls(&self, _stream: TcpStream, remote_addr: SocketAddr) -> Option<Connection> {
+    async fn accept_tls(
+        &self,
+        _stream: TcpStream,
+        remote_addr: SocketAddr,
+        _frame_limits: FrameLimits,
+    ) -> Option<Connection> {
         warn!("client {remote_addr} attempted TLS but rocketmq-transport was compiled without TLS support");
         None
     }

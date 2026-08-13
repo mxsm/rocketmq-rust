@@ -13,9 +13,11 @@
 // limitations under the License.
 
 use rocketmq_transport::api::v1::AdmissionLimits;
+use rocketmq_transport::api::v1::FileTransferMode;
 use rocketmq_transport::api::v1::FrameLimits;
 use rocketmq_transport::api::v1::OneShotTransportClient;
 use rocketmq_transport::api::v1::ServerConfig;
+use rocketmq_transport::api::v1::TransportClientConfig;
 
 #[test]
 fn transport_consumers_use_only_versioned_capabilities_and_dtos() {
@@ -68,5 +70,16 @@ fn transport_consumers_use_only_versioned_capabilities_and_dtos() {
     let _ = AdmissionLimits::default();
     let _ = FrameLimits::default();
     let _ = ServerConfig::default();
+    let _ = ServerConfig {
+        listen_port: 10911,
+        bind_address: "127.0.0.1".to_owned(),
+        tls_config: Default::default(),
+        file_transfer_mode: FileTransferMode::Auto,
+    };
+    let _ = TransportClientConfig {
+        connect: Default::default(),
+        maintenance: Default::default(),
+        tls: Default::default(),
+    };
     let _: Option<OneShotTransportClient> = None;
 }

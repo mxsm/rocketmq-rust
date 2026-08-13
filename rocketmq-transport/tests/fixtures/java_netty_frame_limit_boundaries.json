@@ -1,0 +1,14 @@
+{
+  "decoder": "org.apache.rocketmq.remoting.netty.NettyDecoder",
+  "sourceRevision": "e3458616d",
+  "maxFrameLength": 16777216,
+  "lengthFieldOffset": 0,
+  "lengthFieldLength": 4,
+  "lengthAdjustment": 0,
+  "initialBytesToStrip": 4,
+  "cases": [
+    { "totalWireBytes": 16777215, "accepted": true },
+    { "totalWireBytes": 16777216, "accepted": true },
+    { "totalWireBytes": 16777217, "accepted": false }
+  ]
+}

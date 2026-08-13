@@ -767,16 +767,24 @@ where
                     Ok(Some(final_response))
                 } else {
                     //zero copy transfer
-                    if let Some(header_bytes) =
-                        final_response.encode_header_with_body_length(get_message_result.buffer_total_size() as usize)
-                    {
-                        channel.send_bytes(header_bytes).await?;
-                    }
+                    let header_bytes = final_response
+                        .encode_header_with_body_length(get_message_result.buffer_total_size() as usize)
+                        .ok_or_else(|| {
+                            rocketmq_error::RocketMQError::Serialization(
+                                rocketmq_error::SerializationError::encode_failed(
+                                    "remoting-command",
+                                    "failed to encode POP response header",
+                                ),
+                            )
+                        })?;
+                    let mut frame_segments = Vec::with_capacity(get_message_result.message_mapped_list().len() + 1);
+                    frame_segments.push(header_bytes);
                     for select_result in get_message_result.message_mapped_list_mut() {
                         if let Some(message) = select_result.take() {
-                            channel.send_bytes(message).await?;
+                            frame_segments.push(message);
                         }
                     }
+                    channel.send_frame_segments(frame_segments).await?;
 
                     Ok(None)
                 }

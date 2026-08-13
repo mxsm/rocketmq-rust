@@ -48,6 +48,7 @@ use crate::admission::AdmissionController;
 use crate::admission::AdmissionResource;
 use crate::admission::AdmissionScope;
 use crate::admission::AdmissionScopeHandle;
+use crate::codec::remoting_command_codec::FrameLimits;
 use crate::config::SocketOptions;
 use crate::config::TlsConfig;
 use crate::config::TlsMode;
@@ -124,6 +125,7 @@ struct SessionSendHandle {
     local_addr: SocketAddr,
     remote_addr: SocketAddr,
     connection_id: ConnectionId,
+    frame_limits: FrameLimits,
     writer: WriterLanes,
     writer_diagnostics: Arc<SessionWriterDiagnostics>,
     admission: AdmissionScopeHandle,
@@ -165,6 +167,7 @@ impl SessionHandle {
             self.send.state_tx.clone(),
             self.send.state_rx.clone(),
             self.send.connection_id.clone(),
+            self.send.frame_limits,
             self.response_class,
             self.send.lifecycle.clone(),
             self.send.telemetry.clone(),
@@ -334,6 +337,7 @@ async fn negotiate_transport_connection(
     scope: AdmissionScope,
     stream: tokio::net::TcpStream,
     remote_addr: SocketAddr,
+    frame_limits: FrameLimits,
     timeouts: NegotiationTimeouts,
 ) -> Option<NegotiatedConnection> {
     // Protocol detection waits under the connection idle budget. Once TLS is identified, the
@@ -353,7 +357,8 @@ async fn negotiate_transport_connection(
             AdmissionClass::Data,
         )
         .ok()?;
-    let negotiation = tls.negotiate_detected_connection(stream, remote_addr, is_tls_handshake);
+    let negotiation =
+        tls.negotiate_detected_connection_with_limits(stream, remote_addr, is_tls_handshake, frame_limits);
 
     if is_tls_handshake {
         tokio::time::timeout(timeouts.tls_handshake, negotiation)
@@ -379,6 +384,7 @@ pub struct TransportListener {
     socket_options: SocketOptions,
     file_region_blocking: Option<BlockingExecutor>,
     file_transfer_mode: FileTransferMode,
+    frame_limits: FrameLimits,
 }
 
 impl TransportListener {
@@ -406,6 +412,7 @@ impl TransportListener {
             socket_options: SocketOptions::default(),
             file_region_blocking: None,
             file_transfer_mode: FileTransferMode::Auto,
+            frame_limits: FrameLimits::default(),
         }
     }
 
@@ -424,6 +431,13 @@ impl TransportListener {
     pub fn with_io_policy(mut self, io_policy: SessionIoPolicy) -> Self {
         self.io_policy = io_policy;
         self
+    }
+
+    /// Applies one symmetric frame profile to plaintext/TLS readers and writers.
+    pub fn try_with_frame_limits(mut self, frame_limits: FrameLimits) -> RocketMQResult<Self> {
+        frame_limits.validate()?;
+        self.frame_limits = frame_limits;
+        Ok(self)
     }
 
     #[allow(dead_code, reason = "custom security is used by the feature-gated session harness")]
@@ -519,6 +533,7 @@ impl TransportListener {
             let telemetry = self.telemetry.clone();
             let file_region_blocking = self.file_region_blocking.clone();
             let file_transfer_mode = self.file_transfer_mode;
+            let frame_limits = self.frame_limits;
             let spawn_group = session_group.clone();
             if spawn_group
                 .spawn_service("rocketmq.transport.session", async move {
@@ -532,6 +547,7 @@ impl TransportListener {
                             scope,
                             stream,
                             remote_addr,
+                            frame_limits,
                             NegotiationTimeouts {
                                 protocol_detection: io_policy.idle_timeout,
                                 tls_handshake: handshake_timeout,
@@ -586,6 +602,7 @@ async fn run_framed_session<H>(
     H: ConnectionHandler,
 {
     let connection_id = connection.connection_id().clone();
+    let frame_limits = connection.frame_limits();
     let telemetry = connection.telemetry();
     let admission = dispatch.admission_controller();
     let admission_scope = match admission.prepare_scope(scope) {
@@ -633,6 +650,7 @@ async fn run_framed_session<H>(
             local_addr,
             remote_addr,
             connection_id,
+            frame_limits,
             writer: writer.clone(),
             writer_diagnostics,
             admission: admission_scope,
@@ -831,6 +849,7 @@ pub struct SessionTransportServer {
     active_sessions: AtomicUsize,
     principal: Option<Principal>,
     telemetry: TransportTelemetry,
+    frame_limits: FrameLimits,
 }
 
 #[allow(dead_code, reason = "owned by the feature-gated low-level session server")]
@@ -914,13 +933,26 @@ impl SessionTransportServer {
         processor: Arc<dyn SessionProcessor>,
         admission: Arc<AdmissionController>,
     ) -> RocketMQResult<Arc<Self>> {
-        Self::bind_with_security(
+        Self::bind_with_frame_limits(service_context, config, FrameLimits::default(), processor, admission).await
+    }
+
+    pub async fn bind_with_frame_limits(
+        service_context: ChildServiceContext,
+        config: SessionTransportServerConfig,
+        frame_limits: FrameLimits,
+        processor: Arc<dyn SessionProcessor>,
+        admission: Arc<AdmissionController>,
+    ) -> RocketMQResult<Arc<Self>> {
+        frame_limits.validate()?;
+        Self::bind_with_capabilities(
             service_context,
             config,
             processor,
             admission,
             Arc::new(TransportSecurity::development_insecure_loopback(None, None)),
             None,
+            TransportTelemetry::noop(),
+            frame_limits,
         )
         .await
     }
@@ -975,7 +1007,32 @@ impl SessionTransportServer {
         principal: Option<Principal>,
         telemetry: TransportTelemetry,
     ) -> RocketMQResult<Arc<Self>> {
+        Self::bind_with_capabilities(
+            service_context,
+            config,
+            processor,
+            admission,
+            security,
+            principal,
+            telemetry,
+            FrameLimits::default(),
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn bind_with_capabilities(
+        service_context: ChildServiceContext,
+        config: SessionTransportServerConfig,
+        processor: Arc<dyn SessionProcessor>,
+        admission: Arc<AdmissionController>,
+        security: Arc<TransportSecurity>,
+        principal: Option<Principal>,
+        telemetry: TransportTelemetry,
+        frame_limits: FrameLimits,
+    ) -> RocketMQResult<Arc<Self>> {
         config.io_policy.validate()?;
+        frame_limits.validate()?;
         let listener = tokio::net::TcpListener::bind(config.bind_address).await?;
         let local_addr = listener.local_addr()?;
         let tls = TlsServerRuntime::initialize_with_service_context(config.tls.clone(), &service_context).await?;
@@ -992,6 +1049,7 @@ impl SessionTransportServer {
             active_sessions: AtomicUsize::new(0),
             principal,
             telemetry,
+            frame_limits,
         }))
     }
 
@@ -1087,6 +1145,7 @@ impl SessionTransportServer {
                 scope,
                 stream,
                 remote_addr,
+                self.frame_limits,
                 NegotiationTimeouts {
                     protocol_detection: self.config.io_policy.idle_timeout,
                     tls_handshake: self.config.handshake_timeout,

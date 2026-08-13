@@ -282,6 +282,7 @@ pub struct OneShotTransportClient {
     next_opaque: AtomicI32,
     security: Arc<TransportSecurity>,
     telemetry: TransportTelemetry,
+    frame_limits: FrameLimits,
 }
 
 impl OneShotTransportClient {
@@ -325,6 +326,7 @@ impl OneShotTransportClient {
             next_opaque: AtomicI32::new(1),
             security,
             telemetry: TransportTelemetry::noop(),
+            frame_limits: FrameLimits::default(),
         })
     }
 
@@ -348,6 +350,13 @@ impl OneShotTransportClient {
     pub fn with_telemetry(mut self, telemetry: TransportTelemetry) -> Self {
         self.telemetry = telemetry;
         self
+    }
+
+    /// Binds every plaintext/TLS connection opened by this client to one frame profile.
+    pub fn try_with_frame_limits(mut self, frame_limits: FrameLimits) -> RocketMQResult<Self> {
+        frame_limits.validate()?;
+        self.frame_limits = frame_limits;
+        Ok(self)
     }
 
     pub fn pending_usage(&self) -> PendingRequestUsage {
@@ -379,7 +388,7 @@ impl OneShotTransportClient {
         let connected = connect_with_config_and_telemetry(
             &address.to_string(),
             tls_config,
-            FrameLimits::default(),
+            self.frame_limits,
             deadline,
             self.telemetry.clone(),
         )

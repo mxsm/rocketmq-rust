@@ -19,6 +19,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::codec::remoting_command_codec::FrameLimits;
 use crate::config::ServerConfig;
 use crate::dispatch::AuthorizedCommandDispatcher;
 use crate::file_region::FileTransferMode;
@@ -347,6 +348,7 @@ struct ConnectionListener<RP> {
 
     file_region_blocking: BlockingExecutor,
     file_transfer_mode: FileTransferMode,
+    frame_limits: FrameLimits,
 
     transport_principal: Option<Principal>,
     command_interceptor: Arc<dyn SessionCommandInterceptor>,
@@ -429,6 +431,7 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
         )
         .with_authorized_dispatch(self.dispatcher.boundary(), self.transport_principal.clone())
         .with_file_region_io(self.file_region_blocking.clone(), self.file_transfer_mode)
+        .try_with_frame_limits(self.frame_limits)?
         .with_telemetry(self.telemetry.clone());
         transport
             .run(Arc::new(InterceptingConnectionHandler {
@@ -647,6 +650,7 @@ pub struct TransportServer<RP> {
     authorized_dispatcher: Option<Arc<AuthorizedCommandDispatcher<RP>>>,
     telemetry: TransportTelemetry,
     lifecycle_event_config: LifecycleEventConfig,
+    frame_limits: FrameLimits,
     #[cfg(all(test, not(doctest)))]
     test_request_hook: Option<TestRequestHook>,
     _phantom_data: std::marker::PhantomData<RP>,
@@ -664,6 +668,7 @@ impl<RP> TransportServer<RP> {
             authorized_dispatcher: None,
             telemetry: TransportTelemetry::noop(),
             lifecycle_event_config: LifecycleEventConfig::default(),
+            frame_limits: FrameLimits::java_compatibility(),
             #[cfg(all(test, not(doctest)))]
             test_request_hook: None,
             _phantom_data: std::marker::PhantomData,
@@ -691,6 +696,13 @@ impl<RP> TransportServer<RP> {
     pub fn with_telemetry(mut self, telemetry: TransportTelemetry) -> Self {
         self.telemetry = telemetry;
         self
+    }
+
+    /// Applies one validated frame profile to every accepted connection.
+    pub fn try_with_frame_limits(mut self, frame_limits: FrameLimits) -> RocketMQResult<Self> {
+        frame_limits.validate()?;
+        self.frame_limits = frame_limits;
+        Ok(self)
     }
 
     pub fn register_rpc_hook(&mut self, hook: Arc<dyn RPCHook>) {
@@ -802,6 +814,7 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> TransportServer<RP> {
                 task_group: remoting_context.task_group().clone(),
                 file_region_blocking: remoting_context.storage_io().clone(),
                 file_transfer_mode: self.config.file_transfer_mode,
+                frame_limits: self.frame_limits,
                 process_budget: self.service_context.process_budget(),
                 transport_security: self.transport_security.clone(),
                 transport_principal: self.transport_principal.clone(),
@@ -935,6 +948,7 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> TransportServer<RP> {
                 task_group,
                 file_region_blocking: remoting_context.storage_io().clone(),
                 file_transfer_mode: self.config.file_transfer_mode,
+                frame_limits: self.frame_limits,
                 process_budget: self.service_context.process_budget(),
                 transport_security: self.transport_security.clone(),
                 transport_principal: self.transport_principal.clone(),
@@ -1041,6 +1055,7 @@ async fn run_with_report_with_service_context_and_telemetry<RP: RequestProcessor
             task_group: remoting_context.task_group().clone(),
             file_region_blocking: remoting_context.storage_io().clone(),
             file_transfer_mode: FileTransferMode::Auto,
+            frame_limits: FrameLimits::java_compatibility(),
             process_budget: service_context.process_budget(),
             transport_security: None,
             transport_principal: None,
@@ -1058,6 +1073,7 @@ struct RemotingServerRunCapabilities {
     task_group: TaskGroup,
     file_region_blocking: BlockingExecutor,
     file_transfer_mode: FileTransferMode,
+    frame_limits: FrameLimits,
     process_budget: rocketmq_runtime::ResourceBudget,
     transport_security: Option<Arc<TransportSecurity>>,
     transport_principal: Option<Principal>,
@@ -1082,6 +1098,7 @@ async fn run_with_tls_config_report<RP: RequestProcessor + Sync + 'static + Clon
         task_group,
         file_region_blocking,
         file_transfer_mode,
+        frame_limits,
         process_budget,
         transport_security,
         transport_principal,
@@ -1145,6 +1162,7 @@ async fn run_with_tls_config_report<RP: RequestProcessor + Sync + 'static + Clon
         task_group: task_group.clone(),
         file_region_blocking,
         file_transfer_mode,
+        frame_limits,
         transport_principal,
         command_interceptor,
         telemetry,
@@ -2244,6 +2262,7 @@ mod tests {
                 task_group: service.component("remoting-server").task_group().clone(),
                 file_region_blocking: service.storage_io().clone(),
                 file_transfer_mode: FileTransferMode::Auto,
+                frame_limits: FrameLimits::default(),
                 process_budget: service.process_budget(),
                 transport_security: None,
                 transport_principal: None,
