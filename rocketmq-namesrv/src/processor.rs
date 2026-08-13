@@ -25,8 +25,8 @@ use rocketmq_observability::metrics::namesrv::NameServerSecurityEvent;
 use rocketmq_observability::metrics::namesrv::NameServerWorkloadClass;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_transport::api::v1::command_from_error_with_remark_and_opaque;
-use rocketmq_transport::api::v1::request_code_not_supported_with_opaque;
+use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use rocketmq_transport::api::v1::RejectRequestResponse;
@@ -41,6 +41,7 @@ pub(crate) use self::cluster_test_request_processor::TransportClusterTestRouteLo
 use crate::bootstrap::InFlightRequestTracker;
 use crate::bootstrap::NameServerRuntimeHandle;
 use crate::processor::default_request_processor::DefaultRequestProcessor;
+use crate::processor::response_factory::NameServerResponseFactoryExt;
 use crate::processor::workload_admission::NameServerWorkloadAdmission;
 use crate::processor::workload_admission::WorkloadAdmissionClass;
 use crate::security::classify_namesrv_request;
@@ -48,6 +49,7 @@ use crate::security::classify_namesrv_request;
 pub(crate) mod client_request_processor;
 mod cluster_test_request_processor;
 pub mod default_request_processor;
+mod response_factory;
 #[doc(hidden)]
 pub mod workload_admission;
 
@@ -97,7 +99,7 @@ impl RequestProcessor for NameServerRequestProcessorWrapper {
 
 pub(crate) type RequestCodeType = i32;
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct NameServerRequestProcessor {
     processor_table: Arc<HashMap<RequestCodeType, NameServerRequestProcessorWrapper>>,
     default_request_processor: Option<NameServerRequestProcessorWrapper>,
@@ -106,6 +108,13 @@ pub struct NameServerRequestProcessor {
     runtime_handle: Option<NameServerRuntimeHandle>,
     workload_admission: Option<Arc<NameServerWorkloadAdmission>>,
     metrics: NameServerMetrics,
+    command_factory: RemotingCommandFactory,
+}
+
+impl Default for NameServerRequestProcessor {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl NameServerRequestProcessor {
@@ -118,17 +127,24 @@ impl NameServerRequestProcessor {
             runtime_handle: None,
             workload_admission: None,
             metrics: NameServerMetrics::noop(),
+            command_factory: application_remoting_command_factory(),
         }
     }
 
     pub(crate) fn new_with_in_flight_tracker(
         in_flight_requests: Arc<InFlightRequestTracker>,
         metrics: NameServerMetrics,
+        command_factory: RemotingCommandFactory,
     ) -> Self {
         Self {
+            processor_table: Arc::new(HashMap::new()),
+            default_request_processor: None,
             in_flight_requests: Some(in_flight_requests),
+            auth_runtime: None,
+            runtime_handle: None,
+            workload_admission: None,
             metrics,
-            ..Self::new()
+            command_factory,
         }
     }
 
@@ -174,7 +190,7 @@ impl RequestProcessor for NameServerRequestProcessor {
             None => {
                 let error = RocketMQError::authentication_failed("request code is not authorized by NameServer");
                 self.metrics.record_security_event(NameServerSecurityEvent::AuthDenied);
-                return Ok(Some(command_from_error_with_remark_and_opaque(
+                return Ok(Some(self.command_factory.command_from_error_with_remark_and_opaque(
                     &error,
                     "NameServer request is not authorized",
                     request.opaque(),
@@ -199,7 +215,7 @@ impl RequestProcessor for NameServerRequestProcessor {
                     request_started.elapsed(),
                     0,
                 );
-                return Ok(Some(command_from_error_with_remark_and_opaque(
+                return Ok(Some(self.command_factory.command_from_error_with_remark_and_opaque(
                     &error,
                     error.to_string(),
                     request.opaque(),
@@ -255,7 +271,8 @@ impl RequestProcessor for NameServerRequestProcessor {
                                 rocketmq_observability::metrics::namesrv::NameServerRouteErrorKind::Rejected,
                             );
                         }
-                        let response = workload_admission_rejection_response(rejection, request.opaque());
+                        let response =
+                            workload_admission_rejection_response(&self.command_factory, rejection, request.opaque());
                         let response_bytes = response.body().map_or(0, bytes::Bytes::len);
                         self.metrics.record_request(
                             metric_class,
@@ -274,7 +291,9 @@ impl RequestProcessor for NameServerRequestProcessor {
         let response = match self.processor_table.get(request.code_ref()).cloned() {
             None => match self.default_request_processor.clone() {
                 None => {
-                    let response = request_code_not_supported_with_opaque(request.code(), request.opaque());
+                    let response = self
+                        .command_factory
+                        .request_code_not_supported_with_opaque(request.code(), request.opaque());
                     Ok(Some(response))
                 }
                 Some(mut processor) => RequestProcessor::process_request(&mut processor, channel, ctx, request).await,
@@ -369,10 +388,12 @@ fn metric_workload_class(class: WorkloadAdmissionClass) -> NameServerWorkloadCla
 }
 
 fn workload_admission_rejection_response(
+    command_factory: &RemotingCommandFactory,
     rejection: workload_admission::WorkloadAdmissionRejection,
     opaque: i32,
 ) -> RemotingCommand {
-    RemotingCommand::create_response_command_with_code(rocketmq_protocol::code::response_code::ResponseCode::SystemBusy)
+    command_factory
+        .create_response_command_with_code(rocketmq_protocol::code::response_code::ResponseCode::SystemBusy)
         .set_remark(format!(
             "NameServer workload admission rejected request: {}",
             rejection.as_str()
@@ -405,11 +426,25 @@ mod tests {
 
     #[test]
     fn admission_rejection_is_stable_system_busy_and_preserves_opaque() {
-        let response =
-            workload_admission_rejection_response(workload_admission::WorkloadAdmissionRejection::QueueFull, 9191);
+        let factory = rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory::new(
+            rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandDefaults::new(
+                655,
+                rocketmq_protocol::protocol::SerializeType::ROCKETMQ,
+            ),
+        );
+        let response = workload_admission_rejection_response(
+            &factory,
+            workload_admission::WorkloadAdmissionRejection::QueueFull,
+            9191,
+        );
 
         assert_eq!(response.code(), ResponseCode::SystemBusy as i32);
         assert_eq!(response.opaque(), 9191);
+        assert_eq!(response.version(), 655);
+        assert_eq!(
+            response.serialize_type(),
+            rocketmq_protocol::protocol::SerializeType::ROCKETMQ
+        );
         assert_eq!(
             response.remark().map(cheetah_string::CheetahString::as_str),
             Some("NameServer workload admission rejected request: queue-full")

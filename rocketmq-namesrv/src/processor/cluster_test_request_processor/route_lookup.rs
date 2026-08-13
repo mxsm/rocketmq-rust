@@ -28,6 +28,9 @@ use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::client_request_header::GetRouteInfoRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+#[cfg(test)]
+use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ShutdownDeadline;
@@ -113,6 +116,7 @@ pub(crate) struct TransportClusterTestRouteLookup {
     endpoint_resolution: tokio::sync::Mutex<()>,
     lookup_cache: ClusterTestLookupCache,
     request_timeout: Duration,
+    command_factory: RemotingCommandFactory,
 }
 
 #[derive(Default)]
@@ -127,6 +131,7 @@ impl TransportClusterTestRouteLookup {
         service_context: ChildServiceContext,
         telemetry: TransportTelemetry,
         namesrv_config: &NamesrvConfig,
+        command_factory: RemotingCommandFactory,
     ) -> Self {
         Self::with_resolver_and_cache(
             service_context,
@@ -134,6 +139,7 @@ impl TransportClusterTestRouteLookup {
             ROUTE_LOOKUP_TIMEOUT,
             telemetry,
             LookupCacheConfig::from_namesrv_config(namesrv_config),
+            command_factory,
         )
     }
 
@@ -150,6 +156,7 @@ impl TransportClusterTestRouteLookup {
             request_timeout,
             telemetry,
             LookupCacheConfig::default(),
+            application_remoting_command_factory(),
         )
     }
 
@@ -159,6 +166,7 @@ impl TransportClusterTestRouteLookup {
         request_timeout: Duration,
         telemetry: TransportTelemetry,
         cache_config: LookupCacheConfig,
+        command_factory: RemotingCommandFactory,
     ) -> Self {
         let task_group = service_context.task_group().clone();
         let transport = OneShotTransportClient::new(
@@ -174,6 +182,7 @@ impl TransportClusterTestRouteLookup {
             endpoint_resolution: tokio::sync::Mutex::new(()),
             lookup_cache: ClusterTestLookupCache::new(cache_config),
             request_timeout,
+            command_factory,
         }
     }
 
@@ -206,7 +215,11 @@ impl TransportClusterTestRouteLookup {
                 return Err(route_lookup_timeout(deadline));
             }
 
-            match self.transport.invoke(endpoint, route_request(topic), deadline).await {
+            match self
+                .transport
+                .invoke(endpoint, route_request(&self.command_factory, topic), deadline)
+                .await
+            {
                 Ok(response) => return decode_route_response(response),
                 Err(error) => last_error = Some(error),
             }
@@ -286,8 +299,8 @@ impl ClusterTestRouteLookup for TransportClusterTestRouteLookup {
     }
 }
 
-fn route_request(topic: &CheetahString) -> RemotingCommand {
-    let mut request = RemotingCommand::create_request_command(
+fn route_request(command_factory: &RemotingCommandFactory, topic: &CheetahString) -> RemotingCommand {
+    let mut request = command_factory.create_request_command(
         RequestCode::GetRouteinfoByTopic,
         GetRouteInfoRequestHeader::new(topic.clone(), None),
     );
@@ -380,6 +393,24 @@ mod tests {
     use tokio::sync::Notify;
 
     use super::*;
+
+    #[test]
+    fn route_request_keeps_lookup_factory_defaults() {
+        let factory = rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory::new(
+            rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandDefaults::new(
+                658,
+                rocketmq_protocol::protocol::SerializeType::ROCKETMQ,
+            ),
+        );
+
+        let request = route_request(&factory, &CheetahString::from("factory-topic"));
+
+        assert_eq!(request.version(), 658);
+        assert_eq!(
+            request.serialize_type(),
+            rocketmq_protocol::protocol::SerializeType::ROCKETMQ
+        );
+    }
 
     struct FixedEndpointResolver {
         endpoints: Vec<SocketAddr>,

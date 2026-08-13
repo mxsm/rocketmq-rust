@@ -18,6 +18,7 @@ use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::client_request_header::GetRouteInfoRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use rocketmq_transport::api::v1::RequestProcessor;
@@ -41,12 +42,15 @@ pub(crate) use route_lookup::TransportClusterTestRouteLookup;
 
 pub struct ClusterTestRequestProcessor {
     name_server_runtime_inner: NameServerRuntimeHandle,
+    command_factory: RemotingCommandFactory,
 }
 
 impl ClusterTestRequestProcessor {
     pub(crate) fn new(name_server_runtime_inner: NameServerRuntimeHandle) -> Self {
+        let command_factory = name_server_runtime_inner.remoting_command_factory();
         Self {
             name_server_runtime_inner,
+            command_factory,
         }
     }
 
@@ -114,16 +118,20 @@ impl ClusterTestRequestProcessor {
                 typed_zone_filtered,
             )?;
             return Ok(Some(
-                RemotingCommand::create_response_command_with_code(ResponseCode::Success).set_body(content),
+                self.command_factory
+                    .create_response_command_with_code(ResponseCode::Success)
+                    .set_body(content),
             ));
         }
 
         Ok(Some(
-            RemotingCommand::create_response_command_with_code(ResponseCode::TopicNotExist).set_remark(format!(
-                "No topic route info in name server for the topic: {}{}",
-                request_header.topic,
-                FAQUrl::suggest_todo(FAQUrl::APPLY_TOPIC_URL)
-            )),
+            self.command_factory
+                .create_response_command_with_code(ResponseCode::TopicNotExist)
+                .set_remark(format!(
+                    "No topic route info in name server for the topic: {}{}",
+                    request_header.topic,
+                    FAQUrl::suggest_todo(FAQUrl::APPLY_TOPIC_URL)
+                )),
         ))
     }
 
@@ -221,11 +229,18 @@ mod tests {
         });
 
         let runtime = rocketmq_runtime::RuntimeContext::from_current("namesrv-cluster-test-processor");
+        let command_factory = rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory::new(
+            rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandDefaults::new(
+                657,
+                rocketmq_protocol::protocol::SerializeType::ROCKETMQ,
+            ),
+        );
         let bootstrap = Builder::new(
             runtime.service_context("namesrv"),
             rocketmq_observability::TelemetryHandle::noop(),
         )
         .set_name_server_config(namesrv_config)
+        .set_remoting_command_factory(command_factory)
         .set_cluster_test_route_lookup(mock_lookup)
         .build();
 
@@ -252,6 +267,11 @@ mod tests {
             .expect("processor should always return a response");
 
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        assert_eq!(response.version(), 657);
+        assert_eq!(
+            response.serialize_type(),
+            rocketmq_protocol::protocol::SerializeType::ROCKETMQ
+        );
         let body = response.body().expect("cluster test response should include a body");
         let route_data = TopicRouteData::decode(body).expect("route body should decode");
         assert_eq!(

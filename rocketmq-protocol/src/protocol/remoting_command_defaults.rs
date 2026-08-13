@@ -19,6 +19,7 @@ use std::sync::OnceLock;
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
+use rocketmq_error::RocketMQError;
 
 use crate::code::response_code::RemotingSysResponseCode;
 use crate::protocol::command_custom_header::CommandCustomHeader;
@@ -137,6 +138,22 @@ impl RemotingCommandFactory {
             .mark_response_type()
     }
 
+    /// Creates a response from the central typed-error remoting mapping.
+    pub fn create_response_command_from_error(&self, error: &RocketMQError) -> RemotingCommand {
+        let view = error.boundary_view();
+        self.create_response_command_with_code_remark(view.remoting().code.as_i32(), view.message())
+    }
+
+    /// Creates a mapped typed-error response with an explicit wire remark.
+    pub fn create_response_command_from_error_with_remark(
+        &self,
+        error: &RocketMQError,
+        remark: impl Into<CheetahString>,
+    ) -> RemotingCommand {
+        let view = error.boundary_view();
+        self.create_response_command_with_code_remark(view.remoting().code.as_i32(), remark)
+    }
+
     /// Creates an explicitly successful response.
     pub fn create_success_response_command(&self) -> RemotingCommand {
         self.create_response_command_with_code(RemotingSysResponseCode::Success)
@@ -249,6 +266,8 @@ pub fn application_remoting_command_factory() -> RemotingCommandFactory {
 
 #[cfg(test)]
 mod tests {
+    use rocketmq_error::RocketMQError;
+
     use super::*;
 
     #[test]
@@ -266,5 +285,22 @@ mod tests {
                 requested: second,
             })
         );
+    }
+
+    #[test]
+    fn typed_error_response_keeps_factory_defaults() {
+        let factory = RemotingCommandFactory::new(RemotingCommandDefaults::new(654, SerializeType::ROCKETMQ));
+        let error = RocketMQError::illegal_argument("invalid nameserver request");
+
+        let response = factory.create_response_command_from_error_with_remark(&error, "invalid route request");
+
+        assert_eq!(response.version(), 654);
+        assert_eq!(response.serialize_type(), SerializeType::ROCKETMQ);
+        assert_eq!(response.code(), error.boundary_view().remoting().code.as_i32());
+        assert_eq!(
+            response.remark().map(CheetahString::as_str),
+            Some("invalid route request")
+        );
+        assert!(response.is_response_type());
     }
 }

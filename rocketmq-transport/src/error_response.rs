@@ -16,11 +16,11 @@ use rocketmq_error::ProtocolError;
 use rocketmq_error::RocketMQError;
 
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
 
 /// Convert a typed RocketMQ error into a remoting response command.
 pub fn command_from_error(error: &RocketMQError) -> RemotingCommand {
-    let view = error.boundary_view();
-    RemotingCommand::create_response_command_with_code_remark(view.remoting().code.as_i32(), view.message())
+    application_remoting_command_factory().create_response_command_from_error(error)
 }
 
 /// Convert a typed RocketMQ error into a remoting response command and preserve
@@ -32,8 +32,7 @@ pub fn command_from_error_with_opaque(error: &RocketMQError, opaque: i32) -> Rem
 /// Convert a typed RocketMQ error into a remoting response command with an
 /// explicit wire remark.
 pub fn command_from_error_with_remark(error: &RocketMQError, remark: impl Into<String>) -> RemotingCommand {
-    let view = error.boundary_view();
-    RemotingCommand::create_response_command_with_code_remark(view.remoting().code.as_i32(), remark.into())
+    application_remoting_command_factory().create_response_command_from_error_with_remark(error, remark.into())
 }
 
 /// Apply a typed RocketMQ error mapping to an existing remoting response.

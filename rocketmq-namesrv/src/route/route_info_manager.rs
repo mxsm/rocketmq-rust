@@ -34,6 +34,7 @@ use rocketmq_protocol::protocol::header::namesrv::broker_request::UnRegisterBrok
 use rocketmq_protocol::protocol::header::namesrv::brokerid_change_request_header::NotifyMinBrokerIdChangeRequestHeader;
 use rocketmq_protocol::protocol::namesrv::RegisterBrokerResult;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
 use rocketmq_protocol::protocol::route::route_data_view::QueueData;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
@@ -971,7 +972,10 @@ impl RouteInfoManager {
         );
 
         // Create remoting command
-        let request = RemotingCommand::create_request_command(RequestCode::NotifyMinBrokerIdChange, request_header);
+        let request = build_min_broker_id_change_request(
+            &self.name_server_runtime_inner.remoting_command_factory(),
+            request_header,
+        );
         let notification_version = self.min_broker_notify_sequence.fetch_add(1, Ordering::Relaxed) + 1;
         self.min_broker_notify_versions
             .insert(broker_name.clone(), notification_version);
@@ -2027,6 +2031,13 @@ impl RouteInfoManager {
     }
 }
 
+fn build_min_broker_id_change_request(
+    command_factory: &RemotingCommandFactory,
+    request_header: NotifyMinBrokerIdChangeRequestHeader,
+) -> RemotingCommand {
+    command_factory.create_request_command(RequestCode::NotifyMinBrokerIdChange, request_header)
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Barrier;
@@ -2042,6 +2053,25 @@ mod tests {
 
     use super::*;
     use crate::bootstrap::Builder;
+
+    #[test]
+    fn min_broker_notification_request_keeps_factory_defaults() {
+        let factory = rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory::new(
+            rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandDefaults::new(
+                659,
+                rocketmq_protocol::protocol::SerializeType::ROCKETMQ,
+            ),
+        );
+        let header = NotifyMinBrokerIdChangeRequestHeader::new(Some(0), None, None, None, None);
+
+        let request = build_min_broker_id_change_request(&factory, header);
+
+        assert_eq!(request.version(), 659);
+        assert_eq!(
+            request.serialize_type(),
+            rocketmq_protocol::protocol::SerializeType::ROCKETMQ
+        );
+    }
 
     fn test_route_manager() -> (crate::bootstrap::NameServerBootstrap, Arc<RouteInfoManager>) {
         test_route_manager_with_config(crate::NamesrvConfig::default())
