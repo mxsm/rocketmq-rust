@@ -113,7 +113,7 @@ pub enum HeaderCodecError {
     #[error("ROCKETMQ extension-field payload exceeds the signed 32-bit wire limit")]
     ExtensionFieldsLengthOverflow,
 
-    /// A dynamic extension-field key exceeded its unsigned 16-bit length.
+    /// A dynamic extension-field key exceeded Java's signed 16-bit length.
     #[error("dynamic header key length exceeds the ROCKETMQ wire limit")]
     DynamicKeyLengthOverflow,
 
