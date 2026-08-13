@@ -39,6 +39,7 @@ use rocketmq_store::ArcMessageFilter;
 use rocketmq_store::CqExtUnit;
 use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use tokio::select;
+use tokio::sync::oneshot;
 use tokio::sync::Mutex as AsyncMutex;
 use tracing::error;
 use tracing::info;
@@ -117,6 +118,43 @@ pub(crate) trait LocalPopLongPollingRequestProcessor {
         ctx: ConnectionHandlerContext,
         request: RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PopWakeupOutcome {
+    ProcessingCompleted,
+    ProcessingFailed,
+    InactiveChannel,
+    AlreadyCompleted,
+    ProcessorUnavailable,
+    ServiceNotRunning,
+    ServiceCancelled,
+}
+
+pub(crate) type PopWakeupCompletion = oneshot::Receiver<PopWakeupOutcome>;
+
+struct PopWakeupObserver {
+    sender: Option<oneshot::Sender<PopWakeupOutcome>>,
+}
+
+impl PopWakeupObserver {
+    fn new(sender: oneshot::Sender<PopWakeupOutcome>) -> Self {
+        Self { sender: Some(sender) }
+    }
+
+    fn complete(mut self, outcome: PopWakeupOutcome) {
+        if let Some(sender) = self.sender.take() {
+            let _ = sender.send(outcome);
+        }
+    }
+}
+
+impl Drop for PopWakeupObserver {
+    fn drop(&mut self) {
+        if let Some(sender) = self.sender.take() {
+            let _ = sender.send(PopWakeupOutcome::ServiceCancelled);
+        }
+    }
 }
 
 impl<RP: PopLongPollingRequestProcessor + Sync + 'static> PopLongPollingService<RP> {
@@ -319,42 +357,81 @@ impl<RP: PopLongPollingRequestProcessor + Sync + 'static> PopLongPollingService<
         filter_bit_map: Option<Vec<u8>>,
         properties: Option<&HashMap<CheetahString, CheetahString>>,
     ) -> bool {
+        self.take_matching_request(
+            topic,
+            queue_id,
+            cid,
+            false,
+            tags_code,
+            msg_store_time,
+            filter_bit_map,
+            properties,
+        )
+        .is_some_and(|pop_request| self.wake_up(pop_request))
+    }
+
+    pub(crate) fn notify_message_arriving_before_lag(
+        &self,
+        topic: &CheetahString,
+        cid: &CheetahString,
+    ) -> Option<PopWakeupCompletion> {
+        self.take_matching_request(topic, -1, cid, true, None, 0, None, None)
+            .map(|pop_request| self.wake_up_with_completion(pop_request))
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the long-polling match boundary mirrors the message-arrival metadata"
+    )]
+    fn take_matching_request(
+        &self,
+        topic: &CheetahString,
+        queue_id: i32,
+        cid: &CheetahString,
+        force: bool,
+        tags_code: Option<i64>,
+        msg_store_time: i64,
+        filter_bit_map: Option<Vec<u8>>,
+        properties: Option<&HashMap<CheetahString, CheetahString>>,
+    ) -> Option<Arc<PopRequest>> {
         let key = CheetahString::from_string(KeyBuilder::build_polling_key(topic, cid, queue_id));
         if let Some(remoting_commands) = self.polling_map.get(&key) {
             let value_ = remoting_commands.value();
             if value_.is_empty() {
-                return false;
+                return None;
             }
 
             if let Some(pop_request) = self.poll_remoting_commands(value_) {
                 let (message_filter, subscription_data) =
                     (pop_request.get_message_filter(), pop_request.get_subscription_data());
 
-                if let (Some(message_filter), Some(_subscription_data)) = (message_filter, subscription_data) {
-                    let mut match_result = message_filter.is_matched_by_consume_queue(
-                        tags_code,
-                        Some(&CqExtUnit::new(
-                            tags_code.unwrap_or_default(),
-                            msg_store_time,
-                            filter_bit_map,
-                        )),
-                    );
-                    if match_result {
-                        if let Some(props) = properties {
-                            match_result = message_filter.is_matched_by_commit_log(None, Some(props));
+                if !force {
+                    if let (Some(message_filter), Some(_subscription_data)) = (message_filter, subscription_data) {
+                        let mut match_result = message_filter.is_matched_by_consume_queue(
+                            tags_code,
+                            Some(&CqExtUnit::new(
+                                tags_code.unwrap_or_default(),
+                                msg_store_time,
+                                filter_bit_map,
+                            )),
+                        );
+                        if match_result {
+                            if let Some(props) = properties {
+                                match_result = message_filter.is_matched_by_commit_log(None, Some(props));
+                            }
                         }
-                    }
-                    if !match_result {
-                        remoting_commands.value().insert(pop_request);
-                        self.total_polling_num.fetch_add(1, Ordering::AcqRel);
-                        return false;
+                        if !match_result {
+                            remoting_commands.value().insert(pop_request);
+                            self.total_polling_num.fetch_add(1, Ordering::AcqRel);
+                            return None;
+                        }
                     }
                 }
 
-                return self.wake_up(pop_request);
+                return Some(pop_request);
             }
         }
-        false
+        None
     }
 
     /// Notifies that a message has arrived on a retry topic.
@@ -520,15 +597,42 @@ impl<RP: PopLongPollingRequestProcessor + Sync + 'static> PopLongPollingService<
 
     // wake up and try process request
     pub fn wake_up(&self, pop_request: Arc<PopRequest>) -> bool {
+        self.wake_up_inner(pop_request, None)
+    }
+
+    pub(crate) fn wake_up_with_completion(&self, pop_request: Arc<PopRequest>) -> PopWakeupCompletion {
+        let (sender, receiver) = oneshot::channel();
+        self.wake_up_inner(pop_request, Some(PopWakeupObserver::new(sender)));
+        receiver
+    }
+
+    fn wake_up_inner(&self, pop_request: Arc<PopRequest>, completion: Option<PopWakeupObserver>) -> bool {
         if !pop_request.complete() {
+            if let Some(completion) = completion {
+                completion.complete(PopWakeupOutcome::AlreadyCompleted);
+            }
+            return false;
+        }
+        if !pop_request.get_channel().connection_ref().is_healthy() {
+            if let Some(completion) = completion {
+                completion.complete(PopWakeupOutcome::InactiveChannel);
+            }
             return false;
         }
         match self.processor.upgrade() {
-            None => false,
+            None => {
+                if let Some(completion) = completion {
+                    completion.complete(PopWakeupOutcome::ProcessorUnavailable);
+                }
+                false
+            }
             Some(processor) => {
                 let task_group = self.task_group.lock().as_ref().cloned();
                 let Some(task_group) = task_group else {
                     warn!("PopLongPollingService wake-up skipped because task group is not running");
+                    if let Some(completion) = completion {
+                        completion.complete(PopWakeupOutcome::ServiceNotRunning);
+                    }
                     return false;
                 };
 
@@ -541,6 +645,9 @@ impl<RP: PopLongPollingRequestProcessor + Sync + 'static> PopLongPollingService<
                         .await;
                     match response {
                         Ok(result) => {
+                            if let Some(completion) = completion {
+                                completion.complete(PopWakeupOutcome::ProcessingCompleted);
+                            }
                             if let Some(mut response) = result {
                                 let channel = pop_request.get_channel();
                                 response.set_opaque_mut(opaque);
@@ -549,6 +656,9 @@ impl<RP: PopLongPollingRequestProcessor + Sync + 'static> PopLongPollingService<
                         }
                         Err(e) => {
                             error!("ExecuteRequestWhenWakeup run {}", e);
+                            if let Some(completion) = completion {
+                                completion.complete(PopWakeupOutcome::ProcessingFailed);
+                            }
                         }
                     }
                 });
@@ -622,5 +732,287 @@ where
 {
     fn polling_count(&self, key: &str) -> i32 {
         self.get_polling_num(key)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use cheetah_string::CheetahString;
+    use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+    use rocketmq_runtime::common::time_utils::current_millis;
+    use rocketmq_store::MessageFilter;
+    use rocketmq_store::MessageStoreConfig;
+    use rocketmq_transport::api::v1::Channel;
+    use rocketmq_transport::api::v1::ConnectionHandlerContextWrapper;
+    use rocketmq_transport::test_support::Connection;
+    use tokio::sync::Notify;
+
+    use super::PopLongPollingRequestProcessor;
+    use super::PopLongPollingService;
+    use super::PopLongPollingServiceContext;
+    use super::PopWakeupOutcome;
+    use crate::broker_runtime::BrokerRuntime;
+    use crate::config::broker_config::BrokerConfig;
+    use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingPolicy;
+    use crate::long_polling::polling_header::PollingHeader;
+    use crate::long_polling::pop_request::PopRequest;
+
+    struct RejectAllFilter;
+
+    impl MessageFilter for RejectAllFilter {
+        fn is_matched_by_consume_queue(
+            &self,
+            _tags_code: Option<i64>,
+            _cq_ext_unit: Option<&rocketmq_store::CqExtUnit>,
+        ) -> bool {
+            false
+        }
+
+        fn is_matched_by_commit_log(
+            &self,
+            _msg_buffer: Option<&[u8]>,
+            _properties: Option<&std::collections::HashMap<CheetahString, CheetahString>>,
+        ) -> bool {
+            false
+        }
+    }
+
+    struct FailingProcessor {
+        calls: AtomicUsize,
+    }
+
+    struct ControlledProcessor {
+        calls: AtomicUsize,
+        started: Notify,
+        release: Notify,
+    }
+
+    impl PopLongPollingRequestProcessor for FailingProcessor {
+        async fn process_request_when_wakeup(
+            &self,
+            _channel: Channel,
+            _ctx: rocketmq_transport::api::v1::ConnectionHandlerContext,
+            _request: RemotingCommand,
+        ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+            self.calls.fetch_add(1, Ordering::AcqRel);
+            Err(rocketmq_error::RocketMQError::illegal_argument(
+                "deterministic POP processing failure",
+            ))
+        }
+    }
+
+    impl PopLongPollingRequestProcessor for ControlledProcessor {
+        async fn process_request_when_wakeup(
+            &self,
+            _channel: Channel,
+            _ctx: rocketmq_transport::api::v1::ConnectionHandlerContext,
+            _request: RemotingCommand,
+        ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+            self.calls.fetch_add(1, Ordering::AcqRel);
+            self.started.notify_one();
+            self.release.notified().await;
+            Ok(None)
+        }
+    }
+
+    fn test_service<RP>(processor: &Arc<RP>) -> Arc<PopLongPollingService<RP>>
+    where
+        RP: PopLongPollingRequestProcessor + Sync + 'static,
+    {
+        let mut runtime = BrokerRuntime::new(
+            Arc::new(BrokerConfig::default()),
+            Arc::new(MessageStoreConfig::default()),
+        );
+        let state = runtime.runtime_state_mut();
+        let context = PopLongPollingServiceContext::new(
+            PopLongPollingPolicy::from_config(&state.broker_config()),
+            state.topic_config_manager_handle(),
+            state.subscription_group_manager().config_lookup(),
+            state.broker_service_context(),
+        );
+        Arc::new(PopLongPollingService::new(context, false, Arc::downgrade(processor)))
+    }
+
+    async fn test_pop_request() -> Arc<PopRequest> {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind local test listener");
+        let local_addr = listener.local_addr().expect("local listener addr");
+        let stream = std::net::TcpStream::connect(local_addr).expect("connect local test listener");
+        stream.set_nonblocking(true).expect("set nonblocking");
+        let stream = tokio::net::TcpStream::from_std(stream).expect("convert tcp stream");
+        let connection = Connection::new(stream);
+        let channel = rocketmq_transport::test_support::TestChannelBuilder::new(
+            connection,
+            crate::test_task_group("pop-lag-refresh-channel"),
+        )
+        .addresses(local_addr, local_addr)
+        .build()
+        .expect("build test channel");
+        let ctx = Arc::new(ConnectionHandlerContextWrapper::new(channel));
+        Arc::new(PopRequest::new(
+            RemotingCommand::create_remoting_command(0),
+            ctx,
+            current_millis() + 60_000,
+            None,
+            None,
+        ))
+    }
+
+    async fn test_context() -> rocketmq_transport::api::v1::ConnectionHandlerContext {
+        test_pop_request().await.get_ctx().clone()
+    }
+
+    #[tokio::test]
+    async fn observed_wakeup_reports_processing_failure_exactly_once() {
+        let processor = Arc::new(FailingProcessor {
+            calls: AtomicUsize::new(0),
+        });
+        let service = test_service(&processor);
+        PopLongPollingService::start(&service).await;
+
+        let request = test_pop_request().await;
+        let completion = service.wake_up_with_completion(request);
+
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(1), completion)
+                .await
+                .expect("completion must be bounded")
+                .expect("completion sender must stay owned"),
+            PopWakeupOutcome::ProcessingFailed
+        );
+        assert_eq!(processor.calls.load(Ordering::Acquire), 1);
+
+        service.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn lag_refresh_force_wakes_a_filtered_suspended_request() {
+        let processor = Arc::new(FailingProcessor {
+            calls: AtomicUsize::new(0),
+        });
+        let service = test_service(&processor);
+        PopLongPollingService::start(&service).await;
+        let topic = CheetahString::from_static_str("lag-topic");
+        let group = CheetahString::from_static_str("lag-group");
+        let header = rocketmq_protocol::protocol::header::pop_message_request_header::PopMessageRequestHeader {
+            consumer_group: group.clone(),
+            topic: topic.clone(),
+            queue_id: -1,
+            max_msg_nums: 1,
+            invisible_time: 30_000,
+            poll_time: 60_000,
+            born_time: current_millis(),
+            init_mode: 0,
+            exp_type: None,
+            exp: None,
+            order: Some(false),
+            attempt_id: None,
+            topic_request_header: None,
+        };
+        let mut command = RemotingCommand::create_remoting_command(0);
+        assert_eq!(
+            service.polling(
+                test_context().await,
+                &mut command,
+                PollingHeader::new_from_pop_message_request_header(&header),
+                Some(rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData::default()),
+                Some(Arc::new(RejectAllFilter)),
+            ),
+            crate::long_polling::polling_result::PollingResult::PollingSuc
+        );
+
+        assert!(!service.notify_message_arriving(&topic, -1, &group, None, 0, None, None));
+        let completion = service
+            .notify_message_arriving_before_lag(&topic, &group)
+            .expect("forced lag refresh should claim the suspended request");
+        assert_eq!(
+            completion.await.expect("completion sender must stay owned"),
+            PopWakeupOutcome::ProcessingFailed
+        );
+        assert_eq!(processor.calls.load(Ordering::Acquire), 1);
+
+        service.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn observed_wakeup_completes_after_processing_and_rejects_duplicate_claim() {
+        let processor = Arc::new(ControlledProcessor {
+            calls: AtomicUsize::new(0),
+            started: Notify::new(),
+            release: Notify::new(),
+        });
+        let service = test_service(&processor);
+        PopLongPollingService::start(&service).await;
+        let request = test_pop_request().await;
+
+        let mut first = service.wake_up_with_completion(Arc::clone(&request));
+        processor.started.notified().await;
+        assert_eq!(first.try_recv(), Err(tokio::sync::oneshot::error::TryRecvError::Empty));
+
+        let duplicate = service.wake_up_with_completion(request);
+        assert_eq!(
+            duplicate.await.expect("duplicate completion must be reported"),
+            PopWakeupOutcome::AlreadyCompleted
+        );
+
+        processor.release.notify_one();
+        assert_eq!(
+            first.await.expect("processing completion must be reported"),
+            PopWakeupOutcome::ProcessingCompleted
+        );
+        assert_eq!(processor.calls.load(Ordering::Acquire), 1);
+        service.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn observed_wakeup_reports_inactive_channel_without_processing() {
+        let processor = Arc::new(FailingProcessor {
+            calls: AtomicUsize::new(0),
+        });
+        let service = test_service(&processor);
+        PopLongPollingService::start(&service).await;
+        let request = test_pop_request().await;
+        request.get_channel().connection_ref().close();
+
+        let completion = service.wake_up_with_completion(request);
+
+        assert_eq!(
+            completion.await.expect("inactive channel must be reported"),
+            PopWakeupOutcome::InactiveChannel
+        );
+        assert_eq!(processor.calls.load(Ordering::Acquire), 0);
+        service.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn observed_wakeup_reports_service_cancellation() {
+        let processor = Arc::new(ControlledProcessor {
+            calls: AtomicUsize::new(0),
+            started: Notify::new(),
+            release: Notify::new(),
+        });
+        let service = test_service(&processor);
+        PopLongPollingService::start(&service).await;
+        let request = test_pop_request().await;
+        let completion = service.wake_up_with_completion(request);
+        processor.started.notified().await;
+
+        let report = service
+            .task_group_for_test()
+            .expect("service task group must exist")
+            .shutdown_now();
+        assert!(report.aborted > 0);
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(1), completion)
+                .await
+                .expect("cancelled completion must be bounded")
+                .expect("completion observer must send cancellation"),
+            PopWakeupOutcome::ServiceCancelled
+        );
+        service.shutdown().await;
     }
 }

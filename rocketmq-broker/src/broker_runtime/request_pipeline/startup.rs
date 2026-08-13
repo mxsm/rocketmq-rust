@@ -36,6 +36,7 @@ impl BrokerRuntime {
             });
         }
         let (request_processor, fast_request_processor) = self.init_processor_checked()?;
+        self.initialize_consumer_lag_observability();
         let service_context =
             self.composition
                 .state

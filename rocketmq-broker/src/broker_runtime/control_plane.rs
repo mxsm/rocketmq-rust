@@ -13,11 +13,14 @@
 // limitations under the License.
 
 use super::*;
+#[cfg(feature = "otel-metrics")]
+use crate::metrics::consumer_lag_snapshot::ConsumerLagSnapshotService;
 use rocketmq_store::BrokerReadStore;
 use rocketmq_store::BrokerReplicationStore;
 #[derive(Default)]
 pub(super) struct BrokerControlPlane {
     pub(super) broadcast_offset_scan_started: bool,
+    pub(super) consumer_lag_observability_initialized: bool,
 }
 
 impl BrokerControlPlane {
@@ -92,20 +95,6 @@ impl BrokerRuntime {
                             .collect()
                     },
                 );
-                let consumer_offset_manager = self.composition.state.consumer_offset_manager_handle();
-                metrics_manager.register_consumer_lag_observable_gauge(move || {
-                    consumer_offset_manager
-                        .consumer_lag_snapshot()
-                        .into_iter()
-                        .map(|observation| {
-                            crate::metrics::broker_metrics_manager::ConsumerLagAttributes::new(
-                                observation.topic,
-                                observation.consumer_group,
-                                observation.lag_messages,
-                            )
-                        })
-                        .collect()
-                });
             }
 
             if let Some(metrics_manager) = self.composition.state.pop_metrics_manager.clone() {
@@ -232,6 +221,62 @@ impl BrokerRuntime {
                             .unwrap_or_default()
                     });
             }
+        }
+    }
+
+    pub(super) fn initialize_consumer_lag_observability(&mut self) {
+        #[cfg(feature = "otel-metrics")]
+        {
+            if self.composition.control_plane.consumer_lag_observability_initialized {
+                return;
+            }
+            let Some(metrics_manager) = self.composition.state.broker_metrics_manager.clone() else {
+                return;
+            };
+            let Some(pop_processor) = self.composition.state.pop_message_processor.clone() else {
+                warn!("Consumer lag observability requires an initialized POP processor");
+                return;
+            };
+            let broker_config = self.composition.state.broker_config();
+            let consumer_lag_snapshot = Arc::new(ConsumerLagSnapshotService::new(
+                self.composition.state.consumer_offset_manager_handle(),
+                self.composition.state.consumer_manager.clone_shared_state(),
+                pop_processor,
+                broker_config.enable_notify_before_pop_calculate_lag,
+            ));
+            let refresh_interval = Duration::from_millis(broker_config.metrics_export_interval_millis.max(1));
+            let refresh_snapshot = Arc::clone(&consumer_lag_snapshot);
+            let schedule_result = self
+                .lifecycle
+                .scheduled_task_manager
+                .add_fixed_rate_no_overlap_task_async(Duration::ZERO, refresh_interval, move |ctx| {
+                    let refresh_snapshot = Arc::clone(&refresh_snapshot);
+                    async move {
+                        if !ctx.is_cancelled() {
+                            refresh_snapshot.refresh().await;
+                        }
+                        Ok(())
+                    }
+                });
+            if let Err(error) = schedule_result {
+                error!(%error, "Failed to start consumer lag snapshot refresh");
+                return;
+            }
+
+            metrics_manager.register_consumer_lag_observable_gauge(move || {
+                consumer_lag_snapshot
+                    .current()
+                    .iter()
+                    .map(|observation| {
+                        crate::metrics::broker_metrics_manager::ConsumerLagAttributes::new(
+                            observation.topic.clone(),
+                            observation.consumer_group.clone(),
+                            observation.lag_messages,
+                        )
+                    })
+                    .collect()
+            });
+            self.composition.control_plane.consumer_lag_observability_initialized = true;
         }
     }
 
