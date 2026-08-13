@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use futures::FutureExt;
+use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ServiceLifecycle;
 use rocketmq_runtime::ShutdownDeadline;
@@ -564,7 +565,7 @@ where
                     .and_then(require_healthy_grpc_shutdown)
                 };
                 let remoting_future = async move {
-                    remoting::serve_with_service_context_and_ready_and_drain(
+                    remoting::serve_with_service_context_and_ready_and_drain_and_remoting_command_factory(
                         remoting_service_context,
                         transport_telemetry,
                         remoting_config,
@@ -573,6 +574,7 @@ where
                         remoting_auth_runtime,
                         remoting_backend,
                         drain,
+                        application_remoting_command_factory(),
                         remoting_shutdown,
                         move || publish_listener_ready(remoting_ready),
                     )

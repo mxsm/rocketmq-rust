@@ -124,6 +124,8 @@ pub use proto::v2;
 pub use proto::Resource;
 pub use remoting::serve_with_service_context as serve_remoting_with_service_context;
 pub use remoting::serve_with_service_context_and_ready as serve_remoting_with_service_context_and_ready;
+pub use remoting::serve_with_service_context_and_ready_and_remoting_command_factory as serve_remoting_with_service_context_and_ready_and_remoting_command_factory;
+pub use remoting::serve_with_service_context_and_remoting_command_factory as serve_remoting_with_service_context_and_remoting_command_factory;
 pub use remoting::ProxyRemotingDispatcher;
 pub use remoting::ProxyRequestProcessor;
 pub use rocketmq_proxy_core::ProxyMessage;
