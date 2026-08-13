@@ -280,7 +280,7 @@ impl BrokerRuntime {
         let listener = DefaultTransactionalMessageCheckListener::new(
             broker_name,
             self.composition.state.producer_manager().channel_registry(),
-            Arc::new(Broker2Client),
+            Arc::new(Broker2Client::new(self.composition.state.command_factory())),
             task_group,
         );
         self.composition.state.transactional_message_check_listener = Some(listener.clone());

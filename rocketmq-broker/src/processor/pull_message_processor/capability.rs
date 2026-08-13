@@ -22,6 +22,8 @@ use crate::config::broker_config::BrokerConfig;
 use arc_swap::ArcSwap;
 use cheetah_string::CheetahString;
 use rocketmq_model::common::broker::broker_role::BrokerRole;
+use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_store::ArcMessageFilter;
 use rocketmq_store::BrokerReadStore;
 use rocketmq_store::BrokerStatsManager;
@@ -291,6 +293,7 @@ impl PullMessageStoreCapability {
 
 /// Complete dependency set shared by pull processing and result handling.
 pub(crate) struct PullMessageProcessorContext<MS: BrokerReadStore> {
+    pub(crate) command_factory: RemotingCommandFactory,
     policy: PullMessagePolicyState,
     rpc_client: RpcClientImpl,
     consumer_manager: ConsumerManager,
@@ -328,6 +331,7 @@ impl<MS: BrokerReadStore> PullMessageProcessorContext<MS> {
         cold_data_flow: Option<Arc<ColdDataCgCtrService>>,
     ) -> Self {
         Self {
+            command_factory: application_remoting_command_factory(),
             policy,
             rpc_client,
             consumer_manager,
@@ -343,6 +347,15 @@ impl<MS: BrokerReadStore> PullMessageProcessorContext<MS> {
             cold_data_flow,
             pull_request_hold: Arc::new(OnceLock::new()),
         }
+    }
+
+    pub(crate) fn with_command_factory(mut self, command_factory: RemotingCommandFactory) -> Self {
+        self.command_factory = command_factory;
+        self
+    }
+
+    pub(crate) const fn command_factory(&self) -> &RemotingCommandFactory {
+        &self.command_factory
     }
 
     pub(crate) fn policy(&self) -> Arc<PullMessagePolicy> {

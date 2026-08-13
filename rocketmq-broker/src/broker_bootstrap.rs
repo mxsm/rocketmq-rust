@@ -16,6 +16,8 @@ use std::sync::Arc;
 
 use crate::config::validated::ValidatedBrokerConfig;
 use rocketmq_observability::TelemetryRuntimeGuard;
+use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_runtime::wait_for_signal;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::RuntimeError;
@@ -177,6 +179,7 @@ pub struct Builder {
     validated_config: ValidatedBrokerConfig,
     service_context: ChildServiceContext,
     telemetry_runtime_guard: TelemetryRuntimeGuard,
+    command_factory: RemotingCommandFactory,
     release_identity_required: bool,
 }
 
@@ -187,6 +190,7 @@ impl Builder {
             validated_config: ValidatedBrokerConfig::default(),
             service_context,
             telemetry_runtime_guard,
+            command_factory: application_remoting_command_factory(),
             release_identity_required: false,
         }
     }
@@ -203,13 +207,21 @@ impl Builder {
         self
     }
 
+    /// Uses explicit immutable wire defaults for this Broker instance.
+    #[inline]
+    pub fn with_remoting_command_factory(mut self, command_factory: RemotingCommandFactory) -> Self {
+        self.command_factory = command_factory;
+        self
+    }
+
     #[inline]
     pub fn build(self) -> BrokerBootstrap<Configured> {
         let telemetry_handle = self.telemetry_runtime_guard.handle();
-        let mut broker_runtime = BrokerRuntime::new_with_validated_config_and_telemetry(
+        let mut broker_runtime = BrokerRuntime::new_with_validated_config_telemetry_and_factory(
             Arc::new(self.validated_config),
             self.service_context,
             telemetry_handle,
+            self.command_factory,
         );
         broker_runtime.set_telemetry_runtime_guard(self.telemetry_runtime_guard);
 
@@ -223,6 +235,8 @@ impl Builder {
 
 #[cfg(all(test, feature = "local_file_store"))]
 mod tests {
+    use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandDefaults;
+    use rocketmq_protocol::protocol::SerializeType;
     use rocketmq_runtime::RuntimeContext;
 
     use super::*;
@@ -241,5 +255,24 @@ mod tests {
             .expect("broker service task group should come from service context");
 
         assert_eq!(broker_task_group.id(), service_context.task_group().id());
+    }
+
+    #[tokio::test]
+    async fn builders_keep_independent_remoting_command_factories() {
+        let context = RuntimeContext::from_current("broker-bootstrap-factory-test");
+        let json_factory = RemotingCommandFactory::new(RemotingCommandDefaults::new(674, SerializeType::JSON));
+        let binary_factory = RemotingCommandFactory::new(RemotingCommandDefaults::new(675, SerializeType::ROCKETMQ));
+        let mut json = Builder::new(context.service_context("broker-json"), TelemetryRuntimeGuard::noop())
+            .with_remoting_command_factory(json_factory)
+            .build();
+        let mut binary = Builder::new(context.service_context("broker-binary"), TelemetryRuntimeGuard::noop())
+            .with_remoting_command_factory(binary_factory)
+            .build();
+
+        assert_eq!(json.broker_runtime.runtime_state_mut().command_factory(), json_factory);
+        assert_eq!(
+            binary.broker_runtime.runtime_state_mut().command_factory(),
+            binary_factory
+        );
     }
 }

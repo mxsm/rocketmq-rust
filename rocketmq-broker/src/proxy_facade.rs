@@ -24,6 +24,8 @@ use rocketmq_model::common::attribute::topic_message_type::TopicMessageType;
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::mix_all;
 use rocketmq_observability::TelemetryHandle;
+use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
 use rocketmq_protocol::protocol::route::route_data_view::QueueData;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
@@ -56,26 +58,73 @@ impl ProxyBrokerFacade {
         service_context: ChildServiceContext,
         telemetry_handle: TelemetryHandle,
     ) -> Result<Self, BrokerConfigError> {
+        Self::try_new_from_broker_config_with_factory(
+            broker_config,
+            service_context,
+            telemetry_handle,
+            application_remoting_command_factory(),
+        )
+    }
+
+    /// Creates a proxy facade from broker configuration using explicit remoting defaults.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrokerConfigError`] when the broker or derived message-store configuration is invalid.
+    pub fn try_new_from_broker_config_with_factory(
+        broker_config: BrokerConfig,
+        service_context: ChildServiceContext,
+        telemetry_handle: TelemetryHandle,
+        command_factory: RemotingCommandFactory,
+    ) -> Result<Self, BrokerConfigError> {
         let message_store_config = MessageStoreConfig {
             store_path_root_dir: broker_config.store_path_root_dir.clone(),
             ..MessageStoreConfig::default()
         };
-        Self::try_new(broker_config, message_store_config, service_context, telemetry_handle)
+        Self::try_new_with_factory(
+            broker_config,
+            message_store_config,
+            service_context,
+            telemetry_handle,
+            command_factory,
+        )
     }
 
     pub fn try_new(
-        mut broker_config: BrokerConfig,
+        broker_config: BrokerConfig,
         message_store_config: MessageStoreConfig,
         service_context: ChildServiceContext,
         telemetry_handle: TelemetryHandle,
     ) -> Result<Self, BrokerConfigError> {
+        Self::try_new_with_factory(
+            broker_config,
+            message_store_config,
+            service_context,
+            telemetry_handle,
+            application_remoting_command_factory(),
+        )
+    }
+
+    /// Creates a proxy facade from broker and message-store configurations using explicit remoting defaults.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrokerConfigError`] when either configuration is invalid.
+    pub fn try_new_with_factory(
+        mut broker_config: BrokerConfig,
+        message_store_config: MessageStoreConfig,
+        service_context: ChildServiceContext,
+        telemetry_handle: TelemetryHandle,
+        command_factory: RemotingCommandFactory,
+    ) -> Result<Self, BrokerConfigError> {
         broker_config.transfer_msg_by_heap = true;
         broker_config.broker_server_config.listen_port = broker_config.listen_port;
         let validated_config = ValidatedBrokerConfig::try_from_parts(broker_config, message_store_config)?;
-        Ok(Self::from_validated_config(
+        Ok(Self::from_validated_config_with_factory(
             validated_config,
             service_context,
             telemetry_handle,
+            command_factory,
         ))
     }
 
@@ -84,13 +133,29 @@ impl ProxyBrokerFacade {
         service_context: ChildServiceContext,
         telemetry_handle: TelemetryHandle,
     ) -> Self {
+        Self::from_validated_config_with_factory(
+            validated_config,
+            service_context,
+            telemetry_handle,
+            application_remoting_command_factory(),
+        )
+    }
+
+    /// Creates a proxy facade from validated configuration using explicit remoting defaults.
+    pub fn from_validated_config_with_factory(
+        validated_config: ValidatedBrokerConfig,
+        service_context: ChildServiceContext,
+        telemetry_handle: TelemetryHandle,
+        command_factory: RemotingCommandFactory,
+    ) -> Self {
         let runtime_context = service_context.component("embedded-broker");
         let local_request_tasks = service_context.component("local-request").task_group().clone();
         Self {
-            runtime: BrokerRuntime::new_with_validated_config_and_telemetry(
+            runtime: BrokerRuntime::new_with_validated_config_telemetry_and_factory(
                 Arc::new(validated_config),
                 runtime_context,
                 telemetry_handle,
+                command_factory,
             ),
             local_request_tasks,
         }

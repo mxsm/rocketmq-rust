@@ -49,6 +49,7 @@ use rocketmq_model::common::mix_all::MASTER_ID;
 use rocketmq_observability::TelemetryHandle;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::common::util_all::compute_next_morning_time_millis;
@@ -768,6 +769,7 @@ pub(crate) struct BrokerRuntimeState<MS: BrokerStorePort> {
     store_host: SocketAddr,
     broker_addr: CheetahString,
     config_state: BrokerRuntimeConfigState,
+    command_factory: RemotingCommandFactory,
     resource_budget: ResourceBudget,
     send_message_policy_state: SendMessagePolicyState,
     pull_message_policy_state: PullMessagePolicyState,

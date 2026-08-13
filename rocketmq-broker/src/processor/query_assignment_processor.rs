@@ -36,12 +36,14 @@ use rocketmq_protocol::protocol::body::query_assignment_response_body::QueryAssi
 use rocketmq_protocol::protocol::body::set_message_request_mode_request_body::SetMessageRequestModeRequestBody;
 use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::MetadataDeadline;
 use rocketmq_runtime::MetadataIoActor;
 use rocketmq_store::MessageStoreConfig;
-use rocketmq_transport::api::v1::request_code_not_supported_with_remark_and_opaque;
+use rocketmq_transport::api::v1::request_code_not_supported_with_factory_remark_and_opaque;
 use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use rocketmq_transport::api::v1::RequestProcessor;
@@ -58,6 +60,7 @@ use tracing::warn;
 /// for message queues. It interacts with the broker runtime to process assignment
 /// requests and allocate message queues to consumers.
 pub struct QueryAssignmentProcessor {
+    command_factory: RemotingCommandFactory,
     // Manages the message request modes for different topics and consumer groups.
     message_request_mode_manager: MessageRequestModeManager,
 
@@ -90,7 +93,8 @@ impl RequestProcessor for QueryAssignmentProcessor {
                     "QueryAssignmentProcessor received unknown request code: {:?}",
                     request_code
                 );
-                let response = request_code_not_supported_with_remark_and_opaque(
+                let response = request_code_not_supported_with_factory_remark_and_opaque(
+                    &self.command_factory,
                     request.code(),
                     format!("QueryAssignmentProcessor request code {} not supported", request.code()),
                     request.opaque(),
@@ -124,6 +128,24 @@ impl QueryAssignmentProcessor {
         consumer_assignment_view: ConsumerAssignmentView,
         metadata_io: Option<MetadataIoActor>,
     ) -> Self {
+        Self::new_with_metadata_io_and_factory(
+            broker_config,
+            message_store_config,
+            topic_route_info_manager,
+            consumer_assignment_view,
+            metadata_io,
+            application_remoting_command_factory(),
+        )
+    }
+
+    pub(crate) fn new_with_metadata_io_and_factory(
+        broker_config: Arc<BrokerConfig>,
+        message_store_config: Arc<MessageStoreConfig>,
+        topic_route_info_manager: TopicRouteInfoManager,
+        consumer_assignment_view: ConsumerAssignmentView,
+        metadata_io: Option<MetadataIoActor>,
+        command_factory: RemotingCommandFactory,
+    ) -> Self {
         let allocate_message_queue_averagely: Arc<dyn AllocateMessageQueueStrategy> =
             Arc::new(AllocateMessageQueueAveragely);
         let allocate_message_queue_averagely_by_circle: Arc<dyn AllocateMessageQueueStrategy> =
@@ -140,6 +162,7 @@ impl QueryAssignmentProcessor {
         let manager = MessageRequestModeManager::new(message_store_config);
         let _ = manager.load();
         Self {
+            command_factory,
             message_request_mode_manager: manager,
             load_strategy,
             broker_config,
@@ -167,6 +190,7 @@ impl QueryAssignmentProcessor {
 impl Clone for QueryAssignmentProcessor {
     fn clone(&self) -> Self {
         Self {
+            command_factory: self.command_factory,
             message_request_mode_manager: self.message_request_mode_manager.clone(),
             load_strategy: self.load_strategy.clone(),
             broker_config: Arc::clone(&self.broker_config),
@@ -213,7 +237,7 @@ impl QueryAssignmentProcessor {
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         if request.get_body().is_none() {
-            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+            return Ok(Some(self.command_factory.create_response_command_with_code_remark(
                 ResponseCode::SystemError,
                 "empty body",
             )));
@@ -223,19 +247,19 @@ impl QueryAssignmentProcessor {
 
         // Validate required fields
         if request_body.topic.is_empty() {
-            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+            return Ok(Some(self.command_factory.create_response_command_with_code_remark(
                 ResponseCode::SystemError,
                 "topic is empty",
             )));
         }
         if request_body.consumer_group.is_empty() {
-            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+            return Ok(Some(self.command_factory.create_response_command_with_code_remark(
                 ResponseCode::SystemError,
                 "consumerGroup is empty",
             )));
         }
         if request_body.client_id.is_empty() {
-            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+            return Ok(Some(self.command_factory.create_response_command_with_code_remark(
                 ResponseCode::SystemError,
                 "clientId is empty",
             )));
@@ -315,7 +339,9 @@ impl QueryAssignmentProcessor {
             message_queue_assignments: assignments,
         };
         Ok(Some(
-            RemotingCommand::create_success_response_command().set_body(body.encode()?),
+            self.command_factory
+                .create_success_response_command()
+                .set_body(body.encode()?),
         ))
     }
 
@@ -485,7 +511,7 @@ impl QueryAssignmentProcessor {
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         if request.get_body().is_none() {
-            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+            return Ok(Some(self.command_factory.create_response_command_with_code_remark(
                 ResponseCode::SystemError,
                 "empty body",
             )));
@@ -494,7 +520,8 @@ impl QueryAssignmentProcessor {
         let request_body = SetMessageRequestModeRequestBody::decode(request.get_body().unwrap())?;
         if request_body.topic.starts_with(RETRY_GROUP_TOPIC_PREFIX) {
             return Ok(Some(
-                RemotingCommand::create_response_command_with_code(ResponseCode::NoPermission)
+                self.command_factory
+                    .create_response_command_with_code(ResponseCode::NoPermission)
                     .set_remark(CheetahString::from_static_str("retry topic is not allowed to set mode")),
             ));
         }
@@ -517,9 +544,10 @@ impl QueryAssignmentProcessor {
         } else {
             self.message_request_mode_manager.persist()?;
         }
-        Ok(Some(RemotingCommand::create_response_command_with_code(
-            ResponseCode::Success,
-        )))
+        Ok(Some(
+            self.command_factory
+                .create_response_command_with_code(ResponseCode::Success),
+        ))
     }
 }
 

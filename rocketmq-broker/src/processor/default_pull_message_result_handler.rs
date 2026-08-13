@@ -148,14 +148,27 @@ impl<MS: BrokerReadStore> PullMessageResultHandler for DefaultPullMessageResultH
         {
             let Some(response_header) = response.read_custom_header_mut::<PullMessageResponseHeader>() else {
                 return Some(static_topic_rewrite_error_response(
+                    self.context.command_factory(),
                     StaticTopicRewriteError::MissingResponseHeader,
                     &mapping_context,
                 ));
             };
-            match rewrite_response_for_static_topic(&request_header, response_header, &mut mapping_context, code) {
+            match rewrite_response_for_static_topic(
+                self.context.command_factory(),
+                &request_header,
+                response_header,
+                &mut mapping_context,
+                code,
+            ) {
                 Ok(Some(response)) => return Some(response),
                 Ok(None) => {}
-                Err(error) => return Some(static_topic_rewrite_error_response(error, &mapping_context)),
+                Err(error) => {
+                    return Some(static_topic_rewrite_error_response(
+                        self.context.command_factory(),
+                        error,
+                        &mapping_context,
+                    ));
+                }
             }
         }
         self.update_broadcast_pulled_offset(

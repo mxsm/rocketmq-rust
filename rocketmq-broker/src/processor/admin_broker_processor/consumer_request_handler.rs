@@ -46,6 +46,8 @@ use rocketmq_protocol::protocol::header::query_correction_offset_header::QueryCo
 use rocketmq_protocol::protocol::header::query_subscription_by_consumer_request_header::QuerySubscriptionByConsumerRequestHeader;
 use rocketmq_protocol::protocol::header::reset_offset_request_header::ResetOffsetRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_protocol::protocol::LanguageCode;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_store::BrokerAdminStore;
@@ -57,11 +59,19 @@ use crate::broker::broker_admin_runtime::BrokerAdminRuntime;
 use crate::client::net::broker_to_client::Broker2Client;
 
 #[derive(Clone)]
-pub(super) struct ConsumerRequestHandler;
+pub(super) struct ConsumerRequestHandler {
+    broker_to_client: Broker2Client,
+}
 
 impl ConsumerRequestHandler {
     pub fn new() -> Self {
-        Self
+        Self::new_with_factory(application_remoting_command_factory())
+    }
+
+    pub fn new_with_factory(command_factory: RemotingCommandFactory) -> Self {
+        Self {
+            broker_to_client: Broker2Client::new(command_factory),
+        }
     }
 }
 
@@ -559,9 +569,8 @@ impl ConsumerRequestHandler {
             )
             .await
         } else {
-            let broker_to_client = Broker2Client;
             if request.language() == LanguageCode::CPP {
-                broker_to_client
+                self.broker_to_client
                     .reset_offset_for_c(
                         broker_runtime_inner,
                         &request_header.topic,
@@ -571,7 +580,7 @@ impl ConsumerRequestHandler {
                     )
                     .await
             } else {
-                broker_to_client
+                self.broker_to_client
                     .reset_offset(
                         broker_runtime_inner,
                         &request_header.topic,
@@ -595,9 +604,8 @@ impl ConsumerRequestHandler {
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<GetConsumerStatusRequestHeader>()?;
-        let broker_to_client = Broker2Client;
         Ok(Some(
-            broker_to_client
+            self.broker_to_client
                 .get_consume_status(
                     broker_runtime_inner,
                     &request_header.topic,
@@ -798,7 +806,10 @@ impl ConsumerRequestHandler {
         consumer_group: &str,
         client_id: &str,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let mut response = RemotingCommand::create_java_default_error_response_command();
+        let mut response = self
+            .broker_to_client
+            .command_factory()
+            .create_java_default_error_response_command();
 
         let client_channel_info = broker_runtime_inner
             .consumer_manager()
@@ -827,7 +838,11 @@ impl ConsumerRequestHandler {
         // Default timeout is 5000ms, same as Java implementation
         let timeout_millis = 5000u64;
 
-        match Broker2Client.call_client(&mut channel, request, timeout_millis).await {
+        let mut broker_to_client = self.broker_to_client;
+        match broker_to_client
+            .call_client(&mut channel, request, timeout_millis)
+            .await
+        {
             Ok(result) => Ok(Some(result)),
             Err(e) => {
                 let (code, error_type) = match &e {
@@ -856,7 +871,10 @@ impl ConsumerRequestHandler {
         timestamp: i64,
         offset: Option<i64>,
     ) -> RemotingCommand {
-        let response = RemotingCommand::create_java_default_error_response_command();
+        let response = self
+            .broker_to_client
+            .command_factory()
+            .create_java_default_error_response_command();
 
         if broker_runtime_inner.message_store_config().broker_role == BrokerRole::Slave {
             return response
@@ -931,7 +949,10 @@ impl ConsumerRequestHandler {
             );
         }
 
-        RemotingCommand::create_success_response_command().set_body(body.encode())
+        self.broker_to_client
+            .command_factory()
+            .create_success_response_command()
+            .set_body(body.encode())
     }
 
     async fn resolve_reset_offset<MS: BrokerAdminStore>(
@@ -942,7 +963,10 @@ impl ConsumerRequestHandler {
         timestamp: i64,
         offset: Option<i64>,
     ) -> Result<i64, RemotingCommand> {
-        let mut response = RemotingCommand::create_java_default_error_response_command();
+        let mut response = self
+            .broker_to_client
+            .command_factory()
+            .create_java_default_error_response_command();
         let message_store = broker_runtime_inner
             .message_store()
             .expect("message store should be initialized before admin request");
@@ -1016,8 +1040,11 @@ mod tests {
     use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
     use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+    use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandDefaults;
+    use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
     use rocketmq_protocol::protocol::LanguageCode;
     use rocketmq_protocol::protocol::RemotingDeserializable;
+    use rocketmq_protocol::protocol::SerializeType;
     use rocketmq_store::BrokerAdminStore;
     use rocketmq_store::MessageStoreConfig;
     use rocketmq_transport::api::v1::Channel;
@@ -1037,10 +1064,15 @@ mod tests {
     }
 
     async fn new_test_runtime(label: &str) -> BrokerRuntime {
+        new_test_runtime_with_server_side_reset(label, true).await
+    }
+
+    async fn new_test_runtime_with_server_side_reset(label: &str, use_server_side_reset_offset: bool) -> BrokerRuntime {
         let temp_root = temp_test_root(label);
         let broker_config = Arc::new(BrokerConfig {
             store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
             auth_config_path: temp_root.join("auth.json").to_string_lossy().into_owned().into(),
+            use_server_side_reset_offset,
             ..BrokerConfig::default()
         });
         let message_store_config = Arc::new(MessageStoreConfig {
@@ -1050,6 +1082,15 @@ mod tests {
         let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
         assert!(runtime.initialize().await.is_ok());
         runtime
+    }
+
+    fn test_command_factory(version: i32, serialize_type: SerializeType) -> RemotingCommandFactory {
+        RemotingCommandFactory::new(RemotingCommandDefaults::new(version, serialize_type))
+    }
+
+    fn assert_owner_defaults(response: &RemotingCommand, version: i32, serialize_type: SerializeType) {
+        assert_eq!(response.version(), version);
+        assert_eq!(response.serialize_type(), serialize_type);
     }
 
     async fn create_test_channel() -> Channel {
@@ -1265,7 +1306,7 @@ mod tests {
             .update_subscription_group_config(&mut group_config);
         let msg_id = put_test_message(&mut admin, "topic-a").await;
 
-        let handler = ConsumerRequestHandler::new();
+        let handler = ConsumerRequestHandler::new_with_factory(test_command_factory(9343, SerializeType::ROCKETMQ));
         let mut request = RemotingCommand::create_request_command(
             RequestCode::ConsumeMessageDirectly,
             ConsumeMessageDirectlyResultRequestHeader {
@@ -1290,6 +1331,7 @@ mod tests {
             .expect("consume message directly should return response");
 
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::SystemError);
+        assert_owner_defaults(&response, 9343, SerializeType::ROCKETMQ);
         assert!(response
             .remark()
             .expect("offline response should contain remark")
@@ -1361,7 +1403,7 @@ mod tests {
     #[tokio::test]
     async fn invoke_broker_to_get_consumer_status_returns_offline_group_error() {
         let runtime = new_test_runtime("consumer-status").await;
-        let handler = ConsumerRequestHandler::new();
+        let handler = ConsumerRequestHandler::new_with_factory(test_command_factory(9344, SerializeType::JSON));
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request = RemotingCommand::create_request_command(
@@ -1386,10 +1428,87 @@ mod tests {
             .expect("invoke broker to get consumer status should return response");
 
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::SystemError);
+        assert_owner_defaults(&response, 9344, SerializeType::JSON);
         assert!(response
             .remark()
             .expect("offline response should contain remark")
             .contains("No Any Consumer online"));
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn invoke_broker_to_reset_offset_preserves_factory_for_client_side_error() {
+        let runtime = new_test_runtime_with_server_side_reset("client-reset-error", false).await;
+        let handler = ConsumerRequestHandler::new_with_factory(test_command_factory(9345, SerializeType::JSON));
+        let channel = create_test_channel().await;
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let mut request = RemotingCommand::create_request_command(
+            RequestCode::InvokeBrokerToResetOffset,
+            ResetOffsetRequestHeader {
+                topic: CheetahString::from_static_str("missing-topic"),
+                group: CheetahString::from_static_str("group-a"),
+                queue_id: -1,
+                offset: None,
+                timestamp: -1,
+                is_force: true,
+                topic_request_header: None,
+            },
+        );
+        request.make_custom_header_to_net();
+
+        let response = handler
+            .invoke_broker_to_reset_offset(
+                &runtime.admin_runtime_for_test(),
+                channel,
+                ctx,
+                RequestCode::InvokeBrokerToResetOffset,
+                &mut request,
+            )
+            .await
+            .expect("invoke broker to reset offset should succeed")
+            .expect("invoke broker to reset offset should return response");
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::TopicNotExist);
+        assert_owner_defaults(&response, 9345, SerializeType::JSON);
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn invoke_broker_to_reset_offset_preserves_factory_for_server_side_error() {
+        let runtime = new_test_runtime("server-reset-error").await;
+        let handler = ConsumerRequestHandler::new_with_factory(test_command_factory(9346, SerializeType::ROCKETMQ));
+        let channel = create_test_channel().await;
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let mut request = RemotingCommand::create_request_command(
+            RequestCode::InvokeBrokerToResetOffset,
+            ResetOffsetRequestHeader {
+                topic: CheetahString::from_static_str("missing-topic"),
+                group: CheetahString::from_static_str("group-a"),
+                queue_id: -1,
+                offset: None,
+                timestamp: -1,
+                is_force: true,
+                topic_request_header: None,
+            },
+        );
+        request.make_custom_header_to_net();
+
+        let response = handler
+            .invoke_broker_to_reset_offset(
+                &runtime.admin_runtime_for_test(),
+                channel,
+                ctx,
+                RequestCode::InvokeBrokerToResetOffset,
+                &mut request,
+            )
+            .await
+            .expect("invoke broker to reset offset should succeed")
+            .expect("invoke broker to reset offset should return response");
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::TopicNotExist);
+        assert_owner_defaults(&response, 9346, SerializeType::ROCKETMQ);
 
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }

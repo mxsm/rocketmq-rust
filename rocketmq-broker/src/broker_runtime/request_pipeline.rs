@@ -107,17 +107,20 @@ impl BrokerRuntime {
             self.composition.state.update_master_haserver_addr_periodically,
             Arc::clone(&self.composition.state.shutdown),
         ));
-        let send_message_context = Arc::new(SendMessageProcessorContext::new(
-            self.composition.state.send_message_policy_state.clone(),
-            self.composition.state.telemetry_handle.clone(),
-            SendMessageStoreCapability::new(&self.composition.data_plane.escape_bridge_owner),
-            send_message_topic_capability,
-            self.composition.state.subscription_group_manager().config_lookup(),
-            self.composition.state.rebalance_lock_manager().clone(),
-            self.composition.state.broker_stats_manager_handle(),
-            self.composition.state.broker_metrics_manager.clone(),
-            self.composition.state.producer_manager().reply_channel_registry(),
-        ));
+        let send_message_context = Arc::new(
+            SendMessageProcessorContext::new(
+                self.composition.state.send_message_policy_state.clone(),
+                self.composition.state.telemetry_handle.clone(),
+                SendMessageStoreCapability::new(&self.composition.data_plane.escape_bridge_owner),
+                send_message_topic_capability,
+                self.composition.state.subscription_group_manager().config_lookup(),
+                self.composition.state.rebalance_lock_manager().clone(),
+                self.composition.state.broker_stats_manager_handle(),
+                self.composition.state.broker_metrics_manager.clone(),
+                self.composition.state.producer_manager().reply_channel_registry(),
+            )
+            .with_command_factory(self.composition.state.command_factory()),
+        );
         let send_message_processor = SendMessageProcessor::new(
             Arc::clone(&transactional_message_service),
             Arc::clone(&send_message_context),
@@ -166,16 +169,19 @@ impl BrokerRuntime {
         })?;
         let pop_lite_offset_manager = self.composition.state.consumer_offset_manager_handle();
         let pop_lite_escape_bridge = self.composition.state.escape_bridge();
-        let pop_lite_message_processor = PopLiteMessageProcessor::new(PopLiteMessageProcessorContext::new(
-            PopLiteMessagePolicy::from_config(&self.composition.state.broker_config()),
-            pop_lite_topic_config_manager,
-            pop_lite_subscription_group_lookup,
-            PopLiteOffsetCapability::new(&pop_lite_offset_manager),
-            PopLiteMessageStoreCapability::new(&pop_lite_escape_bridge),
-            pop_lite_event_dispatcher,
-            pop_lite_queue_lock_manager,
-            pop_lite_long_polling_context,
-        ));
+        let pop_lite_message_processor = PopLiteMessageProcessor::new(
+            PopLiteMessageProcessorContext::new(
+                PopLiteMessagePolicy::from_config(&self.composition.state.broker_config()),
+                pop_lite_topic_config_manager,
+                pop_lite_subscription_group_lookup,
+                PopLiteOffsetCapability::new(&pop_lite_offset_manager),
+                PopLiteMessageStoreCapability::new(&pop_lite_escape_bridge),
+                pop_lite_event_dispatcher,
+                pop_lite_queue_lock_manager,
+                pop_lite_long_polling_context,
+            )
+            .with_command_factory(self.composition.state.command_factory()),
+        );
         let pop_lite_message_processor_provider = Arc::downgrade(&pop_lite_message_processor);
         self.composition.state.pop_lite_message_processor = Some(pop_lite_message_processor.clone());
         let ack_policy = AckMessagePolicy::from_config(
@@ -198,18 +204,21 @@ impl BrokerRuntime {
         let ack_escape_bridge = self.composition.state.escape_bridge();
         let ack_offset_manager = self.composition.state.consumer_offset_manager_handle();
         let ack_order_info = self.composition.state.consumer_order_info_manager_handle();
-        let ack_message_processor = Arc::new(AckMessageProcessor::new(AckMessageProcessorContext::new(
-            ack_policy,
-            self.composition.state.topic_config_manager_handle(),
-            AckMessageOffsetCapability::new(&ack_offset_manager),
-            AckMessageOrderCapability::new(&ack_order_info),
-            AckMessageStoreCapability::new(&ack_escape_bridge),
-            self.composition.state.pop_inflight_message_counter().clone(),
-            AckMessagePopCapability::new(&pop_message_processor),
-            pop_revive_services,
-        )));
+        let ack_message_processor = Arc::new(AckMessageProcessor::new(
+            AckMessageProcessorContext::new(
+                ack_policy,
+                self.composition.state.topic_config_manager_handle(),
+                AckMessageOffsetCapability::new(&ack_offset_manager),
+                AckMessageOrderCapability::new(&ack_order_info),
+                AckMessageStoreCapability::new(&ack_escape_bridge),
+                self.composition.state.pop_inflight_message_counter().clone(),
+                AckMessagePopCapability::new(&pop_message_processor),
+                pop_revive_services,
+            )
+            .with_command_factory(self.composition.state.command_factory()),
+        ));
         self.composition.state.ack_message_processor = Some(ack_message_processor.clone());
-        let query_assignment_processor = Arc::new(QueryAssignmentProcessor::new_with_metadata_io(
+        let query_assignment_processor = Arc::new(QueryAssignmentProcessor::new_with_metadata_io_and_factory(
             self.composition.state.broker_config_arc(),
             self.composition.state.message_store_config_arc(),
             self.composition.state.topic_route_info_manager().clone(),
@@ -220,6 +229,7 @@ impl BrokerRuntime {
                 .as_ref()
                 .and_then(|result| result.as_ref().ok())
                 .cloned(),
+            self.composition.state.command_factory(),
         ));
         if let Some(slave_synchronize) = self.composition.state.slave_synchronize() {
             slave_synchronize
@@ -237,19 +247,22 @@ impl BrokerRuntime {
             notification_subscription_group_lookup.clone(),
             self.composition.state.broker_service_context(),
         );
-        let notification_processor = NotificationProcessor::new(NotificationProcessorContext::new(
-            NotificationPolicy::from_config(&self.composition.state.broker_config()),
-            notification_topic_config_manager,
-            notification_subscription_group_lookup,
-            self.composition.state.consumer_order_info_manager_handle(),
-            self.composition
-                .state
-                .consumer_offset_manager_handle()
-                .query_capability(),
-            NotificationStoreCapability::new(&notification_escape_bridge),
-            NotificationPopOffsetCapability::new(pop_message_processor.pop_buffer_merge_service()),
-            notification_long_polling_context,
-        ));
+        let notification_processor = NotificationProcessor::new(
+            NotificationProcessorContext::new(
+                NotificationPolicy::from_config(&self.composition.state.broker_config()),
+                notification_topic_config_manager,
+                notification_subscription_group_lookup,
+                self.composition.state.consumer_order_info_manager_handle(),
+                self.composition
+                    .state
+                    .consumer_offset_manager_handle()
+                    .query_capability(),
+                NotificationStoreCapability::new(&notification_escape_bridge),
+                NotificationPopOffsetCapability::new(pop_message_processor.pop_buffer_merge_service()),
+                notification_long_polling_context,
+            )
+            .with_command_factory(self.composition.state.command_factory()),
+        );
         self.composition.state.notification_processor = Some(notification_processor.clone());
         let message_arriving_listener = NotifyMessageArrivingListener::new(
             &pull_request_hold_service,
@@ -262,7 +275,8 @@ impl BrokerRuntime {
         } else {
             error!("Message store is not exclusively owned while installing request processors");
         }
-        let mut broker_request_processor = BrokerRequestProcessor::new();
+        let mut broker_request_processor =
+            BrokerRequestProcessor::new_with_factory(self.composition.state.command_factory());
         let request_processor_task_group = self.lifecycle.request_processor_task_group.clone().or_else(|| {
             self.broker_task_group_or_current(
                 "rocketmq-broker.request-processor",
@@ -323,11 +337,12 @@ impl BrokerRuntime {
                 std::path::PathBuf::from(broker_config.maintenance_checkpoint_root.as_str()),
                 service_context.component("broker.release-checkpoint"),
             ));
-            let maintenance_processor = Arc::new(MaintenanceRequestProcessor::new(
+            let maintenance_processor = Arc::new(MaintenanceRequestProcessor::new_with_factory(
                 Arc::clone(&broker_config),
                 auth_runtime,
                 authorizer,
                 checkpoint_service,
+                self.composition.state.command_factory(),
             ));
             for request_code in [
                 RequestCode::MaintenanceGetCapabilities,
@@ -377,15 +392,18 @@ impl BrokerRuntime {
             .state
             .consumer_offset_manager_handle()
             .query_capability();
-        let peek_message_processor = Arc::new(PeekMessageProcessor::new(PeekMessageProcessorContext::new(
-            PeekMessagePolicy::from_config(&self.composition.state.broker_config()),
-            self.composition.state.topic_config_manager_handle(),
-            self.composition.state.subscription_group_manager().config_lookup(),
-            consumer_offset_query,
-            self.composition.state.broker_stats_manager_handle(),
-            PeekMessageStoreCapability::new(&escape_bridge),
-            PeekPopOffsetCapability::new(pop_message_processor.pop_buffer_merge_service()),
-        )));
+        let peek_message_processor = Arc::new(PeekMessageProcessor::new(
+            PeekMessageProcessorContext::new(
+                PeekMessagePolicy::from_config(&self.composition.state.broker_config()),
+                self.composition.state.topic_config_manager_handle(),
+                self.composition.state.subscription_group_manager().config_lookup(),
+                consumer_offset_query,
+                self.composition.state.broker_stats_manager_handle(),
+                PeekMessageStoreCapability::new(&escape_bridge),
+                PeekPopOffsetCapability::new(pop_message_processor.pop_buffer_merge_service()),
+            )
+            .with_command_factory(self.composition.state.command_factory()),
+        ));
         broker_request_processor.register_processor(
             RequestCode::PeekMessage as i32,
             BrokerProcessorType::Peek(peek_message_processor),
@@ -431,7 +449,8 @@ impl BrokerRuntime {
                     ChangeInvisibleTimeStoreCapability::new(&change_invisible_escape_bridge),
                     ChangeInvisibleTimePopCapability::new(pop_message_processor.pop_buffer_merge_service()),
                     pop_message_processor.queue_lock_manager().clone(),
-                ),
+                )
+                .with_command_factory(self.composition.state.command_factory()),
             ))),
         );
         //notificationProcessor
@@ -443,11 +462,12 @@ impl BrokerRuntime {
         //pollingInfoProcessor
         broker_request_processor.register_processor(
             RequestCode::PollingInfo as i32,
-            BrokerProcessorType::PollingInfo(Arc::new(PollingInfoProcessor::new(
+            BrokerProcessorType::PollingInfo(Arc::new(PollingInfoProcessor::new_with_factory(
                 self.composition.state.broker_config_arc(),
                 self.composition.state.topic_config_manager_handle(),
                 self.composition.state.subscription_group_manager().config_lookup(),
                 polling_count_provider,
+                self.composition.state.command_factory(),
             ))),
         );
 
@@ -463,25 +483,29 @@ impl BrokerRuntime {
         );
 
         //RecallMessageProcessor
-        let recall_message_processor = Arc::new(RecallMessageProcessor::new(RecallMessageProcessorContext::new(
-            RecallMessagePolicy::from_configs(
-                &self.composition.state.broker_config(),
-                &self.composition.state.message_store_config(),
-                self.composition.state.store_host(),
-            ),
-            self.composition.state.topic_config_manager_handle(),
-            RecallMessageStoreCapability::new(&self.composition.data_plane.escape_bridge_owner),
-            self.composition.state.broker_stats_manager_handle(),
-        )));
+        let recall_message_processor = Arc::new(RecallMessageProcessor::new(
+            RecallMessageProcessorContext::new(
+                RecallMessagePolicy::from_configs(
+                    &self.composition.state.broker_config(),
+                    &self.composition.state.message_store_config(),
+                    self.composition.state.store_host(),
+                ),
+                self.composition.state.topic_config_manager_handle(),
+                RecallMessageStoreCapability::new(&self.composition.data_plane.escape_bridge_owner),
+                self.composition.state.broker_stats_manager_handle(),
+            )
+            .with_command_factory(self.composition.state.command_factory()),
+        ));
         broker_request_processor.register_processor(
             RequestCode::RecallMessage as i32,
             BrokerProcessorType::Recall(recall_message_processor),
         );
 
         //QueryMessageProcessor
-        let query_message_processor = Arc::new(QueryMessageProcessor::new(
+        let query_message_processor = Arc::new(QueryMessageProcessor::new_with_factory(
             self.composition.state.message_store_config().default_query_max_num,
             QueryMessageStoreCapability::new(&self.composition.data_plane.escape_bridge_owner),
+            self.composition.state.command_factory(),
         ));
         broker_request_processor.register_processor(
             RequestCode::QueryMessage as i32,
@@ -554,6 +578,7 @@ impl BrokerRuntime {
                 LiteManagerStoreCapability::new(&escape_bridge),
                 pop_lite_message_processor_provider.clone(),
             )
+            .with_command_factory(self.composition.state.command_factory())
         }));
         broker_request_processor.register_processor(
             RequestCode::GetBrokerLiteInfo as i32,
@@ -593,6 +618,7 @@ impl BrokerRuntime {
                     PopLiteMessageStoreCapability::new(&escape_bridge),
                     pop_lite_message_processor_provider,
                 )
+                .with_command_factory(self.composition.state.command_factory())
             }))),
         );
 
@@ -609,7 +635,8 @@ impl BrokerRuntime {
                     EndTransactionStoreCapability::new(&self.composition.data_plane.escape_bridge_owner),
                     self.composition.state.broker_stats_manager_handle(),
                     self.composition.state.broker_metrics_manager.clone(),
-                ),
+                )
+                .with_command_factory(self.composition.state.command_factory()),
             ))),
         );
         let auth_admin_service = self
@@ -621,7 +648,11 @@ impl BrokerRuntime {
                 component: "auth_admin_service",
                 detail: "auth admin service must be initialized before request processors".to_owned(),
             })?;
-        let admin_broker_processor = Arc::new(AdminBrokerProcessor::new(self.admin_runtime(), auth_admin_service));
+        let admin_broker_processor = Arc::new(AdminBrokerProcessor::new_with_factory(
+            self.admin_runtime(),
+            auth_admin_service,
+            self.composition.state.command_factory(),
+        ));
         broker_request_processor.register_default_processor(BrokerProcessorType::AdminBroker(admin_broker_processor));
 
         Ok((broker_request_processor.clone(), broker_request_processor))

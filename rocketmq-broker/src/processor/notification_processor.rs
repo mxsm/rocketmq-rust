@@ -27,6 +27,8 @@ use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::notification_request_header::NotificationRequestHeader;
 use rocketmq_protocol::protocol::header::notification_response_header::NotificationResponseHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::BrokerReadWriteStore;
 use rocketmq_transport::api::v1::Channel;
@@ -114,6 +116,7 @@ impl<MS: BrokerReadWriteStore> NotificationPopOffsetCapability<MS> {
 }
 
 pub(crate) struct NotificationProcessorContext<MS: BrokerReadWriteStore> {
+    command_factory: RemotingCommandFactory,
     policy: NotificationPolicy,
     topic_config_manager: Arc<TopicConfigManager>,
     subscription_group_lookup: SubscriptionGroupConfigLookup,
@@ -140,6 +143,7 @@ impl<MS: BrokerReadWriteStore> NotificationProcessorContext<MS> {
         long_polling: PopLongPollingServiceContext,
     ) -> Self {
         Self {
+            command_factory: application_remoting_command_factory(),
             policy,
             topic_config_manager,
             subscription_group_lookup,
@@ -149,6 +153,11 @@ impl<MS: BrokerReadWriteStore> NotificationProcessorContext<MS> {
             pop_offset,
             long_polling,
         }
+    }
+
+    pub(crate) fn with_command_factory(mut self, command_factory: RemotingCommandFactory) -> Self {
+        self.command_factory = command_factory;
+        self
     }
 }
 
@@ -311,7 +320,10 @@ where
         }
         let channel = ctx.channel();
 
-        let mut response = RemotingCommand::create_java_default_error_response_command();
+        let mut response = self
+            .context
+            .command_factory
+            .create_java_default_error_response_command();
         let request_header = request.decode_command_custom_header::<NotificationRequestHeader>()?;
 
         response.set_opaque_mut(request.opaque());
@@ -472,11 +484,10 @@ where
         }
 
         Ok(Some(
-            RemotingCommand::create_success_response_command_with_header(NotificationResponseHeader {
-                has_msg,
-                polling_full,
-            })
-            .set_opaque(request.opaque()),
+            self.context
+                .command_factory
+                .create_success_response_command_with_header(NotificationResponseHeader { has_msg, polling_full })
+                .set_opaque(request.opaque()),
         ))
     }
 }

@@ -18,6 +18,7 @@ use super::metadata::BrokerMetadata;
 use super::request_pipeline::BrokerRequestPipeline;
 use super::*;
 use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_store::BrokerReadStore;
 
 pub(super) struct BrokerComposition {
@@ -51,6 +52,11 @@ impl BrokerComposition {
 }
 
 impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
+    #[inline]
+    pub(crate) const fn command_factory(&self) -> RemotingCommandFactory {
+        self.command_factory
+    }
+
     pub(super) fn build_special_service_capability(&self) -> BrokerSpecialServiceCapability<MS> {
         BrokerSpecialServiceCapability::new(
             self.schedule_message_service(),
@@ -170,21 +176,24 @@ impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
 impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
     pub(super) fn build_pull_message_context(&self) -> Arc<PullMessageProcessorContext<MS>> {
         let escape_bridge = self.escape_bridge();
-        Arc::new(PullMessageProcessorContext::new(
-            self.pull_message_policy_state.clone(),
-            self.broker_outer_api().rpc_client().clone(),
-            self.consumer_manager().clone_shared_state(),
-            Arc::new(self.consumer_filter_manager().clone()),
-            self.subscription_group_manager().config_lookup(),
-            self.topic_config_manager_handle(),
-            self.topic_queue_mapping_manager_handle(),
-            &self.consumer_offset_manager,
-            self.broadcast_offset_manager().pull_capability(),
-            self.broker_stats_manager_handle(),
-            Arc::clone(&self.online_role_state),
-            PullMessageStoreCapability::new(&escape_bridge),
-            self.cold_data_cg_ctr_service_handle(),
-        ))
+        Arc::new(
+            PullMessageProcessorContext::new(
+                self.pull_message_policy_state.clone(),
+                self.broker_outer_api().rpc_client().clone(),
+                self.consumer_manager().clone_shared_state(),
+                Arc::new(self.consumer_filter_manager().clone()),
+                self.subscription_group_manager().config_lookup(),
+                self.topic_config_manager_handle(),
+                self.topic_queue_mapping_manager_handle(),
+                &self.consumer_offset_manager,
+                self.broadcast_offset_manager().pull_capability(),
+                self.broker_stats_manager_handle(),
+                Arc::clone(&self.online_role_state),
+                PullMessageStoreCapability::new(&escape_bridge),
+                self.cold_data_cg_ctr_service_handle(),
+            )
+            .with_command_factory(self.command_factory),
+        )
     }
 
     pub(super) fn build_pop_message_processor(&self) -> Arc<PopMessageProcessor<MS>> {
@@ -198,18 +207,21 @@ impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
             .clone()
             .map(QueueLockManager::new_with_service_context)
             .expect("BrokerRuntime always has an injected ChildServiceContext");
-        let context = Arc::new(PopMessageProcessorContext::new(
-            self.pop_policy_state.clone(),
-            Arc::clone(&topics),
-            subscriptions.clone(),
-            PopConsumerCapability::new(self.consumer_manager()),
-            Arc::new(self.consumer_filter_manager().clone()),
-            offsets.clone(),
-            PopOrderCapability::new(&order),
-            PopStoreCapability::new(&escape_bridge),
-            self.broker_stats_manager_handle(),
-            self.pop_inflight_message_counter().clone(),
-        ));
+        let context = Arc::new(
+            PopMessageProcessorContext::new(
+                self.pop_policy_state.clone(),
+                Arc::clone(&topics),
+                subscriptions.clone(),
+                PopConsumerCapability::new(self.consumer_manager()),
+                Arc::new(self.consumer_filter_manager().clone()),
+                offsets.clone(),
+                PopOrderCapability::new(&order),
+                PopStoreCapability::new(&escape_bridge),
+                self.broker_stats_manager_handle(),
+                self.pop_inflight_message_counter().clone(),
+            )
+            .with_command_factory(self.command_factory),
+        );
         let buffer_context = Arc::new(PopBufferMergeContext::new(
             self.pop_policy_state.clone(),
             Arc::clone(&topics),
@@ -246,6 +258,7 @@ impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
 
     pub(super) fn build_consumer_manage_processor(&self) -> ConsumerManageProcessor<MS> {
         ConsumerManageProcessor::new(ConsumerManageProcessorContext {
+            command_factory: self.command_factory,
             consumer_view: self.consumer_manager().assignment_view(),
             consumer_offset: self.consumer_offset_manager_handle().request_capability(),
             topic_queue_mapping_manager: self.topic_queue_mapping_manager_handle(),
@@ -342,6 +355,7 @@ impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
         let retry_topic_registration =
             self.build_transaction_topic_registration(TransactionMessageStore::new(&escape_bridge));
         ClientManageProcessor::new(ClientManageProcessorContext {
+            command_factory: self.command_factory,
             broker_config: self.broker_config_arc(),
             topic_config_manager: self.topic_config_manager_handle(),
             subscription_group_lookup: self.subscription_group_manager().config_lookup(),
@@ -1048,6 +1062,20 @@ impl BrokerRuntime {
         service_context: ChildServiceContext,
         telemetry_handle: TelemetryHandle,
     ) -> Self {
+        Self::new_with_validated_config_telemetry_and_factory(
+            validated_config,
+            service_context,
+            telemetry_handle,
+            application_remoting_command_factory(),
+        )
+    }
+
+    pub(crate) fn new_with_validated_config_telemetry_and_factory(
+        validated_config: Arc<ValidatedBrokerConfig>,
+        service_context: ChildServiceContext,
+        telemetry_handle: TelemetryHandle,
+        command_factory: RemotingCommandFactory,
+    ) -> Self {
         let broker_config = validated_config.broker_arc();
         let message_store_config = validated_config.store_arc();
         #[cfg(feature = "otel-metrics")]
@@ -1105,7 +1133,7 @@ impl BrokerRuntime {
             Arc::new(TransportClientConfig::default()),
             service_context.component("broker.outer-api"),
             transport_telemetry.clone(),
-            application_remoting_command_factory(),
+            command_factory,
         );
 
         let mut topic_queue_mapping_manager = TopicQueueMappingManager::new_with_service_context(
@@ -1136,6 +1164,7 @@ impl BrokerRuntime {
             broker_config.clone(),
             service_context.clone(),
             telemetry_handle.clone(),
+            command_factory,
         );
         #[cfg(feature = "rocksdb_store")]
         let rocksdb_config_managers =
@@ -1168,6 +1197,7 @@ impl BrokerRuntime {
             store_host,
             broker_addr: CheetahString::from(broker_address),
             config_state,
+            command_factory,
             resource_budget,
             send_message_policy_state,
             pull_message_policy_state,

@@ -30,6 +30,8 @@ use rocketmq_protocol::protocol::header::notify_consumer_ids_changed_request_hea
 use rocketmq_protocol::protocol::header::notify_unsubscribe_lite_request_header::NotifyUnsubscribeLiteRequestHeader;
 use rocketmq_protocol::protocol::header::reset_offset_request_header::ResetOffsetRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_store::BrokerAdminStore;
 use rocketmq_transport::api::v1::Channel;
 use tracing::error;
@@ -42,10 +44,26 @@ use crate::broker::broker_admin_runtime::BrokerAdminRuntime;
 /// Java uses V3_0_7_SNAPSHOT.ordinal()
 const MIN_CLIENT_VERSION: i32 = RocketMqVersion::V3_0_7_SNAPSHOT as i32;
 
-#[derive(Default, Clone)]
-pub struct Broker2Client;
+#[derive(Clone, Copy)]
+pub struct Broker2Client {
+    command_factory: RemotingCommandFactory,
+}
+
+impl Default for Broker2Client {
+    fn default() -> Self {
+        Self::new(application_remoting_command_factory())
+    }
+}
 
 impl Broker2Client {
+    pub const fn new(command_factory: RemotingCommandFactory) -> Self {
+        Self { command_factory }
+    }
+
+    pub(crate) const fn command_factory(&self) -> &RemotingCommandFactory {
+        &self.command_factory
+    }
+
     /// Synchronously call client and wait for response.
     ///
     /// # Arguments
@@ -76,7 +94,9 @@ impl Broker2Client {
         request_header: CheckTransactionStateRequestHeader,
         message_ext: MessageExt,
     ) {
-        let mut request = RemotingCommand::create_request_command(RequestCode::CheckTransactionState, request_header);
+        let mut request = self
+            .command_factory
+            .create_request_command(RequestCode::CheckTransactionState, request_header);
         let msg_id = message_ext.msg_id().clone();
         match MessageDecoder::encode(&message_ext, false) {
             Ok(body) => {
@@ -115,7 +135,9 @@ impl Broker2Client {
             consumer_group: consumer_group.clone(),
             rpc_request_header: None,
         };
-        let request = RemotingCommand::create_request_command(RequestCode::NotifyConsumerIdsChanged, request_header);
+        let request = self
+            .command_factory
+            .create_request_command(RequestCode::NotifyConsumerIdsChanged, request_header);
 
         // Java uses timeout=10ms for oneway
         if let Err(e) = channel.send_oneway(request, 10).await {
@@ -137,7 +159,9 @@ impl Broker2Client {
         let lite_topic = request_header.lite_topic.clone();
         let consumer_group = request_header.consumer_group.clone();
         let client_id = request_header.client_id.clone();
-        let request = RemotingCommand::create_request_command(RequestCode::NotifyUnsubscribeLite, request_header);
+        let request = self
+            .command_factory
+            .create_request_command(RequestCode::NotifyUnsubscribeLite, request_header);
 
         if let Err(e) = channel.send_oneway(request, 100).await {
             error!(
@@ -203,7 +227,7 @@ impl Broker2Client {
         is_force: bool,
         is_c: bool,
     ) -> RemotingCommand {
-        let mut response = RemotingCommand::create_java_default_error_response_command();
+        let mut response = self.command_factory.create_java_default_error_response_command();
 
         // Check if topic exists
         let topic_config = broker_inner.topic_config_manager().select_topic_config(topic);
@@ -289,8 +313,9 @@ impl Broker2Client {
             is_force,
             topic_request_header: None,
         };
-        let mut request =
-            RemotingCommand::create_request_command(RequestCode::ResetConsumerClientOffset, request_header);
+        let mut request = self
+            .command_factory
+            .create_request_command(RequestCode::ResetConsumerClientOffset, request_header);
 
         // Use different body format for C++ clients
         if is_c {
@@ -362,7 +387,9 @@ impl Broker2Client {
         }
 
         let res_body = ResetOffsetBody { offset_table };
-        RemotingCommand::create_success_response_command().set_body(res_body.encode())
+        self.command_factory
+            .create_success_response_command()
+            .set_body(res_body.encode())
     }
 
     /// Get consumer status from connected clients.
@@ -382,10 +409,12 @@ impl Broker2Client {
         group: &CheetahString,
         origin_client_id: Option<&CheetahString>,
     ) -> RemotingCommand {
-        let mut result = RemotingCommand::create_java_default_error_response_command();
+        let mut result = self.command_factory.create_java_default_error_response_command();
 
         let request_header = GetConsumerStatusRequestHeader::new(topic.clone(), group.clone());
-        let request = RemotingCommand::create_request_command(RequestCode::GetConsumerStatusFromClient, request_header);
+        let request = self
+            .command_factory
+            .create_request_command(RequestCode::GetConsumerStatusFromClient, request_header);
 
         let mut consumer_status_table: HashMap<CheetahString, HashMap<MessageQueue, i64>> = HashMap::new();
 
@@ -467,6 +496,8 @@ impl Broker2Client {
             message_queue_table: HashMap::new(),
             consumer_table: consumer_status_table,
         };
-        RemotingCommand::create_success_response_command().set_body(res_body.encode())
+        self.command_factory
+            .create_success_response_command()
+            .set_body(res_body.encode())
     }
 }

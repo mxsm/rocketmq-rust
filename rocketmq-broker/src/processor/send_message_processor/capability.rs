@@ -34,6 +34,8 @@ use rocketmq_observability::TelemetryHandle;
 use rocketmq_protocol::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
 use rocketmq_protocol::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigSerializeWrapper;
 use rocketmq_protocol::protocol::header::message_operation_header::TopicRequestHeaderTrait;
+use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
 use rocketmq_store::BrokerMasterAddressStore;
@@ -670,6 +672,7 @@ where
 
 /// Complete dependency set shared by send and reply request processors.
 pub(crate) struct SendMessageProcessorContext<MS: BrokerWriteStore> {
+    pub(crate) command_factory: RemotingCommandFactory,
     pub(crate) policy: SendMessagePolicyState,
     pub(crate) telemetry: TelemetryHandle,
     pub(crate) store: SendMessageStoreCapability,
@@ -684,6 +687,7 @@ pub(crate) struct SendMessageProcessorContext<MS: BrokerWriteStore> {
 impl<MS: BrokerWriteStore> Clone for SendMessageProcessorContext<MS> {
     fn clone(&self) -> Self {
         Self {
+            command_factory: self.command_factory,
             policy: self.policy.clone(),
             telemetry: self.telemetry.clone(),
             store: self.store.clone(),
@@ -714,6 +718,7 @@ impl<MS: BrokerWriteStore> SendMessageProcessorContext<MS> {
         producer_reply_channels: ProducerReplyChannelRegistry,
     ) -> Self {
         Self {
+            command_factory: application_remoting_command_factory(),
             policy,
             telemetry,
             store,
@@ -724,6 +729,11 @@ impl<MS: BrokerWriteStore> SendMessageProcessorContext<MS> {
             broker_metrics_manager,
             producer_reply_channels,
         }
+    }
+
+    pub(crate) fn with_command_factory(mut self, command_factory: RemotingCommandFactory) -> Self {
+        self.command_factory = command_factory;
+        self
     }
 }
 

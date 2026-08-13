@@ -33,6 +33,8 @@ use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
 use rocketmq_protocol::protocol::header::recall_message_request_header::RecallMessageRequestHeader;
 use rocketmq_protocol::protocol::header::recall_message_response_header::RecallMessageResponseHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::build_canonical_delete_key;
 use rocketmq_store::BrokerStatsManager;
@@ -43,7 +45,7 @@ use rocketmq_store::PutMessageStatus;
 use rocketmq_store_api::TimerRecallRequest;
 use rocketmq_store_api::TimerRecallStatus;
 use rocketmq_store_api::TimerStoreMode;
-use rocketmq_transport::api::v1::request_code_not_supported_with_remark_and_opaque;
+use rocketmq_transport::api::v1::request_code_not_supported_with_factory_remark_and_opaque;
 use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use rocketmq_transport::api::v1::RequestProcessor;
@@ -146,6 +148,7 @@ impl<MS: BrokerWriteStore> Clone for RecallMessageStoreCapability<MS> {
 }
 
 pub(crate) struct RecallMessageProcessorContext<MS: BrokerWriteStore> {
+    command_factory: RemotingCommandFactory,
     policy: RecallMessagePolicy,
     topic_config_manager: Arc<TopicConfigManager>,
     message_store: RecallMessageStoreCapability<MS>,
@@ -160,17 +163,24 @@ impl<MS: BrokerWriteStore> RecallMessageProcessorContext<MS> {
         broker_stats_manager: Arc<BrokerStatsManager>,
     ) -> Self {
         Self {
+            command_factory: application_remoting_command_factory(),
             policy,
             topic_config_manager,
             message_store,
             broker_stats_manager,
         }
     }
+
+    pub(crate) fn with_command_factory(mut self, command_factory: RemotingCommandFactory) -> Self {
+        self.command_factory = command_factory;
+        self
+    }
 }
 
 impl<MS: BrokerWriteStore> Clone for RecallMessageProcessorContext<MS> {
     fn clone(&self) -> Self {
         Self {
+            command_factory: self.command_factory,
             policy: self.policy.clone(),
             topic_config_manager: Arc::clone(&self.topic_config_manager),
             message_store: self.message_store.clone(),
@@ -220,7 +230,8 @@ where
                     "RecallMessageProcessor received unexpected request code: {:?}",
                     request_code
                 );
-                let response = request_code_not_supported_with_remark_and_opaque(
+                let response = request_code_not_supported_with_factory_remark_and_opaque(
+                    &self.context.command_factory,
                     request.code(),
                     format!(
                         "RecallMessageProcessor does not support request code {}",
@@ -254,8 +265,10 @@ where
         ctx: &ConnectionHandlerContext,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
-        let mut response =
-            RemotingCommand::create_success_response_command_with_header(RecallMessageResponseHeader::default());
+        let mut response = self
+            .context
+            .command_factory
+            .create_success_response_command_with_header(RecallMessageResponseHeader::default());
         response.set_opaque_mut(request.opaque());
 
         let region_id = self.context.policy.region_id.clone();

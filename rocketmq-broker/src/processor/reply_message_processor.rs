@@ -36,10 +36,12 @@ use rocketmq_store::BrokerWriteStore;
 use rocketmq_store::PutMessageResult;
 use rocketmq_store::PutMessageStatus;
 use rocketmq_store::StatsType;
-use rocketmq_transport::api::v1::request_code_not_supported_with_remark_and_opaque;
+use rocketmq_transport::api::v1::request_code_not_supported_with_factory_remark_and_opaque;
 use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use rocketmq_transport::api::v1::RequestProcessor;
+
+use crate::client::net::broker_to_client::Broker2Client;
 use tracing::info;
 use tracing::warn;
 
@@ -80,18 +82,21 @@ fn push_reply_call_failed_remark(sender_id: &str) -> String {
 ///
 /// ```text
 /// Producer (send request)
-///        ↓
-///  Broker (store request message → Consumer consumes)
-///        ↓
-///  Consumer (process & send reply message to Broker)
-///        ↓
-///  Broker → ReplyMessageProcessor.handle()
-///       ↓
-///  Broker  push reply message to original Producer ((Optional) Store)
-///        ↓
-///  Producer (receive reply in callback or future)
-///                                                      
-///                                              
+///        |
+///        v
+/// Broker (store request message -> Consumer consumes)
+///        |
+///        v
+/// Consumer (process and send reply message to Broker)
+///        |
+///        v
+/// Broker -> ReplyMessageProcessor.handle()
+///        |
+///        v
+/// Broker pushes reply message to original Producer (optional store)
+///        |
+///        v
+/// Producer (receive reply in callback or future)
 /// ```
 pub struct ReplyMessageProcessor<MS: BrokerWriteStore, TS> {
     inner: Arc<Inner<MS, TS>>,
@@ -152,7 +157,8 @@ where
                     "ReplyMessageProcessor received unknown request code: {:?}",
                     request_code
                 );
-                let response = request_code_not_supported_with_remark_and_opaque(
+                let response = request_code_not_supported_with_factory_remark_and_opaque(
+                    &self.inner.context.command_factory,
                     request.code(),
                     format!("ReplyMessageProcessor request code {} not supported", request.code()),
                     request.opaque(),
@@ -174,7 +180,7 @@ where
                 send_message_hook_vec: Arc::new(Vec::new()),
                 consume_message_hook_vec: Arc::new(Vec::new()),
                 transactional_message_service,
-                broker_to_client: Default::default(),
+                broker_to_client: Broker2Client::new(context.command_factory),
                 context,
             }),
         }
@@ -216,7 +222,12 @@ where
         send_message_context: &mut SendMessageContext,
         request_header: SendMessageRequestHeader,
     ) -> RemotingCommand {
-        let mut response = RemotingCommand::create_success_response_command().set_opaque(request.opaque());
+        let mut response = self
+            .inner
+            .context
+            .command_factory
+            .create_success_response_command()
+            .set_opaque(request.opaque());
 
         // Keep one coherent policy generation for the request admission decision.
         let (region_id, trace_on, start_timstamp, store_reply_message_enable) = {
@@ -496,15 +507,16 @@ where
 
         // Build reply message request header with properties (including PROPERTY_PUSH_REPLY_TIME)
         let reply_message_request_header = self.build_reply_request_header(channel, request_header, msg);
-        let mut command = RemotingCommand::create_request_command(
-            RequestCode::PushReplyMessageToClient,
-            reply_message_request_header,
-        );
+        let mut command = self
+            .inner
+            .context
+            .command_factory
+            .create_request_command(RequestCode::PushReplyMessageToClient, reply_message_request_header);
         if let Some(body) = msg.get_body().cloned() {
             command.set_body_mut_ref(body);
         }
 
-        let mut broker_to_client = self.inner.broker_to_client.clone();
+        let mut broker_to_client = self.inner.broker_to_client;
         match broker_to_client
             .call_client(&mut reply_channel, command, PUSH_REPLY_MESSAGE_TO_CLIENT_TIMEOUT_MILLIS)
             .await

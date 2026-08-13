@@ -35,6 +35,8 @@ use rocketmq_protocol::protocol::body::batch_ack_message_request_body::BatchAckM
 use rocketmq_protocol::protocol::header::ack_message_request_header::AckMessageRequestHeader;
 use rocketmq_protocol::protocol::header::extra_info_util::ExtraInfoUtil;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::common::time_utils::current_millis;
@@ -44,7 +46,7 @@ use rocketmq_store::BatchAckMsg;
 use rocketmq_store::BrokerReadWriteStore;
 use rocketmq_store::PutMessageResult;
 use rocketmq_store::PutMessageStatus;
-use rocketmq_transport::api::v1::request_code_not_supported_with_remark_and_opaque;
+use rocketmq_transport::api::v1::request_code_not_supported_with_factory_remark_and_opaque;
 use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use rocketmq_transport::api::v1::RequestProcessor;
@@ -225,6 +227,7 @@ impl<MS: BrokerReadWriteStore> AckMessagePopCapability<MS> {
 }
 
 pub(crate) struct AckMessageProcessorContext<MS: BrokerReadWriteStore> {
+    command_factory: RemotingCommandFactory,
     policy: AckMessagePolicy,
     topic_config_manager: Arc<TopicConfigManager>,
     consumer_offset: AckMessageOffsetCapability<MS>,
@@ -251,6 +254,7 @@ impl<MS: BrokerReadWriteStore> AckMessageProcessorContext<MS> {
         pop_revive_services: Vec<Arc<PopReviveService<MS>>>,
     ) -> Self {
         Self {
+            command_factory: application_remoting_command_factory(),
             policy,
             topic_config_manager,
             consumer_offset,
@@ -260,6 +264,11 @@ impl<MS: BrokerReadWriteStore> AckMessageProcessorContext<MS> {
             pop,
             pop_revive_services,
         }
+    }
+
+    pub(crate) fn with_command_factory(mut self, command_factory: RemotingCommandFactory) -> Self {
+        self.command_factory = command_factory;
+        self
     }
 }
 
@@ -299,7 +308,8 @@ where
             }
             _ => {
                 warn!("AckMessageProcessor received unknown request code: {:?}", request_code);
-                Ok(Some(request_code_not_supported_with_remark_and_opaque(
+                Ok(Some(request_code_not_supported_with_factory_remark_and_opaque(
+                    &self.context.command_factory,
                     request.code(),
                     format!("AckMessageProcessor request code {} not supported", request.code()),
                     request.opaque(),
@@ -333,10 +343,12 @@ where
                     request_code.to_i32(),
                     channel.remote_address()
                 );
-                Ok(Some(RemotingCommand::create_response_command_with_code_remark(
-                    ResponseCode::MessageIllegal,
-                    format!("AckMessageProcessor failed to process RequestCode: {request_code:?}",),
-                )))
+                Ok(Some(
+                    self.context.command_factory.create_response_command_with_code_remark(
+                        ResponseCode::MessageIllegal,
+                        format!("AckMessageProcessor failed to process RequestCode: {request_code:?}",),
+                    ),
+                ))
             }
         }
     }
@@ -391,14 +403,16 @@ where
                 channel.remote_address(),
                 FAQUrl::suggest_todo(FAQUrl::APPLY_TOPIC_URL)
             );
-            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
-                ResponseCode::TopicNotExist,
-                format!(
-                    "topic[{}] not exist, apply first please! {}",
-                    request_header.topic,
-                    FAQUrl::suggest_todo(FAQUrl::APPLY_TOPIC_URL)
+            return Ok(Some(
+                self.context.command_factory.create_response_command_with_code_remark(
+                    ResponseCode::TopicNotExist,
+                    format!(
+                        "topic[{}] not exist, apply first please! {}",
+                        request_header.topic,
+                        FAQUrl::suggest_todo(FAQUrl::APPLY_TOPIC_URL)
+                    ),
                 ),
-            )));
+            ));
         }
         let topic_config = topic_config.unwrap();
         if request_header.queue_id >= topic_config.read_queue_nums as i32 || request_header.queue_id < 0 {
@@ -411,20 +425,23 @@ where
             );
             warn!("{}", error_msg);
 
-            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
-                ResponseCode::MessageIllegal,
-                error_msg,
-            )));
+            return Ok(Some(
+                self.context
+                    .command_factory
+                    .create_response_command_with_code_remark(ResponseCode::MessageIllegal, error_msg),
+            ));
         }
         let Ok((min_offset, max_offset)) = self
             .context
             .message_store
             .queue_offsets(&request_header.topic, request_header.queue_id)
         else {
-            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
-                ResponseCode::ServiceNotAvailable,
-                "message store is not available",
-            )));
+            return Ok(Some(
+                self.context.command_factory.create_response_command_with_code_remark(
+                    ResponseCode::ServiceNotAvailable,
+                    "message store is not available",
+                ),
+            ));
         };
         if request_header.offset < min_offset || request_header.offset > max_offset {
             let error_msg = format!(
@@ -433,12 +450,13 @@ where
             );
             warn!("{}", error_msg);
 
-            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
-                ResponseCode::NoMessage,
-                error_msg,
-            )));
+            return Ok(Some(
+                self.context
+                    .command_factory
+                    .create_response_command_with_code_remark(ResponseCode::NoMessage, error_msg),
+            ));
         }
-        let mut response = RemotingCommand::create_success_response_command();
+        let mut response = self.context.command_factory.create_success_response_command();
         self.append_ack(Some(request_header), &mut response, None, &channel, None)
             .await?;
         Ok(Some(response))
@@ -452,17 +470,21 @@ where
         _broker_allow_suspend: bool,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         if request.get_body().is_none() {
-            return Ok(Some(RemotingCommand::create_response_command_with_code(
-                ResponseCode::NoMessage,
-            )));
+            return Ok(Some(
+                self.context
+                    .command_factory
+                    .create_response_command_with_code(ResponseCode::NoMessage),
+            ));
         }
         let req_body = BatchAckMessageRequestBody::decode(request.get_body().unwrap())?;
         if req_body.acks.is_empty() {
-            return Ok(Some(RemotingCommand::create_response_command_with_code(
-                ResponseCode::NoMessage,
-            )));
+            return Ok(Some(
+                self.context
+                    .command_factory
+                    .create_response_command_with_code(ResponseCode::NoMessage),
+            ));
         }
-        let mut response = RemotingCommand::create_success_response_command();
+        let mut response = self.context.command_factory.create_success_response_command();
         let broker_name = &req_body.broker_name;
         for ack in req_body.acks {
             self.append_ack(None, &mut response, Some(ack), &_channel, Some(broker_name))

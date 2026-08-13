@@ -34,6 +34,7 @@ use rocketmq_protocol::protocol::header::pull_message_response_header::PullMessa
 use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_protocol::protocol::request_source::RequestSource;
 use rocketmq_protocol::protocol::static_topic::logic_queue_mapping_item::LogicQueueMappingItem;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
@@ -48,7 +49,7 @@ use rocketmq_store::BrokerReadStore;
 use rocketmq_store::GetMessageResult;
 use rocketmq_store::GetMessageStatus;
 use rocketmq_store::MAX_PULL_MSG_SIZE;
-use rocketmq_transport::api::v1::request_code_not_supported_with_remark_and_opaque;
+use rocketmq_transport::api::v1::request_code_not_supported_with_factory_remark_and_opaque;
 use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use rocketmq_transport::api::v1::RejectRequestResponse;
@@ -136,7 +137,8 @@ where
             }
             _ => {
                 warn!("PullMessageProcessor received unknown request code: {:?}", request_code);
-                let response = request_code_not_supported_with_remark_and_opaque(
+                let response = request_code_not_supported_with_factory_remark_and_opaque(
+                    &self.context.command_factory,
                     request.code(),
                     format!("ClientManageProcessor request code {} not supported", request.code()),
                     request.opaque(),
@@ -151,7 +153,7 @@ where
         if !policy.slave_read_enable && policy.broker_role == BrokerRole::Slave {
             return (
                 true,
-                Some(RemotingCommand::create_response_command_with_code_remark(
+                Some(self.context.command_factory.create_response_command_with_code_remark(
                     ResponseCode::SlaveNotAvailable,
                     "the slave broker not allow to read",
                 )),
@@ -262,6 +264,7 @@ impl<'a> ValidatedStaticTopicMapping<'a> {
 }
 
 pub(super) fn static_topic_rewrite_error_response(
+    command_factory: &RemotingCommandFactory,
     error: StaticTopicRewriteError,
     mapping_context: &TopicQueueMappingContext,
 ) -> RemotingCommand {
@@ -271,7 +274,7 @@ pub(super) fn static_topic_rewrite_error_response(
         ?error,
         "rejecting invalid static topic request state"
     );
-    RemotingCommand::create_response_command_with_code_remark(error.response_code(), error.client_remark())
+    command_factory.create_response_command_with_code_remark(error.response_code(), error.client_remark())
 }
 
 impl<MS> PullMessageProcessor<MS>
@@ -327,6 +330,7 @@ where
         let mapping_detail = mapping_context.mapping_detail.as_ref()?;
         if !mapping_context.is_leader() {
             return Some(static_topic_rewrite_error_response(
+                self.context.command_factory(),
                 StaticTopicRewriteError::IncompleteMapping(StaticTopicMappingField::LeaderItem),
                 mapping_context,
             ));
@@ -339,6 +343,7 @@ where
             true,
         ) else {
             return Some(static_topic_rewrite_error_response(
+                self.context.command_factory(),
                 StaticTopicRewriteError::MappingItemMissing(StaticTopicMappingItem::RequestedOffset),
                 mapping_context,
             ));
@@ -368,6 +373,7 @@ where
         let mut sys_flag = request_header.sys_flag;
         let Some(topic_request) = request_header.topic_request.as_mut() else {
             return Some(static_topic_rewrite_error_response(
+                self.context.command_factory(),
                 StaticTopicRewriteError::IncompleteRequest(StaticTopicRequestField::TopicRequest),
                 mapping_context,
             ));
@@ -375,6 +381,7 @@ where
         topic_request.lo = Some(false);
         let Some(rpc_header) = topic_request.rpc.as_mut() else {
             return Some(static_topic_rewrite_error_response(
+                self.context.command_factory(),
                 StaticTopicRewriteError::IncompleteRequest(StaticTopicRequestField::RpcHeader),
                 mapping_context,
             ));
@@ -389,7 +396,7 @@ where
         let mut rpc_response = match rpc_response {
             Ok(value) => value,
             Err(err) => {
-                return Some(RemotingCommand::create_response_command_with_code_remark(
+                return Some(self.context.command_factory.create_response_command_with_code_remark(
                     ResponseCode::SystemError,
                     format!("invoke rpc failed: {err:?}"),
                 ));
@@ -398,16 +405,32 @@ where
         let response_code = ResponseCode::from(rpc_response.code);
         let Some(response_header) = rpc_response.get_header_mut::<PullMessageResponseHeader>() else {
             return Some(static_topic_rewrite_error_response(
+                self.context.command_factory(),
                 StaticTopicRewriteError::MissingResponseHeader,
                 mapping_context,
             ));
         };
-        match rewrite_response_for_static_topic(request_header, response_header, mapping_context, response_code) {
+        match rewrite_response_for_static_topic(
+            self.context.command_factory(),
+            request_header,
+            response_header,
+            mapping_context,
+            response_code,
+        ) {
             Ok(Some(response)) => return Some(response),
             Ok(None) => {}
-            Err(error) => return Some(static_topic_rewrite_error_response(error, mapping_context)),
+            Err(error) => {
+                return Some(static_topic_rewrite_error_response(
+                    self.context.command_factory(),
+                    error,
+                    mapping_context,
+                ));
+            }
         }
-        Some(RpcClientUtils::create_command_for_rpc_response(rpc_response))
+        Some(RpcClientUtils::create_command_for_rpc_response_with_factory(
+            self.context.command_factory(),
+            rpc_response,
+        ))
     }
 
     /// Gets subscription data when HAS_SUBSCRIPTION_FLAG is set.
@@ -614,6 +637,7 @@ where
 }
 
 pub(super) fn rewrite_response_for_static_topic(
+    command_factory: &RemotingCommandFactory,
     request_header: &PullMessageRequestHeader,
     response_header: &mut PullMessageResponseHeader,
     mapping_context: &mut TopicQueueMappingContext,
@@ -712,7 +736,7 @@ pub(super) fn rewrite_response_for_static_topic(
     response_header.offset_delta = Some(current_item.compute_offset_delta());
 
     if code != ResponseCode::Success {
-        Ok(Some(RemotingCommand::create_response_command_with_code_and_header(
+        Ok(Some(command_factory.create_response_command_with_code_and_header(
             response_code,
             response_header.clone(),
         )))
@@ -768,7 +792,10 @@ where
         broker_allow_suspend: bool,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let begin_time_mills = current_millis();
-        let mut response = RemotingCommand::create_java_default_error_response_command();
+        let mut response = self
+            .context
+            .command_factory
+            .create_java_default_error_response_command();
         response.set_opaque_mut(request.opaque());
         let mut request_header =
             request.decode_required_header_fast::<PullMessageRequestHeader>("decode pull-message request header")?;
@@ -1195,6 +1222,7 @@ mod tests {
     use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
     use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+    use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
     use rocketmq_protocol::protocol::request_source::RequestSource;
     use rocketmq_protocol::protocol::static_topic::logic_queue_mapping_item::LogicQueueMappingItem;
     use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
@@ -1373,6 +1401,7 @@ mod tests {
         let request_header = PullMessageRequestHeader::default();
         let mut response_header = PullMessageResponseHeader::default();
         let error = match rewrite_response_for_static_topic(
+            &application_remoting_command_factory(),
             &request_header,
             &mut response_header,
             &mut mapping_context,
@@ -1383,7 +1412,8 @@ mod tests {
         };
 
         assert_eq!(error, expected_error);
-        let response = static_topic_rewrite_error_response(error, &mapping_context);
+        let response =
+            static_topic_rewrite_error_response(&application_remoting_command_factory(), error, &mapping_context);
         assert_eq!(response.code(), expected_code as i32);
         assert_eq!(response.remark().map(|remark| remark.as_str()), Some(expected_remark));
         assert!(!response.remark().is_some_and(|remark| remark.contains("broker-a")));
@@ -1396,6 +1426,7 @@ mod tests {
         let mut mapping_context = TopicQueueMappingContext::default();
 
         let result = rewrite_response_for_static_topic(
+            &application_remoting_command_factory(),
             &request_header,
             &mut response_header,
             &mut mapping_context,
@@ -1501,6 +1532,7 @@ mod tests {
             };
 
             let mut response = match rewrite_response_for_static_topic(
+                &application_remoting_command_factory(),
                 &request_header,
                 &mut response_header,
                 &mut mapping_context,
@@ -1551,6 +1583,7 @@ mod tests {
         let mut response_header = PullMessageResponseHeader::default();
 
         let result = rewrite_response_for_static_topic(
+            &application_remoting_command_factory(),
             &request_header,
             &mut response_header,
             &mut mapping_context,

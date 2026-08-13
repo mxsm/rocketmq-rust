@@ -25,13 +25,15 @@ use rocketmq_protocol::protocol::header::query_message_request_header::QueryMess
 use rocketmq_protocol::protocol::header::query_message_response_header::QueryMessageResponseHeader;
 use rocketmq_protocol::protocol::header::view_message_request_header::ViewMessageRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_store::BrokerReadStore;
 use rocketmq_store::QueryMessageResult;
 use rocketmq_store::SelectMappedBufferResult;
 use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreErrorKind;
 use rocketmq_store_api::StoreOperation;
-use rocketmq_transport::api::v1::request_code_not_supported_with_remark_and_opaque;
+use rocketmq_transport::api::v1::request_code_not_supported_with_factory_remark_and_opaque;
 use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use rocketmq_transport::api::v1::RequestProcessor;
@@ -106,6 +108,7 @@ impl<MS: BrokerReadStore> Clone for QueryMessageStoreCapability<MS> {
 }
 
 pub struct QueryMessageProcessor<S: QueryMessageStore> {
+    command_factory: RemotingCommandFactory,
     default_query_max_num: i32,
     query_store: S,
 }
@@ -154,7 +157,8 @@ where
                     "QueryMessageProcessor received unknown request code: {:?}",
                     request_code
                 );
-                let response = request_code_not_supported_with_remark_and_opaque(
+                let response = request_code_not_supported_with_factory_remark_and_opaque(
+                    &self.command_factory,
                     request.code(),
                     format!("QueryMessageProcessor request code {} not supported", request.code()),
                     request.opaque(),
@@ -167,7 +171,20 @@ where
 
 impl<S: QueryMessageStore> QueryMessageProcessor<S> {
     pub fn new(default_query_max_num: usize, query_store: S) -> Self {
+        Self::new_with_factory(
+            default_query_max_num,
+            query_store,
+            application_remoting_command_factory(),
+        )
+    }
+
+    pub(crate) fn new_with_factory(
+        default_query_max_num: usize,
+        query_store: S,
+        command_factory: RemotingCommandFactory,
+    ) -> Self {
         Self {
+            command_factory,
             default_query_max_num: default_query_max_num as i32,
             query_store,
         }
@@ -177,6 +194,7 @@ impl<S: QueryMessageStore> QueryMessageProcessor<S> {
 impl<S: QueryMessageStore + Clone> Clone for QueryMessageProcessor<S> {
     fn clone(&self) -> Self {
         Self {
+            command_factory: self.command_factory,
             default_query_max_num: self.default_query_max_num,
             query_store: self.query_store.clone(),
         }
@@ -217,8 +235,9 @@ where
         _ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let mut response =
-            RemotingCommand::create_success_response_command_with_header(QueryMessageResponseHeader::default());
+        let mut response = self
+            .command_factory
+            .create_success_response_command_with_header(QueryMessageResponseHeader::default());
         let mut request_header = request.decode_command_custom_header::<QueryMessageRequestHeader>()?;
         response.set_opaque_mut(request.opaque());
         let Some(ext_fields) = request.ext_fields() else {
@@ -298,7 +317,7 @@ where
         _ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let mut response = RemotingCommand::create_success_response_command();
+        let mut response = self.command_factory.create_success_response_command();
         let request_header = request.decode_command_custom_header::<ViewMessageRequestHeader>()?;
 
         let select_mapped_buffer_result = match self.query_store.select_message_by_offset(request_header.offset) {
