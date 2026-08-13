@@ -86,6 +86,22 @@ pub(crate) struct ConsumerLagObservation {
     pub(crate) lag_messages: i64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ConsumerLagAdjustment {
+    pub(crate) pull_offset: i64,
+    pub(crate) inflight_messages: i64,
+}
+
+pub(crate) type ConsumerLagAdjustments = HashMap<CheetahString, HashMap<i32, ConsumerLagAdjustment>>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ConsumerLagTarget {
+    pub(crate) topic_group: CheetahString,
+    pub(crate) topic: CheetahString,
+    pub(crate) consumer_group: CheetahString,
+    pub(crate) queue_offsets: Vec<(i32, i64)>,
+}
+
 pub(crate) struct ConsumerOffsetManager<MS: BrokerReadStore> {
     broker_config: Arc<BrokerConfig>,
     message_store_config: Arc<MessageStoreConfig>,
@@ -519,12 +535,43 @@ where
         self.consumer_offset_wrapper.offset_table.read().len()
     }
 
-    pub(crate) fn consumer_lag_snapshot(&self) -> Vec<ConsumerLagObservation> {
+    pub(crate) fn consumer_lag_targets(&self) -> Vec<ConsumerLagTarget> {
+        self.consumer_lag_targets_with_limit(self.broker_config.metrics_cardinality_limit)
+    }
+
+    fn consumer_lag_targets_with_limit(&self, limit: usize) -> Vec<ConsumerLagTarget> {
+        let mut targets = self
+            .offset_table_snapshot()
+            .into_iter()
+            .filter_map(|(topic_group, offsets)| {
+                let (topic, consumer_group) = split_topic_group_key(&topic_group)?;
+                let mut queue_offsets = offsets.into_iter().collect::<Vec<_>>();
+                queue_offsets.sort_unstable_by_key(|(queue_id, _)| *queue_id);
+                Some(ConsumerLagTarget {
+                    topic_group: topic_group.clone(),
+                    topic: CheetahString::from_slice(topic),
+                    consumer_group: CheetahString::from_slice(consumer_group),
+                    queue_offsets,
+                })
+            })
+            .collect::<Vec<_>>();
+        targets.sort_unstable_by(|left, right| {
+            (&left.topic, &left.consumer_group).cmp(&(&right.topic, &right.consumer_group))
+        });
+        targets.truncate(limit);
+        targets
+    }
+
+    pub(crate) fn consumer_lag_snapshot_for_targets_with_adjustments(
+        &self,
+        targets: &[ConsumerLagTarget],
+        adjustments: &ConsumerLagAdjustments,
+    ) -> Vec<ConsumerLagObservation> {
         let Some(message_store) = self.message_store.provider() else {
             return Vec::new();
         };
 
-        self.consumer_lag_snapshot_with(self.broker_config.metrics_cardinality_limit, |topic, queue_id| {
+        self.consumer_lag_snapshot_for_targets_with(targets, adjustments, |topic, queue_id| {
             message_store.get_max_offset_from_local_store(topic, queue_id).ok()
         })
     }
@@ -533,42 +580,51 @@ where
     where
         F: FnMut(&CheetahString, i32) -> Option<i64>,
     {
-        let mut entries = self
-            .offset_table_snapshot()
-            .into_iter()
-            .filter_map(|(topic_group, offsets)| {
-                let (topic, group) = split_topic_group_key(&topic_group)?;
-                Some((topic.to_owned(), group.to_owned(), offsets))
-            })
-            .collect::<Vec<_>>();
-        entries.sort_unstable_by(|left, right| (&left.0, &left.1).cmp(&(&right.0, &right.1)));
+        self.consumer_lag_snapshot_for_targets_with(
+            &self.consumer_lag_targets_with_limit(limit),
+            &ConsumerLagAdjustments::new(),
+            &mut max_offset,
+        )
+    }
 
-        entries
-            .into_iter()
-            .take(limit)
-            .filter_map(|(topic, consumer_group, offsets)| {
-                if offsets.is_empty() {
+    fn consumer_lag_snapshot_for_targets_with<F>(
+        &self,
+        targets: &[ConsumerLagTarget],
+        adjustments: &ConsumerLagAdjustments,
+        mut max_offset: F,
+    ) -> Vec<ConsumerLagObservation>
+    where
+        F: FnMut(&CheetahString, i32) -> Option<i64>,
+    {
+        targets
+            .iter()
+            .filter_map(|target| {
+                if target.queue_offsets.is_empty() {
                     return None;
                 }
 
-                let topic_key = CheetahString::from_slice(&topic);
-                let mut queue_offsets = offsets.into_iter().collect::<Vec<_>>();
-                queue_offsets.sort_unstable_by_key(|(queue_id, _)| *queue_id);
                 let mut lag_messages = 0i64;
-                for (queue_id, consumer_offset) in queue_offsets {
-                    if consumer_offset < 0 {
+                for (queue_id, committed_offset) in &target.queue_offsets {
+                    let adjustment = adjustments
+                        .get(&target.topic_group)
+                        .and_then(|queue_adjustments| queue_adjustments.get(queue_id));
+                    let consumer_offset = adjustment.map_or(*committed_offset, |value| value.pull_offset);
+                    let inflight_messages = adjustment.map_or(0, |value| value.inflight_messages);
+                    if consumer_offset < 0 || inflight_messages < 0 {
                         return None;
                     }
-                    let queue_max_offset = max_offset(&topic_key, queue_id)?;
+                    let queue_max_offset = max_offset(&target.topic, *queue_id)?;
                     if queue_max_offset < 0 {
                         return None;
                     }
-                    lag_messages = lag_messages.saturating_add(queue_max_offset.saturating_sub(consumer_offset).max(0));
+                    lag_messages = lag_messages
+                        .saturating_add(queue_max_offset.saturating_sub(consumer_offset).max(0))
+                        .saturating_add(inflight_messages);
                 }
 
                 Some(ConsumerLagObservation {
-                    topic,
-                    consumer_group,
+                    topic: target.topic.to_string(),
+                    consumer_group: target.consumer_group.to_string(),
                     lag_messages,
                 })
             })
@@ -1225,6 +1281,40 @@ mod tests {
             (topic.as_str() != "topic-c" || queue_id == 0).then_some(10)
         });
         assert!(fail_closed.iter().all(|observation| observation.topic != "topic-c"));
+    }
+
+    #[test]
+    fn consumer_lag_snapshot_applies_pop_pull_offset_and_inflight_messages() {
+        let manager = new_manager();
+        manager.consumer_offset_wrapper.offset_table.write().insert(
+            CheetahString::from_static_str("topic-a@group-a"),
+            HashMap::from([(0, 10)]),
+        );
+        let adjustments = super::ConsumerLagAdjustments::from([(
+            CheetahString::from_static_str("topic-a@group-a"),
+            HashMap::from([(
+                0,
+                super::ConsumerLagAdjustment {
+                    pull_offset: 18,
+                    inflight_messages: 3,
+                },
+            )]),
+        )]);
+
+        let observations = manager.consumer_lag_snapshot_for_targets_with(
+            &manager.consumer_lag_targets_with_limit(1),
+            &adjustments,
+            |_topic, _queue_id| Some(20),
+        );
+
+        assert_eq!(
+            observations,
+            vec![super::ConsumerLagObservation {
+                topic: "topic-a".to_owned(),
+                consumer_group: "group-a".to_owned(),
+                lag_messages: 5,
+            }]
+        );
     }
 
     #[test]

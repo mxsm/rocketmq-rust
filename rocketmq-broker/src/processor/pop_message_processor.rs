@@ -83,8 +83,10 @@ use crate::long_polling::long_polling_service::pop_long_polling_service::Polling
 use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingRequestProcessor;
 use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingService;
 use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingServiceContext;
+use crate::long_polling::long_polling_service::pop_long_polling_service::PopWakeupCompletion;
 use crate::long_polling::polling_header::PollingHeader;
 use crate::long_polling::polling_result::PollingResult;
+use crate::offset::manager::consumer_offset_manager::ConsumerLagAdjustment;
 #[cfg(feature = "rocksdb_store")]
 use crate::pop::rocksdb_store::pop_rocksdb_path;
 #[cfg(feature = "rocksdb_store")]
@@ -1369,6 +1371,45 @@ where
     pub(crate) fn polling_count_provider(&self) -> Weak<dyn PollingCountProvider> {
         let provider: Arc<dyn PollingCountProvider> = self.pop_long_polling_service.clone();
         Arc::downgrade(&provider)
+    }
+
+    pub(crate) fn notify_message_arriving_before_lag(
+        &self,
+        topic: &CheetahString,
+        consumer_group: &CheetahString,
+    ) -> Option<PopWakeupCompletion> {
+        self.pop_long_polling_service
+            .notify_message_arriving_before_lag(topic, consumer_group)
+    }
+
+    pub(crate) async fn consumer_lag_adjustment(
+        &self,
+        topic: &CheetahString,
+        consumer_group: &CheetahString,
+        queue_id: i32,
+        committed_offset: i64,
+    ) -> Option<ConsumerLagAdjustment> {
+        if self.context.policy.snapshot().pop_consumer_kv_service_enable {
+            return None;
+        }
+
+        let buffered_offset = self
+            .pop_buffer_merge_service
+            .get_latest_offset_full(topic, consumer_group, queue_id)
+            .await;
+        let pull_offset = if buffered_offset >= 0 {
+            buffered_offset
+        } else {
+            committed_offset
+        };
+        Some(ConsumerLagAdjustment {
+            pull_offset,
+            inflight_messages: self.context.inflight.get_group_pop_in_flight_message_num(
+                topic,
+                consumer_group,
+                queue_id,
+            ),
+        })
     }
 
     pub fn notify_message_arriving(&self, topic: &CheetahString, queue_id: i32, cid: &CheetahString) {

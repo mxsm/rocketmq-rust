@@ -458,6 +458,10 @@ mod defaults {
         10_000
     }
 
+    pub fn enable_notify_before_pop_calculate_lag() -> bool {
+        true
+    }
+
     pub fn pop_ck_max_buffer_size() -> i64 {
         200_000
     }
@@ -1223,6 +1227,9 @@ pub struct BrokerConfig {
     #[serde(default = "defaults::pop_inflight_message_threshold")]
     pub pop_inflight_message_threshold: i64,
 
+    #[serde(default = "defaults::enable_notify_before_pop_calculate_lag")]
+    pub enable_notify_before_pop_calculate_lag: bool,
+
     #[serde(default = "defaults::pop_ck_max_buffer_size")]
     pub pop_ck_max_buffer_size: i64,
 
@@ -1575,6 +1582,7 @@ impl Default for BrokerConfig {
             pop_polling_size: 1024,
             enable_pop_message_threshold: false,
             pop_inflight_message_threshold: 10_000,
+            enable_notify_before_pop_calculate_lag: true,
             pop_ck_max_buffer_size: 200_000,
             pop_ck_offset_max_queue_size: 20_000,
             delay_offset_update_version_step: 200,
@@ -2112,6 +2120,10 @@ impl BrokerConfig {
             self.enable_pop_message_threshold.to_string().into(),
         );
         properties.insert(
+            "enableNotifyBeforePopCalculateLag".into(),
+            self.enable_notify_before_pop_calculate_lag.to_string().into(),
+        );
+        properties.insert(
             "validateSystemTopicWhenUpdateTopic".into(),
             self.validate_system_topic_when_update_topic.to_string().into(),
         );
@@ -2460,6 +2472,7 @@ mod tests {
         assert!(!config.pop_consumer_kv_service_init);
         assert!(!config.pop_consumer_kv_service_enable);
         assert!(!config.enable_pop_message_threshold);
+        assert!(config.enable_notify_before_pop_calculate_lag);
 
         let properties = config.get_properties();
         assert_eq!(
@@ -2481,6 +2494,12 @@ mod tests {
         assert_eq!(
             properties.get("enablePopMessageThreshold").map(|value| value.as_str()),
             Some("false")
+        );
+        assert_eq!(
+            properties
+                .get("enableNotifyBeforePopCalculateLag")
+                .map(|value| value.as_str()),
+            Some("true")
         );
     }
 
