@@ -26,10 +26,10 @@ use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::client_request_header::GetRouteInfoRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::common::time_utils;
-use rocketmq_transport::api::v1::command_from_error_with_remark;
 use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use rocketmq_transport::api::v1::RequestProcessor;
@@ -37,6 +37,7 @@ use tracing::debug;
 use tracing::warn;
 
 use crate::bootstrap::NameServerRuntimeHandle;
+use crate::processor::response_factory::NameServerResponseFactoryExt;
 use crate::processor::NAMESPACE_ORDER_TOPIC_CONFIG;
 use crate::route::response_cache::JsonEncoding;
 use crate::route::response_cache::RouteCacheKey;
@@ -56,6 +57,7 @@ thread_local! {
 /// Client request processor for handling route info queries
 pub struct ClientRequestProcessor {
     name_server_runtime_inner: NameServerRuntimeHandle,
+    command_factory: RemotingCommandFactory,
     need_check_namesrv_ready: AtomicBool,
     startup_time_millis: u64,
 }
@@ -90,10 +92,12 @@ impl ClientRequestProcessor {
     }
 
     pub(crate) fn new(name_server_runtime_inner: NameServerRuntimeHandle) -> Self {
+        let command_factory = name_server_runtime_inner.remoting_command_factory();
         Self {
             need_check_namesrv_ready: AtomicBool::new(true),
             startup_time_millis: time_utils::current_millis(),
             name_server_runtime_inner,
+            command_factory,
         }
     }
 
@@ -124,7 +128,10 @@ impl ClientRequestProcessor {
                 warn!("name server not ready. request code {}", request.code());
                 let error = rocketmq_error::RocketMQError::not_initialized("name server not ready");
                 route_span.record("result", "not_ready");
-                return Ok(Some(command_from_error_with_remark(&error, "name server not ready")));
+                return Ok(Some(
+                    self.command_factory
+                        .command_from_error_with_remark(&error, "name server not ready"),
+                ));
             }
         }
 
@@ -141,13 +148,13 @@ impl ClientRequestProcessor {
             ) => {
                 route_span.record("result", "not_found");
                 return Ok(Some(
-                    RemotingCommand::create_response_command_with_code(ResponseCode::TopicNotExist).set_remark(
-                        format!(
+                    self.command_factory
+                        .create_response_command_with_code(ResponseCode::TopicNotExist)
+                        .set_remark(format!(
                             "No topic route info in name server for the topic: {}{}",
                             request_header.topic,
                             FAQUrl::suggest_todo(FAQUrl::APPLY_TOPIC_URL)
-                        ),
-                    ),
+                        )),
                 ));
             }
             Err(error) => {
@@ -260,7 +267,9 @@ impl ClientRequestProcessor {
         metrics.record_route_response_bytes(content.len());
         route_span.record("result", "success");
         Ok(Some(
-            RemotingCommand::create_response_command_with_code(ResponseCode::Success).set_body(content),
+            self.command_factory
+                .create_response_command_with_code(ResponseCode::Success)
+                .set_body(content),
         ))
     }
 }

@@ -43,6 +43,8 @@ use rocketmq_error::UnifiedServiceError;
 use rocketmq_observability::metrics::namesrv::NameServerMetrics;
 use rocketmq_observability::TelemetryHandle;
 use rocketmq_protocol::code::request_code::RequestCode;
+use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_runtime::wait_for_signal;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::MetadataDeadline;
@@ -123,6 +125,7 @@ pub struct Builder {
     cluster_test_route_lookup: Option<Arc<dyn ClusterTestRouteLookup>>,
     transport_security: Option<Arc<TransportSecurity>>,
     transport_principal: Option<Principal>,
+    command_factory: RemotingCommandFactory,
     telemetry: TelemetryHandle,
     service_context: ChildServiceContext,
 }
@@ -1020,6 +1023,7 @@ impl NameServerRuntime {
         let mut name_server_request_processor = NameServerRequestProcessor::new_with_in_flight_tracker(
             self.inner.in_flight_request_tracker(),
             self.inner.namesrv_metrics(),
+            self.inner.remoting_command_factory(),
         )
         .with_runtime_handle(runtime_handle)
         .with_workload_admission(Arc::clone(&self.inner.workload_admission))
@@ -1067,6 +1071,7 @@ impl Builder {
             cluster_test_route_lookup: None,
             transport_security: None,
             transport_principal: None,
+            command_factory: application_remoting_command_factory(),
             telemetry,
             service_context,
         }
@@ -1075,6 +1080,13 @@ impl Builder {
     #[inline]
     pub fn set_name_server_config(mut self, name_server_config: NamesrvConfig) -> Self {
         self.name_server_config = Some(name_server_config);
+        self
+    }
+
+    /// Overrides the remoting command defaults owned by this NameServer instance.
+    #[inline]
+    pub fn set_remoting_command_factory(mut self, command_factory: RemotingCommandFactory) -> Self {
+        self.command_factory = command_factory;
         self
     }
 
@@ -1167,6 +1179,7 @@ impl Builder {
                     service_context.component("namesrv.cluster-test-route-lookup"),
                     transport_telemetry.clone(),
                     &name_server_config,
+                    self.command_factory,
                 )) as Arc<dyn ClusterTestRouteLookup>)
             })
         } else {
@@ -1272,6 +1285,7 @@ impl Builder {
                 transport_telemetry,
                 transport_security,
                 transport_principal,
+                command_factory: self.command_factory,
             }
         });
 
@@ -1316,6 +1330,7 @@ pub(crate) struct NameServerRuntimeInner {
     transport_telemetry: TransportTelemetry,
     transport_security: Option<Arc<TransportSecurity>>,
     transport_principal: Option<Principal>,
+    command_factory: RemotingCommandFactory,
     cluster_test_route_lookup: Option<Arc<dyn ClusterTestRouteLookup>>,
     service_context: Option<ChildServiceContext>,
     task_group: OnceLock<TaskGroup>,
@@ -1396,6 +1411,10 @@ impl NameServerRuntimeHandle {
         self.runtime().namesrv_metrics()
     }
 
+    pub(crate) fn remoting_command_factory(&self) -> RemotingCommandFactory {
+        self.runtime().remoting_command_factory()
+    }
+
     pub(crate) fn cluster_test_route_lookup(&self) -> Option<Arc<dyn ClusterTestRouteLookup>> {
         self.runtime().cluster_test_route_lookup()
     }
@@ -1448,6 +1467,10 @@ impl NameServerRuntimeInner {
 
     pub(crate) fn namesrv_metrics(&self) -> NameServerMetrics {
         self.namesrv_metrics.clone()
+    }
+
+    pub(crate) fn remoting_command_factory(&self) -> RemotingCommandFactory {
+        self.command_factory
     }
 
     pub(crate) fn route_response_cache(&self) -> Arc<RouteResponseCache> {
@@ -4275,6 +4298,124 @@ mod tests {
         assert_eq!(
             properties.get("tls.client.authServer").map(|value| value.as_str()),
             Some("true")
+        );
+    }
+
+    #[tokio::test]
+    async fn default_processor_response_keeps_builder_factory_defaults() {
+        let factory = rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory::new(
+            rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandDefaults::new(
+                656,
+                rocketmq_protocol::protocol::SerializeType::ROCKETMQ,
+            ),
+        );
+        let bootstrap = Builder::new(test_service_context(), TelemetryHandle::noop())
+            .set_remoting_command_factory(factory)
+            .build();
+        let harness = LocalRequestHarness::new(test_task_group("namesrv-factory-local-harness"))
+            .await
+            .expect("local harness should start");
+        let mut request = RemotingCommand::create_remoting_command(RequestCode::GetNamesrvConfig);
+
+        let response = process_with_default_processor(&bootstrap, &harness, &mut request).await;
+
+        assert_eq!(response.version(), 656);
+        assert_eq!(
+            response.serialize_type(),
+            rocketmq_protocol::protocol::SerializeType::ROCKETMQ
+        );
+    }
+
+    #[tokio::test]
+    async fn client_processor_response_keeps_builder_factory_defaults() {
+        let factory = rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory::new(
+            rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandDefaults::new(
+                660,
+                rocketmq_protocol::protocol::SerializeType::ROCKETMQ,
+            ),
+        );
+        let bootstrap = Builder::new(test_service_context(), TelemetryHandle::noop())
+            .set_remoting_command_factory(factory)
+            .build();
+        let harness = LocalRequestHarness::new(test_task_group("namesrv-client-factory-local-harness"))
+            .await
+            .expect("local harness should start");
+        let mut request = RemotingCommand::create_request_command(
+            RequestCode::GetRouteinfoByTopic,
+            GetRouteInfoRequestHeader::new(CheetahString::from("missing-factory-topic"), Some(true)),
+        );
+        request.make_custom_header_to_net();
+
+        let response = process_with_client_processor(&bootstrap, &harness, &mut request).await;
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::TopicNotExist);
+        assert_eq!(response.version(), 660);
+        assert_eq!(
+            response.serialize_type(),
+            rocketmq_protocol::protocol::SerializeType::ROCKETMQ
+        );
+    }
+
+    #[tokio::test]
+    async fn request_processor_response_keeps_builder_factory_defaults() {
+        let factory = rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory::new(
+            rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandDefaults::new(
+                661,
+                rocketmq_protocol::protocol::SerializeType::ROCKETMQ,
+            ),
+        );
+        let bootstrap = Builder::new(test_service_context(), TelemetryHandle::noop())
+            .set_remoting_command_factory(factory)
+            .build();
+        let harness = LocalRequestHarness::new(test_task_group("namesrv-wrapper-factory-local-harness"))
+            .await
+            .expect("local harness should start");
+        let mut request = RemotingCommand::create_remoting_command(999_999);
+
+        let response = process_with_name_server_processor(&bootstrap, &harness, &mut request).await;
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::NoPermission);
+        assert_eq!(response.version(), 661);
+        assert_eq!(
+            response.serialize_type(),
+            rocketmq_protocol::protocol::SerializeType::ROCKETMQ
+        );
+    }
+
+    #[tokio::test]
+    async fn independent_nameserver_owners_keep_distinct_factory_defaults() {
+        use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandDefaults;
+        use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
+        use rocketmq_protocol::protocol::SerializeType;
+
+        let json_owner = Builder::new(test_service_context(), TelemetryHandle::noop())
+            .set_remoting_command_factory(RemotingCommandFactory::new(RemotingCommandDefaults::new(
+                662,
+                SerializeType::JSON,
+            )))
+            .build();
+        let rocketmq_owner = Builder::new(test_service_context(), TelemetryHandle::noop())
+            .set_remoting_command_factory(RemotingCommandFactory::new(RemotingCommandDefaults::new(
+                663,
+                SerializeType::ROCKETMQ,
+            )))
+            .build();
+        let harness = LocalRequestHarness::new(test_task_group("namesrv-owner-isolation-local-harness"))
+            .await
+            .expect("local harness should start");
+        let mut json_request = RemotingCommand::create_remoting_command(RequestCode::GetNamesrvConfig);
+        let mut rocketmq_request = RemotingCommand::create_remoting_command(RequestCode::GetNamesrvConfig);
+
+        let json_response = process_with_default_processor(&json_owner, &harness, &mut json_request).await;
+        let rocketmq_response = process_with_default_processor(&rocketmq_owner, &harness, &mut rocketmq_request).await;
+
+        assert_eq!(
+            (json_response.version(), json_response.serialize_type()),
+            (662, SerializeType::JSON)
+        );
+        assert_eq!(
+            (rocketmq_response.version(), rocketmq_response.serialize_type()),
+            (663, SerializeType::ROCKETMQ)
         );
     }
 
