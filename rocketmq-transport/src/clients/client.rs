@@ -197,6 +197,7 @@ fn connect<PR>(
     _notify: broadcast::Receiver<()>,
     _send_notify: broadcast::Receiver<()>,
     tls_config: TlsConfig,
+    frame_limits: FrameLimits,
     task_group: TaskGroup,
     operation: OperationContext,
     process_budget: ResourceBudget,
@@ -213,7 +214,7 @@ where
                 crate::client::connect_with_config_and_telemetry(
                     address.as_str(),
                     &tls_config,
-                    FrameLimits::legacy_compatibility(),
+                    frame_limits,
                     deadline,
                     telemetry,
                 )
@@ -223,7 +224,7 @@ where
                 crate::client::connect_target_with_config_options_and_telemetry(
                     &target,
                     &tls_config,
-                    FrameLimits::legacy_compatibility(),
+                    frame_limits,
                     crate::config::SocketOptions::default(),
                     deadline,
                     telemetry,
@@ -310,6 +311,7 @@ where
             cmd_handler,
             tx,
             tls_config,
+            FrameLimits::java_compatibility(),
             deadline,
             telemetry,
         )
@@ -322,6 +324,7 @@ where
         cmd_handler: Arc<RemotingGeneralHandler<PR>>,
         tx: Option<&tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
         tls_config: TlsConfig,
+        frame_limits: FrameLimits,
         deadline: RequestDeadline,
         telemetry: TransportTelemetry,
     ) -> RocketMQResult<TransportSession<PR>> {
@@ -331,6 +334,7 @@ where
             cmd_handler,
             tx,
             tls_config,
+            frame_limits,
             task_group,
             operation,
             context.process_budget(),
@@ -347,6 +351,7 @@ where
         cmd_handler: Arc<RemotingGeneralHandler<PR>>,
         tx: Option<&tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
         tls_config: TlsConfig,
+        frame_limits: FrameLimits,
         task_group: TaskGroup,
         operation: OperationContext,
         process_budget: ResourceBudget,
@@ -368,6 +373,7 @@ where
             receiver,
             send_receiver,
             tls_config,
+            frame_limits,
             task_group,
             operation,
             process_budget,

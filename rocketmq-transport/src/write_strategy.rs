@@ -116,6 +116,10 @@ pub(crate) enum OutboundPayload {
         frames: Vec<EncodedFrame>,
         encoded_len: usize,
     },
+    FrameSegments {
+        segments: Vec<Bytes>,
+        encoded_len: usize,
+    },
     Contiguous(Bytes),
 }
 
@@ -134,6 +138,7 @@ impl OutboundPayload {
             Self::Frame(frame) => frame.encoded_len(),
             Self::FileFrame { head, .. } => head.encoded_len(),
             Self::Batch { encoded_len, .. } => *encoded_len,
+            Self::FrameSegments { encoded_len, .. } => *encoded_len,
             Self::Contiguous(bytes) => bytes.len(),
         }
     }
@@ -220,24 +225,8 @@ where
     ///
     /// # Errors
     ///
-    /// Returns `InvalidInput` when the TLS coalescing bound is zero.
+    /// This constructor performs no I/O.
     pub fn new(io: W, mode: FrameWriteMode) -> io::Result<Self> {
-        if matches!(
-            mode,
-            FrameWriteMode::TlsCoalesced {
-                max_plaintext_frame_bytes: 0
-            } | FrameWriteMode::TlsVectored {
-                max_plaintext_frame_bytes: 0
-            } | FrameWriteMode::TlsAuto {
-                max_plaintext_frame_bytes: 0,
-                ..
-            }
-        ) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "TLS writing requires a non-zero frame-byte bound",
-            ));
-        }
         Ok(Self {
             io,
             mode,
@@ -688,6 +677,13 @@ fn validate_tls_payloads(payloads: &[&OutboundPayload], max_plaintext_frame_byte
                     validate_tls_frame(frame, max_plaintext_frame_bytes)?;
                 }
             }
+            OutboundPayload::FrameSegments { encoded_len, .. } if *encoded_len > max_plaintext_frame_bytes => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "segmented frame exceeds TLS plaintext bound",
+                ));
+            }
+            OutboundPayload::FrameSegments { .. } => {}
             OutboundPayload::Contiguous(bytes) if bytes.len() > max_plaintext_frame_bytes => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
@@ -730,6 +726,10 @@ fn payload_segments<'a>(payloads: &'a [&'a OutboundPayload]) -> io::Result<Vec<&
                     segments.extend(frame.segments());
                 }
             }
+            OutboundPayload::FrameSegments {
+                segments: frame_segments,
+                ..
+            } => segments.extend(frame_segments.iter().map(Bytes::as_ref)),
             OutboundPayload::Contiguous(bytes) => segments.push(bytes.as_ref()),
         }
     }
@@ -757,6 +757,13 @@ where
                 write_contiguous(io, buffer.as_ref()).await?;
             }
             Ok(())
+        }
+        OutboundPayload::FrameSegments { segments, .. } => {
+            buffer.clear();
+            for segment in segments {
+                buffer.extend_from_slice(segment);
+            }
+            write_contiguous(io, buffer.as_ref()).await
         }
         OutboundPayload::Contiguous(bytes) => write_contiguous(io, bytes).await,
     }

@@ -51,8 +51,6 @@ use crate::write_strategy::OutboundPayload;
 use crate::write_strategy::QueuedWrite;
 use crate::write_strategy::QueuedWriteProgress;
 use crate::writer_runtime::WriterLanes;
-use rocketmq_protocol::protocol::encoded_frame::EncodedFrame;
-use rocketmq_protocol::protocol::encoded_frame::EncodedFrameHead;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::ResourcePermit;
@@ -414,6 +412,9 @@ pub struct Connection {
     /// Direct socket writer or a capability to the canonical session writer actor.
     outbound: ConnectionWriter,
 
+    /// One endpoint-owned profile shared by inbound decoding and every outbound command path.
+    limits: FrameLimits,
+
     // === State Management (Tokio Watch Channel) ===
     /// Broadcast channel for connection state changes
     ///
@@ -534,7 +535,7 @@ impl Connection {
     where
         S: ConnectionTransport + 'static,
     {
-        let max_plaintext_frame_bytes = limits.max_frame_bytes.saturating_add(4);
+        let max_plaintext_frame_bytes = limits.max_frame_bytes;
         Self::new_with_stream_limits_and_write_mode(
             stream,
             limits,
@@ -572,16 +573,17 @@ impl Connection {
         let inbound = FramedRead::with_capacity(
             read_half,
             RemotingCommandCodec::with_limits(limits),
-            limits.initial_read_bytes.max(4),
+            limits.safe_initial_read_bytes(),
         );
         let outbound = FrameWriter::new(write_half, write_mode)
-            .unwrap_or_else(|_| unreachable!("connection frame limits always produce a non-zero writer bound"));
+            .expect("constructing a frame writer does not perform fallible I/O");
         // Initialize watch channel with Healthy state
         let (state_tx, state_rx) = watch::channel(ConnectionState::Healthy);
 
         Self {
             inbound: Some(inbound),
             outbound: ConnectionWriter::Direct(outbound),
+            limits,
             state_tx,
             state_rx,
             connection_id: CheetahString::from_string(Uuid::new_v4().to_string()),
@@ -617,6 +619,7 @@ impl Connection {
         state_tx: watch::Sender<ConnectionState>,
         state_rx: watch::Receiver<ConnectionState>,
         connection_id: ConnectionId,
+        limits: FrameLimits,
         response_class: Option<AdmissionClass>,
         lifecycle: Arc<SessionLifecycle>,
         telemetry: TransportTelemetry,
@@ -630,6 +633,7 @@ impl Connection {
                 response_class,
                 lifecycle,
             }),
+            limits,
             state_tx,
             state_rx,
             connection_id,
@@ -657,6 +661,12 @@ impl Connection {
             .unwrap_or_else(|| unreachable!("session runtime requires an owned transport reader"))
             .map_decoder(|decoder| SessionCommandDecoder::new(decoder, admission));
         (writer, reader)
+    }
+
+    /// Returns the immutable frame policy shared by this connection's reader and writer.
+    #[inline]
+    pub const fn frame_limits(&self) -> FrameLimits {
+        self.limits
     }
 
     pub(crate) fn telemetry(&self) -> TransportTelemetry {
@@ -891,7 +901,7 @@ impl Connection {
         let class = self
             .response_class()
             .unwrap_or_else(|| AdmissionClass::for_request_code(command.code()));
-        let frame = EncodedFrame::from_command(command)?;
+        let frame = self.limits.encode_command(command)?;
         self.send_payload(
             OutboundPayload::Frame(frame),
             class,
@@ -922,7 +932,7 @@ impl Connection {
         let class = self
             .response_class()
             .unwrap_or_else(|| AdmissionClass::for_request_code(command.code()));
-        let frame = EncodedFrame::from_command(command)?;
+        let frame = self.limits.encode_command(command)?;
         deadline.ensure_before_send(target.clone())?;
 
         self.send_payload(OutboundPayload::Frame(frame), class, None, Some(deadline), target)
@@ -986,7 +996,7 @@ impl Connection {
         let body_len = usize::try_from(body.len()).map_err(|_| {
             rocketmq_error::RocketMQError::illegal_argument("file region sequence length exceeds this platform's usize")
         })?;
-        let head = EncodedFrameHead::from_command_and_body_len(command_without_body, body_len)?;
+        let head = self.limits.encode_file_frame_head(command_without_body, body_len)?;
         if let Some(deadline) = deadline {
             deadline.ensure_before_send(target.clone())?;
         }
@@ -1013,7 +1023,7 @@ impl Connection {
         let class = self
             .response_class()
             .unwrap_or_else(|| AdmissionClass::for_request_code(command.code()));
-        let frame = EncodedFrame::from_command(command)?;
+        let frame = self.limits.encode_command(command)?;
         deadline.ensure_before_send(target.clone())?;
 
         self.send_payload(
@@ -1050,8 +1060,8 @@ impl Connection {
             .response_class()
             .unwrap_or_else(|| AdmissionClass::for_request_code(command.code()));
         let owned = command.clone();
+        let frame = self.limits.encode_command(owned)?;
         let _ = command.take_body();
-        let frame = EncodedFrame::from_command(owned)?;
         self.send_payload(
             OutboundPayload::Frame(frame),
             class,
@@ -1088,9 +1098,10 @@ impl Connection {
         if commands.is_empty() {
             return Ok(());
         }
+        let limits = self.limits;
         let frames = commands
             .into_iter()
-            .map(EncodedFrame::from_command)
+            .map(|command| limits.encode_command(command))
             .collect::<rocketmq_error::RocketMQResult<Vec<_>>>()?;
         let payload = OutboundPayload::batch(frames)?;
         self.send_payload(
@@ -1103,10 +1114,10 @@ impl Connection {
         .await
     }
 
-    /// Sends raw `Bytes` directly to the peer (zero-copy).
+    /// Sends one complete pre-encoded remoting frame directly to the peer (zero-copy).
     ///
-    /// Bypasses command encoding and sends pre-serialized bytes directly.
-    /// Use for forwarding or when bytes are already encoded.
+    /// Bypasses command encoding but validates the serialized prefix, header, body, and complete
+    /// wire length against the connection-owned profile before writing.
     /// **Automatically marks connection as Degraded on I/O errors.**
     ///
     /// # Arguments
@@ -1123,6 +1134,7 @@ impl Connection {
     /// This is the most efficient send method as it avoids intermediate buffering
     /// and serialization overhead.
     pub async fn send_bytes(&mut self, bytes: Bytes) -> rocketmq_error::RocketMQResult<()> {
+        self.limits.validate_frame_segments(std::slice::from_ref(&bytes))?;
         self.send_payload(
             OutboundPayload::Contiguous(bytes),
             AdmissionClass::Data,
@@ -1156,9 +1168,32 @@ impl Connection {
     /// ```
     pub async fn send_slice(&mut self, slice: &'static [u8]) -> rocketmq_error::RocketMQResult<()> {
         let bytes = Bytes::from_static(slice);
+        self.limits.validate_raw_payload(bytes.len())?;
         self.send_payload(
             OutboundPayload::Contiguous(bytes),
             AdmissionClass::Control,
+            None,
+            None,
+            "transport-session-writer".to_string(),
+        )
+        .await
+    }
+
+    /// Sends one already encoded frame as immutable ordered segments.
+    ///
+    /// The complete sequence is validated against the connection-owned frame, header, and body
+    /// limits before it enters the writer queue, preserving zero-copy plaintext output without
+    /// allowing multipart writes to bypass the endpoint policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed serialization error before socket progress when the prefix, aggregate
+    /// length, header length, body length, or endpoint profile is invalid.
+    pub async fn send_frame_segments(&mut self, segments: Vec<Bytes>) -> rocketmq_error::RocketMQResult<()> {
+        let encoded_len = self.limits.validate_frame_segments(&segments)?;
+        self.send_payload(
+            OutboundPayload::FrameSegments { segments, encoded_len },
+            AdmissionClass::Data,
             None,
             None,
             "transport-session-writer".to_string(),

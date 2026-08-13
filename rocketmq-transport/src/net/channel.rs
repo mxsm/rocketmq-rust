@@ -281,6 +281,11 @@ impl Channel {
         self.inner.send_bytes(bytes).await
     }
 
+    /// Sends one pre-encoded frame as an atomically validated immutable segment sequence.
+    pub async fn send_frame_segments(&self, segments: Vec<Bytes>) -> rocketmq_error::RocketMQResult<()> {
+        self.inner.send_frame_segments(segments).await
+    }
+
     /// Sends a request and waits for its correlated response.
     pub async fn send_wait_response(
         &self,
@@ -856,6 +861,17 @@ impl ChannelInner {
         match &self.connection {
             ChannelIo::Network(connection) => connection.lock().await.send_bytes(bytes).await,
             ChannelIo::Local(response) => response.send_bytes(bytes).await.map_err(response_sink_error),
+        }
+    }
+
+    /// Sends one pre-encoded frame without allowing multipart output to bypass endpoint limits.
+    pub async fn send_frame_segments(&self, segments: Vec<Bytes>) -> rocketmq_error::RocketMQResult<()> {
+        match &self.connection {
+            ChannelIo::Network(connection) => connection.lock().await.send_frame_segments(segments).await,
+            ChannelIo::Local(response) => response
+                .send_frame_segments(segments)
+                .await
+                .map_err(response_sink_error),
         }
     }
 

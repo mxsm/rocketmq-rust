@@ -79,7 +79,7 @@ impl LocalResponseSink {
             return Err(ResponseSinkError::AlreadyCompleted);
         }
         state.encoded.extend_from_slice(&bytes);
-        let decoded = RemotingCommandCodec::with_limits(FrameLimits::legacy_compatibility())
+        let decoded = RemotingCommandCodec::with_limits(FrameLimits::java_compatibility())
             .decode(&mut state.encoded)
             .map_err(|error| ResponseSinkError::Decode(error.to_string()))?;
         let Some(command) = decoded else {
@@ -157,6 +157,23 @@ impl ResponseSink {
                 .await
                 .map_err(|error| ResponseSinkError::Transport(error.to_string())),
             Self::Local(sink) => sink.send_bytes(bytes),
+        }
+    }
+
+    /// Delivers one pre-encoded response as a validated immutable segment sequence.
+    pub async fn send_frame_segments(&self, segments: Vec<Bytes>) -> Result<(), ResponseSinkError> {
+        match self {
+            Self::Network(session) => session
+                .connection()
+                .send_frame_segments(segments)
+                .await
+                .map_err(|error| ResponseSinkError::Transport(error.to_string())),
+            Self::Local(sink) => {
+                for segment in segments {
+                    sink.send_bytes(segment)?;
+                }
+                Ok(())
+            }
         }
     }
 }

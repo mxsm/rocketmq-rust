@@ -58,6 +58,7 @@ use crate::clients::reconnect::CircuitAdmission;
 use crate::clients::reconnect::CircuitBreaker;
 use crate::clients::reconnect::CircuitState;
 use crate::clients::TransportSession;
+use crate::codec::remoting_command_codec::FrameLimits;
 use crate::deadline::RequestDeadline;
 use crate::error_helpers::remote_error;
 use crate::remoting::inner::RemotingGeneralHandler;
@@ -219,6 +220,7 @@ pub struct TransportClient<PR = DefaultRequestProcessor> {
     transport_security: Option<Arc<TransportSecurity>>,
 
     telemetry: TransportTelemetry,
+    frame_limits: FrameLimits,
 }
 
 /// Builds a persistent endpoint client without exposing positional optional capabilities.
@@ -229,6 +231,7 @@ pub struct TransportClientBuilder<PR> {
     connection_events: Option<tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
     transport_security: Option<Arc<TransportSecurity>>,
     telemetry: TransportTelemetry,
+    frame_limits: FrameLimits,
 }
 
 impl<PR> TransportClientBuilder<PR>
@@ -250,6 +253,13 @@ where
         self
     }
 
+    /// Applies one validated frame profile to every connection created by this client.
+    pub fn frame_limits(mut self, frame_limits: FrameLimits) -> RocketMQResult<Self> {
+        frame_limits.validate()?;
+        self.frame_limits = frame_limits;
+        Ok(self)
+    }
+
     pub fn build(self) -> RocketMQResult<TransportClient<PR>> {
         let mut client = TransportClient::build_inner(
             self.config,
@@ -257,6 +267,7 @@ where
             self.connection_events,
             self.service_context,
             self.telemetry,
+            self.frame_limits,
         )?;
         if let Some(transport_security) = self.transport_security {
             client = client.with_transport_security(transport_security);
@@ -330,6 +341,12 @@ where
     pub fn telemetry(mut self, telemetry: TransportTelemetry) -> Self {
         self.transport = self.transport.telemetry(telemetry);
         self
+    }
+
+    /// Applies one validated frame profile to every connection created by this client.
+    pub fn frame_limits(mut self, frame_limits: FrameLimits) -> RocketMQResult<Self> {
+        self.transport = self.transport.frame_limits(frame_limits)?;
+        Ok(self)
     }
 
     pub fn build(self) -> RocketMQResult<RemotingClient<PR>> {
@@ -488,6 +505,7 @@ impl<PR> Clone for TransportClient<PR> {
             tx: self.tx.clone(),
             transport_security: self.transport_security.clone(),
             telemetry: self.telemetry.clone(),
+            frame_limits: self.frame_limits,
         }
     }
 }
@@ -507,6 +525,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
             connection_events: None,
             transport_security: None,
             telemetry: TransportTelemetry::noop(),
+            frame_limits: FrameLimits::java_compatibility(),
         }
     }
 
@@ -527,7 +546,9 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
         tx: Option<tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
         service_context: ChildServiceContext,
         telemetry: TransportTelemetry,
+        frame_limits: FrameLimits,
     ) -> RocketMQResult<Self> {
+        frame_limits.validate()?;
         let process_budget = service_context.process_budget();
         let handler = RemotingGeneralHandler::new_with_telemetry(
             processor,
@@ -560,6 +581,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
             tx,
             transport_security: None,
             telemetry,
+            frame_limits,
         })
     }
 
@@ -1083,6 +1105,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
             None => SessionConnectTarget::Legacy(addr.to_string()),
         };
         let tls_config = self.tokio_client_config.tls.clone();
+        let frame_limits = self.frame_limits;
 
         let transport_security = self.transport_security.clone();
         let connect_result = TransportSession::connect_target_with_service_context_until_and_telemetry(
@@ -1091,6 +1114,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
             self.cmd_handler.clone(),
             self.tx.as_ref(),
             tls_config,
+            frame_limits,
             deadline,
             self.telemetry.clone(),
         )

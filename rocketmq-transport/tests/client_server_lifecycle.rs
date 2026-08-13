@@ -21,11 +21,13 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
+use bytes::Bytes;
 use cheetah_string::CheetahString;
 use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::EncodedFrame;
 use rocketmq_runtime::RuntimeContext;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_security_api::AuthenticatedRequestContext;
@@ -42,12 +44,11 @@ use rocketmq_transport::api::v1::AdmissionController;
 use rocketmq_transport::api::v1::AdmissionLimits;
 use rocketmq_transport::api::v1::AdmissionResource;
 use rocketmq_transport::api::v1::AdmissionScope;
+use rocketmq_transport::api::v1::FrameLimits;
 use rocketmq_transport::api::v1::OneShotTransportClient;
 use rocketmq_transport::api::v1::RequestDeadline;
 use rocketmq_transport::api::v1::ResourceLimit;
-#[cfg(feature = "tls")]
 use rocketmq_transport::api::v1::TlsClientConfig;
-#[cfg(feature = "tls")]
 use rocketmq_transport::api::v1::TlsConfig;
 use rocketmq_transport::api::v1::TlsMode;
 use rocketmq_transport::api::v1::TlsServerRuntime;
@@ -169,6 +170,42 @@ impl RequestPolicy for RecordPeerTls {
 
 struct SessionEchoHandler {
     calls: AtomicUsize,
+}
+
+struct SegmentedResponseHandler {
+    rejected: Arc<AtomicUsize>,
+}
+
+impl ConnectionHandler for SegmentedResponseHandler {
+    fn connected(&self, _session: SessionHandle) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(async {})
+    }
+
+    fn command(
+        &self,
+        session: SessionHandle,
+        command: RemotingCommand,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(async move {
+            let body_len = if command.code() == RequestCode::HeartBeat.to_i32() {
+                32
+            } else {
+                33
+            };
+            let wire = EncodedFrame::from_command(
+                RemotingCommand::create_response_command_with_code(ResponseCode::Success)
+                    .set_opaque(command.opaque())
+                    .set_body(vec![7_u8; body_len]),
+            )
+            .unwrap()
+            .into_bytes();
+            let header_end = 8 + (u32::from_be_bytes(wire[4..8].try_into().unwrap()) & 0x00ff_ffff) as usize;
+            let segments = vec![wire.slice(..header_end), wire.slice(header_end..)];
+            if session.connection().send_frame_segments(segments).await.is_err() {
+                self.rejected.fetch_add(1, Ordering::SeqCst);
+            }
+        })
+    }
 }
 
 impl ConnectionHandler for SessionEchoHandler {
@@ -492,15 +529,168 @@ async fn transport_security_signs_outbound_and_fails_closed_without_a_principal(
 }
 
 #[tokio::test]
+async fn plaintext_server_and_client_enforce_their_owned_frame_profile() {
+    let runtime = RuntimeContext::from_current("transport-frame-profile-test");
+    let frame_limits = FrameLimits {
+        max_frame_bytes: 1024,
+        max_header_bytes: 512,
+        max_body_bytes: 32,
+        initial_read_bytes: 8,
+    };
+    let server_config = SessionTransportServerConfig::loopback();
+    let server = SessionTransportServer::bind_with_frame_limits(
+        runtime.service_context("transport-server"),
+        server_config,
+        frame_limits,
+        Arc::new(EchoProcessor),
+        Arc::new(AdmissionController::new(AdmissionLimits::default())),
+    )
+    .await
+    .unwrap();
+    let address = server.local_addr();
+    server.start().unwrap();
+
+    let bounded = OneShotTransportClient::new(
+        runtime.service_context("bounded-client"),
+        Arc::new(AdmissionController::new(AdmissionLimits::default())),
+    )
+    .try_with_frame_limits(frame_limits)
+    .unwrap();
+    let response = bounded
+        .invoke(
+            address,
+            RemotingCommand::create_remoting_command(RequestCode::HeartBeat).set_body(vec![7_u8; 32]),
+            RequestDeadline::after(Duration::from_secs(1)),
+        )
+        .await
+        .expect("exact endpoint body limit");
+    assert_eq!(response.body().map(bytes::Bytes::len), Some(32));
+
+    let permissive = OneShotTransportClient::new(
+        runtime.service_context("permissive-client"),
+        Arc::new(AdmissionController::new(AdmissionLimits::default())),
+    )
+    .try_with_frame_limits(FrameLimits::java_compatibility())
+    .unwrap();
+    assert!(permissive
+        .invoke(
+            address,
+            RemotingCommand::create_remoting_command(RequestCode::HeartBeat).set_body(vec![7_u8; 33]),
+            RequestDeadline::after(Duration::from_secs(1)),
+        )
+        .await
+        .is_err());
+
+    let _ = server
+        .shutdown_until(ShutdownDeadline::after(Duration::from_secs(1)))
+        .await;
+    let _ = runtime.shutdown_tasks(Duration::from_secs(1)).await;
+}
+
+async fn queued_segmented_response_obeys_owner_limits(tls_enabled: bool) {
+    let runtime = RuntimeContext::from_current("transport-segmented-frame-profile-test");
+    let service = runtime.service_context("transport-listener");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let frame_limits = FrameLimits {
+        max_frame_bytes: 1024,
+        max_header_bytes: 512,
+        max_body_bytes: 32,
+        initial_read_bytes: 8,
+    };
+    let mut server_tls = TlsConfig::default();
+    let mut client_tls = TlsConfig::default();
+    if tls_enabled {
+        server_tls.test_mode_enable = true;
+        server_tls.server.mode = TlsMode::Permissive;
+        client_tls.enable = true;
+        client_tls.test_mode_enable = true;
+        client_tls.client = TlsClientConfig {
+            auth_server: false,
+            ..TlsClientConfig::default()
+        };
+    } else {
+        server_tls.server.mode = TlsMode::Disabled;
+    }
+    let transport = TransportListener::new(
+        listener,
+        service.task_group().clone(),
+        TlsServerRuntime::initialize_with_service_context(server_tls, &service)
+            .await
+            .unwrap(),
+        Arc::new(AdmissionController::new(AdmissionLimits::default())),
+        Duration::from_secs(1),
+    )
+    .try_with_frame_limits(frame_limits)
+    .unwrap();
+    let rejected = Arc::new(AtomicUsize::new(0));
+    let handler = Arc::new(SegmentedResponseHandler {
+        rejected: rejected.clone(),
+    });
+    service
+        .spawn_service("segmented-listener", async move {
+            let _ = transport.run(handler).await;
+        })
+        .unwrap();
+
+    let client = OneShotTransportClient::new(
+        runtime.service_context("transport-client"),
+        Arc::new(AdmissionController::new(AdmissionLimits::default())),
+    )
+    .try_with_frame_limits(FrameLimits::java_compatibility())
+    .unwrap();
+    let exact = client
+        .invoke_with_config(
+            address,
+            RemotingCommand::create_remoting_command(RequestCode::HeartBeat),
+            &client_tls,
+            RequestDeadline::after(Duration::from_secs(2)),
+        )
+        .await
+        .expect("exact segmented response");
+    assert_eq!(exact.body().map(Bytes::len), Some(32));
+
+    assert!(client
+        .invoke_with_config(
+            address,
+            RemotingCommand::create_remoting_command(RequestCode::SendMessage),
+            &client_tls,
+            RequestDeadline::after(Duration::from_millis(100)),
+        )
+        .await
+        .is_err());
+    assert_eq!(rejected.load(Ordering::SeqCst), 1);
+    let _ = runtime.shutdown_tasks(Duration::from_secs(1)).await;
+}
+
+#[tokio::test]
+async fn queued_plaintext_segmented_responses_enforce_the_complete_frame_profile() {
+    queued_segmented_response_obeys_owner_limits(false).await;
+}
+
+#[tokio::test]
+#[cfg(feature = "tls")]
+async fn queued_tls_segmented_responses_enforce_the_complete_frame_profile() {
+    queued_segmented_response_obeys_owner_limits(true).await;
+}
+
+#[tokio::test]
 #[cfg(feature = "tls")]
 async fn tls_client_invocation_releases_pending_and_server_ownership() {
     let runtime = RuntimeContext::from_current("transport-tls-client-convergence-test");
+    let frame_limits = FrameLimits {
+        max_frame_bytes: 4096,
+        max_header_bytes: 2048,
+        max_body_bytes: 1024,
+        initial_read_bytes: 8,
+    };
     let mut server_config = SessionTransportServerConfig::loopback();
     server_config.tls.test_mode_enable = true;
     server_config.tls.server.mode = TlsMode::Permissive;
-    let server = SessionTransportServer::bind(
+    let server = SessionTransportServer::bind_with_frame_limits(
         runtime.service_context("transport-server"),
         server_config,
+        frame_limits,
         Arc::new(EchoProcessor),
         Arc::new(AdmissionController::new(AdmissionLimits::default())),
     )
@@ -514,7 +704,9 @@ async fn tls_client_invocation_releases_pending_and_server_ownership() {
     let client = OneShotTransportClient::new(
         runtime.service_context("transport-client"),
         Arc::new(AdmissionController::new(AdmissionLimits::default())),
-    );
+    )
+    .try_with_frame_limits(frame_limits)
+    .unwrap();
     let client_tls = TlsConfig {
         enable: true,
         test_mode_enable: true,
@@ -548,6 +740,22 @@ async fn tls_client_invocation_releases_pending_and_server_ownership() {
     .expect("server session and processor tasks should converge");
     assert_eq!(server.owned_component_group_count(), baseline_components);
     assert!(transport_io_snapshot().encoded_bytes_written > io_before.encoded_bytes_written);
+
+    let permissive_client = OneShotTransportClient::new(
+        runtime.service_context("permissive-tls-client"),
+        Arc::new(AdmissionController::new(AdmissionLimits::default())),
+    )
+    .try_with_frame_limits(FrameLimits::java_compatibility())
+    .unwrap();
+    assert!(permissive_client
+        .invoke_with_config(
+            address,
+            RemotingCommand::create_remoting_command(RequestCode::HeartBeat).set_body(vec![7_u8; 1025]),
+            &client_tls,
+            RequestDeadline::after(Duration::from_secs(2)),
+        )
+        .await
+        .is_err());
 
     let _ = server
         .shutdown_until(ShutdownDeadline::after(Duration::from_secs(1)))

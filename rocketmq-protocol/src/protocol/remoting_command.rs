@@ -837,9 +837,27 @@ impl RemotingCommand {
         size
     }
 
-    /// Optimized decode with enhanced boundary checks and reduced allocations
+    /// Decodes one command with the historical 16 MiB announced-payload ceiling.
+    ///
+    /// Transport owners with an explicit total-wire limit should use
+    /// [`Self::decode_with_max_frame_bytes`] so inbound and outbound policy stays symmetric.
     #[inline]
     pub fn decode(src: &mut BytesMut) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        Self::decode_with_max_frame_bytes(src, 16 * 1024 * 1024 + 4)
+    }
+
+    /// Decodes one command bounded by a caller-owned complete wire-frame limit.
+    ///
+    /// `max_frame_bytes` includes the four-byte announced-length prefix.
+    ///
+    /// # Errors
+    ///
+    /// Returns a serialization error for a negative, overflowing, oversized, or malformed frame.
+    #[inline]
+    pub fn decode_with_max_frame_bytes(
+        src: &mut BytesMut,
+        max_frame_bytes: usize,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         const FRAME_HEADER_SIZE: usize = 4;
         const SERIALIZE_TYPE_SIZE: usize = 4;
         const MIN_PAYLOAD_SIZE: usize = SERIALIZE_TYPE_SIZE; // Minimum: just serialize_type field
@@ -852,20 +870,30 @@ impl RemotingCommand {
         }
 
         // Read total size without advancing the buffer (peek)
-        let total_size = i32::from_be_bytes([src[0], src[1], src[2], src[3]]) as usize;
+        let announced_size = i32::from_be_bytes([src[0], src[1], src[2], src[3]]);
+        let total_size = usize::try_from(announced_size).map_err(|_| {
+            rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
+                format: "remoting_command",
+                message: format!("Invalid negative frame size {announced_size}"),
+            })
+        })?;
+        let full_frame_size = total_size.checked_add(FRAME_HEADER_SIZE).ok_or_else(|| {
+            rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
+                format: "remoting_command",
+                message: format!("Frame size {total_size} overflows the wire envelope"),
+            })
+        })?;
 
-        // Validate total_size to prevent overflow attacks (check max first)
-        if total_size > 16 * 1024 * 1024 {
+        if full_frame_size > max_frame_bytes {
             return Err(rocketmq_error::RocketMQError::Serialization(
                 rocketmq_error::SerializationError::DecodeFailed {
                     format: "remoting_command",
-                    message: format!("Frame size {total_size} exceeds maximum allowed (16MB)"),
+                    message: format!("Wire frame size {full_frame_size} exceeds configured limit {max_frame_bytes}"),
                 },
             ));
         }
 
         // Wait for complete frame
-        let full_frame_size = total_size + FRAME_HEADER_SIZE;
         if available < full_frame_size {
             return Ok(None);
         }
