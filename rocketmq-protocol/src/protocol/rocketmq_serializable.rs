@@ -271,7 +271,9 @@ impl RocketMQSerializable {
 
     #[inline]
     fn checked_dynamic_key_length(length: usize) -> Result<u16, HeaderCodecError> {
-        u16::try_from(length).map_err(|_| HeaderCodecError::DynamicKeyLengthOverflow)
+        i16::try_from(length)
+            .map(|length| length as u16)
+            .map_err(|_| HeaderCodecError::DynamicKeyLengthOverflow)
     }
 
     #[inline]
@@ -636,20 +638,30 @@ mod tests {
             Err(HeaderCodecError::ExtensionFieldsLengthOverflow)
         ));
         assert_eq!(
-            RocketMQSerializable::checked_dynamic_key_length(u16::MAX as usize).unwrap(),
-            u16::MAX
-        );
-        assert!(matches!(
-            RocketMQSerializable::checked_dynamic_key_length(u16::MAX as usize + 1),
-            Err(HeaderCodecError::DynamicKeyLengthOverflow)
-        ));
-        assert_eq!(
             RocketMQSerializable::checked_dynamic_value_length(i32::MAX as usize).unwrap(),
             i32::MAX
         );
         assert!(matches!(
             RocketMQSerializable::checked_dynamic_value_length(i32::MAX as usize + 1),
             Err(HeaderCodecError::DynamicValueLengthOverflow)
+        ));
+    }
+
+    #[test]
+    fn dynamic_key_length_java_compatible() {
+        let maximum = i16::MAX as usize;
+
+        assert_eq!(
+            RocketMQSerializable::checked_dynamic_key_length(maximum - 1).unwrap(),
+            (i16::MAX - 1) as u16
+        );
+        assert_eq!(
+            RocketMQSerializable::checked_dynamic_key_length(maximum).unwrap(),
+            i16::MAX as u16
+        );
+        assert!(matches!(
+            RocketMQSerializable::checked_dynamic_key_length(maximum + 1),
+            Err(HeaderCodecError::DynamicKeyLengthOverflow)
         ));
     }
 

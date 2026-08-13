@@ -116,3 +116,49 @@ fn node_js_language_code_matches_java() {
     .expect("serde fallback should recognize NODE_JS");
     assert_eq!(serde_fallback.language(), LanguageCode::NODE_JS);
 }
+
+#[test]
+fn ext_key_length_matches_java_signed_short_boundary() {
+    let maximum = i16::MAX as usize;
+
+    for key_length in [maximum - 1, maximum] {
+        let key = "k".repeat(key_length);
+        let mut command =
+            RemotingCommand::create_success_response_command().set_serialize_type(SerializeType::ROCKETMQ);
+        command.add_ext_field(key.clone(), "value");
+
+        let decoded = round_trip(command);
+        assert_eq!(
+            decoded
+                .ext_fields()
+                .and_then(|fields| fields.get(key.as_str()))
+                .map(CheetahString::as_str),
+            Some("value")
+        );
+    }
+
+    let oversized_key = "k".repeat(maximum + 1);
+    let mut binary_command =
+        RemotingCommand::create_success_response_command().set_serialize_type(SerializeType::ROCKETMQ);
+    binary_command.add_ext_field(oversized_key.clone(), "value");
+    let mut destination = BytesMut::from(&b"prefix"[..]);
+
+    let error = binary_command
+        .try_fast_header_encode(&mut destination)
+        .expect_err("a key larger than Java's signed-short range must be rejected");
+    assert_eq!(destination.as_ref(), b"prefix");
+    assert!(error
+        .to_string()
+        .contains("dynamic header key length exceeds the ROCKETMQ wire limit"));
+
+    let mut json_command = RemotingCommand::create_success_response_command().set_serialize_type(SerializeType::JSON);
+    json_command.add_ext_field(oversized_key.clone(), "value");
+    let decoded = round_trip(json_command);
+    assert_eq!(
+        decoded
+            .ext_fields()
+            .and_then(|fields| fields.get(oversized_key.as_str()))
+            .map(CheetahString::as_str),
+        Some("value")
+    );
+}
