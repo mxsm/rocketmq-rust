@@ -833,11 +833,11 @@ impl MQClientInstance {
 
         #[cfg(not(feature = "nameserver-dns-discovery"))]
         {
-            return Err(RocketMQError::ConfigInvalidValue {
+            Err(RocketMQError::ConfigInvalidValue {
                 key: "nameserver_discovery.dns",
                 value: "enabled".to_string(),
                 reason: "requires the nameserver-dns-discovery Cargo feature".to_string(),
-            });
+            })
         }
 
         #[cfg(feature = "nameserver-dns-discovery")]
