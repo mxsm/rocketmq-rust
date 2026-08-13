@@ -21,7 +21,7 @@ use std::fmt;
 use std::fs;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AppConfig {
     pub server: ServerConfig,
     pub storage: StorageConfig,
@@ -30,6 +30,21 @@ pub struct AppConfig {
     pub dashboard_history_interval_secs: u64,
     pub initial_config: DashboardConfigView,
     pub admin_credentials: Option<AdminCredentials>,
+}
+
+impl fmt::Debug for AppConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AppConfig")
+            .field("server", &self.server)
+            .field("storage", &self.storage)
+            .field("auth", &self.auth)
+            .field("monitor_store_path", &self.monitor_store_path)
+            .field("dashboard_history_interval_secs", &self.dashboard_history_interval_secs)
+            .field("initial_config", &self.initial_config)
+            .field("admin_credentials", &self.admin_credentials.as_ref().map(|_| REDACTED))
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -283,8 +298,10 @@ impl SqliteConfigStore {
 
 #[cfg(test)]
 mod tests {
+    use super::AppConfig;
     use super::AuthConfig;
     use super::ConfigStore;
+    use super::ServerConfig;
     use super::StorageConfig;
     use super::resolve_admin_credentials;
     use crate::model::DashboardConfigView;
@@ -346,6 +363,44 @@ mod tests {
 
         assert!(debug.contains("<redacted>"));
         assert!(!debug.contains("dashboard-secret"));
+    }
+
+    #[test]
+    fn app_config_debug_redacts_all_credentials() {
+        let config = AppConfig {
+            server: ServerConfig {
+                host: "127.0.0.1".to_string(),
+                port: 8082,
+            },
+            storage: StorageConfig {
+                backend: StorageBackend::File,
+                path: "dashboard-config.json".into(),
+            },
+            auth: AuthConfig {
+                login_required: true,
+                username: "admin".to_string(),
+                password: "dashboard-secret".to_string(),
+            },
+            monitor_store_path: "monitor-config.json".into(),
+            dashboard_history_interval_secs: 60,
+            initial_config: DashboardConfigView::default(),
+            admin_credentials: Some(
+                rocketmq_admin_core::core::security::AdminCredentials::try_new(
+                    "access-value",
+                    "secret-value",
+                    Some("token-value".to_string()),
+                )
+                .expect("credentials"),
+            ),
+        };
+
+        let debug = format!("{config:?}");
+
+        assert!(debug.contains("admin_credentials: Some(\"<redacted>\")"));
+        assert!(!debug.contains("dashboard-secret"));
+        assert!(!debug.contains("access-value"));
+        assert!(!debug.contains("secret-value"));
+        assert!(!debug.contains("token-value"));
     }
 
     #[test]
