@@ -577,8 +577,7 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         let admission = self.acquire_owned(MappedFileOperation::Read)?;
         let is_in_cache = self.record_cache_residency_admitted(&admission, offset as i64, len);
         let owner = self.file_owner_admitted(&admission)?;
-        let range = FileRangeLease::try_from_mapped_file(owner, file_offset, len, admission)
-            .map_err(|error| MappedFileError::Custom(error.to_string()))?;
+        let range = FileRangeLease::try_from_mapped_file(owner, file_offset, len, admission)?;
         let start_offset = self
             .get_file_from_offset()
             .checked_add(file_offset)

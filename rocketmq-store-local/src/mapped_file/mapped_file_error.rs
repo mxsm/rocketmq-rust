@@ -16,6 +16,8 @@ use std::io;
 
 use thiserror::Error;
 
+use crate::transfer::segment::FileRangeError;
+
 use super::MappedFileAdmissionState;
 use super::MappedFileOperation;
 
@@ -43,6 +45,10 @@ pub enum MappedFileError {
         /// The total size of the mapped file in bytes
         file_size: u64,
     },
+
+    /// A checked file range could not be constructed for the mapped file.
+    #[error("File range operation failed: {0}")]
+    FileRange(#[from] FileRangeError),
 
     /// The mapped file has reached its capacity and cannot accept more writes.
     ///
@@ -258,6 +264,18 @@ mod tests {
         let err = MappedFileError::MmapFailed(io::Error::other("out of memory"));
 
         assert!(!err.is_recoverable());
+        assert!(err.source().is_some());
+    }
+
+    #[test]
+    fn file_range_errors_preserve_the_typed_source() {
+        let err = MappedFileError::from(FileRangeError::OutOfBounds {
+            position: 1024,
+            len: 512,
+            file_len: 1280,
+        });
+
+        assert!(matches!(err, MappedFileError::FileRange(_)));
         assert!(err.source().is_some());
     }
 
