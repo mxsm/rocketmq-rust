@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::env;
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::config::TlsConfig;
@@ -50,6 +51,62 @@ impl Default for MaintenanceConfig {
     }
 }
 
+/// Controls whether a response-aware request may reconnect after `GO_AWAY`.
+///
+/// The retryable request codes are an explicit allowlist. This keeps the
+/// default behavior unchanged and prevents side-effecting requests from being
+/// repeated unless their owner deliberately opts them in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GoAwayPolicy {
+    enabled: bool,
+    retryable_request_codes: Arc<[i32]>,
+}
+
+impl GoAwayPolicy {
+    /// Preserves the historical single-attempt behavior.
+    #[must_use]
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            retryable_request_codes: Arc::from([]),
+        }
+    }
+
+    /// Enables one replacement-connection retry for the supplied request codes.
+    #[must_use]
+    pub fn enabled_for_request_codes(request_codes: impl IntoIterator<Item = i32>) -> Self {
+        let mut request_codes = request_codes.into_iter().collect::<Vec<_>>();
+        request_codes.sort_unstable();
+        request_codes.dedup();
+        Self {
+            enabled: true,
+            retryable_request_codes: request_codes.into(),
+        }
+    }
+
+    /// Returns whether response-aware retries are enabled.
+    #[must_use]
+    pub const fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// Returns the sorted, duplicate-free request-code allowlist.
+    #[must_use]
+    pub fn retryable_request_codes(&self) -> &[i32] {
+        &self.retryable_request_codes
+    }
+
+    pub(crate) fn allows_request(&self, request_code: i32) -> bool {
+        self.enabled && self.retryable_request_codes.binary_search(&request_code).is_ok()
+    }
+}
+
+impl Default for GoAwayPolicy {
+    fn default() -> Self {
+        Self::disabled()
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct TransportClientConfig {
     pub connect: ConnectConfig,
@@ -67,5 +124,18 @@ mod tests {
 
         assert!(!config.connect.timeout.is_zero());
         assert_eq!(config.maintenance.idle_scan_interval, Some(Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn go_away_policy_is_disabled_and_deduplicates_explicit_codes() {
+        let disabled = GoAwayPolicy::default();
+        assert!(!disabled.is_enabled());
+        assert!(!disabled.allows_request(105));
+
+        let enabled = GoAwayPolicy::enabled_for_request_codes([105, 10, 105]);
+        assert!(enabled.is_enabled());
+        assert_eq!(enabled.retryable_request_codes(), &[10, 105]);
+        assert!(enabled.allows_request(105));
+        assert!(!enabled.allows_request(106));
     }
 }

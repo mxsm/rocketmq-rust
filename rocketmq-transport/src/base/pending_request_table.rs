@@ -439,6 +439,10 @@ impl PendingRequestTable {
         }
     }
 
+    pub(crate) fn max_request_age(&self) -> Duration {
+        self.inner.max_request_age
+    }
+
     /// Returns the age of the oldest pending request for low-cardinality diagnostics.
     pub fn oldest_age(&self, now: Instant) -> Option<Duration> {
         self.inner.entries.iter().map(|entry| entry.age(now)).max()

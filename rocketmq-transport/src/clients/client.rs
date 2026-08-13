@@ -79,6 +79,7 @@ pub(crate) struct TransportSession<PR> {
     peer: PeerInfo,
     last_used_millis: Arc<AtomicU64>,
     accepting_requests: Arc<AtomicBool>,
+    registry_token: Arc<()>,
     _processor: PhantomData<fn() -> PR>,
 }
 
@@ -392,6 +393,7 @@ where
             peer: PeerInfo::new(remote_address, negotiated_tls),
             last_used_millis: Arc::new(AtomicU64::new(current_millis())),
             accepting_requests: Arc::new(AtomicBool::new(true)),
+            registry_token: Arc::new(()),
             _processor: PhantomData,
         })
     }
@@ -641,6 +643,14 @@ where
 
     pub fn remote_address(&self) -> SocketAddr {
         self.channel.remote_address()
+    }
+
+    pub(crate) fn is_same_registry_session(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.registry_token, &other.registry_token)
+    }
+
+    pub(crate) fn max_pending_request_age(&self) -> Duration {
+        self.pending_requests.max_request_age()
     }
 
     pub(crate) fn idle_for_at(&self, now_millis: u64) -> Duration {
