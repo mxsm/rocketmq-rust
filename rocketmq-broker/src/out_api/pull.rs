@@ -30,12 +30,14 @@ use rocketmq_protocol::protocol::header::pull_message_request_header::PullMessag
 use rocketmq_protocol::protocol::header::pull_message_response_header::PullMessageResponseHeader;
 use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_transport::api::v1::RpcRequestHeader;
 
 use crate::out_api::result::BrokerPullResponse;
 
 pub(super) fn build_pull_message_request(
+    command_factory: &RemotingCommandFactory,
     broker_name: &CheetahString,
     consumer_group: &CheetahString,
     topic: &CheetahString,
@@ -65,7 +67,7 @@ pub(super) fn build_pull_message_request(
         }),
         ..Default::default()
     };
-    RemotingCommand::create_request_command(RequestCode::PullMessage, request_header)
+    command_factory.create_request_command(RequestCode::PullMessage, request_header)
 }
 
 pub(super) fn process_pull_response(
@@ -147,7 +149,29 @@ pub(super) fn decode_pull_response(
 
 #[cfg(test)]
 mod tests {
+    use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandDefaults;
+    use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
+    use rocketmq_protocol::protocol::SerializeType;
+
     use super::*;
+
+    #[test]
+    fn pull_request_uses_owning_factory_defaults() {
+        let factory = RemotingCommandFactory::new(RemotingCommandDefaults::new(643, SerializeType::ROCKETMQ));
+
+        let request = build_pull_message_request(
+            &factory,
+            &CheetahString::from_static_str("broker-a"),
+            &CheetahString::from_static_str("consumer-group"),
+            &CheetahString::from_static_str("factory-topic"),
+            1,
+            2,
+            32,
+        );
+
+        assert_eq!(request.version(), 643);
+        assert_eq!(request.serialize_type(), SerializeType::ROCKETMQ);
+    }
 
     #[test]
     fn pull_response_maps_no_new_message_without_client_types() {
