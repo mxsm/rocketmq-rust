@@ -1500,7 +1500,7 @@ where
 
         // Early return: no retry queues configured
         if subscription_group_config.retry_queue_nums() <= 0 {
-            return Ok(Some(RemotingCommand::create_remoting_command(ResponseCode::Success)));
+            return Ok(Some(no_retry_queue_response()));
         }
         let mut new_topic = CheetahString::from_string(mix_all::get_retry_topic(request_header.group.as_str()));
         let mut queue_id_int = rand::rng().random_range(0..subscription_group_config.retry_queue_nums());
@@ -1991,6 +1991,10 @@ fn message_store_not_initialized() -> RocketMQError {
     RocketMQError::not_initialized("message_store")
 }
 
+fn no_retry_queue_response() -> RemotingCommand {
+    RemotingCommand::create_success_response_command()
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -2029,9 +2033,29 @@ mod tests {
     use super::map_store_api_error;
     use super::message_body_limit_violation;
     use super::message_store_not_initialized;
+    use super::no_retry_queue_response;
     use super::store_health_reject_remark;
     use super::store_health_reject_remark_from;
     use super::sync_flush_backlog_reject_remark;
+
+    #[test]
+    fn zero_retry_queue_reply_is_a_response_on_both_wire_formats() {
+        for serialize_type in [SerializeType::JSON, SerializeType::ROCKETMQ] {
+            let mut response = no_retry_queue_response().set_serialize_type(serialize_type);
+            assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+            assert!(response.is_response_type());
+
+            let mut encoded = bytes::BytesMut::new();
+            response
+                .try_fast_header_encode(&mut encoded)
+                .expect("zero-retry response should encode");
+            let decoded = RemotingCommand::decode(&mut encoded)
+                .expect("zero-retry response should decode")
+                .expect("encoded response should contain one frame");
+            assert_eq!(ResponseCode::from(decoded.code()), ResponseCode::Success);
+            assert!(decoded.is_response_type());
+        }
+    }
 
     #[test]
     fn send_response_keeps_region_and_trace_fields() {

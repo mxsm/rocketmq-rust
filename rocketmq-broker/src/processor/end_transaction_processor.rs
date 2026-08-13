@@ -421,9 +421,7 @@ where
             OperationResult::default()
         };
 
-        Ok(Some(
-            RemotingCommand::create_remoting_command(response_code).set_remark_option(response_remark),
-        ))
+        Ok(Some(final_end_transaction_response(response_code, response_remark)))
     }
 
     pub fn reject_commit_or_rollback(&self, from_transaction_check: bool, message_ext: &MessageExt) -> bool {
@@ -514,6 +512,10 @@ where
 fn message_store_unavailable_response() -> RemotingCommand {
     RemotingCommand::create_response_command_with_code(ResponseCode::ServiceNotAvailable)
         .set_remark("Message store is unavailable now.")
+}
+
+fn final_end_transaction_response(response_code: ResponseCode, response_remark: Option<String>) -> RemotingCommand {
+    RemotingCommand::create_response_command_with_code(response_code).set_remark_option(response_remark)
 }
 
 fn build_put_message_response(
@@ -651,7 +653,31 @@ fn end_message_transaction(msg_ext: &mut MessageExt) -> MessageExtBrokerInner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rocketmq_protocol::protocol::SerializeType;
     use rocketmq_store::StorePorts;
+
+    #[test]
+    fn final_end_transaction_reply_preserves_error_semantics_on_both_wire_formats() {
+        for serialize_type in [SerializeType::JSON, SerializeType::ROCKETMQ] {
+            let mut response =
+                final_end_transaction_response(ResponseCode::SystemError, Some("transaction failed".to_owned()))
+                    .set_serialize_type(serialize_type);
+            assert_eq!(ResponseCode::from(response.code()), ResponseCode::SystemError);
+            assert_eq!(response.remark().map(CheetahString::as_str), Some("transaction failed"));
+            assert!(response.is_response_type());
+
+            let mut encoded = bytes::BytesMut::new();
+            response
+                .try_fast_header_encode(&mut encoded)
+                .expect("end-transaction response should encode");
+            let decoded = RemotingCommand::decode(&mut encoded)
+                .expect("end-transaction response should decode")
+                .expect("encoded response should contain one frame");
+            assert_eq!(ResponseCode::from(decoded.code()), ResponseCode::SystemError);
+            assert_eq!(decoded.remark().map(CheetahString::as_str), Some("transaction failed"));
+            assert!(decoded.is_response_type());
+        }
+    }
 
     #[test]
     fn end_message_transaction_with_valid_message() {
