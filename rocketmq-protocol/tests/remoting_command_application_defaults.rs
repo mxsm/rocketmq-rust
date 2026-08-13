@@ -16,6 +16,7 @@ use bytes::Bytes;
 use rocketmq_protocol::protocol::header::empty_header::EmptyHeader;
 use rocketmq_protocol::protocol::remoting_command_defaults::initialize_remoting_command_defaults;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandDefaults;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_protocol::protocol::SerializeType;
 use rocketmq_protocol::RemotingCommand;
 
@@ -23,6 +24,7 @@ use rocketmq_protocol::RemotingCommand;
 fn business_factories_share_immutable_application_defaults() {
     let defaults = RemotingCommandDefaults::new(4242, SerializeType::ROCKETMQ);
     initialize_remoting_command_defaults(defaults).expect("application defaults should initialize");
+    let explicit_factory = RemotingCommandFactory::new(defaults);
 
     let commands = [
         RemotingCommand::new_request(10, Bytes::from_static(b"body")),
@@ -35,6 +37,9 @@ fn business_factories_share_immutable_application_defaults() {
         RemotingCommand::create_success_response_command_with_header(EmptyHeader {}),
         RemotingCommand::create_java_default_error_response_command(),
         RemotingCommand::create_java_default_error_response_command_with_header(EmptyHeader {}),
+        explicit_factory.create_request_command(13, EmptyHeader {}),
+        explicit_factory.create_success_response_command(),
+        explicit_factory.create_java_default_error_response_command(),
     ];
 
     for command in commands {

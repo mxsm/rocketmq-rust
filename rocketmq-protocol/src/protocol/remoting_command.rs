@@ -32,7 +32,6 @@ use serde::Serializer;
 use super::RemotingCommandType;
 use super::SerializeType;
 use crate::code::request_code::RequestCode;
-use crate::code::response_code::RemotingSysResponseCode;
 use crate::protocol::command_custom_header::CommandCustomHeader;
 use crate::protocol::command_custom_header::FromMap;
 use crate::protocol::command_custom_header::HeaderEncodeCapability;
@@ -41,14 +40,14 @@ use crate::protocol::header_codec::BinaryHeaderFields;
 use crate::protocol::header_codec::HeaderCodecError;
 use crate::protocol::header_codec::JsonHeaderFields;
 use crate::protocol::header_field_merge::merge_header_and_dynamic;
-use crate::protocol::remoting_command_defaults::application_remoting_command_defaults;
+use crate::protocol::remoting_command_defaults::application_remoting_command_factory;
+use crate::protocol::remoting_command_defaults::RemotingCommandDefaults;
 use crate::protocol::LanguageCode;
 use crate::rocketmq_serializable::RocketMQSerializable;
 
 pub const SERIALIZE_TYPE_PROPERTY: &str = "rocketmq.serialize.type";
 pub const SERIALIZE_TYPE_ENV: &str = "ROCKETMQ_SERIALIZE_TYPE";
 pub const REMOTING_VERSION_KEY: &str = "rocketmq.remoting.version";
-const JAVA_DEFAULT_RESPONSE_REMARK: &str = "not set any response code";
 
 static REQUEST_ID: std::sync::LazyLock<Arc<AtomicI32>> = std::sync::LazyLock::new(|| Arc::new(AtomicI32::new(0)));
 
@@ -188,11 +187,6 @@ impl Default for RemotingCommand {
 }
 
 impl RemotingCommand {
-    fn with_application_defaults() -> Self {
-        let defaults = application_remoting_command_defaults();
-        Self::with_resolved_defaults(defaults.version(), defaults.serialize_type())
-    }
-
     /// Constructs a command from defaults resolved by the owning facade.
     ///
     /// The protocol crate deliberately does not read process environment or configuration files.
@@ -223,15 +217,14 @@ impl RemotingCommand {
 
 impl RemotingCommand {
     pub fn new_request(code: impl Into<i32>, body: impl Into<Bytes>) -> Self {
-        Self::with_application_defaults().set_code(code).set_body(body)
+        application_remoting_command_factory().create_request(code, body)
     }
 
     pub fn create_request_command<T>(code: impl Into<i32>, header: T) -> Self
     where
         T: CommandCustomHeader + Sync + Send + 'static,
     {
-        let defaults = application_remoting_command_defaults();
-        Self::create_request_command_with_defaults(code, header, defaults.version(), defaults.serialize_type())
+        application_remoting_command_factory().create_request_command(code, header)
     }
 
     /// Creates a request using defaults resolved by the transport/facade owner.
@@ -244,14 +237,15 @@ impl RemotingCommand {
     where
         T: CommandCustomHeader + Sync + Send + 'static,
     {
-        Self::with_resolved_defaults(version, serialize_type)
-            .set_code(code.into())
-            .set_command_custom_header(header)
+        crate::protocol::remoting_command_defaults::RemotingCommandFactory::new(RemotingCommandDefaults::new(
+            version,
+            serialize_type,
+        ))
+        .create_request_command(code, header)
     }
 
     pub fn create_remoting_command(code: impl Into<i32>) -> Self {
-        let command = Self::with_application_defaults();
-        command.set_code(code.into())
+        application_remoting_command_factory().create_remoting_command(code)
     }
 
     pub fn get_and_add() -> i32 {
@@ -259,7 +253,7 @@ impl RemotingCommand {
     }
 
     pub fn create_response_command_with_code(code: impl Into<i32>) -> Self {
-        Self::with_application_defaults().set_code(code).mark_response_type()
+        application_remoting_command_factory().create_response_command_with_code(code)
     }
 
     /// Creates a response with an explicit code and typed custom header.
@@ -267,41 +261,35 @@ impl RemotingCommand {
         code: impl Into<i32>,
         header: impl CommandCustomHeader + Sync + Send + 'static,
     ) -> Self {
-        Self::create_response_command_with_code(code).set_command_custom_header(header)
+        application_remoting_command_factory().create_response_command_with_code_and_header(code, header)
     }
 
     pub fn create_response_command_with_code_remark(code: impl Into<i32>, remark: impl Into<CheetahString>) -> Self {
-        Self::with_application_defaults()
-            .set_code(code)
-            .set_remark_option(Some(remark.into()))
-            .mark_response_type()
+        application_remoting_command_factory().create_response_command_with_code_remark(code, remark)
     }
 
     /// Creates an explicitly successful response.
     pub fn create_success_response_command() -> Self {
-        Self::create_response_command_with_code(RemotingSysResponseCode::Success)
+        application_remoting_command_factory().create_success_response_command()
     }
 
     /// Creates an explicitly successful response with a typed custom header.
     pub fn create_success_response_command_with_header(
         header: impl CommandCustomHeader + Sync + Send + 'static,
     ) -> Self {
-        Self::create_response_command_with_code_and_header(RemotingSysResponseCode::Success, header)
+        application_remoting_command_factory().create_success_response_command_with_header(header)
     }
 
     /// Creates the unset error response used by Java's typed-header factory.
     pub fn create_java_default_error_response_command() -> Self {
-        Self::create_response_command_with_code_remark(
-            RemotingSysResponseCode::SystemError,
-            JAVA_DEFAULT_RESPONSE_REMARK,
-        )
+        application_remoting_command_factory().create_java_default_error_response_command()
     }
 
     /// Creates the unset Java-compatible error response with a typed header.
     pub fn create_java_default_error_response_command_with_header(
         header: impl CommandCustomHeader + Sync + Send + 'static,
     ) -> Self {
-        Self::create_java_default_error_response_command().set_command_custom_header(header)
+        application_remoting_command_factory().create_java_default_error_response_command_with_header(header)
     }
 
     /// Legacy ambiguous-success response factory.
