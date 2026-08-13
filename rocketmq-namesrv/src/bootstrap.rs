@@ -533,10 +533,11 @@ impl NameServerRuntime {
                 .expect("NameServerRuntime always has an injected ChildServiceContext")
                 .component("namesrv.embedded-controller");
             let controller_manager = Arc::new(
-                ControllerManager::new(
+                ControllerManager::new_with_remoting_command_factory(
                     (*controller_config).clone(),
                     controller_context,
                     self.inner.telemetry.clone(),
+                    self.inner.remoting_command_factory(),
                 )
                 .await?,
             );
@@ -1887,6 +1888,8 @@ mod tests {
 
     use cheetah_string::CheetahString;
     #[cfg(feature = "embedded-controller")]
+    use rocketmq_controller::Controller;
+    #[cfg(feature = "embedded-controller")]
     use rocketmq_controller::ControllerConfig;
     use rocketmq_error::ErrorKind;
     use rocketmq_model::common::config::TopicConfig;
@@ -1927,11 +1930,15 @@ mod tests {
     use rocketmq_protocol::protocol::header::namesrv::topic_operation_header::GetTopicsByClusterRequestHeader;
     use rocketmq_protocol::protocol::header::namesrv::topic_operation_header::RegisterTopicRequestHeader;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+    #[cfg(feature = "embedded-controller")]
+    use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandDefaults;
     use rocketmq_protocol::protocol::route::route_data_view::QueueData;
     use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
     use rocketmq_protocol::protocol::DataVersion;
     use rocketmq_protocol::protocol::RemotingDeserializable;
     use rocketmq_protocol::protocol::RemotingSerializable;
+    #[cfg(feature = "embedded-controller")]
+    use rocketmq_protocol::protocol::SerializeType;
     use rocketmq_runtime::RuntimeContext;
     use rocketmq_transport::api::v1::ConnectionState;
     use rocketmq_transport::api::v1::RPCHook;
@@ -4169,12 +4176,14 @@ mod tests {
     #[cfg(feature = "embedded-controller")]
     #[tokio::test]
     async fn enable_controller_in_namesrv_lifecycle_matches_namesrv_runtime() {
+        let command_factory = RemotingCommandFactory::new(RemotingCommandDefaults::new(671, SerializeType::ROCKETMQ));
         let (namesrv_config, _namesrv_root) = isolated_namesrv_config(NamesrvConfig {
             enable_controller_in_namesrv: true,
             ..NamesrvConfig::default()
         });
         let (controller_config, _controller_root) = embedded_controller_config();
         let mut bootstrap = Builder::new(test_service_context(), TelemetryHandle::noop())
+            .set_remoting_command_factory(command_factory)
             .set_name_server_config(namesrv_config)
             .set_server_config(namesrv_server_config())
             .set_controller_config(controller_config)
@@ -4196,6 +4205,17 @@ mod tests {
             .expect("embedded controller should be initialized");
         assert!(controller_manager.is_initialized());
         assert!(!controller_manager.is_running());
+        assert_eq!(controller_manager.remoting_command_factory(), command_factory);
+        let response = controller_manager
+            .controller()
+            .get_controller_metadata()
+            .await
+            .expect("query unstarted embedded Controller")
+            .expect("unstarted embedded Controller response");
+        assert_eq!(
+            (response.version(), response.serialize_type()),
+            (671, SerializeType::ROCKETMQ)
+        );
 
         let mut runtime = bootstrap.name_server_runtime;
         let start_handle = tokio::spawn(async move { runtime.start().await });

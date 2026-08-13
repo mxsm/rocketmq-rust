@@ -20,6 +20,7 @@ use cheetah_string::CheetahString;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::protocol::header::notify_broker_role_change_request_header::NotifyBrokerRoleChangedRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_store_api::HaContractError;
 use rocketmq_store_api::MasterEpoch;
 use rocketmq_store_api::SyncStateSetEpoch;
@@ -96,14 +97,15 @@ impl NotifyTask {
         }
     }
 
-    fn build_request(&self) -> RemotingCommand {
+    fn build_request(&self, command_factory: &RemotingCommandFactory) -> RemotingCommand {
         let request_header = NotifyBrokerRoleChangedRequestHeader {
             master_address: self.master_address.clone(),
             master_epoch: Some(self.state.authority.master_epoch().get()),
             sync_state_set_epoch: Some(self.state.sync_state_set_epoch.get()),
             master_broker_id: Some(self.state.authority.broker_id() as u64),
         };
-        RemotingCommand::create_request_command(RequestCode::NotifyBrokerRoleChanged, request_header)
+        command_factory
+            .create_request_command(RequestCode::NotifyBrokerRoleChanged, request_header)
             .set_body(self.sync_state_set.clone())
     }
 

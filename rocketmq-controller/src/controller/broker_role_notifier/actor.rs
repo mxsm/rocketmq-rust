@@ -20,6 +20,7 @@ use std::time::Instant;
 
 use parking_lot::Mutex;
 use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
 use rocketmq_transport::api::v1::TransportClient;
@@ -332,6 +333,7 @@ impl Mailbox {
 #[derive(Clone)]
 pub(crate) struct BrokerRoleNotifier {
     client: Arc<TransportClient>,
+    command_factory: RemotingCommandFactory,
     sender: mpsc::Sender<NotifyKey>,
     receiver: Arc<Mutex<Option<mpsc::Receiver<NotifyKey>>>>,
     mailbox: Arc<Mutex<Mailbox>>,
@@ -339,10 +341,15 @@ pub(crate) struct BrokerRoleNotifier {
 }
 
 impl BrokerRoleNotifier {
-    pub(crate) fn new(client: Arc<TransportClient>, retry_base_delay: Duration) -> Self {
+    pub(crate) fn new(
+        client: Arc<TransportClient>,
+        retry_base_delay: Duration,
+        command_factory: RemotingCommandFactory,
+    ) -> Self {
         let (sender, receiver) = mpsc::channel(DEFAULT_MAILBOX_CAPACITY);
         Self {
             client,
+            command_factory,
             sender,
             receiver: Arc::new(Mutex::new(Some(receiver))),
             mailbox: Arc::new(Mutex::new(Mailbox::new(DEFAULT_MAILBOX_CAPACITY))),
@@ -401,7 +408,11 @@ impl BrokerRoleNotifier {
         let started_at = Instant::now();
         let result = self
             .client
-            .invoke_request(Some(&task.broker_addr), task.build_request(), NOTIFY_TIMEOUT_MILLIS)
+            .invoke_request(
+                Some(&task.broker_addr),
+                task.build_request(&self.command_factory),
+                NOTIFY_TIMEOUT_MILLIS,
+            )
             .await;
         let success = matches!(&result, Ok(response) if response.code() == ResponseCode::Success as i32);
         let should_retry = self.mailbox.lock().finish(&task, success, started_at.elapsed());

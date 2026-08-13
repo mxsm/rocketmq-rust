@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use rocketmq_protocol::protocol::remoting_command_defaults::{RemotingCommandDefaults, RemotingCommandFactory};
+use rocketmq_protocol::protocol::SerializeType;
 use rocketmq_store_api::MasterEpoch;
 use rocketmq_store_api::SyncStateSetEpoch;
 use tokio::sync::mpsc;
@@ -38,6 +40,16 @@ fn state(master_epoch: i32, sync_state_set_epoch: i32) -> NotifyState {
         Some("127.0.0.1:10911".to_string()),
     )
     .expect("valid notify state")
+}
+
+#[test]
+fn notify_request_uses_the_owning_command_factory() {
+    let factory = RemotingCommandFactory::new(RemotingCommandDefaults::new(666, SerializeType::ROCKETMQ));
+
+    let request = NotifyTask::new_for_test(key(1), state(1, 1)).build_request(&factory);
+
+    assert_eq!(request.version(), 666);
+    assert_eq!(request.serialize_type(), SerializeType::ROCKETMQ);
 }
 
 #[test]

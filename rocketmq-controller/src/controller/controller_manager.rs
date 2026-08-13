@@ -51,6 +51,8 @@ use rocketmq_protocol::protocol::header::controller::get_replica_info_request_he
 use rocketmq_protocol::protocol::header::controller::get_replica_info_response_header::GetReplicaInfoResponseHeader;
 use rocketmq_protocol::protocol::header::elect_master_response_header::ElectMasterResponseHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::common::time_utils::current_millis;
@@ -306,6 +308,9 @@ pub struct ControllerManager {
     /// Configuration
     config: ControllerConfigHandle,
 
+    /// Immutable wire defaults shared by all command producers owned by this Controller.
+    command_factory: RemotingCommandFactory,
+
     /// Raft controller for consensus and leader election.
     /// Lifecycle mutation is synchronized inside the controller.
     raft_controller: Arc<RaftController>,
@@ -365,7 +370,35 @@ impl ControllerManager {
         service_context: ChildServiceContext,
         telemetry_handle: TelemetryHandle,
     ) -> Result<Self> {
-        Self::new_with_security(config, service_context, telemetry_handle, None).await
+        Self::new_with_remoting_command_factory(
+            config,
+            service_context,
+            telemetry_handle,
+            application_remoting_command_factory(),
+        )
+        .await
+    }
+
+    /// Creates a Controller manager with explicitly injected remoting defaults.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ControllerError`] when configuration validation or component
+    /// initialization fails.
+    pub async fn new_with_remoting_command_factory(
+        config: ControllerConfig,
+        service_context: ChildServiceContext,
+        telemetry_handle: TelemetryHandle,
+        command_factory: RemotingCommandFactory,
+    ) -> Result<Self> {
+        Self::new_with_security_and_remoting_command_factory(
+            config,
+            service_context,
+            telemetry_handle,
+            None,
+            command_factory,
+        )
+        .await
     }
 
     /// Creates a Controller manager with an explicitly injected security boundary.
@@ -383,6 +416,29 @@ impl ControllerManager {
         service_context: ChildServiceContext,
         telemetry_handle: TelemetryHandle,
         security: Option<ControllerSecurity>,
+    ) -> Result<Self> {
+        Self::new_with_security_and_remoting_command_factory(
+            config,
+            service_context,
+            telemetry_handle,
+            security,
+            application_remoting_command_factory(),
+        )
+        .await
+    }
+
+    /// Creates a Controller manager with explicit security and wire-default owners.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ControllerError`] when configuration is invalid, an enabled
+    /// security capability is missing, or component initialization fails.
+    pub async fn new_with_security_and_remoting_command_factory(
+        config: ControllerConfig,
+        service_context: ChildServiceContext,
+        telemetry_handle: TelemetryHandle,
+        security: Option<ControllerSecurity>,
+        command_factory: RemotingCommandFactory,
     ) -> Result<Self> {
         config.validate().map_err(ControllerError::ConfigError)?;
         let security_enabled =
@@ -428,12 +484,15 @@ impl ControllerManager {
         // Initialize Raft controller for leader election.
         // The controller and request processor must share the same heartbeat manager so that
         // liveness-aware paths observe the broker heartbeats recorded by RPC handlers.
-        let raft_arc = Arc::new(RaftController::new_open_raft_with_heartbeat_and_metrics(
-            config.reader(),
-            heartbeat_manager.clone(),
-            service_context.component("controller.openraft"),
-            metrics_manager.clone(),
-        ));
+        let raft_arc = Arc::new(
+            RaftController::new_open_raft_with_heartbeat_metrics_and_remoting_command_factory(
+                config.reader(),
+                heartbeat_manager.clone(),
+                service_context.component("controller.openraft"),
+                metrics_manager.clone(),
+                command_factory,
+            ),
+        );
 
         // Initialize remoting server for inbound requests
         let listen_port = config.snapshot().listen_addr.port() as u32;
@@ -466,13 +525,18 @@ impl ControllerManager {
             .map_err(|error| ControllerError::runtime_error(format!("Failed to build remoting client: {error}")))?,
         );
         let notify_retry_base_delay = Duration::from_millis(config.snapshot().heartbeat_interval_ms.max(100));
-        let broker_role_notifier = BrokerRoleNotifier::new(remoting_client.transport_client(), notify_retry_base_delay);
+        let broker_role_notifier = BrokerRoleNotifier::new(
+            remoting_client.transport_client(),
+            notify_retry_base_delay,
+            command_factory,
+        );
         info!("Remoting client created");
 
         info!("Controller manager created successfully");
 
         Ok(Self {
             config,
+            command_factory,
             raft_controller: raft_arc,
             heartbeat_manager,
             remoting_server: Mutex::new(remoting_server),
@@ -973,6 +1037,11 @@ impl ControllerManager {
         self.config.snapshot()
     }
 
+    /// Returns the immutable command factory owned by this Controller instance.
+    pub fn remoting_command_factory(&self) -> RemotingCommandFactory {
+        self.command_factory
+    }
+
     /// Returns the security boundary injected by the composition root.
     pub fn security(&self) -> Option<&ControllerSecurity> {
         self.security.as_ref()
@@ -1273,6 +1342,8 @@ mod tests {
     use rocketmq_protocol::protocol::header::controller::register_broker_to_controller_request_header::RegisterBrokerToControllerRequestHeader;
     use rocketmq_protocol::protocol::header::namesrv::broker_request::BrokerHeartbeatRequestHeader;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+    use rocketmq_protocol::protocol::remoting_command_defaults::{RemotingCommandDefaults, RemotingCommandFactory};
+    use rocketmq_protocol::protocol::SerializeType;
     use rocketmq_transport::api::v1::Channel;
     use rocketmq_transport::api::v1::ConnectionHandlerContextWrapper;
     use rocketmq_transport::api::v1::RequestProcessor;
@@ -1329,6 +1400,80 @@ mod tests {
 
     fn test_service_context() -> ChildServiceContext {
         rocketmq_runtime::RuntimeContext::from_current("controller-manager-test").service_context("controller-manager")
+    }
+
+    #[tokio::test]
+    async fn manager_retains_its_injected_remoting_command_factory() {
+        let factory = RemotingCommandFactory::new(RemotingCommandDefaults::new(667, SerializeType::ROCKETMQ));
+        let config = ControllerConfig::default().with_node_info(1, reserve_controller_addresses().0);
+
+        let manager = ControllerManager::new_with_security_and_remoting_command_factory(
+            config,
+            test_service_context(),
+            test_telemetry_handle(),
+            None,
+            factory,
+        )
+        .await
+        .expect("create manager with explicit command factory");
+
+        assert_eq!(manager.remoting_command_factory(), factory);
+        let response = manager
+            .controller()
+            .get_controller_metadata()
+            .await
+            .expect("query unstarted Controller")
+            .expect("unstarted Controller response");
+        assert_eq!(response.version(), 667);
+        assert_eq!(response.serialize_type(), SerializeType::ROCKETMQ);
+    }
+
+    #[tokio::test]
+    async fn request_processor_uses_its_manager_command_factory() {
+        let binary_factory = RemotingCommandFactory::new(RemotingCommandDefaults::new(668, SerializeType::ROCKETMQ));
+        let json_factory = RemotingCommandFactory::new(RemotingCommandDefaults::new(669, SerializeType::JSON));
+        let binary_manager = Arc::new(
+            ControllerManager::new_with_remoting_command_factory(
+                ControllerConfig::default().with_node_info(1, reserve_controller_addresses().0),
+                test_service_context(),
+                test_telemetry_handle(),
+                binary_factory,
+            )
+            .await
+            .expect("create binary manager"),
+        );
+        let json_manager = Arc::new(
+            ControllerManager::new_with_remoting_command_factory(
+                ControllerConfig::default().with_node_info(2, reserve_controller_addresses().0),
+                test_service_context(),
+                test_telemetry_handle(),
+                json_factory,
+            )
+            .await
+            .expect("create JSON manager"),
+        );
+
+        async fn unsupported_response(manager: Arc<ControllerManager>) -> RemotingCommand {
+            let mut processor = ControllerRequestProcessor::new(manager);
+            let channel = create_test_channel().await;
+            let ctx = Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+            let mut request = RemotingCommand::create_remoting_command(-12345);
+            processor
+                .process_request(channel, ctx, &mut request)
+                .await
+                .expect("unsupported request dispatch")
+                .expect("unsupported request response")
+        }
+
+        let binary = unsupported_response(binary_manager).await;
+        let json = unsupported_response(json_manager).await;
+
+        assert_eq!(binary.code(), ResponseCode::RequestCodeNotSupported as i32);
+        assert_eq!(binary.version(), 668);
+        assert_eq!(binary.serialize_type(), SerializeType::ROCKETMQ);
+        assert_eq!(json.code(), ResponseCode::RequestCodeNotSupported as i32);
+        assert_eq!(json.version(), 669);
+        assert_eq!(json.serialize_type(), SerializeType::JSON);
     }
 
     #[tokio::test]
