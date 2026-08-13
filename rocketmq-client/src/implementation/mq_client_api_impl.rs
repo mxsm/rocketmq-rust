@@ -282,6 +282,7 @@ use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::static_topic::topic_config_and_queue_mapping::TopicConfigAndQueueMapping;
 #[cfg(feature = "admin-mutation")]
@@ -395,6 +396,7 @@ pub struct MQClientAPIImpl {
     top_addressing: RwLock<Arc<dyn TopAddressing>>,
     name_srv_addr: RwLock<Option<String>>,
     client_config: Arc<ClientConfig>,
+    command_factory: RemotingCommandFactory,
     background_tasks: TaskTracker,
     background_shutdown: CancellationToken,
 }

@@ -26,6 +26,8 @@ use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 pub use rocketmq_observability::metrics::client::ClientMetrics;
 pub use rocketmq_observability::TelemetryHandle;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
+use rocketmq_protocol::protocol::remoting_command_facade::initialize_remoting_command_factory;
 use rocketmq_runtime::BudgetCapacity;
 use rocketmq_runtime::BudgetLimit;
 use rocketmq_runtime::ChildServiceContext;
@@ -91,6 +93,30 @@ impl ClientRuntime {
         config: ClientRuntimeConfig,
         telemetry_handle: TelemetryHandle,
     ) -> RocketMQResult<Arc<Self>> {
+        let remoting_command_factory =
+            initialize_remoting_command_factory(rocketmq_model::version::CURRENT_VERSION as i32).map_err(|error| {
+                rocketmq_error::RocketMQError::ConfigParseFailed {
+                    key: "remoting.command.defaults",
+                    reason: error.to_string(),
+                }
+            })?;
+        Self::try_new_with_remoting_command_factory(service_context, config, telemetry_handle, remoting_command_factory)
+    }
+
+    /// Creates a client runtime with explicit immutable remoting wire defaults.
+    ///
+    /// This entry point does not read process configuration and permits
+    /// independent embedded client runtimes to use different wire defaults.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the configured client resource budget is invalid.
+    pub fn try_new_with_remoting_command_factory(
+        service_context: ChildServiceContext,
+        config: ClientRuntimeConfig,
+        telemetry_handle: TelemetryHandle,
+        remoting_command_factory: RemotingCommandFactory,
+    ) -> RocketMQResult<Arc<Self>> {
         let resource_budget = build_client_resource_budget(&config, &service_context.process_budget())?;
         let client_metrics = ClientMetrics::from_handle(&telemetry_handle);
         let pool = ClientPool::new(
@@ -98,6 +124,7 @@ impl ClientRuntime {
             resource_budget.clone(),
             telemetry_handle.clone(),
             client_metrics.clone(),
+            remoting_command_factory,
         );
         Ok(Arc::new(Self {
             service_context,
@@ -637,7 +664,64 @@ pub(crate) fn spawn_delayed_client_action_with_context<F>(
 mod tests {
     use std::sync::atomic::AtomicUsize;
 
+    use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandDefaults;
+    use rocketmq_protocol::protocol::SerializeType;
+
     use super::*;
+
+    #[test]
+    fn client_runtimes_keep_independent_remoting_command_factories() {
+        let json_factory = RemotingCommandFactory::new(RemotingCommandDefaults::new(301, SerializeType::JSON));
+        let binary_factory = RemotingCommandFactory::new(RemotingCommandDefaults::new(302, SerializeType::ROCKETMQ));
+        let json_runtime = ClientRuntime::try_new_with_remoting_command_factory(
+            TEST_RUNTIME_OWNER.root_context().component("client-json-command-owner"),
+            ClientRuntimeConfig::default(),
+            TelemetryHandle::noop(),
+            json_factory,
+        )
+        .expect("JSON client runtime");
+        let binary_runtime = ClientRuntime::try_new_with_remoting_command_factory(
+            TEST_RUNTIME_OWNER
+                .root_context()
+                .component("client-binary-command-owner"),
+            ClientRuntimeConfig::default(),
+            TelemetryHandle::noop(),
+            binary_factory,
+        )
+        .expect("ROCKETMQ client runtime");
+        let mut json_config = crate::base::client_config::ClientConfig::default();
+        json_config.set_instance_name("client-json-command-owner".into());
+        let mut binary_config = crate::base::client_config::ClientConfig::default();
+        binary_config.set_instance_name("client-binary-command-owner".into());
+
+        let json_client = json_runtime
+            .pool()
+            .get_or_create(json_config, None)
+            .expect("JSON client owner");
+        let binary_client = binary_runtime
+            .pool()
+            .get_or_create(binary_config, None)
+            .expect("ROCKETMQ client owner");
+
+        assert_eq!(json_client.instance().remoting_command_factory(), json_factory);
+        assert_eq!(binary_client.instance().remoting_command_factory(), binary_factory);
+        assert_eq!(
+            json_client
+                .instance()
+                .get_mq_client_api_impl()
+                .expect("JSON API owner")
+                .remoting_command_factory(),
+            json_factory
+        );
+        assert_eq!(
+            binary_client
+                .instance()
+                .get_mq_client_api_impl()
+                .expect("ROCKETMQ API owner")
+                .remoting_command_factory(),
+            binary_factory
+        );
+    }
 
     #[test]
     fn sibling_component_budgets_share_the_client_runtime_parent_limit() {

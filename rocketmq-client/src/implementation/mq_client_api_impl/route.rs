@@ -73,7 +73,7 @@ impl MQClientAPIImpl {
             accept_standard_json_only: None,
             topic_request_header: None,
         };
-        let request = RemotingCommand::create_request_command(RequestCode::GetRouteinfoByTopic, request_header);
+        let request = self.create_request_command(RequestCode::GetRouteinfoByTopic, request_header);
         let response = self.remoting_client.invoke_request(None, request, timeout_millis).await;
         match response {
             Ok(mut result) => {

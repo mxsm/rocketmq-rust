@@ -69,9 +69,9 @@ impl MQClientAPIImpl {
             if *SEND_SMART_MSG {
                 let request_header_v2 =
                     SendMessageRequestHeaderV2::create_send_message_request_header_v2(&request_header);
-                RemotingCommand::create_request_command(RequestCode::SendReplyMessageV2, request_header_v2)
+                self.create_request_command(RequestCode::SendReplyMessageV2, request_header_v2)
             } else {
-                RemotingCommand::create_request_command(RequestCode::SendReplyMessage, request_header)
+                self.create_request_command(RequestCode::SendReplyMessage, request_header)
             }
         } else {
             let is_batch_message = msg.as_any().downcast_ref::<MessageBatch>().is_some();
@@ -83,9 +83,9 @@ impl MQClientAPIImpl {
                 } else {
                     RequestCode::SendMessageV2
                 };
-                RemotingCommand::create_request_command(request_code, request_header_v2)
+                self.create_request_command(request_code, request_header_v2)
             } else {
-                RemotingCommand::create_request_command(RequestCode::SendMessage, request_header)
+                self.create_request_command(RequestCode::SendMessage, request_header)
             }
         };
 
@@ -756,7 +756,7 @@ impl MQClientAPIImpl {
         heartbeat_data: &HeartbeatData,
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<(i32, Option<RemotingCommand>)> {
-        let request = heartbeat_request(heartbeat_data, self.client_config.language)?;
+        let request = heartbeat_request(&self.command_factory, heartbeat_data, self.client_config.language)?;
         let response = self
             .remoting_client
             .invoke_request(Some(addr), request, timeout_millis)
@@ -788,7 +788,7 @@ impl MQClientAPIImpl {
         heartbeat_data: &HeartbeatData,
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<()> {
-        let request = heartbeat_request(heartbeat_data, self.client_config.language)?;
+        let request = heartbeat_request(&self.command_factory, heartbeat_data, self.client_config.language)?;
         self.remoting_client
             .invoke_request_oneway(addr, request, timeout_millis)
             .await
@@ -800,7 +800,7 @@ impl MQClientAPIImpl {
         heartbeat_data: &HeartbeatData,
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<bool> {
-        let request = heartbeat_request(heartbeat_data, self.client_config.language)?;
+        let request = heartbeat_request(&self.command_factory, heartbeat_data, self.client_config.language)?;
         let response = self
             .remoting_client
             .invoke_request(Some(addr), request, timeout_millis)
@@ -814,7 +814,7 @@ impl MQClientAPIImpl {
         heartbeat_data: &HeartbeatData,
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<HeartbeatV2Result> {
-        let request = heartbeat_request(heartbeat_data, self.client_config.language)?;
+        let request = heartbeat_request(&self.command_factory, heartbeat_data, self.client_config.language)?;
         let response = self
             .remoting_client
             .invoke_request(Some(addr), request, timeout_millis)
@@ -837,7 +837,7 @@ impl MQClientAPIImpl {
         subscription_data: &SubscriptionData,
         timeout_millis: u64,
     ) -> RocketMQResult<()> {
-        let mut request = RemotingCommand::create_remoting_command(RequestCode::CheckClientConfig);
+        let mut request = self.create_remoting_command(RequestCode::CheckClientConfig);
         let body = CheckClientRequestBody::new(
             client_id.to_string(),
             consumer_group.to_string(),
@@ -867,7 +867,7 @@ impl MQClientAPIImpl {
         request_header: RecallMessageRequestHeader,
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<String> {
-        let request = RemotingCommand::create_request_command(RequestCode::RecallMessage, request_header);
+        let request = self.create_request_command(RequestCode::RecallMessage, request_header);
 
         let response = self
             .remoting_client
@@ -903,7 +903,7 @@ impl MQClientAPIImpl {
     where
         F: FnOnce(rocketmq_error::RocketMQResult<RemotingCommand>) + Send,
     {
-        let request = RemotingCommand::create_request_command(RequestCode::RecallMessage, request_header);
+        let request = self.create_request_command(RequestCode::RecallMessage, request_header);
         let response = self
             .remoting_client
             .invoke_request(Some(addr), request, timeout_millis)

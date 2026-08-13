@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_client_rust::ClientConfig;
+#![recursion_limit = "256"]
+
 use rocketmq_client_rust::ClientRuntime;
 use rocketmq_client_rust::ClientRuntimeConfig;
 use rocketmq_client_rust::TelemetryHandle;
@@ -22,7 +23,7 @@ use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 
 #[test]
-fn client_pool_rejects_invalid_remoting_serialization_before_admission() {
+fn client_runtime_rejects_invalid_remoting_serialization_before_pool_admission() {
     // SAFETY: this integration-test binary contains one test, so no concurrent thread can read or
     // mutate this process environment key while the assertion runs.
     unsafe {
@@ -34,15 +35,12 @@ fn client_pool_rejects_invalid_remoting_serialization_before_admission() {
         ..Default::default()
     })
     .expect("test runtime owner should start");
-    let runtime = ClientRuntime::try_new(
+    let error = match ClientRuntime::try_new(
         owner.root_context().component("client"),
         ClientRuntimeConfig::default(),
         TelemetryHandle::noop(),
-    )
-    .expect("client runtime should be valid");
-
-    let error = match runtime.pool().get_or_create(ClientConfig::default(), None) {
-        Ok(_) => panic!("invalid remoting serialization must reject client admission"),
+    ) {
+        Ok(_) => panic!("invalid remoting serialization must reject client runtime construction"),
         Err(error) => error,
     };
     assert!(matches!(
@@ -52,8 +50,6 @@ fn client_pool_rejects_invalid_remoting_serialization_before_admission() {
             ..
         }
     ));
-    assert_eq!(runtime.pool().instance_count(), 0);
-
     owner
         .shutdown_runtime_blocking()
         .expect("test runtime should shut down cleanly");

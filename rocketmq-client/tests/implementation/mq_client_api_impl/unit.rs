@@ -38,7 +38,10 @@ use std::sync::atomic::Ordering as AtomicOrdering;
 use rocketmq_model::common::lite::LiteSubscriptionAction;
 use rocketmq_protocol::protocol::command_custom_header::CommandCustomHeader;
 use rocketmq_protocol::protocol::command_custom_header::FromMap;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandDefaults;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
+use rocketmq_protocol::protocol::SerializeType;
 
 use super::*;
 
@@ -413,8 +416,11 @@ fn create_topic_request_header_rejects_values_outside_java_int_range() {
 #[cfg(feature = "admin-mutation")]
 #[test]
 fn create_topic_list_request_matches_java_request_code_and_body() {
-    let request = create_topic_list_request(vec![TopicConfig::new("TopicA"), TopicConfig::new("TopicB")])
-        .expect("topic list request should encode");
+    let request = create_topic_list_request(
+        &test_remoting_command_factory(),
+        vec![TopicConfig::new("TopicA"), TopicConfig::new("TopicB")],
+    )
+    .expect("topic list request should encode");
 
     assert_eq!(request.code(), RequestCode::UpdateAndCreateTopicList as i32);
     let body = request.body().expect("topic list request body should be set");
@@ -428,10 +434,13 @@ fn create_topic_list_request_matches_java_request_code_and_body() {
 #[cfg(feature = "admin-mutation")]
 #[test]
 fn create_subscription_group_list_request_matches_java_request_code_and_body() {
-    let request = create_subscription_group_list_request(vec![
-        SubscriptionGroupConfig::new(CheetahString::from_static_str("GroupA")),
-        SubscriptionGroupConfig::new(CheetahString::from_static_str("GroupB")),
-    ])
+    let request = create_subscription_group_list_request(
+        &test_remoting_command_factory(),
+        vec![
+            SubscriptionGroupConfig::new(CheetahString::from_static_str("GroupA")),
+            SubscriptionGroupConfig::new(CheetahString::from_static_str("GroupB")),
+        ],
+    )
     .expect("subscription group list request should encode");
 
     assert_eq!(request.code(), RequestCode::UpdateAndCreateSubscriptionGroupList as i32);
@@ -448,6 +457,7 @@ fn create_subscription_group_list_request_matches_java_request_code_and_body() {
 #[test]
 fn query_correction_offset_request_joins_filter_groups_like_java() {
     let request = query_correction_offset_request(
+        &test_remoting_command_factory(),
         CheetahString::from_static_str("TopicA"),
         CheetahString::from_static_str("CompareGroup"),
         Some(vec![
@@ -837,8 +847,8 @@ fn lite_subscription_ctl_request_matches_java_single_dto_body() {
         .with_topic(CheetahString::from_static_str("topic-a"))
         .with_version(42);
 
-    let request =
-        lite_subscription_ctl_request(lite_subscription_dto.clone()).expect("lite subscription request should encode");
+    let request = lite_subscription_ctl_request(&test_remoting_command_factory(), lite_subscription_dto.clone())
+        .expect("lite subscription request should encode");
 
     assert_eq!(request.code(), RequestCode::LiteSubscriptionCtl as i32);
     let body = request.body().expect("request body should be set");
@@ -848,20 +858,23 @@ fn lite_subscription_ctl_request_matches_java_single_dto_body() {
 
 #[test]
 fn notification_request_matches_java_header_fields() {
-    let mut request = notification_request(NotificationRequestHeader {
-        consumer_group: CheetahString::from_static_str("group-a"),
-        topic: CheetahString::from_static_str("topic-a"),
-        queue_id: -1,
-        poll_time: 3_000,
-        born_time: 10,
-        order: true,
-        attempt_id: Some(CheetahString::from_static_str("attempt-a")),
-        exp_type: Some(CheetahString::from_static_str("TAG")),
-        exp: Some(CheetahString::from_static_str("tag-a")),
-        is_lite_consumer: false,
-        client_id: None,
-        topic_request_header: None,
-    });
+    let mut request = notification_request(
+        &test_remoting_command_factory(),
+        NotificationRequestHeader {
+            consumer_group: CheetahString::from_static_str("group-a"),
+            topic: CheetahString::from_static_str("topic-a"),
+            queue_id: -1,
+            poll_time: 3_000,
+            born_time: 10,
+            order: true,
+            attempt_id: Some(CheetahString::from_static_str("attempt-a")),
+            exp_type: Some(CheetahString::from_static_str("TAG")),
+            exp: Some(CheetahString::from_static_str("tag-a")),
+            is_lite_consumer: false,
+            client_id: None,
+            topic_request_header: None,
+        },
+    );
 
     assert_eq!(request.code(), RequestCode::Notification as i32);
     request.make_custom_header_to_net();
@@ -883,6 +896,35 @@ fn notification_request_matches_java_header_fields() {
     assert_eq!(ext_fields.get("exp").map(|value| value.as_str()), Some("tag-a"));
 }
 
+fn test_remoting_command_factory() -> RemotingCommandFactory {
+    RemotingCommandFactory::new(RemotingCommandDefaults::default())
+}
+
+#[test]
+fn notification_request_uses_owning_factory_defaults() {
+    let factory = RemotingCommandFactory::new(RemotingCommandDefaults::new(731, SerializeType::ROCKETMQ));
+    let request = notification_request(
+        &factory,
+        NotificationRequestHeader {
+            consumer_group: CheetahString::from_static_str("group-owner"),
+            topic: CheetahString::from_static_str("topic-owner"),
+            queue_id: 1,
+            poll_time: 3_000,
+            born_time: 10,
+            order: false,
+            attempt_id: None,
+            exp_type: None,
+            exp: None,
+            is_lite_consumer: false,
+            client_id: None,
+            topic_request_header: None,
+        },
+    );
+
+    assert_eq!(request.version(), 731);
+    assert_eq!(request.serialize_type(), SerializeType::ROCKETMQ);
+}
+
 #[cfg(feature = "admin-mutation")]
 #[test]
 fn create_and_update_plain_access_config_request_matches_java_legacy_acl_body() {
@@ -897,8 +939,8 @@ fn create_and_update_plain_access_config_request_matches_java_legacy_acl_body() 
         group_perms: vec![CheetahString::from_static_str("GroupA=SUB")],
     };
 
-    let request =
-        create_and_update_plain_access_config_request(&config).expect("plain access config request should encode");
+    let request = create_and_update_plain_access_config_request(&test_remoting_command_factory(), &config)
+        .expect("plain access config request should encode");
 
     assert_eq!(request.code(), RequestCode::UpdateAndCreateAclConfig as i32);
     let body = std::str::from_utf8(request.body().expect("request body should be set").as_ref())
@@ -912,7 +954,8 @@ fn create_and_update_plain_access_config_request_matches_java_legacy_acl_body() 
 #[cfg(feature = "admin-mutation")]
 #[test]
 fn delete_plain_access_config_request_matches_java_legacy_acl_body() {
-    let request = delete_plain_access_config_request(&CheetahString::from_static_str("AK"));
+    let request =
+        delete_plain_access_config_request(&test_remoting_command_factory(), &CheetahString::from_static_str("AK"));
 
     assert_eq!(request.code(), RequestCode::DeleteAclConfig as i32);
     assert_eq!(request.body().expect("request body should be set").as_ref(), b"AK");
@@ -920,7 +963,10 @@ fn delete_plain_access_config_request_matches_java_legacy_acl_body() {
 
 #[test]
 fn get_acl_request_matches_java_auth_get_acl_header() {
-    let request = get_acl_request(CheetahString::from_static_str("User:alice"));
+    let request = get_acl_request(
+        &test_remoting_command_factory(),
+        CheetahString::from_static_str("User:alice"),
+    );
 
     assert_eq!(request.code(), RequestCode::AuthGetAcl as i32);
     let header = request
@@ -933,7 +979,8 @@ fn get_acl_request_matches_java_auth_get_acl_header() {
 fn heartbeat_request_matches_java_register_client_request() {
     let heartbeat_data = HeartbeatData::default();
 
-    let request = heartbeat_request(&heartbeat_data, LanguageCode::RUST).expect("heartbeat request should encode body");
+    let request = heartbeat_request(&test_remoting_command_factory(), &heartbeat_data, LanguageCode::RUST)
+        .expect("heartbeat request should encode body");
 
     assert_eq!(request.code(), RequestCode::HeartBeat as i32);
     assert!(request.body().is_some());
@@ -941,7 +988,7 @@ fn heartbeat_request_matches_java_register_client_request() {
 
 #[test]
 fn get_all_consumer_offset_request_uses_java_request_code() {
-    let request = get_all_consumer_offset_request();
+    let request = get_all_consumer_offset_request(&test_remoting_command_factory());
 
     assert_eq!(request.code(), RequestCode::GetAllConsumerOffset as i32);
 }

@@ -238,7 +238,12 @@ pub(crate) fn application_remoting_command_defaults() -> RemotingCommandDefaults
     *APPLICATION_DEFAULTS.get_or_init(RemotingCommandDefaults::default)
 }
 
-pub(crate) fn application_remoting_command_factory() -> RemotingCommandFactory {
+/// Returns the immutable compatibility factory selected by the application.
+///
+/// Instance owners should capture this value once at their composition
+/// boundary and pass it to request/response producers. The returned factory
+/// does not read environment variables.
+pub fn application_remoting_command_factory() -> RemotingCommandFactory {
     RemotingCommandFactory::new(application_remoting_command_defaults())
 }
 

@@ -173,6 +173,7 @@ impl DefaultMQProducerImpl {
                             broker_addr.as_str(),
                         );
                         let mq_client_api = client_instance.get_mq_client_api_impl()?;
+                        let command_factory = mq_client_api.remoting_command_factory();
                         let send_config = runtime.send_config.clone();
                         let namespace = runtime.client_config.namespace.clone();
                         let retained_bytes = Self::message_body_len_for_backpressure(&msg).saturating_add(4 * 1024);
@@ -184,6 +185,7 @@ impl DefaultMQProducerImpl {
                                 &mq,
                                 &broker_name,
                                 &send_config,
+                                command_factory,
                                 namespace.as_deref(),
                             )?;
                             Ok(OnewayEnvelope {
@@ -1848,6 +1850,7 @@ pub(super) fn build_oneway_request_internal<T>(
     mq: &MessageQueue,
     broker_name: &CheetahString,
     send_config: &ProducerSendConfigSnapshot,
+    command_factory: rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory,
     _namespace: Option<&str>,
 ) -> rocketmq_error::RocketMQResult<RemotingCommand>
 where
@@ -1855,7 +1858,6 @@ where
 {
     use rocketmq_protocol::code::request_code::RequestCode;
     use rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
-    use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
     // Set message ID
     MessageClientIDSetter::set_uniq_id(msg);
@@ -1885,7 +1887,7 @@ where
     };
 
     // Build command
-    let mut request = RemotingCommand::create_request_command(RequestCode::SendMessage, request_header);
+    let mut request = command_factory.create_request_command(RequestCode::SendMessage, request_header);
 
     // Set body (zero-copy: Bytes is reference-counted)
     if let Some(body) = msg.get_body() {

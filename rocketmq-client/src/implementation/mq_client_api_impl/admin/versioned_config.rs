@@ -227,7 +227,7 @@ impl MQClientAPIImpl {
         topic: CheetahString,
         timeout_millis: u64,
     ) -> RocketMQResult<TopicConfigVersioned> {
-        let request = RemotingCommand::create_request_command(
+        let request = self.create_request_command(
             RequestCode::GetTopicConfig,
             GetTopicConfigRequestHeader {
                 topic,
@@ -274,11 +274,12 @@ impl MQClientAPIImpl {
             ));
         }
 
-        let request = RemotingCommand::create_request_command(
-            RequestCode::UpdateBrokerConfigCas,
-            UpdateBrokerConfigRequestHeader { expected_generation },
-        )
-        .set_body(body.to_string());
+        let request = self
+            .create_request_command(
+                RequestCode::UpdateBrokerConfigCas,
+                UpdateBrokerConfigRequestHeader { expected_generation },
+            )
+            .set_body(body.to_string());
         let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
         let response = self
             .remoting_client
@@ -370,7 +371,7 @@ impl MQClientAPIImpl {
                     .map_err(|_| RocketMQError::illegal_argument("writeQueueNums exceeds Java int range"))
             })
             .transpose()?;
-        let request = RemotingCommand::create_request_command(
+        let request = self.create_request_command(
             RequestCode::UpdateTopicConfigCas,
             UpdateTopicConfigCasRequestHeader {
                 topic,
@@ -438,7 +439,7 @@ impl MQClientAPIImpl {
                     .map_err(|_| RocketMQError::illegal_argument("consumeTimeoutMinutes exceeds Java int range"))
             })
             .transpose()?;
-        let request = RemotingCommand::create_request_command(
+        let request = self.create_request_command(
             RequestCode::UpdateSubscriptionGroupConfigCas,
             UpdateSubscriptionGroupConfigCasRequestHeader {
                 group,
@@ -461,7 +462,7 @@ impl MQClientAPIImpl {
         addr: &CheetahString,
         timeout_millis: u64,
     ) -> RocketMQResult<BrokerConfigSnapshot> {
-        let request = RemotingCommand::create_remoting_command(RequestCode::GetBrokerConfig);
+        let request = self.create_remoting_command(RequestCode::GetBrokerConfig);
         let response = self
             .remoting_client
             .invoke_request(Some(addr), request, timeout_millis)
@@ -483,7 +484,7 @@ impl MQClientAPIImpl {
         group: CheetahString,
         timeout_millis: u64,
     ) -> RocketMQResult<SubscriptionGroupConfigVersioned> {
-        let request = RemotingCommand::create_request_command(
+        let request = self.create_request_command(
             RequestCode::GetSubscriptionGroupConfig,
             rocketmq_protocol::protocol::header::get_subscription_group_config_request_header::GetSubscriptionGroupConfigRequestHeader {
                 group,
