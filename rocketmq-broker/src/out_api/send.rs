@@ -29,8 +29,13 @@ use rocketmq_protocol::protocol::header::message_operation_header::send_message_
 use rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2;
 use rocketmq_protocol::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 
-pub(super) fn build_send_message_request(msg: MessageExt, group: CheetahString) -> RemotingCommand {
+pub(super) fn build_send_message_request(
+    command_factory: &RemotingCommandFactory,
+    msg: MessageExt,
+    group: CheetahString,
+) -> RemotingCommand {
     let header = SendMessageRequestHeader {
         producer_group: group,
         topic: msg.topic().clone(),
@@ -46,7 +51,7 @@ pub(super) fn build_send_message_request(msg: MessageExt, group: CheetahString) 
         ..Default::default()
     };
     let header = SendMessageRequestHeaderV2::create_send_message_request_header_v2_with_move(header);
-    RemotingCommand::create_request_command(RequestCode::SendMessage, header)
+    command_factory.create_request_command(RequestCode::SendMessage, header)
 }
 
 pub(crate) fn process_send_response(
@@ -105,7 +110,23 @@ pub(crate) fn process_send_response(
 
 #[cfg(test)]
 mod tests {
+    use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandDefaults;
+    use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
+    use rocketmq_protocol::protocol::SerializeType;
+
     use super::*;
+
+    #[test]
+    fn send_request_uses_owning_factory_defaults() {
+        let factory = RemotingCommandFactory::new(RemotingCommandDefaults::new(642, SerializeType::ROCKETMQ));
+        let mut message = MessageExt::default();
+        message.set_topic(CheetahString::from_static_str("factory-topic"));
+
+        let request = build_send_message_request(&factory, message, CheetahString::from_static_str("producer-group"));
+
+        assert_eq!(request.version(), 642);
+        assert_eq!(request.serialize_type(), SerializeType::ROCKETMQ);
+    }
 
     #[test]
     fn send_response_maps_success_to_model_result() {

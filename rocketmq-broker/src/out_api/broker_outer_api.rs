@@ -84,6 +84,8 @@ use rocketmq_protocol::protocol::header::namesrv::topic_operation_header::TopicR
 use rocketmq_protocol::protocol::header::unlock_batch_mq_request_header::UnlockBatchMqRequestHeader;
 use rocketmq_protocol::protocol::namesrv::RegisterBrokerResult;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_protocol::protocol::route::route_data_view::QueueData;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::static_topic::topic_config_and_queue_mapping::TopicConfigAndQueueMapping;
@@ -147,6 +149,7 @@ pub struct BrokerOuterAPI {
     name_server_address: Option<String>,
     rpc_client: RpcClientImpl,
     client_metadata: Arc<ClientMetadata>,
+    command_factory: RemotingCommandFactory,
 }
 
 impl BrokerOuterAPI {
@@ -155,19 +158,27 @@ impl BrokerOuterAPI {
         service_context: ChildServiceContext,
         telemetry: TransportTelemetry,
     ) -> Self {
-        let client = Arc::new(
-            RemotingClient::builder(tokio_client_config, DefaultRequestProcessor, service_context)
-                .telemetry(telemetry)
-                .build()
-                .expect("clamped broker remoting client budgets must be valid"),
-        );
-        let client_metadata = Arc::new(ClientMetadata::new());
-        Self {
-            remoting_client: client.clone(),
-            name_server_address: None,
-            rpc_client: RpcClientImpl::new(Arc::clone(&client_metadata), client.transport_client()),
-            client_metadata,
-        }
+        Self::new_with_remoting_command_factory(
+            tokio_client_config,
+            service_context,
+            telemetry,
+            application_remoting_command_factory(),
+        )
+    }
+
+    pub fn new_with_remoting_command_factory(
+        tokio_client_config: Arc<TransportClientConfig>,
+        service_context: ChildServiceContext,
+        telemetry: TransportTelemetry,
+        command_factory: RemotingCommandFactory,
+    ) -> Self {
+        Self::new_with_hook_and_remoting_command_factory(
+            tokio_client_config,
+            None,
+            service_context,
+            telemetry,
+            command_factory,
+        )
     }
 
     pub fn new_with_hook(
@@ -175,6 +186,22 @@ impl BrokerOuterAPI {
         rpc_hook: Option<Arc<dyn RPCHook>>,
         service_context: ChildServiceContext,
         telemetry: TransportTelemetry,
+    ) -> Self {
+        Self::new_with_hook_and_remoting_command_factory(
+            tokio_client_config,
+            rpc_hook,
+            service_context,
+            telemetry,
+            application_remoting_command_factory(),
+        )
+    }
+
+    pub fn new_with_hook_and_remoting_command_factory(
+        tokio_client_config: Arc<TransportClientConfig>,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
+        service_context: ChildServiceContext,
+        telemetry: TransportTelemetry,
+        command_factory: RemotingCommandFactory,
     ) -> Self {
         let client = Arc::new(
             RemotingClient::builder(tokio_client_config, DefaultRequestProcessor, service_context)
@@ -191,6 +218,7 @@ impl BrokerOuterAPI {
             name_server_address: None,
             rpc_client: RpcClientImpl::new(Arc::clone(&client_metadata), client.transport_client()),
             client_metadata,
+            command_factory,
         }
     }
 
@@ -198,7 +226,7 @@ impl BrokerOuterAPI {
         self.remoting_client.register_rpc_hook(rpc_hook);
     }
 
-    fn create_request(broker_name: CheetahString, topic_config: &TopicConfig) -> RemotingCommand {
+    fn create_request(&self, broker_name: CheetahString, topic_config: &TopicConfig) -> RemotingCommand {
         let request_header = RegisterTopicRequestHeader::new(topic_config.topic_name.as_ref().cloned().unwrap());
         let queue_data = QueueData::new(
             broker_name,
@@ -213,7 +241,8 @@ impl BrokerOuterAPI {
         };
         let topic_route_body = topic_route_data.encode().expect("encode topic route data failed");
 
-        RemotingCommand::create_request_command(RequestCode::RegisterTopicInNamesrv, request_header)
+        self.command_factory
+            .create_request_command(RequestCode::RegisterTopicInNamesrv, request_header)
             .set_body(topic_route_body)
     }
 }
@@ -322,8 +351,10 @@ impl BrokerOuterAPI {
             request_header,
             body.len()
         );
-        let request =
-            RemotingCommand::create_request_command(RequestCode::RegisterBroker, request_header).set_body(body.clone());
+        let request = self
+            .command_factory
+            .create_request_command(RequestCode::RegisterBroker, request_header)
+            .set_body(body.clone());
         if oneway {
             self.remoting_client
                 .invoke_request_oneway(namesrv_addr, request, timeout_mills)
@@ -368,7 +399,7 @@ impl BrokerOuterAPI {
         topic_config: TopicConfig,
         timeout_mills: u64,
     ) {
-        let request = Self::create_request(broker_name, &topic_config);
+        let request = self.create_request(broker_name, &topic_config);
         let name_server_address_list = self.remoting_client.get_available_name_srv_list();
         let futures = name_server_address_list.iter().map(|namesrv_addr| {
             let cloned_request = request.clone();
@@ -432,7 +463,9 @@ impl BrokerOuterAPI {
             let client = self.remoting_client.clone();
 
             async move {
-                let request = RemotingCommand::create_request_command(RequestCode::BrokerHeartbeat, header);
+                let request = self
+                    .command_factory
+                    .create_request_command(RequestCode::BrokerHeartbeat, header);
                 let result = client.invoke_request_oneway(&addr, request, timeout_millis).await;
                 (addr, result)
             }
@@ -498,7 +531,9 @@ impl BrokerOuterAPI {
             let client = self.remoting_client.clone();
 
             async move {
-                let mut request = RemotingCommand::create_request_command(RequestCode::QueryDataVersion, header);
+                let mut request = self
+                    .command_factory
+                    .create_request_command(RequestCode::QueryDataVersion, header);
                 request.set_body_mut_ref(bytes::Bytes::from(body_clone));
 
                 let result = client.invoke_request_oneway(&addr, request, timeout_millis).await;
@@ -567,7 +602,9 @@ impl BrokerOuterAPI {
             let local_version = local_data_version.clone();
 
             async move {
-                let mut request = RemotingCommand::create_request_command(RequestCode::QueryDataVersion, header);
+                let mut request = self
+                    .command_factory
+                    .create_request_command(RequestCode::QueryDataVersion, header);
                 request.set_body_mut_ref(bytes::Bytes::from(body));
 
                 match client.invoke_request(Some(&addr), request, timeout_millis).await {
@@ -634,7 +671,9 @@ impl BrokerOuterAPI {
             topic_request_header: None,
         };
 
-        let request = RemotingCommand::create_request_command(RequestCode::GetMaxOffset, request_header);
+        let request = self
+            .command_factory
+            .create_request_command(RequestCode::GetMaxOffset, request_header);
 
         let response = self.remoting_client.invoke_request(Some(addr), request, 3000).await?;
 
@@ -673,7 +712,9 @@ impl BrokerOuterAPI {
             topic_request_header: None,
         };
 
-        let request = RemotingCommand::create_request_command(RequestCode::GetMinOffset, request_header);
+        let request = self
+            .command_factory
+            .create_request_command(RequestCode::GetMinOffset, request_header);
 
         let response = self.remoting_client.invoke_request(Some(addr), request, 3000).await?;
 
@@ -701,8 +742,9 @@ impl BrokerOuterAPI {
         request_body: bytes::Bytes,
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<HashSet<MessageQueue>> {
-        let mut request =
-            RemotingCommand::create_request_command(RequestCode::LockBatchMq, LockBatchMqRequestHeader::default());
+        let mut request = self
+            .command_factory
+            .create_request_command(RequestCode::LockBatchMq, LockBatchMqRequestHeader::default());
         request.set_body_mut_ref(request_body);
         let result = self
             .remoting_client
@@ -737,8 +779,9 @@ impl BrokerOuterAPI {
         request_body: bytes::Bytes,
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<()> {
-        let mut request =
-            RemotingCommand::create_request_command(RequestCode::UnlockBatchMq, UnlockBatchMqRequestHeader::default());
+        let mut request = self
+            .command_factory
+            .create_request_command(RequestCode::UnlockBatchMq, UnlockBatchMqRequestHeader::default());
         request.set_body_mut_ref(request_body);
         let result = self
             .remoting_client
@@ -771,7 +814,9 @@ impl BrokerOuterAPI {
             topic: topic.clone(),
             ..Default::default()
         };
-        let request = RemotingCommand::create_request_command(RequestCode::GetRouteinfoByTopic, header);
+        let request = self
+            .command_factory
+            .create_request_command(RequestCode::GetRouteinfoByTopic, header);
         let response = self
             .remoting_client
             .invoke_request(None, request, timeout_millis)
@@ -881,7 +926,7 @@ impl BrokerOuterAPI {
         let uniq_msg_id = MessageClientIDSetter::get_uniq_id(&msg);
         let queue_id = msg.queue_id;
         let topic = msg.topic().clone();
-        let request = build_send_message_request(msg, group);
+        let request = build_send_message_request(&self.command_factory, msg, group);
         let response = self
             .remoting_client
             .invoke_request(Some(broker_addr), request, timeout_millis)
@@ -901,8 +946,15 @@ impl BrokerOuterAPI {
         max_nums: i32,
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<(Option<PullOutcome<MessageExt>>, String, bool)> {
-        let request_command =
-            build_pull_message_request(broker_name, consumer_group, topic, queue_id, offset, max_nums);
+        let request_command = build_pull_message_request(
+            &self.command_factory,
+            broker_name,
+            consumer_group,
+            topic,
+            queue_id,
+            offset,
+            max_nums,
+        );
         match self
             .remoting_client
             .invoke_request(Some(broker_addr), request_command, timeout_millis)
@@ -964,7 +1016,9 @@ impl BrokerOuterAPI {
             cluster_name: cluster_name.clone(),
             broker_id,
         };
-        let request = RemotingCommand::create_request_command(RequestCode::UnregisterBroker, request_header);
+        let request = self
+            .command_factory
+            .create_request_command(RequestCode::UnregisterBroker, request_header);
         let response = self
             .remoting_client
             .invoke_request(Some(namesrv_addr), request, 3000)
@@ -985,7 +1039,9 @@ impl BrokerOuterAPI {
         &self,
         addr: &CheetahString,
     ) -> rocketmq_error::RocketMQResult<Option<TopicConfigAndMappingSerializeWrapper>> {
-        let request = RemotingCommand::create_remoting_command(RequestCode::GetAllTopicConfig);
+        let request = self
+            .command_factory
+            .create_remoting_command(RequestCode::GetAllTopicConfig);
         let response = self
             .remoting_client
             .invoke_request(Some(mix_all::broker_vip_channel(true, addr).as_ref()), request, 3000)
@@ -1010,7 +1066,9 @@ impl BrokerOuterAPI {
         &self,
         addr: &CheetahString,
     ) -> rocketmq_error::RocketMQResult<Option<ConsumerOffsetSerializeWrapper>> {
-        let request = RemotingCommand::create_remoting_command(RequestCode::GetAllConsumerOffset);
+        let request = self
+            .command_factory
+            .create_remoting_command(RequestCode::GetAllConsumerOffset);
         // let addr_ = mix_all::broker_vip_channel(true, addr);
         let response = self.remoting_client.invoke_request(Some(addr), request, 3000).await?;
         if ResponseCode::from(response.code()) == ResponseCode::Success {
@@ -1030,7 +1088,9 @@ impl BrokerOuterAPI {
     }
 
     pub async fn get_delay_offset(&self, addr: &CheetahString) -> rocketmq_error::RocketMQResult<Option<String>> {
-        let request = RemotingCommand::create_remoting_command(RequestCode::GetAllDelayOffset);
+        let request = self
+            .command_factory
+            .create_remoting_command(RequestCode::GetAllDelayOffset);
         let mut response = self.remoting_client.invoke_request(Some(addr), request, 3000).await?;
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.take_body() {
@@ -1051,7 +1111,9 @@ impl BrokerOuterAPI {
         &self,
         addr: &CheetahString,
     ) -> rocketmq_error::RocketMQResult<Option<SubscriptionGroupWrapper>> {
-        let request = RemotingCommand::create_remoting_command(RequestCode::GetAllSubscriptionGroupConfig);
+        let request = self
+            .command_factory
+            .create_remoting_command(RequestCode::GetAllSubscriptionGroupConfig);
         let mut response = self.remoting_client.invoke_request(Some(addr), request, 3000).await?;
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.take_body() {
@@ -1072,7 +1134,9 @@ impl BrokerOuterAPI {
         &self,
         addr: &CheetahString,
     ) -> rocketmq_error::RocketMQResult<Option<MessageRequestModeSerializeWrapper>> {
-        let request = RemotingCommand::create_remoting_command(RequestCode::GetAllMessageRequestMode);
+        let request = self
+            .command_factory
+            .create_remoting_command(RequestCode::GetAllMessageRequestMode);
         let mut response = self.remoting_client.invoke_request(Some(addr), request, 3000).await?;
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.take_body() {
@@ -1093,7 +1157,9 @@ impl BrokerOuterAPI {
         &self,
         addr: &CheetahString,
     ) -> rocketmq_error::RocketMQResult<Option<TimerMetricsSerializeWrapper>> {
-        let request = RemotingCommand::create_remoting_command(RequestCode::GetTimerMetrics);
+        let request = self
+            .command_factory
+            .create_remoting_command(RequestCode::GetTimerMetrics);
         let mut response = self.remoting_client.invoke_request(Some(addr), request, 3000).await?;
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.take_body() {
@@ -1114,7 +1180,9 @@ impl BrokerOuterAPI {
         &self,
         addr: &CheetahString,
     ) -> rocketmq_error::RocketMQResult<Option<TimerCheckpointSnapshot>> {
-        let request = RemotingCommand::create_remoting_command(RequestCode::GetTimerCheckPoint);
+        let request = self
+            .command_factory
+            .create_remoting_command(RequestCode::GetTimerCheckPoint);
         let mut response = self.remoting_client.invoke_request(Some(addr), request, 3000).await?;
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.take_body() {
@@ -1150,7 +1218,9 @@ impl BrokerOuterAPI {
         broker_name: &CheetahString,
     ) -> rocketmq_error::RocketMQResult<Option<BrokerMemberGroup>> {
         let request_header = GetBrokerMemberGroupRequestHeader::new(cluster_name.clone(), broker_name.clone());
-        let request = RemotingCommand::create_request_command(RequestCode::GetBrokerMemberGroup, request_header);
+        let request = self
+            .command_factory
+            .create_request_command(RequestCode::GetBrokerMemberGroup, request_header);
         let mut response = self.remoting_client.invoke_request(None, request, 3000).await?;
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.take_body() {
@@ -1178,7 +1248,9 @@ impl BrokerOuterAPI {
             )),
             ..Default::default()
         };
-        let request = RemotingCommand::create_request_command(RequestCode::GetRouteinfoByTopic, request_header);
+        let request = self
+            .command_factory
+            .create_request_command(RequestCode::GetRouteinfoByTopic, request_header);
         let mut response = self.remoting_client.invoke_request(None, request, 3000).await?;
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.take_body() {
@@ -1198,7 +1270,9 @@ impl BrokerOuterAPI {
         &self,
         controller_address: &CheetahString,
     ) -> rocketmq_error::RocketMQResult<GetMetaDataResponseHeader> {
-        let request = RemotingCommand::create_remoting_command(RequestCode::ControllerGetMetadataInfo);
+        let request = self
+            .command_factory
+            .create_remoting_command(RequestCode::ControllerGetMetadataInfo);
         let response = self
             .remoting_client
             .invoke_request(Some(controller_address), request, 3000)
@@ -1243,7 +1317,9 @@ impl BrokerOuterAPI {
             heartbeat_timeout_mills: heartbeat_timeout_millis,
             election_priority,
         };
-        let request = RemotingCommand::create_request_command(RequestCode::BrokerHeartbeat, request_header);
+        let request = self
+            .command_factory
+            .create_request_command(RequestCode::BrokerHeartbeat, request_header);
         self.remoting_client
             .invoke_request_oneway(&controller_address, request, timeout_millis)
             .await
@@ -1274,7 +1350,9 @@ impl BrokerOuterAPI {
             heartbeat_timeout_mills: heartbeat_timeout_millis,
             election_priority,
         };
-        let request = RemotingCommand::create_request_command(RequestCode::BrokerHeartbeat, request_header);
+        let request = self
+            .command_factory
+            .create_request_command(RequestCode::BrokerHeartbeat, request_header);
         let response = self
             .remoting_client
             .invoke_request(Some(controller_address), request, timeout_millis)
@@ -1311,8 +1389,9 @@ impl BrokerOuterAPI {
             master_epoch,
             invoke_time: rocketmq_model::time::current_millis(),
         };
-        let mut request =
-            RemotingCommand::create_request_command(RequestCode::ControllerAlterSyncStateSet, request_header);
+        let mut request = self
+            .command_factory
+            .create_request_command(RequestCode::ControllerAlterSyncStateSet, request_header);
         request.set_body_mut_ref(SyncStateSet::with_values(new_sync_state_set, sync_state_set_epoch).encode()?);
 
         let response = self
@@ -1358,7 +1437,9 @@ impl BrokerOuterAPI {
             broker_id,
             ..Default::default()
         };
-        let request = RemotingCommand::create_request_command(RequestCode::ControllerElectMaster, request_header);
+        let request = self
+            .command_factory
+            .create_request_command(RequestCode::ControllerElectMaster, request_header);
 
         let response = self
             .remoting_client
@@ -1409,7 +1490,9 @@ impl BrokerOuterAPI {
             cluster_name,
             broker_name,
         };
-        let request = RemotingCommand::create_request_command(RequestCode::ControllerGetNextBrokerId, request_header);
+        let request = self
+            .command_factory
+            .create_request_command(RequestCode::ControllerGetNextBrokerId, request_header);
 
         let response = self
             .remoting_client
@@ -1452,7 +1535,9 @@ impl BrokerOuterAPI {
             applied_broker_id: broker_id,
             register_check_code,
         };
-        let request = RemotingCommand::create_request_command(RequestCode::ControllerApplyBrokerId, request_header);
+        let request = self
+            .command_factory
+            .create_request_command(RequestCode::ControllerApplyBrokerId, request_header);
 
         let response = self
             .remoting_client
@@ -1497,7 +1582,9 @@ impl BrokerOuterAPI {
             broker_address: Some(broker_address),
             ..Default::default()
         };
-        let request = RemotingCommand::create_request_command(RequestCode::ControllerRegisterBroker, request_header);
+        let request = self
+            .command_factory
+            .create_request_command(RequestCode::ControllerRegisterBroker, request_header);
 
         let response = self
             .remoting_client
@@ -1546,7 +1633,9 @@ impl BrokerOuterAPI {
         broker_name: CheetahString,
     ) -> rocketmq_error::RocketMQResult<(GetReplicaInfoResponseHeader, SyncStateSet)> {
         let request_header = GetReplicaInfoRequestHeader { broker_name };
-        let request = RemotingCommand::create_request_command(RequestCode::ControllerGetReplicaInfo, request_header);
+        let request = self
+            .command_factory
+            .create_request_command(RequestCode::ControllerGetReplicaInfo, request_header);
 
         let response = self
             .remoting_client
@@ -1599,7 +1688,9 @@ impl BrokerOuterAPI {
             master_flush_offset: Some(broker_init_max_offset),
             master_address: Some(master_addr.clone()),
         };
-        let request = RemotingCommand::create_request_command(RequestCode::ExchangeBrokerHaInfo, request_header);
+        let request = self
+            .command_factory
+            .create_request_command(RequestCode::ExchangeBrokerHaInfo, request_header);
         let response = self
             .remoting_client
             .invoke_request(Some(broker_addr), request, 3000)
@@ -1621,7 +1712,9 @@ impl BrokerOuterAPI {
         master_broker_addr: Option<&CheetahString>,
     ) -> rocketmq_error::RocketMQResult<BrokerSyncInfo> {
         let request_header = ExchangeHAInfoRequestHeader::default();
-        let request = RemotingCommand::create_request_command(RequestCode::ExchangeBrokerHaInfo, request_header);
+        let request = self
+            .command_factory
+            .create_request_command(RequestCode::ExchangeBrokerHaInfo, request_header);
         let response = self
             .remoting_client
             .invoke_request(master_broker_addr, request, 3000)
@@ -1725,7 +1818,10 @@ fn broker_member_group_from_route_data(
 mod tests {
     use std::collections::HashMap;
 
+    use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandDefaults;
+    use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
     use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
+    use rocketmq_protocol::protocol::SerializeType;
 
     use super::*;
 
@@ -1741,6 +1837,36 @@ mod tests {
 
         assert!(Arc::ptr_eq(&api.remoting_client, &cloned.remoting_client));
         assert!(Arc::ptr_eq(&api.client_metadata, &cloned.client_metadata));
+        assert_eq!(api.command_factory, cloned.command_factory);
+    }
+
+    #[test]
+    fn control_plane_requests_keep_independent_owner_defaults() {
+        let runtime = rocketmq_runtime::RuntimeOwner::new(Default::default()).expect("test runtime");
+        let json_api = BrokerOuterAPI::new_with_remoting_command_factory(
+            Arc::new(TransportClientConfig::default()),
+            runtime.root_context().component("broker-outer-api-json-factory-test"),
+            TransportTelemetry::noop(),
+            RemotingCommandFactory::new(RemotingCommandDefaults::new(640, SerializeType::JSON)),
+        );
+        let binary_api = BrokerOuterAPI::new_with_remoting_command_factory(
+            Arc::new(TransportClientConfig::default()),
+            runtime.root_context().component("broker-outer-api-binary-factory-test"),
+            TransportTelemetry::noop(),
+            RemotingCommandFactory::new(RemotingCommandDefaults::new(641, SerializeType::ROCKETMQ)),
+        );
+        let topic_config = TopicConfig {
+            topic_name: Some(CheetahString::from_static_str("factory-topic")),
+            ..Default::default()
+        };
+
+        let json_request = json_api.create_request(CheetahString::from_static_str("broker-a"), &topic_config);
+        let binary_request = binary_api.create_request(CheetahString::from_static_str("broker-a"), &topic_config);
+
+        assert_eq!(json_request.version(), 640);
+        assert_eq!(json_request.serialize_type(), SerializeType::JSON);
+        assert_eq!(binary_request.version(), 641);
+        assert_eq!(binary_request.serialize_type(), SerializeType::ROCKETMQ);
     }
 
     #[test]

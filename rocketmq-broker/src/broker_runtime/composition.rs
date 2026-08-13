@@ -17,6 +17,7 @@ use super::data_plane::BrokerDataPlane;
 use super::metadata::BrokerMetadata;
 use super::request_pipeline::BrokerRequestPipeline;
 use super::*;
+use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
 use rocketmq_store::BrokerReadStore;
 
 pub(super) struct BrokerComposition {
@@ -1100,10 +1101,11 @@ impl BrokerRuntime {
             &service_context.component("broker.metadata-io"),
             MetadataIoConfig::default(),
         ));
-        let broker_outer_api = BrokerOuterAPI::new(
+        let broker_outer_api = BrokerOuterAPI::new_with_remoting_command_factory(
             Arc::new(TransportClientConfig::default()),
             service_context.component("broker.outer-api"),
             transport_telemetry.clone(),
+            application_remoting_command_factory(),
         );
 
         let mut topic_queue_mapping_manager = TopicQueueMappingManager::new_with_service_context(
