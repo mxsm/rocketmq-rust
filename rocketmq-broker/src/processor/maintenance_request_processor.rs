@@ -32,6 +32,8 @@ use rocketmq_protocol::protocol::body::release_checkpoint::StoreReleaseCheckpoin
 use rocketmq_protocol::protocol::body::release_checkpoint::RELEASE_CHECKPOINT_SCHEMA_VERSION;
 use rocketmq_protocol::protocol::header::maintenance_request_header::MaintenanceRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_security_api::MaintenanceAuthorizationContext;
 use rocketmq_security_api::MaintenanceAuthorizationGrant;
 use rocketmq_security_api::MaintenanceAuthorizer;
@@ -46,7 +48,7 @@ use rocketmq_store_api::checkpoint::CheckpointRequest;
 use rocketmq_store_api::checkpoint::CheckpointRestoreVerification;
 use rocketmq_store_api::checkpoint::CheckpointStorageIdentity;
 use rocketmq_store_api::ReleaseCheckpointStore;
-use rocketmq_transport::api::v1::request_code_not_supported_with_remark;
+use rocketmq_transport::api::v1::request_code_not_supported_with_factory_and_remark;
 use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use rocketmq_transport::api::v1::RequestProcessor;
@@ -55,6 +57,7 @@ use crate::config::broker_config::BrokerConfig;
 
 /// Broker endpoint for release-checkpoint operations.
 pub struct MaintenanceRequestProcessor {
+    command_factory: RemotingCommandFactory,
     broker_config: Arc<BrokerConfig>,
     auth_runtime: Arc<AuthRuntime>,
     authorizer: Arc<MaintenanceAuthorizer>,
@@ -68,7 +71,24 @@ impl MaintenanceRequestProcessor {
         authorizer: Arc<MaintenanceAuthorizer>,
         checkpoint_service: Arc<StoreReleaseCheckpointService>,
     ) -> Self {
+        Self::new_with_factory(
+            broker_config,
+            auth_runtime,
+            authorizer,
+            checkpoint_service,
+            application_remoting_command_factory(),
+        )
+    }
+
+    pub(crate) fn new_with_factory(
+        broker_config: Arc<BrokerConfig>,
+        auth_runtime: Arc<AuthRuntime>,
+        authorizer: Arc<MaintenanceAuthorizer>,
+        checkpoint_service: Arc<StoreReleaseCheckpointService>,
+        command_factory: RemotingCommandFactory,
+    ) -> Self {
         Self {
+            command_factory,
             broker_config,
             auth_runtime,
             authorizer,
@@ -89,7 +109,8 @@ impl MaintenanceRequestProcessor {
             RequestCode::MaintenanceVerifyCheckpoint => self.verify_store_checkpoint(request)?,
             RequestCode::MaintenanceRestoreVerify => self.restore_verify(&grant, request).await?,
             _ => {
-                return Ok(Some(request_code_not_supported_with_remark(
+                return Ok(Some(request_code_not_supported_with_factory_and_remark(
+                    &self.command_factory,
                     request.code(),
                     format!("request type {} is not a Broker maintenance operation", request.code()),
                 )));
@@ -165,7 +186,11 @@ impl MaintenanceRequestProcessor {
                 storage_identity: checkpoint_identity_to_wire(storage_identity),
             }),
         };
-        encode_success(&response, "encode Broker maintenance capabilities")
+        encode_success(
+            &self.command_factory,
+            &response,
+            "encode Broker maintenance capabilities",
+        )
     }
 
     async fn create_store_checkpoint(
@@ -182,6 +207,7 @@ impl MaintenanceRequestProcessor {
             .await
             .map_err(checkpoint_error)?;
         encode_success(
+            &self.command_factory,
             &checkpoint_manifest_to_wire(manifest),
             "encode Store release-checkpoint manifest",
         )
@@ -194,7 +220,11 @@ impl MaintenanceRequestProcessor {
         manifest
             .validate()
             .map_err(|source| RocketMQError::request_body_source("MAINTENANCE_VERIFY_CHECKPOINT", source))?;
-        encode_success(&manifest, "encode verified Store release-checkpoint manifest")
+        encode_success(
+            &self.command_factory,
+            &manifest,
+            "encode verified Store release-checkpoint manifest",
+        )
     }
 
     async fn restore_verify(
@@ -211,6 +241,7 @@ impl MaintenanceRequestProcessor {
             .await
             .map_err(checkpoint_error)?;
         encode_success(
+            &self.command_factory,
             &checkpoint_verification_to_wire(verification),
             "encode Store restore-verification proof",
         )
@@ -235,9 +266,13 @@ fn required_body<'a>(request: &'a RemotingCommand, operation: &'static str) -> R
         .ok_or_else(|| RocketMQError::request_body_invalid(operation, "request body is empty"))
 }
 
-fn encode_success<T: serde::Serialize>(value: &T, operation: &'static str) -> RocketMQResult<RemotingCommand> {
+fn encode_success<T: serde::Serialize>(
+    command_factory: &RemotingCommandFactory,
+    value: &T,
+    operation: &'static str,
+) -> RocketMQResult<RemotingCommand> {
     let body = serde_json::to_vec(value).map_err(|error| RocketMQError::internal(operation, error))?;
-    Ok(RemotingCommand::create_success_response_command().set_body(body))
+    Ok(command_factory.create_success_response_command().set_body(body))
 }
 
 fn checkpoint_error(error: impl std::error::Error + Send + Sync + 'static) -> RocketMQError {

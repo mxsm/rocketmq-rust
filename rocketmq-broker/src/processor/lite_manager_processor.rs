@@ -40,12 +40,14 @@ use rocketmq_protocol::protocol::header::get_lite_topic_info_request_header::Get
 use rocketmq_protocol::protocol::header::get_parent_topic_info_request_header::GetParentTopicInfoRequestHeader;
 use rocketmq_protocol::protocol::header::trigger_lite_dispatch_request_header::TriggerLiteDispatchRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_store::BrokerReadWriteStore;
 use rocketmq_store::ConsumeQueueStore;
 use rocketmq_store::ConsumeQueueStoreTrait;
 use rocketmq_store::MessageStoreConfig;
-use rocketmq_transport::api::v1::request_code_not_supported_with_remark_and_opaque;
+use rocketmq_transport::api::v1::request_code_not_supported_with_factory_remark_and_opaque;
 use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use rocketmq_transport::api::v1::RequestProcessor;
@@ -189,6 +191,7 @@ impl<MS: BrokerReadWriteStore> LiteManagerStoreCapability<MS> {
 }
 
 pub(crate) struct LiteManagerContext<MS: BrokerReadWriteStore> {
+    command_factory: RemotingCommandFactory,
     policy: LiteManagerPolicy,
     topic_config_manager: Arc<TopicConfigManager>,
     subscription_group_manager: SubscriptionGroupManager,
@@ -219,6 +222,7 @@ impl<MS: BrokerReadWriteStore> LiteManagerContext<MS> {
         pop_lite_message_processor: Weak<PopLiteMessageProcessor<MS>>,
     ) -> Self {
         Self {
+            command_factory: application_remoting_command_factory(),
             policy,
             topic_config_manager,
             subscription_group_manager,
@@ -230,6 +234,11 @@ impl<MS: BrokerReadWriteStore> LiteManagerContext<MS> {
             message_store,
             pop_lite_message_processor,
         }
+    }
+
+    pub(crate) fn with_command_factory(mut self, command_factory: RemotingCommandFactory) -> Self {
+        self.command_factory = command_factory;
+        self
     }
 
     fn order_info_count(&self) -> i32 {
@@ -279,7 +288,8 @@ impl<MS: BrokerReadWriteStore> LiteManagerProcessor<MS> {
             RequestCode::TriggerLiteDispatch => self.trigger_lite_dispatch(request),
             request_code => {
                 warn!("LiteManagerProcessor received unknown request code: {:?}", request_code);
-                Ok(Some(request_code_not_supported_with_remark_and_opaque(
+                Ok(Some(request_code_not_supported_with_factory_remark_and_opaque(
+                    &self.context.command_factory,
                     request.code(),
                     format!("LiteManagerProcessor request code {} not supported", request.code()),
                     request.opaque(),
@@ -575,7 +585,10 @@ impl<MS: BrokerReadWriteStore> LiteManagerProcessor<MS> {
         }
 
         Ok(Some(
-            RemotingCommand::create_success_response_command().set_opaque(request.opaque()),
+            self.context
+                .command_factory
+                .create_success_response_command()
+                .set_opaque(request.opaque()),
         ))
     }
 
@@ -845,11 +858,12 @@ impl<MS: BrokerReadWriteStore> LiteManagerProcessor<MS> {
         request: &RemotingCommand,
         body: &T,
     ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
-        Ok(
-            RemotingCommand::create_response_command_with_code(ResponseCode::Success)
-                .set_body(body.encode()?)
-                .set_opaque(request.opaque()),
-        )
+        Ok(self
+            .context
+            .command_factory
+            .create_response_command_with_code(ResponseCode::Success)
+            .set_body(body.encode()?)
+            .set_opaque(request.opaque()))
     }
 
     fn response_with_code(
@@ -858,7 +872,10 @@ impl<MS: BrokerReadWriteStore> LiteManagerProcessor<MS> {
         code: ResponseCode,
         remark: impl Into<CheetahString>,
     ) -> RemotingCommand {
-        RemotingCommand::create_response_command_with_code_remark(code, remark).set_opaque(request.opaque())
+        self.context
+            .command_factory
+            .create_response_command_with_code_remark(code, remark)
+            .set_opaque(request.opaque())
     }
 }
 

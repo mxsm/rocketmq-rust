@@ -22,6 +22,8 @@ use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::polling_info_request_header::PollingInfoRequestHeader;
 use rocketmq_protocol::protocol::header::polling_info_response_header::PollingInfoResponseHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use rocketmq_transport::api::v1::RequestProcessor;
@@ -37,6 +39,7 @@ use crate::topic::manager::topic_config_manager::TopicConfigManager;
 /// PollingInfoProcessor handles requests for polling information from clients.
 /// It checks the number of polling requests for a specific topic, consumer group, and queue.
 pub struct PollingInfoProcessor {
+    command_factory: RemotingCommandFactory,
     broker_config: Arc<BrokerConfig>,
     topic_config_manager: Arc<TopicConfigManager>,
     subscription_group_lookup: SubscriptionGroupConfigLookup,
@@ -57,7 +60,24 @@ impl PollingInfoProcessor {
         subscription_group_lookup: SubscriptionGroupConfigLookup,
         polling_count_provider: Weak<dyn PollingCountProvider>,
     ) -> Self {
+        Self::new_with_factory(
+            broker_config,
+            topic_config_manager,
+            subscription_group_lookup,
+            polling_count_provider,
+            application_remoting_command_factory(),
+        )
+    }
+
+    pub(crate) fn new_with_factory(
+        broker_config: Arc<BrokerConfig>,
+        topic_config_manager: Arc<TopicConfigManager>,
+        subscription_group_lookup: SubscriptionGroupConfigLookup,
+        polling_count_provider: Weak<dyn PollingCountProvider>,
+        command_factory: RemotingCommandFactory,
+    ) -> Self {
         Self {
+            command_factory,
             broker_config,
             topic_config_manager,
             subscription_group_lookup,
@@ -69,6 +89,7 @@ impl PollingInfoProcessor {
 impl Clone for PollingInfoProcessor {
     fn clone(&self) -> Self {
         Self {
+            command_factory: self.command_factory,
             broker_config: Arc::clone(&self.broker_config),
             topic_config_manager: Arc::clone(&self.topic_config_manager),
             subscription_group_lookup: self.subscription_group_lookup.clone(),
@@ -104,7 +125,7 @@ impl PollingInfoProcessor {
         channel: Channel,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let mut response = RemotingCommand::create_java_default_error_response_command();
+        let mut response = self.command_factory.create_java_default_error_response_command();
 
         // Decode request header
         let request_header = request
@@ -203,8 +224,10 @@ impl PollingInfoProcessor {
         let polling_num = self.get_polling_num(&key);
 
         let response_header = PollingInfoResponseHeader { polling_num };
-        let final_response =
-            RemotingCommand::create_success_response_command_with_header(response_header).set_opaque(request.opaque());
+        let final_response = self
+            .command_factory
+            .create_success_response_command_with_header(response_header)
+            .set_opaque(request.opaque());
 
         Ok(Some(final_response))
     }

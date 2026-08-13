@@ -28,6 +28,8 @@ use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::pop_lite_message_request_header::PopLiteMessageRequestHeader;
 use rocketmq_protocol::protocol::header::pop_lite_message_response_header::PopLiteMessageResponseHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::BrokerReadWriteStore;
 use rocketmq_store::GetMessageResult;
@@ -151,6 +153,7 @@ impl<MS: BrokerReadWriteStore> PopLiteMessageStoreCapability<MS> {
 }
 
 pub(crate) struct PopLiteMessageProcessorContext<MS: BrokerReadWriteStore> {
+    command_factory: RemotingCommandFactory,
     policy: PopLiteMessagePolicy,
     topic_config_manager: Arc<TopicConfigManager>,
     subscription_group_lookup: SubscriptionGroupConfigLookup,
@@ -177,6 +180,7 @@ impl<MS: BrokerReadWriteStore> PopLiteMessageProcessorContext<MS> {
         long_polling: PopLiteLongPollingServiceContext,
     ) -> Self {
         Self {
+            command_factory: application_remoting_command_factory(),
             policy,
             topic_config_manager,
             subscription_group_lookup,
@@ -186,6 +190,11 @@ impl<MS: BrokerReadWriteStore> PopLiteMessageProcessorContext<MS> {
             queue_lock_manager,
             long_polling,
         }
+    }
+
+    pub(crate) fn with_command_factory(mut self, command_factory: RemotingCommandFactory) -> Self {
+        self.command_factory = command_factory;
+        self
     }
 }
 
@@ -569,7 +578,10 @@ impl<MS: BrokerReadWriteStore> PopLiteMessageProcessor<MS> {
         code: ResponseCode,
         remark: impl Into<CheetahString>,
     ) -> RemotingCommand {
-        RemotingCommand::create_response_command_with_code_remark(code, remark).set_opaque(request.opaque())
+        self.context
+            .command_factory
+            .create_response_command_with_code_remark(code, remark)
+            .set_opaque(request.opaque())
     }
 
     fn transform_order_count_info(order_count_info: &str, msg_count: usize) -> String {
@@ -626,8 +638,11 @@ impl<MS: BrokerReadWriteStore> PopLiteMessageProcessor<MS> {
             msg_offset_info: None,
             order_count_info: (fetched_count > 0).then_some(order_count_info).flatten(),
         };
-        let mut response =
-            RemotingCommand::create_success_response_command_with_header(response_header).set_opaque(request.opaque());
+        let mut response = self
+            .context
+            .command_factory
+            .create_success_response_command_with_header(response_header)
+            .set_opaque(request.opaque());
 
         match body {
             Some(body) => {

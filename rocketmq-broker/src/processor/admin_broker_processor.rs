@@ -46,6 +46,8 @@ use rocketmq_error::RocketMQError;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_store::BrokerAdminStore;
 use rocketmq_transport::api::v1::apply_error_to_response;
 use rocketmq_transport::api::v1::request_code_not_supported_with_remark;
@@ -142,10 +144,22 @@ impl<MS: BrokerAdminStore> AdminBrokerProcessor<MS> {
 
 impl<MS: BrokerAdminStore> AdminBrokerProcessor<MS> {
     pub fn new(broker_runtime_inner: BrokerAdminRuntime<MS>, auth_admin_service: Arc<AuthAdminService>) -> Self {
+        Self::new_with_factory(
+            broker_runtime_inner,
+            auth_admin_service,
+            application_remoting_command_factory(),
+        )
+    }
+
+    pub fn new_with_factory(
+        broker_runtime_inner: BrokerAdminRuntime<MS>,
+        auth_admin_service: Arc<AuthAdminService>,
+        command_factory: RemotingCommandFactory,
+    ) -> Self {
         let topic_request_handler = TopicRequestHandler::new();
         let broker_config_request_handler =
             BrokerConfigRequestHandler::new_with_auth(broker_runtime_inner.clone(), auth_admin_service.clone());
-        let consumer_request_handler = ConsumerRequestHandler::new();
+        let consumer_request_handler = ConsumerRequestHandler::new_with_factory(command_factory);
         let offset_request_handler = OffsetRequestHandler::new();
         let batch_mq_handler = BatchMqHandler::new();
         let subscription_group_handler = SubscriptionGroupHandler::new();

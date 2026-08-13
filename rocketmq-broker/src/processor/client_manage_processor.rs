@@ -31,8 +31,9 @@ use rocketmq_protocol::protocol::header::unregister_client_request_header::Unreg
 use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_protocol::protocol::heartbeat::heartbeat_data::HeartbeatData;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_store::BrokerStorePort;
-use rocketmq_transport::api::v1::request_code_not_supported_with_remark_and_opaque;
+use rocketmq_transport::api::v1::request_code_not_supported_with_factory_remark_and_opaque;
 use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use rocketmq_transport::api::v1::RequestProcessor;
@@ -47,6 +48,7 @@ use crate::topic::manager::topic_config_manager::TopicConfigManager;
 use crate::transaction::queue::transaction_topic_registration::TransactionTopicRegistration;
 
 pub struct ClientManageProcessor<MS: BrokerStorePort> {
+    command_factory: RemotingCommandFactory,
     consumer_group_heartbeat_table:
         Arc<parking_lot::RwLock<HashMap<CheetahString /* ConsumerGroup */, i32 /* HeartbeatFingerprint */>>>,
     broker_config: Arc<BrokerConfig>,
@@ -58,6 +60,7 @@ pub struct ClientManageProcessor<MS: BrokerStorePort> {
 }
 
 pub(crate) struct ClientManageProcessorContext<MS: BrokerStorePort> {
+    pub(crate) command_factory: RemotingCommandFactory,
     pub(crate) broker_config: Arc<BrokerConfig>,
     pub(crate) topic_config_manager: Arc<TopicConfigManager>,
     pub(crate) subscription_group_lookup: SubscriptionGroupConfigLookup,
@@ -87,7 +90,8 @@ where
                     "ClientManageProcessor received unknown request code: {:?}",
                     request_code
                 );
-                let response = request_code_not_supported_with_remark_and_opaque(
+                let response = request_code_not_supported_with_factory_remark_and_opaque(
+                    &self.command_factory,
                     request.code(),
                     format!("ClientManageProcessor request code {} not supported", request.code()),
                     request.opaque(),
@@ -104,6 +108,7 @@ where
 {
     pub(crate) fn new(context: ClientManageProcessorContext<MS>) -> Self {
         Self {
+            command_factory: context.command_factory,
             consumer_group_heartbeat_table: Arc::new(parking_lot::RwLock::new(HashMap::new())),
             broker_config: context.broker_config,
             topic_config_manager: context.topic_config_manager,
@@ -140,7 +145,8 @@ where
             RequestCode::HeartBeat => self.heart_beat(channel, ctx, request).await,
             RequestCode::UnregisterClient => self.unregister_client(channel, ctx, request),
             RequestCode::CheckClientConfig => self.check_client_config(request),
-            _ => Ok(Some(request_code_not_supported_with_remark_and_opaque(
+            _ => Ok(Some(request_code_not_supported_with_factory_remark_and_opaque(
+                &self.command_factory,
                 request.code(),
                 format!("ClientManageProcessor request code {} not supported", request.code()),
                 request.opaque(),
@@ -152,7 +158,7 @@ where
         &self,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let response = RemotingCommand::create_success_response_command();
+        let response = self.command_factory.create_success_response_command();
         let Some(body) = request.body() else {
             return Ok(Some(response));
         };
@@ -222,7 +228,7 @@ where
             );
         }
 
-        Ok(Some(RemotingCommand::create_success_response_command()))
+        Ok(Some(self.command_factory.create_success_response_command()))
     }
 
     async fn heart_beat(
@@ -311,7 +317,7 @@ where
             self.producer_registration
                 .register_producer(&producer_data.group_name, &client_channel_info);
         }
-        let mut response_command = RemotingCommand::create_success_response_command();
+        let mut response_command = self.command_factory.create_success_response_command();
         response_command.ensure_ext_fields_initialized();
         response_command.add_ext_field(IS_SUPPORT_HEART_BEAT_V2.to_string(), true.to_string());
         response_command.add_ext_field(IS_SUB_CHANGE.to_string(), true.to_string());
@@ -413,7 +419,7 @@ where
             self.producer_registration
                 .register_producer(&producer_data.group_name, &client_channel_info);
         }
-        let mut response_command = RemotingCommand::create_success_response_command();
+        let mut response_command = self.command_factory.create_success_response_command();
         response_command.ensure_ext_fields_initialized();
         response_command.add_ext_field(IS_SUPPORT_HEART_BEAT_V2.to_string(), true.to_string());
         response_command.add_ext_field(IS_SUB_CHANGE.to_string(), is_sub_change.to_string());
@@ -424,6 +430,7 @@ where
 impl<MS: BrokerStorePort> Clone for ClientManageProcessor<MS> {
     fn clone(&self) -> Self {
         Self {
+            command_factory: self.command_factory,
             consumer_group_heartbeat_table: self.consumer_group_heartbeat_table.clone(),
             broker_config: Arc::clone(&self.broker_config),
             topic_config_manager: Arc::clone(&self.topic_config_manager),

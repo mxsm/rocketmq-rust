@@ -27,6 +27,7 @@ use rocketmq_protocol::protocol::body::topic_info_wrapper::topic_queue_wrapper::
 use rocketmq_protocol::protocol::data_version_facade::DataVersionExt;
 use rocketmq_protocol::protocol::header::message_operation_header::TopicRequestHeaderTrait;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_protocol::protocol::static_topic::logic_queue_mapping_item::LogicQueueMappingItem;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
@@ -103,13 +104,14 @@ impl TopicQueueMappingManager {
     }
 
     pub(crate) fn rewrite_request_for_static_topic(
+        command_factory: &RemotingCommandFactory,
         request_header: &mut impl TopicRequestHeaderTrait,
         mapping_context: &TopicQueueMappingContext,
     ) -> Option<RemotingCommand> {
         let mapping_detail = mapping_context.mapping_detail.as_ref()?;
 
         if !mapping_context.is_leader() {
-            return Some(RemotingCommand::create_response_command_with_code_remark(
+            return Some(command_factory.create_response_command_with_code_remark(
                 ResponseCode::NotLeaderForQueue,
                 format!(
                     "{}-{:?} does not exit in request process of current broker {}",

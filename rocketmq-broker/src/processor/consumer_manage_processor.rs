@@ -23,11 +23,12 @@ use rocketmq_protocol::protocol::header::query_consumer_offset_request_header::Q
 use rocketmq_protocol::protocol::header::query_consumer_offset_response_header::QueryConsumerOffsetResponseHeader;
 use rocketmq_protocol::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_utils::TopicQueueMappingUtils;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_store::BrokerStorePort;
-use rocketmq_transport::api::v1::request_code_not_supported_with_remark_and_opaque;
+use rocketmq_transport::api::v1::request_code_not_supported_with_factory_remark_and_opaque;
 use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use rocketmq_transport::api::v1::RequestProcessor;
@@ -44,6 +45,7 @@ use crate::topic::manager::topic_config_manager::TopicConfigManager;
 use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager;
 
 pub struct ConsumerManageProcessor<MS: BrokerStorePort> {
+    command_factory: RemotingCommandFactory,
     consumer_view: ConsumerAssignmentView,
     consumer_offset: ConsumerOffsetRequestCapability<MS>,
     topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
@@ -55,6 +57,7 @@ pub struct ConsumerManageProcessor<MS: BrokerStorePort> {
 }
 
 pub(crate) struct ConsumerManageProcessorContext<MS: BrokerStorePort> {
+    pub(crate) command_factory: RemotingCommandFactory,
     pub(crate) consumer_view: ConsumerAssignmentView,
     pub(crate) consumer_offset: ConsumerOffsetRequestCapability<MS>,
     pub(crate) topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
@@ -86,7 +89,8 @@ where
                     "ConsumerManageProcessor received unknown request code: {:?}",
                     request_code
                 );
-                let response = request_code_not_supported_with_remark_and_opaque(
+                let response = request_code_not_supported_with_factory_remark_and_opaque(
+                    &self.command_factory,
                     request.code(),
                     format!("ConsumerManageProcessor request code {} not supported", request.code()),
                     request.opaque(),
@@ -103,6 +107,7 @@ where
 {
     pub(crate) fn new(context: ConsumerManageProcessorContext<MS>) -> Self {
         Self {
+            command_factory: context.command_factory,
             consumer_view: context.consumer_view,
             consumer_offset: context.consumer_offset,
             topic_queue_mapping_manager: context.topic_queue_mapping_manager,
@@ -128,6 +133,7 @@ where
 impl<MS: BrokerStorePort> Clone for ConsumerManageProcessor<MS> {
     fn clone(&self) -> Self {
         Self {
+            command_factory: self.command_factory,
             consumer_view: self.consumer_view.clone(),
             consumer_offset: self.consumer_offset.clone(),
             topic_queue_mapping_manager: Arc::clone(&self.topic_queue_mapping_manager),
@@ -166,7 +172,7 @@ where
         ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let response = RemotingCommand::create_success_response_command();
+        let response = self.command_factory.create_success_response_command();
         let request_header = request.decode_command_custom_header::<GetConsumerListByGroupRequestHeader>()?;
         let consumer_group_info = self.consumer_view.client_ids_if_present(&request_header.consumer_group);
 
@@ -225,7 +231,7 @@ where
         let group = request_header.consumer_group.as_ref();
         let queue_id = request_header.queue_id;
         let offset = request_header.commit_offset;
-        let response = RemotingCommand::create_success_response_command();
+        let response = self.command_factory.create_success_response_command();
         if !self.subscription_group_lookup.contains_subscription_group(group) {
             return Ok(Some(
                 response
@@ -299,7 +305,7 @@ where
             request_header.topic.as_ref(),
             request_header.queue_id,
         );
-        let mut response = RemotingCommand::create_success_response_command();
+        let mut response = self.command_factory.create_success_response_command();
         let mut response_header = QueryConsumerOffsetResponseHeader::default();
         if offset >= 0 {
             response_header.offset = Some(offset);
@@ -350,7 +356,7 @@ where
 
         // Check if current broker is the leader for this queue
         if !mapping_context.is_leader() {
-            return Some(RemotingCommand::create_response_command_with_code_remark(
+            return Some(self.command_factory.create_response_command_with_code_remark(
                 ResponseCode::NotLeaderForQueue,
                 format!(
                     "{}-{} does not exit in request process of current broker {}",
@@ -393,23 +399,24 @@ where
         match rpc_response {
             Ok(response) => {
                 if let Some(exception) = response.exception {
-                    return Some(RemotingCommand::create_response_command_with_code_remark(
+                    return Some(self.command_factory.create_response_command_with_code_remark(
                         ResponseCode::SystemError,
                         format!("RPC exception: {exception}"),
                     ));
                 }
                 if ResponseCode::from(response.code) == ResponseCode::Success {
-                    Some(RemotingCommand::create_response_command_with_code(
-                        ResponseCode::Success,
-                    ))
+                    Some(
+                        self.command_factory
+                            .create_response_command_with_code(ResponseCode::Success),
+                    )
                 } else {
-                    Some(RemotingCommand::create_response_command_with_code_remark(
+                    Some(self.command_factory.create_response_command_with_code_remark(
                         ResponseCode::from(response.code),
                         format!("RPC to broker {:?} returned code {}", mapping_item.bname, response.code),
                     ))
                 }
             }
-            Err(e) => Some(RemotingCommand::create_response_command_with_code_remark(
+            Err(e) => Some(self.command_factory.create_response_command_with_code_remark(
                 ResponseCode::SystemError,
                 format!("RPC forwarding to broker {:?} failed: {e}", mapping_item.bname),
             )),
@@ -423,7 +430,7 @@ where
     ) -> Option<RemotingCommand> {
         let mapping_detail = mapping_context.mapping_detail.as_ref()?;
         if !mapping_context.is_leader() {
-            return Some(RemotingCommand::create_response_command_with_code_remark(
+            return Some(self.command_factory.create_response_command_with_code_remark(
                 ResponseCode::NotLeaderForQueue,
                 format!(
                     "{}-{} does not exit in request process of current broker {}",
@@ -478,7 +485,7 @@ where
                                 "QueryConsumerOffset RPC exception for broker {:?}: {}",
                                 mapping_item.bname, exception
                             );
-                            return Some(RemotingCommand::create_response_command_with_code_remark(
+                            return Some(self.command_factory.create_response_command_with_code_remark(
                                 ResponseCode::SystemError,
                                 format!("RPC exception: {exception}"),
                             ));
@@ -499,7 +506,7 @@ where
                                 "QueryConsumerOffset RPC to broker {:?} returned unexpected code: {}",
                                 mapping_item.bname, response.code
                             );
-                            return Some(RemotingCommand::create_response_command_with_code_remark(
+                            return Some(self.command_factory.create_response_command_with_code_remark(
                                 ResponseCode::SystemError,
                                 format!("RPC to broker {:?} returned code {}", mapping_item.bname, response.code),
                             ));
@@ -510,7 +517,7 @@ where
                             "QueryConsumerOffset RPC to broker {:?} failed: {}",
                             mapping_item.bname, e
                         );
-                        return Some(RemotingCommand::create_response_command_with_code_remark(
+                        return Some(self.command_factory.create_response_command_with_code_remark(
                             ResponseCode::SystemError,
                             format!("RPC forwarding to broker {:?} failed: {e}", mapping_item.bname),
                         ));
@@ -518,7 +525,7 @@ where
                 }
             }
         }
-        let mut response = RemotingCommand::create_success_response_command();
+        let mut response = self.command_factory.create_success_response_command();
         let mut response_header = QueryConsumerOffsetResponseHeader { offset: None };
         if offset >= 0 {
             response_header.offset = Some(offset);

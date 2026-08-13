@@ -25,6 +25,8 @@ use rocketmq_model::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::body::lite_subscription_ctl_request_body::LiteSubscriptionCtlRequestBody;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_store::BrokerStorePort;
 use rocketmq_transport::api::v1::Channel;
@@ -53,6 +55,7 @@ impl LiteSubscriptionCtlPolicy {
 }
 
 pub(crate) struct LiteSubscriptionCtlContext<MS: BrokerStorePort> {
+    command_factory: RemotingCommandFactory,
     policy: LiteSubscriptionCtlPolicy,
     registry: LiteSubscriptionRegistry,
     event_dispatcher: LiteEventDispatcher,
@@ -77,6 +80,7 @@ impl<MS: BrokerStorePort> LiteSubscriptionCtlContext<MS> {
         pop_lite_message_processor: Weak<PopLiteMessageProcessor<MS>>,
     ) -> Self {
         Self {
+            command_factory: application_remoting_command_factory(),
             policy,
             registry,
             event_dispatcher,
@@ -85,6 +89,11 @@ impl<MS: BrokerStorePort> LiteSubscriptionCtlContext<MS> {
             message_store,
             pop_lite_message_processor,
         }
+    }
+
+    pub(crate) fn with_command_factory(mut self, command_factory: RemotingCommandFactory) -> Self {
+        self.command_factory = command_factory;
+        self
     }
 }
 
@@ -239,7 +248,10 @@ impl<MS: BrokerStorePort> LiteSubscriptionCtlProcessor<MS> {
         }
 
         Ok(Some(
-            RemotingCommand::create_success_response_command().set_opaque(request.opaque()),
+            self.context
+                .command_factory
+                .create_success_response_command()
+                .set_opaque(request.opaque()),
         ))
     }
 }
@@ -421,7 +433,10 @@ impl<MS: BrokerStorePort> LiteSubscriptionCtlProcessor<MS> {
         code: ResponseCode,
         remark: impl Into<CheetahString>,
     ) -> RemotingCommand {
-        RemotingCommand::create_response_command_with_code_remark(code, remark).set_opaque(request.opaque())
+        self.context
+            .command_factory
+            .create_response_command_with_code_remark(code, remark)
+            .set_opaque(request.opaque())
     }
 }
 

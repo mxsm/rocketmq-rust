@@ -26,6 +26,8 @@ use crate::config::broker_config::BrokerConfig;
 use parking_lot::Mutex;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::BudgetDimension;
 use rocketmq_runtime::BudgetLimit;
@@ -205,6 +207,7 @@ impl FastFailureTask {
 }
 
 struct FastFailureQueue {
+    command_factory: RemotingCommandFactory,
     kind: FastFailureQueueKind,
     tasks: Mutex<VecDeque<Arc<FastFailureTask>>>,
     pending_count: AtomicUsize,
@@ -213,8 +216,9 @@ struct FastFailureQueue {
 }
 
 impl FastFailureQueue {
-    fn new(kind: FastFailureQueueKind, permits: usize) -> Self {
+    fn new(kind: FastFailureQueueKind, permits: usize, command_factory: RemotingCommandFactory) -> Self {
         Self {
+            command_factory,
             kind,
             tasks: Mutex::new(VecDeque::new()),
             pending_count: AtomicUsize::new(0),
@@ -294,7 +298,13 @@ impl FastFailureQueue {
                 break;
             };
             let behind = now_millis.saturating_sub(task.created_timestamp_millis());
-            let response = system_busy_response(task.opaque, remark_prefix, behind, self.pending_count());
+            let response = system_busy_response(
+                &self.command_factory,
+                task.opaque,
+                remark_prefix,
+                behind,
+                self.pending_count(),
+            );
 
             if self.cancel_pending(&task, response) {
                 cleaned += 1;
@@ -342,6 +352,7 @@ impl FastFailureQueue {
         let mut canceled = 0;
         for task in tasks {
             let response = system_busy_response(
+                &self.command_factory,
                 task.opaque,
                 "[BROKER_SHUTDOWN]",
                 current_millis().saturating_sub(task.created_timestamp_millis()),
@@ -366,35 +377,42 @@ struct FastFailureQueues {
 }
 
 impl FastFailureQueues {
-    fn new() -> Self {
+    fn new(command_factory: RemotingCommandFactory) -> Self {
         Self {
             send: Arc::new(FastFailureQueue::new(
                 FastFailureQueueKind::Send,
                 permits_for(FastFailureQueueKind::Send),
+                command_factory,
             )),
             pull: Arc::new(FastFailureQueue::new(
                 FastFailureQueueKind::Pull,
                 permits_for(FastFailureQueueKind::Pull),
+                command_factory,
             )),
             lite_pull: Arc::new(FastFailureQueue::new(
                 FastFailureQueueKind::LitePull,
                 permits_for(FastFailureQueueKind::LitePull),
+                command_factory,
             )),
             heartbeat: Arc::new(FastFailureQueue::new(
                 FastFailureQueueKind::Heartbeat,
                 permits_for(FastFailureQueueKind::Heartbeat),
+                command_factory,
             )),
             transaction: Arc::new(FastFailureQueue::new(
                 FastFailureQueueKind::Transaction,
                 permits_for(FastFailureQueueKind::Transaction),
+                command_factory,
             )),
             ack: Arc::new(FastFailureQueue::new(
                 FastFailureQueueKind::Ack,
                 permits_for(FastFailureQueueKind::Ack),
+                command_factory,
             )),
             admin_broker: Arc::new(FastFailureQueue::new(
                 FastFailureQueueKind::AdminBroker,
                 permits_for(FastFailureQueueKind::AdminBroker),
+                command_factory,
             )),
         }
     }
@@ -420,6 +438,7 @@ struct FastFailureLifecycle {
 
 struct BrokerFastFailureInner {
     broker_config: Arc<BrokerConfig>,
+    command_factory: RemotingCommandFactory,
     service_context: ChildServiceContext,
     queues: FastFailureQueues,
     pending_budget: ResourceBudget,
@@ -450,6 +469,7 @@ impl BrokerFastFailure {
             broker_config,
             service_context,
             rocketmq_observability::TelemetryHandle::noop(),
+            application_remoting_command_factory(),
         )
     }
 
@@ -457,6 +477,7 @@ impl BrokerFastFailure {
         broker_config: Arc<BrokerConfig>,
         service_context: ChildServiceContext,
         telemetry: rocketmq_observability::TelemetryHandle,
+        command_factory: RemotingCommandFactory,
     ) -> Self {
         let capacity_count = broker_config.broker_fast_failure_pending_max_count;
         let capacity_bytes = broker_config.broker_fast_failure_pending_max_bytes;
@@ -473,8 +494,9 @@ impl BrokerFastFailure {
         let this = Self {
             inner: Arc::new(BrokerFastFailureInner {
                 broker_config,
+                command_factory,
                 service_context,
-                queues: FastFailureQueues::new(),
+                queues: FastFailureQueues::new(command_factory),
                 pending_budget,
                 next_task_id: AtomicU64::new(0),
                 running: AtomicBool::new(false),
@@ -525,6 +547,10 @@ impl BrokerFastFailure {
 
     pub(crate) fn send_request_executor_detached_enabled(&self) -> bool {
         self.inner.broker_config.send_request_executor_detached_enable
+    }
+
+    pub(crate) fn command_factory(&self) -> RemotingCommandFactory {
+        self.inner.command_factory
     }
 
     pub(crate) fn is_running(&self) -> bool {
@@ -697,7 +723,14 @@ impl BrokerFastFailure {
             .try_acquire_data(retained_bytes)
             .map_err(|error| {
                 let usage = self.inner.pending_budget.snapshot();
-                pending_budget_busy_response(opaque, kind, retained_bytes, &usage, error.dimension())
+                pending_budget_busy_response(
+                    &self.inner.command_factory,
+                    opaque,
+                    kind,
+                    retained_bytes,
+                    &usage,
+                    error.dimension(),
+                )
             })?;
         let (response_tx, response_rx) = oneshot::channel();
         let task_id = self.inner.next_task_id.fetch_add(1, Ordering::AcqRel);
@@ -812,39 +845,43 @@ fn permits_for(kind: FastFailureQueueKind) -> usize {
 }
 
 fn system_busy_response(
+    command_factory: &RemotingCommandFactory,
     opaque: i32,
     remark_prefix: &'static str,
     period_in_queue_millis: u64,
     queue_size: usize,
 ) -> RemotingCommand {
-    RemotingCommand::create_response_command_with_code_remark(
-        ResponseCode::SystemBusy,
-        format!(
+    command_factory
+        .create_response_command_with_code_remark(
+            ResponseCode::SystemBusy,
+            format!(
             "{remark_prefix}broker busy, start flow control for a while, period in queue: {period_in_queue_millis}ms, \
              size of queue: {queue_size}"
         ),
-    )
-    .set_opaque(opaque)
+        )
+        .set_opaque(opaque)
 }
 
 fn pending_budget_busy_response(
+    command_factory: &RemotingCommandFactory,
     opaque: i32,
     kind: FastFailureQueueKind,
     retained_bytes: usize,
     usage: &BudgetSnapshot,
     dimension: BudgetDimension,
 ) -> RemotingCommand {
-    RemotingCommand::create_response_command_with_code_remark(
-        ResponseCode::SystemBusy,
-        format!(
-            "[PENDING_BUDGET]broker busy, retry later, queue: {}, exhausted: {dimension:?}, request bytes: \
+    command_factory
+        .create_response_command_with_code_remark(
+            ResponseCode::SystemBusy,
+            format!(
+                "[PENDING_BUDGET]broker busy, retry later, queue: {}, exhausted: {dimension:?}, request bytes: \
              {retained_bytes}, pending count: {}, pending bytes: {}",
-            kind.name(),
-            usage.current_count,
-            usage.current_bytes
-        ),
-    )
-    .set_opaque(opaque)
+                kind.name(),
+                usage.current_count,
+                usage.current_bytes
+            ),
+        )
+        .set_opaque(opaque)
 }
 
 #[cfg(test)]
@@ -913,7 +950,7 @@ mod tests {
         assert!(fast_failure.cancel(
             FastFailureQueueKind::Send,
             &task,
-            system_busy_response(1, "[TEST]", 0, 0),
+            system_busy_response(&application_remoting_command_factory(), 1, "[TEST]", 0, 0),
         ));
         assert_eq!(fast_failure.pending_budget_snapshot().current_count, 0);
     }
@@ -994,7 +1031,7 @@ mod tests {
         fast_failure.clean_expired_request();
         assert!(matches!(response_rx.try_recv(), Err(TryRecvError::Empty)));
 
-        let response = system_busy_response(9, "[TEST]", 0, 0);
+        let response = system_busy_response(&application_remoting_command_factory(), 9, "[TEST]", 0, 0);
         fast_failure.complete(FastFailureQueueKind::Pull, &task, Some(response));
         let response = response_rx.await.expect("worker response").expect("response command");
         assert_eq!(response.opaque(), 9);

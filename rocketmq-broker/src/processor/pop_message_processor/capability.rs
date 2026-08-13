@@ -25,6 +25,8 @@ use rocketmq_model::common::config::TopicConfig;
 use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
+use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_store::ArcMessageFilter;
@@ -397,6 +399,7 @@ impl<MS: BrokerReadWriteStore> PopStoreCapability<MS> {
 }
 
 pub(crate) struct PopMessageProcessorContext<MS: BrokerReadWriteStore> {
+    pub(crate) command_factory: RemotingCommandFactory,
     pub(crate) policy: PopPolicyState,
     pub(crate) topics: Arc<TopicConfigManager>,
     pub(crate) subscriptions: SubscriptionGroupConfigLookup,
@@ -427,6 +430,7 @@ impl<MS: BrokerReadWriteStore> PopMessageProcessorContext<MS> {
         inflight: PopInflightMessageCounter,
     ) -> Self {
         Self {
+            command_factory: application_remoting_command_factory(),
             policy,
             topics,
             subscriptions,
@@ -438,6 +442,11 @@ impl<MS: BrokerReadWriteStore> PopMessageProcessorContext<MS> {
             stats,
             inflight,
         }
+    }
+
+    pub(crate) fn with_command_factory(mut self, command_factory: RemotingCommandFactory) -> Self {
+        self.command_factory = command_factory;
+        self
     }
 }
 

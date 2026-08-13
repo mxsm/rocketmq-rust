@@ -61,6 +61,7 @@ use rocketmq_protocol::protocol::header::message_operation_header::send_message_
 use rocketmq_protocol::protocol::header::message_operation_header::TopicRequestHeaderTrait;
 use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
 use rocketmq_runtime::common::time_utils;
 use rocketmq_runtime::common::util_all;
@@ -76,7 +77,7 @@ use rocketmq_store::StoreHealthSnapshot;
 use rocketmq_store::SyncFlushRuntimeInfo;
 use rocketmq_store_api::MessageAppender;
 use rocketmq_store_api::StoreHealth;
-use rocketmq_transport::api::v1::request_code_not_supported_with_remark_and_opaque;
+use rocketmq_transport::api::v1::request_code_not_supported_with_factory_remark_and_opaque;
 use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use rocketmq_transport::api::v1::RejectRequestResponse;
@@ -157,10 +158,15 @@ where
         if !enable_slave_acting_master && broker_role == BrokerRole::Slave {
             return (
                 true,
-                Some(RemotingCommand::create_response_command_with_code_remark(
-                    ResponseCode::SlaveNotAvailable,
-                    "The broker is slave mode, not allowed to accept message",
-                )),
+                Some(
+                    self.inner
+                        .context
+                        .command_factory
+                        .create_response_command_with_code_remark(
+                            ResponseCode::SlaveNotAvailable,
+                            "The broker is slave mode, not allowed to accept message",
+                        ),
+                ),
             );
         }
         let snapshot = match self.inner.context.store.health_snapshot() {
@@ -168,20 +174,27 @@ where
             Err(_) => {
                 return (
                     true,
-                    Some(RemotingCommand::create_response_command_with_code_remark(
-                        ResponseCode::SystemBusy,
-                        "store_backpressure reason=store_shutdown",
-                    )),
+                    Some(
+                        self.inner
+                            .context
+                            .command_factory
+                            .create_response_command_with_code_remark(
+                                ResponseCode::SystemBusy,
+                                "store_backpressure reason=store_shutdown",
+                            ),
+                    ),
                 );
             }
         };
         if let Some(remark) = store_health_reject_remark(policy.as_ref(), snapshot) {
             return (
                 true,
-                Some(RemotingCommand::create_response_command_with_code_remark(
-                    ResponseCode::SystemBusy,
-                    remark,
-                )),
+                Some(
+                    self.inner
+                        .context
+                        .command_factory
+                        .create_response_command_with_code_remark(ResponseCode::SystemBusy, remark),
+                ),
             );
         }
 
@@ -270,7 +283,8 @@ where
             }
             _ => {
                 warn!("SendMessageProcessor received unknown request code: {:?}", request_code);
-                let response = request_code_not_supported_with_remark_and_opaque(
+                let response = request_code_not_supported_with_factory_remark_and_opaque(
+                    &self.inner.context.command_factory,
                     request.code(),
                     format!("request code {} not supported", request.code()),
                     request.opaque(),
@@ -329,8 +343,11 @@ where
                     .context
                     .topics
                     .build_topic_queue_mapping_context(&request_header, true);
-                let rewrite_result =
-                    TopicQueueMappingManager::rewrite_request_for_static_topic(&mut request_header, &mapping_context);
+                let rewrite_result = TopicQueueMappingManager::rewrite_request_for_static_topic(
+                    &self.inner.context.command_factory,
+                    &mut request_header,
+                    &mapping_context,
+                );
                 if rewrite_result.is_some() {
                     return Ok(rewrite_result);
                 }
@@ -395,7 +412,7 @@ where
                 send_message_hook_vec: Arc::new(Vec::new()),
                 consume_message_hook_vec: Arc::new(Vec::new()),
                 transactional_message_service,
-                broker_to_client: Default::default(),
+                broker_to_client: Broker2Client::new(context.command_factory),
                 context,
             }),
         }
@@ -1003,7 +1020,11 @@ where
                     recall_handle.clone(),
                 );
 
-                let rewrite_result = rewrite_response_for_static_topic(response_header, mapping_context);
+                let rewrite_result = rewrite_response_for_static_topic(
+                    &self.inner.context.command_factory,
+                    response_header,
+                    mapping_context,
+                );
                 if rewrite_result.is_some() {
                     return (rewrite_result, false);
                 }
@@ -1072,8 +1093,11 @@ where
         request: &RemotingCommand,
         request_header: &SendMessageRequestHeader,
     ) -> RemotingCommand {
-        let mut response =
-            RemotingCommand::create_success_response_command_with_header(SendMessageResponseHeader::default());
+        let mut response = self
+            .inner
+            .context
+            .command_factory
+            .create_success_response_command_with_header(SendMessageResponseHeader::default());
         let policy = self.inner.context.policy.snapshot();
         // set opaque
         response.with_opaque(request.opaque());
@@ -1465,34 +1489,40 @@ where
         let request_header = request.decode_command_custom_header::<ConsumerSendMsgBackRequestHeader>()?;
         let policy = self.context.policy.snapshot();
         if policy.broker_id != mix_all::MASTER_ID {
-            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
-                ResponseCode::SystemError,
-                format!("no master available along with {}", policy.broker_ip),
-            )));
+            return Ok(Some(
+                self.context.command_factory.create_response_command_with_code_remark(
+                    ResponseCode::SystemError,
+                    format!("no master available along with {}", policy.broker_ip),
+                ),
+            ));
         }
         let subscription_group_config = self
             .context
             .subscription_groups
             .find_subscription_group_config(&request_header.group);
         if subscription_group_config.is_none() {
-            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
-                ResponseCode::SubscriptionNotExist,
-                format!(
-                    "subscription group not exist, {} {}",
-                    request_header.group,
-                    FAQUrl::suggest_todo(FAQUrl::SUBSCRIPTION_GROUP_NOT_EXIST)
+            return Ok(Some(
+                self.context.command_factory.create_response_command_with_code_remark(
+                    ResponseCode::SubscriptionNotExist,
+                    format!(
+                        "subscription group not exist, {} {}",
+                        request_header.group,
+                        FAQUrl::suggest_todo(FAQUrl::SUBSCRIPTION_GROUP_NOT_EXIST)
+                    ),
                 ),
-            )));
+            ));
         }
 
         if !PermName::is_writeable(policy.broker_permission) {
-            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
-                ResponseCode::NoPermission,
-                format!(
-                    "the broker[{}-{}] sending message is forbidden",
-                    policy.broker_name, policy.broker_ip
+            return Ok(Some(
+                self.context.command_factory.create_response_command_with_code_remark(
+                    ResponseCode::NoPermission,
+                    format!(
+                        "the broker[{}-{}] sending message is forbidden",
+                        policy.broker_name, policy.broker_ip
+                    ),
                 ),
-            )));
+            ));
         }
 
         // SAFETY: subscription_group_config existence checked above
@@ -1500,7 +1530,7 @@ where
 
         // Early return: no retry queues configured
         if subscription_group_config.retry_queue_nums() <= 0 {
-            return Ok(Some(no_retry_queue_response()));
+            return Ok(Some(no_retry_queue_response(&self.context.command_factory)));
         }
         let mut new_topic = CheetahString::from_string(mix_all::get_retry_topic(request_header.group.as_str()));
         let mut queue_id_int = rand::rng().random_range(0..subscription_group_config.retry_queue_nums());
@@ -1521,20 +1551,24 @@ where
             )
             .await;
         if topic_config.is_none() {
-            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
-                ResponseCode::SystemError,
-                format!("topic {new_topic} not exist"),
-            )));
+            return Ok(Some(
+                self.context.command_factory.create_response_command_with_code_remark(
+                    ResponseCode::SystemError,
+                    format!("topic {new_topic} not exist"),
+                ),
+            ));
         }
         // SAFETY: topic_config existence checked above
         let topic_config = topic_config.unwrap();
 
         // Early return: topic not writable
         if !PermName::is_writeable(topic_config.perm) {
-            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
-                ResponseCode::NoPermission,
-                format!("the topic[{new_topic}] sending message is forbidden"),
-            )));
+            return Ok(Some(
+                self.context.command_factory.create_response_command_with_code_remark(
+                    ResponseCode::NoPermission,
+                    format!("the topic[{new_topic}] sending message is forbidden"),
+                ),
+            ));
         }
         // Early return: message not found
         let msg_ext: Option<MessageExt> = self
@@ -1543,10 +1577,12 @@ where
             .look_message_by_offset(request_header.offset)
             .map_err(|_| message_store_not_initialized())?;
         let Some(mut msg_ext) = msg_ext else {
-            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
-                ResponseCode::SystemError,
-                format!("look message by offset failed, the offset is {}", request_header.offset),
-            )));
+            return Ok(Some(
+                self.context.command_factory.create_response_command_with_code_remark(
+                    ResponseCode::SystemError,
+                    format!("look message by offset failed, the offset is {}", request_header.offset),
+                ),
+            ));
         };
         #[cfg(feature = "otel-traces")]
         {
@@ -1591,10 +1627,12 @@ where
                 )
                 .await;
             if topic_config_inner.is_none() {
-                return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
-                    ResponseCode::SystemError,
-                    format!("topic {new_topic} not exist"),
-                )));
+                return Ok(Some(
+                    self.context.command_factory.create_response_command_with_code_remark(
+                        ResponseCode::SystemError,
+                        format!("topic {new_topic} not exist"),
+                    ),
+                ));
             }
             msg_ext.set_delay_time_level(0);
             true
@@ -1647,11 +1685,11 @@ where
                         metrics.inc_send_to_dlq_messages(inner_topic.as_str(), request_header.group.as_str(), 1);
                     }
                 }
-                (RemotingCommand::create_success_response_command(), true)
+                (self.context.command_factory.create_success_response_command(), true)
             }
 
             _ => (
-                RemotingCommand::create_response_command_with_code_remark(
+                self.context.command_factory.create_response_command_with_code_remark(
                     ResponseCode::SystemError,
                     put_message_result.put_message_status().to_string(),
                 ),
@@ -1901,6 +1939,7 @@ where
 }
 
 fn rewrite_response_for_static_topic(
+    command_factory: &RemotingCommandFactory,
     response_header: &mut SendMessageResponseHeader,
     mapping_context: &TopicQueueMappingContext,
 ) -> Option<RemotingCommand> {
@@ -1909,7 +1948,7 @@ fn rewrite_response_for_static_topic(
 
     // Early return: no leader item
     let Some(mapping_item) = mapping_context.leader_item.as_ref() else {
-        return Some(RemotingCommand::create_response_command_with_code_remark(
+        return Some(command_factory.create_response_command_with_code_remark(
             ResponseCode::NotLeaderForQueue,
             format!(
                 "{}-{:?} does not exit in request process of current broker {:?}",
@@ -1991,8 +2030,8 @@ fn message_store_not_initialized() -> RocketMQError {
     RocketMQError::not_initialized("message_store")
 }
 
-fn no_retry_queue_response() -> RemotingCommand {
-    RemotingCommand::create_success_response_command()
+fn no_retry_queue_response(command_factory: &RemotingCommandFactory) -> RemotingCommand {
+    command_factory.create_success_response_command()
 }
 
 #[cfg(test)]
@@ -2009,6 +2048,7 @@ mod tests {
     use rocketmq_protocol::code::response_code::ResponseCode;
     use rocketmq_protocol::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+    use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
     use rocketmq_protocol::protocol::SerializeType;
     use rocketmq_store::store_append_receipt;
     use rocketmq_store::PutMessageResult;
@@ -2041,7 +2081,8 @@ mod tests {
     #[test]
     fn zero_retry_queue_reply_is_a_response_on_both_wire_formats() {
         for serialize_type in [SerializeType::JSON, SerializeType::ROCKETMQ] {
-            let mut response = no_retry_queue_response().set_serialize_type(serialize_type);
+            let mut response =
+                no_retry_queue_response(&application_remoting_command_factory()).set_serialize_type(serialize_type);
             assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
             assert!(response.is_response_type());
 
@@ -2060,10 +2101,16 @@ mod tests {
     #[test]
     fn send_response_keeps_region_and_trace_fields() {
         for serialize_type in [SerializeType::JSON, SerializeType::ROCKETMQ] {
-            let mut response = RemotingCommand::create_success_response_command_with_header(
-                SendMessageResponseHeader::new(CheetahString::from_static_str("msg-id"), 0, 0, None, None, None),
-            )
-            .set_serialize_type(serialize_type);
+            let mut response = application_remoting_command_factory()
+                .create_success_response_command_with_header(SendMessageResponseHeader::new(
+                    CheetahString::from_static_str("msg-id"),
+                    0,
+                    0,
+                    None,
+                    None,
+                    None,
+                ))
+                .set_serialize_type(serialize_type);
             add_send_response_metadata(&mut response, CheetahString::from_static_str("region-a"), true);
             let mut encoded = bytes::BytesMut::new();
 

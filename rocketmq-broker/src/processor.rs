@@ -18,14 +18,16 @@ use std::sync::Arc;
 use rocketmq_auth::AuthRuntime;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
 use rocketmq_store::BrokerStorePort;
-use rocketmq_transport::api::v1::command_from_error_with_opaque;
-use rocketmq_transport::api::v1::command_from_error_with_remark_and_opaque;
-use rocketmq_transport::api::v1::internal_error_with_opaque;
-use rocketmq_transport::api::v1::request_code_not_supported;
-use rocketmq_transport::api::v1::request_code_not_supported_with_opaque;
+use rocketmq_transport::api::v1::command_from_error_with_factory_and_opaque;
+use rocketmq_transport::api::v1::command_from_error_with_factory_remark_and_opaque;
+use rocketmq_transport::api::v1::internal_error_with_factory_and_opaque;
+use rocketmq_transport::api::v1::request_code_not_supported_with_factory;
+use rocketmq_transport::api::v1::request_code_not_supported_with_factory_and_opaque;
 use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use rocketmq_transport::api::v1::RejectRequestResponse;
@@ -261,6 +263,7 @@ where
 pub(crate) type RequestCodeType = i32;
 
 pub struct BrokerRequestProcessor<MS: BrokerStorePort, TS> {
+    command_factory: RemotingCommandFactory,
     process_table: Arc<HashMap<RequestCodeType, BrokerProcessorType<MS, TS>>>,
     default_request_processor: Option<Arc<BrokerProcessorType<MS, TS>>>,
     auth_runtime: Option<Arc<AuthRuntime>>,
@@ -274,7 +277,12 @@ where
     TS: TransactionalMessageService,
 {
     pub fn new() -> Self {
+        Self::new_with_factory(application_remoting_command_factory())
+    }
+
+    pub fn new_with_factory(command_factory: RemotingCommandFactory) -> Self {
         Self {
+            command_factory,
             process_table: Arc::new(HashMap::new()),
             default_request_processor: None,
             auth_runtime: None,
@@ -324,6 +332,7 @@ where
 impl<MS: BrokerStorePort, TS> Clone for BrokerRequestProcessor<MS, TS> {
     fn clone(&self) -> Self {
         Self {
+            command_factory: self.command_factory,
             process_table: self.process_table.clone(),
             default_request_processor: self.default_request_processor.clone(),
             auth_runtime: self.auth_runtime.clone(),
@@ -355,7 +364,8 @@ where
             let error = rocketmq_error::RocketMQError::authentication_failed(
                 "Broker maintenance API is disabled or unavailable",
             );
-            return Ok(Some(command_from_error_with_remark_and_opaque(
+            return Ok(Some(command_from_error_with_factory_remark_and_opaque(
+                &self.command_factory,
                 &error,
                 error.to_string(),
                 request.opaque(),
@@ -364,8 +374,12 @@ where
         if !privileged_maintenance {
             if let Some(auth_runtime) = &self.auth_runtime {
                 if let Err(error) = auth_runtime.check_remoting(&ctx, request).await {
-                    let response =
-                        command_from_error_with_remark_and_opaque(&error, error.to_string(), request.opaque());
+                    let response = command_from_error_with_factory_remark_and_opaque(
+                        &self.command_factory,
+                        &error,
+                        error.to_string(),
+                        request.opaque(),
+                    );
                     return Ok(Some(response));
                 }
             }
@@ -397,13 +411,17 @@ where
                     .await
                 }
                 None => {
-                    let response = request_code_not_supported_with_opaque(request.code(), request.opaque());
+                    let response = request_code_not_supported_with_factory_and_opaque(
+                        &self.command_factory,
+                        request.code(),
+                        request.opaque(),
+                    );
                     Ok(Some(response))
                 }
             },
         };
 
-        map_request_header_error(result, opaque)
+        map_request_header_error(&self.command_factory, result, opaque)
     }
 
     fn reject_request(&self, code: i32) -> RejectRequestResponse {
@@ -413,7 +431,10 @@ where
                 if let Some(default_processor) = &self.default_request_processor {
                     default_processor.reject_request(code)
                 } else {
-                    (true, Some(request_code_not_supported(code)))
+                    (
+                        true,
+                        Some(request_code_not_supported_with_factory(&self.command_factory, code)),
+                    )
                 }
             }
         }
@@ -474,6 +495,7 @@ where
         if detach_response {
             let Some(task_group) = &self.request_task_group else {
                 return Ok(Some(system_error_response(
+                    &self.command_factory,
                     opaque,
                     "detached send request executor has no task group",
                 )));
@@ -496,9 +518,14 @@ where
                 broker_fast_failure.cancel(
                     queue_kind,
                     &task,
-                    system_error_response(opaque, "detached fast failure request task spawn failed"),
+                    system_error_response(
+                        &self.command_factory,
+                        opaque,
+                        "detached fast failure request task spawn failed",
+                    ),
                 );
                 return Ok(Some(system_error_response(
+                    &self.command_factory,
                     opaque,
                     "detached fast failure request task spawn failed",
                 )));
@@ -522,7 +549,7 @@ where
                 broker_fast_failure.cancel(
                     queue_kind,
                     &task,
-                    system_error_response(opaque, "fast failure request task spawn failed"),
+                    system_error_response(&self.command_factory, opaque, "fast failure request task spawn failed"),
                 );
             }
         } else {
@@ -532,6 +559,7 @@ where
         match response_rx.await {
             Ok(response) => Ok(response),
             Err(_error) => Ok(Some(system_error_response(
+                &self.command_factory,
                 opaque,
                 "fast failure response channel closed before request completed",
             ))),
@@ -549,6 +577,7 @@ where
         opaque: i32,
         response_rx: tokio::sync::oneshot::Receiver<Option<RemotingCommand>>,
     ) {
+        let command_factory = broker_fast_failure.command_factory();
         let request_task = Self::run_fast_failure_request(
             queue_kind,
             broker_fast_failure,
@@ -566,10 +595,11 @@ where
             _ = &mut request_task => (&mut response_rx).await,
             response_result = &mut response_rx => response_result,
         };
-        Self::write_detached_fast_failure_response(response_result, ctx, opaque).await;
+        Self::write_detached_fast_failure_response(&command_factory, response_result, ctx, opaque).await;
     }
 
     async fn write_detached_fast_failure_response(
+        command_factory: &RemotingCommandFactory,
         response_result: Result<Option<RemotingCommand>, tokio::sync::oneshot::error::RecvError>,
         ctx: ConnectionHandlerContext,
         opaque: i32,
@@ -579,6 +609,7 @@ where
             Ok(None) => {}
             Err(_error) => {
                 ctx.write_response(system_error_response(
+                    command_factory,
                     opaque,
                     "fast failure response channel closed before detached request completed",
                 ))
@@ -604,6 +635,7 @@ where
                     queue_kind,
                     &task,
                     Some(system_error_response(
+                        &broker_fast_failure.command_factory(),
                         opaque,
                         "fast failure queue permit acquisition failed",
                     )),
@@ -618,7 +650,11 @@ where
 
         let response = match processor.process_request(channel, ctx, &mut queued_request).await {
             Ok(response) => response,
-            Err(error) => Some(command_from_error_with_opaque(&error, opaque)),
+            Err(error) => Some(command_from_error_with_factory_and_opaque(
+                &broker_fast_failure.command_factory(),
+                &error,
+                opaque,
+            )),
         };
         broker_fast_failure.complete(queue_kind, &task, response);
     }
@@ -671,18 +707,23 @@ fn fast_failure_queue_kind(request_code: i32, default_processor: bool) -> Option
     }
 }
 
-fn system_error_response(opaque: i32, remark: impl Into<String>) -> RemotingCommand {
-    internal_error_with_opaque(opaque, remark)
+fn system_error_response(
+    command_factory: &RemotingCommandFactory,
+    opaque: i32,
+    remark: impl Into<String>,
+) -> RemotingCommand {
+    internal_error_with_factory_and_opaque(command_factory, opaque, remark)
 }
 
 fn map_request_header_error(
+    command_factory: &RemotingCommandFactory,
     result: rocketmq_error::RocketMQResult<Option<RemotingCommand>>,
     opaque: i32,
 ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
     match result {
-        Err(error) if error.kind() == rocketmq_error::ErrorKind::RequestHeaderError => {
-            Ok(Some(command_from_error_with_opaque(&error, opaque)))
-        }
+        Err(error) if error.kind() == rocketmq_error::ErrorKind::RequestHeaderError => Ok(Some(
+            command_from_error_with_factory_and_opaque(command_factory, &error, opaque),
+        )),
         result => result,
     }
 }
@@ -693,6 +734,8 @@ mod tests {
     use rocketmq_auth::AuthConfig;
     use rocketmq_auth::AuthRuntimeBuilder;
     use rocketmq_protocol::code::response_code::ResponseCode;
+    use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandDefaults;
+    use rocketmq_protocol::protocol::SerializeType;
     use rocketmq_store::LocalFileMessageStore;
     use rocketmq_transport::test_support::LocalRequestHarness;
 
@@ -709,7 +752,7 @@ mod tests {
         });
         let error = rocketmq_error::RocketMQError::request_header_source("decode test request header", source);
 
-        let response = map_request_header_error(Err(error), 47)
+        let response = map_request_header_error(&application_remoting_command_factory(), Err(error), 47)
             .expect("request-header error should become a response")
             .expect("request-header error should return a response command");
 
@@ -720,6 +763,37 @@ mod tests {
             Some("Request header is invalid")
         );
         assert!(!response.remark().is_some_and(|remark| remark.contains("secret")));
+    }
+
+    #[tokio::test]
+    async fn broker_request_processors_keep_per_instance_wire_defaults() {
+        let json_factory = RemotingCommandFactory::new(RemotingCommandDefaults::new(672, SerializeType::JSON));
+        let binary_factory = RemotingCommandFactory::new(RemotingCommandDefaults::new(673, SerializeType::ROCKETMQ));
+        let mut json_processor = TestBrokerRequestProcessor::new_with_factory(json_factory);
+        let mut binary_processor = TestBrokerRequestProcessor::new_with_factory(binary_factory);
+        let harness = LocalRequestHarness::new(crate::test_task_group("broker-factory-owner"))
+            .await
+            .expect("local remoting harness should start");
+
+        let mut json_request = RemotingCommand::create_remoting_command(99_901).set_opaque(41);
+        let json_response = json_processor
+            .process_request(harness.channel(), harness.context(), &mut json_request)
+            .await
+            .expect("JSON owner should build a response")
+            .expect("unsupported request should return a response");
+        let mut binary_request = RemotingCommand::create_remoting_command(99_902).set_opaque(42);
+        let binary_response = binary_processor
+            .process_request(harness.channel(), harness.context(), &mut binary_request)
+            .await
+            .expect("ROCKETMQ owner should build a response")
+            .expect("unsupported request should return a response");
+
+        assert_eq!(json_response.version(), 672);
+        assert_eq!(json_response.serialize_type(), SerializeType::JSON);
+        assert_eq!(json_response.opaque(), 41);
+        assert_eq!(binary_response.version(), 673);
+        assert_eq!(binary_response.serialize_type(), SerializeType::ROCKETMQ);
+        assert_eq!(binary_response.opaque(), 42);
     }
 
     #[test]

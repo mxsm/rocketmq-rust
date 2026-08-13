@@ -29,13 +29,15 @@ use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
 use rocketmq_protocol::protocol::header::end_transaction_request_header::EndTransactionRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::BrokerStatsManager;
 use rocketmq_store::BrokerWriteStore;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::PutMessageResult;
 use rocketmq_store::PutMessageStatus;
-use rocketmq_transport::api::v1::request_code_not_supported_with_remark_and_opaque;
+use rocketmq_transport::api::v1::request_code_not_supported_with_factory_remark_and_opaque;
 use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use rocketmq_transport::api::v1::RequestProcessor;
@@ -108,6 +110,7 @@ impl<MS: BrokerWriteStore> Clone for EndTransactionStoreCapability<MS> {
 }
 
 pub(crate) struct EndTransactionProcessorContext<MS: BrokerWriteStore> {
+    command_factory: RemotingCommandFactory,
     policy: EndTransactionPolicy,
     message_store: EndTransactionStoreCapability<MS>,
     broker_stats_manager: Arc<BrokerStatsManager>,
@@ -122,17 +125,24 @@ impl<MS: BrokerWriteStore> EndTransactionProcessorContext<MS> {
         broker_metrics_manager: Option<Arc<BrokerMetricsManager>>,
     ) -> Self {
         Self {
+            command_factory: application_remoting_command_factory(),
             policy,
             message_store,
             broker_stats_manager,
             broker_metrics_manager,
         }
     }
+
+    pub(crate) fn with_command_factory(mut self, command_factory: RemotingCommandFactory) -> Self {
+        self.command_factory = command_factory;
+        self
+    }
 }
 
 impl<MS: BrokerWriteStore> Clone for EndTransactionProcessorContext<MS> {
     fn clone(&self) -> Self {
         Self {
+            command_factory: self.command_factory,
             policy: self.policy,
             message_store: self.message_store.clone(),
             broker_stats_manager: Arc::clone(&self.broker_stats_manager),
@@ -200,7 +210,8 @@ where
                     "EndTransactionProcessor received unknown request code: {:?}",
                     request_code
                 );
-                let response = request_code_not_supported_with_remark_and_opaque(
+                let response = request_code_not_supported_with_factory_remark_and_opaque(
+                    &self.context.command_factory,
                     request.code(),
                     format!("request code {} not supported", request.code()),
                     request.opaque(),
@@ -239,13 +250,15 @@ where
             Ok(false) => {}
             Ok(true) => {
                 warn!("Message store is slave mode, so end transaction is forbidden. ");
-                return Ok(Some(RemotingCommand::create_response_command_with_code(
-                    ResponseCode::SlaveNotAvailable,
-                )));
+                return Ok(Some(
+                    self.context
+                        .command_factory
+                        .create_response_command_with_code(ResponseCode::SlaveNotAvailable),
+                ));
             }
             Err(_) => {
                 warn!("Message store provider is unavailable, so end transaction is forbidden. ");
-                return Ok(Some(message_store_unavailable_response()));
+                return Ok(Some(message_store_unavailable_response(&self.context.command_factory)));
             }
         }
         if request_header.from_transaction_check {
@@ -318,9 +331,11 @@ where
                          msgId={},commitLogOffset={}, wait check",
                         request_header.msg_id, request_header.commit_log_offset
                     );
-                    return Ok(Some(RemotingCommand::create_response_command_with_code(
-                        ResponseCode::IllegalOperation,
-                    )));
+                    return Ok(Some(
+                        self.context
+                            .command_factory
+                            .create_response_command_with_code(ResponseCode::IllegalOperation),
+                    ));
                 }
                 let res = self.check_prepare_message(result.prepare_message.as_ref(), &request_header);
                 if ResponseCode::from(res.code()) == ResponseCode::Success {
@@ -385,9 +400,11 @@ where
                          msgId={},commitLogOffset={}, wait check",
                         request_header.msg_id, request_header.commit_log_offset
                     );
-                    return Ok(Some(RemotingCommand::create_response_command_with_code(
-                        ResponseCode::IllegalOperation,
-                    )));
+                    return Ok(Some(
+                        self.context
+                            .command_factory
+                            .create_response_command_with_code(ResponseCode::IllegalOperation),
+                    ));
                 }
                 let res = self.check_prepare_message(result.prepare_message.as_ref(), &request_header);
                 if ResponseCode::from(res.code()) == ResponseCode::Success {
@@ -421,7 +438,11 @@ where
             OperationResult::default()
         };
 
-        Ok(Some(final_end_transaction_response(response_code, response_remark)))
+        Ok(Some(final_end_transaction_response(
+            &self.context.command_factory,
+            response_code,
+            response_remark,
+        )))
     }
 
     pub fn reject_commit_or_rollback(&self, from_transaction_check: bool, message_ext: &MessageExt) -> bool {
@@ -453,7 +474,7 @@ where
         // params: &(String, i64, i64),
         request_header: &EndTransactionRequestHeader,
     ) -> RemotingCommand {
-        let mut command = RemotingCommand::create_success_response_command();
+        let mut command = self.context.command_factory.create_success_response_command();
         if let Some(message_ext) = message_ext {
             let pgroup_read =
                 message_ext.property(&CheetahString::from_static_str(MessageConst::PROPERTY_PRODUCER_GROUP));
@@ -497,10 +518,11 @@ where
 
         let put_message_result = match self.context.message_store.put_message(msg_inner).await {
             Ok(result) => result,
-            Err(_) => return message_store_unavailable_response(),
+            Err(_) => return message_store_unavailable_response(&self.context.command_factory),
         };
 
         build_put_message_response(
+            &self.context.command_factory,
             &self.context.policy,
             self.context.broker_stats_manager.as_ref(),
             &topic,
@@ -509,22 +531,30 @@ where
     }
 }
 
-fn message_store_unavailable_response() -> RemotingCommand {
-    RemotingCommand::create_response_command_with_code(ResponseCode::ServiceNotAvailable)
+fn message_store_unavailable_response(command_factory: &RemotingCommandFactory) -> RemotingCommand {
+    command_factory
+        .create_response_command_with_code(ResponseCode::ServiceNotAvailable)
         .set_remark("Message store is unavailable now.")
 }
 
-fn final_end_transaction_response(response_code: ResponseCode, response_remark: Option<String>) -> RemotingCommand {
-    RemotingCommand::create_response_command_with_code(response_code).set_remark_option(response_remark)
+fn final_end_transaction_response(
+    command_factory: &RemotingCommandFactory,
+    response_code: ResponseCode,
+    response_remark: Option<String>,
+) -> RemotingCommand {
+    command_factory
+        .create_response_command_with_code(response_code)
+        .set_remark_option(response_remark)
 }
 
 fn build_put_message_response(
+    command_factory: &RemotingCommandFactory,
     policy: &EndTransactionPolicy,
     broker_stats_manager: &BrokerStatsManager,
     topic: &CheetahString,
     put_message_result: PutMessageResult,
 ) -> RemotingCommand {
-    let mut response = RemotingCommand::create_success_response_command();
+    let mut response = command_factory.create_success_response_command();
     match put_message_result.put_message_status() {
         PutMessageStatus::PutOk
         | PutMessageStatus::FlushDiskTimeout
@@ -653,15 +683,19 @@ fn end_message_transaction(msg_ext: &mut MessageExt) -> MessageExtBrokerInner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
     use rocketmq_protocol::protocol::SerializeType;
     use rocketmq_store::StorePorts;
 
     #[test]
     fn final_end_transaction_reply_preserves_error_semantics_on_both_wire_formats() {
         for serialize_type in [SerializeType::JSON, SerializeType::ROCKETMQ] {
-            let mut response =
-                final_end_transaction_response(ResponseCode::SystemError, Some("transaction failed".to_owned()))
-                    .set_serialize_type(serialize_type);
+            let mut response = final_end_transaction_response(
+                &application_remoting_command_factory(),
+                ResponseCode::SystemError,
+                Some("transaction failed".to_owned()),
+            )
+            .set_serialize_type(serialize_type);
             assert_eq!(ResponseCode::from(response.code()), ResponseCode::SystemError);
             assert_eq!(response.remark().map(CheetahString::as_str), Some("transaction failed"));
             assert!(response.is_response_type());
@@ -775,7 +809,7 @@ mod tests {
         assert!(capability.is_slave().is_err());
         assert!(capability.put_message(MessageExtBrokerInner::default()).await.is_err());
 
-        let response = message_store_unavailable_response();
+        let response = message_store_unavailable_response(&application_remoting_command_factory());
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::ServiceNotAvailable);
         assert_eq!(
             response.remark().map(CheetahString::as_str),
@@ -799,6 +833,7 @@ mod tests {
         let topic = CheetahString::from_static_str("transaction-topic");
 
         let illegal = build_put_message_response(
+            &application_remoting_command_factory(),
             &policy,
             &broker_stats_manager,
             &topic,
@@ -808,6 +843,7 @@ mod tests {
         assert!(illegal.remark().is_some_and(|remark| remark.contains("4321B")));
 
         let timer_flow_control = build_put_message_response(
+            &application_remoting_command_factory(),
             &policy,
             &broker_stats_manager,
             &topic,
@@ -819,6 +855,7 @@ mod tests {
             .is_some_and(|remark| remark.contains("154") && remark.contains("77")));
 
         let timer_disabled = build_put_message_response(
+            &application_remoting_command_factory(),
             &policy,
             &broker_stats_manager,
             &topic,
@@ -843,6 +880,7 @@ mod tests {
         );
 
         let response = build_put_message_response(
+            &application_remoting_command_factory(),
             &policy,
             &broker_stats_manager,
             &CheetahString::from_static_str("transaction-topic"),

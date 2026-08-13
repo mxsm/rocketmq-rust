@@ -23,6 +23,8 @@ use crate::rpc::rpc_response::RpcResponse;
 use rocketmq_protocol::protocol::command_custom_header::CommandCustomHeader;
 use rocketmq_protocol::protocol::header::message_operation_header::TopicRequestHeaderTrait;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_protocol::protocol::RemotingSerializable;
 
 pub struct RpcClientUtils;
@@ -52,10 +54,21 @@ impl RpcClientUtils {
         result
     }
 
-    pub fn create_command_for_rpc_response(mut rpc_response: RpcResponse) -> RemotingCommand {
+    pub fn create_command_for_rpc_response(rpc_response: RpcResponse) -> RemotingCommand {
+        Self::create_command_for_rpc_response_with_factory(&application_remoting_command_factory(), rpc_response)
+    }
+
+    /// Converts an RPC response using the caller-owned remoting defaults.
+    ///
+    /// [`Self::create_command_for_rpc_response`] is the compatibility facade that uses application defaults.
+    pub fn create_command_for_rpc_response_with_factory(
+        command_factory: &RemotingCommandFactory,
+        mut rpc_response: RpcResponse,
+    ) -> RemotingCommand {
         let mut cmd = match rpc_response.header.take() {
-            None => RemotingCommand::create_response_command_with_code(rpc_response.code),
-            Some(value) => RemotingCommand::create_response_command_with_code(rpc_response.code)
+            None => command_factory.create_response_command_with_code(rpc_response.code),
+            Some(value) => command_factory
+                .create_response_command_with_code(rpc_response.code)
                 .set_command_custom_header_boxed(value),
         };
         match rpc_response.exception {
@@ -92,6 +105,9 @@ impl RpcClientUtils {
 mod tests {
     use cheetah_string::CheetahString;
     use rocketmq_error::RocketMQError;
+    use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandDefaults;
+    use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
+    use rocketmq_protocol::protocol::SerializeType;
 
     use super::*;
     use rocketmq_protocol::protocol::header::client_request_header::GetRouteInfoRequestHeader;
@@ -191,5 +207,49 @@ mod tests {
             .expect("RPC response should retain its typed header");
         assert_eq!(header.topic.as_str(), "owned-topic");
         assert_eq!(header.accept_standard_json_only, Some(true));
+    }
+
+    #[test]
+    fn factory_aware_rpc_response_preserves_fields_and_owner_defaults() {
+        let factory = RemotingCommandFactory::new(RemotingCommandDefaults::new(9343, SerializeType::ROCKETMQ));
+        let exception = RocketMQError::response_process_failed("forward RPC response", "remote failure");
+        let expected_remark = exception.to_string();
+        let mut response = RpcResponse::new(
+            17,
+            Box::new(GetRouteInfoRequestHeader::new("owned-topic", Some(true))),
+            None,
+        );
+        response.exception = Some(exception);
+
+        let command = RpcClientUtils::create_command_for_rpc_response_with_factory(&factory, response);
+
+        assert_eq!(command.code(), 17);
+        assert!(command.is_response_type());
+        assert_eq!(command.version(), 9343);
+        assert_eq!(command.serialize_type(), SerializeType::ROCKETMQ);
+        assert_eq!(
+            command.remark().map(|remark| remark.as_str()),
+            Some(expected_remark.as_str())
+        );
+        let header = command
+            .read_custom_header_ref::<GetRouteInfoRequestHeader>()
+            .expect("RPC response should retain its typed header");
+        assert_eq!(header.topic.as_str(), "owned-topic");
+        assert_eq!(header.accept_standard_json_only, Some(true));
+    }
+
+    #[test]
+    fn factory_aware_rpc_response_matches_legacy_non_empty_body_behavior() {
+        let body = Bytes::from_static(b"payload");
+        let legacy_command =
+            RpcClientUtils::create_command_for_rpc_response(RpcResponse::new_option(17, Some(Box::new(body.clone()))));
+        let factory = RemotingCommandFactory::new(RemotingCommandDefaults::new(9343, SerializeType::ROCKETMQ));
+        let factory_command = RpcClientUtils::create_command_for_rpc_response_with_factory(
+            &factory,
+            RpcResponse::new_option(17, Some(Box::new(body))),
+        );
+
+        assert_eq!(factory_command.body(), legacy_command.body());
+        assert!(legacy_command.body().is_none());
     }
 }

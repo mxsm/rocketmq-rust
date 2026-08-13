@@ -31,6 +31,8 @@ use rocketmq_protocol::protocol::header::change_invisible_time_request_header::C
 use rocketmq_protocol::protocol::header::change_invisible_time_response_header::ChangeInvisibleTimeResponseHeader;
 use rocketmq_protocol::protocol::header::extra_info_util::ExtraInfoUtil;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::AckMsg;
@@ -39,7 +41,7 @@ use rocketmq_store::BrokerStatsManager;
 use rocketmq_store::PopCheckPoint;
 use rocketmq_store::PutMessageResult;
 use rocketmq_store::PutMessageStatus;
-use rocketmq_transport::api::v1::request_code_not_supported_with_remark_and_opaque;
+use rocketmq_transport::api::v1::request_code_not_supported_with_factory_remark_and_opaque;
 use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use rocketmq_transport::api::v1::RequestProcessor;
@@ -155,6 +157,7 @@ impl ChangeInvisibleTimeOrderCapability {
 }
 
 pub(crate) struct ChangeInvisibleTimeProcessorContext<MS: BrokerReadWriteStore> {
+    command_factory: RemotingCommandFactory,
     policy: ChangeInvisibleTimePolicy,
     topic_config_manager: Arc<TopicConfigManager>,
     consumer_offset_query: ConsumerOffsetQueryCapability<MS>,
@@ -181,6 +184,7 @@ impl<MS: BrokerReadWriteStore> ChangeInvisibleTimeProcessorContext<MS> {
         queue_lock_manager: QueueLockManager,
     ) -> Self {
         Self {
+            command_factory: application_remoting_command_factory(),
             policy,
             topic_config_manager,
             consumer_offset_query,
@@ -190,6 +194,11 @@ impl<MS: BrokerReadWriteStore> ChangeInvisibleTimeProcessorContext<MS> {
             pop_buffer,
             queue_lock_manager,
         }
+    }
+
+    pub(crate) fn with_command_factory(mut self, command_factory: RemotingCommandFactory) -> Self {
+        self.command_factory = command_factory;
+        self
     }
 }
 
@@ -230,7 +239,8 @@ where
                     "ChangeInvisibleTimeProcessor received unknown request code: {:?}",
                     request_code
                 );
-                let response = request_code_not_supported_with_remark_and_opaque(
+                let response = request_code_not_supported_with_factory_remark_and_opaque(
+                    &self.context.command_factory,
                     request.code(),
                     format!(
                         "ChangeInvisibleTimeProcessor request code {} not supported",
@@ -283,14 +293,16 @@ where
                 channel.remote_address()
             );
 
-            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
-                ResponseCode::TopicNotExist,
-                format!(
-                    "topic[{}] not exist, apply first please! {}",
-                    request_header.topic,
-                    FAQUrl::suggest_todo(FAQUrl::APPLY_TOPIC_URL)
+            return Ok(Some(
+                self.context.command_factory.create_response_command_with_code_remark(
+                    ResponseCode::TopicNotExist,
+                    format!(
+                        "topic[{}] not exist, apply first please! {}",
+                        request_header.topic,
+                        FAQUrl::suggest_todo(FAQUrl::APPLY_TOPIC_URL)
+                    ),
                 ),
-            )));
+            ));
         }
         let topic_config = topic_config.unwrap();
         if request_header.queue_id >= topic_config.read_queue_nums as i32 || request_header.queue_id < 0 {
@@ -304,20 +316,23 @@ where
 
             error!("{}", error_info);
 
-            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
-                ResponseCode::MessageIllegal,
-                error_info,
-            )));
+            return Ok(Some(
+                self.context
+                    .command_factory
+                    .create_response_command_with_code_remark(ResponseCode::MessageIllegal, error_info),
+            ));
         }
         let Ok((mix_offset, max_offset)) = self
             .context
             .message_store
             .queue_offsets(&request_header.topic, request_header.queue_id)
         else {
-            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
-                ResponseCode::ServiceNotAvailable,
-                "message store is not available",
-            )));
+            return Ok(Some(
+                self.context.command_factory.create_response_command_with_code_remark(
+                    ResponseCode::ServiceNotAvailable,
+                    "message store is not available",
+                ),
+            ));
         };
         if request_header.offset < mix_offset || request_header.offset > max_offset {
             let info = format!(
@@ -331,10 +346,11 @@ where
 
             info!("{}", info);
 
-            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
-                ResponseCode::NoMessage,
-                info,
-            )));
+            return Ok(Some(
+                self.context
+                    .command_factory
+                    .create_response_command_with_code_remark(ResponseCode::NoMessage, info),
+            ));
         }
         let extra_info = ExtraInfoUtil::split(&request_header.extra_info);
         if ExtraInfoUtil::is_order(extra_info.as_slice()) {
@@ -358,10 +374,12 @@ where
         {
             Some(result) => result,
             None => {
-                return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
-                    ResponseCode::ServiceNotAvailable,
-                    "message store is not available",
-                )));
+                return Ok(Some(
+                    self.context.command_factory.create_response_command_with_code_remark(
+                        ResponseCode::ServiceNotAvailable,
+                        "message store is not available",
+                    ),
+                ));
             }
         };
         match ck_result.put_message_status() {
@@ -371,10 +389,12 @@ where
             | PutMessageStatus::SlaveNotAvailable => {}
             _ => {
                 error!("change Invisible, put new ck error: {}", ck_result.put_message_status());
-                return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
-                    ResponseCode::SystemError,
-                    format!("append check point error, status: {:?}", ck_result.put_message_status()),
-                )));
+                return Ok(Some(
+                    self.context.command_factory.create_response_command_with_code_remark(
+                        ResponseCode::SystemError,
+                        format!("append check point error, status: {:?}", ck_result.put_message_status()),
+                    ),
+                ));
             }
         }
         if let Err(e) = self.ack_origin(&request_header, extra_info.as_slice()).await {
@@ -388,9 +408,11 @@ where
             revive_qid,
             invisible_time: request_header.invisible_time,
         };
-        Ok(Some(RemotingCommand::create_success_response_command_with_header(
-            response_header,
-        )))
+        Ok(Some(
+            self.context
+                .command_factory
+                .create_success_response_command_with_header(response_header),
+        ))
     }
 
     async fn ack_origin(
@@ -523,7 +545,7 @@ where
             request_header.queue_id,
         );
         if old_offset > request_header.offset {
-            return Ok(Some(RemotingCommand::create_success_response_command()));
+            return Ok(Some(self.context.command_factory.create_success_response_command()));
         }
         while !self
             .context
@@ -541,7 +563,7 @@ where
             request_header.queue_id,
         );
         if old_offset > request_header.offset {
-            return Ok(Some(RemotingCommand::create_success_response_command()));
+            return Ok(Some(self.context.command_factory.create_success_response_command()));
         }
         let next_visible_time = current_millis() + request_header.invisible_time as u64;
         let updated = self.context.consumer_order_info.update_next_visible_time(
@@ -567,14 +589,18 @@ where
             )
             .await;
         if !updated {
-            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
-                ResponseCode::ServiceNotAvailable,
-                "consumer order info is not available",
-            )));
+            return Ok(Some(
+                self.context.command_factory.create_response_command_with_code_remark(
+                    ResponseCode::ServiceNotAvailable,
+                    "consumer order info is not available",
+                ),
+            ));
         }
-        Ok(Some(RemotingCommand::create_success_response_command_with_header(
-            response_header,
-        )))
+        Ok(Some(
+            self.context
+                .command_factory
+                .create_success_response_command_with_header(response_header),
+        ))
     }
 }
 

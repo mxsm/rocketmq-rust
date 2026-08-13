@@ -268,88 +268,106 @@ where
         );
 
         if request_header.is_timeout_too_much_at(rocketmq_runtime::common::time_utils::current_millis() as i64) {
-            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
-                ResponseCode::PollingTimeout,
-                format!("the broker[{}] pop message is timeout too much", policy.broker_ip),
-            )));
+            return Ok(Some(
+                self.context.command_factory.create_response_command_with_code_remark(
+                    ResponseCode::PollingTimeout,
+                    format!("the broker[{}] pop message is timeout too much", policy.broker_ip),
+                ),
+            ));
         }
 
         if !PermName::is_readable(policy.broker_permission) {
-            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
-                ResponseCode::NoPermission,
-                format!("the broker[{}] pop message is forbidden", policy.broker_ip),
-            )));
+            return Ok(Some(
+                self.context.command_factory.create_response_command_with_code_remark(
+                    ResponseCode::NoPermission,
+                    format!("the broker[{}] pop message is forbidden", policy.broker_ip),
+                ),
+            ));
         }
 
         if request_header.max_msg_nums > 32 {
-            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
-                ResponseCode::SystemError,
-                format!("the broker[{}] pop message's num is greater than 32", policy.broker_ip),
-            )));
+            return Ok(Some(
+                self.context.command_factory.create_response_command_with_code_remark(
+                    ResponseCode::SystemError,
+                    format!("the broker[{}] pop message's num is greater than 32", policy.broker_ip),
+                ),
+            ));
         }
 
         if !policy.timer_wheel_enable {
-            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
-                ResponseCode::SystemError,
-                format!(
-                    "the broker[{}] pop message is forbidden because timerWheelEnable is false",
-                    policy.broker_ip
+            return Ok(Some(
+                self.context.command_factory.create_response_command_with_code_remark(
+                    ResponseCode::SystemError,
+                    format!(
+                        "the broker[{}] pop message is forbidden because timerWheelEnable is false",
+                        policy.broker_ip
+                    ),
                 ),
-            )));
+            ));
         }
         let topic_config = self.context.topics.select_topic_config(&request_header.topic);
         if topic_config.is_none() {
-            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
-                ResponseCode::TopicNotExist,
-                format!(
-                    "topic[{}] not exist, apply first please! {}",
-                    request_header.topic,
-                    FAQUrl::suggest_todo(FAQUrl::APPLY_TOPIC_URL)
+            return Ok(Some(
+                self.context.command_factory.create_response_command_with_code_remark(
+                    ResponseCode::TopicNotExist,
+                    format!(
+                        "topic[{}] not exist, apply first please! {}",
+                        request_header.topic,
+                        FAQUrl::suggest_todo(FAQUrl::APPLY_TOPIC_URL)
+                    ),
                 ),
-            )));
+            ));
         }
         let topic_config = topic_config.unwrap();
         if !PermName::is_readable(topic_config.perm) {
-            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
-                ResponseCode::NoPermission,
-                format!("the topic[{}] peeking message is forbidden", request_header.topic),
-            )));
+            return Ok(Some(
+                self.context.command_factory.create_response_command_with_code_remark(
+                    ResponseCode::NoPermission,
+                    format!("the topic[{}] peeking message is forbidden", request_header.topic),
+                ),
+            ));
         }
         if request_header.queue_id >= topic_config.read_queue_nums as i32 {
-            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
-                ResponseCode::SystemError,
-                format!(
-                    "the queueId[{}] is illegal, topic[{}]  topicConfig readQueueNums[{}] consumer[{}]",
-                    request_header.queue_id,
-                    request_header.topic,
-                    topic_config.read_queue_nums,
-                    channel.remote_address()
+            return Ok(Some(
+                self.context.command_factory.create_response_command_with_code_remark(
+                    ResponseCode::SystemError,
+                    format!(
+                        "the queueId[{}] is illegal, topic[{}]  topicConfig readQueueNums[{}] consumer[{}]",
+                        request_header.queue_id,
+                        request_header.topic,
+                        topic_config.read_queue_nums,
+                        channel.remote_address()
+                    ),
                 ),
-            )));
+            ));
         }
         let subscription_group_config = self
             .context
             .subscriptions
             .find_subscription_group_config(&request_header.consumer_group);
         if subscription_group_config.is_none() {
-            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
-                ResponseCode::SubscriptionGroupNotExist,
-                format!(
-                    "the consumer group[{}] not online, apply first please! {}",
-                    request_header.consumer_group,
-                    FAQUrl::suggest_todo(FAQUrl::SUBSCRIPTION_GROUP_NOT_EXIST)
+            return Ok(Some(
+                self.context.command_factory.create_response_command_with_code_remark(
+                    ResponseCode::SubscriptionGroupNotExist,
+                    format!(
+                        "the consumer group[{}] not online, apply first please! {}",
+                        request_header.consumer_group,
+                        FAQUrl::suggest_todo(FAQUrl::SUBSCRIPTION_GROUP_NOT_EXIST)
+                    ),
                 ),
-            )));
+            ));
         }
         let subscription_group_config = subscription_group_config.unwrap();
         if !subscription_group_config.consume_enable() {
-            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
-                ResponseCode::NoPermission,
-                format!(
-                    "the consumer group[{}], not permitted to consume",
-                    request_header.consumer_group
+            return Ok(Some(
+                self.context.command_factory.create_response_command_with_code_remark(
+                    ResponseCode::NoPermission,
+                    format!(
+                        "the consumer group[{}], not permitted to consume",
+                        request_header.consumer_group
+                    ),
                 ),
-            )));
+            ));
         }
 
         let exp = request_header.exp.as_ref();
@@ -366,10 +384,12 @@ where
                         "Parse the consumer's subscription[{:?}] error, group: {}",
                         request_header.exp, request_header.consumer_group
                     );
-                    return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
-                        ResponseCode::SubscriptionParseFailed,
-                        "parse the consumer's subscription failed",
-                    )));
+                    return Ok(Some(
+                        self.context.command_factory.create_response_command_with_code_remark(
+                            ResponseCode::SubscriptionParseFailed,
+                            "parse the consumer's subscription failed",
+                        ),
+                    ));
                 }
             };
             self.context.consumers.compensate_subscribe_data(
@@ -393,10 +413,12 @@ where
                         "Parse the consumer's subscription[{:?}] error, group: {}",
                         request_header.exp, request_header.consumer_group
                     );
-                    return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
-                        ResponseCode::SubscriptionParseFailed,
-                        "parse the consumer's subscription failed",
-                    )));
+                    return Ok(Some(
+                        self.context.command_factory.create_response_command_with_code_remark(
+                            ResponseCode::SubscriptionParseFailed,
+                            "parse the consumer's subscription failed",
+                        ),
+                    ));
                 }
             };
             self.context.consumers.compensate_subscribe_data(
@@ -417,10 +439,12 @@ where
                         "Parse the consumer's subscription[{:?}] failed, group: {}",
                         request_header.exp, request_header.consumer_group
                     );
-                    return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
-                        ResponseCode::SubscriptionParseFailed,
-                        "parse the consumer's subscription failed",
-                    )));
+                    return Ok(Some(
+                        self.context.command_factory.create_response_command_with_code_remark(
+                            ResponseCode::SubscriptionParseFailed,
+                            "parse the consumer's subscription failed",
+                        ),
+                    ));
                 }
                 let consumer_filter_data = consumer_filter_data.unwrap();
                 let message_filter: ArcMessageFilter = Arc::new(ExpressionMessageFilter::new(
@@ -441,10 +465,12 @@ where
             ) {
                 Ok(value) => value,
                 Err(_) => {
-                    return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
-                        ResponseCode::SubscriptionParseFailed,
-                        "parse the consumer's subscription failed",
-                    )));
+                    return Ok(Some(
+                        self.context.command_factory.create_response_command_with_code_remark(
+                            ResponseCode::SubscriptionParseFailed,
+                            "parse the consumer's subscription failed",
+                        ),
+                    ));
                 }
             };
             self.context.consumers.compensate_subscribe_data(
@@ -464,10 +490,12 @@ where
             ) {
                 Ok(value) => value,
                 Err(_) => {
-                    return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
-                        ResponseCode::SubscriptionParseFailed,
-                        "parse the consumer's subscription failed",
-                    )));
+                    return Ok(Some(
+                        self.context.command_factory.create_response_command_with_code_remark(
+                            ResponseCode::SubscriptionParseFailed,
+                            "parse the consumer's subscription failed",
+                        ),
+                    ));
                 }
             };
             self.context.consumers.compensate_subscribe_data(
@@ -661,7 +689,7 @@ where
                 .await
             };
         }
-        let mut final_response = RemotingCommand::create_success_response_command();
+        let mut final_response = self.context.command_factory.create_success_response_command();
         final_response.set_opaque_mut(opaque);
         if !get_message_result.message_mapped_list().is_empty() {
             get_message_result.set_status(Some(GetMessageStatus::Found));

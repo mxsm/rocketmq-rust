@@ -29,11 +29,13 @@ use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::peek_message_request_header::PeekMessageRequestHeader;
 use rocketmq_protocol::protocol::header::pop_message_response_header::PopMessageResponseHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_store::BrokerReadWriteStore;
 use rocketmq_store::BrokerStatsManager;
 use rocketmq_store::GetMessageResult;
 use rocketmq_store::GetMessageStatus;
-use rocketmq_transport::api::v1::command_from_error_with_remark_and_opaque;
+use rocketmq_transport::api::v1::command_from_error_with_factory_remark_and_opaque;
 use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use rocketmq_transport::api::v1::RequestProcessor;
@@ -137,6 +139,7 @@ impl<MS: BrokerReadWriteStore> PeekPopOffsetCapability<MS> {
 }
 
 pub(crate) struct PeekMessageProcessorContext<MS: BrokerReadWriteStore> {
+    command_factory: RemotingCommandFactory,
     policy: PeekMessagePolicy,
     topic_config_manager: Arc<TopicConfigManager>,
     subscription_group_lookup: SubscriptionGroupConfigLookup,
@@ -161,6 +164,7 @@ impl<MS: BrokerReadWriteStore> PeekMessageProcessorContext<MS> {
         pop_offset: PeekPopOffsetCapability<MS>,
     ) -> Self {
         Self {
+            command_factory: application_remoting_command_factory(),
             policy,
             topic_config_manager,
             subscription_group_lookup,
@@ -169,6 +173,11 @@ impl<MS: BrokerReadWriteStore> PeekMessageProcessorContext<MS> {
             message_store,
             pop_offset,
         }
+    }
+
+    pub(crate) fn with_command_factory(mut self, command_factory: RemotingCommandFactory) -> Self {
+        self.command_factory = command_factory;
+        self
     }
 }
 
@@ -217,9 +226,11 @@ impl<MS: BrokerReadWriteStore> PeekMessageProcessor<MS> {
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let begin_time_mills = self.context.message_store.now();
 
-        let mut response =
-            RemotingCommand::create_success_response_command_with_header(PopMessageResponseHeader::default())
-                .set_opaque(request.opaque());
+        let mut response = self
+            .context
+            .command_factory
+            .create_success_response_command_with_header(PopMessageResponseHeader::default())
+            .set_opaque(request.opaque());
 
         // Decode request header
         let request_header = match request.decode_command_custom_header::<PeekMessageRequestHeader>() {
@@ -232,7 +243,8 @@ impl<MS: BrokerReadWriteStore> PeekMessageProcessor<MS> {
                 );
                 let remark = format!("decode request header failed: {:?}", e);
                 let error = RocketMQError::request_header_error(remark.clone());
-                return Ok(Some(command_from_error_with_remark_and_opaque(
+                return Ok(Some(command_from_error_with_factory_remark_and_opaque(
+                    &self.context.command_factory,
                     &error,
                     remark,
                     request.opaque(),
