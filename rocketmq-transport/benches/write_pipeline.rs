@@ -22,7 +22,6 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::task::Context;
 use std::task::Poll;
-use std::time::Duration;
 
 use criterion::criterion_group;
 use criterion::criterion_main;
@@ -34,6 +33,11 @@ use rocketmq_transport::benchmark_support::Connection;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
 use tokio::io::ReadBuf;
+
+#[path = "support/criterion_profile.rs"]
+mod criterion_profile;
+
+use criterion_profile::apply_remoting_command_baseline_profile;
 
 #[derive(Default)]
 struct WriteCounters {
@@ -125,9 +129,7 @@ fn benchmark_write_pipeline(c: &mut Criterion) {
         .build()
         .expect("benchmark runtime");
     let mut group = c.benchmark_group("write_pipeline");
-    group.sample_size(10);
-    group.warm_up_time(Duration::from_secs(1));
-    group.measurement_time(Duration::from_secs(2));
+    apply_remoting_command_baseline_profile(&mut group);
 
     for body_bytes in [
         128,

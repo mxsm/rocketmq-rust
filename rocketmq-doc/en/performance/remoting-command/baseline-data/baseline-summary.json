@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "baselineId": "remoting-command-correctness-closed-v1",
+  "rustRevision": "f12c363dc040018d612e320f37d2543bd8c872ff",
+  "javaRevision": "e3458616d207ee636b1762f0f8dcf788a590d59d",
+  "rustProcessSamples": 10,
+  "javaCases": 48,
+  "rustCases": 251,
+  "allocationCases": 33,
+  "objectFootprint": {
+    "sizeOfBytes": 160,
+    "objectCount": 100000,
+    "medianRssDeltaBytes": 16019456.0,
+    "minRssDeltaBytes": 16019456,
+    "maxRssDeltaBytes": 16023552
+  }
+}
