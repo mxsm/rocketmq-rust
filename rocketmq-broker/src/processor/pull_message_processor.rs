@@ -1691,7 +1691,10 @@ mod tests {
             .split("#[cfg(test)]")
             .next()
             .expect("production processor source");
-        let result_handler = include_str!("default_pull_message_result_handler.rs");
+        let result_handler = include_str!("default_pull_message_result_handler.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production result handler source");
 
         assert!(!processor.contains(concat!("WAKEUP_WRITE_", "LOCK_SHARDS")));
         assert!(!processor.contains("wakeup_write_locks"));

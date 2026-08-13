@@ -1992,6 +1992,33 @@ where
     }
 }
 
+async fn wait_for_controller_learner_to_reach_committed_frontier(
+    manager: &TestControllerManager,
+    node_id: u64,
+    timeout: Duration,
+) -> u64 {
+    let start = std::time::Instant::now();
+    loop {
+        let membership = manager
+            .raft()
+            .consensus_membership()
+            .await
+            .expect("read controller membership while waiting for learner replication");
+        if membership.caught_up().contains(&node_id) {
+            return membership.version();
+        }
+        if start.elapsed() >= timeout {
+            panic!(
+                "Timed out waiting for controller learner {node_id} to reach the committed log frontier; \
+                 membership_version={}, caught_up={:?}",
+                membership.version(),
+                membership.caught_up()
+            );
+        }
+        sleep(Duration::from_millis(50)).await;
+    }
+}
+
 async fn wait_for_tcp_listener(addr: std::net::SocketAddr, context: &str) {
     wait_until(
         Duration::from_secs(5),
@@ -2203,14 +2230,15 @@ async fn start_controller_cluster(base_port: u16, root: &Path) -> (Vec<Arc<TestC
     }
 
     for controller_peer in controller_peers.iter().skip(1) {
-        let membership = bootstrap_manager
-            .raft()
-            .consensus_membership()
-            .await
-            .expect("read controller membership before promotion");
+        let membership_version = wait_for_controller_learner_to_reach_committed_frontier(
+            bootstrap_manager.as_ref(),
+            controller_peer.id,
+            Duration::from_secs(20),
+        )
+        .await;
         let request = MembershipChangeRequest::new(
             format!("broker-runtime-promote-controller-voter-{}", controller_peer.id),
-            membership.version(),
+            membership_version,
             MembershipChange::PromoteVoter {
                 node_id: controller_peer.id,
             },
