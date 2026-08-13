@@ -398,7 +398,7 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
                             let _ = self.store.update_ha_master_address(master_ha_address.as_str()).await;
                         }
                         if let Some(master_address) = info.master_address {
-                            let _ = self.store.update_master_address(&master_address).await;
+                            let _ = self.store.update_logical_master_address(&master_address);
                         }
                     }
                 }

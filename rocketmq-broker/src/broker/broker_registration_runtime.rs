@@ -74,6 +74,7 @@ pub(crate) struct BrokerRegistrationRuntime<MS: BrokerAdminStore> {
     topic_config_coordinator: Arc<TopicConfigCoordinator>,
     topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
     broker_outer_api: BrokerOuterAPI,
+    ha_server_addr: CheetahString,
     slave_synchronize: Option<Arc<SlaveSynchronize<MS>>>,
     update_master_haserver_addr_periodically: bool,
     shutdown: Arc<AtomicBool>,
@@ -88,6 +89,7 @@ impl<MS: BrokerAdminStore> Clone for BrokerRegistrationRuntime<MS> {
             topic_config_coordinator: Arc::clone(&self.topic_config_coordinator),
             topic_queue_mapping_manager: Arc::clone(&self.topic_queue_mapping_manager),
             broker_outer_api: self.broker_outer_api.clone(),
+            ha_server_addr: self.ha_server_addr.clone(),
             slave_synchronize: self.slave_synchronize.clone(),
             update_master_haserver_addr_periodically: self.update_master_haserver_addr_periodically,
             shutdown: Arc::clone(&self.shutdown),
@@ -107,6 +109,7 @@ impl<MS: BrokerAdminStore> BrokerRegistrationRuntime<MS> {
         topic_config_coordinator: Arc<TopicConfigCoordinator>,
         topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
         broker_outer_api: BrokerOuterAPI,
+        ha_server_addr: CheetahString,
         slave_synchronize: Option<Arc<SlaveSynchronize<MS>>>,
         update_master_haserver_addr_periodically: bool,
         shutdown: Arc<AtomicBool>,
@@ -118,6 +121,7 @@ impl<MS: BrokerAdminStore> BrokerRegistrationRuntime<MS> {
             topic_config_coordinator,
             topic_queue_mapping_manager,
             broker_outer_api,
+            ha_server_addr,
             slave_synchronize,
             update_master_haserver_addr_periodically,
             shutdown,
@@ -344,7 +348,7 @@ impl<MS: BrokerAdminStore> BrokerRegistrationRuntime<MS> {
                 broker_addr.clone(),
                 broker_config.broker_identity.broker_name.clone(),
                 broker_config.broker_identity.broker_id,
-                broker_addr,
+                self.ha_server_addr.clone(),
                 wrapper,
                 vec![],
                 oneway,
@@ -379,8 +383,11 @@ impl<MS: BrokerAdminStore> BrokerRegistrationRuntime<MS> {
         let Some(result) = register_broker_result.into_iter().next() else {
             return;
         };
-        if self.update_master_haserver_addr_periodically {
-            let _ = self.store.update_master_address(&result.master_addr).await;
+        if self.update_master_haserver_addr_periodically && !result.ha_server_addr.is_empty() {
+            let _ = self
+                .store
+                .update_master_addresses(&result.ha_server_addr, &result.master_addr)
+                .await;
         }
         if let Some(slave_synchronize) = self.slave_synchronize.as_ref() {
             slave_synchronize.set_master_addr(Some(&result.master_addr));

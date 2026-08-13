@@ -48,6 +48,7 @@ pub(crate) struct TransactionTopicRegistration<MS: BrokerWriteStore> {
     topic_config_coordinator: Arc<TopicConfigCoordinator>,
     topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
     broker_outer_api: BrokerOuterAPI,
+    ha_server_addr: CheetahString,
     message_store: TransactionMessageStore<MS>,
     slave_master_addr: Option<Arc<SlaveMasterAddress>>,
     update_master_haserver_addr_periodically: bool,
@@ -60,6 +61,7 @@ pub(crate) struct TransactionTopicRegistrationContext<MS: BrokerWriteStore> {
     pub(crate) topic_config_coordinator: Arc<TopicConfigCoordinator>,
     pub(crate) topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
     pub(crate) broker_outer_api: BrokerOuterAPI,
+    pub(crate) ha_server_addr: CheetahString,
     pub(crate) message_store: TransactionMessageStore<MS>,
     pub(crate) slave_master_addr: Option<Arc<SlaveMasterAddress>>,
     pub(crate) update_master_haserver_addr_periodically: bool,
@@ -77,6 +79,7 @@ where
             topic_config_coordinator: context.topic_config_coordinator,
             topic_queue_mapping_manager: context.topic_queue_mapping_manager,
             broker_outer_api: context.broker_outer_api,
+            ha_server_addr: context.ha_server_addr,
             message_store: context.message_store,
             slave_master_addr: context.slave_master_addr,
             update_master_haserver_addr_periodically: context.update_master_haserver_addr_periodically,
@@ -247,7 +250,7 @@ where
                 broker_addr.clone(),
                 self.broker_config.broker_identity.broker_name.clone(),
                 self.broker_config.broker_identity.broker_id,
-                broker_addr,
+                self.ha_server_addr.clone(),
                 wrapper,
                 vec![],
                 false,
@@ -272,8 +275,10 @@ where
         let Some(result) = register_broker_result.into_iter().next() else {
             return;
         };
-        if self.update_master_haserver_addr_periodically {
-            self.message_store.update_master_address(&result.master_addr).await;
+        if self.update_master_haserver_addr_periodically && !result.ha_server_addr.is_empty() {
+            self.message_store
+                .update_master_addresses(&result.ha_server_addr, &result.master_addr)
+                .await;
         }
         if let Some(master_addr) = &self.slave_master_addr {
             master_addr.store(Some(&result.master_addr));

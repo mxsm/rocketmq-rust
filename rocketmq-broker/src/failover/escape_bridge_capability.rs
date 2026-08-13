@@ -326,7 +326,7 @@ impl<MS: BrokerReadStore> EscapeBridgeStoreCapability<MS> {
         master_address: &CheetahString,
     ) -> Result<(), MessageStoreUnavailable>
     where
-        MS: BrokerReplicationStore,
+        MS: BrokerMasterAddressStore,
     {
         let store = self.store()?;
         store
@@ -545,13 +545,14 @@ impl<MS: BrokerReadStore> EscapeBridgeStoreCapability<MS> {
         self.with_store(BrokerReadStore::get_state_machine_version)
     }
 
-    pub(crate) async fn update_master_address(&self, master_addr: &CheetahString) -> Result<(), MessageStoreUnavailable>
+    pub(crate) fn update_logical_master_address(
+        &self,
+        master_addr: &CheetahString,
+    ) -> Result<(), MessageStoreUnavailable>
     where
         MS: BrokerMasterAddressStore,
     {
-        let store = self.store()?;
-        store.update_master_address(master_addr).await;
-        Ok(())
+        self.with_store(|store| store.update_logical_master_address(master_addr))
     }
 
     pub(crate) fn check_in_mem_by_consume_offset(

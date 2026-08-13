@@ -474,7 +474,7 @@ impl BrokerRegistrationCapability {
                 self.policy.broker_addr.clone(),
                 self.policy.broker_name.clone(),
                 self.role_state.local_broker_id(),
-                self.policy.broker_addr.clone(),
+                self.policy.ha_server_addr.clone(),
                 wrapper,
                 vec![],
                 false,

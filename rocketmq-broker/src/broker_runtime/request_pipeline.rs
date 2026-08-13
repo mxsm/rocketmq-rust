@@ -99,6 +99,7 @@ impl BrokerRuntime {
             self.composition.state.topic_config_coordinator_handle(),
             self.composition.state.topic_queue_mapping_manager_handle(),
             self.composition.state.broker_outer_api().clone(),
+            self.composition.state.get_ha_server_addr(),
             TransactionMessageStore::new(&self.composition.data_plane.escape_bridge_owner),
             self.composition
                 .state

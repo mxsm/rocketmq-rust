@@ -96,14 +96,16 @@ impl<MS: BrokerReadStore> TransactionMessageStore<MS> {
             .and_then(|provider| provider.local_store_state_machine_version().ok())
     }
 
-    pub(crate) async fn update_master_address(&self, master_addr: &CheetahString)
+    pub(crate) async fn update_master_addresses(&self, master_ha_addr: &CheetahString, master_addr: &CheetahString)
     where
         MS: BrokerMasterAddressStore,
     {
         let Some(provider) = self.escape_bridge.upgrade() else {
             return;
         };
-        let _ = provider.update_local_store_master_address(master_addr).await;
+        let _ = provider
+            .update_local_store_master_addresses(master_ha_addr, master_addr)
+            .await;
     }
 }
 
@@ -132,7 +134,10 @@ mod tests {
             PutMessageStatus::ServiceNotAvailable
         );
         store
-            .update_master_address(&CheetahString::from_static_str("127.0.0.1:10912"))
+            .update_master_addresses(
+                &CheetahString::from_static_str("127.0.0.1:10913"),
+                &CheetahString::from_static_str("127.0.0.1:10912"),
+            )
             .await;
     }
 

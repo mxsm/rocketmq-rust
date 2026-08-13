@@ -388,14 +388,17 @@ impl<MS: BrokerReadStore> EscapeBridge<MS> {
         self.message_store.state_machine_version()
     }
 
-    pub(crate) async fn update_local_store_master_address(
+    pub(crate) async fn update_local_store_master_addresses(
         &self,
+        master_ha_addr: &CheetahString,
         master_addr: &CheetahString,
     ) -> Result<(), MessageStoreUnavailable>
     where
         MS: BrokerMasterAddressStore,
     {
-        self.message_store.update_master_address(master_addr).await
+        self.message_store
+            .update_master_addresses(master_ha_addr, master_addr)
+            .await
     }
 
     pub(crate) fn is_message_store_slave(&self) -> bool {
