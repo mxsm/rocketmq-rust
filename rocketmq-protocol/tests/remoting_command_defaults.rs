@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use rocketmq_protocol::protocol::header::get_min_offset_request_header::GetMinOffsetRequestHeader;
-use rocketmq_protocol::protocol::remoting_command_facade::initialize_remoting_defaults;
+use rocketmq_protocol::protocol::remoting_command_facade::initialize_remoting_command_factory;
 use rocketmq_protocol::protocol::SerializeType;
 use rocketmq_protocol::RemotingCommand;
 
@@ -26,9 +26,12 @@ fn environment_defaults_are_resolved_before_command_construction() {
         std::env::set_var("rocketmq.serialize.type", "ROCKETMQ");
     }
 
-    initialize_remoting_defaults(4242).expect("valid process defaults should initialize");
+    let factory = initialize_remoting_command_factory(4242).expect("valid process defaults should initialize");
     let command = RemotingCommand::create_request_command(31, GetMinOffsetRequestHeader::default());
+    let owned_command = factory.create_request_command(31, GetMinOffsetRequestHeader::default());
 
     assert_eq!(command.version(), 4242);
     assert_eq!(command.serialize_type(), SerializeType::ROCKETMQ);
+    assert_eq!(owned_command.version(), 4242);
+    assert_eq!(owned_command.serialize_type(), SerializeType::ROCKETMQ);
 }

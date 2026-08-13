@@ -59,6 +59,8 @@ use rocketmq_protocol::protocol::heartbeat::heartbeat_data::HeartbeatData;
 use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_protocol::protocol::heartbeat::producer_data::ProducerData;
 use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
+use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::route_facade::BrokerDataExt;
@@ -199,6 +201,7 @@ pub struct MQClientInstance {
     telemetry_handle: TelemetryHandle,
     client_metrics: ClientMetrics,
     request_future_holder: Arc<RequestFutureHolder>,
+    remoting_command_factory: RemotingCommandFactory,
     pub(crate) client_config: Arc<ClientConfig>,
     nameserver_discovery_config: Option<NameServerDiscoveryConfig>,
     nameserver_discovery_supervisor: Mutex<Option<Arc<NameServerDiscoverySupervisor>>>,
@@ -296,6 +299,33 @@ impl MQClientInstance {
         telemetry_handle: TelemetryHandle,
         request_future_holder: Arc<RequestFutureHolder>,
     ) -> Arc<MQClientInstance> {
+        Self::new_arc_with_remoting_command_factory(
+            client_config,
+            application_remoting_command_factory(),
+            instance_generation,
+            client_id,
+            rpc_hook,
+            service_context,
+            telemetry_handle,
+            request_future_holder,
+        )
+    }
+
+    /// Creates a client instance with explicitly owned remoting wire defaults.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the compatibility constructor keeps the existing lifecycle dependencies explicit"
+    )]
+    pub(crate) fn new_arc_with_remoting_command_factory(
+        client_config: ClientConfig,
+        remoting_command_factory: RemotingCommandFactory,
+        instance_generation: u64,
+        client_id: impl Into<CheetahString>,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
+        service_context: ChildServiceContext,
+        telemetry_handle: TelemetryHandle,
+        request_future_holder: Arc<RequestFutureHolder>,
+    ) -> Arc<MQClientInstance> {
         let resource_budget = crate::runtime::build_client_resource_budget(
             &crate::runtime::ClientRuntimeConfig::default(),
             &service_context.process_budget(),
@@ -304,6 +334,7 @@ impl MQClientInstance {
         let client_metrics = ClientMetrics::from_handle(&telemetry_handle);
         Self::new_arc_with_resource_budget(
             client_config,
+            remoting_command_factory,
             instance_generation,
             client_id,
             rpc_hook,
@@ -317,6 +348,7 @@ impl MQClientInstance {
 
     pub(crate) fn new_arc_with_resource_budget(
         client_config: ClientConfig,
+        remoting_command_factory: RemotingCommandFactory,
         instance_generation: u64,
         client_id: impl Into<CheetahString>,
         rpc_hook: Option<Arc<dyn RPCHook>>,
@@ -329,6 +361,7 @@ impl MQClientInstance {
         Self::new_arc_with_resource_budget_and_discovery(
             client_config,
             None,
+            remoting_command_factory,
             instance_generation,
             client_id,
             rpc_hook,
@@ -343,6 +376,7 @@ impl MQClientInstance {
     pub(crate) fn new_arc_with_resource_budget_and_discovery(
         client_config: ClientConfig,
         nameserver_discovery_config: Option<NameServerDiscoveryConfig>,
+        remoting_command_factory: RemotingCommandFactory,
         _instance_generation: u64,
         client_id: impl Into<CheetahString>,
         rpc_hook: Option<Arc<dyn RPCHook>>,
@@ -395,6 +429,7 @@ impl MQClientInstance {
             telemetry_handle,
             client_metrics,
             request_future_holder,
+            remoting_command_factory,
             client_config: shared_config,
             nameserver_discovery_config,
             nameserver_discovery_supervisor: Mutex::new(None),
@@ -454,6 +489,7 @@ impl MQClientInstance {
             Some(tx),
             service_context.component("remoting"),
             instance.telemetry_handle.clone(),
+            remoting_command_factory,
         ));
 
         if let Some(namesrv_addr) = client_config.get_namesrv_addr().as_deref() {
@@ -479,6 +515,10 @@ impl MQClientInstance {
 
     pub fn service_context(&self) -> &ChildServiceContext {
         &self.service_context
+    }
+
+    pub(crate) fn remoting_command_factory(&self) -> RemotingCommandFactory {
+        self.remoting_command_factory
     }
 
     pub(crate) fn resource_budget(&self) -> ResourceBudget {

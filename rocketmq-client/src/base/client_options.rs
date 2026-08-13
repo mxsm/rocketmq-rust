@@ -15,6 +15,7 @@
 use cheetah_string::CheetahString;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 
 use super::client_config::ClientConfig;
 use crate::nameserver_discovery::NameServerDiscoveryConfig;
@@ -24,6 +25,7 @@ use crate::nameserver_discovery::NameServerDiscoveryConfig;
 pub struct ClientOptions {
     client: ClientConfig,
     nameserver_discovery: Option<NameServerDiscoveryConfig>,
+    remoting_command_factory: Option<RemotingCommandFactory>,
 }
 
 impl ClientOptions {
@@ -33,6 +35,7 @@ impl ClientOptions {
         Self {
             client,
             nameserver_discovery: None,
+            remoting_command_factory: None,
         }
     }
 
@@ -40,6 +43,13 @@ impl ClientOptions {
     #[must_use]
     pub fn with_nameserver_discovery(mut self, discovery: NameServerDiscoveryConfig) -> Self {
         self.nameserver_discovery = Some(discovery);
+        self
+    }
+
+    /// Overrides the runtime's remoting command factory for this client owner.
+    #[must_use]
+    pub fn with_remoting_command_factory(mut self, factory: RemotingCommandFactory) -> Self {
+        self.remoting_command_factory = Some(factory);
         self
     }
 
@@ -55,17 +65,31 @@ impl ClientOptions {
         self.nameserver_discovery.as_ref()
     }
 
+    /// Returns the explicitly configured command factory, if present.
+    #[must_use]
+    pub fn remoting_command_factory(&self) -> Option<RemotingCommandFactory> {
+        self.remoting_command_factory
+    }
+
     pub(crate) fn from_parts(client: ClientConfig, nameserver_discovery: Option<NameServerDiscoveryConfig>) -> Self {
         Self {
             client,
             nameserver_discovery,
+            remoting_command_factory: None,
         }
     }
 
-    pub(crate) fn into_normalized_parts(mut self) -> RocketMQResult<(ClientConfig, Option<NameServerDiscoveryConfig>)> {
+    pub(crate) fn into_normalized_parts(
+        mut self,
+    ) -> RocketMQResult<(
+        ClientConfig,
+        Option<NameServerDiscoveryConfig>,
+        Option<RemotingCommandFactory>,
+    )> {
+        let remoting_command_factory = self.remoting_command_factory;
         let Some(discovery) = self.nameserver_discovery else {
             self.client.normalize_namesrv_addr()?;
-            return Ok((self.client, None));
+            return Ok((self.client, None, remoting_command_factory));
         };
 
         if let Some(legacy) = self.client.namesrv_addr.as_ref() {
@@ -79,7 +103,7 @@ impl ClientOptions {
         if let Some(canonical) = discovery.static_canonical() {
             self.client.namesrv_addr = Some(CheetahString::from_string(canonical));
         }
-        Ok((self.client, Some(discovery)))
+        Ok((self.client, Some(discovery), remoting_command_factory))
     }
 }
 

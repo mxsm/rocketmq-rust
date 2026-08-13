@@ -47,8 +47,9 @@ impl MQClientAPIImpl {
         remark: CheetahString,
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<()> {
-        let request =
-            RemotingCommand::create_request_command(RequestCode::EndTransaction, request_header).set_remark(remark);
+        let request = self
+            .create_request_command(RequestCode::EndTransaction, request_header)
+            .set_remark(remark);
 
         self.remoting_client
             .invoke_request_oneway(addr, request, timeout_millis)

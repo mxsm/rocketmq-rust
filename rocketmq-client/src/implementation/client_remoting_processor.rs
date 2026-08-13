@@ -40,6 +40,7 @@ use rocketmq_protocol::protocol::header::reply_message_request_header::ReplyMess
 use rocketmq_protocol::protocol::header::reset_offset_request_header::ResetOffsetRequestHeader;
 use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_transport::api::v1::Channel;
@@ -57,6 +58,7 @@ use crate::producer::request_future_holder::RequestFutureHolder;
 pub struct ClientRemotingProcessor {
     client_instance: Weak<MQClientInstance>,
     request_future_holder: Arc<RequestFutureHolder>,
+    remoting_command_factory: RemotingCommandFactory,
 }
 
 impl ClientRemotingProcessor {
@@ -64,6 +66,7 @@ impl ClientRemotingProcessor {
         Self {
             client_instance: Arc::downgrade(client_instance),
             request_future_holder: client_instance.request_future_holder(),
+            remoting_command_factory: client_instance.remoting_command_factory(),
         }
     }
 
@@ -159,7 +162,10 @@ impl ClientRemotingProcessor {
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let receive_time = current_millis();
-        let response = RemotingCommand::create_java_default_error_response_command().set_opaque(request.opaque());
+        let response = self
+            .remoting_command_factory
+            .create_java_default_error_response_command()
+            .set_opaque(request.opaque());
         let request_header = match request.decode_command_custom_header::<ReplyMessageRequestHeader>() {
             Ok(header) => header,
             Err(error) => {
@@ -241,7 +247,9 @@ impl ClientRemotingProcessor {
         debug!("Receive reply message: {:?}", msg);
         self.process_reply_message(msg).await;
         Ok(Some(
-            RemotingCommand::create_success_response_command().set_opaque(request.opaque()),
+            self.remoting_command_factory
+                .create_success_response_command()
+                .set_opaque(request.opaque()),
         ))
     }
 
@@ -348,7 +356,10 @@ impl ClientRemotingProcessor {
         &mut self,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let response = RemotingCommand::create_java_default_error_response_command().set_opaque(request.opaque());
+        let response = self
+            .remoting_command_factory
+            .create_java_default_error_response_command()
+            .set_opaque(request.opaque());
         let request_header = match request.decode_command_custom_header::<GetConsumerStatusRequestHeader>() {
             Ok(header) => header,
             Err(error) => {
@@ -368,7 +379,8 @@ impl ClientRemotingProcessor {
                 let mut body = GetConsumerStatusBody::new();
                 body.message_queue_table = message_queue_table;
                 Ok(Some(
-                    RemotingCommand::create_success_response_command()
+                    self.remoting_command_factory
+                        .create_success_response_command()
                         .set_opaque(request.opaque())
                         .set_body(body.encode()),
                 ))
@@ -380,7 +392,8 @@ impl ClientRemotingProcessor {
                     request_header.group
                 );
                 Ok(Some(
-                    RemotingCommand::create_success_response_command()
+                    self.remoting_command_factory
+                        .create_success_response_command()
                         .set_opaque(request.opaque())
                         .set_body(GetConsumerStatusBody::new().encode()),
                 ))
@@ -392,7 +405,10 @@ impl ClientRemotingProcessor {
         &mut self,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let response = RemotingCommand::create_java_default_error_response_command().set_opaque(request.opaque());
+        let response = self
+            .remoting_command_factory
+            .create_java_default_error_response_command()
+            .set_opaque(request.opaque());
         let request_header = match request.decode_command_custom_header::<GetConsumerRunningInfoRequestHeader>() {
             Ok(header) => header,
             Err(error) => {
@@ -414,7 +430,8 @@ impl ClientRemotingProcessor {
                 }
                 let body = consumer_running_info.encode_java_compatible()?;
                 Ok(Some(
-                    RemotingCommand::create_success_response_command()
+                    self.remoting_command_factory
+                        .create_success_response_command()
                         .set_opaque(request.opaque())
                         .set_body(body),
                 ))
@@ -493,7 +510,10 @@ impl ClientRemotingProcessor {
         _ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let response = RemotingCommand::create_java_default_error_response_command().set_opaque(request.opaque());
+        let response = self
+            .remoting_command_factory
+            .create_java_default_error_response_command()
+            .set_opaque(request.opaque());
         let request_header = match request.decode_command_custom_header::<ConsumeMessageDirectlyResultRequestHeader>() {
             Ok(header) => header,
             Err(error) => {
@@ -539,7 +559,8 @@ impl ClientRemotingProcessor {
         if let Some(result) = result {
             match result.encode() {
                 Ok(body) => Ok(Some(
-                    RemotingCommand::create_success_response_command()
+                    self.remoting_command_factory
+                        .create_success_response_command()
                         .set_opaque(request.opaque())
                         .set_body(body),
                 )),
@@ -574,6 +595,9 @@ mod tests {
 
     use bytes::Bytes;
     use rocketmq_model::common::message::message_queue::MessageQueue;
+    use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandDefaults;
+    use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
+    use rocketmq_protocol::protocol::SerializeType;
     use rocketmq_transport::test_support::LocalRequestHarness;
 
     use super::*;
@@ -597,6 +621,24 @@ mod tests {
         let runtime = crate::runtime::test_client_runtime("client-remoting-processor-instance");
         MQClientInstance::new_arc(
             client_config,
+            0,
+            client_id,
+            None,
+            runtime.component("instance"),
+            runtime.telemetry_handle().clone(),
+            runtime.pool().request_future_holder(),
+        )
+    }
+
+    fn test_client_instance_with_factory(
+        client_config: ClientConfig,
+        client_id: impl Into<CheetahString>,
+        remoting_command_factory: RemotingCommandFactory,
+    ) -> Arc<MQClientInstance> {
+        let runtime = crate::runtime::test_client_runtime("client-remoting-processor-factory-instance");
+        MQClientInstance::new_arc_with_remoting_command_factory(
+            client_config,
+            remoting_command_factory,
             0,
             client_id,
             None,
@@ -985,6 +1027,26 @@ mod tests {
         assert!(response
             .remark()
             .is_some_and(|remark| remark.contains("decode reply message request header failed")));
+    }
+
+    #[tokio::test]
+    async fn callback_response_uses_owning_factory_defaults() {
+        let factory = RemotingCommandFactory::new(RemotingCommandDefaults::new(947, SerializeType::ROCKETMQ));
+        let client_instance = test_client_instance_with_factory(ClientConfig::default(), "reply-factory-test", factory);
+        let mut processor = ClientRemotingProcessor::new(&client_instance);
+        let harness = LocalRequestHarness::new(test_task_group())
+            .await
+            .expect("local remoting harness should start");
+        let mut request = RemotingCommand::create_remoting_command(RequestCode::PushReplyMessageToClient);
+
+        let response = processor
+            .process_request(harness.channel(), harness.context(), &mut request)
+            .await
+            .expect("malformed reply callback should not fail")
+            .expect("malformed reply callback should return an error response");
+
+        assert_eq!(response.version(), 947);
+        assert_eq!(response.serialize_type(), SerializeType::ROCKETMQ);
     }
 
     #[tokio::test]

@@ -22,7 +22,8 @@ use dashmap::DashMap;
 use parking_lot::RwLock;
 use rocketmq_observability::metrics::client::ClientMetrics;
 use rocketmq_observability::TelemetryHandle;
-use rocketmq_protocol::protocol::remoting_command_facade::initialize_remoting_defaults;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandDefaults;
+use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ResourceBudget;
 use rocketmq_runtime::ShutdownDeadline;
@@ -51,6 +52,7 @@ struct ClientPoolIdentity {
     vip_channel_enabled: bool,
     api_timeout_millis: u64,
     rpc_hook_identity: Option<usize>,
+    remoting_command_defaults: RemotingCommandDefaults,
 }
 
 impl ClientPoolIdentity {
@@ -58,6 +60,7 @@ impl ClientPoolIdentity {
         client_config: &ClientConfig,
         discovery: Option<&NameServerDiscoveryConfig>,
         rpc_hook: Option<&Arc<dyn RPCHook>>,
+        remoting_command_factory: RemotingCommandFactory,
     ) -> Self {
         Self {
             namesrv_addr: client_config.namesrv_addr.clone(),
@@ -66,6 +69,7 @@ impl ClientPoolIdentity {
             vip_channel_enabled: client_config.vip_channel_enabled,
             api_timeout_millis: client_config.mq_client_api_timeout,
             rpc_hook_identity: rpc_hook.map(|hook| Arc::as_ptr(hook).cast::<()>() as usize),
+            remoting_command_defaults: remoting_command_factory.defaults(),
         }
     }
 }
@@ -86,6 +90,7 @@ struct ClientPoolInner {
     factory_table: Arc<ClientInstanceHashMap>,
     accumulator_table: Arc<AccumulatorHashMap>,
     request_future_holder: Arc<RequestFutureHolder>,
+    remoting_command_factory: RemotingCommandFactory,
     next_generation: AtomicU64,
     closed: AtomicBool,
     admission: RwLock<()>,
@@ -118,6 +123,7 @@ impl ClientPool {
         resource_budget: ResourceBudget,
         telemetry_handle: TelemetryHandle,
         client_metrics: ClientMetrics,
+        remoting_command_factory: RemotingCommandFactory,
     ) -> Self {
         let request_future_holder = Arc::new(RequestFutureHolder::new(service_context.component("request-futures")));
         Self {
@@ -129,6 +135,7 @@ impl ClientPool {
                 factory_table: Arc::new(DashMap::with_capacity(128)),
                 accumulator_table: Arc::new(DashMap::with_capacity(128)),
                 request_future_holder,
+                remoting_command_factory,
                 next_generation: AtomicU64::new(0),
                 closed: AtomicBool::new(false),
                 admission: RwLock::new(()),
@@ -157,20 +164,19 @@ impl ClientPool {
         options: ClientOptions,
         rpc_hook: Option<Arc<dyn RPCHook>>,
     ) -> rocketmq_error::RocketMQResult<PooledClient> {
-        initialize_remoting_defaults(rocketmq_model::version::CURRENT_VERSION as i32).map_err(|error| {
-            rocketmq_error::RocketMQError::ConfigParseFailed {
-                key: "remoting.command.defaults",
-                reason: error.to_string(),
-            }
-        })?;
-
         let _admission = self.inner.admission.read();
         if self.inner.closed.load(Ordering::Acquire) {
             return Err(mq_client_err!("ClientRuntime is shutting down"));
         }
-        let (client_config, discovery) = options.into_normalized_parts()?;
+        let (client_config, discovery, command_factory_override) = options.into_normalized_parts()?;
+        let remoting_command_factory = command_factory_override.unwrap_or(self.inner.remoting_command_factory);
         let client_id = CheetahString::from_string(client_config.build_mq_client_id());
-        let identity = ClientPoolIdentity::new(&client_config, discovery.as_ref(), rpc_hook.as_ref());
+        let identity = ClientPoolIdentity::new(
+            &client_config,
+            discovery.as_ref(),
+            rpc_hook.as_ref(),
+            remoting_command_factory,
+        );
 
         let mut entry = self.inner.factory_table.entry(client_id.clone()).or_insert_with(|| {
             let generation = self.inner.next_generation.fetch_add(1, Ordering::AcqRel) + 1;
@@ -182,6 +188,7 @@ impl ClientPool {
             let instance = MQClientInstance::new_arc_with_resource_budget_and_discovery(
                 client_config,
                 discovery,
+                remoting_command_factory,
                 generation,
                 client_id.clone(),
                 rpc_hook,
@@ -303,6 +310,7 @@ impl ClientPool {
 mod tests {
     use cheetah_string::CheetahString;
     use rocketmq_error::RocketMQError;
+    use rocketmq_protocol::protocol::SerializeType;
 
     use super::*;
 
@@ -356,5 +364,33 @@ mod tests {
             ..Default::default()
         };
         assert!(runtime.pool().get_or_create(different_config, None).is_err());
+    }
+
+    #[test]
+    fn remoting_defaults_participate_in_pool_identity() {
+        let runtime = crate::runtime::test_client_runtime("remoting-defaults-pool-identity-test");
+        let mut config = ClientConfig::default();
+        config.set_instance_name("remoting-defaults-owner".into());
+        let json = RemotingCommandFactory::new(RemotingCommandDefaults::new(501, SerializeType::JSON));
+        let binary = RemotingCommandFactory::new(RemotingCommandDefaults::new(502, SerializeType::ROCKETMQ));
+
+        runtime
+            .pool()
+            .get_or_create_with_options(
+                ClientOptions::legacy(config.clone()).with_remoting_command_factory(json),
+                None,
+            )
+            .expect("first command owner");
+        let error = match runtime.pool().get_or_create_with_options(
+            ClientOptions::legacy(config).with_remoting_command_factory(binary),
+            None,
+        ) {
+            Ok(_) => panic!("different remoting defaults must not share one client-id owner"),
+            Err(error) => error,
+        };
+
+        assert!(error
+            .to_string()
+            .contains("ClientPool configuration conflicts with an existing client-id owner"));
     }
 }

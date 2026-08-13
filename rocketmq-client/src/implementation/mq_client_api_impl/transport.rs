@@ -28,6 +28,7 @@ impl MQClientAPIImpl {
         tx: Option<tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
         service_context: ChildServiceContext,
         telemetry_handle: rocketmq_observability::TelemetryHandle,
+        command_factory: RemotingCommandFactory,
     ) -> Self {
         let mut remoting_config = (*tokio_client_config).clone();
         remoting_config.tls = client_config.tls_config.clone();
@@ -63,6 +64,7 @@ impl MQClientAPIImpl {
             //client_remoting_processor,
             name_srv_addr: RwLock::new(None),
             client_config,
+            command_factory,
             background_tasks: TaskTracker::new(),
             background_shutdown: CancellationToken::new(),
         }
@@ -90,6 +92,10 @@ impl MQClientAPIImpl {
 
     pub fn get_remoting_client(&self) -> Arc<RemotingClient<ClientRemotingProcessor>> {
         self.remoting_client.clone()
+    }
+
+    pub(crate) fn remoting_command_factory(&self) -> RemotingCommandFactory {
+        self.command_factory
     }
 
     #[inline]

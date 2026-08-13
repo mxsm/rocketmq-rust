@@ -43,7 +43,7 @@ impl MQClientAPIImpl {
         timeout_millis: u64,
     ) -> RocketMQResult<Option<CheetahString>> {
         let request_header = GetKVConfigRequestHeader::new(namespace, key);
-        let request = RemotingCommand::create_request_command(RequestCode::GetKvConfig, request_header);
+        let request = self.create_request_command(RequestCode::GetKvConfig, request_header);
 
         let name_server_address_list = self.remoting_client.get_name_server_address_list();
         let mut err_response = None;
@@ -91,7 +91,7 @@ impl MQClientAPIImpl {
         timeout_millis: u64,
     ) -> RocketMQResult<()> {
         let request_header = DeleteKVConfigRequestHeader::new(namespace, key);
-        let request = RemotingCommand::create_request_command(RequestCode::DeleteKvConfig, request_header);
+        let request = self.create_request_command(RequestCode::DeleteKvConfig, request_header);
 
         let name_server_address_list = self.remoting_client.get_name_server_address_list();
         let mut err_response = None;
@@ -131,7 +131,7 @@ impl MQClientAPIImpl {
         timeout_millis: u64,
     ) -> RocketMQResult<rocketmq_protocol::protocol::body::kv_table::KVTable> {
         let request_header = GetKVListByNamespaceRequestHeader::new(namespace);
-        let request = RemotingCommand::create_request_command(RequestCode::GetKvlistByNamespace, request_header);
+        let request = self.create_request_command(RequestCode::GetKvlistByNamespace, request_header);
 
         let response = self
             .remoting_client
@@ -166,7 +166,7 @@ impl MQClientAPIImpl {
         timeout_millis: u64,
     ) -> RocketMQResult<()> {
         let request_header = PutKVConfigRequestHeader::new(namespace, key, value);
-        let request = RemotingCommand::create_request_command(RequestCode::PutKvConfig, request_header);
+        let request = self.create_request_command(RequestCode::PutKvConfig, request_header);
 
         let name_server_address_list = self.remoting_client.get_name_server_address_list();
         let mut err_response = None;
@@ -214,7 +214,7 @@ impl MQClientAPIImpl {
             .clone()
             .ok_or_else(|| mq_client_err!(-1, "username is required".to_string()))?;
         request_header.set_username(username);
-        let mut request = RemotingCommand::create_request_command(RequestCode::AuthCreateUser, request_header);
+        let mut request = self.create_request_command(RequestCode::AuthCreateUser, request_header);
         request = request.set_body(user_info.encode()?);
 
         let response = self
@@ -250,7 +250,7 @@ impl MQClientAPIImpl {
             .clone()
             .ok_or_else(|| mq_client_err!(-1, "username is required".to_string()))?;
         request_header.set_username(username);
-        let mut request = RemotingCommand::create_request_command(RequestCode::AuthUpdateUser, request_header);
+        let mut request = self.create_request_command(RequestCode::AuthUpdateUser, request_header);
         request = request.set_body(user_info.encode()?);
 
         let response = self
@@ -285,7 +285,8 @@ impl MQClientAPIImpl {
             .clone()
             .ok_or_else(|| mq_client_err!(-1, "ACL subject is required".to_string()))?;
         let request_header = CreateAclRequestHeader { subject };
-        let request = RemotingCommand::create_request_command(RequestCode::AuthCreateAcl, request_header)
+        let request = self
+            .create_request_command(RequestCode::AuthCreateAcl, request_header)
             .set_body(acl_info.encode()?);
 
         let response = self
@@ -314,7 +315,8 @@ impl MQClientAPIImpl {
             .clone()
             .ok_or_else(|| mq_client_err!(-1, "ACL subject is required".to_string()))?;
         let request_header = UpdateAclRequestHeader { subject };
-        let request = RemotingCommand::create_request_command(RequestCode::AuthUpdateAcl, request_header)
+        let request = self
+            .create_request_command(RequestCode::AuthUpdateAcl, request_header)
             .set_body(acl_info.encode()?);
 
         let response = self
@@ -338,7 +340,7 @@ impl MQClientAPIImpl {
         plain_access_config: &PlainAccessConfig,
         timeout_millis: u64,
     ) -> RocketMQResult<()> {
-        let request = create_and_update_plain_access_config_request(plain_access_config)?;
+        let request = create_and_update_plain_access_config_request(&self.command_factory, plain_access_config)?;
 
         let response = self
             .remoting_client
@@ -361,7 +363,7 @@ impl MQClientAPIImpl {
         access_key: CheetahString,
         timeout_millis: u64,
     ) -> RocketMQResult<()> {
-        let request = delete_plain_access_config_request(&access_key);
+        let request = delete_plain_access_config_request(&self.command_factory, &access_key);
 
         let response = self
             .remoting_client
@@ -385,8 +387,7 @@ impl MQClientAPIImpl {
         timeout_millis: u64,
     ) -> RocketMQResult<()> {
         let request_header = UpdateGlobalWhiteAddrsConfigRequestHeader { global_white_addrs };
-        let request =
-            RemotingCommand::create_request_command(RequestCode::UpdateGlobalWhiteAddrsConfig, request_header);
+        let request = self.create_request_command(RequestCode::UpdateGlobalWhiteAddrsConfig, request_header);
 
         let response = self
             .remoting_client
@@ -407,7 +408,7 @@ impl MQClientAPIImpl {
         broker_address: CheetahString,
         timeout_millis: u64,
     ) -> RocketMQResult<ClusterAclVersionInfo> {
-        let request = RemotingCommand::create_remoting_command(RequestCode::GetBrokerClusterAclInfo);
+        let request = self.create_remoting_command(RequestCode::GetBrokerClusterAclInfo);
 
         let response = self
             .remoting_client
@@ -433,7 +434,7 @@ impl MQClientAPIImpl {
     ) -> RocketMQResult<()> {
         let resource_option = if resource.is_empty() { None } else { Some(resource) };
         let request_header = DeleteAclRequestHeader::new(subject, resource_option);
-        let request = RemotingCommand::create_request_command(RequestCode::AuthDeleteAcl, request_header);
+        let request = self.create_request_command(RequestCode::AuthDeleteAcl, request_header);
 
         let response = self
             .remoting_client
@@ -460,7 +461,7 @@ impl MQClientAPIImpl {
             subject_filter,
             resource_filter,
         };
-        let request = RemotingCommand::create_request_command(RequestCode::AuthListAcl, request_header);
+        let request = self.create_request_command(RequestCode::AuthListAcl, request_header);
 
         let response = self
             .remoting_client
@@ -488,7 +489,7 @@ impl MQClientAPIImpl {
         subject: CheetahString,
         timeout_millis: u64,
     ) -> RocketMQResult<AclInfo> {
-        let request = get_acl_request(subject);
+        let request = get_acl_request(&self.command_factory, subject);
         let response = self
             .remoting_client
             .invoke_request(Some(&broker_address), request, timeout_millis)
@@ -517,7 +518,7 @@ impl MQClientAPIImpl {
         let request_header = GetUserRequestHeader {
             username: username.clone(),
         };
-        let request = RemotingCommand::create_request_command(RequestCode::AuthGetUser, request_header);
+        let request = self.create_request_command(RequestCode::AuthGetUser, request_header);
 
         let response = self
             .remoting_client
@@ -548,7 +549,7 @@ impl MQClientAPIImpl {
         timeout_millis: u64,
     ) -> RocketMQResult<Vec<UserInfo>> {
         let request_header = ListUsersRequestHeader { filter };
-        let request = RemotingCommand::create_request_command(RequestCode::AuthListUsers, request_header);
+        let request = self.create_request_command(RequestCode::AuthListUsers, request_header);
 
         let response = self
             .remoting_client
@@ -588,7 +589,7 @@ impl MQClientAPIImpl {
     ) -> RocketMQResult<()> {
         let mut request_header = DeleteUserRequestHeader::default();
         request_header.set_username(username);
-        let request = RemotingCommand::create_request_command(RequestCode::AuthDeleteUser, request_header);
+        let request = self.create_request_command(RequestCode::AuthDeleteUser, request_header);
 
         let response = self
             .remoting_client
@@ -634,7 +635,7 @@ impl MQClientAPIImpl {
             return Ok(());
         }
         let empty_header = EmptyHeader {};
-        let mut request = RemotingCommand::create_request_command(RequestCode::UpdateNamesrvConfig, empty_header);
+        let mut request = self.create_request_command(RequestCode::UpdateNamesrvConfig, empty_header);
 
         request = request.set_body(body.to_string());
         let mut err_response = None;
@@ -666,7 +667,7 @@ impl MQClientAPIImpl {
         timeout_millis: u64,
     ) -> RocketMQResult<i32> {
         let request_header = AddWritePermOfBrokerRequestHeader::new(broker_name);
-        let request = RemotingCommand::create_request_command(RequestCode::AddWritePermOfBroker, request_header);
+        let request = self.create_request_command(RequestCode::AddWritePermOfBroker, request_header);
 
         let response = self
             .remoting_client
@@ -690,7 +691,7 @@ impl MQClientAPIImpl {
         timeout_millis: u64,
     ) -> RocketMQResult<i32> {
         let request_header = WipeWritePermOfBrokerRequestHeader::new(broker_name);
-        let request = RemotingCommand::create_request_command(RequestCode::WipeWritePermOfBroker, request_header);
+        let request = self.create_request_command(RequestCode::WipeWritePermOfBroker, request_header);
 
         let response = self
             .remoting_client
@@ -707,7 +708,7 @@ impl MQClientAPIImpl {
     }
 
     pub(crate) async fn get_broker_cluster_info(&self, timeout_millis: u64) -> RocketMQResult<ClusterInfo> {
-        let request = RemotingCommand::create_request_command(RequestCode::GetBrokerClusterInfo, EmptyHeader {});
+        let request = self.create_request_command(RequestCode::GetBrokerClusterInfo, EmptyHeader {});
         let response = self
             .remoting_client
             .invoke_request(None, request, timeout_millis)
@@ -728,7 +729,7 @@ impl MQClientAPIImpl {
         addr: &CheetahString,
         timeout_millis: u64,
     ) -> RocketMQResult<rocketmq_protocol::protocol::body::kv_table::KVTable> {
-        let request = RemotingCommand::create_request_command(RequestCode::GetBrokerRuntimeInfo, EmptyHeader {});
+        let request = self.create_request_command(RequestCode::GetBrokerRuntimeInfo, EmptyHeader {});
         let response = self
             .remoting_client
             .invoke_request(Some(addr), request, timeout_millis)
@@ -764,7 +765,7 @@ impl MQClientAPIImpl {
         broker_name: &CheetahString,
     ) -> RocketMQResult<Option<BrokerMemberGroup>> {
         let request_header = GetBrokerMemberGroupRequestHeader::new(cluster_name.clone(), broker_name.clone());
-        let request = RemotingCommand::create_request_command(RequestCode::GetBrokerMemberGroup, request_header);
+        let request = self.create_request_command(RequestCode::GetBrokerMemberGroup, request_header);
         let mut response = self.remoting_client.invoke_request(None, request, 3000).await?;
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.take_body() {
@@ -792,7 +793,7 @@ impl MQClientAPIImpl {
             )),
             ..Default::default()
         };
-        let request = RemotingCommand::create_request_command(RequestCode::GetRouteinfoByTopic, request_header);
+        let request = self.create_request_command(RequestCode::GetRouteinfoByTopic, request_header);
         let mut response = self.remoting_client.invoke_request(None, request, 3000).await?;
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.take_body() {
@@ -812,7 +813,7 @@ impl MQClientAPIImpl {
         addr: &CheetahString,
         timeout_millis: u64,
     ) -> RocketMQResult<GetBrokerLiteInfoResponseBody> {
-        let request = RemotingCommand::create_request_command(RequestCode::GetBrokerLiteInfo, EmptyHeader {});
+        let request = self.create_request_command(RequestCode::GetBrokerLiteInfo, EmptyHeader {});
         let response = self
             .remoting_client
             .invoke_request(Some(addr), request, timeout_millis)
@@ -840,7 +841,7 @@ impl MQClientAPIImpl {
             check_store_time,
             rpc: None,
         };
-        let request = RemotingCommand::create_request_command(RequestCode::CheckRocksdbCqWriteProgress, request_header);
+        let request = self.create_request_command(RequestCode::CheckRocksdbCqWriteProgress, request_header);
         let response = self
             .remoting_client
             .invoke_request(Some(addr), request, timeout_millis)
@@ -881,7 +882,7 @@ impl MQClientAPIImpl {
             },
             topic_request_header: None,
         };
-        let request = RemotingCommand::create_request_command(RequestCode::QueryConsumeQueue, request_header);
+        let request = self.create_request_command(RequestCode::QueryConsumeQueue, request_header);
         let response = self
             .remoting_client
             .invoke_request(Some(addr), request, timeout_millis)
@@ -917,7 +918,7 @@ impl MQClientAPIImpl {
             top_k,
             rpc: None,
         };
-        let request = RemotingCommand::create_request_command(RequestCode::GetLiteGroupInfo, request_header);
+        let request = self.create_request_command(RequestCode::GetLiteGroupInfo, request_header);
         let response = self
             .remoting_client
             .invoke_request(Some(addr), request, timeout_millis)
@@ -947,7 +948,7 @@ impl MQClientAPIImpl {
             client_id: Some(client_id),
             max_count: 1000,
         };
-        let request = RemotingCommand::create_request_command(RequestCode::GetLiteClientInfo, request_header);
+        let request = self.create_request_command(RequestCode::GetLiteClientInfo, request_header);
         let response = self
             .remoting_client
             .invoke_request(Some(addr), request, timeout_millis)
@@ -975,7 +976,7 @@ impl MQClientAPIImpl {
             group,
             client_id: if client_id.is_empty() { None } else { Some(client_id) },
         };
-        let request = RemotingCommand::create_request_command(RequestCode::TriggerLiteDispatch, request_header);
+        let request = self.create_request_command(RequestCode::TriggerLiteDispatch, request_header);
         let response = self
             .remoting_client
             .invoke_request(Some(addr), request, timeout_millis)
@@ -996,7 +997,7 @@ impl MQClientAPIImpl {
         lite_subscription_dto: LiteSubscriptionDTO,
         timeout_millis: u64,
     ) -> RocketMQResult<()> {
-        let request = lite_subscription_ctl_request(lite_subscription_dto)?;
+        let request = lite_subscription_ctl_request(&self.command_factory, lite_subscription_dto)?;
         let response = self
             .remoting_client
             .invoke_request(Some(broker_addr), request, timeout_millis)
@@ -1034,7 +1035,7 @@ impl MQClientAPIImpl {
             parent_topic: parent_topic.clone(),
             lite_topic: lite_topic.clone(),
         };
-        let request = RemotingCommand::create_request_command(RequestCode::GetLiteTopicInfo, request_header);
+        let request = self.create_request_command(RequestCode::GetLiteTopicInfo, request_header);
         let response = self
             .remoting_client
             .invoke_request(Some(addr), request, timeout_millis)
@@ -1056,7 +1057,7 @@ impl MQClientAPIImpl {
         timeout_millis: u64,
     ) -> RocketMQResult<GetParentTopicInfoResponseBody> {
         let request_header = GetParentTopicInfoRequestHeader { topic, rpc: None };
-        let request = RemotingCommand::create_request_command(RequestCode::GetParentTopicInfo, request_header);
+        let request = self.create_request_command(RequestCode::GetParentTopicInfo, request_header);
         let response = self
             .remoting_client
             .invoke_request(Some(addr), request, timeout_millis)
@@ -1086,7 +1087,7 @@ impl MQClientAPIImpl {
             rpc_request_header: None,
         };
 
-        let request = RemotingCommand::create_request_command(RequestCode::DeleteSubscriptionGroup, request_header);
+        let request = self.create_request_command(RequestCode::DeleteSubscriptionGroup, request_header);
 
         let response = self
             .remoting_client
@@ -1113,7 +1114,7 @@ impl MQClientAPIImpl {
             master_flush_offset: Some(master_flush_offset),
         };
 
-        let request = RemotingCommand::create_request_command(RequestCode::ResetMasterFlushOffset, request_header);
+        let request = self.create_request_command(RequestCode::ResetMasterFlushOffset, request_header);
 
         let response = self
             .remoting_client
@@ -1135,7 +1136,7 @@ impl MQClientAPIImpl {
         request_code: RequestCode,
         timeout_millis: u64,
     ) -> RocketMQResult<TopicList> {
-        let request = RemotingCommand::create_request_command(request_code, EmptyHeader {});
+        let request = self.create_request_command(request_code, EmptyHeader {});
         let response = self
             .remoting_client
             .invoke_request(None, request, timeout_millis)
@@ -1210,7 +1211,7 @@ impl MQClientAPIImpl {
         timeout_millis: u64,
     ) -> RocketMQResult<rocketmq_protocol::protocol::body::topic::topic_list::TopicList> {
         let request_header = GetTopicsByClusterRequestHeader::new(cluster);
-        let request = RemotingCommand::create_request_command(RequestCode::GetTopicsByCluster, request_header);
+        let request = self.create_request_command(RequestCode::GetTopicsByCluster, request_header);
         let response = self
             .remoting_client
             .invoke_request(None, request, timeout_millis)
@@ -1244,8 +1245,7 @@ impl MQClientAPIImpl {
         addr: &CheetahString,
         timeout_millis: u64,
     ) -> RocketMQResult<rocketmq_protocol::protocol::body::topic::topic_list::TopicList> {
-        let request =
-            RemotingCommand::create_request_command(RequestCode::GetSystemTopicListFromBroker, EmptyHeader {});
+        let request = self.create_request_command(RequestCode::GetSystemTopicListFromBroker, EmptyHeader {});
         let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
         let response = self
             .remoting_client
@@ -1268,7 +1268,7 @@ impl MQClientAPIImpl {
         request_header: rocketmq_protocol::protocol::header::get_consume_stats_request_header::GetConsumeStatsRequestHeader,
         timeout_millis: u64,
     ) -> RocketMQResult<rocketmq_protocol::protocol::admin::consume_stats::ConsumeStats> {
-        let request = RemotingCommand::create_request_command(RequestCode::GetConsumeStats, request_header);
+        let request = self.create_request_command(RequestCode::GetConsumeStats, request_header);
         let response = self
             .remoting_client
             .invoke_request(Some(addr), request, timeout_millis)
@@ -1290,7 +1290,7 @@ impl MQClientAPIImpl {
         request_header: QueryConsumeTimeSpanRequestHeader,
         timeout_millis: u64,
     ) -> RocketMQResult<Vec<rocketmq_protocol::protocol::body::queue_time_span::QueueTimeSpan>> {
-        let request = RemotingCommand::create_request_command(RequestCode::QueryConsumeTimeSpan, request_header);
+        let request = self.create_request_command(RequestCode::QueryConsumeTimeSpan, request_header);
         let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
         let response = self
             .remoting_client
@@ -1314,7 +1314,7 @@ impl MQClientAPIImpl {
         request_header: GetTopicStatsInfoRequestHeader,
         timeout_millis: u64,
     ) -> RocketMQResult<rocketmq_protocol::protocol::admin::topic_stats_table::TopicStatsTable> {
-        let request = RemotingCommand::create_request_command(RequestCode::GetTopicStatsInfo, request_header);
+        let request = self.create_request_command(RequestCode::GetTopicStatsInfo, request_header);
         let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
         let response = self
             .remoting_client
@@ -1337,7 +1337,7 @@ impl MQClientAPIImpl {
         request_header: GetTopicConfigRequestHeader,
         timeout_millis: u64,
     ) -> RocketMQResult<TopicConfigAndQueueMapping> {
-        let request = RemotingCommand::create_request_command(RequestCode::GetTopicConfig, request_header);
+        let request = self.create_request_command(RequestCode::GetTopicConfig, request_header);
         let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
         let response = self
             .remoting_client
@@ -1394,7 +1394,8 @@ impl MQClientAPIImpl {
             force: Some(force),
             topic_request_header: None,
         };
-        let request = RemotingCommand::create_request_command(RequestCode::UpdateAndCreateStaticTopic, request_header)
+        let request = self
+            .create_request_command(RequestCode::UpdateAndCreateStaticTopic, request_header)
             .set_body(mapping_detail.encode()?);
         let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
         let response = self
@@ -1419,7 +1420,7 @@ impl MQClientAPIImpl {
         request_header: rocketmq_protocol::protocol::header::query_topic_consume_by_who_request_header::QueryTopicConsumeByWhoRequestHeader,
         timeout_millis: u64,
     ) -> RocketMQResult<rocketmq_protocol::protocol::body::group_list::GroupList> {
-        let request = RemotingCommand::create_request_command(RequestCode::QueryTopicConsumeByWho, request_header);
+        let request = self.create_request_command(RequestCode::QueryTopicConsumeByWho, request_header);
         let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
         let response = self
             .remoting_client
@@ -1442,7 +1443,7 @@ impl MQClientAPIImpl {
         request_header: QueryTopicsByConsumerRequestHeader,
         timeout_millis: u64,
     ) -> RocketMQResult<rocketmq_protocol::protocol::body::topic::topic_list::TopicList> {
-        let request = RemotingCommand::create_request_command(RequestCode::QueryTopicsByConsumer, request_header);
+        let request = self.create_request_command(RequestCode::QueryTopicsByConsumer, request_header);
         let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
         let response = self
             .remoting_client
@@ -1465,7 +1466,7 @@ impl MQClientAPIImpl {
         request_header: QuerySubscriptionByConsumerRequestHeader,
         timeout_millis: u64,
     ) -> RocketMQResult<SubscriptionData> {
-        let request = RemotingCommand::create_request_command(RequestCode::QuerySubscriptionByConsumer, request_header);
+        let request = self.create_request_command(RequestCode::QuerySubscriptionByConsumer, request_header);
         let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
         let response = self
             .remoting_client
@@ -1494,7 +1495,7 @@ impl MQClientAPIImpl {
         request_code: RequestCode,
         timeout_millis: u64,
     ) -> RocketMQResult<bool> {
-        let request = RemotingCommand::create_request_command(request_code, EmptyHeader {});
+        let request = self.create_request_command(request_code, EmptyHeader {});
         let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
         let response = self
             .remoting_client
@@ -1563,7 +1564,7 @@ impl MQClientAPIImpl {
         topic_config_list: Vec<TopicConfig>,
         timeout_millis: u64,
     ) -> RocketMQResult<()> {
-        let request = create_topic_list_request(topic_config_list)?;
+        let request = create_topic_list_request(&self.command_factory, topic_config_list)?;
         let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, address.as_str());
         let response = self
             .remoting_client
@@ -1584,7 +1585,7 @@ impl MQClientAPIImpl {
         request_header: CreateTopicRequestHeader,
         timeout_millis: u64,
     ) -> RocketMQResult<()> {
-        let request = RemotingCommand::create_request_command(RequestCode::UpdateAndCreateTopic, request_header);
+        let request = self.create_request_command(RequestCode::UpdateAndCreateTopic, request_header);
         let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
         let response = self
             .remoting_client
@@ -1606,7 +1607,7 @@ impl MQClientAPIImpl {
         configs: Vec<SubscriptionGroupConfig>,
         timeout_millis: u64,
     ) -> RocketMQResult<()> {
-        let request = create_subscription_group_list_request(configs)?;
+        let request = create_subscription_group_list_request(&self.command_factory, configs)?;
         let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, address.as_str());
         let response = self
             .remoting_client
@@ -1629,7 +1630,7 @@ impl MQClientAPIImpl {
         request_header: DeleteTopicRequestHeader,
         timeout_millis: u64,
     ) -> RocketMQResult<()> {
-        let request = RemotingCommand::create_request_command(RequestCode::DeleteTopicInBroker, request_header);
+        let request = self.create_request_command(RequestCode::DeleteTopicInBroker, request_header);
         let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
         let response = self
             .remoting_client
@@ -1667,7 +1668,7 @@ impl MQClientAPIImpl {
         request_header: DeleteTopicFromNamesrvRequestHeader,
         timeout_millis: u64,
     ) -> RocketMQResult<()> {
-        let request = RemotingCommand::create_request_command(RequestCode::DeleteTopicInNamesrv, request_header);
+        let request = self.create_request_command(RequestCode::DeleteTopicInNamesrv, request_header);
         let response = self
             .remoting_client
             .invoke_request(Some(addr), request, timeout_millis)
@@ -1688,7 +1689,7 @@ impl MQClientAPIImpl {
         request_header: ResetOffsetRequestHeader,
         timeout_millis: u64,
     ) -> RocketMQResult<HashMap<MessageQueue, i64>> {
-        let request = RemotingCommand::create_request_command(RequestCode::InvokeBrokerToResetOffset, request_header);
+        let request = self.create_request_command(RequestCode::InvokeBrokerToResetOffset, request_header);
         let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
         let response = self
             .remoting_client
@@ -1711,7 +1712,7 @@ impl MQClientAPIImpl {
         filter_groups: Option<Vec<CheetahString>>,
         timeout_millis: u64,
     ) -> RocketMQResult<HashMap<i32, i64>> {
-        let request = query_correction_offset_request(topic, group, filter_groups);
+        let request = query_correction_offset_request(&self.command_factory, topic, group, filter_groups);
         let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
         let response = self
             .remoting_client
@@ -1734,7 +1735,7 @@ impl MQClientAPIImpl {
         request_header: rocketmq_protocol::protocol::header::view_broker_stats_data_request_header::ViewBrokerStatsDataRequestHeader,
         timeout_millis: u64,
     ) -> RocketMQResult<rocketmq_protocol::protocol::subscription::broker_stats_data::BrokerStatsData> {
-        let request = RemotingCommand::create_request_command(RequestCode::ViewBrokerStatsData, request_header);
+        let request = self.create_request_command(RequestCode::ViewBrokerStatsData, request_header);
         let response = self
             .remoting_client
             .invoke_request(Some(addr), request, timeout_millis)
@@ -1758,7 +1759,7 @@ impl MQClientAPIImpl {
         request_header: rocketmq_protocol::protocol::header::get_consume_stats_in_broker_header::GetConsumeStatsInBrokerHeader,
         timeout_millis: u64,
     ) -> RocketMQResult<rocketmq_protocol::protocol::admin::consume_stats_list::ConsumeStatsList> {
-        let request = RemotingCommand::create_request_command(RequestCode::GetBrokerConsumeStats, request_header);
+        let request = self.create_request_command(RequestCode::GetBrokerConsumeStats, request_header);
         let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
         let response = self
             .remoting_client
@@ -1795,7 +1796,7 @@ impl MQClientAPIImpl {
             offline: is_offline,
             rpc_request_header: None,
         };
-        let request = RemotingCommand::create_request_command(RequestCode::CloneGroupOffset, request_header);
+        let request = self.create_request_command(RequestCode::CloneGroupOffset, request_header);
         let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
         let response = self
             .remoting_client
@@ -1821,7 +1822,7 @@ impl MQClientAPIImpl {
         addr: &CheetahString,
         timeout_millis: u64,
     ) -> RocketMQResult<ProxyDrainStateResponseBody> {
-        let request = RemotingCommand::create_remoting_command(RequestCode::GetProxyDrainState);
+        let request = self.create_remoting_command(RequestCode::GetProxyDrainState);
         let response = self
             .remoting_client
             .invoke_request(Some(addr), request, timeout_millis)
@@ -1869,7 +1870,7 @@ impl MQClientAPIImpl {
             operation_id: operation_id.to_string(),
         }
         .encode()?;
-        let request = RemotingCommand::new_request(request_code, body);
+        let request = self.create_request(request_code, body);
         let response = self
             .remoting_client
             .invoke_request(Some(addr), request, timeout_millis)
@@ -1895,8 +1896,9 @@ impl MQClientAPIImpl {
             return Ok(());
         }
 
-        let request =
-            RemotingCommand::create_remoting_command(RequestCode::UpdateBrokerConfig).set_body(body.to_string());
+        let request = self
+            .create_remoting_command(RequestCode::UpdateBrokerConfig)
+            .set_body(body.to_string());
         let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
         let response = self
             .remoting_client
@@ -1922,7 +1924,7 @@ impl MQClientAPIImpl {
         let request_header = AddBrokerRequestHeader {
             config_path: Some(broker_config_path),
         };
-        let request = RemotingCommand::create_request_command(RequestCode::AddBroker, request_header);
+        let request = self.create_request_command(RequestCode::AddBroker, request_header);
         let response = self
             .remoting_client
             .invoke_request(Some(addr), request, timeout_millis)
@@ -1951,7 +1953,7 @@ impl MQClientAPIImpl {
             broker_cluster_name: cluster_name,
             broker_id,
         };
-        let request = RemotingCommand::create_request_command(RequestCode::RemoveBroker, request_header);
+        let request = self.create_request_command(RequestCode::RemoveBroker, request_header);
         let response = self
             .remoting_client
             .invoke_request(Some(addr), request, timeout_millis)
@@ -1973,7 +1975,7 @@ impl MQClientAPIImpl {
         request_header: NotifyMinBrokerIdChangeRequestHeader,
         timeout_millis: u64,
     ) -> RocketMQResult<()> {
-        let request = RemotingCommand::create_request_command(RequestCode::NotifyMinBrokerIdChange, request_header);
+        let request = self.create_request_command(RequestCode::NotifyMinBrokerIdChange, request_header);
         self.remoting_client
             .invoke_request_oneway(broker_addr, request, timeout_millis)
             .await
@@ -1999,7 +2001,7 @@ impl MQClientAPIImpl {
         let request_header = ExportRocksdbConfigToJsonRequestHeader {
             config_type: CheetahString::from(config_type),
         };
-        let request = RemotingCommand::create_request_command(RequestCode::ExportRocksdbConfigToJson, request_header);
+        let request = self.create_request_command(RequestCode::ExportRocksdbConfigToJson, request_header);
         let response = self
             .remoting_client
             .invoke_request(Some(&broker_addr), request, timeout_millis)
@@ -2030,7 +2032,7 @@ impl MQClientAPIImpl {
         broker_addr: CheetahString,
         timeout_millis: u64,
     ) -> RocketMQResult<CheetahString> {
-        let request = get_all_consumer_offset_request();
+        let request = get_all_consumer_offset_request(&self.command_factory);
         let response = self
             .remoting_client
             .invoke_request(Some(&broker_addr), request, timeout_millis)
@@ -2065,7 +2067,7 @@ impl MQClientAPIImpl {
         }
 
         // Create request command
-        let request = RemotingCommand::create_remoting_command(RequestCode::GetNamesrvConfig);
+        let request = self.create_remoting_command(RequestCode::GetNamesrvConfig);
         let timeout_millis = duration_millis_to_u64("getNameServerConfig", timeout_millis)?;
         let mut config_map = HashMap::with_capacity(4);
         // Iterate through each name server
@@ -2107,7 +2109,7 @@ impl MQClientAPIImpl {
     }
 
     pub async fn probe_name_server(&self, name_server: &CheetahString, timeout_millis: Duration) -> RocketMQResult<()> {
-        let request = RemotingCommand::create_request_command(
+        let request = self.create_request_command(
             RequestCode::GetNamesrvConfig,
             GetNamesrvConfigRequestHeader::for_probe(),
         );
@@ -2131,7 +2133,7 @@ impl MQClientAPIImpl {
         controller_address: CheetahString,
         timeout_millis: u64,
     ) -> RocketMQResult<GetMetaDataResponseHeader> {
-        let request = RemotingCommand::create_remoting_command(RequestCode::ControllerGetMetadataInfo);
+        let request = self.create_remoting_command(RequestCode::ControllerGetMetadataInfo);
         let response = self
             .remoting_client
             .invoke_request(Some(&controller_address), request, timeout_millis)
@@ -2165,7 +2167,7 @@ impl MQClientAPIImpl {
         let controller_meta_data = self.get_controller_metadata(controller_address, timeout_millis).await?;
         let leader_address = controller_leader_address(controller_meta_data)?;
 
-        let request = RemotingCommand::create_remoting_command(RequestCode::ControllerGetSyncStateData);
+        let request = self.create_remoting_command(RequestCode::ControllerGetSyncStateData);
         let body = serde_json::to_vec(&brokers)
             .map_err(|e| mq_client_err!(format!("Failed to serialize broker names: {}", e)))?;
         let request = request.set_body(body);
@@ -2196,7 +2198,7 @@ impl MQClientAPIImpl {
         broker_addr: CheetahString,
         timeout_millis: u64,
     ) -> RocketMQResult<EpochEntryCache> {
-        let request = RemotingCommand::create_remoting_command(RequestCode::GetBrokerEpochCache);
+        let request = self.create_remoting_command(RequestCode::GetBrokerEpochCache);
         let response = self
             .remoting_client
             .invoke_request(Some(&broker_addr), request, timeout_millis)
@@ -2226,7 +2228,7 @@ impl MQClientAPIImpl {
         broker_addr: CheetahString,
         timeout_millis: u64,
     ) -> RocketMQResult<HARuntimeInfo> {
-        let request = RemotingCommand::create_remoting_command(RequestCode::GetBrokerHaStatus);
+        let request = self.create_remoting_command(RequestCode::GetBrokerHaStatus);
         let response = self
             .remoting_client
             .invoke_request(Some(&broker_addr), request, timeout_millis)
@@ -2254,7 +2256,7 @@ impl MQClientAPIImpl {
         request_header: UpdateGroupForbiddenRequestHeader,
         timeout_millis: u64,
     ) -> RocketMQResult<GroupForbidden> {
-        let request = RemotingCommand::create_request_command(RequestCode::UpdateAndGetGroupForbidden, request_header);
+        let request = self.create_request_command(RequestCode::UpdateAndGetGroupForbidden, request_header);
         let broker_addr_vip = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, broker_addr.as_str());
         let response = self
             .remoting_client
@@ -2284,7 +2286,7 @@ impl MQClientAPIImpl {
         controller_address: CheetahString,
         timeout_millis: u64,
     ) -> RocketMQResult<HashMap<CheetahString, CheetahString>> {
-        let request = RemotingCommand::create_remoting_command(RequestCode::GetControllerConfig);
+        let request = self.create_remoting_command(RequestCode::GetControllerConfig);
         let response = self
             .remoting_client
             .invoke_request(Some(&controller_address), request, timeout_millis)
@@ -2316,8 +2318,9 @@ impl MQClientAPIImpl {
             return Ok(());
         }
 
-        let request =
-            RemotingCommand::create_remoting_command(RequestCode::UpdateControllerConfig).set_body(body.to_string());
+        let request = self
+            .create_remoting_command(RequestCode::UpdateControllerConfig)
+            .set_body(body.to_string());
         let mut err_response = None;
         for controller_addr in controllers {
             let response = self
@@ -2365,7 +2368,7 @@ impl MQClientAPIImpl {
             designate_elect,
             rocketmq_runtime::common::time_utils::current_millis(),
         );
-        let request = RemotingCommand::create_request_command(RequestCode::ControllerElectMaster, request_header);
+        let request = self.create_request_command(RequestCode::ControllerElectMaster, request_header);
         let response = self
             .remoting_client
             .invoke_request(Some(&leader_address), request, timeout_millis)
@@ -2415,7 +2418,7 @@ impl MQClientAPIImpl {
             clean_living_broker,
             ..Default::default()
         };
-        let request = RemotingCommand::create_request_command(RequestCode::CleanBrokerData, request_header);
+        let request = self.create_request_command(RequestCode::CleanBrokerData, request_header);
         let response = self
             .remoting_client
             .invoke_request(Some(&leader_address), request, timeout_millis)
@@ -2442,7 +2445,7 @@ impl MQClientAPIImpl {
             return Ok(());
         }
 
-        let request = RemotingCommand::create_remoting_command(RequestCode::UpdateColdDataFlowCtrConfig);
+        let request = self.create_remoting_command(RequestCode::UpdateColdDataFlowCtrConfig);
         let request = request.set_body(body.to_string());
         let broker_addr =
             mix_all::broker_vip_channel(self.client_config.is_vip_channel_enabled(), broker_addr.as_str());
@@ -2471,7 +2474,8 @@ impl MQClientAPIImpl {
             return Ok(());
         }
 
-        let request = RemotingCommand::create_request_command(RequestCode::RemoveColdDataFlowCtrConfig, EmptyHeader {})
+        let request = self
+            .create_request_command(RequestCode::RemoveColdDataFlowCtrConfig, EmptyHeader {})
             .set_body(consumer_group.to_string());
         let broker_addr_vip =
             mix_all::broker_vip_channel(self.client_config.is_vip_channel_enabled(), broker_addr.as_str());
@@ -2495,7 +2499,7 @@ impl MQClientAPIImpl {
         broker_addr: CheetahString,
         timeout_millis: u64,
     ) -> RocketMQResult<CheetahString> {
-        let request = RemotingCommand::create_request_command(RequestCode::GetColdDataFlowCtrInfo, EmptyHeader {});
+        let request = self.create_request_command(RequestCode::GetColdDataFlowCtrInfo, EmptyHeader {});
         let response = self
             .remoting_client
             .invoke_request(Some(&broker_addr), request, timeout_millis)
@@ -2522,7 +2526,7 @@ impl MQClientAPIImpl {
         mode: CheetahString,
         timeout_millis: u64,
     ) -> RocketMQResult<CheetahString> {
-        let mut request = RemotingCommand::create_request_command(RequestCode::SetCommitlogReadMode, EmptyHeader {});
+        let mut request = self.create_request_command(RequestCode::SetCommitlogReadMode, EmptyHeader {});
         request.ensure_ext_fields_initialized();
         request.add_ext_field(file_readahead_mode::READ_AHEAD_MODE, mode);
         let response = self
@@ -2542,7 +2546,7 @@ impl MQClientAPIImpl {
 
     #[cfg(feature = "admin-mutation")]
     pub async fn export_pop_record(&self, broker_addr: CheetahString, timeout_millis: u64) -> RocketMQResult<()> {
-        let request = RemotingCommand::create_request_command(RequestCode::PopRollback, EmptyHeader {});
+        let request = self.create_request_command(RequestCode::PopRollback, EmptyHeader {});
         let response = self
             .remoting_client
             .invoke_request(Some(&broker_addr), request, timeout_millis)
@@ -2564,7 +2568,7 @@ impl MQClientAPIImpl {
         addr: &CheetahString,
         timeout_millis: u64,
     ) -> RocketMQResult<rocketmq_protocol::protocol::body::topic_info_wrapper::TopicConfigSerializeWrapper> {
-        let request = RemotingCommand::create_request_command(RequestCode::GetAllTopicConfig, EmptyHeader {});
+        let request = self.create_request_command(RequestCode::GetAllTopicConfig, EmptyHeader {});
         let response = self
             .remoting_client
             .invoke_request(Some(addr), request, timeout_millis)
@@ -2587,8 +2591,7 @@ impl MQClientAPIImpl {
         addr: &CheetahString,
         timeout_millis: u64,
     ) -> RocketMQResult<rocketmq_protocol::protocol::body::subscription_group_wrapper::SubscriptionGroupWrapper> {
-        let request =
-            RemotingCommand::create_request_command(RequestCode::GetAllSubscriptionGroupConfig, EmptyHeader {});
+        let request = self.create_request_command(RequestCode::GetAllSubscriptionGroupConfig, EmptyHeader {});
         let mut response = self
             .remoting_client
             .invoke_request(Some(addr), request, timeout_millis)
@@ -2621,7 +2624,7 @@ impl MQClientAPIImpl {
         timeout_millis: u64,
     ) -> RocketMQResult<rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig>
     {
-        let request = RemotingCommand::create_request_command(
+        let request = self.create_request_command(
             RequestCode::GetSubscriptionGroupConfig,
             rocketmq_protocol::protocol::header::get_subscription_group_config_request_header::GetSubscriptionGroupConfigRequestHeader {
                 group,
@@ -2652,9 +2655,9 @@ impl MQClientAPIImpl {
         config: &rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig,
         timeout_millis: u64,
     ) -> RocketMQResult<()> {
-        let request =
-            RemotingCommand::create_request_command(RequestCode::UpdateAndCreateSubscriptionGroup, EmptyHeader {})
-                .set_body(config.encode()?);
+        let request = self
+            .create_request_command(RequestCode::UpdateAndCreateSubscriptionGroup, EmptyHeader {})
+            .set_body(config.encode()?);
         let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
         let response = self
             .remoting_client
@@ -2684,7 +2687,7 @@ impl MQClientAPIImpl {
             jstack_enable: jstack,
             rpc_request_header: None,
         };
-        let request = RemotingCommand::create_request_command(RequestCode::GetConsumerRunningInfo, request_header);
+        let request = self.create_request_command(RequestCode::GetConsumerRunningInfo, request_header);
         let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
         let mut response = self
             .remoting_client
@@ -2719,7 +2722,8 @@ impl MQClientAPIImpl {
     ) -> RocketMQResult<rocketmq_protocol::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult>
     {
         let body = MessageDecoder::encode(message, false)?;
-        let request = RemotingCommand::create_request_command(RequestCode::ConsumeMessageDirectly, request_header)
+        let request = self
+            .create_request_command(RequestCode::ConsumeMessageDirectly, request_header)
             .set_body(body.to_vec());
         let mut response = self
             .remoting_client
@@ -2751,7 +2755,7 @@ impl MQClientAPIImpl {
         request_header: ViewMessageRequestHeader,
         timeout_millis: u64,
     ) -> RocketMQResult<MessageExt> {
-        let request = RemotingCommand::create_request_command(RequestCode::ViewMessageById, request_header);
+        let request = self.create_request_command(RequestCode::ViewMessageById, request_header);
         let response = self
             .remoting_client
             .invoke_request(Some(addr), request, timeout_millis)
@@ -2792,7 +2796,7 @@ impl MQClientAPIImpl {
             topic,
             msg_id: Some(msg_id),
         };
-        let request = RemotingCommand::create_request_command(RequestCode::ResumeCheckHalfMessage, request_header);
+        let request = self.create_request_command(RequestCode::ResumeCheckHalfMessage, request_header);
         let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
         let response = self
             .remoting_client
@@ -2818,7 +2822,7 @@ impl MQClientAPIImpl {
         engine_type: CheetahString,
         timeout_millis: u64,
     ) -> RocketMQResult<()> {
-        let mut request = RemotingCommand::create_request_command(RequestCode::SwitchTimerEngine, EmptyHeader {});
+        let mut request = self.create_request_command(RequestCode::SwitchTimerEngine, EmptyHeader {});
         request.ensure_ext_fields_initialized();
         request.add_ext_field(MessageConst::TIMER_ENGINE_TYPE, engine_type);
         let response = self
@@ -3054,6 +3058,7 @@ pub(super) fn create_topic_request_header_like_java(
 }
 
 pub(super) fn query_correction_offset_request(
+    command_factory: &RemotingCommandFactory,
     topic: CheetahString,
     group: CheetahString,
     filter_groups: Option<Vec<CheetahString>>,
@@ -3073,7 +3078,7 @@ pub(super) fn query_correction_offset_request(
         topic,
         topic_request_header: None,
     };
-    RemotingCommand::create_request_command(RequestCode::QueryCorrectionOffset, request_header)
+    command_factory.create_request_command(RequestCode::QueryCorrectionOffset, request_header)
 }
 
 pub(super) fn split_lite_dispatch_value(value: &str) -> Vec<&str> {
@@ -3228,7 +3233,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
     ) -> RocketMQResult<Vec<MessageExt>> {
         let topic = request_header.topic.clone();
         let key = request_header.key.clone();
-        let mut request = RemotingCommand::create_request_command(RequestCode::QueryMessage, request_header);
+        let mut request = self.create_request_command(RequestCode::QueryMessage, request_header);
         request.ensure_ext_fields_initialized();
         request.add_ext_field(
             mix_all::UNIQUE_MSG_QUERY_FLAG,
@@ -3260,7 +3265,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
         request_header: GetTopicStatsInfoRequestHeader,
         timeout_millis: u64,
     ) -> RocketMQResult<TopicStatsTable> {
-        let request = RemotingCommand::create_request_command(RequestCode::GetTopicStatsInfo, request_header);
+        let request = self.create_request_command(RequestCode::GetTopicStatsInfo, request_header);
         let response = self.invoke_admin_request(address, request, timeout_millis).await?;
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.get_body() {
@@ -3279,7 +3284,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
         request_header: QueryConsumeTimeSpanRequestHeader,
         timeout_millis: u64,
     ) -> RocketMQResult<Vec<QueueTimeSpan>> {
-        let request = RemotingCommand::create_request_command(RequestCode::QueryConsumeTimeSpan, request_header);
+        let request = self.create_request_command(RequestCode::QueryConsumeTimeSpan, request_header);
         let response = self.invoke_admin_request(address, request, timeout_millis).await?;
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.get_body() {
@@ -3300,7 +3305,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
         request_header: CreateTopicRequestHeader,
         timeout_millis: u64,
     ) -> RocketMQResult<()> {
-        let request = RemotingCommand::create_request_command(RequestCode::UpdateAndCreateTopic, request_header);
+        let request = self.create_request_command(RequestCode::UpdateAndCreateTopic, request_header);
         let response = self.invoke_admin_request(address, request, timeout_millis).await?;
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             return Ok(());
@@ -3318,9 +3323,9 @@ impl MqClientAdminInner for MQClientAPIImpl {
         config: SubscriptionGroupConfig,
         timeout_millis: u64,
     ) -> RocketMQResult<()> {
-        let request =
-            RemotingCommand::create_request_command(RequestCode::UpdateAndCreateSubscriptionGroup, EmptyHeader {})
-                .set_body(config.encode()?);
+        let request = self
+            .create_request_command(RequestCode::UpdateAndCreateSubscriptionGroup, EmptyHeader {})
+            .set_body(config.encode()?);
         let response = self.invoke_admin_request(address, request, timeout_millis).await?;
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             return Ok(());
@@ -3338,7 +3343,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
         request_header: DeleteTopicRequestHeader,
         timeout_millis: u64,
     ) -> RocketMQResult<()> {
-        let request = RemotingCommand::create_request_command(RequestCode::DeleteTopicInBroker, request_header);
+        let request = self.create_request_command(RequestCode::DeleteTopicInBroker, request_header);
         let response = self.invoke_admin_request(address, request, timeout_millis).await?;
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             return Ok(());
@@ -3356,7 +3361,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
         request_header: DeleteTopicFromNamesrvRequestHeader,
         timeout_millis: u64,
     ) -> RocketMQResult<()> {
-        let request = RemotingCommand::create_request_command(RequestCode::DeleteTopicInNamesrv, request_header);
+        let request = self.create_request_command(RequestCode::DeleteTopicInNamesrv, request_header);
         let response = self.invoke_admin_request(address, request, timeout_millis).await?;
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             return Ok(());
@@ -3374,7 +3379,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
         request_header: DeleteKVConfigRequestHeader,
         timeout_millis: u64,
     ) -> RocketMQResult<()> {
-        let request = RemotingCommand::create_request_command(RequestCode::DeleteKvConfig, request_header);
+        let request = self.create_request_command(RequestCode::DeleteKvConfig, request_header);
         let response = self.invoke_admin_request(address, request, timeout_millis).await?;
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             return Ok(());
@@ -3392,7 +3397,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
         request_header: DeleteSubscriptionGroupRequestHeader,
         timeout_millis: u64,
     ) -> RocketMQResult<()> {
-        let request = RemotingCommand::create_request_command(RequestCode::DeleteSubscriptionGroup, request_header);
+        let request = self.create_request_command(RequestCode::DeleteSubscriptionGroup, request_header);
         let response = self.invoke_admin_request(address, request, timeout_millis).await?;
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             return Ok(());
@@ -3410,7 +3415,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
         request_header: ResetOffsetRequestHeader,
         timeout_millis: u64,
     ) -> RocketMQResult<HashMap<MessageQueue, i64>> {
-        let request = RemotingCommand::create_request_command(RequestCode::InvokeBrokerToResetOffset, request_header);
+        let request = self.create_request_command(RequestCode::InvokeBrokerToResetOffset, request_header);
         let response = self.invoke_admin_request(address, request, timeout_millis).await?;
         reset_offset_table_from_response(&response)
     }
@@ -3421,7 +3426,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
         request_header: ViewMessageRequestHeader,
         timeout_millis: u64,
     ) -> RocketMQResult<MessageExt> {
-        let request = RemotingCommand::create_request_command(RequestCode::ViewMessageById, request_header);
+        let request = self.create_request_command(RequestCode::ViewMessageById, request_header);
         let response = self.invoke_admin_request(address, request, timeout_millis).await?;
         match ResponseCode::from(response.code()) {
             ResponseCode::Success => {
@@ -3441,7 +3446,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
     }
 
     async fn get_broker_cluster_info(&self, address: &str, timeout_millis: u64) -> RocketMQResult<ClusterInfo> {
-        let request = RemotingCommand::create_request_command(RequestCode::GetBrokerClusterInfo, EmptyHeader {});
+        let request = self.create_request_command(RequestCode::GetBrokerClusterInfo, EmptyHeader {});
         let response = self.invoke_admin_request(address, request, timeout_millis).await?;
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.get_body() {
@@ -3460,7 +3465,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
         request_header: GetConsumerConnectionListRequestHeader,
         timeout_millis: u64,
     ) -> RocketMQResult<ConsumerConnection> {
-        let request = RemotingCommand::create_request_command(RequestCode::GetConsumerConnectionList, request_header);
+        let request = self.create_request_command(RequestCode::GetConsumerConnectionList, request_header);
         let response = self.invoke_admin_request(address, request, timeout_millis).await?;
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.get_body() {
@@ -3479,7 +3484,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
         request_header: QueryTopicsByConsumerRequestHeader,
         timeout_millis: u64,
     ) -> RocketMQResult<TopicList> {
-        let request = RemotingCommand::create_request_command(RequestCode::QueryTopicsByConsumer, request_header);
+        let request = self.create_request_command(RequestCode::QueryTopicsByConsumer, request_header);
         let response = self.invoke_admin_request(address, request, timeout_millis).await?;
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.get_body() {
@@ -3498,7 +3503,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
         request_header: QuerySubscriptionByConsumerRequestHeader,
         timeout_millis: u64,
     ) -> RocketMQResult<SubscriptionData> {
-        let request = RemotingCommand::create_request_command(RequestCode::QuerySubscriptionByConsumer, request_header);
+        let request = self.create_request_command(RequestCode::QuerySubscriptionByConsumer, request_header);
         let response = self.invoke_admin_request(address, request, timeout_millis).await?;
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             let body = response
@@ -3521,7 +3526,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
         request_header: GetConsumeStatsRequestHeader,
         timeout_millis: u64,
     ) -> RocketMQResult<ConsumeStats> {
-        let request = RemotingCommand::create_request_command(RequestCode::GetConsumeStats, request_header);
+        let request = self.create_request_command(RequestCode::GetConsumeStats, request_header);
         let response = self.invoke_admin_request(address, request, timeout_millis).await?;
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.get_body() {
@@ -3540,7 +3545,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
         request_header: QueryTopicConsumeByWhoRequestHeader,
         timeout_millis: u64,
     ) -> RocketMQResult<GroupList> {
-        let request = RemotingCommand::create_request_command(RequestCode::QueryTopicConsumeByWho, request_header);
+        let request = self.create_request_command(RequestCode::QueryTopicConsumeByWho, request_header);
         let response = self.invoke_admin_request(address, request, timeout_millis).await?;
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.get_body() {
@@ -3559,7 +3564,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
         request_header: GetConsumerRunningInfoRequestHeader,
         timeout_millis: u64,
     ) -> RocketMQResult<ConsumerRunningInfo> {
-        let request = RemotingCommand::create_request_command(RequestCode::GetConsumerRunningInfo, request_header);
+        let request = self.create_request_command(RequestCode::GetConsumerRunningInfo, request_header);
         let mut response = self.invoke_admin_request(address, request, timeout_millis).await?;
         match ResponseCode::from(response.code()) {
             ResponseCode::Success => {
@@ -3582,7 +3587,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
         request_header: ConsumeMessageDirectlyResultRequestHeader,
         timeout_millis: u64,
     ) -> RocketMQResult<ConsumeMessageDirectlyResult> {
-        let request = RemotingCommand::create_request_command(RequestCode::ConsumeMessageDirectly, request_header);
+        let request = self.create_request_command(RequestCode::ConsumeMessageDirectly, request_header);
         let mut response = self.invoke_admin_request(address, request, timeout_millis).await?;
         match ResponseCode::from(response.code()) {
             ResponseCode::Success => {

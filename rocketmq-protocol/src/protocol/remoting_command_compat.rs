@@ -167,7 +167,7 @@ fn read_environment_value(key: &'static str) -> Result<Option<String>, InvalidRe
 ///
 /// Returns [`RemotingDefaultsError`] when configuration is invalid or a
 /// different process default was initialized earlier.
-pub fn initialize_remoting_defaults(version: i32) -> Result<(), RemotingDefaultsError> {
+pub fn initialize_remoting_command_factory(version: i32) -> Result<RemotingCommandFactory, RemotingDefaultsError> {
     let property_value = read_environment_value(SERIALIZE_TYPE_PROPERTY)?;
     let environment_value = if property_value.is_none() {
         read_environment_value(SERIALIZE_TYPE_ENV)?
@@ -175,7 +175,24 @@ pub fn initialize_remoting_defaults(version: i32) -> Result<(), RemotingDefaults
         None
     };
     let serialize_type = resolve_remoting_serialize_type(property_value.as_deref(), environment_value.as_deref())?;
-    initialize_remoting_command_defaults(RemotingCommandDefaults::new(version, serialize_type))?;
+    let defaults = RemotingCommandDefaults::new(version, serialize_type);
+    initialize_remoting_command_defaults(defaults)?;
+    Ok(RemotingCommandFactory::new(defaults))
+}
+
+/// Initializes the immutable defaults used by all business command factories.
+///
+/// This compatibility entry point discards the resolved factory. New
+/// application owners should retain the value returned by
+/// [`initialize_remoting_command_factory`] and inject it into command
+/// producers.
+///
+/// # Errors
+///
+/// Returns [`RemotingDefaultsError`] when configuration is invalid or a
+/// different process default was initialized earlier.
+pub fn initialize_remoting_defaults(version: i32) -> Result<(), RemotingDefaultsError> {
+    initialize_remoting_command_factory(version)?;
     Ok(())
 }
 
