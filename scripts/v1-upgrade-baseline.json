@@ -1,0 +1,125 @@
+{
+  "schema_version": 1,
+  "release_line": "1.0",
+  "upgrade_from": {
+    "version": "0.9.0",
+    "tag": "v0.9.0",
+    "writer": "rocketmq-rust",
+    "platform": "windows-x86_64"
+  },
+  "generation": {
+    "owner": "release-fixture-maintainer",
+    "regeneration_policy": "read-only-test-input",
+    "commands": [
+      "git worktree add .worktrees/v0.9.0-fixture-writer v0.9.0 && cargo test -p rocketmq-store --test v1_upgrade_fixture_writer -- --nocapture",
+      "git worktree add .worktrees/v0.9.0-fixture-writer v0.9.0 && cargo test -p rocketmq-broker write_v090_upgrade_fixture --lib -- --nocapture --test-threads=1"
+    ],
+    "configuration": {
+      "commitlog_segment_bytes": 4096,
+      "consumequeue_segment_bytes": 200,
+      "timerlog_segment_bytes": 4096,
+      "index_slots": 32,
+      "index_entries": 128,
+      "topic": "V1UpgradeTopic",
+      "group": "V1UpgradeGroup",
+      "queue_id": 0
+    }
+  },
+  "fixtures": [
+    {
+      "fixture_id": "localfile-store",
+      "writer_version": "0.9.0",
+      "root": "rocketmq-store/tests/fixtures/upgrade/v0.9.0",
+      "files": [
+        "rocketmq-store/tests/fixtures/upgrade/v0.9.0/expected-records.json",
+        "rocketmq-store/tests/fixtures/upgrade/v0.9.0/local-file/checkpoint",
+        "rocketmq-store/tests/fixtures/upgrade/v0.9.0/local-file/timerwheel",
+        "rocketmq-store/tests/fixtures/upgrade/v0.9.0/local-file/commitlog/00000000000000000000",
+        "rocketmq-store/tests/fixtures/upgrade/v0.9.0/local-file/config/timercheck",
+        "rocketmq-store/tests/fixtures/upgrade/v0.9.0/local-file/config/timermetrics",
+        "rocketmq-store/tests/fixtures/upgrade/v0.9.0/local-file/consumequeue/V1UpgradeTopic/0/00000000000000000000",
+        "rocketmq-store/tests/fixtures/upgrade/v0.9.0/local-file/index/20260815011551705",
+        "rocketmq-store/tests/fixtures/upgrade/v0.9.0/local-file/timerlog/00000000000000000000"
+      ],
+      "operations": [
+        "Create a LocalFile store with bounded segment and index sizes.",
+        "Append two keyed messages to queue zero.",
+        "Dispatch both messages to ConsumeQueue and Index.",
+        "Shut the v0.9.0 writer down cleanly."
+      ],
+      "expected_records_file": "rocketmq-store/tests/fixtures/upgrade/v0.9.0/expected-records.json",
+      "expected_records": {
+        "writer_version": "0.9.0",
+        "store_type": "LocalFile",
+        "topic": "V1UpgradeTopic",
+        "queue_id": 0,
+        "queue_max_offset": 2,
+        "message_key": "v1-upgrade-key",
+        "message_bodies": [
+          "v0.9.0-message-0",
+          "v0.9.0-message-1"
+        ],
+        "index_result_count": 2,
+        "timer_state": "inactive-default"
+      }
+    },
+    {
+      "fixture_id": "broker-metadata",
+      "writer_version": "0.9.0",
+      "root": "rocketmq-broker/tests/fixtures/upgrade/v0.9.0",
+      "files": [
+        "rocketmq-broker/tests/fixtures/upgrade/v0.9.0/expected-records.json",
+        "rocketmq-broker/tests/fixtures/upgrade/v0.9.0/config/brokerConfig.json",
+        "rocketmq-broker/tests/fixtures/upgrade/v0.9.0/config/consumerOffset.json",
+        "rocketmq-broker/tests/fixtures/upgrade/v0.9.0/config/subscriptionGroup.json"
+      ],
+      "operations": [
+        "Serialize a stable v0.9.0 BrokerConfig.",
+        "Create V1UpgradeGroup with the v0.9.0 subscription DTO.",
+        "Commit queue zero consumer offset one with ConsumerOffsetManager.",
+        "Leave Timer inactive and persistent POP profile absent."
+      ],
+      "expected_records_file": "rocketmq-broker/tests/fixtures/upgrade/v0.9.0/expected-records.json",
+      "expected_records": {
+        "writer_version": "0.9.0",
+        "broker_name": "v090-upgrade-broker",
+        "broker_cluster": "v090-upgrade-cluster",
+        "topic": "V1UpgradeTopic",
+        "group": "V1UpgradeGroup",
+        "queue_id": 0,
+        "consumer_offset": 1,
+        "subscription_enabled": true,
+        "timer_state": "inactive-default",
+        "pop_profile_state": "legacy-absent"
+      }
+    }
+  ],
+  "format_transitions": [
+    {
+      "format": "multipath-commitlog",
+      "baseline_state": "legacy-absent",
+      "upgrade": "initialize-current-format",
+      "downgrade": "reject-by-1.0-preflight",
+      "old_reader_awareness": "not-assumed"
+    },
+    {
+      "format": "extended-timer",
+      "baseline_state": "legacy-absent",
+      "upgrade": "initialize-current-format",
+      "downgrade": "reject-by-1.0-preflight",
+      "old_reader_awareness": "not-assumed"
+    },
+    {
+      "format": "persistent-pop-profile",
+      "baseline_state": "legacy-absent",
+      "upgrade": "initialize-current-format",
+      "downgrade": "reject-by-1.0-preflight",
+      "old_reader_awareness": "not-assumed"
+    }
+  ],
+  "change_control": {
+    "store_reviewer": "store-maintainer",
+    "broker_reviewer": "broker-maintainer",
+    "reason": "Freeze the first immutable 1.0 upgrade baseline from the v0.9.0 release writer."
+  }
+}
