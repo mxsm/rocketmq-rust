@@ -4607,6 +4607,7 @@ dependencies = [
 name = "rocketmq-proxy"
 version = "1.0.0"
 dependencies = [
+ "arc-swap",
  "async-trait",
  "bytes",
  "cheetah-string",
@@ -4618,7 +4619,9 @@ dependencies = [
  "futures",
  "hex",
  "hmac 0.13.0",
+ "parking_lot",
  "prost-types",
+ "rcgen",
  "rocketmq-auth",
  "rocketmq-error",
  "rocketmq-model",
@@ -4633,8 +4636,10 @@ dependencies = [
  "serde",
  "serde_json",
  "sha1",
+ "tempfile",
  "thiserror 2.0.20",
  "tokio",
+ "tokio-rustls",
  "tokio-stream",
  "tokio-util",
  "tonic",
@@ -6028,6 +6033,7 @@ dependencies = [
  "socket2 0.6.5",
  "sync_wrapper",
  "tokio",
+ "tokio-rustls",
  "tokio-stream",
  "tower",
  "tower-layer",

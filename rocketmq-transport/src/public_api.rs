@@ -115,6 +115,10 @@ pub use crate::socks::SocksProxyConfig;
 pub use crate::socks::SocksProxyRoute;
 pub use crate::telemetry::TransportTelemetry;
 #[cfg(feature = "tls")]
+pub use crate::tls::build_server_acceptor_exact;
+#[cfg(feature = "tls")]
+pub use crate::tls::build_server_acceptor_exact_with_alpn;
+#[cfg(feature = "tls")]
 pub use crate::tls::PrivateKeyLoader;
 pub use crate::tls::TlsServerRuntime;
 pub use rocketmq_protocol::protocol::RemotingDeserializable;

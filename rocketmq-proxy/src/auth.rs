@@ -582,6 +582,9 @@ impl ProxyAuthRuntime {
                 .base
                 .set_channel_id(metadata_string(request, "x-mq-channel-id").map(CheetahString::from));
         }
+        if let Some(identity) = request.extensions().get::<rocketmq_proxy_core::VerifiedTlsIdentity>() {
+            context.set_verified_transport_identity(identity.leaf_certificate_der().to_vec());
+        }
 
         Ok(context)
     }
@@ -945,6 +948,33 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("{prefix}-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&dir).expect("test temp directory should be created");
         dir
+    }
+
+    #[tokio::test]
+    async fn verified_tls_identity_enters_auth_context_without_metadata() {
+        let test_dir = unique_test_dir("proxy-auth-tls-identity");
+        let runtime = ProxyAuthRuntime::from_proxy_config(&ProxyAuthConfig {
+            authentication_enabled: true,
+            auth_config_path: test_dir.join("auth-store").to_string_lossy().into_owned(),
+            ..ProxyAuthConfig::default()
+        })
+        .await
+        .expect("runtime should build")
+        .expect("runtime should be enabled");
+        let mut request = tonic::Request::new(v2::QueryRouteRequest::default());
+        request
+            .extensions_mut()
+            .insert(rocketmq_proxy_core::VerifiedTlsIdentity::from_leaf_certificate_der(
+                vec![1, 2, 3, 4],
+            ));
+
+        let context = runtime
+            .build_authentication_context("QueryRoute", &request)
+            .expect("verified TLS identity should enter authentication context");
+
+        assert_eq!(context.verified_transport_identity(), Some([1, 2, 3, 4].as_slice()));
+        runtime.shutdown().await.expect("runtime should shut down");
+        let _ = fs::remove_dir_all(test_dir);
     }
 
     fn send_message_command(topic: &str, access_key: &str, secret_key: &str) -> RemotingCommand {

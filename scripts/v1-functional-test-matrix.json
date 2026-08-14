@@ -21,7 +21,7 @@
     {"capability_id":"F-03","test_id":"F03-LITEPULL-SUSPEND-TIMEOUT","phase":1,"argv":["cargo","test","-p","rocketmq-client-rust","--test","lite_pull_suspend_timeout"]},
     {"capability_id":"F-04","test_id":"F04-LITE-WILDCARD-ORDERED-SUSPEND","phase":2,"argv":["cargo","test","-p","rocketmq-broker","--test","lite_wildcard_group"]},
     {"capability_id":"F-05","test_id":"F05-PROXY-REMOTING-ROUTES","phase":1,"argv":["cargo","test","-p","rocketmq-proxy","--test","remoting_route_matrix"]},
-    {"capability_id":"F-06","test_id":"F06-PROXY-GRPC-TLS","phase":1,"argv":["cargo","test","-p","rocketmq-proxy","--test","grpc_tls"]},
+    {"capability_id":"F-06","test_id":"F06-PROXY-GRPC-TLS","phase":1,"argv":["cargo","test","-p","rocketmq-proxy","--features","tls","--test","grpc_ingress"]},
     {"capability_id":"F-07","test_id":"F07-TRANSPORT-SECURITY-PROFILES","phase":1,"argv":["cargo","test","-p","rocketmq-client-rust","--test","transport_security_profiles"]},
     {"capability_id":"F-08","test_id":"F08-MULTIPATH-COMMITLOG","phase":2,"argv":["cargo","test","-p","rocketmq-store","--features","test-support","--test","multipath_commit_log"]},
     {"capability_id":"F-09","test_id":"F09-RUST-CONTROLLER-HA","phase":3,"argv":["cargo","test","-p","rocketmq-broker","--test","controller_mode_ha"]},

@@ -26,6 +26,8 @@ use crate::error::ProxyResult;
 #[cfg(feature = "cluster-mode")]
 pub use rocketmq_proxy_cluster::ClusterConfig;
 pub use rocketmq_proxy_core::config::GrpcConfig;
+pub use rocketmq_proxy_core::config::GrpcTlsClientAuth;
+pub use rocketmq_proxy_core::config::GrpcTlsConfig;
 pub use rocketmq_proxy_core::config::ProxyMode;
 pub use rocketmq_proxy_core::config::RemotingConfig;
 pub use rocketmq_proxy_core::config::RuntimeConfig;

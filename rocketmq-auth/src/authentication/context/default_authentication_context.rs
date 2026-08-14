@@ -31,6 +31,7 @@ pub struct DefaultAuthenticationContext {
     signature: Option<CheetahString>,
     request_timestamp: Option<CheetahString>,
     request_timestamp_millis: Option<i64>,
+    verified_transport_identity: Option<Vec<u8>>,
 }
 
 impl fmt::Debug for DefaultAuthenticationContext {
@@ -42,6 +43,10 @@ impl fmt::Debug for DefaultAuthenticationContext {
             .field("signature", &self.signature.as_ref().map(|_| REDACTED))
             .field("request_timestamp", &self.request_timestamp)
             .field("request_timestamp_millis", &self.request_timestamp_millis)
+            .field(
+                "verified_transport_identity_len",
+                &self.verified_transport_identity.as_ref().map(Vec::len),
+            )
             .finish_non_exhaustive()
     }
 }
@@ -90,6 +95,16 @@ impl DefaultAuthenticationContext {
     pub fn set_request_timestamp_millis(&mut self, request_timestamp_millis: i64) {
         self.request_timestamp_millis = Some(request_timestamp_millis);
     }
+
+    /// Returns the transport-verified peer identity, when one was supplied by a trusted ingress.
+    pub fn verified_transport_identity(&self) -> Option<&[u8]> {
+        self.verified_transport_identity.as_deref()
+    }
+
+    /// Attaches a transport-verified identity proof to this authentication context.
+    pub fn set_verified_transport_identity(&mut self, identity: Vec<u8>) {
+        self.verified_transport_identity = Some(identity);
+    }
 }
 
 impl AsAny for DefaultAuthenticationContext {
@@ -116,6 +131,7 @@ mod tests {
         assert!(context.signature().is_none());
         assert!(context.request_timestamp().is_none());
         assert!(context.request_timestamp_millis().is_none());
+        assert!(context.verified_transport_identity().is_none());
 
         let context = DefaultAuthenticationContext::new();
         assert!(context.username().is_none());
@@ -123,6 +139,7 @@ mod tests {
         assert!(context.signature().is_none());
         assert!(context.request_timestamp().is_none());
         assert!(context.request_timestamp_millis().is_none());
+        assert!(context.verified_transport_identity().is_none());
     }
 
     #[test]
@@ -138,12 +155,14 @@ mod tests {
         context.set_signature(signature.clone());
         context.set_request_timestamp(request_timestamp.clone());
         context.set_request_timestamp_millis(1_703_706_379_000);
+        context.set_verified_transport_identity(vec![7, 8, 9]);
 
         assert_eq!(context.username(), Some(&username));
         assert_eq!(context.content(), Some(content.as_slice()));
         assert_eq!(context.signature(), Some(&signature));
         assert_eq!(context.request_timestamp(), Some(&request_timestamp));
         assert_eq!(context.request_timestamp_millis(), Some(1_703_706_379_000));
+        assert_eq!(context.verified_transport_identity(), Some([7, 8, 9].as_slice()));
     }
 
     #[test]

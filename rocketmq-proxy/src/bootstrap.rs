@@ -529,11 +529,11 @@ where
             let serve_result = if !config.remoting.enabled {
                 let grpc_ready = readiness;
                 let grpc_context = service_context.component("grpc-ingress");
-                server::serve_with_report_with_task_group_and_ready(
+                server::serve_with_report_with_service_context_and_ready(
                     config,
                     grpc_service,
                     shared_shutdown.clone(),
-                    grpc_context.task_group().clone(),
+                    grpc_context,
                     move || publish_listener_ready(grpc_ready),
                 )
                 .await
@@ -546,7 +546,7 @@ where
                         let _ = shared_shutdown.await;
                     }
                 };
-                let grpc_parent_task_group = service_context.component("grpc-ingress").task_group().clone();
+                let grpc_service_context = service_context.component("grpc-ingress");
                 let remoting_service_context = service_context.component("remoting-ingress");
                 let grpc_config = config.clone();
                 let remoting_config = config;
@@ -554,11 +554,11 @@ where
                 let grpc_ready = readiness.clone();
                 let remoting_ready = readiness;
                 let grpc_future = async move {
-                    server::serve_with_report_with_task_group_and_ready(
+                    server::serve_with_report_with_service_context_and_ready(
                         grpc_config,
                         grpc_service,
                         grpc_shutdown,
-                        grpc_parent_task_group,
+                        grpc_service_context,
                         move || publish_listener_ready(grpc_ready),
                     )
                     .await

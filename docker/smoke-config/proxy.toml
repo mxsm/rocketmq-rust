@@ -6,6 +6,9 @@ mode = "cluster"
 [grpc]
 listenAddr = "127.0.0.1:8081"
 
+[grpc.tls]
+enabled = false
+
 [remoting]
 enabled = false
 listenAddr = "127.0.0.1:8080"

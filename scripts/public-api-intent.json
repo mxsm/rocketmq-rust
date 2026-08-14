@@ -7011,6 +7011,24 @@
           "path": "rocketmq-transport/src/public_api.rs",
           "rationale": "shared secret-safe private key loading boundary",
           "removal_condition": "retain while TLS configuration accepts file-backed private keys"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use crate::tls::build_server_acceptor_exact",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::tls::build_server_acceptor_exact",
+          "owner": "transport",
+          "path": "rocketmq-transport/src/public_api.rs",
+          "rationale": "exact validated TLS generation builder for lifecycle-owned ingress",
+          "removal_condition": "retain while callers atomically own TLS material generations"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use crate::tls::build_server_acceptor_exact_with_alpn",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::tls::build_server_acceptor_exact_with_alpn",
+          "owner": "transport",
+          "path": "rocketmq-transport/src/public_api.rs",
+          "rationale": "exact validated TLS generation builder with application protocol negotiation",
+          "removal_condition": "retain while HTTP/2 and other ALPN-aware ingress reuse transport TLS"
         }
       ],
       "maximum_exports": 155
