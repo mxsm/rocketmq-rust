@@ -23,6 +23,22 @@ The remoting command plan is complete. Correctness work established explicit def
 
 Diagnostic percentages are not promoted to release-level throughput claims unless their report uses a same-session A/B. The formal baseline remains the absolute reference and all stop decisions state their reopen condition.
 
+## Evidence-weighted score
+
+The source review scored the implementation 79/100. The following table reuses its six dimensions and weights; it does not replace them with a more permissive scale.
+
+| Dimension | Weight | Source | Final | Evidence and retained deduction |
+|---|---:|---:|---:|---|
+| Wire protocol and serialization compatibility | 20 | 18 | 20 | `NODE_JS`, signed key boundaries, malformed behavior, Java frame limits, and the 48-case compatibility corpus are closed by #9296, #9319, #9349, and #9360. |
+| Business behavior and defaults | 20 | 13 | 20 | Absent fields, owner defaults, explicit response intent, production call sites, and bounded `GO_AWAY` retry are closed by #9294, #9298–#9346, and #9351. |
+| Hot-path algorithms | 25 | 22 | 23 | Wire construction, explicit body length, lazy display, and one-field canonicalization improved; two points remain deducted because direct-codec expansion, passthrough, and single-scan work stopped without a production profile. |
+| Memory and concurrency | 15 | 12 | 14 | Direct atomic storage and immutable hook snapshots are retained; one point remains deducted because the double header allocation stays after direct trait-object ownership increased universal command footprint. |
+| Robustness and boundaries | 10 | 8 | 10 | Endpoint-owned symmetric limits, Java total-wire boundaries, segmented/TLS enforcement, deadline-aware retry, and malformed rollback are covered by #9349, #9351, and focused qualification. |
+| Benchmark and evidence governance | 10 | 6 | 7 | #9360 provides formal Rust, Java, allocation, environment, and reproducibility evidence. Three points remain deducted because the final open/closed-loop matrix, tail percentiles, long soak, full workspace, standalone consumer, and fuzz replay were time-boxed out. |
+| **Total** | **100** | **79** | **94** | **The target range is reached through correctness and evidence closure, with incomplete qualification gates still deducted.** |
+
+The 15-point increase is therefore traceable to merged correctness and evidence work, not to an unverified aggregate speedup. A score above 94 requires the omitted final qualification matrix and stronger production-profile evidence; this report does not claim Rust/Java performance leadership.
+
 ## Focused final qualification
 
 The final time-boxed gate ran against the merged protocol and transport scope:
