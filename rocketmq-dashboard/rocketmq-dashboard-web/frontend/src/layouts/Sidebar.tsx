@@ -3,7 +3,6 @@ import {
   Bell,
   Database,
   Gauge,
-  KeyRound,
   MailSearch,
   Network,
   RadioTower,
@@ -18,6 +17,7 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import { NavLink } from 'react-router-dom';
 import { useLocation } from 'react-router-dom';
+import { cn } from '../lib/cn';
 
 interface NavItem {
   to: string;
@@ -48,25 +48,29 @@ const navGroups: NavGroup[] = [
       { to: '/consumers', label: 'Consumer', icon: Users },
       { to: '/producers', label: 'Producer', icon: Send },
       { to: '/messages', label: 'Message', icon: MailSearch },
-      { to: '/messages/dlq', label: 'DLQMessage', icon: Siren },
-      { to: '/message-trace', label: 'MessageTrace', icon: TimerReset }
+      { to: '/messages/dlq', label: 'DLQ Message', icon: Siren },
+      { to: '/message-trace', label: 'Message Trace', icon: TimerReset }
     ]
   },
   {
     label: 'Governance',
     items: [
       { to: '/acl', label: 'ACL Management', icon: ShieldCheck },
-      { to: '/monitors', label: 'Monitor', icon: Bell },
-      { to: '/login', label: 'Login', icon: KeyRound }
+      { to: '/monitors', label: 'Monitor', icon: Bell }
     ]
   }
 ];
 
-export default function Sidebar() {
+interface SidebarProps {
+  className?: string;
+  onNavigate?: () => void;
+}
+
+export default function Sidebar({ className, onNavigate }: SidebarProps) {
   const location = useLocation();
 
   return (
-    <aside className="sidebar">
+    <aside className={cn('sidebar', className)}>
       <div className="brand">
         <div className="brand-mark">
           <Activity size={18} aria-hidden="true" />
@@ -76,7 +80,7 @@ export default function Sidebar() {
           <span>Operations</span>
         </div>
       </div>
-      <nav>
+      <nav aria-label="Primary navigation">
         {navGroups.map((group) => (
           <div key={group.label} className="nav-group">
             <span className="nav-group-label">{group.label}</span>
@@ -84,12 +88,14 @@ export default function Sidebar() {
               const Icon = item.icon;
               const isItemActive = item.match
                 ? item.match(location.pathname, location.hash)
-                : location.pathname === item.to || location.pathname.startsWith(`${item.to}/`);
+                : location.pathname === item.to || (item.to !== '/messages' && location.pathname.startsWith(`${item.to}/`));
 
               return (
                 <NavLink
                   key={`${group.label}-${item.label}`}
                   to={item.to}
+                  end={item.to === '/messages'}
+                  onClick={onNavigate}
                   className={() => (isItemActive ? 'nav-link active' : 'nav-link')}
                 >
                   <Icon size={17} aria-hidden="true" />

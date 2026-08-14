@@ -1,6 +1,14 @@
-import * as AlertDialog from '@radix-ui/react-alert-dialog';
 import { AlertTriangle } from 'lucide-react';
 import type { ReactNode } from 'react';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogTitle,
+  AlertDialogTrigger
+} from './ui/AlertDialog';
 
 interface ConfirmDialogProps {
   title: string;
@@ -18,24 +26,19 @@ export default function ConfirmDialog({
   onConfirm
 }: ConfirmDialogProps) {
   return (
-    <AlertDialog.Root>
-      <AlertDialog.Trigger asChild>{children}</AlertDialog.Trigger>
-      <AlertDialog.Portal>
-        <AlertDialog.Overlay className="dialog-overlay" />
-        <AlertDialog.Content className="dialog-content">
-          <AlertDialog.Title className="dialog-title">
-            <AlertTriangle size={18} aria-hidden="true" />
-            {title}
-          </AlertDialog.Title>
-          <AlertDialog.Description className="dialog-description">{description}</AlertDialog.Description>
-          <div className="dialog-actions">
-            <AlertDialog.Cancel className="button button-secondary">Cancel</AlertDialog.Cancel>
-            <AlertDialog.Action className="button button-danger" onClick={onConfirm}>
-              {confirmLabel}
-            </AlertDialog.Action>
-          </div>
-        </AlertDialog.Content>
-      </AlertDialog.Portal>
-    </AlertDialog.Root>
+    <AlertDialog>
+      <AlertDialogTrigger asChild>{children}</AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogTitle className="dialog-title">
+          <AlertTriangle size={18} aria-hidden="true" />
+          {title}
+        </AlertDialogTitle>
+        <AlertDialogDescription>{description}</AlertDialogDescription>
+        <div className="dialog-actions">
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction onClick={onConfirm}>{confirmLabel}</AlertDialogAction>
+        </div>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }

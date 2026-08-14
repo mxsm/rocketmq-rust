@@ -8,12 +8,12 @@ interface PageHeaderProps {
 
 export default function PageHeader({ title, description, actions }: PageHeaderProps) {
   return (
-    <div className="page-header">
+    <header className="page-header">
       <div>
         <h1>{title}</h1>
         {description ? <p>{description}</p> : null}
       </div>
       {actions ? <div className="page-header-actions">{actions}</div> : null}
-    </div>
+    </header>
   );
 }

@@ -1,4 +1,4 @@
-import { Loader2 } from 'lucide-react';
+import { Skeleton } from './ui/Skeleton';
 
 interface LoadingStateProps {
   label?: string;
@@ -6,8 +6,12 @@ interface LoadingStateProps {
 
 export default function LoadingState({ label = 'Loading data' }: LoadingStateProps) {
   return (
-    <div className="state-block">
-      <Loader2 className="spin" size={24} aria-hidden="true" />
+    <div className="state-block" role="status" aria-label={label}>
+      <div className="state-skeleton" aria-hidden="true">
+        <Skeleton />
+        <Skeleton />
+        <Skeleton />
+      </div>
       <span>{label}</span>
     </div>
   );
