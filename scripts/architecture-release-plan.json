@@ -2,6 +2,12 @@
   "schema_version": 2,
   "milestone": "P0",
   "design_source": "rocketmq-doc/en/architecture-release-governance.md#release-topology",
+  "scope_reporting": {
+    "core_scope": "scripts/core-release-scope.json",
+    "core_command": "python scripts/architecture_release_guard.py --scope core-release",
+    "repo_global_command": "python scripts/architecture_release_guard.py --scope repo-global",
+    "release_decision_scope": "core-release"
+  },
   "release_topology": {
     "publish_order": [
       "rocketmq-error",
