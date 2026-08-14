@@ -77,7 +77,10 @@ pub struct ProxyStatusMapper;
 
 impl ProxyStatusMapper {
     pub fn should_use_tonic_status(error: &ProxyError) -> bool {
-        matches!(error, ProxyError::InvalidMetadata { .. } | ProxyError::Transport { .. })
+        matches!(
+            error,
+            ProxyError::InvalidMetadata { .. } | ProxyError::Transport { .. } | ProxyError::SettingsUnavailable { .. }
+        )
     }
 
     pub fn ok_payload() -> ProxyPayloadStatus {
@@ -144,6 +147,9 @@ impl ProxyStatusMapper {
             }
             ProxyError::Transport { message } => {
                 return TonicStatus::new(TonicCode::Unavailable, message.clone());
+            }
+            ProxyError::SettingsUnavailable { message } => {
+                return TonicStatus::new(TonicCode::FailedPrecondition, message.clone());
             }
             _ => {}
         }
@@ -212,6 +218,9 @@ impl ProxyStatusMapper {
             }
             ProxyErrorKind::MessagePropertyConflictWithType => {
                 ProxyGrpcMapping::new(v2::Code::MessagePropertyConflictWithType, TonicCode::InvalidArgument)
+            }
+            ProxyErrorKind::SettingsUnavailable => {
+                ProxyGrpcMapping::new(v2::Code::InternalError, TonicCode::FailedPrecondition)
             }
         }
     }

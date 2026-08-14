@@ -2522,10 +2522,7 @@ fn convert_topic_message_type(message_type: TopicMessageType) -> ProxyTopicMessa
 }
 
 fn convert_subscription_group(config: Arc<SubscriptionGroupConfig>) -> SubscriptionGroupMetadata {
-    SubscriptionGroupMetadata {
-        consume_message_orderly: config.consume_message_orderly(),
-        lite_bind_topic: None,
-    }
+    SubscriptionGroupMetadata::from(config.as_ref())
 }
 
 fn sanitize_thread_component(value: &str) -> String {

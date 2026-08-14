@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "fields": [
+    {"wire":"publishing.maxBodySize","owner":"grpc.maxMessageBodySize","default":4194304,"merge":"server-replace","providers":["local","cluster"],"consumers":["telemetry","send-validation"]},
+    {"wire":"publishing.validateMessageType","owner":"settings.validateMessageType","default":true,"merge":"server-replace","providers":["local","cluster"],"consumers":["telemetry","send-validation"]},
+    {"wire":"backoffPolicy.maxAttempts:producer","owner":"settings.producerMaxAttempts","default":3,"merge":"server-replace","providers":["local","cluster"],"consumers":["telemetry","producer-retry"]},
+    {"wire":"backoffPolicy.exponentialBackoff:producer","owner":"settings.producerBackoff","default":{"initialMs":10,"maxMs":1000,"multiplier":2},"merge":"server-replace","providers":["local","cluster"],"consumers":["telemetry","producer-retry"]},
+    {"wire":"subscription.receiveBatchSize","owner":"settings.consumerReceiveBatchSize","default":32,"merge":"server-replace","providers":["local","cluster"],"consumers":["telemetry","receive"]},
+    {"wire":"subscription.longPollingTimeout","owner":"session.maxLongPollingTimeoutMs","default":20000,"merge":"server-replace","providers":["local","cluster"],"consumers":["telemetry","receive"]},
+    {"wire":"subscription.fifo","owner":"subscriptionGroup.consumeMessageOrderly","default":false,"merge":"server-replace","providers":["local","cluster"],"consumers":["telemetry","receive"]},
+    {"wire":"backoffPolicy.maxAttempts:consumer","owner":"subscriptionGroup.retryMaxTimes","default":17,"merge":"server-replace-plus-one","providers":["local","cluster"],"consumers":["telemetry","receive","receipt-renewal"]},
+    {"wire":"backoffPolicy.strategy:consumer","owner":"subscriptionGroup.groupRetryPolicy","default":"customized","merge":"server-replace","providers":["local","cluster"],"consumers":["telemetry","receive","receipt-renewal"]},
+    {"wire":"subscription.liteSubscriptionQuota","owner":"subscriptionGroup.liteSubClientQuota","default":2000,"merge":"server-replace-lite-only","providers":["local","cluster"],"consumers":["telemetry","session"]},
+    {"wire":"subscription.maxLiteTopicSize","owner":"settings.maxLiteTopicSize","default":64,"merge":"server-replace-lite-only","providers":["local","cluster"],"consumers":["telemetry","session"]}
+  ]
+}

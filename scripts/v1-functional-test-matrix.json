@@ -30,7 +30,7 @@
     {"capability_id":"F-12","test_id":"F12-JAVA-CONFIG-CONVERSION","phase":3,"argv":["cargo","test","-p","rocketmq-broker","--test","java_config_conversion"]},
     {"capability_id":"F-13","test_id":"F13-COMPACTION-SEMANTICS","phase":2,"argv":["cargo","test","-p","rocketmq-store","--test","compaction_semantics"]},
     {"capability_id":"F-14","test_id":"F14-PERSISTENT-POP-PROFILE","phase":2,"argv":["cargo","test","-p","rocketmq-broker","--features","rocksdb_store","--test","persistent_pop_profile"]},
-    {"capability_id":"F-15","test_id":"F15-PROXY-GRPC-SETTINGS","phase":1,"argv":["cargo","test","-p","rocketmq-proxy","--test","grpc_settings_backend"]},
+    {"capability_id":"F-15","test_id":"F15-PROXY-GRPC-SETTINGS","phase":1,"argv":["cargo","test","-p","rocketmq-proxy","--all-features","telemetry_settings","--lib"]},
     {"capability_id":"F-16","test_id":"F16-QUERY-MESSAGE-PAGINATION","phase":2,"argv":["cargo","test","-p","rocketmq-broker","--features","rocksdb_store","--test","query_message_pagination"]},
     {"capability_id":"F-17","test_id":"F17-SUBSCRIPTION-GROUP-VALIDATION","phase":4,"argv":["cargo","test","-p","rocketmq-broker","--test","subscription_group_validation"]},
     {"capability_id":"F-18","test_id":"F18-CLASSIC-PULL-EQUIVALENCE","phase":4,"argv":["cargo","test","-p","rocketmq-client-rust","--test","classic_pull_equivalence"]},

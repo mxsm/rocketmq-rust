@@ -32,6 +32,7 @@ pub use rocketmq_proxy_core::config::ProxyMode;
 pub use rocketmq_proxy_core::config::RemotingConfig;
 pub use rocketmq_proxy_core::config::RuntimeConfig;
 pub use rocketmq_proxy_core::config::SessionConfig;
+pub use rocketmq_proxy_core::SettingsConfig;
 #[cfg(feature = "local-mode")]
 pub use rocketmq_proxy_local::LocalConfig;
 
@@ -247,6 +248,7 @@ pub struct ProxyConfig {
     pub local: LocalConfig,
     pub runtime: RuntimeConfig,
     pub session: SessionConfig,
+    pub settings: SettingsConfig,
     pub auth: ProxyAuthConfig,
 }
 
@@ -263,6 +265,7 @@ impl Default for ProxyConfig {
             local: LocalConfig::default(),
             runtime: RuntimeConfig::default(),
             session: SessionConfig::default(),
+            settings: SettingsConfig::default(),
             auth: ProxyAuthConfig::default(),
         }
     }

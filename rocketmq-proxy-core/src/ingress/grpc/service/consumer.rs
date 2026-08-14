@@ -78,6 +78,10 @@ pub fn track_received_receipt_handles<C, P>(
     let Some(client_id) = context.client_id() else {
         return;
     };
+    let retry_backoff = sessions
+        .settings_for_client(client_id)
+        .and_then(|settings| settings.retry_backoff)
+        .unwrap_or_default();
 
     for message in &plan.messages {
         let Some(receipt_handle) = message.message.property(POP_RECEIPT_HANDLE_PROPERTY).map(str::to_owned) else {
@@ -93,6 +97,8 @@ pub fn track_received_receipt_handles<C, P>(
             message_id: message.message.msg_id().to_owned(),
             receipt_handle,
             invisible_duration: message.invisible_duration,
+            delivery_attempt: message.message.reconsume_times().saturating_add(1),
+            retry_backoff: retry_backoff.clone(),
         });
     }
 }

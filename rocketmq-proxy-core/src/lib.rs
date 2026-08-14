@@ -44,6 +44,7 @@ pub mod remoting;
 )]
 pub mod service;
 pub mod session;
+pub mod settings;
 pub mod status;
 
 pub use config::GrpcConfig;
@@ -91,6 +92,13 @@ pub use session::ReapSummary;
 pub use session::ReceiptHandleRegistration;
 pub use session::SubscriptionSettingsSnapshot;
 pub use session::TrackedReceiptHandle;
+pub use settings::default_consumer_backoff;
+pub use settings::effective_settings;
+pub use settings::ServerSettingsPolicy;
+pub use settings::SettingsBackoffPolicy;
+pub use settings::SettingsConfig;
+pub use settings::SettingsPolicyProvider;
+pub use settings::SettingsPolicyValues;
 pub use status::ProxyPayloadStatus;
 
 /// Default gRPC port used by the proxy runtime.

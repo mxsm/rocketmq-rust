@@ -14,12 +14,16 @@
 
 use std::io::Read;
 use std::pin::Pin;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::task::Context as TaskContext;
 use std::task::Poll;
 use std::time::Duration;
 use std::time::SystemTime;
 
+use dashmap::mapref::entry::Entry;
+use dashmap::DashMap;
 use futures::stream;
 use futures::Stream;
 use futures::StreamExt;
@@ -50,6 +54,7 @@ use crate::proto::v2;
 use crate::session::ClientSessionRegistry;
 use crate::status::ProxyStatusMapper;
 
+use rocketmq_proxy_core::effective_settings;
 use rocketmq_proxy_core::ingress::grpc::service::admission::estimated_protobuf_retained_bytes;
 use rocketmq_proxy_core::ingress::grpc::service::consumer;
 use rocketmq_proxy_core::ingress::grpc::service::housekeeping;
@@ -58,6 +63,10 @@ use rocketmq_proxy_core::ingress::grpc::service::topic;
 use rocketmq_proxy_core::ingress::grpc::service::transaction;
 use rocketmq_proxy_core::ingress::grpc::service::ExecutionGuards;
 use rocketmq_proxy_core::ingress::grpc::service::ReapSchedule;
+use rocketmq_proxy_core::ServerSettingsPolicy;
+use rocketmq_proxy_core::SettingsBackoffPolicy;
+use rocketmq_proxy_core::SettingsPolicyProvider;
+use rocketmq_proxy_core::SettingsPolicyValues;
 
 type ResponseStream<T> = Pin<Box<dyn Stream<Item = Result<T, Status>> + Send + 'static>>;
 
@@ -89,6 +98,136 @@ where
 const RECEIPT_RENEWAL_CLAIM_LEASE: Duration = Duration::from_secs(5);
 const RECEIPT_RENEWAL_EXPIRY_MARGIN: Duration = Duration::from_millis(250);
 
+struct ProcessorSettingsPolicyProvider<P> {
+    config: Arc<ProxyConfig>,
+    processor: Arc<P>,
+    producer: Arc<ServerSettingsPolicy>,
+    consumers: DashMap<rocketmq_proxy_core::ResourceIdentity, Arc<ServerSettingsPolicy>>,
+    next_generation: AtomicU64,
+}
+
+impl<P> ProcessorSettingsPolicyProvider<P>
+where
+    P: MessagingProcessor,
+{
+    fn new(config: Arc<ProxyConfig>, processor: Arc<P>) -> Self {
+        let producer = Arc::new(ServerSettingsPolicy::new(1, producer_policy_values(config.as_ref())));
+        Self {
+            config,
+            processor,
+            producer,
+            consumers: DashMap::new(),
+            next_generation: AtomicU64::new(2),
+        }
+    }
+
+    fn cache_consumer_policy(
+        &self,
+        group: rocketmq_proxy_core::ResourceIdentity,
+        values: SettingsPolicyValues,
+    ) -> Arc<ServerSettingsPolicy> {
+        let candidate = ServerSettingsPolicy::new(0, values);
+        match self.consumers.entry(group) {
+            Entry::Occupied(entry) if entry.get().has_same_values(&candidate) => Arc::clone(entry.get()),
+            Entry::Occupied(mut entry) => {
+                let policy = Arc::new(ServerSettingsPolicy::new(
+                    self.next_generation.fetch_add(1, Ordering::Relaxed),
+                    candidate.values().clone(),
+                ));
+                entry.insert(Arc::clone(&policy));
+                policy
+            }
+            Entry::Vacant(entry) => {
+                let policy = Arc::new(ServerSettingsPolicy::new(
+                    self.next_generation.fetch_add(1, Ordering::Relaxed),
+                    candidate.values().clone(),
+                ));
+                entry.insert(Arc::clone(&policy));
+                policy
+            }
+        }
+    }
+}
+
+impl<P> SettingsPolicyProvider for ProcessorSettingsPolicyProvider<P>
+where
+    P: MessagingProcessor + 'static,
+{
+    fn policy_for<'a>(
+        &'a self,
+        context: &'a rocketmq_proxy_core::ProxyContext,
+        client_settings: &'a v2::Settings,
+    ) -> rocketmq_proxy_core::contracts::ProxyServiceFuture<'a, Arc<ServerSettingsPolicy>> {
+        Box::pin(async move {
+            let Some(pub_sub) = client_settings.pub_sub.as_ref() else {
+                return Err(ProxyError::settings_unavailable(
+                    "publishing or subscription settings are required",
+                ));
+            };
+            if matches!(pub_sub, v2::settings::PubSub::Publishing(_)) {
+                return Ok(Arc::clone(&self.producer));
+            }
+            let v2::settings::PubSub::Subscription(subscription) = pub_sub else {
+                unreachable!("publishing handled above")
+            };
+            let group = subscription
+                .group
+                .as_ref()
+                .filter(|group| !group.name.trim().is_empty())
+                .map(resource_identity_from_proto)
+                .ok_or_else(|| ProxyError::settings_unavailable("subscription group metadata is required"))?;
+            let topic = subscription
+                .subscriptions
+                .first()
+                .and_then(|entry| entry.topic.as_ref())
+                .filter(|topic| !topic.name.trim().is_empty())
+                .map(resource_identity_from_proto)
+                .ok_or_else(|| ProxyError::settings_unavailable("subscription topic metadata is required"))?;
+            let metadata = self
+                .processor
+                .subscription_group_metadata(context, &topic, &group)
+                .await
+                .map_err(|_| ProxyError::settings_unavailable("subscription group metadata provider is unavailable"))?
+                .ok_or_else(|| ProxyError::settings_unavailable("subscription group metadata was not found"))?;
+            Ok(self.cache_consumer_policy(group, consumer_policy_values(self.config.as_ref(), &metadata)))
+        })
+    }
+}
+
+fn producer_policy_values(config: &ProxyConfig) -> SettingsPolicyValues {
+    SettingsPolicyValues {
+        max_body_size: i32::try_from(config.grpc.max_message_body_size).unwrap_or(i32::MAX),
+        validate_message_type: config.settings.validate_message_type,
+        retry_max_attempts: config.settings.producer_max_attempts.max(1),
+        retry_backoff: SettingsBackoffPolicy::Exponential {
+            initial: Duration::from_millis(config.settings.producer_backoff_initial_ms),
+            max: Duration::from_millis(config.settings.producer_backoff_max_ms),
+            multiplier: config.settings.producer_backoff_multiplier.max(1),
+        },
+        ..SettingsPolicyValues::default()
+    }
+}
+
+fn consumer_policy_values(
+    config: &ProxyConfig,
+    metadata: &rocketmq_proxy_core::SubscriptionGroupMetadata,
+) -> SettingsPolicyValues {
+    SettingsPolicyValues {
+        receive_batch_size: config.settings.consumer_receive_batch_size.max(1),
+        long_polling_timeout: config.session.max_long_polling_timeout(),
+        fifo: metadata.consume_message_orderly,
+        retry_max_attempts: metadata.retry_max_times.saturating_add(1).max(1),
+        retry_backoff: metadata.retry_backoff.clone(),
+        lite_subscription_quota: metadata.lite_subscription_quota.max(0),
+        max_lite_topic_size: config.settings.max_lite_topic_size.max(1),
+        ..SettingsPolicyValues::default()
+    }
+}
+
+fn resource_identity_from_proto(resource: &v2::Resource) -> rocketmq_proxy_core::ResourceIdentity {
+    rocketmq_proxy_core::ResourceIdentity::new(resource.resource_namespace.clone(), resource.name.clone())
+}
+
 fn receive_message_error_stream_plan(status: v2::Status) -> (v2::Status, usize, adapter::ReceiveMessageResponseIter) {
     let retained_bytes = std::mem::size_of::<v2::ReceiveMessageResponse>().saturating_add(status.message.len());
     let responses = adapter::error_receive_message_response_iter(status.clone());
@@ -117,15 +256,18 @@ use observation::TelemetryStreamState;
 // Kept as private facade aliases for the existing behavior tests while Core
 // owns the canonical policy values.
 #[cfg(test)]
-const DEFAULT_MAX_BODY_SIZE_BYTES: i32 = telemetry::DEFAULT_MAX_BODY_SIZE_BYTES;
+const DEFAULT_MAX_BODY_SIZE_BYTES: i32 = 4 * 1024 * 1024;
 #[cfg(test)]
-const DEFAULT_PRODUCER_MAX_ATTEMPTS: i32 = telemetry::DEFAULT_PRODUCER_MAX_ATTEMPTS;
+const DEFAULT_PRODUCER_MAX_ATTEMPTS: i32 = 3;
 #[cfg(test)]
-const DEFAULT_CONSUMER_MAX_ATTEMPTS: i32 = telemetry::DEFAULT_CONSUMER_MAX_ATTEMPTS;
+const DEFAULT_CONSUMER_MAX_ATTEMPTS: i32 = 17;
 #[cfg(test)]
-const DEFAULT_CONSUMER_RECEIVE_BATCH_SIZE: i32 = telemetry::DEFAULT_CONSUMER_RECEIVE_BATCH_SIZE;
+const DEFAULT_CONSUMER_RECEIVE_BATCH_SIZE: i32 = 32;
 #[cfg(test)]
-const DEFAULT_CONSUMER_CUSTOMIZED_BACKOFF_MS: [u64; 18] = telemetry::DEFAULT_CONSUMER_CUSTOMIZED_BACKOFF_MS;
+const DEFAULT_CONSUMER_CUSTOMIZED_BACKOFF_MS: [u64; 18] = [
+    1_000, 5_000, 10_000, 30_000, 60_000, 120_000, 180_000, 240_000, 300_000, 360_000, 420_000, 480_000, 540_000,
+    600_000, 1_200_000, 1_800_000, 3_600_000, 7_200_000,
+];
 
 pub struct ProxyGrpcService<P> {
     config: Arc<ProxyConfig>,
@@ -138,6 +280,7 @@ pub struct ProxyGrpcService<P> {
     metrics: ProxyMetrics,
     drain: rocketmq_proxy_core::ProxyDrainController,
     cpu_crypto: Option<BlockingExecutor>,
+    settings_policy: Arc<dyn SettingsPolicyProvider>,
 }
 
 pub type ProxyHousekeepingRunReport = housekeeping::GrpcHousekeepingRunReport;
@@ -155,11 +298,15 @@ impl<P> Clone for ProxyGrpcService<P> {
             metrics: self.metrics.clone(),
             drain: self.drain.clone(),
             cpu_crypto: self.cpu_crypto.clone(),
+            settings_policy: Arc::clone(&self.settings_policy),
         }
     }
 }
 
-impl<P> ProxyGrpcService<P> {
+impl<P> ProxyGrpcService<P>
+where
+    P: MessagingProcessor + 'static,
+{
     pub(crate) fn try_execution_guards(config: &ProxyConfig) -> ProxyResult<ExecutionGuards> {
         config.grpc.tls.validate()?;
         #[cfg(not(feature = "tls"))]
@@ -183,6 +330,10 @@ impl<P> ProxyGrpcService<P> {
         let interval_ms = Self::housekeeping_interval_from_config(config.as_ref())
             .as_millis()
             .clamp(1, u128::from(u64::MAX)) as u64;
+        let settings_policy = Arc::new(ProcessorSettingsPolicyProvider::new(
+            Arc::clone(&config),
+            Arc::clone(&processor),
+        ));
         Self {
             guards,
             config,
@@ -194,6 +345,7 @@ impl<P> ProxyGrpcService<P> {
             metrics: ProxyMetrics::default(),
             drain: rocketmq_proxy_core::ProxyDrainController::default(),
             cpu_crypto: None,
+            settings_policy,
         }
     }
 
@@ -238,6 +390,11 @@ impl<P> ProxyGrpcService<P> {
 
     pub fn with_drain_controller(mut self, drain: rocketmq_proxy_core::ProxyDrainController) -> Self {
         self.drain = drain;
+        self
+    }
+
+    pub fn with_settings_policy_provider(mut self, provider: Arc<dyn SettingsPolicyProvider>) -> Self {
+        self.settings_policy = provider;
         self
     }
 
@@ -707,8 +864,29 @@ where
         telemetry::send_notify_unsubscribe_lite(&self.sessions, client_id, lite_topic)
     }
 
+    async fn effective_telemetry_settings(
+        &self,
+        context: &ProxyContext,
+        settings: &v2::Settings,
+    ) -> ProxyResult<(Arc<ServerSettingsPolicy>, v2::Settings)> {
+        let policy = self
+            .settings_policy
+            .policy_for(&context.without_principal(), settings)
+            .await?;
+        let effective = effective_settings(settings, policy.as_ref());
+        Ok((policy, effective))
+    }
+
+    #[cfg(test)]
     fn merged_telemetry_settings(&self, settings: &v2::Settings) -> v2::Settings {
-        telemetry::merged_settings(settings, &self.config.session)
+        let values = match settings.pub_sub.as_ref() {
+            Some(v2::settings::PubSub::Publishing(_)) => producer_policy_values(self.config.as_ref()),
+            _ => consumer_policy_values(
+                self.config.as_ref(),
+                &rocketmq_proxy_core::SubscriptionGroupMetadata::default(),
+            ),
+        };
+        effective_settings(settings, &ServerSettingsPolicy::new(1, values))
     }
 
     fn effective_receive_request(
@@ -726,6 +904,53 @@ where
         plan: &crate::processor::ReceiveMessagePlan,
     ) {
         consumer::track_received_receipt_handles(&self.sessions, &self.config.session, context, request, plan);
+    }
+
+    async fn enforce_delivery_attempt_policy(
+        &self,
+        context: &ProxyContext,
+        request: &crate::processor::ReceiveMessageRequest,
+        mut plan: crate::processor::ReceiveMessagePlan,
+    ) -> crate::processor::ReceiveMessagePlan {
+        let Some(max_attempts) = context
+            .client_id()
+            .and_then(|client_id| self.sessions.settings_for_client(client_id))
+            .and_then(|settings| settings.retry_max_attempts)
+            .and_then(|value| i32::try_from(value).ok())
+        else {
+            return plan;
+        };
+        let mut deliverable = Vec::with_capacity(plan.messages.len());
+        for received in plan.messages.drain(..) {
+            let reconsume_times = received.message.reconsume_times();
+            if reconsume_times < max_attempts {
+                deliverable.push(received);
+                continue;
+            }
+            let Some(receipt_handle) = received.message.property("POP_CK").map(ToOwned::to_owned) else {
+                deliverable.push(received);
+                continue;
+            };
+            let dlq_request = crate::processor::ForwardMessageToDeadLetterQueueRequest {
+                group: request.group.clone(),
+                topic: request.target.topic.clone(),
+                receipt_handle,
+                message_id: received.message.msg_id().to_owned(),
+                delivery_attempt: reconsume_times.saturating_add(1),
+                max_delivery_attempts: max_attempts,
+                lite_topic: received.message.property("__LITE_TOPIC").map(ToOwned::to_owned),
+            };
+            match self
+                .processor
+                .forward_message_to_dead_letter_queue(&context.without_principal(), dlq_request)
+                .await
+            {
+                Ok(result) if result.status.is_ok() => {}
+                _ => deliverable.push(received),
+            }
+        }
+        plan.messages = deliverable;
+        plan
     }
 
     fn reconcile_ack_result(
@@ -796,11 +1021,6 @@ where
 
                     let tracked = &claim.tracked;
                     let remaining_visibility = claim.remaining_visibility();
-                    if remaining_visibility <= RECEIPT_RENEWAL_EXPIRY_MARGIN {
-                        let _ = sessions.retry_receipt_handle_renewal(&claim, remaining_visibility);
-                        return;
-                    }
-
                     let context =
                         ProxyContext::for_internal_client("AutoRenewReceiptHandle", tracked.client_id.clone());
                     let renew_request = crate::processor::ChangeInvisibleDurationRequest {
@@ -812,6 +1032,18 @@ where
                         lite_topic: None,
                         suspend: None,
                     };
+                    if remaining_visibility <= RECEIPT_RENEWAL_EXPIRY_MARGIN {
+                        let mut stop_request = renew_request.clone();
+                        stop_request.invisible_duration = tracked
+                            .retry_backoff
+                            .delay_for_attempt(tracked.delivery_attempt.saturating_sub(1));
+                        stop_request.suspend = Some(true);
+                        let _ = processor
+                            .change_invisible_duration(&context.without_principal(), stop_request)
+                            .await;
+                        let _ = sessions.invalidate_receipt_handle_renewal(&claim);
+                        return;
+                    }
 
                     let attempt_timeout = renewal_attempt_timeout(tracked.invisible_duration)
                         .min(remaining_visibility.saturating_sub(RECEIPT_RENEWAL_EXPIRY_MARGIN));
@@ -855,41 +1087,53 @@ where
         context: &ProxyContext,
         principal: Option<&AuthenticatedPrincipal>,
         command: v2::TelemetryCommand,
-    ) -> v2::TelemetryCommand {
-        self.sessions.upsert_from_context(context);
-
+    ) -> Result<v2::TelemetryCommand, Status> {
         match command.command {
             Some(v2::telemetry_command::Command::Settings(settings)) => {
-                let merged = self.merged_telemetry_settings(&settings);
+                let (policy, effective) = self
+                    .effective_telemetry_settings(context, &settings)
+                    .await
+                    .map_err(|error| ProxyStatusMapper::to_tonic_status(&error))?;
                 match self
                     .authorize_contexts(
                         context,
                         principal,
                         &auth::telemetry_command_contexts(&v2::TelemetryCommand {
                             status: None,
-                            command: Some(v2::telemetry_command::Command::Settings(merged.clone())),
+                            command: Some(v2::telemetry_command::Command::Settings(effective.clone())),
                         }),
                     )
                     .await
                 {
                     Ok(()) => {
-                        let _ = self.sessions.update_settings_from_telemetry(context, &merged);
-                        v2::TelemetryCommand {
+                        self.sessions.upsert_from_context(context);
+                        let _ = self.sessions.update_effective_settings_from_telemetry(
+                            context,
+                            &effective,
+                            policy.generation(),
+                        );
+                        Ok(v2::TelemetryCommand {
                             status: Some(ProxyStatusMapper::ok()),
-                            command: Some(v2::telemetry_command::Command::Settings(merged)),
-                        }
+                            command: Some(v2::telemetry_command::Command::Settings(effective)),
+                        })
                     }
-                    Err(error) => Self::telemetry_status(ProxyStatusMapper::from_error(&error)),
+                    Err(error) => Ok(Self::telemetry_status(ProxyStatusMapper::from_error(&error))),
                 }
             }
-            Some(command) => telemetry::handle_client_report(&self.sessions, context.client_id(), &command)
-                .unwrap_or_else(|| {
-                    Self::telemetry_status(ProxyStatusMapper::from_code(
-                        v2::Code::InternalError,
-                        "telemetry command was not handled",
-                    ))
-                }),
-            None => Self::telemetry_status(ProxyStatusMapper::ok()),
+            Some(command) => {
+                self.sessions.upsert_from_context(context);
+                Ok(
+                    telemetry::handle_client_report(&self.sessions, context.client_id(), &command).unwrap_or_else(
+                        || {
+                            Self::telemetry_status(ProxyStatusMapper::from_code(
+                                v2::Code::InternalError,
+                                "telemetry command was not handled",
+                            ))
+                        },
+                    ),
+                )
+            }
+            None => Ok(Self::telemetry_status(ProxyStatusMapper::ok())),
         }
     }
 }
@@ -1171,6 +1415,7 @@ where
                                 .await
                             {
                                 Ok(plan) => {
+                                    let plan = self.enforce_delivery_attempt_policy(&context, &input, plan).await;
                                     self.track_received_receipt_handles(&context, &input, &plan);
                                     let status = plan.status.clone().into();
                                     let retained_bytes = adapter::receive_message_response_retained_bytes(&plan);
@@ -1630,10 +1875,16 @@ where
                                         .await
                                 }
                                 Err(error) => {
-                                    Self::telemetry_status(ProxyStatusMapper::from_error(&error))
+                                    Ok(Self::telemetry_status(ProxyStatusMapper::from_error(&error)))
                                 }
                             };
-                            Some((Ok(response), state))
+                            match response {
+                                Ok(response) => Some((Ok(response), state)),
+                                Err(status) => {
+                                    state.done = true;
+                                    Some((Err(status), state))
+                                }
+                            }
                         }
                         Some(Err(error)) => {
                             state.done = true;
@@ -1914,6 +2165,7 @@ mod tests {
     use crate::processor::AckMessageResultEntry;
     use crate::processor::ChangeInvisibleDurationPlan;
     use crate::processor::ChangeInvisibleDurationRequest;
+    use crate::processor::ConsumerFilterExpression;
     use crate::processor::DefaultMessagingProcessor;
     use crate::processor::EndTransactionPlan;
     use crate::processor::EndTransactionRequest;
@@ -1928,6 +2180,7 @@ mod tests {
     use crate::processor::QueryOffsetRequest;
     use crate::processor::ReceiveMessagePlan;
     use crate::processor::ReceiveMessageRequest;
+    use crate::processor::ReceiveTarget;
     use crate::processor::ReceivedMessage;
     use crate::processor::SendMessageRequest;
     use crate::processor::SendMessageResultEntry;
@@ -1951,6 +2204,9 @@ mod tests {
     use crate::session::TelemetryCommandKind;
     use crate::status::ProxyPayloadStatus;
     use crate::status::ProxyStatusMapper;
+    use rocketmq_proxy_core::ServerSettingsPolicy;
+    use rocketmq_proxy_core::SettingsBackoffPolicy;
+    use rocketmq_proxy_core::SettingsPolicyProvider;
 
     fn gzip_body(body: &[u8]) -> Bytes {
         let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
@@ -2006,6 +2262,22 @@ mod tests {
     use rocketmq_proxy_core::ProxyMessageExt;
 
     struct PartialMessageService;
+
+    struct UnavailableSettingsProvider;
+
+    impl SettingsPolicyProvider for UnavailableSettingsProvider {
+        fn policy_for<'a>(
+            &'a self,
+            _context: &'a CoreProxyContext,
+            _client_settings: &'a v2::Settings,
+        ) -> rocketmq_proxy_core::ProxyServiceFuture<'a, Arc<ServerSettingsPolicy>> {
+            Box::pin(async {
+                Err(crate::error::ProxyError::settings_unavailable(
+                    "subscription group metadata provider is unavailable",
+                ))
+            })
+        }
+    }
 
     #[derive(Default)]
     struct TestConsumerService {
@@ -2555,6 +2827,7 @@ mod tests {
             SubscriptionGroupMetadata {
                 consume_message_orderly: true,
                 lite_bind_topic: None,
+                ..SubscriptionGroupMetadata::default()
             },
         );
 
@@ -2827,8 +3100,13 @@ mod tests {
         let auth_runtime = test_auth_runtime(true, true).await;
         seed_normal_user(&auth_runtime, "alice", "secret").await;
         allow_group_actions(&auth_runtime, "alice", "GroupA", vec![Action::Sub]).await;
-        let service = test_service(StaticRouteService::default(), StaticMetadataService::default())
-            .with_auth_runtime(Some(auth_runtime));
+        let metadata_service = StaticMetadataService::default();
+        metadata_service.set_subscription_group(
+            ResourceIdentity::new("", "GroupA"),
+            SubscriptionGroupMetadata::default(),
+        );
+        let service =
+            test_service(StaticRouteService::default(), metadata_service).with_auth_runtime(Some(auth_runtime));
 
         let mut auth_request = Request::new(());
         apply_auth_headers(&mut auth_request, "client-a", "alice", "secret");
@@ -2881,7 +3159,8 @@ mod tests {
                     })),
                 },
             )
-            .await;
+            .await
+            .expect("telemetry response");
 
         assert_eq!(response.status.unwrap().code, v2::Code::Forbidden as i32);
     }
@@ -3345,6 +3624,76 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn receive_uses_stored_max_attempts_to_forward_exhausted_message() {
+        let consumer = Arc::new(TestConsumerService::default());
+        let service = test_service_with_services(
+            StaticRouteService::default(),
+            StaticMetadataService::default(),
+            Arc::new(StaticMessageService::with_send_status(SendStatus::SendOk)),
+            consumer.clone(),
+        );
+        let mut context_request = Request::new(());
+        context_request
+            .metadata_mut()
+            .insert("x-mq-client-id", MetadataValue::from_static("client-a"));
+        let context = service.context("ReceiveMessage", &context_request).expect("context");
+        let settings = v2::Settings {
+            backoff_policy: Some(v2::RetryPolicy {
+                max_attempts: 1,
+                strategy: Some(v2::retry_policy::Strategy::CustomizedBackoff(v2::CustomizedBackoff {
+                    next: vec![prost_types::Duration { seconds: 7, nanos: 0 }],
+                })),
+            }),
+            pub_sub: Some(v2::settings::PubSub::Subscription(v2::Subscription::default())),
+            ..Default::default()
+        };
+        service
+            .sessions
+            .update_effective_settings_from_telemetry(&context, &settings, 7)
+            .expect("stored settings");
+        let request = ReceiveMessageRequest {
+            group: ResourceIdentity::new("", "GroupA"),
+            target: ReceiveTarget {
+                topic: ResourceIdentity::new("", "TopicA"),
+                queue_id: 0,
+                broker_name: None,
+                broker_addr: None,
+                fifo: false,
+            },
+            filter_expression: ConsumerFilterExpression {
+                expression_type: "TAG".to_owned(),
+                expression: "*".to_owned(),
+            },
+            batch_size: 1,
+            invisible_duration: Duration::from_secs(30),
+            auto_renew: false,
+            long_polling_timeout: Duration::from_secs(20),
+            attempt_id: None,
+        };
+        let mut message = ProxyMessage::new("TopicA", b"payload".to_vec());
+        message.put_property("POP_CK", "receipt-handle");
+        let plan = ReceiveMessagePlan {
+            status: ProxyStatusMapper::ok_payload(),
+            delivery_timestamp_ms: None,
+            messages: vec![ReceivedMessage {
+                message: ProxyMessageExt {
+                    message,
+                    msg_id: "msg-1".to_owned(),
+                    reconsume_times: 1,
+                    ..ProxyMessageExt::default()
+                },
+                invisible_duration: Duration::from_secs(30),
+            }],
+        };
+
+        let filtered = service.enforce_delivery_attempt_policy(&context, &request, plan).await;
+        assert!(filtered.messages.is_empty());
+        let dlq = consumer.dlq_requests.lock().expect("dlq mutex");
+        assert_eq!(dlq.len(), 1);
+        assert_eq!(dlq[0].max_delivery_attempts, 1);
+    }
+
+    #[tokio::test]
     async fn change_invisible_duration_returns_new_receipt_handle() {
         let service = test_service_with_services(
             StaticRouteService::default(),
@@ -3672,8 +4021,172 @@ mod tests {
             v2::settings::PubSub::Subscription(subscription) => subscription,
             _ => panic!("expected subscription settings"),
         };
-        assert_eq!(subscription.lite_subscription_quota, Some(1200));
+        assert_eq!(subscription.lite_subscription_quota, Some(2000));
         assert_eq!(subscription.max_lite_topic_size, Some(64));
+    }
+
+    #[tokio::test]
+    async fn telemetry_settings_refreshes_group_policy_without_mutating_inflight_snapshot() {
+        let metadata = StaticMetadataService::default();
+        metadata.set_subscription_group(
+            ResourceIdentity::new("", "GroupA"),
+            SubscriptionGroupMetadata {
+                consume_message_orderly: false,
+                retry_max_times: 4,
+                retry_backoff: SettingsBackoffPolicy::Customized {
+                    next: vec![Duration::from_secs(1), Duration::from_secs(5)],
+                },
+                lite_subscription_quota: 10,
+                ..SubscriptionGroupMetadata::default()
+            },
+        );
+        let service = test_service(StaticRouteService::default(), metadata.clone());
+        let mut request = Request::new(());
+        request
+            .metadata_mut()
+            .insert("x-mq-client-id", MetadataValue::from_static("client-a"));
+        let context = service.context("Telemetry", &request).expect("context");
+        let client = v2::Settings {
+            client_type: Some(v2::ClientType::LitePushConsumer as i32),
+            pub_sub: Some(v2::settings::PubSub::Subscription(v2::Subscription {
+                group: Some(v2::Resource {
+                    resource_namespace: String::new(),
+                    name: "GroupA".to_owned(),
+                }),
+                subscriptions: vec![v2::SubscriptionEntry {
+                    topic: Some(v2::Resource {
+                        resource_namespace: String::new(),
+                        name: "TopicA".to_owned(),
+                    }),
+                    expression: None,
+                }],
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+
+        let (first_policy, first_effective) = service
+            .effective_telemetry_settings(&context, &client)
+            .await
+            .expect("first policy");
+        metadata.set_subscription_group(
+            ResourceIdentity::new("", "GroupA"),
+            SubscriptionGroupMetadata {
+                consume_message_orderly: true,
+                retry_max_times: 8,
+                retry_backoff: SettingsBackoffPolicy::Exponential {
+                    initial: Duration::from_secs(2),
+                    max: Duration::from_secs(30),
+                    multiplier: 2,
+                },
+                lite_subscription_quota: 20,
+                ..SubscriptionGroupMetadata::default()
+            },
+        );
+        let (second_policy, second_effective) = service
+            .effective_telemetry_settings(&context, &client)
+            .await
+            .expect("refreshed policy");
+
+        assert_ne!(first_policy.generation(), second_policy.generation());
+        assert_eq!(first_effective.backoff_policy.as_ref().expect("retry").max_attempts, 5);
+        assert_eq!(second_effective.backoff_policy.as_ref().expect("retry").max_attempts, 9);
+        let first_subscription = match first_effective.pub_sub.as_ref().expect("subscription") {
+            v2::settings::PubSub::Subscription(value) => value,
+            _ => panic!("subscription expected"),
+        };
+        let second_subscription = match second_effective.pub_sub.as_ref().expect("subscription") {
+            v2::settings::PubSub::Subscription(value) => value,
+            _ => panic!("subscription expected"),
+        };
+        assert_eq!(first_subscription.fifo, Some(false));
+        assert_eq!(first_subscription.lite_subscription_quota, Some(10));
+        assert_eq!(second_subscription.fifo, Some(true));
+        assert_eq!(second_subscription.lite_subscription_quota, Some(20));
+        assert_eq!(first_policy.values().retry_max_attempts, 5);
+        let stored = service
+            .sessions
+            .update_effective_settings_from_telemetry(&context, &second_effective, second_policy.generation())
+            .expect("stored effective snapshot");
+        assert_eq!(stored.policy_generation, second_policy.generation());
+        assert_eq!(stored.retry_max_attempts, Some(9));
+        assert_eq!(
+            stored
+                .subscription
+                .as_ref()
+                .and_then(|value| value.lite_subscription_quota),
+            Some(20)
+        );
+    }
+
+    #[tokio::test]
+    async fn telemetry_settings_missing_group_fails_precondition_without_snapshot_mutation() {
+        let service = test_service(StaticRouteService::default(), StaticMetadataService::default());
+        let mut request = Request::new(());
+        request
+            .metadata_mut()
+            .insert("x-mq-client-id", MetadataValue::from_static("client-a"));
+        let context = service.context("Telemetry", &request).expect("context");
+        let response = service
+            .handle_telemetry_command(
+                &context,
+                None,
+                v2::TelemetryCommand {
+                    status: None,
+                    command: Some(v2::telemetry_command::Command::Settings(v2::Settings {
+                        client_type: Some(v2::ClientType::PushConsumer as i32),
+                        pub_sub: Some(v2::settings::PubSub::Subscription(v2::Subscription {
+                            group: Some(v2::Resource {
+                                resource_namespace: String::new(),
+                                name: "missing".to_owned(),
+                            }),
+                            subscriptions: vec![v2::SubscriptionEntry {
+                                topic: Some(v2::Resource {
+                                    resource_namespace: String::new(),
+                                    name: "TopicA".to_owned(),
+                                }),
+                                expression: None,
+                            }],
+                            ..Default::default()
+                        })),
+                        ..Default::default()
+                    })),
+                },
+            )
+            .await
+            .expect_err("missing metadata must fail closed");
+
+        assert_eq!(response.code(), tonic::Code::FailedPrecondition);
+        assert!(service.sessions.settings_for_client("client-a").is_none());
+    }
+
+    #[tokio::test]
+    async fn telemetry_settings_unavailable_provider_fails_precondition_without_snapshot_mutation() {
+        let service = test_service(StaticRouteService::default(), StaticMetadataService::default())
+            .with_settings_policy_provider(Arc::new(UnavailableSettingsProvider));
+        let mut request = Request::new(());
+        request
+            .metadata_mut()
+            .insert("x-mq-client-id", MetadataValue::from_static("client-a"));
+        let context = service.context("Telemetry", &request).expect("context");
+        let response = service
+            .handle_telemetry_command(
+                &context,
+                None,
+                v2::TelemetryCommand {
+                    status: None,
+                    command: Some(v2::telemetry_command::Command::Settings(v2::Settings {
+                        client_type: Some(v2::ClientType::Producer as i32),
+                        pub_sub: Some(v2::settings::PubSub::Publishing(v2::Publishing::default())),
+                        ..Default::default()
+                    })),
+                },
+            )
+            .await
+            .expect_err("unavailable provider must fail closed");
+
+        assert_eq!(response.code(), tonic::Code::FailedPrecondition);
+        assert!(service.sessions.settings_for_client("client-a").is_none());
     }
 
     #[tokio::test]
@@ -3745,7 +4258,8 @@ mod tests {
                     })),
                 },
             )
-            .await;
+            .await
+            .expect("telemetry response");
 
         assert_eq!(
             response
@@ -3791,7 +4305,8 @@ mod tests {
                     )),
                 },
             )
-            .await;
+            .await
+            .expect("telemetry response");
 
         assert_eq!(
             response
@@ -3847,7 +4362,8 @@ mod tests {
                     )),
                 },
             )
-            .await;
+            .await
+            .expect("telemetry response");
 
         assert_eq!(
             response
@@ -4023,7 +4539,7 @@ mod tests {
 
         assert_eq!(request.batch_size, 32);
         assert_eq!(request.long_polling_timeout, std::time::Duration::from_secs(20));
-        assert!(request.target.fifo);
+        assert!(!request.target.fifo, "server policy must replace the client FIFO claim");
     }
 
     #[tokio::test]
@@ -4096,6 +4612,8 @@ mod tests {
                 message_id: "msg-1".to_owned(),
                 receipt_handle: "handle-1".to_owned(),
                 invisible_duration: Duration::from_secs(15),
+                delivery_attempt: 1,
+                retry_backoff: SettingsBackoffPolicy::default(),
             });
         let renewal_called = consumer.change_invisible_called.notified();
         let renewal_task = {
@@ -4131,6 +4649,43 @@ mod tests {
         let _ = renewal_task.await;
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn renewal_stop_uses_the_stored_group_retry_policy() {
+        let consumer = Arc::new(TestConsumerService::default());
+        let service = test_service_with_services(
+            StaticRouteService::default(),
+            StaticMetadataService::default(),
+            Arc::new(StaticMessageService::with_send_status(SendStatus::SendOk)),
+            consumer.clone(),
+        );
+        service
+            .sessions
+            .track_receipt_handle(crate::session::ReceiptHandleRegistration {
+                client_id: "client-a".to_owned(),
+                group: ResourceIdentity::new("", "GroupA"),
+                topic: ResourceIdentity::new("", "TopicA"),
+                message_id: "msg-1".to_owned(),
+                receipt_handle: "handle-1".to_owned(),
+                invisible_duration: Duration::from_millis(1_500),
+                delivery_attempt: 1,
+                retry_backoff: SettingsBackoffPolicy::Customized {
+                    next: vec![Duration::from_secs(7)],
+                },
+            });
+
+        tokio::time::advance(Duration::from_millis(1_250)).await;
+        service.renew_due_receipt_handles().await;
+
+        let requests = consumer
+            .change_invisible_requests
+            .lock()
+            .expect("change invisible requests mutex poisoned");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].invisible_duration, Duration::from_secs(7));
+        assert_eq!(requests[0].suspend, Some(true));
+        assert_eq!(service.sessions.tracked_handle_count(), 0);
+    }
+
     #[tokio::test]
     async fn ack_message_success_clears_tracked_receipt_handle() {
         let service = test_service_with_services(
@@ -4148,6 +4703,8 @@ mod tests {
                 message_id: "msg-1".to_owned(),
                 receipt_handle: "handle-1".to_owned(),
                 invisible_duration: std::time::Duration::from_secs(30),
+                delivery_attempt: 1,
+                retry_backoff: SettingsBackoffPolicy::default(),
             });
 
         let mut request = Request::new(v2::AckMessageRequest {
@@ -4191,6 +4748,8 @@ mod tests {
                 message_id: "msg-1".to_owned(),
                 receipt_handle: "handle-1".to_owned(),
                 invisible_duration: std::time::Duration::from_secs(30),
+                delivery_attempt: 1,
+                retry_backoff: SettingsBackoffPolicy::default(),
             });
 
         let mut request = Request::new(v2::ChangeInvisibleDurationRequest {
@@ -4252,6 +4811,8 @@ mod tests {
                 message_id: "msg-1".to_owned(),
                 receipt_handle: "handle-1".to_owned(),
                 invisible_duration: std::time::Duration::from_secs(30),
+                delivery_attempt: 1,
+                retry_backoff: SettingsBackoffPolicy::default(),
             });
 
         let mut request = Request::new(v2::NotifyClientTerminationRequest { group: None });
@@ -4433,7 +4994,15 @@ mod tests {
 
     #[tokio::test]
     async fn sync_lite_subscription_rejects_quota_exceeded() {
-        let service = test_service(StaticRouteService::default(), StaticMetadataService::default());
+        let metadata = StaticMetadataService::default();
+        metadata.set_subscription_group(
+            ResourceIdentity::new("", "GroupA"),
+            SubscriptionGroupMetadata {
+                lite_subscription_quota: 1,
+                ..SubscriptionGroupMetadata::default()
+            },
+        );
+        let service = test_service(StaticRouteService::default(), metadata);
         let mut context_request = Request::new(());
         context_request
             .metadata_mut()
@@ -4441,29 +5010,39 @@ mod tests {
         let context = service
             .context("Telemetry", &context_request)
             .expect("context should be constructed");
-        let _ = service.sessions.update_settings_from_telemetry(
-            &context,
-            &service.merged_telemetry_settings(&v2::Settings {
-                client_type: Some(v2::ClientType::LitePushConsumer as i32),
-                access_point: None,
-                backoff_policy: None,
-                request_timeout: None,
-                pub_sub: Some(v2::settings::PubSub::Subscription(v2::Subscription {
-                    group: Some(v2::Resource {
-                        resource_namespace: String::new(),
-                        name: "GroupA".to_owned(),
-                    }),
-                    subscriptions: Vec::new(),
-                    fifo: Some(false),
-                    receive_batch_size: Some(8),
-                    long_polling_timeout: Some(prost_types::Duration { seconds: 6, nanos: 0 }),
-                    lite_subscription_quota: Some(1),
-                    max_lite_topic_size: Some(64),
-                })),
-                user_agent: None,
-                metric: None,
-            }),
-        );
+        let (_, effective) = service
+            .effective_telemetry_settings(
+                &context,
+                &v2::Settings {
+                    client_type: Some(v2::ClientType::LitePushConsumer as i32),
+                    access_point: None,
+                    backoff_policy: None,
+                    request_timeout: None,
+                    pub_sub: Some(v2::settings::PubSub::Subscription(v2::Subscription {
+                        group: Some(v2::Resource {
+                            resource_namespace: String::new(),
+                            name: "GroupA".to_owned(),
+                        }),
+                        subscriptions: vec![v2::SubscriptionEntry {
+                            topic: Some(v2::Resource {
+                                resource_namespace: String::new(),
+                                name: "TopicA".to_owned(),
+                            }),
+                            expression: None,
+                        }],
+                        fifo: Some(false),
+                        receive_batch_size: Some(8),
+                        long_polling_timeout: Some(prost_types::Duration { seconds: 6, nanos: 0 }),
+                        lite_subscription_quota: Some(i32::MAX),
+                        max_lite_topic_size: Some(64),
+                    })),
+                    user_agent: None,
+                    metric: None,
+                },
+            )
+            .await
+            .expect("server settings policy");
+        let _ = service.sessions.update_settings_from_telemetry(&context, &effective);
 
         let mut request = Request::new(v2::SyncLiteSubscriptionRequest {
             action: v2::LiteSubscriptionAction::CompleteAdd as i32,

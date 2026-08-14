@@ -30,6 +30,10 @@ use rocketmq_model::result::SendStatus;
 use rocketmq_protocol::protocol::body::acl_info::AclInfo;
 use rocketmq_protocol::protocol::body::user_info::UserInfo;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
+use rocketmq_protocol::protocol::subscription::customized_retry_policy::CustomizedRetryPolicy;
+use rocketmq_protocol::protocol::subscription::exponential_retry_policy::ExponentialRetryPolicy;
+use rocketmq_protocol::protocol::subscription::group_retry_policy_type::GroupRetryPolicyType;
+use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 
 use crate::config::ProxyMode;
 use crate::context::ProxyContext;
@@ -61,6 +65,7 @@ use crate::processor::UpdateOffsetRequest;
 use crate::session::LiteSubscriptionSyncRequest;
 use crate::status::ProxyStatusMapper;
 use crate::ResourceIdentity;
+use crate::SettingsBackoffPolicy;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ProxyTopicMessageType {
@@ -75,10 +80,63 @@ pub enum ProxyTopicMessageType {
     Priority,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubscriptionGroupMetadata {
     pub consume_message_orderly: bool,
     pub lite_bind_topic: Option<String>,
+    pub retry_max_times: i32,
+    pub retry_backoff: SettingsBackoffPolicy,
+    pub lite_subscription_quota: i32,
+}
+
+impl Default for SubscriptionGroupMetadata {
+    fn default() -> Self {
+        Self::from(&SubscriptionGroupConfig::default())
+    }
+}
+
+impl From<&SubscriptionGroupConfig> for SubscriptionGroupMetadata {
+    fn from(config: &SubscriptionGroupConfig) -> Self {
+        let retry_backoff = match config.group_retry_policy().type_() {
+            GroupRetryPolicyType::Exponential => {
+                let policy = config
+                    .group_retry_policy()
+                    .exponential_retry_policy()
+                    .cloned()
+                    .unwrap_or_else(ExponentialRetryPolicy::default);
+                SettingsBackoffPolicy::Exponential {
+                    initial: duration_from_millis(policy.initial()),
+                    max: duration_from_millis(policy.max()),
+                    multiplier: policy.multiplier(),
+                }
+            }
+            GroupRetryPolicyType::Customized => {
+                let policy = config
+                    .group_retry_policy()
+                    .customized_retry_policy()
+                    .cloned()
+                    .unwrap_or_else(CustomizedRetryPolicy::default);
+                SettingsBackoffPolicy::Customized {
+                    next: policy
+                        .next()
+                        .iter()
+                        .map(|millis| duration_from_millis(u64::try_from(*millis).unwrap_or_default()))
+                        .collect(),
+                }
+            }
+        };
+        Self {
+            consume_message_orderly: config.consume_message_orderly(),
+            lite_bind_topic: config.lite_bind_topic().map(ToString::to_string),
+            retry_max_times: config.retry_max_times(),
+            retry_backoff,
+            lite_subscription_quota: config.lite_sub_client_quota(),
+        }
+    }
+}
+
+fn duration_from_millis(millis: u64) -> std::time::Duration {
+    std::time::Duration::from_millis(millis)
 }
 
 /// Object-safe future returned by Proxy service contracts.

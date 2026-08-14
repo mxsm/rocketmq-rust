@@ -52,4 +52,5 @@ tonic-prost = "0.14"
 tonic-prost-build = "0.14.6"
 
 [dev-dependencies]
+serde_json.workspace = true
 tokio = { workspace = true, features = ["test-util"] }

@@ -312,6 +312,15 @@ pub trait MessagingProcessor: Send + Sync {
         async { Ok(()) }
     }
 
+    fn subscription_group_metadata(
+        &self,
+        _context: &ProxyContext,
+        _topic: &ResourceIdentity,
+        _group: &ResourceIdentity,
+    ) -> impl Future<Output = ProxyResult<Option<SubscriptionGroupMetadata>>> + Send {
+        async { Ok(None) }
+    }
+
     fn query_route(
         &self,
         context: &ProxyContext,
@@ -642,6 +651,18 @@ impl MessagingProcessor for DefaultMessagingProcessor {
         self.service_manager
             .consumer_service()
             .sync_lite_subscription(context, client_id, &request)
+            .await
+    }
+
+    async fn subscription_group_metadata(
+        &self,
+        context: &ProxyContext,
+        topic: &ResourceIdentity,
+        group: &ResourceIdentity,
+    ) -> ProxyResult<Option<SubscriptionGroupMetadata>> {
+        self.service_manager
+            .metadata_service()
+            .subscription_group(context, topic, group)
             .await
     }
 

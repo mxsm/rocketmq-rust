@@ -38,6 +38,7 @@ pub enum ProxyErrorKind {
     IllegalLiteTopic,
     LiteSubscriptionQuotaExceeded,
     MessagePropertyConflictWithType,
+    SettingsUnavailable,
 }
 
 #[derive(Debug, Error)]
@@ -101,6 +102,9 @@ pub enum ProxyError {
 
     #[error("message property conflicts with message type: {message}")]
     MessagePropertyConflictWithType { message: String },
+
+    #[error("authoritative client settings are unavailable: {message}")]
+    SettingsUnavailable { message: String },
 }
 
 impl ProxyError {
@@ -126,6 +130,7 @@ impl ProxyError {
             Self::IllegalLiteTopic { .. } => ProxyErrorKind::IllegalLiteTopic,
             Self::LiteSubscriptionQuotaExceeded { .. } => ProxyErrorKind::LiteSubscriptionQuotaExceeded,
             Self::MessagePropertyConflictWithType { .. } => ProxyErrorKind::MessagePropertyConflictWithType,
+            Self::SettingsUnavailable { .. } => ProxyErrorKind::SettingsUnavailable,
         })
     }
 
@@ -211,6 +216,12 @@ impl ProxyError {
 
     pub fn message_property_conflict(message: impl Into<String>) -> Self {
         Self::MessagePropertyConflictWithType {
+            message: message.into(),
+        }
+    }
+
+    pub fn settings_unavailable(message: impl Into<String>) -> Self {
+        Self::SettingsUnavailable {
             message: message.into(),
         }
     }
