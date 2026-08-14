@@ -280,6 +280,19 @@ impl TopicAdmin for DefaultMQAdminExtImpl {
         Ok(())
     }
 
+    async fn delete_topic_in_broker_list(
+        &self,
+        addrs: HashSet<CheetahString>,
+        topics: Vec<CheetahString>,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        let api = self.mq_client_api()?;
+        let timeout = self.remoting_timeout_millis()?;
+        for addr in addrs {
+            api.delete_topic_in_broker_list(&addr, topics.clone(), timeout).await?;
+        }
+        Ok(())
+    }
+
     async fn delete_topic_in_name_server(
         &self,
         addrs: HashSet<CheetahString>,
@@ -914,6 +927,17 @@ impl ConsumerAdmin for DefaultMQAdminExtImpl {
                 remove_offset.unwrap_or(false),
                 self.remoting_timeout_millis()?,
             )
+            .await
+    }
+
+    async fn delete_subscription_group_list(
+        &self,
+        addr: CheetahString,
+        group_names: Vec<CheetahString>,
+        clean_offset: bool,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        self.mq_client_api()?
+            .delete_subscription_group_list(&addr, group_names, clean_offset, self.remoting_timeout_millis()?)
             .await
     }
 

@@ -454,6 +454,48 @@ fn create_subscription_group_list_request_matches_java_request_code_and_body() {
     assert_eq!(decoded.group_config_list[1].group_name().as_str(), "GroupB");
 }
 
+#[cfg(feature = "admin-mutation")]
+#[test]
+fn delete_topic_list_request_matches_java_request_code_and_body() {
+    let request = delete_topic_list_request(
+        &test_remoting_command_factory(),
+        vec![
+            CheetahString::from_static_str("TopicA"),
+            CheetahString::from_static_str("TopicB"),
+        ],
+    )
+    .expect("topic delete list request should encode");
+
+    assert_eq!(request.code(), RequestCode::DeleteTopicInBrokerList as i32);
+    let body = request.body().expect("topic delete list request body should be set");
+    let decoded: DeleteTopicListRequestBody =
+        serde_json::from_slice(body.as_ref()).expect("topic delete list body should decode");
+    assert_eq!(decoded.topic_list, vec!["TopicA", "TopicB"]);
+}
+
+#[cfg(feature = "admin-mutation")]
+#[test]
+fn delete_subscription_group_list_request_matches_java_request_code_and_body() {
+    let request = delete_subscription_group_list_request(
+        &test_remoting_command_factory(),
+        vec![
+            CheetahString::from_static_str("GroupA"),
+            CheetahString::from_static_str("GroupB"),
+        ],
+        true,
+    )
+    .expect("subscription group delete list request should encode");
+
+    assert_eq!(request.code(), RequestCode::DeleteSubscriptionGroupList as i32);
+    let body = request
+        .body()
+        .expect("subscription group delete list request body should be set");
+    let decoded: DeleteSubscriptionGroupListRequestBody =
+        serde_json::from_slice(body.as_ref()).expect("subscription group delete list body should decode");
+    assert_eq!(decoded.group_name_list, vec!["GroupA", "GroupB"]);
+    assert!(decoded.clean_offset);
+}
+
 #[test]
 fn query_correction_offset_request_joins_filter_groups_like_java() {
     let request = query_correction_offset_request(

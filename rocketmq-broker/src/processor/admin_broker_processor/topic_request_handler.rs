@@ -25,6 +25,7 @@ use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::admin::topic_offset::TopicOffset;
 use rocketmq_protocol::protocol::admin::topic_stats_table::TopicStatsTable;
 use rocketmq_protocol::protocol::body::create_topic_list_request_body::CreateTopicListRequestBody;
+use rocketmq_protocol::protocol::body::delete_topic_list_request_body::DeleteTopicListRequestBody;
 use rocketmq_protocol::protocol::body::group_list::GroupList;
 use rocketmq_protocol::protocol::body::topic::topic_list::TopicList;
 use rocketmq_protocol::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
@@ -46,6 +47,7 @@ use rocketmq_store::BrokerAdminStore;
 use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ConnectionHandlerContext;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use tracing::info;
 
 use crate::broker::broker_admin_runtime::BrokerAdminRuntime;
@@ -647,6 +649,134 @@ impl TopicRequestHandler {
         Ok(Some(RemotingCommand::create_success_response_command()))
     }
 
+    pub async fn delete_topic_list<MS: BrokerAdminStore>(
+        &self,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
+        channel: Channel,
+        _ctx: ConnectionHandlerContext,
+        _request_code: RequestCode,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let response = RemotingCommand::create_java_default_error_response_command();
+        let Some(encoded) = request.body() else {
+            return Ok(Some(
+                response
+                    .set_code(ResponseCode::InvalidParameter)
+                    .set_remark("The specified topic list is blank."),
+            ));
+        };
+        let request_body = match DeleteTopicListRequestBody::decode(encoded.as_ref()) {
+            Ok(body) => body,
+            Err(_) => {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::InvalidParameter)
+                        .set_remark("The specified topic list body is invalid."),
+                ));
+            }
+        };
+        if request_body.topic_list.is_empty() {
+            return Ok(Some(
+                response
+                    .set_code(ResponseCode::InvalidParameter)
+                    .set_remark("The specified topic list is blank."),
+            ));
+        }
+
+        let mut seen = HashSet::new();
+        let mut topics = Vec::with_capacity(request_body.topic_list.len());
+        for topic in request_body.topic_list {
+            let validation = TopicValidator::validate_topic(topic.as_str());
+            if !validation.valid() {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::InvalidParameter)
+                        .set_remark(validation.remark().clone()),
+                ));
+            }
+            if broker_runtime_inner
+                .broker_config()
+                .validate_system_topic_when_update_topic
+                && TopicValidator::is_system_topic(topic.as_str())
+            {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::InvalidParameter)
+                        .set_remark(format!("The topic[{topic}] is conflict with system topic.")),
+                ));
+            }
+            if seen.insert(topic.clone()) {
+                topics.push(topic);
+            }
+        }
+
+        info!(
+            "AdminBrokerProcessor#deleteTopicList: broker receive request to delete topics={:?}, caller={}",
+            topics,
+            channel.remote_address()
+        );
+        let original_topics = topics.clone();
+        for topic in &original_topics {
+            for group in broker_runtime_inner
+                .consumer_offset_manager()
+                .which_group_by_topic(topic)
+            {
+                for retry_topic in [
+                    CheetahString::from_string(KeyBuilder::build_pop_retry_topic(topic, group.as_str(), true)),
+                    CheetahString::from_string(KeyBuilder::build_pop_retry_topic_v1(topic, group.as_str())),
+                ] {
+                    if broker_runtime_inner
+                        .topic_config_manager()
+                        .select_topic_config(&retry_topic)
+                        .is_some()
+                        && seen.insert(retry_topic.clone())
+                    {
+                        topics.push(retry_topic);
+                    }
+                }
+            }
+        }
+
+        let mut mapping_changed = false;
+        let mut store_failed = false;
+        for topic in &topics {
+            broker_runtime_inner
+                .topic_config_manager()
+                .delete_topic_config(topic, broker_runtime_inner.topic_config_state_machine_version());
+            mapping_changed |= broker_runtime_inner
+                .topic_queue_mapping_manager()
+                .delete_without_persist(topic);
+            broker_runtime_inner
+                .consumer_offset_manager()
+                .clean_offset_by_topic(topic);
+            broker_runtime_inner
+                .pop_inflight_message_counter()
+                .clear_in_flight_message_num_by_topic_name(topic);
+            if broker_runtime_inner.delete_topics(vec![topic]).is_err() {
+                store_failed = true;
+                break;
+            }
+        }
+
+        let topic_persist = broker_runtime_inner.topic_config_coordinator().persist_and_wait().await;
+        let mapping_persist = if mapping_changed {
+            broker_runtime_inner
+                .topic_queue_mapping_manager()
+                .persist_current()
+                .await
+        } else {
+            Ok(())
+        };
+        if store_failed || topic_persist.is_err() || mapping_persist.is_err() {
+            return Ok(Some(
+                response
+                    .set_code(ResponseCode::SystemError)
+                    .set_remark("Failed to delete one or more topics."),
+            ));
+        }
+        Ok(Some(RemotingCommand::create_success_response_command()))
+    }
+
     pub async fn get_all_topic_config<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
@@ -1212,6 +1342,71 @@ mod tests {
                 .topic_version,
             1
         );
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn batch_delete_validates_all_topics_before_mutation_and_deduplicates() {
+        let runtime = new_test_runtime("batch-delete-topics").await;
+        let admin = runtime.admin_runtime_for_test();
+        let handler = TopicRequestHandler::new();
+        let topic_a = CheetahString::from_static_str("BatchDeleteTopicA");
+        let topic_b = CheetahString::from_static_str("BatchDeleteTopicB");
+        admin
+            .topic_config_manager()
+            .put_topic_config(TopicConfig::with_queues(topic_a.clone(), 1, 1));
+        admin
+            .topic_config_manager()
+            .put_topic_config(TopicConfig::with_queues(topic_b.clone(), 1, 1));
+
+        let empty_body =
+            rocketmq_protocol::protocol::body::delete_topic_list_request_body::DeleteTopicListRequestBody::default();
+        let mut empty = RemotingCommand::create_remoting_command(RequestCode::DeleteTopicInBrokerList.to_i32())
+            .set_body(empty_body.encode().unwrap());
+        let channel = create_test_channel().await;
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let response = handler
+            .delete_topic_list(&admin, channel, ctx, RequestCode::DeleteTopicInBrokerList, &mut empty)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(ResponseCode::InvalidParameter, ResponseCode::from(response.code()));
+        assert!(admin.topic_config_manager().select_topic_config(&topic_a).is_some());
+        assert!(admin.topic_config_manager().select_topic_config(&topic_b).is_some());
+
+        let invalid_body =
+            rocketmq_protocol::protocol::body::delete_topic_list_request_body::DeleteTopicListRequestBody {
+                topic_list: vec![topic_a.clone(), CheetahString::from_static_str("invalid topic")],
+            };
+        let mut invalid = RemotingCommand::create_remoting_command(RequestCode::DeleteTopicInBrokerList.to_i32())
+            .set_body(invalid_body.encode().unwrap());
+        let channel = create_test_channel().await;
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let response = handler
+            .delete_topic_list(&admin, channel, ctx, RequestCode::DeleteTopicInBrokerList, &mut invalid)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(ResponseCode::InvalidParameter, ResponseCode::from(response.code()));
+        assert!(admin.topic_config_manager().select_topic_config(&topic_a).is_some());
+        assert!(admin.topic_config_manager().select_topic_config(&topic_b).is_some());
+
+        let body = rocketmq_protocol::protocol::body::delete_topic_list_request_body::DeleteTopicListRequestBody {
+            topic_list: vec![topic_a.clone(), topic_b.clone(), topic_a.clone()],
+        };
+        let mut request = RemotingCommand::create_remoting_command(RequestCode::DeleteTopicInBrokerList.to_i32())
+            .set_body(body.encode().unwrap());
+        let channel = create_test_channel().await;
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let response = handler
+            .delete_topic_list(&admin, channel, ctx, RequestCode::DeleteTopicInBrokerList, &mut request)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(ResponseCode::Success, ResponseCode::from(response.code()));
+        assert!(admin.topic_config_manager().select_topic_config(&topic_a).is_none());
+        assert!(admin.topic_config_manager().select_topic_config(&topic_b).is_none());
 
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }

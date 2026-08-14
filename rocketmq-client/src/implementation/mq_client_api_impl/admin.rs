@@ -1104,6 +1104,31 @@ impl MQClientAPIImpl {
         ))
     }
 
+    /// Deletes multiple subscription groups with one broker request.
+    #[cfg(feature = "admin-mutation")]
+    pub async fn delete_subscription_group_list(
+        &self,
+        addr: &CheetahString,
+        group_name_list: Vec<CheetahString>,
+        clean_offset: bool,
+        timeout_millis: u64,
+    ) -> RocketMQResult<()> {
+        let request = delete_subscription_group_list_request(&self.command_factory, group_name_list, clean_offset)?;
+        let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
+        let response = self
+            .remoting_client
+            .invoke_request(Some(&broker_addr), request, timeout_millis)
+            .await?;
+
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => Ok(()),
+            _ => Err(mq_client_err!(
+                response.code(),
+                response.remark().map_or_else(String::new, |remark| remark.to_string())
+            )),
+        }
+    }
+
     #[cfg(feature = "admin-mutation")]
     pub async fn reset_master_flush_offset(
         &self,
@@ -1643,6 +1668,30 @@ impl MQClientAPIImpl {
             response.code(),
             response.remark().map_or("".to_string(), |s| s.to_string())
         ))
+    }
+
+    /// Deletes multiple topics with one broker request.
+    #[cfg(feature = "admin-mutation")]
+    pub async fn delete_topic_in_broker_list(
+        &self,
+        addr: &CheetahString,
+        topic_list: Vec<CheetahString>,
+        timeout_millis: u64,
+    ) -> RocketMQResult<()> {
+        let request = delete_topic_list_request(&self.command_factory, topic_list)?;
+        let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
+        let response = self
+            .remoting_client
+            .invoke_request(Some(&broker_addr), request, timeout_millis)
+            .await?;
+
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => Ok(()),
+            _ => Err(mq_client_err!(
+                response.code(),
+                response.remark().map_or_else(String::new, |remark| remark.to_string())
+            )),
+        }
     }
 
     #[cfg(feature = "admin-mutation")]
@@ -3355,6 +3404,24 @@ impl MqClientAdminInner for MQClientAPIImpl {
     }
 
     #[cfg(feature = "admin-mutation")]
+    async fn delete_topic_in_broker_list(
+        &self,
+        address: &str,
+        topic_list: Vec<CheetahString>,
+        timeout_millis: u64,
+    ) -> RocketMQResult<()> {
+        let request = delete_topic_list_request(&self.command_factory, topic_list)?;
+        let response = self.invoke_admin_request(address, request, timeout_millis).await?;
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => Ok(()),
+            _ => Err(mq_client_err!(
+                response.code(),
+                response.remark().map_or_else(String::new, |remark| remark.to_string())
+            )),
+        }
+    }
+
+    #[cfg(feature = "admin-mutation")]
     async fn delete_topic_in_nameserver(
         &self,
         address: &str,
@@ -3406,6 +3473,25 @@ impl MqClientAdminInner for MQClientAPIImpl {
             response.code(),
             response.remark().map_or_else(String::new, |s| s.to_string())
         ))
+    }
+
+    #[cfg(feature = "admin-mutation")]
+    async fn delete_subscription_group_list(
+        &self,
+        address: &str,
+        group_name_list: Vec<CheetahString>,
+        clean_offset: bool,
+        timeout_millis: u64,
+    ) -> RocketMQResult<()> {
+        let request = delete_subscription_group_list_request(&self.command_factory, group_name_list, clean_offset)?;
+        let response = self.invoke_admin_request(address, request, timeout_millis).await?;
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => Ok(()),
+            _ => Err(mq_client_err!(
+                response.code(),
+                response.remark().map_or_else(String::new, |remark| remark.to_string())
+            )),
+        }
     }
 
     #[cfg(feature = "admin-mutation")]

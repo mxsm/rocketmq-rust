@@ -14,6 +14,7 @@
 
 use std::collections::HashMap;
 
+use cheetah_string::CheetahString;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_protocol::protocol::admin::consume_stats::ConsumeStats;
@@ -159,6 +160,14 @@ pub trait MqClientAdminInner: Sync {
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<()>;
 
+    /// Deletes multiple topics in a broker using the Java-compatible batch request.
+    async fn delete_topic_in_broker_list(
+        &self,
+        address: &str,
+        topic_list: Vec<CheetahString>,
+        timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<()>;
+
     /// Deletes a topic in the nameserver.
     ///
     /// # Arguments
@@ -210,6 +219,15 @@ pub trait MqClientAdminInner: Sync {
         &self,
         address: &str,
         request_header: DeleteSubscriptionGroupRequestHeader,
+        timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<()>;
+
+    /// Deletes multiple subscription groups in a broker using one request.
+    async fn delete_subscription_group_list(
+        &self,
+        address: &str,
+        group_name_list: Vec<CheetahString>,
+        clean_offset: bool,
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<()>;
 

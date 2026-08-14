@@ -272,6 +272,8 @@ define_request_code! {
         AuthListAcl = 3010,
 
         SwitchTimerEngine = 5001,
+        DeleteTopicInBrokerList = 5002,
+        DeleteSubscriptionGroupList = 5003,
 
         // Privileged maintenance codes. These are not ordinary Admin actions.
         MaintenanceGetCapabilities = 6001,
@@ -303,6 +305,8 @@ mod tests {
         assert_eq!(RequestCode::UpdateSubscriptionGroupConfigCas.to_i32(), 335);
         assert_eq!(RequestCode::AuthCreateUser.to_i32(), 3001);
         assert_eq!(RequestCode::MaintenanceCreateControllerSnapshot.to_i32(), 6002);
+        assert_eq!(RequestCode::DeleteTopicInBrokerList.to_i32(), 5002);
+        assert_eq!(RequestCode::DeleteSubscriptionGroupList.to_i32(), 5003);
         assert_eq!(RequestCode::Unknown.to_i32(), -9999999);
     }
 
@@ -321,6 +325,8 @@ mod tests {
         assert_eq!(RequestCode::from(335), RequestCode::UpdateSubscriptionGroupConfigCas);
         assert_eq!(RequestCode::from(3001), RequestCode::AuthCreateUser);
         assert_eq!(RequestCode::from(6003), RequestCode::MaintenanceCreateStoreCheckpoint);
+        assert_eq!(RequestCode::from(5002), RequestCode::DeleteTopicInBrokerList);
+        assert_eq!(RequestCode::from(5003), RequestCode::DeleteSubscriptionGroupList);
         assert_eq!(RequestCode::from(-9999999), RequestCode::Unknown);
     }
 

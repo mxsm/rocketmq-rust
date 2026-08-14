@@ -977,6 +977,24 @@ impl SubscriptionGroupManager {
     /// # Returns
     /// Returns the deleted config if it existed, None otherwise
     pub fn delete_subscription_group_config(&self, group_name: &str) -> Option<Arc<SubscriptionGroupConfig>> {
+        let old = self.delete_subscription_group_config_without_persist(group_name);
+        if old.is_some() {
+            #[cfg(feature = "rocksdb_store")]
+            if let Err(error) = self.delete_group_from_rocksdb(group_name) {
+                error!(
+                    "delete subscription group from rocksdb failed, group={}, error={}",
+                    group_name, error
+                );
+            }
+            self.persist_after_mutation("delete");
+        }
+        old
+    }
+
+    fn delete_subscription_group_config_without_persist(
+        &self,
+        group_name: &str,
+    ) -> Option<Arc<SubscriptionGroupConfig>> {
         let old = {
             let _transition = self.metadata_transition.lock();
             let old = self.subscription_group_table.remove(group_name).map(|(_, v)| v);
@@ -991,19 +1009,38 @@ impl SubscriptionGroupManager {
 
         if old.is_some() {
             info!("Deleted subscription group: {}", group_name);
-            #[cfg(feature = "rocksdb_store")]
-            if let Err(error) = self.delete_group_from_rocksdb(group_name) {
-                error!(
-                    "delete subscription group from rocksdb failed, group={}, error={}",
-                    group_name, error
-                );
-            }
-            self.persist_after_mutation("delete");
         } else {
             warn!("Delete failed, subscription group not found: {}", group_name);
         }
 
         old
+    }
+
+    /// Delete multiple subscription groups and persist the resulting snapshot once.
+    pub fn delete_subscription_group_config_list(&self, group_names: &[CheetahString]) -> usize {
+        let mut deleted = Vec::new();
+        for group_name in group_names {
+            if self
+                .delete_subscription_group_config_without_persist(group_name.as_str())
+                .is_some()
+            {
+                deleted.push(group_name);
+            }
+        }
+        if deleted.is_empty() {
+            return 0;
+        }
+        #[cfg(feature = "rocksdb_store")]
+        for group_name in &deleted {
+            if let Err(error) = self.delete_group_from_rocksdb(group_name.as_str()) {
+                error!(
+                    "delete subscription group from rocksdb failed, group={}, error={}",
+                    group_name, error
+                );
+            }
+        }
+        self.persist_after_mutation("batch-delete");
+        deleted.len()
     }
 
     /// Batch update subscription group configurations

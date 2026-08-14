@@ -47,10 +47,12 @@ use crate::core::broker::RestoreBrokerLogFilterRequest;
 use crate::core::broker::SetBrokerLogFilterTtlRequest;
 use crate::core::clock::Clock;
 use crate::core::consumer;
+use crate::core::consumer::ConsumerBatchMutationOutcome;
 use crate::core::consumer::ConsumerMutationAdmin;
 use crate::core::consumer::DashboardConsumerDeleteRequest;
 use crate::core::consumer::DashboardConsumerMutationResult;
 use crate::core::consumer::DashboardConsumerUpsertRequest;
+use crate::core::consumer::DeleteSubscriptionGroupsRequest;
 use crate::core::consumer::SetConsumerRequestModeRequest;
 use crate::core::consumer::SetConsumerRequestModeResult;
 use crate::core::message::DirectConsumeRequest;
@@ -64,6 +66,7 @@ use crate::core::proxy::ProxyDrainState;
 use crate::core::proxy::ProxyMutationAdmin;
 use crate::core::security::AdminCredentials;
 use crate::core::topic::DeleteTopicAdminRequest;
+use crate::core::topic::DeleteTopicsInBrokerRequest;
 use crate::core::topic::PatchTopicConfigOutcome;
 use crate::core::topic::PatchTopicConfigRequest;
 use crate::core::topic::ResetTopicConsumerOffsetRequest;
@@ -313,6 +316,34 @@ impl TopicMutationAdmin for MutationAdminSession {
         })
     }
 
+    fn delete_topics_in_broker<'a>(
+        &'a mut self,
+        request: &'a DeleteTopicsInBrokerRequest,
+    ) -> AdminFuture<'a, TopicMutationOutcome> {
+        Box::pin(async move {
+            self.inner.ensure_open()?;
+            self.inner
+                .inner
+                .remove_topics_from_broker(
+                    CheetahString::from(request.broker_addr.as_str()),
+                    request
+                        .topics
+                        .iter()
+                        .map(|topic| CheetahString::from(topic.as_str()))
+                        .collect(),
+                )
+                .await
+                .map_err(|error| backend_error("remove_topics_from_broker", error))?;
+            Ok(TopicMutationOutcome {
+                message: format!(
+                    "deleted {} topics through one broker batch request",
+                    request.topics.len()
+                ),
+                target_count: 1,
+            })
+        })
+    }
+
     fn delete_topic<'a>(&'a mut self, request: &'a DeleteTopicAdminRequest) -> AdminFuture<'a, TopicMutationOutcome> {
         Box::pin(async move {
             self.inner.ensure_open()?;
@@ -548,6 +579,35 @@ impl ConsumerMutationAdmin for MutationAdminSession {
                 consumer_group: group,
                 broker_names,
                 updated: true,
+            })
+        })
+    }
+
+    fn delete_subscription_groups<'a>(
+        &'a mut self,
+        request: &'a DeleteSubscriptionGroupsRequest,
+    ) -> AdminFuture<'a, ConsumerBatchMutationOutcome> {
+        Box::pin(async move {
+            self.inner.ensure_open()?;
+            self.inner
+                .inner
+                .remove_subscription_groups(
+                    CheetahString::from(request.broker_addr.as_str()),
+                    request
+                        .group_names
+                        .iter()
+                        .map(|group_name| CheetahString::from(group_name.as_str()))
+                        .collect(),
+                    request.clean_offset,
+                )
+                .await
+                .map_err(|error| backend_error("remove_subscription_groups", error))?;
+            Ok(ConsumerBatchMutationOutcome {
+                message: format!(
+                    "deleted {} subscription groups through one broker batch request",
+                    request.group_names.len()
+                ),
+                broker_count: 1,
             })
         })
     }

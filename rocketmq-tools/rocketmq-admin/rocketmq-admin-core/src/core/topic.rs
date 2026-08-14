@@ -214,6 +214,26 @@ pub struct DeleteTopicAdminRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeleteTopicsInBrokerRequest {
+    pub broker_addr: String,
+    pub topics: Vec<String>,
+}
+
+impl DeleteTopicsInBrokerRequest {
+    pub fn try_new(broker_addr: impl Into<String>, topics: Vec<String>) -> AdminResult<Self> {
+        let broker_addr = required("brokerAddr", broker_addr)?;
+        if topics.is_empty() {
+            return Err(crate::core::AdminError::invalid_argument("topics", "must not be empty"));
+        }
+        let topics = topics
+            .into_iter()
+            .map(|topic| required("topic", topic))
+            .collect::<AdminResult<Vec<_>>>()?;
+        Ok(Self { broker_addr, topics })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TopicMutationOutcome {
     pub message: String,
     pub target_count: usize,
@@ -368,6 +388,11 @@ pub trait TopicAdmin: Send {
 
     fn delete_topic<'a>(&'a mut self, request: &'a DeleteTopicAdminRequest) -> AdminFuture<'a, TopicMutationOutcome>;
 
+    fn delete_topics_in_broker<'a>(
+        &'a mut self,
+        request: &'a DeleteTopicsInBrokerRequest,
+    ) -> AdminFuture<'a, TopicMutationOutcome>;
+
     fn get_topic_consumer_groups<'a>(&'a mut self, topic: &'a str) -> AdminFuture<'a, TopicConsumerGroups>;
 
     fn get_topic_consumers<'a>(&'a mut self, topic: &'a str) -> AdminFuture<'a, TopicConsumers>;
@@ -419,6 +444,10 @@ pub trait TopicMutationAdmin: Send {
 
     fn upsert_topic<'a>(&'a mut self, request: &'a UpsertTopicRequest) -> AdminFuture<'a, TopicMutationOutcome>;
     fn delete_topic<'a>(&'a mut self, request: &'a DeleteTopicAdminRequest) -> AdminFuture<'a, TopicMutationOutcome>;
+    fn delete_topics_in_broker<'a>(
+        &'a mut self,
+        request: &'a DeleteTopicsInBrokerRequest,
+    ) -> AdminFuture<'a, TopicMutationOutcome>;
     fn reset_topic_consumer_offset<'a>(
         &'a mut self,
         request: &'a ResetTopicConsumerOffsetRequest,
@@ -459,6 +488,12 @@ impl<T: TopicAdmin + ?Sized> TopicMutationAdmin for T {
     }
     fn delete_topic<'a>(&'a mut self, request: &'a DeleteTopicAdminRequest) -> AdminFuture<'a, TopicMutationOutcome> {
         TopicAdmin::delete_topic(self, request)
+    }
+    fn delete_topics_in_broker<'a>(
+        &'a mut self,
+        request: &'a DeleteTopicsInBrokerRequest,
+    ) -> AdminFuture<'a, TopicMutationOutcome> {
+        TopicAdmin::delete_topics_in_broker(self, request)
     }
     fn reset_topic_consumer_offset<'a>(
         &'a mut self,

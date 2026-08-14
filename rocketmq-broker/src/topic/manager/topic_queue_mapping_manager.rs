@@ -368,6 +368,10 @@ impl TopicQueueMappingManager {
 
     pub(crate) async fn persist_clean_result(&self) -> RocketMQResult<()> {
         self.data_version.lock().next_version();
+        self.persist_current().await
+    }
+
+    pub(crate) async fn persist_current(&self) -> RocketMQResult<()> {
         let json = self.encode_pretty(true);
         if json.is_empty() {
             return Ok(());
@@ -397,15 +401,22 @@ impl TopicQueueMappingManager {
     }
 
     pub fn delete(&self, topic: &CheetahString) {
+        if self.delete_without_persist(topic) {
+            self.persist_after_mutation("delete");
+        }
+    }
+
+    pub(crate) fn delete_without_persist(&self, topic: &CheetahString) -> bool {
         let old = self.topic_queue_mapping_table.remove(topic);
         match old {
             None => {
-                warn!("delete topic queue mapping failed, static topic: {} not exists", topic)
+                warn!("delete topic queue mapping failed, static topic: {} not exists", topic);
+                false
             }
             Some(value) => {
                 info!("delete topic queue mapping OK, static topic queue mapping: {:?}", value);
                 self.data_version.lock().next_version();
-                self.persist_after_mutation("delete");
+                true
             }
         }
     }

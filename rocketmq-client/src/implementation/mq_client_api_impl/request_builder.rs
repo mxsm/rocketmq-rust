@@ -119,3 +119,29 @@ pub(super) fn create_subscription_group_list_request(
         .create_request_command(RequestCode::UpdateAndCreateSubscriptionGroupList, EmptyHeader {})
         .set_body(body.encode()?))
 }
+
+#[cfg(feature = "admin-mutation")]
+pub(super) fn delete_topic_list_request(
+    command_factory: &RemotingCommandFactory,
+    topic_list: Vec<CheetahString>,
+) -> RocketMQResult<RemotingCommand> {
+    let body = DeleteTopicListRequestBody { topic_list };
+    Ok(command_factory
+        .create_request_command(RequestCode::DeleteTopicInBrokerList, EmptyHeader {})
+        .set_body(body.encode()?))
+}
+
+#[cfg(feature = "admin-mutation")]
+pub(super) fn delete_subscription_group_list_request(
+    command_factory: &RemotingCommandFactory,
+    group_name_list: Vec<CheetahString>,
+    clean_offset: bool,
+) -> RocketMQResult<RemotingCommand> {
+    let body = DeleteSubscriptionGroupListRequestBody {
+        group_name_list,
+        clean_offset,
+    };
+    Ok(command_factory
+        .create_request_command(RequestCode::DeleteSubscriptionGroupList, EmptyHeader {})
+        .set_body(body.encode()?))
+}
