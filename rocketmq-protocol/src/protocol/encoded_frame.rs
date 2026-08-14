@@ -58,17 +58,8 @@ impl EncodedFrame {
     /// length field.
     pub fn from_command(mut command: RemotingCommand) -> RocketMQResult<Self> {
         let body = command.take_body().unwrap_or_default();
-        command.set_body_mut_ref(body.clone());
-        let (prefix, header) = encode_header_segments(&mut command)?;
-        let total_len = checked_payload_len(header.len(), body.len())?;
-        let announced_total = i32::from_be_bytes([prefix[0], prefix[1], prefix[2], prefix[3]]);
-        if announced_total != total_len {
-            return Err(SerializationError::encode_failed(
-                "remoting-command",
-                "fast header encoder produced inconsistent wire lengths",
-            )
-            .into());
-        }
+        let (prefix, header) = encode_header_segments(&mut command, body.len())?;
+        validate_announced_payload_len(&prefix, header.len(), body.len())?;
         Ok(Self { prefix, header, body })
     }
 
@@ -123,9 +114,8 @@ impl EncodedFrameHead {
             )
             .into());
         }
-        let (mut prefix, header) = encode_header_segments(&mut command)?;
-        let total_len = checked_payload_len(header.len(), body_len)?;
-        prefix[..4].copy_from_slice(&total_len.to_be_bytes());
+        let (prefix, header) = encode_header_segments(&mut command, body_len)?;
+        validate_announced_payload_len(&prefix, header.len(), body_len)?;
         Ok(Self {
             prefix,
             header,
@@ -155,9 +145,12 @@ impl EncodedFrameHead {
     }
 }
 
-fn encode_header_segments(command: &mut RemotingCommand) -> RocketMQResult<([u8; FRAME_PREFIX_BYTES], Bytes)> {
+fn encode_header_segments(
+    command: &mut RemotingCommand,
+    body_len: usize,
+) -> RocketMQResult<([u8; FRAME_PREFIX_BYTES], Bytes)> {
     let mut encoded_header = BytesMut::new();
-    command.try_fast_header_encode(&mut encoded_header)?;
+    command.try_fast_header_encode_with_body_length(&mut encoded_header, body_len)?;
     if encoded_header.len() < FRAME_PREFIX_BYTES {
         return Err(SerializationError::encode_failed(
             "remoting-command",
@@ -202,6 +195,23 @@ fn checked_payload_len(header_len: usize, body_len: usize) -> RocketMQResult<i32
         )
         .into()
     })
+}
+
+fn validate_announced_payload_len(
+    prefix: &[u8; FRAME_PREFIX_BYTES],
+    header_len: usize,
+    body_len: usize,
+) -> RocketMQResult<()> {
+    let expected = checked_payload_len(header_len, body_len)?;
+    let announced = i32::from_be_bytes([prefix[0], prefix[1], prefix[2], prefix[3]]);
+    if announced != expected {
+        return Err(SerializationError::encode_failed(
+            "remoting-command",
+            "fast header encoder produced inconsistent wire lengths",
+        )
+        .into());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -313,6 +323,45 @@ mod tests {
 
         assert_eq!(reconstructed.freeze(), complete);
         assert_eq!(head.body_len(), body.len());
+    }
+
+    #[test]
+    fn frame_head_and_complete_frame_match_for_all_body_sizes_and_protocols() {
+        for serialize_type in [SerializeType::JSON, SerializeType::ROCKETMQ] {
+            for body_len in [0, 1, 128, 4 * 1024, 64 * 1024, 1024 * 1024, 4 * 1024 * 1024] {
+                let body = Bytes::from(vec![0x5a; body_len]);
+                let command = RemotingCommand::create_remoting_command(108)
+                    .set_opaque(92)
+                    .set_serialize_type(serialize_type)
+                    .set_remark("body-length-matrix");
+                let head = EncodedFrameHead::from_command_and_body_len(command.clone(), body_len).unwrap();
+                let complete = EncodedFrame::from_command(command.set_body(body.clone()))
+                    .unwrap()
+                    .into_bytes();
+                let [prefix, header] = head.segments();
+                let mut reconstructed = BytesMut::with_capacity(head.encoded_len());
+                reconstructed.put_slice(prefix);
+                reconstructed.put_slice(header);
+                reconstructed.put_slice(&body);
+
+                assert_eq!(
+                    reconstructed.freeze(),
+                    complete,
+                    "{serialize_type:?} body_len={body_len}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn explicit_body_length_rejects_an_in_memory_body_mismatch_atomically() {
+        let mut command = RemotingCommand::create_remoting_command(109).set_body(Bytes::from_static(b"body"));
+        let mut destination = BytesMut::from(&b"existing"[..]);
+
+        assert!(command
+            .try_fast_header_encode_with_body_length(&mut destination, 3)
+            .is_err());
+        assert_eq!(destination.as_ref(), b"existing");
     }
 
     #[test]
