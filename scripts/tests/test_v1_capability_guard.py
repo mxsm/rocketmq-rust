@@ -89,6 +89,9 @@ print(json.dumps([finding.as_dict() for finding in findings]))
 
         self.assertEqual(expected, {item["capability_id"] for item in capabilities})
         self.assertEqual(len(test_ids), len(set(test_ids)))
+        for capability in capabilities:
+            expected = "deferred" if capability["capability_id"] in {"G-07", "G-08"} else "1.0.0-rc.1"
+            self.assertEqual(expected, capability["target_rc"])
 
     def test_missing_required_fields_are_structured_findings(self) -> None:
         manifest = self.load_manifest()
@@ -98,6 +101,7 @@ print(json.dumps([finding.as_dict() for finding in findings]))
         capability["commands"] = []
         capability["expected_results"] = []
         del capability["target_phase"]
+        del capability["target_rc"]
 
         findings = self.validate_fixture(manifest)
         codes = {item["code"] for item in findings}
@@ -108,6 +112,7 @@ print(json.dumps([finding.as_dict() for finding in findings]))
                 "commands-missing",
                 "expected-results-missing",
                 "target-phase-invalid",
+                "target-rc-invalid",
             }.issubset(codes),
             findings,
         )
@@ -173,6 +178,30 @@ print(json.dumps([finding.as_dict() for finding in findings]))
 
         findings = self.validate_fixture(manifest)
         self.assertIn("deferred-capability-not-approved", {item["code"] for item in findings})
+
+    def test_active_capability_cannot_enter_development_without_a_target_rc(self) -> None:
+        manifest = self.load_manifest()
+        capability = self.capability(manifest, "F-01")
+        capability["implementation_status"] = "partial"
+        capability["target_rc"] = "deferred"
+
+        findings = self.validate_fixture(manifest)
+        self.assertIn("active-target-rc-missing", {item["code"] for item in findings})
+
+    def test_scope_document_records_compatibility_boundaries(self) -> None:
+        path = ROOT / "rocketmq-doc/en/release/1.0/scope-and-compatibility.md"
+        self.assertTrue(path.is_file(), "1.0 scope document is missing")
+        document = path.read_text(encoding="utf-8")
+        for required in (
+            "Pure Rust Controller",
+            "Rust-native Timer and POP",
+            "Conditional Java data migration",
+            "OpenMessaging",
+            "BrokerContainer",
+            "DLedger CommitLog",
+            "not production-certified",
+        ):
+            self.assertIn(required, document)
 
     def test_phase_six_rejects_every_active_blocked_capability(self) -> None:
         findings = self.validate_fixture(self.load_manifest(), phase=6)

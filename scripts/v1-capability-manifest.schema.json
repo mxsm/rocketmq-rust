@@ -80,6 +80,7 @@
         "artifacts",
         "ownership",
         "target_phase",
+        "target_rc",
         "dependencies",
         "completion_status",
         "variance_class"
@@ -105,6 +106,7 @@
         },
         "ownership": { "$ref": "#/$defs/ownership" },
         "target_phase": { "type": "integer", "minimum": 0, "maximum": 6 },
+        "target_rc": { "enum": ["1.0.0-rc.1", "deferred"] },
         "dependencies": { "$ref": "#/$defs/stringArray" },
         "completion_status": {
           "enum": ["blocked", "equivalent", "alternative-equivalent", "not-applicable", "intentionally-unsupported", "deferred-by-scope"]
