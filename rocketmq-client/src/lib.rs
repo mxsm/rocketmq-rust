@@ -181,6 +181,20 @@ mod cluster_session {
             self.inner.start().await
         }
 
+        /// Invokes one canonical Remoting command on a Broker selected by a managed caller.
+        pub async fn invoke_remoting(
+            &self,
+            broker_addr: &CheetahString,
+            request: RemotingCommand,
+            timeout_millis: u64,
+        ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
+            let _operation = self.operation().await;
+            self.inner
+                .get_mq_client_api_impl()?
+                .invoke(broker_addr, request, timeout_millis)
+                .await
+        }
+
         /// Returns low-cardinality NameServer discovery state without endpoint identities.
         pub async fn nameserver_discovery_status(&self) -> Option<crate::NameServerDiscoveryStatus> {
             let _operation = self.operation().await;

@@ -13,11 +13,13 @@
 // limitations under the License.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::body::request::lock_batch_request_body::LockBatchRequestBody;
 use rocketmq_protocol::protocol::body::unlock_batch_request_body::UnlockBatchRequestBody;
+use rocketmq_protocol::protocol::header::pop_message_request_header::PopMessageRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_protocol::protocol::RemotingSerializable;
@@ -60,8 +62,52 @@ impl ProxyRemotingBackend for ClusterRemotingBackend {
                     self.client.unlock_batch_mq(request_body).await?;
                     Ok(RemotingCommand::create_response_command_with_code(ResponseCode::Success).set_opaque(opaque))
                 }
+                RequestCode::ConsumerSendMsgBack
+                | RequestCode::EndTransaction
+                | RequestCode::RecallMessage
+                | RequestCode::PopMessage
+                | RequestCode::AckMessage
+                | RequestCode::ChangeMessageInvisibleTime => {
+                    let Some(broker_name) = broker_name(&request) else {
+                        return Ok(RemotingCommand::create_response_command_with_code(
+                            ResponseCode::VersionNotSupported,
+                        )
+                        .set_remark("Request doesn't have field bname")
+                        .set_opaque(opaque));
+                    };
+                    let timeout_millis = forward_timeout_millis(&request);
+                    self.client.forward_remoting(broker_name, request, timeout_millis).await
+                }
                 _ => Err(ProxyError::not_implemented("cluster remoting backend request")),
             }
         })
+    }
+}
+
+fn broker_name(request: &RemotingCommand) -> Option<String> {
+    request.ext_fields().and_then(|fields| {
+        fields
+            .iter()
+            .find(|(key, _)| key.as_str() == "bname")
+            .map(|(_, value)| value.to_string())
+            .filter(|value| !value.trim().is_empty())
+    })
+}
+
+fn forward_timeout_millis(request: &RemotingCommand) -> u64 {
+    if RequestCode::from(request.code()) == RequestCode::PopMessage {
+        return request
+            .decode_command_custom_header::<PopMessageRequestHeader>()
+            .map(|header| {
+                header
+                    .poll_time
+                    .saturating_add(Duration::from_secs(10).as_millis() as u64)
+            })
+            .unwrap_or(13_000);
+    }
+    if RequestCode::from(request.code()) == RequestCode::RecallMessage {
+        2_000
+    } else {
+        3_000
     }
 }

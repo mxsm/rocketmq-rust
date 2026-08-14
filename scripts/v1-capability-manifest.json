@@ -74,7 +74,7 @@
       "rust_surfaces": ["rocketmq-broker/src/processor/pop_message_processor.rs", "rocketmq-client/src/consumer/default_lite_pull_consumer.rs"],
       "profiles": ["lite-wildcard", "ordered-pop"],
       "compatibility_mode": "behavior",
-      "implementation_status": "partial",
+      "implementation_status": "implemented",
       "evidence_status": "none",
       "test_ids": ["F04-LITE-WILDCARD-ORDERED-SUSPEND"],
       "commands": ["cargo test -p rocketmq-broker --test lite_wildcard_group"],

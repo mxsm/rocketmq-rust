@@ -57,6 +57,7 @@ pub enum RemotingIngressRoute {
     Heartbeat,
     UnregisterClient,
     GetConsumerListByGroup,
+    GetConsumerConnectionList,
     NotifyConsumerIdsChanged,
     NotifyUnsubscribeLite,
     LockBatchMessageQueue,
@@ -75,8 +76,198 @@ pub enum RemotingIngressRoute {
     GetProxyDrainState,
     BeginProxyDrain,
     CancelProxyDrain,
+    ForwardBackend,
     AuthAdminUnsupported,
     Unsupported,
+}
+
+/// Execution ownership selected for a Remoting request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemotingRouteClass {
+    /// The Proxy decodes the request and invokes a backend-neutral service.
+    Translate,
+    /// The Proxy preserves the command and forwards it to exactly one Broker backend.
+    ForwardBackend,
+    /// The request is outside the supported Proxy surface.
+    Unsupported,
+}
+
+/// One immutable entry in the Java-compatible Proxy Remoting policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RemotingRoutePolicy {
+    request_code: RequestCode,
+    java_request_name: &'static str,
+    route: RemotingIngressRoute,
+}
+
+impl RemotingRoutePolicy {
+    const fn new(request_code: RequestCode, java_request_name: &'static str, route: RemotingIngressRoute) -> Self {
+        Self {
+            request_code,
+            java_request_name,
+            route,
+        }
+    }
+
+    /// Returns the numeric wire request code.
+    pub const fn request_code(self) -> i32 {
+        self.request_code.to_i32()
+    }
+
+    /// Returns the Java `RequestCode` constant name used by the generated inventory.
+    pub const fn java_request_name(self) -> &'static str {
+        self.java_request_name
+    }
+
+    /// Returns the selected ingress operation.
+    pub const fn route(self) -> RemotingIngressRoute {
+        self.route
+    }
+
+    /// Returns who owns execution for this route.
+    pub const fn route_class(self) -> RemotingRouteClass {
+        match self.route {
+            RemotingIngressRoute::ForwardBackend
+            | RemotingIngressRoute::LockBatchMessageQueue
+            | RemotingIngressRoute::UnlockBatchMessageQueue => RemotingRouteClass::ForwardBackend,
+            RemotingIngressRoute::AuthAdminUnsupported | RemotingIngressRoute::Unsupported => {
+                RemotingRouteClass::Unsupported
+            }
+            _ => RemotingRouteClass::Translate,
+        }
+    }
+}
+
+const JAVA_PROXY_ACTIVE_ROUTE_POLICIES: &[RemotingRoutePolicy] = &[
+    RemotingRoutePolicy::new(
+        RequestCode::SendMessage,
+        "SEND_MESSAGE",
+        RemotingIngressRoute::SendMessage,
+    ),
+    RemotingRoutePolicy::new(
+        RequestCode::SendMessageV2,
+        "SEND_MESSAGE_V2",
+        RemotingIngressRoute::SendMessage,
+    ),
+    RemotingRoutePolicy::new(
+        RequestCode::SendBatchMessage,
+        "SEND_BATCH_MESSAGE",
+        RemotingIngressRoute::SendMessage,
+    ),
+    RemotingRoutePolicy::new(
+        RequestCode::ConsumerSendMsgBack,
+        "CONSUMER_SEND_MSG_BACK",
+        RemotingIngressRoute::ForwardBackend,
+    ),
+    RemotingRoutePolicy::new(
+        RequestCode::EndTransaction,
+        "END_TRANSACTION",
+        RemotingIngressRoute::ForwardBackend,
+    ),
+    RemotingRoutePolicy::new(
+        RequestCode::RecallMessage,
+        "RECALL_MESSAGE",
+        RemotingIngressRoute::ForwardBackend,
+    ),
+    RemotingRoutePolicy::new(RequestCode::HeartBeat, "HEART_BEAT", RemotingIngressRoute::Heartbeat),
+    RemotingRoutePolicy::new(
+        RequestCode::UnregisterClient,
+        "UNREGISTER_CLIENT",
+        RemotingIngressRoute::UnregisterClient,
+    ),
+    RemotingRoutePolicy::new(
+        RequestCode::CheckClientConfig,
+        "CHECK_CLIENT_CONFIG",
+        RemotingIngressRoute::CheckClientConfig,
+    ),
+    RemotingRoutePolicy::new(
+        RequestCode::PullMessage,
+        "PULL_MESSAGE",
+        RemotingIngressRoute::PullMessage,
+    ),
+    RemotingRoutePolicy::new(
+        RequestCode::LitePullMessage,
+        "LITE_PULL_MESSAGE",
+        RemotingIngressRoute::PullMessage,
+    ),
+    RemotingRoutePolicy::new(
+        RequestCode::PopMessage,
+        "POP_MESSAGE",
+        RemotingIngressRoute::ForwardBackend,
+    ),
+    RemotingRoutePolicy::new(
+        RequestCode::UpdateConsumerOffset,
+        "UPDATE_CONSUMER_OFFSET",
+        RemotingIngressRoute::UpdateConsumerOffset,
+    ),
+    RemotingRoutePolicy::new(
+        RequestCode::AckMessage,
+        "ACK_MESSAGE",
+        RemotingIngressRoute::ForwardBackend,
+    ),
+    RemotingRoutePolicy::new(
+        RequestCode::ChangeMessageInvisibleTime,
+        "CHANGE_MESSAGE_INVISIBLETIME",
+        RemotingIngressRoute::ForwardBackend,
+    ),
+    RemotingRoutePolicy::new(
+        RequestCode::GetConsumerConnectionList,
+        "GET_CONSUMER_CONNECTION_LIST",
+        RemotingIngressRoute::GetConsumerConnectionList,
+    ),
+    RemotingRoutePolicy::new(
+        RequestCode::GetConsumerListByGroup,
+        "GET_CONSUMER_LIST_BY_GROUP",
+        RemotingIngressRoute::GetConsumerListByGroup,
+    ),
+    RemotingRoutePolicy::new(
+        RequestCode::GetMaxOffset,
+        "GET_MAX_OFFSET",
+        RemotingIngressRoute::GetMaxOffset,
+    ),
+    RemotingRoutePolicy::new(
+        RequestCode::GetMinOffset,
+        "GET_MIN_OFFSET",
+        RemotingIngressRoute::GetMinOffset,
+    ),
+    RemotingRoutePolicy::new(
+        RequestCode::QueryConsumerOffset,
+        "QUERY_CONSUMER_OFFSET",
+        RemotingIngressRoute::QueryConsumerOffset,
+    ),
+    RemotingRoutePolicy::new(
+        RequestCode::SearchOffsetByTimestamp,
+        "SEARCH_OFFSET_BY_TIMESTAMP",
+        RemotingIngressRoute::SearchOffsetByTimestamp,
+    ),
+    RemotingRoutePolicy::new(
+        RequestCode::LockBatchMq,
+        "LOCK_BATCH_MQ",
+        RemotingIngressRoute::LockBatchMessageQueue,
+    ),
+    RemotingRoutePolicy::new(
+        RequestCode::UnlockBatchMq,
+        "UNLOCK_BATCH_MQ",
+        RemotingIngressRoute::UnlockBatchMessageQueue,
+    ),
+    RemotingRoutePolicy::new(
+        RequestCode::GetRouteinfoByTopic,
+        "GET_ROUTEINFO_BY_TOPIC",
+        RemotingIngressRoute::QueryRoute,
+    ),
+];
+
+/// Returns the complete active Java 5.5 Proxy route policy.
+pub const fn java_proxy_active_route_policies() -> &'static [RemotingRoutePolicy] {
+    JAVA_PROXY_ACTIVE_ROUTE_POLICIES
+}
+
+/// Returns the active Java policy for `code`, if the code belongs to that surface.
+pub fn remoting_route_policy(code: i32) -> Option<RemotingRoutePolicy> {
+    JAVA_PROXY_ACTIVE_ROUTE_POLICIES
+        .iter()
+        .copied()
+        .find(|policy| policy.request_code() == code)
 }
 
 impl RemotingIngressRoute {
@@ -91,6 +282,7 @@ impl RemotingIngressRoute {
             RequestCode::HeartBeat => "RemotingHeartBeat",
             RequestCode::UnregisterClient => "RemotingUnregisterClient",
             RequestCode::GetConsumerListByGroup => "RemotingGetConsumerListByGroup",
+            RequestCode::GetConsumerConnectionList => "RemotingGetConsumerConnectionList",
             RequestCode::NotifyConsumerIdsChanged => "RemotingNotifyConsumerIdsChanged",
             RequestCode::NotifyUnsubscribeLite => "RemotingNotifyUnsubscribeLite",
             RequestCode::LockBatchMq => "RemotingLockBatchMq",
@@ -110,6 +302,12 @@ impl RemotingIngressRoute {
             RequestCode::GetProxyDrainState => "RemotingGetProxyDrainState",
             RequestCode::BeginProxyDrain => "RemotingBeginProxyDrain",
             RequestCode::CancelProxyDrain => "RemotingCancelProxyDrain",
+            RequestCode::ConsumerSendMsgBack => "RemotingConsumerSendMsgBack",
+            RequestCode::EndTransaction => "RemotingEndTransaction",
+            RequestCode::RecallMessage => "RemotingRecallMessage",
+            RequestCode::PopMessage => "RemotingPopMessage",
+            RequestCode::AckMessage => "RemotingAckMessage",
+            RequestCode::ChangeMessageInvisibleTime => "RemotingChangeMessageInvisibleTime",
             _ => "RemotingRequest",
         }
     }
@@ -131,26 +329,13 @@ impl RemotingIngressDispatcher {
 
 /// Classifies a wire request code without decoding facade-owned headers.
 pub fn classify_remoting_request(code: i32) -> RemotingIngressRoute {
+    if let Some(policy) = remoting_route_policy(code) {
+        return policy.route();
+    }
     match RequestCode::from(code) {
-        RequestCode::GetRouteinfoByTopic => RemotingIngressRoute::QueryRoute,
         RequestCode::QueryAssignment => RemotingIngressRoute::QueryAssignment,
-        RequestCode::SendMessage | RequestCode::SendMessageV2 | RequestCode::SendBatchMessage => {
-            RemotingIngressRoute::SendMessage
-        }
-        RequestCode::HeartBeat => RemotingIngressRoute::Heartbeat,
-        RequestCode::UnregisterClient => RemotingIngressRoute::UnregisterClient,
-        RequestCode::GetConsumerListByGroup => RemotingIngressRoute::GetConsumerListByGroup,
         RequestCode::NotifyConsumerIdsChanged => RemotingIngressRoute::NotifyConsumerIdsChanged,
         RequestCode::NotifyUnsubscribeLite => RemotingIngressRoute::NotifyUnsubscribeLite,
-        RequestCode::LockBatchMq => RemotingIngressRoute::LockBatchMessageQueue,
-        RequestCode::UnlockBatchMq => RemotingIngressRoute::UnlockBatchMessageQueue,
-        RequestCode::CheckClientConfig => RemotingIngressRoute::CheckClientConfig,
-        RequestCode::PullMessage | RequestCode::LitePullMessage => RemotingIngressRoute::PullMessage,
-        RequestCode::UpdateConsumerOffset => RemotingIngressRoute::UpdateConsumerOffset,
-        RequestCode::QueryConsumerOffset => RemotingIngressRoute::QueryConsumerOffset,
-        RequestCode::GetMaxOffset => RemotingIngressRoute::GetMaxOffset,
-        RequestCode::GetMinOffset => RemotingIngressRoute::GetMinOffset,
-        RequestCode::SearchOffsetByTimestamp => RemotingIngressRoute::SearchOffsetByTimestamp,
         RequestCode::GetBrokerLiteInfo => RemotingIngressRoute::GetBrokerLiteInfo,
         RequestCode::GetParentTopicInfo => RemotingIngressRoute::GetParentTopicInfo,
         RequestCode::GetLiteTopicInfo => RemotingIngressRoute::GetLiteTopicInfo,
