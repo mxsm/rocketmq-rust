@@ -1,25 +1,47 @@
-import { Moon, RefreshCw, Sun } from 'lucide-react';
+import { ChevronDown, LockKeyhole, Menu, RefreshCw, Server, UserCircle } from 'lucide-react';
+import type { Ref } from 'react';
 import { useCallback, useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { authApi } from '../api/auth_api';
 import { configApi } from '../api/config_api';
-import StatusBadge from '../components/StatusBadge';
+import { Badge } from '../components/ui/Badge';
+import { Button } from '../components/ui/Button';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '../components/ui/DropdownMenu';
 
 interface HeaderProps {
-  theme: 'light' | 'dark';
-  onThemeToggle: () => void;
+  menuButtonRef?: Ref<HTMLButtonElement>;
+  onMenuOpen: () => void;
 }
 
-export default function Header({ theme, onThemeToggle }: HeaderProps) {
+const pageLabels = [
+  ['/messages/dlq', 'DLQ Message', 'Messaging'],
+  ['/message-trace', 'Message Trace', 'Messaging'],
+  ['/dashboard', 'Dashboard', 'Operate'],
+  ['/brokers', 'Cluster', 'Messaging'],
+  ['/topics', 'Topic', 'Messaging'],
+  ['/consumers', 'Consumer', 'Messaging'],
+  ['/producers', 'Producer', 'Messaging'],
+  ['/messages', 'Message', 'Messaging'],
+  ['/acl', 'ACL Management', 'Governance'],
+  ['/monitors', 'Monitor', 'Governance'],
+  ['/config', 'OPS', 'Operate'],
+  ['/proxy', 'Proxy', 'Operate']
+] as const;
+
+export default function Header({ menuButtonRef, onMenuOpen }: HeaderProps) {
   const [namesrv, setNamesrv] = useState<string>('unconfigured');
   const [tls, setTls] = useState(false);
   const [sessionLabel, setSessionLabel] = useState('session open');
   const [loginRequired, setLoginRequired] = useState(false);
   const [authenticated, setAuthenticated] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const navigate = useNavigate();
+  const location = useLocation();
+  const page = pageLabels.find(([path]) => location.pathname === path || location.pathname.startsWith(`${path}/`));
 
   const loadConfig = useCallback(() => {
-    configApi
+    setRefreshing(true);
+    return configApi
       .getConfig()
       .then((config) => {
         setNamesrv(config.currentNamesrv ?? 'unconfigured');
@@ -27,7 +49,8 @@ export default function Header({ theme, onThemeToggle }: HeaderProps) {
       })
       .catch(() => {
         setNamesrv('unavailable');
-      });
+      })
+      .finally(() => setRefreshing(false));
   }, []);
 
   useEffect(() => {
@@ -67,28 +90,49 @@ export default function Header({ theme, onThemeToggle }: HeaderProps) {
 
   return (
     <header className="topbar">
-      <div className="topbar-title">
-        <strong>RocketMQ Web</strong>
-        <span>Rust Axum API</span>
+      <div className="topbar-leading">
+        <Button ref={menuButtonRef} variant="ghost" size="icon" className="topbar-menu" aria-label="Open navigation" onClick={onMenuOpen}>
+          <Menu size={18} aria-hidden="true" />
+        </Button>
+        <div className="topbar-title">
+          <span>{page?.[2] ?? 'RocketMQ'}</span>
+          <strong>{page?.[1] ?? 'Operations'}</strong>
+        </div>
       </div>
       <div className="topbar-status">
-        <StatusBadge status="cluster default" tone="neutral" />
-        <StatusBadge status={namesrv} tone={namesrv === 'unconfigured' ? 'warning' : 'success'} />
-        <StatusBadge status={tls ? 'TLS on' : 'TLS off'} tone={tls ? 'success' : 'neutral'} />
-        <StatusBadge status={sessionLabel} tone={sessionLabel === 'signed out' ? 'warning' : 'neutral'} />
+        <Badge tone={namesrv === 'unconfigured' || namesrv === 'unavailable' ? 'warning' : 'success'}>
+          <Server size={12} aria-hidden="true" />
+          <span className="topbar-status-label">NameServer</span> {namesrv}
+        </Badge>
+        <Badge tone={tls ? 'success' : 'neutral'}>
+          <LockKeyhole size={12} aria-hidden="true" />
+          {tls ? 'TLS on' : 'TLS off'}
+        </Badge>
       </div>
       <div className="topbar-actions">
-        <button type="button" className="icon-button" title="Refresh config" onClick={loadConfig}>
+        <Button type="button" variant="ghost" size="icon" loading={refreshing} aria-label="Refresh configuration" onClick={loadConfig}>
           <RefreshCw size={16} aria-hidden="true" />
-        </button>
-        {loginRequired ? (
-          <button type="button" className="button button-secondary" onClick={handleAuthAction}>
-            {authenticated ? 'Sign out' : 'Sign in'}
-          </button>
-        ) : null}
-        <button type="button" className="icon-button" title="Toggle theme" onClick={onThemeToggle}>
-          {theme === 'dark' ? <Sun size={16} aria-hidden="true" /> : <Moon size={16} aria-hidden="true" />}
-        </button>
+        </Button>
+        {loginRequired && authenticated ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" className="topbar-user">
+                <UserCircle size={16} aria-hidden="true" />
+                {sessionLabel}
+                <ChevronDown size={14} aria-hidden="true" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuLabel>Dashboard session</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={handleAuthAction}>Sign out</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : loginRequired ? (
+          <Button type="button" variant="secondary" onClick={handleAuthAction}>Sign in</Button>
+        ) : (
+          <Badge tone="neutral"><UserCircle size={12} aria-hidden="true" />{sessionLabel}</Badge>
+        )}
       </div>
     </header>
   );

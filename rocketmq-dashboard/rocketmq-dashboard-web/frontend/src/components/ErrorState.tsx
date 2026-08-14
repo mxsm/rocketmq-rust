@@ -1,4 +1,5 @@
 import { AlertTriangle } from 'lucide-react';
+import { Button } from './ui/Button';
 
 interface ErrorStateProps {
   message: string;
@@ -7,13 +8,13 @@ interface ErrorStateProps {
 
 export default function ErrorState({ message, onRetry }: ErrorStateProps) {
   return (
-    <div className="state-block state-block-error">
+    <div className="state-block state-block-error" role="alert">
       <AlertTriangle size={24} aria-hidden="true" />
       <span>{message}</span>
       {onRetry ? (
-        <button type="button" className="button button-secondary" onClick={onRetry}>
+        <Button type="button" variant="secondary" onClick={onRetry}>
           Retry
-        </button>
+        </Button>
       ) : null}
     </div>
   );
