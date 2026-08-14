@@ -321,7 +321,7 @@ RocketMQ-Rust 利用 Rust 的零成本抽象和高效的异步运行时，以较
 
 ### Star 历史
 
-[![Star History Chart](https://api.star-history.com/svg?repos=mxsm/rocketmq-rust&type=Date)](https://star-history.com/#mxsm/rocketmq-rust&Date)
+[![Star History Chart](https://star-history.dera.page/svg?repos=mxsm/rocketmq-rust&type=Date)](https://star-history.dera.page/#mxsm/rocketmq-rust&Date)
 
 ## 📄 许可证
 
