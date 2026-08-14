@@ -23,6 +23,7 @@ use crate::model::ConsumerResetOffsetRequest;
 use crate::model::DashboardOverview;
 use crate::model::MessageListView;
 use crate::model::MessageResendRequest;
+use crate::model::MessageResendResult;
 use crate::model::MessageTraceView;
 use crate::model::MutationResult;
 use crate::model::ProducerConnectionView;
@@ -59,7 +60,7 @@ impl DashboardAdminProvider for DashboardAdminClient {
     type Message = MessageListView;
     type MessageTrace = MessageTraceView;
     type MessageResendRequest = MessageResendRequest;
-    type MessageResendResult = MutationResult;
+    type MessageResendResult = MessageResendResult;
 
     fn dashboard_overview(&self) -> AdminFuture<'_, Self::DashboardOverview, Self::Error> {
         Box::pin(DashboardAdminClient::dashboard_overview(self))

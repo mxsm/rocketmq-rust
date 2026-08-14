@@ -1,642 +1,239 @@
-import * as Dialog from '@radix-ui/react-dialog';
-import {
-  Clock3,
-  Copy,
-  DatabaseZap,
-  Eye,
-  GitBranch,
-  Hash,
-  Network,
-  RefreshCw,
-  Search,
-  X
-} from 'lucide-react';
-import type { ReactNode } from 'react';
-import { useEffect, useMemo, useState } from 'react';
+import { GitBranch, Hash, Network, Search } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { messageApi } from '../api/message_api';
 import { topicApi } from '../api/topic_api';
-import EmptyState from '../components/EmptyState';
+import AppDataTable, { type AppDataTableColumn } from '../components/AppDataTable';
+import MetricCard from '../components/MetricCard';
 import PageHeader from '../components/PageHeader';
-import SelectMenu, { type SelectMenuOption } from '../components/SelectMenu';
+import RefreshButton from '../components/RefreshButton';
 import StatusBadge from '../components/StatusBadge';
-import type { MessageListView, MessageTraceNode, MessageTraceView, MessageView } from '../types/message';
+import { Button } from '../components/ui/Button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/Card';
+import { Input } from '../components/ui/Input';
+import { Label } from '../components/ui/Label';
+import { Tabs, TabsList, TabsTrigger } from '../components/ui/Tabs';
+import type { MessageTraceView, MessageView } from '../types/message';
+import { messageRowId, messageTraceId } from './messages/dlq-selection';
+import { formatMessageTimestamp, messageKeys, messageTags, truncateIdentifier } from './messages/message-model';
+import TraceTimeline from './messages/TraceTimeline';
 
-type QueryMode = 'key' | 'id';
-type NoticeTone = 'success' | 'warning' | 'danger';
+type TraceQuery =
+  | { mode: 'id'; topic: string; messageId: string }
+  | { mode: 'key'; topic: string; messageKey: string };
 
-const traceDefaultTopic = 'RMQ_SYS_TRACE_TOPIC';
-
-const queryModes: Array<{ key: QueryMode; label: string; description: string }> = [
-  {
-    key: 'key',
-    label: 'Message Key',
-    description: 'Query by topic and message key. Only return 64 messages.'
-  },
-  {
-    key: 'id',
-    label: 'Message ID',
-    description: 'Resolve one message by topic and message ID before loading trace detail.'
-  }
-];
+const pageSize = 10;
+const defaultTraceTopic = 'RMQ_SYS_TRACE_TOPIC';
 
 export default function MessageTracePage() {
   const [topics, setTopics] = useState<string[]>([]);
-  const [topic, setTopic] = useState('');
-  const [traceTopic, setTraceTopic] = useState(traceDefaultTopic);
-  const [mode, setMode] = useState<QueryMode>('key');
-  const [messageKey, setMessageKey] = useState('');
-  const [messageId, setMessageId] = useState('');
+  const [query, setQuery] = useState<TraceQuery>({ mode: 'id', topic: '', messageId: '' });
+  const [traceTopic, setTraceTopic] = useState(defaultTraceTopic);
   const [rows, setRows] = useState<MessageView[]>([]);
-  const [total, setTotal] = useState(0);
-  const [tableQuery, setTableQuery] = useState('');
+  const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<MessageView | null>(null);
   const [trace, setTrace] = useState<MessageTraceView | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [candidateLoading, setCandidateLoading] = useState(false);
+  const [candidateError, setCandidateError] = useState<string | null>(null);
   const [traceLoading, setTraceLoading] = useState(false);
-  const [notice, setNotice] = useState<{ tone: NoticeTone; message: string } | null>(null);
+  const [traceError, setTraceError] = useState<string | null>(null);
+  const [validation, setValidation] = useState<string | null>(null);
+  const [topicsLoading, setTopicsLoading] = useState(false);
+  const [topicsError, setTopicsError] = useState<string | null>(null);
+  const topicRequestRef = useRef(0);
+  const candidateRequestRef = useRef(0);
+  const traceRequestRef = useRef(0);
 
-  const activeMode = queryModes.find((item) => item.key === mode) ?? queryModes[0];
-
-  const topicOptions = useMemo<SelectMenuOption[]>(() => {
-    const values = Array.from(new Set([...topics, topic].filter(Boolean))).sort((left, right) => left.localeCompare(right));
-    return values.map((value) => ({ value, label: value }));
-  }, [topic, topics]);
-
-  const traceTopicOptions = useMemo<SelectMenuOption[]>(() => {
-    const values = Array.from(
-      new Set([
-        traceDefaultTopic,
-        traceTopic,
-        ...topics.filter((item) => !item.startsWith('%RETRY%') && !item.startsWith('%DLQ%'))
-      ].filter(Boolean))
-    ).sort((left, right) => (left === traceDefaultTopic ? -1 : right === traceDefaultTopic ? 1 : left.localeCompare(right)));
-    return values.map((value) => ({ value, label: value }));
-  }, [topics, traceTopic]);
-
-  const filteredRows = useMemo(() => {
-    const normalized = tableQuery.trim().toLowerCase();
-    if (!normalized) {
-      return rows;
+  const loadTopics = useCallback(async () => {
+    const requestId = ++topicRequestRef.current;
+    setTopicsLoading(true);
+    setTopicsError(null);
+    try {
+      const data = await topicApi.list();
+      if (topicRequestRef.current !== requestId) return;
+      const nextTopics = data.items.map((item) => item.topic).sort((left, right) => left.localeCompare(right));
+      setTopics(nextTopics);
+      setQuery((current) => current.topic ? current : { ...current, topic: preferredTopic(nextTopics) });
+    } catch (requestError) {
+      if (topicRequestRef.current === requestId) {
+        setTopics([]);
+        setTopicsError(`Topic discovery failed: ${requestError instanceof Error ? requestError.message : String(requestError)}`);
+      }
+    } finally {
+      if (topicRequestRef.current === requestId) setTopicsLoading(false);
     }
-    return rows.filter((row) => JSON.stringify(row).toLowerCase().includes(normalized));
-  }, [rows, tableQuery]);
-
-  const querySummary = mode === 'key' ? messageKey.trim() || 'message key pending' : messageId.trim() || 'message id pending';
-
-  useEffect(() => {
-    topicApi
-      .list()
-      .then((data) => {
-        const nextTopics = data.items.map((item) => item.topic).sort((left, right) => left.localeCompare(right));
-        setTopics(nextTopics);
-        setTopic((current) => current || preferredMessageTopic(nextTopics));
-        setTraceTopic((current) => current || preferredTraceTopic(nextTopics));
-      })
-      .catch((requestError: Error) => {
-        setNotice({ tone: 'warning', message: `Topic list unavailable: ${requestError.message}` });
-      });
   }, []);
 
-  const submitQuery = () => {
-    const validation = validateQuery(mode, topic, messageKey, messageId);
-    if (validation) {
-      setNotice({ tone: 'warning', message: validation });
+  useEffect(() => {
+    void loadTopics();
+    return () => { topicRequestRef.current += 1; };
+  }, [loadTopics]);
+
+  useEffect(() => () => {
+    candidateRequestRef.current += 1;
+    traceRequestRef.current += 1;
+  }, []);
+
+  const invalidateCandidates = () => {
+    candidateRequestRef.current += 1;
+    traceRequestRef.current += 1;
+    setCandidateLoading(false);
+    setRows([]);
+    setPage(1);
+    setSelected(null);
+    setTrace(null);
+    setCandidateError(null);
+    setTraceError(null);
+    setTraceLoading(false);
+    setValidation(null);
+  };
+
+  const updateQuery = (nextQuery: TraceQuery) => {
+    setQuery(nextQuery);
+    invalidateCandidates();
+  };
+
+  const switchMode = (mode: string) => {
+    setQuery(mode === 'key' ? { mode, topic: query.topic, messageKey: '' } : { mode: 'id', topic: query.topic, messageId: '' });
+    invalidateCandidates();
+  };
+
+  const findCandidates = async () => {
+    const issue = validateQuery(query, traceTopic);
+    if (issue) {
+      setValidation(issue);
       return;
     }
-
-    setLoading(true);
-    setTrace(null);
+    const requestId = ++candidateRequestRef.current;
+    traceRequestRef.current += 1;
+    setCandidateLoading(true);
+    setCandidateError(null);
+    setValidation(null);
     setSelected(null);
-    setNotice(null);
-
-    const request = mode === 'key' ? messageApi.byKey(topic.trim(), messageKey.trim()) : messageApi.byId(topic.trim(), messageId.trim());
-
-    request
-      .then((data: MessageListView) => {
-        const nextItems = normalizeTraceRows(mode, topic.trim(), data.items);
-        setRows(nextItems);
-        setTotal(data.total || data.items.length);
-        setNotice({
-          tone: nextItems.length > 0 ? 'success' : 'warning',
-          message:
-            nextItems.length > 0
-              ? `Trace query completed. ${nextItems.length} message(s) loaded.`
-              : 'No messages matched the current trace query.'
-        });
-      })
-      .catch((requestError: Error) => {
+    setTrace(null);
+    setTraceError(null);
+    setTraceLoading(false);
+    try {
+      const data = query.mode === 'id'
+        ? await messageApi.byId(query.topic.trim(), query.messageId.trim())
+        : await messageApi.byKey(query.topic.trim(), query.messageKey.trim());
+      if (candidateRequestRef.current !== requestId) return;
+      setRows(query.mode === 'id' ? data.items.slice(0, 1) : data.items.slice(0, 64));
+      setPage(1);
+    } catch (requestError) {
+      if (candidateRequestRef.current === requestId) {
         setRows([]);
-        setTotal(0);
-        setNotice({ tone: 'danger', message: requestError.message });
-      })
-      .finally(() => setLoading(false));
+        setCandidateError(requestError instanceof Error ? requestError.message : String(requestError));
+      }
+    } finally {
+      if (candidateRequestRef.current === requestId) setCandidateLoading(false);
+    }
   };
 
-  const resetQuery = () => {
-    setMessageKey('');
-    setMessageId('');
-    setRows([]);
-    setTotal(0);
-    setTableQuery('');
-    setSelected(null);
-    setTrace(null);
-    setNotice(null);
-  };
-
-  const openTrace = (message: MessageView) => {
+  const loadTrace = async (message = selected) => {
+    if (!message) return;
+    const requestId = ++traceRequestRef.current;
     setSelected(message);
     setTrace(null);
     setTraceLoading(true);
-    messageApi
-      .trace(message.messageId, message.topic, traceTopic || traceDefaultTopic)
-      .then((data) => {
-        setTrace(data);
-        setNotice({
-          tone: data.nodes.length > 0 ? 'success' : 'warning',
-          message: data.nodes.length > 0 ? `Trace detail loaded with ${data.nodes.length} node(s).` : 'Trace detail returned no nodes.'
-        });
-      })
-      .catch((requestError: Error) => {
-        setTrace(null);
-        setNotice({ tone: 'danger', message: requestError.message });
-      })
-      .finally(() => setTraceLoading(false));
+    setTraceError(null);
+    try {
+      const data = await messageApi.trace(messageTraceId(message), message.topic, traceTopic.trim());
+      if (traceRequestRef.current === requestId) setTrace(data);
+    } catch (requestError) {
+      if (traceRequestRef.current === requestId) setTraceError(requestError instanceof Error ? requestError.message : String(requestError));
+    } finally {
+      if (traceRequestRef.current === requestId) setTraceLoading(false);
+    }
   };
 
-  const copyMessageId = (value: string) => {
-    copyText(value);
-    setNotice({ tone: 'success', message: `Copied message ID ${truncateMiddle(value, 28)}.` });
-  };
+  const columns: AppDataTableColumn<MessageView>[] = [
+    { id: 'message-id', header: 'Message ID', width: '34%', cell: (row) => <span className="mono message-id-value" title={row.messageId}>{truncateIdentifier(row.messageId, 38)}</span> },
+    { id: 'topic', header: 'Topic', cell: (row) => <span className="mono">{row.topic}</span> },
+    { id: 'tags', header: 'Tags', cell: (row) => <StatusBadge status={messageTags(row)} tone={messageTags(row) === '-' ? 'neutral' : 'success'} /> },
+    { id: 'keys', header: 'Keys', cell: (row) => <span className="mono message-muted-value">{messageKeys(row)}</span> },
+    { id: 'stored', header: 'Stored', cell: (row) => formatMessageTimestamp(row.storeTimestamp) }
+  ];
+  const visibleRows = rows.slice((page - 1) * pageSize, page * pageSize);
 
   return (
-    <>
+    <div className="message-ops-workspace">
       <PageHeader
-        title="MessageTrace"
-        description="Query message trace by key or message ID, then inspect delivery and consume status in a focused detail panel."
-        actions={
-          <button type="button" className="button button-secondary" onClick={submitQuery} disabled={loading}>
-            <RefreshCw className={loading ? 'spin' : undefined} size={15} aria-hidden="true" />
-            Refresh
-          </button>
-        }
+        title="Message trace"
+        description="Find real message candidates, then render only the trace nodes returned by the backend."
+        actions={<RefreshButton refreshing={candidateLoading} onRefresh={() => void findCandidates()} />}
       />
 
-      {notice ? <div className={`notice notice-${notice.tone}`}>{notice.message}</div> : null}
-
-      <section className="trace-topic-panel">
-        <label className="message-query-field">
-          <span>
-            <strong>*</strong> TraceTopic
-          </span>
-          <SelectMenu
-            value={traceTopic}
-            options={traceTopicOptions}
-            onChange={setTraceTopic}
-            ariaLabel="Select trace topic"
-            className="trace-topic-select"
-          />
-        </label>
-        <p>Trace topic selects where the dashboard reads message trace records.</p>
-      </section>
-
-      <section className="trace-query-panel">
-        <div className="trace-query-head">
-          <div className="message-mode-tabs" role="tablist" aria-label="Message trace query mode">
-            {queryModes.map((item) => (
-              <button
-                type="button"
-                role="tab"
-                aria-selected={mode === item.key}
-                className={mode === item.key ? 'active' : ''}
-                key={item.key}
-                onClick={() => {
-                  setMode(item.key);
-                  setRows([]);
-                  setTotal(0);
-                  setSelected(null);
-                  setTrace(null);
-                  setNotice(null);
-                }}
-              >
-                {item.label}
-              </button>
-            ))}
-          </div>
-          <p>{activeMode.description}</p>
-        </div>
-
-        <div className="trace-query-fields">
-          <label className="message-query-field">
-            <span>
-              <strong>*</strong> Topic
-            </span>
-            {topicOptions.length > 0 ? (
-              <SelectMenu value={topic} options={topicOptions} onChange={setTopic} ariaLabel="Select message topic" className="trace-topic-name-select" />
+      <Card className="message-query-card">
+        <CardHeader>
+          <div><CardTitle>Find trace candidates</CardTitle><CardDescription>Select one message before loading its returned trace nodes.</CardDescription></div>
+          <Tabs value={query.mode} onValueChange={switchMode}>
+            <TabsList aria-label="Trace query mode"><TabsTrigger value="id">By message ID</TabsTrigger><TabsTrigger value="key">By message key</TabsTrigger></TabsList>
+          </Tabs>
+        </CardHeader>
+        <CardContent>
+          <div className="trace-query-grid">
+            <div className="message-query-field"><Label htmlFor="trace-topic">Trace topic</Label><Input id="trace-topic" value={traceTopic} onChange={(event) => { traceRequestRef.current += 1; setTraceTopic(event.target.value); setSelected(null); setTrace(null); setTraceError(null); setTraceLoading(false); }} /></div>
+            <div className="message-query-field"><Label htmlFor="trace-message-topic">Message topic</Label><select id="trace-message-topic" value={query.topic} onChange={(event) => updateQuery({ ...query, topic: event.target.value })}>{topics.length === 0 ? <option value="">Select a topic</option> : null}{topics.map((topic) => <option key={topic}>{topic}</option>)}</select></div>
+            {query.mode === 'id' ? (
+              <div className="message-query-field trace-identifier-field"><Label htmlFor="trace-message-id">Message ID</Label><Input id="trace-message-id" value={query.messageId} onChange={(event) => updateQuery({ ...query, messageId: event.target.value })} /></div>
             ) : (
-              <input value={topic} placeholder="Topic name" onChange={(event) => setTopic(event.target.value)} />
+              <div className="message-query-field trace-identifier-field"><Label htmlFor="trace-message-key">Message key</Label><Input id="trace-message-key" value={query.messageKey} onChange={(event) => updateQuery({ ...query, messageKey: event.target.value })} /></div>
             )}
-          </label>
-
-          {mode === 'key' ? (
-            <label className="message-query-field trace-wide-field">
-              <span>
-                <strong>*</strong> Key
-              </span>
-              <input value={messageKey} placeholder="Message key" onChange={(event) => setMessageKey(event.target.value)} />
-            </label>
-          ) : (
-            <label className="message-query-field trace-wide-field">
-              <span>
-                <strong>*</strong> Message ID
-              </span>
-              <input value={messageId} placeholder="Message ID" onChange={(event) => setMessageId(event.target.value)} />
-            </label>
-          )}
-
-          <button type="button" className="button trace-action-button" onClick={submitQuery} disabled={loading}>
-            {loading ? <RefreshCw className="spin" size={15} aria-hidden="true" /> : <Search size={15} aria-hidden="true" />}
-            Search
-          </button>
-          <button type="button" className="button button-secondary trace-action-button" onClick={resetQuery}>
-            Reset
-          </button>
-        </div>
-      </section>
-
-      <section className="message-metric-grid trace-metric-grid">
-        <TraceMetric label="Rows" value={rows.length.toLocaleString()} detail={`${total.toLocaleString()} total from latest query`} icon={<DatabaseZap size={18} />} />
-        <TraceMetric label="Trace nodes" value={(trace?.nodes.length ?? 0).toLocaleString()} detail="loaded after detail opens" icon={<GitBranch size={18} />} />
-        <TraceMetric label="Trace topic" value={traceTopic || '-'} detail="selected trace topic" icon={<Network size={18} />} />
-        <TraceMetric label="Condition" value={querySummary} detail="current query condition" icon={mode === 'key' ? <Hash size={18} /> : <Clock3 size={18} />} />
-      </section>
-
-      <section className="trace-results-wide">
-        <div className="table-shell">
-          <div className="table-toolbar trace-table-toolbar">
-            <div>
-              <h2>Trace messages</h2>
-              <p>Open Message Trace Detail for the selected message.</p>
+            <Button type="button" className="message-query-submit" loading={candidateLoading} aria-label="Find trace candidates" onClick={() => void findCandidates()}><Search size={15} aria-hidden="true" /> Find trace candidates</Button>
+          </div>
+          {topicsError ? (
+            <div className="notice notice-danger message-discovery-notice" role="alert">
+              <span>{topicsError}</span>
+              <Button type="button" variant="outline" size="sm" loading={topicsLoading} aria-label="Retry topics" onClick={() => void loadTopics()}>Retry topics</Button>
             </div>
-            <div className="trace-table-tools">
-              <StatusBadge status={`${filteredRows.length} visible`} tone={filteredRows.length > 0 ? 'success' : 'neutral'} />
-              <button type="button" className="icon-button" onClick={submitQuery} title="Refresh table" disabled={loading}>
-                <RefreshCw className={loading ? 'spin' : undefined} size={16} aria-hidden="true" />
-              </button>
-            </div>
-          </div>
-          <div className="trace-search-band">
-            <label className="search-box">
-              <Search size={16} aria-hidden="true" />
-              <input
-                value={tableQuery}
-                placeholder="Search message id, tag, key, or store time"
-                onChange={(event) => setTableQuery(event.target.value)}
-              />
-            </label>
-          </div>
-          <div className="table-scroll">
-            <table>
-              <thead>
-                <tr>
-                  <th>Message ID</th>
-                  <th>Tag</th>
-                  <th>Message Key</th>
-                  <th>StoreTime</th>
-                  <th>Trace State</th>
-                  <th>Operation</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredRows.map((row) => (
-                  <tr key={row.messageId}>
-                    <td>
-                      <div className="message-id-cell trace-message-id-cell">
-                        <button type="button" className="message-id-link" title={row.messageId} onClick={() => openTrace(row)}>
-                          <span>{row.messageId}</span>
-                        </button>
-                        <button type="button" className="message-copy-button" title="Copy message ID" onClick={() => copyMessageId(row.messageId)}>
-                          <Copy size={13} aria-hidden="true" /> Copy
-                        </button>
-                      </div>
-                    </td>
-                    <td>
-                      <StatusBadge status={messageTags(row)} tone={messageTags(row) !== '-' ? 'success' : 'neutral'} />
-                    </td>
-                    <td>
-                      <span className="message-muted-value">{messageKeys(row)}</span>
-                    </td>
-                    <td>{formatTimestamp(row.storeTimestamp)}</td>
-                    <td>
-                      <StatusBadge status={traceStateFor(row, selected, trace, traceLoading)} tone={traceStateTone(row, selected, trace, traceLoading)} />
-                    </td>
-                    <td>
-                      <button type="button" className="message-action-button" onClick={() => openTrace(row)} disabled={traceLoading && selected?.messageId === row.messageId}>
-                        {traceLoading && selected?.messageId === row.messageId ? <RefreshCw className="spin" size={14} aria-hidden="true" /> : <Eye size={14} aria-hidden="true" />}
-                        Trace Detail
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          {filteredRows.length === 0 ? <EmptyState title={loading ? 'Loading trace messages' : 'No trace messages'} /> : null}
-          <div className="table-footer">
-            <span>{filteredRows.length.toLocaleString()} rows / latest query</span>
-          </div>
-        </div>
-      </section>
-
-      <MessageTraceDetailDialog
-        message={selected}
-        trace={trace}
-        traceTopic={traceTopic}
-        traceLoading={traceLoading}
-        onClose={() => {
-          setSelected(null);
-          setTrace(null);
-        }}
-        onCopyMessageId={copyMessageId}
-      />
-    </>
-  );
-}
-
-interface TraceMetricProps {
-  label: string;
-  value: string;
-  detail: string;
-  icon: ReactNode;
-}
-
-function TraceMetric({ label, value, detail, icon }: TraceMetricProps) {
-  return (
-    <article className="message-metric-card">
-      <div>
-        <span>{label}</span>
-        <strong title={value}>{value}</strong>
-        <small>{detail}</small>
-      </div>
-      <div className="message-metric-icon">{icon}</div>
-    </article>
-  );
-}
-
-interface MessageTraceDetailDialogProps {
-  message: MessageView | null;
-  trace: MessageTraceView | null;
-  traceTopic: string;
-  traceLoading: boolean;
-  onClose: () => void;
-  onCopyMessageId: (value: string) => void;
-}
-
-function MessageTraceDetailDialog({
-  message,
-  trace,
-  traceTopic,
-  traceLoading,
-  onClose,
-  onCopyMessageId
-}: MessageTraceDetailDialogProps) {
-  const nodes = trace?.nodes ?? [];
-  const groupedNodes = groupTraceNodes(nodes);
-
-  return (
-    <Dialog.Root open={message !== null} onOpenChange={(open) => !open && onClose()}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="dialog-overlay" />
-        <Dialog.Content className="drawer-content message-detail-drawer trace-detail-drawer">
-          <div className="drawer-header">
-            <div>
-              <Dialog.Title>Message Trace Detail</Dialog.Title>
-              <div className="drawer-meta">
-                <StatusBadge status={traceTopic || traceDefaultTopic} tone="neutral" />
-                <StatusBadge status={traceLoading ? 'loading trace' : `${nodes.length} nodes`} tone={nodes.length > 0 ? 'success' : 'neutral'} />
-              </div>
-            </div>
-            <div className="message-detail-header-actions">
-              {message ? (
-                <button type="button" className="button button-secondary" onClick={() => onCopyMessageId(message.messageId)}>
-                  <Copy size={15} aria-hidden="true" />
-                  Copy ID
-                </button>
-              ) : null}
-              <Dialog.Close className="icon-button" title="Close">
-                <X size={16} aria-hidden="true" />
-              </Dialog.Close>
-            </div>
-          </div>
-
-          {message ? (
-            <>
-              <section className="drawer-section">
-                <div className="message-detail-section-heading">
-                  <h3>Message trace graph</h3>
-                  <StatusBadge status={trace?.traceTopic ?? traceTopic} tone="neutral" />
-                </div>
-                <TraceGraph nodes={nodes} loading={traceLoading} />
-              </section>
-
-              <section className="drawer-section">
-                <div className="message-detail-section-heading">
-                  <h3>Send message trace</h3>
-                  <StatusBadge status={message.topic} tone="success" />
-                </div>
-                <div className="message-info-grid">
-                  {sendTraceRows(message).map((row) => (
-                    <div className={row.wide ? 'wide' : undefined} key={row.label}>
-                      <span>{row.label}</span>
-                      <strong title={row.value}>{row.value}</strong>
-                    </div>
-                  ))}
-                </div>
-              </section>
-
-              <section className="drawer-section">
-                <div className="message-detail-section-heading">
-                  <h3>Consume message trace</h3>
-                  <StatusBadge status={`${groupedNodes.length} consumer groups`} tone={groupedNodes.length > 0 ? 'success' : 'neutral'} />
-                </div>
-                {groupedNodes.length > 0 ? (
-                  <div className="trace-node-table">
-                    <div className="trace-node-row trace-node-head">
-                      <span>Consumer group</span>
-                      <span>Status</span>
-                      <span>Timestamp</span>
-                      <span>Node type</span>
-                    </div>
-                    {groupedNodes.map((node) => (
-                      <div className="trace-node-row" key={`${node.name}-${node.status}-${node.timestamp}-${node.nodeType}`}>
-                        <code>{node.name || '-'}</code>
-                        <StatusBadge status={node.status || 'UNKNOWN'} tone={traceNodeTone(node)} />
-                        <span>{formatTimestamp(node.timestamp)}</span>
-                        <span>{node.nodeType || '-'}</span>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <EmptyState title={traceLoading ? 'Loading trace nodes' : 'No consumer trace nodes'} />
-                )}
-              </section>
-            </>
           ) : null}
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
-  );
-}
+          {validation ? <div className="notice notice-warning" role="alert">{validation}</div> : null}
+        </CardContent>
+      </Card>
 
-function TraceGraph({ nodes, loading }: { nodes: MessageTraceNode[]; loading: boolean }) {
-  if (loading) {
-    return <EmptyState title="Loading trace graph" />;
-  }
-  if (nodes.length === 0) {
-    return <EmptyState title="No trace graph data" />;
-  }
+      <div className="metric-grid message-metric-grid">
+        <MetricCard label="Candidates" value={rows.length} detail="Returned by message query" icon={<Search size={18} />} />
+        <MetricCard label="Trace nodes" value={trace?.nodes.length ?? 0} detail="Returned without inference" icon={<GitBranch size={18} />} />
+        <MetricCard label="Trace topic" value={traceTopic || '-'} detail="Forwarded to trace API" icon={<Network size={18} />} />
+        <MetricCard label="Query" value={query.mode === 'id' ? 'Message ID' : 'Message key'} detail="One active query path" icon={<Hash size={18} />} />
+      </div>
 
-  return (
-    <div className="trace-graph">
-      <div className="trace-graph-axis" />
-      {nodes.map((node, index) => (
-        <div
-          className={`trace-graph-node trace-graph-node-${traceNodeTone(node)}`}
-          style={{ left: `${Math.min(84, 8 + index * 18)}%`, top: `${24 + (index % 3) * 34}px` }}
-          key={`${node.name}-${node.status}-${index}`}
-        >
-          <span>{node.name || node.nodeType}</span>
-          <small>{node.status || 'UNKNOWN'}</small>
-        </div>
-      ))}
+      <div className="trace-workspace-grid">
+        <Card className="message-results-card">
+          <CardHeader><div><CardTitle>Candidate messages</CardTitle><CardDescription>Activate a row to request its trace.</CardDescription></div></CardHeader>
+          <CardContent>
+            <AppDataTable
+              ariaLabel="Trace candidate messages" rows={visibleRows} columns={columns} getRowId={messageRowId}
+              page={page} pageSize={pageSize} total={rows.length} onPageChange={setPage}
+              onRowActivate={(row) => void loadTrace(row)} loading={candidateLoading} error={candidateError}
+              onRetry={() => void findCandidates()} emptyTitle="No candidate messages"
+              emptyDetail="Run a message ID or message key query to locate candidates."
+            />
+          </CardContent>
+        </Card>
+
+        <Card className="trace-detail-card">
+          <CardHeader>
+            <div><CardTitle>Returned trace nodes</CardTitle><CardDescription>{selected ? truncateIdentifier(selected.messageId, 44) : 'Select a candidate message.'}</CardDescription></div>
+            {selected ? <Button type="button" variant="outline" size="sm" loading={traceLoading} onClick={() => void loadTrace()}>Reload trace</Button> : null}
+          </CardHeader>
+          <CardContent>
+            {selected ? <TraceTimeline nodes={trace?.nodes ?? []} loading={traceLoading} error={traceError} onRetry={() => void loadTrace()} /> : <div className="state-block"><strong>No message selected</strong><span>Choose one candidate to request its trace nodes.</span></div>}
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }
 
-function validateQuery(mode: QueryMode, topic: string, messageKey: string, messageId: string) {
-  if (!topic.trim()) {
-    return 'Topic is required.';
-  }
-  if (mode === 'key' && !messageKey.trim()) {
-    return 'Topic and message key are required.';
-  }
-  if (mode === 'id' && !messageId.trim()) {
-    return 'Topic and message ID are required.';
-  }
+function validateQuery(query: TraceQuery, traceTopic: string) {
+  if (!traceTopic.trim()) return 'Trace topic is required.';
+  if (!query.topic.trim()) return 'Message topic is required.';
+  if (query.mode === 'id' && !query.messageId.trim()) return 'Message ID is required.';
+  if (query.mode === 'key' && !query.messageKey.trim()) return 'Message key is required.';
   return null;
 }
 
-function preferredMessageTopic(topics: string[]) {
-  return topics.find((item) => item === 'TopicTest1111') ?? topics.find((item) => isApplicationTopic(item)) ?? topics[0] ?? '';
-}
-
-function normalizeTraceRows(mode: QueryMode, topic: string, items: MessageView[]) {
-  if (mode === 'id') {
-    const topicRows = items.filter((item) => item.topic === topic);
-    return topicRows.length > 0 ? topicRows.slice(0, 1) : items.slice(0, 1);
-  }
-  return items.slice(0, 64);
-}
-
-function preferredTraceTopic(topics: string[]) {
-  return topics.find((item) => item === traceDefaultTopic) ?? traceDefaultTopic;
-}
-
-function isApplicationTopic(topic: string) {
-  return (
-    !topic.startsWith('%RETRY%') &&
-    !topic.startsWith('%DLQ%') &&
-    !topic.startsWith('RMQ_SYS') &&
-    !topic.startsWith('rmq_sys') &&
-    !topic.startsWith('SCHEDULE_TOPIC') &&
-    topic !== 'OFFSET_MOVED_EVENT' &&
-    !topic.endsWith('_REPLY_TOPIC') &&
-    !topic.includes('SYNC_BROKER_MEMBER')
-  );
-}
-
-function sendTraceRows(message: MessageView) {
-  return [
-    { label: 'Topic', value: message.topic },
-    { label: 'Message ID', value: message.messageId, wide: true },
-    { label: 'Message Key', value: messageKeys(message) },
-    { label: 'Tag', value: messageTags(message) },
-    { label: 'StoreTime', value: formatTimestamp(message.storeTimestamp) },
-    { label: 'BornTime', value: formatTimestamp(message.bornTimestamp) },
-    { label: 'Queue ID', value: String(message.queueId) },
-    { label: 'Queue Offset', value: String(message.queueOffset) },
-    { label: 'Store Message ID', value: message.properties.STORE_MESSAGE_ID || '-', wide: true }
-  ];
-}
-
-function groupTraceNodes(nodes: MessageTraceNode[]) {
-  return [...nodes].sort((left, right) => left.name.localeCompare(right.name));
-}
-
-function traceStateFor(row: MessageView, selected: MessageView | null, trace: MessageTraceView | null, traceLoading: boolean) {
-  if (selected?.messageId !== row.messageId) {
-    return 'not loaded';
-  }
-  if (traceLoading) {
-    return 'loading';
-  }
-  return trace && trace.nodes.length > 0 ? `${trace.nodes.length} nodes` : 'no nodes';
-}
-
-function traceStateTone(row: MessageView, selected: MessageView | null, trace: MessageTraceView | null, traceLoading: boolean) {
-  if (selected?.messageId !== row.messageId || traceLoading) {
-    return 'neutral';
-  }
-  return trace && trace.nodes.length > 0 ? 'success' : 'warning';
-}
-
-function traceNodeTone(node: MessageTraceNode) {
-  const normalized = node.status.toLowerCase();
-  if (normalized.includes('consume') || normalized.includes('success') || normalized.includes('ok')) {
-    return 'success';
-  }
-  if (normalized.includes('fail') || normalized.includes('error')) {
-    return 'danger';
-  }
-  return 'warning';
-}
-
-function messageTags(message: MessageView | null | undefined) {
-  return message?.tags || message?.properties?.TAGS || '-';
-}
-
-function messageKeys(message: MessageView | null | undefined) {
-  return message?.keys || message?.properties?.KEYS || '-';
-}
-
-function formatTimestamp(value: number | undefined) {
-  if (!value) return '-';
-  return new Date(value).toLocaleString();
-}
-
-function truncateMiddle(value: string, maxLength: number) {
-  if (value.length <= maxLength) return value;
-  const edge = Math.floor((maxLength - 3) / 2);
-  return `${value.slice(0, edge)}...${value.slice(-edge)}`;
-}
-
-function copyText(value: string) {
-  if (!value) return;
-  if (navigator.clipboard?.writeText) {
-    void navigator.clipboard.writeText(value).catch(() => legacyCopyText(value));
-    return;
-  }
-  legacyCopyText(value);
-}
-
-function legacyCopyText(value: string) {
-  const textarea = document.createElement('textarea');
-  textarea.value = value;
-  textarea.setAttribute('readonly', 'true');
-  textarea.style.position = 'fixed';
-  textarea.style.left = '-9999px';
-  textarea.style.top = '0';
-  document.body.appendChild(textarea);
-  textarea.select();
-  document.execCommand('copy');
-  textarea.remove();
+function preferredTopic(topics: string[]) {
+  return topics.find((topic) => !topic.startsWith('%') && !topic.startsWith('RMQ_SYS')) ?? topics[0] ?? '';
 }

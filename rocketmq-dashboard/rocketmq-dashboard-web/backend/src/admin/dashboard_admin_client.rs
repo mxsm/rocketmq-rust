@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::cmp::Reverse;
+use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
@@ -57,9 +58,11 @@ use crate::model::DashboardTopicCurrent;
 use crate::model::DlqBatchResendRequest;
 use crate::model::DlqExportView;
 use crate::model::DlqMessageQuery;
+use crate::model::DlqMessageRef;
 use crate::model::DlqMessageResendResult;
 use crate::model::MessageListView;
 use crate::model::MessageResendRequest;
+use crate::model::MessageResendResult;
 use crate::model::MessageTraceNode;
 use crate::model::MessageTraceView;
 use crate::model::MessageView;
@@ -647,7 +650,7 @@ impl DashboardAdminClient {
         &self,
         message_id: &str,
         request: MessageResendRequest,
-    ) -> Result<MutationResult, DashboardError> {
+    ) -> Result<MessageResendResult, DashboardError> {
         validate_name(message_id, "Message ID")?;
         validate_name(&request.topic, "Topic")?;
         validate_name(&request.consumer_group, "Consumer group")?;
@@ -658,9 +661,7 @@ impl DashboardAdminClient {
             client_id: request.client_id,
         };
         let result = run_admin_rpc!(self, |admin| admin.dashboard_consume_message_directly(&request))?;
-        Ok(MutationResult {
-            message: result.message,
-        })
+        Ok(map_direct_consume_result(result))
     }
 
     pub async fn query_dlq_messages(&self, query: DlqMessageQuery) -> Result<MessageListView, DashboardError> {
@@ -687,31 +688,10 @@ impl DashboardAdminClient {
                 "DLQ resend messages cannot be empty".to_string(),
             ));
         }
-        let mut results = Vec::with_capacity(request.messages.len());
-        for message in request.messages {
-            validate_name(&message.consumer_group, "Consumer group")?;
-            validate_name(&message.msg_id, "Message ID")?;
-            let topic = message
-                .topic_name
-                .filter(|topic| !topic.trim().is_empty())
-                .unwrap_or_else(|| format!("%DLQ%{}", message.consumer_group));
-            let result = self
-                .resend_message(
-                    &message.msg_id,
-                    MessageResendRequest {
-                        topic,
-                        consumer_group: message.consumer_group,
-                        client_id: message.client_id,
-                    },
-                )
-                .await?;
-            results.push(DlqMessageResendResult {
-                msg_id: message.msg_id,
-                consume_result: "REQUESTED".to_string(),
-                remark: Some(result.message),
-            });
-        }
-        Ok(results)
+        Ok(resend_dlq_batch(request.messages, |message_id, request| async move {
+            self.resend_message(&message_id, request).await
+        })
+        .await)
     }
 
     pub async fn export_dlq_messages(&self, query: DlqMessageQuery) -> Result<DlqExportView, DashboardError> {
@@ -834,6 +814,77 @@ impl DashboardAdminClient {
     }
 }
 
+async fn resend_dlq_batch<F, Fut>(messages: Vec<DlqMessageRef>, mut resend: F) -> Vec<DlqMessageResendResult>
+where
+    F: FnMut(String, MessageResendRequest) -> Fut,
+    Fut: Future<Output = Result<MessageResendResult, DashboardError>>,
+{
+    let mut results = Vec::with_capacity(messages.len());
+    for message in messages {
+        let result_id = message.msg_id.clone();
+        let outcome = match dlq_resend_request(message) {
+            Ok((message_id, request)) => resend(message_id, request).await,
+            Err(error) => Err(error),
+        };
+        match outcome {
+            Ok(result) => results.push(DlqMessageResendResult {
+                msg_id: result_id,
+                success: result.success,
+                consume_result: result.consume_result,
+                remark: result.remark,
+            }),
+            Err(error) => results.push(DlqMessageResendResult {
+                msg_id: result_id,
+                success: false,
+                consume_result: "FAILED".to_string(),
+                remark: Some(format!("{}: DLQ resend request failed", error.code())),
+            }),
+        }
+    }
+    results
+}
+
+fn map_direct_consume_result(result: core::AdminMutationResult) -> MessageResendResult {
+    const PREFIX: &str = "Direct consume returned ";
+    const REMARK_SEPARATOR: &str = ". Remark: ";
+
+    let consume_result = result
+        .message
+        .strip_prefix(PREFIX)
+        .and_then(|details| details.split_whitespace().next())
+        .unwrap_or("UNKNOWN")
+        .to_string();
+    let remark = result
+        .message
+        .split_once(REMARK_SEPARATOR)
+        .map(|(_, remark)| remark.trim().to_string())
+        .filter(|remark| !remark.is_empty());
+    MessageResendResult {
+        message: result.message,
+        success: consume_result == "CR_SUCCESS",
+        consume_result,
+        remark,
+    }
+}
+
+fn dlq_resend_request(message: DlqMessageRef) -> Result<(String, MessageResendRequest), DashboardError> {
+    validate_name(&message.consumer_group, "Consumer group")?;
+    validate_name(&message.msg_id, "Message ID")?;
+    let topic = message
+        .topic_name
+        .map(|topic| topic.trim().to_string())
+        .filter(|topic| !topic.is_empty())
+        .ok_or_else(|| DashboardError::Validation("DLQ resend requires the original topic".to_string()))?;
+    Ok((
+        message.msg_id,
+        MessageResendRequest {
+            topic,
+            consumer_group: message.consumer_group,
+            client_id: message.client_id,
+        },
+    ))
+}
+
 fn session_is_current(current: Option<&Arc<ManagedAdminSession>>, expected: &Arc<ManagedAdminSession>) -> bool {
     current.is_some_and(|candidate| Arc::ptr_eq(candidate, expected))
 }
@@ -860,14 +911,21 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
+    use rocketmq_admin_core::core::dashboard::AdminMutationResult as CoreMutationResult;
     use rocketmq_admin_core::core::dashboard::DashboardAclUser;
     use tokio::sync::Mutex;
     use tokio::sync::Notify;
 
+    use crate::model::DlqMessageRef;
+    use crate::model::MessageResendResult;
+
     use super::AdminConfigSnapshot;
     use super::AdminSessionOwner;
     use super::ManagedAdminSession;
+    use super::dlq_resend_request;
     use super::map_acl_user;
+    use super::map_direct_consume_result;
+    use super::resend_dlq_batch;
     use super::session_is_current;
 
     #[test]
@@ -882,6 +940,88 @@ mod tests {
 
         assert_eq!(mapped.username, "alice");
         assert_eq!(mapped.password, None);
+    }
+
+    #[test]
+    fn dlq_resend_request_requires_canonical_original_topic() {
+        let error = dlq_resend_request(DlqMessageRef {
+            topic_name: None,
+            consumer_group: "order-service".to_string(),
+            msg_id: "MSG-001".to_string(),
+            client_id: None,
+        })
+        .expect_err("missing original topic must fail closed");
+
+        assert!(matches!(error, crate::error::DashboardError::Validation(_)));
+
+        let (message_id, request) = dlq_resend_request(DlqMessageRef {
+            topic_name: Some("orders".to_string()),
+            consumer_group: "order-service".to_string(),
+            msg_id: "MSG-001".to_string(),
+            client_id: Some("client-a".to_string()),
+        })
+        .expect("canonical DLQ resend request");
+        assert_eq!(message_id, "MSG-001");
+        assert_eq!(request.topic, "orders");
+        assert_eq!(request.consumer_group, "order-service");
+        assert_eq!(request.client_id.as_deref(), Some("client-a"));
+    }
+
+    #[test]
+    fn direct_consume_result_classifies_non_success_outcomes() {
+        let result = map_direct_consume_result(CoreMutationResult {
+            message: "Direct consume returned CR_LATER for `MSG-001` on `orders` in consumer group `order-service`. Remark: retry later".to_string(),
+            target_count: 1,
+        });
+
+        assert!(!result.success);
+        assert_eq!(result.consume_result, "CR_LATER");
+        assert_eq!(result.remark.as_deref(), Some("retry later"));
+    }
+
+    #[tokio::test]
+    async fn resend_dlq_batch_continues_after_a_failed_message() {
+        let messages = vec![
+            DlqMessageRef {
+                topic_name: Some("orders".to_string()),
+                consumer_group: "order-service".to_string(),
+                msg_id: "MSG-001".to_string(),
+                client_id: None,
+            },
+            DlqMessageRef {
+                topic_name: Some("orders".to_string()),
+                consumer_group: "order-service".to_string(),
+                msg_id: "MSG-002".to_string(),
+                client_id: None,
+            },
+        ];
+
+        let results = resend_dlq_batch(messages, |message_id, _| async move {
+            if message_id == "MSG-001" {
+                Err(crate::error::DashboardError::Internal("broker unavailable".to_string()))
+            } else {
+                Ok(MessageResendResult {
+                    message: "Direct consume returned CR_SUCCESS".to_string(),
+                    success: true,
+                    consume_result: "CR_SUCCESS".to_string(),
+                    remark: None,
+                })
+            }
+        })
+        .await;
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].msg_id, "MSG-001");
+        assert!(!results[0].success);
+        assert_eq!(results[0].consume_result, "FAILED");
+        assert_eq!(
+            results[0].remark.as_deref(),
+            Some("INTERNAL_ERROR: DLQ resend request failed")
+        );
+        assert_eq!(results[1].msg_id, "MSG-002");
+        assert!(results[1].success);
+        assert_eq!(results[1].consume_result, "CR_SUCCESS");
+        assert_eq!(results[1].remark, None);
     }
 
     fn managed_session(generation: u64) -> Arc<ManagedAdminSession> {

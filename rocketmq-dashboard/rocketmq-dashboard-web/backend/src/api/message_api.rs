@@ -20,8 +20,8 @@ use crate::model::DlqMessageResendResult;
 use crate::model::MessageListView;
 use crate::model::MessageQuery;
 use crate::model::MessageResendRequest;
+use crate::model::MessageResendResult;
 use crate::model::MessageTraceView;
-use crate::model::MutationResult;
 use crate::service;
 use crate::state::AppState;
 use axum::Json;
@@ -85,7 +85,7 @@ pub async fn resend_message(
     State(state): State<AppState>,
     Path(message_id): Path<String>,
     Json(request): Json<MessageResendRequest>,
-) -> Result<Json<ApiResponse<MutationResult>>, DashboardError> {
+) -> Result<Json<ApiResponse<MessageResendResult>>, DashboardError> {
     Ok(Json(ApiResponse::success(
         service::resend_message(&state, &message_id, request).await?,
     )))

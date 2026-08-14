@@ -1,6 +1,7 @@
 import { apiClient } from './client';
-import type { MessageListView, MessageQueryParams, MessageResendRequest, MessageTraceView } from '../types/message';
-import type { MutationResult } from '../types/topic';
+import type {
+  MessageListView, MessageQueryParams, MessageResendRequest, MessageResendResult, MessageTraceView
+} from '../types/message';
 
 function toQueryString(params: Record<string, string | number | undefined | null>) {
   const search = new URLSearchParams();
@@ -24,5 +25,5 @@ export const messageApi = {
       `/api/messages/${encodeURIComponent(messageId)}/trace${toQueryString({ topic, traceTopic })}`
     ),
   resend: (messageId: string, request: MessageResendRequest) =>
-    apiClient.post<MutationResult>(`/api/messages/${encodeURIComponent(messageId)}/resend`, request)
+    apiClient.post<MessageResendResult>(`/api/messages/${encodeURIComponent(messageId)}/resend`, request)
 };

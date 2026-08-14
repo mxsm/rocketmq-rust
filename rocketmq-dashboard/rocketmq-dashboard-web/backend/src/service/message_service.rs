@@ -19,8 +19,8 @@ use crate::model::DlqMessageResendResult;
 use crate::model::MessageListView;
 use crate::model::MessageQuery;
 use crate::model::MessageResendRequest;
+use crate::model::MessageResendResult;
 use crate::model::MessageTraceView;
-use crate::model::MutationResult;
 use crate::state::AppState;
 
 pub async fn query_messages(state: &AppState, query: MessageQuery) -> Result<MessageListView, DashboardError> {
@@ -68,7 +68,7 @@ pub async fn resend_message(
     state: &AppState,
     message_id: &str,
     request: MessageResendRequest,
-) -> Result<MutationResult, DashboardError> {
+) -> Result<MessageResendResult, DashboardError> {
     state
         .admin_facade()
         .resend_message(message_id.to_string(), request)
