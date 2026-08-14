@@ -74,6 +74,14 @@ export interface DlqBatchResendRequest {
 
 export interface DlqMessageResendResult {
   msgId: string;
+  success: boolean;
+  consumeResult: string;
+  remark?: string;
+}
+
+export interface MessageResendResult {
+  message: string;
+  success: boolean;
   consumeResult: string;
   remark?: string;
 }

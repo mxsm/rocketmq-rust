@@ -175,6 +175,42 @@ describe('operational workspace components', () => {
     await user.click(screen.getByRole('button', { name: 'Previous page' }));
     expect(onPageChange).toHaveBeenCalledWith(1);
     expect(screen.getByRole('button', { name: 'Next page' })).toBeDisabled();
+
+    rerender(
+      <AppDataTable
+        ariaLabel="Broker inventory"
+        rows={[{ id: 'a', name: 'broker-a' }]}
+        columns={columns}
+        getRowId={(row) => row.id}
+        page={1}
+        pageSize={1}
+        total={1}
+        hasNextPage
+        onPageChange={onPageChange}
+      />
+    );
+    await user.click(screen.getByRole('button', { name: 'Next page' }));
+    expect(onPageChange).toHaveBeenLastCalledWith(2);
+  });
+
+  it('clamps exact-total callers when the requested page exceeds the new page count', () => {
+    const columns: AppDataTableColumn<BrokerRow>[] = [
+      { id: 'broker', header: 'Broker', cell: (row) => row.name }
+    ];
+    render(
+      <AppDataTable
+        ariaLabel="Exact total rows"
+        rows={[{ id: 'a', name: 'broker-a' }]}
+        columns={columns}
+        getRowId={(row) => row.id}
+        page={5}
+        pageSize={10}
+        total={1}
+        onPageChange={vi.fn()}
+      />
+    );
+
+    expect(screen.getByLabelText('Page 1 of 1')).toBeInTheDocument();
   });
 
   it('does not activate a row when keyboard events originate from a nested control', async () => {

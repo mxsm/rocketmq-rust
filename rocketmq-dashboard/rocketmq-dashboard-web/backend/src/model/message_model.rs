@@ -68,6 +68,15 @@ pub struct MessageResendRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct MessageResendResult {
+    pub message: String,
+    pub success: bool,
+    pub consume_result: String,
+    pub remark: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct DlqMessageQuery {
     pub consumer_group: String,
     pub key: Option<String>,
@@ -99,6 +108,7 @@ pub struct DlqBatchResendRequest {
 #[serde(rename_all = "camelCase")]
 pub struct DlqMessageResendResult {
     pub msg_id: String,
+    pub success: bool,
     pub consume_result: String,
     pub remark: Option<String>,
 }

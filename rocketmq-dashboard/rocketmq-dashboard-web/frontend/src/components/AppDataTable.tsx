@@ -21,6 +21,7 @@ interface AppDataTableProps<T> {
   pageSize: number;
   total: number;
   onPageChange: (page: number) => void;
+  hasNextPage?: boolean;
   onRowActivate?: (row: T, origin: HTMLElement) => void;
   loading?: boolean;
   error?: string | null;
@@ -39,6 +40,7 @@ export default function AppDataTable<T>({
   pageSize,
   total,
   onPageChange,
+  hasNextPage,
   onRowActivate,
   loading = false,
   error,
@@ -47,7 +49,12 @@ export default function AppDataTable<T>({
   emptyTitle = 'No rows',
   emptyDetail
 }: AppDataTableProps<T>) {
-  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const countedPages = Math.max(1, Math.ceil(total / pageSize));
+  const pageCount = hasNextPage === undefined
+    ? countedPages
+    : hasNextPage
+      ? Math.max(countedPages, page + 1)
+      : Math.max(countedPages, page);
   const currentPage = Math.min(Math.max(page, 1), pageCount);
   const firstRow = total === 0 ? 0 : (currentPage - 1) * pageSize + 1;
   const lastRow = total === 0 ? 0 : Math.min(firstRow + rows.length - 1, total);
@@ -105,7 +112,7 @@ export default function AppDataTable<T>({
       {!loading && !error ? (
         <footer className="app-data-table-footer">
           <span>
-            {firstRow}-{lastRow} of {total}
+            {firstRow}-{lastRow} of {total}{hasNextPage === true ? '+' : ''}
           </span>
           <div className="app-data-table-pagination">
             <Button
@@ -124,7 +131,7 @@ export default function AppDataTable<T>({
               variant="outline"
               size="sm"
               aria-label="Next page"
-              disabled={currentPage >= pageCount}
+              disabled={hasNextPage === undefined ? currentPage >= pageCount : !hasNextPage}
               onClick={() => onPageChange(currentPage + 1)}
             >
               Next

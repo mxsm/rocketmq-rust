@@ -244,9 +244,7 @@ pub(super) fn map_message(message: core::DashboardMessage) -> MessageView {
         .filter(|value| !value.trim().is_empty())
         .cloned()
         .unwrap_or_else(|| store_message_id.clone());
-    properties
-        .entry("STORE_MESSAGE_ID".to_string())
-        .or_insert(store_message_id);
+    properties.insert("STORE_MESSAGE_ID".to_string(), store_message_id);
     MessageView {
         topic: message.topic,
         message_id,
@@ -315,10 +313,15 @@ pub(super) fn build_dlq_csv(messages: &[MessageView]) -> String {
 }
 
 pub(super) fn csv_escape(value: &str) -> String {
-    if value.contains([',', '"', '\n', '\r']) {
-        format!("\"{}\"", value.replace('"', "\"\""))
+    let neutralized = if matches!(value.chars().next(), Some('=' | '+' | '-' | '@' | '\t' | '\r' | '\n')) {
+        format!("'{value}")
     } else {
         value.to_string()
+    };
+    if neutralized.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", neutralized.replace('"', "\"\""))
+    } else {
+        neutralized
     }
 }
 
@@ -383,6 +386,7 @@ mod tests {
     fn maps_owned_message_without_protocol_types() {
         let mut properties = BTreeMap::new();
         properties.insert("UNIQ_KEY".to_string(), "client-id".to_string());
+        properties.insert("STORE_MESSAGE_ID".to_string(), "producer-spoofed-id".to_string());
         let message = DashboardMessage {
             topic: "Orders".to_string(),
             message_id: "store-id".to_string(),
@@ -418,5 +422,16 @@ mod tests {
     fn escapes_csv_cells() {
         assert_eq!(csv_escape("plain"), "plain");
         assert_eq!(csv_escape("a,\"b\""), "\"a,\"\"b\"\"\"");
+    }
+
+    #[test]
+    fn neutralizes_formula_leading_csv_cells() {
+        assert_eq!(csv_escape("=1+1"), "'=1+1");
+        assert_eq!(csv_escape("+cmd"), "'+cmd");
+        assert_eq!(csv_escape("-2+3"), "'-2+3");
+        assert_eq!(csv_escape("@SUM(A1:A2)"), "'@SUM(A1:A2)");
+        assert_eq!(csv_escape("\t=1+1"), "'\t=1+1");
+        assert_eq!(csv_escape("\r=1+1"), "\"'\r=1+1\"");
+        assert_eq!(csv_escape("\n=1+1"), "\"'\n=1+1\"");
     }
 }
