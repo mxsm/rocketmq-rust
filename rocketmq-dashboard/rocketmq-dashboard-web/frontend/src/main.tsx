@@ -7,6 +7,7 @@ import './styles/base.css';
 import './styles/components.css';
 import './styles/shell.css';
 import './styles/globals.css';
+import './styles/pages.css';
 
 document.documentElement.dataset.theme = 'dark';
 
