@@ -49,7 +49,7 @@ pub const SERIALIZE_TYPE_PROPERTY: &str = "rocketmq.serialize.type";
 pub const SERIALIZE_TYPE_ENV: &str = "ROCKETMQ_SERIALIZE_TYPE";
 pub const REMOTING_VERSION_KEY: &str = "rocketmq.remoting.version";
 
-static REQUEST_ID: std::sync::LazyLock<Arc<AtomicI32>> = std::sync::LazyLock::new(|| Arc::new(AtomicI32::new(0)));
+static REQUEST_ID: AtomicI32 = AtomicI32::new(0);
 
 #[cfg(test)]
 std::thread_local! {
@@ -59,6 +59,18 @@ std::thread_local! {
 #[cfg(test)]
 pub(crate) fn request_id_generation_count() -> usize {
     REQUEST_ID_GENERATIONS.get()
+}
+
+#[inline]
+fn next_request_id_from(counter: &AtomicI32) -> i32 {
+    counter.fetch_add(1, Ordering::AcqRel)
+}
+
+#[inline]
+fn next_request_id() -> i32 {
+    #[cfg(test)]
+    REQUEST_ID_GENERATIONS.set(REQUEST_ID_GENERATIONS.get() + 1);
+    next_request_id_from(&REQUEST_ID)
 }
 
 #[inline]
@@ -202,9 +214,7 @@ impl RemotingCommand {
     /// The protocol crate deliberately does not read process environment or configuration files.
     /// Legacy facades resolve those sources and pass the resulting wire values here.
     pub fn with_resolved_defaults(version: i32, serialize_type: SerializeType) -> Self {
-        #[cfg(test)]
-        REQUEST_ID_GENERATIONS.set(REQUEST_ID_GENERATIONS.get() + 1);
-        let opaque = REQUEST_ID.fetch_add(1, Ordering::AcqRel);
+        let opaque = next_request_id();
         RemotingCommand {
             code: 0,
             language: LanguageCode::RUST, // Replace with your actual enum variant
@@ -286,7 +296,7 @@ impl RemotingCommand {
     }
 
     pub fn get_and_add() -> i32 {
-        REQUEST_ID.fetch_add(1, Ordering::AcqRel)
+        next_request_id()
     }
 
     pub fn create_response_command_with_code(code: impl Into<i32>) -> Self {
@@ -1367,7 +1377,7 @@ impl RemotingCommand {
     }
 
     pub fn create_new_request_id() -> i32 {
-        REQUEST_ID.fetch_add(1, Ordering::AcqRel)
+        next_request_id()
     }
 
     #[inline]
@@ -1470,6 +1480,8 @@ impl AsMut<RemotingCommand> for RemotingCommand {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::*;
 
     fn json_header_with_ext_fields(ext_fields: &str) -> BytesMut {
@@ -1479,6 +1491,50 @@ mod tests {
             )
             .as_bytes(),
         )
+    }
+
+    #[test]
+    fn request_id_sequence_is_unique_under_contention() {
+        const THREADS: usize = 8;
+        const IDS_PER_THREAD: usize = 1_024;
+        let counter = Arc::new(AtomicI32::new(0));
+        let handles = (0..THREADS)
+            .map(|_| {
+                let counter = Arc::clone(&counter);
+                std::thread::spawn(move || {
+                    (0..IDS_PER_THREAD)
+                        .map(|_| next_request_id_from(&counter))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect::<Vec<_>>();
+        let ids = handles
+            .into_iter()
+            .flat_map(|handle| handle.join().expect("request ID worker must finish"))
+            .collect::<HashSet<_>>();
+
+        assert_eq!(ids.len(), THREADS * IDS_PER_THREAD);
+        assert_eq!(ids.iter().copied().min(), Some(0));
+        assert_eq!(ids.iter().copied().max(), Some((THREADS * IDS_PER_THREAD - 1) as i32));
+    }
+
+    #[test]
+    fn request_id_sequence_preserves_signed_wrap_behavior() {
+        let counter = AtomicI32::new(i32::MAX);
+
+        assert_eq!(next_request_id_from(&counter), i32::MAX);
+        assert_eq!(next_request_id_from(&counter), i32::MIN);
+    }
+
+    #[test]
+    fn request_id_storage_is_a_direct_static_atomic() {
+        let source = include_str!("remoting_command.rs");
+        let declaration = source
+            .lines()
+            .find(|line| line.starts_with("static REQUEST_ID:"))
+            .expect("request ID declaration");
+
+        assert_eq!(declaration, "static REQUEST_ID: AtomicI32 = AtomicI32::new(0);");
     }
 
     #[derive(Debug, Default, PartialEq, Eq)]
