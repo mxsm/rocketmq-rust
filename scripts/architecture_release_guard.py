@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import argparse
 from dataclasses import dataclass
 from datetime import date
 import json
@@ -25,6 +26,8 @@ import sys
 import tomllib
 from pathlib import Path
 from typing import Any
+
+import core_release_scope
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -416,6 +419,19 @@ def validate_transition_contract(plan: dict[str, Any], findings: list[Finding]) 
         )
 
 
+def validate_scope_reporting(plan: dict[str, Any], findings: list[Finding]) -> None:
+    expected = {
+        "core_scope": "scripts/core-release-scope.json",
+        "core_command": "python scripts/architecture_release_guard.py --scope core-release",
+        "repo_global_command": "python scripts/architecture_release_guard.py --scope repo-global",
+        "release_decision_scope": "core-release",
+    }
+    if plan.get("scope_reporting") != expected:
+        findings.append(
+            Finding("scope-reporting-invalid", "release-plan", "core/repo-global contract drifted")
+        )
+
+
 def validate_ci(root: Path, findings: list[Finding]) -> None:
     try:
         workflow = (root / CI_PATH.relative_to(ROOT)).read_text(encoding="utf-8")
@@ -448,12 +464,38 @@ def validate(
     validate_release_topology(plan, policy, inventory, root, findings)
     validate_compatibility_windows(plan, baseline, root, findings)
     validate_transition_contract(plan, findings)
+    validate_scope_reporting(plan, findings)
     if check_ci:
         validate_ci(root, findings)
     return sorted(findings, key=Finding.render)
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--scope", choices=("core-release", "repo-global", "all"), default="all")
+    args = parser.parse_args()
+
+    if args.scope in {"core-release", "all"}:
+        try:
+            scope, scope_findings = core_release_scope.validate_repository()
+        except core_release_scope.ScopeInputError as error:
+            print(f"ARCHITECTURE_RELEASE_CORE_FAILED findings=1 detail={error}")
+            if args.scope == "core-release":
+                return 1
+            scope_findings = []
+            core_failed = True
+        else:
+            core_only = [item for item in scope_findings if item.scope == "core"]
+            core_failed = bool(core_only)
+            if core_failed:
+                print(f"ARCHITECTURE_RELEASE_CORE_FAILED findings={len(core_only)}")
+                for finding in core_only:
+                    print(finding.render())
+            else:
+                print(f"ARCHITECTURE_RELEASE_CORE_OK packages={len(core_release_scope.core_packages(scope))}")
+        if args.scope == "core-release":
+            return int(core_failed)
+
     findings: list[Finding] = []
     plan = load_json(PLAN_PATH, "release plan", findings)
     policy = load_json(POLICY_PATH, "dependency policy", findings)
@@ -462,11 +504,15 @@ def main() -> int:
         findings.extend(validate(plan, policy, baseline))
     findings = sorted(findings, key=Finding.render)
     if findings:
-        print(f"ARCHITECTURE_RELEASE_GUARD_FAILED findings={len(findings)}")
+        print(f"ARCHITECTURE_RELEASE_REPO_GLOBAL_FAILED findings={len(findings)}")
         for finding in findings:
             print(finding.render())
         return 1
-    print("ARCHITECTURE_RELEASE_GUARD_OK packages=29 standalone=7 transition_debt=tracked")
+    print("ARCHITECTURE_RELEASE_REPO_GLOBAL_OK packages=29 standalone=7 transition_debt=tracked")
+    if args.scope == "all":
+        if core_failed:
+            return 1
+        print("ARCHITECTURE_RELEASE_GUARD_OK core=27 repo_global_packages=29 standalone=7")
     return 0
 
 

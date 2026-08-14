@@ -1,0 +1,221 @@
+{
+  "schema_version": 1,
+  "scope_name": "core-release",
+  "workspace_manifest": "Cargo.toml",
+  "metadata_command": [
+    "cargo",
+    "metadata",
+    "--no-deps",
+    "--format-version",
+    "1",
+    "--locked"
+  ],
+  "allowed_classifications": [
+    "registry-publish",
+    "internal-only",
+    "binary-only",
+    "non-publish"
+  ],
+  "core_packages": [
+    {
+      "name": "rocketmq-admin-cli",
+      "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-cli",
+      "classification": "binary-only"
+    },
+    {
+      "name": "rocketmq-admin-core",
+      "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-core",
+      "classification": "registry-publish"
+    },
+    {
+      "name": "rocketmq-admin-tui",
+      "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui",
+      "classification": "binary-only"
+    },
+    {
+      "name": "rocketmq-auth",
+      "path": "rocketmq-auth",
+      "classification": "registry-publish"
+    },
+    {
+      "name": "rocketmq-broker",
+      "path": "rocketmq-broker",
+      "classification": "registry-publish"
+    },
+    {
+      "name": "rocketmq-client-rust",
+      "path": "rocketmq-client",
+      "classification": "registry-publish"
+    },
+    {
+      "name": "rocketmq-controller",
+      "path": "rocketmq-controller",
+      "classification": "registry-publish"
+    },
+    {
+      "name": "rocketmq-error",
+      "path": "rocketmq-error",
+      "classification": "registry-publish"
+    },
+    {
+      "name": "rocketmq-filter",
+      "path": "rocketmq-filter",
+      "classification": "registry-publish"
+    },
+    {
+      "name": "rocketmq-macros",
+      "path": "rocketmq-macros",
+      "classification": "registry-publish"
+    },
+    {
+      "name": "rocketmq-model",
+      "path": "rocketmq-model",
+      "classification": "registry-publish"
+    },
+    {
+      "name": "rocketmq-namesrv",
+      "path": "rocketmq-namesrv",
+      "classification": "registry-publish"
+    },
+    {
+      "name": "rocketmq-observability",
+      "path": "rocketmq-observability",
+      "classification": "registry-publish"
+    },
+    {
+      "name": "rocketmq-protocol",
+      "path": "rocketmq-protocol",
+      "classification": "registry-publish"
+    },
+    {
+      "name": "rocketmq-proxy",
+      "path": "rocketmq-proxy",
+      "classification": "registry-publish"
+    },
+    {
+      "name": "rocketmq-proxy-cluster",
+      "path": "rocketmq-proxy-cluster",
+      "classification": "registry-publish"
+    },
+    {
+      "name": "rocketmq-proxy-core",
+      "path": "rocketmq-proxy-core",
+      "classification": "registry-publish"
+    },
+    {
+      "name": "rocketmq-proxy-local",
+      "path": "rocketmq-proxy-local",
+      "classification": "registry-publish"
+    },
+    {
+      "name": "rocketmq-runtime",
+      "path": "rocketmq-runtime",
+      "classification": "registry-publish"
+    },
+    {
+      "name": "rocketmq-security-api",
+      "path": "rocketmq-security-api",
+      "classification": "registry-publish"
+    },
+    {
+      "name": "rocketmq-store",
+      "path": "rocketmq-store",
+      "classification": "registry-publish"
+    },
+    {
+      "name": "rocketmq-store-api",
+      "path": "rocketmq-store-api",
+      "classification": "registry-publish"
+    },
+    {
+      "name": "rocketmq-store-inspect",
+      "path": "rocketmq-tools/rocketmq-store-inspect",
+      "classification": "binary-only"
+    },
+    {
+      "name": "rocketmq-store-local",
+      "path": "rocketmq-store-local",
+      "classification": "registry-publish"
+    },
+    {
+      "name": "rocketmq-store-rocksdb",
+      "path": "rocketmq-store-rocksdb",
+      "classification": "registry-publish"
+    },
+    {
+      "name": "rocketmq-tieredstore",
+      "path": "rocketmq-tieredstore",
+      "classification": "registry-publish"
+    },
+    {
+      "name": "rocketmq-transport",
+      "path": "rocketmq-transport",
+      "classification": "registry-publish"
+    }
+  ],
+  "workspace_exclusions": [
+    {
+      "name": "rocketmq-dashboard-common",
+      "path": "rocketmq-dashboard/rocketmq-dashboard-common",
+      "reason": "excluded-dashboard"
+    }
+  ],
+  "repository_exclusions": [
+    {
+      "name": "rocketmq-mcp",
+      "path": "rocketmq-tools/rocketmq-mcp",
+      "reason": "excluded-mcp"
+    },
+    {
+      "name": "rocketmq-sre",
+      "path": "rocketmq-sre",
+      "reason": "excluded-sre"
+    },
+    {
+      "name": "rocketmq-sre-ui",
+      "path": "rocketmq-sre/ui",
+      "reason": "excluded-sre"
+    },
+    {
+      "name": "rocketmq-sre-typescript-sdk",
+      "path": "rocketmq-sre/sdk/typescript",
+      "reason": "excluded-sre"
+    },
+    {
+      "name": "rocketmq-dashboard-gpui",
+      "path": "rocketmq-dashboard/rocketmq-dashboard-gpui",
+      "reason": "excluded-dashboard"
+    },
+    {
+      "name": "rocketmq-dashboard-tauri",
+      "path": "rocketmq-dashboard/rocketmq-dashboard-tauri",
+      "reason": "excluded-dashboard"
+    },
+    {
+      "name": "rocketmq-dashboard-tauri-backend",
+      "path": "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri",
+      "reason": "excluded-dashboard"
+    },
+    {
+      "name": "rocketmq-dashboard-web",
+      "path": "rocketmq-dashboard/rocketmq-dashboard-web",
+      "reason": "excluded-dashboard"
+    },
+    {
+      "name": "rocketmq-dashboard-web-backend",
+      "path": "rocketmq-dashboard/rocketmq-dashboard-web/backend",
+      "reason": "excluded-dashboard"
+    },
+    {
+      "name": "rocketmq-dashboard-web-frontend",
+      "path": "rocketmq-dashboard/rocketmq-dashboard-web/frontend",
+      "reason": "excluded-dashboard"
+    }
+  ],
+  "core_services": [
+    "rocketmq-namesrv",
+    "rocketmq-broker",
+    "rocketmq-controller",
+    "rocketmq-proxy"
+  ]
+}
