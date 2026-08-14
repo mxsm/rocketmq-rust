@@ -399,6 +399,7 @@ pub struct MQClientAPIImpl {
     remoting_client: Arc<RemotingClient<ClientRemotingProcessor>>,
     top_addressing: RwLock<Arc<dyn TopAddressing>>,
     name_srv_addr: RwLock<Option<String>>,
+    callback_executor: callback_executor::ClientCallbackExecutor,
     client_config: Arc<ClientConfig>,
     command_factory: RemotingCommandFactory,
     background_tasks: TaskTracker,
@@ -420,6 +421,7 @@ where
 }
 
 mod admin;
+mod callback_executor;
 mod consumer;
 mod producer;
 mod request_builder;

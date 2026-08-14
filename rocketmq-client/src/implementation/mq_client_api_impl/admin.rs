@@ -15,8 +15,190 @@
 use super::request_builder::*;
 use super::response_decoder::*;
 use super::*;
+use rocketmq_model::topic::TopicConfig;
+use rocketmq_protocol::protocol::body::subscription_group_wrapper::SubscriptionGroupWrapper;
+use rocketmq_protocol::protocol::body::topic_info_wrapper::TopicConfigSerializeWrapper;
+use rocketmq_protocol::protocol::header::get_all_subscription_group_request_header::GetAllSubscriptionGroupRequestHeader;
+use rocketmq_protocol::protocol::header::get_all_topic_config_request_header::GetAllTopicConfigRequestHeader;
+use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
+use rocketmq_protocol::protocol::DataVersion;
 
 mod versioned_config;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MetadataPageAction {
+    Continue,
+    Complete,
+    Restart,
+}
+
+#[derive(Default)]
+struct TopicMetadataAccumulator {
+    sequence: i32,
+    version: Option<DataVersion>,
+    configs: HashMap<CheetahString, TopicConfig>,
+}
+
+impl TopicMetadataAccumulator {
+    fn merge(
+        &mut self,
+        mut page: TopicConfigSerializeWrapper,
+        total: Option<i32>,
+    ) -> RocketMQResult<MetadataPageAction> {
+        validate_metadata_total(total, "totalTopicNum")?;
+        let page_version = page.data_version().cloned();
+        if self.version.is_some() && self.version != page_version {
+            self.sequence = 0;
+            self.version = page_version;
+            self.configs.clear();
+            return Ok(MetadataPageAction::Restart);
+        }
+        if self.version.is_none() {
+            self.version = page_version;
+        }
+        let entries = page.take_topic_config_table().unwrap_or_default();
+        let received = i32::try_from(entries.len())
+            .map_err(|_| RocketMQError::response_process_failed("getAllTopicConfig", "page entry count exceeds i32"))?;
+        self.sequence = self
+            .sequence
+            .checked_add(received)
+            .ok_or_else(|| RocketMQError::response_process_failed("getAllTopicConfig", "metadata sequence overflow"))?;
+        self.configs.extend(entries);
+        metadata_page_action(self.sequence, received, total, "getAllTopicConfig")
+    }
+
+    fn finish(self) -> TopicConfigSerializeWrapper {
+        TopicConfigSerializeWrapper::new(Some(self.configs), self.version)
+    }
+}
+
+#[derive(Default)]
+struct SubscriptionMetadataAccumulator {
+    sequence: i32,
+    version: Option<DataVersion>,
+    groups: HashMap<CheetahString, SubscriptionGroupConfig>,
+    forbidden: HashMap<CheetahString, HashMap<CheetahString, i32>>,
+}
+
+impl SubscriptionMetadataAccumulator {
+    fn merge(&mut self, page: SubscriptionGroupWrapper, total: Option<i32>) -> RocketMQResult<MetadataPageAction> {
+        validate_metadata_total(total, "totalGroupNum")?;
+        let page_version = page.data_version.clone();
+        if self.version.as_ref().is_some_and(|version| version != &page_version) {
+            self.sequence = 0;
+            self.version = Some(page_version);
+            self.groups.clear();
+            self.forbidden.clear();
+            return Ok(MetadataPageAction::Restart);
+        }
+        if self.version.is_none() {
+            self.version = Some(page_version);
+        }
+        let received = i32::try_from(page.subscription_group_table.len()).map_err(|_| {
+            RocketMQError::response_process_failed("getAllSubscriptionGroup", "page entry count exceeds i32")
+        })?;
+        self.sequence = self.sequence.checked_add(received).ok_or_else(|| {
+            RocketMQError::response_process_failed("getAllSubscriptionGroup", "metadata sequence overflow")
+        })?;
+        self.groups.extend(page.subscription_group_table);
+        self.forbidden.extend(page.forbidden_table);
+        metadata_page_action(self.sequence, received, total, "getAllSubscriptionGroup")
+    }
+
+    fn finish(self) -> SubscriptionGroupWrapper {
+        SubscriptionGroupWrapper {
+            subscription_group_table: self.groups,
+            forbidden_table: self.forbidden,
+            data_version: self.version.unwrap_or_default(),
+        }
+    }
+}
+
+fn validate_metadata_total(total: Option<i32>, field: &'static str) -> RocketMQResult<()> {
+    if total.is_some_and(|value| value < 0) {
+        return Err(RocketMQError::response_process_failed(
+            "metadata pagination",
+            format!("{field} cannot be negative"),
+        ));
+    }
+    Ok(())
+}
+
+fn metadata_page_action(
+    sequence: i32,
+    received: i32,
+    total: Option<i32>,
+    operation: &'static str,
+) -> RocketMQResult<MetadataPageAction> {
+    let Some(total) = total else {
+        return Ok(MetadataPageAction::Complete);
+    };
+    if sequence >= total.saturating_sub(1) {
+        return Ok(MetadataPageAction::Complete);
+    }
+    if received == 0 {
+        return Err(RocketMQError::response_process_failed(
+            operation,
+            "server returned an empty page before the advertised total",
+        ));
+    }
+    Ok(MetadataPageAction::Continue)
+}
+
+fn metadata_data_version(version: Option<&DataVersion>) -> RocketMQResult<Option<CheetahString>> {
+    let encoded = match version {
+        Some(version) => serde_json::to_string(version)
+            .map(CheetahString::from_string)
+            .map_err(|error| RocketMQError::response_process_failed("metadata dataVersion", error.to_string()))?,
+        None => CheetahString::new(),
+    };
+    Ok(Some(encoded))
+}
+
+fn topic_metadata_request_header(
+    accumulator: &TopicMetadataAccumulator,
+    page_size: i32,
+) -> RocketMQResult<GetAllTopicConfigRequestHeader> {
+    Ok(GetAllTopicConfigRequestHeader {
+        topic_seq: accumulator.sequence,
+        data_version: metadata_data_version(accumulator.version.as_ref())?,
+        max_topic_num: Some(page_size),
+    })
+}
+
+fn subscription_metadata_request_header(
+    accumulator: &SubscriptionMetadataAccumulator,
+    page_size: i32,
+) -> RocketMQResult<GetAllSubscriptionGroupRequestHeader> {
+    Ok(GetAllSubscriptionGroupRequestHeader {
+        group_seq: accumulator.sequence,
+        data_version: metadata_data_version(accumulator.version.as_ref())?,
+        max_group_num: Some(page_size),
+    })
+}
+
+fn metadata_total(response: &RemotingCommand, field: &'static str) -> RocketMQResult<Option<i32>> {
+    response
+        .ext_fields()
+        .and_then(|fields| fields.get(field))
+        .map(|value| {
+            value.parse::<i32>().map_err(|error| {
+                RocketMQError::response_process_failed("metadata pagination response", error.to_string())
+            })
+        })
+        .transpose()
+}
+
+fn metadata_remaining_timeout(started: Instant, timeout_millis: u64, operation: &'static str) -> RocketMQResult<u64> {
+    let elapsed = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    timeout_millis
+        .checked_sub(elapsed)
+        .filter(|remaining| *remaining > 0)
+        .ok_or(RocketMQError::Timeout {
+            operation,
+            timeout_ms: timeout_millis,
+        })
+}
 
 pub struct AdminClient<'a> {
     api: &'a MQClientAPIImpl,
@@ -2616,46 +2798,84 @@ impl MQClientAPIImpl {
         &self,
         addr: &CheetahString,
         timeout_millis: u64,
-    ) -> RocketMQResult<rocketmq_protocol::protocol::body::topic_info_wrapper::TopicConfigSerializeWrapper> {
-        let request = self.create_request_command(RequestCode::GetAllTopicConfig, EmptyHeader {});
-        let response = self
-            .remoting_client
-            .invoke_request(Some(addr), request, timeout_millis)
-            .await?;
-        if ResponseCode::from(response.code()) == ResponseCode::Success {
-            if let Some(body) = response.get_body() {
-                return rocketmq_protocol::protocol::body::topic_info_wrapper::TopicConfigSerializeWrapper::decode(
-                    body.as_ref(),
-                );
+    ) -> RocketMQResult<TopicConfigSerializeWrapper> {
+        let started = Instant::now();
+        let page_size = i32::try_from(self.client_config.max_page_size_in_get_metadata).map_err(|_| {
+            RocketMQError::ConfigInvalidValue {
+                key: "max_page_size_in_get_metadata",
+                value: self.client_config.max_page_size_in_get_metadata.to_string(),
+                reason: "must fit the Java i32 wire field".to_string(),
+            }
+        })?;
+        let mut accumulator = TopicMetadataAccumulator::default();
+        loop {
+            let request = self.create_request_command(
+                RequestCode::GetAllTopicConfig,
+                topic_metadata_request_header(&accumulator, page_size)?,
+            );
+            let remaining = metadata_remaining_timeout(started, timeout_millis, "getAllTopicConfig")?;
+            let response = self
+                .remoting_client
+                .invoke_request(Some(addr), request, remaining)
+                .await?;
+            if ResponseCode::from(response.code()) != ResponseCode::Success {
+                return Err(mq_client_err!(
+                    response.code(),
+                    response.remark().map_or("".to_string(), |s| s.to_string())
+                ));
+            }
+            let total = metadata_total(&response, "totalTopicNum")?;
+            let body = response.get_body().ok_or_else(|| {
+                RocketMQError::response_process_failed("getAllTopicConfig", "successful response has no body")
+            })?;
+            let page = TopicConfigSerializeWrapper::decode(body.as_ref())?;
+            match accumulator.merge(page, total)? {
+                MetadataPageAction::Complete => return Ok(accumulator.finish()),
+                MetadataPageAction::Continue | MetadataPageAction::Restart => {}
             }
         }
-        Err(mq_client_err!(
-            response.code(),
-            response.remark().map_or("".to_string(), |s| s.to_string())
-        ))
     }
 
     pub(crate) async fn get_all_subscription_group_config(
         &self,
         addr: &CheetahString,
         timeout_millis: u64,
-    ) -> RocketMQResult<rocketmq_protocol::protocol::body::subscription_group_wrapper::SubscriptionGroupWrapper> {
-        let request = self.create_request_command(RequestCode::GetAllSubscriptionGroupConfig, EmptyHeader {});
-        let mut response = self
-            .remoting_client
-            .invoke_request(Some(addr), request, timeout_millis)
-            .await?;
-        if ResponseCode::from(response.code()) == ResponseCode::Success {
-            if let Some(body) = response.take_body() {
-                return rocketmq_protocol::protocol::body::subscription_group_wrapper::SubscriptionGroupWrapper::decode(
-                    body.as_ref(),
-                );
+    ) -> RocketMQResult<SubscriptionGroupWrapper> {
+        let started = Instant::now();
+        let page_size = i32::try_from(self.client_config.max_page_size_in_get_metadata).map_err(|_| {
+            RocketMQError::ConfigInvalidValue {
+                key: "max_page_size_in_get_metadata",
+                value: self.client_config.max_page_size_in_get_metadata.to_string(),
+                reason: "must fit the Java i32 wire field".to_string(),
+            }
+        })?;
+        let mut accumulator = SubscriptionMetadataAccumulator::default();
+        loop {
+            let request = self.create_request_command(
+                RequestCode::GetAllSubscriptionGroupConfig,
+                subscription_metadata_request_header(&accumulator, page_size)?,
+            );
+            let remaining = metadata_remaining_timeout(started, timeout_millis, "getAllSubscriptionGroup")?;
+            let mut response = self
+                .remoting_client
+                .invoke_request(Some(addr), request, remaining)
+                .await?;
+            if ResponseCode::from(response.code()) != ResponseCode::Success {
+                return Err(mq_client_err!(
+                    response.code(),
+                    response.remark().map_or("".to_string(), |s| s.to_string())
+                ));
+            }
+            let total = metadata_total(&response, "totalGroupNum")?;
+            let body = response.take_body().ok_or_else(|| {
+                RocketMQError::response_process_failed("getAllSubscriptionGroup", "successful response has no body")
+            })?;
+            let page = SubscriptionGroupWrapper::decode(body.as_ref())?;
+            match accumulator.merge(page, total)? {
+                MetadataPageAction::Complete => return Ok(accumulator.finish()),
+                MetadataPageAction::Continue | MetadataPageAction::Restart => {}
             }
         }
-        Err(mq_client_err!(
-            response.code(),
-            response.remark().map_or("".to_string(), |s| s.to_string())
-        ))
     }
 
     pub(crate) async fn get_all_subscription_group(
@@ -3687,5 +3907,94 @@ impl MqClientAdminInner for MQClientAPIImpl {
                 response.remark().map_or_else(String::new, |s| s.to_string())
             )),
         }
+    }
+}
+
+#[cfg(test)]
+mod metadata_pagination_tests {
+    use super::*;
+
+    fn topic_page(version: &DataVersion, names: &[&str]) -> TopicConfigSerializeWrapper {
+        TopicConfigSerializeWrapper::new(
+            Some(
+                names
+                    .iter()
+                    .map(|name| (CheetahString::from_slice(name), TopicConfig::default()))
+                    .collect(),
+            ),
+            Some(version.clone()),
+        )
+    }
+
+    fn group_page(version: &DataVersion, names: &[&str]) -> SubscriptionGroupWrapper {
+        SubscriptionGroupWrapper {
+            subscription_group_table: names
+                .iter()
+                .map(|name| (CheetahString::from_slice(name), SubscriptionGroupConfig::default()))
+                .collect(),
+            forbidden_table: HashMap::new(),
+            data_version: version.clone(),
+        }
+    }
+
+    #[test]
+    fn configured_page_size_enters_topic_and_group_headers() {
+        let topic = topic_metadata_request_header(&TopicMetadataAccumulator::default(), 37).expect("topic header");
+        let group = subscription_metadata_request_header(&SubscriptionMetadataAccumulator::default(), 37)
+            .expect("group header");
+
+        assert_eq!(topic.topic_seq, 0);
+        assert_eq!(topic.max_topic_num, Some(37));
+        assert_eq!(group.group_seq, 0);
+        assert_eq!(group.max_group_num, Some(37));
+    }
+
+    #[test]
+    fn topic_pages_are_assembled_and_old_server_fallback_is_complete() {
+        let version = DataVersion::with_values(1, 2, 3);
+        let mut paged = TopicMetadataAccumulator::default();
+        assert_eq!(
+            paged
+                .merge(topic_page(&version, &["a", "b"]), Some(4))
+                .expect("first page"),
+            MetadataPageAction::Continue
+        );
+        assert_eq!(
+            paged
+                .merge(topic_page(&version, &["c", "d"]), Some(4))
+                .expect("second page"),
+            MetadataPageAction::Complete
+        );
+        assert_eq!(paged.finish().topic_config_table().map(HashMap::len), Some(4));
+
+        let mut legacy = TopicMetadataAccumulator::default();
+        assert_eq!(
+            legacy
+                .merge(topic_page(&version, &["all"]), None)
+                .expect("legacy response"),
+            MetadataPageAction::Complete
+        );
+    }
+
+    #[test]
+    fn version_change_restarts_group_pagination_without_mixing_snapshots() {
+        let first = DataVersion::with_values(1, 2, 3);
+        let second = DataVersion::with_values(2, 3, 4);
+        let mut groups = SubscriptionMetadataAccumulator::default();
+        assert_eq!(
+            groups
+                .merge(group_page(&first, &["a", "b"]), Some(5))
+                .expect("first page"),
+            MetadataPageAction::Continue
+        );
+        assert_eq!(
+            groups
+                .merge(group_page(&second, &["stale"]), Some(5))
+                .expect("version transition"),
+            MetadataPageAction::Restart
+        );
+        assert_eq!(groups.sequence, 0);
+        assert!(groups.groups.is_empty());
+        assert_eq!(groups.version.as_ref(), Some(&second));
     }
 }

@@ -14,6 +14,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::future::Future;
 use std::sync::atomic::AtomicI64;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
@@ -25,7 +26,8 @@ use arc_swap::ArcSwapOption;
 use cheetah_string::CheetahString;
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
-use futures::future;
+use futures::stream;
+use futures::StreamExt;
 use rand::seq::IndexedRandom;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
@@ -135,6 +137,13 @@ pub use route_conversion::topic_route_data2topic_subscribe_info;
 const LOCK_TIMEOUT_MILLIS: u64 = 3000;
 const SCHEDULED_TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const ROUTE_REFRESH_MAX_TOPICS_PER_ROUND: usize = 64;
+
+async fn collect_bounded<F, T>(tasks: Vec<F>, limit: usize) -> Vec<T>
+where
+    F: Future<Output = T>,
+{
+    stream::iter(tasks).buffer_unordered(limit.max(1)).collect().await
+}
 
 fn client_scheduled_task_startup_failed(task: &'static str, error: impl std::fmt::Display) -> RocketMQError {
     RocketMQError::Service(UnifiedServiceError::StartupFailed(format!(
@@ -479,14 +488,19 @@ impl MQClientInstance {
             }
         }
 
-        let (tx, rx) = tokio::sync::broadcast::channel::<ConnectionNetEvent>(16);
+        let (tx, rx) = if client_config.enable_heartbeat_channel_event_listener {
+            let (tx, rx) = tokio::sync::broadcast::channel::<ConnectionNetEvent>(16);
+            (Some(tx), Some(rx))
+        } else {
+            (None, None)
+        };
 
         let mq_client_api_impl = Arc::new(MQClientAPIImpl::new(
             Arc::new(TransportClientConfig::default()),
             ClientRemotingProcessor::new(&instance),
             rpc_hook,
             Arc::new(client_config.clone()),
-            Some(tx),
+            tx,
             service_context.component("remoting"),
             instance.telemetry_handle.clone(),
             remoting_command_factory,
@@ -499,17 +513,19 @@ impl MQClientInstance {
         instance.mq_client_api_impl.store(Some(mq_client_api_impl));
 
         // Use weak reference to avoid circular dependencies
-        let weak_instance = Arc::downgrade(&instance);
-        let connection_event_shutdown = instance.connection_event_shutdown.clone();
-        *instance
-            .connection_event_task_handle
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = connection_listener::spawn(
-            &service_context.component("connection-events"),
-            rx,
-            weak_instance,
-            connection_event_shutdown,
-        );
+        if let Some(rx) = rx {
+            let weak_instance = Arc::downgrade(&instance);
+            let connection_event_shutdown = instance.connection_event_shutdown.clone();
+            *instance
+                .connection_event_task_handle
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = connection_listener::spawn(
+                &service_context.component("connection-events"),
+                rx,
+                weak_instance,
+                connection_event_shutdown,
+            );
+        }
         instance
     }
 
@@ -1473,14 +1489,10 @@ impl MQClientInstance {
             }
         };
 
-        // Check if concurrent heartbeat is enabled
-        if self.client_config.enable_concurrent_heartbeat {
-            return self.send_heartbeat_to_all_broker_concurrently().await;
-        }
-
-        // Use V2 or V1 protocol based on configuration
         if self.client_config.use_heartbeat_v2 {
             self.send_heartbeat_to_all_broker_v2(false).await
+        } else if self.client_config.enable_concurrent_heartbeat {
+            self.send_heartbeat_to_all_broker_concurrently().await
         } else {
             self.send_heartbeat_to_all_broker().await
         }
@@ -1906,7 +1918,9 @@ impl MQClientInstance {
         }
 
         // Wait for all tasks with timeout (3 seconds)
-        let results = match tokio::time::timeout(Duration::from_millis(3000), future::join_all(tasks)).await {
+        let concurrency = self.client_config.concurrent_heartbeat_thread_pool_size;
+        let results = match tokio::time::timeout(Duration::from_millis(3000), collect_bounded(tasks, concurrency)).await
+        {
             Ok(results) => results,
             Err(_) => {
                 warn!(
@@ -2836,6 +2850,9 @@ pub fn run_heartbeat_route_index_probe(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+
     use futures::FutureExt;
     use rocketmq_error::ErrorKind;
     use rocketmq_error::RocketMQError;
@@ -2879,6 +2896,73 @@ mod tests {
         assert!(error
             .to_string()
             .contains("MQClientInstance::pull_message returned None"));
+    }
+
+    #[tokio::test]
+    async fn concurrent_heartbeat_work_respects_configured_bound() {
+        let active = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let started = Arc::new(tokio::sync::Semaphore::new(0));
+        let release = Arc::new(tokio::sync::Semaphore::new(0));
+        let tasks = (0..6)
+            .map(|_| {
+                let active = active.clone();
+                let peak = peak.clone();
+                let started = started.clone();
+                let release = release.clone();
+                async move {
+                    let current = active.fetch_add(1, Ordering::SeqCst) + 1;
+                    peak.fetch_max(current, Ordering::SeqCst);
+                    started.add_permits(1);
+                    let permit = release.acquire().await.expect("release heartbeat");
+                    permit.forget();
+                    active.fetch_sub(1, Ordering::SeqCst);
+                }
+            })
+            .collect();
+        let joined = tokio::spawn(collect_bounded(tasks, 2));
+
+        let first_two = started.acquire_many(2).await.expect("two heartbeats started");
+        first_two.forget();
+        assert_eq!(peak.load(Ordering::SeqCst), 2);
+        release.add_permits(6);
+        joined.await.expect("heartbeat join");
+
+        assert_eq!(peak.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn disabled_heartbeat_listener_creates_no_event_task() {
+        let config = ClientConfig {
+            enable_heartbeat_channel_event_listener: false,
+            ..Default::default()
+        };
+        let instance = test_instance(config, "disabled-heartbeat-listener");
+
+        assert_eq!(instance.connection_event_task_count(), 0);
+        instance.shutdown().await;
+        assert_eq!(instance.connection_event_task_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn start_rejects_invalid_unvalidated_runtime_config() {
+        let config = ClientConfig {
+            client_callback_executor_threads: 0,
+            ..Default::default()
+        };
+        let instance = test_instance(config, "invalid-runtime-config");
+        let api = instance.get_mq_client_api_impl().expect("client API");
+
+        let error = api.start().await.expect_err("start must revalidate raw config");
+
+        assert!(matches!(
+            error,
+            RocketMQError::ConfigInvalidValue {
+                key: "client_callback_executor_threads",
+                ..
+            }
+        ));
+        instance.shutdown().await;
     }
 
     #[tokio::test]
