@@ -47,6 +47,8 @@ pub mod session;
 pub mod status;
 
 pub use config::GrpcConfig;
+pub use config::GrpcTlsClientAuth;
+pub use config::GrpcTlsConfig;
 pub use config::ProxyMode;
 pub use config::RemotingConfig;
 pub use config::RuntimeConfig;
@@ -56,6 +58,7 @@ pub use context::ProxyContext;
 pub use context::ProxyContextWithPrincipal;
 pub use context::ResolvedAddressScheme;
 pub use context::ResolvedEndpoint;
+pub use context::VerifiedTlsIdentity;
 pub use contracts::*;
 pub use drain::ProxyDrainAdmission;
 pub use drain::ProxyDrainController;

@@ -161,6 +161,16 @@ impl<P> Clone for ProxyGrpcService<P> {
 
 impl<P> ProxyGrpcService<P> {
     pub(crate) fn try_execution_guards(config: &ProxyConfig) -> ProxyResult<ExecutionGuards> {
+        config.grpc.tls.validate()?;
+        #[cfg(not(feature = "tls"))]
+        if config.grpc.tls.enabled {
+            return Err(rocketmq_error::RocketMQError::ConfigInvalidValue {
+                key: "grpc.tls.enabled",
+                value: "true".to_owned(),
+                reason: "rocketmq-proxy was compiled without the tls feature".to_owned(),
+            }
+            .into());
+        }
         ExecutionGuards::try_from_config(&config.runtime)
     }
 

@@ -656,6 +656,27 @@ pub fn build_client_config(tls_config: &TlsConfig) -> RocketMQResult<tokio_rustl
 pub fn build_server_acceptor(tls_config: &TlsConfig) -> RocketMQResult<tokio_rustls::TlsAcceptor> {
     let effective_config = effective_tls_config(tls_config);
 
+    build_server_acceptor_exact(&effective_config)
+}
+
+/// Builds a server acceptor from exactly the supplied snapshot.
+///
+/// Unlike [`build_server_acceptor`], this entry point does not merge the Java-compatible
+/// transport TLS properties file. It is intended for callers that already own an atomic,
+/// validated configuration generation.
+#[cfg(feature = "tls")]
+pub fn build_server_acceptor_exact(tls_config: &TlsConfig) -> RocketMQResult<tokio_rustls::TlsAcceptor> {
+    build_server_acceptor_exact_with_alpn(tls_config, &[])
+}
+
+/// Builds an exact server acceptor with an explicit ALPN protocol list.
+#[cfg(feature = "tls")]
+pub fn build_server_acceptor_exact_with_alpn(
+    tls_config: &TlsConfig,
+    alpn_protocols: &[Vec<u8>],
+) -> RocketMQResult<tokio_rustls::TlsAcceptor> {
+    let effective_config = tls_config;
+
     let (certs, key) = if effective_config.test_mode_enable
         && (effective_config.server.cert_path.is_none() || effective_config.server.key_path.is_none())
     {
@@ -685,16 +706,17 @@ pub fn build_server_acceptor(tls_config: &TlsConfig) -> RocketMQResult<tokio_rus
         )
     };
 
-    let verifier = build_client_cert_verifier(&effective_config)?;
-    let protocol_versions = configured_protocol_versions(&effective_config)?;
+    let verifier = build_client_cert_verifier(effective_config)?;
+    let protocol_versions = configured_protocol_versions(effective_config)?;
     let server_builder = match protocol_versions.as_deref() {
         Some(versions) => tokio_rustls::rustls::ServerConfig::builder_with_protocol_versions(versions),
         None => tokio_rustls::rustls::ServerConfig::builder(),
     };
-    let server_config = server_builder
+    let mut server_config = server_builder
         .with_client_cert_verifier(verifier)
         .with_single_cert(certs, key)
         .map_err(|error| config_error("tls.server.certificate", "<configured>", error.to_string()))?;
+    server_config.alpn_protocols = alpn_protocols.to_vec();
 
     Ok(tokio_rustls::TlsAcceptor::from(StdArc::new(server_config)))
 }

@@ -26,6 +26,22 @@ use futures::StreamExt;
 use hmac::digest::KeyInit;
 use hmac::Hmac;
 use hmac::Mac;
+#[cfg(feature = "tls")]
+use rcgen::BasicConstraints;
+#[cfg(feature = "tls")]
+use rcgen::CertificateParams;
+#[cfg(feature = "tls")]
+use rcgen::DnType;
+#[cfg(feature = "tls")]
+use rcgen::ExtendedKeyUsagePurpose;
+#[cfg(feature = "tls")]
+use rcgen::IsCa;
+#[cfg(feature = "tls")]
+use rcgen::Issuer;
+#[cfg(feature = "tls")]
+use rcgen::KeyPair;
+#[cfg(feature = "tls")]
+use rcgen::KeyUsagePurpose;
 use rocketmq_model::result::SendStatus;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_proxy::v2;
@@ -45,6 +61,10 @@ use rocketmq_proxy::ForwardMessageToDeadLetterQueueRequest;
 use rocketmq_proxy::GetOffsetPlan;
 use rocketmq_proxy::GetOffsetRequest;
 use rocketmq_proxy::GrpcConfig;
+#[cfg(feature = "tls")]
+use rocketmq_proxy::GrpcTlsClientAuth;
+#[cfg(feature = "tls")]
+use rocketmq_proxy::GrpcTlsConfig;
 use rocketmq_proxy::MetadataService;
 use rocketmq_proxy::ProxyAuthConfig;
 use rocketmq_proxy::ProxyAuthRuntime;
@@ -77,6 +97,14 @@ use rocketmq_runtime::RuntimeContext;
 use sha1::Sha1;
 use tokio::sync::oneshot;
 use tonic::metadata::MetadataValue;
+#[cfg(feature = "tls")]
+use tonic::transport::Certificate;
+#[cfg(feature = "tls")]
+use tonic::transport::ClientTlsConfig;
+#[cfg(feature = "tls")]
+use tonic::transport::Endpoint;
+#[cfg(feature = "tls")]
+use tonic::transport::Identity;
 use tonic::Request;
 
 type HmacSha1 = Hmac<Sha1>;
@@ -755,6 +783,170 @@ accounts:
     let _ = fs::remove_dir_all(test_dir);
 }
 
+#[cfg(feature = "tls")]
+#[tokio::test]
+async fn proxy_runtime_rejects_partial_grpc_tls_material_before_startup() {
+    let runtime_context = RuntimeContext::from_current("proxy-grpc-partial-tls-test");
+    let result = ProxyRuntime::builder(
+        ProxyConfig {
+            grpc: GrpcConfig {
+                tls: GrpcTlsConfig {
+                    enabled: true,
+                    certificate_path: "server.pem".to_owned(),
+                    ..GrpcTlsConfig::default()
+                },
+                ..GrpcConfig::default()
+            },
+            ..ProxyConfig::default()
+        },
+        runtime_context.service_context("proxy-grpc-partial-tls"),
+        rocketmq_observability::TelemetryHandle::noop(),
+    )
+    .build();
+
+    let error = match result {
+        Ok(_) => panic!("certificate-only TLS must fail before the listener starts"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("privateKeyPath"), "{error}");
+}
+
+#[cfg(feature = "tls")]
+#[tokio::test]
+async fn grpc_mtls_enforces_server_trust_and_client_identity() {
+    let trusted_ca = TestCertificateAuthority::new("trusted-ca");
+    let rogue_ca = TestCertificateAuthority::new("rogue-ca");
+    let server = trusted_ca.server_identity("localhost");
+    let trusted_client = trusted_ca.client_identity("trusted-client");
+    let rogue_client = rogue_ca.client_identity("rogue-client");
+    let directory = tempfile::tempdir().expect("TLS fixture directory");
+    let certificate_path = directory.path().join("server.pem");
+    let private_key_path = directory.path().join("server.key");
+    let client_ca_path = directory.path().join("client-ca.pem");
+    fs::write(&certificate_path, &server.certificate_pem).expect("server certificate");
+    fs::write(&private_key_path, &server.private_key_pem).expect("server private key");
+    fs::write(&client_ca_path, &trusted_ca.certificate_pem).expect("client CA");
+
+    let route_service = Arc::new(RecordingRouteService::default());
+    let listen_addr = reserve_loopback_addr();
+    let (shutdown_tx, mut server_task) = spawn_runtime_on_addr_with_grpc_config(
+        service_manager_with_route(route_service.clone()),
+        GrpcConfig {
+            listen_addr: listen_addr.to_string(),
+            tls: GrpcTlsConfig {
+                enabled: true,
+                certificate_path: certificate_path.to_string_lossy().into_owned(),
+                private_key_path: private_key_path.to_string_lossy().into_owned(),
+                client_ca_path: Some(client_ca_path.to_string_lossy().into_owned()),
+                client_auth: GrpcTlsClientAuth::Require,
+                reload_interval_ms: 20,
+                ..GrpcTlsConfig::default()
+            },
+            ..GrpcConfig::default()
+        },
+    );
+    wait_for_server_ready(listen_addr, &mut server_task)
+        .await
+        .expect("mTLS listener should become ready");
+
+    assert_tls_connection_rejected(listen_addr, &trusted_ca.certificate_pem, None).await;
+
+    assert_tls_connection_rejected(
+        listen_addr,
+        &trusted_ca.certificate_pem,
+        Some((&rogue_client.certificate_pem, &rogue_client.private_key_pem)),
+    )
+    .await;
+
+    assert_tls_connection_rejected(
+        listen_addr,
+        &rogue_ca.certificate_pem,
+        Some((&trusted_client.certificate_pem, &trusted_client.private_key_pem)),
+    )
+    .await;
+
+    let mut client = connect_tls(
+        listen_addr,
+        &trusted_ca.certificate_pem,
+        Some((&trusted_client.certificate_pem, &trusted_client.private_key_pem)),
+    )
+    .await
+    .expect("trusted mTLS identity should connect");
+    let response = client
+        .query_route(route_request("TopicA"))
+        .await
+        .expect("trusted mTLS request should reach the Proxy")
+        .into_inner();
+    assert_eq!(
+        response.status.as_ref().map(|status| status.code),
+        Some(v2::Code::Ok as i32)
+    );
+    assert_eq!(route_service.observed().len(), 1);
+
+    let _ = shutdown_tx.send(());
+    assert!(server_task.await.expect("server task join").is_ok());
+}
+
+#[cfg(feature = "tls")]
+#[tokio::test]
+async fn grpc_tls_reload_is_atomic_and_preserves_existing_connections() {
+    let original_ca = TestCertificateAuthority::new("original-ca");
+    let replacement_ca = TestCertificateAuthority::new("replacement-ca");
+    let original = original_ca.server_identity("localhost");
+    let replacement = replacement_ca.server_identity("localhost");
+    let directory = tempfile::tempdir().expect("TLS rotation fixture directory");
+    let certificate_path = directory.path().join("server.pem");
+    let private_key_path = directory.path().join("server.key");
+    fs::write(&certificate_path, &original.certificate_pem).expect("original certificate");
+    fs::write(&private_key_path, &original.private_key_pem).expect("original private key");
+
+    let route_service = Arc::new(RecordingRouteService::default());
+    let listen_addr = reserve_loopback_addr();
+    let (shutdown_tx, mut server_task) = spawn_runtime_on_addr_with_grpc_config(
+        service_manager_with_route(route_service),
+        GrpcConfig {
+            listen_addr: listen_addr.to_string(),
+            tls: GrpcTlsConfig {
+                enabled: true,
+                certificate_path: certificate_path.to_string_lossy().into_owned(),
+                private_key_path: private_key_path.to_string_lossy().into_owned(),
+                reload_interval_ms: 20,
+                ..GrpcTlsConfig::default()
+            },
+            ..GrpcConfig::default()
+        },
+    );
+    wait_for_server_ready(listen_addr, &mut server_task)
+        .await
+        .expect("TLS listener should become ready");
+    let mut established = connect_tls(listen_addr, &original_ca.certificate_pem, None)
+        .await
+        .expect("original TLS generation should connect");
+
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    fs::write(&certificate_path, &replacement.certificate_pem).expect("mismatched replacement certificate");
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    connect_tls(listen_addr, &original_ca.certificate_pem, None)
+        .await
+        .expect("invalid generation must retain the last-known-good certificate");
+
+    fs::write(&private_key_path, &replacement.private_key_pem).expect("matching replacement private key");
+    let mut replacement_client = connect_tls_with_retry(listen_addr, &replacement_ca.certificate_pem, None)
+        .await
+        .expect("complete replacement generation should become active");
+    replacement_client
+        .query_route(route_request("ReplacementTopic"))
+        .await
+        .expect("replacement generation request should succeed");
+    established
+        .query_route(route_request("EstablishedTopic"))
+        .await
+        .expect("existing TLS connection must survive listener rotation");
+
+    let _ = shutdown_tx.send(());
+    assert!(server_task.await.expect("server task join").is_ok());
+}
+
 async fn spawn_runtime(
     service_manager: Arc<dyn rocketmq_proxy::ServiceManager>,
 ) -> (
@@ -801,13 +993,26 @@ fn spawn_runtime_on_addr(
     oneshot::Sender<()>,
     tokio::task::JoinHandle<rocketmq_proxy::ProxyResult<()>>,
 ) {
+    spawn_runtime_on_addr_with_grpc_config(
+        service_manager,
+        GrpcConfig {
+            listen_addr: listen_addr.to_string(),
+            ..GrpcConfig::default()
+        },
+    )
+}
+
+fn spawn_runtime_on_addr_with_grpc_config(
+    service_manager: Arc<dyn rocketmq_proxy::ServiceManager>,
+    grpc: GrpcConfig,
+) -> (
+    oneshot::Sender<()>,
+    tokio::task::JoinHandle<rocketmq_proxy::ProxyResult<()>>,
+) {
     let runtime_context = RuntimeContext::from_current("proxy-grpc-listener-test");
     let runtime = ProxyRuntime::builder(
         ProxyConfig {
-            grpc: GrpcConfig {
-                listen_addr: listen_addr.to_string(),
-                ..GrpcConfig::default()
-            },
+            grpc,
             ..ProxyConfig::default()
         },
         runtime_context.service_context("proxy-grpc-listener"),
@@ -827,6 +1032,125 @@ fn spawn_runtime_on_addr(
     });
 
     (shutdown_tx, server_task)
+}
+
+fn service_manager_with_route(route_service: Arc<RecordingRouteService>) -> Arc<dyn rocketmq_proxy::ServiceManager> {
+    Arc::new(ClusterServiceManager::with_services(
+        route_service,
+        Arc::new(NormalMetadataService),
+        Arc::new(DefaultAssignmentService),
+        Arc::new(DefaultMessageService),
+        Arc::new(DefaultConsumerService),
+        Arc::new(DefaultTransactionService),
+    ))
+}
+
+#[cfg(feature = "tls")]
+async fn connect_tls(
+    addr: SocketAddr,
+    ca_pem: &str,
+    identity: Option<(&str, &str)>,
+) -> Result<MessagingServiceClient<tonic::transport::Channel>, tonic::transport::Error> {
+    let mut tls = ClientTlsConfig::new()
+        .domain_name("localhost")
+        .ca_certificate(Certificate::from_pem(ca_pem));
+    if let Some((certificate, private_key)) = identity {
+        tls = tls.identity(Identity::from_pem(certificate, private_key));
+    }
+    let channel = Endpoint::from_shared(format!("https://{addr}"))?
+        .tls_config(tls)?
+        .connect()
+        .await?;
+    Ok(MessagingServiceClient::new(channel))
+}
+
+#[cfg(feature = "tls")]
+async fn connect_tls_with_retry(
+    addr: SocketAddr,
+    ca_pem: &str,
+    identity: Option<(&str, &str)>,
+) -> Result<MessagingServiceClient<tonic::transport::Channel>, tonic::transport::Error> {
+    let mut last_error = None;
+    for _ in 0..30 {
+        match connect_tls(addr, ca_pem, identity).await {
+            Ok(client) => return Ok(client),
+            Err(error) => last_error = Some(error),
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    Err(last_error.expect("TLS retry loop must attempt a connection"))
+}
+
+#[cfg(feature = "tls")]
+async fn assert_tls_connection_rejected(addr: SocketAddr, ca_pem: &str, identity: Option<(&str, &str)>) {
+    if let Ok(mut client) = connect_tls(addr, ca_pem, identity).await {
+        client
+            .query_route(route_request("RejectedTlsClient"))
+            .await
+            .expect_err("TLS policy must reject this connection before processing a request");
+    }
+}
+
+#[cfg(feature = "tls")]
+struct TestCertificateAuthority {
+    certificate_pem: String,
+    issuer: Issuer<'static, KeyPair>,
+}
+
+#[cfg(feature = "tls")]
+impl TestCertificateAuthority {
+    fn new(common_name: &str) -> Self {
+        let mut params = CertificateParams::new(Vec::<String>::new()).expect("CA parameters");
+        params.distinguished_name.push(DnType::CommonName, common_name);
+        params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        params.key_usages = vec![
+            KeyUsagePurpose::DigitalSignature,
+            KeyUsagePurpose::KeyCertSign,
+            KeyUsagePurpose::CrlSign,
+        ];
+        let key = KeyPair::generate().expect("CA key");
+        let certificate = params.self_signed(&key).expect("CA certificate");
+        Self {
+            certificate_pem: certificate.pem(),
+            issuer: Issuer::new(params, key),
+        }
+    }
+
+    fn server_identity(&self, common_name: &str) -> TestTlsIdentity {
+        self.identity(
+            common_name,
+            ExtendedKeyUsagePurpose::ServerAuth,
+            vec!["localhost".to_owned()],
+        )
+    }
+
+    fn client_identity(&self, common_name: &str) -> TestTlsIdentity {
+        self.identity(common_name, ExtendedKeyUsagePurpose::ClientAuth, Vec::new())
+    }
+
+    fn identity(
+        &self,
+        common_name: &str,
+        usage: ExtendedKeyUsagePurpose,
+        subject_alt_names: Vec<String>,
+    ) -> TestTlsIdentity {
+        let mut params = CertificateParams::new(subject_alt_names).expect("leaf parameters");
+        params.distinguished_name.push(DnType::CommonName, common_name);
+        params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        params.extended_key_usages = vec![usage];
+        let key = KeyPair::generate().expect("leaf key");
+        let certificate = params.signed_by(&key, &self.issuer).expect("signed leaf certificate");
+        TestTlsIdentity {
+            certificate_pem: certificate.pem(),
+            private_key_pem: key.serialize_pem(),
+        }
+    }
+}
+
+#[cfg(feature = "tls")]
+struct TestTlsIdentity {
+    certificate_pem: String,
+    private_key_pem: String,
 }
 
 async fn wait_for_server_ready(

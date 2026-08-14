@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::fmt;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -30,6 +32,36 @@ use crate::error::ProxyResult;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct GrpcTransportContext {
     local_addr: String,
+}
+
+/// Verified TLS client identity attached by the gRPC transport boundary.
+///
+/// The bytes are the peer's leaf certificate DER after rustls has validated the configured
+/// client-auth policy. Request metadata cannot construct this proof.
+#[derive(Clone, PartialEq, Eq)]
+pub struct VerifiedTlsIdentity {
+    leaf_certificate_der: Arc<[u8]>,
+}
+
+impl VerifiedTlsIdentity {
+    pub fn from_leaf_certificate_der(certificate: impl Into<Arc<[u8]>>) -> Self {
+        Self {
+            leaf_certificate_der: certificate.into(),
+        }
+    }
+
+    pub fn leaf_certificate_der(&self) -> &[u8] {
+        self.leaf_certificate_der.as_ref()
+    }
+}
+
+impl fmt::Debug for VerifiedTlsIdentity {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("VerifiedTlsIdentity")
+            .field("leaf_certificate", &"<verified>")
+            .finish()
+    }
 }
 
 impl GrpcTransportContext {

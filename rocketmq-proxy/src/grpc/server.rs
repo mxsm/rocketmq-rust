@@ -15,10 +15,14 @@
 use std::future::Future;
 use std::sync::Arc;
 
+#[cfg(feature = "tls")]
+use futures::TryStreamExt;
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic::service::interceptor::InterceptedService;
 use tonic::transport::Server;
 
+use rocketmq_runtime::BlockingExecutor;
+use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::TaskGroup;
 
@@ -61,7 +65,15 @@ where
     F: Future<Output = ShutdownDeadline> + Send + 'static,
     R: FnOnce() -> ProxyResult<()> + Send + 'static,
 {
-    serve_with_report_and_ready(config, service, shutdown, parent_task_group, Some(Box::new(ready))).await
+    serve_with_report_and_ready(
+        config,
+        service,
+        shutdown,
+        parent_task_group,
+        None,
+        Some(Box::new(ready)),
+    )
+    .await
 }
 
 #[doc(hidden)]
@@ -75,7 +87,7 @@ where
     P: MessagingProcessor + 'static,
     F: Future<Output = ShutdownDeadline> + Send + 'static,
 {
-    serve_with_report_and_ready(config, service, shutdown, parent_task_group, None).await
+    serve_with_report_and_ready(config, service, shutdown, parent_task_group, None, None).await
 }
 
 #[doc(hidden)]
@@ -89,7 +101,7 @@ where
     P: MessagingProcessor + 'static,
     F: Future<Output = ShutdownDeadline> + Send + 'static,
 {
-    serve_with_report_and_ready(config, service, shutdown, parent_task_group, None).await
+    serve_with_report_and_ready(config, service, shutdown, parent_task_group, None, None).await
 }
 
 #[doc(hidden)]
@@ -105,7 +117,40 @@ where
     F: Future<Output = ShutdownDeadline> + Send + 'static,
     R: FnOnce() -> ProxyResult<()> + Send + 'static,
 {
-    serve_with_report_and_ready(config, service, shutdown, parent_task_group, Some(Box::new(ready))).await
+    serve_with_report_and_ready(
+        config,
+        service,
+        shutdown,
+        parent_task_group,
+        None,
+        Some(Box::new(ready)),
+    )
+    .await
+}
+
+pub(crate) async fn serve_with_report_with_service_context_and_ready<P, F, R>(
+    config: Arc<ProxyConfig>,
+    service: ProxyGrpcService<P>,
+    shutdown: F,
+    service_context: ChildServiceContext,
+    ready: R,
+) -> ProxyResult<ProxyGrpcServerShutdownReport>
+where
+    P: MessagingProcessor + 'static,
+    F: Future<Output = ShutdownDeadline> + Send + 'static,
+    R: FnOnce() -> ProxyResult<()> + Send + 'static,
+{
+    let blocking = service_context.metadata_io().clone();
+    let task_group = service_context.task_group().clone();
+    serve_with_report_and_ready(
+        config,
+        service,
+        shutdown,
+        task_group,
+        Some(blocking),
+        Some(Box::new(ready)),
+    )
+    .await
 }
 
 async fn serve_with_report_and_ready<P, F>(
@@ -113,6 +158,7 @@ async fn serve_with_report_and_ready<P, F>(
     service: ProxyGrpcService<P>,
     shutdown: F,
     parent_task_group: TaskGroup,
+    blocking: Option<BlockingExecutor>,
     ready: Option<Box<dyn FnOnce() -> ProxyResult<()> + Send>>,
 ) -> ProxyResult<ProxyGrpcServerShutdownReport>
 where
@@ -125,6 +171,26 @@ where
     let max_decoding_message_size = grpc_config.max_decoding_message_size;
     let max_encoding_message_size = grpc_config.max_encoding_message_size;
     let concurrency_limit_per_connection = grpc_config.concurrency_limit_per_connection;
+    grpc_config.tls.validate()?;
+    #[cfg(feature = "tls")]
+    let tls_acceptor = if grpc_config.tls.enabled {
+        let blocking = blocking.ok_or_else(|| ProxyError::Transport {
+            message: "Proxy gRPC TLS requires an injected service context".to_owned(),
+        })?;
+        Some(super::tls_acceptor::ReloadableGrpcTlsAcceptor::initialize(grpc_config.tls.clone(), blocking).await?)
+    } else {
+        None
+    };
+    #[cfg(not(feature = "tls"))]
+    if grpc_config.tls.enabled {
+        let _ = blocking;
+        return Err(ProxyError::Transport {
+            message: "Proxy gRPC TLS was configured, but rocketmq-proxy was compiled without the tls feature"
+                .to_owned(),
+        });
+    }
+    #[cfg(feature = "tls")]
+    let tls_task_group = task_group.clone();
     let shutdown_report = rocketmq_proxy_core::ingress::grpc::server::serve_with_lifecycle_and_ready(
         &grpc_config,
         shutdown,
@@ -152,6 +218,30 @@ where
                 .max_decoding_message_size(max_decoding_message_size)
                 .max_encoding_message_size(max_encoding_message_size);
             let service = InterceptedService::new(service, middleware::ingress_context_interceptor(local_addr));
+            #[cfg(feature = "tls")]
+            if let Some(tls_acceptor) = tls_acceptor {
+                tls_acceptor.start_reload(&tls_task_group)?;
+                let handshakes = TcpListenerStream::new(listener)
+                    .map_ok(move |stream| {
+                        let tls_acceptor = tls_acceptor.clone();
+                        async move { tls_acceptor.accept(stream).await }
+                    })
+                    .try_buffer_unordered(concurrency_limit_per_connection.max(1));
+                return Server::builder()
+                    .concurrency_limit_per_connection(concurrency_limit_per_connection)
+                    .add_service(service)
+                    .serve_with_incoming_shutdown(handshakes, async move {
+                        loop {
+                            if *shutdown_rx.borrow() || shutdown_rx.changed().await.is_err() {
+                                break;
+                            }
+                        }
+                    })
+                    .await
+                    .map_err(|error| ProxyError::Transport {
+                        message: format!("proxy gRPC TLS server failed: {error}"),
+                    });
+            }
             Server::builder()
                 .concurrency_limit_per_connection(concurrency_limit_per_connection)
                 .add_service(service)

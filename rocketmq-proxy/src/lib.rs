@@ -50,6 +50,8 @@ pub use cluster::RocketmqClusterClient;
 #[cfg(feature = "cluster-mode")]
 pub use config::ClusterConfig;
 pub use config::GrpcConfig;
+pub use config::GrpcTlsClientAuth;
+pub use config::GrpcTlsConfig;
 #[cfg(feature = "local-mode")]
 pub use config::LocalConfig;
 pub use config::ProxyAuthConfig;
@@ -130,6 +132,7 @@ pub use remoting::ProxyRemotingDispatcher;
 pub use remoting::ProxyRequestProcessor;
 pub use rocketmq_proxy_core::ProxyMessage;
 pub use rocketmq_proxy_core::ProxyMessageExt;
+pub use rocketmq_proxy_core::VerifiedTlsIdentity;
 pub use service::AssignmentService;
 #[cfg(feature = "cluster-mode")]
 pub use service::ClusterServiceManager;

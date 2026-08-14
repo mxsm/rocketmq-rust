@@ -16,5 +16,7 @@ pub mod adapter;
 pub mod middleware;
 pub mod server;
 pub mod service;
+#[cfg(feature = "tls")]
+mod tls_acceptor;
 
 pub use service::ProxyGrpcService;
