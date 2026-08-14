@@ -393,6 +393,7 @@ pub(crate) struct SendMessageTopicCapability<MS: BrokerWriteStore> {
     topic_config_coordinator: Arc<TopicConfigCoordinator>,
     topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
     broker_outer_api: BrokerOuterAPI,
+    ha_server_addr: CheetahString,
     message_store: TransactionMessageStore<MS>,
     slave_master_addr: Option<Arc<SlaveMasterAddress>>,
     update_master_haserver_addr_periodically: bool,
@@ -407,6 +408,7 @@ impl<MS: BrokerWriteStore> Clone for SendMessageTopicCapability<MS> {
             topic_config_coordinator: Arc::clone(&self.topic_config_coordinator),
             topic_queue_mapping_manager: Arc::clone(&self.topic_queue_mapping_manager),
             broker_outer_api: self.broker_outer_api.clone(),
+            ha_server_addr: self.ha_server_addr.clone(),
             message_store: self.message_store.clone(),
             slave_master_addr: self.slave_master_addr.as_ref().map(Arc::clone),
             update_master_haserver_addr_periodically: self.update_master_haserver_addr_periodically,
@@ -429,6 +431,7 @@ where
         topic_config_coordinator: Arc<TopicConfigCoordinator>,
         topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
         broker_outer_api: BrokerOuterAPI,
+        ha_server_addr: CheetahString,
         message_store: TransactionMessageStore<MS>,
         slave_master_addr: Option<Arc<SlaveMasterAddress>>,
         update_master_haserver_addr_periodically: bool,
@@ -440,6 +443,7 @@ where
             topic_config_coordinator,
             topic_queue_mapping_manager,
             broker_outer_api,
+            ha_server_addr,
             message_store,
             slave_master_addr,
             update_master_haserver_addr_periodically,
@@ -632,7 +636,7 @@ where
                 policy.broker_addr.clone(),
                 policy.broker_name.clone(),
                 policy.broker_id,
-                policy.broker_addr.clone(),
+                self.ha_server_addr.clone(),
                 wrapper,
                 vec![],
                 false,
@@ -657,8 +661,10 @@ where
         let Some(result) = register_broker_result.into_iter().next() else {
             return;
         };
-        if self.update_master_haserver_addr_periodically {
-            self.message_store.update_master_address(&result.master_addr).await;
+        if self.update_master_haserver_addr_periodically && !result.ha_server_addr.is_empty() {
+            self.message_store
+                .update_master_addresses(&result.ha_server_addr, &result.master_addr)
+                .await;
         }
         if let Some(master_addr) = &self.slave_master_addr {
             master_addr.store(Some(&result.master_addr));

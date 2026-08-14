@@ -6213,6 +6213,7 @@ async fn three_controller_two_broker_controller_mode_failover_reregisters_namesr
     }
 
     let surviving_broker = if broker_a_is_master { &broker_b } else { &broker_a };
+    let surviving_ha_addr = surviving_broker.composition.state.get_ha_server_addr();
     let surviving_store = surviving_broker
         .composition
         .state
@@ -6325,7 +6326,7 @@ async fn three_controller_two_broker_controller_mode_failover_reregisters_namesr
                 && surviving_runtime_info.in_sync_slave_nums
                     == (surviving_manager.sync_state_set().len().max(1) as i32 - 1).max(0)
                 && !rejoining_runtime_info.master
-                && rejoining_runtime_info.ha_client_runtime_info.master_addr == surviving_broker_addr.as_str()
+                && rejoining_runtime_info.ha_client_runtime_info.master_addr == surviving_ha_addr.as_str()
                 && rejoining_broker.composition.state.message_store_config().broker_role == BrokerRole::Slave
         },
         "rejoining broker namesrv/store/HA view to converge as slave",
