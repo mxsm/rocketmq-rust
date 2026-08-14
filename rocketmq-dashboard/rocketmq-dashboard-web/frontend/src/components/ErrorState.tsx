@@ -4,16 +4,17 @@ import { Button } from './ui/Button';
 interface ErrorStateProps {
   message: string;
   onRetry?: () => void;
+  retryLabel?: string;
 }
 
-export default function ErrorState({ message, onRetry }: ErrorStateProps) {
+export default function ErrorState({ message, onRetry, retryLabel = 'Retry' }: ErrorStateProps) {
   return (
     <div className="state-block state-block-error" role="alert">
       <AlertTriangle size={24} aria-hidden="true" />
       <span>{message}</span>
       {onRetry ? (
         <Button type="button" variant="secondary" onClick={onRetry}>
-          Retry
+          {retryLabel}
         </Button>
       ) : null}
     </div>

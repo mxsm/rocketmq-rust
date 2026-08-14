@@ -24,6 +24,7 @@ use crate::service::spawn_dashboard_history_collector;
 use rocketmq_admin_core::client_adapter::ClientRuntime;
 use rocketmq_dashboard_common::DashboardAdminFacade;
 use std::sync::Arc;
+use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 
 pub type WebAdminFacade = DashboardAdminFacade<DashboardAdminClient>;
@@ -37,6 +38,7 @@ pub struct AppState {
     pub dashboard_tasks: DashboardTaskManager,
     pub dashboard_config: Arc<RwLock<DashboardConfigView>>,
     pub admin_client: DashboardAdminClient,
+    pub(crate) topic_mutation_lock: Arc<Mutex<()>>,
 }
 
 impl AppState {
@@ -67,6 +69,7 @@ impl AppState {
             dashboard_tasks,
             dashboard_config,
             admin_client,
+            topic_mutation_lock: Arc::new(Mutex::new(())),
         })
     }
 

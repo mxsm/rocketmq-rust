@@ -1,375 +1,349 @@
-import { Activity, FastForward, GitBranch, Plus, RefreshCw, RotateCcw, Search, Send, Settings2, Trash2, Users } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { Database, Layers3, MoreHorizontal, Plus, RotateCcw, ShieldAlert, Trash2 } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { consumerApi } from '../api/consumer_api';
 import { topicApi } from '../api/topic_api';
-import ConfirmDialog from '../components/ConfirmDialog';
-import EmptyState from '../components/EmptyState';
+import AppDataTable, { type AppDataTableColumn } from '../components/AppDataTable';
+import EntitySheet from '../components/EntitySheet';
 import ErrorState from '../components/ErrorState';
 import LoadingState from '../components/LoadingState';
+import MetricCard from '../components/MetricCard';
 import PageHeader from '../components/PageHeader';
+import QueryToolbar from '../components/QueryToolbar';
+import RefreshButton from '../components/RefreshButton';
 import StatusBadge from '../components/StatusBadge';
-import TopicInspectorDrawer, { type TopicInspectorTab } from '../components/TopicInspectorDrawer';
-import TopicMaintenanceDialog, { type TopicMaintenanceMode } from '../components/TopicMaintenanceDialog';
+import TopicMaintenanceDialog from '../components/TopicMaintenanceDialog';
 import TopicMutationDialog from '../components/TopicMutationDialog';
+import { Button } from '../components/ui/Button';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogTitle
+} from '../components/ui/AlertDialog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger
+} from '../components/ui/DropdownMenu';
 import type { ConsumerGroupInfo } from '../types/consumer';
 import type { TopicInfo, TopicListView, TopicMutationRequest } from '../types/topic';
+import TopicDetailContent from './topics/TopicDetailContent';
+import {
+  filterTopics,
+  getTopicCategory,
+  getTopicMetrics,
+  getTopicPermissionLabel,
+  type TopicOperationalCategory
+} from './topics/topic-model';
 
-const topicTypeFilters = [
-  { key: 'normal', label: 'NORMAL', defaultChecked: true },
-  { key: 'delay', label: 'Delay', defaultChecked: true },
-  { key: 'fifo', label: 'FIFO', defaultChecked: false },
-  { key: 'transaction', label: 'TRANSACTION', defaultChecked: false },
-  { key: 'unspecified', label: 'UNSPECIFIED', defaultChecked: false },
-  { key: 'retry', label: 'RETRY', defaultChecked: true },
-  { key: 'dlq', label: 'DLQ', defaultChecked: true },
-  { key: 'system', label: 'SYSTEM', defaultChecked: true }
-] as const;
-
-type TopicTypeKey = (typeof topicTypeFilters)[number]['key'];
-
-type TopicTypeFilterState = Record<TopicTypeKey, boolean>;
-
-const pageSize = 10;
-
-function defaultFilters(): TopicTypeFilterState {
-  return Object.fromEntries(topicTypeFilters.map((item) => [item.key, item.defaultChecked])) as TopicTypeFilterState;
-}
+const PAGE_SIZE = 10;
 
 export default function TopicListPage() {
   const [data, setData] = useState<TopicListView | null>(null);
   const [consumerGroups, setConsumerGroups] = useState<ConsumerGroupInfo[]>([]);
+  const [consumerGroupsLoading, setConsumerGroupsLoading] = useState(true);
+  const [consumerGroupsError, setConsumerGroupsError] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
+  const [brokerName, setBrokerName] = useState('all');
+  const [category, setCategory] = useState<TopicOperationalCategory | 'all'>('all');
+  const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [topicQuery, setTopicQuery] = useState('');
-  const [filters, setFilters] = useState<TopicTypeFilterState>(() => defaultFilters());
   const [mutationOpen, setMutationOpen] = useState(false);
-  const [inspectorTopic, setInspectorTopic] = useState<TopicInfo | null>(null);
-  const [inspectorTab, setInspectorTab] = useState<TopicInspectorTab>('status');
+  const [selectedTopic, setSelectedTopic] = useState<TopicInfo | null>(null);
+  const detailTriggerRef = useRef<HTMLElement | null>(null);
   const [maintenanceTopic, setMaintenanceTopic] = useState<string | null>(null);
-  const [maintenanceMode, setMaintenanceMode] = useState<TopicMaintenanceMode>('reset');
-  const [page, setPage] = useState(1);
+  const [deleteTarget, setDeleteTarget] = useState<TopicInfo | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const consumerGroupsRequestRef = useRef(0);
 
-  const load = () => {
-    setLoading(true);
+  const load = async () => {
+    if (data) setRefreshing(true);
+    else setLoading(true);
     setError(null);
-    Promise.all([topicApi.list(), consumerApi.list().catch(() => ({ items: [], total: 0 }))])
-      .then(([topicData, consumerData]) => {
-        setData(topicData);
-        setConsumerGroups(consumerData.items);
-      })
-      .catch((requestError: Error) => setError(requestError.message))
-      .finally(() => setLoading(false));
+    try {
+      setData(await topicApi.list());
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : String(requestError));
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  };
+
+  const loadConsumerGroups = async () => {
+    const requestId = ++consumerGroupsRequestRef.current;
+    setConsumerGroupsLoading(true);
+    setConsumerGroupsError(null);
+    try {
+      const consumerData = await consumerApi.list();
+      if (consumerGroupsRequestRef.current === requestId) setConsumerGroups(consumerData.items);
+    } catch (requestError) {
+      if (consumerGroupsRequestRef.current === requestId) {
+        setConsumerGroups([]);
+        setConsumerGroupsError(requestError instanceof Error ? requestError.message : String(requestError));
+      }
+    } finally {
+      if (consumerGroupsRequestRef.current === requestId) setConsumerGroupsLoading(false);
+    }
   };
 
   useEffect(() => {
-    load();
+    void load();
+    void loadConsumerGroups();
+    return () => {
+      consumerGroupsRequestRef.current += 1;
+    };
   }, []);
 
-  const filteredTopics = useMemo(() => {
-    const query = topicQuery.trim().toLowerCase();
-    const enabledTypes = new Set(
-      Object.entries(filters)
-        .filter(([, enabled]) => enabled)
-        .map(([key]) => key)
-    );
-    return (data?.items ?? []).filter((topic) => {
-      const matchesQuery = !query || topic.topic.toLowerCase().includes(query);
-      const matchesType = enabledTypes.size === 0 || enabledTypes.has(inferTopicType(topic));
-      return matchesQuery && matchesType;
-    });
-  }, [data?.items, filters, topicQuery]);
-
-  const topicCounts = useMemo(() => {
-    const items = data?.items ?? [];
-    const system = items.filter(isSystemTopic).length;
-    return {
-      total: items.length,
-      visible: filteredTopics.length,
-      system,
-      application: Math.max(0, items.length - system)
-    };
-  }, [data?.items, filteredTopics.length]);
-
-  const pageCount = Math.max(1, Math.ceil(filteredTopics.length / pageSize));
-  const currentPage = Math.min(page, pageCount);
-  const visibleTopics = useMemo(
-    () => filteredTopics.slice((currentPage - 1) * pageSize, currentPage * pageSize),
-    [currentPage, filteredTopics]
+  const topics = data?.items ?? [];
+  const metrics = useMemo(() => getTopicMetrics(topics), [topics]);
+  const brokers = useMemo(
+    () => Array.from(new Set(topics.map((topic) => topic.brokerName).filter((name): name is string => Boolean(name)))).sort(),
+    [topics]
   );
+  const filteredTopics = useMemo(
+    () => filterTopics(topics, { query: search, brokerName, category }),
+    [brokerName, category, search, topics]
+  );
+  const pageCount = Math.max(1, Math.ceil(filteredTopics.length / PAGE_SIZE));
+  const currentPage = Math.min(page, pageCount);
+  const visibleTopics = filteredTopics.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
 
-  useEffect(() => {
+  const updateFilter = (setter: (value: string) => void) => (value: string) => {
+    setter(value);
     setPage(1);
-  }, [filters, topicQuery]);
-
-  const openInspector = (topic: TopicInfo, tab: TopicInspectorTab) => {
-    setInspectorTopic(topic);
-    setInspectorTab(tab);
   };
 
-  const openMaintenance = (topic: string, mode: TopicMaintenanceMode) => {
-    setMaintenanceTopic(topic);
-    setMaintenanceMode(mode);
+  const saveTopic = async (request: TopicMutationRequest) => {
+    if (topics.some((topic) => topic.topic === request.topic)) {
+      throw new Error(`Topic \`${request.topic}\` already exists. Choose a new name.`);
+    }
+    await topicApi.create(request);
+    setNotice(`Topic ${request.topic} created.`);
+    await load();
   };
 
-  const saveTopic = (request: TopicMutationRequest) =>
-    topicApi.create(request).then(() => {
-      setNotice(`Topic ${request.topic} saved.`);
-      load();
-    });
-
-  const deleteTopic = (topic: string) => {
-    topicApi
-      .delete(topic)
-      .then(() => {
-        setNotice(`Topic ${topic} deleted.`);
-        load();
-      })
-      .catch((requestError: Error) => setError(requestError.message));
+  const deleteTopic = async (topic: string) => {
+    setDeleting(true);
+    try {
+      await topicApi.delete(topic);
+      setDeleteTarget(null);
+      setNotice(`Topic ${topic} deleted.`);
+      await load();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : String(requestError));
+    } finally {
+      setDeleting(false);
+    }
   };
 
-  if (loading) {
-    return <LoadingState label="Loading topics" />;
-  }
+  const openCreate = () => {
+    setMutationOpen(true);
+  };
 
-  if (error) {
-    return <ErrorState message={error} onRetry={load} />;
-  }
+  const openDetails = (topic: TopicInfo, origin?: HTMLElement) => {
+    if (origin) detailTriggerRef.current = origin;
+    setSelectedTopic(topic);
+  };
+
+  const columns: AppDataTableColumn<TopicInfo>[] = [
+    {
+      id: 'topic',
+      header: 'Topic',
+      width: '260px',
+      cell: (topic) => (
+        <div className="entity-name-cell">
+          <strong>{topic.topic}</strong>
+          <Link to={`/topics/${encodeURIComponent(topic.topic)}`}>Full page</Link>
+        </div>
+      )
+    },
+    { id: 'category', header: 'Category', width: '130px', cell: (topic) => <StatusBadge status={topic.category.toUpperCase()} tone={categoryTone(getTopicCategory(topic))} /> },
+    { id: 'broker', header: 'Broker', width: '150px', cell: (topic) => topic.brokerName || 'All brokers' },
+    { id: 'queues', header: 'Queues R / W', width: '130px', cell: (topic) => `${topic.readQueueCount} / ${topic.writeQueueCount}` },
+    { id: 'permission', header: 'Permission', width: '110px', cell: (topic) => <code>{getTopicPermissionLabel(topic.perm)}</code> },
+    {
+      id: 'actions',
+      header: 'Actions',
+      width: '88px',
+      align: 'right',
+      cell: (topic) => (
+        <div className="entity-row-actions">
+          <DropdownMenu modal={false}>
+            <DropdownMenuTrigger asChild>
+              <Button type="button" variant="ghost" size="icon" aria-label={`Actions for ${topic.topic}`}>
+                <MoreHorizontal size={16} aria-hidden="true" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {getTopicCategory(topic) !== 'system' ? (
+                <>
+                  <DropdownMenuItem
+                    disabled={consumerGroupsLoading || Boolean(consumerGroupsError) || consumerGroups.length === 0}
+                    onSelect={() => setMaintenanceTopic(topic.topic)}
+                  >
+                    <RotateCcw size={15} aria-hidden="true" /> Reset offsets
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem className="ui-menu-item-danger" onSelect={() => setDeleteTarget(topic)}>
+                    <Trash2 size={15} aria-hidden="true" /> Delete topic
+                  </DropdownMenuItem>
+                </>
+              ) : null}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      )
+    }
+  ];
+
+  if (loading) return <LoadingState label="Loading topics" />;
+  if (error) return <ErrorState message={error} onRetry={() => void load()} />;
 
   return (
-    <>
+    <div className="entity-workspace topic-workspace">
       <PageHeader
-        title="Topic"
-        description="Java Dashboard topic parity with Rust Web API backed status, route, consumer progress, config, and guarded maintenance flows."
+        title="Topics"
+        description="Manage topic inventory, queue permissions, routes, and API-backed maintenance from one workspace."
         actions={
-          <div className="action-row">
-            <button type="button" className="button" onClick={() => setMutationOpen(true)}>
-              <Plus size={15} aria-hidden="true" /> Add / Update
-            </button>
-            <button type="button" className="button button-secondary" onClick={load}>
-              <RefreshCw size={15} aria-hidden="true" /> Refresh
-            </button>
-          </div>
+          <>
+            <Button type="button" onClick={openCreate}><Plus size={15} aria-hidden="true" /> Create topic</Button>
+            <RefreshButton
+              refreshing={refreshing || consumerGroupsLoading}
+              onRefresh={() => {
+                void load();
+                void loadConsumerGroups();
+              }}
+            />
+          </>
         }
       />
 
-      {notice ? <div className="notice notice-success">{notice}</div> : null}
+      {notice ? <div className="notice notice-success" role="status">{notice}</div> : null}
+      {consumerGroupsError ? (
+        <div className="notice notice-danger entity-auxiliary-error" role="alert">
+          <span>{consumerGroupsError}</span>
+          <Button type="button" variant="outline" size="sm" onClick={() => void loadConsumerGroups()}>
+            Retry consumer groups
+          </Button>
+        </div>
+      ) : null}
+      {!consumerGroupsLoading && !consumerGroupsError && consumerGroups.length === 0 ? (
+        <div className="notice notice-warning entity-auxiliary-error" role="status">
+          <span>No consumer groups are available for offset reset.</span>
+          <Button type="button" variant="outline" size="sm" onClick={() => void loadConsumerGroups()}>
+            Reload consumer groups
+          </Button>
+        </div>
+      ) : null}
 
-      <section className="topic-filter-panel">
-        <label className="field topic-filter-search">
-          Topic
-          <input value={topicQuery} placeholder="Topic name" onChange={(event) => setTopicQuery(event.target.value)} />
-        </label>
-        <div className="topic-type-filters" aria-label="Topic type filters">
-          {topicTypeFilters.map((filter) => (
-            <label className="compact-check topic-type-check" key={filter.key}>
-              <input
-                type="checkbox"
-                checked={filters[filter.key]}
-                onChange={(event) => setFilters((value) => ({ ...value, [filter.key]: event.target.checked }))}
-              />
-              {filter.label}
-            </label>
-          ))}
-        </div>
-      </section>
+      <div className="metric-grid entity-metrics">
+        <MetricCard label="Total topics" value={metrics.total} detail="Visible API inventory" icon={<Database size={18} />} />
+        <MetricCard label="Application" value={metrics.application} detail="Non-system workloads" icon={<Layers3 size={18} />} />
+        <MetricCard label="Retry" value={metrics.retry} detail="Retry delivery topics" icon={<RotateCcw size={18} />} />
+        <MetricCard label="DLQ" value={metrics.dlq} detail="Dead-letter topics" icon={<ShieldAlert size={18} />} />
+        <MetricCard label="System" value={metrics.system} detail="RocketMQ internal topics" icon={<Database size={18} />} />
+      </div>
 
-      <section className="topic-list-panel">
-        <div className="topic-list-toolbar">
-          <div>
-            <h2>Topic inventory</h2>
-            <p>
-              {topicCounts.visible} visible / {topicCounts.total} total
-            </p>
-          </div>
-          <div className="topic-list-summary">
-            <StatusBadge status={`${topicCounts.system} system`} />
-            <StatusBadge status={`${topicCounts.application} non-system`} tone="success" />
-            <button type="button" className="icon-button" title="Refresh topics" onClick={load}>
-              <RefreshCw size={15} aria-hidden="true" />
-            </button>
-          </div>
-        </div>
-        <div className="topic-list-search">
-          <Search size={16} aria-hidden="true" />
-          <input value={topicQuery} placeholder="Search topic inventory" onChange={(event) => setTopicQuery(event.target.value)} />
-        </div>
-        <div className="topic-inventory-scroll">
-          <table className="topic-inventory-table">
-            <thead>
-              <tr>
-                <th>Topic</th>
-                <th>Type</th>
-                <th>Queues</th>
-                <th>Perm</th>
-                <th>Policy</th>
-                <th>Operation</th>
-              </tr>
-            </thead>
-            <tbody>
-              {visibleTopics.map((row) => (
-                <tr className={isSystemTopic(row) ? 'topic-row-system' : 'topic-row-application'} key={row.topic}>
-                  <td>
-                    <div className="topic-name-cell">
-                      <Link to={`/topics/${encodeURIComponent(row.topic)}`}>{row.topic}</Link>
-                      <span>{topicDescription(row)}</span>
-                    </div>
-                  </td>
-                  <td>
-                    <StatusBadge status={inferTopicType(row).toUpperCase()} tone={topicTone(row)} />
-                  </td>
-                  <td>
-                    <span className="topic-queue-cell">
-                      <strong>{row.readQueueCount}</strong>
-                      <span>/</span>
-                      <strong>{row.writeQueueCount}</strong>
-                    </span>
-                  </td>
-                  <td>
-                    <code>{row.perm}</code>
-                  </td>
-                  <td>
-                    <StatusBadge status={isSystemTopic(row) ? '4 safe actions' : 'full actions'} tone={isSystemTopic(row) ? 'neutral' : 'success'} />
-                  </td>
-                  <td>{renderTopicActions(row, openInspector, openMaintenance, deleteTopic)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        {visibleTopics.length === 0 ? <EmptyState title="No topics match the current filters" /> : null}
-        <div className="topic-list-footer">
-          <span>
-            {filteredTopics.length} rows / page {currentPage} of {pageCount}
-          </span>
-          <div className="pagination">
-            <button type="button" className="button button-secondary" disabled={currentPage <= 1} onClick={() => setPage(currentPage - 1)}>
-              Previous
-            </button>
-            <button type="button" className="button button-secondary" disabled={currentPage >= pageCount} onClick={() => setPage(currentPage + 1)}>
-              Next
-            </button>
-          </div>
-        </div>
+      <section className="entity-table-card">
+        <QueryToolbar
+          searchValue={search}
+          searchPlaceholder="Filter topics"
+          onSearchChange={updateFilter(setSearch)}
+          onReset={() => { setSearch(''); setBrokerName('all'); setCategory('all'); setPage(1); }}
+        >
+          <label className="native-filter-field">
+            <span>Category</span>
+            <select
+              aria-label="Category filter"
+              value={category}
+              onChange={(event) => { setCategory(event.target.value as TopicOperationalCategory | 'all'); setPage(1); }}
+            >
+              <option value="all">All categories</option>
+              <option value="application">Application</option>
+              <option value="retry">Retry</option>
+              <option value="dlq">DLQ</option>
+              <option value="system">System</option>
+            </select>
+          </label>
+          <label className="native-filter-field">
+            <span>Broker</span>
+            <select aria-label="Broker filter" value={brokerName} onChange={(event) => updateFilter(setBrokerName)(event.target.value)}>
+              <option value="all">All brokers</option>
+              {brokers.map((broker) => <option key={broker} value={broker}>{broker}</option>)}
+            </select>
+          </label>
+        </QueryToolbar>
+        <AppDataTable
+          ariaLabel="Topic inventory"
+          rows={visibleTopics}
+          columns={columns}
+          getRowId={(topic) => topic.topic}
+          page={currentPage}
+          pageSize={PAGE_SIZE}
+          total={filteredTopics.length}
+          onPageChange={setPage}
+          onRowActivate={openDetails}
+          emptyTitle="No topics match"
+          emptyDetail="Adjust the search, category, or broker filters."
+        />
       </section>
 
       <TopicMutationDialog open={mutationOpen} onOpenChange={setMutationOpen} onSubmit={saveTopic} />
-      <TopicInspectorDrawer
-        open={inspectorTopic !== null}
-        topic={inspectorTopic}
-        initialTab={inspectorTab}
-        onOpenChange={(open) => {
-          if (!open) setInspectorTopic(null);
-        }}
-        onTopicUpdated={load}
-      />
+      <EntitySheet
+        open={selectedTopic !== null}
+        title={selectedTopic?.topic ?? 'Topic details'}
+        description={selectedTopic ? `${selectedTopic.category} · ${selectedTopic.brokerName || 'All brokers'}` : undefined}
+        restoreFocusRef={detailTriggerRef}
+        onOpenChange={(open) => { if (!open) setSelectedTopic(null); }}
+      >
+        {selectedTopic ? (
+          <TopicDetailContent topicName={selectedTopic.topic} topic={selectedTopic} />
+        ) : null}
+      </EntitySheet>
       <TopicMaintenanceDialog
         open={maintenanceTopic !== null}
         topic={maintenanceTopic}
-        mode={maintenanceMode}
+        mode="reset"
         consumerGroups={consumerGroups}
-        onOpenChange={(open) => {
-          if (!open) setMaintenanceTopic(null);
-        }}
-        onMutationFinished={load}
+        onOpenChange={(open) => { if (!open) setMaintenanceTopic(null); }}
+        onMutationFinished={() => void load()}
       />
-    </>
-  );
-}
-
-function inferTopicType(topic: TopicInfo): TopicTypeKey {
-  if (isSystemTopic(topic)) return 'system';
-  if (topic.topic.startsWith('%RETRY%')) return 'retry';
-  if (topic.topic.startsWith('%DLQ%')) return 'dlq';
-  if (topic.topic.includes('TRANS')) return 'transaction';
-  if (topic.topic.includes('SCHEDULE')) return 'delay';
-  const explicit = topic.category.toLowerCase();
-  if (topicTypeFilters.some((filter) => filter.key === explicit)) return explicit as TopicTypeKey;
-  return 'normal';
-}
-
-function isSystemTopic(topic: TopicInfo) {
-  const topicName = topic.topic;
-  const upperTopic = topicName.toUpperCase();
-  return (
-    topicName.startsWith('%SYS%') ||
-    upperTopic.startsWith('RMQ_SYS_') ||
-    topicName.startsWith('rmq_sys_') ||
-    upperTopic.startsWith('SCHEDULE_TOPIC_') ||
-    upperTopic.startsWith('DEFAULTCLUSTER') ||
-    upperTopic.startsWith('BROKER-') ||
-    upperTopic.endsWith('_REPLY_TOPIC') ||
-    upperTopic === 'TRANS_CHECK_MAX_TIME_TOPIC' ||
-    upperTopic === 'CHECKPOINT_TOPIC' ||
-    upperTopic === 'SELF_TEST_TOPIC' ||
-    upperTopic === 'DEFAULTHEARTBEATSYNCERTOPIC' ||
-    upperTopic === 'TBW102' ||
-    upperTopic === 'OFFSET_MOVED_EVENT' ||
-    upperTopic === 'BENCHMARKTEST'
-  );
-}
-
-function topicTone(topic: TopicInfo) {
-  const type = inferTopicType(topic);
-  if (type === 'system') return 'neutral';
-  if (type === 'retry' || type === 'dlq') return 'warning';
-  if (type === 'transaction') return 'danger';
-  return 'success';
-}
-
-function topicDescription(topic: TopicInfo) {
-  const type = inferTopicType(topic);
-  if (type === 'retry') return 'retry maintenance topic';
-  if (type === 'dlq') return 'dead-letter queue topic';
-  if (type === 'system') return 'system topic';
-  return `${topic.readQueueCount}/${topic.writeQueueCount} queues`;
-}
-
-function renderTopicActions(
-  row: TopicInfo,
-  openInspector: (topic: TopicInfo, tab: TopicInspectorTab) => void,
-  openMaintenance: (topic: string, mode: TopicMaintenanceMode) => void,
-  deleteTopic: (topic: string) => void
-) {
-  const systemTopic = isSystemTopic(row);
-  return (
-    <div className="topic-action-grid">
-      <button type="button" className="button button-secondary topic-action-button" onClick={() => openInspector(row, 'status')}>
-        <Activity size={14} aria-hidden="true" /> Status
-      </button>
-      <button type="button" className="button button-secondary topic-action-button" onClick={() => openInspector(row, 'router')}>
-        <GitBranch size={14} aria-hidden="true" /> Router
-      </button>
-      <button type="button" className="button button-secondary topic-action-button" onClick={() => openInspector(row, 'consumers')}>
-        <Users size={14} aria-hidden="true" /> Consumer Manage
-      </button>
-      <button type="button" className="button topic-action-button" onClick={() => openInspector(row, 'config')}>
-        <Settings2 size={14} aria-hidden="true" /> Topic Config
-      </button>
-      {!systemTopic ? (
-        <>
-          <button type="button" className="button button-secondary topic-action-button" onClick={() => openMaintenance(row.topic, 'send')}>
-            <Send size={14} aria-hidden="true" /> Send Message
-          </button>
-          <button type="button" className="button button-danger topic-action-button" onClick={() => openMaintenance(row.topic, 'reset')}>
-            <RotateCcw size={14} aria-hidden="true" /> Reset Consumer Offset
-          </button>
-          <button type="button" className="button button-danger topic-action-button" onClick={() => openMaintenance(row.topic, 'skip')}>
-            <FastForward size={14} aria-hidden="true" /> Skip Message Accumulate
-          </button>
-          <ConfirmDialog
-            title="Delete topic"
-            description={`Delete topic ${row.topic}? This operation changes cluster metadata.`}
-            confirmLabel="Delete"
-            onConfirm={() => deleteTopic(row.topic)}
-          >
-            <button type="button" className="button button-danger topic-action-button">
-              <Trash2 size={14} aria-hidden="true" /> Delete
-            </button>
-          </ConfirmDialog>
-        </>
-      ) : null}
+      <AlertDialog open={deleteTarget !== null} onOpenChange={(open) => { if (!open && !deleting) setDeleteTarget(null); }}>
+        <AlertDialogContent>
+          <AlertDialogTitle>Delete topic?</AlertDialogTitle>
+          <AlertDialogDescription>
+            Delete {deleteTarget?.topic}? This changes cluster metadata and cannot be undone from the dashboard.
+          </AlertDialogDescription>
+          <div className="ui-alert-dialog-actions">
+            <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={deleting}
+              onClick={(event) => {
+                event.preventDefault();
+                if (deleteTarget) void deleteTopic(deleteTarget.topic);
+              }}
+            >
+              {deleting ? 'Deleting' : 'Delete topic'}
+            </AlertDialogAction>
+          </div>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
+}
+
+function categoryTone(category: TopicOperationalCategory) {
+  if (category === 'retry') return 'warning';
+  if (category === 'dlq') return 'danger';
+  if (category === 'system') return 'info';
+  return 'success';
 }

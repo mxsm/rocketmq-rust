@@ -25,6 +25,7 @@ interface AppDataTableProps<T> {
   loading?: boolean;
   error?: string | null;
   onRetry?: () => void;
+  retryLabel?: string;
   emptyTitle?: string;
   emptyDetail?: string;
 }
@@ -42,6 +43,7 @@ export default function AppDataTable<T>({
   loading = false,
   error,
   onRetry,
+  retryLabel,
   emptyTitle = 'No rows',
   emptyDetail
 }: AppDataTableProps<T>) {
@@ -58,13 +60,13 @@ export default function AppDataTable<T>({
 
   const isInteractiveTarget = (target: EventTarget | null) => (
     target instanceof Element
-    && target.closest('a, button, input, select, textarea, [role="button"], [role="link"]') !== null
+    && target.closest('a, button, input, select, textarea, [role="button"], [role="link"], [role="menuitem"]') !== null
   );
 
   return (
     <section className="app-data-table">
       {loading ? <LoadingState label={`Loading ${ariaLabel.toLowerCase()}`} /> : null}
-      {!loading && error ? <ErrorState message={error} onRetry={onRetry} /> : null}
+      {!loading && error ? <ErrorState message={error} onRetry={onRetry} retryLabel={retryLabel} /> : null}
       {!loading && !error && rows.length === 0 ? <EmptyState title={emptyTitle} detail={emptyDetail} /> : null}
       {!loading && !error && rows.length > 0 ? (
         <div className="app-data-table-scroll" role="region" aria-label={ariaLabel} tabIndex={0}>
