@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "baselineId": "remoting-command-correctness-closed-v1",
+  "caseCorpus": "scripts/request-header-codec/perf-corpus-v1.json",
+  "caseCount": 48,
+  "rustProcessSamples": 10,
+  "diagnosticQuickResultsAccepted": false,
+  "criterion": {
+    "warmupSeconds": 5,
+    "measurementSeconds": 10,
+    "sampleSize": 100
+  },
+  "javaJmh": {
+    "forks": 5,
+    "warmupIterations": 10,
+    "warmupSeconds": 1,
+    "measurementIterations": 15,
+    "measurementSeconds": 1,
+    "profiler": "gc"
+  },
+  "dimensions": {
+    "protocols": ["JSON", "ROCKETMQ"],
+    "extFieldCounts": [0, 1, 8, 16, 32, 128, 256],
+    "remarks": ["absent", "ascii-32", "unicode-escaped-4096"],
+    "bodyBytes": [0, 128, 4096, 65536, 1048576, 4194304],
+    "operations": [
+      "construct",
+      "header_encode",
+      "frame_assemble",
+      "envelope_decode",
+      "typed_decode",
+      "round_trip",
+      "clone",
+      "raw_forward",
+      "display",
+      "limits_rejection",
+      "hook_snapshot"
+    ],
+    "threads": [1, 2, 4, 8, 16, 32],
+    "hooks": [0, 1, 4],
+    "inputs": [
+      "complete_frame",
+      "one_byte_fragmentation",
+      "prefix_boundary",
+      "random_fragments",
+      "consecutive_32_frames"
+    ]
+  },
+  "rawOutputPolicy": "target-only"
+}

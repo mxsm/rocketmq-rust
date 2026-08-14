@@ -53,8 +53,13 @@ zstd = "0.13"
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }
 serde_json.workspace = true
+sysinfo.workspace = true
 trybuild = "=1.0.120"
 
 [[bench]]
 name = "request_header_codec"
+harness = false
+
+[[bench]]
+name = "remoting_command_hot_paths"
 harness = false
