@@ -158,6 +158,17 @@ class PublicApiCompatibilityTests(unittest.TestCase):
         ):
             self.assertIn(required, entries)
 
+    def test_capability_routes_cover_every_active_v1_capability(self) -> None:
+        self.assertTrue(hasattr(MATRIX, "capability_routes"), "capability route provider is missing")
+        routes = MATRIX.capability_routes()
+        expected = {f"F-{number:02d}" for number in range(1, 19)} | {
+            f"G-{number:02d}" for number in range(1, 7)
+        }
+
+        self.assertEqual(expected, {route.capability_id for route in routes})
+        self.assertEqual(len(routes), len({route.test_id for route in routes}))
+        self.assertTrue(all(route.command for route in routes))
+
     def test_evidence_records_current_snapshot_and_approved_breaking_cleanup(self) -> None:
         evidence = EVIDENCE.read_text(encoding="utf-8")
 

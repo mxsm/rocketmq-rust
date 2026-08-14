@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rocketmq-rust.dev/schemas/v1-capability-manifest.schema.json",
+  "title": "RocketMQ Rust 1.0 capability manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "release_line",
+    "java_baseline_version",
+    "capabilities",
+    "exclusions"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "release_line": { "const": "1.0" },
+    "java_baseline_version": { "const": "5.5.0" },
+    "capabilities": {
+      "type": "array",
+      "minItems": 26,
+      "items": { "$ref": "#/$defs/capability" }
+    },
+    "exclusions": {
+      "type": "array",
+      "minItems": 4,
+      "items": { "$ref": "#/$defs/exclusion" }
+    }
+  },
+  "$defs": {
+    "nonEmptyString": { "type": "string", "minLength": 1 },
+    "stringArray": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/nonEmptyString" }
+    },
+    "javaBaseline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "symbols", "scope"],
+      "properties": {
+        "version": { "const": "5.5.0" },
+        "symbols": { "$ref": "#/$defs/stringArray" },
+        "scope": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "run_id"],
+      "properties": {
+        "path": { "$ref": "#/$defs/nonEmptyString" },
+        "run_id": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    },
+    "ownership": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dri", "reviewer", "release_approver"],
+      "properties": {
+        "dri": { "$ref": "#/$defs/nonEmptyString" },
+        "reviewer": { "$ref": "#/$defs/nonEmptyString" },
+        "release_approver": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    },
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "capability_id",
+        "domain",
+        "title",
+        "java_baseline",
+        "rust_surfaces",
+        "profiles",
+        "compatibility_mode",
+        "implementation_status",
+        "evidence_status",
+        "test_ids",
+        "commands",
+        "expected_results",
+        "artifacts",
+        "ownership",
+        "target_phase",
+        "dependencies",
+        "completion_status",
+        "variance_class"
+      ],
+      "properties": {
+        "capability_id": { "type": "string", "pattern": "^[FG]-[0-9]{2}$" },
+        "domain": { "enum": ["protocol", "client", "broker", "proxy", "store", "ha", "admin", "release"] },
+        "title": { "$ref": "#/$defs/nonEmptyString" },
+        "java_baseline": { "$ref": "#/$defs/javaBaseline" },
+        "rust_surfaces": { "$ref": "#/$defs/stringArray" },
+        "profiles": { "$ref": "#/$defs/stringArray" },
+        "compatibility_mode": { "enum": ["wire", "behavior", "rust-native", "not-applicable"] },
+        "implementation_status": {
+          "enum": ["missing", "placeholder", "partial", "implemented", "unsupported", "not-applicable", "intentionally-unsupported"]
+        },
+        "evidence_status": { "enum": ["none", "unit", "component", "interop", "functional-system"] },
+        "test_ids": { "$ref": "#/$defs/stringArray" },
+        "commands": { "$ref": "#/$defs/stringArray" },
+        "expected_results": { "$ref": "#/$defs/stringArray" },
+        "artifacts": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/artifact" }
+        },
+        "ownership": { "$ref": "#/$defs/ownership" },
+        "target_phase": { "type": "integer", "minimum": 0, "maximum": 6 },
+        "dependencies": { "$ref": "#/$defs/stringArray" },
+        "completion_status": {
+          "enum": ["blocked", "equivalent", "alternative-equivalent", "not-applicable", "intentionally-unsupported", "deferred-by-scope"]
+        },
+        "variance_class": { "enum": ["java-compatible", "rust-hardening", "rust-enhancement"] },
+        "deferred_reference": { "$ref": "#/$defs/nonEmptyString" },
+        "exclusion": {
+          "type": "object",
+          "required": ["reason"],
+          "properties": { "reason": { "$ref": "#/$defs/nonEmptyString" } }
+        }
+      }
+    },
+    "exclusion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["exclusion_id", "title", "completion_status", "reason"],
+      "properties": {
+        "exclusion_id": { "type": "string", "pattern": "^X-[0-9]{2}$" },
+        "title": { "$ref": "#/$defs/nonEmptyString" },
+        "completion_status": { "const": "intentionally-unsupported" },
+        "reason": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    }
+  }
+}
