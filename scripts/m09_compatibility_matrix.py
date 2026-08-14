@@ -27,6 +27,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_VERSION = 1
+CAPABILITY_MANIFEST = ROOT / "scripts" / "v1-capability-manifest.json"
 
 
 @dataclass(frozen=True)
@@ -34,6 +35,13 @@ class MatrixEntry:
     id: str
     group: str
     command: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class CapabilityRoute:
+    capability_id: str
+    test_id: str
+    command: str
 
 
 MATRIX = (
@@ -209,6 +217,26 @@ MATRIX = (
 )
 
 
+def capability_routes() -> tuple[CapabilityRoute, ...]:
+    """Return the executable short-test routes for the active 1.0 capabilities."""
+    manifest = json.loads(CAPABILITY_MANIFEST.read_text(encoding="utf-8"))
+    routes: list[CapabilityRoute] = []
+    for capability in manifest["capabilities"]:
+        if capability["completion_status"] == "deferred-by-scope":
+            continue
+        test_ids = capability["test_ids"]
+        commands = capability["commands"]
+        if len(test_ids) != len(commands):
+            raise ValueError(
+                f"{capability['capability_id']} must map each test ID to exactly one command"
+            )
+        routes.extend(
+            CapabilityRoute(capability["capability_id"], test_id, command)
+            for test_id, command in zip(test_ids, commands, strict=True)
+        )
+    return tuple(sorted(routes, key=lambda route: (route.capability_id, route.test_id)))
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--group", action="append", choices=("feature", "wire", "storage"))
@@ -229,6 +257,8 @@ def main() -> int:
     if args.list:
         for entry in selected:
             print(f"{entry.id}\t{entry.group}\t{' '.join(entry.command)}")
+        for route in capability_routes():
+            print(f"{route.capability_id}\tcapability\t{route.test_id}\t{route.command}")
         return 0
 
     results = []
