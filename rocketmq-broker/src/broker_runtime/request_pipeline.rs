@@ -242,6 +242,7 @@ impl BrokerRuntime {
         let notification_topic_config_manager = self.composition.state.topic_config_manager_handle();
         let notification_subscription_group_lookup =
             self.composition.state.subscription_group_manager().config_lookup();
+        let notification_consumer_filter_manager = Arc::new(self.composition.state.consumer_filter_manager().clone());
         let notification_long_polling_context = PopLongPollingServiceContext::new(
             PopLongPollingPolicy::from_config(&self.composition.state.broker_config()),
             Arc::clone(&notification_topic_config_manager),
@@ -253,6 +254,7 @@ impl BrokerRuntime {
                 NotificationPolicy::from_config(&self.composition.state.broker_config()),
                 notification_topic_config_manager,
                 notification_subscription_group_lookup,
+                notification_consumer_filter_manager,
                 self.composition.state.consumer_order_info_manager_handle(),
                 self.composition
                     .state

@@ -782,6 +782,13 @@ fn validate_resources(broker: &BrokerConfig, store: &MessageStoreConfig) -> Resu
             "maxPopPollingSize, popPollingMapSize and popPollingSize must be greater than zero",
         ));
     }
+    if !(1..=1024).contains(&broker.max_message_filter_num_for_notification) {
+        return Err(BrokerConfigError::invalid(
+            ConfigSection::Resources,
+            "broker.maxMessageFilterNumForNotification",
+            "must be in [1, 1024]",
+        ));
+    }
     if store.compaction_thread_num == 0 {
         return Err(BrokerConfigError::invalid(
             ConfigSection::Resources,
@@ -1076,5 +1083,20 @@ mod tests {
             .expect_err("zero fast-failure pending bytes must fail startup");
 
         assert!(error.to_string().contains("broker.brokerFastFailurePendingMaxBytes"));
+    }
+
+    #[test]
+    fn resource_validation_rejects_notification_filter_scan_outside_bounds() {
+        for invalid in [0, 1025] {
+            let broker = BrokerConfig {
+                max_message_filter_num_for_notification: invalid,
+                ..BrokerConfig::default()
+            };
+
+            let error = validate_resources(&broker, &MessageStoreConfig::default())
+                .expect_err("notification filter scan limit outside [1, 1024] must fail startup");
+
+            assert!(error.to_string().contains("broker.maxMessageFilterNumForNotification"));
+        }
     }
 }

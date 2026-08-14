@@ -21,15 +21,21 @@ use cheetah_string::CheetahString;
 use rand::RngExt;
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::constant::PermName;
+use rocketmq_model::common::filter::expression_type::ExpressionType;
+#[cfg(any(test, feature = "test-support"))]
+use rocketmq_model::common::hasher::string_hasher::JavaStringHasher;
 use rocketmq_model::common::key_builder::KeyBuilder;
 use rocketmq_model::common::FAQUrl;
 use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::protocol::filter::filter_api::FilterAPI;
 use rocketmq_protocol::protocol::header::notification_request_header::NotificationRequestHeader;
 use rocketmq_protocol::protocol::header::notification_response_header::NotificationResponseHeader;
+use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_runtime::common::time_utils::current_millis;
+use rocketmq_store::ArcMessageFilter;
 use rocketmq_store::BrokerReadWriteStore;
 use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ConnectionHandlerContext;
@@ -40,6 +46,8 @@ use tracing::warn;
 
 use crate::failover::escape_bridge::EscapeBridge;
 use crate::failover::escape_bridge::MessageStoreUnavailable;
+use crate::filter::expression_message_filter::ExpressionMessageFilter;
+use crate::filter::manager::consumer_filter_manager::ConsumerFilterManager;
 use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingRequestProcessor;
 use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingService;
 use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingServiceContext;
@@ -57,6 +65,8 @@ pub(crate) struct NotificationPolicy {
     broker_ip1: CheetahString,
     enable_retry_topic_v2: bool,
     retrieve_message_from_pop_retry_topic_v1: bool,
+    use_message_filter_for_notification: bool,
+    max_message_filter_num_for_notification: i32,
 }
 
 impl NotificationPolicy {
@@ -66,8 +76,157 @@ impl NotificationPolicy {
             broker_ip1: broker_config.broker_ip1().clone(),
             enable_retry_topic_v2: broker_config.enable_retry_topic_v2,
             retrieve_message_from_pop_retry_topic_v1: broker_config.retrieve_message_from_pop_retry_topic_v1,
+            use_message_filter_for_notification: broker_config.use_message_filter_for_notification,
+            max_message_filter_num_for_notification: broker_config.max_message_filter_num_for_notification,
         }
     }
+}
+
+#[derive(Clone)]
+struct NotificationFilterContract {
+    subscription_data: SubscriptionData,
+    message_filter: ArcMessageFilter,
+}
+
+fn build_notification_filter_contract(
+    enabled: bool,
+    filters: &Arc<ConsumerFilterManager>,
+    request_header: &NotificationRequestHeader,
+) -> Result<Option<NotificationFilterContract>, ()> {
+    let Some(expression) = request_header.exp.as_ref().filter(|expression| !expression.is_empty()) else {
+        return Ok(None);
+    };
+    let Some(expression_type) = request_header
+        .exp_type
+        .as_ref()
+        .filter(|expression_type| !expression_type.is_empty())
+    else {
+        return Ok(None);
+    };
+    if !enabled {
+        return Ok(None);
+    }
+
+    let subscription_data =
+        FilterAPI::build(&request_header.topic, expression, Some(expression_type.clone())).map_err(|_| ())?;
+    if ExpressionType::is_tag_type(Some(subscription_data.expression_type.as_str()))
+        && subscription_data.sub_string.as_str() != SubscriptionData::SUB_ALL
+        && subscription_data.code_set.is_empty()
+    {
+        return Err(());
+    }
+    let consumer_filter_data = if ExpressionType::is_tag_type(Some(subscription_data.expression_type.as_str())) {
+        None
+    } else {
+        Some(
+            filters
+                .resolve(
+                    request_header.topic.clone(),
+                    request_header.consumer_group.clone(),
+                    Some(expression.clone()),
+                    Some(expression_type.clone()),
+                    current_millis(),
+                )
+                .ok_or(())?,
+        )
+    };
+    let message_filter: ArcMessageFilter = Arc::new(ExpressionMessageFilter::new(
+        Some(subscription_data.clone()),
+        consumer_filter_data,
+        Arc::clone(filters),
+    ));
+
+    Ok(Some(NotificationFilterContract {
+        subscription_data,
+        message_filter,
+    }))
+}
+
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Clone, Debug)]
+pub struct NotificationFilterProbeMessage {
+    pub tag: Option<CheetahString>,
+    pub properties: HashMap<CheetahString, CheetahString>,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NotificationFilterProbe {
+    pub has_message: bool,
+    pub optimistic: bool,
+    pub scanned_messages: usize,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub fn run_notification_filter_probe(
+    expression_type: &str,
+    expression: &str,
+    messages: &[NotificationFilterProbeMessage],
+    max_scan: usize,
+) -> Result<NotificationFilterProbe, CheetahString> {
+    if max_scan == 0 {
+        return Err(CheetahString::from_static_str("max scan must be greater than zero"));
+    }
+    let filters = Arc::new(ConsumerFilterManager::new(
+        Arc::new(BrokerConfig::default()),
+        Arc::new(rocketmq_store::MessageStoreConfig::default()),
+    ));
+    let header = NotificationRequestHeader {
+        consumer_group: CheetahString::from_static_str("notification-probe-group"),
+        topic: CheetahString::from_static_str("notification-probe-topic"),
+        queue_id: 0,
+        born_time: 0,
+        order: false,
+        attempt_id: None,
+        exp_type: Some(CheetahString::from(expression_type)),
+        exp: Some(CheetahString::from(expression)),
+        is_lite_consumer: false,
+        client_id: None,
+        poll_time: 0,
+        topic_request_header: None,
+    };
+    let contract = build_notification_filter_contract(true, &filters, &header)
+        .map_err(|()| CheetahString::from_static_str("invalid notification expression"))?
+        .ok_or_else(|| CheetahString::from_static_str("notification filter was not created"))?;
+
+    if messages.len() > max_scan {
+        return Ok(NotificationFilterProbe {
+            has_message: true,
+            optimistic: true,
+            scanned_messages: 0,
+        });
+    }
+    if messages.is_empty() {
+        return Ok(NotificationFilterProbe {
+            has_message: false,
+            optimistic: false,
+            scanned_messages: 0,
+        });
+    }
+
+    for (index, message) in messages.iter().enumerate() {
+        let tags_code = message
+            .tag
+            .as_ref()
+            .map(|tag| JavaStringHasher::hash_str(tag.as_str()) as i64);
+        if contract.message_filter.is_matched_by_consume_queue(tags_code, None)
+            && contract
+                .message_filter
+                .is_matched_by_commit_log(None, Some(&message.properties))
+        {
+            return Ok(NotificationFilterProbe {
+                has_message: true,
+                optimistic: false,
+                scanned_messages: index + 1,
+            });
+        }
+    }
+
+    Ok(NotificationFilterProbe {
+        has_message: false,
+        optimistic: false,
+        scanned_messages: messages.len(),
+    })
 }
 
 pub(crate) struct NotificationStoreCapability<MS: BrokerReadWriteStore> {
@@ -93,6 +252,29 @@ impl<MS: BrokerReadWriteStore> NotificationStoreCapability<MS> {
             .upgrade()
             .ok_or(MessageStoreUnavailable)?
             .get_max_offset_from_local_store(topic, queue_id)
+    }
+
+    async fn get_message(
+        &self,
+        group: &CheetahString,
+        topic: &CheetahString,
+        queue_id: i32,
+        offset: i64,
+        max_msg_nums: i32,
+        message_filter: ArcMessageFilter,
+    ) -> Result<Option<rocketmq_store::GetMessageResult>, MessageStoreUnavailable> {
+        self.escape_bridge
+            .upgrade()
+            .ok_or(MessageStoreUnavailable)?
+            .get_message_with_filter_from_local_store(
+                group,
+                topic,
+                queue_id,
+                offset,
+                max_msg_nums,
+                Some(message_filter),
+            )
+            .await
     }
 }
 
@@ -120,6 +302,7 @@ pub(crate) struct NotificationProcessorContext<MS: BrokerReadWriteStore> {
     policy: NotificationPolicy,
     topic_config_manager: Arc<TopicConfigManager>,
     subscription_group_lookup: SubscriptionGroupConfigLookup,
+    consumer_filter_manager: Arc<ConsumerFilterManager>,
     consumer_order_info_manager: Arc<ConsumerOrderInfoManager>,
     consumer_offset_query: ConsumerOffsetQueryCapability<MS>,
     message_store: NotificationStoreCapability<MS>,
@@ -136,6 +319,7 @@ impl<MS: BrokerReadWriteStore> NotificationProcessorContext<MS> {
         policy: NotificationPolicy,
         topic_config_manager: Arc<TopicConfigManager>,
         subscription_group_lookup: SubscriptionGroupConfigLookup,
+        consumer_filter_manager: Arc<ConsumerFilterManager>,
         consumer_order_info_manager: Arc<ConsumerOrderInfoManager>,
         consumer_offset_query: ConsumerOffsetQueryCapability<MS>,
         message_store: NotificationStoreCapability<MS>,
@@ -147,6 +331,7 @@ impl<MS: BrokerReadWriteStore> NotificationProcessorContext<MS> {
             policy,
             topic_config_manager,
             subscription_group_lookup,
+            consumer_filter_manager,
             consumer_order_info_manager,
             consumer_offset_query,
             message_store,
@@ -221,9 +406,10 @@ impl<MS: BrokerReadWriteStore> NotificationProcessor<MS> {
         topic_name: &CheetahString,
         random_q: i32,
         request_header: &NotificationRequestHeader,
+        filter_contract: Option<&NotificationFilterContract>,
     ) -> bool {
         let topic_config = self.context.topic_config_manager.select_topic_config(topic_name);
-        self.has_msg_from_topic(topic_config.as_deref(), random_q, request_header)
+        self.has_msg_from_topic(topic_config.as_deref(), random_q, request_header, filter_contract)
             .await
     }
 
@@ -232,6 +418,7 @@ impl<MS: BrokerReadWriteStore> NotificationProcessor<MS> {
         topic_config: Option<&TopicConfig>,
         random_q: i32,
         request_header: &NotificationRequestHeader,
+        filter_contract: Option<&NotificationFilterContract>,
     ) -> bool {
         if let Some(tc) = topic_config {
             let topic_name = match tc.topic_name.as_ref() {
@@ -241,7 +428,7 @@ impl<MS: BrokerReadWriteStore> NotificationProcessor<MS> {
             for i in 0..tc.read_queue_nums {
                 let queue_id = ((random_q as u32) + i) % tc.read_queue_nums;
                 if self
-                    .has_msg_from_queue(topic_name, request_header, queue_id as i32)
+                    .has_msg_from_queue(topic_name, request_header, queue_id as i32, filter_contract)
                     .await
                 {
                     return true;
@@ -256,6 +443,7 @@ impl<MS: BrokerReadWriteStore> NotificationProcessor<MS> {
         target_topic: &CheetahString,
         request_header: &NotificationRequestHeader,
         queue_id: i32,
+        filter_contract: Option<&NotificationFilterContract>,
     ) -> bool {
         // For order mode, check if blocked. If attempt_id is missing, skip block check.
         if request_header.order {
@@ -279,7 +467,30 @@ impl<MS: BrokerReadWriteStore> NotificationProcessor<MS> {
             return false;
         };
         let rest_num = max_offset - offset;
-        rest_num > 0
+        if rest_num <= 0 {
+            return false;
+        }
+        let Some(filter_contract) = filter_contract else {
+            return true;
+        };
+        if rest_num > i64::from(self.context.policy.max_message_filter_num_for_notification) {
+            return true;
+        }
+
+        self.context
+            .message_store
+            .get_message(
+                &request_header.consumer_group,
+                target_topic,
+                queue_id,
+                offset,
+                self.context.policy.max_message_filter_num_for_notification,
+                Arc::clone(&filter_contract.message_filter),
+            )
+            .await
+            .ok()
+            .flatten()
+            .is_some_and(|result| result.message_count() > 0)
     }
 
     async fn get_pop_offset(&self, topic: &CheetahString, cid: &CheetahString, queue_id: i32) -> i64 {
@@ -375,7 +586,7 @@ where
                 channel.remote_address()
             );
             warn!("{}", error_info);
-            response.set_code_ref(ResponseCode::SystemError);
+            response.set_code_ref(ResponseCode::InvalidParameter);
             response.set_remark_mut(&error_info);
             return Ok(Some(response));
         }
@@ -406,6 +617,23 @@ where
             return Ok(Some(response));
         }
 
+        let filter_contract = match build_notification_filter_contract(
+            self.context.policy.use_message_filter_for_notification,
+            &self.context.consumer_filter_manager,
+            &request_header,
+        ) {
+            Ok(contract) => contract,
+            Err(()) => {
+                warn!(
+                    "Parse the consumer's subscription[{:?}] failed, group: {}",
+                    request_header.exp, request_header.consumer_group
+                );
+                response.set_code_ref(ResponseCode::SubscriptionParseFailed);
+                response.set_remark_mut("parse the consumer's subscription failed");
+                return Ok(Some(response));
+            }
+        };
+
         let random_q: i32 = rand::rng().random_range(0..100);
         let mut has_msg = false;
         let need_retry = random_q % 5 == 0;
@@ -418,7 +646,7 @@ where
             )
             .into();
             has_msg = self
-                .has_msg_from_topic_name(&retry_topic, random_q, &request_header)
+                .has_msg_from_topic_name(&retry_topic, random_q, &request_header, None)
                 .await;
             if !has_msg
                 && self.context.policy.enable_retry_topic_v2
@@ -430,18 +658,20 @@ where
                 )
                 .into();
                 has_msg = self
-                    .has_msg_from_topic_name(&retry_topic_v1, random_q, &request_header)
+                    .has_msg_from_topic_name(&retry_topic_v1, random_q, &request_header, None)
                     .await;
             }
         }
         if !has_msg {
             if request_header.queue_id < 0 {
                 has_msg = self
-                    .has_msg_from_topic(Some(&topic_config), random_q, &request_header)
+                    .has_msg_from_topic(Some(&topic_config), random_q, &request_header, filter_contract.as_ref())
                     .await;
             } else if let Some(topic_name) = topic_config.topic_name.as_ref() {
                 let queue_id = request_header.queue_id;
-                has_msg = self.has_msg_from_queue(topic_name, &request_header, queue_id).await;
+                has_msg = self
+                    .has_msg_from_queue(topic_name, &request_header, queue_id, filter_contract.as_ref())
+                    .await;
             }
             // if it doesn't have message, fetch retry again
             if !need_retry && !has_msg {
@@ -452,7 +682,7 @@ where
                 )
                 .into();
                 has_msg = self
-                    .has_msg_from_topic_name(&retry_topic, random_q, &request_header)
+                    .has_msg_from_topic_name(&retry_topic, random_q, &request_header, None)
                     .await;
                 if !has_msg
                     && self.context.policy.enable_retry_topic_v2
@@ -464,7 +694,7 @@ where
                     )
                     .into();
                     has_msg = self
-                        .has_msg_from_topic_name(&retry_topic_v1, random_q, &request_header)
+                        .has_msg_from_topic_name(&retry_topic_v1, random_q, &request_header, None)
                         .await;
                 }
             }
@@ -472,10 +702,14 @@ where
 
         let mut polling_full = false;
         if !has_msg {
-            match self.pop_long_polling_service.polling_(
+            match self.pop_long_polling_service.polling(
                 ctx,
                 request,
                 PollingHeader::new_from_notification_request_header(&request_header),
+                filter_contract
+                    .as_ref()
+                    .map(|contract| contract.subscription_data.clone()),
+                filter_contract.map(|contract| contract.message_filter),
             ) {
                 PollingResult::PollingSuc => return Ok(None),
                 PollingResult::PollingFull => polling_full = true,
@@ -539,6 +773,7 @@ mod tests {
         let long_polling_policy = PopLongPollingPolicy::from_config(&inner.broker_config());
         let topic_config_manager = inner.topic_config_manager_handle();
         let subscription_group_lookup = inner.subscription_group_manager().config_lookup();
+        let consumer_filter_manager = Arc::new(inner.consumer_filter_manager().clone());
         let long_polling = PopLongPollingServiceContext::new(
             long_polling_policy,
             Arc::clone(&topic_config_manager),
@@ -549,6 +784,7 @@ mod tests {
             policy,
             topic_config_manager,
             subscription_group_lookup,
+            consumer_filter_manager,
             inner.consumer_order_info_manager_handle(),
             inner.consumer_offset_manager_handle().query_capability(),
             NotificationStoreCapability {
@@ -613,6 +849,8 @@ mod tests {
             broker_ip1: CheetahString::from_static_str("192.0.2.11"),
             enable_retry_topic_v2: true,
             retrieve_message_from_pop_retry_topic_v1: true,
+            use_message_filter_for_notification: false,
+            max_message_filter_num_for_notification: 17,
             ..Default::default()
         };
 
@@ -622,6 +860,8 @@ mod tests {
         assert_eq!(policy.broker_ip1, "192.0.2.11");
         assert!(policy.enable_retry_topic_v2);
         assert!(policy.retrieve_message_from_pop_retry_topic_v1);
+        assert!(!policy.use_message_filter_for_notification);
+        assert_eq!(policy.max_message_filter_num_for_notification, 17);
     }
 
     #[tokio::test]
