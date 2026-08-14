@@ -48,10 +48,29 @@ fn trailing_header_error(remaining: usize) -> rocketmq_error::RocketMQError {
     })
 }
 
-fn sorted_ext_fields(map: &HashMap<CheetahString, CheetahString>) -> Vec<(&CheetahString, &CheetahString)> {
+enum SortedExtFields<'a> {
+    Direct(std::collections::hash_map::Iter<'a, CheetahString, CheetahString>),
+    Sorted(std::vec::IntoIter<(&'a CheetahString, &'a CheetahString)>),
+}
+
+impl<'a> Iterator for SortedExtFields<'a> {
+    type Item = (&'a CheetahString, &'a CheetahString);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Direct(entries) => entries.find(|(key, _)| !key.is_empty()),
+            Self::Sorted(entries) => entries.next(),
+        }
+    }
+}
+
+fn sorted_ext_fields(map: &HashMap<CheetahString, CheetahString>) -> SortedExtFields<'_> {
+    if map.len() <= 1 {
+        return SortedExtFields::Direct(map.iter());
+    }
     let mut entries = map.iter().filter(|(key, _)| !key.is_empty()).collect::<Vec<_>>();
     entries.sort_unstable_by(|(left, _), (right, _)| left.as_str().cmp(right.as_str()));
-    entries
+    SortedExtFields::Sorted(entries.into_iter())
 }
 
 pub struct RocketMQSerializable;
