@@ -19,6 +19,7 @@ use std::fmt;
 use std::fmt::Display;
 use std::fmt::Formatter;
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::AtomicU64;
@@ -85,6 +86,8 @@ const DELAY_FOR_A_PERIOD: u64 = 10000;
 const WAIT_FOR_SHUTDOWN: u64 = 5000;
 const DELAY_FOR_A_SLEEP: u64 = 10;
 const PERSIST_DELAY_INITIAL_DELAY: u64 = 10000;
+
+type ScheduleTaskFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
 
 // Performance optimization constants
 /// Maximum number of messages to process in a single batch
@@ -525,29 +528,38 @@ impl<MS: BrokerWriteStore> ScheduleMessageService<MS> {
                         let service = Arc::downgrade(&this);
                         let context = run_context.clone();
                         let mut activation = activation_rx.clone();
-                        Self::spawn_schedule_task(&run_context, "broker.schedule.handle-put-result", async move {
-                            if !wait_for_schedule_activation(&mut activation, &context.cancellation).await
-                                || !schedule_sleep(&context.cancellation, Duration::from_millis(FIRST_DELAY_TIME)).await
-                            {
-                                return;
-                            }
-                            let task = HandlePutResultTask::new(level, service, context);
-                            task.run().await;
-                        })?;
+                        Self::spawn_schedule_task(
+                            &run_context,
+                            "broker.schedule.handle-put-result",
+                            Box::pin(async move {
+                                if !wait_for_schedule_activation(&mut activation, &context.cancellation).await
+                                    || !schedule_sleep(&context.cancellation, Duration::from_millis(FIRST_DELAY_TIME))
+                                        .await
+                                {
+                                    return;
+                                }
+                                let task = HandlePutResultTask::new(level, service, context);
+                                task.run().await;
+                            }),
+                        )?;
                     }
 
                     let service = Arc::downgrade(&this);
                     let context = run_context.clone();
                     let mut activation = activation_rx.clone();
-                    Self::spawn_schedule_task(&run_context, "broker.schedule.deliver-delayed-message", async move {
-                        if !wait_for_schedule_activation(&mut activation, &context.cancellation).await
-                            || !schedule_sleep(&context.cancellation, Duration::from_millis(FIRST_DELAY_TIME)).await
-                        {
-                            return;
-                        }
-                        let task = DeliverDelayedMessageTimerTask::new(level, offset, service, context);
-                        task.run().await;
-                    })?;
+                    Self::spawn_schedule_task(
+                        &run_context,
+                        "broker.schedule.deliver-delayed-message",
+                        Box::pin(async move {
+                            if !wait_for_schedule_activation(&mut activation, &context.cancellation).await
+                                || !schedule_sleep(&context.cancellation, Duration::from_millis(FIRST_DELAY_TIME)).await
+                            {
+                                return;
+                            }
+                            let task = DeliverDelayedMessageTimerTask::new(level, offset, service, context);
+                            task.run().await;
+                        }),
+                    )?;
                 }
             }
             Self::schedule_persist_task(
@@ -699,14 +711,11 @@ impl<MS: BrokerWriteStore> ScheduleMessageService<MS> {
             .unwrap_or_default()
     }
 
-    fn spawn_schedule_task<F>(
+    fn spawn_schedule_task(
         run_context: &ScheduleRunContext,
         task_name: &'static str,
-        future: F,
-    ) -> RocketMQResult<()>
-    where
-        F: Future<Output = ()> + Send + 'static,
-    {
+        future: ScheduleTaskFuture,
+    ) -> RocketMQResult<()> {
         run_context
             .task_group
             .spawn_operation(&run_context.operation, task_name, future)
@@ -1366,13 +1375,13 @@ impl<MS: BrokerWriteStore> DeliverDelayedMessageTimerTask<MS> {
         let spawn_result = ScheduleMessageService::<MS>::spawn_schedule_task(
             &self.run_context,
             "broker.schedule.deliver-delayed-message",
-            async move {
+            Box::pin(async move {
                 if !schedule_sleep(&context.cancellation, Duration::from_millis(delay)).await {
                     return;
                 }
                 let task = DeliverDelayedMessageTimerTask::new(delay_level, offset, schedule_service, context);
                 task.run().await;
-            },
+            }),
         );
         if let Err(error) = spawn_result {
             warn!(
@@ -1996,13 +2005,13 @@ impl<MS: BrokerWriteStore> HandlePutResultTask<MS> {
             let spawn_result = ScheduleMessageService::<MS>::spawn_schedule_task(
                 &self.run_context,
                 "broker.schedule.handle-put-result",
-                async move {
+                Box::pin(async move {
                     if !schedule_sleep(&context.cancellation, Duration::from_millis(DELAY_FOR_A_SLEEP)).await {
                         return;
                     }
                     let task = HandlePutResultTask::new(delay_level, schedule_service, context);
                     task.run().await;
-                },
+                }),
             );
             if let Err(error) = spawn_result {
                 warn!(

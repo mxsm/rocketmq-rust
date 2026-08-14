@@ -13,9 +13,11 @@
 // limitations under the License.
 
 use std::env;
+use std::future::Future;
 use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::pin::Pin;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -91,7 +93,14 @@ fn broker_runtime_config() -> RuntimeConfig {
     RuntimeConfig::broker_default()
 }
 
-async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) -> Result<()> {
+fn run(
+    service_context: ChildServiceContext,
+    lifecycle: ServiceLifecycle,
+) -> Pin<Box<impl Future<Output = Result<()>>>> {
+    Box::pin(run_inner(service_context, lifecycle))
+}
+
+async fn run_inner(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) -> Result<()> {
     initialize_remoting_defaults(CURRENT_VERSION as i32)
         .context("failed to initialize the immutable broker remoting defaults")?;
 
