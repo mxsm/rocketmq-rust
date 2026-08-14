@@ -73,6 +73,7 @@ use rocketmq_protocol::protocol::header::pull_message_request_header::PullMessag
 use rocketmq_protocol::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
 use rocketmq_protocol::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
 use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::route_facade::BrokerDataExt;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
@@ -238,6 +239,17 @@ trait ClusterClientIo: Send + Sync {
     async fn start(&self) -> Result<(), RocketMQError>;
 
     async fn shutdown(&self);
+
+    async fn invoke_remoting(
+        &self,
+        _broker_addr: &CheetahString,
+        _request: RemotingCommand,
+        _timeout_millis: u64,
+    ) -> Result<RemotingCommand, RocketMQError> {
+        Err(RocketMQError::IllegalArgument(
+            "raw Remoting invocation is unavailable for this Client adapter".to_owned(),
+        ))
+    }
 
     async fn sync_lite_subscription(
         &self,
@@ -466,6 +478,15 @@ impl ClusterClientIo for ClientInstanceHandle {
 
     async fn shutdown(&self) {
         self.shutdown_owned().await;
+    }
+
+    async fn invoke_remoting(
+        &self,
+        broker_addr: &CheetahString,
+        request: RemotingCommand,
+        timeout_millis: u64,
+    ) -> Result<RemotingCommand, RocketMQError> {
+        ClientInstanceHandle::invoke_remoting(self, broker_addr, request, timeout_millis).await
     }
 
     async fn sync_lite_subscription(
@@ -882,6 +903,17 @@ impl RocketmqClusterClient {
 
     pub(crate) async fn unlock_batch_mq(&self, request: UnlockBatchRequestBody) -> ProxyResult<()> {
         self.executor.unlock_batch_mq(request).await
+    }
+
+    pub(crate) async fn forward_remoting(
+        &self,
+        broker_name: String,
+        request: RemotingCommand,
+        timeout_millis: u64,
+    ) -> ProxyResult<RemotingCommand> {
+        self.executor
+            .forward_remoting(broker_name, request, timeout_millis)
+            .await
     }
 }
 
@@ -1407,7 +1439,36 @@ async fn handle_cluster_command(config: &ClusterConfig, state: &mut ClusterWorke
         ClusterCommand::UnlockBatchMq { request, reply } => {
             let _ = reply.send(unlock_batch_mq_inner(config, state, request).await);
         }
+        ClusterCommand::ForwardRemoting {
+            broker_name,
+            request,
+            timeout_millis,
+            reply,
+        } => {
+            let _ = reply.send(forward_remoting_inner(config, state, broker_name, request, timeout_millis).await);
+        }
     }
+}
+
+async fn forward_remoting_inner(
+    config: &ClusterConfig,
+    state: &mut ClusterWorkerState,
+    broker_name: String,
+    request: RemotingCommand,
+    timeout_millis: u64,
+) -> ProxyResult<RemotingCommand> {
+    let client = state.client(config).await?;
+    let broker_name = CheetahString::from(broker_name);
+    let broker_addr = client
+        .find_subscribe_broker_addr(&broker_name, MASTER_ID, true)
+        .await
+        .ok_or_else(|| RocketMQError::BrokerNotFound {
+            name: broker_name.to_string(),
+        })?;
+    client
+        .invoke_remoting(&broker_addr, request, timeout_millis.max(1))
+        .await
+        .map_err(ProxyError::from)
 }
 
 async fn cluster_readiness_inner(config: &ClusterConfig, state: &mut ClusterWorkerState) -> ProxyResult<()> {

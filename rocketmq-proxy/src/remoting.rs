@@ -34,6 +34,8 @@ use rocketmq_model::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
+use rocketmq_protocol::protocol::body::connection::Connection;
+use rocketmq_protocol::protocol::body::consumer_connection::ConsumerConnection;
 use rocketmq_protocol::protocol::body::get_broker_lite_info_response_body::GetBrokerLiteInfoResponseBody;
 use rocketmq_protocol::protocol::body::get_consumer_list_by_group_response_body::GetConsumerListByGroupResponseBody;
 use rocketmq_protocol::protocol::body::get_lite_group_info_response_body::GetLiteGroupInfoResponseBody;
@@ -47,6 +49,7 @@ use rocketmq_protocol::protocol::body::query_assignment_request_body::QueryAssig
 use rocketmq_protocol::protocol::body::query_assignment_response_body::QueryAssignmentResponseBody;
 use rocketmq_protocol::protocol::command_custom_header::CommandCustomHeader;
 use rocketmq_protocol::protocol::header::client_request_header::GetRouteInfoRequestHeader;
+use rocketmq_protocol::protocol::header::get_consumer_connection_list_request_header::GetConsumerConnectionListRequestHeader;
 use rocketmq_protocol::protocol::header::get_consumer_listby_group_request_header::GetConsumerListByGroupRequestHeader;
 use rocketmq_protocol::protocol::header::get_lite_group_info_request_header::GetLiteGroupInfoRequestHeader;
 use rocketmq_protocol::protocol::header::get_lite_topic_info_request_header::GetLiteTopicInfoRequestHeader;
@@ -75,6 +78,7 @@ use rocketmq_protocol::protocol::heartbeat::heartbeat_data::HeartbeatData;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
+use rocketmq_protocol::protocol::LanguageCode;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_proxy_core::identity::ResourceIdentity;
 pub use rocketmq_proxy_core::remoting::ProxyRemotingBackend;
@@ -643,6 +647,7 @@ where
             RemotingIngressRoute::Heartbeat => self.dispatch_heartbeat(context, request).await,
             RemotingIngressRoute::UnregisterClient => self.dispatch_unregister_client(request).await,
             RemotingIngressRoute::GetConsumerListByGroup => self.dispatch_get_consumer_list_by_group(request).await,
+            RemotingIngressRoute::GetConsumerConnectionList => self.dispatch_get_consumer_connection_list(request),
             RemotingIngressRoute::NotifyConsumerIdsChanged => self.dispatch_notify_consumer_ids_changed(request).await,
             RemotingIngressRoute::NotifyUnsubscribeLite => self.dispatch_notify_unsubscribe_lite(request).await,
             RemotingIngressRoute::LockBatchMessageQueue => self.dispatch_lock_batch_mq(request).await,
@@ -661,6 +666,7 @@ where
             RemotingIngressRoute::GetProxyDrainState => self.dispatch_get_proxy_drain_state(request),
             RemotingIngressRoute::BeginProxyDrain => self.dispatch_begin_proxy_drain(request),
             RemotingIngressRoute::CancelProxyDrain => self.dispatch_cancel_proxy_drain(request),
+            RemotingIngressRoute::ForwardBackend => self.dispatch_forward_backend(request).await,
             RemotingIngressRoute::AuthAdminUnsupported => unsupported_response(
                 &self.command_factory,
                 request.opaque(),
@@ -677,6 +683,71 @@ where
                     "proxy remoting ingress does not support request code {}",
                     request.code()
                 ),
+            ),
+        }
+    }
+
+    async fn dispatch_forward_backend(&self, request: &RemotingCommand) -> RemotingCommand {
+        self.dispatch_via_backend(request).await.unwrap_or_else(|| {
+            unsupported_response(
+                &self.command_factory,
+                request.opaque(),
+                format!(
+                    "proxy remoting backend is unavailable for request code {}",
+                    request.code()
+                ),
+            )
+        })
+    }
+
+    fn dispatch_get_consumer_connection_list(&self, request: &RemotingCommand) -> RemotingCommand {
+        let header = match request.decode_command_custom_header::<GetConsumerConnectionListRequestHeader>() {
+            Ok(header) => header,
+            Err(error) => {
+                return decode_error_response(
+                    &self.command_factory,
+                    request.opaque(),
+                    "decode getConsumerConnectionList header",
+                    error,
+                );
+            }
+        };
+        let sessions = self.sessions.consumer_sessions(header.consumer_group.as_str());
+        if sessions.is_empty() {
+            return response_with_code(
+                &self.command_factory,
+                request.opaque(),
+                ResponseCode::ConsumerNotOnline,
+                format!("the consumer group[{}] not online", header.consumer_group),
+            );
+        }
+
+        let mut body = ConsumerConnection::new();
+        for session in sessions {
+            let mut connection = Connection::new();
+            connection.set_client_id(CheetahString::from(session.client_id));
+            connection.set_client_addr(CheetahString::from(session.remote_addr.unwrap_or_default()));
+            connection.set_language(remoting_language(session.language.as_deref()));
+            connection.set_version(
+                session
+                    .client_version
+                    .as_deref()
+                    .and_then(|version| version.parse::<i32>().ok())
+                    .unwrap_or_default(),
+            );
+            body.insert_connection(connection);
+        }
+        match body.encode() {
+            Ok(encoded) => self
+                .command_factory
+                .create_response_command_with_code(ResponseCode::Success)
+                .set_body(encoded)
+                .set_opaque(request.opaque()),
+            Err(error) => transport_error_response(
+                &self.command_factory,
+                request.opaque(),
+                "encode getConsumerConnectionList response",
+                error,
             ),
         }
     }
@@ -1787,6 +1858,24 @@ fn build_lite_group_meta(
         .collect()
 }
 
+fn remoting_language(language: Option<&str>) -> LanguageCode {
+    match language.map(str::to_ascii_uppercase).as_deref() {
+        Some("JAVA") => LanguageCode::JAVA,
+        Some("CPP") => LanguageCode::CPP,
+        Some("DOTNET") => LanguageCode::DOTNET,
+        Some("PYTHON") => LanguageCode::PYTHON,
+        Some("DELPHI") => LanguageCode::DELPHI,
+        Some("ERLANG") => LanguageCode::ERLANG,
+        Some("RUBY") => LanguageCode::RUBY,
+        Some("HTTP") => LanguageCode::HTTP,
+        Some("GO") => LanguageCode::GO,
+        Some("PHP") => LanguageCode::PHP,
+        Some("RUST") => LanguageCode::RUST,
+        Some("NODE_JS") => LanguageCode::NODE_JS,
+        _ => LanguageCode::OTHER,
+    }
+}
+
 fn unique_lite_topics(subscriptions: &[crate::session::LiteSubscriptionSnapshot]) -> HashSet<String> {
     subscriptions
         .iter()
@@ -2123,6 +2212,7 @@ mod tests {
     use rocketmq_protocol::code::request_code::RequestCode;
     use rocketmq_protocol::code::response_code::ResponseCode;
     use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
+    use rocketmq_protocol::protocol::body::consumer_connection::ConsumerConnection;
     use rocketmq_protocol::protocol::body::proxy_drain::ProxyDrainOperationRequestBody;
     use rocketmq_protocol::protocol::body::proxy_drain::ProxyDrainStateResponseBody;
     use rocketmq_protocol::protocol::body::proxy_drain::PROXY_DRAIN_SCHEMA_VERSION;
@@ -2131,6 +2221,7 @@ mod tests {
     use rocketmq_protocol::protocol::body::request::lock_batch_request_body::LockBatchRequestBody;
     use rocketmq_protocol::protocol::body::unlock_batch_request_body::UnlockBatchRequestBody;
     use rocketmq_protocol::protocol::header::client_request_header::GetRouteInfoRequestHeader;
+    use rocketmq_protocol::protocol::header::get_consumer_connection_list_request_header::GetConsumerConnectionListRequestHeader;
     use rocketmq_protocol::protocol::header::get_consumer_listby_group_request_header::GetConsumerListByGroupRequestHeader;
     use rocketmq_protocol::protocol::header::get_lite_group_info_request_header::GetLiteGroupInfoRequestHeader;
     use rocketmq_protocol::protocol::header::get_lite_topic_info_request_header::GetLiteTopicInfoRequestHeader;
@@ -2285,16 +2376,13 @@ mod tests {
 
     #[derive(Default)]
     struct TestRemotingBackend {
-        seen_codes: Mutex<Vec<i32>>,
+        seen_requests: Mutex<Vec<RemotingCommand>>,
     }
 
     impl ProxyRemotingBackend for TestRemotingBackend {
         fn process(&self, request: RemotingCommand) -> rocketmq_proxy_core::ProxyServiceFuture<'_, RemotingCommand> {
             Box::pin(async move {
-                self.seen_codes
-                    .lock()
-                    .expect("backend mutex poisoned")
-                    .push(request.code());
+                self.seen_requests.lock().expect("backend mutex poisoned").push(request);
                 Ok(RemotingCommand::create_response_command_with_code(
                     ResponseCode::Success,
                 ))
@@ -2769,6 +2857,34 @@ mod tests {
         )
         .expect("consumer list body should decode");
         assert_eq!(decoded.consumer_id_list, vec![CheetahString::from("client-a")]);
+
+        let mut connection_request = RemotingCommand::create_request_command(
+            RequestCode::GetConsumerConnectionList,
+            GetConsumerConnectionListRequestHeader {
+                consumer_group: CheetahString::from("GroupA"),
+                rpc_request_header: None,
+            },
+        );
+        connection_request.make_custom_header_to_net();
+        let connection_response = dispatcher.dispatch(&test_context(), &connection_request).await;
+        assert_eq!(ResponseCode::from(connection_response.code()), ResponseCode::Success);
+        let connections = ConsumerConnection::decode(
+            connection_response
+                .body()
+                .expect("consumer connection body should exist")
+                .as_ref(),
+        )
+        .expect("consumer connection body should decode");
+        assert_eq!(connections.get_connection_set().len(), 1);
+        assert_eq!(
+            connections
+                .get_connection_set()
+                .iter()
+                .next()
+                .expect("consumer connection should exist")
+                .get_client_id(),
+            "client-a"
+        );
     }
 
     #[tokio::test]
@@ -3273,9 +3389,85 @@ mod tests {
         assert_eq!(ResponseCode::from(unlock_response.code()), ResponseCode::Success);
 
         assert_eq!(
-            *backend.seen_codes.lock().expect("backend mutex poisoned"),
+            backend
+                .seen_requests
+                .lock()
+                .expect("backend mutex poisoned")
+                .iter()
+                .map(RemotingCommand::code)
+                .collect::<Vec<_>>(),
             vec![RequestCode::LockBatchMq.to_i32(), RequestCode::UnlockBatchMq.to_i32()]
         );
+    }
+
+    #[tokio::test]
+    async fn dispatch_forward_routes_preserve_the_command_and_call_backend_once() {
+        let backend = Arc::new(TestRemotingBackend::default());
+        let dispatcher = ProxyRemotingDispatcher::new(
+            Arc::new(ProxyConfig {
+                mode: ProxyMode::Local,
+                ..ProxyConfig::default()
+            }),
+            Arc::new(DefaultMessagingProcessor::new(Arc::new(
+                LocalServiceManager::with_services(
+                    Arc::new(StaticRouteService::default()),
+                    Arc::new(StaticMetadataService::default()),
+                    Arc::new(DefaultAssignmentService),
+                    Arc::new(TestMessageService),
+                    Arc::new(TestConsumerService),
+                    Arc::new(DefaultTransactionService),
+                ),
+            ))),
+            ClientSessionRegistry::default(),
+            Some(backend.clone()),
+        );
+        let codes = [
+            RequestCode::ConsumerSendMsgBack,
+            RequestCode::EndTransaction,
+            RequestCode::RecallMessage,
+            RequestCode::PopMessage,
+            RequestCode::AckMessage,
+            RequestCode::ChangeMessageInvisibleTime,
+        ];
+
+        for (index, code) in codes.into_iter().enumerate() {
+            let opaque = 700 + index as i32;
+            let request = RemotingCommand::create_remoting_command(code)
+                .set_opaque(opaque)
+                .set_version(501)
+                .set_serialize_type(SerializeType::ROCKETMQ)
+                .set_body(Bytes::from_static(b"forward-body"))
+                .set_ext_fields(HashMap::from([
+                    (
+                        CheetahString::from_static_str("bname"),
+                        CheetahString::from_static_str("broker-a"),
+                    ),
+                    (
+                        CheetahString::from_static_str("custom"),
+                        CheetahString::from_static_str("preserved"),
+                    ),
+                ]));
+            let response = dispatcher.dispatch(&test_context(), &request).await;
+            assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+            assert_eq!(response.opaque(), opaque);
+        }
+
+        let seen = backend.seen_requests.lock().expect("backend mutex poisoned");
+        assert_eq!(seen.len(), codes.len());
+        for (index, request) in seen.iter().enumerate() {
+            assert_eq!(request.code(), codes[index].to_i32());
+            assert_eq!(request.opaque(), 700 + index as i32);
+            assert_eq!(request.version(), 501);
+            assert_eq!(request.serialize_type(), SerializeType::ROCKETMQ);
+            assert_eq!(request.body().map(Bytes::as_ref), Some(b"forward-body".as_slice()));
+            assert_eq!(
+                request
+                    .ext_fields()
+                    .and_then(|fields| fields.get("custom"))
+                    .map(CheetahString::as_str),
+                Some("preserved")
+            );
+        }
     }
 
     #[tokio::test]

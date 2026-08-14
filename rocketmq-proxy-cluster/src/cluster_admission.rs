@@ -25,6 +25,7 @@ use std::time::Instant;
 
 use cheetah_string::CheetahString;
 use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_proxy_core::MessageQueueTarget;
 use rocketmq_proxy_core::ProxyError;
 use rocketmq_proxy_core::ProxyResult;
@@ -521,6 +522,9 @@ impl ClusterCommand {
             | Self::GetOffset { .. }
             | Self::QueryOffset { .. } => ClusterCommandClass::Control,
             Self::ReceiveMessage { .. } | Self::PullMessage { .. } => ClusterCommandClass::LongPoll,
+            Self::ForwardRemoting { request, .. } if RequestCode::from(request.code()) == RequestCode::PopMessage => {
+                ClusterCommandClass::LongPoll
+            }
             _ => ClusterCommandClass::ShortData,
         }
     }
@@ -622,6 +626,9 @@ impl ClusterCommand {
                     request.client_id.as_ref().map(ToString::to_string).unwrap_or_default(),
                 ],
             ),
+            Self::ForwardRemoting {
+                broker_name, request, ..
+            } => ClusterOrderingKey::new("remoting", [broker_name.clone(), request.code().to_string()]),
         }
     }
 
@@ -637,6 +644,7 @@ impl ClusterCommand {
             | Self::GetOffset { deadline, .. }
             | Self::QueryOffset { deadline, .. }
             | Self::EndTransaction { deadline, .. } => *deadline,
+            Self::ForwardRemoting { timeout_millis, .. } => Some(Duration::from_millis(*timeout_millis)),
             Self::ReadinessCheck { .. }
             | Self::SyncLiteSubscription { .. }
             | Self::QueryRoute { .. }
@@ -666,6 +674,12 @@ impl ClusterCommand {
             | Self::QueryOffset { deadline, .. }
             | Self::EndTransaction { deadline, .. } => {
                 *deadline = deadline.map(|value| value.saturating_sub(waited));
+            }
+            Self::ForwardRemoting { timeout_millis, .. } => {
+                *timeout_millis = Duration::from_millis(*timeout_millis)
+                    .saturating_sub(waited)
+                    .as_millis()
+                    .clamp(0, u128::from(u64::MAX)) as u64;
             }
             Self::ReadinessCheck { .. }
             | Self::SyncLiteSubscription { .. }
@@ -815,6 +829,15 @@ impl ClusterCommand {
                 request.client_id.as_ref(),
                 &request.mq_set,
             ),
+            Self::ForwardRemoting {
+                broker_name, request, ..
+            } => {
+                broker_name.len()
+                    + request.body().map_or(0, |body| body.len())
+                    + request.ext_fields().map_or(0, |fields| {
+                        fields.iter().map(|(key, value)| key.len() + value.len()).sum()
+                    })
+            }
         };
         size_of::<Self>().saturating_add(dynamic)
     }
@@ -882,6 +905,9 @@ impl ClusterCommand {
                 let _ = reply.send(Err(error));
             }
             Self::UnlockBatchMq { reply, .. } => {
+                let _ = reply.send(Err(error));
+            }
+            Self::ForwardRemoting { reply, .. } => {
                 let _ = reply.send(Err(error));
             }
         }

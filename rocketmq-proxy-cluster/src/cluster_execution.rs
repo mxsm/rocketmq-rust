@@ -27,6 +27,7 @@ use rocketmq_protocol::protocol::body::request::lock_batch_request_body::LockBat
 use rocketmq_protocol::protocol::body::response::lock_batch_response_body::LockBatchResponseBody;
 use rocketmq_protocol::protocol::body::unlock_batch_request_body::UnlockBatchRequestBody;
 use rocketmq_protocol::protocol::body::user_info::UserInfo;
+use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_proxy_core::AckMessageRequest;
 use rocketmq_proxy_core::AckMessageResultEntry;
@@ -193,6 +194,12 @@ pub(super) enum ClusterCommand {
     UnlockBatchMq {
         request: UnlockBatchRequestBody,
         reply: oneshot::Sender<ProxyResult<()>>,
+    },
+    ForwardRemoting {
+        broker_name: String,
+        request: RemotingCommand,
+        timeout_millis: u64,
+        reply: oneshot::Sender<ProxyResult<RemotingCommand>>,
     },
 }
 
@@ -570,6 +577,21 @@ impl ClusterTaskExecutor {
     pub(super) async fn unlock_batch_mq(&self, request: UnlockBatchRequestBody) -> ProxyResult<()> {
         self.execute(|reply| ClusterCommand::UnlockBatchMq { request, reply })
             .await
+    }
+
+    pub(super) async fn forward_remoting(
+        &self,
+        broker_name: String,
+        request: RemotingCommand,
+        timeout_millis: u64,
+    ) -> ProxyResult<RemotingCommand> {
+        self.execute(|reply| ClusterCommand::ForwardRemoting {
+            broker_name,
+            request,
+            timeout_millis,
+            reply,
+        })
+        .await
     }
 
     async fn execute<T>(

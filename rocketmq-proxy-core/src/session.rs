@@ -500,6 +500,18 @@ impl<C> ClientSessionRegistry<C> {
         client_ids
     }
 
+    /// Returns stable snapshots for clients currently registered in a consumer group.
+    pub fn consumer_sessions(&self, consumer_group: &str) -> Vec<ClientSession> {
+        let mut sessions = self
+            .sessions
+            .iter()
+            .filter(|entry| entry.consumer_groups.contains(consumer_group))
+            .map(|entry| entry.clone())
+            .collect::<Vec<_>>();
+        sessions.sort_unstable_by(|left, right| left.client_id.cmp(&right.client_id));
+        sessions
+    }
+
     fn upsert_client_identity<P>(
         &self,
         client_id: &str,
