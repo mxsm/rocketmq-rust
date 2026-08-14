@@ -680,8 +680,25 @@ impl RemotingCommand {
     /// Returns the custom-header validation or direct-binary encoding failure.
     #[inline]
     pub fn try_fast_header_encode(&mut self, dst: &mut BytesMut) -> rocketmq_error::RocketMQResult<()> {
+        let body_length = self.body.as_ref().map_or(0, Bytes::len);
+        self.try_fast_header_encode_with_body_length(dst, body_length)
+    }
+
+    #[inline]
+    pub(crate) fn try_fast_header_encode_with_body_length(
+        &mut self,
+        dst: &mut BytesMut,
+        body_length: usize,
+    ) -> rocketmq_error::RocketMQResult<()> {
         let checkpoint = dst.len();
-        let result = self.try_fast_header_encode_inner(dst);
+        let result = match self.body.as_ref() {
+            Some(body) if body.len() != body_length => Err(rocketmq_error::SerializationError::encode_failed(
+                "remoting-command",
+                "explicit body length does not match the in-memory body",
+            )
+            .into()),
+            _ => self.try_fast_header_encode_inner(dst, body_length),
+        };
         if result.is_err() {
             dst.truncate(checkpoint);
         }
@@ -689,30 +706,33 @@ impl RemotingCommand {
     }
 
     #[inline]
-    fn try_fast_header_encode_inner(&mut self, dst: &mut BytesMut) -> rocketmq_error::RocketMQResult<()> {
+    fn try_fast_header_encode_inner(
+        &mut self,
+        dst: &mut BytesMut,
+        body_length: usize,
+    ) -> rocketmq_error::RocketMQResult<()> {
         match self.serialize_type {
-            SerializeType::JSON => self.fast_encode_json(dst),
-            SerializeType::ROCKETMQ => self.fast_encode_rocketmq(dst),
+            SerializeType::JSON => self.fast_encode_json(dst, body_length),
+            SerializeType::ROCKETMQ => self.fast_encode_rocketmq(dst, body_length),
         }
     }
 
     /// Optimized JSON encoding with pre-calculated capacity and zero-copy optimizations
     #[inline]
-    fn fast_encode_json(&mut self, dst: &mut BytesMut) -> rocketmq_error::RocketMQResult<()> {
+    fn fast_encode_json(&mut self, dst: &mut BytesMut, body_length: usize) -> rocketmq_error::RocketMQResult<()> {
         let direct_fields = !self.custom_header_to_net
             && self.ext_fields.is_absent()
             && self
                 .command_custom_header_ref()
                 .is_some_and(CommandCustomHeader::supports_direct_json_fields);
         if direct_fields {
-            return self.fast_encode_json_direct(dst);
+            return self.fast_encode_json_direct(dst, body_length);
         }
 
         self.try_make_custom_header_to_net()
             .map_err(|error| rocketmq_error::RocketMQError::request_header_error(error.to_string()))?;
 
         let estimated_header_size = self.estimate_json_header_size();
-        let body_length = self.body.as_ref().map_or(0, |b| b.len());
         let begin_index = dst.len();
 
         dst.reserve(8 + estimated_header_size);
@@ -738,14 +758,13 @@ impl RemotingCommand {
     }
 
     #[inline]
-    fn fast_encode_json_direct(&self, dst: &mut BytesMut) -> rocketmq_error::RocketMQResult<()> {
+    fn fast_encode_json_direct(&self, dst: &mut BytesMut, body_length: usize) -> rocketmq_error::RocketMQResult<()> {
         let header = self.command_custom_header_ref().ok_or_else(|| {
             rocketmq_error::SerializationError::encode_failed(
                 "remoting-command",
                 "direct JSON header capability was selected without a custom header",
             )
         })?;
-        let body_length = self.body.as_ref().map_or(0, |body| body.len());
         let begin_index = dst.len();
 
         // Avoid a full preflight walk over every typed field. A single 1 KiB
@@ -787,7 +806,7 @@ impl RemotingCommand {
 
     /// Optimized ROCKETMQ binary encoding with minimal allocations
     #[inline]
-    fn fast_encode_rocketmq(&mut self, dst: &mut BytesMut) -> rocketmq_error::RocketMQResult<()> {
+    fn fast_encode_rocketmq(&mut self, dst: &mut BytesMut, body_length: usize) -> rocketmq_error::RocketMQResult<()> {
         let begin_index = dst.len();
         dst.reserve(8 + RocketMQSerializable::INITIAL_ENCODE_CAPACITY);
         dst.put_i64(0); // Placeholder for total_length + serialize_type
@@ -804,7 +823,6 @@ impl RemotingCommand {
             None => RocketMQSerializable::try_rocketmq_protocol_encode_with_capability(self, dst, capability),
         }
         .map_err(|error| rocketmq_error::RocketMQError::request_header_error(error.to_string()))?;
-        let body_length = self.body.as_ref().map_or(0, |b| b.len());
         let (total_length, serialize_type) =
             Self::checked_frame_lengths(header_size, body_length, SerializeType::ROCKETMQ)?;
 
