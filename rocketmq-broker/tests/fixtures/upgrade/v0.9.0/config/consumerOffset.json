@@ -1,0 +1,19 @@
+{
+  "dataVersion": {
+    "stateVersion": 0,
+    "timestamp": 1786728134258,
+    "counter": 0
+  },
+  "offsetTable": {
+    "V1UpgradeTopic@V1UpgradeGroup": {
+      "0": 1
+    }
+  },
+  "resetOffsetTable": {},
+  "pullOffsetTable": {},
+  "processedPullOffsetTable": {
+    "V1UpgradeGroup": [
+      "V1UpgradeTopic"
+    ]
+  }
+}

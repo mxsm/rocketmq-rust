@@ -1,0 +1,19 @@
+{
+  "timingCount": {},
+  "timingDistribution": {},
+  "timerDist": [
+    5,
+    60,
+    300,
+    900,
+    3600,
+    14400,
+    28800,
+    86400
+  ],
+  "dataVersion": {
+    "stateVersion": 0,
+    "timestamp": 1786727751703,
+    "counter": 1
+  }
+}

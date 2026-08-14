@@ -1,0 +1,12 @@
+{
+  "writer_version": "0.9.0",
+  "broker_name": "v090-upgrade-broker",
+  "broker_cluster": "v090-upgrade-cluster",
+  "topic": "V1UpgradeTopic",
+  "group": "V1UpgradeGroup",
+  "queue_id": 0,
+  "consumer_offset": 1,
+  "subscription_enabled": true,
+  "timer_state": "inactive-default",
+  "pop_profile_state": "legacy-absent"
+}

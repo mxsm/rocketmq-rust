@@ -1,0 +1,31 @@
+{
+  "subscriptionGroupTable": {
+    "V1UpgradeGroup": {
+      "groupName": "V1UpgradeGroup",
+      "consumeEnable": true,
+      "consumeFromMinEnable": true,
+      "consumeBroadcastEnable": true,
+      "consumeMessageOrderly": false,
+      "retryQueueNums": 1,
+      "retryMaxTimes": 16,
+      "groupRetryPolicy": {
+        "type": "CUSTOMIZED",
+        "exponentialRetryPolicy": null,
+        "customizedRetryPolicy": null
+      },
+      "brokerId": 0,
+      "whichBrokerWhenConsumeSlowly": 1,
+      "notifyConsumerIdsChangedEnable": true,
+      "groupSysFlag": 0,
+      "consumeTimeoutMinute": 15,
+      "subscriptionDataSet": null,
+      "attributes": {}
+    }
+  },
+  "forbiddenTable": {},
+  "dataVersion": {
+    "stateVersion": 0,
+    "timestamp": 1786728134261,
+    "counter": 0
+  }
+}

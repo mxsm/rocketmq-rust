@@ -1,0 +1,14 @@
+{
+  "writer_version": "0.9.0",
+  "store_type": "LocalFile",
+  "topic": "V1UpgradeTopic",
+  "queue_id": 0,
+  "queue_max_offset": 2,
+  "message_key": "v1-upgrade-key",
+  "message_bodies": [
+    "v0.9.0-message-0",
+    "v0.9.0-message-1"
+  ],
+  "index_result_count": 2,
+  "timer_state": "inactive-default"
+}
