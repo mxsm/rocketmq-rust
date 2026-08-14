@@ -46,7 +46,7 @@ rocketmq-model           = { workspace = true }
 rocketmq-protocol        = { workspace = true }
 rocketmq-runtime         = { workspace = true }
 rocketmq-security-api    = { workspace = true }
-rocketmq-transport       = { workspace = true }
+rocketmq-transport       = { workspace = true, features = ["socks"] }
 rocketmq-error.workspace = true
 rocketmq-auth.workspace  = true
 rocketmq-observability   = { workspace = true }
@@ -76,8 +76,12 @@ cheetah-string = { workspace = true }
 hickory-resolver = { workspace = true, optional = true }
 
 [dev-dependencies]
-rocketmq-transport = { workspace = true, features = ["test-support"] }
+rocketmq-transport = { workspace = true, features = ["socks", "test-support", "tls"] }
 criterion = { version = "0.8.2", features = ["async_tokio"] }
+pkcs8.workspace = true
+rcgen = "0.14"
+tempfile = "3.27.0"
+tokio-rustls = "0.26"
 trybuild  = "1.0.116"
 
 [[bench]]

@@ -37,6 +37,8 @@ use crate::config::SocketOptions;
 use crate::config::TlsConfig;
 use crate::connection::Connection;
 use crate::deadline::RequestDeadline;
+#[cfg(feature = "socks")]
+use crate::runtime::config::client_config::TransportClientConfig;
 use crate::security::TransportSecurity;
 use crate::telemetry::TransportTelemetry;
 #[cfg(feature = "tls")]
@@ -130,6 +132,8 @@ pub async fn connect_with_config_options_and_telemetry(
     connect_legacy_address_with_options_and_telemetry(
         address,
         tls_config,
+        #[cfg(feature = "socks")]
+        None,
         frame_limits,
         socket_options,
         deadline,
@@ -152,8 +156,63 @@ pub async fn connect_target_with_config_options_and_telemetry(
         target.authority(),
         target.tls_server_name(),
         tls_config,
+        #[cfg(feature = "socks")]
+        None,
         frame_limits,
         socket_options,
+        deadline,
+        telemetry,
+    )
+    .await
+}
+
+#[cfg(feature = "socks")]
+pub(crate) async fn connect_with_transport_config_and_telemetry(
+    address: &str,
+    transport_config: &TransportClientConfig,
+    frame_limits: FrameLimits,
+    deadline: RequestDeadline,
+    telemetry: TransportTelemetry,
+) -> RocketMQResult<ConnectedTransport> {
+    connect_legacy_address_with_options_and_telemetry(
+        address,
+        &transport_config.tls,
+        Some(&transport_config.socks_proxy),
+        frame_limits,
+        SocketOptions::default(),
+        deadline,
+        telemetry,
+    )
+    .await
+}
+
+#[cfg(feature = "socks")]
+pub(crate) async fn connect_target_with_transport_config_and_telemetry(
+    target: &ConnectTarget,
+    transport_config: &TransportClientConfig,
+    frame_limits: FrameLimits,
+    deadline: RequestDeadline,
+    telemetry: TransportTelemetry,
+) -> RocketMQResult<ConnectedTransport> {
+    if transport_config.socks_proxy.is_empty() {
+        return connect_target_with_config_options_and_telemetry(
+            target,
+            &transport_config.tls,
+            frame_limits,
+            SocketOptions::default(),
+            deadline,
+            telemetry,
+        )
+        .await;
+    }
+    connect_physical_with_options_and_telemetry(
+        target.socket_addr(),
+        target.authority(),
+        target.tls_server_name(),
+        &transport_config.tls,
+        Some(&transport_config.socks_proxy),
+        frame_limits,
+        SocketOptions::default(),
         deadline,
         telemetry,
     )
@@ -163,15 +222,19 @@ pub async fn connect_target_with_config_options_and_telemetry(
 async fn connect_legacy_address_with_options_and_telemetry(
     address: &str,
     tls_config: &TlsConfig,
+    #[cfg(feature = "socks")] socks_proxy: Option<&crate::socks::SocksProxyConfig>,
     frame_limits: FrameLimits,
     socket_options: SocketOptions,
     deadline: RequestDeadline,
     telemetry: TransportTelemetry,
 ) -> RocketMQResult<ConnectedTransport> {
-    let stream = deadline
-        .timeout(tokio::net::TcpStream::connect(address))
-        .await
-        .map_err(|_| RocketMQError::network_connection_timeout(address, deadline.budget_millis()))??;
+    let stream = connect_legacy_tcp(
+        address,
+        #[cfg(feature = "socks")]
+        socks_proxy,
+        deadline,
+    )
+    .await?;
     socket_options
         .apply(&stream)
         .map_err(|error| RocketMQError::network_connection_failed(address, error.to_string()))?;
@@ -217,15 +280,20 @@ async fn connect_physical_with_options_and_telemetry(
     authority: &str,
     tls_server_name: &str,
     tls_config: &TlsConfig,
+    #[cfg(feature = "socks")] socks_proxy: Option<&crate::socks::SocksProxyConfig>,
     frame_limits: FrameLimits,
     socket_options: SocketOptions,
     deadline: RequestDeadline,
     telemetry: TransportTelemetry,
 ) -> RocketMQResult<ConnectedTransport> {
-    let stream = deadline
-        .timeout(tokio::net::TcpStream::connect(socket_addr))
-        .await
-        .map_err(|_| RocketMQError::network_connection_timeout(authority, deadline.budget_millis()))??;
+    let stream = connect_physical_tcp(
+        socket_addr,
+        authority,
+        #[cfg(feature = "socks")]
+        socks_proxy,
+        deadline,
+    )
+    .await?;
     socket_options
         .apply(&stream)
         .map_err(|error| RocketMQError::network_connection_failed(authority, error.to_string()))?;
@@ -260,6 +328,39 @@ async fn connect_physical_with_options_and_telemetry(
         negotiated_tls,
         socket_nodelay,
     })
+}
+
+async fn connect_legacy_tcp(
+    address: &str,
+    #[cfg(feature = "socks")] socks_proxy: Option<&crate::socks::SocksProxyConfig>,
+    deadline: RequestDeadline,
+) -> RocketMQResult<tokio::net::TcpStream> {
+    #[cfg(feature = "socks")]
+    if let Some(socks_proxy) = socks_proxy.filter(|config| !config.is_empty()) {
+        return crate::socks::connect_target(socks_proxy, address, None, deadline).await;
+    }
+    deadline
+        .timeout(tokio::net::TcpStream::connect(address))
+        .await
+        .map_err(|_| RocketMQError::network_connection_timeout(address, deadline.budget_millis()))?
+        .map_err(|error| RocketMQError::network_connection_failed(address, error.to_string()))
+}
+
+async fn connect_physical_tcp(
+    socket_addr: SocketAddr,
+    authority: &str,
+    #[cfg(feature = "socks")] socks_proxy: Option<&crate::socks::SocksProxyConfig>,
+    deadline: RequestDeadline,
+) -> RocketMQResult<tokio::net::TcpStream> {
+    #[cfg(feature = "socks")]
+    if let Some(socks_proxy) = socks_proxy.filter(|config| !config.is_empty()) {
+        return crate::socks::connect_target(socks_proxy, authority, Some(socket_addr), deadline).await;
+    }
+    deadline
+        .timeout(tokio::net::TcpStream::connect(socket_addr))
+        .await
+        .map_err(|_| RocketMQError::network_connection_timeout(authority, deadline.budget_millis()))?
+        .map_err(|error| RocketMQError::network_connection_failed(authority, error.to_string()))
 }
 
 #[cfg(feature = "tls")]

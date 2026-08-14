@@ -33,6 +33,14 @@ impl MQClientAPIImpl {
         let mut remoting_config = (*tokio_client_config).clone();
         remoting_config.tls = client_config.tls_config.clone();
         remoting_config.tls.enable = client_config.use_tls;
+        let startup_config_error = match client_config.parse_socks_proxy_config() {
+            Ok(socks_proxy) => {
+                remoting_config.socks_proxy = socks_proxy;
+                None
+            }
+            Err(RocketMQError::ConfigInvalidValue { reason, .. }) => Some(Arc::<str>::from(reason)),
+            Err(_) => Some(Arc::<str>::from("invalid SOCKS proxy configuration")),
+        };
         #[cfg(any(feature = "observability", feature = "observability-metrics"))]
         let transport_telemetry = TransportTelemetry::from_handle(&telemetry_handle);
         #[cfg(not(any(feature = "observability", feature = "observability-metrics")))]
@@ -67,13 +75,19 @@ impl MQClientAPIImpl {
             command_factory,
             background_tasks: TaskTracker::new(),
             background_shutdown: CancellationToken::new(),
+            startup_config_error,
         }
     }
 
-    pub async fn start(&self) {
-        if let Err(error) = self.remoting_client.start().await {
-            tracing::error!(?error, "failed to start transport client");
+    pub async fn start(&self) -> RocketMQResult<()> {
+        if let Some(reason) = self.startup_config_error.as_ref() {
+            return Err(RocketMQError::ConfigInvalidValue {
+                key: ClientConfig::SOCKS_PROXY_CONFIG,
+                value: "<redacted>".to_string(),
+                reason: reason.to_string(),
+            });
         }
+        self.remoting_client.start().await.map(|_| ())
     }
 
     pub fn shutdown(&self) {

@@ -6984,9 +6984,36 @@
           "path": "rocketmq-transport/src/public_api.rs",
           "rationale": "deliberate root entry point",
           "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use crate::socks::SocksProxyConfig",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::socks::SocksProxyConfig",
+          "owner": "transport",
+          "path": "rocketmq-transport/src/public_api.rs",
+          "rationale": "typed Java-compatible SOCKS routing configuration",
+          "removal_condition": "retain while client SOCKS5 routing remains supported"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use crate::socks::SocksProxyRoute",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::socks::SocksProxyRoute",
+          "owner": "transport",
+          "path": "rocketmq-transport/src/public_api.rs",
+          "rationale": "selected credential-safe SOCKS5 connection route",
+          "removal_condition": "retain while client SOCKS5 routing remains supported"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use crate::tls::PrivateKeyLoader",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::tls::PrivateKeyLoader",
+          "owner": "transport",
+          "path": "rocketmq-transport/src/public_api.rs",
+          "rationale": "shared secret-safe private key loading boundary",
+          "removal_condition": "retain while TLS configuration accepts file-backed private keys"
         }
       ],
-      "maximum_exports": 152
+      "maximum_exports": 155
     }
   },
   "policy": "Every deliberate export is classified; additions and count growth fail closed.",

@@ -109,7 +109,13 @@ pub use crate::runtime::processor::ResponseWriteOutcome;
 pub use crate::runtime::RPCHook;
 pub use crate::runtime::RPCHookArc;
 pub use crate::security::TransportSecurity;
+#[cfg(feature = "socks")]
+pub use crate::socks::SocksProxyConfig;
+#[cfg(feature = "socks")]
+pub use crate::socks::SocksProxyRoute;
 pub use crate::telemetry::TransportTelemetry;
+#[cfg(feature = "tls")]
+pub use crate::tls::PrivateKeyLoader;
 pub use crate::tls::TlsServerRuntime;
 pub use rocketmq_protocol::protocol::RemotingDeserializable;
 pub use rocketmq_protocol::protocol::RemotingSerializable;

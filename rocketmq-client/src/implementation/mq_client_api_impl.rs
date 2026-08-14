@@ -403,6 +403,7 @@ pub struct MQClientAPIImpl {
     command_factory: RemotingCommandFactory,
     background_tasks: TaskTracker,
     background_shutdown: CancellationToken,
+    startup_config_error: Option<Arc<str>>,
 }
 
 async fn update_cached_name_server_addr<F>(cache: &RwLock<Option<String>>, addrs: &str, update: F) -> bool

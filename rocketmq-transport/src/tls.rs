@@ -624,21 +624,17 @@ pub fn build_client_config(tls_config: &TlsConfig) -> RocketMQResult<tokio_rustl
         )?)
     };
 
-    if effective_config.client.key_password.is_some() {
-        return Err(config_error(
-            "tls.client.keyPassword",
-            "<redacted>",
-            "encrypted private keys are not supported by rocketmq-rust TLS v1",
-        ));
-    }
-
     match (
         effective_config.client.cert_path.as_deref(),
         effective_config.client.key_path.as_deref(),
     ) {
         (Some(cert_path), Some(key_path)) => {
             let certs = load_certificates(cert_path, "tls.client.certPath")?;
-            let key = load_private_key(key_path, "tls.client.keyPath")?;
+            let key = load_private_key(
+                key_path,
+                "tls.client.keyPath",
+                effective_config.client.key_password.as_deref(),
+            )?;
             builder.with_client_auth_cert(certs, key).map_err(|error| {
                 config_error(
                     "tls.client.certificate",
@@ -659,14 +655,6 @@ pub fn build_client_config(tls_config: &TlsConfig) -> RocketMQResult<tokio_rustl
 #[cfg(feature = "tls")]
 pub fn build_server_acceptor(tls_config: &TlsConfig) -> RocketMQResult<tokio_rustls::TlsAcceptor> {
     let effective_config = effective_tls_config(tls_config);
-
-    if effective_config.server.key_password.is_some() {
-        return Err(config_error(
-            "tls.server.keyPassword",
-            "<redacted>",
-            "encrypted private keys are not supported by rocketmq-rust TLS v1",
-        ));
-    }
 
     let (certs, key) = if effective_config.test_mode_enable
         && (effective_config.server.cert_path.is_none() || effective_config.server.key_path.is_none())
@@ -689,7 +677,11 @@ pub fn build_server_acceptor(tls_config: &TlsConfig) -> RocketMQResult<tokio_rus
         })?;
         (
             load_certificates(cert_path, "tls.server.certPath")?,
-            load_private_key(key_path, "tls.server.keyPath")?,
+            load_private_key(
+                key_path,
+                "tls.server.keyPath",
+                effective_config.server.key_password.as_deref(),
+            )?,
         )
     };
 
@@ -841,21 +833,83 @@ pub fn load_certificates(
 }
 
 #[cfg(feature = "tls")]
+/// Loads plain PEM and encrypted PKCS#8 private keys without exposing secret material in errors.
+pub struct PrivateKeyLoader;
+
+#[cfg(feature = "tls")]
+impl PrivateKeyLoader {
+    /// Loads a private key from `path`, decrypting encrypted PKCS#8 with `password` when required.
+    ///
+    /// Temporary file contents, password bytes, and decrypted DER are zeroized on drop.
+    pub fn load(
+        path: impl AsRef<std::path::Path>,
+        key: &'static str,
+        password: Option<&str>,
+    ) -> RocketMQResult<tokio_rustls::rustls::pki_types::PrivateKeyDer<'static>> {
+        use std::io::Cursor;
+
+        use pkcs8::EncryptedPrivateKeyInfo;
+        use zeroize::Zeroizing;
+
+        let path = path.as_ref();
+        let safe_path = path.to_string_lossy();
+        let pem = Zeroizing::new(fs::read(path).map_err(|error| {
+            config_error(
+                key,
+                safe_path.as_ref(),
+                format!("failed to open private key file: {error}"),
+            )
+        })?);
+
+        if pem
+            .windows(b"-----BEGIN ENCRYPTED PRIVATE KEY-----".len())
+            .any(|window| window == b"-----BEGIN ENCRYPTED PRIVATE KEY-----")
+        {
+            let password = password.ok_or_else(|| {
+                config_error(
+                    key,
+                    safe_path.as_ref(),
+                    "password is required for encrypted PKCS#8 private key",
+                )
+            })?;
+            let password = Zeroizing::new(password.as_bytes().to_vec());
+            let pem_text = std::str::from_utf8(pem.as_slice())
+                .map_err(|_| config_error(key, safe_path.as_ref(), "encrypted private key PEM is not UTF-8"))?;
+            let (_, encrypted_document) = pkcs8::SecretDocument::from_pem(pem_text)
+                .map_err(|_| config_error(key, safe_path.as_ref(), "invalid encrypted PKCS#8 PEM"))?;
+            let encrypted = EncryptedPrivateKeyInfo::try_from(encrypted_document.as_bytes())
+                .map_err(|_| config_error(key, safe_path.as_ref(), "invalid encrypted PKCS#8 payload"))?;
+            let decrypted = encrypted.decrypt(password.as_slice()).map_err(|_| {
+                config_error(
+                    key,
+                    safe_path.as_ref(),
+                    "encrypted PKCS#8 private key decryption failed",
+                )
+            })?;
+            return Ok(tokio_rustls::rustls::pki_types::PrivateKeyDer::Pkcs8(
+                tokio_rustls::rustls::pki_types::PrivatePkcs8KeyDer::from(decrypted.as_bytes().to_vec()),
+            ));
+        }
+
+        match tokio_rustls::rustls::pki_types::PrivateKeyDer::pem_reader_iter(Cursor::new(pem.as_slice())).next() {
+            Some(Ok(private_key)) => Ok(private_key),
+            Some(Err(_)) => Err(config_error(key, safe_path.as_ref(), "failed to read PEM private key")),
+            None => Err(config_error(
+                key,
+                safe_path.as_ref(),
+                "no supported PEM private key was found",
+            )),
+        }
+    }
+}
+
+#[cfg(feature = "tls")]
 fn load_private_key(
     path: &str,
     key: &'static str,
+    password: Option<&str>,
 ) -> RocketMQResult<tokio_rustls::rustls::pki_types::PrivateKeyDer<'static>> {
-    let file = fs::File::open(path)
-        .map_err(|error| config_error(key, path, format!("failed to open private key file: {error}")))?;
-    match tokio_rustls::rustls::pki_types::PrivateKeyDer::pem_reader_iter(file).next() {
-        Some(Ok(private_key)) => Ok(private_key),
-        Some(Err(error)) => Err(config_error(
-            key,
-            path,
-            format!("failed to read PEM private key: {error}"),
-        )),
-        None => Err(config_error(key, path, "no supported PEM private key was found")),
-    }
+    PrivateKeyLoader::load(path, key, password)
 }
 
 #[cfg(feature = "tls")]
@@ -1222,7 +1276,7 @@ mod tests {
         let loaded_certificates =
             load_certificates(&mixed_bundle_path, "tls.server.certPath").expect("load certificate section");
         let loaded_private_key =
-            load_private_key(&mixed_bundle_path, "tls.server.keyPath").expect("load private key section");
+            load_private_key(&mixed_bundle_path, "tls.server.keyPath", None).expect("load private key section");
 
         assert_eq!(loaded_certificates.len(), 1);
         assert!(!loaded_private_key.secret_der().is_empty());

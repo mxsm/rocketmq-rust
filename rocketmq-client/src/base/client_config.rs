@@ -29,6 +29,7 @@ use rocketmq_protocol::protocol::request_type::RequestType;
 use rocketmq_protocol::protocol::LanguageCode;
 use rocketmq_runtime::common::time_utils::current_nano;
 use rocketmq_transport::api::v1::NetworkUtil;
+use rocketmq_transport::api::v1::SocksProxyConfig;
 use rocketmq_transport::api::v1::TlsConfig;
 
 use crate::base::access_channel::AccessChannel;
@@ -533,6 +534,11 @@ impl ClientConfig {
     #[inline]
     pub fn set_socks_proxy_config(&mut self, config: CheetahString) {
         self.socks_proxy_config = config;
+    }
+
+    /// Parses the Java-compatible SOCKS proxy JSON into the transport-owned typed model.
+    pub fn parse_socks_proxy_config(&self) -> RocketMQResult<SocksProxyConfig> {
+        SocksProxyConfig::parse_java_json(&self.socks_proxy_config)
     }
 
     #[inline]

@@ -2402,6 +2402,7 @@ dependencies = [
  "form_urlencoded",
  "futures",
  "futures-util",
+ "ipnet",
  "local-ip-address",
  "num_cpus",
  "parking_lot",
@@ -2423,6 +2424,7 @@ dependencies = [
  "tracing",
  "trait-variant",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]
