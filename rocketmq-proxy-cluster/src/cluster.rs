@@ -3086,10 +3086,7 @@ fn convert_topic_message_type(message_type: TopicMessageType) -> ProxyTopicMessa
 }
 
 fn convert_subscription_group(group_config: SubscriptionGroupConfig) -> SubscriptionGroupMetadata {
-    SubscriptionGroupMetadata {
-        consume_message_orderly: group_config.consume_message_orderly(),
-        lite_bind_topic: None,
-    }
+    SubscriptionGroupMetadata::from(&group_config)
 }
 
 #[cfg(test)]

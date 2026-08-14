@@ -12,64 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::time::Duration;
-
 // Telemetry command gRPC ingress.
 
-use crate::ingress::grpc::service::consumer::clamp_duration;
 use crate::proto::v2;
 use crate::session::TelemetryCommandKind;
 use crate::status::ProxyStatusMapper;
 use crate::ClientSessionRegistry;
 use crate::ProxyError;
-use crate::SessionConfig;
-
-pub const DEFAULT_MAX_BODY_SIZE_BYTES: i32 = 4 * 1024 * 1024;
-pub const DEFAULT_PRODUCER_MAX_ATTEMPTS: i32 = 3;
-const DEFAULT_PRODUCER_BACKOFF_INITIAL_MS: u64 = 10;
-const DEFAULT_PRODUCER_BACKOFF_MAX_MS: u64 = 1_000;
-const DEFAULT_PRODUCER_BACKOFF_MULTIPLIER: f32 = 2.0;
-pub const DEFAULT_CONSUMER_MAX_ATTEMPTS: i32 = 17;
-pub const DEFAULT_CONSUMER_RECEIVE_BATCH_SIZE: i32 = 32;
-const DEFAULT_CONSUMER_LONG_POLLING_TIMEOUT_MS: u64 = 20_000;
-pub const DEFAULT_CONSUMER_CUSTOMIZED_BACKOFF_MS: [u64; 18] = [
-    1_000, 5_000, 10_000, 30_000, 60_000, 120_000, 180_000, 240_000, 300_000, 360_000, 420_000, 480_000, 540_000,
-    600_000, 1_200_000, 1_800_000, 3_600_000, 7_200_000,
-];
-
-/// Applies Core defaults to client settings without consulting a backend.
-pub fn merged_settings(settings: &v2::Settings, session_config: &SessionConfig) -> v2::Settings {
-    let mut merged = settings.clone();
-    let mut backoff_policy = None;
-    match merged.pub_sub.as_mut() {
-        Some(v2::settings::PubSub::Publishing(publishing)) => {
-            if publishing.max_body_size <= 0 {
-                publishing.max_body_size = DEFAULT_MAX_BODY_SIZE_BYTES;
-            }
-            publishing.validate_message_type = true;
-            backoff_policy = Some(default_producer_retry_policy());
-        }
-        Some(v2::settings::PubSub::Subscription(subscription)) => {
-            subscription.receive_batch_size = Some(DEFAULT_CONSUMER_RECEIVE_BATCH_SIZE);
-            let timeout = Duration::from_millis(DEFAULT_CONSUMER_LONG_POLLING_TIMEOUT_MS);
-            subscription.long_polling_timeout = Some(duration_to_proto_duration(clamp_duration(
-                timeout,
-                session_config.min_long_polling_timeout(),
-                session_config.max_long_polling_timeout(),
-            )));
-            backoff_policy = Some(default_consumer_retry_policy());
-            if is_lite_client(merged.client_type) {
-                subscription.lite_subscription_quota.get_or_insert(1200);
-                subscription.max_lite_topic_size.get_or_insert(64);
-            }
-        }
-        None => {}
-    }
-    if let Some(backoff_policy) = backoff_policy {
-        merged.backoff_policy = Some(backoff_policy);
-    }
-    merged
-}
 
 pub fn send_reconnect_endpoints<C>(
     sessions: &ClientSessionRegistry<C>,
@@ -239,45 +188,4 @@ fn command(payload: v2::telemetry_command::Command) -> v2::TelemetryCommand {
         status: Some(ProxyStatusMapper::ok()),
         command: Some(payload),
     }
-}
-
-fn duration_to_proto_duration(duration: Duration) -> prost_types::Duration {
-    prost_types::Duration {
-        seconds: duration.as_secs() as i64,
-        nanos: duration.subsec_nanos() as i32,
-    }
-}
-
-fn default_producer_retry_policy() -> v2::RetryPolicy {
-    v2::RetryPolicy {
-        max_attempts: DEFAULT_PRODUCER_MAX_ATTEMPTS,
-        strategy: Some(v2::retry_policy::Strategy::ExponentialBackoff(v2::ExponentialBackoff {
-            initial: Some(duration_to_proto_duration(Duration::from_millis(
-                DEFAULT_PRODUCER_BACKOFF_INITIAL_MS,
-            ))),
-            max: Some(duration_to_proto_duration(Duration::from_millis(
-                DEFAULT_PRODUCER_BACKOFF_MAX_MS,
-            ))),
-            multiplier: DEFAULT_PRODUCER_BACKOFF_MULTIPLIER,
-        })),
-    }
-}
-
-fn default_consumer_retry_policy() -> v2::RetryPolicy {
-    v2::RetryPolicy {
-        max_attempts: DEFAULT_CONSUMER_MAX_ATTEMPTS,
-        strategy: Some(v2::retry_policy::Strategy::CustomizedBackoff(v2::CustomizedBackoff {
-            next: DEFAULT_CONSUMER_CUSTOMIZED_BACKOFF_MS
-                .iter()
-                .map(|millis| duration_to_proto_duration(Duration::from_millis(*millis)))
-                .collect(),
-        })),
-    }
-}
-
-fn is_lite_client(client_type: Option<i32>) -> bool {
-    matches!(
-        client_type.and_then(|value| v2::ClientType::try_from(value).ok()),
-        Some(v2::ClientType::LitePushConsumer | v2::ClientType::LiteSimpleConsumer)
-    )
 }

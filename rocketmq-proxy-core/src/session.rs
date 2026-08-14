@@ -35,6 +35,7 @@ use crate::receipt_renewal::ReceiptRenewalMetricsSnapshot;
 use crate::receipt_renewal::ReceiptRenewalSchedule;
 use crate::receipt_renewal::ReceiptRenewalToken;
 use crate::ResourceIdentity;
+use crate::SettingsBackoffPolicy;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubscriptionSettingsSnapshot {
@@ -48,13 +49,22 @@ pub struct SubscriptionSettingsSnapshot {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientSettingsSnapshot {
+    pub policy_generation: u64,
     pub client_type: Option<i32>,
     pub request_timeout: Option<Duration>,
+    pub max_body_size: Option<u32>,
+    pub validate_message_type: Option<bool>,
+    pub retry_max_attempts: Option<u32>,
+    pub retry_backoff: Option<SettingsBackoffPolicy>,
     pub subscription: Option<SubscriptionSettingsSnapshot>,
 }
 
 impl ClientSettingsSnapshot {
     pub fn from_proto(settings: &v2::Settings) -> Self {
+        Self::from_effective(settings, 0)
+    }
+
+    pub fn from_effective(settings: &v2::Settings, policy_generation: u64) -> Self {
         let subscription = match settings.pub_sub.as_ref() {
             Some(v2::settings::PubSub::Subscription(subscription)) => Some(SubscriptionSettingsSnapshot {
                 group: subscription.group.as_ref().map(resource_identity),
@@ -75,10 +85,32 @@ impl ClientSettingsSnapshot {
             }),
             _ => None,
         };
+        let (max_body_size, validate_message_type) = match settings.pub_sub.as_ref() {
+            Some(v2::settings::PubSub::Publishing(publishing)) => (
+                u32::try_from(publishing.max_body_size).ok().filter(|value| *value > 0),
+                Some(publishing.validate_message_type),
+            ),
+            _ => (None, None),
+        };
+        let (retry_max_attempts, retry_backoff) = settings
+            .backoff_policy
+            .as_ref()
+            .map(|policy| {
+                (
+                    u32::try_from(policy.max_attempts).ok().filter(|value| *value > 0),
+                    policy.strategy.as_ref().and_then(settings_backoff_from_proto),
+                )
+            })
+            .unwrap_or_default();
 
         Self {
+            policy_generation,
             client_type: settings.client_type,
             request_timeout: settings.request_timeout.as_ref().and_then(proto_duration),
+            max_body_size,
+            validate_message_type,
+            retry_max_attempts,
+            retry_backoff,
             subscription,
         }
     }
@@ -107,6 +139,8 @@ pub struct ReceiptHandleRegistration {
     pub message_id: String,
     pub receipt_handle: String,
     pub invisible_duration: Duration,
+    pub delivery_attempt: i32,
+    pub retry_backoff: SettingsBackoffPolicy,
 }
 
 #[derive(Debug, Clone)]
@@ -117,6 +151,8 @@ pub struct TrackedReceiptHandle {
     pub message_id: String,
     pub receipt_handle: String,
     pub invisible_duration: Duration,
+    pub delivery_attempt: i32,
+    pub retry_backoff: SettingsBackoffPolicy,
     pub last_touched: SystemTime,
     pub next_renew_at: SystemTime,
     pub cancellation: CancellationToken,
@@ -557,6 +593,25 @@ impl<C> ClientSessionRegistry<C> {
     ) -> Option<ClientSettingsSnapshot> {
         let client_id = context.client_id()?;
         let snapshot = ClientSettingsSnapshot::from_proto(settings);
+        self.upsert_from_context_with_client_type(context, snapshot.client_type);
+
+        if let Some(mut session) = self.sessions.get_mut(client_id) {
+            session.client_type = snapshot.client_type.or(session.client_type);
+            session.settings = Some(snapshot.clone());
+            session.last_seen = SystemTime::now();
+        }
+
+        Some(snapshot)
+    }
+
+    pub fn update_effective_settings_from_telemetry<P>(
+        &self,
+        context: &ProxyContextWithPrincipal<P>,
+        settings: &v2::Settings,
+        policy_generation: u64,
+    ) -> Option<ClientSettingsSnapshot> {
+        let client_id = context.client_id()?;
+        let snapshot = ClientSettingsSnapshot::from_effective(settings, policy_generation);
         self.upsert_from_context_with_client_type(context, snapshot.client_type);
 
         if let Some(mut session) = self.sessions.get_mut(client_id) {
@@ -1028,6 +1083,8 @@ impl<C> ClientSessionRegistry<C> {
             message_id: registration.message_id,
             receipt_handle: registration.receipt_handle,
             invisible_duration,
+            delivery_attempt: registration.delivery_attempt,
+            retry_backoff: registration.retry_backoff,
             last_touched: now,
             next_renew_at: renew_at(now, invisible_duration),
             cancellation: CancellationToken::new(),
@@ -1548,6 +1605,19 @@ fn proto_duration(duration: &prost_types::Duration) -> Option<Duration> {
     Some(Duration::new(seconds, nanos))
 }
 
+fn settings_backoff_from_proto(strategy: &v2::retry_policy::Strategy) -> Option<SettingsBackoffPolicy> {
+    match strategy {
+        v2::retry_policy::Strategy::ExponentialBackoff(policy) => Some(SettingsBackoffPolicy::Exponential {
+            initial: policy.initial.as_ref().and_then(proto_duration)?,
+            max: policy.max.as_ref().and_then(proto_duration)?,
+            multiplier: policy.multiplier.max(1.0).round() as u64,
+        }),
+        v2::retry_policy::Strategy::CustomizedBackoff(policy) => Some(SettingsBackoffPolicy::Customized {
+            next: policy.next.iter().map(proto_duration).collect::<Option<Vec<_>>>()?,
+        }),
+    }
+}
+
 fn is_expired(instant: SystemTime, now: SystemTime, ttl: Duration) -> bool {
     match now.duration_since(instant) {
         Ok(elapsed) => elapsed >= ttl,
@@ -1691,6 +1761,8 @@ mod tests {
             message_id: message_id.to_owned(),
             receipt_handle: receipt_handle.to_owned(),
             invisible_duration: Duration::from_secs(30),
+            delivery_attempt: 1,
+            retry_backoff: crate::SettingsBackoffPolicy::default(),
         }
     }
 
@@ -1870,8 +1942,13 @@ mod tests {
     fn sync_lite_subscription_enforces_quota() {
         let registry = ClientSessionRegistry::default();
         let settings = ClientSettingsSnapshot {
+            policy_generation: 1,
             client_type: Some(v2::ClientType::LitePushConsumer as i32),
             request_timeout: None,
+            max_body_size: None,
+            validate_message_type: None,
+            retry_max_attempts: Some(17),
+            retry_backoff: Some(crate::SettingsBackoffPolicy::default()),
             subscription: Some(SubscriptionSettingsSnapshot {
                 group: Some(ResourceIdentity::new("", "GroupA")),
                 fifo: false,
@@ -2140,6 +2217,8 @@ mod tests {
                 message_id: "msg-1".to_owned(),
                 receipt_handle: "handle-1".to_owned(),
                 invisible_duration: Duration::from_secs(30),
+                delivery_attempt: 1,
+                retry_backoff: crate::SettingsBackoffPolicy::default(),
                 last_touched: SystemTime::UNIX_EPOCH,
                 next_renew_at: SystemTime::UNIX_EPOCH,
                 cancellation: CancellationToken::new(),

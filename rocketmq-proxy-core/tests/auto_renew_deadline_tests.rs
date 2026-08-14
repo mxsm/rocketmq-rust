@@ -17,6 +17,7 @@ use std::time::Duration;
 use rocketmq_proxy_core::ClientSessionRegistry;
 use rocketmq_proxy_core::ReceiptHandleRegistration;
 use rocketmq_proxy_core::ResourceIdentity;
+use rocketmq_proxy_core::SettingsBackoffPolicy;
 
 fn registration(invisible_duration: Duration) -> ReceiptHandleRegistration {
     ReceiptHandleRegistration {
@@ -26,6 +27,8 @@ fn registration(invisible_duration: Duration) -> ReceiptHandleRegistration {
         message_id: "msg-1".to_owned(),
         receipt_handle: "handle-1".to_owned(),
         invisible_duration,
+        delivery_attempt: 1,
+        retry_backoff: SettingsBackoffPolicy::default(),
     }
 }
 
