@@ -44,6 +44,12 @@ class CapabilityRoute:
     command: str
 
 
+@dataclass(frozen=True)
+class JavaInventoryRoute:
+    id: str
+    command: str
+
+
 MATRIX = (
     MatrixEntry("protocol-no-default", "feature", ("cargo", "check", "-p", "rocketmq-protocol", "--no-default-features")),
     MatrixEntry("protocol-simd", "feature", ("cargo", "test", "-p", "rocketmq-protocol", "--features", "simd")),
@@ -237,6 +243,14 @@ def capability_routes() -> tuple[CapabilityRoute, ...]:
     return tuple(sorted(routes, key=lambda route: (route.capability_id, route.test_id)))
 
 
+def java_inventory_route() -> JavaInventoryRoute:
+    """Return the portable regeneration command for the Java 5.5 denominator."""
+    return JavaInventoryRoute(
+        "java-55-core-inventory",
+        "python scripts/generate_java_55_inventory.py --java-root <java-root> --check",
+    )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--group", action="append", choices=("feature", "wire", "storage"))
@@ -259,6 +273,8 @@ def main() -> int:
             print(f"{entry.id}\t{entry.group}\t{' '.join(entry.command)}")
         for route in capability_routes():
             print(f"{route.capability_id}\tcapability\t{route.test_id}\t{route.command}")
+        route = java_inventory_route()
+        print(f"{route.id}\tinventory\t{route.command}")
         return 0
 
     results = []
