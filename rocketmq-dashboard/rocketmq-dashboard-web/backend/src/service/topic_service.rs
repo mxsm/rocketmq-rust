@@ -40,9 +40,69 @@ pub async fn create_or_update_topic(
     state: &AppState,
     request: TopicMutationRequest,
 ) -> Result<MutationResult, DashboardError> {
+    let _mutation_guard = state.topic_mutation_lock.lock().await;
     state.admin_facade().create_or_update_topic(request).await
 }
 
+pub async fn create_topic(state: &AppState, request: TopicMutationRequest) -> Result<MutationResult, DashboardError> {
+    let _mutation_guard = state.topic_mutation_lock.lock().await;
+    let topics = state.admin_facade().list_topics().await?;
+    ensure_topic_does_not_exist(&topics, &request.topic)?;
+    state.admin_facade().create_or_update_topic(request).await
+}
+
+fn ensure_topic_does_not_exist(topics: &TopicListView, topic: &str) -> Result<(), DashboardError> {
+    if topics.items.iter().any(|item| item.topic == topic) {
+        return Err(DashboardError::Validation(format!("Topic `{topic}` already exists")));
+    }
+    Ok(())
+}
+
 pub async fn delete_topic(state: &AppState, topic: &str) -> Result<MutationResult, DashboardError> {
+    let _mutation_guard = state.topic_mutation_lock.lock().await;
     state.admin_facade().delete_topic(topic).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ensure_topic_does_not_exist;
+    use crate::error::DashboardError;
+    use crate::model::TopicInfo;
+    use crate::model::TopicListView;
+
+    fn topic(name: &str) -> TopicInfo {
+        TopicInfo {
+            topic: name.to_string(),
+            broker_name: Some("broker-a".to_string()),
+            read_queue_count: 8,
+            write_queue_count: 8,
+            perm: 6,
+            category: "NORMAL".to_string(),
+        }
+    }
+
+    #[test]
+    fn create_only_guard_rejects_an_existing_topic() {
+        let topics = TopicListView {
+            items: vec![topic("orders")],
+            total: 1,
+        };
+
+        let error = ensure_topic_does_not_exist(&topics, "orders").expect_err("existing topic must be rejected");
+
+        assert!(matches!(
+            error,
+            DashboardError::Validation(message) if message == "Topic `orders` already exists"
+        ));
+    }
+
+    #[test]
+    fn create_only_guard_allows_a_new_case_sensitive_topic_name() {
+        let topics = TopicListView {
+            items: vec![topic("orders")],
+            total: 1,
+        };
+
+        ensure_topic_does_not_exist(&topics, "Orders").expect("RocketMQ topic names are case-sensitive");
+    }
 }

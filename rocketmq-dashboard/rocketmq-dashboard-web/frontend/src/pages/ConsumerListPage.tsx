@@ -1,418 +1,251 @@
-import { Activity, FileText, Plus, Power, RefreshCw, Search, Settings2, Trash2, Users } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { Activity, ListRestart, MoreHorizontal, RotateCcw, Users } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { consumerApi } from '../api/consumer_api';
-import { configApi } from '../api/config_api';
-import ConfirmDialog from '../components/ConfirmDialog';
-import ConsumerInspectorDrawer, { type ConsumerInspectorTab } from '../components/ConsumerInspectorDrawer';
-import ConsumerMutationDialog from '../components/ConsumerMutationDialog';
-import EmptyState from '../components/EmptyState';
+import AppDataTable, { type AppDataTableColumn } from '../components/AppDataTable';
+import EntitySheet from '../components/EntitySheet';
 import ErrorState from '../components/ErrorState';
 import LoadingState from '../components/LoadingState';
+import MetricCard from '../components/MetricCard';
 import PageHeader from '../components/PageHeader';
-import SelectMenu from '../components/SelectMenu';
+import QueryToolbar from '../components/QueryToolbar';
+import RefreshButton from '../components/RefreshButton';
 import StatusBadge from '../components/StatusBadge';
+import { Button } from '../components/ui/Button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger
+} from '../components/ui/DropdownMenu';
 import type { ConsumerGroupInfo, ConsumerListView } from '../types/consumer';
-import type { DashboardConfigView } from '../types/config';
+import ConsumerDetailContent from './consumers/ConsumerDetailContent';
+import {
+  filterConsumers,
+  getConsumerMetrics,
+  normalizeConsumerValue,
+  type ConsumerLagFilter
+} from './consumers/consumer-model';
 
-const groupTypeFilters = [
-  { key: 'normal', label: 'NORMAL', defaultChecked: true },
-  { key: 'fifo', label: 'FIFO', defaultChecked: false },
-  { key: 'system', label: 'SYSTEM', defaultChecked: false }
-] as const;
-
-type GroupTypeKey = (typeof groupTypeFilters)[number]['key'];
-type GroupTypeFilterState = Record<GroupTypeKey, boolean>;
-
-const pageSize = 10;
-
-function defaultFilters(): GroupTypeFilterState {
-  return Object.fromEntries(groupTypeFilters.map((item) => [item.key, item.defaultChecked])) as GroupTypeFilterState;
-}
+const PAGE_SIZE = 10;
 
 export default function ConsumerListPage() {
   const [data, setData] = useState<ConsumerListView | null>(null);
-  const [config, setConfig] = useState<DashboardConfigView | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [groupQuery, setGroupQuery] = useState('');
-  const [filters, setFilters] = useState<GroupTypeFilterState>(() => defaultFilters());
-  const [selectedProxy, setSelectedProxy] = useState('');
-  const [proxyEnabled, setProxyEnabled] = useState(false);
-  const [mutationOpen, setMutationOpen] = useState(false);
-  const [inspectorConsumer, setInspectorConsumer] = useState<ConsumerGroupInfo | null>(null);
-  const [inspectorTab, setInspectorTab] = useState<ConsumerInspectorTab>('client');
+  const [query, setQuery] = useState('');
+  const [consumeType, setConsumeType] = useState('all');
+  const [messageModel, setMessageModel] = useState('all');
+  const [lag, setLag] = useState<ConsumerLagFilter>('all');
   const [page, setPage] = useState(1);
-  const [lastLoadedAt, setLastLoadedAt] = useState('');
+  const [selectedConsumer, setSelectedConsumer] = useState<ConsumerGroupInfo | null>(null);
+  const [detailTab, setDetailTab] = useState<'overview' | 'progress' | 'reset'>('overview');
+  const detailTriggerRef = useRef<HTMLElement | null>(null);
+  const actionTriggerRefs = useRef(new Map<string, HTMLButtonElement>());
 
-  const load = () => {
-    setLoading(true);
+  const load = async () => {
+    if (data) setRefreshing(true);
+    else setLoading(true);
     setError(null);
-    Promise.all([consumerApi.list(), configApi.getConfig().catch(() => null)])
-      .then(([consumerData, configData]) => {
-        setData(consumerData);
-        setConfig(configData);
-        const currentProxy = configData?.currentProxyAddr ?? configData?.proxyAddrList[0] ?? '';
-        setSelectedProxy(currentProxy);
-        setProxyEnabled(Boolean(configData?.currentProxyAddr));
-        setLastLoadedAt(formatDateTime(new Date()));
-      })
-      .catch((requestError: Error) => setError(requestError.message))
-      .finally(() => setLoading(false));
+    try {
+      setData(await consumerApi.list());
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : String(requestError));
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
   };
 
   useEffect(() => {
-    load();
+    void load();
   }, []);
 
-  const filteredConsumers = useMemo(() => {
-    const query = groupQuery.trim().toLowerCase();
-    const enabledTypes = new Set(
-      Object.entries(filters)
-        .filter(([, enabled]) => enabled)
-        .map(([key]) => key)
-    );
-    return (data?.items ?? []).filter((consumer) => {
-      const matchesQuery = !query || consumer.group.toLowerCase().includes(query);
-      const matchesType = enabledTypes.size === 0 || enabledTypes.has(inferGroupType(consumer));
-      return matchesQuery && matchesType;
-    });
-  }, [data?.items, filters, groupQuery]);
-
-  const counts = useMemo(() => {
-    const items = data?.items ?? [];
-    const system = items.filter(isSystemGroup).length;
-    const clients = items.reduce((sum, item) => sum + item.clientCount, 0);
-    const delay = items.reduce((sum, item) => sum + item.diffTotal, 0);
-    return {
-      total: items.length,
-      visible: filteredConsumers.length,
-      system,
-      application: Math.max(0, items.length - system),
-      clients,
-      delay
-    };
-  }, [data?.items, filteredConsumers.length]);
-
-  const pageCount = Math.max(1, Math.ceil(filteredConsumers.length / pageSize));
-  const currentPage = Math.min(page, pageCount);
-  const visibleConsumers = useMemo(
-    () => filteredConsumers.slice((currentPage - 1) * pageSize, currentPage * pageSize),
-    [currentPage, filteredConsumers]
+  const consumers = data?.items ?? [];
+  const metrics = useMemo(() => getConsumerMetrics(consumers), [consumers]);
+  const consumeTypes = useMemo(
+    () => Array.from(new Set(consumers.map((consumer) => normalizeConsumerValue(consumer.consumeType)))).sort(),
+    [consumers]
   );
+  const messageModels = useMemo(
+    () => Array.from(new Set(consumers.map((consumer) => normalizeConsumerValue(consumer.messageModel)))).sort(),
+    [consumers]
+  );
+  const filteredConsumers = useMemo(
+    () => filterConsumers(consumers, { query, consumeType, messageModel, lag }),
+    [consumeType, consumers, lag, messageModel, query]
+  );
+  const pageCount = Math.max(1, Math.ceil(filteredConsumers.length / PAGE_SIZE));
+  const currentPage = Math.min(page, pageCount);
+  const visibleConsumers = filteredConsumers.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
 
-  useEffect(() => {
+  const updateFilter = <T,>(setter: (value: T) => void) => (value: T) => {
+    setter(value);
     setPage(1);
-  }, [filters, groupQuery]);
-
-  const openInspector = (consumer: ConsumerGroupInfo, tab: ConsumerInspectorTab) => {
-    setInspectorConsumer(consumer);
-    setInspectorTab(tab);
   };
 
-  const refreshGroup = (group: string) => {
-    consumerApi
-      .progress(group)
-      .then((progress) => {
-        setNotice(`Consumer ${group} refreshed. ${progress.queues.length} queue(s), lag ${progress.diffTotal}.`);
-        load();
-      })
-      .catch((requestError: Error) => setError(requestError.message));
+  const openDetails = (
+    consumer: ConsumerGroupInfo,
+    origin?: HTMLElement,
+    tab: 'overview' | 'progress' | 'reset' = 'overview'
+  ) => {
+    if (origin) detailTriggerRef.current = origin;
+    setDetailTab(tab);
+    setSelectedConsumer(consumer);
   };
 
-  const switchProxy = (enabled: boolean) => {
-    setProxyEnabled(enabled);
-    if (!enabled) {
-      setNotice('Proxy disabled for Consumer page context.');
-      return;
+  const columns: AppDataTableColumn<ConsumerGroupInfo>[] = [
+    {
+      id: 'group',
+      header: 'Consumer group',
+      width: '280px',
+      cell: (consumer) => (
+        <div className="entity-name-cell">
+          <strong>{consumer.group}</strong>
+          <Link to={`/consumers/${encodeURIComponent(consumer.group)}`}>Full page</Link>
+        </div>
+      )
+    },
+    {
+      id: 'consumeType',
+      header: 'Consume type',
+      width: '150px',
+      cell: (consumer) => <StatusBadge status={normalizeConsumerValue(consumer.consumeType)} tone="info" />
+    },
+    {
+      id: 'messageModel',
+      header: 'Message model',
+      width: '160px',
+      cell: (consumer) => <StatusBadge status={normalizeConsumerValue(consumer.messageModel)} tone="success" />
+    },
+    { id: 'clients', header: 'Clients', width: '90px', cell: (consumer) => consumer.clientCount },
+    {
+      id: 'lag',
+      header: 'Total lag',
+      width: '120px',
+      cell: (consumer) => <StatusBadge status={String(consumer.diffTotal)} tone={consumer.diffTotal > 0 ? 'warning' : 'success'} />
+    },
+    {
+      id: 'actions',
+      header: 'Actions',
+      width: '88px',
+      align: 'right',
+      cell: (consumer) => (
+        <DropdownMenu modal={false}>
+          <DropdownMenuTrigger asChild>
+            <Button
+              ref={(node) => {
+                if (node) actionTriggerRefs.current.set(consumer.group, node);
+                else actionTriggerRefs.current.delete(consumer.group);
+              }}
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-label={`Actions for ${consumer.group}`}
+            >
+              <MoreHorizontal size={16} aria-hidden="true" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onSelect={() => openDetails(consumer, actionTriggerRefs.current.get(consumer.group), 'overview')}>
+              <Activity size={15} aria-hidden="true" /> Inspect group
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => openDetails(consumer, actionTriggerRefs.current.get(consumer.group), 'progress')}>
+              <ListRestart size={15} aria-hidden="true" /> View progress
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => openDetails(consumer, actionTriggerRefs.current.get(consumer.group), 'reset')}>
+              <RotateCcw size={15} aria-hidden="true" /> Reset offset
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )
     }
-    if (!selectedProxy) {
-      setNotice('No proxy endpoint configured. Add a proxy endpoint in Config first.');
-      return;
-    }
-    configApi
-      .switchProxy({ address: selectedProxy })
-      .then((result) => {
-        setConfig(result.config);
-        setNotice(`Proxy switched to ${selectedProxy}.`);
-      })
-      .catch((requestError: Error) => {
-        setProxyEnabled(false);
-        setError(requestError.message);
-      });
-  };
-
-  const deleteGroupPending = (group: string) => {
-    setNotice(`Delete ${group} is pending Rust backend support for Java /consumer/deleteSubGroup.do.`);
-  };
+  ];
 
   if (loading) return <LoadingState label="Loading consumers" />;
-  if (error) return <ErrorState message={error} onRetry={load} />;
+  if (error) return <ErrorState message={error} onRetry={() => void load()} />;
 
   return (
-    <>
+    <div className="entity-workspace consumer-workspace">
       <PageHeader
-        title="Consumer"
-        description="Java Dashboard consumer parity with group filters, proxy context, connection detail, consume progress, config, refresh, and guarded deletion flows."
-        actions={
-          <div className="action-row">
-            <button type="button" className="button" onClick={() => setMutationOpen(true)}>
-              <Plus size={15} aria-hidden="true" /> Add / Update
-            </button>
-            <button type="button" className="button button-secondary" onClick={load}>
-              <RefreshCw size={15} aria-hidden="true" /> Refresh
-            </button>
-          </div>
-        }
+        title="Consumer groups"
+        description="Monitor group identity, connected clients, queue lag, and protected offset maintenance from current API data."
+        actions={<RefreshButton refreshing={refreshing} onRefresh={() => void load()} />}
       />
 
-      {notice ? <div className="notice notice-warning">{notice}</div> : null}
+      <div className="metric-grid entity-metrics">
+        <MetricCard label="Consumer groups" value={metrics.groups} detail="Visible API inventory" icon={<Users size={18} />} />
+        <MetricCard label="Connected clients" value={metrics.connectedClients} detail="Across all groups" icon={<Activity size={18} />} />
+        <MetricCard label="Total lag" value={metrics.totalLag} detail="Aggregate diffTotal" icon={<RotateCcw size={18} />} />
+        <MetricCard label="Lagging groups" value={metrics.laggingGroups} detail="Groups with lag above zero" icon={<ListRestart size={18} />} />
+      </div>
 
-      <section className="consumer-filter-panel">
-        <div className="consumer-filter-left">
-          <label className="field consumer-filter-search">
-            SubscriptionGroup
-            <input value={groupQuery} placeholder="Input subscription group" onChange={(event) => setGroupQuery(event.target.value)} />
+      <section className="entity-table-card">
+        <QueryToolbar
+          searchValue={query}
+          searchPlaceholder="Filter consumer groups"
+          onSearchChange={updateFilter(setQuery)}
+          onReset={() => {
+            setQuery('');
+            setConsumeType('all');
+            setMessageModel('all');
+            setLag('all');
+            setPage(1);
+          }}
+        >
+          <label className="native-filter-field">
+            <span>Consume type</span>
+            <select aria-label="Consume type filter" value={consumeType} onChange={(event) => updateFilter(setConsumeType)(event.target.value)}>
+              <option value="all">All consume types</option>
+              {consumeTypes.map((value) => <option key={value} value={value}>{value}</option>)}
+            </select>
           </label>
-          <div className="topic-type-filters" aria-label="Consumer group type filters">
-            {groupTypeFilters.map((filter) => (
-              <label className="compact-check topic-type-check" key={filter.key}>
-                <input
-                  type="checkbox"
-                  checked={filters[filter.key]}
-                  onChange={(event) => setFilters((value) => ({ ...value, [filter.key]: event.target.checked }))}
-                />
-                {filter.label}
-              </label>
-            ))}
-          </div>
-        </div>
-        <div className="consumer-filter-proxy">
-          <label className="consumer-proxy-field">
-            Select Proxy
-            <SelectMenu
-              value={selectedProxy}
-              options={proxyOptions(config)}
-              onChange={setSelectedProxy}
-              ariaLabel="Select proxy endpoint"
-              className="consumer-proxy-select"
-            />
+          <label className="native-filter-field">
+            <span>Message model</span>
+            <select aria-label="Message model filter" value={messageModel} onChange={(event) => updateFilter(setMessageModel)(event.target.value)}>
+              <option value="all">All message models</option>
+              {messageModels.map((value) => <option key={value} value={value}>{value}</option>)}
+            </select>
           </label>
-          <label className="consumer-proxy-toggle">
-            Enable Proxy
-            <button type="button" className={`proxy-toggle ${proxyEnabled ? 'proxy-toggle-on' : ''}`} onClick={() => switchProxy(!proxyEnabled)}>
-              <Power size={13} aria-hidden="true" />
-              <span />
-              {proxyEnabled ? 'Enabled' : 'Disabled'}
-            </button>
+          <label className="native-filter-field">
+            <span>Lag</span>
+            <select aria-label="Lag filter" value={lag} onChange={(event) => updateFilter(setLag)(event.target.value as ConsumerLagFilter)}>
+              <option value="all">Any lag</option>
+              <option value="lagging">Lagging</option>
+              <option value="clear">No lag</option>
+            </select>
           </label>
-        </div>
+        </QueryToolbar>
+
+        <AppDataTable
+          ariaLabel="Consumer group inventory"
+          rows={visibleConsumers}
+          columns={columns}
+          getRowId={(consumer) => consumer.group}
+          page={currentPage}
+          pageSize={PAGE_SIZE}
+          total={filteredConsumers.length}
+          onPageChange={setPage}
+          onRowActivate={openDetails}
+          emptyTitle="No consumer groups match"
+          emptyDetail="Adjust the group, type, model, or lag filters."
+        />
       </section>
 
-      <section className="consumer-metric-grid">
-        <div>
-          <span>Groups</span>
-          <strong>{counts.total}</strong>
-          <small>{counts.visible} visible</small>
-        </div>
-        <div>
-          <span>Online clients</span>
-          <strong>{counts.clients}</strong>
-          <small>from consumer connection summary</small>
-        </div>
-        <div>
-          <span>Total delay</span>
-          <strong>{counts.delay}</strong>
-          <small>diffTotal aggregate</small>
-        </div>
-        <div>
-          <span>Proxy</span>
-          <strong>{proxyEnabled ? 'Enabled' : 'Disabled'}</strong>
-          <small>{selectedProxy || 'no endpoint selected'}</small>
-        </div>
-      </section>
-
-      <section className="consumer-list-panel">
-        <div className="topic-list-toolbar">
-          <div>
-            <h2>Consumer inventory</h2>
-            <p>
-              {counts.visible} visible / {counts.total} total
-            </p>
-          </div>
-          <div className="topic-list-summary">
-            <StatusBadge status={`${counts.application} normal`} tone="success" />
-            <StatusBadge status={`${counts.system} system`} />
-            <button type="button" className="icon-button" title="Refresh consumers" onClick={load}>
-              <RefreshCw size={15} aria-hidden="true" />
-            </button>
-          </div>
-        </div>
-        <div className="topic-list-search">
-          <Search size={16} aria-hidden="true" />
-          <input value={groupQuery} placeholder="Search within filtered consumer groups" onChange={(event) => setGroupQuery(event.target.value)} />
-        </div>
-        <div className="consumer-inventory-scroll">
-          <table className="consumer-inventory-table">
-            <thead>
-              <tr>
-                <th>SubscriptionGroup</th>
-                <th>Quantity</th>
-                <th>Version</th>
-                <th>Type</th>
-                <th>Mode</th>
-                <th>TPS</th>
-                <th>Delay</th>
-                <th>Update Time</th>
-                <th>Operation</th>
-              </tr>
-            </thead>
-            <tbody>
-              {visibleConsumers.map((row) => (
-                <tr className={isSystemGroup(row) ? 'consumer-row-system' : 'consumer-row-application'} key={row.group}>
-                  <td>
-                    <div className="consumer-name-cell">
-                      <code>{row.group}</code>
-                      <span>{isSystemGroup(row) ? 'system consumer group' : `${row.clientCount} active clients`}</span>
-                    </div>
-                  </td>
-                  <td>{row.clientCount}</td>
-                  <td>
-                    <span className="muted-cell">-</span>
-                  </td>
-                  <td>
-                    <StatusBadge status={normalizeConsumerType(row.consumeType)} />
-                  </td>
-                  <td>
-                    <StatusBadge status={normalizeMessageModel(row.messageModel)} tone="success" />
-                  </td>
-                  <td>0</td>
-                  <td>
-                    <StatusBadge status={String(row.diffTotal)} tone={row.diffTotal > 0 ? 'warning' : 'success'} />
-                  </td>
-                  <td>{lastLoadedAt}</td>
-                  <td>{renderConsumerActions(row, openInspector, refreshGroup, deleteGroupPending)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        {visibleConsumers.length === 0 ? <EmptyState title="No consumer groups match the current filters" /> : null}
-        <div className="topic-list-footer">
-          <span>
-            {filteredConsumers.length} rows / page {currentPage} of {pageCount}
-          </span>
-          <div className="pagination">
-            <button type="button" className="button button-secondary" disabled={currentPage <= 1} onClick={() => setPage(currentPage - 1)}>
-              Previous
-            </button>
-            <button type="button" className="button button-secondary" disabled={currentPage >= pageCount} onClick={() => setPage(currentPage + 1)}>
-              Next
-            </button>
-          </div>
-        </div>
-      </section>
-
-      <ConsumerMutationDialog open={mutationOpen} onOpenChange={setMutationOpen} />
-      <ConsumerInspectorDrawer
-        open={inspectorConsumer !== null}
-        consumer={inspectorConsumer}
-        initialTab={inspectorTab}
-        onOpenChange={(open) => {
-          if (!open) setInspectorConsumer(null);
-        }}
-        onRefreshGroup={refreshGroup}
-      />
-    </>
-  );
-}
-
-function proxyOptions(config: DashboardConfigView | null) {
-  const proxies = config?.proxyAddrList ?? [];
-  if (proxies.length === 0) {
-    return [{ value: '', label: 'No proxy configured', disabled: true }];
-  }
-  return proxies.map((address) => ({ value: address, label: address }));
-}
-
-function renderConsumerActions(
-  row: ConsumerGroupInfo,
-  openInspector: (consumer: ConsumerGroupInfo, tab: ConsumerInspectorTab) => void,
-  refreshGroup: (group: string) => void,
-  deleteGroup: (group: string) => void
-) {
-  return (
-    <div className="consumer-action-grid">
-      <button type="button" className="button button-secondary consumer-action-button" onClick={() => openInspector(row, 'client')}>
-        <Users size={14} aria-hidden="true" /> CLIENT
-      </button>
-      <button type="button" className="button button-secondary consumer-action-button" onClick={() => openInspector(row, 'detail')}>
-        <FileText size={14} aria-hidden="true" /> CONSUME DETAIL
-      </button>
-      <button type="button" className="button consumer-action-button" onClick={() => openInspector(row, 'config')}>
-        <Settings2 size={14} aria-hidden="true" /> Config
-      </button>
-      <button type="button" className="button button-secondary consumer-action-button" onClick={() => refreshGroup(row.group)}>
-        <Activity size={14} aria-hidden="true" /> REFRESH
-      </button>
-      <ConfirmDialog
-        title="Delete consumer group"
-        description={`Delete consumer group ${row.group}? This maps to Java /consumer/deleteSubGroup.do and changes broker subscription metadata.`}
-        confirmLabel="Delete"
-        onConfirm={() => deleteGroup(row.group)}
+      <EntitySheet
+        open={selectedConsumer !== null}
+        title={selectedConsumer?.group ?? 'Consumer details'}
+        description={selectedConsumer
+          ? `${normalizeConsumerValue(selectedConsumer.consumeType)} · ${normalizeConsumerValue(selectedConsumer.messageModel)}`
+          : undefined}
+        restoreFocusRef={detailTriggerRef}
+        onOpenChange={(open) => { if (!open) setSelectedConsumer(null); }}
       >
-        <button type="button" className="button button-danger consumer-action-button">
-          <Trash2 size={14} aria-hidden="true" /> Delete
-        </button>
-      </ConfirmDialog>
+        {selectedConsumer ? (
+          <ConsumerDetailContent group={selectedConsumer.group} consumer={selectedConsumer} initialTab={detailTab} />
+        ) : null}
+      </EntitySheet>
     </div>
   );
-}
-
-function inferGroupType(consumer: ConsumerGroupInfo): GroupTypeKey {
-  if (isSystemGroup(consumer)) return 'system';
-  if (consumer.group.toUpperCase().includes('FIFO') || consumer.consumeType.toUpperCase().includes('FIFO')) return 'fifo';
-  return 'normal';
-}
-
-function isSystemGroup(consumer: ConsumerGroupInfo) {
-  const group = consumer.group;
-  const upperGroup = group.toUpperCase();
-  return (
-    group.startsWith('%SYS%') ||
-    upperGroup.startsWith('RMQ_SYS') ||
-    upperGroup.startsWith('CID_SYS') ||
-    upperGroup.startsWith('CID_RMQ_SYS') ||
-    upperGroup.startsWith('CID_ONS') ||
-    upperGroup.includes('ONSAPI') ||
-    upperGroup.includes('ONS-HTTP-PROXY') ||
-    upperGroup.includes('ONS_HTTP_PROXY') ||
-    upperGroup.includes('FILTERSRV') ||
-    upperGroup.startsWith('SELF_TEST') ||
-    upperGroup === 'TOOLS_CONSUMER_GROUP' ||
-    upperGroup === 'TOOLS_CONSUMER' ||
-    upperGroup === 'FILTERSRV_CONSUMER_GROUP' ||
-    upperGroup === 'FILTERSRV_CONSUMER' ||
-    upperGroup === 'SELF_TEST_CONSUMER_GROUP' ||
-    upperGroup === 'SELF_TEST_C_GROUP' ||
-    upperGroup === 'ONS_HTTP_PROXY_GROUP' ||
-    upperGroup === 'CID_ONSAPI_PULL_GROUP' ||
-    upperGroup === 'CID_ONSAPI_PERMISSION_GROUP' ||
-    upperGroup === 'CID_ONSAPI_OWNER_GROUP' ||
-    upperGroup === 'CID_SYS_RMQ_TRANS' ||
-    upperGroup === 'CID_DEFAULTHEARTBEATSYNCERTOPIC'
-  );
-}
-
-function normalizeConsumerType(value: string) {
-  return value.replace(/^CONSUME_/, '') || 'UNKNOWN';
-}
-
-function normalizeMessageModel(value: string) {
-  return value.replace(/^MESSAGE_MODEL_/, '') || 'UNKNOWN';
-}
-
-function formatDateTime(date: Date) {
-  const pad = (value: number) => String(value).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }

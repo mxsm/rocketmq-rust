@@ -41,7 +41,7 @@ pub async fn create_topic(
     Json(request): Json<TopicMutationRequest>,
 ) -> Result<Json<ApiResponse<MutationResult>>, DashboardError> {
     Ok(Json(ApiResponse::success(
-        service::create_or_update_topic(&state, request).await?,
+        service::create_topic(&state, request).await?,
     )))
 }
 
