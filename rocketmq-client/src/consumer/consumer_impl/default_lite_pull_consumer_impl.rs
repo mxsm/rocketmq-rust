@@ -315,6 +315,53 @@ fn lite_pull_request_sys_flag() -> i32 {
     PullSysFlag::build_sys_flag_with_lite_pull(false, true, true, false, true) as i32
 }
 
+fn effective_pull_rpc_timeout(sys_flag: i32, config: &LitePullConsumerConfig) -> u64 {
+    if PullSysFlag::has_suspend_flag(sys_flag as u32) {
+        config.consumer_timeout_millis_when_suspend
+    } else {
+        config.consumer_pull_timeout_millis
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct LitePullSuspendTimeoutProbe {
+    pub header_suspend_timeout_millis: u64,
+    pub invoke_timeout_millis: u64,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub fn run_lite_pull_suspend_timeout_probe(
+    suspended: bool,
+    broker_suspend_timeout_millis: u64,
+    suspend_rpc_timeout_millis: u64,
+    ordinary_rpc_timeout_millis: u64,
+) -> LitePullSuspendTimeoutProbe {
+    struct FakePullAdapter;
+
+    impl FakePullAdapter {
+        fn capture(header_suspend_timeout_millis: u64, invoke_timeout_millis: u64) -> LitePullSuspendTimeoutProbe {
+            LitePullSuspendTimeoutProbe {
+                header_suspend_timeout_millis,
+                invoke_timeout_millis,
+            }
+        }
+    }
+
+    let config = LitePullConsumerConfig {
+        broker_suspend_max_time_millis: broker_suspend_timeout_millis,
+        consumer_timeout_millis_when_suspend: suspend_rpc_timeout_millis,
+        consumer_pull_timeout_millis: ordinary_rpc_timeout_millis,
+        ..Default::default()
+    };
+    let sys_flag = PullSysFlag::build_sys_flag_with_lite_pull(false, suspended, true, false, true) as i32;
+
+    FakePullAdapter::capture(
+        config.broker_suspend_max_time_millis,
+        effective_pull_rpc_timeout(sys_flag, &config),
+    )
+}
+
 fn lite_pull_request_sub_version(subscription_data: &SubscriptionData) -> i64 {
     if ExpressionType::is_tag_type(Some(subscription_data.expression_type.as_str())) {
         0
@@ -1681,6 +1728,10 @@ impl DefaultLitePullConsumerImpl {
         let subscription_data = self.subscription_data_for_queue(mq).await?;
         let sub_version = lite_pull_request_sub_version(&subscription_data);
         let sys_flag = lite_pull_request_sys_flag();
+        let pull_rpc_timeout_millis = effective_pull_rpc_timeout(sys_flag, &consumer_config);
+        let pull_deadline = tokio::time::Instant::now()
+            .checked_add(Duration::from_millis(pull_rpc_timeout_millis))
+            .ok_or_else(|| crate::mq_client_err!("Lite pull timeout exceeds the supported deadline range"))?;
 
         let pull_api_wrapper = self
             .component_snapshot(&self.pull_api_wrapper)
@@ -1688,23 +1739,27 @@ impl DefaultLitePullConsumerImpl {
         let Some(pull_permit) = self.acquire_pull_permit(mq, assignment).await? else {
             return Ok(0);
         };
-        let mut pull_result = pull_api_wrapper
-            .pull_kernel_impl(
-                mq,
-                subscription_data.sub_string.clone(),
-                subscription_data.expression_type.clone(),
-                sub_version,
-                pull_offset,
-                consumer_config.pull_batch_size,
-                i32::MAX,
-                sys_flag,
-                0,
-                consumer_config.broker_suspend_max_time_millis,
-                consumer_config.consumer_pull_timeout_millis,
-                CommunicationMode::Sync,
-                NoopPullCallback,
-            )
-            .await?
+        let pull_request = pull_api_wrapper.pull_kernel_impl(
+            mq,
+            subscription_data.sub_string.clone(),
+            subscription_data.expression_type.clone(),
+            sub_version,
+            pull_offset,
+            consumer_config.pull_batch_size,
+            i32::MAX,
+            sys_flag,
+            0,
+            consumer_config.broker_suspend_max_time_millis,
+            pull_rpc_timeout_millis,
+            CommunicationMode::Sync,
+            NoopPullCallback,
+        );
+        let mut pull_result = tokio::time::timeout_at(pull_deadline, pull_request)
+            .await
+            .map_err(|_| RocketMQError::Timeout {
+                operation: "lite pull request",
+                timeout_ms: pull_rpc_timeout_millis,
+            })??
             .ok_or_else(|| crate::mq_client_err!("Synchronous lite pull returned no result"))?;
         drop(pull_permit);
 
@@ -3975,6 +4030,21 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(lite_pull_request_sub_version(&sql_subscription), 456);
+    }
+
+    #[test]
+    fn lite_pull_rpc_timeout_follows_the_suspend_flag() {
+        let config = LitePullConsumerConfig {
+            broker_suspend_max_time_millis: 20_000,
+            consumer_timeout_millis_when_suspend: 30_000,
+            consumer_pull_timeout_millis: 10_000,
+            ..Default::default()
+        };
+        let suspended = PullSysFlag::build_sys_flag_with_lite_pull(false, true, true, false, true) as i32;
+        let ordinary = PullSysFlag::build_sys_flag_with_lite_pull(false, false, true, false, true) as i32;
+
+        assert_eq!(effective_pull_rpc_timeout(suspended, &config), 30_000);
+        assert_eq!(effective_pull_rpc_timeout(ordinary, &config), 10_000);
     }
 
     #[tokio::test]

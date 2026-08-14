@@ -28,8 +28,8 @@ pub use crate::consumer::consumer_impl::consume_message_pop_orderly_service::{
 };
 pub use crate::consumer::consumer_impl::default_lite_pull_consumer_impl::{
     run_lite_pull_assignment_registry_probe, run_lite_pull_concurrency_contract_probe,
-    run_lite_pull_task_lifecycle_probe, LitePullAssignmentRegistryProbe, LitePullConcurrencyContractProbe,
-    LitePullTaskLifecycleProbe,
+    run_lite_pull_suspend_timeout_probe, run_lite_pull_task_lifecycle_probe, LitePullAssignmentRegistryProbe,
+    LitePullConcurrencyContractProbe, LitePullSuspendTimeoutProbe, LitePullTaskLifecycleProbe,
 };
 pub use crate::consumer::consumer_impl::process_queue::{
     run_process_queue_has_temp_message_probe, run_process_queue_max_span_only_probe, run_process_queue_put_probe,
