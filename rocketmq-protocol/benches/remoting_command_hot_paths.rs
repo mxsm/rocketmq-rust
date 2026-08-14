@@ -327,6 +327,16 @@ fn write_allocation_evidence() {
     };
     let mut cases = Vec::new();
     cases.push(allocation_case(
+        "construct-typed-get-route",
+        || typed_command(SerializeType::ROCKETMQ),
+        |_| (0, None),
+    ));
+    cases.push(allocation_case(
+        "clone-typed-get-route",
+        || typed_command(SerializeType::ROCKETMQ).clone(),
+        |_| (0, None),
+    ));
+    cases.push(allocation_case(
         "construct-json-ext-32-body-4096",
         || command(SerializeType::JSON, 32, None, 4096),
         |command| (command.body().map_or(0, Bytes::len), None),
