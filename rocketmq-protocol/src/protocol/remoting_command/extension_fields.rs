@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::fmt;
 use std::sync::Arc;
 use std::sync::OnceLock;
 
@@ -33,6 +34,27 @@ pub(super) enum ExtensionFields {
         fields: JsonHeaderFields,
         materialized: OnceLock<Arc<HeaderMap>>,
     },
+}
+
+impl fmt::Debug for ExtensionFields {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Absent => formatter.write_str("Absent"),
+            Self::Materialized(fields) => write!(formatter, "Materialized(count={})", fields.len()),
+            Self::RocketMqRaw { fields, materialized } => write!(
+                formatter,
+                "RocketMqRaw(count={}, materialized={})",
+                fields.len(),
+                materialized.get().is_some()
+            ),
+            Self::JsonRaw { fields, materialized } => write!(
+                formatter,
+                "JsonRaw(count={}, materialized={})",
+                fields.len(),
+                materialized.get().is_some()
+            ),
+        }
+    }
 }
 
 impl ExtensionFields {
@@ -77,13 +99,19 @@ impl ExtensionFields {
         match self {
             Self::Absent => None,
             Self::Materialized(fields) => Some(fields),
-            Self::RocketMqRaw { fields, .. } => {
-                let fields = fields.materialize();
+            Self::RocketMqRaw { fields, materialized } => {
+                let fields = materialized.take().map_or_else(
+                    || fields.materialize(),
+                    |cached| Arc::try_unwrap(cached).unwrap_or_else(|shared| (*shared).clone()),
+                );
                 *self = Self::Materialized(fields);
                 self.as_map_mut()
             }
-            Self::JsonRaw { fields, .. } => {
-                let fields = fields.materialize();
+            Self::JsonRaw { fields, materialized } => {
+                let fields = materialized.take().map_or_else(
+                    || fields.materialize(),
+                    |cached| Arc::try_unwrap(cached).unwrap_or_else(|shared| (*shared).clone()),
+                );
                 *self = Self::Materialized(fields);
                 self.as_map_mut()
             }
@@ -97,13 +125,19 @@ impl ExtensionFields {
                 *self = Self::Materialized(HeaderMap::new());
                 self.get_or_insert_map()
             }
-            Self::RocketMqRaw { fields, .. } => {
-                let fields = fields.materialize();
+            Self::RocketMqRaw { fields, materialized } => {
+                let fields = materialized.take().map_or_else(
+                    || fields.materialize(),
+                    |cached| Arc::try_unwrap(cached).unwrap_or_else(|shared| (*shared).clone()),
+                );
                 *self = Self::Materialized(fields);
                 self.get_or_insert_map()
             }
-            Self::JsonRaw { fields, .. } => {
-                let fields = fields.materialize();
+            Self::JsonRaw { fields, materialized } => {
+                let fields = materialized.take().map_or_else(
+                    || fields.materialize(),
+                    |cached| Arc::try_unwrap(cached).unwrap_or_else(|shared| (*shared).clone()),
+                );
                 *self = Self::Materialized(fields);
                 self.get_or_insert_map()
             }

@@ -80,6 +80,10 @@ impl BinaryHeaderFields {
         Ok(Self { payload, entry_count })
     }
 
+    pub(crate) const fn len(&self) -> usize {
+        self.entry_count
+    }
+
     /// Materializes the compatibility map. The payload has already been
     /// validated, so iteration uses its immutable representation invariant.
     pub(crate) fn materialize(&self) -> HeaderMap {
