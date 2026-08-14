@@ -51,6 +51,16 @@ pub const REMOTING_VERSION_KEY: &str = "rocketmq.remoting.version";
 
 static REQUEST_ID: std::sync::LazyLock<Arc<AtomicI32>> = std::sync::LazyLock::new(|| Arc::new(AtomicI32::new(0)));
 
+#[cfg(test)]
+std::thread_local! {
+    static REQUEST_ID_GENERATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn request_id_generation_count() -> usize {
+    REQUEST_ID_GENERATIONS.get()
+}
+
 #[inline]
 fn write_json_i32(out: &mut BytesMut, value: i32) {
     let mut buffer = itoa::Buffer::new();
@@ -192,6 +202,8 @@ impl RemotingCommand {
     /// The protocol crate deliberately does not read process environment or configuration files.
     /// Legacy facades resolve those sources and pass the resulting wire values here.
     pub fn with_resolved_defaults(version: i32, serialize_type: SerializeType) -> Self {
+        #[cfg(test)]
+        REQUEST_ID_GENERATIONS.set(REQUEST_ID_GENERATIONS.get() + 1);
         let opaque = REQUEST_ID.fetch_add(1, Ordering::AcqRel);
         RemotingCommand {
             code: 0,
@@ -206,6 +218,31 @@ impl RemotingCommand {
             command_custom_header: None,
             custom_header_to_net: false,
             serialize_type,
+        }
+    }
+
+    pub(crate) fn from_binary_wire_parts(
+        code: i32,
+        language: LanguageCode,
+        version: i32,
+        opaque: i32,
+        flag: i32,
+        remark: Option<CheetahString>,
+        ext_fields: BinaryHeaderFields,
+    ) -> Self {
+        Self {
+            code,
+            language,
+            version,
+            opaque,
+            flag,
+            remark,
+            ext_fields: ExtensionFields::from_rocketmq_raw(ext_fields),
+            body: None,
+            suspended: false,
+            command_custom_header: None,
+            custom_header_to_net: false,
+            serialize_type: SerializeType::ROCKETMQ,
         }
     }
 }
@@ -378,11 +415,6 @@ impl RemotingCommand {
         self
     }
 
-    #[inline]
-    pub(crate) fn set_language_ref(&mut self, language: LanguageCode) {
-        self.language = language;
-    }
-
     pub fn set_version_ref(&mut self, version: i32) {
         self.version = version;
     }
@@ -407,11 +439,6 @@ impl RemotingCommand {
     pub fn set_flag(mut self, flag: i32) -> Self {
         self.flag = flag;
         self
-    }
-
-    #[inline]
-    pub(crate) fn set_flag_ref(&mut self, flag: i32) {
-        self.flag = flag;
     }
 
     #[inline]
@@ -445,14 +472,9 @@ impl RemotingCommand {
 
     #[cfg(test)]
     fn set_binary_ext_fields(mut self, ext_fields: BinaryHeaderFields) -> Self {
-        self.set_binary_ext_fields_ref(ext_fields);
-        self
-    }
-
-    #[inline]
-    pub(crate) fn set_binary_ext_fields_ref(&mut self, ext_fields: BinaryHeaderFields) {
         self.ext_fields = ExtensionFields::from_rocketmq_raw(ext_fields);
         self.custom_header_to_net = false;
+        self
     }
 
     #[inline]

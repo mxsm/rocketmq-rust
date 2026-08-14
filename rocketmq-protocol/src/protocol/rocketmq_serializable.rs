@@ -409,12 +409,11 @@ impl RocketMQSerializable {
             return Err(decoding_error(FIXED_HEADER_LEN, header.len()));
         }
 
-        let mut cmd = RemotingCommand::default();
-        cmd.set_code_ref(i16::from_be_bytes([header[0], header[1]]));
-        cmd.set_language_ref(LanguageCode::from(header[2]));
-        cmd.set_version_ref(i16::from_be_bytes([header[3], header[4]]) as i32);
-        cmd.set_opaque_mut(i32::from_be_bytes([header[5], header[6], header[7], header[8]]));
-        cmd.set_flag_ref(i32::from_be_bytes([header[9], header[10], header[11], header[12]]));
+        let code = i16::from_be_bytes([header[0], header[1]]) as i32;
+        let language = LanguageCode::from(header[2]);
+        let version = i16::from_be_bytes([header[3], header[4]]) as i32;
+        let opaque = i32::from_be_bytes([header[5], header[6], header[7], header[8]]);
+        let flag = i32::from_be_bytes([header[9], header[10], header[11], header[12]]);
 
         let mut cursor = FIXED_HEADER_LEN;
         if header.len() - cursor < LENGTH_FIELD_LEN {
@@ -466,10 +465,10 @@ impl RocketMQSerializable {
             return Err(trailing_header_error(header.len() - cursor));
         }
 
-        let ext = BinaryHeaderFields::new(payload)?;
-        cmd.set_remark_option_mut(remark);
-        cmd.set_binary_ext_fields_ref(ext);
-        Ok(cmd)
+        let ext_fields = BinaryHeaderFields::new(payload)?;
+        Ok(RemotingCommand::from_binary_wire_parts(
+            code, language, version, opaque, flag, remark, ext_fields,
+        ))
     }
 
     /// Optimized map deserialization with capacity hint and better error handling
@@ -730,5 +729,34 @@ mod tests {
         assert_eq!(command.flag(), 1);
         assert_eq!(command.remark().map(CheetahString::as_str), Some("remark"));
         assert_eq!(command.ext_fields().unwrap().get("key").unwrap(), "value");
+    }
+
+    #[test]
+    fn binary_decode_does_not_generate_an_outbound_request_id() {
+        let mut buf = BytesMut::new();
+        buf.put_i16(105);
+        buf.put_u8(LanguageCode::JAVA.get_code());
+        buf.put_i16(321);
+        buf.put_i32(0x0102_0304);
+        buf.put_i32(3);
+        RocketMQSerializable::write_str(&mut buf, false, "wire");
+        buf.put_i32(0);
+        let before = crate::protocol::remoting_command::request_id_generation_count();
+
+        let command = RocketMQSerializable::rocket_mq_protocol_decode_bytes(buf.freeze()).unwrap();
+
+        assert_eq!(
+            crate::protocol::remoting_command::request_id_generation_count(),
+            before,
+            "binary decode must not consume an outbound correlation ID"
+        );
+        assert_eq!(command.code(), 105);
+        assert_eq!(command.language(), LanguageCode::JAVA);
+        assert_eq!(command.version(), 321);
+        assert_eq!(command.opaque(), 0x0102_0304);
+        assert_eq!(command.flag(), 3);
+        assert_eq!(command.remark().map(CheetahString::as_str), Some("wire"));
+        assert!(command.ext_fields().is_some_and(HashMap::is_empty));
+        assert_eq!(command.get_serialize_type(), crate::protocol::SerializeType::ROCKETMQ);
     }
 }
