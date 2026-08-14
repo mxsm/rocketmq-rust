@@ -169,6 +169,14 @@ class PublicApiCompatibilityTests(unittest.TestCase):
         self.assertEqual(len(routes), len({route.test_id for route in routes}))
         self.assertTrue(all(route.command for route in routes))
 
+    def test_java_inventory_route_is_listed_without_a_machine_specific_path(self) -> None:
+        self.assertTrue(hasattr(MATRIX, "java_inventory_route"), "Java inventory route is missing")
+        route = MATRIX.java_inventory_route()
+
+        self.assertEqual("java-55-core-inventory", route.id)
+        self.assertIn("<java-root>", route.command)
+        self.assertNotIn("D:\\", route.command)
+
     def test_evidence_records_current_snapshot_and_approved_breaking_cleanup(self) -> None:
         evidence = EVIDENCE.read_text(encoding="utf-8")
 
