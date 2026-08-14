@@ -1,0 +1,590 @@
+/* Shared operational workspaces */
+.operations-dashboard,
+.cluster-inventory-page,
+.broker-detail-page {
+  display: grid;
+  gap: 16px;
+}
+
+.query-toolbar {
+  display: flex;
+  min-height: 64px;
+  align-items: end;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--card);
+}
+
+.query-search {
+  position: relative;
+  flex: 1 1 280px;
+  min-width: 220px;
+}
+
+.query-search > svg {
+  position: absolute;
+  top: 50%;
+  left: 11px;
+  z-index: 1;
+  color: var(--muted-foreground);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.query-search .ui-input {
+  padding-left: 34px;
+  background: var(--background);
+}
+
+.query-filters,
+.query-actions {
+  display: flex;
+  align-items: end;
+  gap: 10px;
+}
+
+.query-actions {
+  margin-left: auto;
+}
+
+.native-filter-field {
+  display: grid;
+  gap: 5px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.native-filter-field select,
+.dashboard-topic-select,
+.dashboard-date-field {
+  min-height: 36px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--background);
+  color: var(--foreground);
+}
+
+.native-filter-field select,
+.dashboard-topic-select {
+  min-width: 160px;
+  padding: 0 32px 0 10px;
+}
+
+.app-data-table {
+  min-width: 0;
+  background: var(--card);
+}
+
+.app-data-table-scroll {
+  overflow: auto;
+}
+
+.app-data-table table {
+  min-width: 1120px;
+}
+
+.app-data-table th {
+  height: 42px;
+  background: var(--chrome);
+  color: var(--muted-foreground);
+  font-size: 11px;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+}
+
+.app-data-table td {
+  height: 52px;
+}
+
+.app-data-table-row-interactive {
+  cursor: pointer;
+}
+
+.app-data-table-row-interactive:hover td,
+.app-data-table-row-interactive:focus-visible td {
+  background: var(--muted-surface);
+}
+
+.app-data-table-row-interactive:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+.app-data-table-footer {
+  display: flex;
+  min-height: 54px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.app-data-table-pagination {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.entity-sheet {
+  width: min(680px, 100vw) !important;
+  padding: 20px;
+  background: var(--card);
+  box-shadow: -18px 0 40px rgb(0 0 0 / 0.28);
+}
+
+.entity-sheet-header {
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.entity-sheet-body {
+  padding-top: 16px;
+}
+
+/* Dashboard */
+.dashboard-date-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 9px;
+  color: var(--muted-foreground);
+}
+
+.dashboard-date-field input {
+  width: 126px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--foreground);
+  font-size: 12px;
+}
+
+.dashboard-health-rail {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  overflow: hidden;
+}
+
+.health-signal {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 3px 8px;
+  padding: 12px 14px;
+  border-right: 1px solid var(--border);
+}
+
+.health-signal:last-child {
+  border-right: 0;
+}
+
+.health-signal-icon {
+  grid-row: 1 / 3;
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--info);
+  background: var(--chrome);
+}
+
+.health-signal > span:not(.health-signal-icon) {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+.health-signal strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--foreground);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.health-success .health-signal-icon { color: var(--success); }
+.health-warning .health-signal-icon { color: var(--warning); }
+.health-danger .health-signal-icon { color: var(--destructive); }
+
+.dashboard-metrics-flat .metric-card,
+.cluster-metrics .metric-card {
+  box-shadow: none;
+}
+
+.dashboard-metrics-flat .metric-card::before {
+  content: none;
+  background: none;
+}
+
+.dashboard-metrics-flat .metric-icon,
+.cluster-metrics .metric-icon {
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--border);
+  color: var(--primary);
+  background: var(--chrome);
+  box-shadow: none;
+}
+
+.dashboard-metrics-flat .metric-icon::before,
+.dashboard-metrics-flat .metric-icon::after {
+  content: none;
+}
+
+.dashboard-main-grid,
+.dashboard-history-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.08fr) minmax(0, 0.92fr);
+  align-items: start;
+  gap: 16px;
+}
+
+.dashboard-main-grid .ui-card,
+.dashboard-history-grid .ui-card {
+  min-width: 0;
+}
+
+.dashboard-main-grid .ui-card-header,
+.dashboard-history-grid .ui-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.advisory-list {
+  display: grid;
+  gap: 8px;
+}
+
+.advisory-item {
+  display: flex;
+  min-height: 68px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 11px 12px;
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: var(--radius-sm);
+  background: var(--chrome);
+}
+
+.advisory-warning { border-left-color: var(--warning); }
+.advisory-destructive { border-left-color: var(--destructive); }
+.advisory-info { border-left-color: var(--info); }
+
+.advisory-item strong {
+  display: block;
+  font-size: 13px;
+}
+
+.advisory-item p {
+  margin: 4px 0 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.dashboard-ranking-card .ranking-row {
+  background: var(--card);
+}
+
+.dashboard-ranking-card .ranking-row:hover {
+  background: var(--muted-surface);
+}
+
+.dashboard-ranking-card .ranking-track span {
+  background: var(--rank-accent);
+}
+
+.dashboard-history-card .ui-card-content {
+  min-height: 286px;
+}
+
+.dashboard-topic-select {
+  max-width: 200px;
+}
+
+.history-unavailable {
+  min-height: 252px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  color: var(--warning);
+  text-align: center;
+}
+
+.history-unavailable span {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+/* Cluster inventory */
+.cluster-metrics {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.cluster-table-card {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+
+.broker-name-cell {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.broker-name-cell strong {
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-overflow: ellipsis;
+}
+
+.broker-name-cell a {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+/* Broker detail */
+.broker-detail-content .ui-tabs-list {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.broker-detail-content .ui-tabs-trigger {
+  width: 100%;
+}
+
+.broker-identity-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--border);
+}
+
+.broker-identity-item {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  padding: 13px;
+  background: var(--card);
+}
+
+.broker-identity-item > span:first-child {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.broker-identity-item strong {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.broker-throughput-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.broker-throughput-grid .metric-card {
+  box-shadow: none;
+}
+
+.broker-detail-section {
+  display: grid;
+  gap: 12px;
+}
+
+.broker-detail-section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.broker-detail-section-heading h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.broker-detail-section-heading p {
+  margin: 4px 0 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.broker-config-editor {
+  display: grid;
+  gap: 9px;
+}
+
+.broker-config-editor > label {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.broker-config-editor textarea {
+  width: 100%;
+  min-height: 360px;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.broker-config-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.inline-validation,
+.inline-success {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 10px;
+  border: 1px solid;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+}
+
+.inline-validation {
+  border-color: color-mix(in srgb, var(--destructive) 46%, var(--border));
+  color: var(--destructive);
+  background: color-mix(in srgb, var(--destructive) 8%, var(--card));
+}
+
+.inline-success {
+  border-color: color-mix(in srgb, var(--success) 42%, var(--border));
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 8%, var(--card));
+}
+
+@media (max-width: 1050px) {
+  .dashboard-health-rail {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .health-signal:nth-child(3) {
+    border-right: 0;
+  }
+
+  .health-signal:nth-child(n + 4) {
+    border-top: 1px solid var(--border);
+  }
+
+  .dashboard-main-grid,
+  .dashboard-history-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (min-width: 761px) and (max-width: 900px) {
+  .dashboard-metrics-flat {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .dashboard-metrics-flat .metric-card:last-child {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 760px) {
+  .query-toolbar,
+  .query-filters {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .query-search,
+  .native-filter-field,
+  .native-filter-field select {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .query-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .dashboard-health-rail {
+    grid-template-columns: 1fr;
+  }
+
+  .health-signal,
+  .health-signal:nth-child(3) {
+    border-right: 0;
+    border-top: 1px solid var(--border);
+  }
+
+  .health-signal:first-child {
+    border-top: 0;
+  }
+
+  .dashboard-main-grid .ui-card-header,
+  .dashboard-history-grid .ui-card-header,
+  .advisory-item,
+  .broker-detail-section-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .advisory-item .ui-button {
+    width: 100%;
+  }
+
+  .dashboard-topic-select {
+    width: 100%;
+    max-width: none;
+  }
+
+  .cluster-metrics,
+  .broker-throughput-grid,
+  .broker-identity-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .entity-sheet {
+    padding: 16px;
+  }
+
+  .app-data-table-footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

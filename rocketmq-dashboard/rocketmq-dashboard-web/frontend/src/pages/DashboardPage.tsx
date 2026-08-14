@@ -4,14 +4,12 @@ import {
   Database,
   Layers,
   RadioTower,
-  RefreshCw,
   Send,
   Server,
-  Users,
-  Zap
+  Users
 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
-import { brokerApi } from '../api/broker_api';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Link } from 'react-router-dom';
 import { dashboardApi } from '../api/dashboard_api';
 import EmptyState from '../components/EmptyState';
 import ErrorState from '../components/ErrorState';
@@ -19,10 +17,13 @@ import LoadingState from '../components/LoadingState';
 import MetricCard from '../components/MetricCard';
 import PageHeader from '../components/PageHeader';
 import RankingTable from '../components/RankingTable';
+import RefreshButton from '../components/RefreshButton';
 import StatusBadge from '../components/StatusBadge';
 import TrendAreaChart from '../components/TrendAreaChart';
-import type { BrokerListView, BrokerRuntimeStats } from '../types/broker';
+import { buttonVariants } from '../components/ui/Button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/Card';
 import type { DashboardHistorySeries, DashboardOverview, DashboardTopicCurrent } from '../types/dashboard';
+import { buildDashboardAdvisories, formatDashboardMetric, sortTopTopics } from './dashboard/dashboard-model';
 
 function today() {
   const now = new Date();
@@ -31,26 +32,7 @@ function today() {
   return `${now.getFullYear()}-${month}-${day}`;
 }
 
-function formatNumber(value: number) {
-  return new Intl.NumberFormat().format(Math.round(value));
-}
-
-interface HistoryChartPoint {
-  time: string;
-  value: number;
-}
-
-type BrokerRuntimeEntries = BrokerRuntimeStats['entries'];
-
-interface BrokerOverviewRow {
-  brokerName: string;
-  address: string;
-  totalMessagesReceivedToday: number;
-  todayProduceCount: number;
-  yesterdayProduceCount: number;
-}
-
-function historyPoints(series: DashboardHistorySeries | null): HistoryChartPoint[] {
+function historyPoints(series: DashboardHistorySeries | null) {
   return (
     series?.points.map((point) => ({
       time: new Date(point.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
@@ -59,313 +41,334 @@ function historyPoints(series: DashboardHistorySeries | null): HistoryChartPoint
   );
 }
 
-function runtimeNumber(entries: BrokerRuntimeEntries | undefined, key: string) {
-  const value = entries?.[key];
-  if (value === undefined || value === null) {
-    return 0;
-  }
-  const parsed = Number.parseFloat(String(value).split(/\s+/)[0]);
-  return Number.isFinite(parsed) ? parsed : 0;
+function rejectionMessage(result: PromiseRejectedResult) {
+  return result.reason instanceof Error ? result.reason.message : String(result.reason);
 }
 
 export default function DashboardPage() {
   const [overview, setOverview] = useState<DashboardOverview | null>(null);
   const [topicCurrent, setTopicCurrent] = useState<DashboardTopicCurrent | null>(null);
-  const [brokerList, setBrokerList] = useState<BrokerListView | null>(null);
-  const [brokerRuntimeEntriesByName, setBrokerRuntimeEntriesByName] = useState<Record<string, BrokerRuntimeEntries>>({});
   const [brokerHistory, setBrokerHistory] = useState<DashboardHistorySeries | null>(null);
   const [topicHistory, setTopicHistory] = useState<DashboardHistorySeries | null>(null);
+  const [brokerHistoryError, setBrokerHistoryError] = useState<string | null>(null);
+  const [topicHistoryError, setTopicHistoryError] = useState<string | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(true);
   const [historyDate, setHistoryDate] = useState(today);
   const [selectedTopic, setSelectedTopic] = useState('');
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const hasCoreData = useRef(false);
+  const latestRequest = useRef(0);
 
-  const load = () => {
-    setLoading(true);
+  const load = useCallback(async () => {
+    const requestId = ++latestRequest.current;
+    if (hasCoreData.current) setRefreshing(true);
+    else setLoading(true);
     setError(null);
-    Promise.all([
+    setHistoryLoading(true);
+    setBrokerHistory(null);
+    setTopicHistory(null);
+    setBrokerHistoryError(null);
+    setTopicHistoryError(null);
+
+    const [overviewResult, topicCurrentResult, brokerHistoryResult, topicHistoryResult] = await Promise.allSettled([
       dashboardApi.overview(),
       dashboardApi.topicCurrent(),
-      brokerApi.list(),
       dashboardApi.brokerHistory({ date: historyDate }),
       dashboardApi.topicHistory({ date: historyDate, topicName: selectedTopic || undefined })
-    ])
-      .then(async ([overviewData, topicData, brokerData, brokerHistoryData, topicHistoryData]) => {
-        const runtimeResults = await Promise.allSettled(brokerData.items.map((broker) => brokerApi.runtime(broker.brokerName)));
-        const nextRuntimeEntries = brokerData.items.reduce<Record<string, BrokerRuntimeEntries>>((entriesByName, broker, index) => {
-          const result = runtimeResults[index];
-          entriesByName[broker.brokerName] = result?.status === 'fulfilled' ? result.value.entries : {};
-          return entriesByName;
-        }, {});
+    ]);
 
-        setOverview(overviewData);
-        setTopicCurrent(topicData);
-        setBrokerList(brokerData);
-        setBrokerRuntimeEntriesByName(nextRuntimeEntries);
-        setBrokerHistory(brokerHistoryData);
-        setTopicHistory(topicHistoryData);
-        if (!selectedTopic && topicData.topTopics[0]) {
-          setSelectedTopic(topicData.topTopics[0].topic);
-        }
-      })
-      .catch((requestError: Error) => setError(requestError.message))
-      .finally(() => setLoading(false));
-  };
+    if (requestId !== latestRequest.current) return;
 
-  useEffect(() => {
-    load();
+    if (overviewResult.status === 'rejected') {
+      setError(rejectionMessage(overviewResult));
+      setHistoryLoading(false);
+      setLoading(false);
+      setRefreshing(false);
+      return;
+    }
+
+    if (topicCurrentResult.status === 'rejected') {
+      setError(rejectionMessage(topicCurrentResult));
+      setHistoryLoading(false);
+      setLoading(false);
+      setRefreshing(false);
+      return;
+    }
+
+    setOverview(overviewResult.value);
+    setTopicCurrent(topicCurrentResult.value);
+    hasCoreData.current = true;
+
+    if (brokerHistoryResult.status === 'fulfilled') {
+      setBrokerHistory(brokerHistoryResult.value);
+      setBrokerHistoryError(null);
+    } else {
+      setBrokerHistory(null);
+      setBrokerHistoryError(rejectionMessage(brokerHistoryResult));
+    }
+
+    if (topicHistoryResult.status === 'fulfilled') {
+      setTopicHistory(topicHistoryResult.value);
+      setTopicHistoryError(null);
+    } else {
+      setTopicHistory(null);
+      setTopicHistoryError(rejectionMessage(topicHistoryResult));
+    }
+
+    setHistoryLoading(false);
+    setLoading(false);
+    setRefreshing(false);
   }, [historyDate, selectedTopic]);
 
-  const brokerTopData = useMemo(
-    () =>
-      (brokerList?.items ?? [])
-        .map((broker) => ({
-          name: broker.brokerName,
-          totalTps: Number((broker.produceTps + broker.consumeTps).toFixed(2)),
-          produceTps: Number(broker.produceTps.toFixed(2)),
-          consumeTps: Number(broker.consumeTps.toFixed(2))
-        }))
-        .sort((left, right) => right.totalTps - left.totalTps)
-        .slice(0, 10),
-    [brokerList]
-  );
+  useEffect(() => {
+    void load();
+  }, [load]);
 
-  const topicTopData = useMemo(
-    () =>
-      (topicCurrent?.topTopics ?? [])
-        .map((topic) => ({
-          name: topic.topic,
-          totalMsg: topic.totalMsg,
-          inTps: Number(topic.inTps.toFixed(2)),
-          outTps: Number(topic.outTps.toFixed(2))
-        }))
-        .sort((left, right) => right.totalMsg - left.totalMsg)
-        .slice(0, 10),
-    [topicCurrent]
-  );
+  const topTopics = useMemo(() => sortTopTopics(topicCurrent?.topTopics ?? []), [topicCurrent]);
+  const advisories = useMemo(() => (overview ? buildDashboardAdvisories(overview) : []), [overview]);
 
-  if (loading) {
-    return <LoadingState label="Loading dashboard" />;
-  }
-
-  if (error) {
-    return <ErrorState message={error} onRetry={load} />;
-  }
-
-  if (!overview || !topicCurrent || !brokerList) {
-    return <EmptyState title="Dashboard unavailable" />;
-  }
+  if (loading) return <LoadingState label="Loading dashboard" />;
+  if (error) return <ErrorState message={error} onRetry={() => void load()} />;
+  if (!overview || !topicCurrent) return <EmptyState title="Dashboard unavailable" />;
 
   const brokerHistoryData = historyPoints(brokerHistory);
   const topicHistoryData = historyPoints(topicHistory);
-  const brokerOverviewRows: BrokerOverviewRow[] = brokerList.items.map((broker) => {
-    const entries = brokerRuntimeEntriesByName[broker.brokerName];
-    const todayProduceMorning = runtimeNumber(entries, 'msgPutTotalTodayMorning');
-    const yesterdayProduceMorning = runtimeNumber(entries, 'msgPutTotalYesterdayMorning');
-
-    return {
-      brokerName: broker.brokerName,
-      address: broker.address,
-      totalMessagesReceivedToday: runtimeNumber(entries, 'msgGetTotalTodayNow'),
-      todayProduceCount: todayProduceMorning,
-      yesterdayProduceCount: todayProduceMorning - yesterdayProduceMorning
-    };
-  });
-  const brokerRankingRows = brokerTopData.map((broker) => ({
-    name: broker.name,
-    value: broker.totalTps,
-    detail: `produce ${broker.produceTps} / consume ${broker.consumeTps}`
-  }));
-  const topicRankingRows = topicTopData.map((topic) => ({
-    name: topic.name,
+  const topicRankingRows = topTopics.map((topic) => ({
+    name: topic.topic,
     value: topic.totalMsg,
-    detail: `in ${topic.inTps} / out ${topic.outTps}`
+    detail: `in ${formatDashboardMetric(topic.inTps)} / out ${formatDashboardMetric(topic.outTps)} TPS`
   }));
 
   return (
-    <>
+    <div className="operations-dashboard">
       <PageHeader
-        title="Dashboard"
-        description="Broker overview, traffic top lists, and 5-minute trends from the Rust Web backend."
+        title="Operations overview"
+        description="Live RocketMQ inventory, demand signals, and collection history in one operational workspace."
         actions={
           <>
-            <label className="dashboard-filter" title="History date">
+            <label className="dashboard-date-field">
               <CalendarDays size={15} aria-hidden="true" />
-              <input type="date" value={historyDate} onChange={(event) => setHistoryDate(event.target.value)} />
+              <span className="sr-only">History date</span>
+              <input
+                aria-label="History date"
+                type="date"
+                value={historyDate}
+                onChange={(event) => {
+                  setHistoryLoading(true);
+                  setBrokerHistory(null);
+                  setTopicHistory(null);
+                  setHistoryDate(event.target.value);
+                }}
+              />
             </label>
-            <StatusBadge status={overview.systemStatus} tone={overview.systemStatus === 'UP' ? 'success' : 'warning'} />
-            <button type="button" className="icon-button" title="Refresh dashboard" onClick={load}>
-              <RefreshCw size={15} aria-hidden="true" />
-            </button>
+            <RefreshButton refreshing={refreshing} onRefresh={() => void load()} />
           </>
         }
       />
 
-      <div className="metric-grid dashboard-metrics">
-        <MetricCard label="Brokers" value={overview.brokerCount} detail="GET /api/brokers" icon={<RadioTower size={18} />} />
-        <MetricCard label="Topics" value={overview.topicCount} detail="topic-current" icon={<Database size={18} />} />
-        <MetricCard label="Consumers" value={overview.consumerGroupCount} detail="group count" icon={<Users size={18} />} />
-        <MetricCard label="Backlog" value={formatNumber(overview.messageBacklog)} detail="consumer lag" icon={<Layers size={18} />} />
-        <MetricCard label="Producers" value={overview.producerCount} detail="connections" icon={<Send size={18} />} />
+      <Card className="dashboard-health-rail" aria-label="Cluster health summary">
+        <HealthSignal
+          icon={<Activity size={16} />}
+          label="System"
+          value={overview.systemStatus}
+          tone={overview.systemStatus.toUpperCase() === 'UP' ? 'success' : 'warning'}
+        />
+        <HealthSignal icon={<RadioTower size={16} />} label="Brokers" value={String(overview.brokerCount)} tone={overview.brokerCount > 0 ? 'success' : 'danger'} />
+        <HealthSignal icon={<Layers size={16} />} label="Backlog" value={formatDashboardMetric(overview.messageBacklog)} tone={overview.messageBacklog > 0 ? 'warning' : 'success'} />
+        <HealthSignal icon={<Database size={16} />} label="Topics" value={String(overview.topicCount)} />
+        <HealthSignal icon={<Server size={16} />} label="NameServer" value={overview.currentNamesrv ?? 'Not configured'} tone={overview.currentNamesrv ? 'success' : 'danger'} />
+      </Card>
+
+      <div className="metric-grid dashboard-metrics dashboard-metrics-flat">
+        <MetricCard label="Brokers" value={overview.brokerCount} detail="Visible broker instances" icon={<RadioTower size={18} />} />
+        <MetricCard label="Topics" value={overview.topicCount} detail="Current route inventory" icon={<Database size={18} />} />
+        <MetricCard label="Consumers" value={overview.consumerGroupCount} detail="Known consumer groups" icon={<Users size={18} />} />
+        <MetricCard label="Backlog" value={formatDashboardMetric(overview.messageBacklog)} detail="Messages awaiting consumption" icon={<Layers size={18} />} />
+        <MetricCard label="Producers" value={overview.producerCount} detail="Known producer groups" icon={<Send size={18} />} />
       </div>
 
-      <div className="dashboard-overview-grid">
-        <section className="panel dashboard-panel dashboard-panel-table">
-          <div className="panel-heading">
+      <div className="dashboard-main-grid">
+        <Card className="dashboard-advisories">
+          <CardHeader>
             <div>
-              <h2>Broker Overview</h2>
-              <p>Broker address and daily message counters aligned with the Java dashboard overview.</p>
+              <CardTitle>Action center</CardTitle>
+              <CardDescription>Evidence-based checks from the current API response.</CardDescription>
             </div>
-            <StatusBadge status={`${brokerList.total} brokers`} tone={brokerList.total > 0 ? 'success' : 'neutral'} />
-          </div>
-          <BrokerOverviewTable rows={brokerOverviewRows} />
-        </section>
+            <StatusBadge status={advisories.length === 0 ? 'No active advisories' : `${advisories.length} active`} tone={advisories.length === 0 ? 'success' : 'warning'} />
+          </CardHeader>
+          <CardContent>
+            {advisories.length === 0 ? (
+              <EmptyState title="No active advisories" detail="The available dashboard signals do not require action." />
+            ) : (
+              <div className="advisory-list">
+                {advisories.map((advisory) => (
+                  <article className={`advisory-item advisory-${advisory.tone}`} key={advisory.id}>
+                    <div>
+                      <strong>{advisory.title}</strong>
+                      <p>{advisory.detail}</p>
+                    </div>
+                    <Link className={buttonVariants({ variant: 'outline', size: 'sm' })} to={advisory.target}>
+                      {advisory.actionLabel}
+                    </Link>
+                  </article>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
-        <section className="panel dashboard-panel">
-          <div className="panel-heading">
+        <Card className="dashboard-ranking-card">
+          <CardHeader>
             <div>
-              <h2>Dashboard Window</h2>
-              <p>History queries use broker/topic 5-minute collector samples.</p>
-            </div>
-            <StatusBadge status={overview.currentNamesrv ?? 'No NameServer'} tone={overview.currentNamesrv ? 'success' : 'warning'} />
-          </div>
-          <div className="dashboard-signal-grid">
-            <div className="dashboard-signal">
-              <Server size={18} aria-hidden="true" />
-              <span>NameServer</span>
-              <strong>{overview.currentNamesrv ?? 'unconfigured'}</strong>
-            </div>
-            <div className="dashboard-signal">
-              <Activity size={18} aria-hidden="true" />
-              <span>History</span>
-              <strong>{brokerHistory?.collected || topicHistory?.collected ? 'collecting' : 'warming up'}</strong>
-            </div>
-            <div className="dashboard-signal">
-              <Zap size={18} aria-hidden="true" />
-              <span>Admin facade</span>
-              <strong>ready</strong>
-            </div>
-          </div>
-        </section>
-      </div>
-
-      <div className="dashboard-chart-grid">
-        <section className="panel dashboard-panel">
-          <div className="panel-heading">
-            <div>
-              <h2>Broker TOP 10</h2>
-              <p>Ranked by produce TPS + consume TPS.</p>
-            </div>
-            <StatusBadge status="Total TPS" />
-          </div>
-          <RankingTable
-            rows={brokerRankingRows}
-            valueLabel="TPS"
-            accent="var(--primary)"
-            emptyTitle="No broker traffic"
-            emptyDetail="Broker TPS is currently zero, so no TOP ranking is shown."
-            formatValue={formatNumber}
-          />
-        </section>
-
-        <section className="panel dashboard-panel">
-          <div className="panel-heading">
-            <div>
-              <h2>Broker 5min trend</h2>
-              <p>Broker count trend collected by the Rust history task.</p>
-            </div>
-            <StatusBadge status={brokerHistory?.collected ? 'collected' : 'warming up'} tone={brokerHistory?.collected ? 'success' : 'warning'} />
-          </div>
-          <TrendAreaChart
-            data={brokerHistoryData}
-            color="var(--info)"
-            label="Broker count"
-            emptyTitle="No broker trend yet"
-            emptyDetail="The collector needs at least one sample for the selected date."
-          />
-        </section>
-
-        <section className="panel dashboard-panel">
-          <div className="panel-heading">
-            <div>
-              <h2>Topic TOP 10</h2>
-              <p>Ranked by current total messages.</p>
+              <CardTitle>Top topics</CardTitle>
+              <CardDescription>Ranked by currently reported total messages.</CardDescription>
             </div>
             <StatusBadge status={`${topicCurrent.totalTopics} observed`} />
-          </div>
-          <RankingTable
-            rows={topicRankingRows}
-            valueLabel="TotalMsg"
-            accent="var(--accent)"
-            emptyTitle="No topic ranking"
-            emptyDetail="Topics with zero messages are hidden from TOP ranking."
-            formatValue={formatNumber}
-          />
-        </section>
+          </CardHeader>
+          <CardContent>
+            <RankingTable
+              rows={topicRankingRows}
+              valueLabel="Messages"
+              accent="var(--primary)"
+              emptyTitle="No topic ranking"
+              emptyDetail="Topic metrics are not available for the current cluster."
+              formatValue={formatDashboardMetric}
+            />
+          </CardContent>
+        </Card>
+      </div>
 
-        <section className="panel dashboard-panel">
-          <div className="panel-heading">
+      <div className="dashboard-history-grid">
+        <HistoryCard
+          title="Broker activity"
+          description="Collected broker count samples for the selected date."
+          series={brokerHistory}
+          error={brokerHistoryError}
+          loading={historyLoading}
+          errorTitle="Broker history unavailable"
+          data={brokerHistoryData}
+          color="var(--info)"
+          label="Broker count"
+        />
+
+        <Card className="dashboard-history-card">
+          <CardHeader>
             <div>
-              <h2>Topic 5min trend</h2>
-              <p>Select topic, then query `/api/dashboard/topics/history`.</p>
+              <CardTitle>Topic activity</CardTitle>
+              <CardDescription>
+                {selectedTopic ? 'Collected total message samples for the selected topic.' : 'Topic count collected across the cluster.'}
+              </CardDescription>
             </div>
-            <select className="dashboard-select" value={selectedTopic} onChange={(event) => setSelectedTopic(event.target.value)}>
+            <select
+              className="dashboard-topic-select"
+              aria-label="Topic history filter"
+              value={selectedTopic}
+              onChange={(event) => {
+                setHistoryLoading(true);
+                setTopicHistory(null);
+                setSelectedTopic(event.target.value);
+              }}
+            >
               <option value="">All topics</option>
-              {topicCurrent.topTopics.map((topic) => (
-                <option key={topic.topic} value={topic.topic}>
-                  {topic.topic}
-                </option>
+              {topTopics.map((topic) => (
+                <option key={topic.topic} value={topic.topic}>{topic.topic}</option>
               ))}
             </select>
-          </div>
-          <TrendAreaChart
-            data={topicHistoryData}
-            color="var(--accent)"
-            label="TotalMsg"
-            emptyTitle="No topic trend yet"
-            emptyDetail="The collector needs samples for the selected date and topic."
-          />
-        </section>
+          </CardHeader>
+          <CardContent>
+            {historyLoading ? (
+              <LoadingState label="Loading topic history" />
+            ) : topicHistoryError ? (
+              <HistoryUnavailable title="Topic history unavailable" detail={topicHistoryError} />
+            ) : topicHistory?.collected ? (
+              <TrendAreaChart
+                data={topicHistoryData}
+                color="var(--primary)"
+                label={selectedTopic ? 'Total messages' : 'Topic count'}
+                emptyTitle="No topic samples"
+                emptyDetail="No collected topic points match these filters."
+              />
+            ) : (
+              <EmptyState title="Topic history is warming up" detail="The collector has not stored a sample for these filters yet." />
+            )}
+          </CardContent>
+        </Card>
       </div>
-    </>
+    </div>
   );
 }
 
-function BrokerOverviewTable({ rows }: { rows: BrokerOverviewRow[] }) {
-  if (rows.length === 0) {
-    return <EmptyState title="No broker data" />;
-  }
+interface HealthSignalProps {
+  icon: ReactNode;
+  label: string;
+  value: string;
+  tone?: 'success' | 'warning' | 'danger';
+}
 
+function HealthSignal({ icon, label, value, tone }: HealthSignalProps) {
   return (
-    <div className="broker-overview-table-shell">
-      <div className="table-scroll">
-        <table className="broker-overview-table">
-          <thead>
-            <tr>
-              <th>Broker name</th>
-              <th>Broker address</th>
-              <th>Total messages received today</th>
-              <th>Today Produce Count</th>
-              <th>Yesterday Produce Count</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row) => (
-              <tr key={`${row.brokerName}-${row.address}`}>
-                <td>
-                  <code>{row.brokerName}</code>
-                </td>
-                <td>
-                  <code>{row.address}</code>
-                </td>
-                <td>{formatNumber(row.totalMessagesReceivedToday)}</td>
-                <td>{formatNumber(row.todayProduceCount)}</td>
-                <td>{formatNumber(row.yesterdayProduceCount)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+    <div className={`health-signal${tone ? ` health-${tone}` : ''}`}>
+      <span className="health-signal-icon" aria-hidden="true">{icon}</span>
+      <span>{label}</span>
+      <strong title={value}>{value}</strong>
+    </div>
+  );
+}
+
+interface HistoryCardProps {
+  title: string;
+  description: string;
+  series: DashboardHistorySeries | null;
+  error: string | null;
+  loading: boolean;
+  errorTitle: string;
+  data: Array<{ time: string; value: number }>;
+  color: string;
+  label: string;
+}
+
+function HistoryCard({ title, description, series, error, loading, errorTitle, data, color, label }: HistoryCardProps) {
+  return (
+    <Card className="dashboard-history-card">
+      <CardHeader>
+        <div>
+          <CardTitle>{title}</CardTitle>
+          <CardDescription>{description}</CardDescription>
+        </div>
+        <StatusBadge
+          status={loading ? 'Loading' : error ? 'Unavailable' : series?.collected ? 'Collected' : 'Warming up'}
+          tone={loading ? undefined : error ? 'danger' : series?.collected ? 'success' : 'warning'}
+        />
+      </CardHeader>
+      <CardContent>
+        {loading ? (
+          <LoadingState label={`Loading ${title.toLowerCase()}`} />
+        ) : error ? (
+          <HistoryUnavailable title={errorTitle} detail={error} />
+        ) : series?.collected ? (
+          <TrendAreaChart
+            data={data}
+            color={color}
+            label={label}
+            emptyTitle="No samples"
+            emptyDetail="No collected points match the selected date."
+          />
+        ) : (
+          <EmptyState title={`${title} is warming up`} detail="The collector has not stored a sample for this date yet." />
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function HistoryUnavailable({ title, detail }: { title: string; detail: string }) {
+  return (
+    <div className="history-unavailable" role="status" aria-label={title} aria-live="polite">
+      <Activity size={22} aria-hidden="true" />
+      <strong>{title}</strong>
+      <span>{detail}</span>
     </div>
   );
 }
