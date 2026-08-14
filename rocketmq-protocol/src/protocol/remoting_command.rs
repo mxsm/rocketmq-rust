@@ -196,7 +196,7 @@ impl fmt::Display for RemotingCommand {
             self.opaque,
             self.flag,
             self.remark.as_ref().unwrap_or(&CheetahString::default()),
-            self.ext_fields.as_map(),
+            self.ext_fields,
             self.serialize_type
         )
     }
@@ -2025,6 +2025,35 @@ mod tests {
         assert_eq!(json["extFields"]["unicode"], "火箭");
         assert!(cloned.ext_fields.is_json_raw());
         assert!(cloned.ext_fields.has_materialized_map());
+    }
+
+    #[test]
+    fn display_summarizes_raw_extension_fields_without_materializing_or_exposing_values() {
+        let mut json_header = json_header_with_ext_fields(r#"{"token":"json-secret"}"#);
+        let json_length = json_header.len();
+        let json = RemotingCommand::header_decode(&mut json_header, json_length, SerializeType::JSON)
+            .unwrap()
+            .unwrap();
+
+        let mut rocketmq_source = RemotingCommand::create_remoting_command(1)
+            .set_serialize_type(SerializeType::ROCKETMQ)
+            .set_ext_fields(HashMap::from([(
+                CheetahString::from_static_str("token"),
+                CheetahString::from_static_str("rocketmq-secret"),
+            )]));
+        let mut encoded = BytesMut::new();
+        rocketmq_source.try_fast_header_encode(&mut encoded).unwrap();
+        let rocketmq = RemotingCommand::decode(&mut encoded).unwrap().unwrap();
+
+        let json_display = json.to_string();
+        let rocketmq_display = rocketmq.to_string();
+
+        assert!(json_display.contains("JsonRaw(count=1, materialized=false)"));
+        assert!(rocketmq_display.contains("RocketMqRaw(count=1, materialized=false)"));
+        assert!(!json_display.contains("json-secret"));
+        assert!(!rocketmq_display.contains("rocketmq-secret"));
+        assert!(!json.ext_fields.has_materialized_map());
+        assert!(!rocketmq.ext_fields.has_materialized_map());
     }
 
     #[test]

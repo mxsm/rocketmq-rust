@@ -53,6 +53,10 @@ enum JsonFieldEncoding {
 }
 
 impl JsonHeaderFields {
+    pub(crate) const fn len(&self) -> usize {
+        self.entry_count
+    }
+
     pub(crate) fn from_length_prefixed(payload: Vec<u8>, entry_count: usize) -> Self {
         Self {
             payload: Bytes::from(payload),
