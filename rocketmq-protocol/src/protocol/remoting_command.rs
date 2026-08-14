@@ -2057,6 +2057,42 @@ mod tests {
     }
 
     #[test]
+    fn populated_raw_cache_clone_mutation_preserves_the_original_for_both_protocols() {
+        let mut json_header = json_header_with_ext_fields(r#"{"original":"json"}"#);
+        let json_length = json_header.len();
+        let json = RemotingCommand::header_decode(&mut json_header, json_length, SerializeType::JSON)
+            .unwrap()
+            .unwrap();
+
+        let mut rocketmq_source = RemotingCommand::create_remoting_command(1)
+            .set_serialize_type(SerializeType::ROCKETMQ)
+            .set_ext_fields(HashMap::from([(
+                CheetahString::from_static_str("original"),
+                CheetahString::from_static_str("rocketmq"),
+            )]));
+        let mut encoded = BytesMut::new();
+        rocketmq_source.try_fast_header_encode(&mut encoded).unwrap();
+        let rocketmq = RemotingCommand::decode(&mut encoded).unwrap().unwrap();
+
+        for original in [json, rocketmq] {
+            assert!(original
+                .ext_fields()
+                .is_some_and(|fields| fields.contains_key("original")));
+            assert!(original.ext_fields.has_materialized_map());
+
+            let mut cloned = original.clone();
+            cloned.add_ext_field("cloned", "only");
+
+            assert!(original
+                .ext_fields()
+                .is_some_and(|fields| !fields.contains_key("cloned")));
+            assert!(cloned
+                .ext_fields()
+                .is_some_and(|fields| fields.get("cloned").is_some_and(|value| value == "only")));
+        }
+    }
+
+    #[test]
     fn json_decode_preserves_absent_null_and_empty_extension_fields() {
         let mut missing = BytesMut::from(
             r#"{"code":1,"language":"RUST","version":0,"opaque":7,"flag":0,"remark":null,"serializeTypeCurrentRPC":"JSON"}"#

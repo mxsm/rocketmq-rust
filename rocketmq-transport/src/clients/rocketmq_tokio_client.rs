@@ -1949,6 +1949,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
 #[cfg(test)]
 mod tests {
     use std::net::SocketAddr;
+    use std::sync::atomic::AtomicBool;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
@@ -1972,6 +1973,7 @@ mod tests {
     struct CountingHook {
         before_count: AtomicUsize,
         after_count: AtomicUsize,
+        after_observed_before_field: AtomicBool,
     }
 
     impl RPCHook for CountingHook {
@@ -1985,10 +1987,17 @@ mod tests {
         fn do_after_response(
             &self,
             _remote_addr: SocketAddr,
-            _request: &RemotingCommand,
+            request: &RemotingCommand,
             response: &mut RemotingCommand,
         ) -> RocketMQResult<()> {
             self.after_count.fetch_add(1, Ordering::SeqCst);
+            self.after_observed_before_field.store(
+                request
+                    .ext_fields()
+                    .and_then(|fields| fields.get("hooked"))
+                    .is_some_and(|value| value == "true"),
+                Ordering::SeqCst,
+            );
             response.ensure_ext_fields_initialized();
             response.add_ext_field("afterHook", "true");
             Ok(())
@@ -2207,6 +2216,7 @@ mod tests {
 
         assert_eq!(hook.before_count.load(Ordering::SeqCst), 1);
         assert_eq!(hook.after_count.load(Ordering::SeqCst), 1);
+        assert!(hook.after_observed_before_field.load(Ordering::SeqCst));
         assert_eq!(
             response
                 .ext_fields()
