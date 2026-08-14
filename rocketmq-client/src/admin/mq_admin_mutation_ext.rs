@@ -215,6 +215,14 @@ pub trait MQAdminMutationExt: Send {
         remove_offset: Option<bool>,
     ) -> rocketmq_error::RocketMQResult<()>;
 
+    /// Removes multiple subscription groups from one broker in a single request.
+    async fn remove_subscription_groups(
+        &self,
+        broker_addr: CheetahString,
+        group_names: Vec<CheetahString>,
+        clean_offset: bool,
+    ) -> rocketmq_error::RocketMQResult<()>;
+
     async fn configure_message_request_mode(
         &self,
         broker_addr: CheetahString,
@@ -262,6 +270,13 @@ pub trait MQAdminMutationExt: Send {
         &self,
         broker_addrs: HashSet<CheetahString>,
         topic: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<()>;
+
+    /// Removes multiple topics from one broker in a single request.
+    async fn remove_topics_from_broker(
+        &self,
+        broker_addr: CheetahString,
+        topics: Vec<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<()>;
 
     /// Removes a topic from an explicitly resolved NameServer set.
@@ -437,6 +452,15 @@ impl MQAdminMutationExt for DefaultMQAdminExt {
         MQAdminMutationExt::remove_subscription_group(self.inner(), broker_addr, group_name, remove_offset).await
     }
 
+    async fn remove_subscription_groups(
+        &self,
+        broker_addr: CheetahString,
+        group_names: Vec<CheetahString>,
+        clean_offset: bool,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        MQAdminMutationExt::remove_subscription_groups(self.inner(), broker_addr, group_names, clean_offset).await
+    }
+
     async fn configure_message_request_mode(
         &self,
         broker_addr: CheetahString,
@@ -504,6 +528,14 @@ impl MQAdminMutationExt for DefaultMQAdminExt {
         topic: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
         MQAdminMutationExt::remove_topic_from_brokers(self.inner(), broker_addrs, topic).await
+    }
+
+    async fn remove_topics_from_broker(
+        &self,
+        broker_addr: CheetahString,
+        topics: Vec<CheetahString>,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        MQAdminMutationExt::remove_topics_from_broker(self.inner(), broker_addr, topics).await
     }
 
     async fn remove_topic_from_name_servers(

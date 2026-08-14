@@ -78,6 +78,8 @@ pub mod producer {
 // Topic Bodies
 pub mod topic {
     pub use super::super::body::create_topic_list_request_body::CreateTopicListRequestBody;
+    pub use super::super::body::delete_subscription_group_list_request_body::DeleteSubscriptionGroupListRequestBody;
+    pub use super::super::body::delete_topic_list_request_body::DeleteTopicListRequestBody;
     pub use super::super::body::get_lite_topic_info_response_body::GetLiteTopicInfoResponseBody;
     pub use super::super::body::get_parent_topic_info_response_body::GetParentTopicInfoResponseBody;
     pub use super::super::body::topic::topic_list::TopicList;

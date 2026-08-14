@@ -262,6 +262,12 @@ impl<MS: BrokerAdminStore> AdminBrokerProcessor<MS> {
                     .delete_topic(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
             }
+            RequestCode::DeleteTopicInBrokerList => {
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
+                self.topic_request_handler
+                    .delete_topic_list(broker_runtime_inner, channel, ctx, request_code, request)
+                    .await
+            }
             RequestCode::GetAllTopicConfig => {
                 let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
                 self.topic_request_handler
@@ -383,6 +389,12 @@ impl<MS: BrokerAdminStore> AdminBrokerProcessor<MS> {
                 let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
                 self.subscription_group_handler
                     .delete_subscription_group(broker_runtime_inner, channel, ctx, request_code, request)
+                    .await
+            }
+            RequestCode::DeleteSubscriptionGroupList => {
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
+                self.subscription_group_handler
+                    .delete_subscription_group_list(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
             }
             RequestCode::GetTopicStatsInfo => {

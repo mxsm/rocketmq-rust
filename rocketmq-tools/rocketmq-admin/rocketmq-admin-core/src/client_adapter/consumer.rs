@@ -36,6 +36,8 @@ use serde_json::json;
 use crate::client_adapter::lifecycle::AdminSession;
 use crate::core::consumer;
 use crate::core::consumer::ConsumerAdmin;
+use crate::core::consumer::ConsumerBatchMutationOutcome;
+use crate::core::consumer::DeleteSubscriptionGroupsRequest;
 use crate::core::AdminError;
 use crate::core::AdminFuture;
 use crate::core::AdminResult;
@@ -446,6 +448,34 @@ impl ConsumerAdmin for AdminSession {
                 consumer_group: group,
                 broker_names: selected_broker_names,
                 updated: false,
+            })
+        })
+    }
+
+    fn delete_subscription_groups<'a>(
+        &'a mut self,
+        request: &'a DeleteSubscriptionGroupsRequest,
+    ) -> AdminFuture<'a, ConsumerBatchMutationOutcome> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            self.client_mut()
+                .delete_subscription_group_list(
+                    CheetahString::from(request.broker_addr.as_str()),
+                    request
+                        .group_names
+                        .iter()
+                        .map(|group_name| CheetahString::from(group_name.as_str()))
+                        .collect(),
+                    request.clean_offset,
+                )
+                .await
+                .map_err(|error| backend_error("delete_subscription_group_list", error))?;
+            Ok(ConsumerBatchMutationOutcome {
+                message: format!(
+                    "deleted {} subscription groups through one broker batch request",
+                    request.group_names.len()
+                ),
+                broker_count: 1,
             })
         })
     }

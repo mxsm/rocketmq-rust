@@ -17,6 +17,7 @@ use rocketmq_model::common::mix_all::is_sys_consumer_group;
 use rocketmq_model::common::topic::TopicValidator;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::protocol::body::delete_subscription_group_list_request_body::DeleteSubscriptionGroupListRequestBody;
 use rocketmq_protocol::protocol::body::subscription_group_list::SubscriptionGroupList;
 use rocketmq_protocol::protocol::header::delete_subscription_group_request_header::DeleteSubscriptionGroupRequestHeader;
 use rocketmq_protocol::protocol::header::get_subscription_group_config_request_header::GetSubscriptionGroupConfigRequestHeader;
@@ -32,6 +33,7 @@ use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::BrokerAdminStore;
 use rocketmq_transport::api::v1::Channel;
 use rocketmq_transport::api::v1::ConnectionHandlerContext;
+use std::collections::HashSet;
 use tracing::info;
 
 use crate::broker::broker_admin_runtime::BrokerAdminRuntime;
@@ -368,6 +370,84 @@ impl SubscriptionGroupHandler {
                 .clear_in_flight_message_num_by_group_name(&request_header.group_name);
         }
 
+        Ok(Some(RemotingCommand::create_success_response_command()))
+    }
+
+    pub async fn delete_subscription_group_list<MS: BrokerAdminStore>(
+        &self,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
+        channel: Channel,
+        _ctx: ConnectionHandlerContext,
+        _request_code: RequestCode,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let response = RemotingCommand::create_java_default_error_response_command();
+        let Some(encoded) = request.body() else {
+            return Ok(Some(
+                response
+                    .set_code(ResponseCode::InvalidParameter)
+                    .set_remark("The specified group name list is blank."),
+            ));
+        };
+        let request_body = match DeleteSubscriptionGroupListRequestBody::decode(encoded.as_ref()) {
+            Ok(body) => body,
+            Err(_) => {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::InvalidParameter)
+                        .set_remark("The specified group name list body is invalid."),
+                ));
+            }
+        };
+        if request_body.group_name_list.is_empty() {
+            return Ok(Some(
+                response
+                    .set_code(ResponseCode::InvalidParameter)
+                    .set_remark("The specified group name list is blank."),
+            ));
+        }
+
+        let mut seen = HashSet::new();
+        let mut groups = Vec::with_capacity(request_body.group_name_list.len());
+        for group in request_body.group_name_list {
+            if let Some(remark) = validate_group_name(group.as_str()) {
+                return Ok(Some(
+                    response.set_code(ResponseCode::InvalidParameter).set_remark(remark),
+                ));
+            }
+            if seen.insert(group.clone()) {
+                groups.push(group);
+            }
+        }
+        info!(
+            "AdminBrokerProcessor#deleteSubscriptionGroupList: groupNames={:?}, caller={}",
+            groups,
+            channel.remote_address()
+        );
+
+        let clean_offsets = groups
+            .iter()
+            .filter(|group| {
+                request_body.clean_offset
+                    || broker_runtime_inner
+                        .subscription_group_manager()
+                        .find_subscription_group_config(group)
+                        .and_then(|config| config.lite_bind_topic().cloned())
+                        .is_some()
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        broker_runtime_inner
+            .subscription_group_manager()
+            .delete_subscription_group_config_list(&groups);
+        for group in clean_offsets {
+            broker_runtime_inner
+                .consumer_offset_manager()
+                .clean_offset_by_group(&group);
+            broker_runtime_inner
+                .pop_inflight_message_counter()
+                .clear_in_flight_message_num_by_group_name(&group);
+        }
         Ok(Some(RemotingCommand::create_success_response_command()))
     }
 
@@ -783,6 +863,89 @@ mod tests {
                 .subscription_group_version,
             initial_version + 1
         );
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn batch_delete_validates_all_groups_before_mutation_and_deduplicates() {
+        let runtime = new_test_runtime("batch-delete-groups").await;
+        let admin = runtime.admin_runtime_for_test();
+        let handler = SubscriptionGroupHandler::new();
+        let group_a = CheetahString::from_static_str("BatchDeleteGroupA");
+        let group_b = CheetahString::from_static_str("BatchDeleteGroupB");
+        for group in [&group_a, &group_b] {
+            let mut config = SubscriptionGroupConfig::new(group.clone());
+            admin
+                .subscription_group_manager()
+                .update_subscription_group_config(&mut config);
+        }
+
+        let empty_body = rocketmq_protocol::protocol::body::delete_subscription_group_list_request_body::DeleteSubscriptionGroupListRequestBody::default();
+        let mut empty = RemotingCommand::create_remoting_command(RequestCode::DeleteSubscriptionGroupList.to_i32())
+            .set_body(empty_body.encode().unwrap());
+        let channel = create_test_channel().await;
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let response = handler
+            .delete_subscription_group_list(
+                &admin,
+                channel,
+                ctx,
+                RequestCode::DeleteSubscriptionGroupList,
+                &mut empty,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(ResponseCode::InvalidParameter, ResponseCode::from(response.code()));
+        assert!(admin.subscription_group_manager().group_exists(group_a.as_str()));
+        assert!(admin.subscription_group_manager().group_exists(group_b.as_str()));
+
+        let invalid_body = rocketmq_protocol::protocol::body::delete_subscription_group_list_request_body::DeleteSubscriptionGroupListRequestBody {
+            group_name_list: vec![group_a.clone(), CheetahString::from_static_str("invalid group")],
+            clean_offset: true,
+        };
+        let mut invalid = RemotingCommand::create_remoting_command(RequestCode::DeleteSubscriptionGroupList.to_i32())
+            .set_body(invalid_body.encode().unwrap());
+        let channel = create_test_channel().await;
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let response = handler
+            .delete_subscription_group_list(
+                &admin,
+                channel,
+                ctx,
+                RequestCode::DeleteSubscriptionGroupList,
+                &mut invalid,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(ResponseCode::InvalidParameter, ResponseCode::from(response.code()));
+        assert!(admin.subscription_group_manager().group_exists(group_a.as_str()));
+        assert!(admin.subscription_group_manager().group_exists(group_b.as_str()));
+
+        let body = rocketmq_protocol::protocol::body::delete_subscription_group_list_request_body::DeleteSubscriptionGroupListRequestBody {
+            group_name_list: vec![group_a.clone(), group_b.clone(), group_a.clone()],
+            clean_offset: true,
+        };
+        let mut request = RemotingCommand::create_remoting_command(RequestCode::DeleteSubscriptionGroupList.to_i32())
+            .set_body(body.encode().unwrap());
+        let channel = create_test_channel().await;
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let response = handler
+            .delete_subscription_group_list(
+                &admin,
+                channel,
+                ctx,
+                RequestCode::DeleteSubscriptionGroupList,
+                &mut request,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(ResponseCode::Success, ResponseCode::from(response.code()));
+        assert!(!admin.subscription_group_manager().group_exists(group_a.as_str()));
+        assert!(!admin.subscription_group_manager().group_exists(group_b.as_str()));
 
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }

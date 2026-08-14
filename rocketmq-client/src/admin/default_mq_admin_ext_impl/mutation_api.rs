@@ -518,6 +518,17 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
             .await
     }
 
+    async fn remove_subscription_groups(
+        &self,
+        broker_addr: CheetahString,
+        group_names: Vec<CheetahString>,
+        clean_offset: bool,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        self.mq_client_api()?
+            .delete_subscription_group_list(&broker_addr, group_names, clean_offset, self.remoting_timeout_millis()?)
+            .await
+    }
+
     async fn configure_message_request_mode(
         &self,
         broker_addr: CheetahString,
@@ -666,6 +677,16 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
             .await?;
         }
         Ok(())
+    }
+
+    async fn remove_topics_from_broker(
+        &self,
+        broker_addr: CheetahString,
+        topics: Vec<CheetahString>,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        self.mq_client_api()?
+            .delete_topic_in_broker_list(&broker_addr, topics, self.remoting_timeout_millis()?)
+            .await
     }
 
     async fn remove_topic_from_name_servers(

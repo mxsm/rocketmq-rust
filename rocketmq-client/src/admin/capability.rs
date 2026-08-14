@@ -154,6 +154,12 @@ pub trait TopicAdmin: Send {
         addrs: HashSet<CheetahString>,
         topic: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()>;
+
+    async fn delete_topic_in_broker_list(
+        &self,
+        addrs: HashSet<CheetahString>,
+        topics: Vec<CheetahString>,
+    ) -> rocketmq_error::RocketMQResult<()>;
     #[allow(deprecated)]
     async fn delete_topic_in_broker_concurrent(
         &self,
@@ -355,6 +361,13 @@ pub trait ConsumerAdmin: Send {
         addr: CheetahString,
         group_name: CheetahString,
         remove_offset: Option<bool>,
+    ) -> rocketmq_error::RocketMQResult<()>;
+
+    async fn delete_subscription_group_list(
+        &self,
+        addr: CheetahString,
+        group_names: Vec<CheetahString>,
+        clean_offset: bool,
     ) -> rocketmq_error::RocketMQResult<()>;
 
     async fn get_consume_status(
@@ -1072,6 +1085,14 @@ impl TopicAdmin for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         TopicAdmin::delete_topic_in_broker(self.inner(), addrs, topic).await
     }
 
+    async fn delete_topic_in_broker_list(
+        &self,
+        addrs: HashSet<CheetahString>,
+        topics: Vec<CheetahString>,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        TopicAdmin::delete_topic_in_broker_list(self.inner(), addrs, topics).await
+    }
+
     #[allow(deprecated)]
     async fn delete_topic_in_broker_concurrent(
         &self,
@@ -1365,6 +1386,15 @@ impl ConsumerAdmin for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         remove_offset: Option<bool>,
     ) -> rocketmq_error::RocketMQResult<()> {
         ConsumerAdmin::delete_subscription_group(self.inner(), addr, group_name, remove_offset).await
+    }
+
+    async fn delete_subscription_group_list(
+        &self,
+        addr: CheetahString,
+        group_names: Vec<CheetahString>,
+        clean_offset: bool,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        ConsumerAdmin::delete_subscription_group_list(self.inner(), addr, group_names, clean_offset).await
     }
 
     async fn get_consume_status(

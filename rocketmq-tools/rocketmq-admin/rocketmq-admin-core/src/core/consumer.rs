@@ -243,6 +243,40 @@ pub struct DashboardConsumerMutationResult {
     pub updated: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeleteSubscriptionGroupsRequest {
+    pub broker_addr: String,
+    pub group_names: Vec<String>,
+    pub clean_offset: bool,
+}
+
+impl DeleteSubscriptionGroupsRequest {
+    pub fn try_new(broker_addr: impl Into<String>, group_names: Vec<String>, clean_offset: bool) -> AdminResult<Self> {
+        let broker_addr = required("brokerAddr", broker_addr)?;
+        if group_names.is_empty() {
+            return Err(crate::core::AdminError::invalid_argument(
+                "groupNames",
+                "must not be empty",
+            ));
+        }
+        let group_names = group_names
+            .into_iter()
+            .map(|group_name| required("groupName", group_name))
+            .collect::<AdminResult<Vec<_>>>()?;
+        Ok(Self {
+            broker_addr,
+            group_names,
+            clean_offset,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConsumerBatchMutationOutcome {
+    pub message: String,
+    pub broker_count: usize,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ConsumerRequestMode {
     Pull,
@@ -428,6 +462,11 @@ pub trait ConsumerAdmin: Send {
         request: &'a DashboardConsumerDeleteRequest,
     ) -> AdminFuture<'a, DashboardConsumerMutationResult>;
 
+    fn delete_subscription_groups<'a>(
+        &'a mut self,
+        request: &'a DeleteSubscriptionGroupsRequest,
+    ) -> AdminFuture<'a, ConsumerBatchMutationOutcome>;
+
     fn set_consumer_request_mode<'a>(
         &'a mut self,
         request: &'a SetConsumerRequestModeRequest,
@@ -496,6 +535,10 @@ pub trait ConsumerMutationAdmin: Send {
         &'a mut self,
         request: &'a DashboardConsumerDeleteRequest,
     ) -> AdminFuture<'a, DashboardConsumerMutationResult>;
+    fn delete_subscription_groups<'a>(
+        &'a mut self,
+        request: &'a DeleteSubscriptionGroupsRequest,
+    ) -> AdminFuture<'a, ConsumerBatchMutationOutcome>;
     fn set_consumer_request_mode<'a>(
         &'a mut self,
         request: &'a SetConsumerRequestModeRequest,
@@ -553,6 +596,12 @@ impl<T: ConsumerAdmin + ?Sized> ConsumerMutationAdmin for T {
         request: &'a DashboardConsumerDeleteRequest,
     ) -> AdminFuture<'a, DashboardConsumerMutationResult> {
         ConsumerAdmin::delete_dashboard_consumer_group(self, request)
+    }
+    fn delete_subscription_groups<'a>(
+        &'a mut self,
+        request: &'a DeleteSubscriptionGroupsRequest,
+    ) -> AdminFuture<'a, ConsumerBatchMutationOutcome> {
+        ConsumerAdmin::delete_subscription_groups(self, request)
     }
     fn set_consumer_request_mode<'a>(
         &'a mut self,

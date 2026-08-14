@@ -96,6 +96,10 @@ use rocketmq_protocol::protocol::body::consume_message_directly_result::ConsumeM
 use rocketmq_protocol::protocol::body::consumer_running_info::ConsumerRunningInfo;
 #[cfg(feature = "admin-mutation")]
 use rocketmq_protocol::protocol::body::create_topic_list_request_body::CreateTopicListRequestBody;
+#[cfg(feature = "admin-mutation")]
+use rocketmq_protocol::protocol::body::delete_subscription_group_list_request_body::DeleteSubscriptionGroupListRequestBody;
+#[cfg(feature = "admin-mutation")]
+use rocketmq_protocol::protocol::body::delete_topic_list_request_body::DeleteTopicListRequestBody;
 use rocketmq_protocol::protocol::body::epoch_entry_cache::EpochEntryCache;
 use rocketmq_protocol::protocol::body::get_consumer_list_by_group_response_body::GetConsumerListByGroupResponseBody;
 use rocketmq_protocol::protocol::body::get_lite_client_info_response_body::GetLiteClientInfoResponseBody;

@@ -33,6 +33,7 @@ use rocketmq_protocol::protocol::subscription::broker_stats_data::BrokerStatsDat
 use crate::client_adapter::lifecycle::AdminSession;
 use crate::client_adapter::producer::*;
 use crate::core::topic::DeleteTopicAdminRequest;
+use crate::core::topic::DeleteTopicsInBrokerRequest;
 use crate::core::topic::GetTopicConfigRequest;
 use crate::core::topic::GetTopicRouteRequest;
 use crate::core::topic::ListTopicsRequest;
@@ -500,6 +501,33 @@ impl TopicAdmin for AdminSession {
             Ok(TopicMutationOutcome {
                 message: format!("Topic `{topic}` was deleted from {} cluster(s).", clusters.len()),
                 target_count: clusters.len(),
+            })
+        })
+    }
+
+    fn delete_topics_in_broker<'a>(
+        &'a mut self,
+        request: &'a DeleteTopicsInBrokerRequest,
+    ) -> AdminFuture<'a, TopicMutationOutcome> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            self.client_mut()
+                .delete_topic_in_broker_list(
+                    HashSet::from([CheetahString::from(request.broker_addr.as_str())]),
+                    request
+                        .topics
+                        .iter()
+                        .map(|topic| CheetahString::from(topic.as_str()))
+                        .collect(),
+                )
+                .await
+                .map_err(|error| backend_error("delete_topic_in_broker_list", error))?;
+            Ok(TopicMutationOutcome {
+                message: format!(
+                    "deleted {} topics through one broker batch request",
+                    request.topics.len()
+                ),
+                target_count: 1,
             })
         })
     }

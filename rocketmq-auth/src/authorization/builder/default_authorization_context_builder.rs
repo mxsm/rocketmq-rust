@@ -14,10 +14,13 @@
 
 use std::any::Any;
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 use cheetah_string::CheetahString;
 use rocketmq_model::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_protocol::code::request_code::RequestCode;
+use rocketmq_protocol::protocol::body::delete_subscription_group_list_request_body::DeleteSubscriptionGroupListRequestBody;
+use rocketmq_protocol::protocol::body::delete_topic_list_request_body::DeleteTopicListRequestBody;
 use rocketmq_protocol::protocol::body::request::lock_batch_request_body::LockBatchRequestBody;
 use rocketmq_protocol::protocol::body::unlock_batch_request_body::UnlockBatchRequestBody;
 use rocketmq_protocol::protocol::header::get_consumer_listby_group_request_header::GetConsumerListByGroupRequestHeader;
@@ -501,8 +504,16 @@ impl AuthorizationContextBuilder for DefaultAuthorizationContextBuilder {
         command: &RemotingCommand,
     ) -> AuthorizationResult<Vec<DefaultAuthorizationContext>> {
         let mut contexts = Vec::new();
+        let empty_fields = HashMap::new();
         let fields = match command.ext_fields() {
             Some(fields) => fields,
+            None if matches!(
+                RequestCode::from(command.code()),
+                RequestCode::DeleteTopicInBrokerList | RequestCode::DeleteSubscriptionGroupList
+            ) =>
+            {
+                &empty_fields
+            }
             None => return Ok(contexts),
         };
 
@@ -781,6 +792,44 @@ impl AuthorizationContextBuilder for DefaultAuthorizationContextBuilder {
                     }
                 }
             }
+            RequestCode::DeleteTopicInBrokerList => {
+                let body = command
+                    .body()
+                    .ok_or_else(|| AuthorizationError::InvalidContext("batch topic delete body is missing".into()))?;
+                let body = SerdeJsonUtils::from_json_bytes::<DeleteTopicListRequestBody>(body)
+                    .map_err(|error| AuthorizationError::InvalidContext(error.to_string()))?;
+                let mut seen = HashSet::new();
+                for topic in body.topic_list {
+                    if seen.insert(topic.clone()) {
+                        contexts.push(self.build_context(
+                            subject_key,
+                            Resource::of_topic(topic.as_str()),
+                            vec![Action::Delete],
+                            &source_ip,
+                            &rpc_code,
+                        ));
+                    }
+                }
+            }
+            RequestCode::DeleteSubscriptionGroupList => {
+                let body = command
+                    .body()
+                    .ok_or_else(|| AuthorizationError::InvalidContext("batch group delete body is missing".into()))?;
+                let body = SerdeJsonUtils::from_json_bytes::<DeleteSubscriptionGroupListRequestBody>(body)
+                    .map_err(|error| AuthorizationError::InvalidContext(error.to_string()))?;
+                let mut seen = HashSet::new();
+                for group in body.group_name_list {
+                    if seen.insert(group.clone()) {
+                        contexts.push(self.build_context(
+                            subject_key,
+                            Resource::of_group(group.to_string()),
+                            vec![Action::Delete],
+                            &source_ip,
+                            &rpc_code,
+                        ));
+                    }
+                }
+            }
             request_code => self.build_context_by_java_annotation_mapping(
                 &mut contexts,
                 subject_key,
@@ -1003,5 +1052,51 @@ mod tests {
         let contexts = builder.build_from_remoting(&(), &topics).unwrap();
         assert_eq!(contexts[0].resource_key(), Some("Cluster:ClusterA".to_string()));
         assert_eq!(contexts[0].actions(), &[Action::List]);
+    }
+
+    #[test]
+    fn batch_delete_builds_one_deduplicated_context_per_resource() {
+        let builder = DefaultAuthorizationContextBuilder::new(AuthConfig::default());
+        let topic_body =
+            rocketmq_protocol::protocol::body::delete_topic_list_request_body::DeleteTopicListRequestBody {
+                topic_list: vec!["TopicA".into(), "TopicB".into(), "TopicA".into()],
+            };
+        let topic_command = RemotingCommand::create_remoting_command(RequestCode::DeleteTopicInBrokerList.to_i32())
+            .set_body(serde_json::to_vec(&topic_body).unwrap());
+
+        let topic_contexts = builder.build_from_remoting(&(), &topic_command).unwrap();
+        assert_eq!(2, topic_contexts.len());
+        assert_eq!(Some("Topic:TopicA".to_string()), topic_contexts[0].resource_key());
+        assert_eq!(Some("Topic:TopicB".to_string()), topic_contexts[1].resource_key());
+        assert!(topic_contexts
+            .iter()
+            .all(|context| context.actions() == [Action::Delete]));
+
+        let group_body = rocketmq_protocol::protocol::body::delete_subscription_group_list_request_body::DeleteSubscriptionGroupListRequestBody {
+            group_name_list: vec!["GroupA".into(), "GroupA".into(), "GroupB".into()],
+            clean_offset: true,
+        };
+        let group_command = RemotingCommand::create_remoting_command(RequestCode::DeleteSubscriptionGroupList.to_i32())
+            .set_body(serde_json::to_vec(&group_body).unwrap());
+
+        let group_contexts = builder.build_from_remoting(&(), &group_command).unwrap();
+        assert_eq!(2, group_contexts.len());
+        assert_eq!(Some("Group:GroupA".to_string()), group_contexts[0].resource_key());
+        assert_eq!(Some("Group:GroupB".to_string()), group_contexts[1].resource_key());
+        assert!(group_contexts
+            .iter()
+            .all(|context| context.actions() == [Action::Delete]));
+    }
+
+    #[test]
+    fn batch_delete_rejects_missing_or_malformed_body() {
+        let builder = DefaultAuthorizationContextBuilder::new(AuthConfig::default());
+        for command in [
+            RemotingCommand::create_remoting_command(RequestCode::DeleteTopicInBrokerList.to_i32()),
+            RemotingCommand::create_remoting_command(RequestCode::DeleteSubscriptionGroupList.to_i32())
+                .set_body(b"not-json".to_vec()),
+        ] {
+            assert!(builder.build_from_remoting(&(), &command).is_err());
+        }
     }
 }
