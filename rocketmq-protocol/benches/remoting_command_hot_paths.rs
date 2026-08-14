@@ -53,6 +53,7 @@ use sysinfo::System as ProcessSystem;
 static ALLOCATOR: CountingAllocator<SystemAllocator> = CountingAllocator::new(SystemAllocator);
 
 const CONSTRUCTS_PER_ROUND: usize = 512;
+const DECODES_PER_ROUND: usize = 512;
 const BODY_SIZES: [usize; 6] = [0, 128, 4 * 1024, 64 * 1024, 1024 * 1024, 4 * 1024 * 1024];
 const EXT_FIELD_COUNTS: [usize; 7] = [0, 1, 8, 16, 32, 128, 256];
 
@@ -176,6 +177,61 @@ impl ConstructContentionHarness {
     fn run(&self) {
         self.start.wait();
         self.finish.wait();
+    }
+}
+
+struct DecodeContentionHarness {
+    start: Arc<Barrier>,
+    finish: Arc<Barrier>,
+    stop: Arc<AtomicBool>,
+    workers: Vec<JoinHandle<()>>,
+}
+
+impl DecodeContentionHarness {
+    fn new(worker_count: usize, ext_fields: usize) -> Self {
+        let frame = encoded(command(SerializeType::ROCKETMQ, ext_fields, None, 0));
+        let start = Arc::new(Barrier::new(worker_count + 1));
+        let finish = Arc::new(Barrier::new(worker_count + 1));
+        let stop = Arc::new(AtomicBool::new(false));
+        let workers = (0..worker_count)
+            .map(|_| {
+                let frame = frame.clone();
+                let start = Arc::clone(&start);
+                let finish = Arc::clone(&finish);
+                let stop = Arc::clone(&stop);
+                std::thread::spawn(move || loop {
+                    start.wait();
+                    if stop.load(Ordering::Acquire) {
+                        break;
+                    }
+                    for _ in 0..DECODES_PER_ROUND {
+                        black_box(decode_complete(&frame));
+                    }
+                    finish.wait();
+                })
+            })
+            .collect();
+        Self {
+            start,
+            finish,
+            stop,
+            workers,
+        }
+    }
+
+    fn run(&self) {
+        self.start.wait();
+        self.finish.wait();
+    }
+}
+
+impl Drop for DecodeContentionHarness {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        self.start.wait();
+        for worker in self.workers.drain(..) {
+            worker.join().expect("decode contention worker must stop");
+        }
     }
 }
 
@@ -475,6 +531,20 @@ fn benchmark_decode_and_round_trip(c: &mut Criterion) {
         }
     }
     decode.finish();
+
+    let mut contention = c.benchmark_group("remoting_command/decode_contention");
+    for ext_fields in [0, 8, 32, 128] {
+        for thread_count in [1, 8, 16, 32] {
+            let harness = DecodeContentionHarness::new(thread_count, ext_fields);
+            contention.throughput(Throughput::Elements((thread_count * DECODES_PER_ROUND) as u64));
+            contention.bench_with_input(
+                BenchmarkId::new(format!("ext-{ext_fields}"), format!("threads-{thread_count}")),
+                &harness,
+                |benchmark, harness| benchmark.iter(|| harness.run()),
+            );
+        }
+    }
+    contention.finish();
 
     let mut typed_decode = c.benchmark_group("remoting_command/typed_decode");
     for (serialize_type, protocol) in protocols() {
