@@ -33,6 +33,14 @@ pub mod command;
 pub mod proxy_facade;
 pub mod send_message_constants;
 
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub mod test_support {
+    pub use crate::processor::notification_processor::{
+        run_notification_filter_probe, NotificationFilterProbe, NotificationFilterProbeMessage,
+    };
+}
+
 mod lifecycle;
 
 pub(crate) fn runtime_to_rocketmq_error(

@@ -450,6 +450,14 @@ mod defaults {
         100000
     }
 
+    pub fn use_message_filter_for_notification() -> bool {
+        true
+    }
+
+    pub fn max_message_filter_num_for_notification() -> i32 {
+        64
+    }
+
     pub fn pop_polling_size() -> usize {
         1024
     }
@@ -1056,6 +1064,12 @@ pub struct BrokerConfig {
     #[serde(default)]
     pub filter_support_retry: bool,
 
+    #[serde(default = "defaults::use_message_filter_for_notification")]
+    pub use_message_filter_for_notification: bool,
+
+    #[serde(default = "defaults::max_message_filter_num_for_notification")]
+    pub max_message_filter_num_for_notification: i32,
+
     #[serde(default = "defaults::use_server_side_reset_offset")]
     pub use_server_side_reset_offset: bool,
 
@@ -1527,6 +1541,8 @@ impl Default for BrokerConfig {
             subscription_expired_timeout: 1000 * 60 * 10,
             enable_property_filter: false,
             filter_support_retry: false,
+            use_message_filter_for_notification: defaults::use_message_filter_for_notification(),
+            max_message_filter_num_for_notification: defaults::max_message_filter_num_for_notification(),
             use_server_side_reset_offset: true,
             slave_read_enable: false,
             commercial_base_count: 1,
@@ -2059,6 +2075,14 @@ impl BrokerConfig {
         properties.insert(
             "filterSupportRetry".into(),
             self.filter_support_retry.to_string().into(),
+        );
+        properties.insert(
+            "useMessageFilterForNotification".into(),
+            self.use_message_filter_for_notification.to_string().into(),
+        );
+        properties.insert(
+            "maxMessageFilterNumForNotification".into(),
+            self.max_message_filter_num_for_notification.to_string().into(),
         );
         properties.insert(
             "useServerSideResetOffset".into(),

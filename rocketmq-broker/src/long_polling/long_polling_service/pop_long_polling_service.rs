@@ -242,6 +242,7 @@ impl<RP: PopLongPollingRequestProcessor + Sync + 'static> PopLongPollingService<
                 for entry in service.polling_map.iter() {
                     let value = entry.value();
                     while let Some(first) = value.pop_front() {
+                        service.total_polling_num.fetch_sub(1, Ordering::AcqRel);
                         service.wake_up(first.value().clone());
                     }
                 }
@@ -743,6 +744,7 @@ mod tests {
     use std::time::Duration;
 
     use cheetah_string::CheetahString;
+    use rocketmq_model::common::key_builder::KeyBuilder;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     use rocketmq_runtime::common::time_utils::current_millis;
     use rocketmq_store::MessageFilter;
@@ -764,6 +766,8 @@ mod tests {
 
     struct RejectAllFilter;
 
+    struct MatchTagFilter(i64);
+
     impl MessageFilter for RejectAllFilter {
         fn is_matched_by_consume_queue(
             &self,
@@ -779,6 +783,24 @@ mod tests {
             _properties: Option<&std::collections::HashMap<CheetahString, CheetahString>>,
         ) -> bool {
             false
+        }
+    }
+
+    impl MessageFilter for MatchTagFilter {
+        fn is_matched_by_consume_queue(
+            &self,
+            tags_code: Option<i64>,
+            _cq_ext_unit: Option<&rocketmq_store::CqExtUnit>,
+        ) -> bool {
+            tags_code == Some(self.0)
+        }
+
+        fn is_matched_by_commit_log(
+            &self,
+            _msg_buffer: Option<&[u8]>,
+            _properties: Option<&std::collections::HashMap<CheetahString, CheetahString>>,
+        ) -> bool {
+            true
         }
     }
 
@@ -936,6 +958,98 @@ mod tests {
         assert_eq!(processor.calls.load(Ordering::Acquire), 1);
 
         service.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn notification_filter_requeues_a_miss_then_wakes_on_a_match() {
+        let processor = Arc::new(FailingProcessor {
+            calls: AtomicUsize::new(0),
+        });
+        let service = test_service(&processor);
+        PopLongPollingService::start(&service).await;
+        let topic = CheetahString::from_static_str("notification-filter-topic");
+        let group = CheetahString::from_static_str("notification-filter-group");
+        let header = rocketmq_protocol::protocol::header::notification_request_header::NotificationRequestHeader {
+            consumer_group: group.clone(),
+            topic: topic.clone(),
+            queue_id: 0,
+            born_time: i64::try_from(current_millis()).expect("test clock fits i64"),
+            order: false,
+            attempt_id: None,
+            exp_type: Some(CheetahString::from_static_str("TAG")),
+            exp: Some(CheetahString::from_static_str("blue")),
+            is_lite_consumer: false,
+            client_id: None,
+            poll_time: 60_000,
+            topic_request_header: None,
+        };
+        let mut command = RemotingCommand::create_remoting_command(0);
+        assert_eq!(
+            service.polling(
+                test_context().await,
+                &mut command,
+                PollingHeader::new_from_notification_request_header(&header),
+                Some(rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData::default()),
+                Some(Arc::new(MatchTagFilter(7))),
+            ),
+            crate::long_polling::polling_result::PollingResult::PollingSuc
+        );
+
+        assert!(!service.notify_message_arriving(&topic, 0, &group, Some(6), 0, None, None));
+        assert_eq!(processor.calls.load(Ordering::Acquire), 0);
+        assert!(service.notify_message_arriving(&topic, 0, &group, Some(7), 0, None, None));
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while processor.calls.load(Ordering::Acquire) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("matching notification should wake without sleeping");
+
+        service.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn shutdown_clears_suspended_notification_accounting() {
+        let processor = Arc::new(FailingProcessor {
+            calls: AtomicUsize::new(0),
+        });
+        let service = test_service(&processor);
+        PopLongPollingService::start(&service).await;
+        let topic = CheetahString::from_static_str("notification-shutdown-topic");
+        let group = CheetahString::from_static_str("notification-shutdown-group");
+        let header = rocketmq_protocol::protocol::header::notification_request_header::NotificationRequestHeader {
+            consumer_group: group.clone(),
+            topic: topic.clone(),
+            queue_id: 0,
+            born_time: i64::try_from(current_millis()).expect("test clock fits i64"),
+            order: false,
+            attempt_id: None,
+            exp_type: None,
+            exp: None,
+            is_lite_consumer: false,
+            client_id: None,
+            poll_time: 60_000,
+            topic_request_header: None,
+        };
+        let mut command = RemotingCommand::create_remoting_command(0);
+        assert_eq!(
+            service.polling(
+                test_context().await,
+                &mut command,
+                PollingHeader::new_from_notification_request_header(&header),
+                None,
+                None,
+            ),
+            crate::long_polling::polling_result::PollingResult::PollingSuc
+        );
+        assert_eq!(service.total_polling_num.load(Ordering::Acquire), 1);
+
+        service.shutdown().await;
+
+        assert_eq!(service.total_polling_num.load(Ordering::Acquire), 0);
+        let key = KeyBuilder::build_polling_key(&topic, &group, 0);
+        assert_eq!(service.get_polling_num(&key), 0);
     }
 
     #[tokio::test]

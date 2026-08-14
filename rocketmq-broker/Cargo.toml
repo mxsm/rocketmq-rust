@@ -54,6 +54,7 @@ prometheus       = ["otel-metrics", "rocketmq-observability/prometheus"]
 metrics-prometheus = ["prometheus"]
 production-observability = ["metrics-prometheus", "otlp-traces", "otlp-logs"]
 production      = ["local_file_store", "production-observability"]
+test-support    = []
 
 [dependencies]
 rocketmq-store       = { workspace = true }
@@ -172,3 +173,7 @@ windows = { version = "0.62.2", features = [
   "Win32_System_ProcessStatus",
   "Win32_System_Threading",
 ] }
+
+[[test]]
+name = "notification_filtering"
+required-features = ["test-support"]
