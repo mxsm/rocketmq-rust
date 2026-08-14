@@ -80,6 +80,8 @@ fn transport_consumers_use_only_versioned_capabilities_and_dtos() {
         connect: Default::default(),
         maintenance: Default::default(),
         tls: Default::default(),
+        #[cfg(feature = "socks")]
+        socks_proxy: Default::default(),
     };
     let _: Option<OneShotTransportClient> = None;
 }

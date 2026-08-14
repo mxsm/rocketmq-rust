@@ -63,6 +63,8 @@ mod runtime;
 mod security;
 mod server;
 mod session_executor;
+#[cfg(feature = "socks")]
+mod socks;
 mod telemetry;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;

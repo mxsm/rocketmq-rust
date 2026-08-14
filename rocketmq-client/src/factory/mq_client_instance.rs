@@ -699,7 +699,7 @@ impl MQClientInstance {
                 let Some(mq_client_api_impl) = self.mq_client_api_impl.load_full() else {
                     return Err(mq_client_err!("mq_client_api_impl is None"));
                 };
-                mq_client_api_impl.start().await;
+                mq_client_api_impl.start().await?;
                 // Start various schedule tasks
                 self.start_scheduled_task(self.clone())?;
                 // Start pull service

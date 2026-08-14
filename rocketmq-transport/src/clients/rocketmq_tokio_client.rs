@@ -1129,7 +1129,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
             },
             None => SessionConnectTarget::Legacy(addr.to_string()),
         };
-        let tls_config = self.tokio_client_config.tls.clone();
+        let transport_config = (*self.tokio_client_config).clone();
         let frame_limits = self.frame_limits;
 
         let transport_security = self.transport_security.clone();
@@ -1138,7 +1138,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
             session_target,
             self.cmd_handler.clone(),
             self.tx.as_ref(),
-            tls_config,
+            transport_config,
             frame_limits,
             deadline,
             self.telemetry.clone(),

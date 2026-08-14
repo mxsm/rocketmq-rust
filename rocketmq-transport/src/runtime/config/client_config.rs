@@ -17,6 +17,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::config::TlsConfig;
+#[cfg(feature = "socks")]
+use crate::socks::SocksProxyConfig;
 
 const CLIENT_CONNECT_TIMEOUT: &str = "com.rocketmq.rocketmq-remoting.client.connect.timeout";
 
@@ -112,6 +114,8 @@ pub struct TransportClientConfig {
     pub connect: ConnectConfig,
     pub maintenance: MaintenanceConfig,
     pub tls: TlsConfig,
+    #[cfg(feature = "socks")]
+    pub socks_proxy: SocksProxyConfig,
 }
 
 #[cfg(test)]

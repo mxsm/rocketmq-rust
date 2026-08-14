@@ -164,7 +164,7 @@ impl MQClientAPIFactory {
         self.apply_nameserver_access_config().await?;
         self.start_nameserver_domain_refresh();
         for client in &self.clients {
-            client.start().await;
+            client.start().await?;
         }
         Ok(())
     }

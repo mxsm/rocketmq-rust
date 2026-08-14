@@ -23,7 +23,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::clients::nameserver_endpoint::ConnectTarget;
+#[cfg(test)]
 use crate::config::TlsConfig;
+use crate::runtime::config::client_config::TransportClientConfig;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_runtime::common::time_utils::current_millis;
@@ -197,7 +199,7 @@ fn connect<PR>(
     tx: Option<tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
     _notify: broadcast::Receiver<()>,
     _send_notify: broadcast::Receiver<()>,
-    tls_config: TlsConfig,
+    transport_config: TransportClientConfig,
     frame_limits: FrameLimits,
     task_group: TaskGroup,
     operation: OperationContext,
@@ -212,25 +214,47 @@ where
         let error_identity = target.error_identity();
         let connected = match target {
             SessionConnectTarget::Legacy(address) => {
-                crate::client::connect_with_config_and_telemetry(
+                #[cfg(feature = "socks")]
+                let connected = crate::client::connect_with_transport_config_and_telemetry(
                     address.as_str(),
-                    &tls_config,
+                    &transport_config,
                     frame_limits,
                     deadline,
                     telemetry,
                 )
-                .await?
+                .await?;
+                #[cfg(not(feature = "socks"))]
+                let connected = crate::client::connect_with_config_and_telemetry(
+                    address.as_str(),
+                    &transport_config.tls,
+                    frame_limits,
+                    deadline,
+                    telemetry,
+                )
+                .await?;
+                connected
             }
             SessionConnectTarget::Resolved(target) => {
-                crate::client::connect_target_with_config_options_and_telemetry(
+                #[cfg(feature = "socks")]
+                let connected = crate::client::connect_target_with_transport_config_and_telemetry(
                     &target,
-                    &tls_config,
+                    &transport_config,
+                    frame_limits,
+                    deadline,
+                    telemetry,
+                )
+                .await?;
+                #[cfg(not(feature = "socks"))]
+                let connected = crate::client::connect_target_with_config_options_and_telemetry(
+                    &target,
+                    &transport_config.tls,
                     frame_limits,
                     crate::config::SocketOptions::default(),
                     deadline,
                     telemetry,
                 )
-                .await?
+                .await?;
+                connected
             }
         };
         let (connection, local_addr, remote_address, negotiated_tls) = connected.into_parts_with_tls();
@@ -311,7 +335,10 @@ where
             SessionConnectTarget::Legacy(addr),
             cmd_handler,
             tx,
-            tls_config,
+            TransportClientConfig {
+                tls: tls_config,
+                ..TransportClientConfig::default()
+            },
             FrameLimits::java_compatibility(),
             deadline,
             telemetry,
@@ -324,7 +351,7 @@ where
         target: SessionConnectTarget,
         cmd_handler: Arc<RemotingGeneralHandler<PR>>,
         tx: Option<&tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
-        tls_config: TlsConfig,
+        transport_config: TransportClientConfig,
         frame_limits: FrameLimits,
         deadline: RequestDeadline,
         telemetry: TransportTelemetry,
@@ -334,7 +361,7 @@ where
             target,
             cmd_handler,
             tx,
-            tls_config,
+            transport_config,
             frame_limits,
             task_group,
             operation,
@@ -351,7 +378,7 @@ where
         target: SessionConnectTarget,
         cmd_handler: Arc<RemotingGeneralHandler<PR>>,
         tx: Option<&tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
-        tls_config: TlsConfig,
+        transport_config: TransportClientConfig,
         frame_limits: FrameLimits,
         task_group: TaskGroup,
         operation: OperationContext,
@@ -373,7 +400,7 @@ where
             tx.cloned(),
             receiver,
             send_receiver,
-            tls_config,
+            transport_config,
             frame_limits,
             task_group,
             operation,
