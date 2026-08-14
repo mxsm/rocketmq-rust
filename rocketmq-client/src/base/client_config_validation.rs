@@ -21,6 +21,8 @@
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 
+use crate::base::client_config::ClientConfig;
+
 /// Validator for ClientConfig fields
 ///
 /// Provides validation methods for all configuration parameters,
@@ -74,6 +76,22 @@ impl ClientConfigValidator {
     // =========================================================================
     // Validation Methods
     // =========================================================================
+
+    /// Validates every runtime-affecting public client setting.
+    pub fn validate_config(config: &ClientConfig) -> RocketMQResult<()> {
+        Self::validate_poll_name_server_interval(config.poll_name_server_interval)?;
+        Self::validate_heartbeat_broker_interval(config.heartbeat_broker_interval)?;
+        Self::validate_persist_consumer_offset_interval(config.persist_consumer_offset_interval)?;
+        Self::validate_mq_client_api_timeout(config.mq_client_api_timeout)?;
+        Self::validate_trace_msg_batch_num(config.trace_msg_batch_num)?;
+        Self::validate_max_page_size_in_get_metadata(config.max_page_size_in_get_metadata)?;
+        Self::validate_client_callback_executor_threads(config.client_callback_executor_threads)?;
+        Self::validate_pull_message_service_shards(config.pull_message_service_shards)?;
+        if config.enable_concurrent_heartbeat {
+            Self::validate_concurrent_heartbeat_thread_pool_size(config.concurrent_heartbeat_thread_pool_size)?;
+        }
+        Ok(())
+    }
 
     /// Validate poll name server interval
     ///

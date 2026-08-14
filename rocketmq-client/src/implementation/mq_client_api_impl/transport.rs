@@ -71,6 +71,9 @@ impl MQClientAPIImpl {
             ))),
             //client_remoting_processor,
             name_srv_addr: RwLock::new(None),
+            callback_executor: callback_executor::ClientCallbackExecutor::new(
+                client_config.client_callback_executor_threads,
+            ),
             client_config,
             command_factory,
             background_tasks: TaskTracker::new(),
@@ -80,6 +83,7 @@ impl MQClientAPIImpl {
     }
 
     pub async fn start(&self) -> RocketMQResult<()> {
+        crate::base::client_config_validation::ClientConfigValidator::validate_config(&self.client_config)?;
         if let Some(reason) = self.startup_config_error.as_ref() {
             return Err(RocketMQError::ConfigInvalidValue {
                 key: ClientConfig::SOCKS_PROXY_CONFIG,
@@ -93,15 +97,17 @@ impl MQClientAPIImpl {
     pub fn shutdown(&self) {
         self.background_shutdown.cancel();
         self.background_tasks.close();
+        self.callback_executor.close();
         self.remoting_client.shutdown();
     }
 
     pub async fn shutdown_background_tasks(&self, timeout: Duration) -> bool {
         self.background_shutdown.cancel();
         self.background_tasks.close();
-        tokio::time::timeout(timeout, self.background_tasks.wait())
-            .await
-            .is_ok()
+        let background = tokio::time::timeout(timeout, self.background_tasks.wait());
+        let callbacks = self.callback_executor.shutdown(timeout);
+        let (background, callbacks) = tokio::join!(background, callbacks);
+        background.is_ok() && callbacks
     }
 
     pub fn get_remoting_client(&self) -> Arc<RemotingClient<ClientRemotingProcessor>> {

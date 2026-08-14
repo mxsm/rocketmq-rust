@@ -43,6 +43,7 @@ use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFacto
 use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
 use rocketmq_protocol::protocol::SerializeType;
 
+use super::callback_executor::ClientCallbackExecutor;
 use super::*;
 
 fn retry_strategy() -> MQFaultStrategy {
@@ -687,15 +688,20 @@ fn async_retry_queue_without_topic_publish_info_returns_none() {
     assert!(selected.is_none());
 }
 
-#[test]
-fn async_send_callback_success_runs_in_owned_send_task() {
+#[tokio::test]
+async fn async_send_callback_success_runs_in_owned_send_task() {
     let (tx, rx) = std::sync::mpsc::channel();
     let callback: ArcSendCallback = Arc::new(move |result: Option<&SendResult>, error: Option<&RocketMQError>| {
         tx.send((result.is_some(), error.is_some()))
             .expect("test receiver should be alive");
     });
 
-    MQClientAPIImpl::notify_send_callback_success(&Some(callback), &SendResult::default());
+    MQClientAPIImpl::notify_send_callback_success(
+        &ClientCallbackExecutor::new(1),
+        &Some(callback),
+        &SendResult::default(),
+    )
+    .await;
 
     let (has_result, has_error) = rx
         .recv_timeout(Duration::from_secs(2))
@@ -704,8 +710,8 @@ fn async_send_callback_success_runs_in_owned_send_task() {
     assert!(!has_error);
 }
 
-#[test]
-fn async_send_callback_exception_runs_in_owned_send_task() {
+#[tokio::test]
+async fn async_send_callback_exception_runs_in_owned_send_task() {
     let (tx, rx) = std::sync::mpsc::channel();
     let callback: ArcSendCallback = Arc::new(move |result: Option<&SendResult>, error: Option<&RocketMQError>| {
         tx.send((result.is_some(), error.map(ToString::to_string)))
@@ -713,7 +719,7 @@ fn async_send_callback_exception_runs_in_owned_send_task() {
     });
     let error = RocketMQError::network_request_failed("broker-a", "callback failure");
 
-    MQClientAPIImpl::notify_send_callback_exception(&Some(callback), &error);
+    MQClientAPIImpl::notify_send_callback_exception(&ClientCallbackExecutor::new(1), &Some(callback), &error).await;
 
     let (has_result, error) = rx
         .recv_timeout(Duration::from_secs(2))
@@ -823,6 +829,7 @@ async fn pop_callback_task_does_not_wait_for_the_remoting_future() {
         &crate::runtime::test_service_context("client-pop-background-test").component("api-background"),
         &tracker,
         &token,
+        ClientCallbackExecutor::new(1),
         async move {
             released.await.expect("test should release blocked POP request");
             Ok(PopResult::default())
@@ -859,6 +866,7 @@ async fn pop_callback_task_completes_once_when_shutdown_cancels_the_request() {
         &crate::runtime::test_service_context("client-pop-cancel-test").component("api-background"),
         &tracker,
         &token,
+        ClientCallbackExecutor::new(1),
         pending::<rocketmq_error::RocketMQResult<PopResult>>(),
         RecordingPopCallback {
             calls: calls.clone(),

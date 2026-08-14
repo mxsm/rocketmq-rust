@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::callback_executor::ClientCallbackExecutor;
 use super::request_builder::heartbeat_request;
 use super::*;
 
@@ -262,6 +263,7 @@ impl MQClientAPIImpl {
         // Clone all necessary data for background task
         let remoting_client = self.remoting_client.clone();
         let client_config = self.client_config.clone();
+        let callback_executor = self.callback_executor.clone();
         let current_addr = addr.clone();
         let current_broker_name = broker_name.clone();
         let current_request = request;
@@ -287,6 +289,7 @@ impl MQClientAPIImpl {
         Self::send_message_async_impl(
             remoting_client,
             client_config,
+            callback_executor,
             mq_fault_strategy,
             current_addr,
             current_broker_name,
@@ -314,6 +317,7 @@ impl MQClientAPIImpl {
     pub(super) async fn send_message_async_impl(
         remoting_client: Arc<RemotingClient<ClientRemotingProcessor>>,
         client_config: Arc<ClientConfig>,
+        callback_executor: ClientCallbackExecutor,
         mq_fault_strategy: MQFaultStrategy,
         mut current_addr: CheetahString,
         mut current_broker_name: CheetahString,
@@ -341,7 +345,7 @@ impl MQClientAPIImpl {
                     timeout_ms: timeout_millis,
                 };
                 Self::execute_async_send_hook_after(&context_data, None, Some(Self::context_error(err.to_string())));
-                Self::notify_send_callback_exception(&send_callback, &err);
+                Self::notify_send_callback_exception(&callback_executor, &send_callback, &err).await;
                 return;
             }
 
@@ -403,7 +407,7 @@ impl MQClientAPIImpl {
                                 None,
                                 Some(Self::context_error(err_obj.to_string())),
                             );
-                            Self::notify_send_callback_exception(&send_callback, &err_obj);
+                            Self::notify_send_callback_exception(&callback_executor, &send_callback, &err_obj).await;
                             return;
                         }
                     };
@@ -443,7 +447,8 @@ impl MQClientAPIImpl {
                                         None,
                                         Some(Self::context_error(err_obj.to_string())),
                                     );
-                                    Self::notify_send_callback_exception(&send_callback, &err_obj);
+                                    Self::notify_send_callback_exception(&callback_executor, &send_callback, &err_obj)
+                                        .await;
                                     return;
                                 }
                             };
@@ -466,7 +471,7 @@ impl MQClientAPIImpl {
                                 .update_fault_item(current_broker_name.clone(), cost, false, true)
                                 .await;
                             Self::execute_async_send_hook_after(&context_data, Some(&send_result), None);
-                            Self::notify_send_callback_success(&send_callback, &send_result);
+                            Self::notify_send_callback_success(&callback_executor, &send_callback, &send_result).await;
                             return;
                         }
                         Err(_) => {
@@ -479,7 +484,7 @@ impl MQClientAPIImpl {
                                 None,
                                 Some(Self::context_error(err_obj.to_string())),
                             );
-                            Self::notify_send_callback_exception(&send_callback, &err_obj);
+                            Self::notify_send_callback_exception(&callback_executor, &send_callback, &err_obj).await;
                             return;
                         }
                     }
@@ -517,7 +522,7 @@ impl MQClientAPIImpl {
                     }
 
                     Self::execute_async_send_hook_after(&context_data, None, Some(Self::context_error(e.to_string())));
-                    Self::notify_send_callback_exception(&send_callback, &e);
+                    Self::notify_send_callback_exception(&callback_executor, &send_callback, &e).await;
                     return;
                 }
             }
@@ -623,20 +628,30 @@ impl MQClientAPIImpl {
         }
     }
 
-    pub(super) fn notify_send_callback_success(send_callback: &Option<ArcSendCallback>, send_result: &SendResult) {
+    pub(super) async fn notify_send_callback_success(
+        callback_executor: &ClientCallbackExecutor,
+        send_callback: &Option<ArcSendCallback>,
+        send_result: &SendResult,
+    ) {
         let Some(callback) = send_callback.as_ref().cloned() else {
             return;
         };
 
-        callback.on_success(send_result);
+        let _ = callback_executor
+            .execute(async { callback.on_success(send_result) })
+            .await;
     }
 
-    pub(super) fn notify_send_callback_exception(send_callback: &Option<ArcSendCallback>, error: &RocketMQError) {
+    pub(super) async fn notify_send_callback_exception(
+        callback_executor: &ClientCallbackExecutor,
+        send_callback: &Option<ArcSendCallback>,
+        error: &RocketMQError,
+    ) {
         let Some(callback) = send_callback.as_ref().cloned() else {
             return;
         };
 
-        callback.on_exception(error);
+        let _ = callback_executor.execute(async { callback.on_exception(error) }).await;
     }
 
     pub(super) fn process_send_response<T>(

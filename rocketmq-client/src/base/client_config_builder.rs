@@ -86,8 +86,7 @@ impl ClientConfigBuilder {
     }
 
     // ========================================================================
-    // Thread pool configuration--only java client has these options,
-    // but we keep them for compatibility and future use
+    // Runtime concurrency configuration.
     // ========================================================================
 
     /// Sets the number of client callback executor threads
@@ -364,30 +363,7 @@ impl ClientConfigBuilder {
 
     /// Validates the current configuration
     fn validate(&self) -> RocketMQResult<()> {
-        // Validate intervals
-        ClientConfigValidator::validate_poll_name_server_interval(self.config.poll_name_server_interval)?;
-        ClientConfigValidator::validate_heartbeat_broker_interval(self.config.heartbeat_broker_interval)?;
-        ClientConfigValidator::validate_persist_consumer_offset_interval(self.config.persist_consumer_offset_interval)?;
-
-        // Validate timeouts
-        ClientConfigValidator::validate_mq_client_api_timeout(self.config.mq_client_api_timeout)?;
-
-        // Validate numeric limits
-        ClientConfigValidator::validate_trace_msg_batch_num(self.config.trace_msg_batch_num)?;
-        ClientConfigValidator::validate_max_page_size_in_get_metadata(self.config.max_page_size_in_get_metadata)?;
-
-        // Validate thread pool sizes
-        ClientConfigValidator::validate_client_callback_executor_threads(self.config.client_callback_executor_threads)?;
-        ClientConfigValidator::validate_pull_message_service_shards(self.config.pull_message_service_shards)?;
-
-        // Only validate concurrent heartbeat thread pool size if concurrent heartbeat is enabled
-        if self.config.enable_concurrent_heartbeat {
-            ClientConfigValidator::validate_concurrent_heartbeat_thread_pool_size(
-                self.config.concurrent_heartbeat_thread_pool_size,
-            )?;
-        }
-
-        Ok(())
+        ClientConfigValidator::validate_config(&self.config)
     }
 }
 

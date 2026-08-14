@@ -15,6 +15,7 @@
 use super::admin::parse_lite_order_count_info_like_java;
 use super::admin::pop_msg_queue_offset_for_index;
 use super::admin::split_lite_dispatch_value;
+use super::callback_executor::ClientCallbackExecutor;
 use super::request_builder::notification_request;
 use super::response_decoder::notify_result_from_response;
 use super::*;
@@ -48,6 +49,7 @@ impl MQClientAPIImpl {
         service_context: &ChildServiceContext,
         tracker: &TaskTracker,
         shutdown_token: &CancellationToken,
+        callback_executor: ClientCallbackExecutor,
         request: F,
         pop_callback: PC,
     ) where
@@ -83,10 +85,14 @@ impl MQClientAPIImpl {
             let Some(mut callback) = callback else {
                 return;
             };
-            match outcome {
-                Ok(pop_result) => callback.on_success(pop_result).await,
-                Err(error) => callback.on_error(error),
-            }
+            let _ = callback_executor
+                .execute(async move {
+                    match outcome {
+                        Ok(pop_result) => callback.on_success(pop_result).await,
+                        Err(error) => callback.on_error(error),
+                    }
+                })
+                .await;
         });
 
         if let Err(error) =
@@ -567,17 +573,21 @@ impl MQClientAPIImpl {
         {
             Ok(response) => {
                 let result = self.process_pull_response(response, addr).await;
-                match result {
-                    Ok(pull_result) => {
-                        pull_callback.on_success(pull_result).await;
-                    }
-                    Err(error) => {
-                        pull_callback.on_exception(error);
-                    }
-                }
+                let _ = self
+                    .callback_executor
+                    .execute(async {
+                        match result {
+                            Ok(pull_result) => pull_callback.on_success(pull_result).await,
+                            Err(error) => pull_callback.on_exception(error),
+                        }
+                    })
+                    .await;
             }
             Err(err) => {
-                pull_callback.on_exception(err);
+                let _ = self
+                    .callback_executor
+                    .execute(async { pull_callback.on_exception(err) })
+                    .await;
             }
         }
         Ok(())
@@ -1161,10 +1171,16 @@ impl MQClientAPIImpl {
                         ..Default::default()
                     }
                 };
-                ack_callback.on_success(ack_result);
+                let _ = self
+                    .callback_executor
+                    .execute(async { ack_callback.on_success(ack_result) })
+                    .await;
             }
             Err(e) => {
-                ack_callback.on_exception(e);
+                let _ = self
+                    .callback_executor
+                    .execute(async { ack_callback.on_exception(e) })
+                    .await;
             }
         };
         Ok(())
@@ -1188,6 +1204,7 @@ impl MQClientAPIImpl {
         let addr = addr.clone();
         let topic = request_header.topic.clone();
         let order = request_header.order.unwrap_or_default();
+        let callback_executor = self.callback_executor.clone();
         let request = self.create_request_command(RequestCode::PopMessage, request_header);
         let request_task = async move {
             let response = self
@@ -1196,7 +1213,14 @@ impl MQClientAPIImpl {
                 .await?;
             self.process_pop_response(&broker_name, response, &topic, order)
         };
-        Self::spawn_pop_callback_task(&service_context, &tracker, &shutdown_token, request_task, pop_callback);
+        Self::spawn_pop_callback_task(
+            &service_context,
+            &tracker,
+            &shutdown_token,
+            callback_executor,
+            request_task,
+            pop_callback,
+        );
         Ok(())
     }
 
@@ -1217,6 +1241,7 @@ impl MQClientAPIImpl {
         let broker_name = broker_name.clone();
         let addr = addr.clone();
         let bind_topic = request_header.topic.clone();
+        let callback_executor = self.callback_executor.clone();
         let request = self.create_request_command(RequestCode::PopLiteMessage, request_header);
         let request_task = async move {
             let response = self
@@ -1225,7 +1250,14 @@ impl MQClientAPIImpl {
                 .await?;
             self.process_pop_lite_response(&broker_name, response, &bind_topic)
         };
-        Self::spawn_pop_callback_task(&service_context, &tracker, &shutdown_token, request_task, pop_callback);
+        Self::spawn_pop_callback_task(
+            &service_context,
+            &tracker,
+            &shutdown_token,
+            callback_executor,
+            request_task,
+            pop_callback,
+        );
         Ok(())
     }
 
@@ -1647,12 +1679,18 @@ impl MQClientAPIImpl {
             .await
         {
             Ok(ack_result) => {
-                ack_callback.on_success(ack_result);
+                let _ = self
+                    .callback_executor
+                    .execute(async { ack_callback.on_success(ack_result) })
+                    .await;
                 Ok(())
             }
             Err(error) => {
                 let propagated = mq_client_err!(error.to_string());
-                ack_callback.on_exception(error);
+                let _ = self
+                    .callback_executor
+                    .execute(async { ack_callback.on_exception(error) })
+                    .await;
                 Err(propagated)
             }
         }
