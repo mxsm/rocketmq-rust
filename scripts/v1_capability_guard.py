@@ -62,6 +62,7 @@ REQUIRED_FIELDS = (
     "artifacts",
     "ownership",
     "target_phase",
+    "target_rc",
     "dependencies",
     "completion_status",
     "variance_class",
@@ -179,6 +180,13 @@ def _validate_record_shape(
     target_phase = record.get("target_phase")
     if not isinstance(target_phase, int) or isinstance(target_phase, bool) or not 0 <= target_phase <= 6:
         _finding(findings, "target-phase-invalid", path, repr(target_phase))
+    target_rc = record.get("target_rc")
+    if target_rc not in {"1.0.0-rc.1", "deferred"}:
+        _finding(findings, "target-rc-invalid", path, repr(target_rc))
+    elif completion != "deferred-by-scope" and target_rc == "deferred":
+        _finding(findings, "active-target-rc-missing", path, "active capability requires a release candidate")
+    elif completion == "deferred-by-scope" and target_rc != "deferred":
+        _finding(findings, "deferred-target-rc-invalid", path, repr(target_rc))
 
     dependencies = record.get("dependencies")
     if not isinstance(dependencies, list) or any(not isinstance(item, str) for item in dependencies):

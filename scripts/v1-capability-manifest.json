@@ -19,6 +19,7 @@
       "artifacts": [],
       "ownership": { "dri": "protocol-maintainer", "reviewer": "broker-reviewer", "release_approver": "release-approver" },
       "target_phase": 1,
+      "target_rc": "1.0.0-rc.1",
       "dependencies": [],
       "completion_status": "blocked",
       "variance_class": "java-compatible"
@@ -39,6 +40,7 @@
       "artifacts": [],
       "ownership": { "dri": "broker-maintainer", "reviewer": "filter-reviewer", "release_approver": "release-approver" },
       "target_phase": 1,
+      "target_rc": "1.0.0-rc.1",
       "dependencies": [],
       "completion_status": "blocked",
       "variance_class": "java-compatible"
@@ -59,6 +61,7 @@
       "artifacts": [],
       "ownership": { "dri": "client-maintainer", "reviewer": "transport-reviewer", "release_approver": "release-approver" },
       "target_phase": 1,
+      "target_rc": "1.0.0-rc.1",
       "dependencies": [],
       "completion_status": "blocked",
       "variance_class": "java-compatible"
@@ -79,6 +82,7 @@
       "artifacts": [],
       "ownership": { "dri": "broker-maintainer", "reviewer": "client-reviewer", "release_approver": "release-approver" },
       "target_phase": 2,
+      "target_rc": "1.0.0-rc.1",
       "dependencies": ["F-03"],
       "completion_status": "blocked",
       "variance_class": "java-compatible"
@@ -99,6 +103,7 @@
       "artifacts": [],
       "ownership": { "dri": "proxy-maintainer", "reviewer": "protocol-reviewer", "release_approver": "release-approver" },
       "target_phase": 1,
+      "target_rc": "1.0.0-rc.1",
       "dependencies": [],
       "completion_status": "blocked",
       "variance_class": "java-compatible"
@@ -119,6 +124,7 @@
       "artifacts": [],
       "ownership": { "dri": "proxy-maintainer", "reviewer": "security-reviewer", "release_approver": "release-approver" },
       "target_phase": 1,
+      "target_rc": "1.0.0-rc.1",
       "dependencies": [],
       "completion_status": "blocked",
       "variance_class": "java-compatible"
@@ -139,6 +145,7 @@
       "artifacts": [],
       "ownership": { "dri": "transport-maintainer", "reviewer": "security-reviewer", "release_approver": "release-approver" },
       "target_phase": 1,
+      "target_rc": "1.0.0-rc.1",
       "dependencies": [],
       "completion_status": "blocked",
       "variance_class": "java-compatible"
@@ -159,6 +166,7 @@
       "artifacts": [],
       "ownership": { "dri": "store-maintainer", "reviewer": "ha-reviewer", "release_approver": "release-approver" },
       "target_phase": 2,
+      "target_rc": "1.0.0-rc.1",
       "dependencies": [],
       "completion_status": "blocked",
       "variance_class": "java-compatible"
@@ -179,6 +187,7 @@
       "artifacts": [],
       "ownership": { "dri": "ha-maintainer", "reviewer": "store-reviewer", "release_approver": "release-approver" },
       "target_phase": 3,
+      "target_rc": "1.0.0-rc.1",
       "dependencies": ["F-08"],
       "completion_status": "blocked",
       "variance_class": "rust-enhancement"
@@ -199,6 +208,7 @@
       "artifacts": [],
       "ownership": { "dri": "store-maintainer", "reviewer": "broker-reviewer", "release_approver": "release-approver" },
       "target_phase": 2,
+      "target_rc": "1.0.0-rc.1",
       "dependencies": ["F-09"],
       "completion_status": "blocked",
       "variance_class": "rust-enhancement"
@@ -219,6 +229,7 @@
       "artifacts": [],
       "ownership": { "dri": "broker-maintainer", "reviewer": "store-reviewer", "release_approver": "release-approver" },
       "target_phase": 2,
+      "target_rc": "1.0.0-rc.1",
       "dependencies": [],
       "completion_status": "blocked",
       "variance_class": "java-compatible"
@@ -239,6 +250,7 @@
       "artifacts": [],
       "ownership": { "dri": "broker-maintainer", "reviewer": "configuration-reviewer", "release_approver": "release-approver" },
       "target_phase": 3,
+      "target_rc": "1.0.0-rc.1",
       "dependencies": [],
       "completion_status": "blocked",
       "variance_class": "java-compatible"
@@ -259,6 +271,7 @@
       "artifacts": [],
       "ownership": { "dri": "store-maintainer", "reviewer": "api-reviewer", "release_approver": "release-approver" },
       "target_phase": 2,
+      "target_rc": "1.0.0-rc.1",
       "dependencies": ["F-08"],
       "completion_status": "blocked",
       "variance_class": "java-compatible"
@@ -279,6 +292,7 @@
       "artifacts": [],
       "ownership": { "dri": "store-maintainer", "reviewer": "broker-reviewer", "release_approver": "release-approver" },
       "target_phase": 2,
+      "target_rc": "1.0.0-rc.1",
       "dependencies": ["F-09"],
       "completion_status": "blocked",
       "variance_class": "rust-enhancement"
@@ -299,6 +313,7 @@
       "artifacts": [],
       "ownership": { "dri": "proxy-maintainer", "reviewer": "broker-reviewer", "release_approver": "release-approver" },
       "target_phase": 1,
+      "target_rc": "1.0.0-rc.1",
       "dependencies": [],
       "completion_status": "blocked",
       "variance_class": "java-compatible"
@@ -319,6 +334,7 @@
       "artifacts": [],
       "ownership": { "dri": "store-maintainer", "reviewer": "client-reviewer", "release_approver": "release-approver" },
       "target_phase": 2,
+      "target_rc": "1.0.0-rc.1",
       "dependencies": [],
       "completion_status": "blocked",
       "variance_class": "java-compatible"
@@ -339,6 +355,7 @@
       "artifacts": [],
       "ownership": { "dri": "admin-maintainer", "reviewer": "broker-reviewer", "release_approver": "release-approver" },
       "target_phase": 4,
+      "target_rc": "1.0.0-rc.1",
       "dependencies": [],
       "completion_status": "blocked",
       "variance_class": "java-compatible"
@@ -359,6 +376,7 @@
       "artifacts": [],
       "ownership": { "dri": "client-maintainer", "reviewer": "api-reviewer", "release_approver": "release-approver" },
       "target_phase": 4,
+      "target_rc": "1.0.0-rc.1",
       "dependencies": ["F-03"],
       "completion_status": "blocked",
       "variance_class": "java-compatible"
@@ -379,6 +397,7 @@
       "artifacts": [],
       "ownership": { "dri": "client-maintainer", "reviewer": "runtime-reviewer", "release_approver": "release-approver" },
       "target_phase": 1,
+      "target_rc": "1.0.0-rc.1",
       "dependencies": [],
       "completion_status": "blocked",
       "variance_class": "java-compatible"
@@ -399,6 +418,7 @@
       "artifacts": [],
       "ownership": { "dri": "broker-maintainer", "reviewer": "observability-reviewer", "release_approver": "release-approver" },
       "target_phase": 2,
+      "target_rc": "1.0.0-rc.1",
       "dependencies": [],
       "completion_status": "blocked",
       "variance_class": "java-compatible"
@@ -419,6 +439,7 @@
       "artifacts": [],
       "ownership": { "dri": "transport-maintainer", "reviewer": "protocol-reviewer", "release_approver": "release-approver" },
       "target_phase": 1,
+      "target_rc": "1.0.0-rc.1",
       "dependencies": [],
       "completion_status": "blocked",
       "variance_class": "java-compatible"
@@ -439,6 +460,7 @@
       "artifacts": [],
       "ownership": { "dri": "tieredstore-maintainer", "reviewer": "store-reviewer", "release_approver": "release-approver" },
       "target_phase": 2,
+      "target_rc": "1.0.0-rc.1",
       "dependencies": ["F-08"],
       "completion_status": "blocked",
       "variance_class": "java-compatible"
@@ -459,6 +481,7 @@
       "artifacts": [],
       "ownership": { "dri": "admin-maintainer", "reviewer": "client-reviewer", "release_approver": "release-approver" },
       "target_phase": 4,
+      "target_rc": "1.0.0-rc.1",
       "dependencies": ["F-16", "F-17"],
       "completion_status": "blocked",
       "variance_class": "java-compatible"
@@ -479,6 +502,7 @@
       "artifacts": [],
       "ownership": { "dri": "release-engineer", "reviewer": "platform-reviewer", "release_approver": "release-approver" },
       "target_phase": 5,
+      "target_rc": "1.0.0-rc.1",
       "dependencies": [],
       "completion_status": "blocked",
       "variance_class": "rust-hardening"
@@ -499,6 +523,7 @@
       "artifacts": [],
       "ownership": { "dri": "security-maintainer", "reviewer": "concurrency-reviewer", "release_approver": "release-approver" },
       "target_phase": 6,
+      "target_rc": "deferred",
       "dependencies": [],
       "completion_status": "deferred-by-scope",
       "variance_class": "rust-hardening",
@@ -520,6 +545,7 @@
       "artifacts": [],
       "ownership": { "dri": "performance-maintainer", "reviewer": "platform-reviewer", "release_approver": "release-approver" },
       "target_phase": 6,
+      "target_rc": "deferred",
       "dependencies": [],
       "completion_status": "deferred-by-scope",
       "variance_class": "rust-hardening",
