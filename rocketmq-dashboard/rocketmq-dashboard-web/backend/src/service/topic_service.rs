@@ -59,18 +59,24 @@ pub async fn create_or_update_topic(
     state: &AppState,
     request: TopicMutationRequest,
 ) -> Result<TopicOperationResult, DashboardError> {
-    let _mutation_guard = state.topic_mutation_lock.lock().await;
+    let mutation_guard = state.admin_client.acquire_topic_mutation_lock().await;
     let request = normalize_topic_mutation(request)?;
-    state.admin_client.create_or_update_topic(request).await
+    state
+        .admin_client
+        .create_or_update_topic_with_guard(request, mutation_guard)
+        .await
 }
 
 pub async fn create_topic(
     state: &AppState,
     request: TopicMutationRequest,
 ) -> Result<TopicOperationResult, DashboardError> {
-    let _mutation_guard = state.topic_mutation_lock.lock().await;
+    let mutation_guard = state.admin_client.acquire_topic_mutation_lock().await;
     let request = normalize_topic_mutation(request)?;
-    state.admin_client.create_topic(request).await
+    state
+        .admin_client
+        .create_topic_with_guard(request, mutation_guard)
+        .await
 }
 
 pub(crate) fn validate_topic_mutation(request: &TopicMutationRequest) -> Result<(), DashboardError> {
@@ -152,8 +158,11 @@ pub async fn send_topic_test_message(
     topic: &str,
     request: TopicTestMessageRequest,
 ) -> Result<TopicSendResultView, DashboardError> {
-    let _mutation_guard = state.topic_mutation_lock.lock().await;
-    state.admin_client.send_topic_test_message(topic, request).await
+    let mutation_guard = state.admin_client.acquire_topic_mutation_lock().await;
+    state
+        .admin_client
+        .send_topic_test_message_with_guard(topic, request, mutation_guard)
+        .await
 }
 
 pub async fn reset_topic_consumer_offset(
@@ -161,8 +170,11 @@ pub async fn reset_topic_consumer_offset(
     topic: &str,
     request: TopicResetOffsetRequest,
 ) -> Result<TopicOffsetResult, DashboardError> {
-    let _mutation_guard = state.topic_mutation_lock.lock().await;
-    state.admin_client.reset_topic_consumer_offset(topic, request).await
+    let mutation_guard = state.admin_client.acquire_topic_mutation_lock().await;
+    state
+        .admin_client
+        .reset_topic_consumer_offset_with_guard(topic, request, mutation_guard)
+        .await
 }
 
 pub async fn skip_topic_consumer_offset(
@@ -170,8 +182,11 @@ pub async fn skip_topic_consumer_offset(
     topic: &str,
     request: TopicSkipOffsetRequest,
 ) -> Result<TopicOffsetResult, DashboardError> {
-    let _mutation_guard = state.topic_mutation_lock.lock().await;
-    state.admin_client.skip_topic_consumer_offset(topic, request).await
+    let mutation_guard = state.admin_client.acquire_topic_mutation_lock().await;
+    state
+        .admin_client
+        .skip_topic_consumer_offset_with_guard(topic, request, mutation_guard)
+        .await
 }
 
 pub async fn delete_topic_from_broker(
@@ -179,13 +194,16 @@ pub async fn delete_topic_from_broker(
     topic: &str,
     broker_name: &str,
 ) -> Result<TopicOperationResult, DashboardError> {
-    let _mutation_guard = state.topic_mutation_lock.lock().await;
-    state.admin_client.delete_topic_from_broker(topic, broker_name).await
+    let mutation_guard = state.admin_client.acquire_topic_mutation_lock().await;
+    state
+        .admin_client
+        .delete_topic_from_broker_with_guard(topic, broker_name, mutation_guard)
+        .await
 }
 
 pub async fn delete_topic(state: &AppState, topic: &str) -> Result<TopicOperationResult, DashboardError> {
-    let _mutation_guard = state.topic_mutation_lock.lock().await;
-    state.admin_client.delete_topic(topic).await
+    let mutation_guard = state.admin_client.acquire_topic_mutation_lock().await;
+    state.admin_client.delete_topic_with_guard(topic, mutation_guard).await
 }
 
 #[cfg(test)]

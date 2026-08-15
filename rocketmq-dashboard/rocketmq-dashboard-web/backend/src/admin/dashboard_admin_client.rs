@@ -30,6 +30,7 @@ use rocketmq_admin_core::core::security::AdminCredentials;
 use rocketmq_runtime::ChildServiceContext;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
+use tokio::sync::OwnedMutexGuard;
 use tokio::sync::RwLock;
 use tokio::sync::oneshot;
 
@@ -89,6 +90,7 @@ pub struct DashboardAdminClient {
     admin_credentials: Option<AdminCredentials>,
     admin_session: Arc<Mutex<Option<Arc<ManagedAdminSession>>>>,
     topic_admin_sessions: Arc<TopicAdminSessionRegistry<AdminGuard>>,
+    topic_mutation_lock: Arc<Mutex<()>>,
     next_generation: Arc<AtomicU64>,
     session_tasks: ChildServiceContext,
 }
@@ -134,7 +136,10 @@ macro_rules! run_admin_rpc {
 // dedicated session registry, while tracked request tasks borrow a single guard only for their
 // RPC. This leaves the guard available for ordered cleanup if a task group must abort a request.
 macro_rules! run_topic_admin_rpc {
-    ($client:expr, |$admin:ident| $operation:expr) => {{
+    ($client:expr, |$admin:ident| $operation:expr) => {
+        run_topic_admin_rpc!($client, None, |$admin| $operation)
+    };
+    ($client:expr, $mutation_guard:expr, |$admin:ident| $operation:expr) => {{
         let snapshot = $client.admin_config_snapshot().await?;
         let client = $client.clone();
         let admin_group = unique_admin_group();
@@ -144,24 +149,28 @@ macro_rules! run_topic_admin_rpc {
         let operation_cancellation = client.session_tasks.task_group().cancellation_token();
         let build_client = client.clone();
         let build_snapshot = snapshot.clone();
+        let mutation_guard = $mutation_guard;
         client
             .session_tasks
             .spawn_service(format!("topic-admin-rpc-{admin_group}"), async move {
-                let result = run_tracked_topic_admin_service(
-                    &client.topic_admin_sessions,
-                    &client.config,
-                    snapshot,
-                    config_cancellation.cancelled(),
-                    guard_cancellation.cancelled(),
-                    operation_cancellation.cancelled(),
-                    move || async move { build_client.build_topic_admin_guard(&build_snapshot, admin_group).await },
-                    move |guard| {
-                        Box::pin(async move {
-                            let $admin = guard.inner_mut();
-                            Box::pin($operation).await.map_err(DashboardError::from)
-                        })
-                    },
-                )
+                let result = run_topic_mutation_with_guard(mutation_guard, async move {
+                    run_tracked_topic_admin_service(
+                        &client.topic_admin_sessions,
+                        &client.config,
+                        snapshot,
+                        config_cancellation.cancelled(),
+                        guard_cancellation.cancelled(),
+                        operation_cancellation.cancelled(),
+                        move || async move { build_client.build_topic_admin_guard(&build_snapshot, admin_group).await },
+                        move |guard| {
+                            Box::pin(async move {
+                                let $admin = guard.inner_mut();
+                                Box::pin($operation).await.map_err(DashboardError::from)
+                            })
+                        },
+                    )
+                    .await
+                })
                 .await;
                 let _ = response_tx.send(result);
             })
@@ -170,6 +179,14 @@ macro_rules! run_topic_admin_rpc {
             .await
             .map_err(|_| DashboardError::Internal("Topic admin RPC stopped before returning a result".to_string()))?
     }};
+}
+
+async fn run_topic_mutation_with_guard<T, F>(mutation_guard: Option<OwnedMutexGuard<()>>, operation: F) -> T
+where
+    F: Future<Output = T>,
+{
+    let _mutation_guard = mutation_guard;
+    operation.await
 }
 
 mod topic;
@@ -243,9 +260,14 @@ impl DashboardAdminClient {
             admin_credentials,
             admin_session: Arc::new(Mutex::new(None)),
             topic_admin_sessions: Arc::new(TopicAdminSessionRegistry::default()),
+            topic_mutation_lock: Arc::new(Mutex::new(())),
             next_generation: Arc::new(AtomicU64::new(1)),
             session_tasks,
         }
+    }
+
+    pub(crate) async fn acquire_topic_mutation_lock(&self) -> OwnedMutexGuard<()> {
+        Arc::clone(&self.topic_mutation_lock).lock_owned().await
     }
 
     pub async fn shutdown(&self) {
@@ -949,6 +971,7 @@ mod tests {
     use super::map_acl_user;
     use super::map_direct_consume_result;
     use super::resend_dlq_batch;
+    use super::run_topic_mutation_with_guard;
     use super::run_tracked_topic_admin_service;
     use super::session_is_current;
     use super::shutdown_topic_admin_services;
@@ -1637,6 +1660,81 @@ mod tests {
 
         assert!(matches!(result, Err(DashboardError::Config(_))));
         assert_eq!(shutdowns.load(Ordering::Acquire), 1);
+    }
+
+    #[test]
+    fn tracked_topic_mutation_keeps_the_owned_lock_after_the_caller_receiver_drops() {
+        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+        let context = owner.root_context().component("topic-mutation-lock-test");
+
+        owner.block_on(async {
+            let mutation_lock = Arc::new(Mutex::new(()));
+            let first_guard = Arc::clone(&mutation_lock).lock_owned().await;
+            let started = Arc::new(Notify::new());
+            let release = Arc::new(Notify::new());
+            let completed = Arc::new(Notify::new());
+            let (result_tx, result_rx) = oneshot::channel::<()>();
+            let service_started = Arc::clone(&started);
+            let service_release = Arc::clone(&release);
+            let service_completed = Arc::clone(&completed);
+
+            context
+                .spawn_service("tracked-topic-mutation", async move {
+                    run_topic_mutation_with_guard(Some(first_guard), async move {
+                        service_started.notify_one();
+                        service_release.notified().await;
+                    })
+                    .await;
+                    service_completed.notify_one();
+                    let _ = result_tx.send(());
+                })
+                .expect("tracked topic mutation");
+
+            started.notified().await;
+            drop(result_rx);
+            let second_lock = Arc::clone(&mutation_lock);
+            let mut second_guard = Box::pin(second_lock.lock_owned());
+            std::future::poll_fn(|task| {
+                assert!(second_guard.as_mut().poll(task).is_pending());
+                std::task::Poll::Ready(())
+            })
+            .await;
+
+            release.notify_one();
+            completed.notified().await;
+            drop(second_guard.await);
+            let report = context.task_group().shutdown(Duration::from_millis(100)).await;
+            assert!(report.is_healthy(), "{report:?}");
+        });
+
+        owner.shutdown_runtime_blocking().expect("runtime owner shutdown");
+    }
+
+    #[test]
+    fn failed_validation_before_topic_mutation_spawn_releases_the_owned_lock() {
+        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+
+        owner.block_on(async {
+            let mutation_lock = Arc::new(Mutex::new(()));
+            let validation_guard = Arc::clone(&mutation_lock).lock_owned().await;
+            let validation: Result<(), &str> = Err("topic validation failed");
+
+            assert!(validation.is_err());
+            drop(validation_guard);
+
+            let second_lock = Arc::clone(&mutation_lock);
+            let mut second_guard = Box::pin(second_lock.lock_owned());
+            std::future::poll_fn(|task| match second_guard.as_mut().poll(task) {
+                std::task::Poll::Ready(guard) => {
+                    drop(guard);
+                    std::task::Poll::Ready(())
+                }
+                std::task::Poll::Pending => panic!("validation failure retained the mutation lock"),
+            })
+            .await;
+        });
+
+        owner.shutdown_runtime_blocking().expect("runtime owner shutdown");
     }
 
     #[test]

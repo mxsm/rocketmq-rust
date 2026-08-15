@@ -42,6 +42,9 @@ use crate::core::topic::ListTopicsRequest;
 use crate::core::topic::ListTopicsResult;
 use crate::core::topic::ResetTopicConsumerOffsetRequest;
 use crate::core::topic::TopicAdmin;
+use crate::core::topic::TopicBatchDeleteAdmin;
+use crate::core::topic::TopicBatchDeleteOutcome;
+use crate::core::topic::TopicBatchDeleteRequest;
 use crate::core::topic::TopicBatchMutationAdmin;
 use crate::core::topic::TopicBatchMutationOutcome;
 use crate::core::topic::TopicBatchOrderConfigOutcome;
@@ -601,6 +604,93 @@ impl TopicBatchMutationAdmin for AdminSession {
     }
 }
 
+impl TopicBatchDeleteAdmin for AdminSession {
+    fn delete_topic_batch<'a>(
+        &'a mut self,
+        request: &'a TopicBatchDeleteRequest,
+    ) -> AdminFuture<'a, TopicBatchDeleteOutcome> {
+        Box::pin(async move { run_topic_batch_delete_workflow(self, request).await })
+    }
+}
+
+trait TopicBatchDeleteExecutor {
+    fn delete_topic_cluster<'a>(
+        &'a mut self,
+        request: &'a DeleteTopicAdminRequest,
+    ) -> AdminFuture<'a, TopicMutationOutcome>;
+
+    fn delete_order_config<'a>(&'a mut self, topic: &'a str) -> AdminFuture<'a, ()>;
+}
+
+impl TopicBatchDeleteExecutor for AdminSession {
+    fn delete_topic_cluster<'a>(
+        &'a mut self,
+        request: &'a DeleteTopicAdminRequest,
+    ) -> AdminFuture<'a, TopicMutationOutcome> {
+        TopicAdmin::delete_topic(self, request)
+    }
+
+    fn delete_order_config<'a>(&'a mut self, topic: &'a str) -> AdminFuture<'a, ()> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            self.inner
+                .delete_kv_config(
+                    CheetahString::from_static_str("ORDER_TOPIC_CONFIG"),
+                    CheetahString::from(topic),
+                )
+                .await
+                .map_err(|error| backend_error("delete_order_topic_config", error))
+        })
+    }
+}
+
+async fn run_topic_batch_delete_workflow<E>(
+    executor: &mut E,
+    request: &TopicBatchDeleteRequest,
+) -> AdminResult<TopicBatchDeleteOutcome>
+where
+    E: TopicBatchDeleteExecutor,
+{
+    let request = request.canonical_for_execution()?;
+    let mut targets = Vec::with_capacity(request.cluster_names().len());
+    for cluster_name in request.cluster_names() {
+        match executor
+            .delete_topic_cluster(&DeleteTopicAdminRequest {
+                topic: request.topic().to_string(),
+                cluster_name: Some(cluster_name.clone()),
+                broker_name: None,
+            })
+            .await
+        {
+            Ok(outcome) => targets.push(TopicBatchTargetOutcome {
+                broker_name: cluster_name.clone(),
+                success: true,
+                message: outcome.message,
+            }),
+            Err(error) => targets.push(TopicBatchTargetOutcome {
+                broker_name: cluster_name.clone(),
+                success: false,
+                message: stable_error_message(&error),
+            }),
+        }
+    }
+    let order_config = if targets.iter().all(|target| target.success) {
+        Some(match executor.delete_order_config(request.topic()).await {
+            Ok(()) => TopicBatchOrderConfigOutcome {
+                success: true,
+                message: "Order topic configuration deleted".to_string(),
+            },
+            Err(error) => TopicBatchOrderConfigOutcome {
+                success: false,
+                message: stable_error_message(&error),
+            },
+        })
+    } else {
+        None
+    };
+    Ok(TopicBatchDeleteOutcome { targets, order_config })
+}
+
 trait TopicBatchExecutor {
     fn upsert_topic_local<'a>(&'a mut self, request: &'a UpsertTopicRequest) -> AdminFuture<'a, TopicMutationOutcome>;
 
@@ -819,11 +909,14 @@ mod tests {
     use super::build_topic_current_stats_items;
     use super::classify_topic;
     use super::normalize_message_type;
+    use super::run_topic_batch_delete_workflow;
     use super::run_topic_batch_workflow;
     use super::CanonicalTopicBatchUpsertRequest;
+    use super::TopicBatchDeleteExecutor;
     use super::TopicBatchExecutor;
     use super::TopicBrokerConfigSnapshot;
     use super::TopicCurrentStatsRow;
+    use crate::core::topic::TopicBatchDeleteRequest;
     use crate::core::topic::TopicBatchUpsertRequest;
     use crate::core::topic::TopicMutationOutcome;
     use crate::core::AdminError;
@@ -951,6 +1044,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn batch_delete_cleans_order_config_once_only_after_all_clusters_succeed() {
+        let request = TopicBatchDeleteRequest::try_new("orders", vec!["cluster-b".into(), "cluster-a".into()])
+            .expect("validated delete request");
+        let mut executor = RecordingDeleteExecutor::default();
+
+        let outcome = run_topic_batch_delete_workflow(&mut executor, &request)
+            .await
+            .expect("structured delete outcome");
+
+        assert_eq!(executor.clusters, ["cluster-a", "cluster-b"]);
+        assert_eq!(executor.order_cleanup_calls, 1);
+        assert!(outcome.order_config.expect("cleanup result").success);
+    }
+
+    #[tokio::test]
+    async fn batch_delete_skips_order_cleanup_for_partial_or_total_cluster_failure() {
+        let request = TopicBatchDeleteRequest::try_new("orders", vec!["cluster-a".into(), "cluster-b".into()])
+            .expect("validated delete request");
+        for failing_cluster in [Some("cluster-a"), None] {
+            let mut executor = RecordingDeleteExecutor {
+                failing_cluster: failing_cluster.map(str::to_string),
+                fail_all: failing_cluster.is_none(),
+                ..Default::default()
+            };
+
+            let outcome = run_topic_batch_delete_workflow(&mut executor, &request)
+                .await
+                .expect("structured delete outcome");
+
+            assert_eq!(executor.order_cleanup_calls, 0);
+            assert!(outcome.order_config.is_none());
+            assert!(outcome.targets.iter().any(|target| !target.success));
+        }
+    }
+
+    #[tokio::test]
+    async fn batch_delete_reports_order_cleanup_failure_after_all_clusters_succeed() {
+        let request =
+            TopicBatchDeleteRequest::try_new("orders", vec!["cluster-a".into()]).expect("validated delete request");
+        let mut executor = RecordingDeleteExecutor {
+            fail_order_cleanup: true,
+            ..Default::default()
+        };
+
+        let outcome = run_topic_batch_delete_workflow(&mut executor, &request)
+            .await
+            .expect("structured delete outcome");
+
+        assert_eq!(executor.order_cleanup_calls, 1);
+        assert!(!outcome.order_config.expect("cleanup result").success);
+    }
+
+    #[tokio::test]
     async fn batch_workflow_revalidates_unchecked_input_before_any_side_effect() {
         let requests = [
             TopicBatchUpsertRequest::unchecked_for_execution_test(
@@ -1038,6 +1184,48 @@ mod tests {
         ) -> AdminFuture<'a, ()> {
             self.reconciliations.push((request.order, successful_brokers.to_vec()));
             Box::pin(async { Ok(()) })
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingDeleteExecutor {
+        clusters: Vec<String>,
+        order_cleanup_calls: usize,
+        failing_cluster: Option<String>,
+        fail_all: bool,
+        fail_order_cleanup: bool,
+    }
+
+    impl TopicBatchDeleteExecutor for RecordingDeleteExecutor {
+        fn delete_topic_cluster<'a>(
+            &'a mut self,
+            request: &'a super::DeleteTopicAdminRequest,
+        ) -> AdminFuture<'a, TopicMutationOutcome> {
+            let cluster = request.cluster_name.clone().expect("test cluster request");
+            self.clusters.push(cluster.clone());
+            let should_fail = self.fail_all || self.failing_cluster.as_deref() == Some(cluster.as_str());
+            Box::pin(async move {
+                if should_fail {
+                    Err(AdminError::backend("delete_topic", "unavailable"))
+                } else {
+                    Ok(TopicMutationOutcome {
+                        message: "deleted".to_string(),
+                        target_count: 1,
+                    })
+                }
+            })
+        }
+
+        fn delete_order_config<'a>(&'a mut self, _: &'a str) -> AdminFuture<'a, ()> {
+            self.order_cleanup_calls += 1;
+            let fail = self.fail_order_cleanup;
+            Box::pin(async move {
+                if fail {
+                    Err(AdminError::backend("delete_order_topic_config", "unavailable"))
+                } else {
+                    Ok(())
+                }
+            })
         }
     }
 }

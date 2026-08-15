@@ -436,6 +436,68 @@ pub struct TopicBatchMutationOutcome {
     pub order_config: Option<TopicBatchOrderConfigOutcome>,
 }
 
+/// A closed, validated complete deletion batch for one Topic across authoritative clusters.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TopicBatchDeleteRequest {
+    topic: String,
+    cluster_names: Vec<String>,
+}
+
+impl TopicBatchDeleteRequest {
+    pub fn try_new(topic: impl Into<String>, cluster_names: Vec<String>) -> AdminResult<Self> {
+        let topic = required("topic", topic)?;
+        let validation = TopicValidator::validate_topic(&topic);
+        if !validation.valid() {
+            return Err(crate::core::AdminError::invalid_argument(
+                "topic",
+                validation.remark().to_string(),
+            ));
+        }
+        let cluster_names = cluster_names
+            .into_iter()
+            .map(|cluster| cluster.trim().to_string())
+            .map(|cluster| {
+                if cluster.is_empty() {
+                    Err(crate::core::AdminError::invalid_argument(
+                        "clusterNames",
+                        "must not be empty",
+                    ))
+                } else {
+                    Ok(cluster)
+                }
+            })
+            .collect::<AdminResult<BTreeSet<_>>>()?
+            .into_iter()
+            .collect::<Vec<_>>();
+        if cluster_names.is_empty() {
+            return Err(crate::core::AdminError::invalid_argument(
+                "clusterNames",
+                "must not be empty",
+            ));
+        }
+        Ok(Self { topic, cluster_names })
+    }
+
+    pub fn topic(&self) -> &str {
+        &self.topic
+    }
+
+    pub fn cluster_names(&self) -> &[String] {
+        &self.cluster_names
+    }
+
+    pub(crate) fn canonical_for_execution(&self) -> AdminResult<Self> {
+        Self::try_new(self.topic.clone(), self.cluster_names.clone())
+    }
+}
+
+/// Outcome of a complete batch-owned Topic deletion.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TopicBatchDeleteOutcome {
+    pub targets: Vec<TopicBatchTargetOutcome>,
+    pub order_config: Option<TopicBatchOrderConfigOutcome>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeleteTopicAdminRequest {
     pub topic: String,
@@ -702,6 +764,16 @@ pub trait TopicBatchMutationAdmin: Send {
         &'a mut self,
         request: &'a TopicBatchUpsertRequest,
     ) -> AdminFuture<'a, TopicBatchMutationOutcome>;
+}
+
+/// Admin-owned complete multi-cluster Topic deletion workflow.
+pub trait TopicBatchDeleteAdmin: Send {
+    /// Deletes every canonical cluster and removes `ORDER_TOPIC_CONFIG` exactly once only when
+    /// every cluster deletion succeeded. Individual cluster failures are represented in the result.
+    fn delete_topic_batch<'a>(
+        &'a mut self,
+        request: &'a TopicBatchDeleteRequest,
+    ) -> AdminFuture<'a, TopicBatchDeleteOutcome>;
 }
 
 impl<T: TopicAdmin + ?Sized> TopicQueryAdmin for T {

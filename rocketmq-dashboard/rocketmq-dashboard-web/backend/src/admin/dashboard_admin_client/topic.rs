@@ -22,6 +22,7 @@ use rocketmq_admin_core::core::topic::TopicAdmin;
 use rocketmq_admin_core::core::topic::TopicBatchMutationAdmin;
 use rocketmq_admin_core::core::topic::TopicBatchUpsertRequest;
 use rocketmq_admin_core::core::topic::TopicCatalogRequest;
+use tokio::sync::OwnedMutexGuard;
 
 use super::*;
 use crate::model::TopicConfigView;
@@ -37,6 +38,11 @@ use crate::model::TopicTargetOptionView;
 use crate::model::TopicTargetResult;
 use crate::model::TopicTestMessageRequest;
 use crate::model::build_operation_result;
+
+#[path = "topic_operations.rs"]
+mod topic_operations;
+
+use topic_operations::run_topic_batch_delete;
 
 impl DashboardAdminClient {
     pub async fn list_topics(&self) -> Result<TopicListView, DashboardError> {
@@ -91,11 +97,31 @@ impl DashboardAdminClient {
         &self,
         request: TopicMutationRequest,
     ) -> Result<TopicOperationResult, DashboardError> {
-        self.upsert_topic(request, TopicMutationKind::Update).await
+        let mutation_guard = self.acquire_topic_mutation_lock().await;
+        self.create_or_update_topic_with_guard(request, mutation_guard).await
+    }
+
+    pub(crate) async fn create_or_update_topic_with_guard(
+        &self,
+        request: TopicMutationRequest,
+        mutation_guard: OwnedMutexGuard<()>,
+    ) -> Result<TopicOperationResult, DashboardError> {
+        self.upsert_topic(request, TopicMutationKind::Update, mutation_guard)
+            .await
     }
 
     pub async fn create_topic(&self, request: TopicMutationRequest) -> Result<TopicOperationResult, DashboardError> {
-        self.upsert_topic(request, TopicMutationKind::Create).await
+        let mutation_guard = self.acquire_topic_mutation_lock().await;
+        self.create_topic_with_guard(request, mutation_guard).await
+    }
+
+    pub(crate) async fn create_topic_with_guard(
+        &self,
+        request: TopicMutationRequest,
+        mutation_guard: OwnedMutexGuard<()>,
+    ) -> Result<TopicOperationResult, DashboardError> {
+        self.upsert_topic(request, TopicMutationKind::Create, mutation_guard)
+            .await
     }
 
     pub async fn send_topic_test_message(
@@ -103,10 +129,21 @@ impl DashboardAdminClient {
         topic: &str,
         request: TopicTestMessageRequest,
     ) -> Result<TopicSendResultView, DashboardError> {
+        let mutation_guard = self.acquire_topic_mutation_lock().await;
+        self.send_topic_test_message_with_guard(topic, request, mutation_guard)
+            .await
+    }
+
+    pub(crate) async fn send_topic_test_message_with_guard(
+        &self,
+        topic: &str,
+        request: TopicTestMessageRequest,
+        mutation_guard: OwnedMutexGuard<()>,
+    ) -> Result<TopicSendResultView, DashboardError> {
         let topic = topic.trim().to_string();
         validate_name(&topic, "Topic")?;
         let request = normalize_test_message_request(request)?;
-        run_topic_admin_rpc!(self, |admin| async {
+        run_topic_admin_rpc!(self, Some(mutation_guard), |admin| async {
             let catalog = authoritative_topic_catalog(admin).await?;
             let mut executor = TopicAdminSendExecutor { admin };
             run_topic_send(catalog, topic, request, &mut executor).await
@@ -118,10 +155,21 @@ impl DashboardAdminClient {
         topic: &str,
         request: TopicResetOffsetRequest,
     ) -> Result<TopicOffsetResult, DashboardError> {
+        let mutation_guard = self.acquire_topic_mutation_lock().await;
+        self.reset_topic_consumer_offset_with_guard(topic, request, mutation_guard)
+            .await
+    }
+
+    pub(crate) async fn reset_topic_consumer_offset_with_guard(
+        &self,
+        topic: &str,
+        request: TopicResetOffsetRequest,
+        mutation_guard: OwnedMutexGuard<()>,
+    ) -> Result<TopicOffsetResult, DashboardError> {
         let topic = topic.trim().to_string();
         validate_name(&topic, "Topic")?;
         let request = normalize_reset_offset_request(request)?;
-        run_topic_admin_rpc!(self, |admin| async {
+        run_topic_admin_rpc!(self, Some(mutation_guard), |admin| async {
             let catalog = authoritative_topic_catalog(admin).await?;
             let mut executor = TopicAdminOffsetExecutor { admin };
             run_topic_offset(
@@ -142,11 +190,22 @@ impl DashboardAdminClient {
         topic: &str,
         request: TopicSkipOffsetRequest,
     ) -> Result<TopicOffsetResult, DashboardError> {
+        let mutation_guard = self.acquire_topic_mutation_lock().await;
+        self.skip_topic_consumer_offset_with_guard(topic, request, mutation_guard)
+            .await
+    }
+
+    pub(crate) async fn skip_topic_consumer_offset_with_guard(
+        &self,
+        topic: &str,
+        request: TopicSkipOffsetRequest,
+        mutation_guard: OwnedMutexGuard<()>,
+    ) -> Result<TopicOffsetResult, DashboardError> {
         let topic = topic.trim().to_string();
         validate_name(&topic, "Topic")?;
         let consumer_group = normalize_consumer_group(request.consumer_group)?;
         let applied_timestamp = epoch_millis(std::time::SystemTime::now())?;
-        run_topic_admin_rpc!(self, |admin| async {
+        run_topic_admin_rpc!(self, Some(mutation_guard), |admin| async {
             let catalog = authoritative_topic_catalog(admin).await?;
             let mut executor = TopicAdminOffsetExecutor { admin };
             run_topic_offset(
@@ -167,11 +226,22 @@ impl DashboardAdminClient {
         topic: &str,
         broker_name: &str,
     ) -> Result<TopicOperationResult, DashboardError> {
+        let mutation_guard = self.acquire_topic_mutation_lock().await;
+        self.delete_topic_from_broker_with_guard(topic, broker_name, mutation_guard)
+            .await
+    }
+
+    pub(crate) async fn delete_topic_from_broker_with_guard(
+        &self,
+        topic: &str,
+        broker_name: &str,
+        mutation_guard: OwnedMutexGuard<()>,
+    ) -> Result<TopicOperationResult, DashboardError> {
         let topic = topic.trim().to_string();
         let broker_name = broker_name.trim().to_string();
         validate_name(&topic, "Topic")?;
         validate_name(&broker_name, "Broker")?;
-        run_topic_admin_rpc!(self, |admin| async {
+        run_topic_admin_rpc!(self, Some(mutation_guard), |admin| async {
             let catalog = authoritative_topic_catalog(admin).await?;
             let mut executor = TopicAdminDeleteExecutor { admin };
             run_topic_delete(catalog, topic, Some(broker_name), &mut executor).await
@@ -179,12 +249,20 @@ impl DashboardAdminClient {
     }
 
     pub async fn delete_topic(&self, topic: &str) -> Result<TopicOperationResult, DashboardError> {
+        let mutation_guard = self.acquire_topic_mutation_lock().await;
+        self.delete_topic_with_guard(topic, mutation_guard).await
+    }
+
+    pub(crate) async fn delete_topic_with_guard(
+        &self,
+        topic: &str,
+        mutation_guard: OwnedMutexGuard<()>,
+    ) -> Result<TopicOperationResult, DashboardError> {
         let topic = topic.trim().to_string();
         validate_name(&topic, "Topic")?;
-        run_topic_admin_rpc!(self, |admin| async {
+        run_topic_admin_rpc!(self, Some(mutation_guard), |admin| async {
             let catalog = authoritative_topic_catalog(admin).await?;
-            let mut executor = TopicAdminDeleteExecutor { admin };
-            run_topic_delete(catalog, topic, None, &mut executor).await
+            run_topic_batch_delete(catalog, topic, admin).await
         })
     }
 }
@@ -200,12 +278,13 @@ impl DashboardAdminClient {
         &self,
         request: TopicMutationRequest,
         kind: TopicMutationKind,
+        mutation_guard: OwnedMutexGuard<()>,
     ) -> Result<TopicOperationResult, DashboardError> {
         let operation = match kind {
             TopicMutationKind::Create => "CREATE",
             TopicMutationKind::Update => "UPDATE",
         };
-        run_topic_admin_rpc!(self, |admin| async {
+        run_topic_admin_rpc!(self, Some(mutation_guard), |admin| async {
             let catalog = map_topic_catalog(
                 admin
                     .get_topic_catalog(&TopicCatalogRequest {
@@ -793,11 +872,13 @@ mod tests {
     use super::map_topic_catalog;
     use super::map_topic_stats;
     use super::resolve_topic_targets;
+    use super::run_topic_batch_delete;
     use super::run_topic_delete;
     use super::run_topic_offset;
     use super::run_topic_send;
     use super::run_topic_upserts;
     use super::topic_info_from_catalog;
+    use super::topic_operations::TopicBatchDeleteExecutor;
     use crate::model::TopicInfo;
     use crate::model::TopicListView;
     use crate::model::TopicMutationRequest;
@@ -961,6 +1042,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn batch_delete_order_cleanup_failure_is_a_structured_global_failure() {
+        let mut executor = FakeBatchDeleteExecutor;
+
+        let result = run_topic_batch_delete(mutable_catalog("orders"), "orders".into(), &mut executor)
+            .await
+            .expect("structured batch outcome");
+
+        assert!(!result.success);
+        assert!(
+            result
+                .targets
+                .iter()
+                .any(|target| target.target == "ORDER_TOPIC_CONFIG" && !target.success)
+        );
+    }
+
+    #[tokio::test]
     async fn unknown_consumer_group_makes_no_offset_reset_call() {
         let mut executor = FakeTopicOperations::default();
 
@@ -1091,6 +1189,31 @@ mod tests {
             Ok(core_topic::TopicMutationOutcome {
                 message: "reset".into(),
                 target_count: 1,
+            })
+        }
+    }
+
+    struct FakeBatchDeleteExecutor;
+
+    impl TopicBatchDeleteExecutor for FakeBatchDeleteExecutor {
+        async fn delete_batch(
+            &mut self,
+            request: &core_topic::TopicBatchDeleteRequest,
+        ) -> Result<core_topic::TopicBatchDeleteOutcome, AdminError> {
+            Ok(core_topic::TopicBatchDeleteOutcome {
+                targets: request
+                    .cluster_names()
+                    .iter()
+                    .map(|cluster| core_topic::TopicBatchTargetOutcome {
+                        broker_name: cluster.clone(),
+                        success: true,
+                        message: "deleted".into(),
+                    })
+                    .collect(),
+                order_config: Some(core_topic::TopicBatchOrderConfigOutcome {
+                    success: false,
+                    message: "cleanup failed".into(),
+                }),
             })
         }
     }
