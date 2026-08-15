@@ -29,6 +29,7 @@ JAVA_INVENTORY = ROOT / "scripts" / "fixtures" / "java-5.5-core-inventory.json"
 OPERATION_MAP = ROOT / "rocketmq-doc" / "en" / "admin" / "java-55-operation-map.md"
 CAPABILITY_MANIFEST = ROOT / "scripts" / "v1-capability-manifest.json"
 FUNCTIONAL_MATRIX = ROOT / "scripts" / "v1-functional-test-matrix.json"
+GOLDENS = ROOT / "scripts" / "fixtures" / "admin-java-55" / "operation-goldens.json"
 
 
 def run_guard(matrix: Path = MATRIX, *extra_args: str) -> subprocess.CompletedProcess[str]:
@@ -40,6 +41,8 @@ def run_guard(matrix: Path = MATRIX, *extra_args: str) -> subprocess.CompletedPr
             str(matrix),
             "--java-inventory",
             str(JAVA_INVENTORY),
+            "--goldens",
+            str(GOLDENS),
             *extra_args,
         ],
         cwd=ROOT,
@@ -53,6 +56,11 @@ class AdminOperationGuardTest(unittest.TestCase):
     def write_matrix(self, matrix: dict[str, object], directory: str) -> Path:
         path = Path(directory) / "admin-operation-matrix.json"
         path.write_text(json.dumps(matrix), encoding="utf-8")
+        return path
+
+    def write_goldens(self, goldens: dict[str, object], directory: str) -> Path:
+        path = Path(directory) / "operation-goldens.json"
+        path.write_text(json.dumps(goldens), encoding="utf-8")
         return path
 
     def test_repository_matrix_closes_the_raw_excluded_active_denominator(self) -> None:
@@ -107,17 +115,99 @@ class AdminOperationGuardTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertNotIn("code=active-operation-incomplete", result.stdout)
 
+    def test_repository_goldens_cover_every_active_operation_with_success_and_error(self) -> None:
+        result = run_guard(MATRIX, "--require-complete")
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("goldens=94 scenarios=278", result.stdout)
+
+        fixture = json.loads(GOLDENS.read_text(encoding="utf-8"))
+        self.assertEqual(fixture["counts"], {"operations": 94, "scenarios": 278})
+        self.assertEqual(len(fixture["operations"]), 94)
+        for operation in fixture["operations"]:
+            expected_cases = {"success", "error"}
+            if operation["side_effect_class"] == "read-only-query":
+                expected_cases.update({"empty", "partial-failure"})
+            self.assertEqual({scenario["case"] for scenario in operation["scenarios"]}, expected_cases)
+
+    def test_missing_operation_golden_is_rejected(self) -> None:
+        goldens = json.loads(GOLDENS.read_text(encoding="utf-8"))
+        goldens["operations"].pop()
+        with tempfile.TemporaryDirectory() as directory:
+            result = run_guard(MATRIX, "--goldens", str(self.write_goldens(goldens, directory)))
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("code=golden-operation-denominator-drift", result.stdout)
+
+    def test_wrong_golden_exit_code_is_rejected(self) -> None:
+        goldens = json.loads(GOLDENS.read_text(encoding="utf-8"))
+        error = next(
+            scenario
+            for operation in goldens["operations"]
+            for scenario in operation["scenarios"]
+            if scenario["outcome"] == "error"
+        )
+        error["expected_exit_code"] = 0
+        with tempfile.TemporaryDirectory() as directory:
+            result = run_guard(MATRIX, "--goldens", str(self.write_goldens(goldens, directory)))
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("code=golden-scenario-drift", result.stdout)
+
+    def test_duplicate_golden_scenario_id_is_rejected(self) -> None:
+        goldens = json.loads(GOLDENS.read_text(encoding="utf-8"))
+        goldens["operations"][1]["scenarios"][0]["scenario_id"] = goldens["operations"][0]["scenarios"][0][
+            "scenario_id"
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            result = run_guard(MATRIX, "--goldens", str(self.write_goldens(goldens, directory)))
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("code=golden-scenario-id-duplicate", result.stdout)
+
     def test_g05_capability_route_runs_the_structural_guard(self) -> None:
         manifest = json.loads(CAPABILITY_MANIFEST.read_text(encoding="utf-8"))
         capability = next(item for item in manifest["capabilities"] if item["capability_id"] == "G-05")
-        self.assertEqual(capability["commands"], ["python scripts/admin_operation_guard.py --require-complete"])
+        self.assertEqual(
+            capability["test_ids"],
+            [
+                "G05-ADMIN-OPERATION-GOLDEN-CORE",
+                "G05-ADMIN-OPERATION-EXIT-CODES",
+                "G05-ADMIN-OPERATION-GUARD",
+            ],
+        )
+        self.assertEqual(
+            capability["commands"],
+            [
+                "cargo test -p rocketmq-admin-core --test java_operation_golden",
+                "cargo test -p rocketmq-admin-cli --test operation_exit_codes",
+                "python scripts/admin_operation_guard.py --require-complete",
+            ],
+        )
         self.assertIn("scripts/admin-operation-matrix.json", capability["rust_surfaces"])
+        self.assertIn("scripts/fixtures/admin-java-55/operation-goldens.json", capability["rust_surfaces"])
         self.assertIn("rocketmq-doc/en/admin/java-55-operation-map.md", capability["rust_surfaces"])
         self.assertEqual(capability["artifacts"], [])
 
         routes = json.loads(FUNCTIONAL_MATRIX.read_text(encoding="utf-8"))
-        route = next(item for item in routes["capability_routes"] if item["capability_id"] == "G-05")
-        self.assertEqual(route["argv"], ["python", "scripts/admin_operation_guard.py", "--require-complete"])
+        g05_routes = [item for item in routes["capability_routes"] if item["capability_id"] == "G-05"]
+        self.assertEqual(
+            [(route["test_id"], route["argv"]) for route in g05_routes],
+            [
+                (
+                    "G05-ADMIN-OPERATION-GOLDEN-CORE",
+                    ["cargo", "test", "-p", "rocketmq-admin-core", "--test", "java_operation_golden"],
+                ),
+                (
+                    "G05-ADMIN-OPERATION-EXIT-CODES",
+                    ["cargo", "test", "-p", "rocketmq-admin-cli", "--test", "operation_exit_codes"],
+                ),
+                (
+                    "G05-ADMIN-OPERATION-GUARD",
+                    ["python", "scripts/admin_operation_guard.py", "--require-complete"],
+                ),
+            ],
+        )
 
 if __name__ == "__main__":
     unittest.main()

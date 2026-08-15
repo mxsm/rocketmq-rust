@@ -59,7 +59,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-UpdateTopicSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -104,7 +107,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-UpdateTopicListSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -149,7 +155,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-DeleteTopicSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -193,7 +202,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-UpdateSubGroupSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -237,7 +249,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-UpdateSubGroupListSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -281,7 +296,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-SetConsumeModeSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -325,7 +343,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-DeleteSubscriptionGroupCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -371,7 +392,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-UpdateBrokerConfigSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -416,7 +440,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-UpdateTopicPermSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -461,7 +488,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-TopicRouteSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -506,7 +536,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-TopicStatusSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -551,7 +584,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-TopicClusterSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -627,7 +663,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-ResetMasterFlushOffsetSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -671,7 +710,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-BrokerStatusSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -715,7 +757,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-QueryMsgByIdSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -759,7 +804,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-QueryMsgByKeySubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -804,7 +852,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-QueryMsgByUniqueKeySubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -848,7 +899,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-QueryMsgByOffsetSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -892,7 +946,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-QueryMsgTraceByIdSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -936,7 +993,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-PrintMessageSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -980,7 +1040,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-PrintMessageByQueueCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -1025,7 +1088,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-SendMsgStatusCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -1069,7 +1135,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-BrokerConsumeStatsSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -1113,7 +1182,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-ProducerConnectionSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -1157,7 +1229,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-ConsumerConnectionSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -1201,7 +1276,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-ConsumerProgressSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -1245,7 +1323,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-ConsumerStatusSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -1289,7 +1370,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-CloneGroupOffsetCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -1334,7 +1418,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-ProducerSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -1379,7 +1466,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-ClusterListSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -1424,7 +1514,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-TopicListSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -1468,7 +1561,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-UpdateKvConfigCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -1512,7 +1608,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-DeleteKvConfigCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -1556,7 +1655,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-WipeWritePermSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -1600,7 +1702,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-AddWritePermSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -1645,7 +1750,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-ResetOffsetByTimeCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -1689,7 +1797,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-SkipAccumulationSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -1734,7 +1845,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-UpdateOrderConfCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -1778,7 +1892,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-CleanExpiredCQSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -1822,7 +1939,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-DeleteExpiredCommitLogSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -1866,7 +1986,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-CleanUnusedTopicCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -1910,7 +2033,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-StartMonitoringSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -1955,7 +2081,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-StatsAllSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -2000,7 +2129,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-AllocateMQSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -2044,7 +2176,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-CheckMsgSendRTCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -2089,7 +2224,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-ClusterSendMsgRTCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -2133,7 +2271,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-GetNamesrvConfigCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -2177,7 +2318,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-UpdateNamesrvConfigCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -2221,7 +2365,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-GetBrokerConfigCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -2265,7 +2412,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-GetConsumerConfigSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -2309,7 +2459,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-QueryConsumeQueueCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -2353,7 +2506,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-SendMessageCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -2397,7 +2553,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-ConsumeMessageCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -2444,7 +2603,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-UpdateStaticTopicSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -2491,7 +2653,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-RemappingStaticTopicSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -2537,7 +2702,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-ExportMetadataCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -2583,7 +2751,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-ExportConfigsCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -2629,7 +2800,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-ExportMetricsCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -2675,7 +2849,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-ExportMetadataInRocksDBCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -2721,7 +2898,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-ExportPopRecordCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -2766,7 +2946,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-HAStatusSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -2811,7 +2994,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-GetSyncStateSetSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -2855,7 +3041,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-GetBrokerEpochSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -2899,7 +3088,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-GetControllerMetaDataSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -2943,7 +3135,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-GetControllerConfigSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -2987,7 +3182,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-UpdateControllerConfigSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -3031,7 +3229,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-ReElectMasterSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -3075,7 +3276,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-CleanControllerBrokerMetaSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -3119,7 +3323,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-DumpCompactionLogCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -3163,7 +3370,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-GetColdDataFlowCtrInfoSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -3207,7 +3417,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-UpdateColdDataFlowCtrGroupConfigSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -3251,7 +3464,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-RemoveColdDataFlowCtrGroupConfigSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -3295,7 +3511,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-CommitLogSetReadAheadSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -3339,7 +3558,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-CreateUserSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -3383,7 +3605,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-UpdateUserSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -3427,7 +3652,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-DeleteUserSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -3471,7 +3699,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-GetUserSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -3515,7 +3746,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-ListUserSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -3559,7 +3793,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-CopyUsersSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -3603,7 +3840,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-CreateAclSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -3647,7 +3887,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-UpdateAclSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -3691,7 +3934,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-DeleteAclSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -3735,7 +3981,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-GetAclSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -3779,7 +4028,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-ListAclSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -3823,7 +4075,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-CopyAclsSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -3874,7 +4129,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-RocksDBConfigToJsonCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -3918,7 +4176,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-CheckRocksdbCqWriteProgressCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -3962,7 +4223,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-SwitchTimerEngineSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -4007,7 +4271,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-GetBrokerLiteInfoSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -4052,7 +4319,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-GetParentTopicInfoSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -4097,7 +4367,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-GetLiteTopicInfoSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -4142,7 +4415,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-GetLiteClientInfoSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -4187,7 +4463,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-GetLiteGroupInfoSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
@@ -4232,7 +4511,10 @@
         "usage_or_unknown_command": "Clap usage exit 2"
       },
       "test_id": "G05-TriggerLiteDispatchSubCommand",
-      "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+      "test_command": [
+        "cargo test -p rocketmq-admin-core --test java_operation_golden",
+        "cargo test -p rocketmq-admin-cli --test operation_exit_codes"
+      ],
       "status": "alternative-equivalent",
       "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     }
