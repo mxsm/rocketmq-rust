@@ -24,7 +24,9 @@ use anyhow::Result;
 use clap::Parser;
 use rocketmq_broker::build_broker_telemetry_bootstrap_config;
 use rocketmq_broker::command::Args;
+use rocketmq_broker::command::ConfigFileFormat;
 use rocketmq_broker::config::broker_config::BrokerConfig;
+use rocketmq_broker::config::java_properties::JavaBrokerProperties;
 use rocketmq_broker::config::raw::RawBrokerConfig;
 use rocketmq_broker::config::validated::ValidatedBrokerConfig;
 use rocketmq_broker::Builder;
@@ -346,11 +348,45 @@ fn verify_rocketmq_home() -> Result<()> {
 fn parse_config_file(args: &Args) -> Result<RawBrokerConfig> {
     if let Some(config_file) = args.get_config_file() {
         info!("Loading configuration from: {}", config_file.display());
-        RawBrokerConfig::load(&config_file)
-            .with_context(|| format!("Failed to parse canonical broker configuration from {:?}", config_file))
+        match resolve_config_format(args, &config_file)? {
+            ConfigFileFormat::Toml => RawBrokerConfig::load(&config_file)
+                .with_context(|| format!("Failed to parse canonical broker configuration from {:?}", config_file)),
+            ConfigFileFormat::Properties => {
+                let input = std::fs::read_to_string(&config_file)
+                    .with_context(|| format!("Failed to read Java broker properties from {:?}", config_file))?;
+                let conversion = JavaBrokerProperties::parse(&input)
+                    .with_context(|| format!("Failed to convert Java broker properties from {:?}", config_file))?;
+                let report_path = args
+                    .conversion_report
+                    .clone()
+                    .unwrap_or_else(|| config_file.with_extension("conversion.json"));
+                let report = conversion
+                    .report_json()
+                    .context("Failed to serialize Java broker properties conversion report")?;
+                std::fs::write(&report_path, report)
+                    .with_context(|| format!("Failed to write Java conversion report to {:?}", report_path))?;
+                Ok(conversion.into_config())
+            }
+        }
     } else {
         info!("Using default configuration (no config file specified)");
         Ok(RawBrokerConfig::default())
+    }
+}
+
+fn resolve_config_format(args: &Args, path: &std::path::Path) -> Result<ConfigFileFormat> {
+    if let Some(format) = args.config_format {
+        return Ok(format);
+    }
+    match path.extension().and_then(std::ffi::OsStr::to_str) {
+        Some(extension) if extension.eq_ignore_ascii_case("toml") => Ok(ConfigFileFormat::Toml),
+        Some(extension) if extension.eq_ignore_ascii_case("conf") || extension.eq_ignore_ascii_case("properties") => {
+            Ok(ConfigFileFormat::Properties)
+        }
+        _ => anyhow::bail!(
+            "configuration format is ambiguous for {}; use --config-format toml|properties",
+            path.display()
+        ),
     }
 }
 
@@ -695,6 +731,8 @@ storePathCommitLog = "{}"
 
         let args = Args {
             config_file: Some(config_file),
+            config_format: None,
+            conversion_report: None,
             print_config_item: false,
             print_important_config: false,
             namesrv_addr: None,
@@ -733,5 +771,54 @@ storePathCommitLog = "{}"
                 .map(|path| path.as_str()),
             Some(commit_log.as_str())
         );
+    }
+
+    #[test]
+    fn parse_config_file_converts_java_properties_and_writes_one_report() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let config_file = temp_dir.path().join("broker.conf");
+        let report_file = temp_dir.path().join("conversion.json");
+        std::fs::write(
+            &config_file,
+            "brokerName=converted-broker\nstoreType=DEFAULTROCKSDB\nmaxMessageSize=0\n",
+        )
+        .expect("write Java properties");
+        let args = Args {
+            config_file: Some(config_file),
+            config_format: None,
+            conversion_report: Some(report_file.clone()),
+            print_config_item: false,
+            print_important_config: false,
+            namesrv_addr: None,
+            log_filter: None,
+        };
+
+        let raw = parse_config_file(&args).expect("convert Java properties");
+        assert_eq!(raw.broker().broker_identity.broker_name, "converted-broker");
+        assert_eq!(raw.store().store_type, rocketmq_store::StoreType::RocksDB);
+        assert_eq!(raw.store().max_message_size, 0);
+        let report = std::fs::read_to_string(report_file).expect("read conversion report");
+        assert!(report.contains("brokerName"));
+        assert!(report.contains("store.storeType"));
+    }
+
+    #[test]
+    fn conversion_report_failure_prevents_configuration_startup() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let config_file = temp_dir.path().join("broker.properties");
+        let blocked_report = temp_dir.path().join("report-directory");
+        std::fs::write(&config_file, "brokerName=blocked-report\n").expect("write Java properties");
+        std::fs::create_dir(&blocked_report).expect("create blocking report directory");
+        let args = Args {
+            config_file: Some(config_file),
+            config_format: Some(ConfigFileFormat::Properties),
+            conversion_report: Some(blocked_report),
+            print_config_item: false,
+            print_important_config: false,
+            namesrv_addr: None,
+            log_filter: None,
+        };
+
+        assert!(parse_config_file(&args).is_err());
     }
 }

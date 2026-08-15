@@ -18,6 +18,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use clap::Parser;
+use clap::ValueEnum;
 use thiserror::Error;
 use tracing::info;
 
@@ -49,6 +50,12 @@ pub enum BrokerArgsError {
     ConfigLoadError(String),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum ConfigFileFormat {
+    Toml,
+    Properties,
+}
+
 /// RocketMQ Broker command line arguments
 ///
 /// Supports the same command line options as the Java implementation:
@@ -74,6 +81,15 @@ pub struct Args {
     /// 2. Default configuration values
     #[arg(short = 'c', long = "configFile", value_name = "FILE")]
     pub config_file: Option<PathBuf>,
+
+    /// Explicit configuration syntax. When omitted, `.toml`, `.conf`, and
+    /// `.properties` extensions are interpreted deterministically.
+    #[arg(long = "config-format", value_enum)]
+    pub config_format: Option<ConfigFileFormat>,
+
+    /// Destination for the redacted Java-properties conversion report.
+    #[arg(long = "conversion-report", value_name = "FILE")]
+    pub conversion_report: Option<PathBuf>,
 
     /// Print all configuration items and exit
     ///
@@ -286,9 +302,26 @@ mod tests {
     }
 
     #[test]
+    fn explicit_java_properties_format_and_report_are_parsed() {
+        let args = Args::try_parse_from([
+            "rocketmq-broker-rust",
+            "--config-format",
+            "properties",
+            "--conversion-report",
+            "converted.json",
+        ])
+        .expect("configuration conversion arguments should parse");
+
+        assert_eq!(args.config_format, Some(ConfigFileFormat::Properties));
+        assert_eq!(args.conversion_report, Some(PathBuf::from("converted.json")));
+    }
+
+    #[test]
     fn test_validate_namesrv_addr_single() {
         let args = Args {
             config_file: None,
+            config_format: None,
+            conversion_report: None,
             print_config_item: false,
             print_important_config: false,
             namesrv_addr: Some("127.0.0.1:9876".to_string()),
@@ -302,6 +335,8 @@ mod tests {
     fn test_validate_namesrv_addr_multiple() {
         let args = Args {
             config_file: None,
+            config_format: None,
+            conversion_report: None,
             print_config_item: false,
             print_important_config: false,
             namesrv_addr: Some("192.168.0.1:9876;192.168.0.2:9876".to_string()),
@@ -315,6 +350,8 @@ mod tests {
     fn test_validate_namesrv_addr_invalid() {
         let args = Args {
             config_file: None,
+            config_format: None,
+            conversion_report: None,
             print_config_item: false,
             print_important_config: false,
             namesrv_addr: Some("invalid".to_string()),
@@ -328,6 +365,8 @@ mod tests {
     fn test_should_exit_after_print() {
         let args_print = Args {
             config_file: None,
+            config_format: None,
+            conversion_report: None,
             print_config_item: true,
             print_important_config: false,
             namesrv_addr: None,
@@ -337,6 +376,8 @@ mod tests {
 
         let args_important = Args {
             config_file: None,
+            config_format: None,
+            conversion_report: None,
             print_config_item: false,
             print_important_config: true,
             namesrv_addr: None,
@@ -346,6 +387,8 @@ mod tests {
 
         let args_none = Args {
             config_file: None,
+            config_format: None,
+            conversion_report: None,
             print_config_item: false,
             print_important_config: false,
             namesrv_addr: None,
@@ -358,6 +401,8 @@ mod tests {
     fn test_get_namesrv_addr_default() {
         let args = Args {
             config_file: None,
+            config_format: None,
+            conversion_report: None,
             print_config_item: false,
             print_important_config: false,
             namesrv_addr: None,
@@ -372,6 +417,8 @@ mod tests {
     fn test_get_namesrv_addr_from_args() {
         let args = Args {
             config_file: None,
+            config_format: None,
+            conversion_report: None,
             print_config_item: false,
             print_important_config: false,
             namesrv_addr: Some("192.168.1.1:9876".to_string()),
@@ -385,6 +432,8 @@ mod tests {
     fn test_is_valid_host_port() {
         let args = Args {
             config_file: None,
+            config_format: None,
+            conversion_report: None,
             print_config_item: false,
             print_important_config: false,
             namesrv_addr: None,

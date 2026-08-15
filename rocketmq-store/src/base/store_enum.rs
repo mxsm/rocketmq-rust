@@ -33,6 +33,18 @@ impl StoreType {
             StoreType::RocksDB => "RocksDB",
         }
     }
+
+    /// Converts the Java 5.5 `storeType` aliases without weakening canonical
+    /// Rust configuration deserialization.
+    pub fn from_java_alias(value: &str) -> Option<Self> {
+        if value.eq_ignore_ascii_case("default") {
+            Some(Self::LocalFile)
+        } else if value.eq_ignore_ascii_case("defaultRocksDB") {
+            Some(Self::RocksDB)
+        } else {
+            None
+        }
+    }
 }
 
 impl Serialize for StoreType {
@@ -59,7 +71,7 @@ impl<'de> Deserialize<'de> for StoreType {
             type Value = StoreType;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("a string representing TopicFilterType")
+                formatter.write_str("`LocalFile` or `RocksDB`")
             }
 
             fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
@@ -69,7 +81,7 @@ impl<'de> Deserialize<'de> for StoreType {
                 match value {
                     "LocalFile" => Ok(StoreType::LocalFile),
                     "RocksDB" => Ok(StoreType::RocksDB),
-                    _ => Err(serde::de::Error::unknown_variant(value, &["SingleTag", "MultiTag"])),
+                    _ => Err(serde::de::Error::unknown_variant(value, &["LocalFile", "RocksDB"])),
                 }
             }
         }
@@ -109,8 +121,18 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "unknown variant `Unknown`, expected `SingleTag` or `MultiTag`")]
-    fn deserialize_panics_on_unknown_variant() {
-        let _: StoreType = serde_json::from_value(json!("Unknown")).unwrap();
+    fn deserialize_rejects_unknown_variant() {
+        let error = serde_json::from_value::<StoreType>(json!("Unknown"))
+            .expect_err("unknown canonical store type should fail");
+        assert!(error.to_string().contains("LocalFile"));
+        assert!(error.to_string().contains("RocksDB"));
+    }
+
+    #[test]
+    fn java_aliases_are_isolated_from_canonical_deserialization() {
+        assert_eq!(StoreType::from_java_alias("DeFaUlT"), Some(StoreType::LocalFile));
+        assert_eq!(StoreType::from_java_alias("DEFAULTROCKSDB"), Some(StoreType::RocksDB));
+        assert_eq!(StoreType::from_java_alias("rocksdb"), None);
+        assert!(serde_json::from_value::<StoreType>(json!("default")).is_err());
     }
 }
