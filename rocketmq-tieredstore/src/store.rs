@@ -106,7 +106,10 @@ where
     ) -> Result<Self, RocketMQError> {
         let config = Arc::new(config);
         let shutdown = CancellationToken::new();
-        let metadata_store = Arc::new(JsonMetadataStore::new(config.clone()));
+        let metadata_store = Arc::new(JsonMetadataStore::new_with_provider_descriptor(
+            config.clone(),
+            provider_descriptor,
+        ));
         let metrics = Arc::new(TieredStoreMetrics::new(metrics));
         let flat_file_store = Arc::new(TieredFlatFileStore::new_with_metrics(
             config.clone(),

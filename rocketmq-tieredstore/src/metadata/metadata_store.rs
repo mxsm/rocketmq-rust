@@ -28,6 +28,36 @@ use crate::file::TieredIndexEntry;
 use crate::metadata::FileSegmentMetadata;
 use crate::metadata::TopicMetadata;
 use crate::metadata::TopicQueueMetadata;
+use crate::provider::TieredProviderDescriptor;
+use crate::provider::TieredProviderPersistence;
+
+const METADATA_FORMAT: &str = "rocketmq-tiered-metadata";
+const METADATA_VERSION: u32 = 1;
+
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PersistedProviderContract {
+    id: String,
+    config_version: u32,
+    format: Option<String>,
+    version: Option<u32>,
+}
+
+impl From<TieredProviderDescriptor> for PersistedProviderContract {
+    fn from(descriptor: TieredProviderDescriptor) -> Self {
+        let (format, version) = match descriptor.persistence() {
+            TieredProviderPersistence::Ephemeral => (None, None),
+            TieredProviderPersistence::Stable { format, version } => (Some(format.to_owned()), Some(version)),
+        };
+        Self {
+            id: descriptor.id().to_owned(),
+            config_version: descriptor.config_version(),
+            format,
+            version,
+        }
+    }
+}
 
 #[allow(async_fn_in_trait)]
 pub trait TieredMetadataStore: Send + Sync {
@@ -67,8 +97,12 @@ pub trait TieredMetadataStore: Send + Sync {
 }
 
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
-#[derive(Debug, Clone, Default)]
+#[cfg_attr(feature = "serde", serde(default, rename_all = "camelCase"))]
+#[derive(Debug, Clone)]
 struct MetadataState {
+    format: String,
+    version: u32,
+    provider: Option<PersistedProviderContract>,
     topics: HashMap<String, TopicMetadata>,
     queues: HashMap<String, TopicQueueMetadata>,
     segments: HashMap<String, FileSegmentMetadata>,
@@ -76,21 +110,51 @@ struct MetadataState {
     index: HashMap<String, Vec<TieredIndexEntry>>,
 }
 
+impl MetadataState {
+    fn new(provider: Option<PersistedProviderContract>) -> Self {
+        Self {
+            format: METADATA_FORMAT.to_owned(),
+            version: METADATA_VERSION,
+            provider,
+            topics: HashMap::new(),
+            queues: HashMap::new(),
+            segments: HashMap::new(),
+            index: HashMap::new(),
+        }
+    }
+}
+
+impl Default for MetadataState {
+    fn default() -> Self {
+        Self::new(None)
+    }
+}
+
 pub struct JsonMetadataStore {
     path: PathBuf,
     state: RwLock<MetadataState>,
+    expected_provider: Option<PersistedProviderContract>,
     persist_lock: tokio::sync::Mutex<()>,
     successful_persists: AtomicU64,
 }
 
 impl JsonMetadataStore {
     pub fn new(config: Arc<TieredStoreConfig>) -> Self {
+        Self::new_with_provider_descriptor(config, None)
+    }
+
+    pub fn new_with_provider_descriptor(
+        config: Arc<TieredStoreConfig>,
+        provider_descriptor: Option<TieredProviderDescriptor>,
+    ) -> Self {
+        let expected_provider = provider_descriptor.map(PersistedProviderContract::from);
         Self {
             path: config
                 .store_path_root_dir
                 .join("config")
                 .join("tieredStoreMetadata.json"),
-            state: RwLock::new(MetadataState::default()),
+            state: RwLock::new(MetadataState::new(expected_provider.clone())),
+            expected_provider,
             persist_lock: tokio::sync::Mutex::new(()),
             successful_persists: AtomicU64::new(0),
         }
@@ -125,8 +189,18 @@ impl TieredMetadataStore for JsonMetadataStore {
             let data = fs::read(&self.path)
                 .await
                 .map_err(|err| error::storage_read_failed(path_to_string(&self.path), err.to_string()))?;
-            let state = serde_json::from_slice::<MetadataState>(&data)
+            let mut state = serde_json::from_slice::<MetadataState>(&data)
                 .map_err(|_| error::storage_corrupted(path_to_string(&self.path)))?;
+            if state.format != METADATA_FORMAT || state.version != METADATA_VERSION {
+                return Err(error::storage_corrupted(path_to_string(&self.path)));
+            }
+            match (&state.provider, &self.expected_provider) {
+                (Some(stored), Some(expected)) if stored != expected => {
+                    return Err(error::storage_corrupted(path_to_string(&self.path)));
+                }
+                (None, Some(expected)) => state.provider = Some(expected.clone()),
+                _ => {}
+            }
             *self.state.write() = state;
         }
 
@@ -154,6 +228,14 @@ impl TieredMetadataStore for JsonMetadataStore {
             fs::write(&tmp_path, data)
                 .await
                 .map_err(|err| error::storage_write_failed(path_to_string(&tmp_path), err.to_string()))?;
+            fs::OpenOptions::new()
+                .write(true)
+                .open(&tmp_path)
+                .await
+                .map_err(|err| error::storage_write_failed(path_to_string(&tmp_path), err.to_string()))?
+                .sync_all()
+                .await
+                .map_err(|err| error::storage_write_failed(path_to_string(&tmp_path), err.to_string()))?;
             fs::rename(&tmp_path, &self.path)
                 .await
                 .map_err(|err| error::storage_write_failed(path_to_string(&self.path), err.to_string()))?;
@@ -164,7 +246,7 @@ impl TieredMetadataStore for JsonMetadataStore {
     }
 
     async fn destroy(&self) -> Result<(), RocketMQError> {
-        *self.state.write() = MetadataState::default();
+        *self.state.write() = MetadataState::new(self.expected_provider.clone());
         Ok(())
     }
 

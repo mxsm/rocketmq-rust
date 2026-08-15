@@ -561,11 +561,14 @@ where
 
     async fn delete_segment(&self, segment: Arc<TieredFileSegment<P>>) -> Result<(), RocketMQError> {
         let metadata = segment.metadata();
+        // The provider object remains readable until its deletion succeeds. Only
+        // then publish the durable metadata tombstone and remove the segment
+        // from the live view.
+        self.provider.delete(metadata.path.clone()).await?;
         self.metadata_store
             .mark_file_segment_deleted(&metadata.path, metadata.base_offset)
             .await?;
         segment.mark_deleted();
-        self.provider.delete(metadata.path.clone()).await?;
         self.read_ahead_cache.invalidate_path(&metadata.path);
         self.remove_segment(metadata.segment_type, metadata.base_offset, &metadata.path);
         Ok(())
