@@ -230,6 +230,14 @@ name              = "mapped_file_queue_retirement"
 required-features = ["test-support"]
 
 [[test]]
+name              = "commitlog_multipath_tests"
+required-features = ["test-support"]
+
+[[test]]
+name              = "commitlog_recovery_tests"
+required-features = ["test-support"]
+
+[[test]]
 name              = "timer_timeline_codec_tests"
 required-features = ["extended_timeline"]
 

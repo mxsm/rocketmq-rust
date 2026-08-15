@@ -86,6 +86,11 @@ mod timer_migration;
 #[cfg(feature = "extended_timeline")]
 pub use timer_migration::*;
 
+mod fault_injection;
+pub use fault_injection::*;
+mod multipath_commit_log;
+pub use multipath_commit_log::*;
+
 /// Mapped-file queue surface exposed only to lifecycle integration tests.
 #[doc(hidden)]
 pub use crate::consume_queue::mapped_file_queue::MappedFileQueue as MappedFileQueueTestHarness;

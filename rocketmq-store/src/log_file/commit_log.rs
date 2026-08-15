@@ -92,6 +92,7 @@ use crate::consume_queue::mapped_file_queue::MappedFileWarmupStats;
 use crate::ha::general_ha_service::GeneralHAService;
 use crate::ha::ha_service::HAService;
 use crate::log_file::cold_data_check_service::ColdDataCheckService;
+use crate::log_file::commit_log_path_set::CommitLogPathSet;
 use rocketmq_store_local::mapped_file::ManagedLifecycleRuntime;
 use rocketmq_store_local::mapped_file::ManagedMappedFileQueueGeneration;
 // Import the optimized loader module
@@ -434,13 +435,35 @@ impl CommitLog {
         store_metrics: rocketmq_observability::metrics::store::StoreMetricsRecorder,
     ) -> Result<Self, StoreError> {
         let enabled_append_prop_crc = message_store_config.enabled_append_prop_crc;
-        let store_path = message_store_config.get_store_path_commit_log();
         let mapped_file_size = message_store_config.mapped_file_size_commit_log;
         let memory_lock_budget_bytes = message_store_config.effective_linux_memory_lock_budget_bytes(
             crate::platform::current_store_platform_capability().memory_lock_limit_bytes,
         );
-        let mapped_file_queue =
-            MappedFileQueue::new(store_path, mapped_file_size as u64, Some(allocate_mapped_file_service));
+        let writable_paths = message_store_config.commit_log_writable_paths();
+        let readonly_paths = message_store_config.commit_log_readonly_paths();
+        let mapped_file_queue = if message_store_config.enable_mapped_file_lifecycle_wave_b {
+            if writable_paths.len() != 1 || !readonly_paths.is_empty() {
+                return Err(StoreError::storage(
+                    StoreOperation::Start,
+                    "managed mapped-file lifecycle does not support multipath CommitLog roots",
+                ));
+            }
+            MappedFileQueue::new(
+                writable_paths[0].to_string_lossy().into_owned(),
+                mapped_file_size as u64,
+                Some(allocate_mapped_file_service),
+            )
+        } else {
+            let commit_log_paths = CommitLogPathSet::try_new(writable_paths, readonly_paths, mapped_file_size as u64)
+                .map_err(|error| {
+                StoreError::storage(StoreOperation::Start, "invalid CommitLog path set").with_source(error)
+            })?;
+            MappedFileQueue::new_commit_log(
+                Arc::new(commit_log_paths),
+                mapped_file_size as u64,
+                Some(allocate_mapped_file_service),
+            )
+        };
         let mapped_file_flush = mapped_file_queue.flush_handle();
         #[cfg(feature = "observability")]
         let runtime_state = Arc::new(CommitLogRuntimeState::new_with_store_metrics(
@@ -841,6 +864,9 @@ impl CommitLog {
     /// - File size validation fails
     /// - mmap creation fails
     fn load_optimized(&mut self) -> Result<bool, std::io::Error> {
+        if self.mapped_file_queue.is_multipath_commit_log() {
+            return Ok(self.load_sequential());
+        }
         let store_path = self.message_store_config.get_store_path_commit_log();
         let mapped_file_size = self.message_store_config.mapped_file_size_commit_log as u64;
 

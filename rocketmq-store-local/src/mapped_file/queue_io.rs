@@ -258,11 +258,44 @@ pub fn create_mapped_file_for_queue(
     mapped_file_size: u64,
     first_in_queue: bool,
 ) -> Option<Arc<DefaultMappedFile>> {
+    create_mapped_file_for_queue_inner(
+        allocate_service,
+        file_path,
+        Some(next_file_path),
+        mapped_file_size,
+        first_in_queue,
+    )
+}
+
+/// Creates one queue segment without scheduling an adjacent segment.
+///
+/// Multipath callers select the adjacent segment's root through their global path policy and use
+/// the explicit background preallocation route instead.
+#[doc(hidden)]
+pub fn create_mapped_file_for_queue_without_preallocation(
+    allocate_service: Option<&AllocateMappedFileService>,
+    file_path: &Path,
+    mapped_file_size: u64,
+    first_in_queue: bool,
+) -> Option<Arc<DefaultMappedFile>> {
+    create_mapped_file_for_queue_inner(allocate_service, file_path, None, mapped_file_size, first_in_queue)
+}
+
+fn create_mapped_file_for_queue_inner(
+    allocate_service: Option<&AllocateMappedFileService>,
+    file_path: &Path,
+    next_file_path: Option<&Path>,
+    mapped_file_size: u64,
+    first_in_queue: bool,
+) -> Option<Arc<DefaultMappedFile>> {
     let file_path_text = file_path.to_string_lossy().into_owned();
     let mut mapped_file = if let Some(service) = allocate_service.filter(|service| service.is_started()) {
         match service.allocate_mapped_file_blocking(file_path_text, mapped_file_size) {
             Ok(pre_allocated) => {
-                service.submit_request_in_background(next_file_path.to_string_lossy().into_owned(), mapped_file_size);
+                if let Some(next_file_path) = next_file_path {
+                    service
+                        .submit_request_in_background(next_file_path.to_string_lossy().into_owned(), mapped_file_size);
+                }
                 pre_allocated
             }
             Err(error) => {

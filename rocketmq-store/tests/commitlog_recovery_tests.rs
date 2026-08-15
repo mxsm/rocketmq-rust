@@ -881,3 +881,37 @@ async fn local_file_and_rocksdb_double_write_compatibility_match_after_restart()
     assert_eq!(local_snapshot.get_message_count, 2);
     assert_eq!(local_snapshot.query_message_count, 2);
 }
+
+#[tokio::test]
+async fn multipath_commitlog_recovers_one_global_offset_sequence() {
+    let temp_dir = TempDir::new().expect("create temp dir");
+    let first_root = temp_dir.path().join("commitlog-a");
+    let second_root = temp_dir.path().join("commitlog-b");
+    let topic = CheetahString::from_static_str("multipath-recovery-topic");
+    let mut config = phase6_store_config();
+    config.mapped_file_size_commit_log = RECOVERY_SEGMENT_SIZE;
+    config.store_path_commit_log = Some(format!("{},{}", first_root.display(), second_root.display()).into());
+
+    let mut writer = new_test_store(&temp_dir, config.clone());
+    writer.init().await.expect("init writer");
+    assert!(writer.load().await, "load writer");
+    for _ in 0..8 {
+        let result = writer
+            .put_message(build_test_message(&topic, 0, &FIRST_RECOVERY_BODY))
+            .await;
+        assert_eq!(result.put_message_status(), PutMessageStatus::PutOk);
+    }
+    let written_max_offset = writer.get_max_phy_offset();
+    assert!(written_max_offset > RECOVERY_SEGMENT_SIZE as i64);
+    writer.shutdown().await;
+    drop(writer);
+
+    let first_segments = fs::read_dir(&first_root).expect("first root").count();
+    let second_segments = fs::read_dir(&second_root).expect("second root").count();
+    assert!(first_segments > 0 && second_segments > 0);
+
+    let mut restarted = new_test_store(&temp_dir, config);
+    restarted.init().await.expect("init restarted store");
+    assert!(restarted.load().await, "load multipath CommitLog");
+    assert_eq!(restarted.get_max_phy_offset(), written_max_offset);
+}

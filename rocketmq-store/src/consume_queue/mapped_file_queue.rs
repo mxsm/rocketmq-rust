@@ -35,6 +35,7 @@ use rocketmq_store_local::mapped_file::queue_index::for_each_discontinuous_pair;
 use rocketmq_store_local::mapped_file::queue_index::overlapping_file_range;
 use rocketmq_store_local::mapped_file::queue_index::MappedFileQueueIndex;
 use rocketmq_store_local::mapped_file::queue_io::create_mapped_file_for_queue;
+use rocketmq_store_local::mapped_file::queue_io::create_mapped_file_for_queue_without_preallocation;
 use rocketmq_store_local::mapped_file::queue_io::load_mapped_file_queue_files;
 use rocketmq_store_local::mapped_file::queue_io::load_mapped_file_queue_path;
 use rocketmq_store_local::mapped_file::queue_io::MappedFileQueueLoadOutcome;
@@ -81,6 +82,8 @@ use tracing::warn;
 use crate::base::allocate_mapped_file_service::AllocateMappedFileService;
 use crate::base::select_result::SelectMappedBufferResult;
 use crate::log_file::commit_log::CommitLogReadHandle;
+use crate::log_file::commit_log_path_set::CommitLogPathSet;
+use crate::log_file::commit_log_path_set::StoreFaultPoint;
 use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::default_mapped_file_impl::LazyMmapStats;
 use crate::log_file::mapped_file::MappedFile;
@@ -431,9 +434,15 @@ pub(crate) struct MappedFileQueueAppendHandle {
     mapped_file_size: u64,
     allocate_mapped_file_service: Option<AllocateMappedFileService>,
     runtime_state: MappedFileQueueRuntimeState,
+    commit_log_paths: Option<Arc<CommitLogPathSet>>,
 }
 
 impl MappedFileQueueAppendHandle {
+    pub(crate) fn fence_writes(&self) {
+        let _guard = self.runtime_state.commit_lock().lock();
+        self.runtime_state.begin_close();
+    }
+
     /// Returns the current absolute append position without exposing the mapped-file generation.
     pub(crate) fn current_append_offset(&self) -> u64 {
         self.mapped_files
@@ -454,6 +463,7 @@ impl MappedFileQueueAppendHandle {
             self.mapped_file_size,
             self.allocate_mapped_file_service.as_ref(),
             &self.runtime_state,
+            self.commit_log_paths.as_ref(),
             start_offset,
             need_create,
         )
@@ -466,6 +476,7 @@ fn get_last_mapped_file_for_append(
     mapped_file_size: u64,
     allocate_mapped_file_service: Option<&AllocateMappedFileService>,
     runtime_state: &MappedFileQueueRuntimeState,
+    commit_log_paths: Option<&Arc<CommitLogPathSet>>,
     start_offset: u64,
     need_create: bool,
 ) -> Option<Arc<DefaultMappedFile>> {
@@ -475,6 +486,13 @@ fn get_last_mapped_file_for_append(
     let mapped_file_last = mapped_files.snapshot().last().cloned();
     if mapped_file_last.as_ref().is_some_and(|file| !file.is_available()) {
         return None;
+    }
+    if let (Some(paths), Some(file)) = (commit_log_paths, mapped_file_last.as_ref()) {
+        if paths.should_fail(StoreFaultPoint::Append, Path::new(file.get_file_name().as_str())) {
+            let _guard = runtime_state.commit_lock().lock();
+            runtime_state.begin_close();
+            return None;
+        }
     }
     if let Some(file) = mapped_file_last.as_ref() {
         let last_file =
@@ -487,6 +505,7 @@ fn get_last_mapped_file_for_append(
                     mapped_file_size,
                     allocate_mapped_file_service,
                     runtime_state,
+                    commit_log_paths,
                     next_offset,
                 );
             }
@@ -503,6 +522,7 @@ fn get_last_mapped_file_for_append(
             mapped_file_size,
             allocate_mapped_file_service,
             runtime_state,
+            commit_log_paths,
             create_offset,
         );
     }
@@ -515,6 +535,7 @@ fn trigger_mapped_file_preallocation(
     mapped_file_size: u64,
     allocate_mapped_file_service: Option<&AllocateMappedFileService>,
     runtime_state: &MappedFileQueueRuntimeState,
+    commit_log_paths: Option<&Arc<CommitLogPathSet>>,
     next_offset: u64,
 ) {
     let _maintenance_guard = runtime_state.commit_lock().lock();
@@ -528,7 +549,17 @@ fn trigger_mapped_file_preallocation(
         return;
     }
 
-    let next_file_path = PathBuf::from(store_path).join(offset_to_file_name(next_offset));
+    let root = match commit_log_paths {
+        Some(paths) => match paths.creation_candidates(StoreFaultPoint::Preallocate) {
+            Ok(candidates) => candidates.into_iter().next(),
+            Err(_) => None,
+        },
+        None => Some(PathBuf::from(store_path)),
+    };
+    let Some(root) = root else {
+        return;
+    };
+    let next_file_path = root.join(offset_to_file_name(next_offset));
     service.submit_request_in_background(next_file_path.to_string_lossy().to_string(), mapped_file_size);
 }
 
@@ -538,6 +569,7 @@ fn create_and_publish_mapped_file(
     mapped_file_size: u64,
     allocate_mapped_file_service: Option<&AllocateMappedFileService>,
     runtime_state: &MappedFileQueueRuntimeState,
+    commit_log_paths: Option<&Arc<CommitLogPathSet>>,
     create_offset: u64,
 ) -> Option<Arc<DefaultMappedFile>> {
     create_and_publish_mapped_file_with_before_lock(
@@ -546,6 +578,7 @@ fn create_and_publish_mapped_file(
         mapped_file_size,
         allocate_mapped_file_service,
         runtime_state,
+        commit_log_paths,
         create_offset,
         || {},
     )
@@ -557,6 +590,7 @@ fn create_and_publish_mapped_file_with_before_lock<F>(
     mapped_file_size: u64,
     allocate_mapped_file_service: Option<&AllocateMappedFileService>,
     runtime_state: &MappedFileQueueRuntimeState,
+    commit_log_paths: Option<&Arc<CommitLogPathSet>>,
     create_offset: u64,
     before_lock: F,
 ) -> Option<Arc<DefaultMappedFile>>
@@ -597,15 +631,42 @@ where
     }
 
     let is_first = current_files.is_empty();
-    let next_file_path = PathBuf::from(store_path).join(offset_to_file_name(create_offset));
-    let next_next_file_path = PathBuf::from(store_path).join(offset_to_file_name(create_offset + mapped_file_size));
-    let mapped_file = create_mapped_file_for_queue(
-        allocate_mapped_file_service,
-        &next_file_path,
-        &next_next_file_path,
-        mapped_file_size,
-        is_first,
-    )?;
+    let candidates = match commit_log_paths {
+        Some(paths) => paths.creation_candidates(StoreFaultPoint::CreateSegment).ok()?,
+        None => vec![PathBuf::from(store_path)],
+    };
+    let mut mapped_file = None;
+    for root in candidates {
+        let next_file_path = root.join(offset_to_file_name(create_offset));
+        let created = if commit_log_paths.is_some() {
+            create_mapped_file_for_queue_without_preallocation(
+                allocate_mapped_file_service,
+                &next_file_path,
+                mapped_file_size,
+                is_first,
+            )
+        } else {
+            let next_next_file_path = root.join(offset_to_file_name(create_offset + mapped_file_size));
+            create_mapped_file_for_queue(
+                allocate_mapped_file_service,
+                &next_file_path,
+                &next_next_file_path,
+                mapped_file_size,
+                is_first,
+            )
+        };
+        if let Some(created) = created {
+            if let Some(paths) = commit_log_paths {
+                paths.record_selected(&root);
+            }
+            mapped_file = Some(created);
+            break;
+        }
+        if let Some(paths) = commit_log_paths {
+            paths.mark_unhealthy(&root);
+        }
+    }
+    let mapped_file = mapped_file?;
 
     mapped_files
         .publish_legacy_created_file(Arc::clone(&mapped_file))
@@ -838,6 +899,7 @@ pub struct MappedFileQueue {
     pub(crate) allocate_mapped_file_service: Option<AllocateMappedFileService>,
 
     runtime_state: MappedFileQueueRuntimeState,
+    commit_log_paths: Option<Arc<CommitLogPathSet>>,
 }
 
 pub use rocketmq_store_local::flush::FlushProgress;
@@ -848,11 +910,25 @@ impl Default for MappedFileQueue {
             storage: MappedFileQueueStorage::new(String::new(), 0, MappedFileGeneration::legacy()),
             allocate_mapped_file_service: None,
             runtime_state: MappedFileQueueRuntimeState::default(),
+            commit_log_paths: None,
         }
     }
 }
 
 impl MappedFileQueue {
+    pub(crate) fn is_multipath_commit_log(&self) -> bool {
+        self.commit_log_paths.as_ref().is_some_and(|paths| paths.is_multipath())
+    }
+
+    pub(crate) fn fence_writes(&self) {
+        let _guard = self.runtime_state.commit_lock().lock();
+        self.runtime_state.begin_close();
+    }
+
+    pub(crate) fn is_write_fenced(&self) -> bool {
+        self.runtime_state.is_closing()
+    }
+
     #[inline]
     pub fn new(
         store_path: String,
@@ -863,6 +939,21 @@ impl MappedFileQueue {
             storage: MappedFileQueueStorage::new(store_path, mapped_file_size, MappedFileGeneration::legacy()),
             allocate_mapped_file_service,
             runtime_state: MappedFileQueueRuntimeState::default(),
+            commit_log_paths: None,
+        }
+    }
+
+    pub(crate) fn new_commit_log(
+        path_set: Arc<CommitLogPathSet>,
+        mapped_file_size: u64,
+        allocate_mapped_file_service: Option<AllocateMappedFileService>,
+    ) -> Self {
+        let primary = path_set.primary_writable_root().to_string_lossy().into_owned();
+        Self {
+            storage: MappedFileQueueStorage::new(primary, mapped_file_size, MappedFileGeneration::legacy()),
+            allocate_mapped_file_service,
+            runtime_state: MappedFileQueueRuntimeState::default(),
+            commit_log_paths: Some(path_set),
         }
     }
 
@@ -878,6 +969,7 @@ impl MappedFileQueue {
             storage: MappedFileQueueStorage::new(store_path, mapped_file_size, MappedFileGeneration::managed(runtime)),
             allocate_mapped_file_service: Some(allocate_mapped_file_service),
             runtime_state: MappedFileQueueRuntimeState::default(),
+            commit_log_paths: None,
         }
     }
 }
@@ -888,7 +980,20 @@ impl MappedFileQueue {
         if !self.storage.mapped_files().allows_legacy_namespace_mutation() {
             return false;
         }
-        let outcome = load_mapped_file_queue_path(self.storage.store_path(), self.storage.mapped_file_size());
+        let outcome = if let Some(paths) = self.commit_log_paths.as_ref() {
+            match paths.scan_segments(self.storage.mapped_file_size()) {
+                Ok(segments) => load_mapped_file_queue_files(
+                    segments.into_iter().map(|segment| segment.path).collect(),
+                    self.storage.mapped_file_size(),
+                ),
+                Err(error) => {
+                    error!(%error, "multipath CommitLog inventory failed closed");
+                    return false;
+                }
+            }
+        } else {
+            load_mapped_file_queue_path(self.storage.store_path(), self.storage.mapped_file_size())
+        };
         self.apply_load_outcome(outcome)
     }
 
@@ -966,6 +1071,7 @@ impl MappedFileQueue {
             self.storage.mapped_file_size(),
             self.allocate_mapped_file_service.as_ref(),
             &self.runtime_state,
+            self.commit_log_paths.as_ref(),
             start_offset,
             need_create,
         )
@@ -979,6 +1085,7 @@ impl MappedFileQueue {
             self.storage.mapped_file_size(),
             self.allocate_mapped_file_service.as_ref(),
             &self.runtime_state,
+            self.commit_log_paths.as_ref(),
             create_offset,
         )
     }
@@ -1047,6 +1154,7 @@ impl MappedFileQueue {
             mapped_file_size: self.storage.mapped_file_size(),
             allocate_mapped_file_service: self.allocate_mapped_file_service.clone(),
             runtime_state: self.runtime_state.clone(),
+            commit_log_paths: self.commit_log_paths.clone(),
         }
     }
 
@@ -1747,25 +1855,38 @@ impl MappedFileQueue {
             return false;
         }
         let store_path = PathBuf::from(self.storage.store_path());
+        let roots = self
+            .commit_log_paths
+            .as_ref()
+            .map(|paths| paths.roots().to_vec())
+            .unwrap_or_else(|| vec![store_path.clone()]);
         if let Some(service) = &self.allocate_mapped_file_service {
-            let _ = service.retire_directory(&store_path);
+            for root in &roots {
+                let _ = service.retire_directory(root);
+            }
         }
         let files = self.storage.mapped_files().snapshot();
         let deletion = destroy_mapped_file_queue(files.as_ref(), self.storage.store_path());
         self.apply_namespace_removal_under_maintenance_lock(deletion);
+        for root in roots.iter().filter(|root| **root != store_path) {
+            if std::fs::read_dir(root).is_ok_and(|mut entries| entries.next().is_none()) {
+                let _ = std::fs::remove_dir(root);
+            }
+        }
         let allocator_retirement_complete = self
             .allocate_mapped_file_service
             .as_ref()
-            .is_none_or(|service| service.is_directory_retirement_complete(&store_path));
-        let namespace_absent = match std::fs::metadata(&store_path) {
-            Err(error) if error.kind() == io::ErrorKind::NotFound => true,
-            Ok(_) | Err(_) => false,
-        };
+            .is_none_or(|service| roots.iter().all(|root| service.is_directory_retirement_complete(root)));
+        let namespace_absent = roots
+            .iter()
+            .all(|root| matches!(std::fs::metadata(root), Err(error) if error.kind() == io::ErrorKind::NotFound));
         let destroyed = self.is_mapped_files_empty() && allocator_retirement_complete && namespace_absent;
         if destroyed {
             self.set_flushed_where(0);
             if let Some(service) = &self.allocate_mapped_file_service {
-                let _ = service.complete_directory_retirement(&store_path);
+                for root in &roots {
+                    let _ = service.complete_directory_retirement(root);
+                }
             }
         }
         destroyed
@@ -2191,6 +2312,7 @@ mod tests {
                 mapped_file_size,
                 Some(&thread_service),
                 &thread_state,
+                None,
                 mapped_file_size,
             );
         });
@@ -2305,6 +2427,7 @@ mod tests {
                 mapped_file_size,
                 None,
                 &runtime_state,
+                None,
                 0,
                 || {
                     preflight_done_tx.send(()).expect("signal legacy preflight");
