@@ -34,6 +34,8 @@ use rocketmq_protocol::protocol::body::consumer_running_info::ConsumerRunningInf
 use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_protocol::protocol::route_facade::BrokerDataExt;
+use rocketmq_protocol::protocol::subscription::subscription_group_config::validate_subscription_group_configs;
+use rocketmq_protocol::protocol::subscription::subscription_group_config::validate_subscription_group_name;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use serde::Deserialize;
 use serde::Serialize;
@@ -275,11 +277,13 @@ impl UpdateSubscriptionGroupRequest {
         cluster_name: Option<String>,
         config: SubscriptionGroupConfig,
     ) -> RocketMQResult<Self> {
-        Ok(Self {
+        let request = Self {
             target: target_from_options(broker_addr, cluster_name)?,
             config,
             namesrv_addr: None,
-        })
+        };
+        request.validate()?;
+        Ok(request)
     }
 
     pub fn with_optional_namesrv_addr(mut self, namesrv_addr: Option<String>) -> Self {
@@ -297,6 +301,11 @@ impl UpdateSubscriptionGroupRequest {
 
     pub(crate) fn admin_builder(&self) -> AdminBuilder {
         builder_with_namesrv(self.namesrv_addr.as_deref())
+    }
+
+    fn validate(&self) -> RocketMQResult<()> {
+        validate_subscription_group_name(self.config.group_name().as_str())
+            .map_err(|error| ToolsError::validation_error("groupName", error.to_string()).into())
     }
 }
 
@@ -591,11 +600,13 @@ impl UpdateSubscriptionGroupListRequest {
         cluster_name: Option<String>,
         configs: Vec<SubscriptionGroupConfig>,
     ) -> RocketMQResult<Self> {
-        Ok(Self {
+        let request = Self {
             target: target_from_options(broker_addr, cluster_name)?,
             configs,
             namesrv_addr: None,
-        })
+        };
+        request.validate()?;
+        Ok(request)
     }
 
     pub fn with_optional_namesrv_addr(mut self, namesrv_addr: Option<String>) -> Self {
@@ -609,6 +620,11 @@ impl UpdateSubscriptionGroupListRequest {
 
     pub(crate) fn admin_builder(&self) -> AdminBuilder {
         builder_with_namesrv(self.namesrv_addr.as_deref())
+    }
+
+    fn validate(&self) -> RocketMQResult<()> {
+        validate_subscription_group_configs(&self.configs)
+            .map_err(|error| ToolsError::validation_error("groupConfigs", error.to_string()).into())
     }
 }
 
@@ -755,6 +771,7 @@ impl ConsumerService {
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<ConsumerOperationResult> {
+        request.validate()?;
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -767,6 +784,7 @@ impl ConsumerService {
         admin: &DefaultMQAdminExt,
         request: &UpdateSubscriptionGroupRequest,
     ) -> RocketMQResult<ConsumerOperationResult> {
+        request.validate()?;
         let mut result = ConsumerOperationResult::empty();
         let broker_addrs = resolve_master_targets(admin, request.target()).await?;
         for broker_addr in broker_addrs {
@@ -788,6 +806,7 @@ impl ConsumerService {
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
     ) -> RocketMQResult<ConsumerOperationResult> {
+        request.validate()?;
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -800,6 +819,7 @@ impl ConsumerService {
         admin: &DefaultMQAdminExt,
         request: &UpdateSubscriptionGroupListRequest,
     ) -> RocketMQResult<ConsumerOperationResult> {
+        request.validate()?;
         let mut result = ConsumerOperationResult::empty();
         if request.configs().is_empty() {
             return Ok(result);

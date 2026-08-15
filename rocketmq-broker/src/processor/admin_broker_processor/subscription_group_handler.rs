@@ -14,7 +14,6 @@
 
 use rocketmq_model::common::constant::PermName;
 use rocketmq_model::common::mix_all::is_sys_consumer_group;
-use rocketmq_model::common::topic::TopicValidator;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::body::delete_subscription_group_list_request_body::DeleteSubscriptionGroupListRequestBody;
@@ -26,6 +25,8 @@ use rocketmq_protocol::protocol::header::update_subscription_group_config_cas_re
 use rocketmq_protocol::protocol::header::update_subscription_group_config_cas_response_header::UpdateSubscriptionGroupConfigCasResponseHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::subscription::group_forbidden::GroupForbidden;
+use rocketmq_protocol::protocol::subscription::subscription_group_config::validate_subscription_group_configs;
+use rocketmq_protocol::protocol::subscription::subscription_group_config::validate_subscription_group_name;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_protocol::protocol::RemotingSerializable;
@@ -38,7 +39,6 @@ use tracing::info;
 
 use crate::broker::broker_admin_runtime::BrokerAdminRuntime;
 use crate::subscription::manager::subscription_group_manager::SubscriptionGroupConfigCasError;
-use crate::subscription::manager::subscription_group_manager::CHARACTER_MAX_LENGTH;
 
 pub(super) struct SubscriptionGroupHandler;
 
@@ -57,28 +57,52 @@ impl SubscriptionGroupHandler {
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let start_time = current_millis() as i64;
 
-        let mut response = RemotingCommand::create_success_response_command();
+        let response = RemotingCommand::create_java_default_error_response_command();
 
         info!(
             "AdminBrokerProcessor#updateAndCreateSubscriptionGroup called by {}",
             _channel.remote_address()
         );
-        let mut config = SubscriptionGroupConfig::decode(request.get_body().unwrap());
-        if let Ok(config) = config.as_mut() {
-            broker_runtime_inner
-                .subscription_group_manager()
-                .update_subscription_group_config(config)
+        let Some(body) = request.get_body() else {
+            return Ok(Some(
+                response
+                    .set_code(ResponseCode::InvalidParameter)
+                    .set_remark("subscription group body is required"),
+            ));
+        };
+        let mut config = match SubscriptionGroupConfig::decode(body) {
+            Ok(config) => config,
+            Err(_) => {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::InvalidParameter)
+                        .set_remark("subscription group body is malformed"),
+                ));
+            }
+        };
+        if let Err(error) = validate_subscription_group_name(config.group_name().as_str()) {
+            return Ok(Some(
+                response
+                    .set_code(ResponseCode::InvalidParameter)
+                    .set_remark(error.to_string()),
+            ));
         }
-        response.set_code_ref(ResponseCode::Success);
+        if !broker_runtime_inner
+            .subscription_group_manager()
+            .update_subscription_group_config(&mut config)
+        {
+            return Ok(Some(
+                response
+                    .set_code(ResponseCode::InvalidParameter)
+                    .set_remark("subscription group configuration was rejected"),
+            ));
+        }
         let execution_time = current_millis() as i64 - start_time;
-
-        if let Ok(config) = config.as_ref() {
-            info!(
-                "executionTime of create subscriptionGroup:{} is {} ms",
-                config.group_name(),
-                execution_time
-            );
-        }
+        info!(
+            "executionTime of create subscriptionGroup:{} is {} ms",
+            config.group_name(),
+            execution_time
+        );
 
         // todo
         // InvocationStatus status =
@@ -87,7 +111,7 @@ impl SubscriptionGroupHandler {
         // BrokerMetricsManager.newAttributesBuilder()     .put(LABEL_INVOCATION_STATUS,
         // status.getName())     .build();
         // BrokerMetricsManager.consumerGroupCreateExecuteTime.record(executionTime, attributes);
-        Ok(Some(response))
+        Ok(Some(RemotingCommand::create_success_response_command()))
     }
 
     pub async fn update_subscription_group_config_cas<MS: BrokerAdminStore>(
@@ -114,9 +138,11 @@ impl SubscriptionGroupHandler {
             channel.remote_address()
         );
 
-        if let Some(remark) = validate_group_name(request_header.group.as_str()) {
+        if let Err(error) = validate_subscription_group_name(request_header.group.as_str()) {
             return Ok(Some(
-                response.set_code(ResponseCode::InvalidParameter).set_remark(remark),
+                response
+                    .set_code(ResponseCode::InvalidParameter)
+                    .set_remark(error.to_string()),
             ));
         }
         if is_sys_consumer_group(request_header.group.as_str()) {
@@ -177,6 +203,13 @@ impl SubscriptionGroupHandler {
                 consume_timeout_minutes,
             ) {
             Ok(update) => update,
+            Err(SubscriptionGroupConfigCasError::InvalidGroupName) => {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::InvalidParameter)
+                        .set_remark("The specified group is invalid."),
+                ));
+            }
             Err(SubscriptionGroupConfigCasError::GroupNotFound) => {
                 return Ok(Some(
                     response
@@ -280,6 +313,11 @@ impl SubscriptionGroupHandler {
                     .set_code(ResponseCode::SubscriptionGroupNotExist)
                     .set_remark(format!("No group in this broker. group: {}", group)),
             )),
+            Err(SubscriptionGroupConfigCasError::InvalidGroupName) => Ok(Some(
+                response
+                    .set_code(ResponseCode::InvalidParameter)
+                    .set_remark("The specified group is invalid."),
+            )),
             Err(
                 SubscriptionGroupConfigCasError::VersionUnavailable | SubscriptionGroupConfigCasError::VersionExhausted,
             ) => Ok(Some(
@@ -316,23 +354,38 @@ impl SubscriptionGroupHandler {
         let Some(body) = request.get_body() else {
             return Ok(Some(
                 response
-                    .set_code(ResponseCode::SystemError)
-                    .set_remark("empty subscription group list body"),
+                    .set_code(ResponseCode::InvalidParameter)
+                    .set_remark("subscription group list body is required"),
             ));
         };
-        let subscription_group_list = SubscriptionGroupList::decode(body)?;
-
-        for config in &subscription_group_list.group_config_list {
-            if let Some(remark) = validate_group_name(config.group_name().as_str()) {
+        let subscription_group_list = match SubscriptionGroupList::decode(body) {
+            Ok(list) => list,
+            Err(_) => {
                 return Ok(Some(
-                    response.set_code(ResponseCode::InvalidParameter).set_remark(remark),
+                    response
+                        .set_code(ResponseCode::InvalidParameter)
+                        .set_remark("subscription group list body is malformed"),
                 ));
             }
+        };
+        if let Err(error) = validate_subscription_group_configs(&subscription_group_list.group_config_list) {
+            return Ok(Some(
+                response
+                    .set_code(ResponseCode::InvalidParameter)
+                    .set_remark(error.to_string()),
+            ));
         }
 
-        broker_runtime_inner
+        if !broker_runtime_inner
             .subscription_group_manager()
-            .update_subscription_group_config_list(subscription_group_list.group_config_list);
+            .update_subscription_group_config_list(subscription_group_list.group_config_list)
+        {
+            return Ok(Some(
+                response
+                    .set_code(ResponseCode::InvalidParameter)
+                    .set_remark("subscription group configuration list was rejected"),
+            ));
+        }
         Ok(Some(RemotingCommand::create_success_response_command()))
     }
 
@@ -422,9 +475,11 @@ impl SubscriptionGroupHandler {
         let mut seen = HashSet::new();
         let mut groups = Vec::with_capacity(request_body.group_name_list.len());
         for group in request_body.group_name_list {
-            if let Some(remark) = validate_group_name(group.as_str()) {
+            if let Err(error) = validate_subscription_group_name(group.as_str()) {
                 return Ok(Some(
-                    response.set_code(ResponseCode::InvalidParameter).set_remark(remark),
+                    response
+                        .set_code(ResponseCode::InvalidParameter)
+                        .set_remark(error.to_string()),
                 ));
             }
             if seen.insert(group.clone()) {
@@ -518,31 +573,13 @@ impl SubscriptionGroupHandler {
     }
 }
 
-fn validate_group_name(group_name: &str) -> Option<String> {
-    if group_name.trim().is_empty() {
-        return Some("The specified group is blank.".to_string());
-    }
-
-    if group_name.len() > CHARACTER_MAX_LENGTH {
-        return Some(format!(
-            "The specified group is longer than group max length {}.",
-            CHARACTER_MAX_LENGTH
-        ));
-    }
-
-    if TopicValidator::is_topic_or_group_illegal(group_name) {
-        return Some("The specified group contains illegal characters, allowing only ^[%|a-zA-Z0-9_-]+$".to_string());
-    }
-
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
     use std::time::SystemTime;
 
     use crate::config::broker_config::BrokerConfig;
+    use bytes::Bytes;
     use cheetah_string::CheetahString;
     use rocketmq_protocol::code::request_code::RequestCode;
     use rocketmq_protocol::code::response_code::ResponseCode;
@@ -637,6 +674,103 @@ mod tests {
             .subscription_group_manager()
             .find_subscription_group_config(&CheetahString::from_static_str("group-b"))
             .is_some());
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn subscription_group_updates_fail_closed_without_mutating_state() {
+        let runtime = new_test_runtime("invalid-update").await;
+        let admin = runtime.admin_runtime_for_test();
+        let handler = SubscriptionGroupHandler::new();
+        let before_version = admin.subscription_group_manager().data_version().read().clone();
+
+        let mut missing = RemotingCommand::create_remoting_command(RequestCode::UpdateAndCreateSubscriptionGroup);
+        let channel = create_test_channel().await;
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let response = handler
+            .update_and_create_subscription_group(
+                &admin,
+                channel,
+                ctx,
+                RequestCode::UpdateAndCreateSubscriptionGroup,
+                &mut missing,
+            )
+            .await
+            .expect("missing body should return normally")
+            .expect("missing body should return a response");
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::InvalidParameter);
+
+        let mut malformed = RemotingCommand::create_remoting_command(RequestCode::UpdateAndCreateSubscriptionGroup)
+            .set_body(Bytes::from_static(b"{not-json"));
+        let channel = create_test_channel().await;
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let response = handler
+            .update_and_create_subscription_group(
+                &admin,
+                channel,
+                ctx,
+                RequestCode::UpdateAndCreateSubscriptionGroup,
+                &mut malformed,
+            )
+            .await
+            .expect("malformed body should return normally")
+            .expect("malformed body should return a response");
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::InvalidParameter);
+
+        let invalid_group = CheetahString::from_static_str("invalid.group");
+        let invalid = SubscriptionGroupConfig::new(invalid_group.clone());
+        let mut single = RemotingCommand::create_remoting_command(RequestCode::UpdateAndCreateSubscriptionGroup)
+            .set_body(invalid.encode().expect("invalid config should still encode"));
+        let channel = create_test_channel().await;
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let response = handler
+            .update_and_create_subscription_group(
+                &admin,
+                channel,
+                ctx,
+                RequestCode::UpdateAndCreateSubscriptionGroup,
+                &mut single,
+            )
+            .await
+            .expect("invalid group should return normally")
+            .expect("invalid group should return a response");
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::InvalidParameter);
+        assert!(!admin
+            .subscription_group_manager()
+            .contains_subscription_group(&invalid_group));
+
+        let valid_group = CheetahString::from_static_str("valid-group");
+        let body = SubscriptionGroupList {
+            group_config_list: vec![
+                SubscriptionGroupConfig::new(valid_group.clone()),
+                SubscriptionGroupConfig::new(invalid_group.clone()),
+            ],
+        };
+        let mut list =
+            RemotingCommand::create_request_command(RequestCode::UpdateAndCreateSubscriptionGroupList, EmptyHeader {})
+                .set_body(body.encode().expect("subscription group list should encode"));
+        let channel = create_test_channel().await;
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let response = handler
+            .update_and_create_subscription_group_list(
+                &admin,
+                channel,
+                ctx,
+                RequestCode::UpdateAndCreateSubscriptionGroupList,
+                &mut list,
+            )
+            .await
+            .expect("invalid list should return normally")
+            .expect("invalid list should return a response");
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::InvalidParameter);
+        assert!(!admin
+            .subscription_group_manager()
+            .contains_subscription_group(&valid_group));
+        assert_eq!(
+            *admin.subscription_group_manager().data_version().read(),
+            before_version
+        );
 
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }

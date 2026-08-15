@@ -30,6 +30,7 @@ use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_protocol::protocol::subscription::group_retry_policy::GroupRetryPolicy;
 use rocketmq_protocol::protocol::subscription::group_retry_policy_type::GroupRetryPolicyType;
+use rocketmq_protocol::protocol::subscription::subscription_group_config::validate_subscription_group_name;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use serde_json::json;
 
@@ -528,14 +529,9 @@ impl ConsumerAdmin for AdminSession {
 
 fn normalize_consumer_group(value: &str) -> AdminResult<String> {
     let value = value.strip_prefix("%SYS%").unwrap_or(value).trim();
-    if value.is_empty() {
-        Err(AdminError::invalid_argument(
-            "consumerGroup",
-            "Consumer group is required.",
-        ))
-    } else {
-        Ok(value.to_string())
-    }
+    validate_subscription_group_name(value)
+        .map_err(|error| AdminError::invalid_argument("consumerGroup", error.to_string()))?;
+    Ok(value.to_string())
 }
 
 fn normalize_address(value: Option<&str>) -> Option<CheetahString> {

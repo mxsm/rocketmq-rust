@@ -123,5 +123,9 @@ name              = "stats_core_models"
 required-features = ["client-adapter"]
 
 [[test]]
+name              = "subscription_group_validation"
+required-features = ["client-adapter"]
+
+[[test]]
 name              = "topic_list_core_models"
 required-features = ["client-adapter"]
