@@ -20,8 +20,11 @@ use std::sync::Weak;
 use crate::config::broker_config::BrokerConfig;
 use arc_swap::ArcSwap;
 use cheetah_string::CheetahString;
+use dashmap::DashMap;
 use rocketmq_model::common::broker::broker_role::BrokerRole;
 use rocketmq_model::common::config::TopicConfig;
+use rocketmq_model::common::pop_retry_policy::PopRetryMigrationState;
+use rocketmq_model::common::pop_retry_policy::PopRetryPolicy;
 use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
@@ -57,12 +60,12 @@ pub(crate) struct PopPolicy {
     pub(crate) broker_cluster_name: CheetahString,
     pub(crate) broker_permission: u32,
     pub(crate) broker_role: BrokerRole,
-    pub(crate) enable_retry_topic_v2: bool,
+    pub(crate) default_retry_policy: PopRetryPolicy,
+    pub(crate) configured_retry_state: Option<PopRetryMigrationState>,
     pub(crate) revive_queue_num: u32,
     pub(crate) pop_from_retry_probability: i32,
     pub(crate) pop_from_retry_probability_for_priority: i32,
     pub(crate) priority_order_asc: bool,
-    pub(crate) retrieve_message_from_pop_retry_topic_v1: bool,
     pub(crate) transfer_msg_by_heap: bool,
     pub(crate) enable_pop_log: bool,
     pub(crate) pop_response_return_actual_retry_topic: bool,
@@ -99,12 +102,16 @@ impl PopPolicy {
             broker_cluster_name: broker.broker_identity.broker_cluster_name.clone(),
             broker_permission: broker.broker_permission,
             broker_role: store.broker_role,
-            enable_retry_topic_v2: broker.enable_retry_topic_v2,
+            default_retry_policy: PopRetryPolicy::from_legacy_flags(
+                broker.enable_retry_topic_v2,
+                broker.retrieve_message_from_pop_retry_topic_v1,
+                0,
+            ),
+            configured_retry_state: broker.pop_retry_migration_state,
             revive_queue_num: broker.revive_queue_num,
             pop_from_retry_probability: broker.pop_from_retry_probability,
             pop_from_retry_probability_for_priority: broker.pop_from_retry_probability_for_priority,
             priority_order_asc: broker.priority_order_asc,
-            retrieve_message_from_pop_retry_topic_v1: broker.retrieve_message_from_pop_retry_topic_v1,
             transfer_msg_by_heap: broker.transfer_msg_by_heap,
             enable_pop_log: broker.enable_pop_log,
             pop_response_return_actual_retry_topic: broker.pop_response_return_actual_retry_topic,
@@ -161,6 +168,7 @@ impl PopPolicy {
 #[derive(Clone)]
 pub(crate) struct PopPolicyState {
     current: Arc<ArcSwap<PopPolicy>>,
+    group_retry_policies: Arc<DashMap<CheetahString, PopRetryPolicy>>,
 }
 
 impl PopPolicyState {
@@ -169,6 +177,7 @@ impl PopPolicyState {
             current: Arc::new(ArcSwap::from_pointee(PopPolicy::from_configs(
                 broker, store, store_host,
             ))),
+            group_retry_policies: Arc::new(DashMap::new()),
         }
     }
 
@@ -198,6 +207,29 @@ impl PopPolicyState {
             next.store_host = store_host;
             Arc::new(next)
         });
+    }
+
+    pub(crate) fn retry_policy(&self, group: &CheetahString) -> PopRetryPolicy {
+        let current = self.snapshot();
+        if let Some(state) = current.configured_retry_state {
+            let generation = self
+                .group_retry_policies
+                .get(group)
+                .map_or(0, |policy| policy.generation);
+            return PopRetryPolicy::for_state(state, generation);
+        }
+        self.group_retry_policies
+            .get(group)
+            .map(|policy| policy.value().clone())
+            .unwrap_or_else(|| current.default_retry_policy.clone())
+    }
+
+    pub(crate) fn restore_retry_policy(&self, group: CheetahString, policy: PopRetryPolicy) {
+        self.group_retry_policies.insert(group, policy);
+    }
+
+    pub(crate) fn remove_retry_policy(&self, group: &CheetahString) {
+        self.group_retry_policies.remove(group);
     }
 }
 
@@ -567,7 +599,10 @@ mod tests {
     use std::sync::Weak;
 
     use crate::config::broker_config::BrokerConfig;
+    use cheetah_string::CheetahString;
     use rocketmq_model::common::broker::broker_role::BrokerRole;
+    use rocketmq_model::common::pop_retry_policy::PopRetryMigrationState;
+    use rocketmq_model::common::pop_retry_policy::PopRetryPolicy;
     use rocketmq_store::MessageStoreConfig;
     use rocketmq_store::StorePorts;
 
@@ -592,6 +627,30 @@ mod tests {
         assert_eq!(policy.revive_interval, 321);
         assert!(!policy.timer_wheel_enable);
         assert_eq!(policy.broker_role, BrokerRole::Slave);
+    }
+
+    #[test]
+    fn persisted_group_policy_survives_restart_defaults_until_an_explicit_target_is_configured() {
+        let broker = BrokerConfig::default();
+        let store = MessageStoreConfig::default();
+        let group = CheetahString::from_static_str("group-a");
+        let state = PopPolicyState::from_configs(&broker, &store, "127.0.0.1:10911".parse().unwrap());
+        state.restore_retry_policy(group.clone(), PopRetryPolicy::dual_read_v2_write(7));
+
+        assert_eq!(
+            state.retry_policy(&group).state(),
+            Ok(PopRetryMigrationState::DualReadV2Write)
+        );
+        assert_eq!(state.retry_policy(&group).generation, 7);
+
+        let mut explicit = broker;
+        explicit.pop_retry_migration_state = Some(PopRetryMigrationState::DualReadV1Write);
+        state.update_broker_config(&explicit);
+        assert_eq!(
+            state.retry_policy(&group).state(),
+            Ok(PopRetryMigrationState::DualReadV1Write)
+        );
+        assert_eq!(state.retry_policy(&group).generation, 7);
     }
 
     #[test]

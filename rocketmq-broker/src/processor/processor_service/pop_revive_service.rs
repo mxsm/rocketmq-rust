@@ -34,6 +34,7 @@ use rocketmq_model::common::message::MessageConst;
 use rocketmq_model::common::message::MessageTrait;
 use rocketmq_model::common::mix_all;
 use rocketmq_model::common::pop_ack_constants::PopAckConstants;
+use rocketmq_model::common::pop_retry_policy::PopRetryTopicVersion;
 use rocketmq_model::common::TopicFilterType;
 use rocketmq_model::utils::data_converter::DataConverter;
 use rocketmq_model::utils::serde_json_utils::SerdeJsonUtils;
@@ -107,11 +108,18 @@ impl<MS: BrokerReadWriteStore> PopReviveService<MS> {
         // Check if topic is NOT retry topic, then build retry topic
         if !pop_check_point.topic.starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
             // Normal topic -> build %RETRY% topic
-            msg_inner.set_topic(CheetahString::from_string(KeyBuilder::build_pop_retry_topic(
-                pop_check_point.topic.as_str(),
-                pop_check_point.cid.as_str(),
-                self.context.policy.snapshot().enable_retry_topic_v2,
-            )));
+            let policy = self.context.policy.snapshot();
+            let retry_version = pop_check_point
+                .retry_topic_version
+                .and_then(PopRetryTopicVersion::from_number)
+                .unwrap_or(policy.default_retry_policy.write_version);
+            msg_inner.set_topic(CheetahString::from_string(
+                KeyBuilder::build_pop_retry_topic_for_version(
+                    pop_check_point.topic.as_str(),
+                    pop_check_point.cid.as_str(),
+                    retry_version,
+                ),
+            ));
         } else {
             // Already retry topic -> keep it unchanged
             msg_inner.set_topic(pop_check_point.topic.clone());

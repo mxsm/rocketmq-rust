@@ -35,6 +35,7 @@ pub mod message;
 pub mod mix_all;
 pub mod mq_version;
 pub mod pop_ack_constants;
+pub mod pop_retry_policy;
 pub mod producer;
 
 pub mod running;

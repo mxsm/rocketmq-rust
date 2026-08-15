@@ -113,6 +113,8 @@ pub use crate::common::admin_tools_result_code_enum::AdminToolsResultCodeEnum;
 pub use crate::common::nameserver_access_config::NameserverAccessConfig;
 pub use crate::common::session_credentials::SessionCredentials;
 pub use crate::common::thread_local_index::ThreadLocalIndex;
+pub use crate::consumer::pop_retry_policy::pop_retry_subscription_topics;
+pub use crate::consumer::pop_retry_policy::resolve_pop_retry_topic;
 
 mod cluster_session {
     use std::collections::HashMap;

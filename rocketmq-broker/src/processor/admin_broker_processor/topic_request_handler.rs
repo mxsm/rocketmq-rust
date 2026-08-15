@@ -603,7 +603,7 @@ impl TopicRequestHandler {
             .which_group_by_topic(topic);
         for group in groups.iter() {
             let pop_retry_topic_v2 =
-                CheetahString::from_string(KeyBuilder::build_pop_retry_topic(topic, group.as_str(), true));
+                CheetahString::from_string(KeyBuilder::build_pop_retry_topic_v2(topic, group.as_str()));
             if broker_runtime_inner
                 .topic_config_manager()
                 .select_topic_config(pop_retry_topic_v2.as_ref())
@@ -722,7 +722,7 @@ impl TopicRequestHandler {
                 .which_group_by_topic(topic)
             {
                 for retry_topic in [
-                    CheetahString::from_string(KeyBuilder::build_pop_retry_topic(topic, group.as_str(), true)),
+                    CheetahString::from_string(KeyBuilder::build_pop_retry_topic_v2(topic, group.as_str())),
                     CheetahString::from_string(KeyBuilder::build_pop_retry_topic_v1(topic, group.as_str())),
                 ] {
                     if broker_runtime_inner

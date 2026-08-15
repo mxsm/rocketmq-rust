@@ -257,6 +257,7 @@ impl BrokerRuntime {
         let notification_processor = NotificationProcessor::new(
             NotificationProcessorContext::new(
                 NotificationPolicy::from_config(&self.composition.state.broker_config()),
+                self.composition.state.pop_policy_state(),
                 notification_topic_config_manager,
                 notification_subscription_group_lookup,
                 notification_consumer_filter_manager,
@@ -415,6 +416,7 @@ impl BrokerRuntime {
         let peek_message_processor = Arc::new(PeekMessageProcessor::new(
             PeekMessageProcessorContext::new(
                 PeekMessagePolicy::from_config(&self.composition.state.broker_config()),
+                self.composition.state.pop_policy_state(),
                 self.composition.state.topic_config_manager_handle(),
                 self.composition.state.subscription_group_manager().config_lookup(),
                 consumer_offset_query,

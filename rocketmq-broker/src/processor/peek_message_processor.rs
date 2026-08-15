@@ -45,6 +45,7 @@ use tracing::warn;
 use crate::failover::escape_bridge::EscapeBridge;
 use crate::failover::escape_bridge::MessageStoreUnavailable;
 use crate::offset::manager::consumer_offset_manager::ConsumerOffsetQueryCapability;
+use crate::processor::pop_message_processor::capability::PopPolicyState;
 use crate::processor::processor_service::pop_buffer_merge_service::PopBufferMergeService;
 use crate::subscription::manager::subscription_group_manager::SubscriptionGroupConfigLookup;
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
@@ -55,7 +56,6 @@ pub(crate) struct PeekMessagePolicy {
     broker_ip1: CheetahString,
     revive_queue_num: u32,
     transfer_msg_by_heap: bool,
-    enable_retry_topic_v2: bool,
 }
 
 impl PeekMessagePolicy {
@@ -65,7 +65,6 @@ impl PeekMessagePolicy {
             broker_ip1: broker_config.broker_ip1().clone(),
             revive_queue_num: broker_config.revive_queue_num,
             transfer_msg_by_heap: broker_config.transfer_msg_by_heap,
-            enable_retry_topic_v2: broker_config.enable_retry_topic_v2,
         }
     }
 }
@@ -141,6 +140,7 @@ impl<MS: BrokerReadWriteStore> PeekPopOffsetCapability<MS> {
 pub(crate) struct PeekMessageProcessorContext<MS: BrokerReadWriteStore> {
     command_factory: RemotingCommandFactory,
     policy: PeekMessagePolicy,
+    retry_policies: PopPolicyState,
     topic_config_manager: Arc<TopicConfigManager>,
     subscription_group_lookup: SubscriptionGroupConfigLookup,
     consumer_offset_query: ConsumerOffsetQueryCapability<MS>,
@@ -156,6 +156,7 @@ impl<MS: BrokerReadWriteStore> PeekMessageProcessorContext<MS> {
     )]
     pub(crate) fn new(
         policy: PeekMessagePolicy,
+        retry_policies: PopPolicyState,
         topic_config_manager: Arc<TopicConfigManager>,
         subscription_group_lookup: SubscriptionGroupConfigLookup,
         consumer_offset_query: ConsumerOffsetQueryCapability<MS>,
@@ -166,6 +167,7 @@ impl<MS: BrokerReadWriteStore> PeekMessageProcessorContext<MS> {
         Self {
             command_factory: application_remoting_command_factory(),
             policy,
+            retry_policies,
             topic_config_manager,
             subscription_group_lookup,
             consumer_offset_query,
@@ -356,7 +358,7 @@ impl<MS: BrokerReadWriteStore> PeekMessageProcessor<MS> {
                 let queue_id = ((random_q + i) % topic_config.read_queue_nums) as i32;
                 rest_num = self
                     .peek_msg_from_queue(
-                        false,
+                        None,
                         &mut get_message_result,
                         &request_header,
                         queue_id,
@@ -370,7 +372,7 @@ impl<MS: BrokerReadWriteStore> PeekMessageProcessor<MS> {
         } else {
             rest_num = self
                 .peek_msg_from_queue(
-                    false,
+                    None,
                     &mut get_message_result,
                     &request_header,
                     request_header.queue_id,
@@ -479,31 +481,32 @@ impl<MS: BrokerReadWriteStore> PeekMessageProcessor<MS> {
         channel: &Channel,
         pop_time: i64,
     ) -> i64 {
-        let retry_topic = CheetahString::from_string(KeyBuilder::build_pop_retry_topic(
-            request_header.topic.as_str(),
-            request_header.consumer_group.as_str(),
-            self.context.policy.enable_retry_topic_v2,
-        ));
-
-        let retry_topic_config = self.context.topic_config_manager.select_topic_config(&retry_topic);
-
         let mut rest_num = 0i64;
 
-        if let Some(retry_config) = retry_topic_config {
-            for i in 0..retry_config.read_queue_nums {
-                let queue_id = ((random_q + i) % retry_config.read_queue_nums) as i32;
-                rest_num = self
-                    .peek_msg_from_queue(
-                        true,
-                        get_message_result,
-                        request_header,
-                        queue_id,
-                        rest_num,
-                        revive_qid,
-                        channel,
-                        pop_time,
-                    )
-                    .await;
+        let retry_policy = self.context.retry_policies.retry_policy(&request_header.consumer_group);
+        for retry_topic in
+            retry_policy.read_topics(request_header.topic.as_str(), request_header.consumer_group.as_str())
+        {
+            let retry_topic = CheetahString::from_string(retry_topic);
+            if let Some(retry_config) = self.context.topic_config_manager.select_topic_config(&retry_topic) {
+                for i in 0..retry_config.read_queue_nums {
+                    let queue_id = ((random_q + i) % retry_config.read_queue_nums) as i32;
+                    rest_num = self
+                        .peek_msg_from_queue(
+                            Some(&retry_topic),
+                            get_message_result,
+                            request_header,
+                            queue_id,
+                            rest_num,
+                            revive_qid,
+                            channel,
+                            pop_time,
+                        )
+                        .await;
+                }
+            }
+            if !get_message_result.message_mapped_list().is_empty() {
+                break;
             }
         }
 
@@ -512,7 +515,7 @@ impl<MS: BrokerReadWriteStore> PeekMessageProcessor<MS> {
 
     async fn peek_msg_from_queue(
         &self,
-        is_retry: bool,
+        retry_topic: Option<&CheetahString>,
         get_message_result: &mut GetMessageResult,
         request_header: &PeekMessageRequestHeader,
         queue_id: i32,
@@ -522,15 +525,7 @@ impl<MS: BrokerReadWriteStore> PeekMessageProcessor<MS> {
         _pop_time: i64,
     ) -> i64 {
         // Determine topic (retry or normal)
-        let topic = if is_retry {
-            CheetahString::from_string(KeyBuilder::build_pop_retry_topic(
-                request_header.topic.as_str(),
-                request_header.consumer_group.as_str(),
-                self.context.policy.enable_retry_topic_v2,
-            ))
-        } else {
-            request_header.topic.clone()
-        };
+        let topic = retry_topic.cloned().unwrap_or_else(|| request_header.topic.clone());
 
         // Get starting offset
         let offset = self
@@ -662,7 +657,6 @@ mod tests {
             broker_ip1: CheetahString::from_static_str("192.0.2.10"),
             revive_queue_num: 12,
             transfer_msg_by_heap: false,
-            enable_retry_topic_v2: true,
             ..Default::default()
         };
 
@@ -672,7 +666,6 @@ mod tests {
         assert_eq!(policy.broker_ip1, "192.0.2.10");
         assert_eq!(policy.revive_queue_num, 12);
         assert!(!policy.transfer_msg_by_heap);
-        assert!(policy.enable_retry_topic_v2);
     }
 
     #[tokio::test]

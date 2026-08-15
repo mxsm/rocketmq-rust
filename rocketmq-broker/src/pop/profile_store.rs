@@ -18,6 +18,8 @@ use std::sync::Arc;
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
 use rocketmq_error::RocketMQError;
+use rocketmq_model::common::pop_retry_policy::PopRetryPolicy;
+use rocketmq_model::common::pop_retry_policy::PopRetryTopicVersion;
 use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_store_rocksdb::profile_marker::pop_consumer_profile_key;
 use rocketmq_store_rocksdb::profile_marker::PopConsumerProfileMarker;
@@ -34,6 +36,8 @@ pub(crate) struct PopConsumerProfile {
     pub(crate) group: CheetahString,
     pub(crate) subscriptions: Vec<SubscriptionData>,
     pub(crate) retry_version: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) retry_policy: Option<PopRetryPolicy>,
     pub(crate) generation: u64,
     pub(crate) last_seen: i64,
     pub(crate) format_version: u32,
@@ -84,7 +88,8 @@ impl PopConsumerProfileStore {
             let record: StoredProfileRecord = serde_json::from_slice(&value)
                 .map_err(|error| codec_error(format!("profile record JSON is invalid: {error}")))?;
             match record {
-                StoredProfileRecord::Profile { profile } => {
+                StoredProfileRecord::Profile { mut profile } => {
+                    normalize_retry_policy(&mut profile)?;
                     validate_profile(&profile)?;
                     if profile.generation > generation {
                         return Err(codec_error("profile generation is newer than the format marker"));
@@ -126,7 +131,7 @@ impl PopConsumerProfileStore {
         &self,
         group: CheetahString,
         mut subscriptions: Vec<SubscriptionData>,
-        retry_version: i32,
+        retry_policy: PopRetryPolicy,
         last_seen: i64,
     ) -> Result<PopConsumerProfile, RocketMQError> {
         if group.is_empty() {
@@ -153,10 +158,12 @@ impl PopConsumerProfileStore {
             .generation
             .checked_add(1)
             .ok_or_else(|| codec_error("POP consumer profile generation overflow"))?;
+        let retry_policy = next_retry_policy(state.profiles.get(&group), retry_policy, generation)?;
         let profile = PopConsumerProfile {
             group: group.clone(),
             subscriptions,
-            retry_version,
+            retry_version: retry_policy.write_version.number(),
+            retry_policy: Some(retry_policy),
             generation,
             last_seen,
             format_version: POP_CONSUMER_PROFILE_FORMAT_VERSION,
@@ -205,6 +212,14 @@ impl PopConsumerProfileStore {
     pub(crate) fn generation(&self) -> u64 {
         self.state.lock().generation
     }
+
+    pub(crate) fn retry_policy(&self, group: &CheetahString) -> Option<PopRetryPolicy> {
+        self.state
+            .lock()
+            .profiles
+            .get(group)
+            .and_then(|profile| profile.retry_policy.clone())
+    }
 }
 
 fn validate_profile(profile: &PopConsumerProfile) -> Result<(), RocketMQError> {
@@ -228,7 +243,67 @@ fn validate_profile(profile: &PopConsumerProfile) -> Result<(), RocketMQError> {
             "persisted subscription topic must not be empty",
         ));
     }
+    let retry_policy = profile
+        .retry_policy
+        .as_ref()
+        .ok_or_else(|| codec_error("persisted POP profile is missing retry policy"))?;
+    retry_policy
+        .state()
+        .map_err(|error| codec_error(format!("invalid persisted POP retry policy: {error}")))?;
+    if retry_policy.generation != profile.generation || retry_policy.write_version.number() != profile.retry_version {
+        return Err(codec_error(
+            "persisted POP retry policy generation/version does not match the profile",
+        ));
+    }
     Ok(())
+}
+
+fn normalize_retry_policy(profile: &mut PopConsumerProfile) -> Result<(), RocketMQError> {
+    if profile.retry_policy.is_none() {
+        profile.retry_policy = Some(match PopRetryTopicVersion::from_number(profile.retry_version) {
+            Some(PopRetryTopicVersion::V1) => PopRetryPolicy::v1_only(profile.generation),
+            Some(PopRetryTopicVersion::V2) => PopRetryPolicy::dual_read_v2_write(profile.generation),
+            None => {
+                return Err(invalid_profile(
+                    "retryVersion",
+                    profile.retry_version.to_string(),
+                    "retry version must be 1 or 2",
+                ));
+            }
+        });
+    }
+    Ok(())
+}
+
+fn next_retry_policy(
+    existing: Option<&PopConsumerProfile>,
+    requested: PopRetryPolicy,
+    generation: u64,
+) -> Result<PopRetryPolicy, RocketMQError> {
+    let requested_state = requested.state().map_err(|error| {
+        invalid_profile(
+            "retryPolicy",
+            error.to_string(),
+            "a supported POP retry migration state",
+        )
+    })?;
+    let Some(existing) = existing else {
+        return Ok(PopRetryPolicy::for_state(requested_state, generation));
+    };
+    let current = existing
+        .retry_policy
+        .as_ref()
+        .ok_or_else(|| codec_error("existing POP profile is missing retry policy"))?;
+    if current.state().map_err(|error| codec_error(error.to_string()))? == requested_state {
+        return Ok(PopRetryPolicy::for_state(requested_state, generation));
+    }
+    current.transition_to(requested_state, generation).map_err(|error| {
+        invalid_profile(
+            "retryPolicy",
+            error.to_string(),
+            "the next safe POP retry migration state",
+        )
+    })
 }
 
 fn validate_format_version(format_version: u32) -> Result<(), RocketMQError> {

@@ -43,6 +43,10 @@ pub mod test_support {
 
     use cheetah_string::CheetahString;
     use rocketmq_model::common::lite::to_lmq_name;
+    #[cfg(feature = "rocksdb_store")]
+    use rocketmq_model::common::pop_retry_policy::PopRetryPolicy;
+    #[cfg(feature = "rocksdb_store")]
+    use rocketmq_model::common::pop_retry_policy::PopRetryTopicVersion;
     use rocketmq_runtime::common::time_utils::current_millis;
 
     use crate::lite::memory_consumer_order_info_manager::LiteOrderVisibilityUpdate;
@@ -72,6 +76,7 @@ pub mod test_support {
         pub group: String,
         pub topics: Vec<String>,
         pub retry_version: i32,
+        pub retry_policy: PopRetryPolicy,
         pub generation: u64,
         pub last_seen: i64,
     }
@@ -112,6 +117,21 @@ pub mod test_support {
             retry_version: i32,
             last_seen: i64,
         ) -> Result<PopProfileSnapshotProbe, String> {
+            let retry_policy = match PopRetryTopicVersion::from_number(retry_version) {
+                Some(PopRetryTopicVersion::V1) => PopRetryPolicy::v1_only(0),
+                Some(PopRetryTopicVersion::V2) => PopRetryPolicy::dual_read_v2_write(0),
+                None => return Err("retry version must be 1 or 2".to_owned()),
+            };
+            self.upsert_policy(group, topics, retry_policy, last_seen)
+        }
+
+        pub fn upsert_policy(
+            &self,
+            group: &str,
+            topics: &[&str],
+            retry_policy: PopRetryPolicy,
+            last_seen: i64,
+        ) -> Result<PopProfileSnapshotProbe, String> {
             let subscriptions = topics
                 .iter()
                 .map(
@@ -123,12 +143,7 @@ pub mod test_support {
                 )
                 .collect();
             self.store
-                .upsert(
-                    CheetahString::from_slice(group),
-                    subscriptions,
-                    retry_version,
-                    last_seen,
-                )
+                .upsert(CheetahString::from_slice(group), subscriptions, retry_policy, last_seen)
                 .map(profile_probe)
                 .map_err(|error| error.to_string())
         }
@@ -179,6 +194,9 @@ pub mod test_support {
 
     #[cfg(feature = "rocksdb_store")]
     fn profile_probe(profile: crate::pop::profile_store::PopConsumerProfile) -> PopProfileSnapshotProbe {
+        let retry_policy = profile
+            .retry_policy
+            .expect("validated profile snapshots always contain a retry policy");
         PopProfileSnapshotProbe {
             group: profile.group.to_string(),
             topics: profile
@@ -187,6 +205,7 @@ pub mod test_support {
                 .map(|subscription| subscription.topic.to_string())
                 .collect(),
             retry_version: profile.retry_version,
+            retry_policy,
             generation: profile.generation,
             last_seen: profile.last_seen,
         }

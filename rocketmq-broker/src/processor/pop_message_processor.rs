@@ -42,6 +42,7 @@ use rocketmq_model::common::message::MessageConst;
 use rocketmq_model::common::message::MessageTrait;
 use rocketmq_model::common::mix_all;
 use rocketmq_model::common::pop_ack_constants::PopAckConstants;
+use rocketmq_model::common::pop_retry_policy::PopRetryPolicy;
 use rocketmq_model::common::FAQUrl;
 use rocketmq_model::topic::TopicMessageType;
 use rocketmq_protocol::code::request_code::RequestCode;
@@ -134,6 +135,9 @@ impl<MS: BrokerReadWriteStore> PopMessageProcessor<MS> {
         #[cfg(feature = "rocksdb_store")]
         if let Some(store) = &profile_store {
             for profile in store.snapshot() {
+                if let Some(retry_policy) = profile.retry_policy.clone() {
+                    context.policy.restore_retry_policy(profile.group.clone(), retry_policy);
+                }
                 context
                     .consumers
                     .restore_pop_consumer_profile(&profile.group, &profile.subscriptions);
@@ -172,6 +176,10 @@ impl<MS: BrokerReadWriteStore> PopMessageProcessor<MS> {
         }))
     }
 
+    fn retry_policy_for_group(&self, group: &CheetahString) -> PopRetryPolicy {
+        self.context.policy.retry_policy(group)
+    }
+
     pub async fn start(&self) {
         let _lifecycle = self.lifecycle.lock().await;
         PopLongPollingService::start(&self.pop_long_polling_service).await;
@@ -193,9 +201,11 @@ impl<MS: BrokerReadWriteStore> PopMessageProcessor<MS> {
                 .await
                 .map_err(crate::runtime_to_rocketmq_error)??;
             self.context.consumers.remove_compensated_consumer_profile(&group);
+            self.context.policy.remove_retry_policy(&group);
             return Ok(removed);
         }
         self.context.consumers.remove_compensated_consumer_profile(&group);
+        self.context.policy.remove_retry_policy(&group);
         Ok(false)
     }
 
@@ -314,6 +324,7 @@ where
         let opaque = request.opaque();
         let request_header = request.decode_command_custom_header::<PopMessageRequestHeader>()?;
         let policy = self.context.policy.snapshot();
+        let retry_policy = self.retry_policy_for_group(&request_header.consumer_group);
 
         if request_header.is_timeout_too_much_at(rocketmq_runtime::common::time_utils::current_millis() as i64) {
             return Ok(Some(
@@ -441,11 +452,9 @@ where
                     ));
                 }
             };
-            let retry_topic = CheetahString::from_string(KeyBuilder::build_pop_retry_topic(
-                &request_header.topic,
-                &request_header.consumer_group,
-                policy.enable_retry_topic_v2,
-            ));
+            let retry_topic = CheetahString::from_string(
+                retry_policy.write_topic(&request_header.topic, &request_header.consumer_group),
+            );
             let retry_subscription_data = match FilterAPI::build(
                 &retry_topic,
                 &CheetahString::from_static_str(SubscriptionData::SUB_ALL),
@@ -512,11 +521,9 @@ where
                     ));
                 }
             };
-            let retry_topic = CheetahString::from_string(KeyBuilder::build_pop_retry_topic(
-                &request_header.topic,
-                &request_header.consumer_group,
-                policy.enable_retry_topic_v2,
-            ));
+            let retry_topic = CheetahString::from_string(
+                retry_policy.write_topic(&request_header.topic, &request_header.consumer_group),
+            );
             let retry_subscription_data = match FilterAPI::build(
                 &retry_topic,
                 &CheetahString::from_static_str(SubscriptionData::SUB_ALL),
@@ -535,35 +542,67 @@ where
             (subscription_data, retry_subscription_data, None)
         };
 
-        let durable_subscriptions = vec![subscription_data.clone(), retry_subscription_data];
+        let mut durable_subscriptions = vec![subscription_data.clone(), retry_subscription_data];
+        for retry_topic in retry_policy.read_topics(&request_header.topic, &request_header.consumer_group) {
+            if durable_subscriptions
+                .iter()
+                .any(|subscription| subscription.topic.as_str() == retry_topic)
+            {
+                continue;
+            }
+            let fallback_subscription = FilterAPI::build(
+                &CheetahString::from_string(retry_topic),
+                &CheetahString::from_static_str(SubscriptionData::SUB_ALL),
+                request_header.exp_type.clone(),
+            )
+            .map_err(|error| rocketmq_error::RocketMQError::illegal_argument(error.to_string()))?;
+            durable_subscriptions.push(fallback_subscription);
+        }
         #[cfg(feature = "rocksdb_store")]
-        if let Some(profile_store) = &self.profile_store {
+        let retry_policy = if let Some(profile_store) = &self.profile_store {
             let profile_store = Arc::clone(profile_store);
             let group = request_header.consumer_group.clone();
             let subscriptions = durable_subscriptions.clone();
-            let retry_version = if policy.enable_retry_topic_v2 { 2 } else { 1 };
+            let requested_retry_policy = retry_policy.clone();
             let persist_result = self
                 .context
                 .metadata_io
                 .spawn_io("broker.pop-consumer-profile.upsert", move || {
-                    profile_store.upsert(group, subscriptions, retry_version, current_millis() as i64)
+                    profile_store.upsert(group, subscriptions, requested_retry_policy, current_millis() as i64)
                 })
                 .await;
-            let persist_error = match persist_result {
-                Ok(Ok(_)) => None,
-                Ok(Err(error)) => Some(error.to_string()),
-                Err(error) => Some(error.to_string()),
-            };
-            if let Some(error) = persist_error {
-                error!(%error, group = %request_header.consumer_group, "Failed to persist POP consumer profile");
-                return Ok(Some(
-                    self.context.command_factory.create_response_command_with_code_remark(
-                        ResponseCode::ServiceNotAvailable,
-                        "POP consumer profile persistence is unavailable",
-                    ),
-                ));
+            match persist_result {
+                Ok(Ok(profile)) => {
+                    let persisted_policy = profile
+                        .retry_policy
+                        .unwrap_or_else(|| policy.default_retry_policy.clone());
+                    self.context
+                        .policy
+                        .restore_retry_policy(request_header.consumer_group.clone(), persisted_policy.clone());
+                    persisted_policy
+                }
+                Ok(Err(error)) => {
+                    error!(%error, group = %request_header.consumer_group, "Failed to persist POP consumer profile");
+                    return Ok(Some(
+                        self.context.command_factory.create_response_command_with_code_remark(
+                            ResponseCode::ServiceNotAvailable,
+                            "POP consumer profile persistence is unavailable",
+                        ),
+                    ));
+                }
+                Err(error) => {
+                    error!(%error, group = %request_header.consumer_group, "Failed to persist POP consumer profile");
+                    return Ok(Some(
+                        self.context.command_factory.create_response_command_with_code_remark(
+                            ResponseCode::ServiceNotAvailable,
+                            "POP consumer profile persistence is unavailable",
+                        ),
+                    ));
+                }
             }
-        }
+        } else {
+            retry_policy
+        };
         self.context
             .consumers
             .restore_pop_consumer_profile(&request_header.consumer_group, &durable_subscriptions);
@@ -596,10 +635,6 @@ where
         };
         let need_retry = random_sample < retry_probability;
         let randomq = if use_priority_mode { 0 } else { random_sample };
-        let mut need_retry_v1 = false;
-        if policy.enable_retry_topic_v2 && policy.retrieve_message_from_pop_retry_topic_v1 {
-            need_retry_v1 = random_sample % 2 == 0;
-        }
         let mut start_offset_info = String::with_capacity(64);
         let mut msg_offset_info = String::with_capacity(64);
         let mut order_count_info = if request_header.order.is_some() {
@@ -611,53 +646,30 @@ where
 
         let mut rest_num = 0; // remaining number of messages to be fetched
         if need_retry && !request_header.order.unwrap_or(false) {
-            rest_num = if need_retry_v1 {
-                let retry_topic = CheetahString::from_string(KeyBuilder::build_pop_retry_topic_v1(
-                    &request_header.topic,
-                    &request_header.consumer_group,
-                ));
-
-                self.pop_msg_from_topic_by_name(
-                    &retry_topic,
-                    true,
-                    &mut get_message_result,
-                    &request_header,
-                    revive_qid,
-                    channel.clone(),
-                    pop_time,
-                    message_filter.clone(),
-                    &mut start_offset_info,
-                    &mut msg_offset_info,
-                    &mut order_count_info,
-                    randomq,
-                    use_priority_mode.then_some(policy.priority_order_asc),
-                    rest_num,
-                )
-                .await
-            } else {
-                let retry_topic = CheetahString::from_string(KeyBuilder::build_pop_retry_topic(
-                    &request_header.topic,
-                    &request_header.consumer_group,
-                    policy.enable_retry_topic_v2,
-                ));
-                self.pop_msg_from_topic_by_name(
-                    &retry_topic,
-                    true,
-                    &mut get_message_result,
-                    &request_header,
-                    revive_qid,
-                    channel.clone(),
-                    pop_time,
-                    message_filter.clone(),
-                    &mut start_offset_info,
-                    &mut msg_offset_info,
-                    &mut order_count_info,
-                    randomq,
-                    use_priority_mode.then_some(policy.priority_order_asc),
-                    rest_num,
-                )
-                .await
-            };
+            for retry_topic in retry_policy.read_topics(&request_header.topic, &request_header.consumer_group) {
+                let retry_topic = CheetahString::from_string(retry_topic);
+                rest_num = self
+                    .pop_msg_from_topic_by_name(
+                        &retry_topic,
+                        true,
+                        &mut get_message_result,
+                        &request_header,
+                        revive_qid,
+                        channel.clone(),
+                        pop_time,
+                        message_filter.clone(),
+                        &mut start_offset_info,
+                        &mut msg_offset_info,
+                        &mut order_count_info,
+                        randomq,
+                        use_priority_mode.then_some(policy.priority_order_asc),
+                        rest_num,
+                    )
+                    .await;
+                if !get_message_result.message_mapped_list().is_empty() {
+                    break;
+                }
+            }
         }
         //request_header.queue_id < 0 means read all queue
         rest_num = if request_header.queue_id < 0 {
@@ -703,53 +715,30 @@ where
             && get_message_result.message_mapped_list().len() < request_header.max_msg_nums as usize
             && !request_header.order.unwrap_or(false)
         {
-            rest_num = if need_retry_v1 {
-                let retry_topic = CheetahString::from_string(KeyBuilder::build_pop_retry_topic_v1(
-                    &request_header.topic,
-                    &request_header.consumer_group,
-                ));
-
-                self.pop_msg_from_topic_by_name(
-                    &retry_topic,
-                    true,
-                    &mut get_message_result,
-                    &request_header,
-                    revive_qid,
-                    channel.clone(),
-                    pop_time,
-                    message_filter.clone(),
-                    &mut start_offset_info,
-                    &mut msg_offset_info,
-                    &mut order_count_info,
-                    randomq,
-                    use_priority_mode.then_some(policy.priority_order_asc),
-                    rest_num,
-                )
-                .await
-            } else {
-                let retry_topic = CheetahString::from_string(KeyBuilder::build_pop_retry_topic(
-                    &request_header.topic,
-                    &request_header.consumer_group,
-                    policy.enable_retry_topic_v2,
-                ));
-                self.pop_msg_from_topic_by_name(
-                    &retry_topic,
-                    true,
-                    &mut get_message_result,
-                    &request_header,
-                    revive_qid,
-                    channel.clone(),
-                    pop_time,
-                    message_filter.clone(),
-                    &mut start_offset_info,
-                    &mut msg_offset_info,
-                    &mut order_count_info,
-                    randomq,
-                    use_priority_mode.then_some(policy.priority_order_asc),
-                    rest_num,
-                )
-                .await
-            };
+            for retry_topic in retry_policy.read_topics(&request_header.topic, &request_header.consumer_group) {
+                let retry_topic = CheetahString::from_string(retry_topic);
+                rest_num = self
+                    .pop_msg_from_topic_by_name(
+                        &retry_topic,
+                        true,
+                        &mut get_message_result,
+                        &request_header,
+                        revive_qid,
+                        channel.clone(),
+                        pop_time,
+                        message_filter.clone(),
+                        &mut start_offset_info,
+                        &mut msg_offset_info,
+                        &mut order_count_info,
+                        randomq,
+                        use_priority_mode.then_some(policy.priority_order_asc),
+                        rest_num,
+                    )
+                    .await;
+                if !get_message_result.message_mapped_list().is_empty() {
+                    break;
+                }
+            }
         }
         let mut final_response = self.context.command_factory.create_success_response_command();
         final_response.set_opaque_mut(opaque);
@@ -966,6 +955,7 @@ where
         order_count_info: &mut String,
     ) -> i64 {
         let policy = self.context.policy.snapshot();
+        let retry_policy = self.retry_policy_for_group(&request_header.consumer_group);
         let lock_key = CheetahString::from_string(QueueLockManager::build_lock_key(
             topic,
             &request_header.consumer_group,
@@ -1259,7 +1249,7 @@ where
                         let message_ext_list = MessageDecoder::decodes_batch(&mut bytes, true, false);
                         //maped_buffer.release();
                         for mut message_ext in message_ext_list {
-                            let ck_info = ExtraInfoUtil::build_extra_info_with_offset(
+                            let ck_info = ExtraInfoUtil::build_extra_info_with_offset_and_retry_policy(
                                 final_offset,
                                 pop_time as i64,
                                 request_header.invisible_time as i64,
@@ -1268,6 +1258,7 @@ where
                                 broker_name,
                                 message_ext.queue_id(),
                                 message_ext.queue_offset(),
+                                &retry_policy,
                             );
                             message_ext
                                 .message
@@ -1336,6 +1327,8 @@ where
         pop_time: u64,
         broker_name: &CheetahString,
     ) -> bool {
+        let retry_policy = self.retry_policy_for_group(&request_header.consumer_group);
+        let actual_retry_version = KeyBuilder::classify_pop_retry_topic(topic).unwrap_or(retry_policy.write_version);
         let mut ck = PopCheckPoint {
             start_offset: offset,
             pop_time: pop_time as i64,
@@ -1346,6 +1339,8 @@ where
             topic: topic.into(),
             cid: request_header.consumer_group.clone(),
             broker_name: Some(broker_name.clone()),
+            retry_topic_version: Some(actual_retry_version.number()),
+            retry_policy_generation: Some(retry_policy.generation),
             ..Default::default()
         };
         for msg_queue_offset in get_message_tmp_result.message_queue_offset() {
@@ -1979,6 +1974,8 @@ mod tests {
             num: 0,
             queue_offset_diff: vec![],
             re_put_times: None,
+            retry_topic_version: None,
+            retry_policy_generation: None,
         };
         let result = PopMessageProcessor::<LocalFileMessageStore>::gen_ck_unique_id(&ck);
         let expected = "test_topic@1@456@test_cid@789@test_broker@ck";

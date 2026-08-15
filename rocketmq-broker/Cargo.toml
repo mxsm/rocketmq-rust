@@ -198,3 +198,7 @@ required-features = ["rocksdb_store", "test-support"]
 [[test]]
 name = "pop_profile_runtime_flow"
 required-features = ["rocksdb_store", "test-support"]
+
+[[test]]
+name = "pop_retry_version_migration"
+required-features = ["rocksdb_store", "test-support"]

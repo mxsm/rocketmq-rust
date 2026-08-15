@@ -471,6 +471,8 @@ mod tests {
             bit_map: 0,
             num: 0,
             re_put_times: None,
+            retry_topic_version: None,
+            retry_policy_generation: None,
         };
 
         counter.decrement_in_flight_message_num_checkpoint(&old_checkpoint);
@@ -566,6 +568,8 @@ mod tests {
             bit_map: 0,
             num: 0,
             re_put_times: None,
+            retry_topic_version: None,
+            retry_policy_generation: None,
         };
 
         counter.increment_in_flight_message_num(&topic, &group, 1, 5);
