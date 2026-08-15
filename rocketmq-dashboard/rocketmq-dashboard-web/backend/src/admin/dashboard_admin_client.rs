@@ -14,7 +14,6 @@
 
 use std::cmp::Reverse;
 use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
@@ -110,37 +109,11 @@ struct AdminSessionLease {
     owner: Arc<AdminSessionOwner>,
 }
 
-struct TopicAdminSessionRegistry<G> {
-    sessions: Mutex<TopicAdminSessions<G>>,
-}
-
-struct TopicAdminSessions<G> {
-    current: Option<Arc<ManagedTopicAdminSession<G>>>,
-    retired: Vec<Arc<ManagedTopicAdminSession<G>>>,
-}
-
-struct ManagedTopicAdminSession<G> {
-    guard: Mutex<Option<G>>,
-    snapshot: AdminConfigSnapshot,
-}
-
-trait TopicAdminSessionGuard: Send {
-    fn shutdown_in_place<'a>(&'a mut self) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
-}
-
-impl TopicAdminSessionGuard for AdminGuard {
-    fn shutdown_in_place<'a>(&'a mut self) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
-        Box::pin(async move {
-            self.inner_mut().shutdown().await;
-        })
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct AdminConfigSnapshot {
-    namesrv_addr: String,
-    use_vip_channel: bool,
-    use_tls: bool,
+pub(super) struct AdminConfigSnapshot {
+    pub(super) namesrv_addr: String,
+    pub(super) use_vip_channel: bool,
+    pub(super) use_tls: bool,
 }
 
 macro_rules! run_admin_rpc {
@@ -167,6 +140,7 @@ macro_rules! run_topic_admin_rpc {
         let admin_group = unique_admin_group();
         let (response_tx, response_rx) = oneshot::channel();
         let config_cancellation = client.session_tasks.task_group().cancellation_token();
+        let guard_cancellation = client.session_tasks.task_group().cancellation_token();
         let operation_cancellation = client.session_tasks.task_group().cancellation_token();
         let build_client = client.clone();
         let build_snapshot = snapshot.clone();
@@ -178,6 +152,7 @@ macro_rules! run_topic_admin_rpc {
                     &client.config,
                     snapshot,
                     config_cancellation.cancelled(),
+                    guard_cancellation.cancelled(),
                     operation_cancellation.cancelled(),
                     move || async move { build_client.build_topic_admin_guard(&build_snapshot, admin_group).await },
                     move |guard| {
@@ -198,6 +173,9 @@ macro_rules! run_topic_admin_rpc {
 }
 
 mod topic;
+mod topic_session;
+
+use self::topic_session::*;
 
 impl ManagedAdminSession {
     async fn lease(&self) -> Result<AdminSessionLease, DashboardError> {
@@ -231,83 +209,6 @@ impl ManagedAdminSession {
                 tracing::error!("Dashboard admin session retirement retained an owner without an active lease");
             }
         }
-    }
-}
-
-impl<G> Default for TopicAdminSessionRegistry<G> {
-    fn default() -> Self {
-        Self {
-            sessions: Mutex::new(TopicAdminSessions {
-                current: None,
-                retired: Vec::new(),
-            }),
-        }
-    }
-}
-
-impl<G> TopicAdminSessionRegistry<G>
-where
-    G: TopicAdminSessionGuard,
-{
-    async fn acquire<F, BuildFuture>(
-        &self,
-        snapshot: AdminConfigSnapshot,
-        build: F,
-    ) -> Result<Arc<ManagedTopicAdminSession<G>>, DashboardError>
-    where
-        F: FnOnce() -> BuildFuture,
-        BuildFuture: Future<Output = Result<G, DashboardError>>,
-    {
-        let mut sessions = self.sessions.lock().await;
-        if let Some(session) = sessions
-            .current
-            .as_ref()
-            .filter(|session| session.snapshot == snapshot)
-            .cloned()
-        {
-            return Ok(session);
-        }
-
-        // The registry lock stays held while the guard is built, so a successfully built guard
-        // is inserted into client-owned state before this future can yield again.
-        let session = Arc::new(ManagedTopicAdminSession {
-            guard: Mutex::new(Some(build().await?)),
-            snapshot,
-        });
-        if let Some(previous) = sessions.current.replace(Arc::clone(&session)) {
-            sessions.retired.push(previous);
-        }
-        Ok(session)
-    }
-
-    async fn shutdown(&self) {
-        let sessions = {
-            let sessions = self.sessions.lock().await;
-            let mut all = sessions.retired.clone();
-            all.extend(sessions.current.iter().cloned());
-            all
-        };
-        for session in &sessions {
-            session.shutdown().await;
-        }
-        let mut sessions = self.sessions.lock().await;
-        sessions.current = None;
-        sessions.retired.clear();
-    }
-}
-
-impl<G> ManagedTopicAdminSession<G>
-where
-    G: TopicAdminSessionGuard,
-{
-    async fn shutdown(&self) {
-        let mut guard = self.guard.lock().await;
-        if let Some(guard) = guard.as_mut() {
-            guard.shutdown_in_place().await;
-        }
-        // A cancelled shutdown never reaches this point, so the guard remains client-owned for a
-        // later lifecycle pass instead of being dropped with its registration or pool lease live.
-        guard.take();
     }
 }
 
@@ -348,13 +249,16 @@ impl DashboardAdminClient {
     }
 
     pub async fn shutdown(&self) {
-        self.session_tasks.task_group().cancel();
-        self.topic_admin_sessions.shutdown().await;
+        let report = shutdown_topic_admin_services(
+            &self.topic_admin_sessions,
+            self.session_tasks.task_group(),
+            Duration::from_secs(5),
+        )
+        .await;
         let session = self.admin_session.lock().await.take();
         if let Some(session) = session {
             session.shutdown().await;
         }
-        let report = self.session_tasks.task_group().shutdown(Duration::from_secs(5)).await;
         if !report.is_healthy() {
             tracing::warn!(
                 report = %report.to_json(),
@@ -906,7 +810,9 @@ impl DashboardAdminClient {
     }
 }
 
-async fn admin_config_snapshot(config: &RwLock<DashboardConfigView>) -> Result<AdminConfigSnapshot, DashboardError> {
+pub(super) async fn admin_config_snapshot(
+    config: &RwLock<DashboardConfigView>,
+) -> Result<AdminConfigSnapshot, DashboardError> {
     let config = config.read().await;
     let namesrv_addr = config
         .current_namesrv
@@ -917,61 +823,6 @@ async fn admin_config_snapshot(config: &RwLock<DashboardConfigView>) -> Result<A
         use_vip_channel: config.use_vip_channel,
         use_tls: config.use_tls,
     })
-}
-
-async fn run_tracked_topic_admin_service<
-    G,
-    T,
-    Build,
-    BuildFuture,
-    ConfigCancellation,
-    OperationCancellation,
-    Operation,
->(
-    sessions: &TopicAdminSessionRegistry<G>,
-    config: &RwLock<DashboardConfigView>,
-    snapshot: AdminConfigSnapshot,
-    config_cancellation: ConfigCancellation,
-    operation_cancellation: OperationCancellation,
-    build: Build,
-    operation: Operation,
-) -> Result<T, DashboardError>
-where
-    G: TopicAdminSessionGuard,
-    Build: FnOnce() -> BuildFuture,
-    BuildFuture: Future<Output = Result<G, DashboardError>>,
-    ConfigCancellation: Future<Output = ()>,
-    OperationCancellation: Future<Output = ()>,
-    Operation:
-        for<'guard> FnOnce(&'guard mut G) -> Pin<Box<dyn Future<Output = Result<T, DashboardError>> + Send + 'guard>>,
-{
-    let session = sessions.acquire(snapshot.clone(), build).await?;
-    let current = tokio::select! {
-        biased;
-        _ = config_cancellation => {
-            return Err(DashboardError::Config(
-                "Topic admin operation was cancelled during shutdown".to_string(),
-            ));
-        }
-        current = admin_config_snapshot(config) => current?,
-    };
-    if current != snapshot {
-        return Err(DashboardError::Config(
-            "Dashboard admin configuration changed while opening a topic admin session; retry the request".to_string(),
-        ));
-    }
-
-    let mut guard = session.guard.lock().await;
-    let guard = guard
-        .as_mut()
-        .ok_or_else(|| DashboardError::Internal("Topic admin session was already retired".to_string()))?;
-    tokio::select! {
-        biased;
-        _ = operation_cancellation => Err(DashboardError::Config(
-            "Topic admin operation was cancelled during shutdown".to_string(),
-        )),
-        result = operation(guard) => result,
-    }
 }
 
 async fn resend_dlq_batch<F, Fut>(messages: Vec<DlqMessageRef>, mut resend: F) -> Vec<DlqMessageResendResult>
@@ -1100,6 +951,7 @@ mod tests {
     use super::resend_dlq_batch;
     use super::run_tracked_topic_admin_service;
     use super::session_is_current;
+    use super::shutdown_topic_admin_services;
 
     struct TestTopicGuard {
         shutdowns: Arc<AtomicUsize>,
@@ -1267,6 +1119,7 @@ mod tests {
             let snapshot = admin_config_snapshot(&config).await.expect("configured snapshot");
             let sessions = Arc::new(TopicAdminSessionRegistry::default());
             let config_cancellation = context.task_group().cancellation_token();
+            let guard_cancellation = context.task_group().cancellation_token();
             let operation_cancellation = context.task_group().cancellation_token();
             let (result_tx, result_rx) = oneshot::channel();
             let service_sessions = Arc::clone(&sessions);
@@ -1281,6 +1134,7 @@ mod tests {
                         &service_config,
                         snapshot,
                         config_cancellation.cancelled(),
+                        guard_cancellation.cancelled(),
                         operation_cancellation.cancelled(),
                         move || {
                             let shutdowns = Arc::clone(&service_shutdowns);
@@ -1325,6 +1179,7 @@ mod tests {
             let config_write = config.write().await;
             let sessions = Arc::new(TopicAdminSessionRegistry::default());
             let config_cancellation = context.task_group().cancellation_token();
+            let guard_cancellation = context.task_group().cancellation_token();
             let operation_cancellation = context.task_group().cancellation_token();
             let (result_tx, result_rx) = oneshot::channel();
             let service_sessions = Arc::clone(&sessions);
@@ -1339,6 +1194,7 @@ mod tests {
                         &service_config,
                         snapshot,
                         config_cancellation.cancelled(),
+                        guard_cancellation.cancelled(),
                         operation_cancellation.cancelled(),
                         move || {
                             let shutdowns = Arc::clone(&service_shutdowns);
@@ -1357,7 +1213,7 @@ mod tests {
 
             guard_built.notified().await;
             loop {
-                if sessions.sessions.lock().await.current.is_some() {
+                if sessions.has_current() {
                     break;
                 }
                 tokio::task::yield_now().await;
@@ -1386,6 +1242,7 @@ mod tests {
             let snapshot = admin_config_snapshot(&config).await.expect("configured snapshot");
             let sessions = Arc::new(TopicAdminSessionRegistry::<TestTopicGuard>::default());
             let config_cancellation = context.task_group().cancellation_token();
+            let guard_cancellation = context.task_group().cancellation_token();
             let operation_cancellation = context.task_group().cancellation_token();
             let service_sessions = Arc::clone(&sessions);
             let service_config = Arc::clone(&config);
@@ -1398,6 +1255,7 @@ mod tests {
                         &service_config,
                         snapshot,
                         config_cancellation.cancelled(),
+                        guard_cancellation.cancelled(),
                         operation_cancellation.cancelled(),
                         move || async move {
                             service_build_started.notify_one();
@@ -1410,14 +1268,211 @@ mod tests {
                 .expect("tracked topic build");
 
             build_started.notified().await;
-            context.task_group().cancel();
-            let report = context.task_group().shutdown(Duration::from_millis(10)).await;
+            let report = tokio::time::timeout(
+                Duration::from_millis(100),
+                shutdown_topic_admin_services(&sessions, context.task_group(), Duration::from_millis(10)),
+            )
+            .await
+            .expect("production topic shutdown must reach its bounded task-group drain");
 
             assert_eq!(report.aborted, 1, "{report:?}");
-            assert!(sessions.sessions.lock().await.current.is_none());
+            assert!(!sessions.has_current());
         });
 
         owner.shutdown_runtime_blocking().expect("runtime owner shutdown");
+    }
+
+    #[test]
+    fn topic_shutdown_drains_a_guard_completed_after_admission_closes() {
+        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+        let context = owner.root_context().component("topic-late-build-test");
+        let build_started = Arc::new(Notify::new());
+        let allow_build = Arc::new(Notify::new());
+        let shutdowns = Arc::new(AtomicUsize::new(0));
+
+        owner.block_on(async {
+            let config = Arc::new(RwLock::new(DashboardConfigView::default()));
+            let snapshot = admin_config_snapshot(&config).await.expect("configured snapshot");
+            let sessions = Arc::new(TopicAdminSessionRegistry::default());
+            let config_cancellation = context.task_group().cancellation_token();
+            let guard_cancellation = context.task_group().cancellation_token();
+            let operation_cancellation = context.task_group().cancellation_token();
+            let service_sessions = Arc::clone(&sessions);
+            let service_config = Arc::clone(&config);
+            let service_started = Arc::clone(&build_started);
+            let service_allowed = Arc::clone(&allow_build);
+            let service_shutdowns = Arc::clone(&shutdowns);
+
+            context
+                .spawn_service("topic-late-build", async move {
+                    let _ = run_tracked_topic_admin_service(
+                        &service_sessions,
+                        &service_config,
+                        snapshot,
+                        config_cancellation.cancelled(),
+                        guard_cancellation.cancelled(),
+                        operation_cancellation.cancelled(),
+                        move || async move {
+                            service_started.notify_one();
+                            service_allowed.notified().await;
+                            Ok(TestTopicGuard {
+                                shutdowns: service_shutdowns,
+                            })
+                        },
+                        |_| Box::pin(async { Ok(()) }),
+                    )
+                    .await;
+                })
+                .expect("tracked late topic build");
+
+            build_started.notified().await;
+            let shutdown_sessions = Arc::clone(&sessions);
+            let shutdown_group = context.task_group().clone();
+            let shutdown = tokio::spawn(async move {
+                shutdown_topic_admin_services(&shutdown_sessions, &shutdown_group, Duration::from_millis(100)).await
+            });
+            tokio::task::yield_now().await;
+            allow_build.notify_one();
+            let report = shutdown.await.expect("topic shutdown task");
+
+            assert!(report.is_healthy(), "{report:?}");
+            assert_eq!(shutdowns.load(Ordering::Acquire), 1);
+            assert!(!sessions.has_current());
+        });
+
+        owner.shutdown_runtime_blocking().expect("runtime owner shutdown");
+    }
+
+    #[tokio::test]
+    async fn topic_registry_reaps_retired_sessions_before_each_configuration_switch() {
+        let sessions = TopicAdminSessionRegistry::default();
+        let shutdowns = Arc::new(AtomicUsize::new(0));
+        for namesrv_addr in ["127.0.0.1:9876", "127.0.0.2:9876", "127.0.0.3:9876"] {
+            let shutdowns = Arc::clone(&shutdowns);
+            sessions
+                .acquire(
+                    AdminConfigSnapshot {
+                        namesrv_addr: namesrv_addr.to_string(),
+                        use_vip_channel: false,
+                        use_tls: false,
+                    },
+                    move || async move { Ok(TestTopicGuard { shutdowns }) },
+                )
+                .await
+                .expect("configured topic session");
+        }
+        sessions.reap_retired().await;
+
+        assert_eq!(shutdowns.load(Ordering::Acquire), 2);
+        assert!(sessions.has_current());
+    }
+
+    #[tokio::test]
+    async fn topic_operation_rejects_a_session_staled_while_waiting_for_its_guard() {
+        let config = Arc::new(RwLock::new(DashboardConfigView::default()));
+        let snapshot = admin_config_snapshot(&config).await.expect("configured snapshot");
+        let sessions = Arc::new(TopicAdminSessionRegistry::default());
+        let shutdowns = Arc::new(AtomicUsize::new(0));
+        let first_started = Arc::new(Notify::new());
+        let (cancel_first_tx, cancel_first_rx) = oneshot::channel();
+        let first_sessions = Arc::clone(&sessions);
+        let first_config = Arc::clone(&config);
+        let first_shutdowns = Arc::clone(&shutdowns);
+        let first_started_for_task = Arc::clone(&first_started);
+        let first_snapshot = snapshot.clone();
+
+        let first = tokio::spawn(async move {
+            run_tracked_topic_admin_service(
+                &first_sessions,
+                &first_config,
+                first_snapshot,
+                std::future::pending(),
+                std::future::pending(),
+                async move {
+                    let _ = cancel_first_rx.await;
+                },
+                move || async move {
+                    Ok(TestTopicGuard {
+                        shutdowns: first_shutdowns,
+                    })
+                },
+                move |_| {
+                    let started = Arc::clone(&first_started_for_task);
+                    Box::pin(async move {
+                        started.notify_one();
+                        std::future::pending::<Result<(), DashboardError>>().await
+                    })
+                },
+            )
+            .await
+        });
+
+        first_started.notified().await;
+        config.write().await.current_namesrv = Some("127.0.0.2:9876".to_string());
+        let operations = Arc::new(AtomicUsize::new(0));
+        let second_operations = Arc::clone(&operations);
+        let second_sessions = Arc::clone(&sessions);
+        let second_config = Arc::clone(&config);
+        let second = tokio::spawn(async move {
+            run_tracked_topic_admin_service(
+                &second_sessions,
+                &second_config,
+                snapshot,
+                std::future::pending(),
+                std::future::pending(),
+                std::future::pending(),
+                || async move { unreachable!("the queued operation must reuse the existing session") },
+                move |_| {
+                    let operations = Arc::clone(&second_operations);
+                    Box::pin(async move {
+                        operations.fetch_add(1, Ordering::AcqRel);
+                        Ok(())
+                    })
+                },
+            )
+            .await
+        });
+        tokio::task::yield_now().await;
+        let _ = cancel_first_tx.send(());
+        assert!(matches!(first.await, Ok(Err(DashboardError::Config(_)))));
+        assert!(matches!(second.await, Ok(Err(DashboardError::Config(_)))));
+        assert_eq!(operations.load(Ordering::Acquire), 0);
+        assert_eq!(shutdowns.load(Ordering::Acquire), 1);
+    }
+
+    #[tokio::test]
+    async fn topic_operation_rejects_a_result_staled_during_the_rpc() {
+        let config = Arc::new(RwLock::new(DashboardConfigView::default()));
+        let snapshot = admin_config_snapshot(&config).await.expect("configured snapshot");
+        let sessions = TopicAdminSessionRegistry::default();
+        let shutdowns = Arc::new(AtomicUsize::new(0));
+        let operation_config = Arc::clone(&config);
+        let build_shutdowns = Arc::clone(&shutdowns);
+
+        let result = run_tracked_topic_admin_service(
+            &sessions,
+            &config,
+            snapshot,
+            std::future::pending(),
+            std::future::pending(),
+            std::future::pending(),
+            move || async move {
+                Ok(TestTopicGuard {
+                    shutdowns: build_shutdowns,
+                })
+            },
+            move |_| {
+                let config = Arc::clone(&operation_config);
+                Box::pin(async move {
+                    config.write().await.current_namesrv = Some("127.0.0.2:9876".to_string());
+                    Ok("stale topic result")
+                })
+            },
+        )
+        .await;
+
+        assert!(matches!(result, Err(DashboardError::Config(_))));
+        assert_eq!(shutdowns.load(Ordering::Acquire), 1);
     }
 
     #[test]
@@ -1433,6 +1488,7 @@ mod tests {
             let config = Arc::new(RwLock::new(DashboardConfigView::default()));
             let snapshot = admin_config_snapshot(&config).await.expect("configured snapshot");
             let config_cancellation = context.task_group().cancellation_token();
+            let guard_cancellation = context.task_group().cancellation_token();
             let operation_cancellation = context.task_group().cancellation_token();
             let service_sessions = Arc::clone(&sessions);
             let service_config = Arc::clone(&config);
@@ -1448,6 +1504,7 @@ mod tests {
                         &service_config,
                         snapshot,
                         config_cancellation.cancelled(),
+                        guard_cancellation.cancelled(),
                         operation_cancellation.cancelled(),
                         move || async move {
                             Ok(BlockingTestTopicGuard {
