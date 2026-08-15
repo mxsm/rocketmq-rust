@@ -41,6 +41,7 @@ use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_model::common::filter::expression_type::ExpressionType;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::message::MessageTrait;
 use rocketmq_model::common::mix_all;
 use rocketmq_model::common::sys_flag::pull_sys_flag::PullSysFlag;
 use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
@@ -78,6 +79,8 @@ use crate::consumer::consumer_impl::lite_pull_consume_request::LitePullConsumeRe
 use crate::consumer::consumer_impl::pull_api_wrapper::PullAPIWrapper;
 use crate::consumer::consumer_impl::re_balance::rebalance_lite_pull_impl::RebalanceLitePullImpl;
 use crate::consumer::consumer_impl::re_balance::Rebalance;
+use crate::consumer::default_mq_pull_consumer::ClassicPullCallback;
+use crate::consumer::default_mq_pull_consumer::PullOptions;
 use crate::consumer::message_queue_listener::ArcMessageQueueListener;
 use crate::consumer::message_queue_listener::MessageQueueListener;
 use crate::consumer::mq_consumer_inner::MQConsumerInner;
@@ -275,14 +278,16 @@ impl MessageQueueListener for LitePullRebalanceListener {
                 biased;
                 _ = shutdown_token.cancelled() => {},
                 _ = async move {
-                    if let Err(error) = consumer_impl
-                        .update_assign_queue_and_start_pull_task(topic.as_str(), &mq_all, &mq_assigned)
-                        .await
-                    {
-                        warn!(
-                            "LitePull rebalance assignment update failed. topic={}, error={}",
-                            topic, error
-                        );
+                    if !consumer_impl.consumer_config_snapshot().classic_pull_manual_mode {
+                        if let Err(error) = consumer_impl
+                            .update_assign_queue_and_start_pull_task(topic.as_str(), &mq_all, &mq_assigned)
+                            .await
+                        {
+                            warn!(
+                                "LitePull rebalance assignment update failed. topic={}, error={}",
+                                topic, error
+                            );
+                        }
                     }
 
                     let listener = user_listener.read().ok().and_then(|listener| listener.clone());
@@ -383,6 +388,87 @@ pub struct LitePullConcurrencyContractProbe {
 struct AssignmentPullContext {
     entry: Arc<AssignmentEntry>,
     generation: u64,
+}
+
+struct ClassicPullCallbackAdapter<C> {
+    callback: C,
+    pull_api_wrapper: Arc<PullAPIWrapper>,
+    message_queue: MessageQueue,
+    subscription_data: SubscriptionData,
+    namespace: Option<CheetahString>,
+}
+
+impl<C> PullCallback for ClassicPullCallbackAdapter<C>
+where
+    C: ClassicPullCallback,
+{
+    async fn on_success(&mut self, mut pull_result: crate::PullResultExt) {
+        self.pull_api_wrapper
+            .process_pull_result(&self.message_queue, &mut pull_result, &self.subscription_data);
+        reset_classic_pull_message_topics(&mut pull_result.pull_result.msg_found_list, self.namespace.as_deref());
+        self.callback.on_success(pull_result.pull_result);
+    }
+
+    fn on_exception(&mut self, error: RocketMQError) {
+        self.callback.on_exception(error);
+    }
+}
+
+fn reset_classic_pull_message_topics(messages: &mut Option<Vec<MessageExt>>, namespace: Option<&str>) {
+    let Some(namespace) = namespace.filter(|namespace| !namespace.is_empty()) else {
+        return;
+    };
+    let Some(messages) = messages else {
+        return;
+    };
+    for message in messages {
+        let topic = NamespaceUtil::without_namespace_with_namespace(message.topic(), namespace);
+        message.set_topic(CheetahString::from_string(topic));
+    }
+}
+
+fn duration_millis(field: &'static str, duration: Duration) -> RocketMQResult<u64> {
+    u64::try_from(duration.as_millis()).map_err(|_| RocketMQError::ConfigInvalidValue {
+        key: field,
+        value: duration.as_millis().to_string(),
+        reason: "duration exceeds the supported millisecond range".to_string(),
+    })
+}
+
+struct PreparedClassicPull {
+    message_queue: MessageQueue,
+    subscription_data: SubscriptionData,
+    sub_version: i64,
+    sys_flag: i32,
+    broker_suspend_timeout_millis: u64,
+    timeout_millis: u64,
+}
+
+fn prepare_classic_pull(options: &PullOptions) -> RocketMQResult<PreparedClassicPull> {
+    options.validate()?;
+    let message_queue = options.message_queue().clone();
+    let mut subscription_data = FilterAPI::build(
+        message_queue.topic(),
+        options.selector().get_expression(),
+        Some(options.selector().get_expression_type().clone()),
+    )
+    .map_err(|error| crate::mq_client_err!(format!("parse subscription error: {error}")))?;
+    if !ExpressionType::is_tag_type(Some(subscription_data.expression_type.as_str()))
+        && subscription_data.sub_version <= 0
+    {
+        subscription_data.sub_version = i64::try_from(current_millis()).unwrap_or(i64::MAX);
+    }
+    Ok(PreparedClassicPull {
+        sub_version: lite_pull_request_sub_version(&subscription_data),
+        subscription_data,
+        message_queue,
+        sys_flag: PullSysFlag::build_sys_flag(false, options.is_block_if_not_found(), true, false) as i32,
+        broker_suspend_timeout_millis: duration_millis(
+            "broker suspend timeout",
+            options.broker_suspend_timeout_value(),
+        )?,
+        timeout_millis: duration_millis("pull timeout", options.timeout_value())?,
+    })
 }
 
 /// Core implementation of lite pull consumer.
@@ -628,6 +714,138 @@ impl DefaultLitePullConsumerImpl {
             )));
         }
         Ok(())
+    }
+
+    pub(crate) fn ensure_classic_pull_running(&self) -> RocketMQResult<()> {
+        self.make_sure_state_ok()
+    }
+
+    pub(crate) async fn register_classic_pull_subscription(&self, topic: &CheetahString) -> RocketMQResult<()> {
+        if self.rebalance_impl.get_subscription_inner().contains_key(topic) {
+            return Ok(());
+        }
+        let subscription =
+            FilterAPI::build_subscription_data(topic, &CheetahString::from_static_str(SubscriptionData::SUB_ALL))
+                .map_err(|error| crate::mq_client_err!(format!("parse subscription error: {error}")))?;
+        self.rebalance_impl.put_subscription_data(topic.clone(), subscription);
+        if self.service_state() == ServiceState::Running {
+            if let Some(client_instance) = self.component_snapshot(&self.client_instance) {
+                client_instance.send_heartbeat_to_all_broker_with_lock().await;
+                self.update_topic_subscribe_info_when_subscription_changed().await?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn classic_pull(&self, options: &PullOptions) -> RocketMQResult<crate::PullResult> {
+        struct NoopPullCallback;
+
+        impl PullCallback for NoopPullCallback {
+            async fn on_success(&mut self, _pull_result: crate::PullResultExt) {}
+
+            fn on_exception(&mut self, _error: RocketMQError) {}
+        }
+
+        self.make_sure_state_ok()?;
+        let prepared = prepare_classic_pull(options)?;
+        self.register_classic_pull_subscription(prepared.message_queue.topic())
+            .await?;
+        let wrapper = self
+            .component_snapshot(&self.pull_api_wrapper)
+            .ok_or_else(|| crate::mq_client_err!("PullAPIWrapper is not initialized"))?;
+        let pull = wrapper.pull_kernel_impl(
+            &prepared.message_queue,
+            prepared.subscription_data.sub_string.clone(),
+            prepared.subscription_data.expression_type.clone(),
+            prepared.sub_version,
+            options.offset(),
+            options.max_messages(),
+            options.max_size_in_bytes_value(),
+            prepared.sys_flag,
+            0,
+            prepared.broker_suspend_timeout_millis,
+            prepared.timeout_millis,
+            CommunicationMode::Sync,
+            NoopPullCallback,
+        );
+        let mut pull_result = tokio::time::timeout(options.timeout_value(), pull)
+            .await
+            .map_err(|_| RocketMQError::Timeout {
+                operation: "classic pull request",
+                timeout_ms: prepared.timeout_millis,
+            })??
+            .ok_or_else(|| crate::mq_client_err!("Synchronous classic pull returned no result"))?;
+        wrapper.process_pull_result(&prepared.message_queue, &mut pull_result, &prepared.subscription_data);
+        let namespace = self.client_config.load().namespace.clone();
+        reset_classic_pull_message_topics(&mut pull_result.pull_result.msg_found_list, namespace.as_deref());
+        Ok(pull_result.pull_result)
+    }
+
+    pub(crate) async fn classic_pull_async<C>(&self, options: PullOptions, callback: C) -> RocketMQResult<()>
+    where
+        C: ClassicPullCallback,
+    {
+        self.make_sure_state_ok()?;
+        let prepared = prepare_classic_pull(&options)?;
+        self.register_classic_pull_subscription(prepared.message_queue.topic())
+            .await?;
+        let wrapper = self
+            .component_snapshot(&self.pull_api_wrapper)
+            .ok_or_else(|| crate::mq_client_err!("PullAPIWrapper is not initialized"))?;
+        let callback = ClassicPullCallbackAdapter {
+            callback,
+            pull_api_wrapper: wrapper.clone(),
+            message_queue: prepared.message_queue.clone(),
+            subscription_data: prepared.subscription_data.clone(),
+            namespace: self.client_config.load().namespace.clone(),
+        };
+        wrapper
+            .pull_kernel_impl(
+                &prepared.message_queue,
+                prepared.subscription_data.sub_string,
+                prepared.subscription_data.expression_type,
+                prepared.sub_version,
+                options.offset(),
+                options.max_messages(),
+                options.max_size_in_bytes_value(),
+                prepared.sys_flag,
+                0,
+                prepared.broker_suspend_timeout_millis,
+                prepared.timeout_millis,
+                CommunicationMode::Async,
+                callback,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn update_classic_pull_offset(&self, mq: &MessageQueue, offset: i64) -> RocketMQResult<()> {
+        self.make_sure_state_ok()?;
+        if offset < 0 {
+            return Err(crate::mq_client_err!("offset < 0"));
+        }
+        let offset_store = self
+            .offset_store()
+            .ok_or_else(|| crate::mq_client_err!("Offset store is not initialized"))?;
+        offset_store.update_offset(mq, offset, false).await;
+        Ok(())
+    }
+
+    pub(crate) async fn fetch_classic_pull_offset(&self, mq: &MessageQueue, from_store: bool) -> RocketMQResult<i64> {
+        self.make_sure_state_ok()?;
+        let offset_store = self
+            .offset_store()
+            .ok_or_else(|| crate::mq_client_err!("Offset store is not initialized"))?;
+        let read_type = if from_store {
+            ReadOffsetType::ReadFromStore
+        } else {
+            ReadOffsetType::MemoryFirstThenStore
+        };
+        let offset = offset_store.read_offset(mq, read_type).await;
+        if offset == -2 {
+            return Err(crate::mq_client_err!("Fetch consume offset from broker exception"));
+        }
+        Ok(offset)
     }
 
     /// Returns the current service state.
@@ -2505,15 +2723,12 @@ impl DefaultLitePullConsumerImpl {
             .component_snapshot(&self.client_instance)
             .ok_or_else(|| crate::mq_client_err!("Client instance not initialized"))?;
 
-        // Fetch topic route data from name server
+        // Use the client-instance route path so queue discovery and the broker-address table are
+        // updated atomically. A direct NameServer query returns queues but leaves the subsequent
+        // Classic Pull request unable to resolve their broker addresses.
         let topic_route_data = client_instance
-            .mq_client_api_impl
-            .load_full()
-            .ok_or_else(|| crate::mq_client_err!("MQClientAPIImpl not initialized"))?
-            .get_topic_route_info_from_name_server_detail(topic.as_str(), 3000, true)
-            .await?;
-
-        let topic_route_data = topic_route_data
+            .query_topic_route_data(&topic)
+            .await
             .ok_or_else(|| crate::mq_client_err!(format!("No route data found for topic: {}", topic)))?;
 
         // Convert route data to subscribe info
@@ -3403,6 +3618,46 @@ mod tests {
 
     use super::*;
     use crate::base::access_channel::AccessChannel;
+
+    #[test]
+    fn classic_pull_contract_preserves_filter_and_suspend_wire_fields() {
+        let queue = MessageQueue::from_parts("TopicA", "broker-a", 2);
+        let ordinary = PullOptions::new(
+            queue.clone(),
+            crate::consumer::MessageSelector::by_tag("TagA || TagB"),
+            7,
+            16,
+        )
+        .expect("ordinary Classic Pull options should be valid");
+        let ordinary = prepare_classic_pull(&ordinary).expect("ordinary request should prepare");
+        assert_eq!(ordinary.subscription_data.expression_type.as_str(), ExpressionType::TAG);
+        assert_eq!(ordinary.sub_version, 0);
+        assert!(!PullSysFlag::has_suspend_flag(ordinary.sys_flag as u32));
+        assert!(PullSysFlag::has_subscription_flag(ordinary.sys_flag as u32));
+        assert!(!PullSysFlag::has_lite_pull_flag(ordinary.sys_flag as u32));
+
+        let suspended = PullOptions::new(
+            queue,
+            crate::consumer::MessageSelector::by_sql("region = 'east'"),
+            7,
+            16,
+        )
+        .expect("SQL Classic Pull options should be valid")
+        .broker_suspend_timeout(Duration::from_secs(3))
+        .timeout(Duration::from_secs(4))
+        .block_if_not_found(true);
+        let suspended = prepare_classic_pull(&suspended).expect("suspended request should prepare");
+        assert_eq!(
+            suspended.subscription_data.expression_type.as_str(),
+            ExpressionType::SQL92
+        );
+        assert!(suspended.sub_version > 0);
+        assert!(PullSysFlag::has_suspend_flag(suspended.sys_flag as u32));
+        assert!(PullSysFlag::has_subscription_flag(suspended.sys_flag as u32));
+        assert!(!PullSysFlag::has_lite_pull_flag(suspended.sys_flag as u32));
+        assert_eq!(suspended.broker_suspend_timeout_millis, 3000);
+        assert_eq!(suspended.timeout_millis, 4000);
+    }
 
     fn test_context() -> ChildServiceContext {
         crate::runtime::test_service_context("default-lite-pull-consumer-impl-test")
@@ -5033,6 +5288,51 @@ mod tests {
             .assignment_registry
             .close_and_shutdown(Duration::from_secs(1))
             .await;
+    }
+
+    #[tokio::test]
+    async fn classic_pull_rebalance_listener_never_starts_lite_pull_tasks() {
+        let impl_ = Arc::new(DefaultLitePullConsumerImpl::new(
+            crate::runtime::test_client_runtime("classic-pull-rebalance-test"),
+            Arc::new(ClientConfig::default()),
+            Arc::new(LitePullConsumerConfig {
+                consumer_group: CheetahString::from_static_str("classic_pull_rebalance_group"),
+                classic_pull_manual_mode: true,
+                ..Default::default()
+            }),
+        ));
+        impl_.bind_self();
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        {
+            let mut user_listener = impl_
+                .user_message_queue_listener
+                .write()
+                .expect("user listener lock should not be poisoned");
+            *user_listener = Some(Arc::new(CountingMessageQueueListener { calls: calls.clone() }));
+        }
+
+        let listener = LitePullRebalanceListener {
+            consumer_impl: Arc::downgrade(&impl_),
+            user_listener: impl_.user_message_queue_listener.clone(),
+            task_tracker: impl_.rebalance_listener_tasks.clone(),
+            shutdown_token: impl_.rebalance_listener_shutdown.clone(),
+        };
+        let mq = MessageQueue::from_parts("topic-a", "broker-a", 0);
+        let all = HashSet::from([mq.clone()]);
+        listener.message_queue_changed("topic-a", &all, &all);
+
+        impl_.rebalance_listener_tasks.close();
+        tokio::time::timeout(Duration::from_secs(1), impl_.rebalance_listener_tasks.wait())
+            .await
+            .expect("classic rebalance listener task should finish before timeout");
+
+        assert_eq!(calls.load(AtomicOrdering::SeqCst), 1);
+        assert!(
+            impl_.assignment().await.is_empty(),
+            "Classic Pull must not populate the LitePull assignment registry"
+        );
+        assert_eq!(impl_.assignment_registry_snapshot().await.owned_tasks, 0);
     }
 
     #[tokio::test]

@@ -19,6 +19,8 @@ pub mod allocate_message_queue_strategy;
 pub mod consumer_impl;
 pub mod default_lite_pull_consumer;
 pub mod default_lite_pull_consumer_builder;
+pub mod default_mq_pull_consumer;
+pub mod default_mq_pull_consumer_builder;
 pub mod default_mq_push_consumer;
 pub mod default_mq_push_consumer_builder;
 pub mod listener;
@@ -51,6 +53,13 @@ pub use allocate_message_queue_strategy::AbstractAllocateMessageQueueStrategy;
 pub use allocate_message_queue_strategy::AllocateMessageQueueStrategy;
 pub use default_lite_pull_consumer::DefaultLitePullConsumer;
 pub use default_lite_pull_consumer_builder::DefaultLitePullConsumerBuilder;
+pub use default_mq_pull_consumer::ClassicPullCallback;
+#[allow(deprecated)]
+pub use default_mq_pull_consumer::DefaultMQPullConsumer;
+#[allow(deprecated)]
+pub use default_mq_pull_consumer::MQPullConsumer;
+pub use default_mq_pull_consumer::PullOptions;
+pub use default_mq_pull_consumer_builder::DefaultMQPullConsumerBuilder;
 pub use default_mq_push_consumer::ConsumerTuningProfile;
 pub use default_mq_push_consumer::DefaultMQPushConsumer;
 pub use default_mq_push_consumer_builder::DefaultMQPushConsumerBuilder;

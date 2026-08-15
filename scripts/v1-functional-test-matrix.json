@@ -35,6 +35,8 @@
     {"capability_id":"F-17","test_id":"F17-SUBSCRIPTION-GROUP-VALIDATION","phase":4,"argv":["cargo","test","-p","rocketmq-broker","--test","subscription_group_validation"]},
     {"capability_id":"F-17","test_id":"F17-ADMIN-PREFLIGHT-VALIDATION","phase":4,"argv":["cargo","test","-p","rocketmq-admin-core","--features","client-adapter","--test","subscription_group_validation"]},
     {"capability_id":"F-18","test_id":"F18-CLASSIC-PULL-EQUIVALENCE","phase":4,"argv":["cargo","test","-p","rocketmq-client-rust","--test","classic_pull_equivalence"]},
+    {"capability_id":"F-18","test_id":"F18-CLASSIC-PULL-EXPORTS","phase":4,"argv":["cargo","test","-p","rocketmq-client-rust","--test","public_api_exports_test"]},
+    {"capability_id":"F-18","test_id":"F18-CLASSIC-PULL-BROKER-SMOKE","phase":4,"argv":["cargo","test","-p","rocketmq-client-rust","--test","broker_backed_smoke","classic_pull"]},
     {"capability_id":"G-01","test_id":"G01-CLIENT-SECONDARY-CONFIG","phase":1,"argv":["cargo","test","-p","rocketmq-client-rust","--test","client_config_behavior"]},
     {"capability_id":"G-02","test_id":"G02-TRANSACTION-METRICS","phase":2,"argv":["cargo","test","-p","rocketmq-broker","--test","transaction_metrics"]},
     {"capability_id":"G-03","test_id":"G03-PROXY-PROTOCOL","phase":1,"argv":["cargo","test","-p","rocketmq-transport","--test","proxy_protocol"]},

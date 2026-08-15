@@ -53,6 +53,8 @@ use rocketmq_client_rust::ConsumeOrderlyContext;
 use rocketmq_client_rust::ConsumeOrderlyStatus;
 use rocketmq_client_rust::DefaultLitePullConsumer;
 use rocketmq_client_rust::DefaultMQProducer;
+#[allow(deprecated)]
+use rocketmq_client_rust::DefaultMQPullConsumer;
 use rocketmq_client_rust::DefaultMQPushConsumer;
 use rocketmq_client_rust::LocalTransactionState;
 use rocketmq_client_rust::MQConsumer;
@@ -1280,6 +1282,89 @@ async fn broker_backed_lite_pull_assign_offset_smoke() -> RocketMQResult<()> {
     consumer.seek_to_end(&queue).await?;
     consumer.unsubscribe(&env.topic).await;
     consumer.shutdown().await;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(deprecated)]
+async fn broker_backed_classic_pull_send_pull_commit_offset_smoke() -> RocketMQResult<()> {
+    let Some(env) = broker_env()? else {
+        return Ok(());
+    };
+
+    let topic = unique_group("classic-pull-topic");
+    let tag = "ClassicPullSmoke";
+    let body = format!("rocketmq-rust-classic-pull-smoke-{}", unique_group("body"));
+    ensure_topic_route(&env.namesrv_addr, &topic).await?;
+
+    let mut producer = maybe_with_acl_rpc_hook!(DefaultMQProducer::builder(support::client_runtime(
+        "broker-backed-classic-pull-producer"
+    )))
+    .producer_group(unique_group("classic-pull-producer"))
+    .name_server_addr(env.namesrv_addr.clone())
+    .send_msg_timeout(5_000)
+    .build();
+    producer.start().await?;
+    let send_result = producer.send_with_timeout(message(&topic, tag, &body), 5_000).await?;
+    assert!(
+        send_result
+            .as_ref()
+            .and_then(|result| result.msg_id.as_ref())
+            .is_some_and(|msg_id| !msg_id.is_empty()),
+        "classic pull smoke producer should return a message id"
+    );
+
+    let consumer = maybe_with_acl_rpc_hook!(DefaultMQPullConsumer::builder(support::client_runtime(
+        "broker-backed-classic-pull-consumer"
+    )))
+    .consumer_group(unique_group("classic-pull"))
+    .name_server_addr(env.namesrv_addr)
+    .consumer_pull_timeout(Duration::from_secs(5))
+    .build()?;
+    consumer.start().await?;
+
+    let queues = consumer.fetch_subscribe_message_queues(&topic).await?;
+    assert!(!queues.is_empty(), "classic pull topic should have readable queues");
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let mut committed = None;
+    while tokio::time::Instant::now() < deadline && committed.is_none() {
+        for queue in &queues {
+            let min_offset = consumer.min_offset(queue).await?;
+            let max_offset = consumer.max_offset(queue).await?;
+            assert!(max_offset >= min_offset, "queue offset bounds should be ordered");
+            let search_offset = consumer.search_offset(queue, 0).await?;
+            let start_offset = search_offset.max(min_offset).max(max_offset.saturating_sub(32));
+            let result = consumer.pull(queue, tag, start_offset, 32).await?;
+            let received = result.msg_found_list().is_some_and(|messages| {
+                messages.iter().any(|message| {
+                    message
+                        .body()
+                        .as_ref()
+                        .is_some_and(|candidate| candidate.as_ref() == body.as_bytes())
+                })
+            });
+            if received {
+                let next_offset = i64::try_from(result.next_begin_offset())
+                    .map_err(|_| RocketMQError::illegal_argument("classic pull next offset exceeds i64"))?;
+                consumer.update_consume_offset(queue, next_offset).await?;
+                assert_eq!(consumer.fetch_consume_offset(queue, false).await?, next_offset);
+                committed = Some((queue.clone(), next_offset));
+                break;
+            }
+        }
+        if committed.is_none() {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    }
+
+    consumer.shutdown().await?;
+    producer.shutdown().await;
+    assert!(
+        committed.is_some(),
+        "Classic Pull should receive and commit the smoke message"
+    );
 
     Ok(())
 }
