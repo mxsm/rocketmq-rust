@@ -14,6 +14,8 @@
 
 use std::path::Path;
 
+use cheetah_string::CheetahString;
+
 use super::default_mapped_file_impl::DefaultMappedFile;
 use super::FlushStrategy;
 use super::MappedFileError;
@@ -32,10 +34,10 @@ use super::MappedFileResult;
 ///
 /// # Optional Parameters
 ///
-/// - Flush strategy (default: `FlushStrategy::Async`)
-/// - Transient store pool usage (default: disabled)
-/// - Metrics collection (default: enabled)
-/// - Warmup on creation (default: disabled)
+/// - Flush strategy (only `FlushStrategy::Async` is currently supported)
+/// - Transient store pool usage (must remain disabled)
+/// - Metrics collection (must remain enabled)
+/// - Warmup on creation (must remain disabled)
 ///
 /// # Examples
 ///
@@ -47,13 +49,7 @@ use super::MappedFileResult;
 ///     .size_mb(1024)  // 1 GB file
 ///     .build()?;
 ///
-/// // Advanced configuration
-/// let file = MappedFileBuilder::new("data/commitlog/00000000000000000000")
-///     .size(1024 * 1024 * 1024)
-///     .flush_strategy(FlushStrategy::periodic(Duration::from_millis(500)))
-///     .enable_transient_store_pool()
-///     .warmup(true)
-///     .build()?;
+/// Unsupported options return a configuration error before the file is created.
 /// ```
 #[derive(Debug, Clone)]
 pub struct MappedFileBuilder {
@@ -145,7 +141,7 @@ impl MappedFileBuilder {
     ///     .size_mb(1024);  // 1 GB
     /// ```
     pub fn size_mb(self, mb: u64) -> Self {
-        self.size(mb * 1024 * 1024)
+        self.size(mb.saturating_mul(1024 * 1024))
     }
 
     /// Sets the file size in gigabytes.
@@ -165,7 +161,7 @@ impl MappedFileBuilder {
     ///     .size_gb(1);  // 1 GB
     /// ```
     pub fn size_gb(self, gb: u64) -> Self {
-        self.size(gb * 1024 * 1024 * 1024)
+        self.size(gb.saturating_mul(1024 * 1024 * 1024))
     }
 
     /// Sets the flush strategy.
@@ -292,13 +288,11 @@ impl MappedFileBuilder {
     ///
     /// `Ok(())` if configuration is valid, `Err` otherwise
     fn validate(&self) -> MappedFileResult<()> {
-        if self.file_size.is_none() {
+        let Some(size) = self.file_size else {
             return Err(MappedFileError::Configuration(
                 "file size must be specified".to_string(),
             ));
-        }
-
-        let size = self.file_size.unwrap();
+        };
         if size == 0 {
             return Err(MappedFileError::Configuration(
                 "file size must be greater than zero".to_string(),
@@ -312,6 +306,46 @@ impl MappedFileBuilder {
                 "file size {} exceeds maximum {} bytes",
                 size, MAX_FILE_SIZE
             )));
+        }
+
+        if self.flush_strategy != FlushStrategy::Async {
+            return Err(MappedFileError::Configuration(
+                "mapped file builder only supports the async flush strategy".to_string(),
+            ));
+        }
+        if self.use_transient_store_pool {
+            return Err(MappedFileError::Configuration(
+                "mapped file builder does not support transient store pool allocation".to_string(),
+            ));
+        }
+        if !self.enable_metrics {
+            return Err(MappedFileError::Configuration(
+                "mapped file builder does not support disabling mapped-file metrics".to_string(),
+            ));
+        }
+        if self.warmup {
+            return Err(MappedFileError::Configuration(
+                "mapped file builder does not support eager mapped-file warmup".to_string(),
+            ));
+        }
+
+        let file_name = Path::new(&self.file_path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| MappedFileError::Configuration("mapped file name is missing".to_string()))?;
+        let parsed_offset = file_name.parse::<u64>().map_err(|_| {
+            MappedFileError::Configuration(format!(
+                "mapped file name must be a numeric starting offset: {file_name}"
+            ))
+        })?;
+        match self.file_from_offset {
+            Some(configured_offset) if configured_offset != parsed_offset => {
+                return Err(MappedFileError::Configuration(format!(
+                    "configured starting offset does not match mapped file name: configured={configured_offset}, \
+                     parsed={parsed_offset}"
+                )));
+            }
+            _ => {}
         }
 
         Ok(())
@@ -340,14 +374,11 @@ impl MappedFileBuilder {
     ///     .build()?;
     /// ```
     pub fn build(self) -> MappedFileResult<DefaultMappedFile> {
-        // Validate configuration
         self.validate()?;
-
-        // This will be implemented once DefaultMappedFile refactoring is complete
-        // For now, return a configuration error as a placeholder
-        Err(MappedFileError::Configuration(
-            "Builder implementation pending DefaultMappedFile refactoring".to_string(),
-        ))
+        let file_size = self
+            .file_size
+            .ok_or_else(|| MappedFileError::Configuration("file size must be specified".to_string()))?;
+        DefaultMappedFile::try_new(CheetahString::from_string(self.file_path), file_size).map_err(MappedFileError::from)
     }
 
     /// Returns the configured file size in bytes.

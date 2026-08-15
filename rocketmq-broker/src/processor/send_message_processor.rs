@@ -18,6 +18,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::config::broker_config::BrokerConfig;
+use crate::send_message_constants::has_valid_compaction_key;
 use cheetah_string::CheetahString;
 use rand::RngExt;
 use rocketmq_error::RocketMQError;
@@ -1975,12 +1976,6 @@ fn message_body_limit_violation(request: &RemotingCommand, configured_max_messag
 
 fn broker_send_permission_denied(broker_permission: u32) -> bool {
     !PermName::is_writeable(broker_permission)
-}
-
-fn has_valid_compaction_key(properties: &HashMap<CheetahString, CheetahString>) -> bool {
-    properties
-        .get(MessageConst::PROPERTY_KEYS)
-        .is_some_and(|value| !value.trim().is_empty())
 }
 
 fn apply_topic_delivery_properties(

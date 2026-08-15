@@ -24,6 +24,8 @@ pub struct DispatchRequest {
     pub queue_id: i32,
     pub commit_log_offset: i64,
     pub msg_size: i32,
+    /// Decoded message body length. `-1` means that the parser did not expose it.
+    pub body_size: i32,
     pub tags_code: i64,
     pub store_timestamp: i64,
     pub consume_queue_offset: i64,
@@ -48,6 +50,7 @@ impl Default for DispatchRequest {
             queue_id: 0,
             commit_log_offset: 0,
             msg_size: 0,
+            body_size: -1,
             tags_code: 0,
             store_timestamp: 0,
             consume_queue_offset: 0,
@@ -71,7 +74,7 @@ impl Display for DispatchRequest {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "DispatchRequest {{ topic: {}, queue_id: {}, commit_log_offset: {}, msg_size: {}, tags_code: {}, \
+            "DispatchRequest {{ topic: {}, queue_id: {}, commit_log_offset: {}, msg_size: {}, body_size: {}, tags_code: {}, \
              store_timestamp: {}, consume_queue_offset: {}, keys: {}, success: {}, uniq_key: {:?}, sys_flag: {}, \
              prepared_transaction_offset: {}, properties_map: {:?}, bit_map: {:?}, buffer_size: {}, msg_base_offset: \
              {}, batch_size: {}, next_reput_from_offset: {}, offset_id: {:?} }}",
@@ -79,6 +82,7 @@ impl Display for DispatchRequest {
             self.queue_id,
             self.commit_log_offset,
             self.msg_size,
+            self.body_size,
             self.tags_code,
             self.store_timestamp,
             self.consume_queue_offset,

@@ -14,6 +14,7 @@
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -21,6 +22,9 @@ use bytes::Bytes;
 use cheetah_string::CheetahString;
 use parking_lot::RwLock;
 use rocketmq_error::RocketMQError;
+use rocketmq_model::common::attribute::cleanup_policy::CleanupPolicy;
+use rocketmq_model::common::config::TopicConfig;
+use rocketmq_model::utils::cleanup_policy_utils::get_delete_policy_arc_mut;
 
 use crate::base::dispatch_request::DispatchRequest;
 use crate::base::get_message_result::GetMessageResult;
@@ -75,6 +79,8 @@ struct CompactionState {
     delta: CompactionQueues,
     next_generation: u64,
     read_state: CompactionReadState,
+    corrupted: bool,
+    inactive_topics: HashSet<CheetahString>,
 }
 
 pub struct CompactionStore {
@@ -103,6 +109,8 @@ impl Default for CompactionStore {
                     generation: 0,
                     durable_watermark: 0,
                 },
+                corrupted: false,
+                inactive_topics: HashSet::new(),
             }),
             payload_resolver: RwLock::new(None),
             generation_lock: tokio::sync::Mutex::new(()),
@@ -202,6 +210,8 @@ impl CompactionStore {
                 durable_watermark,
                 required_wal_position: durable_watermark,
             };
+            state.corrupted = false;
+            state.inactive_topics.clear();
         }
         compaction_generation::cleanup_orphans(
             runtime_scope,
@@ -254,20 +264,51 @@ impl CompactionStore {
             .max(commit_log_min_offset)
     }
 
+    pub(crate) fn reconcile_topic_policies(
+        &self,
+        topic_config_table: &dashmap::DashMap<CheetahString, Arc<TopicConfig>>,
+    ) {
+        let mut state = self.state.write();
+        let topics = state
+            .current
+            .queues
+            .keys()
+            .chain(state.delta.keys())
+            .map(|key| key.topic.clone())
+            .collect::<HashSet<_>>();
+        for topic in topics {
+            let is_compaction = topic_config_table
+                .get(&topic)
+                .is_some_and(|config| get_delete_policy_arc_mut(Some(config.value())) == CleanupPolicy::COMPACTION);
+            if !is_compaction {
+                state.inactive_topics.insert(topic);
+            }
+        }
+    }
+
+    pub(crate) fn deactivate_topics(&self, topics: &[CheetahString]) {
+        self.state.write().inactive_topics.extend(topics.iter().cloned());
+    }
+
     pub fn put_message(&self, topic: &CheetahString, queue_id: i32, queue_offset: i64, batch_num: i32, payload: Bytes) {
         self.put_message_with_key(topic, queue_id, queue_offset, batch_num, None, payload);
     }
 
     pub(crate) fn put_dispatch_message(&self, dispatch_request: &DispatchRequest) {
-        let key = (!dispatch_request.keys.is_empty()).then(|| dispatch_request.keys.clone());
+        let key = canonical_key(Some(dispatch_request.keys.clone()));
+        let Some(key) = key else {
+            tracing::warn!(topic = %dispatch_request.topic, "compaction projection rejected a message without a non-blank key");
+            return;
+        };
         self.put_reference(
             &dispatch_request.topic,
             dispatch_request.queue_id,
             dispatch_request.consume_queue_offset,
             dispatch_request.batch_size as i32,
-            key,
+            Some(key),
             dispatch_request.commit_log_offset,
             dispatch_request.msg_size,
+            dispatch_request.body_size == 0,
         );
     }
 
@@ -280,19 +321,24 @@ impl CompactionStore {
         message_key: Option<CheetahString>,
         payload: Bytes,
     ) {
-        if queue_offset < 0 || payload.is_empty() {
+        let Some(message_key) = canonical_key(message_key) else {
+            return;
+        };
+        if queue_offset < 0 {
             return;
         }
         let source_size = payload.len() as i32;
+        let tombstone = payload.is_empty();
         self.insert_record(
             topic,
             queue_id,
             CompactionRecord {
                 queue_offset,
                 batch_num: batch_num.max(1),
-                key: message_key,
+                key: Some(message_key),
                 source_physical_offset: queue_offset,
                 source_size,
+                tombstone,
                 payload: CompactionPayload::Inline(payload),
             },
         );
@@ -307,6 +353,7 @@ impl CompactionStore {
         message_key: Option<CheetahString>,
         physical_offset: i64,
         size: i32,
+        tombstone: bool,
     ) {
         if queue_offset < 0 || physical_offset < 0 || size <= 0 {
             return;
@@ -320,6 +367,7 @@ impl CompactionStore {
                 key: message_key,
                 source_physical_offset: physical_offset,
                 source_size: size,
+                tombstone,
                 payload: CompactionPayload::CommitLog,
             },
         );
@@ -327,9 +375,37 @@ impl CompactionStore {
 
     fn insert_record(&self, topic: &CheetahString, queue_id: i32, record: CompactionRecord) {
         let mut state = self.state.write();
+        if state.inactive_topics.remove(topic) {
+            let mut queues = state.current.queues.clone();
+            queues.retain(|key, _| key.topic != *topic);
+            state.current = Arc::new(CompactionGeneration {
+                metadata: state.current.metadata,
+                queues,
+            });
+            state.delta.retain(|key, _| key.topic != *topic);
+        }
+        let queue_key = CompactionQueueKey::new(topic, queue_id);
+        let existing = state
+            .delta
+            .get(&queue_key)
+            .and_then(|queue| queue.get(&record.queue_offset))
+            .or_else(|| {
+                state
+                    .current
+                    .queues
+                    .get(&queue_key)
+                    .and_then(|queue| queue.get(&record.queue_offset))
+            });
+        if let Some(existing) = existing {
+            if !same_record_identity(existing, &record) {
+                state.corrupted = true;
+                tracing::error!(topic = %topic, queue_id, queue_offset = record.queue_offset, "conflicting compaction replay detected");
+            }
+            return;
+        }
         state
             .delta
-            .entry(CompactionQueueKey::new(topic, queue_id))
+            .entry(queue_key)
             .or_default()
             .insert(record.queue_offset, record);
     }
@@ -364,16 +440,23 @@ impl CompactionStore {
     pub async fn compact_once(&self) -> Result<usize, RocketMQError> {
         let _generation_guard = self.generation_lock.lock().await;
         self.cleanup_retired().await?;
-        let (base_generation, delta_snapshot, merged, generation, before) = {
+        let (base_generation, delta_snapshot, inactive_snapshot, merged, generation, before) = {
             let state = self.state.read();
-            if state.delta.is_empty() {
+            if state.corrupted {
+                return Err(RocketMQError::StorageCorrupted {
+                    path: self.root_display(),
+                });
+            }
+            if state.delta.is_empty() && state.inactive_topics.is_empty() {
                 return Ok(0);
             }
-            let source = merged_queues(&state.current.queues, &state.delta);
+            let mut source = merged_queues(&state.current.queues, &state.delta);
             let before = merged_count(&source);
+            source.retain(|key, _| !state.inactive_topics.contains(&key.topic));
             (
                 state.current.metadata.generation,
                 state.delta.clone(),
+                state.inactive_topics.clone(),
                 compact_queues(source),
                 state.next_generation,
                 before,
@@ -432,6 +515,7 @@ impl CompactionStore {
                 queues: published_queues,
             });
             remove_snapshot_from_delta(&mut state.delta, &delta_snapshot);
+            state.inactive_topics.retain(|topic| !inactive_snapshot.contains(topic));
             state.next_generation = generation.saturating_add(1);
             state.read_state = match state.read_state {
                 CompactionReadState::Ready { durable_watermark, .. } => CompactionReadState::Ready {
@@ -488,6 +572,10 @@ impl CompactionStore {
         let mut materialized = queues.clone();
         for queue in materialized.values_mut() {
             for record in queue.values_mut() {
+                if record.tombstone && record.source_size == 0 {
+                    record.payload = CompactionPayload::Inline(Bytes::new());
+                    continue;
+                }
                 let Some(payload) = self.resolve_payload(record).await? else {
                     return Err(RocketMQError::storage_read_failed(
                         self.root_display(),
@@ -543,7 +631,7 @@ impl CompactionStore {
         max_msg_nums: i32,
         max_total_msg_size: i32,
     ) -> Option<GetMessageResult> {
-        let (current_lease, delta, read_state) = {
+        let (current_lease, delta, read_state, corrupted, inactive) = {
             let state = self.state.read();
             (
                 state.current.clone(),
@@ -553,22 +641,32 @@ impl CompactionStore {
                     .cloned()
                     .unwrap_or_default(),
                 state.read_state.clone(),
+                state.corrupted,
+                state.inactive_topics.contains(topic),
             )
         };
-        if matches!(read_state, CompactionReadState::Recovering { .. }) {
+        if corrupted || matches!(read_state, CompactionReadState::Recovering { .. }) {
             // Preserve the stable Java-compatible public enum while making the internal state explicit.
             return Some(status_result(GetMessageStatus::MessageWasRemoving, offset, 0, 0));
+        }
+        if inactive {
+            return Some(status_result(GetMessageStatus::NoMatchedLogicQueue, 0, 0, 0));
         }
 
         let key = CompactionQueueKey::new(topic, queue_id);
         let mut queue = current_lease.queues.get(&key).cloned().unwrap_or_default();
         queue.extend(delta);
-        let queue = compact_queue(queue);
+        let compacted_queue = compact_queue(queue);
+        let queue = compacted_queue
+            .iter()
+            .filter(|(_, record)| !record.tombstone)
+            .map(|(offset, record)| (*offset, record.clone()))
+            .collect::<BTreeMap<_, _>>();
         if queue.is_empty() {
             return Some(status_result(GetMessageStatus::NoMatchedLogicQueue, 0, 0, 0));
         }
         let min_offset = *queue.keys().next().unwrap_or(&0);
-        let max_offset = queue
+        let max_offset = compacted_queue
             .values()
             .map(|message| message.queue_offset + i64::from(message.batch_num))
             .max()
@@ -671,7 +769,7 @@ impl CompactionStore {
         if result.message_count() == 0 {
             return Some(status_result(
                 GetMessageStatus::NoMatchedMessage,
-                offset,
+                max_offset,
                 min_offset,
                 max_offset,
             ));
@@ -723,12 +821,18 @@ impl CompactionStore {
 
     pub fn message_count(&self, topic: &CheetahString, queue_id: i32) -> usize {
         let state = self.state.read();
+        if state.inactive_topics.contains(topic) {
+            return 0;
+        }
         let key = CompactionQueueKey::new(topic, queue_id);
         let mut queue = state.current.queues.get(&key).cloned().unwrap_or_default();
         if let Some(delta) = state.delta.get(&key) {
             queue.extend(delta.clone());
         }
-        compact_queue(queue).len()
+        if state.corrupted {
+            return 0;
+        }
+        visible_queue(queue).len()
     }
 
     pub(crate) fn current_generation_id(&self) -> u64 {
@@ -813,25 +917,34 @@ fn compact_queues(mut queues: CompactionQueues) -> CompactionQueues {
 }
 
 fn compact_queue(mut queue: BTreeMap<i64, CompactionRecord>) -> BTreeMap<i64, CompactionRecord> {
-    let mut latest = HashMap::<CheetahString, (i64, i64)>::new();
+    let mut latest = HashMap::<CheetahString, i64>::new();
     for (&queue_offset, record) in &queue {
         let Some(key) = record.key.as_ref() else {
             continue;
         };
-        let candidate = (record.physical_offset(), queue_offset);
         latest
             .entry(key.clone())
-            .and_modify(|current| *current = (*current).max(candidate))
-            .or_insert(candidate);
+            .and_modify(|current| *current = (*current).max(queue_offset))
+            .or_insert(queue_offset);
     }
     queue.retain(|queue_offset, record| {
-        record.key.as_ref().is_none_or(|key| {
-            latest
-                .get(key)
-                .is_some_and(|latest| *latest == (record.physical_offset(), *queue_offset))
-        })
+        record
+            .key
+            .as_ref()
+            .is_some_and(|key| latest.get(key).is_some_and(|latest| latest == queue_offset))
     });
     queue
+}
+
+fn visible_queue(queue: BTreeMap<i64, CompactionRecord>) -> BTreeMap<i64, CompactionRecord> {
+    compact_queue(queue)
+        .into_iter()
+        .filter(|(_, record)| !record.tombstone)
+        .collect()
+}
+
+fn canonical_key(key: Option<CheetahString>) -> Option<CheetahString> {
+    key.filter(|key| !key.is_empty() && !key.chars().all(char::is_whitespace))
 }
 
 fn merged_count(queues: &CompactionQueues) -> usize {
@@ -855,8 +968,15 @@ fn same_record_identity(left: &CompactionRecord, right: &CompactionRecord) -> bo
     left.queue_offset == right.queue_offset
         && left.batch_num == right.batch_num
         && left.key == right.key
+        && left.tombstone == right.tombstone
         && left.physical_offset() == right.physical_offset()
         && left.end_physical_offset() == right.end_physical_offset()
+        && match (&left.payload, &right.payload) {
+            (CompactionPayload::Inline(left), CompactionPayload::Inline(right)) => left == right,
+            // A durable generation record and its CommitLog replay intentionally use different payload owners.
+            // Their exact physical range and metadata above are the stable replay identity.
+            _ => true,
+        }
 }
 
 fn metadata_for_memory(generation: u64, queues: &CompactionQueues) -> GenerationMetadata {
@@ -915,6 +1035,7 @@ mod tests {
     use bytes::Bytes;
     use cheetah_string::CheetahString;
     use parking_lot::RwLock;
+    use serde::Deserialize;
 
     use super::CompactionReadState;
     use super::CompactionStore;
@@ -924,6 +1045,71 @@ mod tests {
 
     fn durable_store(root: PathBuf) -> CompactionStore {
         CompactionStore::with_root(root, crate::runtime::test_scope("compaction-store-test"))
+    }
+
+    #[derive(Deserialize)]
+    struct JavaCompactionContract {
+        records: Vec<JavaCompactionRecord>,
+        replay: JavaReplayContract,
+        retention: JavaRetentionContract,
+    }
+
+    #[derive(Deserialize)]
+    struct JavaCompactionRecord {
+        queue_offset: i64,
+        raw_key: String,
+        body: String,
+        tombstone: bool,
+    }
+
+    #[derive(Deserialize)]
+    struct JavaReplayContract {
+        identical_same_offset: String,
+        conflicting_same_offset: String,
+        winner: String,
+    }
+
+    #[derive(Deserialize)]
+    struct JavaRetentionContract {
+        retain_tombstone_until_atomic_generation_covers_older_records: bool,
+        restart_must_not_resurrect_deleted_value: bool,
+    }
+
+    #[tokio::test]
+    async fn java_55_fixture_drives_batch_tombstone_replay_and_retention_contracts() {
+        let fixture: JavaCompactionContract = serde_json::from_str(include_str!(
+            "../../../scripts/fixtures/java-5.5-compaction-contract.json"
+        ))
+        .expect("valid Java 5.5 compaction fixture");
+        let store = CompactionStore::new();
+        let topic = CheetahString::from_static_str("java-fixture-topic");
+        let group = CheetahString::from_static_str("java-fixture-group");
+
+        for record in fixture.records {
+            assert_eq!(record.tombstone, record.body.is_empty());
+            store.put_message_with_key(
+                &topic,
+                0,
+                record.queue_offset,
+                1,
+                Some(CheetahString::from_string(record.raw_key)),
+                Bytes::from(record.body),
+            );
+        }
+
+        assert_eq!(store.message_count(&topic, 0), 1);
+        let result = store.get_message(&group, &topic, 0, 11, 1, 1024).await.unwrap();
+        assert_eq!(result.status(), Some(GetMessageStatus::Found));
+        assert_eq!(result.next_begin_offset(), 12);
+        assert_eq!(fixture.replay.identical_same_offset, "idempotent");
+        assert_eq!(fixture.replay.conflicting_same_offset, "fail-closed");
+        assert_eq!(fixture.replay.winner, "maximum-queue-offset");
+        assert!(
+            fixture
+                .retention
+                .retain_tombstone_until_atomic_generation_covers_older_records
+        );
+        assert!(fixture.retention.restart_must_not_resurrect_deleted_value);
     }
 
     #[tokio::test]
@@ -944,7 +1130,14 @@ mod tests {
         let store = CompactionStore::new();
         let topic = CheetahString::from_static_str("compaction-topic");
         let group = CheetahString::from_static_str("compaction-group");
-        store.put_message(&topic, 0, 7, 1, Bytes::from_static(b"compacted-message"));
+        store.put_message_with_key(
+            &topic,
+            0,
+            7,
+            1,
+            Some(CheetahString::from_static_str("key")),
+            Bytes::from_static(b"compacted-message"),
+        );
         let result = store
             .get_message(&group, &topic, 0, 7, 32, 1024)
             .await
@@ -978,6 +1171,143 @@ mod tests {
             latest_result.message_mapped_list()[0].get_bytes_ref().unwrap(),
             &Bytes::from_static(b"latest-message")
         );
+    }
+
+    #[tokio::test]
+    async fn latest_queue_offset_wins_even_when_physical_offsets_are_not_monotonic() {
+        let store = CompactionStore::new();
+        let topic = CheetahString::from_static_str("compaction-order-topic");
+        let group = CheetahString::from_static_str("compaction-order-group");
+        let key = CheetahString::from_static_str("same-key");
+        let payloads = Arc::new(RwLock::new(HashMap::from([
+            (100_i64, Bytes::from_static(b"old")),
+            (50_i64, Bytes::from_static(b"new")),
+        ])));
+        install_resolver(&store, payloads);
+
+        store.put_reference(&topic, 0, 10, 1, Some(key.clone()), 100, 3, false);
+        store.put_reference(&topic, 0, 11, 1, Some(key), 50, 3, false);
+
+        let result = store.get_message(&group, &topic, 0, 11, 1, 1024).await.unwrap();
+        assert_eq!(result.status(), Some(GetMessageStatus::Found));
+        assert_eq!(
+            result.message_mapped_list()[0].get_bytes_ref().unwrap().as_ref(),
+            b"new"
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_body_tombstone_survives_generation_restart_without_resurrection() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("compaction-tombstone");
+        let topic = CheetahString::from_static_str("compaction-tombstone-topic");
+        let group = CheetahString::from_static_str("compaction-tombstone-group");
+        let key = CheetahString::from_static_str("deleted-key");
+
+        let store = durable_store(root.clone());
+        store.load().await.unwrap();
+        store.finish_recovery(0);
+        store.put_message_with_key(&topic, 0, 0, 1, Some(key.clone()), Bytes::from_static(b"value"));
+        store.compact_once().await.unwrap();
+        store.put_message_with_key(&topic, 0, 1, 1, Some(key), Bytes::new());
+        assert_eq!(store.message_count(&topic, 0), 0);
+        store.compact_once().await.unwrap();
+        drop(store);
+
+        let restarted = durable_store(root);
+        restarted.load().await.unwrap();
+        restarted.finish_recovery(1);
+        assert_eq!(restarted.message_count(&topic, 0), 0);
+        let result = restarted.get_message(&group, &topic, 0, 0, 1, 1024).await.unwrap();
+        assert_eq!(result.status(), Some(GetMessageStatus::NoMatchedLogicQueue));
+    }
+
+    #[tokio::test]
+    async fn same_offset_replay_is_idempotent_but_conflicting_replay_fails_closed() {
+        let store = CompactionStore::new();
+        let topic = CheetahString::from_static_str("compaction-replay-topic");
+        let group = CheetahString::from_static_str("compaction-replay-group");
+        let key = CheetahString::from_static_str("key");
+
+        store.put_message_with_key(&topic, 0, 4, 1, Some(key.clone()), Bytes::from_static(b"same"));
+        store.put_message_with_key(&topic, 0, 4, 1, Some(key.clone()), Bytes::from_static(b"same"));
+        assert_eq!(store.message_count(&topic, 0), 1);
+
+        store.put_message_with_key(&topic, 0, 4, 1, Some(key), Bytes::from_static(b"different"));
+        assert_eq!(store.message_count(&topic, 0), 0);
+        let result = store.get_message(&group, &topic, 0, 4, 1, 1024).await.unwrap();
+        assert_eq!(result.status(), Some(GetMessageStatus::MessageWasRemoving));
+        assert!(store.compact_once().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn raw_multi_token_key_is_compacted_as_one_key_without_splitting() {
+        let store = CompactionStore::new();
+        let topic = CheetahString::from_static_str("compaction-raw-key-topic");
+        let group = CheetahString::from_static_str("compaction-raw-key-group");
+        let key = CheetahString::from_static_str("a b");
+
+        store.put_message_with_key(&topic, 0, 0, 1, Some(key.clone()), Bytes::from_static(b"old"));
+        store.put_message_with_key(&topic, 0, 1, 1, Some(key), Bytes::from_static(b"new"));
+        assert_eq!(store.message_count(&topic, 0), 1);
+        let result = store.get_message(&group, &topic, 0, 1, 1, 1024).await.unwrap();
+        assert_eq!(
+            result.message_mapped_list()[0].get_bytes_ref().unwrap().as_ref(),
+            b"new"
+        );
+    }
+
+    #[tokio::test]
+    async fn tombstone_only_tail_advances_the_logical_read_frontier() {
+        let store = CompactionStore::new();
+        let topic = CheetahString::from_static_str("compaction-tombstone-frontier-topic");
+        let group = CheetahString::from_static_str("compaction-tombstone-frontier-group");
+
+        store.put_message_with_key(
+            &topic,
+            0,
+            0,
+            1,
+            Some(CheetahString::from_static_str("visible")),
+            Bytes::from_static(b"value"),
+        );
+        store.put_message_with_key(
+            &topic,
+            0,
+            2,
+            1,
+            Some(CheetahString::from_static_str("deleted")),
+            Bytes::new(),
+        );
+
+        let result = store.get_message(&group, &topic, 0, 1, 1, 1024).await.unwrap();
+        assert_eq!(result.status(), Some(GetMessageStatus::NoMatchedMessage));
+        assert_eq!(result.next_begin_offset(), 3);
+        assert_eq!(result.max_offset(), 3);
+    }
+
+    #[tokio::test]
+    async fn missing_or_blank_keys_never_create_compaction_projection_state() {
+        let store = CompactionStore::new();
+        let topic = CheetahString::from_static_str("compaction-key-contract-topic");
+        let group = CheetahString::from_static_str("compaction-key-contract-group");
+
+        store.put_message_with_key(&topic, 0, 0, 1, None, Bytes::from_static(b"missing"));
+        store.put_message_with_key(
+            &topic,
+            0,
+            1,
+            1,
+            Some(CheetahString::from_static_str("   \t")),
+            Bytes::from_static(b"blank"),
+        );
+
+        assert_eq!(store.message_count(&topic, 0), 0);
+        let result = store
+            .get_message(&group, &topic, 0, 0, 32, 1024)
+            .await
+            .expect("compaction status");
+        assert_eq!(result.status(), Some(GetMessageStatus::NoMatchedLogicQueue));
     }
 
     #[tokio::test]
@@ -1021,10 +1351,10 @@ mod tests {
         install_resolver(&store, payloads.clone());
         store.load().await.unwrap();
         store.finish_recovery(0);
-        store.put_reference(&topic, 0, 0, 1, Some(key.clone()), 10, 3);
+        store.put_reference(&topic, 0, 0, 1, Some(key.clone()), 10, 3, false);
         store.compact_once().await.unwrap();
         assert_eq!(store.durable_dispatch_offset(0), 13);
-        store.put_reference(&topic, 0, 1, 1, Some(key.clone()), 20, 3);
+        store.put_reference(&topic, 0, 1, 1, Some(key.clone()), 20, 3, false);
         store.compact_once().await.unwrap();
         assert_eq!(store.current_generation_id(), 2);
         drop(store);
@@ -1048,7 +1378,7 @@ mod tests {
             Some(GetMessageStatus::MessageWasRemoving)
         );
 
-        restarted.put_reference(&topic, 0, 1, 1, Some(key), 20, 3);
+        restarted.put_reference(&topic, 0, 1, 1, Some(key), 20, 3, false);
         restarted.finish_recovery(23);
         assert_eq!(
             restarted
@@ -1072,7 +1402,16 @@ mod tests {
         install_resolver(&store, payloads.clone());
         store.load().await.unwrap();
         store.finish_recovery(0);
-        store.put_reference(&topic, 0, 0, 1, None, 10, 4);
+        store.put_reference(
+            &topic,
+            0,
+            0,
+            1,
+            Some(CheetahString::from_static_str("key")),
+            10,
+            4,
+            false,
+        );
         store.compact_once().await.unwrap();
         payloads.write().clear();
 
@@ -1110,9 +1449,9 @@ mod tests {
         install_resolver(&store, payloads.clone());
         store.load().await.unwrap();
         store.finish_recovery(0);
-        store.put_reference(&topic, 0, 0, 1, Some(key.clone()), 10, 3);
+        store.put_reference(&topic, 0, 0, 1, Some(key.clone()), 10, 3, false);
         store.compact_once().await.unwrap();
-        store.put_reference(&topic, 0, 1, 1, Some(key.clone()), 20, 3);
+        store.put_reference(&topic, 0, 1, 1, Some(key.clone()), 20, 3, false);
         store.set_fault(stage);
         assert!(store.compact_once().await.is_err());
         let expected_generation = if matches!(stage, FaultStage::Cleanup) { 2 } else { 1 };
@@ -1126,7 +1465,7 @@ mod tests {
         let recovering = restarted.get_message(&group, &topic, 0, 0, 32, 1024).await.unwrap();
         assert_eq!(recovering.status(), Some(GetMessageStatus::MessageWasRemoving));
 
-        restarted.put_reference(&topic, 0, 1, 1, Some(key), 20, 3);
+        restarted.put_reference(&topic, 0, 1, 1, Some(key), 20, 3, false);
         restarted.finish_recovery(23);
         let result = restarted.get_message(&group, &topic, 0, 0, 32, 1024).await.unwrap();
         assert_eq!(result.status(), Some(GetMessageStatus::OffsetTooSmall));
@@ -1154,12 +1493,13 @@ mod tests {
         );
         store.load().await.unwrap();
         store.finish_recovery(0);
-        store.put_reference(&topic, 0, 0, 1, None, 10, 3);
+        let key = CheetahString::from_static_str("lease-key");
+        store.put_reference(&topic, 0, 0, 1, Some(key.clone()), 10, 3, false);
         store.compact_once().await.unwrap();
         let generation_one_lease = store.current_lease();
-        store.put_reference(&topic, 0, 1, 1, None, 20, 3);
+        store.put_reference(&topic, 0, 1, 1, Some(key.clone()), 20, 3, false);
         store.compact_once().await.unwrap();
-        store.put_reference(&topic, 0, 2, 1, None, 30, 5);
+        store.put_reference(&topic, 0, 2, 1, Some(key), 30, 5, false);
         store.compact_once().await.unwrap();
         assert!(compaction_generation::generation_path(&root, 1).exists());
         drop(generation_one_lease);

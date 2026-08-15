@@ -2069,12 +2069,12 @@ async fn compaction_topic_dispatches_and_reads_from_compaction_store() {
     store.init().await.expect("init compaction-enabled store");
     assert!(store.load().await, "load compaction-enabled store");
 
-    let put_result = store
-        .put_message(build_test_message(
-            &topic,
-            Bytes::from_static(b"compaction-fallback-body"),
-        ))
-        .await;
+    let mut message = build_test_message(&topic, Bytes::from_static(b"compaction-fallback-body"));
+    message.put_property(
+        CheetahString::from_static_str(MessageConst::PROPERTY_KEYS),
+        CheetahString::from_static_str("compaction-key"),
+    );
+    let put_result = store.put_message(message).await;
     assert_eq!(put_result.put_message_status(), PutMessageStatus::PutOk);
     store.reput_once().await;
 

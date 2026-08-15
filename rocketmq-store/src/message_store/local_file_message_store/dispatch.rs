@@ -139,6 +139,7 @@ impl LocalFileMessageStore {
             if !removed {
                 continue;
             }
+            self.compaction_store.deactivate_topics(std::slice::from_ref(topic));
             info!("DeleteTopic: Topic has been destroyed, topic={}", topic);
             delete_count += 1;
         }

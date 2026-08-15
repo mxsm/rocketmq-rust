@@ -39,13 +39,15 @@ use std::os::windows::ffi::OsStrExt;
 const CURRENT_MAGIC: u32 = 0x4343_5547;
 const GENERATION_MAGIC: u32 = 0x4347_454E;
 const RECORDS_MAGIC: u32 = 0x4347_5253;
-const FORMAT_VERSION: u16 = 1;
+const LEGACY_FORMAT_VERSION: u16 = 1;
+const FORMAT_VERSION: u16 = 2;
 const CURRENT_SIZE: usize = 40;
 const GENERATION_METADATA_SIZE: usize = 64;
 const RECORDS_HEADER_SIZE: usize = 16;
 const RECORD_HEADER_SIZE: usize = 40;
 const NO_GENERATION: u64 = u64::MAX;
 const NO_KEY: u16 = u16::MAX;
+const RECORD_FLAG_TOMBSTONE: u32 = 1;
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(crate) struct CompactionQueueKey {
@@ -76,6 +78,7 @@ pub(crate) struct CompactionRecord {
     pub(crate) key: Option<CheetahString>,
     pub(crate) source_physical_offset: i64,
     pub(crate) source_size: i32,
+    pub(crate) tombstone: bool,
     pub(crate) payload: CompactionPayload,
 }
 
@@ -391,7 +394,8 @@ fn encode_records(queues: &CompactionQueues, path: &Path) -> Result<Vec<u8>, Roc
                 ));
             };
             if record.source_physical_offset < 0
-                || record.source_size <= 0
+                || record.source_size < 0
+                || (!record.tombstone && record.source_size == 0)
                 || payload.len() != record.source_size as usize
             {
                 return Err(RocketMQError::storage_write_failed(
@@ -406,7 +410,7 @@ fn encode_records(queues: &CompactionQueues, path: &Path) -> Result<Vec<u8>, Roc
             bytes.put_i32(record.batch_num);
             bytes.put_i64(record.source_physical_offset);
             bytes.put_i32(record.source_size);
-            bytes.put_u32(0);
+            bytes.put_u32(u32::from(record.tombstone) * RECORD_FLAG_TOMBSTONE);
             bytes.put_u32(0);
             bytes.put_slice(topic);
             if let Some(key) = key_bytes {
@@ -423,7 +427,11 @@ fn decode_records(bytes: &[u8], path: &Path, generation: u64) -> Result<Compacti
         return Err(corrupted(path));
     }
     let mut cursor = Bytes::copy_from_slice(bytes);
-    if cursor.get_u32() != RECORDS_MAGIC || cursor.get_u16() != FORMAT_VERSION {
+    if cursor.get_u32() != RECORDS_MAGIC {
+        return Err(corrupted(path));
+    }
+    let format_version = cursor.get_u16();
+    if !is_supported_version(format_version) {
         return Err(corrupted(path));
     }
     let _reserved = cursor.get_u16();
@@ -441,10 +449,21 @@ fn decode_records(bytes: &[u8], path: &Path, generation: u64) -> Result<Compacti
         let batch_num = cursor.get_i32();
         let physical_offset = cursor.get_i64();
         let size = cursor.get_i32();
+        let flags = cursor.get_u32();
         let _reserved = cursor.get_u32();
-        let _reserved = cursor.get_u32();
+        if (format_version == LEGACY_FORMAT_VERSION && flags != 0)
+            || (format_version == FORMAT_VERSION && flags & !RECORD_FLAG_TOMBSTONE != 0)
+        {
+            return Err(corrupted(path));
+        }
+        let tombstone = format_version == FORMAT_VERSION && flags & RECORD_FLAG_TOMBSTONE != 0;
         let variable_size = topic_len.saturating_add(key_len).saturating_add(size.max(0) as usize);
-        if queue_offset < 0 || batch_num <= 0 || physical_offset < 0 || size <= 0 || cursor.remaining() < variable_size
+        if queue_offset < 0
+            || batch_num <= 0
+            || physical_offset < 0
+            || size < 0
+            || (!tombstone && size == 0)
+            || cursor.remaining() < variable_size
         {
             return Err(corrupted(path));
         }
@@ -472,6 +491,7 @@ fn decode_records(bytes: &[u8], path: &Path, generation: u64) -> Result<Compacti
             key: key.map(CheetahString::from_string),
             source_physical_offset: physical_offset,
             source_size: size,
+            tombstone,
             payload: CompactionPayload::Generation {
                 generation,
                 position: payload_position,
@@ -528,7 +548,7 @@ fn decode_generation_metadata(bytes: &[u8], path: &Path) -> Result<GenerationMet
         return Err(corrupted(path));
     }
     let mut cursor = Bytes::copy_from_slice(bytes);
-    if cursor.get_u32() != GENERATION_MAGIC || cursor.get_u16() != FORMAT_VERSION {
+    if cursor.get_u32() != GENERATION_MAGIC || !is_supported_version(cursor.get_u16()) {
         return Err(corrupted(path));
     }
     let _reserved = cursor.get_u16();
@@ -578,7 +598,7 @@ fn decode_current(bytes: &[u8], path: &Path) -> Result<CurrentPointer, RocketMQE
         return Err(corrupted(path));
     }
     let mut cursor = Bytes::copy_from_slice(bytes);
-    if cursor.get_u32() != CURRENT_MAGIC || cursor.get_u16() != FORMAT_VERSION {
+    if cursor.get_u32() != CURRENT_MAGIC || !is_supported_version(cursor.get_u16()) {
         return Err(corrupted(path));
     }
     let _reserved = cursor.get_u16();
@@ -596,6 +616,10 @@ fn decode_current(bytes: &[u8], path: &Path) -> Result<CurrentPointer, RocketMQE
         previous,
         next_generation,
     })
+}
+
+fn is_supported_version(version: u16) -> bool {
+    matches!(version, LEGACY_FORMAT_VERSION | FORMAT_VERSION)
 }
 
 fn parse_generation_id(path: &Path) -> Option<u64> {
@@ -776,6 +800,47 @@ mod tests {
         assert_eq!(
             decode_generation_metadata(&encoded, Path::new("GENERATION")).unwrap(),
             metadata
+        );
+    }
+
+    #[test]
+    fn version_two_reader_accepts_legacy_version_one_metadata_and_records() {
+        let pointer = CurrentPointer {
+            current: 7,
+            previous: Some(6),
+            next_generation: 8,
+        };
+        let mut legacy_current = encode_current(pointer);
+        legacy_current[4..6].copy_from_slice(&LEGACY_FORMAT_VERSION.to_be_bytes());
+        let checksum = crc32(&legacy_current[..32]);
+        legacy_current[32..36].copy_from_slice(&checksum.to_be_bytes());
+        assert_eq!(decode_current(&legacy_current, Path::new("CURRENT")).unwrap(), pointer);
+
+        let mut queues = CompactionQueues::new();
+        queues.insert(
+            CompactionQueueKey {
+                topic: CheetahString::from_static_str("legacy-topic"),
+                queue_id: 0,
+            },
+            BTreeMap::from([(
+                3,
+                CompactionRecord {
+                    queue_offset: 3,
+                    batch_num: 1,
+                    key: Some(CheetahString::from_static_str("legacy-key")),
+                    source_physical_offset: 10,
+                    source_size: 4,
+                    tombstone: false,
+                    payload: CompactionPayload::Inline(Bytes::from_static(b"data")),
+                },
+            )]),
+        );
+        let mut legacy_records = encode_records(&queues, Path::new("records")).unwrap();
+        legacy_records[4..6].copy_from_slice(&LEGACY_FORMAT_VERSION.to_be_bytes());
+        let decoded = decode_records(&legacy_records, Path::new("records"), 7).unwrap();
+        assert_eq!(
+            decoded.values().next().unwrap().values().next().unwrap().queue_offset,
+            3
         );
     }
 }

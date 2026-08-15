@@ -1,0 +1,22 @@
+{
+  "source": "Apache RocketMQ 5.5 Java compaction behavior",
+  "key_cases": [
+    { "name": "raw compound key", "raw_key": "a b", "accepted": true, "canonical_key": "a b" },
+    { "name": "empty key", "raw_key": "", "accepted": false, "canonical_key": null },
+    { "name": "blank key", "raw_key": " \t", "accepted": false, "canonical_key": null }
+  ],
+  "records": [
+    { "name": "batch child one", "queue_offset": 10, "raw_key": "batch-a", "body": "one", "tombstone": false },
+    { "name": "batch child two", "queue_offset": 11, "raw_key": "batch-b", "body": "two", "tombstone": false },
+    { "name": "empty body deletes", "queue_offset": 12, "raw_key": "batch-a", "body": "", "tombstone": true }
+  ],
+  "replay": {
+    "identical_same_offset": "idempotent",
+    "conflicting_same_offset": "fail-closed",
+    "winner": "maximum-queue-offset"
+  },
+  "retention": {
+    "retain_tombstone_until_atomic_generation_covers_older_records": true,
+    "restart_must_not_resurrect_deleted_value": true
+  }
+}
