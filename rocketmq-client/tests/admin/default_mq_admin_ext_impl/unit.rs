@@ -43,6 +43,23 @@ use rocketmq_model::common::message::message_enum::MessageRequestMode;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_model::common::message::MessageConst;
+
+#[test]
+fn query_message_header_preserves_index_type_and_last_key() {
+    let cursor = CheetahString::from_static_str("1700000000000@TopicA@K@KeyA@UniqA@1024");
+    let header = query_message_request_header(
+        &CheetahString::from_static_str("TopicA"),
+        &CheetahString::from_static_str("KeyA"),
+        32,
+        1,
+        2,
+        &CheetahString::from_static_str(MessageConst::INDEX_KEY_TYPE),
+        Some(&cursor),
+    );
+
+    assert_eq!(header.index_type.as_deref(), Some(MessageConst::INDEX_KEY_TYPE));
+    assert_eq!(header.last_key.as_deref(), Some(cursor.as_str()));
+}
 use rocketmq_model::common::mix_all;
 use rocketmq_model::common::mix_all::DLQ_GROUP_TOPIC_PREFIX;
 use rocketmq_model::common::mix_all::RETRY_GROUP_TOPIC_PREFIX;

@@ -28,6 +28,7 @@ pub mod message_encoder_pool;
 pub mod message_result;
 pub mod message_status_enum;
 pub mod put_message_context;
+pub mod query_message_request;
 pub mod query_message_result;
 pub mod select_result;
 pub mod store_checkpoint;

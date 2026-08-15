@@ -45,6 +45,28 @@ pub(super) fn query_consume_queue_index_to_java_long(index: u64) -> rocketmq_err
     offset_to_java_long("queryConsumeQueue", index)
 }
 
+#[allow(clippy::too_many_arguments, reason = "mirrors the Java query-message wire header")]
+pub(super) fn query_message_request_header(
+    topic: &CheetahString,
+    key: &CheetahString,
+    max_num: i32,
+    begin_timestamp: i64,
+    end_timestamp: i64,
+    key_type: &CheetahString,
+    last_key: Option<&CheetahString>,
+) -> rocketmq_protocol::protocol::header::query_message_request_header::QueryMessageRequestHeader {
+    rocketmq_protocol::protocol::header::query_message_request_header::QueryMessageRequestHeader {
+        topic: topic.clone(),
+        key: key.clone(),
+        max_num,
+        begin_timestamp,
+        end_timestamp,
+        index_type: Some(key_type.clone()),
+        last_key: last_key.cloned(),
+        topic_request_header: None,
+    }
+}
+
 pub(super) fn search_offset_timestamp_to_java_long(timestamp: u64) -> rocketmq_error::RocketMQResult<i64> {
     timestamp_to_java_long("searchOffset", timestamp)
 }
@@ -228,11 +250,21 @@ impl DefaultMQAdminExtImpl {
         max_num: i32,
         begin_timestamp: i64,
         end_timestamp: i64,
-        _key_type: CheetahString,
-        _last_key: Option<CheetahString>,
+        key_type: CheetahString,
+        last_key: Option<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<crate::base::query_result::QueryResult> {
-        self.query_message_by_key_internal(cluster_name, topic, key, max_num, begin_timestamp, end_timestamp, false)
-            .await
+        self.query_message_by_key_internal(
+            cluster_name,
+            topic,
+            key,
+            max_num,
+            begin_timestamp,
+            end_timestamp,
+            key_type,
+            last_key,
+            false,
+        )
+        .await
     }
 
     pub async fn query_message_by_unique_key(
@@ -251,6 +283,8 @@ impl DefaultMQAdminExtImpl {
             max_num,
             begin_timestamp,
             end_timestamp,
+            CheetahString::from_static_str(MessageConst::INDEX_UNIQUE_TYPE),
+            None,
             true,
         )
         .await
@@ -264,6 +298,8 @@ impl DefaultMQAdminExtImpl {
         max_num: i32,
         begin_timestamp: i64,
         end_timestamp: i64,
+        key_type: CheetahString,
+        last_key: Option<CheetahString>,
         unique_key_flag: bool,
     ) -> rocketmq_error::RocketMQResult<crate::base::query_result::QueryResult> {
         let route_topic = cluster_name.unwrap_or_else(|| topic.clone());
@@ -284,21 +320,15 @@ impl DefaultMQAdminExtImpl {
                 None => continue,
             };
 
-            let request_header =
-                rocketmq_protocol::protocol::header::query_message_request_header::QueryMessageRequestHeader {
-                    topic: topic.clone(),
-                    key: key.clone(),
-                    max_num,
-                    begin_timestamp,
-                    end_timestamp,
-                    index_type: Some(CheetahString::from_static_str(if unique_key_flag {
-                        MessageConst::INDEX_UNIQUE_TYPE
-                    } else {
-                        MessageConst::INDEX_KEY_TYPE
-                    })),
-                    last_key: None,
-                    topic_request_header: None,
-                };
+            let request_header = query_message_request_header(
+                &topic,
+                &key,
+                max_num,
+                begin_timestamp,
+                end_timestamp,
+                &key_type,
+                last_key.as_ref(),
+            );
 
             match MQClientAPIImpl::query_message(&api_impl, &broker_addr, request_header, unique_key_flag, timeout)
                 .await

@@ -28,6 +28,7 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_store::BrokerReadStore;
+use rocketmq_store::QueryMessageRequest;
 use rocketmq_store::QueryMessageResult;
 use rocketmq_store::SelectMappedBufferResult;
 use rocketmq_store_api::StoreError;
@@ -67,27 +68,16 @@ fn query_store_unavailable() -> StoreError {
 pub trait QueryMessageStore: Send + Sync {
     fn query_message(
         &self,
-        topic: &CheetahString,
-        key: &CheetahString,
-        max_num: i32,
-        begin_timestamp: i64,
-        end_timestamp: i64,
+        request: &QueryMessageRequest,
     ) -> impl Future<Output = Result<Option<QueryMessageResult>, StoreError>> + Send;
 
     fn select_message_by_offset(&self, offset: i64) -> Result<Option<SelectMappedBufferResult>, StoreError>;
 }
 
 impl<MS: BrokerReadStore> QueryMessageStore for QueryMessageStoreCapability<MS> {
-    async fn query_message(
-        &self,
-        topic: &CheetahString,
-        key: &CheetahString,
-        max_num: i32,
-        begin_timestamp: i64,
-        end_timestamp: i64,
-    ) -> Result<Option<QueryMessageResult>, StoreError> {
+    async fn query_message(&self, request: &QueryMessageRequest) -> Result<Option<QueryMessageResult>, StoreError> {
         self.provider()?
-            .query_message_from_store(topic, key, max_num, begin_timestamp, end_timestamp)
+            .query_message_from_store(request)
             .await
             .map_err(|MessageStoreUnavailable| query_store_unavailable())
     }
@@ -120,7 +110,7 @@ fn query_index_type(request_header: &QueryMessageRequestHeader, is_unique_key: b
         .filter(|idx_type| {
             matches!(
                 *idx_type,
-                MessageConst::INDEX_UNIQUE_TYPE | MessageConst::INDEX_TAG_TYPE
+                MessageConst::INDEX_KEY_TYPE | MessageConst::INDEX_UNIQUE_TYPE | MessageConst::INDEX_TAG_TYPE
             )
         })
         .or_else(|| is_unique_key.then_some(MessageConst::INDEX_UNIQUE_TYPE))
@@ -250,6 +240,18 @@ where
         let is_unique_key = ext_fields
             .get(UNIQUE_MSG_QUERY_FLAG)
             .is_some_and(|value| value == "true");
+        if request_header.index_type.as_deref().is_some_and(|index_type| {
+            !matches!(
+                index_type,
+                MessageConst::INDEX_KEY_TYPE | MessageConst::INDEX_UNIQUE_TYPE | MessageConst::INDEX_TAG_TYPE
+            )
+        }) {
+            return Ok(Some(
+                response
+                    .set_code(ResponseCode::SystemError)
+                    .set_remark("indexType must be K, U, or T"),
+            ));
+        }
         let query_index_type = query_index_type(&request_header, is_unique_key).map(CheetahString::from_slice);
         if is_unique_key
             || query_index_type
@@ -258,20 +260,16 @@ where
         {
             request_header.max_num = self.default_query_max_num;
         }
-        let typed_query_key = query_index_type
-            .as_deref()
-            .map(|idx_type| CheetahString::from_string(format!("{}#{}", idx_type, request_header.key.as_str())));
-        let query_key = typed_query_key.as_ref().unwrap_or(&request_header.key);
-        let query_message_result = self
-            .query_store
-            .query_message(
-                request_header.topic.as_ref(),
-                query_key,
-                request_header.max_num,
-                request_header.begin_timestamp,
-                request_header.end_timestamp,
-            )
-            .await;
+        let store_request = QueryMessageRequest {
+            topic: request_header.topic.clone(),
+            key: request_header.key.clone(),
+            index_type: query_index_type,
+            max_num: request_header.max_num,
+            begin: request_header.begin_timestamp,
+            end: request_header.end_timestamp,
+            last_key: request_header.last_key.clone(),
+        };
+        let query_message_result = self.query_store.query_message(&store_request).await;
         let query_message_result = match query_message_result {
             Ok(Some(query_message_result)) => query_message_result,
             Ok(None) => {
@@ -384,10 +382,10 @@ mod tests {
     }
 
     #[test]
-    fn query_index_type_ignores_normal_key_index_type_for_store_key_compatibility() {
+    fn query_index_type_preserves_normal_key_index_type_for_rocksdb_cursor_queries() {
         assert_eq!(
             query_index_type(&header(Some(MessageConst::INDEX_KEY_TYPE)), false),
-            None
+            Some(MessageConst::INDEX_KEY_TYPE)
         );
     }
 
@@ -428,7 +426,8 @@ mod tests {
         let topic = CheetahString::from_static_str("TopicA");
         let key = CheetahString::from_static_str("KeyA");
 
-        let Err(query_error) = capability.query_message(&topic, &key, 32, 0, i64::MAX).await else {
+        let request = QueryMessageRequest::legacy(&topic, &key, 32, 0, i64::MAX);
+        let Err(query_error) = capability.query_message(&request).await else {
             panic!("closed provider must reject query");
         };
         assert_eq!(StoreErrorKind::NotStarted, query_error.kind());

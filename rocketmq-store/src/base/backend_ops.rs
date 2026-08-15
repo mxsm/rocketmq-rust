@@ -47,6 +47,7 @@ use crate::base::flush_manager::SyncFlushRuntimeInfo;
 use crate::base::get_message_result::GetMessageResult;
 use crate::base::message_result::AppendMessageResult;
 use crate::base::message_result::PutMessageResult;
+use crate::base::query_message_request::QueryMessageRequest;
 use crate::base::query_message_result::QueryMessageResult;
 use crate::base::select_result::SelectMappedBufferResult;
 use crate::base::store_checkpoint::StoreCheckpoint;
@@ -538,6 +539,9 @@ pub trait BackendOps: Send + Sync + 'static {
         begin: i64,
         end: i64,
     ) -> Option<QueryMessageResult>;
+
+    /// Query messages while preserving the optional index type and continuation cursor.
+    async fn query_message_with_options(&self, request: &QueryMessageRequest) -> Option<QueryMessageResult>;
 
     /// Update HA master address.
     async fn update_ha_master_address(&self, new_addr: &str);

@@ -233,15 +233,9 @@ impl<MS: BrokerReadStore> EscapeBridge<MS> {
 
     pub(crate) async fn query_message_from_store(
         &self,
-        topic: &CheetahString,
-        key: &CheetahString,
-        max_num: i32,
-        begin_timestamp: i64,
-        end_timestamp: i64,
+        request: &rocketmq_store::QueryMessageRequest,
     ) -> Result<Option<QueryMessageResult>, MessageStoreUnavailable> {
-        self.message_store
-            .query_message(topic, key, max_num, begin_timestamp, end_timestamp)
-            .await
+        self.message_store.query_message(request).await
     }
 
     pub(crate) fn select_message_from_store(

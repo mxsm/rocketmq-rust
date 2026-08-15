@@ -36,6 +36,7 @@ pub use crate::base::message_status_enum::AppendMessageStatus;
 pub use crate::base::message_status_enum::GetMessageStatus;
 pub use crate::base::message_status_enum::PutMessageStatus;
 pub use crate::base::put_message_context::PutMessageContext;
+pub use crate::base::query_message_request::QueryMessageRequest;
 pub use crate::base::query_message_result::QueryMessageResult;
 pub use crate::base::select_result::SelectMappedBufferCacheState;
 pub use crate::base::select_result::SelectMappedBufferResult;

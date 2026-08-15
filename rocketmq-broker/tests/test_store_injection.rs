@@ -18,7 +18,6 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use cheetah_string::CheetahString;
 use rocketmq_broker::QueryMessageProcessor;
 use rocketmq_broker::QueryMessageStore;
 use rocketmq_store::QueryMessageResult;
@@ -33,11 +32,7 @@ struct TestStore {
 impl QueryMessageStore for TestStore {
     fn query_message(
         &self,
-        _topic: &CheetahString,
-        _key: &CheetahString,
-        _max_num: i32,
-        _begin_timestamp: i64,
-        _end_timestamp: i64,
+        _request: &rocketmq_store::QueryMessageRequest,
     ) -> impl Future<Output = Result<Option<QueryMessageResult>, StoreError>> + Send {
         self.query_count.fetch_add(1, Ordering::SeqCst);
         ready(Ok(Some(QueryMessageResult::default())))
@@ -53,10 +48,9 @@ async fn query_processor_accepts_a_test_store_without_a_backend_facade() {
     let store = TestStore::default();
     let _processor = QueryMessageProcessor::new(32, store.clone());
 
-    let topic = CheetahString::from_static_str("TestTopic");
-    let key = CheetahString::from_static_str("TestKey");
+    let request = rocketmq_store::QueryMessageRequest::legacy(&"TestTopic".into(), &"TestKey".into(), 32, 0, i64::MAX);
     let result = store
-        .query_message(&topic, &key, 32, 0, i64::MAX)
+        .query_message(&request)
         .await
         .expect("test store query should succeed");
 
