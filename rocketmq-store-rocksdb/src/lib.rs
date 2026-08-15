@@ -27,6 +27,7 @@ pub mod message;
 pub mod message_store;
 pub mod options;
 pub mod profile_marker;
+pub mod read_only;
 pub mod release_checkpoint;
 pub mod resource_budget;
 #[doc(hidden)]

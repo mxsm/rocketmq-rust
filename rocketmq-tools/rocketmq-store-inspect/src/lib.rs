@@ -14,3 +14,5 @@
 
 pub mod command_line;
 pub mod content_show;
+pub mod downgrade_preflight;
+pub mod multipath_consolidate;
