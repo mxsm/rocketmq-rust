@@ -77,15 +77,6 @@ REQUIRED_PROXY_GAPS = frozenset(
     }
 )
 CONTAINER_COMMANDS = frozenset({"AddBrokerSubCommand", "RemoveBrokerSubCommand"})
-ADMIN_PLACEHOLDER_COMMANDS = frozenset(
-    {
-        "deleteSubGroup",
-        "deleteTopic",
-        "queryMsgByKey",
-        "queryMsgByUniqueKey",
-        "updateTopic",
-    }
-)
 ADMIN_MODULE_ALIASES = {"metadata": "export"}
 ADMIN_CLI_DOMAIN_ALIASES = {"metadata": "export", "namesrv": "nameserver"}
 ADMIN_HANDLER_OWNERS = {
@@ -400,7 +391,6 @@ def generate_admin_operation_matrix(
             "Result",
             frozenset({"Result", "RocketMQResult"}),
         ) or ["RocketMQResult<()> status"]
-        placeholder = command in ADMIN_PLACEHOLDER_COMMANDS
         base.update(
             {
                 "rust_admin_core_methods": core_methods,
@@ -423,10 +413,8 @@ def generate_admin_operation_matrix(
                 },
                 "test_id": f"G05-{symbol}",
                 "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
-                "status": "placeholder" if placeholder else "alternative-equivalent",
-                "status_reason": "Known high-risk Admin behavior requires the dedicated closure task."
-                if placeholder
-                else "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure.",
+                "status": "alternative-equivalent",
+                "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure.",
             }
         )
         operations.append(base)
@@ -513,11 +501,14 @@ def render_admin_operation_markdown(matrix: dict[str, Any]) -> str:
 
     lines.extend(["", "## Known incomplete operations", ""])
     placeholders = [operation for operation in matrix["operations"] if operation["status"] == "placeholder"]
-    for operation in placeholders:
-        lines.append(
-            f"- `{operation['cli_command_id']}` — {operation['status_reason']} "
-            f"Tracked by the Admin high-risk behavior closure work."
-        )
+    if placeholders:
+        for operation in placeholders:
+            lines.append(
+                f"- `{operation['cli_command_id']}` — {operation['status_reason']} "
+                f"Tracked by the Admin high-risk behavior closure work."
+            )
+    else:
+        lines.append("_None._")
 
     lines.extend(["", "## Approved exclusions", ""])
     for operation in matrix["operations"]:

@@ -46,6 +46,7 @@ pub use self::types::TopicConfig;
 pub use self::types::TopicListItem;
 pub use self::types::TopicListQueryRequest;
 pub use self::types::TopicListResult;
+pub use self::types::TopicOperationFailure;
 pub use self::types::TopicRouteInfo;
 pub use self::types::TopicRouteQueryRequest;
 pub use self::types::TopicStatus;

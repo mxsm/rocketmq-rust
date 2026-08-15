@@ -122,6 +122,14 @@ impl ConsumerOperationResult {
             warnings: Vec::new(),
         }
     }
+
+    pub fn is_complete_success(&self) -> bool {
+        self.failures.is_empty()
+    }
+
+    pub fn is_partial_failure(&self) -> bool {
+        !self.broker_addrs.is_empty() && !self.failures.is_empty()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -653,10 +661,10 @@ impl ConsumerService {
 
         for broker_addr in broker_addrs {
             match admin
-                .delete_subscription_group(
+                .delete_subscription_group_list(
                     broker_addr.clone(),
-                    request.group_name().clone(),
-                    Some(request.remove_offset()),
+                    vec![request.group_name().clone()],
+                    request.remove_offset(),
                 )
                 .await
             {
@@ -667,15 +675,21 @@ impl ConsumerService {
             }
         }
 
-        if let BrokerTarget::ClusterName(cluster_name) = request.target() {
-            for topic in [
-                get_retry_topic(request.group_name().as_str()),
-                get_dlq_topic(request.group_name().as_str()),
-            ] {
-                if let Err(error) = admin.delete_topic(topic.into(), cluster_name.clone()).await {
-                    result.warnings.push(stable_error_message(&error));
+        if result.failures.is_empty() {
+            if let BrokerTarget::ClusterName(cluster_name) = request.target() {
+                for topic in [
+                    get_retry_topic(request.group_name().as_str()),
+                    get_dlq_topic(request.group_name().as_str()),
+                ] {
+                    if let Err(error) = admin.delete_topic(topic.into(), cluster_name.clone()).await {
+                        result.warnings.push(stable_error_message(&error));
+                    }
                 }
             }
+        } else if !result.failures.is_empty() && matches!(request.target(), BrokerTarget::ClusterName(_)) {
+            result
+                .warnings
+                .push("retry and DLQ topic deletion skipped because one or more broker mutations failed".to_string());
         }
 
         Ok(result)
@@ -1384,6 +1398,22 @@ mod tests {
         assert_eq!(request.group_name().as_str(), "GroupA");
         assert!(request.remove_offset());
         assert!(DeleteSubscriptionGroupRequest::try_new(None, None, "GroupA", false).is_err());
+    }
+
+    #[test]
+    fn consumer_operation_result_distinguishes_partial_failure() {
+        let result = ConsumerOperationResult {
+            broker_addrs: vec!["broker-a:10911".into()],
+            failures: vec![ConsumerOperationFailure {
+                broker_addr: "broker-b:10911".into(),
+                error_code: "NO_PERMISSION".to_string(),
+                error: "permission denied".to_string(),
+            }],
+            warnings: Vec::new(),
+        };
+
+        assert!(result.is_partial_failure());
+        assert!(!result.is_complete_success());
     }
 
     #[test]

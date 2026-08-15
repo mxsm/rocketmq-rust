@@ -42,8 +42,8 @@ use rocketmq_admin_core::client_adapter::services::message::QueryMessageByIdOutc
 use rocketmq_admin_core::client_adapter::services::message::QueryMessageByIdResult;
 use rocketmq_admin_core::client_adapter::services::message::QueryMessageByKeyResult;
 use rocketmq_admin_core::client_adapter::services::message::QueryMessageByOffsetResult;
+use rocketmq_admin_core::client_adapter::services::message::QueryMessageByUniqueKeyEntry;
 use rocketmq_admin_core::client_adapter::services::message::QueryMessageByUniqueKeyResult;
-use rocketmq_admin_core::client_adapter::services::message::UniqueKeyDirectStatus;
 use rocketmq_admin_core::client_adapter::services::producer::CheckMessageSendRtResult;
 use rocketmq_admin_core::client_adapter::services::producer::ProducerInfoQueryResult;
 use rocketmq_admin_core::client_adapter::services::producer::SendMessageResult;
@@ -628,24 +628,18 @@ impl CommandResultViewModel {
 
     pub fn message_query_by_unique_key(title: impl Into<String>, result: &QueryMessageByUniqueKeyResult) -> Self {
         let rows = match result {
-            QueryMessageByUniqueKeyResult::Messages(messages) => messages
+            QueryMessageByUniqueKeyResult::Messages(entries) => entries
                 .iter()
-                .map(|message| message_detail_row("found", message, ""))
+                .map(|entry| {
+                    let note = unique_key_track_note(entry);
+                    message_detail_row("found", &entry.message, &note)
+                })
                 .collect(),
-            QueryMessageByUniqueKeyResult::DirectStatus(status) => {
-                let note = match status {
-                    UniqueKeyDirectStatus::PushConsumerUnsupported { client_id } => {
-                        format!("client_id={client_id}; push consumer direct consume is unsupported")
-                    }
-                    UniqueKeyDirectStatus::NotPushConsumer { client_id } => {
-                        format!("client_id={client_id}; not a push consumer")
-                    }
-                    UniqueKeyDirectStatus::RunningInfoFailed { client_id } => {
-                        format!("client_id={client_id}; running info query failed")
-                    }
-                };
-                vec![empty_message_detail_row("", "direct-status", &note)]
-            }
+            QueryMessageByUniqueKeyResult::Direct(result) => vec![empty_message_detail_row(
+                result.msg_id.as_str(),
+                "direct-status",
+                &unique_key_direct_note(result),
+            )],
         };
 
         Self::table(title, &MESSAGE_DETAIL_HEADERS, rows)
@@ -1563,6 +1557,60 @@ impl CommandResultViewModel {
                 }
                 lines.join("\n")
             }
+        }
+    }
+}
+
+fn unique_key_track_note(entry: &QueryMessageByUniqueKeyEntry) -> String {
+    let mut notes = Vec::with_capacity(2);
+    if !entry.tracks.is_empty() {
+        let tracks = entry
+            .tracks
+            .iter()
+            .map(|track| {
+                let mut rendered = format!(
+                    "{}:{}",
+                    sanitize_cell(&track.consumer_group),
+                    track.track_type.as_deref().unwrap_or("UNKNOWN")
+                );
+                if !track.exception_desc.is_empty() {
+                    rendered.push('(');
+                    rendered.push_str(&sanitize_cell(&track.exception_desc));
+                    rendered.push(')');
+                }
+                rendered
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        notes.push(format!("tracks={tracks}"));
+    }
+    if let Some(error) = &entry.track_error {
+        notes.push(format!("track_error={}", sanitize_cell(error)));
+    }
+    notes.join("; ")
+}
+
+fn unique_key_direct_note(result: &DirectConsumeMessageResult) -> String {
+    let prefix = format!(
+        "consumer_group={}; client_id={}",
+        sanitize_cell(result.consumer_group.as_str()),
+        sanitize_cell(result.client_id.as_str())
+    );
+    match &result.status {
+        DirectConsumeMessageStatus::Consumed(detail) => format!(
+            "{prefix}; consumed={}; order={}; auto_commit={}; spent_time_millis={}; remark={}",
+            detail.consume_result.as_deref().unwrap_or_default(),
+            detail.order,
+            detail.auto_commit,
+            detail.spent_time_millis,
+            sanitize_cell(detail.remark.as_deref().unwrap_or_default())
+        ),
+        DirectConsumeMessageStatus::NotPushConsumer => format!("{prefix}; not a push consumer"),
+        DirectConsumeMessageStatus::RunningInfoFailed { error } => {
+            format!("{prefix}; running info failed={}", sanitize_cell(error))
+        }
+        DirectConsumeMessageStatus::Failed { error } => {
+            format!("{prefix}; direct consume failed={}", sanitize_cell(error))
         }
     }
 }

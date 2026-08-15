@@ -77,7 +77,8 @@ class AdminOperationGuardTest(unittest.TestCase):
         operation_map = OPERATION_MAP.read_text(encoding="utf-8")
         self.assertIn("Raw operations: **96**", operation_map)
         self.assertIn("Core active operations: **94**", operation_map)
-        self.assertIn("Known placeholders: **5**", operation_map)
+        self.assertIn("Known placeholders: **0**", operation_map)
+        self.assertIn("## Known incomplete operations\n\n_None._", operation_map)
         self.assertIn("`AddBrokerSubCommand`", operation_map)
         self.assertIn("`RemoveBrokerSubCommand`", operation_map)
 
@@ -100,23 +101,23 @@ class AdminOperationGuardTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("code=active-field-missing", result.stdout)
 
-    def test_strict_mode_reports_known_placeholders(self) -> None:
+    def test_strict_mode_accepts_the_completed_active_denominator(self) -> None:
         result = run_guard(MATRIX, "--require-complete")
 
-        self.assertEqual(result.returncode, 1)
-        self.assertEqual(result.stdout.count("code=active-operation-incomplete"), 5)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("code=active-operation-incomplete", result.stdout)
 
     def test_g05_capability_route_runs_the_structural_guard(self) -> None:
         manifest = json.loads(CAPABILITY_MANIFEST.read_text(encoding="utf-8"))
         capability = next(item for item in manifest["capabilities"] if item["capability_id"] == "G-05")
-        self.assertEqual(capability["commands"], ["python scripts/admin_operation_guard.py"])
+        self.assertEqual(capability["commands"], ["python scripts/admin_operation_guard.py --require-complete"])
         self.assertIn("scripts/admin-operation-matrix.json", capability["rust_surfaces"])
         self.assertIn("rocketmq-doc/en/admin/java-55-operation-map.md", capability["rust_surfaces"])
         self.assertEqual(capability["artifacts"], [])
 
         routes = json.loads(FUNCTIONAL_MATRIX.read_text(encoding="utf-8"))
         route = next(item for item in routes["capability_routes"] if item["capability_id"] == "G-05")
-        self.assertEqual(route["argv"], ["python", "scripts/admin_operation_guard.py"])
+        self.assertEqual(route["argv"], ["python", "scripts/admin_operation_guard.py", "--require-complete"])
 
 if __name__ == "__main__":
     unittest.main()

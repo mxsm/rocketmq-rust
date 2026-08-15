@@ -41,7 +41,7 @@
     {"capability_id":"G-02","test_id":"G02-TRANSACTION-METRICS","phase":2,"argv":["cargo","test","-p","rocketmq-broker","--test","transaction_metrics"]},
     {"capability_id":"G-03","test_id":"G03-PROXY-PROTOCOL","phase":1,"argv":["cargo","test","-p","rocketmq-transport","--test","proxy_protocol"]},
     {"capability_id":"G-04","test_id":"G04-TIEREDSTORE-RECOVERY","phase":2,"argv":["cargo","test","-p","rocketmq-store","--features","tieredstore","--test","tieredstore_recovery"]},
-    {"capability_id":"G-05","test_id":"G05-ADMIN-OPERATION-MATRIX","phase":4,"argv":["python","scripts/admin_operation_guard.py"]},
+    {"capability_id":"G-05","test_id":"G05-ADMIN-OPERATION-MATRIX","phase":4,"argv":["python","scripts/admin_operation_guard.py","--require-complete"]},
     {"capability_id":"G-06","test_id":"G06-CORE-PLATFORM-MATRIX","phase":5,"argv":["python","scripts/core_platform_matrix.py","--check"]}
   ]
 }

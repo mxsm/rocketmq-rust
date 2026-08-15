@@ -7,7 +7,7 @@ This map records the raw Java `mqadmin` denominator and the RocketMQ-rust 1.0 co
 - Raw operations: **96**
 - BrokerContainer exclusions: **2**
 - Core active operations: **94**
-- Known placeholders: **5**
+- Known placeholders: **0**
 
 ## Status model
 
@@ -22,13 +22,13 @@ The default guard validates inventory structure and mappings. `python scripts/ad
 
 | Java command | Java request code(s) | Rust CLI | Rust Admin Core method(s) | Handler owner(s) | Status |
 |---|---|---|---|---|---|
-| `UpdateTopicSubCommand` / `updateTopic` | delegated to Java Admin API | topic.updateTopic | `TopicService::create_or_update_topic_by_request_with_credentials` | `nameserver`<br>`broker` | `placeholder` |
+| `UpdateTopicSubCommand` / `updateTopic` | delegated to Java Admin API | topic.updateTopic | `TopicService::create_or_update_topic_by_request_with_credentials` | `nameserver`<br>`broker` | `alternative-equivalent` |
 | `UpdateTopicListSubCommand` / `updateTopicList` | delegated to Java Admin API | topic.updateTopicList | `TopicService::update_topic_config_list_by_request` | `nameserver`<br>`broker` | `alternative-equivalent` |
-| `DeleteTopicSubCommand` / `deleteTopic` | delegated to Java Admin API | topic.deleteTopic | `TopicService::delete_topic_by_request` | `nameserver`<br>`broker` | `placeholder` |
+| `DeleteTopicSubCommand` / `deleteTopic` | delegated to Java Admin API | topic.deleteTopic | `TopicService::delete_topic_by_request_with_credentials` | `nameserver`<br>`broker` | `alternative-equivalent` |
 | `UpdateSubGroupSubCommand` / `updateSubGroup` | delegated to Java Admin API | consumer.updateSubGroup | `ConsumerService::update_subscription_group_by_request_with_credentials` | `broker` | `alternative-equivalent` |
 | `UpdateSubGroupListSubCommand` / `updateSubGroupList` | delegated to Java Admin API | consumer.updateSubGroupList | `ConsumerService::update_subscription_group_list_by_request_with_credentials` | `broker` | `alternative-equivalent` |
 | `SetConsumeModeSubCommand` / `setConsumeMode` | delegated to Java Admin API | consumer.setConsumeMode | `ConsumerService::set_consume_mode_by_request_with_credentials` | `broker` | `alternative-equivalent` |
-| `DeleteSubscriptionGroupCommand` / `deleteSubGroup` | delegated to Java Admin API | consumer.deleteSubGroup | `ConsumerService::delete_subscription_group_by_request_with_credentials` | `broker` | `placeholder` |
+| `DeleteSubscriptionGroupCommand` / `deleteSubGroup` | delegated to Java Admin API | consumer.deleteSubGroup | `ConsumerService::delete_subscription_group_by_request_with_credentials` | `broker` | `alternative-equivalent` |
 | `UpdateBrokerConfigSubCommand` / `updateBrokerConfig` | delegated to Java Admin API | broker.updateBrokerConfig | `BrokerService::apply_broker_config_update_plan_by_request_with_credentials`<br>`BrokerService::build_broker_config_update_plan_by_request_with_credentials` | `broker` | `alternative-equivalent` |
 | `UpdateTopicPermSubCommand` / `updateTopicPerm` | delegated to Java Admin API | topic.updateTopicPerm | `TopicService::update_topic_perm_by_request` | `nameserver`<br>`broker` | `alternative-equivalent` |
 | `TopicRouteSubCommand` / `topicRoute` | delegated to Java Admin API | topic.topicRoute | `TopicService::query_topic_route_by_request_with_credentials` | `nameserver`<br>`broker` | `alternative-equivalent` |
@@ -39,8 +39,8 @@ The default guard validates inventory structure and mappings. `python scripts/ad
 | `ResetMasterFlushOffsetSubCommand` / `resetMasterFlushOffset` | delegated to Java Admin API | broker.resetMasterFlushOffset | `BrokerService::reset_master_flush_offset_by_request_with_credentials` | `broker` | `alternative-equivalent` |
 | `BrokerStatusSubCommand` / `brokerStatus` | delegated to Java Admin API | broker.brokerStatus | `BrokerService::query_broker_runtime_stats_by_request_with_credentials` | `broker` | `alternative-equivalent` |
 | `QueryMsgByIdSubCommand` / `queryMsgById` | delegated to Java Admin API | message.queryMsgById | `MessageService::query_message_by_id_by_request_with_credentials` | `broker` | `alternative-equivalent` |
-| `QueryMsgByKeySubCommand` / `queryMsgByKey` | delegated to Java Admin API | message.queryMsgByKey | `MessageService::query_message_by_key_by_request_with_credentials` | `broker` | `placeholder` |
-| `QueryMsgByUniqueKeySubCommand` / `queryMsgByUniqueKey` | delegated to Java Admin API | message.queryMsgByUniqueKey | `MessageService::query_message_by_unique_key_by_request_with_credentials` | `broker` | `placeholder` |
+| `QueryMsgByKeySubCommand` / `queryMsgByKey` | delegated to Java Admin API | message.queryMsgByKey | `MessageService::query_message_by_key_by_request_with_credentials` | `broker` | `alternative-equivalent` |
+| `QueryMsgByUniqueKeySubCommand` / `queryMsgByUniqueKey` | delegated to Java Admin API | message.queryMsgByUniqueKey | `MessageService::query_message_by_unique_key_by_request_with_credentials` | `broker` | `alternative-equivalent` |
 | `QueryMsgByOffsetSubCommand` / `queryMsgByOffset` | delegated to Java Admin API | message.queryMsgByOffset | `MessageService::query_message_by_offset_by_request_with_credentials` | `broker` | `alternative-equivalent` |
 | `QueryMsgTraceByIdSubCommand` / `queryMsgTraceById` | delegated to Java Admin API | message.queryMsgTraceById | `MessageService::query_message_trace_by_id_by_request_with_credentials` | `broker` | `alternative-equivalent` |
 | `PrintMessageSubCommand` / `printMsg` | delegated to Java Admin API | message.printMsg | `MessageService::print_messages_by_request_with_credentials` | `broker` | `alternative-equivalent` |
@@ -121,11 +121,7 @@ The default guard validates inventory structure and mappings. `python scripts/ad
 
 ## Known incomplete operations
 
-- `topic.updateTopic` — Known high-risk Admin behavior requires the dedicated closure task. Tracked by the Admin high-risk behavior closure work.
-- `topic.deleteTopic` — Known high-risk Admin behavior requires the dedicated closure task. Tracked by the Admin high-risk behavior closure work.
-- `consumer.deleteSubGroup` — Known high-risk Admin behavior requires the dedicated closure task. Tracked by the Admin high-risk behavior closure work.
-- `message.queryMsgByKey` — Known high-risk Admin behavior requires the dedicated closure task. Tracked by the Admin high-risk behavior closure work.
-- `message.queryMsgByUniqueKey` — Known high-risk Admin behavior requires the dedicated closure task. Tracked by the Admin high-risk behavior closure work.
+_None._
 
 ## Approved exclusions
 

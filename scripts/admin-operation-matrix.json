@@ -8,9 +8,8 @@
     "active": 94
   },
   "status_counts": {
-    "alternative-equivalent": 89,
-    "excluded": 2,
-    "placeholder": 5
+    "alternative-equivalent": 94,
+    "excluded": 2
   },
   "status_semantics": {
     "alternative-equivalent": "The Rust-native API and CLI provide the same user capability without Java implementation-shape parity.",
@@ -61,8 +60,8 @@
       },
       "test_id": "G05-UpdateTopicSubCommand",
       "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
-      "status": "placeholder",
-      "status_reason": "Known high-risk Admin behavior requires the dedicated closure task."
+      "status": "alternative-equivalent",
+      "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
     {
       "operation_id": "mqadmin.topic.updateTopicList",
@@ -120,7 +119,7 @@
       "classification": "active",
       "exclusion_reason": null,
       "rust_admin_core_methods": [
-        "TopicService::delete_topic_by_request"
+        "TopicService::delete_topic_by_request_with_credentials"
       ],
       "cli_command_id": "topic.deleteTopic",
       "tui_command_id": null,
@@ -151,8 +150,8 @@
       },
       "test_id": "G05-DeleteTopicSubCommand",
       "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
-      "status": "placeholder",
-      "status_reason": "Known high-risk Admin behavior requires the dedicated closure task."
+      "status": "alternative-equivalent",
+      "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
     {
       "operation_id": "mqadmin.consumer.updateSubGroup",
@@ -327,8 +326,8 @@
       },
       "test_id": "G05-DeleteSubscriptionGroupCommand",
       "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
-      "status": "placeholder",
-      "status_reason": "Known high-risk Admin behavior requires the dedicated closure task."
+      "status": "alternative-equivalent",
+      "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
     {
       "operation_id": "mqadmin.broker.updateBrokerConfig",
@@ -748,7 +747,7 @@
         "QueryMessageByKeyRequest"
       ],
       "typed_response": [
-        "RocketMQResult<()> status"
+        "QueryMessageByKeyResult"
       ],
       "expected_side_effects": {
         "class": "read-only-query",
@@ -761,8 +760,8 @@
       },
       "test_id": "G05-QueryMsgByKeySubCommand",
       "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
-      "status": "placeholder",
-      "status_reason": "Known high-risk Admin behavior requires the dedicated closure task."
+      "status": "alternative-equivalent",
+      "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
     {
       "operation_id": "mqadmin.message.queryMsgByUniqueKey",
@@ -792,6 +791,7 @@
         "QueryMessageByUniqueKeyRequest"
       ],
       "typed_response": [
+        "DirectConsumeMessageResult",
         "QueryMessageByUniqueKeyResult"
       ],
       "expected_side_effects": {
@@ -805,8 +805,8 @@
       },
       "test_id": "G05-QueryMsgByUniqueKeySubCommand",
       "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
-      "status": "placeholder",
-      "status_reason": "Known high-risk Admin behavior requires the dedicated closure task."
+      "status": "alternative-equivalent",
+      "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure."
     },
     {
       "operation_id": "mqadmin.message.queryMsgByOffset",
