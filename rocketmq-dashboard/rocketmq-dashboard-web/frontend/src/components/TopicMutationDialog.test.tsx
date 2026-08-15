@@ -180,6 +180,61 @@ describe('TopicMutationDialog', () => {
     }));
   });
 
+  it('keeps confirmation target counts and payloads stable when discovered targets rerender', async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn().mockResolvedValue({
+      ...successResult,
+      operation: 'CREATE',
+      topic: 'snapshot-topic'
+    });
+    const props = {
+      open: true,
+      mode: 'create' as const,
+      onOpenChange: vi.fn(),
+      onSubmit
+    };
+    const { rerender } = render(<TopicMutationDialog {...props} targets={targets} />);
+
+    await user.type(screen.getByRole('textbox', { name: 'Topic name' }), 'snapshot-topic');
+    await user.click(screen.getByRole('checkbox', { name: 'DefaultCluster' }));
+    await user.click(screen.getByRole('checkbox', { name: 'broker-c' }));
+    const confirmation = await openConfirmation(user);
+    expect(confirmation).toHaveTextContent('3 broker targets');
+    expect(confirmation).toHaveTextContent('selected brokers broker-c');
+
+    rerender(
+      <TopicMutationDialog
+        {...props}
+        targets={[
+          { clusterName: 'DefaultCluster', brokerNames: ['broker-a', 'broker-b', 'broker-d', 'broker-e'] },
+          { clusterName: 'BackupCluster', brokerNames: ['broker-z'] }
+        ]}
+      />
+    );
+
+    expect(screen.getByRole('alertdialog')).toHaveTextContent('3 broker targets');
+    expect(screen.getByRole('alertdialog')).toHaveTextContent('selected brokers broker-c');
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Create topic' }));
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({
+      topic: 'snapshot-topic',
+      clusterNameList: ['DefaultCluster'],
+      brokerNameList: ['broker-c']
+    }));
+  });
+
+  it('uses a primary action for the non-destructive Create confirmation', async () => {
+    const user = userEvent.setup();
+    render(<TopicMutationDialog {...defaultProps} />);
+
+    await user.type(screen.getByRole('textbox', { name: 'Topic name' }), 'primary-action-topic');
+    await user.click(screen.getByRole('checkbox', { name: 'broker-a' }));
+    const confirmation = await openConfirmation(user);
+    const createAction = within(confirmation).getByRole('button', { name: 'Create topic' });
+
+    expect(createAction).toHaveClass('ui-button-default');
+    expect(createAction).not.toHaveClass('ui-button-destructive');
+  });
+
   it('shows config loading and retryable errors without presenting an editable form', async () => {
     const user = userEvent.setup();
     const onRetryConfig = vi.fn();
@@ -289,5 +344,100 @@ describe('TopicMutationDialog', () => {
     expect(screen.getByRole('textbox', { name: 'Topic name' })).toHaveValue('payments');
     expect(screen.queryByText('2 targets saved')).not.toBeInTheDocument();
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
+  });
+
+  it('preserves dirty Edit values across same-topic config refreshes and rehydrates after reopen', async () => {
+    const user = userEvent.setup();
+    const props = {
+      mode: 'edit' as const,
+      targets,
+      onOpenChange: vi.fn(),
+      onSubmit: vi.fn().mockResolvedValue(successResult)
+    };
+    const { rerender } = render(<TopicMutationDialog {...props} open config={config} />);
+
+    const readQueues = screen.getByRole('spinbutton', { name: 'Read queue count' });
+    await user.clear(readQueues);
+    await user.type(readQueues, '12');
+    await user.click(screen.getByRole('checkbox', { name: 'broker-b' }));
+
+    rerender(
+      <TopicMutationDialog
+        {...props}
+        open
+        config={{ ...config, inconsistentFields: ['perm'] }}
+      />
+    );
+    expect(readQueues).toHaveValue(12);
+    expect(screen.getByRole('checkbox', { name: 'broker-b' })).toBeChecked();
+    expect(screen.getByText('Broker configurations disagree: perm')).toBeInTheDocument();
+
+    rerender(<TopicMutationDialog {...props} open={false} config={{ ...config, inconsistentFields: ['perm'] }} />);
+    rerender(<TopicMutationDialog {...props} open config={{ ...config, inconsistentFields: ['perm'] }} />);
+    expect(screen.getByRole('spinbutton', { name: 'Read queue count' })).toHaveValue(8);
+    expect(screen.getByRole('checkbox', { name: 'broker-b' })).not.toBeChecked();
+  });
+
+  it('accepts a pending partial result after a same-topic config refresh', async () => {
+    const user = userEvent.setup();
+    const pending = deferred<TopicOperationResult>();
+    const props = {
+      open: true,
+      mode: 'edit' as const,
+      targets,
+      onOpenChange: vi.fn(),
+      onSubmit: vi.fn().mockReturnValue(pending.promise)
+    };
+    const { rerender } = render(<TopicMutationDialog {...props} config={config} />);
+
+    const confirmation = await openConfirmation(user);
+    await user.click(within(confirmation).getByRole('button', { name: 'Save changes' }));
+    rerender(<TopicMutationDialog {...props} config={{ ...config, inconsistentFields: ['perm'] }} />);
+    await act(async () => pending.resolve(partialResult));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('1 of 2 targets failed');
+    expect(props.onOpenChange).not.toHaveBeenCalledWith(false);
+  });
+
+  it('accepts a pending success after a same-topic config refresh', async () => {
+    const user = userEvent.setup();
+    const pending = deferred<TopicOperationResult>();
+    const onOpenChange = vi.fn();
+    const props = {
+      open: true,
+      mode: 'edit' as const,
+      targets,
+      onOpenChange,
+      onSubmit: vi.fn().mockReturnValue(pending.promise)
+    };
+    const { rerender } = render(<TopicMutationDialog {...props} config={config} />);
+
+    const confirmation = await openConfirmation(user);
+    await user.click(within(confirmation).getByRole('button', { name: 'Save changes' }));
+    rerender(<TopicMutationDialog {...props} config={{ ...config, inconsistentFields: ['perm'] }} />);
+    await act(async () => pending.resolve(successResult));
+
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it('accepts a pending rejection after a same-topic config refresh', async () => {
+    const user = userEvent.setup();
+    const pending = deferred<TopicOperationResult>();
+    const props = {
+      open: true,
+      mode: 'edit' as const,
+      targets,
+      onOpenChange: vi.fn(),
+      onSubmit: vi.fn().mockReturnValue(pending.promise)
+    };
+    const { rerender } = render(<TopicMutationDialog {...props} config={config} />);
+
+    const confirmation = await openConfirmation(user);
+    await user.click(within(confirmation).getByRole('button', { name: 'Save changes' }));
+    rerender(<TopicMutationDialog {...props} config={{ ...config, inconsistentFields: ['perm'] }} />);
+    await act(async () => pending.reject(new Error('same-topic request failed')));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('same-topic request failed');
+    expect(screen.getByRole('textbox', { name: 'Topic name' })).toHaveValue('orders');
   });
 });

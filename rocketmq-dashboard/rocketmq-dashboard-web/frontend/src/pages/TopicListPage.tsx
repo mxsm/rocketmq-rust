@@ -126,9 +126,10 @@ export default function TopicListPage() {
     if (topics.some((topic) => topic.topic === request.topic)) {
       throw new Error(`Topic \`${request.topic}\` already exists. Choose a new name.`);
     }
-    await topicApi.create(request);
-    setNotice(`Topic ${request.topic} created.`);
+    const result = await topicApi.create(request);
+    setNotice(result.success ? `Topic ${request.topic} created.` : null);
     await load();
+    return result;
   };
 
   const deleteTopic = async (topic: string) => {
@@ -297,7 +298,13 @@ export default function TopicListPage() {
         />
       </section>
 
-      <TopicMutationDialog open={mutationOpen} onOpenChange={setMutationOpen} onSubmit={saveTopic} />
+      <TopicMutationDialog
+        open={mutationOpen}
+        mode="create"
+        targets={data?.targets ?? []}
+        onOpenChange={setMutationOpen}
+        onSubmit={saveTopic}
+      />
       <EntitySheet
         open={selectedTopic !== null}
         title={selectedTopic?.topic ?? 'Topic details'}

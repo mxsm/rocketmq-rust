@@ -112,7 +112,7 @@ describe('TopicListPage', () => {
     await user.click(screen.getByRole('button', { name: 'Create topic' }));
     const createDialog = screen.getByRole('dialog', { name: 'Create topic' });
     await user.type(within(createDialog).getByRole('textbox', { name: 'Topic name' }), 'inventory-events');
-    await user.type(within(createDialog).getByRole('textbox', { name: 'Cluster names' }), 'DefaultCluster');
+    await user.click(within(createDialog).getByRole('checkbox', { name: 'DefaultCluster' }));
     await user.click(within(createDialog).getByRole('button', { name: 'Save topic' }));
     const createConfirmation = screen.getByRole('alertdialog', { name: 'Create topic?' });
     await user.click(within(createConfirmation).getByRole('button', { name: 'Create topic' }));
@@ -132,12 +132,42 @@ describe('TopicListPage', () => {
     await user.click(screen.getByRole('button', { name: 'Create topic' }));
     const createDialog = screen.getByRole('dialog', { name: 'Create topic' });
     await user.type(within(createDialog).getByRole('textbox', { name: 'Topic name' }), 'orders');
-    await user.type(within(createDialog).getByRole('textbox', { name: 'Cluster names' }), 'DefaultCluster');
+    await user.click(within(createDialog).getByRole('checkbox', { name: 'DefaultCluster' }));
     await user.click(within(createDialog).getByRole('button', { name: 'Save topic' }));
     await user.click(within(screen.getByRole('alertdialog', { name: 'Create topic?' })).getByRole('button', { name: 'Create topic' }));
 
     expect(await within(createDialog).findByText('Topic `orders` already exists. Choose a new name.')).toBeInTheDocument();
     expect(topicApi.create).not.toHaveBeenCalled();
+  });
+
+  it('keeps a partial Create result in the dialog without a global success notice', async () => {
+    const user = userEvent.setup();
+    vi.mocked(topicApi.create).mockResolvedValue({
+      operation: 'CREATE',
+      topic: 'partial-topic',
+      success: false,
+      targetCount: 2,
+      message: '1 of 2 targets failed',
+      targets: [
+        { target: 'broker-a', success: true, message: 'created on broker-a' },
+        { target: 'broker-b', success: false, message: 'broker-b unavailable' }
+      ]
+    });
+    renderAtRoute(<TopicListPage />, '/topics');
+    await screen.findByRole('heading', { name: 'Topics' });
+
+    await user.click(screen.getByRole('button', { name: 'Create topic' }));
+    const createDialog = screen.getByRole('dialog', { name: 'Create topic' });
+    await user.type(within(createDialog).getByRole('textbox', { name: 'Topic name' }), 'partial-topic');
+    await user.click(within(createDialog).getByRole('checkbox', { name: 'DefaultCluster' }));
+    await user.click(within(createDialog).getByRole('button', { name: 'Save topic' }));
+    await user.click(within(screen.getByRole('alertdialog', { name: 'Create topic?' })).getByRole('button', { name: 'Create topic' }));
+
+    expect(await within(createDialog).findByRole('alert')).toHaveTextContent('1 of 2 targets failed');
+    expect(within(createDialog).getByText('created on broker-a')).toBeInTheDocument();
+    expect(within(createDialog).getByText('broker-b unavailable')).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Create topic' })).toBeInTheDocument();
+    expect(screen.queryByText('Topic partial-topic created.')).not.toBeInTheDocument();
   });
 
   it('requires explicit confirmation before deleting a topic', async () => {

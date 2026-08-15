@@ -10,7 +10,6 @@ import ErrorState from './ErrorState';
 import LoadingState from './LoadingState';
 import {
   AlertDialog,
-  AlertDialogAction,
   AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
@@ -33,24 +32,10 @@ interface TopicMutationDialogProps {
   onSubmit: (request: TopicMutationRequest) => Promise<TopicOperationResult>;
 }
 
-interface LegacyCreateDialogProps {
-  open: boolean;
-  mode?: never;
-  targets?: never;
-  config?: never;
-  loadingConfig?: never;
-  configError?: never;
-  onRetryConfig?: never;
-  onOpenChange: (open: boolean) => void;
-  onSubmit: (request: TopicMutationRequest) => Promise<void>;
-}
-
 interface TopicFormState {
   topic: string;
   clusterNameList: string[];
   brokerNameList: string[];
-  legacyClusterNames: string;
-  legacyBrokerNames: string;
   readQueueCount: string;
   writeQueueCount: string;
   read: boolean;
@@ -60,27 +45,34 @@ interface TopicFormState {
   ordered: boolean;
 }
 
+interface TopicConfirmation {
+  request: TopicMutationRequest;
+  resolvedBrokers: string[];
+  mode: 'create' | 'edit';
+  topic: string;
+}
+
 const MIN_QUEUE_COUNT = 1;
 const MAX_QUEUE_COUNT = 128;
 
-export default function TopicMutationDialog(props: TopicMutationDialogProps | LegacyCreateDialogProps) {
-  const legacyCreate = props.mode === undefined;
+export default function TopicMutationDialog(props: TopicMutationDialogProps) {
   const {
     open,
     onOpenChange,
     onSubmit
   } = props;
-  const mode = props.mode ?? 'create';
-  const targets = props.targets ?? [];
+  const mode = props.mode;
+  const targets = props.targets;
   const config = props.config ?? null;
   const loadingConfig = props.loadingConfig ?? false;
   const configError = props.configError ?? null;
   const onRetryConfig = props.onRetryConfig;
+  const configTopic = config?.topicName ?? '';
   const [form, setForm] = useState<TopicFormState>(() => toFormState(mode, config));
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<TopicOperationResult | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmation, setConfirmation] = useState<TopicConfirmation | null>(null);
   const pendingRef = useRef<number | null>(null);
   const requestRef = useRef(0);
   const mountedRef = useRef(false);
@@ -95,11 +87,9 @@ export default function TopicMutationDialog(props: TopicMutationDialogProps | Le
   );
   const selectedClusters = canonicalSelection(clusterNames, form.clusterNameList);
   const selectedBrokers = canonicalSelection(brokerNames, form.brokerNameList);
-  const submittedClusters = legacyCreate ? splitCsv(form.legacyClusterNames) : selectedClusters;
-  const submittedBrokers = legacyCreate ? splitCsv(form.legacyBrokerNames) : selectedBrokers;
-  const resolvedBrokers = legacyCreate
-    ? Array.from(new Set([...submittedClusters, ...submittedBrokers]))
-    : resolveBrokers(targets, selectedClusters, selectedBrokers);
+  const submittedClusters = selectedClusters;
+  const submittedBrokers = selectedBrokers;
+  const resolvedBrokers = resolveBrokers(targets, selectedClusters, selectedBrokers);
 
   modeRef.current = mode;
   topicRef.current = mode === 'edit' ? config?.topicName ?? '' : form.topic.trim();
@@ -114,18 +104,18 @@ export default function TopicMutationDialog(props: TopicMutationDialogProps | Le
 
   useEffect(() => {
     requestRef.current += 1;
-    setConfirmOpen(false);
+    setConfirmation(null);
     if (open) {
       setForm(toFormState(mode, config));
       setError(null);
       setResult(null);
       setSubmitting(false);
     }
-  }, [config, mode, open]);
+  }, [configTopic, mode, open]);
 
   const closeDialog = () => {
     requestRef.current += 1;
-    setConfirmOpen(false);
+    setConfirmation(null);
     onOpenChange(false);
   };
 
@@ -153,7 +143,22 @@ export default function TopicMutationDialog(props: TopicMutationDialogProps | Le
     }
     setError(null);
     setResult(null);
-    setConfirmOpen(true);
+    const topic = form.topic.trim();
+    setConfirmation({
+      request: {
+        topic,
+        readQueueCount: Number(form.readQueueCount),
+        writeQueueCount: Number(form.writeQueueCount),
+        perm: permissionBits(form),
+        brokerNameList: [...submittedBrokers],
+        clusterNameList: [...submittedClusters],
+        order: form.ordered,
+        messageType: form.messageType
+      },
+      resolvedBrokers: [...resolvedBrokers],
+      mode,
+      topic
+    });
   };
 
   const focusSave = () => {
@@ -161,15 +166,18 @@ export default function TopicMutationDialog(props: TopicMutationDialogProps | Le
   };
 
   const submit = async () => {
+    const snapshot = confirmation;
+    if (!snapshot) return;
+
     if (pendingRef.current !== null) {
-      setConfirmOpen(false);
+      setConfirmation(null);
       setError('A topic save is already in progress.');
       focusSave();
       return;
     }
 
-    const submittedMode = mode;
-    const submittedTopic = form.topic.trim();
+    const submittedMode = snapshot.mode;
+    const submittedTopic = snapshot.topic;
     const requestId = requestRef.current + 1;
     requestRef.current = requestId;
     pendingRef.current = requestId;
@@ -177,23 +185,12 @@ export default function TopicMutationDialog(props: TopicMutationDialogProps | Le
     setError(null);
     setResult(null);
 
-    const request: TopicMutationRequest = {
-      topic: submittedTopic,
-      readQueueCount: Number(form.readQueueCount),
-      writeQueueCount: Number(form.writeQueueCount),
-      perm: permissionBits(form),
-      brokerNameList: submittedBrokers,
-      clusterNameList: submittedClusters,
-      order: form.ordered,
-      messageType: form.messageType
-    };
-
     try {
-      const operationResult = await onSubmit(request);
+      const operationResult = await onSubmit(snapshot.request);
       if (!isCurrentPresentation(requestId, submittedMode, submittedTopic)) return;
 
-      setConfirmOpen(false);
-      if (!operationResult || operationResult.success) {
+      setConfirmation(null);
+      if (operationResult.success) {
         onOpenChange(false);
       } else {
         setResult(operationResult);
@@ -202,7 +199,7 @@ export default function TopicMutationDialog(props: TopicMutationDialogProps | Le
     } catch (requestError) {
       if (!isCurrentPresentation(requestId, submittedMode, submittedTopic)) return;
 
-      setConfirmOpen(false);
+      setConfirmation(null);
       setError(requestError instanceof Error ? requestError.message : 'Unable to save the topic.');
       focusSave();
     } finally {
@@ -253,57 +250,30 @@ export default function TopicMutationDialog(props: TopicMutationDialogProps | Le
                   />
                 </div>
 
-                {legacyCreate ? (
-                  <>
-                    <div className="field">
-                      <Label htmlFor={`${formId}-clusters`}>Cluster names</Label>
-                      <Input
-                        id={`${formId}-clusters`}
-                        value={form.legacyClusterNames}
-                        placeholder="Comma-separated target clusters"
-                        disabled={submitting}
-                        onChange={(event) => setForm((value) => ({ ...value, legacyClusterNames: event.target.value }))}
-                      />
-                    </div>
-                    <div className="field">
-                      <Label htmlFor={`${formId}-brokers`}>Broker names</Label>
-                      <Input
-                        id={`${formId}-brokers`}
-                        value={form.legacyBrokerNames}
-                        placeholder="Comma-separated target brokers"
-                        disabled={submitting}
-                        onChange={(event) => setForm((value) => ({ ...value, legacyBrokerNames: event.target.value }))}
-                      />
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <TargetGroup
-                      legend="Clusters"
-                      names={clusterNames}
-                      selected={selectedClusters}
-                      disabled={submitting}
-                      emptyLabel="No clusters discovered"
-                      idPrefix={`${formId}-cluster`}
-                      onToggle={(name, checked) => setForm((value) => ({
-                        ...value,
-                        clusterNameList: toggleSelection(value.clusterNameList, name, checked)
-                      }))}
-                    />
-                    <TargetGroup
-                      legend="Brokers"
-                      names={brokerNames}
-                      selected={selectedBrokers}
-                      disabled={submitting}
-                      emptyLabel="No brokers discovered"
-                      idPrefix={`${formId}-broker`}
-                      onToggle={(name, checked) => setForm((value) => ({
-                        ...value,
-                        brokerNameList: toggleSelection(value.brokerNameList, name, checked)
-                      }))}
-                    />
-                  </>
-                )}
+                <TargetGroup
+                  legend="Clusters"
+                  names={clusterNames}
+                  selected={selectedClusters}
+                  disabled={submitting}
+                  emptyLabel="No clusters discovered"
+                  idPrefix={`${formId}-cluster`}
+                  onToggle={(name, checked) => setForm((value) => ({
+                    ...value,
+                    clusterNameList: toggleSelection(value.clusterNameList, name, checked)
+                  }))}
+                />
+                <TargetGroup
+                  legend="Brokers"
+                  names={brokerNames}
+                  selected={selectedBrokers}
+                  disabled={submitting}
+                  emptyLabel="No brokers discovered"
+                  idPrefix={`${formId}-broker`}
+                  onToggle={(name, checked) => setForm((value) => ({
+                    ...value,
+                    brokerNameList: toggleSelection(value.brokerNameList, name, checked)
+                  }))}
+                />
 
                 <div className="field">
                   <Label htmlFor={`${formId}-write-queues`}>Write queue count</Label>
@@ -408,26 +378,31 @@ export default function TopicMutationDialog(props: TopicMutationDialogProps | Le
         </DialogContent>
       </Dialog>
 
-      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+      <AlertDialog
+        open={confirmation !== null}
+        onOpenChange={(nextOpen) => { if (!nextOpen) setConfirmation(null); }}
+      >
         <AlertDialogContent>
-          <AlertDialogTitle>{mode === 'edit' ? 'Save topic changes?' : 'Create topic?'}</AlertDialogTitle>
+          <AlertDialogTitle>{confirmation?.mode === 'edit' ? 'Save topic changes?' : 'Create topic?'}</AlertDialogTitle>
           <AlertDialogDescription>
-            {mode === 'edit' ? 'Save changes to' : 'Create'} {form.topic.trim() || 'this topic'} for{' '}
-            {resolvedBrokers.length} broker {resolvedBrokers.length === 1 ? 'target' : 'targets'}
-            {submittedClusters.length > 0 ? ` resolved from ${submittedClusters.join(', ')}` : ''}
-            {submittedBrokers.length > 0 ? ` and selected brokers ${submittedBrokers.join(', ')}` : ''}?
+            {confirmation?.mode === 'edit' ? 'Save changes to' : 'Create'} {confirmation?.topic || 'this topic'} for{' '}
+            {confirmation?.resolvedBrokers.length ?? 0} broker {confirmation?.resolvedBrokers.length === 1 ? 'target' : 'targets'}
+            {confirmation?.request.clusterNameList.length
+              ? ` resolved from ${confirmation.request.clusterNameList.join(', ')}`
+              : ''}
+            {confirmation?.request.brokerNameList.length
+              ? ` and selected brokers ${confirmation.request.brokerNameList.join(', ')}`
+              : ''}?
           </AlertDialogDescription>
           <div className="ui-alert-dialog-actions">
             <AlertDialogCancel disabled={submitting}>Cancel</AlertDialogCancel>
-            <AlertDialogAction
+            <Button
+              type="button"
               disabled={submitting}
-              onClick={(event) => {
-                event.preventDefault();
-                void submit();
-              }}
+              onClick={() => void submit()}
             >
-              {submitting ? 'Saving' : mode === 'edit' ? 'Save changes' : 'Create topic'}
-            </AlertDialogAction>
+              {submitting ? 'Saving' : confirmation?.mode === 'edit' ? 'Save changes' : 'Create topic'}
+            </Button>
           </div>
         </AlertDialogContent>
       </AlertDialog>
@@ -513,8 +488,6 @@ function toFormState(mode: 'create' | 'edit', config: TopicConfigView | null): T
       topic: config.topicName,
       clusterNameList: config.clusterNameList,
       brokerNameList: config.brokerNameList,
-      legacyClusterNames: '',
-      legacyBrokerNames: '',
       readQueueCount: String(config.readQueueNums),
       writeQueueCount: String(config.writeQueueNums),
       read: (config.perm & 4) !== 0,
@@ -529,8 +502,6 @@ function toFormState(mode: 'create' | 'edit', config: TopicConfigView | null): T
     topic: '',
     clusterNameList: [],
     brokerNameList: [],
-    legacyClusterNames: '',
-    legacyBrokerNames: '',
     readQueueCount: '8',
     writeQueueCount: '8',
     read: true,
@@ -561,13 +532,6 @@ function toggleSelection(values: string[], name: string, checked: boolean) {
 
 function canonicalSelection(available: string[], selected: string[]) {
   return available.filter((name) => selected.includes(name));
-}
-
-function splitCsv(value: string) {
-  return value
-    .split(',')
-    .map((item) => item.trim())
-    .filter(Boolean);
 }
 
 function resolveBrokers(
