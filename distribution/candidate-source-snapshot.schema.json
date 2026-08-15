@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rocketmq-rust.local/schemas/candidate-source-snapshot.schema.json",
+  "title": "RocketMQ Rust semantic source snapshot",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "candidate_id",
+    "version",
+    "run_id",
+    "attempt",
+    "source_bundle",
+    "files",
+    "sealed"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "candidate_id": { "type": "string" },
+    "version": { "type": "string" },
+    "run_id": { "type": "string" },
+    "attempt": { "type": "integer", "minimum": 1 },
+    "source_bundle": { "type": "string" },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "type", "size"],
+        "properties": {
+          "path": { "type": "string" },
+          "type": { "const": "file" },
+          "size": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "sealed": { "const": true },
+    "created_at": { "type": "string" }
+  }
+}

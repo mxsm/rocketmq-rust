@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "scope": "core-release",
+  "release_version": "1.0.0",
+  "services": [
+    "rocketmq-namesrv",
+    "rocketmq-broker",
+    "rocketmq-controller",
+    "rocketmq-proxy"
+  ],
+  "publication": {
+    "default": "local-layout-only",
+    "remote": "separate-approved-task"
+  }
+}
