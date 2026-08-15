@@ -17,17 +17,20 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import core_release_scope
+
 
 ROOT = Path(__file__).resolve().parents[1]
 PUBLIC_API_INTENT = ROOT / "scripts" / "public-api-intent.json"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 LIB_KINDS = {"lib", "rlib", "proc-macro"}
 RUSTDOC_TOOLCHAIN = "nightly-2026-07-05"
 
@@ -53,12 +56,18 @@ def run(command: list[str]) -> str:
     return result.stdout.strip()
 
 
-def workspace_library_targets() -> list[tuple[str, str]]:
-    metadata = json.loads(run(["cargo", "metadata", "--format-version", "1", "--no-deps"]))
+def workspace_library_targets(*, scope: str = "core-release") -> list[tuple[str, str]]:
+    metadata = json.loads(
+        run(["cargo", "metadata", "--format-version", "1", "--no-deps", "--locked"])
+    )
     members = set(metadata["workspace_members"])
+    scope_document = core_release_scope.load_scope()
+    core_names = {entry["name"] for entry in core_release_scope.core_packages(scope_document)}
     targets: list[tuple[str, str]] = []
     for package in metadata["packages"]:
         if package["id"] not in members:
+            continue
+        if scope == "core-release" and package["name"] not in core_names:
             continue
         library_targets = [
             target
@@ -80,18 +89,80 @@ def toolchain() -> dict[str, str]:
     }
 
 
-def sha256(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
+VOLATILE_RUSTDOC_KEYS = frozenset({"id", "fields", "impls", "items", "variants"})
+FEATURE_RE = re.compile(r"feature\s*=\s*\"([^\"]+)\"")
 
 
-def public_path_fingerprint(document: dict[str, Any]) -> tuple[int, str]:
-    paths = sorted(
-        f"{item['kind']} {'::'.join(item['path'])}"
-        for item in document["paths"].values()
-        if item["crate_id"] == 0
+def _semantic_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _semantic_value(item)
+            for key, item in sorted(value.items())
+            if key not in VOLATILE_RUSTDOC_KEYS
+        }
+    if isinstance(value, list):
+        return [_semantic_value(item) for item in value]
+    return value
+
+
+def semantic_public_items(package: str, document: dict[str, Any]) -> list[dict[str, str]]:
+    """Build stable, readable API records from rustdoc's public path table."""
+
+    index = document.get("index", {})
+    records: list[dict[str, str]] = []
+    for item_id, path_record in document.get("paths", {}).items():
+        if path_record.get("crate_id") != 0:
+            continue
+        path = path_record.get("path")
+        if not isinstance(path, list) or not path or any(not isinstance(part, str) for part in path):
+            raise SnapshotError(f"invalid public path for {package}: {path!r}")
+        item = index.get(item_id, {})
+        kind = str(path_record.get("kind") or next(iter(item.get("inner", {})), "unknown"))
+        visibility = item.get("visibility", "public")
+        if not isinstance(visibility, str):
+            visibility = json.dumps(visibility, sort_keys=True, separators=(",", ":"))
+        attributes = item.get("attrs", [])
+        features = sorted(
+            {
+                feature
+                for attribute in attributes
+                if isinstance(attribute, str)
+                for feature in FEATURE_RE.findall(attribute)
+            }
+        )
+        inner = item.get("inner", {})
+        kind_value = inner.get(kind, inner) if isinstance(inner, dict) else inner
+        signature = json.dumps(
+            _semantic_value(kind_value),
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        records.append(
+            {
+                "package": package,
+                "module": "::".join(path[:-1]),
+                "item_path": "::".join(path),
+                "kind": kind,
+                "visibility": visibility,
+                "signature": signature,
+                "feature": ",".join(features) if features else "default",
+            }
+        )
+    return sorted(
+        records,
+        key=lambda item: tuple(
+            item[field]
+            for field in (
+                "package",
+                "module",
+                "item_path",
+                "kind",
+                "visibility",
+                "signature",
+                "feature",
+            )
+        ),
     )
-    payload = ("\n".join(paths) + "\n").encode()
-    return len(paths), sha256(payload)
 
 
 def snapshot_package(package: str, target: str, *, refresh: bool = True) -> dict[str, Any]:
@@ -114,15 +185,11 @@ def snapshot_package(package: str, target: str, *, refresh: bool = True) -> dict
     rustdoc_json = ROOT / "target" / "doc" / f"{target}.json"
     if not rustdoc_json.is_file():
         raise SnapshotError(f"rustdoc JSON was not produced for {package}: {rustdoc_json}")
-    raw = rustdoc_json.read_bytes()
-    document = json.loads(raw)
-    public_path_count, public_path_sha256 = public_path_fingerprint(document)
+    document = json.loads(rustdoc_json.read_text(encoding="utf-8"))
     return {
         "target": target,
         "crate_version": document.get("crate_version"),
-        "public_path_count": public_path_count,
-        "public_path_sha256": public_path_sha256,
-        "rustdoc_json_sha256": sha256(raw),
+        "public_api": semantic_public_items(package, document),
     }
 
 
@@ -160,8 +227,8 @@ def validate_existing_artifacts(targets: list[tuple[str, str]]) -> None:
         )
 
 
-def generate_snapshot(*, refresh: bool = True) -> dict[str, Any]:
-    targets = workspace_library_targets()
+def generate_snapshot(*, refresh: bool = True, scope: str = "core-release") -> dict[str, Any]:
+    targets = workspace_library_targets(scope=scope)
     if not refresh:
         validate_existing_artifacts(targets)
     packages = {}
@@ -178,7 +245,7 @@ def generate_snapshot(*, refresh: bool = True) -> dict[str, Any]:
     }
     return {
         "schema_version": SCHEMA_VERSION,
-        "source_commit": run(["git", "rev-parse", "HEAD"]),
+        "scope": scope,
         "feature_profile": "default",
         "toolchain": toolchain(),
         "packages": packages,
@@ -212,22 +279,43 @@ def compare_snapshots(baseline: dict[str, Any], candidate: dict[str, Any]) -> li
             differences.append({"kind": "package-added", "package": package, "classification": "unclassified"})
         elif after is None:
             differences.append({"kind": "package-removed", "package": package, "classification": "breaking"})
-        elif before != after:
-            differences.append(
-                {
-                    "kind": "surface-changed",
-                    "package": package,
-                    "classification": "unclassified",
-                    "expected": before,
-                    "actual": after,
-                }
-            )
+        else:
+            before_items = {
+                tuple(item[field] for field in ("package", "module", "item_path", "kind", "visibility", "signature", "feature"))
+                for item in before.get("public_api", [])
+            }
+            after_items = {
+                tuple(item[field] for field in ("package", "module", "item_path", "kind", "visibility", "signature", "feature"))
+                for item in after.get("public_api", [])
+            }
+            for identity in sorted(before_items - after_items):
+                differences.append(
+                    {
+                        "kind": "item-removed",
+                        "package": package,
+                        "classification": "breaking",
+                        "item": dict(zip(("package", "module", "item_path", "kind", "visibility", "signature", "feature"), identity, strict=True)),
+                    }
+                )
+            for identity in sorted(after_items - before_items):
+                differences.append(
+                    {
+                        "kind": "item-added",
+                        "package": package,
+                        "classification": "additive",
+                        "item": dict(zip(("package", "module", "item_path", "kind", "visibility", "signature", "feature"), identity, strict=True)),
+                    }
+                )
     return differences
 
 
 def write_json(path: Path, value: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(value, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -236,6 +324,11 @@ def parse_args() -> argparse.Namespace:
     mode.add_argument("--write-baseline", type=Path)
     mode.add_argument("--check", type=Path)
     parser.add_argument("--output", type=Path)
+    parser.add_argument(
+        "--scope",
+        choices=("core-release",),
+        default="core-release",
+    )
     parser.add_argument(
         "--from-existing",
         action="store_true",
@@ -247,7 +340,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     try:
-        candidate = generate_snapshot(refresh=not args.from_existing)
+        candidate = generate_snapshot(refresh=not args.from_existing, scope=args.scope)
         if args.write_baseline:
             write_json(args.write_baseline, candidate)
             print(
@@ -260,8 +353,7 @@ def main() -> int:
         differences = compare_snapshots(baseline, candidate)
         report = {
             "schema_version": SCHEMA_VERSION,
-            "baseline_commit": baseline.get("source_commit"),
-            "candidate_commit": candidate["source_commit"],
+            "scope": args.scope,
             "packages": len(candidate["packages"]),
             "differences": differences,
             "status": "compatible" if not differences else "review-required",

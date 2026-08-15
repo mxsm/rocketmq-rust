@@ -32,6 +32,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import environment_write_guard as rust_source  # noqa: E402
+import core_release_scope  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -251,14 +252,23 @@ def scan_file(root: Path, path: Path, history: History) -> FileMetrics:
     )
 
 
-def scan_tree(root: Path) -> list[FileMetrics]:
+def scan_tree(root: Path, *, scope: str = "all") -> list[FileMetrics]:
     history = git_history(root)
+    scope_document = (
+        core_release_scope.load_scope(root / "scripts/core-release-scope.json")
+        if scope != "all"
+        else None
+    )
     metrics = []
     for path in rust_source.production_sources(root):
         relative = path.relative_to(root)
         if is_test_only_file(relative):
             continue
         key = normalized(relative)
+        if scope_document is not None and not core_release_scope.path_in_scope(
+            key, scope, scope_document
+        ):
+            continue
         metrics.append(scan_file(root, path, history.get(key, History())))
     return sorted(metrics, key=lambda item: (-item.score, -item.production_lines, item.path))
 
@@ -538,7 +548,11 @@ def render_report(payload: dict[str, Any]) -> str:
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
 
 
 def main() -> int:
@@ -549,10 +563,15 @@ def main() -> int:
     parser.add_argument("--decisions", type=Path, default=DECISIONS)
     parser.add_argument("--write-baseline", action="store_true")
     parser.add_argument("--write-report", action="store_true")
+    parser.add_argument(
+        "--scope",
+        choices=("core-release", "repo-global", "all"),
+        default="all",
+    )
     args = parser.parse_args()
 
     root = args.root.resolve()
-    metrics = scan_tree(root)
+    metrics = scan_tree(root, scope=args.scope)
     try:
         decision_document = args.decisions.read_text(encoding="utf-8")
     except OSError:
@@ -567,7 +586,7 @@ def main() -> int:
         payload = baseline_payload(metrics)
         write_json(args.baseline, payload)
         args.report.parent.mkdir(parents=True, exist_ok=True)
-        args.report.write_text(render_report(payload), encoding="utf-8")
+        args.report.write_text(render_report(payload), encoding="utf-8", newline="\n")
         print(
             f"MODULE_MAINTAINABILITY_BASELINE_WRITTEN files={len(metrics)} "
             f"hotspots={RANKED_HOTSPOTS}"
@@ -584,7 +603,7 @@ def main() -> int:
     expected_report = render_report(baseline)
     if args.write_report:
         args.report.parent.mkdir(parents=True, exist_ok=True)
-        args.report.write_text(expected_report, encoding="utf-8")
+        args.report.write_text(expected_report, encoding="utf-8", newline="\n")
     elif not args.report.is_file() or args.report.read_text(encoding="utf-8") != expected_report:
         findings.append(Finding("stale-report", normalized(args.report), "run with --write-report"))
 

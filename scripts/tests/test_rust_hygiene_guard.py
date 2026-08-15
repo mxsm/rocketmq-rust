@@ -156,6 +156,24 @@ pub unsafe fn read_raw(pointer: *const u8) -> u8 {
 
         self.assertEqual(first_debt[0]["identity"], shifted_debt[0]["identity"])
 
+    def test_structural_debt_identity_contains_no_content_fingerprint(self):
+        _, debt = self.guard.scan_source(
+            "fn decode(value: Option<u8>) { value.unwrap(); }\n",
+            "rocketmq-client/src/decode.rs",
+        )
+
+        self.assertEqual("rocketmq-client/src/decode.rs:panic_surface:decode:0", debt[0]["identity"])
+        self.assertNotIn("fingerprint", debt[0])
+
+    def test_core_tree_scan_uses_the_phase_zero_package_scope(self):
+        safety, debt = self.guard.scan_tree(ROOT, scope="core-release")
+
+        self.assertEqual([], safety)
+        self.assertTrue(debt)
+        self.assertFalse(any(entry["path"].startswith("rocketmq-sre/") for entry in debt))
+        self.assertFalse(any("rocketmq-mcp" in entry["path"] for entry in debt))
+        self.assertFalse(any(entry["path"].startswith("rocketmq-dashboard/") for entry in debt))
+
     def test_ignores_test_module_debt_and_unsafe(self):
         source = """
 #[cfg(test)]
@@ -217,6 +235,29 @@ fn test_runtime() {
 
         self.assertEqual([], safety)
         self.assertEqual(["crate/src/runtime.rs"], [entry["path"] for entry in debt])
+
+    def test_scan_tree_follows_test_only_module_named_build(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "crate" / "src"
+            fixtures = source / "fixtures"
+            cases = fixtures / "cases"
+            cases.mkdir(parents=True)
+            (source / "lib.rs").write_text(
+                "#[cfg(test)]\nmod fixtures;\n",
+                encoding="utf-8",
+            )
+            (source / "fixtures.rs").write_text("mod build;\n", encoding="utf-8")
+            (fixtures / "build.rs").write_text(
+                '#[path = "cases/sample.rs"]\nmod sample;\n',
+                encoding="utf-8",
+            )
+            (cases / "sample.rs").write_text("fn sample() { panic!(); }\n", encoding="utf-8")
+
+            safety, debt = self.guard.scan_tree(root)
+
+        self.assertEqual([], safety)
+        self.assertEqual([], debt)
 
     def test_scan_tree_keeps_modules_that_can_compile_without_test_cfg(self):
         with tempfile.TemporaryDirectory() as directory:

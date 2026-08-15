@@ -193,11 +193,28 @@ trigger that returns it to active decomposition review.
 - Evidence: The capability boundary is already private; the current replacement hotspot has 1,534 production lines, fan-out 9, and 19 lock or atomic sites that participate in one ordered POP transition.
 - Revisit when: Validation or response mapping can use owned values without offset state, lock sites exceed 19, or fan-out exceeds 9.
 
+### `rocketmq-store/src/timer/timer_message_store.rs`
+
+- Decision: `retained`.
+- Owner: RocketMQ timer-store maintainers.
+- State owner: `TimerMessageStore` remains the single owner of timer-wheel, timer-log, checkpoint, drain, and delivery progress.
+- Evidence: The 2,167 production lines coordinate 53 lock or atomic sites and two state owners across one crash-consistent persistence protocol; recovered state, delete identity, slot drain, and persistence-stage values are already private boundaries, and splitting methods without an owned transition would duplicate or expose mutable timer state.
+- Revisit when: Recovery, drain, or delivery can accept a complete immutable snapshot and return an owned transition, fan-out exceeds 13, or lock sites exceed 53.
+
+### `rocketmq-namesrv/src/bootstrap.rs`
+
+- Decision: `decomposed`.
+- Owner: RocketMQ NameServer lifecycle maintainers.
+- State owner: `NameServerRuntime` remains the sole owner of startup journal, component handles, configuration snapshot, and shutdown ordering.
+- Evidence: Configuration application, lifecycle sequencing, and signal handling already live in three private child modules; the parent retains builder/runtime composition and 60 focused tests without exporting task handles or lock guards.
+- Revisit when: The parent adds another independent protocol service, fan-out exceeds 14, lock sites exceed 9, or a value-only configuration projection can leave the lifecycle owner.
+
 ## Outcome
 
-The original twenty hotspots all have a reviewed decision. Six are confirmed as
-domain decomposition roots and fourteen are retained single-owner boundaries.
-The original Client admin entry is one of the decomposed roots and has left the
-current board. The retained Broker POP processor that replaced it is also governed.
-Future board regeneration therefore cannot silently introduce an unowned
-ranked hotspot.
+The original twenty hotspots and every replacement on the current core board have
+a reviewed decision. Seven are confirmed as domain decomposition roots and sixteen
+are retained single-owner boundaries. The original Client admin entry is one of the
+decomposed roots and has left the current board. The retained Broker POP and Timer
+processors plus the decomposed NameServer bootstrap that entered later boards are
+also governed. Future board regeneration therefore cannot silently introduce an
+unowned ranked hotspot.

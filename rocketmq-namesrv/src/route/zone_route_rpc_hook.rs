@@ -82,23 +82,20 @@ impl RPCHook for ZoneRouteRPCHook {
         if typed_mode == Some(TYPED_ZONE_ROUTE_ENABLED) {
             return Ok(());
         }
-        let zone_mode = if let Some(ext) = request.get_ext_fields() {
-            ext.get(mix_all::ZONE_MODE)
-                .unwrap_or(&"false".into())
-                .parse::<bool>()
-                .unwrap_or(false)
-        } else {
+        let Some(ext_fields) = request.get_ext_fields() else {
             return Ok(());
         };
+        let zone_mode = ext_fields
+            .get(mix_all::ZONE_MODE)
+            .and_then(|value| value.parse::<bool>().ok())
+            .unwrap_or(false);
         if !zone_mode {
             return Ok(());
         }
 
-        let zone_name = request.get_ext_fields().unwrap().get(mix_all::ZONE_NAME);
-        if zone_name.is_none() {
+        let Some(zone_name) = ext_fields.get(mix_all::ZONE_NAME) else {
             return Ok(());
-        }
-        let zone_name = zone_name.unwrap();
+        };
         if zone_name.trim().is_empty() {
             return Ok(());
         }
@@ -106,7 +103,10 @@ impl RPCHook for ZoneRouteRPCHook {
         let hook_started = Instant::now();
         #[cfg(test)]
         ZONE_HOOK_DECODE_COUNT.fetch_add(1, Ordering::Relaxed);
-        let original_route_data = TopicRouteData::decode(response.get_body().unwrap())?;
+        let Some(response_body) = response.get_body() else {
+            return Ok(());
+        };
+        let original_route_data = TopicRouteData::decode(response_body)?;
         let mut topic_route_data = original_route_data.clone();
         filter_by_zone_name(&mut topic_route_data, zone_name);
         let body = topic_route_data.encode()?;

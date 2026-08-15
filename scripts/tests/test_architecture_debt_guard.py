@@ -15,6 +15,8 @@
 from __future__ import annotations
 
 import copy
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -26,6 +28,38 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class ArchitectureDebtGuardTests(unittest.TestCase):
+    def test_core_allow_debt_excludes_non_core_projects(self) -> None:
+        source = """
+INTERNAL_ERROR_ALLOWLIST = ("rocketmq-broker/src/",)
+ANYHOW_RESULT_ALLOWLIST = {
+    "rocketmq-client/src/runtime.rs": "core",
+    "rocketmq-dashboard/app/src/main.rs": "excluded",
+}
+PROCESSOR_GENERIC_RESPONSE_ALLOWLIST = {}
+SOURCE_STRINGIFICATION_ALLOWLIST = {}
+"""
+
+        self.assertEqual(2, guard.error_allowlist_count(source, scope="core-release"))
+        self.assertEqual(3, guard.error_allowlist_count(source, scope="repo-global"))
+
+    def test_live_core_scope_check_is_an_independent_gate(self) -> None:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts/architecture_debt_guard.py"),
+                "--check",
+                "--scope",
+                "core-release",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
+        self.assertIn("scope=core-release", completed.stdout)
+
     @classmethod
     def setUpClass(cls) -> None:
         cls.registry = guard.load_registry(ROOT)

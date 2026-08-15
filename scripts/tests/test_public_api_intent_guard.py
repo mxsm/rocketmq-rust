@@ -25,9 +25,20 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import public_api_intent_guard as guard  # noqa: E402
+import core_release_scope  # noqa: E402
 
 
 class PublicApiIntentGuardTests(unittest.TestCase):
+    def test_core_inventory_is_derived_from_the_phase_zero_allowlist(self) -> None:
+        inventory = guard.current_inventory(ROOT, scope="core-release")
+
+        self.assertEqual(set(guard.CRATES), set(inventory))
+        for entries in inventory.values():
+            self.assertTrue(entries)
+            self.assertTrue(
+                all(core_release_scope.path_in_scope(entry["path"], "core-release") for entry in entries)
+            )
+
     def test_inventory_ignores_nested_items_and_classifies_compat(self) -> None:
         entries = guard.inventory_source(
             "crate/src/lib.rs",

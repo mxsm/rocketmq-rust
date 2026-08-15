@@ -225,6 +225,28 @@ def build_source_inventory() -> dict[str, Any]:
     }
 
 
+def scoped_source_inventory(inventory: dict[str, Any], scope: str) -> dict[str, Any]:
+    """Exclude telemetry surfaces owned only by projects outside the core release."""
+
+    if scope not in {"core-release", "repo-global", "all"}:
+        raise ValueError(f"unsupported telemetry scope: {scope}")
+    if scope != "core-release":
+        return inventory
+    result = deepcopy(inventory)
+    result["metrics"] = [metric for metric in inventory["metrics"] if metric.get("source") != "Mcp"]
+    result["spans"] = {
+        symbol: value
+        for symbol, value in inventory["spans"].items()
+        if symbol not in {"MCP_TOOL", "MCP_RESOURCE"}
+    }
+    result["events"] = {
+        symbol: value
+        for symbol, value in inventory["events"].items()
+        if symbol != "MCP_ACTION"
+    }
+    return result
+
+
 def version_tuple(value: Any) -> tuple[int, int, int] | None:
     if not isinstance(value, str):
         return None
@@ -490,6 +512,11 @@ def apply_fixture(document: dict[str, Any], fixture: dict[str, Any]) -> dict[str
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--registry", type=Path, default=DEFAULT_REGISTRY)
+    parser.add_argument(
+        "--scope",
+        choices=("core-release", "repo-global", "all"),
+        default="core-release",
+    )
     return parser.parse_args(argv)
 
 
@@ -497,7 +524,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
         registry = load_json(args.registry)
-        inventory = build_source_inventory()
+        inventory = scoped_source_inventory(build_source_inventory(), args.scope)
         findings = validate_registry(registry, inventory)
     except (OSError, ValueError) as error:
         print(f"telemetry semantic guard: FAIL\n- {error}")
@@ -513,7 +540,7 @@ def main(argv: list[str] | None = None) -> int:
     }
     print(
         "telemetry semantic guard: PASS "
-        f"version={registry['registry_version']} metrics={signal_counts['metric']} "
+        f"scope={args.scope} version={registry['registry_version']} metrics={signal_counts['metric']} "
         f"spans={signal_counts['span']} logs={signal_counts['log']} "
         f"attributes={len(registry['attributes'])}"
     )

@@ -190,6 +190,15 @@ pub struct RuntimeState;
 
 
 class RepositoryModuleMaintainabilityContracts(unittest.TestCase):
+    def test_core_scan_excludes_projects_outside_the_release_allowlist(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        metrics = guard.scan_tree(root, scope="core-release")
+
+        self.assertTrue(metrics)
+        self.assertFalse(any(item.path.startswith("rocketmq-sre/") for item in metrics))
+        self.assertFalse(any("rocketmq-mcp" in item.path for item in metrics))
+        self.assertFalse(any(item.path.startswith("rocketmq-dashboard/") for item in metrics))
+
     def test_ci_scans_maintainability_with_complete_git_history(self) -> None:
         root = Path(__file__).resolve().parents[2]
         workflow = (root / ".github/workflows/rocketmq-rust-ci.yaml").read_text(encoding="utf-8")
@@ -202,7 +211,7 @@ class RepositoryModuleMaintainabilityContracts(unittest.TestCase):
     def test_repository_baseline_and_report_are_current(self) -> None:
         root = Path(__file__).resolve().parents[2]
         baseline = json.loads((root / "scripts/module-maintainability-baseline.json").read_text(encoding="utf-8"))
-        metrics = guard.scan_tree(root)
+        metrics = guard.scan_tree(root, scope="core-release")
 
         self.assertEqual([], guard.compare(metrics, baseline))
         self.assertEqual(

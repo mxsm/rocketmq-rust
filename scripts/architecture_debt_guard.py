@@ -25,6 +25,10 @@ from pathlib import Path
 import sys
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import core_release_scope
+
 
 DEFAULT_ROOT = Path(__file__).resolve().parents[1]
 REGISTRY_RELATIVE = Path("scripts/architecture-debt-registry.json")
@@ -177,7 +181,37 @@ def validate_registry(root: Path, registry: dict[str, Any]) -> list[Finding]:
     return findings
 
 
-def validate_specialist_ledgers(root: Path, registry: dict[str, Any]) -> list[Finding]:
+def error_allowlist_count(source: str, *, scope: str) -> int:
+    tree = ast.parse(source)
+    allowlist_names = {
+        "INTERNAL_ERROR_ALLOWLIST",
+        "ANYHOW_RESULT_ALLOWLIST",
+        "PROCESSOR_GENERIC_RESPONSE_ALLOWLIST",
+        "SOURCE_STRINGIFICATION_ALLOWLIST",
+    }
+    count = 0
+    for node in tree.body:
+        name = None
+        value = None
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            name = node.targets[0].id
+            value = node.value
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            name = node.target.id
+            value = node.value
+        if name not in allowlist_names or value is None:
+            continue
+        entries = ast.literal_eval(value)
+        count += sum(core_release_scope.path_in_scope(path, scope) for path in entries)
+    return count
+
+
+def validate_specialist_ledgers(
+    root: Path,
+    registry: dict[str, Any],
+    *,
+    scope: str = "core-release",
+) -> list[Finding]:
     findings: list[Finding] = []
     entries = {entry["id"]: entry for entry in registry["entries"]}
 
@@ -229,25 +263,7 @@ def validate_specialist_ledgers(root: Path, registry: dict[str, Any]) -> list[Fi
         findings.append(Finding("scope-drift", "scripts/runtime-audit-baseline.json", f"runtime={runtime_count}"))
 
     error_source = (root / "scripts/error_architecture_guard.py").read_text(encoding="utf-8")
-    error_tree = ast.parse(error_source)
-    allowlist_names = {
-        "INTERNAL_ERROR_ALLOWLIST",
-        "ANYHOW_RESULT_ALLOWLIST",
-        "PROCESSOR_GENERIC_RESPONSE_ALLOWLIST",
-        "SOURCE_STRINGIFICATION_ALLOWLIST",
-    }
-    allow_count = 0
-    for node in error_tree.body:
-        name = None
-        value = None
-        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
-            name = node.targets[0].id
-            value = node.value
-        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-            name = node.target.id
-            value = node.value
-        if name in allowlist_names and value is not None:
-            allow_count += len(ast.literal_eval(value))
+    allow_count = error_allowlist_count(error_source, scope=scope)
     lint_registry = json.loads(
         (root / "scripts/rust-lint-debt-registry.json").read_text(encoding="utf-8")
     )
@@ -310,13 +326,18 @@ def main() -> int:
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--check", action="store_true")
     mode.add_argument("--write", action="store_true")
+    parser.add_argument(
+        "--scope",
+        choices=("core-release", "repo-global", "all"),
+        default="all",
+    )
     parser.add_argument("--root", type=Path, default=DEFAULT_ROOT, help=argparse.SUPPRESS)
     args = parser.parse_args()
     root = args.root.resolve()
     try:
         registry = load_registry(root)
         findings = validate_registry(root, registry)
-        findings.extend(validate_specialist_ledgers(root, registry))
+        findings.extend(validate_specialist_ledgers(root, registry, scope=args.scope))
         document = root / registry["generated_document"]
         rendered = render_document(registry)
         if args.write:
@@ -325,7 +346,7 @@ def main() -> int:
                     print(finding.render())
                 return 1
             document.parent.mkdir(parents=True, exist_ok=True)
-            document.write_text(rendered, encoding="utf-8")
+            document.write_text(rendered, encoding="utf-8", newline="\n")
             print(f"ARCHITECTURE_DEBT_WRITTEN path={document.relative_to(root).as_posix()}")
             return 0
         actual = document.read_text(encoding="utf-8") if document.is_file() else ""
@@ -341,7 +362,10 @@ def main() -> int:
         print(f"ARCHITECTURE_DEBT_FAILED findings={len(findings)}")
         return 1
     active = sum(entry["status"] == "active" for entry in registry["entries"])
-    print(f"ARCHITECTURE_DEBT_OK entries={len(registry['entries'])} active={active}")
+    print(
+        f"ARCHITECTURE_DEBT_OK scope={args.scope} "
+        f"entries={len(registry['entries'])} active={active}"
+    )
     return 0
 
 
