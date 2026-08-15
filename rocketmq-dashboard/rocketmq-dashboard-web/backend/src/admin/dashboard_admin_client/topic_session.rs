@@ -118,13 +118,20 @@ impl<G> TopicAdminSessionRegistry<G> {
         let mut state = self.state();
         state.builders = state.builders.saturating_sub(1);
         if state.builders == 0 {
-            self.builders_drained.notify_one();
+            self.builders_drained.notify_waiters();
         }
     }
 
     #[cfg(test)]
     pub(super) fn has_current(&self) -> bool {
         self.state().current.is_some()
+    }
+
+    #[cfg(test)]
+    pub(super) async fn take_current_guard_for_test(&self) -> Option<G> {
+        let current = self.state().current.clone()?;
+        let mut guard = current.guard.lock().await;
+        guard.take()
     }
 
     #[cfg(test)]
@@ -324,7 +331,7 @@ where
         }
         state.builders = state.builders.saturating_sub(1);
         if state.builders == 0 {
-            self.builders_drained.notify_one();
+            self.builders_drained.notify_waiters();
         }
         selected.map(|session| TopicAdminOperationLease {
             session,
@@ -389,7 +396,7 @@ impl<G> Drop for TopicAdminOperationLease<G> {
         let previous = self.session.active_operations.fetch_sub(1, Ordering::AcqRel);
         debug_assert!(previous > 0, "Topic admin operation lease count underflow");
         if previous == 1 {
-            self.operations_drained.notify_one();
+            self.operations_drained.notify_waiters();
         }
     }
 }
@@ -485,7 +492,7 @@ where
                 Ok(_) => Ok(None),
                 Err(error) => Err(error),
             },
-            None => Err(stale_topic_session_error()),
+            None => Err(missing_topic_session_guard_error()),
         }
     };
     let result = match operation_result {
@@ -546,6 +553,6 @@ fn cancellation_error() -> DashboardError {
     DashboardError::Config("Topic admin operation was cancelled during shutdown".to_string())
 }
 
-fn stale_topic_session_error() -> DashboardError {
-    DashboardError::Config("Topic admin session is no longer available; retry the request".to_string())
+fn missing_topic_session_guard_error() -> DashboardError {
+    DashboardError::Internal("Topic admin session guard is unexpectedly missing".to_string())
 }

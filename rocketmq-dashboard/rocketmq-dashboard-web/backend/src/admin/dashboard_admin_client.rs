@@ -1368,6 +1368,165 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn topic_shutdown_wakes_all_waiters_when_the_last_operation_finishes() {
+        let sessions = TopicAdminSessionRegistry::default();
+        let snapshot = AdminConfigSnapshot {
+            namesrv_addr: "127.0.0.1:9876".to_string(),
+            use_vip_channel: false,
+            use_tls: false,
+        };
+        let shutdowns = Arc::new(AtomicUsize::new(0));
+        let lease = sessions
+            .acquire(snapshot, || async {
+                Ok(TestTopicGuard {
+                    shutdowns: Arc::clone(&shutdowns),
+                })
+            })
+            .await
+            .expect("active topic operation lease");
+        let mut first_shutdown = Box::pin(sessions.shutdown());
+        let mut second_shutdown = Box::pin(sessions.shutdown());
+
+        std::future::poll_fn(|context| {
+            assert!(first_shutdown.as_mut().poll(context).is_pending());
+            assert!(second_shutdown.as_mut().poll(context).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        drop(lease);
+
+        tokio::time::timeout(Duration::from_millis(100), async {
+            first_shutdown.await;
+            second_shutdown.await;
+        })
+        .await
+        .expect("all topic shutdown waiters must be woken");
+        assert_eq!(shutdowns.load(Ordering::Acquire), 1);
+    }
+
+    #[tokio::test]
+    async fn topic_builder_abandonment_wakes_all_waiters() {
+        let sessions = TopicAdminSessionRegistry::<TestTopicGuard>::default();
+        let snapshot = AdminConfigSnapshot {
+            namesrv_addr: "127.0.0.1:9876".to_string(),
+            use_vip_channel: false,
+            use_tls: false,
+        };
+        let mut build = Box::pin(sessions.acquire(snapshot, std::future::pending));
+        std::future::poll_fn(|context| {
+            assert!(build.as_mut().poll(context).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        let mut first_waiter = Box::pin(sessions.wait_for_builders());
+        let mut second_waiter = Box::pin(sessions.wait_for_builders());
+        std::future::poll_fn(|context| {
+            assert!(first_waiter.as_mut().poll(context).is_pending());
+            assert!(second_waiter.as_mut().poll(context).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+
+        drop(build);
+
+        tokio::time::timeout(Duration::from_millis(100), async {
+            first_waiter.await;
+            second_waiter.await;
+        })
+        .await
+        .expect("all abandoned-builder waiters must be woken");
+    }
+
+    #[tokio::test]
+    async fn topic_builder_completion_wakes_all_waiters() {
+        let sessions = TopicAdminSessionRegistry::default();
+        let snapshot = AdminConfigSnapshot {
+            namesrv_addr: "127.0.0.1:9876".to_string(),
+            use_vip_channel: false,
+            use_tls: false,
+        };
+        let allow_build = Arc::new(Notify::new());
+        let build_allowed = Arc::clone(&allow_build);
+        let shutdowns = Arc::new(AtomicUsize::new(0));
+        let build_shutdowns = Arc::clone(&shutdowns);
+        let mut build = Box::pin(sessions.acquire(snapshot, move || async move {
+            build_allowed.notified().await;
+            Ok(TestTopicGuard {
+                shutdowns: build_shutdowns,
+            })
+        }));
+        std::future::poll_fn(|context| {
+            assert!(build.as_mut().poll(context).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        let mut first_waiter = Box::pin(sessions.wait_for_builders());
+        let mut second_waiter = Box::pin(sessions.wait_for_builders());
+        std::future::poll_fn(|context| {
+            assert!(first_waiter.as_mut().poll(context).is_pending());
+            assert!(second_waiter.as_mut().poll(context).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+
+        allow_build.notify_one();
+        let lease = build.await.expect("completed topic build");
+
+        tokio::time::timeout(Duration::from_millis(100), async {
+            first_waiter.await;
+            second_waiter.await;
+        })
+        .await
+        .expect("all completed-builder waiters must be woken");
+        drop(lease);
+        sessions.shutdown().await;
+        assert_eq!(shutdowns.load(Ordering::Acquire), 1);
+    }
+
+    #[tokio::test]
+    async fn topic_operation_reports_a_missing_guard_as_internal_corruption() {
+        let config = Arc::new(RwLock::new(DashboardConfigView::default()));
+        let snapshot = admin_config_snapshot(&config).await.expect("configured snapshot");
+        let sessions = TopicAdminSessionRegistry::default();
+        let shutdowns = Arc::new(AtomicUsize::new(0));
+        let seed_shutdowns = Arc::clone(&shutdowns);
+        let lease = sessions
+            .acquire(snapshot.clone(), move || async move {
+                Ok(TestTopicGuard {
+                    shutdowns: seed_shutdowns,
+                })
+            })
+            .await
+            .expect("seeded topic session");
+        drop(lease);
+        let _detached_guard = sessions
+            .take_current_guard_for_test()
+            .await
+            .expect("malformed session keeps a missing guard");
+        let operation_calls = Arc::new(AtomicUsize::new(0));
+        let tracked_calls = Arc::clone(&operation_calls);
+
+        let result = run_tracked_topic_admin_service(
+            &sessions,
+            &config,
+            snapshot,
+            std::future::pending(),
+            std::future::pending(),
+            std::future::pending(),
+            || async { unreachable!("the malformed current session must be reused") },
+            move |_| {
+                tracked_calls.fetch_add(1, Ordering::AcqRel);
+                Box::pin(async { Ok(()) })
+            },
+        )
+        .await;
+
+        assert!(matches!(result, Err(DashboardError::Internal(_))));
+        assert_eq!(operation_calls.load(Ordering::Acquire), 0);
+        assert_eq!(shutdowns.load(Ordering::Acquire), 0);
+    }
+
+    #[tokio::test]
     async fn topic_operation_lease_keeps_a_retired_guard_alive_until_the_stale_request_releases_it() {
         let config = Arc::new(RwLock::new(DashboardConfigView::default()));
         let snapshot = admin_config_snapshot(&config).await.expect("configured snapshot");
