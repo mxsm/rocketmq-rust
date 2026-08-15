@@ -262,6 +262,10 @@ mod defaults {
         10_000
     }
 
+    pub fn lite_event_full_dispatch_delay_time_for_wildcard_group() -> u64 {
+        10_000
+    }
+
     pub fn lite_lag_latency_collect_enable() -> bool {
         false
     }
@@ -1037,6 +1041,9 @@ pub struct BrokerConfig {
     #[serde(default = "defaults::lite_event_full_dispatch_delay_time")]
     pub lite_event_full_dispatch_delay_time: u64,
 
+    #[serde(default = "defaults::lite_event_full_dispatch_delay_time_for_wildcard_group")]
+    pub lite_event_full_dispatch_delay_time_for_wildcard_group: u64,
+
     #[serde(default = "defaults::lite_lag_latency_collect_enable")]
     pub lite_lag_latency_collect_enable: bool,
 
@@ -1532,6 +1539,8 @@ impl Default for BrokerConfig {
             max_client_event_count: defaults::max_client_event_count(),
             process_memory_limit_bytes: defaults::process_memory_limit_bytes(),
             lite_event_full_dispatch_delay_time: defaults::lite_event_full_dispatch_delay_time(),
+            lite_event_full_dispatch_delay_time_for_wildcard_group:
+                defaults::lite_event_full_dispatch_delay_time_for_wildcard_group(),
             lite_lag_latency_collect_enable: defaults::lite_lag_latency_collect_enable(),
             lite_lag_latency_metrics_enable: defaults::lite_lag_latency_metrics_enable(),
             lite_lag_count_metrics_enable: defaults::lite_lag_count_metrics_enable(),
@@ -2039,6 +2048,12 @@ impl BrokerConfig {
         properties.insert(
             "liteEventFullDispatchDelayTime".into(),
             self.lite_event_full_dispatch_delay_time.to_string().into(),
+        );
+        properties.insert(
+            "liteEventFullDispatchDelayTimeForWildcardGroup".into(),
+            self.lite_event_full_dispatch_delay_time_for_wildcard_group
+                .to_string()
+                .into(),
         );
         properties.insert(
             "liteLagLatencyCollectEnable".into(),
@@ -2575,6 +2590,12 @@ mod tests {
         assert_eq!(
             properties
                 .get("liteEventFullDispatchDelayTime")
+                .map(|value| value.as_str()),
+            Some("10000")
+        );
+        assert_eq!(
+            properties
+                .get("liteEventFullDispatchDelayTimeForWildcardGroup")
                 .map(|value| value.as_str()),
             Some("10000")
         );

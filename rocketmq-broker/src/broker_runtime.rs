@@ -159,6 +159,7 @@ use crate::processor::ack_message_processor::AckMessageProcessor;
 use crate::processor::ack_message_processor::AckMessageProcessorContext;
 use crate::processor::ack_message_processor::AckMessageStoreCapability;
 use crate::processor::admin_broker_processor::AdminBrokerProcessor;
+use crate::processor::change_invisible_time_processor::ChangeInvisibleTimeLiteCapability;
 use crate::processor::change_invisible_time_processor::ChangeInvisibleTimeOrderCapability;
 use crate::processor::change_invisible_time_processor::ChangeInvisibleTimePolicy;
 use crate::processor::change_invisible_time_processor::ChangeInvisibleTimePopCapability;

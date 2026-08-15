@@ -22,6 +22,7 @@ use rocketmq_model::common::attribute::subscription_group_attributes::LITE_SUB_C
 use rocketmq_model::common::attribute::subscription_group_attributes::LITE_SUB_MODEL_ATTRIBUTE_NAME;
 use rocketmq_model::common::attribute::subscription_group_attributes::LITE_SUB_RESET_OFFSET_EXCLUSIVE_ATTRIBUTE_NAME;
 use rocketmq_model::common::attribute::subscription_group_attributes::LITE_SUB_RESET_OFFSET_UNSUBSCRIBE_ATTRIBUTE_NAME;
+use rocketmq_model::common::attribute::subscription_group_attributes::LITE_SUB_WILDCARD_ATTRIBUTE_NAME;
 use rocketmq_model::common::attribute::subscription_group_attributes::PRIORITY_FACTOR_ATTRIBUTE_NAME;
 use serde::Deserialize;
 use serde::Serialize;
@@ -201,6 +202,26 @@ impl SubscriptionGroupConfig {
             ))
             .and_then(|value| value.parse::<i32>().ok())
             .unwrap_or(-1)
+    }
+
+    /// Returns whether this group follows every active Lite topic under its bound parent topic.
+    ///
+    /// Java 5.5 models this as the presence of the `lite.sub.wildcard` attribute rather than as a
+    /// normal tag expression. Preserve that presence-based wire contract for compatibility.
+    #[inline]
+    pub fn lite_sub_wildcard(&self) -> bool {
+        self.attributes
+            .contains_key(&CheetahString::from_static_str(LITE_SUB_WILDCARD_ATTRIBUTE_NAME))
+    }
+
+    #[inline]
+    pub fn set_lite_sub_wildcard(&mut self, wildcard: bool) {
+        let key = CheetahString::from_static_str(LITE_SUB_WILDCARD_ATTRIBUTE_NAME);
+        if wildcard {
+            self.attributes.insert(key, CheetahString::from_static_str("true"));
+        } else {
+            self.attributes.remove(&key);
+        }
     }
 
     #[inline]
@@ -408,6 +429,7 @@ mod subscription_group_config_tests {
         assert!(!config.reset_offset_in_exclusive_mode());
         assert!(!config.reset_offset_on_unsubscribe());
         assert_eq!(config.priority_factor(), 100);
+        assert!(!config.lite_sub_wildcard());
     }
 
     #[test]
@@ -446,5 +468,21 @@ mod subscription_group_config_tests {
         assert!(config.reset_offset_in_exclusive_mode());
         assert!(config.reset_offset_on_unsubscribe());
         assert_eq!(config.priority_factor(), 25);
+    }
+
+    #[test]
+    fn wildcard_lite_group_uses_attribute_presence_and_can_be_disabled() {
+        let mut config = SubscriptionGroupConfig::default();
+        config.set_attributes(HashMap::from([(
+            CheetahString::from_static_str(LITE_SUB_WILDCARD_ATTRIBUTE_NAME),
+            CheetahString::from_static_str("false"),
+        )]));
+
+        assert!(config.lite_sub_wildcard());
+
+        config.set_lite_sub_wildcard(false);
+        assert!(!config.lite_sub_wildcard());
+        config.set_lite_sub_wildcard(true);
+        assert!(config.lite_sub_wildcard());
     }
 }

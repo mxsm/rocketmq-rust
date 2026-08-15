@@ -36,9 +36,118 @@ pub mod send_message_constants;
 #[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub mod test_support {
+    use std::collections::HashSet;
+
+    use cheetah_string::CheetahString;
+    use rocketmq_model::common::lite::to_lmq_name;
+    use rocketmq_runtime::common::time_utils::current_millis;
+
+    use crate::lite::memory_consumer_order_info_manager::LiteOrderVisibilityUpdate;
+    use crate::lite::memory_consumer_order_info_manager::MemoryConsumerOrderInfoManager;
+    use crate::subscription::lite_subscription_registry::LiteSubscriptionRegistry;
+
     pub use crate::processor::notification_processor::{
         run_notification_filter_probe, NotificationFilterProbe, NotificationFilterProbeMessage,
     };
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct LiteWildcardProbe {
+        pub wildcard_matches_first_lmq: bool,
+        pub wildcard_matches_second_lmq: bool,
+        pub explicit_group_matches_second_lmq: bool,
+        pub removed_client_is_absent: bool,
+    }
+
+    pub fn run_lite_wildcard_probe() -> LiteWildcardProbe {
+        let registry = LiteSubscriptionRegistry::default();
+        let parent = CheetahString::from_static_str("parent-topic");
+        let wildcard_group = CheetahString::from_static_str("wildcard-group");
+        let explicit_group = CheetahString::from_static_str("explicit-group");
+        let wildcard_client = CheetahString::from_static_str("wildcard-client");
+        let explicit_client = CheetahString::from_static_str("explicit-client");
+        let first = CheetahString::from_string(to_lmq_name(parent.as_str(), "first").expect("valid LMQ"));
+        let second = CheetahString::from_string(to_lmq_name(parent.as_str(), "second").expect("valid LMQ"));
+        registry.add_complete_subscription(&wildcard_client, &wildcard_group, &parent, &HashSet::new(), 1, true);
+        registry.add_complete_subscription(
+            &explicit_client,
+            &explicit_group,
+            &parent,
+            &HashSet::from([first.clone()]),
+            1,
+            false,
+        );
+
+        let first_subscribers = registry.subscribers_for_lmq(&first, None);
+        let second_subscribers = registry.subscribers_for_lmq(&second, None);
+        let wildcard_matches_first_lmq = first_subscribers.contains(&(wildcard_client.clone(), wildcard_group.clone()));
+        let wildcard_matches_second_lmq =
+            second_subscribers.contains(&(wildcard_client.clone(), wildcard_group.clone()));
+        let explicit_group_matches_second_lmq = second_subscribers.contains(&(explicit_client, explicit_group));
+        registry.remove_complete_subscription(&wildcard_client);
+        let remaining = registry.subscribers_for_lmq(&first, None);
+
+        LiteWildcardProbe {
+            wildcard_matches_first_lmq,
+            wildcard_matches_second_lmq,
+            explicit_group_matches_second_lmq,
+            removed_client_is_absent: !remaining.contains(&(wildcard_client, wildcard_group)),
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct LiteOrderedSuspendProbe {
+        pub stale_owner_rejected: bool,
+        pub stale_offset_rejected: bool,
+        pub current_owner_suspended: bool,
+    }
+
+    pub fn run_lite_ordered_suspend_probe() -> LiteOrderedSuspendProbe {
+        let manager = MemoryConsumerOrderInfoManager::default();
+        let topic = CheetahString::from_static_str("%LMQ%$parent-topic$child");
+        let group = CheetahString::from_static_str("ordered-group");
+        let pop_time = current_millis();
+        let mut order_info = String::new();
+        manager.update(
+            CheetahString::from_static_str("attempt-1"),
+            &topic,
+            &group,
+            0,
+            pop_time,
+            30_000,
+            vec![7],
+            &mut order_info,
+        );
+
+        LiteOrderedSuspendProbe {
+            stale_owner_rejected: manager.change_visibility(
+                &topic,
+                &group,
+                0,
+                7,
+                pop_time.saturating_add(1),
+                pop_time.saturating_add(60_000),
+                true,
+            ) == LiteOrderVisibilityUpdate::Stale,
+            stale_offset_rejected: manager.change_visibility(
+                &topic,
+                &group,
+                0,
+                8,
+                pop_time,
+                pop_time.saturating_add(60_000),
+                true,
+            ) == LiteOrderVisibilityUpdate::Stale,
+            current_owner_suspended: manager.change_visibility(
+                &topic,
+                &group,
+                0,
+                7,
+                pop_time,
+                pop_time.saturating_add(60_000),
+                true,
+            ) == LiteOrderVisibilityUpdate::Updated,
+        }
+    }
 }
 
 mod lifecycle;

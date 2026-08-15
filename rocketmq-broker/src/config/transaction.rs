@@ -67,6 +67,9 @@ impl ConfigUpdateTransaction {
                 "liteEventFullDispatchDelayTime" => {
                     broker.lite_event_full_dispatch_delay_time = parse_u64(key, value)?;
                 }
+                "liteEventFullDispatchDelayTimeForWildcardGroup" => {
+                    broker.lite_event_full_dispatch_delay_time_for_wildcard_group = parse_u64(key, value)?;
+                }
                 "liteLagLatencyCollectEnable" => {
                     broker.lite_lag_latency_collect_enable = parse_bool(key, value)?;
                 }

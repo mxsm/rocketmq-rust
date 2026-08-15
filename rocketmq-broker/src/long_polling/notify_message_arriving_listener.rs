@@ -17,17 +17,27 @@ use std::sync::Arc;
 use std::sync::Weak;
 
 use cheetah_string::CheetahString;
+use rocketmq_model::common::lite::get_parent_topic;
 use rocketmq_store::BrokerReadWriteStore;
 use rocketmq_store::MessageArrivingListener;
 
+use crate::lite::lite_event_dispatcher::LiteEventDispatcher;
 use crate::long_polling::long_polling_service::pull_request_hold_service::PullRequestHoldService;
 use crate::processor::notification_processor::NotificationProcessor;
 use crate::processor::pop_message_processor::PopMessageProcessor;
+use crate::subscription::lite_subscription_registry::LiteSubscriptionRegistry;
+use crate::subscription::manager::subscription_group_manager::SubscriptionGroupConfigLookup;
 
 pub struct NotifyMessageArrivingListener<MS: BrokerReadWriteStore> {
     pull_request_hold_service: Weak<PullRequestHoldService<MS>>,
     pop_message_processor: Weak<PopMessageProcessor<MS>>,
     notification_processor: Weak<NotificationProcessor<MS>>,
+    lite_subscription_registry: LiteSubscriptionRegistry,
+    lite_event_dispatcher: LiteEventDispatcher,
+    lite_group_lookup: SubscriptionGroupConfigLookup,
+    default_max_client_event_count: usize,
+    default_dispatch_delay_millis: u64,
+    wildcard_dispatch_delay_millis: u64,
 }
 
 impl<MS> NotifyMessageArrivingListener<MS>
@@ -38,11 +48,23 @@ where
         pull_request_hold_service: &Arc<PullRequestHoldService<MS>>,
         pop_message_processor: &Arc<PopMessageProcessor<MS>>,
         notification_processor: &Arc<NotificationProcessor<MS>>,
+        lite_subscription_registry: LiteSubscriptionRegistry,
+        lite_event_dispatcher: LiteEventDispatcher,
+        lite_group_lookup: SubscriptionGroupConfigLookup,
+        default_max_client_event_count: usize,
+        default_dispatch_delay_millis: u64,
+        wildcard_dispatch_delay_millis: u64,
     ) -> Self {
         Self {
             pull_request_hold_service: Arc::downgrade(pull_request_hold_service),
             pop_message_processor: Arc::downgrade(pop_message_processor),
             notification_processor: Arc::downgrade(notification_processor),
+            lite_subscription_registry,
+            lite_event_dispatcher,
+            lite_group_lookup,
+            default_max_client_event_count,
+            default_dispatch_delay_millis,
+            wildcard_dispatch_delay_millis,
         }
     }
 }
@@ -94,6 +116,31 @@ where
                 filter_bit_map,
                 properties,
             );
+        }
+
+        if get_parent_topic(topic.as_str()).is_some() {
+            let lmq_names = std::collections::HashSet::from([topic.clone()]);
+            for (client_id, group) in self.lite_subscription_registry.subscribers_for_lmq(topic, None) {
+                let group_config = self.lite_group_lookup.find_subscription_group_config(&group);
+                let max_event_count = group_config
+                    .as_ref()
+                    .map(|config| config.max_client_event_count())
+                    .filter(|count| *count > 0)
+                    .map_or(self.default_max_client_event_count, |count| count as usize)
+                    .max(1);
+                let delay = if group_config.is_some_and(|config| config.lite_sub_wildcard()) {
+                    self.wildcard_dispatch_delay_millis
+                } else {
+                    self.default_dispatch_delay_millis
+                };
+                self.lite_event_dispatcher.do_full_dispatch_with_limit(
+                    &client_id,
+                    &group,
+                    &lmq_names,
+                    max_event_count,
+                    delay,
+                );
+            }
         }
     }
 }

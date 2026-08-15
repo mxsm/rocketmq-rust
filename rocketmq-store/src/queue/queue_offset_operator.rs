@@ -149,6 +149,14 @@ impl QueueOffsetOperator {
     }
 
     #[inline]
+    pub fn get_lmq_topic_names(&self) -> Vec<CheetahString> {
+        self.lmq_topic_queue_table
+            .iter()
+            .filter_map(|entry| entry.key().strip_suffix("-0").map(CheetahString::from))
+            .collect()
+    }
+
+    #[inline]
     pub fn is_lmq_exist(&self, lmq_topic: &str) -> bool {
         let queue_key = CheetahString::from_string(lmq_queue_key(lmq_topic));
         self.lmq_topic_queue_table.contains_key(&queue_key)

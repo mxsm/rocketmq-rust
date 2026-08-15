@@ -1158,6 +1158,10 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
         self.inner.queue_offset_operator.get_lmq_num()
     }
 
+    fn get_lmq_topic_names(&self) -> Vec<CheetahString> {
+        self.inner.queue_offset_operator.get_lmq_topic_names()
+    }
+
     fn is_lmq_exist(&self, lmq_topic: &str) -> bool {
         self.inner.queue_offset_operator.is_lmq_exist(lmq_topic)
     }

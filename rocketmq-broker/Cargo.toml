@@ -177,3 +177,11 @@ windows = { version = "0.62.2", features = [
 [[test]]
 name = "notification_filtering"
 required-features = ["test-support"]
+
+[[test]]
+name = "lite_wildcard_group"
+required-features = ["test-support"]
+
+[[test]]
+name = "lite_ordered_suspend"
+required-features = ["test-support"]

@@ -271,6 +271,18 @@ impl BrokerRuntime {
             &pull_request_hold_service,
             &pop_message_processor,
             &notification_processor,
+            self.composition.state.lite_subscription_registry().clone(),
+            self.composition.state.lite_event_dispatcher().clone(),
+            self.composition.state.subscription_group_manager().config_lookup(),
+            self.composition.state.broker_config().max_client_event_count.max(1) as usize,
+            self.composition
+                .state
+                .broker_config()
+                .lite_event_full_dispatch_delay_time,
+            self.composition
+                .state
+                .broker_config()
+                .lite_event_full_dispatch_delay_time_for_wildcard_group,
         );
         if let Some(message_store) = self.composition.state.message_store_exclusive_mut() {
             message_store.set_message_arriving_listener(Some(Arc::new(Box::new(message_arriving_listener))));
@@ -419,7 +431,7 @@ impl BrokerRuntime {
         );
         broker_request_processor.register_processor(
             RequestCode::PopLiteMessage as i32,
-            BrokerProcessorType::PopLite(pop_lite_message_processor),
+            BrokerProcessorType::PopLite(pop_lite_message_processor.clone()),
         );
 
         //AckMessageProcessor
@@ -448,6 +460,7 @@ impl BrokerRuntime {
                         .consumer_offset_manager_handle()
                         .query_capability(),
                     ChangeInvisibleTimeOrderCapability::new(&change_invisible_order_info),
+                    ChangeInvisibleTimeLiteCapability::new(&pop_lite_message_processor),
                     self.composition.state.broker_stats_manager_handle(),
                     ChangeInvisibleTimeStoreCapability::new(&change_invisible_escape_bridge),
                     ChangeInvisibleTimePopCapability::new(pop_message_processor.pop_buffer_merge_service()),
