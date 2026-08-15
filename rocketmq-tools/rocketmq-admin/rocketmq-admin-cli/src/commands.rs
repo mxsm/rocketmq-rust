@@ -17,7 +17,6 @@ mod broker;
 mod cluster;
 mod connection;
 mod consumer;
-mod container;
 mod controller;
 mod export;
 mod ha;
@@ -124,11 +123,6 @@ pub enum Commands {
     Consumer(consumer::ConsumerCommands),
 
     #[command(subcommand)]
-    #[command(about = "Broker container commands")]
-    #[command(name = "container")]
-    Container(container::ContainerCommands),
-
-    #[command(subcommand)]
     #[command(about = "Controller commands")]
     #[command(name = "controller")]
     Controller(controller::ControllerCommands),
@@ -203,7 +197,6 @@ impl CommandExecute for Commands {
             Commands::Cluster(value) => value.execute(credentials, client_runtime.clone()).await,
             Commands::Connection(value) => value.execute(credentials, client_runtime.clone()).await,
             Commands::Consumer(value) => value.execute(credentials, client_runtime.clone()).await,
-            Commands::Container(value) => value.execute(credentials, client_runtime.clone()).await,
             Commands::Controller(value) => value.execute(credentials, client_runtime.clone()).await,
             Commands::Export(value) => value.execute(credentials, client_runtime.clone()).await,
             Commands::HA(value) => value.execute(credentials, client_runtime.clone()).await,
@@ -398,16 +391,6 @@ impl CommandExecute for ClassificationTablePrint {
                 category: "Connection",
                 command: "producerConnection",
                 remark: "Query producer's socket connection and client version.",
-            },
-            Command {
-                category: "Container",
-                command: "addBroker",
-                remark: "Add a broker to specified container.",
-            },
-            Command {
-                category: "Container",
-                command: "removeBroker",
-                remark: "Remove a broker from specified container.",
             },
             Command {
                 category: "Consumer",

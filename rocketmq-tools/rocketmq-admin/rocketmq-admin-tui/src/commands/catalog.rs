@@ -14,7 +14,6 @@ pub fn command_catalog() -> Vec<CommandSpec> {
     broker_commands(&mut commands);
     cluster_commands(&mut commands);
     controller_commands(&mut commands);
-    container_commands(&mut commands);
     connection_commands(&mut commands);
     consumer_commands(&mut commands);
     offset_commands(&mut commands);
@@ -910,54 +909,6 @@ fn controller_commands(commands: &mut Vec<CommandSpec>) {
                     "Allow cleaning living broker metadata.",
                     false,
                 ),
-            ],
-            ResultViewKind::OperationSummary,
-            Some("broker_name"),
-        ),
-    ]);
-}
-
-fn container_commands(commands: &mut Vec<CommandSpec>) {
-    commands.extend([
-        spec(
-            "container.add_broker",
-            CommandCategory::Container,
-            "Add Broker To Container",
-            "Add a broker to the specified broker container using a broker config path.",
-            RiskLevel::Dangerous,
-            vec![
-                required_string(
-                    "broker_container_addr",
-                    "Broker Container Addr",
-                    "Broker container address.",
-                    "127.0.0.1:10911",
-                ),
-                required_string(
-                    "broker_config_path",
-                    "Broker Config Path",
-                    "Broker config path visible to the broker container.",
-                    "/path/to/broker.conf",
-                ),
-            ],
-            ResultViewKind::OperationSummary,
-            Some("broker_container_addr"),
-        ),
-        spec(
-            "container.remove_broker",
-            CommandCategory::Container,
-            "Remove Broker From Container",
-            "Remove a broker identity from the specified broker container.",
-            RiskLevel::Dangerous,
-            vec![
-                required_string(
-                    "broker_container_addr",
-                    "Broker Container Addr",
-                    "Broker container address.",
-                    "127.0.0.1:10911",
-                ),
-                required_string("cluster_name", "Cluster", "Cluster name.", "DefaultCluster"),
-                required_string("broker_name", "Broker Name", "Broker name.", "broker-a"),
-                number("broker_id", "Broker ID", "Broker id to remove.", true, Some(1), Some(0)),
             ],
             ResultViewKind::OperationSummary,
             Some("broker_name"),
