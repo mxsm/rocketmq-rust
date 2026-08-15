@@ -5524,6 +5524,15 @@
         },
         {
           "category": "experimental",
+          "declaration": "pub mod profile_marker",
+          "identity": "rocketmq-store-rocksdb/src/lib.rs:pub mod profile_marker",
+          "owner": "store-rocksdb",
+          "path": "rocketmq-store-rocksdb/src/lib.rs",
+          "rationale": "shared persisted POP profile format marker for Broker and offline inspection",
+          "removal_condition": "retain while POP profile format compatibility is supported"
+        },
+        {
+          "category": "experimental",
           "declaration": "pub mod release_checkpoint",
           "identity": "rocketmq-store-rocksdb/src/lib.rs:pub mod release_checkpoint",
           "owner": "store-rocksdb",
@@ -5622,7 +5631,7 @@
           "removal_condition": "retain while the stable entry point remains supported"
         }
       ],
-      "maximum_exports": 25
+      "maximum_exports": 26
     },
     "rocketmq-transport": {
       "entries": [
