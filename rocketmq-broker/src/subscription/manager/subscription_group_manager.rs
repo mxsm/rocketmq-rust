@@ -28,7 +28,10 @@ use rocketmq_model::common::attribute::subscription_group_attributes::Subscripti
 use rocketmq_model::common::mix_all::is_sys_consumer_group;
 use rocketmq_model::common::topic::TopicValidator;
 use rocketmq_protocol::protocol::data_version_facade::DataVersionExt;
+use rocketmq_protocol::protocol::subscription::subscription_group_config::validate_subscription_group_configs;
+use rocketmq_protocol::protocol::subscription::subscription_group_config::validate_subscription_group_name;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
+use rocketmq_protocol::protocol::subscription::subscription_group_config::SUBSCRIPTION_GROUP_NAME_MAX_LENGTH;
 use rocketmq_protocol::protocol::DataVersion;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::common::file_utils;
@@ -47,7 +50,7 @@ use crate::broker_path_config_helper::get_subscription_group_path;
 use crate::config::rocksdb_manager::RocksDbBrokerConfigManager;
 use crate::metrics::broker_metrics_manager::BrokerMetricsManager;
 
-pub const CHARACTER_MAX_LENGTH: usize = 255;
+pub const CHARACTER_MAX_LENGTH: usize = SUBSCRIPTION_GROUP_NAME_MAX_LENGTH;
 pub const TOPIC_MAX_LENGTH: usize = 127;
 
 #[derive(Clone, Debug)]
@@ -67,6 +70,7 @@ pub(crate) struct SlowConsumerDisableMarker {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SubscriptionGroupConfigCasError {
+    InvalidGroupName,
     GroupNotFound,
     VersionConflict { expected_version: u64, actual_version: u64 },
     VersionUnavailable,
@@ -278,45 +282,6 @@ impl SubscriptionGroupManager {
         &self.forbidden_table
     }
 
-    /// Validate group name
-    ///
-    /// # Arguments
-    /// * `group_name` - The group name to validate
-    ///
-    /// # Returns
-    /// `true` if valid, `false` otherwise
-    ///
-    /// # Validation Rules
-    /// - Cannot be empty
-    /// - Length must not exceed CHARACTER_MAX_LENGTH (255)
-    /// - Must not contain illegal characters (validated by TopicValidator)
-    fn validate_group_name(group_name: &str) -> bool {
-        if group_name.is_empty() {
-            warn!("Group name validation failed: empty name");
-            return false;
-        }
-
-        if group_name.len() > CHARACTER_MAX_LENGTH {
-            warn!(
-                "Group name validation failed: name too long ({} > {}): {}",
-                group_name.len(),
-                CHARACTER_MAX_LENGTH,
-                group_name
-            );
-            return false;
-        }
-
-        if TopicValidator::is_topic_or_group_illegal(group_name) {
-            warn!(
-                "Group name validation failed: contains illegal characters: {}",
-                group_name
-            );
-            return false;
-        }
-
-        true
-    }
-
     /// Validate topic name
     ///
     /// # Arguments
@@ -366,12 +331,19 @@ impl SubscriptionGroupManager {
         true
     }
 
-    pub(crate) fn update_subscription_group_config(&self, config: &mut SubscriptionGroupConfig) {
-        self.update_subscription_group_config_without_persist(config);
+    pub(crate) fn update_subscription_group_config(&self, config: &mut SubscriptionGroupConfig) -> bool {
+        if !self.update_subscription_group_config_without_persist(config) {
+            return false;
+        }
         self.persist_after_mutation("update");
+        true
     }
 
-    fn update_subscription_group_config_without_persist(&self, config: &mut SubscriptionGroupConfig) {
+    fn update_subscription_group_config_without_persist(&self, config: &mut SubscriptionGroupConfig) -> bool {
+        if let Err(error) = validate_subscription_group_name(config.group_name().as_str()) {
+            warn!(group = %config.group_name(), %error, "Rejected invalid subscription group configuration");
+            return false;
+        }
         let _transition = self.metadata_transition.lock();
         let start_time = Instant::now();
         let new_attributes = self.request(config);
@@ -419,6 +391,7 @@ impl SubscriptionGroupManager {
         self.data_version
             .write()
             .next_version_with(self.state_machine_version.get());
+        true
     }
     fn request(&self, subscription_group_config: &SubscriptionGroupConfig) -> HashMap<CheetahString, CheetahString> {
         subscription_group_config.attributes().clone()
@@ -734,11 +707,21 @@ impl ConfigManager for SubscriptionGroupManager {
 
         // Load subscription group table
         for (key, config) in wrapper.subscription_group_table {
+            if key.as_str() != config.group_name().as_str()
+                || validate_subscription_group_name(config.group_name().as_str()).is_err()
+            {
+                warn!(key = %key, group = %config.group_name(), "Ignoring invalid persisted subscription group");
+                continue;
+            }
             self.subscription_group_table.insert(key, Arc::new(config));
         }
 
         // Load forbidden table
         for (group, topics) in wrapper.forbidden_table {
+            if validate_subscription_group_name(group.as_str()).is_err() {
+                warn!(group = %group, "Ignoring forbidden entries for invalid subscription group");
+                continue;
+            }
             let topic_map = DashMap::new();
             for (topic, value) in topics {
                 topic_map.insert(topic, value);
@@ -747,6 +730,10 @@ impl ConfigManager for SubscriptionGroupManager {
         }
 
         for (group, marker) in wrapper.slow_consumer_markers {
+            if validate_subscription_group_name(group.as_str()).is_err() {
+                warn!(group = %group, "Ignoring slow-consumer marker for invalid subscription group");
+                continue;
+            }
             self.slow_consumer_markers.insert(group, marker);
         }
 
@@ -769,7 +756,7 @@ impl SubscriptionGroupManager {
             && (self.config.auto_create_subscription_group || is_sys_consumer_group(group))
         {
             let start_time = Instant::now();
-            if group.len() > CHARACTER_MAX_LENGTH || TopicValidator::is_topic_or_group_illegal(group) {
+            if validate_subscription_group_name(group.as_str()).is_err() {
                 return None;
             }
             let mut subscription_group_config_new = SubscriptionGroupConfig::default();
@@ -826,6 +813,8 @@ impl SubscriptionGroupManager {
         retry_queue_nums: Option<u32>,
         consume_timeout_minutes: Option<u32>,
     ) -> Result<SubscriptionGroupConfigUpdate, SubscriptionGroupConfigCasError> {
+        validate_subscription_group_name(group.as_str())
+            .map_err(|_| SubscriptionGroupConfigCasError::InvalidGroupName)?;
         if retry_max_times.is_none() && retry_queue_nums.is_none() && consume_timeout_minutes.is_none() {
             return Err(SubscriptionGroupConfigCasError::NoChange);
         }
@@ -1115,17 +1104,27 @@ impl SubscriptionGroupManager {
     /// * `config_list` - List of subscription group configs to update
     ///
     /// This method updates multiple subscription groups in a single persist operation
-    pub fn update_subscription_group_config_list(&self, config_list: Vec<SubscriptionGroupConfig>) {
+    pub fn update_subscription_group_config_list(&self, config_list: Vec<SubscriptionGroupConfig>) -> bool {
         if config_list.is_empty() {
-            return;
+            return true;
+        }
+
+        if let Err(error) = validate_subscription_group_configs(&config_list) {
+            warn!(%error, "Rejected invalid subscription group configuration list");
+            return false;
         }
 
         for mut config in config_list {
-            self.update_subscription_group_config_without_persist(&mut config);
+            let updated = self.update_subscription_group_config_without_persist(&mut config);
+            debug_assert!(updated);
+            if !updated {
+                return false;
+            }
         }
 
         self.persist_after_mutation("batch-update");
         info!("Batch updated subscription groups");
+        true
     }
 
     /// Set forbidden flag for a specific consumer group and topic
@@ -1522,6 +1521,57 @@ impl SubscriptionGroupWrapperInner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invalid_single_batch_and_cas_updates_do_not_mutate_state() {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir should be created");
+        let root = CheetahString::from_string(temp_dir.path().to_string_lossy().to_string());
+        let broker_config = BrokerConfig {
+            store_path_root_dir: root.clone(),
+            ..BrokerConfig::default()
+        };
+        let message_store_config = MessageStoreConfig {
+            store_path_root_dir: root,
+            ..MessageStoreConfig::default()
+        };
+        let manager = SubscriptionGroupManager::new(
+            SubscriptionGroupManagerConfig::from_configs(&broker_config, &message_store_config),
+            StateMachineVersionView::default(),
+            None,
+        );
+        let before_version = manager.data_version().read().clone();
+        let before_snapshot = serde_json::from_str::<serde_json::Value>(&manager.encode_pretty(false))
+            .expect("manager snapshot should decode");
+
+        let mut invalid = SubscriptionGroupConfig::new(CheetahString::from_static_str("invalid.group"));
+        assert!(!manager.update_subscription_group_config(&mut invalid));
+
+        manager.update_subscription_group_config_list(vec![
+            SubscriptionGroupConfig::new(CheetahString::from_static_str("valid-group")),
+            SubscriptionGroupConfig::new(CheetahString::from_static_str("invalid.group")),
+        ]);
+        assert!(!manager.group_exists("valid-group"));
+        assert!(!manager.group_exists("invalid.group"));
+        assert_eq!(*manager.data_version().read(), before_version);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&manager.encode_pretty(false))
+                .expect("manager snapshot should decode"),
+            before_snapshot
+        );
+        assert!(!std::path::Path::new(&manager.config_file_path()).exists());
+
+        assert!(matches!(
+            manager.update_subscription_group_config_if_version(
+                &CheetahString::from_static_str("invalid.group"),
+                0,
+                Some(8),
+                None,
+                None,
+            ),
+            Err(SubscriptionGroupConfigCasError::InvalidGroupName)
+        ));
+        assert_eq!(*manager.data_version().read(), before_version);
+    }
 
     #[cfg(feature = "rocksdb_store")]
     #[tokio::test]

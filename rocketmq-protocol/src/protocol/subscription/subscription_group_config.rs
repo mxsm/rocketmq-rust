@@ -24,12 +24,89 @@ use rocketmq_model::common::attribute::subscription_group_attributes::LITE_SUB_R
 use rocketmq_model::common::attribute::subscription_group_attributes::LITE_SUB_RESET_OFFSET_UNSUBSCRIBE_ATTRIBUTE_NAME;
 use rocketmq_model::common::attribute::subscription_group_attributes::LITE_SUB_WILDCARD_ATTRIBUTE_NAME;
 use rocketmq_model::common::attribute::subscription_group_attributes::PRIORITY_FACTOR_ATTRIBUTE_NAME;
+use rocketmq_model::common::topic::TopicValidator;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::common::wire_constants::MASTER_ID;
 use crate::protocol::subscription::group_retry_policy::GroupRetryPolicy;
 use crate::protocol::subscription::simple_subscription_data::SimpleSubscriptionData;
+
+pub const SUBSCRIPTION_GROUP_NAME_MAX_LENGTH: usize = 255;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SubscriptionGroupValidationError {
+    Blank,
+    TooLong {
+        group_name: CheetahString,
+        max_length: usize,
+    },
+    IllegalCharacters {
+        group_name: CheetahString,
+    },
+    Duplicate {
+        group_name: CheetahString,
+    },
+}
+
+impl std::fmt::Display for SubscriptionGroupValidationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Blank => formatter.write_str("The specified group is blank."),
+            Self::TooLong { group_name, max_length } => write!(
+                formatter,
+                "The specified group: {group_name}, is longer than group max length: {max_length}"
+            ),
+            Self::IllegalCharacters { group_name } => write!(
+                formatter,
+                "The specified group: {group_name}, contains illegal characters, allowing only ^[%|a-zA-Z0-9_-]+$"
+            ),
+            Self::Duplicate { group_name } => {
+                write!(
+                    formatter,
+                    "The specified group list contains duplicate group {group_name}."
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for SubscriptionGroupValidationError {}
+
+/// Validates a consumer group name using the Java 5.5 `TopicValidator.validateGroup` contract.
+pub fn validate_subscription_group_name(group_name: &str) -> Result<(), SubscriptionGroupValidationError> {
+    if group_name.trim().is_empty() {
+        return Err(SubscriptionGroupValidationError::Blank);
+    }
+    if TopicValidator::is_topic_or_group_illegal(group_name) {
+        return Err(SubscriptionGroupValidationError::IllegalCharacters {
+            group_name: CheetahString::from(group_name),
+        });
+    }
+    if group_name.len() > SUBSCRIPTION_GROUP_NAME_MAX_LENGTH {
+        return Err(SubscriptionGroupValidationError::TooLong {
+            group_name: CheetahString::from(group_name),
+            max_length: SUBSCRIPTION_GROUP_NAME_MAX_LENGTH,
+        });
+    }
+    Ok(())
+}
+
+/// Validates every group before a batch mutation and rejects duplicate names.
+pub fn validate_subscription_group_configs(
+    configs: &[SubscriptionGroupConfig],
+) -> Result<(), SubscriptionGroupValidationError> {
+    let mut seen = HashSet::with_capacity(configs.len());
+    for config in configs {
+        validate_subscription_group_name(config.group_name().as_str())?;
+        if !seen.insert(config.group_name().clone()) {
+            return Err(SubscriptionGroupValidationError::Duplicate {
+                group_name: config.group_name().clone(),
+            });
+        }
+    }
+    Ok(())
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
