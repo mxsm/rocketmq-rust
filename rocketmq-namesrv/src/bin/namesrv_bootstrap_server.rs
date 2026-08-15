@@ -39,6 +39,7 @@ use rocketmq_model::utils::env_utils::EnvUtils;
 use rocketmq_model::version::CURRENT_VERSION;
 use rocketmq_namesrv::bootstrap::Builder;
 use rocketmq_namesrv::config::is_tls_config_key;
+use rocketmq_namesrv::config::DEFAULT_NAMESRV_LISTEN_PORT;
 use rocketmq_namesrv::parse_command_and_config_file;
 use rocketmq_namesrv::security::NameServerTransportPolicy;
 use rocketmq_namesrv::NamesrvConfig;
@@ -489,7 +490,10 @@ fn parse_and_merge_config(
         namesrv_config.kv_config_path = kv_path.to_string_lossy().to_string();
     }
 
-    let mut server_config = ServerConfig::default();
+    let mut server_config = ServerConfig {
+        listen_port: DEFAULT_NAMESRV_LISTEN_PORT,
+        ..ServerConfig::default()
+    };
     let mut tokio_client_config = TransportClientConfig::default();
     if let Some(config_file) = args.config_file.clone() {
         let config = Config::builder()
