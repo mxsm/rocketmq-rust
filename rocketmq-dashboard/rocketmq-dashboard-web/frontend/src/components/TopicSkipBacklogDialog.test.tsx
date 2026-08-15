@@ -117,6 +117,22 @@ describe('TopicSkipBacklogDialog', () => {
     expect(screen.getByRole('textbox', { name: 'Consumer group' })).toHaveValue('payment-service');
   });
 
+  it('drops a pending success after the dialog truly unmounts', async () => {
+    const user = userEvent.setup();
+    const pending = deferred<TopicOffsetResult>();
+    const onSucceeded = vi.fn();
+    vi.mocked(topicApi.skipBacklog).mockReturnValue(pending.promise);
+    const { unmount } = render(<TopicSkipBacklogDialog {...defaultProps} onSucceeded={onSucceeded} />);
+    await user.type(screen.getByRole('textbox', { name: 'Confirm consumer group' }), 'order-service');
+    await user.click(screen.getByRole('button', { name: 'Skip accumulated messages' }));
+
+    unmount();
+    await act(async () => pending.resolve(skipOldGroupFixture));
+
+    expect(onSucceeded).not.toHaveBeenCalled();
+    expect(screen.queryByText(/8 queues skipped/)).not.toBeInTheDocument();
+  });
+
   it('uses a synchronous lock and unlocks after completion under StrictMode', async () => {
     const user = userEvent.setup();
     const pending = deferred<TopicOffsetResult>();
@@ -131,8 +147,10 @@ describe('TopicSkipBacklogDialog', () => {
     const groupConfirmation = screen.getByRole('textbox', { name: 'Confirm consumer group' });
     await user.type(groupConfirmation, 'order-service');
     const action = screen.getByRole('button', { name: 'Skip accumulated messages' });
-    fireEvent.click(action);
-    fireEvent.click(action);
+    act(() => {
+      action.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      action.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
     expect(topicApi.skipBacklog).toHaveBeenCalledTimes(1);
 
     await act(async () => pending.resolve(skipOldGroupFixture));

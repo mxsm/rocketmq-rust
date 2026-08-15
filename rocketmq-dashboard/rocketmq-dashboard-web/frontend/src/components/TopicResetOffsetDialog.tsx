@@ -30,6 +30,15 @@ interface ResetConfirmation {
   localTimeLabel: string;
 }
 
+export interface LocalDateTimeFields {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  second: number;
+}
+
 export default function TopicResetOffsetDialog({
   open,
   topic,
@@ -81,8 +90,8 @@ export default function TopicResetOffsetDialog({
 
   const reviewReset = (event: FormEvent) => {
     event.preventDefault();
-    const resetTimestamp = new Date(resetTime).getTime();
-    if (!resetTime || !Number.isFinite(resetTimestamp)) {
+    const resetTimestamp = parseLocalDateTime(resetTime);
+    if (resetTimestamp === null) {
       setError('Select a valid reset time.');
       setResult(null);
       return;
@@ -216,6 +225,65 @@ export default function TopicResetOffsetDialog({
       </AlertDialog>
     </>
   );
+}
+
+export function parseLocalDateTime(value: string): number | null {
+  const match = /^(\d{4,6})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(value);
+  if (!match) return null;
+
+  const fields: LocalDateTimeFields = {
+    year: Number(match[1]),
+    month: Number(match[2]),
+    day: Number(match[3]),
+    hour: Number(match[4]),
+    minute: Number(match[5]),
+    second: Number(match[6] ?? 0)
+  };
+  if (
+    fields.month < 1 || fields.month > 12
+    || fields.day < 1 || fields.day > 31
+    || fields.hour < 0 || fields.hour > 23
+    || fields.minute < 0 || fields.minute > 59
+    || fields.second < 0 || fields.second > 59
+  ) return null;
+
+  const localDate = new Date(
+    fields.year,
+    fields.month - 1,
+    fields.day,
+    fields.hour,
+    fields.minute,
+    fields.second,
+    0
+  );
+  const resolvedFields: LocalDateTimeFields = {
+    year: localDate.getFullYear(),
+    month: localDate.getMonth() + 1,
+    day: localDate.getDate(),
+    hour: localDate.getHours(),
+    minute: localDate.getMinutes(),
+    second: localDate.getSeconds()
+  };
+  const timestamp = localDate.getTime();
+  if (
+    !hasExactLocalDateTimeFields(fields, resolvedFields)
+    || !Number.isSafeInteger(timestamp)
+    || timestamp < 0
+  ) return null;
+
+  return timestamp;
+}
+
+export function hasExactLocalDateTimeFields(
+  expected: LocalDateTimeFields,
+  resolved: LocalDateTimeFields
+): boolean {
+  return expected.year === resolved.year
+    && expected.month === resolved.month
+    && expected.day === resolved.day
+    && expected.hour === resolved.hour
+    && expected.minute === resolved.minute
+    && expected.second === resolved.second;
 }
 
 function OffsetResult({ result, successLabel }: { result: TopicOffsetResult; successLabel: string }) {

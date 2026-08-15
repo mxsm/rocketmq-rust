@@ -156,6 +156,22 @@ describe('TopicSendMessageDialog', () => {
     expect(screen.getByRole('textbox', { name: 'Topic' })).toHaveValue('payments');
   });
 
+  it('drops a pending success after the dialog truly unmounts', async () => {
+    const user = userEvent.setup();
+    const pending = deferred<TopicSendResultView>();
+    const onSucceeded = vi.fn();
+    vi.mocked(topicApi.sendTestMessage).mockReturnValue(pending.promise);
+    const { unmount } = render(<TopicSendMessageDialog {...defaultProps} onSucceeded={onSucceeded} />);
+    await user.type(screen.getByRole('textbox', { name: 'Message body' }), 'test');
+    await submitSend(user);
+
+    unmount();
+    await act(async () => pending.resolve(sendOkFixture));
+
+    expect(onSucceeded).not.toHaveBeenCalled();
+    expect(screen.queryByText('msg-old')).not.toBeInTheDocument();
+  });
+
   it('uses a synchronous lock and unlocks after completion under StrictMode', async () => {
     const user = userEvent.setup();
     const pending = deferred<TopicSendResultView>();
@@ -172,8 +188,10 @@ describe('TopicSendMessageDialog', () => {
     await user.click(screen.getByRole('button', { name: 'Review send' }));
     const confirmation = screen.getByRole('alertdialog');
     const confirm = within(confirmation).getByRole('button', { name: 'Send test message' });
-    fireEvent.click(confirm);
-    fireEvent.click(confirm);
+    act(() => {
+      confirm.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      confirm.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
     expect(topicApi.sendTestMessage).toHaveBeenCalledTimes(1);
 
     await act(async () => pending.resolve(sendOkFixture));

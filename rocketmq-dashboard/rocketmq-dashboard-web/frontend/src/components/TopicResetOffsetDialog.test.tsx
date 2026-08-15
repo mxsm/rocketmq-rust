@@ -5,7 +5,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { topicApi } from '../api/topic_api';
 import { deferred } from '../test/deferred';
 import type { TopicOffsetResult } from '../types/topic';
-import TopicResetOffsetDialog from './TopicResetOffsetDialog';
+import TopicResetOffsetDialog, {
+  hasExactLocalDateTimeFields,
+  parseLocalDateTime
+} from './TopicResetOffsetDialog';
 
 vi.mock('../api/topic_api', () => ({
   topicApi: { resetOffset: vi.fn() }
@@ -39,6 +42,24 @@ describe('TopicResetOffsetDialog', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(topicApi.resetOffset).mockResolvedValue(resetOldGroupFixture);
+  });
+
+  it('parses exact local datetime components including optional seconds', () => {
+    expect(parseLocalDateTime('2026-08-15T10:30')).toBe(new Date(2026, 7, 15, 10, 30, 0, 0).getTime());
+    expect(parseLocalDateTime('2026-08-15T10:30:45')).toBe(new Date(2026, 7, 15, 10, 30, 45, 0).getTime());
+  });
+
+  it('rejects normalized calendar values, local gaps, and negative timestamps', () => {
+    expect(parseLocalDateTime('2026-02-30T10:30')).toBeNull();
+    expect(parseLocalDateTime('1900-01-01T00:00')).toBeNull();
+
+    const localEpochStart = new Date(1970, 0, 1, 0, 0, 0, 0).getTime();
+    expect(parseLocalDateTime('1970-01-01T00:00')).toBe(localEpochStart < 0 ? null : localEpochStart);
+
+    expect(hasExactLocalDateTimeFields(
+      { year: 2026, month: 3, day: 8, hour: 2, minute: 30, second: 0 },
+      { year: 2026, month: 3, day: 8, hour: 3, minute: 30, second: 0 }
+    )).toBe(false);
   });
 
   it('resets the captured group to the selected local time after explicit primary confirmation', async () => {
@@ -132,6 +153,22 @@ describe('TopicResetOffsetDialog', () => {
     expect(screen.getByRole('textbox', { name: 'Consumer group' })).toHaveValue('payment-service');
   });
 
+  it('drops a pending rejection after the dialog truly unmounts', async () => {
+    const user = userEvent.setup();
+    const pending = deferred<TopicOffsetResult>();
+    const onSucceeded = vi.fn();
+    vi.mocked(topicApi.resetOffset).mockReturnValue(pending.promise);
+    const { unmount } = render(<TopicResetOffsetDialog {...defaultProps} onSucceeded={onSucceeded} />);
+    fireEvent.change(screen.getByLabelText('Reset time'), { target: { value: '2026-08-15T10:30' } });
+    await submitReset(user);
+
+    unmount();
+    await act(async () => pending.reject(new Error('unmounted reset failed')));
+
+    expect(onSucceeded).not.toHaveBeenCalled();
+    expect(screen.queryByText('unmounted reset failed')).not.toBeInTheDocument();
+  });
+
   it('uses a synchronous lock and unlocks after completion under StrictMode', async () => {
     const user = userEvent.setup();
     const pending = deferred<TopicOffsetResult>();
@@ -146,8 +183,10 @@ describe('TopicResetOffsetDialog', () => {
     fireEvent.change(screen.getByLabelText('Reset time'), { target: { value: '2026-08-15T10:30' } });
     await user.click(screen.getByRole('button', { name: 'Review reset' }));
     const confirm = within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Reset offset' });
-    fireEvent.click(confirm);
-    fireEvent.click(confirm);
+    act(() => {
+      confirm.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      confirm.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
     expect(topicApi.resetOffset).toHaveBeenCalledTimes(1);
 
     await act(async () => pending.resolve(resetOldGroupFixture));
