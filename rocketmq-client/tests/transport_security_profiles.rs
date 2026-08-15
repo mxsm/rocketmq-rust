@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use pkcs8::LineEnding;
-use pkcs8::PrivateKeyInfo;
+use pkcs8::PrivateKeyInfoRef;
 use rocketmq_client_rust::ClientConfig;
 use rocketmq_transport::api::v1::PrivateKeyLoader;
 use rocketmq_transport::api::v1::RequestDeadline;
@@ -32,9 +32,9 @@ fn encrypted_pkcs8_profile_is_secret_safe() {
     let rcgen::CertifiedKey { signing_key, .. } =
         rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).expect("generate key");
     let key_der = signing_key.serialize_der();
-    let key_info = PrivateKeyInfo::try_from(key_der.as_slice()).expect("parse key");
+    let key_info = PrivateKeyInfoRef::try_from(key_der.as_slice()).expect("parse key");
     let encrypted = key_info
-        .encrypt(pkcs8::rand_core::OsRng, "transport-password")
+        .encrypt("transport-password")
         .expect("encrypt key")
         .to_pem("ENCRYPTED PRIVATE KEY", LineEnding::LF)
         .expect("encode PEM");
