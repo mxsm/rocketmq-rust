@@ -82,6 +82,46 @@ def excluded_projects(scope: dict[str, Any] | None = None) -> tuple[dict[str, An
     return tuple(values)
 
 
+def package_for_path(relative: str, scope: dict[str, Any] | None = None) -> str | None:
+    """Return the declared package/project that owns a repository-relative path."""
+
+    normalized = _normalized_relative_path(relative)
+    if normalized is None:
+        return None
+    loaded = scope or load_scope()
+    candidates = (*core_packages(loaded), *excluded_projects(loaded))
+    matches: list[tuple[int, str]] = []
+    for entry in candidates:
+        prefix = _normalized_relative_path(entry.get("path"))
+        name = entry.get("name")
+        if (
+            prefix is not None
+            and isinstance(name, str)
+            and (normalized == prefix or normalized.startswith(f"{prefix}/"))
+        ):
+            matches.append((len(Path(prefix).parts), name))
+    return max(matches)[1] if matches else None
+
+
+def path_in_scope(
+    relative: str,
+    requested_scope: str,
+    scope: dict[str, Any] | None = None,
+) -> bool:
+    """Return whether a repository-relative path belongs to a requested scan scope."""
+
+    if requested_scope not in {"core-release", "repo-global", "all"}:
+        raise ScopeInputError(f"unsupported release scope: {requested_scope}")
+    normalized = _normalized_relative_path(relative)
+    if normalized is None:
+        return False
+    if requested_scope in {"repo-global", "all"}:
+        return True
+    loaded = scope or load_scope()
+    owner = package_for_path(normalized, loaded)
+    return owner in {entry["name"] for entry in core_packages(loaded)}
+
+
 def collect_metadata(root: Path = ROOT) -> dict[str, Any]:
     completed = subprocess.run(
         ["cargo", "metadata", "--no-deps", "--format-version", "1", "--locked"],

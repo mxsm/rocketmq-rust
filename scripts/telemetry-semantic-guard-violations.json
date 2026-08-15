@@ -31,7 +31,7 @@
       "operation": "set",
       "path": [
         "attributes",
-        31,
+        35,
         "default_enabled"
       ],
       "value": true,
@@ -42,7 +42,7 @@
       "operation": "delete",
       "path": [
         "signals",
-        173,
+        215,
         "sampling",
         "max_per_second"
       ],
@@ -53,7 +53,7 @@
       "operation": "set",
       "path": [
         "signals",
-        173,
+        215,
         "deprecation"
       ],
       "value": {

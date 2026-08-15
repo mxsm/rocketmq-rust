@@ -19,40 +19,44 @@ use std::path::Path;
 use super::FileIdentity;
 
 pub(super) fn open_root(_path: &Path, _create: bool) -> io::Result<File> {
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "verified Store roots are unsupported on this platform",
-    ))
+    unsupported()
 }
 
 pub(super) fn verify_root_directory(_file: &File) -> io::Result<()> {
-    unreachable!("unsupported platform cannot open a Store root")
+    unsupported()
 }
 
 pub(super) fn open_lock_file(_root: &File, _create: bool) -> io::Result<File> {
-    unreachable!("unsupported platform cannot open a Store root")
+    unsupported()
 }
 
 pub(super) fn verify_lock_file(_file: &File) -> io::Result<()> {
-    unreachable!("unsupported platform cannot open a Store root")
+    unsupported()
 }
 
 pub(super) fn file_identity(_file: &File) -> io::Result<FileIdentity> {
-    unreachable!("unsupported platform cannot open a Store root")
+    unsupported()
 }
 
 pub(super) fn abort_marker_present(_root: &File) -> io::Result<bool> {
-    unreachable!("unsupported platform cannot open a Store root")
+    unsupported()
 }
 
 pub(super) fn create_abort_marker(_root: &File, _contents: &[u8]) -> io::Result<()> {
-    unreachable!("unsupported platform cannot open a Store root")
+    unsupported()
 }
 
 pub(super) fn remove_abort_marker(_root: &File) -> io::Result<()> {
-    unreachable!("unsupported platform cannot open a Store root")
+    unsupported()
 }
 
 pub(super) fn is_unsafe_path_error(_error: &io::Error) -> bool {
     false
+}
+
+fn unsupported<T>() -> io::Result<T> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "verified Store roots are unsupported on this platform",
+    ))
 }

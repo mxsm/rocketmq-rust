@@ -151,6 +151,18 @@ def _validate_record_shape(
         _finding(findings, "commands-missing", path, "commands")
     elif completion == "deferred-by-scope" and not isinstance(commands, list):
         _finding(findings, "commands-invalid", path, "deferred commands must be a list")
+    if (
+        completion != "deferred-by-scope"
+        and isinstance(record.get("test_ids"), list)
+        and isinstance(commands, list)
+        and len(record["test_ids"]) != len(commands)
+    ):
+        _finding(
+            findings,
+            "test-command-cardinality-mismatch",
+            path,
+            f"test_ids={len(record['test_ids'])} commands={len(commands)}",
+        )
 
     surfaces = record.get("rust_surfaces")
     if isinstance(surfaces, list):

@@ -373,90 +373,6 @@
       "scope": "crate"
     },
     {
-      "identity": "rocketmq-dashboard/rocketmq-dashboard-gpui/src/ui/icons.rs:crate:<crate>:dead_code:0",
-      "item": "<crate>",
-      "lints": [
-        "dead_code"
-      ],
-      "owner": "dashboard",
-      "path": "rocketmq-dashboard/rocketmq-dashboard-gpui/src/ui/icons.rs",
-      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "crate"
-    },
-    {
-      "identity": "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/src/auth/db.rs:item:const DB_FILE_NAME:dead_code:0",
-      "item": "const DB_FILE_NAME",
-      "lints": [
-        "dead_code"
-      ],
-      "owner": "dashboard",
-      "path": "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/src/auth/db.rs",
-      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
-      "identity": "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/src/auth/db.rs:item:const USERS_TABLE_SCHEMA:dead_code:0",
-      "item": "const USERS_TABLE_SCHEMA",
-      "lints": [
-        "dead_code"
-      ],
-      "owner": "dashboard",
-      "path": "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/src/auth/db.rs",
-      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
-      "identity": "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/src/auth/db.rs:item:impl AuthDb:dead_code:0",
-      "item": "impl AuthDb",
-      "lints": [
-        "dead_code"
-      ],
-      "owner": "dashboard",
-      "path": "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/src/auth/db.rs",
-      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
-      "identity": "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/src/auth/db.rs:item:struct AuthDb:dead_code:0",
-      "item": "struct AuthDb",
-      "lints": [
-        "dead_code"
-      ],
-      "owner": "dashboard",
-      "path": "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/src/auth/db.rs",
-      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
-      "identity": "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/src/message/types.rs:item:struct MessageDetailView:dead_code:0",
-      "item": "struct MessageDetailView",
-      "lints": [
-        "dead_code"
-      ],
-      "owner": "dashboard",
-      "path": "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/src/message/types.rs",
-      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
-      "identity": "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/src/message/types.rs:item:struct MessageTrackView:dead_code:0",
-      "item": "struct MessageTrackView",
-      "lints": [
-        "dead_code"
-      ],
-      "owner": "dashboard",
-      "path": "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/src/message/types.rs",
-      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
       "identity": "rocketmq-error/src/boundary.rs:item:fn new:clippy::too_many_arguments:0",
       "item": "fn new",
       "lints": [
@@ -577,18 +493,6 @@
       "scope": "crate"
     },
     {
-      "identity": "rocketmq-namesrv/src/lib.rs:crate:<crate>:dead_code:0",
-      "item": "<crate>",
-      "lints": [
-        "dead_code"
-      ],
-      "owner": "rocketmq-namesrv",
-      "path": "rocketmq-namesrv/src/lib.rs",
-      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "crate"
-    },
-    {
       "identity": "rocketmq-namesrv/src/route/batch_unregistration_service.rs:item:fn queue_length:dead_code:0",
       "item": "fn queue_length",
       "lints": [
@@ -613,8 +517,8 @@
       "scope": "item"
     },
     {
-      "identity": "rocketmq-store-local/src/mapped_file/default_mapped_file.rs:item:fn get_mapped_file:unused_variables:0",
-      "item": "fn get_mapped_file",
+      "identity": "rocketmq-store-local/src/mapped_file/default_mapped_file.rs:item:fn is_loaded_admitted:unused_variables:0",
+      "item": "fn is_loaded_admitted",
       "lints": [
         "unused_variables"
       ],
@@ -635,6 +539,234 @@
       "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
       "removal_issue": "ARC-ALLOW-001",
       "scope": "item"
+    },
+    {
+      "identity": "rocketmq-store-local/src/mapped_file/retirement.rs:module:mod activation:dead_code:0",
+      "item": "mod activation",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "rocketmq-store-local",
+      "path": "rocketmq-store-local/src/mapped_file/retirement.rs",
+      "reason": "M3 stages Wave-B activation behind the external fleet-fencing evidence gate",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "module"
+    },
+    {
+      "identity": "rocketmq-store-local/src/mapped_file/retirement.rs:module:mod bootstrap:dead_code:0",
+      "item": "mod bootstrap",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "rocketmq-store-local",
+      "path": "rocketmq-store-local/src/mapped_file/retirement.rs",
+      "reason": "M3.2 stages the pure bootstrap protocol before managed Store activation wiring",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "module"
+    },
+    {
+      "identity": "rocketmq-store-local/src/mapped_file/retirement.rs:module:mod codec:dead_code:0",
+      "item": "mod codec",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "rocketmq-store-local",
+      "path": "rocketmq-store-local/src/mapped_file/retirement.rs",
+      "reason": "M3 stages the byte-exact ledger codec before the durable writer consumes it",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "module"
+    },
+    {
+      "identity": "rocketmq-store-local/src/mapped_file/retirement.rs:module:mod compaction:dead_code:0",
+      "item": "mod compaction",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "rocketmq-store-local",
+      "path": "rocketmq-store-local/src/mapped_file/retirement.rs",
+      "reason": "M3.2 stages the pure compaction protocol before managed Store activation wiring",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "module"
+    },
+    {
+      "identity": "rocketmq-store-local/src/mapped_file/retirement.rs:module:mod identity:dead_code:0",
+      "item": "mod identity",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "rocketmq-store-local",
+      "path": "rocketmq-store-local/src/mapped_file/retirement.rs",
+      "reason": "M3 stages validated identity values before the durable ledger consumes them",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "module"
+    },
+    {
+      "identity": "rocketmq-store-local/src/mapped_file/retirement.rs:module:mod io:dead_code:0",
+      "item": "mod io",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "rocketmq-store-local",
+      "path": "rocketmq-store-local/src/mapped_file/retirement.rs",
+      "reason": "M3.2 stages handle-relative ledger I/O before managed Store wiring",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "module"
+    },
+    {
+      "identity": "rocketmq-store-local/src/mapped_file/retirement.rs:module:mod registry:dead_code:0",
+      "item": "mod registry",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "rocketmq-store-local",
+      "path": "rocketmq-store-local/src/mapped_file/retirement.rs",
+      "reason": "M3 stages the strong retirement registry before managed queue handoff wiring",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "module"
+    },
+    {
+      "identity": "rocketmq-store-local/src/mapped_file/retirement.rs:module:mod replay:dead_code:0",
+      "item": "mod replay",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "rocketmq-store-local",
+      "path": "rocketmq-store-local/src/mapped_file/retirement.rs",
+      "reason": "M3.2 stages pure replay decisions before namespace reconciliation wiring",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "module"
+    },
+    {
+      "identity": "rocketmq-store-local/src/mapped_file/retirement.rs:module:mod service:dead_code:0",
+      "item": "mod service",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "rocketmq-store-local",
+      "path": "rocketmq-store-local/src/mapped_file/retirement.rs",
+      "reason": "M3 stages the bounded retirement core before Wave-B Store activation",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "module"
+    },
+    {
+      "identity": "rocketmq-store-local/src/mapped_file/retirement.rs:module:mod sidecar:dead_code:0",
+      "item": "mod sidecar",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "rocketmq-store-local",
+      "path": "rocketmq-store-local/src/mapped_file/retirement.rs",
+      "reason": "M3 stages the immutable sidecar codec before the durable writer consumes it",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "module"
+    },
+    {
+      "identity": "rocketmq-store-local/src/mapped_file/retirement.rs:module:mod state:dead_code:0",
+      "item": "mod state",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "rocketmq-store-local",
+      "path": "rocketmq-store-local/src/mapped_file/retirement.rs",
+      "reason": "M3.2 stages replay-validated state before namespace reconciliation wiring",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "module"
+    },
+    {
+      "identity": "rocketmq-store-local/src/mapped_file/retirement.rs:module:mod writer:dead_code:0",
+      "item": "mod writer",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "rocketmq-store-local",
+      "path": "rocketmq-store-local/src/mapped_file/retirement.rs",
+      "reason": "M3.2 stages the durable ledger writer before managed Store wiring",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "module"
+    },
+    {
+      "identity": "rocketmq-store-local/src/mapped_file/retirement/platform.rs:module:mod engine:dead_code:0",
+      "item": "mod engine",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "rocketmq-store-local",
+      "path": "rocketmq-store-local/src/mapped_file/retirement/platform.rs",
+      "reason": "M3 stages the namespace engine before Wave-B reaper wiring",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "module"
+    },
+    {
+      "identity": "rocketmq-store-local/src/mapped_file/retirement/platform.rs:module:mod native:dead_code:0",
+      "item": "mod native",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "rocketmq-store-local",
+      "path": "rocketmq-store-local/src/mapped_file/retirement/platform.rs",
+      "reason": "M3 stages Linux namespace mutation before Wave-B reaper wiring",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "module"
+    },
+    {
+      "identity": "rocketmq-store-local/src/mapped_file/retirement/platform.rs:module:mod native:dead_code:1",
+      "item": "mod native",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "rocketmq-store-local",
+      "path": "rocketmq-store-local/src/mapped_file/retirement/platform.rs",
+      "reason": "M3 stages Windows namespace mutation before Wave-B reaper wiring",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "module"
+    },
+    {
+      "identity": "rocketmq-store-local/src/mapped_file/retirement/platform.rs:module:mod native:dead_code:2",
+      "item": "mod native",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "rocketmq-store-local",
+      "path": "rocketmq-store-local/src/mapped_file/retirement/platform.rs",
+      "reason": "M3 retains a typed unsupported backend for other targets",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "module"
+    },
+    {
+      "identity": "rocketmq-store-local/src/mapped_file/retirement/platform.rs:module:mod types:dead_code:0",
+      "item": "mod types",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "rocketmq-store-local",
+      "path": "rocketmq-store-local/src/mapped_file/retirement/platform.rs",
+      "reason": "M3 stages typed namespace proofs before Wave-B reaper wiring",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "module"
+    },
+    {
+      "identity": "rocketmq-store-local/src/mapped_file/retirement/platform.rs:module:mod unsupported_contract:dead_code:0",
+      "item": "mod unsupported_contract",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "rocketmq-store-local",
+      "path": "rocketmq-store-local/src/mapped_file/retirement/platform.rs",
+      "reason": "supported-target tests compile the unsupported backend contract",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "module"
+    },
+    {
+      "identity": "rocketmq-store-local/src/mapped_file/retirement/state.rs:module:mod reconciliation:dead_code:0",
+      "item": "mod reconciliation",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "rocketmq-store-local",
+      "path": "rocketmq-store-local/src/mapped_file/retirement/state.rs",
+      "reason": "M3 stages pure startup reconciliation before the handle-relative inventory provider is wired",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "module"
     },
     {
       "identity": "rocketmq-store/src/lib.rs:crate:<crate>:dead_code:0",
@@ -1165,18 +1297,6 @@
       "scope": "item"
     },
     {
-      "identity": "rocketmq-transport/src/clients/rocketmq_tokio_client.rs:item:fn update_name_server_address_list:unused_variables:0",
-      "item": "fn update_name_server_address_list",
-      "lints": [
-        "unused_variables"
-      ],
-      "owner": "rocketmq-transport",
-      "path": "rocketmq-transport/src/clients/rocketmq_tokio_client.rs",
-      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
       "identity": "rocketmq-transport/src/remoting.rs:module:mod inner:unused_variables:0",
       "item": "mod inner",
       "lints": [
@@ -1196,6 +1316,18 @@
       ],
       "owner": "rocketmq-transport",
       "path": "rocketmq-transport/src/remoting_server/rocketmq_tokio_server.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-transport/src/server.rs:item:fn bind_with_capabilities:clippy::too_many_arguments:0",
+      "item": "fn bind_with_capabilities",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-transport",
+      "path": "rocketmq-transport/src/server.rs",
       "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
       "removal_issue": "ARC-ALLOW-001",
       "scope": "item"
@@ -1225,8 +1357,9 @@
       "scope": "item"
     }
   ],
-  "maximum_entries": 102,
-  "schema_version": 1,
+  "maximum_entries": 113,
+  "schema_version": 2,
+  "scope": "core-release",
   "too_many_arguments": {
     "current_threshold": 12,
     "next_approved_threshold": 8,

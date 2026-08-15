@@ -124,6 +124,29 @@ assert {item['name'] for item in scope.excluded_projects(loaded)} >= {
 
         self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
 
+    def test_scope_helpers_resolve_package_and_exclude_non_core_paths(self) -> None:
+        code = """
+import core_release_scope as scope
+loaded = scope.load_scope()
+assert scope.package_for_path('rocketmq-client/src/lib.rs', loaded) == 'rocketmq-client-rust'
+assert scope.package_for_path('rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/lib.rs', loaded) == 'rocketmq-admin-core'
+assert scope.path_in_scope('rocketmq-client/src/lib.rs', 'core-release', loaded)
+assert not scope.path_in_scope('rocketmq-dashboard/rocketmq-dashboard-common/src/lib.rs', 'core-release', loaded)
+assert not scope.path_in_scope('rocketmq-tools/rocketmq-mcp/src/main.rs', 'core-release', loaded)
+assert scope.path_in_scope('rocketmq-dashboard/rocketmq-dashboard-common/src/lib.rs', 'repo-global', loaded)
+assert scope.path_in_scope('rocketmq-client/src/lib.rs', 'all', loaded)
+"""
+        completed = subprocess.run(
+            [sys.executable, "-c", code],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+            env={**os.environ, "PYTHONPATH": str(SCRIPTS)},
+        )
+
+        self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
+
     def test_unclassified_workspace_package_is_a_core_finding(self) -> None:
         scope = self.load_live_scope()
         findings = self.validate_fixture(scope, self.metadata_for(scope, extra_packages=("rocketmq-new",)))

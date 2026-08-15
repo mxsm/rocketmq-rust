@@ -19,7 +19,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import re
 import sys
@@ -30,6 +29,7 @@ from typing import NamedTuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import environment_write_guard as rust_source  # noqa: E402
+import core_release_scope  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -65,7 +65,6 @@ DEBT_FIELDS = {
     "kind",
     "item",
     "line",
-    "fingerprint",
     "classification",
     "owner",
     "reachability",
@@ -174,7 +173,13 @@ def external_module_target(root: Path, parent: Path, attributes: str, name: str)
 
 def test_only_external_modules(root: Path, sources: list[Path]) -> set[Path]:
     inbound: dict[Path, list[tuple[Path, bool]]] = defaultdict(list)
-    for parent in sources:
+    pending = list(sources)
+    visited: set[Path] = set()
+    while pending:
+        parent = pending.pop().resolve()
+        if parent in visited:
+            continue
+        visited.add(parent)
         source = parent.read_text(encoding="utf-8")
         masked = rust_source.mask_comments_and_literals(source)
         for declaration in EXTERNAL_MODULE.finditer(masked):
@@ -187,6 +192,8 @@ def test_only_external_modules(root: Path, sources: list[Path]) -> set[Path]:
                 for attribute in CFG_ATTRIBUTE.finditer(attributes)
             )
             inbound[target].append((parent.resolve(), requires_test))
+            if target not in visited:
+                pending.append(target)
 
     test_only = {
         path.resolve()
@@ -413,8 +420,6 @@ def normalized_line(masked: str, offset: int) -> str:
 def debt_entry(relative: str, kind: str, masked: str, source: str, offset: int) -> dict[str, object]:
     line = source.count("\n", 0, offset) + 1
     item = enclosing_function(masked, offset)
-    snippet = normalized_line(masked, offset)
-    fingerprint = hashlib.sha256(f"{relative}\0{kind}\0{item}\0{snippet}".encode()).hexdigest()[:20]
     classification = {
         "panic_surface": "internal_invariant",
         "manual_pin": "unsafe_invariant",
@@ -424,12 +429,11 @@ def debt_entry(relative: str, kind: str, masked: str, source: str, offset: int) 
     if kind == "panic_surface" and (relative, item) in REVIEWED_PANIC_INVARIANTS:
         classification, justification = REVIEWED_PANIC_INVARIANTS[(relative, item)]
     return {
-        "identity": f"{relative}:{kind}:{item}:{fingerprint}",
+        "identity": f"{relative}:{kind}:{item}",
         "path": relative,
         "kind": kind,
         "item": item,
         "line": line,
-        "fingerprint": fingerprint,
         "classification": classification,
         "owner": relative.split("/", 1)[0],
         "reachability": "production-internal",
@@ -485,15 +489,28 @@ def scan_source(source: str, relative: str) -> tuple[list[SafetyFinding], list[d
     return safety_findings, debt
 
 
-def scan_tree(root: Path) -> tuple[list[SafetyFinding], list[dict[str, object]]]:
+def scan_tree(
+    root: Path,
+    *,
+    scope: str = "all",
+) -> tuple[list[SafetyFinding], list[dict[str, object]]]:
     safety_findings: list[SafetyFinding] = []
     debt: list[dict[str, object]] = []
     sources = rust_source.production_sources(root)
+    scope_document = (
+        core_release_scope.load_scope(root / "scripts/core-release-scope.json")
+        if scope != "all"
+        else None
+    )
     test_only_modules = test_only_external_modules(root, sources)
     for path in sources:
         if path.resolve() in test_only_modules:
             continue
         relative = path.relative_to(root).as_posix()
+        if scope_document is not None and not core_release_scope.path_in_scope(
+            relative, scope, scope_document
+        ):
+            continue
         file_safety, file_debt = scan_source(path.read_text(encoding="utf-8"), relative)
         safety_findings.extend(file_safety)
         debt.extend(file_debt)
@@ -503,15 +520,17 @@ def scan_tree(root: Path) -> tuple[list[SafetyFinding], list[dict[str, object]]]
         if "target" in relative_path.parts or "src" not in relative_path.parts:
             continue
         relative = relative_path.as_posix()
-        fingerprint = hashlib.sha256(relative.encode()).hexdigest()[:20]
+        if scope_document is not None and not core_release_scope.path_in_scope(
+            relative, scope, scope_document
+        ):
+            continue
         debt.append(
             {
-                "identity": f"{relative}:legacy_mod_rs:{fingerprint}:0",
+                "identity": f"{relative}:legacy_mod_rs:<module>:0",
                 "path": relative,
                 "kind": "legacy_mod_rs",
                 "item": "<module>",
                 "line": 1,
-                "fingerprint": fingerprint,
                 "classification": "legacy module layout; additions are forbidden",
                 "owner": "owning crate maintainers",
                 "reachability": "production-layout",
@@ -525,7 +544,7 @@ def scan_tree(root: Path) -> tuple[list[SafetyFinding], list[dict[str, object]]]
 
 def write_baseline(path: Path, debt: list[dict[str, object]]) -> None:
     payload = {
-        "schema_version": 2,
+        "schema_version": 3,
         "policy": {
             "unsafe": "Every production unsafe block or impl requires an adjacent // SAFETY: comment.",
             "safe_raw_pointer_api": "Public safe functions must not accept raw pointers.",
@@ -533,12 +552,12 @@ def write_baseline(path: Path, debt: list[dict[str, object]]) -> None:
         },
         "entries": debt,
     }
-    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8", newline="\n")
 
 
-def load_baseline(path: Path) -> set[str]:
+def load_baseline(path: Path, *, scope: str = "all", root: Path = ROOT) -> set[str]:
     payload = json.loads(path.read_text(encoding="utf-8"))
-    if payload.get("schema_version") != 2 or not isinstance(payload.get("entries"), list):
+    if payload.get("schema_version") != 3 or not isinstance(payload.get("entries"), list):
         raise ValueError("rust hygiene baseline has an unsupported schema")
     for entry in payload["entries"]:
         if not isinstance(entry, dict) or set(entry) != DEBT_FIELDS:
@@ -547,7 +566,12 @@ def load_baseline(path: Path) -> set[str]:
             raise ValueError("rust hygiene baseline contains empty debt metadata")
         if not isinstance(entry["line"], int) or entry["line"] < 1:
             raise ValueError("rust hygiene baseline contains an invalid line")
-    identities = [entry.get("identity") for entry in payload["entries"]]
+    scope_document = core_release_scope.load_scope(root / "scripts/core-release-scope.json")
+    identities = [
+        entry.get("identity")
+        for entry in payload["entries"]
+        if core_release_scope.path_in_scope(entry["path"], scope, scope_document)
+    ]
     if any(not isinstance(identity, str) or not identity for identity in identities):
         raise ValueError("rust hygiene baseline contains an invalid identity")
     if len(identities) != len(set(identities)):
@@ -560,10 +584,16 @@ def main() -> int:
     parser.add_argument("--root", type=Path, default=ROOT)
     parser.add_argument("--baseline", type=Path, default=BASELINE)
     parser.add_argument("--write-baseline", action="store_true")
+    parser.add_argument(
+        "--scope",
+        choices=("core-release", "repo-global", "all"),
+        default="all",
+    )
+    parser.add_argument("--identity", choices=("structural",), default="structural")
     args = parser.parse_args()
 
     root = args.root.resolve()
-    safety_findings, debt = scan_tree(root)
+    safety_findings, debt = scan_tree(root, scope=args.scope)
     if safety_findings:
         for finding in safety_findings:
             print(f"{finding.path}:{finding.line}: {finding.reason}", file=sys.stderr)
@@ -576,7 +606,7 @@ def main() -> int:
         return 0
 
     try:
-        baseline = load_baseline(args.baseline)
+        baseline = load_baseline(args.baseline, scope=args.scope, root=root)
     except (OSError, ValueError, json.JSONDecodeError) as error:
         print(f"RUST_HYGIENE_GUARD_FAILED baseline={error}", file=sys.stderr)
         return 1

@@ -1034,22 +1034,116 @@ def validate(root: Path, policy: dict[str, Any], facts: Facts) -> list[Finding]:
     return findings
 
 
+def semantic_document_records(
+    root: Path,
+    policy: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[Finding]]:
+    """Collect readable documentation identities without content fingerprints."""
+
+    required_paths = {policy["generated_document"]}
+    contracts = policy.get("documentation_contracts", {})
+    if isinstance(contracts, dict):
+        required_paths.update(value for value in contracts.values() if isinstance(value, str))
+    records: list[dict[str, Any]] = []
+    findings: list[Finding] = []
+    root_commands = policy.get("root", {}).get("commands", [])
+    for relative in sorted(required_paths):
+        path = root / relative
+        if not path.is_file():
+            findings.append(Finding("required-document-missing", relative, "declared by documentation policy"))
+            continue
+        source = path.read_text(encoding="utf-8")
+        sections = re.findall(r"^#{1,6}\s+(.+?)\s*$", source, re.MULTILINE) if path.suffix == ".md" else []
+        links = sorted(
+            set(
+                target.strip().split(maxsplit=1)[0].strip("<>")
+                for target in re.findall(r"\[[^]]*\]\(([^)]+)\)", source)
+            )
+        )
+        commands = sorted(
+            set(
+                line.strip()
+                for line in source.splitlines()
+                if line.strip().startswith(("cargo ", "python ", "python3 ", "bash ", "pwsh ", ".\\scripts\\"))
+            )
+        )
+        if relative == policy["generated_document"] and isinstance(root_commands, list):
+            commands = sorted(set(commands) | {item for item in root_commands if isinstance(item, str)})
+        if path.suffix == ".md" and not sections:
+            findings.append(Finding("required-document-sections", relative, "Markdown document has no sections"))
+        for target in links:
+            if target.startswith(("http://", "https://", "mailto:", "#", "/")):
+                continue
+            resolved = (path.parent / target.split("#", 1)[0]).resolve()
+            if not resolved.exists():
+                findings.append(Finding("required-document-link", relative, target))
+        records.append(
+            {
+                "path": relative,
+                "sections": sections,
+                "link_targets": links,
+                "commands": commands,
+            }
+        )
+    return records, sorted(findings)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    mode = parser.add_mutually_exclusive_group(required=True)
+    mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--check", action="store_true")
     mode.add_argument("--write", action="store_true")
+    parser.add_argument("--mode", choices=("semantic",))
+    parser.add_argument(
+        "--scope",
+        choices=("core-release", "repo-global", "all"),
+        default="core-release",
+    )
+    parser.add_argument("--output", type=Path)
     parser.add_argument("--root", type=Path, default=DEFAULT_ROOT, help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     root = args.root.resolve()
     try:
         policy = load_json(root / POLICY_RELATIVE)
+        if args.mode == "semantic":
+            records, findings = semantic_document_records(root, policy)
+            if args.output is not None:
+                args.output.parent.mkdir(parents=True, exist_ok=True)
+                args.output.write_text(
+                    json.dumps(
+                        {
+                            "schema_version": 1,
+                            "scope": args.scope,
+                            "mode": "semantic",
+                            "status": "compliant" if not findings else "violation",
+                            "documents": records,
+                            "findings": [finding.__dict__ for finding in findings],
+                        },
+                        indent=2,
+                        sort_keys=True,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                    newline="\n",
+                )
+            if findings:
+                for finding in findings:
+                    print(finding.render())
+                print(f"ARCHITECTURE_DOCUMENTATION_FAILED findings={len(findings)}")
+                return 1
+            print(
+                "ARCHITECTURE_DOCUMENTATION_OK "
+                f"mode=semantic scope={args.scope} documents={len(records)}"
+            )
+            return 0
+        if not args.check and not args.write:
+            parser.error("one of --check, --write, or --mode semantic is required")
         facts = collect_facts(root, policy)
         if args.write:
             output = root / policy["generated_document"]
             output.parent.mkdir(parents=True, exist_ok=True)
-            output.write_text(render_document(policy, facts), encoding="utf-8")
+            output.write_text(render_document(policy, facts), encoding="utf-8", newline="\n")
             print(f"ARCHITECTURE_DOCUMENTATION_WRITTEN path={normalized(output.relative_to(root))}")
             return 0
         findings = validate(root, policy, facts)

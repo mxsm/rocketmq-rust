@@ -497,3 +497,37 @@ mod platform;
 #[cfg(not(any(unix, windows)))]
 #[path = "root_lock/unsupported.rs"]
 mod platform;
+
+#[cfg(test)]
+#[path = "root_lock/unsupported.rs"]
+mod unsupported_contract;
+
+#[cfg(test)]
+mod unsupported_contract_tests {
+    use std::fs::File;
+    use std::io;
+
+    use super::unsupported_contract;
+
+    #[test]
+    fn unsupported_platform_operations_fail_closed_instead_of_panicking() {
+        let file = File::open(std::env::current_exe().expect("resolve current test executable"))
+            .expect("open current test executable");
+
+        assert_unsupported(unsupported_contract::verify_root_directory(&file));
+        assert_unsupported(unsupported_contract::open_lock_file(&file, false));
+        assert_unsupported(unsupported_contract::verify_lock_file(&file));
+        assert_unsupported(unsupported_contract::file_identity(&file));
+        assert_unsupported(unsupported_contract::abort_marker_present(&file));
+        assert_unsupported(unsupported_contract::create_abort_marker(&file, b"test"));
+        assert_unsupported(unsupported_contract::remove_abort_marker(&file));
+    }
+
+    fn assert_unsupported<T>(result: io::Result<T>) {
+        let error = match result {
+            Ok(_) => panic!("unsupported Store root operation must fail"),
+            Err(error) => error,
+        };
+        assert_eq!(io::ErrorKind::Unsupported, error.kind());
+    }
+}

@@ -401,7 +401,7 @@ impl RouteInfoManager {
         )?;
 
         // Step 3: Check if broker registration should be rejected
-        if update_result.is_none() {
+        let Some((register_first, is_min_broker_id_changed, broker_topology_changed)) = update_result else {
             warn!(
                 "Broker registration rejected due to version conflict: cluster={}, broker={}, id={}, addr={}",
                 cluster_name, broker_name, broker_id, broker_addr
@@ -410,8 +410,7 @@ impl RouteInfoManager {
             self.metrics.record_registration_delta("rejected", 0);
             registration_span.record("result", "rejected");
             return Ok(result);
-        }
-        let (register_first, is_min_broker_id_changed, broker_topology_changed) = update_result.unwrap();
+        };
 
         // Step 2: Update cluster membership only after registration validation succeeds.
         self.cluster_addr_table

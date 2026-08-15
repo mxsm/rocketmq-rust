@@ -429,29 +429,25 @@ where
             ));
         }
 
-        let exp = request_header.exp.as_ref();
+        let expression = request_header.exp.as_ref().filter(|value| !value.is_empty());
 
-        let (subscription_data, retry_subscription_data, message_filter) = if exp.is_some() && !exp.unwrap().is_empty()
-        {
-            let subscription_data = match FilterAPI::build(
-                &request_header.topic,
-                &request_header.exp.clone().unwrap_or_default(),
-                request_header.exp_type.clone(),
-            ) {
-                Ok(value) => value,
-                Err(_) => {
-                    warn!(
-                        "Parse the consumer's subscription[{:?}] error, group: {}",
-                        request_header.exp, request_header.consumer_group
-                    );
-                    return Ok(Some(
-                        self.context.command_factory.create_response_command_with_code_remark(
-                            ResponseCode::SubscriptionParseFailed,
-                            "parse the consumer's subscription failed",
-                        ),
-                    ));
-                }
-            };
+        let (subscription_data, retry_subscription_data, message_filter) = if let Some(expression) = expression {
+            let subscription_data =
+                match FilterAPI::build(&request_header.topic, expression, request_header.exp_type.clone()) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        warn!(
+                            "Parse the consumer's subscription[{:?}] error, group: {}",
+                            request_header.exp, request_header.consumer_group
+                        );
+                        return Ok(Some(
+                            self.context.command_factory.create_response_command_with_code_remark(
+                                ResponseCode::SubscriptionParseFailed,
+                                "parse the consumer's subscription failed",
+                            ),
+                        ));
+                    }
+                };
             let retry_topic = CheetahString::from_string(
                 retry_policy.write_topic(&request_header.topic, &request_header.consumer_group),
             );
@@ -482,7 +478,7 @@ where
                     request_header.exp_type.clone(),
                     current_millis(),
                 );
-                if consumer_filter_data.is_none() {
+                let Some(consumer_filter_data) = consumer_filter_data else {
                     warn!(
                         "Parse the consumer's subscription[{:?}] failed, group: {}",
                         request_header.exp, request_header.consumer_group
@@ -493,8 +489,7 @@ where
                             "parse the consumer's subscription failed",
                         ),
                     ));
-                }
-                let consumer_filter_data = consumer_filter_data.unwrap();
+                };
                 let message_filter: ArcMessageFilter = Arc::new(ExpressionMessageFilter::new(
                     Some(subscription_data.clone()),
                     Some(consumer_filter_data),

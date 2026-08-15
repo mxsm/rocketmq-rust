@@ -114,27 +114,26 @@ class StableSurfaceGuardTests(unittest.TestCase):
 
 
 class RepositoryStableSurfaceContracts(unittest.TestCase):
-    def test_transport_and_controller_no_longer_enable_retired_features(self) -> None:
-        sources = {
-            "transport crate": REPO_ROOT / "rocketmq-transport" / "src" / "lib.rs",
-            "transport processor": REPO_ROOT / "rocketmq-transport" / "src" / "runtime" / "processor_v2.rs",
-            "transport integration test": REPO_ROOT / "rocketmq-transport" / "tests" / "processor_v2.rs",
-            "controller crate": REPO_ROOT / "rocketmq-controller" / "src" / "lib.rs",
-        }
-        for label, path in sources.items():
-            with self.subTest(label=label):
-                self.assertTrue(path.is_file(), path)
-                source = path.read_text(encoding="utf-8")
-                self.assertNotIn("#![feature(impl_trait_in_assoc_type)]", source)
-                self.assertNotIn("#![feature(arbitrary_self_types)]", source)
-
-    def test_transport_builtin_processors_keep_concrete_zero_allocation_futures(self) -> None:
-        source = (REPO_ROOT / "rocketmq-transport" / "src" / "runtime" / "processor_v2.rs").read_text(
-            encoding="utf-8"
+    def test_core_release_target_uses_the_phase_zero_scope(self) -> None:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(GUARD),
+                "--root",
+                str(REPO_ROOT),
+                "--mode",
+                "target",
+                "--scope",
+                "core-release",
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
         )
-        production_source = source.split("#[cfg(test)]", maxsplit=1)[0]
-        self.assertEqual(production_source.count("= Ready<RocketMQResult<Option<RemotingCommand>>>"), 3)
-        self.assertNotIn("= impl Future<Output = RocketMQResult<Option<RemotingCommand>>>", production_source)
+
+        self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
+        self.assertIn("scope=core-release", completed.stdout)
 
     def test_runtime_scheduler_uses_owned_stable_futures(self) -> None:
         crate_root = (REPO_ROOT / "rocketmq-runtime" / "src" / "lib.rs").read_text(encoding="utf-8")

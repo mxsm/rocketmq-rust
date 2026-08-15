@@ -933,16 +933,46 @@ rocketmq-client-rust = { path = "../../rocketmq-client" }
         cycles = [line for line in result.stdout.splitlines() if "rule=dependency-cycle" in line]
         self.assertGreaterEqual(len(cycles), 2)
 
-    def test_baseline_reproducibility_schema_is_complete(self) -> None:
+    def test_baseline_uses_readable_semantic_records_without_content_digest(self) -> None:
         baseline = json.loads(BASELINE.read_text(encoding="utf-8"))
-        for key in (
-            "cargo_metadata_command",
-            "metadata_sha256",
-            "rustc_version",
-            "cargo_version",
-            "generated_output_path",
-        ):
-            self.assertIn(key, baseline)
+        self.assertEqual(2, baseline["schema_version"])
+        self.assertIn("semantic_dependencies", baseline)
+        self.assertNotIn("metadata_sha256", baseline)
+        serialized = json.dumps(baseline).lower()
+        self.assertNotIn("sha256", serialized)
+        for entry in baseline["semantic_dependencies"]:
+            self.assertEqual(
+                {"package", "dependency", "kind", "optional", "features"},
+                set(entry),
+            )
+
+    def test_live_structural_core_mode_emits_only_semantic_core_dependencies(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "dependencies.json"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(GUARD),
+                    "--mode",
+                    "structural",
+                    "--scope",
+                    "core-release",
+                    "--output",
+                    str(output),
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            payload = json.loads(output.read_text(encoding="utf-8"))
+        self.assertEqual(("core-release", "structural", "compliant"), (payload["scope"], payload["mode"], payload["status"]))
+        self.assertNotIn("sha256", json.dumps(payload).lower())
+        self.assertTrue(payload["dependencies"])
+        self.assertFalse(any(entry["package"] == "rocketmq-dashboard-common" for entry in payload["dependencies"]))
+        self.assertFalse(any(entry["dependency"] == "rocketmq-dashboard-common" for entry in payload["dependencies"]))
 
     def test_policy_encodes_all_29_target_packages(self) -> None:
         policy = json.loads(POLICY.read_text(encoding="utf-8"))

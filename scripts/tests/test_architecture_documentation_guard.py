@@ -13,6 +13,9 @@
 # limitations under the License.
 
 import tempfile
+import json
+import subprocess
+import sys
 import unittest
 from pathlib import Path
 
@@ -20,6 +23,35 @@ from scripts import architecture_documentation_guard as guard
 
 
 class ArchitectureDocumentationGuardTest(unittest.TestCase):
+    def test_live_semantic_core_mode_records_paths_sections_links_and_commands(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "documentation.json"
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(root / "scripts/architecture_documentation_guard.py"),
+                    "--mode",
+                    "semantic",
+                    "--scope",
+                    "core-release",
+                    "--output",
+                    str(output),
+                ],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
+            payload = json.loads(output.read_text(encoding="utf-8"))
+        self.assertEqual(("core-release", "semantic", "compliant"), (payload["scope"], payload["mode"], payload["status"]))
+        self.assertTrue(payload["documents"])
+        self.assertNotIn("sha256", json.dumps(payload).lower())
+        for record in payload["documents"]:
+            self.assertEqual({"path", "sections", "link_targets", "commands"}, set(record))
+
     def test_documentation_workflow_provisions_property_suite_native_dependencies(self) -> None:
         root = Path(__file__).resolve().parents[2]
         workflow = (root / ".github/workflows/architecture-documentation.yml").read_text(encoding="utf-8")

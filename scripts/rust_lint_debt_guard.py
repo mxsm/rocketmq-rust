@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from environment_write_guard import mask_comments_and_literals, production_sources
+import core_release_scope
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -124,17 +125,29 @@ def inventory_source(relative: str, source: str) -> list[dict[str, Any]]:
     return entries
 
 
-def current_inventory(root: Path = ROOT) -> list[dict[str, Any]]:
+def current_inventory(
+    root: Path = ROOT,
+    *,
+    scope: str = "all",
+) -> list[dict[str, Any]]:
+    scope_document = core_release_scope.load_scope(root / "scripts/core-release-scope.json")
     entries: list[dict[str, Any]] = []
     for path in production_sources(root):
         relative = path.relative_to(root).as_posix()
+        if not core_release_scope.path_in_scope(relative, scope, scope_document):
+            continue
         entries.extend(inventory_source(relative, path.read_text(encoding="utf-8")))
     return sorted(entries, key=lambda entry: entry["identity"])
 
 
-def render_registry(entries: list[dict[str, Any]]) -> dict[str, Any]:
+def render_registry(
+    entries: list[dict[str, Any]],
+    *,
+    scope: str = "all",
+) -> dict[str, Any]:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
+        "scope": scope,
         "too_many_arguments": {
             "current_threshold": 12,
             "next_approved_threshold": 8,
@@ -148,13 +161,16 @@ def render_registry(entries: list[dict[str, Any]]) -> dict[str, Any]:
 def validate_registry(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) != {
         "schema_version",
+        "scope",
         "too_many_arguments",
         "maximum_entries",
         "entries",
     }:
         raise ValueError("unexpected registry schema")
-    if value["schema_version"] != 1:
+    if value["schema_version"] != 2:
         raise ValueError("unsupported registry schema")
+    if value["scope"] not in {"core-release", "repo-global", "all"}:
+        raise ValueError("unsupported registry scope")
     threshold = value["too_many_arguments"]
     if threshold != {
         "current_threshold": 12,
@@ -186,12 +202,25 @@ def validate_registry(value: Any) -> dict[str, Any]:
     return value
 
 
-def compare(registry: dict[str, Any], current: list[dict[str, Any]], clippy_config: str) -> list[str]:
+def compare(
+    registry: dict[str, Any],
+    current: list[dict[str, Any]],
+    clippy_config: str,
+    *,
+    scope: str = "all",
+    scope_document: dict[str, Any] | None = None,
+) -> list[str]:
     findings: list[str] = []
     match = THRESHOLD.search(clippy_config)
     if match is None or int(match.group(1)) != 12:
         findings.append("too-many-arguments-threshold must remain 12")
-    approved = {entry["identity"] for entry in registry["entries"]}
+    loaded_scope = scope_document or core_release_scope.load_scope()
+    approved_entries = [
+        entry
+        for entry in registry["entries"]
+        if core_release_scope.path_in_scope(entry["path"], scope, loaded_scope)
+    ]
+    approved = {entry["identity"] for entry in approved_entries}
     actual = {entry["identity"] for entry in current}
     for entry in current:
         if entry["identity"] not in approved:
@@ -201,9 +230,10 @@ def compare(registry: dict[str, Any], current: list[dict[str, Any]], clippy_conf
             )
     for identity in sorted(approved - actual):
         findings.append(f"stale lint debt identity {identity}")
-    if len(current) > registry["maximum_entries"]:
+    maximum_entries = len(approved_entries) if scope == "core-release" else registry["maximum_entries"]
+    if len(current) > maximum_entries:
         findings.append(
-            f"lint debt grew: current={len(current)} maximum={registry['maximum_entries']}"
+            f"lint debt grew: current={len(current)} maximum={maximum_entries}"
         )
     return findings
 
@@ -211,17 +241,32 @@ def compare(registry: dict[str, Any], current: list[dict[str, Any]], clippy_conf
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--write-registry", action="store_true")
+    parser.add_argument(
+        "--scope",
+        choices=("core-release", "repo-global", "all"),
+        default="all",
+    )
     parser.add_argument("--root", type=Path, default=ROOT, help=argparse.SUPPRESS)
     args = parser.parse_args()
     root = args.root.resolve()
     try:
-        current = current_inventory(root)
+        current = current_inventory(root, scope=args.scope)
         if args.write_registry:
-            REGISTRY.write_text(json.dumps(render_registry(current), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            REGISTRY.write_text(
+                json.dumps(render_registry(current, scope=args.scope), indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+                newline="\n",
+            )
             print(f"RUST_LINT_DEBT_WRITTEN entries={len(current)}")
             return 0
         registry = validate_registry(json.loads(REGISTRY.read_text(encoding="utf-8")))
-        findings = compare(registry, current, (root / ".clippy.toml").read_text(encoding="utf-8"))
+        findings = compare(
+            registry,
+            current,
+            (root / ".clippy.toml").read_text(encoding="utf-8"),
+            scope=args.scope,
+            scope_document=core_release_scope.load_scope(root / "scripts/core-release-scope.json"),
+        )
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
         print(f"RUST_LINT_DEBT_FAILED input={error}", file=sys.stderr)
         return 2

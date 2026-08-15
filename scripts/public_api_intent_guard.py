@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from environment_write_guard import mask_comments_and_literals
+import core_release_scope
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -159,11 +160,23 @@ def inventory_source(relative: str, source: str, owner: str) -> list[dict[str, s
     return entries
 
 
-def current_inventory(root: Path = ROOT) -> dict[str, list[dict[str, str]]]:
+def current_inventory(
+    root: Path = ROOT,
+    *,
+    scope: str = "all",
+) -> dict[str, list[dict[str, str]]]:
+    scope_document = core_release_scope.load_scope(root / "scripts/core-release-scope.json")
+    core_names = {entry["name"] for entry in core_release_scope.core_packages(scope_document)}
     result: dict[str, list[dict[str, str]]] = {}
     for crate, (owner, paths) in CRATES.items():
+        if scope == "core-release" and crate not in core_names:
+            continue
         entries: list[dict[str, str]] = []
         for relative in paths:
+            if scope == "core-release" and not core_release_scope.path_in_scope(
+                relative, scope, scope_document
+            ):
+                raise ValueError(f"configured public API path is outside core-release: {relative}")
             entries.extend(inventory_source(relative, (root / relative).read_text(encoding="utf-8"), owner))
         result[crate] = sorted(entries, key=lambda entry: entry["identity"])
     return result
@@ -276,11 +289,16 @@ def summary(manifest: dict[str, Any]) -> dict[str, dict[str, int]]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--write-manifest", action="store_true")
+    parser.add_argument(
+        "--scope",
+        choices=("core-release", "repo-global", "all"),
+        default="all",
+    )
     parser.add_argument("--root", type=Path, default=ROOT, help=argparse.SUPPRESS)
     args = parser.parse_args()
     root = args.root.resolve()
     try:
-        inventory = current_inventory(root)
+        inventory = current_inventory(root, scope=args.scope)
         if args.write_manifest:
             previous = None
             if MANIFEST.exists():
@@ -289,7 +307,11 @@ def main() -> int:
             generated_findings = compare(value, inventory)
             if generated_findings:
                 raise ValueError("generated manifest is inconsistent: " + "; ".join(generated_findings))
-            MANIFEST.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            MANIFEST.write_text(
+                json.dumps(value, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+                newline="\n",
+            )
             print(
                 "PUBLIC_API_INTENT_WRITTEN "
                 + " ".join(f"{crate}={len(entries)}" for crate, entries in inventory.items())
