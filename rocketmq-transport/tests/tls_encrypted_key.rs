@@ -17,7 +17,7 @@
 use std::fs;
 
 use pkcs8::LineEnding;
-use pkcs8::PrivateKeyInfo;
+use pkcs8::PrivateKeyInfoRef;
 use rocketmq_transport::api::v1::PrivateKeyLoader;
 
 #[test]
@@ -25,10 +25,10 @@ fn encrypted_pkcs8_key_requires_the_correct_password_without_leaking_it() {
     let rcgen::CertifiedKey { signing_key, .. } =
         rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).expect("generate key");
     let key_der = signing_key.serialize_der();
-    let key_info = PrivateKeyInfo::try_from(key_der.as_slice()).expect("parse key");
+    let key_info = PrivateKeyInfoRef::try_from(key_der.as_slice()).expect("parse key");
     let password = "correct horse battery staple";
     let encrypted = key_info
-        .encrypt(pkcs8::rand_core::OsRng, password)
+        .encrypt(password)
         .expect("encrypt key")
         .to_pem("ENCRYPTED PRIVATE KEY", LineEnding::LF)
         .expect("encode PEM");

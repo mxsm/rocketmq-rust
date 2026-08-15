@@ -870,7 +870,7 @@ impl PrivateKeyLoader {
     ) -> RocketMQResult<tokio_rustls::rustls::pki_types::PrivateKeyDer<'static>> {
         use std::io::Cursor;
 
-        use pkcs8::EncryptedPrivateKeyInfo;
+        use pkcs8::EncryptedPrivateKeyInfoRef;
         use zeroize::Zeroizing;
 
         let path = path.as_ref();
@@ -899,7 +899,7 @@ impl PrivateKeyLoader {
                 .map_err(|_| config_error(key, safe_path.as_ref(), "encrypted private key PEM is not UTF-8"))?;
             let (_, encrypted_document) = pkcs8::SecretDocument::from_pem(pem_text)
                 .map_err(|_| config_error(key, safe_path.as_ref(), "invalid encrypted PKCS#8 PEM"))?;
-            let encrypted = EncryptedPrivateKeyInfo::try_from(encrypted_document.as_bytes())
+            let encrypted = EncryptedPrivateKeyInfoRef::try_from(encrypted_document.as_bytes())
                 .map_err(|_| config_error(key, safe_path.as_ref(), "invalid encrypted PKCS#8 payload"))?;
             let decrypted = encrypted.decrypt(password.as_slice()).map_err(|_| {
                 config_error(
