@@ -72,8 +72,29 @@ async fn posix_store_recovers_dispatched_messages_and_index_after_restart() -> R
         .await?;
     store.shutdown().await?;
 
-    let reloaded = TieredStore::new(config, context.root_group().clone())?;
+    let provider_before_restart = provider_file_snapshot(&config.store_path_root_dir)?;
+    let metadata: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(
+            config
+                .store_path_root_dir
+                .join("config")
+                .join("tieredStoreMetadata.json"),
+        )
+        .map_err(|source| RocketMQError::internal("read tiered metadata", source))?,
+    )
+    .map_err(|source| RocketMQError::internal("decode tiered metadata", source))?;
+    assert_eq!(metadata["format"], "rocketmq-tiered-metadata");
+    assert_eq!(metadata["version"], 1);
+    assert_eq!(metadata["provider"]["id"], "posix");
+    assert_eq!(metadata["provider"]["format"], "rocketmq-tiered-posix");
+    assert_eq!(metadata["provider"]["version"], 1);
+
+    let reloaded = TieredStore::new(config.clone(), context.root_group().clone())?;
     reloaded.load().await?;
+    assert_eq!(
+        provider_file_snapshot(&config.store_path_root_dir)?,
+        provider_before_restart
+    );
 
     let fetched = reloaded
         .fetcher()
@@ -114,6 +135,43 @@ async fn posix_store_recovers_dispatched_messages_and_index_after_restart() -> R
         .await?;
     assert_eq!(uniq_query_result.values, vec![message]);
 
+    Ok(())
+}
+
+fn provider_file_snapshot(root: &std::path::Path) -> Result<Vec<(String, Vec<u8>)>, RocketMQError> {
+    let mut snapshot = Vec::new();
+    collect_provider_files(root, root, &mut snapshot)?;
+    snapshot.sort_by(|left, right| left.0.cmp(&right.0));
+    Ok(snapshot)
+}
+
+fn collect_provider_files(
+    root: &std::path::Path,
+    current: &std::path::Path,
+    snapshot: &mut Vec<(String, Vec<u8>)>,
+) -> Result<(), RocketMQError> {
+    for entry in std::fs::read_dir(current).map_err(|source| RocketMQError::internal("list provider files", source))? {
+        let entry = entry.map_err(|source| RocketMQError::internal("read provider entry", source))?;
+        let path = entry.path();
+        let relative = path
+            .strip_prefix(root)
+            .map_err(|source| RocketMQError::internal("resolve provider path", source))?;
+        if relative
+            .components()
+            .next()
+            .is_some_and(|component| component.as_os_str() == "config")
+        {
+            continue;
+        }
+        if path.is_dir() {
+            collect_provider_files(root, &path, snapshot)?;
+        } else {
+            snapshot.push((
+                relative.to_string_lossy().replace('\\', "/"),
+                std::fs::read(&path).map_err(|source| RocketMQError::internal("read provider file", source))?,
+            ));
+        }
+    }
     Ok(())
 }
 

@@ -31,7 +31,12 @@ use rocketmq_tieredstore::fetcher::TieredQueryResult;
 use rocketmq_tieredstore::provider::ProviderKind;
 use rocketmq_tieredstore::provider::TieredStoreProvider;
 use rocketmq_tieredstore::TieredLifecycle;
+use rocketmq_tieredstore::TieredLocalResidency;
 use rocketmq_tieredstore::TieredMessageFetcher;
+use rocketmq_tieredstore::TieredReadContext;
+use rocketmq_tieredstore::TieredReadErrorDisposition;
+use rocketmq_tieredstore::TieredReadPolicy;
+use rocketmq_tieredstore::TieredReadSource;
 use rocketmq_tieredstore::TieredStore;
 use rocketmq_tieredstore::TieredStoreConfig;
 use tracing::debug;
@@ -125,15 +130,37 @@ impl TieredStoreDecorator {
         self.store.dispatcher().health().is_ready()
     }
 
-    pub const fn should_try_get_message(status: GetMessageStatus) -> bool {
-        matches!(
+    pub fn should_try_get_message(&self, status: GetMessageStatus, local_residency: TieredLocalResidency) -> bool {
+        let residency = if status == GetMessageStatus::Found {
+            local_residency
+        } else if matches!(
             status,
             GetMessageStatus::NoMatchedLogicQueue
                 | GetMessageStatus::NoMessageInQueue
                 | GetMessageStatus::OffsetTooSmall
                 | GetMessageStatus::OffsetFoundNull
                 | GetMessageStatus::MessageWasRemoving
-        )
+        ) {
+            TieredLocalResidency::Missing
+        } else {
+            return false;
+        };
+        TieredReadPolicy::new(self.store.config().storage_level).select(TieredReadContext::new(residency))
+            == TieredReadSource::Tiered
+    }
+
+    pub fn should_try_query(&self, local_result_empty: bool) -> bool {
+        let residency = if local_result_empty {
+            TieredLocalResidency::Missing
+        } else {
+            TieredLocalResidency::Disk
+        };
+        TieredReadPolicy::new(self.store.config().storage_level).select(TieredReadContext::new(residency))
+            == TieredReadSource::Tiered
+    }
+
+    pub fn should_try_offset_by_time(&self, local_range_missing: bool) -> bool {
+        self.should_try_query(local_range_missing)
     }
 
     pub async fn get_message(
@@ -145,7 +172,8 @@ impl TieredStoreDecorator {
         max_msg_nums: i32,
         max_total_msg_size: i32,
         message_filter: Option<ArcMessageFilter>,
-    ) -> Option<GetMessageResult> {
+        local_available: bool,
+    ) -> Result<Option<GetMessageResult>, StoreError> {
         let metrics = self.store.metrics();
         metrics.record_get_message_fallback(topic.as_str(), group.as_str());
         match self
@@ -159,7 +187,7 @@ impl TieredStoreDecorator {
                 if result.status() == Some(GetMessageStatus::Found) {
                     metrics.record_messages_out(topic.as_str(), group.as_str(), result.message_count().max(0) as u64);
                 }
-                Some(result)
+                Ok(Some(result))
             }
             Err(error) => {
                 warn!(
@@ -170,7 +198,10 @@ impl TieredStoreDecorator {
                     error = %error,
                     "tieredstore get_message fallback failed"
                 );
-                None
+                match TieredReadPolicy::classify_error(error.kind(), local_available) {
+                    TieredReadErrorDisposition::FallbackToLocal | TieredReadErrorDisposition::Miss => Ok(None),
+                    TieredReadErrorDisposition::Fatal => Err(StoreError::tiered_store(StoreOperation::Read, error)),
+                }
             }
         }
     }
@@ -182,7 +213,8 @@ impl TieredStoreDecorator {
         max_num: i32,
         begin_timestamp: i64,
         end_timestamp: i64,
-    ) -> Option<QueryMessageResult> {
+        local_available: bool,
+    ) -> Result<Option<QueryMessageResult>, StoreError> {
         match self
             .store
             .fetcher()
@@ -196,12 +228,15 @@ impl TieredStoreDecorator {
             .await
         {
             Ok(fetched) if !fetched.values.is_empty() => {
-                Some(Self::to_store_query_message_result(fetched, end_timestamp))
+                Ok(Some(Self::to_store_query_message_result(fetched, end_timestamp)))
             }
-            Ok(_) => None,
+            Ok(_) => Ok(None),
             Err(error) => {
                 warn!(topic = %topic, key = %key, error = %error, "tieredstore query_message fallback failed");
-                None
+                match TieredReadPolicy::classify_error(error.kind(), local_available) {
+                    TieredReadErrorDisposition::FallbackToLocal | TieredReadErrorDisposition::Miss => Ok(None),
+                    TieredReadErrorDisposition::Fatal => Err(StoreError::tiered_store(StoreOperation::Read, error)),
+                }
             }
         }
     }

@@ -227,6 +227,8 @@ use crate::transfer::segment::SegmentLease;
 use crate::utils::store_util::TOTAL_PHYSICAL_MEMORY_SIZE;
 #[cfg(feature = "extended_timeline")]
 use rocketmq_store_api::TimerEngineEpoch;
+#[cfg(feature = "tieredstore")]
+use rocketmq_tieredstore::TieredLocalResidency;
 
 mod composition;
 mod dispatch;
@@ -1015,8 +1017,9 @@ impl BackendOps for LocalFileMessageStore {
         boundary_type: BoundaryType,
     ) -> Result<i64, StoreError> {
         #[cfg(feature = "tieredstore")]
-        if self.should_try_tiered_offset_by_time(topic, queue_id, timestamp) {
-            if let Some(tiered_store) = self.tiered_store.as_ref() {
+        if let Some(tiered_store) = self.tiered_store.as_ref() {
+            let local_range_missing = self.should_try_tiered_offset_by_time(topic, queue_id, timestamp);
+            if tiered_store.should_try_offset_by_time(local_range_missing) {
                 if let Some(offset) = tiered_store
                     .offset_by_time(topic, queue_id, timestamp, boundary_type)
                     .await?

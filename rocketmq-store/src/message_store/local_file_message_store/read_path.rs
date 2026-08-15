@@ -130,6 +130,9 @@ impl LocalFileMessageStore {
 
         let mut status = GetMessageStatus::NoMessageInQueue;
 
+        #[cfg(feature = "tieredstore")]
+        let mut local_residency = TieredLocalResidency::Missing;
+
         let mut next_begin_offset = offset;
         let mut min_offset = 0;
         let mut max_offset = 0;
@@ -258,6 +261,14 @@ impl LocalFileMessageStore {
                                 continue;
                             };
                             let in_cache = select_result.is_in_cache();
+                            #[cfg(feature = "tieredstore")]
+                            {
+                                local_residency = match (local_residency, in_cache) {
+                                    (TieredLocalResidency::Missing, true) => TieredLocalResidency::Memory,
+                                    (TieredLocalResidency::Memory, true) => TieredLocalResidency::Memory,
+                                    _ => TieredLocalResidency::Disk,
+                                };
+                            }
                             self.commit_log.get_cold_data_check_service().observe_message_residency(
                                 group,
                                 topic,
@@ -322,10 +333,15 @@ impl LocalFileMessageStore {
         result.set_min_offset(min_offset);
 
         #[cfg(feature = "tieredstore")]
-        if TieredStoreDecorator::should_try_get_message(status) {
+        if self
+            .tiered_store
+            .as_ref()
+            .is_some_and(|tiered_store| tiered_store.should_try_get_message(status, local_residency))
+        {
+            let local_available = local_residency != TieredLocalResidency::Missing;
             if let Some(tiered_result) = match self.tiered_store.as_ref() {
                 Some(tiered_store) => {
-                    tiered_store
+                    match tiered_store
                         .get_message(
                             group,
                             topic,
@@ -334,8 +350,16 @@ impl LocalFileMessageStore {
                             max_msg_nums,
                             max_total_msg_size,
                             message_filter.clone(),
+                            local_available,
                         )
                         .await
+                    {
+                        Ok(result) => result,
+                        Err(error) => {
+                            warn!(topic = %topic, queue_id, offset, error = %error, "fatal tiered read failure");
+                            return None;
+                        }
+                    }
                 }
                 None => None,
             } {
@@ -429,13 +453,29 @@ impl LocalFileMessageStore {
         }
 
         #[cfg(feature = "tieredstore")]
-        if query_message_result.buffer_total_size == 0 {
+        if self
+            .tiered_store
+            .as_ref()
+            .is_some_and(|tiered_store| tiered_store.should_try_query(query_message_result.buffer_total_size == 0))
+        {
             if let Some(tiered_store) = self.tiered_store.as_ref() {
-                if let Some(tiered_result) = tiered_store
-                    .query_message(topic, key, max_num, begin_timestamp, end_timestamp)
+                match tiered_store
+                    .query_message(
+                        topic,
+                        key,
+                        max_num,
+                        begin_timestamp,
+                        end_timestamp,
+                        query_message_result.buffer_total_size > 0,
+                    )
                     .await
                 {
-                    return Some(tiered_result);
+                    Ok(Some(tiered_result)) => return Some(tiered_result),
+                    Ok(None) => {}
+                    Err(error) => {
+                        warn!(topic = %topic, key = %key, error = %error, "fatal tiered query failure");
+                        return None;
+                    }
                 }
             }
         }
