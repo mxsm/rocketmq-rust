@@ -23,6 +23,13 @@ use crate::offset::manager::consumer_order_info_manager::OrderInfo;
 
 const TOPIC_GROUP_SEPARATOR: &str = "@";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LiteOrderVisibilityUpdate {
+    Updated,
+    Missing,
+    Stale,
+}
+
 #[derive(Default)]
 pub(crate) struct MemoryConsumerOrderInfoManager {
     table: Mutex<HashMap<CheetahString, HashMap<i32, OrderInfo>>>,
@@ -116,6 +123,52 @@ impl MemoryConsumerOrderInfoManager {
     pub(crate) fn order_info_count(&self) -> usize {
         self.table.lock().len()
     }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the fields are the ordered POP fencing coordinates carried by the wire request"
+    )]
+    pub(crate) fn change_visibility(
+        &self,
+        topic: &CheetahString,
+        group: &CheetahString,
+        queue_id: i32,
+        queue_offset: u64,
+        pop_time: u64,
+        next_visible_time: u64,
+        suspend: bool,
+    ) -> LiteOrderVisibilityUpdate {
+        let mut table = self.table.lock();
+        let Some(order_info) = table
+            .get_mut(&build_key(topic, group))
+            .and_then(|queues| queues.get_mut(&queue_id))
+        else {
+            return LiteOrderVisibilityUpdate::Missing;
+        };
+        let offset_belongs_to_batch = order_info
+            .offset_list
+            .iter()
+            .enumerate()
+            .any(|(index, _)| order_info.get_queue_offset(index) == queue_offset);
+        let previous_deadline = order_info
+            .pop_time
+            .saturating_add(order_info.invisible_time.unwrap_or(0));
+        if order_info.pop_time != pop_time || !offset_belongs_to_batch || current_millis() >= previous_deadline {
+            return LiteOrderVisibilityUpdate::Stale;
+        }
+
+        if suspend {
+            for consumed_count in order_info.offset_consumed_count.values_mut() {
+                *consumed_count = consumed_count.saturating_sub(1);
+            }
+            order_info.offset_next_visible_time.clear();
+            order_info.invisible_time = Some(next_visible_time.saturating_sub(order_info.pop_time));
+        } else {
+            order_info.update_offset_next_visible_time(queue_offset, next_visible_time);
+        }
+        order_info.last_consume_timestamp = current_millis();
+        LiteOrderVisibilityUpdate::Updated
+    }
 }
 
 fn build_key(topic: &CheetahString, group: &CheetahString) -> CheetahString {
@@ -167,5 +220,37 @@ mod tests {
 
         assert!(manager.check_block(&CheetahString::from_static_str("attempt-2"), &topic, &group, 0, 30_000,));
         assert!(!manager.check_block(&CheetahString::from_static_str("attempt-1"), &topic, &group, 0, 30_000,));
+    }
+
+    #[test]
+    fn suspend_requires_current_pop_owner_and_active_offset() {
+        let manager = MemoryConsumerOrderInfoManager::default();
+        let topic = CheetahString::from_static_str("%LMQ%$parent$child-a");
+        let group = CheetahString::from_static_str("group-a");
+        let pop_time = current_millis();
+        let mut builder = String::new();
+        manager.update(
+            CheetahString::from_static_str("attempt-1"),
+            &topic,
+            &group,
+            0,
+            pop_time,
+            30_000,
+            vec![10],
+            &mut builder,
+        );
+
+        assert_eq!(
+            manager.change_visibility(&topic, &group, 0, 10, pop_time + 1, pop_time + 60_000, true),
+            LiteOrderVisibilityUpdate::Stale
+        );
+        assert_eq!(
+            manager.change_visibility(&topic, &group, 0, 11, pop_time, pop_time + 60_000, true),
+            LiteOrderVisibilityUpdate::Stale
+        );
+        assert_eq!(
+            manager.change_visibility(&topic, &group, 0, 10, pop_time, pop_time + 60_000, true),
+            LiteOrderVisibilityUpdate::Updated
+        );
     }
 }

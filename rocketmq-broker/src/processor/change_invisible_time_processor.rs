@@ -19,6 +19,7 @@ use std::sync::Weak;
 use crate::config::broker_config::BrokerConfig;
 use bytes::Bytes;
 use cheetah_string::CheetahString;
+use rocketmq_model::common::lite::to_lmq_name;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_model::common::message::MessageConst;
 use rocketmq_model::common::message::MessageTrait;
@@ -53,6 +54,8 @@ use crate::failover::escape_bridge::EscapeBridge;
 use crate::failover::escape_bridge::MessageStoreUnavailable;
 use crate::offset::manager::consumer_offset_manager::ConsumerOffsetQueryCapability;
 use crate::offset::manager::consumer_order_info_manager::ConsumerOrderInfoManager;
+use crate::processor::pop_lite_message_processor::PopLiteMessageProcessor;
+use crate::processor::pop_lite_message_processor::PopLiteVisibilityUpdate;
 use crate::processor::pop_message_processor::PopMessageProcessor;
 use crate::processor::pop_message_processor::QueueLockManager;
 use crate::processor::processor_service::pop_buffer_merge_service::PopBufferMergeService;
@@ -128,6 +131,43 @@ pub(crate) struct ChangeInvisibleTimeOrderCapability {
     manager: Weak<ConsumerOrderInfoManager>,
 }
 
+pub(crate) struct ChangeInvisibleTimeLiteCapability<MS: BrokerReadWriteStore> {
+    processor: Weak<PopLiteMessageProcessor<MS>>,
+}
+
+impl<MS: BrokerReadWriteStore> ChangeInvisibleTimeLiteCapability<MS> {
+    pub(crate) fn new(processor: &Arc<PopLiteMessageProcessor<MS>>) -> Self {
+        Self {
+            processor: Arc::downgrade(processor),
+        }
+    }
+
+    fn max_offset(&self, lmq_name: &CheetahString) -> Option<i64> {
+        self.processor.upgrade().map(|processor| processor.max_offset(lmq_name))
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the fields are the ordered Lite POP fencing coordinates"
+    )]
+    async fn change_visibility(
+        &self,
+        lmq_name: &CheetahString,
+        group: &CheetahString,
+        queue_offset: u64,
+        pop_time: u64,
+        next_visible_time: u64,
+        suspend: bool,
+    ) -> Option<PopLiteVisibilityUpdate> {
+        Some(
+            self.processor
+                .upgrade()?
+                .change_order_visibility(lmq_name, group, queue_offset, pop_time, next_visible_time, suspend)
+                .await,
+        )
+    }
+}
+
 impl ChangeInvisibleTimeOrderCapability {
     pub(crate) fn new(manager: &Arc<ConsumerOrderInfoManager>) -> Self {
         Self {
@@ -162,6 +202,7 @@ pub(crate) struct ChangeInvisibleTimeProcessorContext<MS: BrokerReadWriteStore> 
     topic_config_manager: Arc<TopicConfigManager>,
     consumer_offset_query: ConsumerOffsetQueryCapability<MS>,
     consumer_order_info: ChangeInvisibleTimeOrderCapability,
+    lite_order_info: ChangeInvisibleTimeLiteCapability<MS>,
     broker_stats_manager: Arc<BrokerStatsManager>,
     message_store: ChangeInvisibleTimeStoreCapability<MS>,
     pop_buffer: ChangeInvisibleTimePopCapability<MS>,
@@ -178,6 +219,7 @@ impl<MS: BrokerReadWriteStore> ChangeInvisibleTimeProcessorContext<MS> {
         topic_config_manager: Arc<TopicConfigManager>,
         consumer_offset_query: ConsumerOffsetQueryCapability<MS>,
         consumer_order_info: ChangeInvisibleTimeOrderCapability,
+        lite_order_info: ChangeInvisibleTimeLiteCapability<MS>,
         broker_stats_manager: Arc<BrokerStatsManager>,
         message_store: ChangeInvisibleTimeStoreCapability<MS>,
         pop_buffer: ChangeInvisibleTimePopCapability<MS>,
@@ -189,6 +231,7 @@ impl<MS: BrokerReadWriteStore> ChangeInvisibleTimeProcessorContext<MS> {
             topic_config_manager,
             consumer_offset_query,
             consumer_order_info,
+            lite_order_info,
             broker_stats_manager,
             message_store,
             pop_buffer,
@@ -282,6 +325,13 @@ where
         _broker_allow_suspend: bool,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<ChangeInvisibleTimeRequestHeader>()?;
+        if request_header
+            .lite_topic
+            .as_ref()
+            .is_some_and(|lite_topic| !lite_topic.is_empty())
+        {
+            return self.process_change_invisible_time_for_lite(&request_header).await;
+        }
         let topic_config = self
             .context
             .topic_config_manager
@@ -601,6 +651,93 @@ where
                 .command_factory
                 .create_success_response_command_with_header(response_header),
         ))
+    }
+
+    async fn process_change_invisible_time_for_lite(
+        &self,
+        request_header: &ChangeInvisibleTimeRequestHeader,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let Some(lite_topic) = request_header.lite_topic.as_ref() else {
+            return Ok(None);
+        };
+        let Some(lmq_name) =
+            to_lmq_name(request_header.topic.as_str(), lite_topic.as_str()).map(CheetahString::from_string)
+        else {
+            return Ok(Some(
+                self.context.command_factory.create_response_command_with_code_remark(
+                    ResponseCode::InvalidParameter,
+                    "parent topic or Lite topic is blank",
+                ),
+            ));
+        };
+        let Some(max_offset) = self.context.lite_order_info.max_offset(&lmq_name) else {
+            return Ok(Some(
+                self.context.command_factory.create_response_command_with_code_remark(
+                    ResponseCode::ServiceNotAvailable,
+                    "Lite POP processor is not available",
+                ),
+            ));
+        };
+        if request_header.offset < 0 || request_header.offset > max_offset {
+            return Ok(Some(
+                self.context.command_factory.create_response_command_with_code_remark(
+                    ResponseCode::NoMessage,
+                    format!(
+                        "Lite offset {} exceeds queue maximum {}",
+                        request_header.offset, max_offset
+                    ),
+                ),
+            ));
+        }
+        let extra_info = ExtraInfoUtil::split(&request_header.extra_info);
+        let pop_time = ExtraInfoUtil::get_pop_time(&extra_info)? as u64;
+        let next_visible_time = current_millis().saturating_add(request_header.invisible_time.max(0) as u64);
+        let Some(outcome) = self
+            .context
+            .lite_order_info
+            .change_visibility(
+                &lmq_name,
+                &request_header.consumer_group,
+                request_header.offset as u64,
+                pop_time,
+                next_visible_time,
+                request_header.suspend,
+            )
+            .await
+        else {
+            return Ok(Some(
+                self.context.command_factory.create_response_command_with_code_remark(
+                    ResponseCode::ServiceNotAvailable,
+                    "Lite POP processor is not available",
+                ),
+            ));
+        };
+        match outcome {
+            PopLiteVisibilityUpdate::Updated => {
+                let response_header = ChangeInvisibleTimeResponseHeader {
+                    pop_time,
+                    revive_qid: ExtraInfoUtil::get_revive_qid(&extra_info)?,
+                    invisible_time: next_visible_time.saturating_sub(pop_time) as i64,
+                };
+                Ok(Some(
+                    self.context
+                        .command_factory
+                        .create_success_response_command_with_header(response_header),
+                ))
+            }
+            PopLiteVisibilityUpdate::LockBusy => Ok(Some(
+                self.context.command_factory.create_response_command_with_code_remark(
+                    ResponseCode::SystemBusy,
+                    "ordered Lite queue is owned by another in-flight request",
+                ),
+            )),
+            PopLiteVisibilityUpdate::Missing | PopLiteVisibilityUpdate::Stale => Ok(Some(
+                self.context.command_factory.create_response_command_with_code_remark(
+                    ResponseCode::MessageIllegal,
+                    "ordered Lite ownership is missing or stale",
+                ),
+            )),
+        }
     }
 }
 

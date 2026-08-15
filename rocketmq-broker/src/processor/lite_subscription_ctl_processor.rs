@@ -169,6 +169,13 @@ impl<MS: BrokerStorePort> LiteSubscriptionCtlProcessor<MS> {
                             return Ok(Some(self.response_with_code(request, code, remark)));
                         }
                     };
+                    if group_config.lite_sub_wildcard() {
+                        return Ok(Some(self.response_with_code(
+                            request,
+                            ResponseCode::IllegalOperation,
+                            "Partial Lite subscription is not supported for a wildcard group.",
+                        )));
+                    }
                     if let Err((code, remark)) =
                         self.ensure_quota(entry.client_id(), entry.group(), entry.topic(), &lmq_name_set)
                     {
@@ -201,6 +208,16 @@ impl<MS: BrokerStorePort> LiteSubscriptionCtlProcessor<MS> {
                     }
                 }
                 LiteSubscriptionAction::PartialRemove => {
+                    if self
+                        .find_consumer_group_config(entry.group())
+                        .is_some_and(|config| config.lite_sub_wildcard())
+                    {
+                        return Ok(Some(self.response_with_code(
+                            request,
+                            ResponseCode::IllegalOperation,
+                            "Partial Lite subscription is not supported for a wildcard group.",
+                        )));
+                    }
                     let removed_lmq_names = registry
                         .lite_subscription(entry.client_id(), entry.group(), entry.topic())
                         .map(|subscription| {
@@ -228,9 +245,10 @@ impl<MS: BrokerStorePort> LiteSubscriptionCtlProcessor<MS> {
                     }
                 }
                 LiteSubscriptionAction::CompleteAdd => {
-                    if let Err((code, remark)) = self.validate_consumer_group(entry.group(), entry.topic()) {
-                        return Ok(Some(self.response_with_code(request, code, remark)));
-                    }
+                    let group_config = match self.validate_consumer_group(entry.group(), entry.topic()) {
+                        Ok(group_config) => group_config,
+                        Err((code, remark)) => return Ok(Some(self.response_with_code(request, code, remark))),
+                    };
                     registry.update_client_channel(entry.client_id(), channel.clone());
                     self.context.event_dispatcher.touch_client(entry.client_id());
                     registry.add_complete_subscription(
@@ -239,6 +257,7 @@ impl<MS: BrokerStorePort> LiteSubscriptionCtlProcessor<MS> {
                         entry.topic(),
                         &lmq_name_set,
                         entry.version(),
+                        group_config.lite_sub_wildcard(),
                     );
                 }
                 LiteSubscriptionAction::CompleteRemove => {
@@ -454,6 +473,7 @@ mod tests {
     use rocketmq_model::common::attribute::subscription_group_attributes::LITE_SUB_MODEL_ATTRIBUTE_NAME;
     use rocketmq_model::common::attribute::subscription_group_attributes::LITE_SUB_RESET_OFFSET_EXCLUSIVE_ATTRIBUTE_NAME;
     use rocketmq_model::common::attribute::subscription_group_attributes::LITE_SUB_RESET_OFFSET_UNSUBSCRIBE_ATTRIBUTE_NAME;
+    use rocketmq_model::common::attribute::subscription_group_attributes::LITE_SUB_WILDCARD_ATTRIBUTE_NAME;
     use rocketmq_model::common::lite::to_lmq_name;
     use rocketmq_model::common::lite::LiteSubscriptionAction;
     use rocketmq_model::common::lite::LiteSubscriptionDTO;
@@ -645,6 +665,48 @@ mod tests {
             to_lmq_name("parent-topic", "child-a").expect("convert lite topic")
         )));
 
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn wildcard_group_rejects_partial_subscription_without_registry_state() {
+        let mut runtime = new_test_runtime("wildcard-partial-rejected").await;
+        let lite_registry = runtime.runtime_state_mut().lite_subscription_registry().clone();
+        seed_group_config(
+            &mut runtime,
+            "wildcard-group",
+            HashMap::from([
+                (
+                    CheetahString::from_string(format!("+{LITE_BIND_TOPIC_ATTRIBUTE_NAME}")),
+                    CheetahString::from_static_str("parent-topic"),
+                ),
+                (
+                    CheetahString::from_string(format!("+{LITE_SUB_WILDCARD_ATTRIBUTE_NAME}")),
+                    CheetahString::from_static_str("true"),
+                ),
+            ]),
+        );
+        let mut body = LiteSubscriptionCtlRequestBody::new();
+        body.set_subscription_set(vec![LiteSubscriptionDTO::new()
+            .with_action(LiteSubscriptionAction::PartialAdd)
+            .with_client_id(CheetahString::from_static_str("client-id"))
+            .with_group(CheetahString::from_static_str("wildcard-group"))
+            .with_topic(CheetahString::from_static_str("parent-topic"))
+            .with_lite_topic_set(HashSet::from([CheetahString::from_static_str("child-a")]))]);
+        let mut request = RemotingCommand::create_request_command(RequestCode::LiteSubscriptionCtl, EmptyHeader {})
+            .set_body(Bytes::from(serde_json::to_vec(&body).expect("serialize request body")));
+        let channel = create_test_channel().await;
+        let ctx = Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let mut processor = lite_subscription_processor_for_test(&mut runtime);
+
+        let response = processor
+            .process_request(channel, ctx, &mut request)
+            .await
+            .expect("processor request")
+            .expect("response");
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::IllegalOperation);
+        assert!(lite_registry.all_subscriptions().is_empty());
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }
 

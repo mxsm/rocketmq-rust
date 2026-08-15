@@ -272,6 +272,9 @@ pub trait ConsumeQueueStoreInterface: Sync + Any {
     /// Get the number of tracked LMQ topics.
     fn get_lmq_num(&self) -> i32;
 
+    /// Return a point-in-time snapshot of the tracked LMQ topic names.
+    fn get_lmq_topic_names(&self) -> Vec<CheetahString>;
+
     /// Check whether the specified LMQ topic exists.
     fn is_lmq_exist(&self, lmq_topic: &str) -> bool;
 

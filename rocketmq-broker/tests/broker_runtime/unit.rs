@@ -1720,6 +1720,7 @@ fn seed_lite_query_state(runtime: &mut BrokerRuntime) {
             CheetahString::from_string(to_lmq_name("parent-topic", "child-b").expect("child-b lmq")),
         ]),
         1,
+        false,
     );
     registry.add_complete_subscription(
         &client_two,
@@ -1729,6 +1730,7 @@ fn seed_lite_query_state(runtime: &mut BrokerRuntime) {
             to_lmq_name("parent-topic", "child-b").expect("child-b lmq"),
         )]),
         1,
+        false,
     );
 }
 

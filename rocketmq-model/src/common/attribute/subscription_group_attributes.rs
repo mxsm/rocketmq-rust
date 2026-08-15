@@ -17,6 +17,7 @@ pub const LITE_SUB_RESET_OFFSET_EXCLUSIVE_ATTRIBUTE_NAME: &str = "lite.sub.reset
 pub const LITE_SUB_RESET_OFFSET_UNSUBSCRIBE_ATTRIBUTE_NAME: &str = "lite.sub.reset.offset.unsubscribe";
 pub const LITE_SUB_CLIENT_QUOTA_ATTRIBUTE_NAME: &str = "lite.sub.client.quota";
 pub const LITE_SUB_CLIENT_MAX_EVENT_COUNT_ATTRIBUTE_NAME: &str = "lite.sub.client.max.event.cnt";
+pub const LITE_SUB_WILDCARD_ATTRIBUTE_NAME: &str = "lite.sub.wildcard";
 pub const PRIORITY_FACTOR_ATTRIBUTE_NAME: &str = "priority.factor";
 
 pub struct SubscriptionGroupAttributes {}
@@ -91,6 +92,13 @@ impl SubscriptionGroupAttributes {
         })
     }
 
+    pub fn lite_sub_wildcard_attribute() -> &'static StringAttribute {
+        static INSTANCE: OnceLock<StringAttribute> = OnceLock::new();
+        INSTANCE.get_or_init(|| {
+            StringAttribute::new(CheetahString::from_static_str(LITE_SUB_WILDCARD_ATTRIBUTE_NAME), true)
+        })
+    }
+
     pub fn priority_factor_attribute() -> &'static LongRangeAttribute {
         static INSTANCE: OnceLock<LongRangeAttribute> = OnceLock::new();
         INSTANCE.get_or_init(|| {
@@ -115,6 +123,7 @@ impl SubscriptionGroupAttributes {
             let lite_sub_reset_offset_unsubscribe = Self::lite_sub_reset_offset_unsubscribe_attribute();
             let lite_sub_client_quota = Self::lite_sub_client_quota_attribute();
             let lite_sub_client_max_event_count = Self::lite_sub_client_max_event_count_attribute();
+            let lite_sub_wildcard = Self::lite_sub_wildcard_attribute();
             let priority_factor = Self::priority_factor_attribute();
 
             all.insert(
@@ -140,6 +149,10 @@ impl SubscriptionGroupAttributes {
             all.insert(
                 lite_sub_client_max_event_count.name().clone(),
                 Arc::new(lite_sub_client_max_event_count.clone()) as Arc<dyn Attribute>,
+            );
+            all.insert(
+                lite_sub_wildcard.name().clone(),
+                Arc::new(lite_sub_wildcard.clone()) as Arc<dyn Attribute>,
             );
             all.insert(
                 priority_factor.name().clone(),
@@ -171,6 +184,7 @@ mod tests {
         assert!(all.contains_key(&CheetahString::from_static_str(
             LITE_SUB_CLIENT_MAX_EVENT_COUNT_ATTRIBUTE_NAME
         )));
+        assert!(all.contains_key(&CheetahString::from_static_str(LITE_SUB_WILDCARD_ATTRIBUTE_NAME)));
         assert!(all.contains_key(&CheetahString::from_static_str(PRIORITY_FACTOR_ATTRIBUTE_NAME)));
     }
 

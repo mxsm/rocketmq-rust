@@ -42,6 +42,7 @@ use tokio::sync::Mutex as AsyncMutex;
 use crate::failover::escape_bridge::EscapeBridge;
 use crate::lite::lite_event_dispatcher::LiteEventDispatcher;
 use crate::lite::lite_lifecycle_manager::LiteLifecycleManager;
+use crate::lite::memory_consumer_order_info_manager::LiteOrderVisibilityUpdate;
 use crate::lite::memory_consumer_order_info_manager::MemoryConsumerOrderInfoManager;
 use crate::long_polling::long_polling_service::pop_lite_long_polling_service::PopLiteLongPollingRequestProcessor;
 use crate::long_polling::long_polling_service::pop_lite_long_polling_service::PopLiteLongPollingService;
@@ -58,6 +59,7 @@ pub(crate) struct PopLiteMessagePolicy {
     broker_permission: u32,
     max_client_event_count: i32,
     lite_event_full_dispatch_delay_time: u64,
+    lite_event_full_dispatch_delay_time_for_wildcard_group: u64,
 }
 
 impl PopLiteMessagePolicy {
@@ -67,6 +69,8 @@ impl PopLiteMessagePolicy {
             broker_permission: broker_config.broker_permission,
             max_client_event_count: broker_config.max_client_event_count,
             lite_event_full_dispatch_delay_time: broker_config.lite_event_full_dispatch_delay_time,
+            lite_event_full_dispatch_delay_time_for_wildcard_group: broker_config
+                .lite_event_full_dispatch_delay_time_for_wildcard_group,
         }
     }
 }
@@ -216,6 +220,14 @@ enum PopLmqResult {
     Skip,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PopLiteVisibilityUpdate {
+    Updated,
+    LockBusy,
+    Missing,
+    Stale,
+}
+
 impl<MS: BrokerReadWriteStore> PopLiteMessageProcessor<MS> {
     pub(crate) fn new(context: PopLiteMessageProcessorContext<MS>) -> Arc<Self> {
         let long_polling_context = context.long_polling.clone();
@@ -254,16 +266,62 @@ impl<MS: BrokerReadWriteStore> PopLiteMessageProcessor<MS> {
         self.consumer_order_info_manager.clear_block(topic, group, 0);
     }
 
+    pub(crate) fn max_offset(&self, lmq_name: &CheetahString) -> i64 {
+        self.context.message_store.max_offset(lmq_name)
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the fields are the ordered POP fencing coordinates carried by ChangeInvisibleTime"
+    )]
+    pub(crate) async fn change_order_visibility(
+        &self,
+        lmq_name: &CheetahString,
+        group: &CheetahString,
+        queue_offset: u64,
+        pop_time: u64,
+        next_visible_time: u64,
+        suspend: bool,
+    ) -> PopLiteVisibilityUpdate {
+        if !self.context.queue_lock_manager.try_lock(lmq_name, group, 0).await {
+            return PopLiteVisibilityUpdate::LockBusy;
+        }
+        let result = self.consumer_order_info_manager.change_visibility(
+            lmq_name,
+            group,
+            0,
+            queue_offset,
+            pop_time,
+            next_visible_time,
+            suspend,
+        );
+        self.context.queue_lock_manager.unlock(lmq_name, group, 0).await;
+        match result {
+            LiteOrderVisibilityUpdate::Updated => PopLiteVisibilityUpdate::Updated,
+            LiteOrderVisibilityUpdate::Missing => PopLiteVisibilityUpdate::Missing,
+            LiteOrderVisibilityUpdate::Stale => PopLiteVisibilityUpdate::Stale,
+        }
+    }
+
     fn lite_dispatch_policy(&self, group: &CheetahString) -> (usize, u64) {
-        let max_event_count = self
+        let group_config = self
             .context
             .subscription_group_lookup
-            .find_subscription_group_config(group)
+            .find_subscription_group_config(group);
+        let max_event_count = group_config
+            .as_ref()
             .map(|config| config.max_client_event_count())
             .filter(|count| *count > 0)
             .unwrap_or(self.context.policy.max_client_event_count)
             .max(1) as usize;
-        (max_event_count, self.context.policy.lite_event_full_dispatch_delay_time)
+        let delay = if group_config.is_some_and(|config| config.lite_sub_wildcard()) {
+            self.context
+                .policy
+                .lite_event_full_dispatch_delay_time_for_wildcard_group
+        } else {
+            self.context.policy.lite_event_full_dispatch_delay_time
+        };
+        (max_event_count, delay)
     }
 
     fn pre_check(&self, request_header: &PopLiteMessageRequestHeader) -> Option<(ResponseCode, CheetahString)> {

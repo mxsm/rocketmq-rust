@@ -24,6 +24,7 @@ use rocketmq_model::common::attribute::topic_message_type::TopicMessageType;
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::entity::ClientGroup;
 use rocketmq_model::common::lite::get_lite_topic;
+use rocketmq_model::common::lite::get_parent_topic;
 use rocketmq_model::common::lite::to_lmq_name;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
@@ -73,6 +74,7 @@ pub(crate) struct LiteManagerPolicy {
     broker_name: CheetahString,
     max_client_event_count: i32,
     dispatch_delay_millis: u64,
+    wildcard_dispatch_delay_millis: u64,
 }
 
 impl LiteManagerPolicy {
@@ -83,6 +85,7 @@ impl LiteManagerPolicy {
             broker_name: broker_config.broker_name().clone(),
             max_client_event_count: broker_config.max_client_event_count,
             dispatch_delay_millis: broker_config.lite_event_full_dispatch_delay_time,
+            wildcard_dispatch_delay_millis: broker_config.lite_event_full_dispatch_delay_time_for_wildcard_group,
         }
     }
 }
@@ -152,6 +155,20 @@ impl<MS: BrokerReadWriteStore> LiteManagerStoreCapability<MS> {
                 .map(|queue_map| queue_map.len() as i32)
                 .sum();
             (queue_store.get_lmq_num(), cq_table_size)
+        })
+        .unwrap_or_default()
+    }
+
+    fn active_lmq_names(&self, parent_topic: &CheetahString) -> HashSet<CheetahString> {
+        self.with_store(|store| {
+            let Some(queue_store) = store.get_queue_store().downcast_ref::<ConsumeQueueStore>() else {
+                return HashSet::new();
+            };
+            queue_store
+                .get_lmq_topic_names()
+                .into_iter()
+                .filter(|lmq_name| get_parent_topic(lmq_name.as_str()).as_deref() == Some(parent_topic.as_str()))
+                .collect()
         })
         .unwrap_or_default()
     }
@@ -390,12 +407,9 @@ impl<MS: BrokerReadWriteStore> LiteManagerProcessor<MS> {
         let subscribers = self
             .context
             .lite_subscription_registry
-            .all_subscriptions()
+            .subscribers_for_lmq(&lmq_name, None)
             .into_iter()
-            .filter(|subscription| {
-                subscription.topic == request_header.parent_topic && subscription.lite_topic_set.contains(&lmq_name)
-            })
-            .map(|subscription| ClientGroup::from_parts(subscription.client_id, subscription.group))
+            .map(|(client_id, group)| ClientGroup::from_parts(client_id, group))
             .collect::<HashSet<_>>();
         if subscribers.is_empty() {
             return Ok(Some(self.response_with_code(
@@ -472,7 +486,16 @@ impl<MS: BrokerReadWriteStore> LiteManagerProcessor<MS> {
             )));
         };
 
-        let lite_topic_set = self.decode_lite_topic_set(subscription.lite_topic_set(), request_header.max_count);
+        let effective_lmq_names = if self
+            .context
+            .lite_subscription_registry
+            .is_wildcard_group(&parent_topic, &group)
+        {
+            self.context.message_store.active_lmq_names(&parent_topic)
+        } else {
+            subscription.lite_topic_set().clone()
+        };
+        let lite_topic_set = self.decode_lite_topic_set(&effective_lmq_names, request_header.max_count);
         let last_access_time = self
             .context
             .lite_event_dispatcher
@@ -656,6 +679,24 @@ impl<MS: BrokerReadWriteStore> LiteManagerProcessor<MS> {
         group: &CheetahString,
         parent_topic: &CheetahString,
     ) -> HashSet<CheetahString> {
+        if self
+            .context
+            .lite_subscription_registry
+            .is_wildcard_group(parent_topic, group)
+            && self
+                .context
+                .lite_subscription_registry
+                .wildcard_clients(parent_topic, group)
+                .contains(client_id)
+        {
+            return self
+                .context
+                .message_store
+                .active_lmq_names(parent_topic)
+                .into_iter()
+                .filter(|lmq_name| self.has_dispatchable_messages(group, lmq_name))
+                .collect();
+        }
         self.context
             .lite_subscription_registry
             .all_subscriptions()
@@ -675,6 +716,29 @@ impl<MS: BrokerReadWriteStore> LiteManagerProcessor<MS> {
         group: &CheetahString,
         parent_topic: &CheetahString,
     ) -> HashMap<CheetahString, HashSet<CheetahString>> {
+        if self
+            .context
+            .lite_subscription_registry
+            .is_wildcard_group(parent_topic, group)
+        {
+            let active = self
+                .context
+                .message_store
+                .active_lmq_names(parent_topic)
+                .into_iter()
+                .filter(|lmq_name| self.has_dispatchable_messages(group, lmq_name))
+                .collect::<HashSet<_>>();
+            if active.is_empty() {
+                return HashMap::new();
+            }
+            return self
+                .context
+                .lite_subscription_registry
+                .wildcard_clients(parent_topic, group)
+                .into_iter()
+                .map(|client_id| (client_id, active.clone()))
+                .collect();
+        }
         self.context
             .lite_subscription_registry
             .all_subscriptions()
@@ -757,15 +821,22 @@ impl<MS: BrokerReadWriteStore> LiteManagerProcessor<MS> {
     }
 
     fn lite_dispatch_policy(&self, group: &CheetahString) -> (usize, u64) {
-        let max_event_count = self
+        let group_config = self
             .context
             .subscription_group_manager
-            .find_subscription_group_config(group)
+            .find_subscription_group_config(group);
+        let max_event_count = group_config
+            .as_ref()
             .map(|config| config.max_client_event_count())
             .filter(|count| *count > 0)
             .unwrap_or(self.context.policy.max_client_event_count)
             .max(1) as usize;
-        (max_event_count, self.context.policy.dispatch_delay_millis)
+        let delay = if group_config.is_some_and(|config| config.lite_sub_wildcard()) {
+            self.context.policy.wildcard_dispatch_delay_millis
+        } else {
+            self.context.policy.dispatch_delay_millis
+        };
+        (max_event_count, delay)
     }
 
     fn validate_consumer_group(
