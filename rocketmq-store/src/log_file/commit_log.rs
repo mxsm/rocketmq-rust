@@ -96,6 +96,7 @@ use crate::ha::ha_service::HAService;
 use crate::ha::write_lease::ControllerWriteLeaseState;
 use crate::log_file::cold_data_check_service::ColdDataCheckService;
 use crate::log_file::commit_log_path_set::CommitLogPathSet;
+use rocketmq_store_local::mapped_file::queue_state::MappedFileQueueRuntimeState;
 use rocketmq_store_local::mapped_file::ManagedLifecycleRuntime;
 use rocketmq_store_local::mapped_file::ManagedMappedFileQueueGeneration;
 // Import the optimized loader module
@@ -603,6 +604,10 @@ impl CommitLog {
 
     pub(crate) fn controller_write_lease_state(&self) -> ControllerWriteLeaseState {
         self.store_context.controller_write_lease.clone()
+    }
+
+    pub(crate) fn mapped_file_queue_runtime_state(&self) -> MappedFileQueueRuntimeState {
+        self.mapped_file_queue.runtime_state_handle()
     }
 
     #[inline]

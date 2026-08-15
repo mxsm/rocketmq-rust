@@ -453,6 +453,7 @@ impl BrokerOuterAPI {
             epoch: None,
             max_offset: None,
             confirm_offset: None,
+            store_ready: None,
             heartbeat_timeout_mills: None,
             election_priority: None,
         };
@@ -1293,31 +1294,12 @@ impl BrokerOuterAPI {
     pub async fn send_heartbeat_to_controller(
         &self,
         controller_address: CheetahString,
-        cluster_name: CheetahString,
-        broker_addr: CheetahString,
-        broker_name: CheetahString,
-        broker_id: i64,
         timeout_millis: u64,
-        epoch: Option<i32>,
-        max_offset: Option<i64>,
-        confirm_offset: Option<i64>,
-        heartbeat_timeout_millis: Option<i64>,
-        election_priority: Option<i32>,
+        request_header: BrokerHeartbeatRequestHeader,
     ) -> rocketmq_error::RocketMQResult<Option<ControllerWriteLeaseGrant>> {
         if controller_address.is_empty() {
             return Ok(None);
         }
-        let request_header = BrokerHeartbeatRequestHeader {
-            cluster_name,
-            broker_addr,
-            broker_name,
-            broker_id: Some(broker_id),
-            epoch,
-            max_offset,
-            confirm_offset,
-            heartbeat_timeout_mills: heartbeat_timeout_millis,
-            election_priority,
-        };
         let request = self
             .command_factory
             .create_request_command(RequestCode::BrokerHeartbeat, request_header);
@@ -1343,28 +1325,9 @@ impl BrokerOuterAPI {
     pub async fn send_heartbeat_to_controller_sync(
         &self,
         controller_address: &CheetahString,
-        cluster_name: CheetahString,
-        broker_addr: CheetahString,
-        broker_name: CheetahString,
-        broker_id: i64,
         timeout_millis: u64,
-        epoch: Option<i32>,
-        max_offset: Option<i64>,
-        confirm_offset: Option<i64>,
-        heartbeat_timeout_millis: Option<i64>,
-        election_priority: Option<i32>,
+        request_header: BrokerHeartbeatRequestHeader,
     ) -> rocketmq_error::RocketMQResult<Option<ControllerWriteLeaseGrant>> {
-        let request_header = BrokerHeartbeatRequestHeader {
-            cluster_name,
-            broker_addr,
-            broker_name,
-            broker_id: Some(broker_id),
-            epoch,
-            max_offset,
-            confirm_offset,
-            heartbeat_timeout_mills: heartbeat_timeout_millis,
-            election_priority,
-        };
         let request = self
             .command_factory
             .create_request_command(RequestCode::BrokerHeartbeat, request_header);

@@ -181,6 +181,7 @@ impl ProcessorHarness {
             epoch: Some(1),
             max_offset: Some(100),
             confirm_offset: Some(80),
+            store_ready: Some(true),
             heartbeat_timeout_mills: Some(3_000),
             election_priority: Some(1),
         };
@@ -449,7 +450,7 @@ async fn controller_request_contract_broker_heartbeat() {
     assert_eq!(response.code(), ResponseCode::Success as i32);
     assert_eq!(
         response.remark().map(|remark| remark.as_str()),
-        Some("Heart beat success")
+        Some("Heartbeat committed; no write lease for this authority")
     );
     wait_until(
         Duration::from_secs(5),
@@ -477,6 +478,7 @@ async fn controller_request_contract_broker_heartbeat_rejects_missing_timeout_he
         epoch: Some(1),
         max_offset: Some(100),
         confirm_offset: Some(80),
+        store_ready: Some(true),
         heartbeat_timeout_mills: None,
         election_priority: Some(1),
     };

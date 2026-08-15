@@ -168,7 +168,7 @@ impl ReplicasInfoManager {
         broker_live_info: &BrokerLiveInfoSnapshot,
         lease_grant_allowed: bool,
     ) -> Option<ControllerWriteLeaseGrant> {
-        if !lease_grant_allowed {
+        if !lease_grant_allowed || !broker_live_info.store_ready {
             return None;
         }
         let broker_id = broker_identity.broker_id?;
@@ -960,6 +960,7 @@ impl ReplicasInfoManager {
             prev.last_update_timestamp = broker_live_info.last_update_timestamp;
             prev.heartbeat_timeout_millis = broker_live_info.heartbeat_timeout_millis;
             prev.election_priority = broker_live_info.election_priority;
+            prev.store_ready = broker_live_info.store_ready;
 
             if broker_live_info.epoch > prev.epoch
                 || (broker_live_info.epoch == prev.epoch && broker_live_info.max_offset > prev.max_offset)
@@ -1053,6 +1054,23 @@ impl ReplicasInfoManager {
         self.broker_live_table
             .get(&identity)
             .is_some_and(|live_info| live_info.is_active_at(check_time_millis))
+    }
+
+    pub fn is_broker_promotion_ready_at(
+        &self,
+        cluster_name: &str,
+        broker_name: &str,
+        broker_id: i64,
+        check_time_millis: u64,
+    ) -> bool {
+        if broker_id < 0 {
+            return false;
+        }
+
+        let identity = BrokerIdentityInfoSnapshot::new(cluster_name, broker_name, Some(broker_id as u64));
+        self.broker_live_table
+            .get(&identity)
+            .is_some_and(|live_info| live_info.is_promotion_ready_at(check_time_millis))
     }
 
     pub fn is_broker_active(&self, cluster_name: &str, broker_name: &str, broker_id: i64) -> bool {
@@ -1351,7 +1369,9 @@ fn compare_live_info(left: &BrokerLiveInfoSnapshot, right: &BrokerLiveInfoSnapsh
 
 impl BrokerValidPredicate for ReplicasInfoManager {
     fn check(&self, cluster_name: &str, broker_name: &str, broker_id: Option<i64>) -> bool {
-        broker_id.is_some_and(|broker_id| self.is_broker_active(cluster_name, broker_name, broker_id))
+        broker_id.is_some_and(|broker_id| {
+            self.is_broker_promotion_ready_at(cluster_name, broker_name, broker_id, current_millis())
+        })
     }
 }
 
@@ -1367,7 +1387,9 @@ impl ReplicasInfoManager {
         let valid_brokers: HashSet<i64> = brokers
             .iter()
             .copied()
-            .filter(|broker_id| self.is_broker_active(cluster_name, broker_name, *broker_id))
+            .filter(|broker_id| {
+                self.is_broker_promotion_ready_at(cluster_name, broker_name, *broker_id, current_millis())
+            })
             .collect();
 
         if valid_brokers.is_empty() {
@@ -1473,6 +1495,7 @@ mod tests {
                 max_offset: 100,
                 confirm_offset: 90,
                 election_priority: None,
+                store_ready: true,
             };
             manager.on_broker_heartbeat(live_info.identity(), live_info);
         }
@@ -1510,6 +1533,7 @@ mod tests {
             max_offset: 100,
             confirm_offset: 90,
             election_priority: None,
+            store_ready: true,
         };
 
         let first = heartbeat(0, 1, 100);

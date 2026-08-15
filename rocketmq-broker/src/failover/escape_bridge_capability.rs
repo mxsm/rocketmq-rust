@@ -288,10 +288,16 @@ impl<MS: BrokerReadStore> EscapeBridgeStoreCapability<MS> {
         self.with_store(|store| (store.get_max_phy_offset(), store.get_flushed_where()))
     }
 
-    pub(crate) fn controller_heartbeat_offsets(&self) -> (Option<i64>, Option<i64>) {
-        self.with_store(|store| (store.get_max_phy_offset(), store.get_confirm_offset()))
-            .map(|(max_offset, confirm_offset)| (Some(max_offset), Some(confirm_offset)))
-            .unwrap_or((None, None))
+    pub(crate) fn controller_heartbeat_state(&self) -> (Option<i64>, Option<i64>, Option<bool>) {
+        self.with_store(|store| {
+            (
+                store.get_max_phy_offset(),
+                store.get_confirm_offset(),
+                store.put_message_preflight().is_store_ready_for_promotion(),
+            )
+        })
+        .map(|(max_offset, confirm_offset, store_ready)| (Some(max_offset), Some(confirm_offset), Some(store_ready)))
+        .unwrap_or((None, None, None))
     }
 
     pub(crate) fn set_alive_replica_num_in_group(&self, alive_replica_num: i32) -> Result<(), MessageStoreUnavailable>
@@ -654,7 +660,7 @@ mod tests {
     fn controller_observations_fail_closed_before_store_binding() {
         let store = EscapeBridgeStoreCapability::<StorePorts>::default();
 
-        assert_eq!(store.controller_heartbeat_offsets(), (None, None));
+        assert_eq!(store.controller_heartbeat_state(), (None, None, None));
         assert!(store.set_alive_replica_num_in_group(1).is_err());
     }
 }

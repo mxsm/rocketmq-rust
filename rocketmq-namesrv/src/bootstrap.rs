@@ -2833,6 +2833,7 @@ mod tests {
                 epoch: Some(1),
                 max_offset: Some(128),
                 confirm_offset: Some(64),
+                store_ready: None,
                 heartbeat_timeout_mills: Some(30_000),
                 election_priority: Some(1),
             },

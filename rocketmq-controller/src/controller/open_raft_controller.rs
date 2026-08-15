@@ -551,6 +551,7 @@ impl OpenRaftController {
             max_offset: request.max_offset.unwrap_or(-1),
             confirm_offset: request.confirm_offset.unwrap_or(-1),
             election_priority: request.election_priority.or(Some(i32::MAX)),
+            store_ready: request.store_ready.unwrap_or(false),
         };
         let lease_grant_allowed = self.current_leader_term().is_some_and(|leader_term| {
             let authority = self.node().and_then(|node| {
@@ -1169,8 +1170,12 @@ impl Controller for OpenRaftController {
 
         if let Some(replica_header) = replica_info.response() {
             if let Some(master_broker_id) = replica_header.master_broker_id {
-                if replicas_info_manager.is_broker_active(cluster_name.as_str(), broker_name.as_str(), master_broker_id)
-                {
+                if replicas_info_manager.is_broker_promotion_ready_at(
+                    cluster_name.as_str(),
+                    broker_name.as_str(),
+                    master_broker_id,
+                    rocketmq_runtime::common::time_utils::current_millis(),
+                ) {
                     register_header.master_broker_id = Some(master_broker_id);
                     register_header.master_address =
                         replica_header.master_address.clone().map(CheetahString::from_string);

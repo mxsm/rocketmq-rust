@@ -1783,6 +1783,7 @@ mod tests {
                 epoch: Some(1),
                 max_offset: Some(100),
                 confirm_offset: Some(80),
+                store_ready: Some(true),
                 heartbeat_timeout_mills: Some(60_000),
                 election_priority: Some(1),
             };
@@ -1854,6 +1855,7 @@ mod tests {
             epoch: Some(1),
             max_offset: Some(100),
             confirm_offset: Some(80),
+            store_ready: Some(true),
             heartbeat_timeout_mills: Some(60_000),
             election_priority: Some(1),
         };
@@ -1967,6 +1969,7 @@ mod tests {
                 epoch: Some(1),
                 max_offset: Some(100),
                 confirm_offset: Some(80),
+                store_ready: Some(true),
                 heartbeat_timeout_mills: Some(60_000),
                 election_priority: Some(1),
             };

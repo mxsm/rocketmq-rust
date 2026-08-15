@@ -144,6 +144,10 @@ impl MultipathCommitLogHarness {
         self.queue.is_write_fenced()
     }
 
+    pub fn is_promotion_ready(&self) -> bool {
+        !self.queue.is_write_fenced()
+    }
+
     pub fn flush(&self) -> bool {
         if self.queue.get_mapped_files().iter().any(|mapped_file| {
             self.paths
