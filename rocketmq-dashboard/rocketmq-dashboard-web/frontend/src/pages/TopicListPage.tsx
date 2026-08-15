@@ -55,6 +55,7 @@ export default function TopicListPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [mutationOpen, setMutationOpen] = useState(false);
   const [selectedTopic, setSelectedTopic] = useState<TopicInfo | null>(null);
@@ -62,19 +63,31 @@ export default function TopicListPage() {
   const [maintenanceTopic, setMaintenanceTopic] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<TopicInfo | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const topicListRequestRef = useRef(0);
+  const mountedRef = useRef(false);
   const consumerGroupsRequestRef = useRef(0);
 
   const load = async () => {
-    if (data) setRefreshing(true);
+    const requestId = ++topicListRequestRef.current;
+    const hasCatalog = data !== null;
+    if (hasCatalog) setRefreshing(true);
     else setLoading(true);
     setError(null);
+    setRefreshError(null);
     try {
-      setData(await topicApi.list());
+      const nextData = await topicApi.list();
+      if (mountedRef.current && topicListRequestRef.current === requestId) setData(nextData);
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : String(requestError));
+      if (mountedRef.current && topicListRequestRef.current === requestId) {
+        const message = requestError instanceof Error ? requestError.message : String(requestError);
+        if (hasCatalog) setRefreshError(message);
+        else setError(message);
+      }
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (mountedRef.current && topicListRequestRef.current === requestId) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   };
 
@@ -96,9 +109,12 @@ export default function TopicListPage() {
   };
 
   useEffect(() => {
+    mountedRef.current = true;
     void load();
     void loadConsumerGroups();
     return () => {
+      mountedRef.current = false;
+      topicListRequestRef.current += 1;
       consumerGroupsRequestRef.current += 1;
     };
   }, []);
@@ -128,7 +144,7 @@ export default function TopicListPage() {
     }
     const result = await topicApi.create(request);
     setNotice(result.success ? `Topic ${request.topic} created.` : null);
-    await load();
+    void load();
     return result;
   };
 
@@ -229,6 +245,14 @@ export default function TopicListPage() {
       />
 
       {notice ? <div className="notice notice-success" role="status">{notice}</div> : null}
+      {refreshError ? (
+        <div className="notice notice-danger entity-auxiliary-error" role="alert">
+          <span>{refreshError}</span>
+          <Button type="button" variant="outline" size="sm" onClick={() => void load()}>
+            Retry topic catalog
+          </Button>
+        </div>
+      ) : null}
       {consumerGroupsError ? (
         <div className="notice notice-danger entity-auxiliary-error" role="alert">
           <span>{consumerGroupsError}</span>

@@ -1,8 +1,9 @@
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { vi } from 'vitest';
 import { consumerApi } from '../api/consumer_api';
 import { topicApi } from '../api/topic_api';
+import { deferred } from '../test/deferred';
 import { renderAtRoute } from '../test/render';
 import type { TopicInfo, TopicListView, TopicOperationResult } from '../types/topic';
 import TopicListPage from './TopicListPage';
@@ -49,6 +50,16 @@ const operationResult = (operation: string, topic: string, message: string): Top
   message,
   targets: [{ target: 'broker-a', success: true, message }]
 });
+
+async function submitCreate(user: ReturnType<typeof userEvent.setup>, topic: string) {
+  await user.click(screen.getByRole('button', { name: 'Create topic' }));
+  const createDialog = screen.getByRole('dialog', { name: 'Create topic' });
+  await user.type(within(createDialog).getByRole('textbox', { name: 'Topic name' }), topic);
+  await user.click(within(createDialog).getByRole('checkbox', { name: 'DefaultCluster' }));
+  await user.click(within(createDialog).getByRole('button', { name: 'Save topic' }));
+  await user.click(within(screen.getByRole('alertdialog', { name: 'Create topic?' })).getByRole('button', { name: 'Create topic' }));
+  return createDialog;
+}
 
 describe('TopicListPage', () => {
   beforeEach(() => {
@@ -168,6 +179,123 @@ describe('TopicListPage', () => {
     expect(within(createDialog).getByText('broker-b unavailable')).toBeInTheDocument();
     expect(screen.getByRole('dialog', { name: 'Create topic' })).toBeInTheDocument();
     expect(screen.queryByText('Topic partial-topic created.')).not.toBeInTheDocument();
+  });
+
+  it('presents a partial Create result without waiting for the catalog refresh', async () => {
+    const user = userEvent.setup();
+    const refresh = deferred<TopicListView>();
+    vi.mocked(topicApi.list)
+      .mockResolvedValueOnce(listView)
+      .mockReturnValueOnce(refresh.promise);
+    vi.mocked(topicApi.create).mockResolvedValue({
+      operation: 'CREATE',
+      topic: 'immediate-partial',
+      success: false,
+      targetCount: 2,
+      message: '1 of 2 targets failed immediately',
+      targets: [
+        { target: 'broker-a', success: true, message: 'created immediately' },
+        { target: 'broker-b', success: false, message: 'broker-b still unavailable' }
+      ]
+    });
+    renderAtRoute(<TopicListPage />, '/topics');
+    await screen.findByRole('heading', { name: 'Topics' });
+
+    const createDialog = await submitCreate(user, 'immediate-partial');
+
+    await waitFor(() => expect(topicApi.list).toHaveBeenCalledTimes(2));
+    expect(await within(createDialog).findByRole('alert')).toHaveTextContent('1 of 2 targets failed immediately');
+    expect(within(createDialog).getByText('created immediately')).toBeInTheDocument();
+    expect(within(createDialog).getByRole('button', { name: 'Save topic' })).toBeEnabled();
+  });
+
+  it('keeps the valid catalog and partial result when its background refresh fails', async () => {
+    const user = userEvent.setup();
+    vi.mocked(topicApi.list)
+      .mockResolvedValueOnce(listView)
+      .mockRejectedValueOnce(new Error('topic catalog refresh unavailable'));
+    vi.mocked(topicApi.create).mockResolvedValue({
+      operation: 'CREATE',
+      topic: 'refresh-failure-partial',
+      success: false,
+      targetCount: 2,
+      message: 'partial result survives refresh failure',
+      targets: [
+        { target: 'broker-a', success: true, message: 'created on broker-a' },
+        { target: 'broker-b', success: false, message: 'broker-b unavailable' }
+      ]
+    });
+    renderAtRoute(<TopicListPage />, '/topics');
+    await screen.findByRole('heading', { name: 'Topics' });
+
+    const createDialog = await submitCreate(user, 'refresh-failure-partial');
+
+    expect(await within(createDialog).findByRole('alert')).toHaveTextContent('partial result survives refresh failure');
+    expect(await screen.findByText('topic catalog refresh unavailable')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Topics', hidden: true })).toBeInTheDocument();
+    expect(screen.getByRole('row', { name: /^orders Full page/, hidden: true })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry topic catalog', hidden: true })).toBeInTheDocument();
+    await user.click(within(createDialog).getByRole('button', { name: 'Cancel' }));
+    await user.click(screen.getByRole('button', { name: 'Retry topic catalog' }));
+    await waitFor(() => expect(topicApi.list).toHaveBeenCalledTimes(3));
+    expect(screen.queryByText('topic catalog refresh unavailable')).not.toBeInTheDocument();
+    expect(screen.getByRole('row', { name: /^orders Full page/ })).toBeInTheDocument();
+  });
+
+  it('ignores an older catalog response after a newer refresh finishes', async () => {
+    const user = userEvent.setup();
+    const olderRefresh = deferred<TopicListView>();
+    const newerRefresh = deferred<TopicListView>();
+    const staleView: TopicListView = {
+      items: [{ ...topics[0], topic: 'stale-catalog-topic' }],
+      total: 1,
+      targets: listView.targets
+    };
+    const currentView: TopicListView = {
+      items: [{ ...topics[0], topic: 'current-catalog-topic' }],
+      total: 1,
+      targets: listView.targets
+    };
+    vi.mocked(topicApi.list)
+      .mockResolvedValueOnce(listView)
+      .mockReturnValueOnce(olderRefresh.promise)
+      .mockReturnValueOnce(newerRefresh.promise);
+    renderAtRoute(<TopicListPage />, '/topics');
+    await screen.findByRole('heading', { name: 'Topics' });
+
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => expect(topicApi.list).toHaveBeenCalledTimes(2));
+    await user.click(screen.getByRole('button', { name: 'Actions for orders' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Delete topic' }));
+    await user.click(within(screen.getByRole('alertdialog', { name: 'Delete topic?' })).getByRole('button', { name: 'Delete topic' }));
+    await waitFor(() => expect(topicApi.list).toHaveBeenCalledTimes(3));
+
+    await act(async () => newerRefresh.resolve(currentView));
+    expect(await screen.findByRole('row', { name: /^current-catalog-topic Full page/ })).toBeInTheDocument();
+    await act(async () => olderRefresh.resolve(staleView));
+    expect(screen.getByRole('row', { name: /^current-catalog-topic Full page/ })).toBeInTheDocument();
+    expect(screen.queryByRole('row', { name: /^stale-catalog-topic Full page/ })).not.toBeInTheDocument();
+  });
+
+  it('closes a successful Create once and preserves its notice when the catalog refresh fails', async () => {
+    const user = userEvent.setup();
+    const refresh = deferred<TopicListView>();
+    vi.mocked(topicApi.list)
+      .mockResolvedValueOnce(listView)
+      .mockReturnValueOnce(refresh.promise);
+    vi.mocked(topicApi.create).mockResolvedValue(operationResult('CREATE', 'successful-topic', 'created'));
+    renderAtRoute(<TopicListPage />, '/topics');
+    await screen.findByRole('heading', { name: 'Topics' });
+
+    await submitCreate(user, 'successful-topic');
+
+    expect(await screen.findByText('Topic successful-topic created.')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Create topic' })).not.toBeInTheDocument());
+    expect(screen.getAllByText('Topic successful-topic created.')).toHaveLength(1);
+    await act(async () => refresh.reject(new Error('post-create catalog refresh failed')));
+    expect(await screen.findByText('post-create catalog refresh failed')).toBeInTheDocument();
+    expect(screen.getAllByText('Topic successful-topic created.')).toHaveLength(1);
+    expect(screen.queryByRole('dialog', { name: 'Create topic' })).not.toBeInTheDocument();
   });
 
   it('requires explicit confirmation before deleting a topic', async () => {
