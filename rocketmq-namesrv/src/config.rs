@@ -27,6 +27,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 pub const REMOVED_ROUTE_MANAGER_CONFIG_KEY: &str = "useRouteInfoManagerV2";
+pub const DEFAULT_NAMESRV_LISTEN_PORT: u32 = 9876;
 const REMOVED_ROUTE_MANAGER_CONFIG_FIELD: &str = "use_route_info_manager_v2";
 
 const MAX_THREAD_COUNT: i32 = 4096;
