@@ -19,8 +19,6 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
 
 use rocketmq_admin_core::client_adapter::AdminBuilder;
 use rocketmq_admin_core::client_adapter::AdminGuard;
@@ -33,6 +31,7 @@ use rocketmq_runtime::ChildServiceContext;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio::sync::RwLock;
+use tokio::sync::oneshot;
 
 use crate::error::DashboardError;
 use crate::model::AclMutationResult;
@@ -135,31 +134,54 @@ macro_rules! run_admin_rpc {
 macro_rules! run_topic_admin_rpc {
     ($client:expr, |$admin:ident| $operation:expr) => {{
         let snapshot = $client.admin_config_snapshot().await?;
-        let builder = AdminBuilder::new(Arc::clone(&$client.client_runtime))
-            .namesrv_addr(snapshot.namesrv_addr.clone())
-            .admin_group(unique_admin_group())
-            .timeout_millis(5_000)
-            .vip_channel_enabled(snapshot.use_vip_channel)
-            .use_tls(snapshot.use_tls);
-        let builder = match $client.admin_credentials.clone() {
-            Some(credentials) => builder.credentials(credentials),
-            None => builder,
-        };
-        let mut guard = builder.build_with_guard().await?;
-        if $client.admin_config_snapshot().await? != snapshot {
-            guard.shutdown().await;
-            Err(DashboardError::Config(
-                "Dashboard admin configuration changed while opening a topic admin session; retry the request"
-                    .to_string(),
-            ))
-        } else {
-            let result = {
-                let $admin = guard.inner_mut();
-                Box::pin($operation).await
-            };
-            guard.shutdown().await;
-            result.map_err(DashboardError::from)
-        }
+        let client = $client.clone();
+        let cancellation = client.session_tasks.task_group().cancellation_token();
+        let admin_group = unique_admin_group();
+        let (response_tx, response_rx) = oneshot::channel();
+        client
+            .session_tasks
+            .spawn_service(format!("topic-admin-rpc-{admin_group}"), async move {
+                let result = async {
+                    let builder = AdminBuilder::new(Arc::clone(&client.client_runtime))
+                        .namesrv_addr(snapshot.namesrv_addr.clone())
+                        .admin_group(admin_group)
+                        .timeout_millis(5_000)
+                        .vip_channel_enabled(snapshot.use_vip_channel)
+                        .use_tls(snapshot.use_tls);
+                    let builder = match client.admin_credentials.clone() {
+                        Some(credentials) => builder.credentials(credentials),
+                        None => builder,
+                    };
+                    let guard = Arc::new(Mutex::new(Some(builder.build_with_guard().await?)));
+                    let operation_guard = Arc::clone(&guard);
+                    let cleanup_guard = Arc::clone(&guard);
+                    run_topic_admin_operation(
+                        &client.config,
+                        &snapshot,
+                        async move {
+                            let mut guard = operation_guard.lock().await;
+                            let $admin = guard.as_mut().map(AdminGuard::inner_mut).ok_or_else(|| {
+                                DashboardError::Internal("Topic admin session was already retired".to_string())
+                            })?;
+                            Box::pin($operation).await.map_err(DashboardError::from)
+                        },
+                        cancellation.cancelled(),
+                        move || async move {
+                            let guard = cleanup_guard.lock().await.take();
+                            if let Some(guard) = guard {
+                                guard.shutdown().await;
+                            }
+                        },
+                    )
+                    .await
+                }
+                .await;
+                let _ = response_tx.send(result);
+            })
+            .map_err(|error| DashboardError::Internal(format!("Could not start topic admin RPC: {error}")))?;
+        response_rx
+            .await
+            .map_err(|_| DashboardError::Internal("Topic admin RPC stopped before returning a result".to_string()))?
     }};
 }
 
@@ -770,17 +792,53 @@ impl DashboardAdminClient {
     }
 
     async fn admin_config_snapshot(&self) -> Result<AdminConfigSnapshot, DashboardError> {
-        let config = self.config.read().await;
-        let namesrv_addr = config
-            .current_namesrv
-            .clone()
-            .ok_or_else(|| DashboardError::Config("No active NameServer is configured".to_string()))?;
-        Ok(AdminConfigSnapshot {
-            namesrv_addr,
-            use_vip_channel: config.use_vip_channel,
-            use_tls: config.use_tls,
-        })
+        admin_config_snapshot(&self.config).await
     }
+}
+
+async fn admin_config_snapshot(config: &RwLock<DashboardConfigView>) -> Result<AdminConfigSnapshot, DashboardError> {
+    let config = config.read().await;
+    let namesrv_addr = config
+        .current_namesrv
+        .clone()
+        .ok_or_else(|| DashboardError::Config("No active NameServer is configured".to_string()))?;
+    Ok(AdminConfigSnapshot {
+        namesrv_addr,
+        use_vip_channel: config.use_vip_channel,
+        use_tls: config.use_tls,
+    })
+}
+
+async fn run_topic_admin_operation<T, Operation, Cancellation, Cleanup, CleanupFuture>(
+    config: &RwLock<DashboardConfigView>,
+    snapshot: &AdminConfigSnapshot,
+    operation: Operation,
+    cancellation: Cancellation,
+    cleanup: Cleanup,
+) -> Result<T, DashboardError>
+where
+    Operation: Future<Output = Result<T, DashboardError>>,
+    Cancellation: Future<Output = ()>,
+    Cleanup: FnOnce() -> CleanupFuture,
+    CleanupFuture: Future<Output = ()>,
+{
+    let result = match admin_config_snapshot(config).await {
+        Ok(current) if current == *snapshot => {
+            tokio::select! {
+                biased;
+                _ = cancellation => Err(DashboardError::Config(
+                    "Topic admin operation was cancelled during shutdown".to_string(),
+                )),
+                result = operation => result,
+            }
+        }
+        Ok(_) => Err(DashboardError::Config(
+            "Dashboard admin configuration changed while opening a topic admin session; retry the request".to_string(),
+        )),
+        Err(error) => Err(error),
+    };
+    cleanup().await;
+    result
 }
 
 async fn resend_dlq_batch<F, Fut>(messages: Vec<DlqMessageRef>, mut resend: F) -> Vec<DlqMessageResendResult>
@@ -878,23 +936,30 @@ fn map_acl_user(user: core::DashboardAclUser) -> AclUserView {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
     use std::time::Duration;
 
     use rocketmq_admin_core::core::dashboard::AdminMutationResult as CoreMutationResult;
     use rocketmq_admin_core::core::dashboard::DashboardAclUser;
     use tokio::sync::Mutex;
     use tokio::sync::Notify;
+    use tokio::sync::RwLock;
 
+    use crate::error::DashboardError;
+    use crate::model::DashboardConfigView;
     use crate::model::DlqMessageRef;
     use crate::model::MessageResendResult;
 
     use super::AdminConfigSnapshot;
     use super::AdminSessionOwner;
     use super::ManagedAdminSession;
+    use super::admin_config_snapshot;
     use super::dlq_resend_request;
     use super::map_acl_user;
     use super::map_direct_consume_result;
     use super::resend_dlq_batch;
+    use super::run_topic_admin_operation;
     use super::session_is_current;
 
     #[test]
@@ -1021,6 +1086,51 @@ mod tests {
 
         drop(second);
         drop(first);
+    }
+
+    #[tokio::test]
+    async fn topic_operation_cleans_up_when_configuration_is_removed() {
+        let config = Arc::new(RwLock::new(DashboardConfigView::default()));
+        let snapshot = admin_config_snapshot(&config).await.expect("configured snapshot");
+        config.write().await.current_namesrv = None;
+        let cleaned = Arc::new(AtomicUsize::new(0));
+        let cleanup_counter = Arc::clone(&cleaned);
+
+        let result = run_topic_admin_operation(
+            &config,
+            &snapshot,
+            async { Ok::<_, DashboardError>(()) },
+            std::future::pending(),
+            move || async move {
+                cleanup_counter.fetch_add(1, Ordering::AcqRel);
+            },
+        )
+        .await;
+
+        assert!(matches!(result, Err(DashboardError::Config(_))));
+        assert_eq!(cleaned.load(Ordering::Acquire), 1);
+    }
+
+    #[tokio::test]
+    async fn topic_operation_cleans_up_when_owner_is_cancelled() {
+        let config = Arc::new(RwLock::new(DashboardConfigView::default()));
+        let snapshot = admin_config_snapshot(&config).await.expect("configured snapshot");
+        let cleaned = Arc::new(AtomicUsize::new(0));
+        let cleanup_counter = Arc::clone(&cleaned);
+
+        let result = run_topic_admin_operation(
+            &config,
+            &snapshot,
+            std::future::pending::<Result<(), DashboardError>>(),
+            std::future::ready(()),
+            move || async move {
+                cleanup_counter.fetch_add(1, Ordering::AcqRel);
+            },
+        )
+        .await;
+
+        assert!(matches!(result, Err(DashboardError::Config(_))));
+        assert_eq!(cleaned.load(Ordering::Acquire), 1);
     }
 
     #[test]

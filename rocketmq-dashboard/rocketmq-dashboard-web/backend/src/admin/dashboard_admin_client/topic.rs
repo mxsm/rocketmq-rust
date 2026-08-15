@@ -36,8 +36,12 @@ impl DashboardAdminClient {
 
     pub async fn get_topic(&self, topic: &str) -> Result<TopicInfo, DashboardError> {
         validate_name(topic, "Topic")?;
-        let route = self.topic_route(topic).await?;
-        Ok(topic_info_from_route(topic, &route))
+        let catalog = self.list_topics().await?;
+        topic_info_from_catalog(&catalog, topic).ok_or_else(|| {
+            DashboardError::NotFound(format!(
+                "Topic `{topic}` was not found in the authoritative topic catalog"
+            ))
+        })
     }
 
     pub async fn topic_route(&self, topic: &str) -> Result<TopicRouteInfo, DashboardError> {
@@ -48,7 +52,8 @@ impl DashboardAdminClient {
 
     pub async fn topic_stats(&self, topic: &str) -> Result<TopicStatsInfo, DashboardError> {
         validate_name(topic, "Topic")?;
-        let stats = run_topic_admin_rpc!(self, |admin| admin.get_topic_stats(topic))?;
+        let topic = topic.to_string();
+        let stats = run_topic_admin_rpc!(self, |admin| admin.get_topic_stats(&topic))?;
         Ok(map_topic_stats(stats))
     }
 
@@ -64,7 +69,8 @@ impl DashboardAdminClient {
 
     pub async fn topic_consumers(&self, topic: &str) -> Result<TopicConsumersView, DashboardError> {
         validate_name(topic, "Topic")?;
-        let consumers = run_topic_admin_rpc!(self, |admin| admin.get_topic_consumers(topic))?;
+        let topic = topic.to_string();
+        let consumers = run_topic_admin_rpc!(self, |admin| admin.get_topic_consumers(&topic))?;
         Ok(map_topic_consumers(consumers))
     }
 
@@ -172,26 +178,8 @@ fn map_topic_route(route: core::DashboardTopicRoute) -> TopicRouteInfo {
     }
 }
 
-fn topic_info_from_route(topic: &str, route: &TopicRouteInfo) -> TopicInfo {
-    let mut brokers = route
-        .brokers
-        .iter()
-        .map(|broker| broker.broker_name.clone())
-        .collect::<Vec<_>>();
-    brokers.sort_unstable();
-    TopicInfo {
-        topic: topic.to_string(),
-        broker_name: brokers.first().cloned(),
-        brokers,
-        clusters: Vec::new(),
-        read_queue_count: route.queues.iter().map(|queue| queue.read_queue_nums).sum(),
-        write_queue_count: route.queues.iter().map(|queue| queue.write_queue_nums).sum(),
-        perm: route.queues.iter().map(|queue| queue.perm).max().unwrap_or_default(),
-        category: classify_topic(topic).to_string(),
-        message_type: "NORMAL".to_string(),
-        order: false,
-        system_topic: classify_topic(topic) == "system",
-    }
+fn topic_info_from_catalog(catalog: &TopicListView, topic: &str) -> Option<TopicInfo> {
+    catalog.items.iter().find(|item| item.topic == topic).cloned()
 }
 
 fn map_topic_stats(stats: topic::TopicStats) -> TopicStatsInfo {
@@ -263,7 +251,9 @@ fn map_topic_consumers(consumers: topic::TopicConsumers) -> TopicConsumersView {
 mod tests {
     use rocketmq_admin_core::core::topic as core_topic;
 
+    use super::map_topic_catalog;
     use super::map_topic_stats;
+    use super::topic_info_from_catalog;
 
     #[test]
     fn maps_core_stats_without_losing_queue_identity() {
@@ -281,5 +271,31 @@ mod tests {
         });
         assert_eq!(view.total_message_count, 9);
         assert_eq!(view.offsets[0].queue_id, 2);
+    }
+
+    #[test]
+    fn topic_detail_reuses_authoritative_catalog_metadata() {
+        let catalog = map_topic_catalog(core_topic::TopicCatalog {
+            items: vec![core_topic::TopicCatalogItem {
+                topic: "orders".to_string(),
+                category: "NORMAL".to_string(),
+                message_type: "MIXED".to_string(),
+                clusters: vec!["DefaultCluster".to_string()],
+                brokers: vec!["broker-a".to_string()],
+                read_queue_count: 8,
+                write_queue_count: 12,
+                perm: 6,
+                order: true,
+                system_topic: false,
+            }],
+            targets: Vec::new(),
+        });
+
+        let detail = topic_info_from_catalog(&catalog, "orders").expect("topic catalog entry");
+
+        assert_eq!(detail.clusters, ["DefaultCluster"]);
+        assert_eq!(detail.message_type, "MIXED");
+        assert!(detail.order);
+        assert_eq!(detail.category, "NORMAL");
     }
 }
