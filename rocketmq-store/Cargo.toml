@@ -264,3 +264,7 @@ required-features = ["extended_timeline"]
 [[test]]
 name              = "timer_extended_soak_tests"
 required-features = ["extended_timeline"]
+
+[[test]]
+name              = "timer_java_compat_to_extended_cutover_tests"
+required-features = ["extended_timeline"]

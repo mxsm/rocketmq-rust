@@ -14,10 +14,87 @@
 
 use super::*;
 
+const EXTENDED_TIMER_OWNER_MARKER: &str = "config/timer-store-owner.meta";
+const EXTENDED_TIMER_OWNER_PREFIX: &str = "extended_timeline:v1:";
+
 #[cfg(feature = "extended_timeline")]
 use crate::timer::timeline::TimelinePromotionObservation;
 
 impl LocalFileMessageStore {
+    fn read_extended_timer_owner(store_root: &str) -> Result<Option<u64>, StoreError> {
+        let path = Path::new(store_root).join(EXTENDED_TIMER_OWNER_MARKER);
+        let encoded = match fs::read_to_string(&path) {
+            Ok(encoded) => encoded,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(StoreError::storage(
+                    StoreOperation::Load,
+                    "failed to read the Extended Timeline owner marker",
+                )
+                .with_source(error));
+            }
+        };
+        let epoch = encoded
+            .trim()
+            .strip_prefix(EXTENDED_TIMER_OWNER_PREFIX)
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|epoch| *epoch > 0)
+            .ok_or_else(|| {
+                StoreError::config(
+                    StoreOperation::Load,
+                    "the Extended Timeline owner marker is corrupt or incompatible",
+                )
+            })?;
+        Ok(Some(epoch))
+    }
+
+    #[cfg(feature = "extended_timeline")]
+    fn persist_extended_timer_owner(&self) -> Result<(), StoreError> {
+        let epoch = self.message_store_config.timer_extended_activation_epoch;
+        if let Some(persisted) =
+            Self::read_extended_timer_owner(self.message_store_config.store_path_root_dir.as_str())?
+        {
+            if persisted == epoch {
+                return Ok(());
+            }
+            return Err(StoreError::config(
+                StoreOperation::Load,
+                format!("Extended Timeline activation epoch {epoch} does not match persisted owner epoch {persisted}"),
+            ));
+        }
+        let path = Path::new(self.message_store_config.store_path_root_dir.as_str()).join(EXTENDED_TIMER_OWNER_MARKER);
+        let parent = path
+            .parent()
+            .ok_or_else(|| StoreError::config(StoreOperation::Load, "Extended Timeline owner marker has no parent"))?;
+        fs::create_dir_all(parent).map_err(|error| {
+            StoreError::storage(
+                StoreOperation::Load,
+                "failed to create the Extended Timeline owner marker directory",
+            )
+            .with_source(error)
+        })?;
+        let temporary = path.with_extension("meta.tmp");
+        let persist = || -> std::io::Result<()> {
+            let mut file = fs::OpenOptions::new()
+                .create(true)
+                .truncate(true)
+                .write(true)
+                .open(&temporary)?;
+            use std::io::Write;
+            file.write_all(format!("{EXTENDED_TIMER_OWNER_PREFIX}{epoch}\n").as_bytes())?;
+            file.sync_all()?;
+            drop(file);
+            fs::rename(&temporary, &path)
+        };
+        persist().map_err(|error| {
+            StoreError::storage(
+                StoreOperation::Load,
+                "failed to persist the Extended Timeline owner marker",
+            )
+            .with_source(error)
+        })
+    }
+
     pub(super) fn is_dledger_commit_log_enabled_config(message_store_config: &MessageStoreConfig) -> bool {
         message_store_config.enable_dledger_commit_log || message_store_config.enable_dleger_commit_log
     }
@@ -349,6 +426,8 @@ impl LocalFileMessageStore {
             #[cfg(feature = "extended_timeline")]
             extended_timeline_materializer: None,
             #[cfg(feature = "extended_timeline")]
+            extended_timeline_engine: None,
+            #[cfg(feature = "extended_timeline")]
             extended_timeline_due_scanner: None,
             #[cfg(feature = "extended_timeline")]
             extended_timeline_recall_service: None,
@@ -586,7 +665,7 @@ impl LocalFileMessageStore {
                 )
             })?);
             let timeline = materializer.timeline();
-            self.extended_timeline_due_scanner = Some(Arc::new(if formal {
+            let due_scanner = Arc::new(if formal {
                 TimelineDueScanner::new_with_clock(
                     self.message_store_config.timer_store_config.clone(),
                     Arc::clone(&timeline),
@@ -598,7 +677,15 @@ impl LocalFileMessageStore {
                     Arc::clone(&timeline),
                     materializer.reconciler(),
                 )
-            }));
+            });
+            self.extended_timeline_engine = Some(ExtendedTimelineEngine::new(
+                self.runtime_scope.clone(),
+                Arc::clone(&materializer),
+                Arc::clone(&due_scanner),
+                Arc::clone(&self.extended_timeline_role),
+                formal,
+            ));
+            self.extended_timeline_due_scanner = Some(due_scanner);
             self.extended_timeline_recall_service = Some(Arc::new(TimelineRecallService::new(Arc::clone(&timeline))));
             if formal {
                 let completion = Arc::new(TimelineCompletionReconciler::new(
@@ -680,6 +767,7 @@ impl LocalFileMessageStore {
                 self.extended_timeline_promotion_gate = Some(promotion_gate);
                 self.extended_timeline_admission = Some(admission);
                 self.extended_timeline_gc = Some(gc);
+                self.persist_extended_timer_owner()?;
             }
             self.extended_timeline_materializer = Some(materializer);
         }
@@ -765,6 +853,26 @@ impl LocalFileMessageStore {
                 StoreOperation::Load,
                 "DLedger commit log is Java-specific and is intentionally unsupported in rocketmq-rust".to_string(),
             ));
+        }
+        if let Some(persisted_epoch) =
+            Self::read_extended_timer_owner(self.message_store_config.store_path_root_dir.as_str())?
+        {
+            if self.message_store_config.timer_store_mode != TimerStoreMode::ExtendedTimeline {
+                return Err(StoreError::unsupported(
+                    StoreOperation::Load,
+                    "JavaCompat rollback is unsafe after formal Extended Timeline ownership; quiesce and drain the store before an explicit offline conversion"
+                        .to_string(),
+                ));
+            }
+            if self.message_store_config.timer_extended_activation_epoch != persisted_epoch {
+                return Err(StoreError::config(
+                    StoreOperation::Load,
+                    format!(
+                        "configured Extended Timeline activation epoch {} does not match persisted epoch {persisted_epoch}",
+                        self.message_store_config.timer_extended_activation_epoch
+                    ),
+                ));
+            }
         }
         if self.message_store_config.timer_rocksdb_enable && !self.message_store_config.is_enable_rocksdb_store() {
             return Err(StoreError::unsupported(
@@ -1036,6 +1144,11 @@ impl LocalFileMessageStore {
                 StoreError::storage(StoreOperation::Admin, "failed to release Extended Timeline snapshot")
                     .with_source(error)
             })
+    }
+
+    #[cfg(all(test, feature = "extended_timeline"))]
+    pub(crate) fn extended_timeline_engine_for_test(&self) -> Option<ExtendedTimelineEngine> {
+        self.extended_timeline_engine.clone()
     }
 
     pub(super) fn refresh_controller_confirm_offset_after_role_change(&self) {
