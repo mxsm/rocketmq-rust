@@ -929,6 +929,10 @@ impl MappedFileQueue {
         self.runtime_state.is_closing()
     }
 
+    pub(crate) fn runtime_state_handle(&self) -> MappedFileQueueRuntimeState {
+        self.runtime_state.clone()
+    }
+
     #[inline]
     pub fn new(
         store_path: String,
@@ -988,13 +992,18 @@ impl MappedFileQueue {
                 ),
                 Err(error) => {
                     error!(%error, "multipath CommitLog inventory failed closed");
+                    self.fence_writes();
                     return false;
                 }
             }
         } else {
             load_mapped_file_queue_path(self.storage.store_path(), self.storage.mapped_file_size())
         };
-        self.apply_load_outcome(outcome)
+        let loaded = self.apply_load_outcome(outcome);
+        if !loaded && self.is_multipath_commit_log() {
+            self.fence_writes();
+        }
+        loaded
     }
 
     /// Commit data to file system cache

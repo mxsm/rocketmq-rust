@@ -72,11 +72,13 @@ fn f08_mp_003_restart_rebuilds_global_order_and_truncates_the_real_owner() {
     let mut restarted =
         MultipathCommitLogHarness::try_new(vec![first, second], vec![], SEGMENT_SIZE, None).expect("restart");
     assert!(restarted.load());
+    assert!(restarted.is_promotion_ready());
     assert_eq!(
         restarted.read_range(0, 32).expect("global read"),
         [[1_u8; 16], [2_u8; 16]].concat()
     );
     assert!(restarted.truncate(16));
+    assert!(restarted.is_promotion_ready());
     assert_eq!(restarted.segment_owners().len(), 2);
     assert!(restarted.read_range(16, 1).is_err());
 }
@@ -101,10 +103,28 @@ fn f08_mp_004_prewrite_failure_moves_root_but_mid_segment_failure_fences() {
 
     assert!(harness.create_segment(0, &[1; 16]).is_err());
     assert!(harness.is_write_fenced());
+    assert!(!harness.is_promotion_ready());
     let owners = harness.segment_owners();
     assert_eq!(owners.len(), 1);
     assert_eq!(owners[0].1, fs::canonicalize(second).expect("canonical second"));
     assert!(harness.create_segment(16, &[2; 16]).is_err());
+}
+
+#[test]
+fn controller_promotion_remains_blocked_after_conflicting_inventory() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let first = temp.path().join("a");
+    let second = temp.path().join("b");
+    fs::create_dir_all(&first).expect("first root");
+    fs::create_dir_all(&second).expect("second root");
+    fs::write(first.join("00000000000000000000"), [1_u8; 16]).expect("first owner");
+    fs::write(second.join("00000000000000000000"), [2_u8; 16]).expect("conflicting owner");
+
+    let mut harness =
+        MultipathCommitLogHarness::try_new(vec![first, second], vec![], SEGMENT_SIZE, None).expect("harness");
+    assert!(!harness.load());
+    assert!(harness.is_write_fenced());
+    assert!(!harness.is_promotion_ready());
 }
 
 #[test]

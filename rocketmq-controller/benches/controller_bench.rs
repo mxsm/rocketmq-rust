@@ -43,6 +43,7 @@ fn heartbeat_fixture() -> (BrokerIdentityInfoSnapshot, BrokerLiveInfoSnapshot) {
             max_offset: 100,
             confirm_offset: 100,
             election_priority: Some(1),
+            store_ready: true,
         },
     )
 }

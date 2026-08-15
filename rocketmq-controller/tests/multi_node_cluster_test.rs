@@ -181,6 +181,7 @@ fn broker_heartbeat_request(
             max_offset: 100,
             confirm_offset: 80,
             election_priority: Some(1),
+            store_ready: true,
         },
         lease_grant_allowed: false,
     }

@@ -84,6 +84,8 @@ pub struct BrokerHeartbeatRequestHeader {
     pub epoch: Option<i32>,
     pub max_offset: Option<i64>,
     pub confirm_offset: Option<i64>,
+    /// Rust-native Controller extension; Java peers and NameServers ignore it.
+    pub store_ready: Option<bool>,
     pub heartbeat_timeout_mills: Option<i64>,
     pub election_priority: Option<i32>,
 }
@@ -146,6 +148,7 @@ mod tests {
             epoch: Some(1),
             max_offset: Some(100),
             confirm_offset: Some(50),
+            store_ready: Some(true),
             heartbeat_timeout_mills: Some(3000),
             election_priority: Some(1),
         };
@@ -156,6 +159,7 @@ mod tests {
         assert_eq!(header.epoch, Some(1));
         assert_eq!(header.max_offset, Some(100));
         assert_eq!(header.confirm_offset, Some(50));
+        assert_eq!(header.store_ready, Some(true));
         assert_eq!(header.heartbeat_timeout_mills, Some(3000));
         assert_eq!(header.election_priority, Some(1));
     }
@@ -170,6 +174,7 @@ mod tests {
             epoch: None,
             max_offset: None,
             confirm_offset: None,
+            store_ready: None,
             heartbeat_timeout_mills: None,
             election_priority: None,
         };
@@ -180,6 +185,7 @@ mod tests {
         assert!(header.epoch.is_none());
         assert!(header.max_offset.is_none());
         assert!(header.confirm_offset.is_none());
+        assert!(header.store_ready.is_none());
         assert!(header.heartbeat_timeout_mills.is_none());
         assert!(header.election_priority.is_none());
     }
@@ -194,6 +200,7 @@ mod tests {
             epoch: None,
             max_offset: None,
             confirm_offset: None,
+            store_ready: None,
             heartbeat_timeout_mills: None,
             election_priority: None,
         };
@@ -204,6 +211,7 @@ mod tests {
         assert!(header.epoch.is_none());
         assert!(header.max_offset.is_none());
         assert!(header.confirm_offset.is_none());
+        assert!(header.store_ready.is_none());
         assert!(header.heartbeat_timeout_mills.is_none());
         assert!(header.election_priority.is_none());
     }
@@ -219,6 +227,7 @@ mod tests {
             epoch: Some(1),
             max_offset: Some(100),
             confirm_offset: Some(50),
+            store_ready: Some(true),
             heartbeat_timeout_mills: Some(3000),
             election_priority: Some(1),
         };
@@ -229,6 +238,7 @@ mod tests {
         assert_eq!(header.epoch, Some(1));
         assert_eq!(header.max_offset, Some(100));
         assert_eq!(header.confirm_offset, Some(50));
+        assert_eq!(header.store_ready, Some(true));
         assert_eq!(header.heartbeat_timeout_mills, Some(3000));
         assert_eq!(header.election_priority, Some(1));
     }

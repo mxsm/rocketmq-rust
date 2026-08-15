@@ -2077,6 +2077,7 @@ impl BackendOps for LocalFileMessageStore {
             self.running_flags.clone(),
             self.commit_log.begin_time_in_lock().clone(),
             self.commit_log.controller_write_lease_state(),
+            self.commit_log.mapped_file_queue_runtime_state(),
         )
     }
 

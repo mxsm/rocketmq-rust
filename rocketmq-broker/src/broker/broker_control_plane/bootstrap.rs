@@ -23,6 +23,7 @@ use std::time::Instant;
 use cheetah_string::CheetahString;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_protocol::protocol::header::namesrv::broker_request::BrokerHeartbeatRequestHeader;
 use rocketmq_runtime::MetadataDeadline;
 use rocketmq_store::BrokerReplicationStore;
 use tracing::error;
@@ -666,12 +667,22 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
         let broker_election_priority = broker_config.broker_election_priority;
         let broker_id = heartbeat_state.broker_id;
         let epoch = heartbeat_state.epoch;
-        let (max_offset, confirm_offset) = self.store.controller_heartbeat_offsets();
+        let (max_offset, confirm_offset, store_ready) = self.store.controller_heartbeat_state();
+        let heartbeat_header = BrokerHeartbeatRequestHeader {
+            cluster_name,
+            broker_addr: self.broker_addr.clone(),
+            broker_name,
+            broker_id: Some(broker_id),
+            epoch,
+            max_offset,
+            confirm_offset,
+            store_ready,
+            heartbeat_timeout_mills: Some(controller_heartbeat_timeout_millis),
+            election_priority: Some(broker_election_priority),
+        };
 
         let futures = controller_targets.into_iter().map(|controller_address| {
-            let cluster_name = cluster_name.clone();
-            let broker_addr = self.broker_addr.clone();
-            let broker_name = broker_name.clone();
+            let heartbeat_header = heartbeat_header.clone();
             async move {
                 if self.shutdown.load(Ordering::Acquire) {
                     return None;
@@ -680,19 +691,7 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
                 let sent_at = Instant::now();
                 let result = self
                     .broker_outer_api
-                    .send_heartbeat_to_controller(
-                        controller_address,
-                        cluster_name,
-                        broker_addr,
-                        broker_name,
-                        broker_id,
-                        send_heartbeat_timeout_millis,
-                        epoch,
-                        max_offset,
-                        confirm_offset,
-                        Some(controller_heartbeat_timeout_millis),
-                        Some(broker_election_priority),
-                    )
+                    .send_heartbeat_to_controller(controller_address, send_heartbeat_timeout_millis, heartbeat_header)
                     .await;
                 Some((target, sent_at, result))
             }
@@ -730,23 +729,26 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
                 )
             })?;
         let broker_config = self.config.broker_snapshot();
-        let (max_offset, confirm_offset) = self.store.controller_heartbeat_offsets();
+        let (max_offset, confirm_offset, store_ready) = self.store.controller_heartbeat_state();
 
         let sent_at = Instant::now();
         let grant = self
             .broker_outer_api
             .send_heartbeat_to_controller_sync(
                 controller_leader,
-                broker_config.broker_identity.broker_cluster_name.clone(),
-                self.broker_addr.clone(),
-                broker_config.broker_identity.broker_name.clone(),
-                heartbeat_state.broker_id,
                 broker_config.send_heartbeat_timeout_millis,
-                heartbeat_state.epoch,
-                max_offset,
-                confirm_offset,
-                Some(broker_config.controller_heartbeat_timeout_mills),
-                Some(broker_config.broker_election_priority),
+                BrokerHeartbeatRequestHeader {
+                    cluster_name: broker_config.broker_identity.broker_cluster_name.clone(),
+                    broker_addr: self.broker_addr.clone(),
+                    broker_name: broker_config.broker_identity.broker_name.clone(),
+                    broker_id: Some(heartbeat_state.broker_id),
+                    epoch: heartbeat_state.epoch,
+                    max_offset,
+                    confirm_offset,
+                    store_ready,
+                    heartbeat_timeout_mills: Some(broker_config.controller_heartbeat_timeout_mills),
+                    election_priority: Some(broker_config.broker_election_priority),
+                },
             )
             .await?;
         let lease_required = self

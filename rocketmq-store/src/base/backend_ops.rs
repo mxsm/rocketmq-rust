@@ -39,6 +39,7 @@ use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store_api::TimerRecallRequest;
 use rocketmq_store_api::TimerRecallStatus;
 use rocketmq_store_api::WriteLeaseToken;
+use rocketmq_store_local::mapped_file::queue_state::MappedFileQueueRuntimeState;
 use rocketmq_store_local::mapped_file::ManagedRetirementStage;
 
 use crate::base::allocate_mapped_file_service::AllocateMappedFileService;
@@ -109,6 +110,7 @@ pub struct PutMessagePreflight {
     running_flags: Arc<RunningFlags>,
     begin_time_in_lock: Arc<AtomicU64>,
     controller_write_lease: ControllerWriteLeaseState,
+    commit_log_queue_state: MappedFileQueueRuntimeState,
 }
 
 impl PutMessagePreflight {
@@ -117,12 +119,14 @@ impl PutMessagePreflight {
         running_flags: Arc<RunningFlags>,
         begin_time_in_lock: Arc<AtomicU64>,
         controller_write_lease: ControllerWriteLeaseState,
+        commit_log_queue_state: MappedFileQueueRuntimeState,
     ) -> Self {
         Self {
             shutdown,
             running_flags,
             begin_time_in_lock,
             controller_write_lease,
+            commit_log_queue_state,
         }
     }
 
@@ -132,6 +136,7 @@ impl PutMessagePreflight {
             Arc::new(RunningFlags::new()),
             Arc::new(AtomicU64::new(0)),
             ControllerWriteLeaseState::new(false),
+            MappedFileQueueRuntimeState::default(),
         )
     }
 
@@ -142,7 +147,12 @@ impl PutMessagePreflight {
 
     /// Returns whether the store running flags permit writes.
     pub fn is_writeable(&self) -> bool {
-        self.running_flags.is_writeable() && self.controller_write_lease.is_write_permitted()
+        self.is_store_ready_for_promotion() && self.controller_write_lease.is_write_permitted()
+    }
+
+    /// Returns whether recovery and the CommitLog inventory permit Controller promotion.
+    pub fn is_store_ready_for_promotion(&self) -> bool {
+        !self.is_shutdown() && self.running_flags.is_writeable() && !self.commit_log_queue_state.is_closing()
     }
 
     /// Returns the raw running-state flags for diagnostic logging.
@@ -937,6 +947,7 @@ mod tests {
     use rocketmq_store_api::MasterEpoch;
     use rocketmq_store_api::WriteAuthority;
     use rocketmq_store_api::WriteLeaseToken;
+    use rocketmq_store_local::mapped_file::queue_state::MappedFileQueueRuntimeState;
 
     use super::PutMessagePreflight;
     use super::StateMachineVersionView;
@@ -953,10 +964,12 @@ mod tests {
             running_flags.clone(),
             begin_time_in_lock.clone(),
             ControllerWriteLeaseState::new(false),
+            MappedFileQueueRuntimeState::default(),
         );
 
         assert!(!preflight.is_shutdown());
         assert!(preflight.is_writeable());
+        assert!(preflight.is_store_ready_for_promotion());
         assert_eq!(preflight.flag_bits(), 0);
         assert!(!preflight.is_os_page_cache_busy(10));
 
@@ -976,7 +989,8 @@ mod tests {
         let preflight = PutMessagePreflight::unavailable();
 
         assert!(preflight.is_shutdown());
-        assert!(preflight.is_writeable());
+        assert!(!preflight.is_writeable());
+        assert!(!preflight.is_store_ready_for_promotion());
         assert_eq!(preflight.flag_bits(), 0);
         assert!(!preflight.is_os_page_cache_busy(10));
     }
@@ -989,6 +1003,7 @@ mod tests {
             Arc::new(RunningFlags::new()),
             Arc::new(AtomicU64::new(0)),
             lease.clone(),
+            MappedFileQueueRuntimeState::default(),
         );
         assert!(!preflight.is_writeable());
 
@@ -997,6 +1012,24 @@ mod tests {
         assert!(lease.install(token, Duration::from_secs(1)));
         assert!(preflight.is_writeable());
         lease.fence();
+        assert!(!preflight.is_writeable());
+    }
+
+    #[test]
+    fn fenced_commit_log_queue_blocks_promotion_readiness() {
+        let queue_state = MappedFileQueueRuntimeState::default();
+        let preflight = PutMessagePreflight::new(
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(RunningFlags::new()),
+            Arc::new(AtomicU64::new(0)),
+            ControllerWriteLeaseState::new(false),
+            queue_state.clone(),
+        );
+        assert!(preflight.is_store_ready_for_promotion());
+
+        let _guard = queue_state.commit_lock().lock();
+        assert!(queue_state.begin_close());
+        assert!(!preflight.is_store_ready_for_promotion());
         assert!(!preflight.is_writeable());
     }
 

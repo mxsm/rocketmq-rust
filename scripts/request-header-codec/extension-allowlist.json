@@ -18,6 +18,14 @@
       "expiry": "2027-08-01"
     },
     {
+      "rustTypeId": "rocketmq_protocol::protocol::header::namesrv::broker_request::BrokerHeartbeatRequestHeader",
+      "fields": ["storeReady"],
+      "owner": "rocketmq-rust maintainers",
+      "rationale": "Rust controller promotion-readiness extension; Java ignores unknown fields",
+      "compatibleSince": "1.0.0",
+      "expiry": "2028-08-01"
+    },
+    {
       "rustTypeId": "rocketmq_protocol::protocol::header::check_rocksdb_cq_write_progress_request_header::CheckRocksdbCqWriteProgressRequestHeader",
       "fields": ["ns", "nsd", "bname", "oway"],
       "owner": "rocketmq-rust maintainers",

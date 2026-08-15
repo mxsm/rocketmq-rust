@@ -100,6 +100,8 @@ pub struct BrokerLiveInfoSnapshot {
     pub max_offset: i64,
     pub confirm_offset: i64,
     pub election_priority: Option<i32>,
+    #[serde(default)]
+    pub store_ready: bool,
 }
 
 impl BrokerLiveInfoSnapshot {
@@ -107,10 +109,16 @@ impl BrokerLiveInfoSnapshot {
         BrokerIdentityInfoSnapshot::new(&self.cluster_name, &self.broker_name, Some(self.broker_id))
     }
 
+    /// Returns whether this heartbeat remains within its liveness timeout.
     pub fn is_active_at(&self, timestamp_millis: u64) -> bool {
         self.last_update_timestamp
             .checked_add(self.heartbeat_timeout_millis)
             .is_some_and(|expires_at| expires_at >= timestamp_millis)
+    }
+
+    /// Returns whether the live Broker has also reported a recovered, writable Store.
+    pub fn is_promotion_ready_at(&self, timestamp_millis: u64) -> bool {
+        self.store_ready && self.is_active_at(timestamp_millis)
     }
 }
 
@@ -283,6 +291,26 @@ mod tests {
     use rocketmq_protocol::protocol::SerializeType;
 
     use super::*;
+
+    #[test]
+    fn legacy_heartbeat_snapshot_requires_fresh_store_readiness_before_promotion() {
+        let encoded = r#"{
+            "cluster_name":"cluster-a",
+            "broker_name":"broker-a",
+            "broker_addr":"127.0.0.1:10911",
+            "broker_id":0,
+            "last_update_timestamp":1000,
+            "heartbeat_timeout_millis":30000,
+            "epoch":1,
+            "max_offset":64,
+            "confirm_offset":48,
+            "election_priority":1
+        }"#;
+        let heartbeat: BrokerLiveInfoSnapshot = serde_json::from_str(encoded).expect("legacy heartbeat snapshot");
+
+        assert!(heartbeat.is_active_at(1_001));
+        assert!(!heartbeat.is_promotion_ready_at(1_001));
+    }
 
     #[test]
     fn controller_response_preserves_success_contract() {
