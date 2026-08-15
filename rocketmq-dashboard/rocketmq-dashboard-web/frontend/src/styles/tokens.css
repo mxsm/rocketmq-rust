@@ -16,6 +16,8 @@
   --success: #22c55e;
   --warning: #f59e0b;
   --destructive: #ef4444;
+  --destructive-control-default: #b91c1c;
+  --destructive-control-hover: #991b1b;
   --info: #3b82f6;
   --ring: #2dd4bf;
   --bg: var(--background);

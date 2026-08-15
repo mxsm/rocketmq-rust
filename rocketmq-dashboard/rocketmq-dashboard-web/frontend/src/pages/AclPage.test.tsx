@@ -54,6 +54,16 @@ describe('AclPage', () => {
     expect(aclApi.listPolicies).toHaveBeenCalledWith({ clusterName: 'Cluster-A', brokerName: 'broker-a' });
   });
 
+  it('uses operator-facing descriptions for users and policy records', async () => {
+    const user = userEvent.setup();
+    renderAtRoute(<AclPage />, '/acl');
+
+    expect(await screen.findByText('Manage ACL users and permissions for the selected cluster and broker.')).toBeInTheDocument();
+    expect(await screen.findByText('Manage credentials, account status, and access changes for the selected broker.')).toBeInTheDocument();
+    await user.click(screen.getByRole('tab', { name: 'ACL Policies' }));
+    expect(screen.getByText('Review and manage subject permissions for resources in the selected broker.')).toBeInTheDocument();
+  });
+
   it('finishes broker discovery when React Strict Mode probes the mount lifecycle', async () => {
     render(
       <StrictMode>

@@ -2,6 +2,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import SelectMenu from '../../components/SelectMenu';
+import { Button } from '../../components/ui/Button';
 import { buildAclPolicyRequest, type AclPolicyDraft, type AclPolicyRow, type AclScope } from './acl-model';
 import type { AclPolicyRequest } from '../../types/acl';
 
@@ -62,7 +63,7 @@ export default function AclPolicyDialog({ open, policy, scope, saving, error, on
               <Dialog.Title>{editing ? 'Edit ACL Permission' : 'Add ACL Permission'}</Dialog.Title>
               <Dialog.Description className="dialog-description">Create or update an ACL policy on the confirmed broker.</Dialog.Description>
             </div>
-            <Dialog.Close className="icon-button" title="Close"><X size={15} aria-hidden="true" /></Dialog.Close>
+            <Dialog.Close asChild><Button type="button" variant="ghost" size="icon" title="Close" aria-label="Close"><X size={15} aria-hidden="true" /></Button></Dialog.Close>
           </div>
           <div className="acl-dialog-form">
             <label className="acl-field">
@@ -88,7 +89,7 @@ export default function AclPolicyDialog({ open, policy, scope, saving, error, on
             <div className="acl-field">
               <span>Operation Type</span>
               <div className="acl-action-toggle-grid">
-                {actionOptions.map((action) => <button type="button" className={draft.actions.includes(action) ? 'active' : ''} key={action} aria-pressed={draft.actions.includes(action)} onClick={() => toggleAction(action)}>{action}</button>)}
+                {actionOptions.map((action) => <Button type="button" variant="ghost" className={draft.actions.includes(action) ? 'active' : ''} key={action} aria-pressed={draft.actions.includes(action)} onClick={() => toggleAction(action)}>{action}</Button>)}
               </div>
               {validationErrors.actions ? <small className="inline-validation">{validationErrors.actions}</small> : null}
             </div>
@@ -96,8 +97,8 @@ export default function AclPolicyDialog({ open, policy, scope, saving, error, on
           </div>
           <div className="dialog-actions">
             {error ? <div className="acl-dialog-error" role="alert">{error}</div> : null}
-            <Dialog.Close className="button button-secondary" disabled={saving}>Cancel</Dialog.Close>
-            <button type="button" className="button" disabled={saving} onClick={submit}>{saving ? 'Saving...' : error ? 'Retry' : 'Confirm'}</button>
+            <Dialog.Close asChild><Button type="button" variant="secondary" disabled={saving}>Cancel</Button></Dialog.Close>
+            <Button type="button" disabled={saving} onClick={submit}>{saving ? 'Saving...' : error ? 'Retry' : 'Confirm'}</Button>
           </div>
         </Dialog.Content>
       </Dialog.Portal>

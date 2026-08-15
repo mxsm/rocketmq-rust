@@ -1,0 +1,144 @@
+.login-shell {
+  display: grid;
+  min-height: 100vh;
+  grid-template-rows: auto 1fr auto;
+  padding: 28px;
+  background: var(--background);
+}
+
+.login-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--foreground);
+}
+
+.login-brand-mark {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--chrome);
+  color: var(--primary);
+}
+
+.login-brand strong,
+.login-brand span {
+  display: block;
+}
+
+.login-brand strong {
+  font-size: 20px;
+  line-height: 1.2;
+}
+
+.login-brand span,
+.login-footer {
+  color: var(--muted-foreground);
+}
+
+.login-brand span {
+  margin-top: 2px;
+  font-size: 14px;
+}
+
+.login-content {
+  display: grid;
+  width: min(572px, 100%);
+  align-self: center;
+  justify-self: center;
+  gap: 20px;
+}
+
+.login-session-note {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0;
+  padding: 16px 20px;
+  border: 1px solid color-mix(in srgb, var(--info) 70%, var(--border));
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--info) 8%, var(--background));
+  color: var(--foreground);
+  font-size: 16px;
+}
+
+.login-session-note svg {
+  flex: 0 0 auto;
+  color: var(--info);
+}
+
+.login-card {
+  box-shadow: var(--shadow);
+}
+
+.login-card .ui-card-header {
+  gap: 8px;
+  padding: 28px 30px 0;
+}
+
+.login-card .ui-card-title {
+  font-size: 27px;
+  line-height: 1.2;
+}
+
+.login-card .ui-card-description {
+  font-size: 16px;
+}
+
+.login-card .ui-card-content {
+  padding: 28px 30px 30px;
+}
+
+.login-form {
+  display: grid;
+  gap: 22px;
+}
+
+.login-field {
+  display: grid;
+  gap: 8px;
+}
+
+.login-field .ui-input {
+  min-height: 48px;
+  font-size: 16px;
+}
+
+.login-submit {
+  width: 100%;
+  min-height: 48px;
+  font-size: 16px;
+}
+
+.login-form .state-block {
+  margin: 0;
+}
+
+.login-footer {
+  justify-self: center;
+  margin: 20px 0 0;
+  font-size: 14px;
+}
+
+@media (max-width: 640px) {
+  .login-shell {
+    padding: 20px;
+  }
+
+  .login-content {
+    gap: 16px;
+  }
+
+  .login-card .ui-card-header,
+  .login-card .ui-card-content {
+    padding-right: 20px;
+    padding-left: 20px;
+  }
+
+  .login-card .ui-card-title {
+    font-size: 23px;
+  }
+}

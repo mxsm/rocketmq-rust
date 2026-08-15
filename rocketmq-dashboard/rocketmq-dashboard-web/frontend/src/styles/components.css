@@ -19,8 +19,8 @@
 .ui-button-ghost:hover { background: color-mix(in srgb, var(--foreground) 7%, var(--card)); }
 .ui-button-outline { background: transparent; border-color: var(--border); color: var(--foreground); }
 .ui-button-ghost { background: transparent; color: var(--muted-foreground); }
-.ui-button-destructive { background: var(--destructive); color: #fff; }
-.ui-button-destructive:hover { background: color-mix(in srgb, var(--destructive) 82%, #000); }
+.ui-button-destructive { background: var(--destructive-control-default); color: var(--foreground); }
+.ui-button-destructive:hover { background: var(--destructive-control-hover); }
 .ui-button-link { background: transparent; color: var(--primary); text-decoration: underline; text-underline-offset: 4px; }
 .ui-button-size-default { min-height: 36px; padding: 0 14px; }
 .ui-button-size-sm { min-height: 32px; padding: 0 10px; font-size: 13px; }

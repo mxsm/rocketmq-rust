@@ -3,6 +3,7 @@ import { useMemo } from 'react';
 import AppDataTable, { type AppDataTableColumn } from '../../components/AppDataTable';
 import ConfirmDialog from '../../components/ConfirmDialog';
 import StatusBadge from '../../components/StatusBadge';
+import { Button } from '../../components/ui/Button';
 import type { AclUserView } from '../../types/acl';
 
 export interface AclUsersTableProps {
@@ -29,9 +30,9 @@ export default function AclUsersTable({ rows, total, page, pageSize, loading, er
     { id: 'broker', header: 'Broker', cell: (row) => <div className="acl-primary-cell"><span>{row.brokerName || '-'}</span><code>{row.brokerAddr || '-'}</code></div> },
     {
       id: 'actions', header: 'Operation', cell: (row) => <div className="acl-operation-row">
-        <button type="button" className="button button-secondary acl-action-button" aria-label={`Modify ACL user ${row.username}`} disabled={disabled} onClick={() => onEdit(row)}><Edit3 size={14} aria-hidden="true" /> Modify</button>
+        <Button type="button" variant="secondary" className="acl-action-button" aria-label={`Modify ACL user ${row.username}`} disabled={disabled} onClick={() => onEdit(row)}><Edit3 size={14} aria-hidden="true" /> Modify</Button>
         <ConfirmDialog title="Delete ACL user" description={`Delete ACL user ${row.username} from the selected broker target?`} confirmLabel="Delete" onConfirm={() => onDelete(row.username)}>
-          <button type="button" className="button button-danger acl-action-button" aria-label={`Delete ACL user ${row.username}`} disabled={disabled}><Trash2 size={14} aria-hidden="true" /> Delete</button>
+          <Button type="button" variant="destructive" className="acl-action-button" aria-label={`Delete ACL user ${row.username}`} disabled={disabled}><Trash2 size={14} aria-hidden="true" /> Delete</Button>
         </ConfirmDialog>
       </div>
     }

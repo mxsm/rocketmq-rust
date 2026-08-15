@@ -1,44 +1,71 @@
-import { LogIn } from 'lucide-react';
-import { FormEvent, useEffect, useState } from 'react';
+import { Activity, LogIn } from 'lucide-react';
+import { FormEvent, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { authApi } from '../api/auth_api';
 import { ApiClientError } from '../api/client';
 import ErrorState from '../components/ErrorState';
 import LoadingState from '../components/LoadingState';
+import { Button } from '../components/ui/Button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/Card';
+import { Input } from '../components/ui/Input';
+import { Label } from '../components/ui/Label';
+import './LoginPage.css';
 
 export default function LoginPage() {
   const navigate = useNavigate();
-  const [username, setUsername] = useState('admin');
+  const passwordInputRef = useRef<HTMLInputElement>(null);
+  const submittingRef = useRef(false);
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [checking, setChecking] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [sessionError, setSessionError] = useState<string | null>(null);
+  const [credentialError, setCredentialError] = useState<string | null>(null);
+
+  const checkSession = async () => {
+    setChecking(true);
+    setSessionError(null);
+    try {
+      const session = await authApi.session();
+      if (!session.loginRequired || session.authenticated) {
+        navigate('/dashboard', { replace: true });
+      }
+    } catch {
+      setSessionError('Unable to load auth session.');
+    } finally {
+      setChecking(false);
+    }
+  };
 
   useEffect(() => {
-    authApi
-      .session()
-      .then((session) => {
-        if (!session.loginRequired || session.authenticated) {
-          navigate('/dashboard', { replace: true });
-        }
-      })
-      .catch(() => {
-        setError('Unable to load auth session.');
-      })
-      .finally(() => setChecking(false));
+    void checkSession();
   }, [navigate]);
 
-  const submit = (event: FormEvent<HTMLFormElement>) => {
+  useEffect(() => {
+    if (credentialError && !submitting) {
+      passwordInputRef.current?.focus();
+    }
+  }, [credentialError, submitting]);
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    setError(null);
+    if (submittingRef.current) {
+      return;
+    }
+
+    submittingRef.current = true;
+    setCredentialError(null);
     setSubmitting(true);
-    authApi
-      .login({ username, password })
-      .then(() => navigate('/dashboard', { replace: true }))
-      .catch((err: unknown) => {
-        setError(err instanceof ApiClientError ? err.message : 'Login failed.');
-      })
-      .finally(() => setSubmitting(false));
+    try {
+      await authApi.login({ username, password });
+      navigate('/dashboard', { replace: true });
+    } catch (err) {
+      setPassword('');
+      setCredentialError(err instanceof ApiClientError ? err.message : 'Login failed.');
+    } finally {
+      submittingRef.current = false;
+      setSubmitting(false);
+    }
   };
 
   if (checking) {
@@ -49,31 +76,72 @@ export default function LoginPage() {
     );
   }
 
+  if (sessionError) {
+    return (
+      <main className="login-shell">
+        <ErrorState message={sessionError} onRetry={() => void checkSession()} />
+      </main>
+    );
+  }
+
   return (
     <main className="login-shell">
-      <form className="login-panel" onSubmit={submit}>
-        <div className="login-mark" aria-hidden="true">
-          <LogIn size={22} />
+      <div className="login-brand" aria-label="RocketMQ Operations">
+        <div className="login-brand-mark" aria-hidden="true">
+          <Activity size={22} />
         </div>
-        <h1>RocketMQ Dashboard</h1>
-        <label className="field">
-          Username
-          <input value={username} autoComplete="username" onChange={(event) => setUsername(event.target.value)} />
-        </label>
-        <label className="field">
-          Password
-          <input
-            value={password}
-            type="password"
-            autoComplete="current-password"
-            onChange={(event) => setPassword(event.target.value)}
-          />
-        </label>
-        {error ? <ErrorState message={error} /> : null}
-        <button type="submit" className="button" disabled={submitting || !username || !password}>
-          {submitting ? 'Signing in' : 'Sign in'}
-        </button>
-      </form>
+        <div>
+          <strong>RocketMQ</strong>
+          <span>Operations</span>
+        </div>
+      </div>
+
+      <div className="login-content">
+        <p className="login-session-note" role="status">
+          <LogIn size={18} aria-hidden="true" />
+          Authentication is required for this dashboard.
+        </p>
+        <Card className="login-card">
+          <CardHeader>
+            <CardTitle>Sign in to RocketMQ Operations</CardTitle>
+            <CardDescription>Use your dashboard credentials to continue.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form className="login-form" onSubmit={submit} aria-busy={submitting}>
+              <div className="login-field">
+                <Label htmlFor="login-username">Username</Label>
+                <Input
+                  id="login-username"
+                  value={username}
+                  autoComplete="username"
+                  placeholder="Enter your username"
+                  disabled={submitting}
+                  onChange={(event) => setUsername(event.target.value)}
+                />
+              </div>
+              <div className="login-field">
+                <Label htmlFor="login-password">Password</Label>
+                <Input
+                  ref={passwordInputRef}
+                  id="login-password"
+                  value={password}
+                  type="password"
+                  autoComplete="current-password"
+                  placeholder="Enter your password"
+                  disabled={submitting}
+                  onChange={(event) => setPassword(event.target.value)}
+                />
+              </div>
+              {credentialError ? <ErrorState message={credentialError} /> : null}
+              <Button type="submit" className="login-submit" loading={submitting} disabled={!username || !password}>
+                {submitting ? 'Signing in' : 'Sign in'}
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
+      </div>
+
+      <p className="login-footer">RocketMQ Dashboard Web</p>
     </main>
   );
 }

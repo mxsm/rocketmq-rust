@@ -2,6 +2,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import SelectMenu from '../../components/SelectMenu';
+import { Button } from '../../components/ui/Button';
 import type { AclUserUpsertRequest, AclUserView } from '../../types/acl';
 import type { AclScope } from './acl-model';
 
@@ -42,7 +43,7 @@ export default function AclUserDialog({ open, user, scope, saving, error, onOpen
               <Dialog.Title>{editing ? 'Edit User' : 'Add User'}</Dialog.Title>
               <Dialog.Description className="dialog-description">Create or update an ACL user on the confirmed broker.</Dialog.Description>
             </div>
-            <Dialog.Close className="icon-button" title="Close"><X size={15} aria-hidden="true" /></Dialog.Close>
+            <Dialog.Close asChild><Button type="button" variant="ghost" size="icon" title="Close" aria-label="Close"><X size={15} aria-hidden="true" /></Button></Dialog.Close>
           </div>
           <div className="acl-dialog-form">
             <label className="acl-field"><span><strong>*</strong> Username</span><input value={username} disabled={editing} onChange={(event) => setUsername(event.target.value)} /></label>
@@ -60,10 +61,10 @@ export default function AclUserDialog({ open, user, scope, saving, error, onOpen
           </div>
           <div className="dialog-actions">
             {error ? <div className="acl-dialog-error" role="alert">{error}</div> : null}
-            <Dialog.Close className="button button-secondary" disabled={saving}>Cancel</Dialog.Close>
-            <button type="button" className="button" disabled={!canSubmit || saving} onClick={() => onSubmit({
+            <Dialog.Close asChild><Button type="button" variant="secondary" disabled={saving}>Cancel</Button></Dialog.Close>
+            <Button type="button" disabled={!canSubmit || saving} onClick={() => onSubmit({
               clusterName: scope.clusterName, brokerName: scope.brokerName, username, password, userType, userStatus
-            }, user?.username)}>{saving ? 'Saving...' : error ? 'Retry' : 'Confirm'}</button>
+            }, user?.username)}>{saving ? 'Saving...' : error ? 'Retry' : 'Confirm'}</Button>
           </div>
         </Dialog.Content>
       </Dialog.Portal>
