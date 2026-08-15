@@ -101,7 +101,7 @@ Edit loads the real Topic configuration first. When brokers disagree, the form s
 
 The dialog captures Topic, key, tag, message body, and trace enabled. Topic is read-only. Body is required; key and tag are optional. The result renders structured fields: send status, message ID, broker, queue ID, queue offset, transaction ID, region, and local transaction state when present.
 
-The action is unavailable for System, Retry, and DLQ Topics. A request is considered successful only when the returned send status represents a successful broker send; other statuses render as an operation failure even when the HTTP request completed.
+The action is unavailable for System Topics. Retry and DLQ Topics retain the same operational actions as the Java Dashboard. A request is considered successful only when the returned send status represents a successful broker send; other statuses render as an operation failure even when the HTTP request completed.
 
 ### 4.2 Reset consumer offset
 
