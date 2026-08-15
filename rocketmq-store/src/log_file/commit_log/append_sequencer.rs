@@ -648,7 +648,11 @@ impl CommitLogAppendProcessor {
                     | CommitLogAppendFailure::RolledActiveLockFailed { error } => {
                         error!(%error, topic, born_host, "Failed to lock active CommitLog mapped segment");
                     }
-                    CommitLogAppendFailure::InitialMessageIllegal | CommitLogAppendFailure::InitialUnknown => {}
+                    CommitLogAppendFailure::InitialMessageIllegal => {}
+                    CommitLogAppendFailure::InitialUnknown => {
+                        self.append.fence_writes();
+                        error!(topic, born_host, "CommitLog append failed; Store writes fenced");
+                    }
                 }
                 drop(abandoned_segment);
                 (

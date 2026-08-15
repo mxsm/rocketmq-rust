@@ -1861,6 +1861,27 @@ impl MessageStoreConfig {
         self.store_path_commit_log.clone().unwrap().to_string()
     }
 
+    pub(crate) fn commit_log_writable_paths(&self) -> Vec<PathBuf> {
+        self.get_store_path_commit_log()
+            .split(mix_all::MULTI_PATH_SPLITTER.as_str())
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from)
+            .collect()
+    }
+
+    pub(crate) fn commit_log_readonly_paths(&self) -> Vec<PathBuf> {
+        self.read_only_commit_log_store_paths
+            .as_ref()
+            .map(CheetahString::as_str)
+            .unwrap_or_default()
+            .split(mix_all::MULTI_PATH_SPLITTER.as_str())
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from)
+            .collect()
+    }
+
     pub fn is_enable_rocksdb_store(&self) -> bool {
         self.store_type == StoreType::RocksDB
     }
@@ -2788,6 +2809,30 @@ mod tests {
         assert_eq!(normalized.cleanup.disk_clean_forcibly_ratio, 0.85);
         assert_eq!(normalized.cleanup.disk_max_used_ratio, 0.10);
         assert!(normalized.reput.read_uncommitted);
+        Ok(())
+    }
+
+    #[test]
+    fn commit_log_paths_preserve_java_multipath_and_readonly_fields() -> Result<(), serde_json::Error> {
+        let config: MessageStoreConfig = serde_json::from_str(
+            r#"{
+                "storePathCommitLog": "one, two,one",
+                "readOnlyCommitLogStorePaths": "archive"
+            }"#,
+        )?;
+
+        assert_eq!(
+            config.commit_log_writable_paths(),
+            vec![
+                std::path::PathBuf::from("one"),
+                std::path::PathBuf::from("two"),
+                std::path::PathBuf::from("one")
+            ]
+        );
+        assert_eq!(
+            config.commit_log_readonly_paths(),
+            vec![std::path::PathBuf::from("archive")]
+        );
         Ok(())
     }
 
