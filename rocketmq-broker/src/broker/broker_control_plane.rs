@@ -225,6 +225,7 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
         // Store remains fail-closed until a quorum-committed heartbeat installs
         // a lease for the newly published authority.
         let _ = self.store.fence_controller_writes();
+        self.escape_policy.fence_controller_role();
         let outcome = self
             .controller
             .with_replicas_mut(|replicas_manager| {
@@ -320,6 +321,7 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
             }
         }
 
+        self.escape_policy.update_controller_role(role, outcome.master_epoch);
         self.role_state.set_isolated(false);
         if outcome.should_register_to_namesrv {
             if let Err(error) = self.registration.register().await {

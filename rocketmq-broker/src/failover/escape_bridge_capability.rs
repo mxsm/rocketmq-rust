@@ -26,6 +26,7 @@ use rocketmq_model::common::broker::broker_role::BrokerRole;
 use rocketmq_model::common::message::message_batch::MessageExtBatch;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_model::common::mix_all::MASTER_ID;
 use rocketmq_store::store_append_receipt;
 use rocketmq_store::ArcMessageFilter;
 use rocketmq_store::BrokerAdminStore;
@@ -65,6 +66,10 @@ pub(crate) struct EscapeBridgePolicy {
     pub(crate) enable_slave_acting_master: bool,
     pub(crate) enable_remote_escape: bool,
     pub(crate) broker_role: BrokerRole,
+    enable_controller_mode: bool,
+    controller_role: Option<BrokerReplicaRole>,
+    controller_role_epoch: Option<i32>,
+    generation: u64,
 }
 
 impl EscapeBridgePolicy {
@@ -75,6 +80,10 @@ impl EscapeBridgePolicy {
             enable_slave_acting_master: broker_config.enable_slave_acting_master,
             enable_remote_escape: broker_config.enable_remote_escape,
             broker_role: message_store_config.broker_role,
+            enable_controller_mode: broker_config.enable_controller_mode,
+            controller_role: None,
+            controller_role_epoch: None,
+            generation: 0,
         }
     }
 
@@ -83,11 +92,52 @@ impl EscapeBridgePolicy {
         self.broker_id = broker_config.broker_identity.broker_id;
         self.enable_slave_acting_master = broker_config.enable_slave_acting_master;
         self.enable_remote_escape = broker_config.enable_remote_escape;
+        self.enable_controller_mode = broker_config.enable_controller_mode;
+        if !self.enable_controller_mode {
+            self.controller_role = None;
+            self.controller_role_epoch = None;
+        }
+        self.generation = self.generation.saturating_add(1);
     }
 
     fn apply_message_store_config(&mut self, message_store_config: &MessageStoreConfig) {
         self.broker_role = message_store_config.broker_role;
+        self.generation = self.generation.saturating_add(1);
     }
+
+    fn apply_controller_role(&mut self, role: Option<BrokerReplicaRole>, role_epoch: Option<i32>) {
+        self.controller_role = role;
+        self.controller_role_epoch = role_epoch;
+        self.generation = self.generation.saturating_add(1);
+    }
+
+    pub(crate) fn remote_escape_authority(&self) -> Option<EscapeRemoteAuthority> {
+        if !self.enable_slave_acting_master
+            || !self.enable_remote_escape
+            || self.broker_role != BrokerRole::Slave
+            || self.broker_id == MASTER_ID
+        {
+            return None;
+        }
+        let role_epoch = if self.enable_controller_mode {
+            if self.controller_role != Some(BrokerReplicaRole::Slave) {
+                return None;
+            }
+            Some(self.controller_role_epoch?)
+        } else {
+            None
+        };
+        Some(EscapeRemoteAuthority {
+            policy_generation: self.generation,
+            role_epoch,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct EscapeRemoteAuthority {
+    policy_generation: u64,
+    role_epoch: Option<i32>,
 }
 
 /// Atomically published failover policy generations.
@@ -124,6 +174,26 @@ impl EscapeBridgePolicyState {
             replacement.apply_message_store_config(message_store_config);
             Arc::new(replacement)
         });
+    }
+
+    pub(crate) fn update_controller_role(&self, role: BrokerReplicaRole, role_epoch: i32) {
+        self.current.rcu(|current| {
+            let mut replacement = current.as_ref().clone();
+            replacement.apply_controller_role(Some(role), Some(role_epoch));
+            Arc::new(replacement)
+        });
+    }
+
+    pub(crate) fn fence_controller_role(&self) {
+        self.current.rcu(|current| {
+            let mut replacement = current.as_ref().clone();
+            replacement.apply_controller_role(None, None);
+            Arc::new(replacement)
+        });
+    }
+
+    pub(crate) fn is_remote_escape_authority_current(&self, authority: EscapeRemoteAuthority) -> bool {
+        self.snapshot().remote_escape_authority() == Some(authority)
     }
 }
 
@@ -300,6 +370,11 @@ impl<MS: BrokerReadStore> EscapeBridgeStoreCapability<MS> {
         .unwrap_or((None, None, None))
     }
 
+    pub(crate) fn is_local_writeable(&self) -> bool {
+        self.with_store(|store| store.put_message_preflight().is_writeable())
+            .unwrap_or(false)
+    }
+
     pub(crate) fn set_alive_replica_num_in_group(&self, alive_replica_num: i32) -> Result<(), MessageStoreUnavailable>
     where
         MS: BrokerReplicationStore,
@@ -474,6 +549,13 @@ impl<MS: BrokerReadStore> EscapeBridgeStoreCapability<MS> {
         Ok(self.shared_append()?.put_message(message).await?.result)
     }
 
+    pub(crate) async fn put_messages(&self, batch: MessageExtBatch) -> Result<PutMessageResult, MessageStoreUnavailable>
+    where
+        MS: BrokerWriteStore,
+    {
+        Ok(self.shared_append()?.put_messages(batch).await?.result)
+    }
+
     pub(crate) fn set_commitlog_read_mode(
         &self,
         read_ahead_mode: rocketmq_store::CommitLogReadMode,
@@ -646,6 +728,50 @@ mod tests {
         assert_eq!(snapshot.broker_role, BrokerRole::Slave);
     }
 
+    #[test]
+    fn controller_remote_escape_authority_is_epoch_scoped_and_fail_closed() {
+        let mut broker_config = BrokerConfig::default();
+        broker_config.broker_identity.broker_id = 1;
+        broker_config.enable_controller_mode = true;
+        broker_config.enable_slave_acting_master = true;
+        broker_config.enable_remote_escape = true;
+        let store_config = MessageStoreConfig {
+            broker_role: BrokerRole::Slave,
+            ..Default::default()
+        };
+        let state = EscapeBridgePolicyState::from_configs(&broker_config, &store_config);
+
+        assert!(state.snapshot().remote_escape_authority().is_none());
+        state.update_controller_role(BrokerReplicaRole::Slave, 3);
+        let authority = state.snapshot().remote_escape_authority().expect("slave authority");
+        assert!(state.is_remote_escape_authority_current(authority));
+
+        state.fence_controller_role();
+        assert!(!state.is_remote_escape_authority_current(authority));
+        assert!(state.snapshot().remote_escape_authority().is_none());
+
+        state.update_controller_role(BrokerReplicaRole::Master, 4);
+        assert!(state.snapshot().remote_escape_authority().is_none());
+    }
+
+    #[test]
+    fn classic_remote_escape_requires_a_non_master_slave() {
+        let mut broker_config = BrokerConfig::default();
+        broker_config.broker_identity.broker_id = 1;
+        broker_config.enable_slave_acting_master = true;
+        broker_config.enable_remote_escape = true;
+        let store_config = MessageStoreConfig {
+            broker_role: BrokerRole::Slave,
+            ..Default::default()
+        };
+        let state = EscapeBridgePolicyState::from_configs(&broker_config, &store_config);
+        assert!(state.snapshot().remote_escape_authority().is_some());
+
+        broker_config.broker_identity.broker_id = 0;
+        state.update_broker_config(&broker_config);
+        assert!(state.snapshot().remote_escape_authority().is_none());
+    }
+
     #[tokio::test]
     async fn controller_role_change_is_a_noop_before_store_binding() {
         let store = EscapeBridgeStoreCapability::<StorePorts>::default();
@@ -661,6 +787,7 @@ mod tests {
         let store = EscapeBridgeStoreCapability::<StorePorts>::default();
 
         assert_eq!(store.controller_heartbeat_state(), (None, None, None));
+        assert!(!store.is_local_writeable());
         assert!(store.set_alive_replica_num_in_group(1).is_err());
     }
 }
