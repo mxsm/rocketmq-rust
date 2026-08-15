@@ -46,6 +46,7 @@ use crate::deadline::RequestDeadline;
 use crate::dispatch::ResponseSink;
 use crate::file_region::FileRegion;
 use crate::file_region::FileRegionSequence;
+use crate::proxy_protocol::ProxyProtocolMetadata;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
 pub type ChannelId = CheetahString;
@@ -97,6 +98,12 @@ pub struct Channel {
     /// Remote peer socket address (their end of the connection)
     remote_address: SocketAddr,
 
+    /// Socket peer before a trusted PROXY header supplies the effective source address.
+    transport_peer_address: SocketAddr,
+
+    /// Trusted ingress metadata retained for authorization and audit consumers.
+    proxy_protocol: Option<Arc<ProxyProtocolMetadata>>,
+
     /// Unique identifier for this channel instance (UUID-based)
     ///
     /// Used for logging, routing, and distinguishing channels in maps/sets.
@@ -121,8 +128,23 @@ impl Channel {
             inner,
             local_address,
             remote_address,
+            transport_peer_address: remote_address,
+            proxy_protocol: None,
             channel_id,
         }
+    }
+
+    pub(crate) fn new_with_proxy_protocol(
+        inner: Arc<ChannelInner>,
+        local_address: SocketAddr,
+        remote_address: SocketAddr,
+        transport_peer_address: SocketAddr,
+        proxy_protocol: Option<Arc<ProxyProtocolMetadata>>,
+    ) -> Self {
+        let mut channel = Self::new(inner, local_address, remote_address);
+        channel.transport_peer_address = transport_peer_address;
+        channel.proxy_protocol = proxy_protocol;
+        channel
     }
 
     // === Address Mutators ===
@@ -181,6 +203,25 @@ impl Channel {
     #[inline]
     pub fn remote_address(&self) -> SocketAddr {
         self.remote_address
+    }
+
+    /// Gets the direct transport peer, which can differ from `remote_address()` behind a trusted
+    /// PROXY protocol ingress.
+    #[inline]
+    pub fn transport_peer_address(&self) -> SocketAddr {
+        self.transport_peer_address
+    }
+
+    /// Gets trusted PROXY source/destination/TLV metadata for this channel.
+    #[inline]
+    pub fn proxy_protocol(&self) -> Option<&ProxyProtocolMetadata> {
+        self.proxy_protocol.as_deref()
+    }
+
+    /// Resolves one Java-compatible HAProxy channel attribute from typed metadata.
+    #[must_use]
+    pub fn proxy_protocol_attribute(&self, key: &str) -> Option<String> {
+        self.proxy_protocol().and_then(|metadata| metadata.attribute(key))
     }
 
     /// Gets the channel identifier as a string slice.

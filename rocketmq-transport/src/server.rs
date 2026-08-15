@@ -62,6 +62,9 @@ use crate::dispatch::AuthorizedDispatchBoundary;
 use crate::dispatch::RequestContext;
 use crate::dispatch::ResponseSink;
 use crate::file_region::FileTransferMode;
+use crate::proxy_protocol::read_proxy_protocol;
+use crate::proxy_protocol::ProxyProtocolConfig;
+use crate::proxy_protocol::ProxyProtocolMetadata;
 use crate::request_ordering::RequestOrdering;
 use crate::security::TransportSecurity;
 use crate::telemetry::TransportTelemetry;
@@ -124,6 +127,8 @@ struct SessionSendHandle {
     session_id: u64,
     local_addr: SocketAddr,
     remote_addr: SocketAddr,
+    transport_peer_addr: SocketAddr,
+    proxy_protocol: Option<Arc<ProxyProtocolMetadata>>,
     connection_id: ConnectionId,
     frame_limits: FrameLimits,
     writer: WriterLanes,
@@ -157,6 +162,16 @@ impl SessionHandle {
 
     pub fn remote_addr(&self) -> SocketAddr {
         self.send.remote_addr
+    }
+
+    /// Returns the socket peer before trusted PROXY source rewriting.
+    pub fn transport_peer_addr(&self) -> SocketAddr {
+        self.send.transport_peer_addr
+    }
+
+    /// Returns trusted PROXY source metadata for this session, when present.
+    pub fn proxy_protocol(&self) -> Option<&Arc<ProxyProtocolMetadata>> {
+        self.send.proxy_protocol.as_ref()
     }
 
     pub fn connection(&self) -> Connection {
@@ -385,6 +400,7 @@ pub struct TransportListener {
     file_region_blocking: Option<BlockingExecutor>,
     file_transfer_mode: FileTransferMode,
     frame_limits: FrameLimits,
+    proxy_protocol: ProxyProtocolConfig,
 }
 
 impl TransportListener {
@@ -413,6 +429,7 @@ impl TransportListener {
             file_region_blocking: None,
             file_transfer_mode: FileTransferMode::Auto,
             frame_limits: FrameLimits::default(),
+            proxy_protocol: ProxyProtocolConfig::default(),
         }
     }
 
@@ -437,6 +454,13 @@ impl TransportListener {
     pub fn try_with_frame_limits(mut self, frame_limits: FrameLimits) -> RocketMQResult<Self> {
         frame_limits.validate()?;
         self.frame_limits = frame_limits;
+        Ok(self)
+    }
+
+    /// Applies the trusted PROXY protocol policy before TLS/application negotiation.
+    pub fn try_with_proxy_protocol(mut self, config: ProxyProtocolConfig) -> RocketMQResult<Self> {
+        config.validate()?;
+        self.proxy_protocol = config;
         Ok(self)
     }
 
@@ -534,17 +558,34 @@ impl TransportListener {
             let file_region_blocking = self.file_region_blocking.clone();
             let file_transfer_mode = self.file_transfer_mode;
             let frame_limits = self.frame_limits;
+            let proxy_protocol = self.proxy_protocol.clone();
             let spawn_group = session_group.clone();
             if spawn_group
                 .spawn_service("rocketmq.transport.session", async move {
                     let _connection_permit = connection_permit;
                     let handshake_cancellation = session_group.cancellation_token();
+                    let mut stream = stream;
+                    let proxy_metadata = tokio::select! {
+                        () = handshake_cancellation.cancelled() => return,
+                        metadata = read_proxy_protocol(&mut stream, remote_addr, &proxy_protocol) => match metadata {
+                            Ok(metadata) => metadata.map(Arc::new),
+                            Err(error) => {
+                                tracing::warn!(%remote_addr, %error, "rejected invalid PROXY protocol header");
+                                return;
+                            }
+                        },
+                    };
+                    let effective_remote_addr = proxy_metadata.as_ref().map_or(remote_addr, |metadata| metadata.source);
+                    let effective_local_addr = proxy_metadata
+                        .as_ref()
+                        .map_or(local_addr, |metadata| metadata.destination);
+                    let effective_scope = AdmissionScope::new(effective_remote_addr.ip()).with_session(session_id);
                     let negotiated = tokio::select! {
                         () = handshake_cancellation.cancelled() => return,
                         negotiated = negotiate_transport_connection(
                             &tls,
                             &admission,
-                            scope,
+                            effective_scope,
                             stream,
                             remote_addr,
                             frame_limits,
@@ -564,10 +605,12 @@ impl TransportListener {
                     }
                     run_framed_session(
                         connection,
-                        local_addr,
+                        effective_local_addr,
+                        effective_remote_addr,
                         remote_addr,
+                        proxy_metadata,
                         session_id,
-                        scope,
+                        effective_scope,
                         session_group,
                         dispatch,
                         principal,
@@ -590,6 +633,8 @@ async fn run_framed_session<H>(
     connection: Connection,
     local_addr: SocketAddr,
     remote_addr: SocketAddr,
+    transport_peer_addr: SocketAddr,
+    proxy_protocol: Option<Arc<ProxyProtocolMetadata>>,
     session_id: u64,
     scope: AdmissionScope,
     task_group: TaskGroup,
@@ -649,6 +694,8 @@ async fn run_framed_session<H>(
             session_id,
             local_addr,
             remote_addr,
+            transport_peer_addr,
+            proxy_protocol,
             connection_id,
             frame_limits,
             writer: writer.clone(),
@@ -779,6 +826,8 @@ pub async fn run_connected_session_with_io_policy<H>(
         connection,
         local_addr,
         remote_addr,
+        remote_addr,
+        None,
         session_id,
         scope,
         session_group,
@@ -1164,6 +1213,8 @@ impl SessionTransportServer {
             connection,
             self.local_addr,
             remote_addr,
+            remote_addr,
+            None,
             session_id,
             scope,
             session_group.clone(),

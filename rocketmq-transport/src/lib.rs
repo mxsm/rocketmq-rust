@@ -53,6 +53,7 @@ mod linux;
 mod local;
 mod net;
 pub mod prelude;
+mod proxy_protocol;
 mod public_api;
 mod remoting;
 mod remoting_server;

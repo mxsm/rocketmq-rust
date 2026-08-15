@@ -215,6 +215,9 @@ impl ProxyRuntimeBuilder {
     }
 
     fn build_inner(self) -> ProxyResult<ProxyRuntime<DefaultMessagingProcessor>> {
+        if self.config.remoting.enabled {
+            self.config.remoting.validate()?;
+        }
         let grpc_guards = ProxyGrpcService::<DefaultMessagingProcessor>::try_execution_guards(&self.config)?;
         let service_context = self.service_context.clone();
         let telemetry = self.telemetry.clone();

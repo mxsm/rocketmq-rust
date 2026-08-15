@@ -17,6 +17,7 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use rocketmq_error::RocketMQError;
+use rocketmq_transport::api::v1::ProxyProtocolConfig;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -197,6 +198,7 @@ fn grpc_tls_config_error(key: &'static str, reason: &'static str) -> crate::Prox
 pub struct RemotingConfig {
     pub enabled: bool,
     pub listen_addr: String,
+    pub proxy_protocol: ProxyProtocolConfig,
 }
 
 impl Default for RemotingConfig {
@@ -204,11 +206,18 @@ impl Default for RemotingConfig {
         Self {
             enabled: false,
             listen_addr: format!("0.0.0.0:{DEFAULT_PROXY_REMOTING_PORT}"),
+            proxy_protocol: ProxyProtocolConfig::default(),
         }
     }
 }
 
 impl RemotingConfig {
+    pub fn validate(&self) -> ProxyResult<()> {
+        self.socket_addr()?;
+        self.proxy_protocol.validate()?;
+        Ok(())
+    }
+
     pub fn socket_addr(&self) -> ProxyResult<SocketAddr> {
         self.listen_addr.parse().map_err(|error| {
             RocketMQError::illegal_argument(format!(

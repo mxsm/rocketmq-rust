@@ -543,7 +543,7 @@ fn apply_overrides(config: &mut ProxyConfig, args: &Args) -> ProxyResult<()> {
 
     config.grpc.socket_addr()?;
     if config.remoting.enabled {
-        config.remoting.socket_addr()?;
+        config.remoting.validate()?;
     }
     Ok(())
 }
@@ -595,6 +595,7 @@ mod tests {
             remoting: RemotingConfig {
                 enabled: true,
                 listen_addr: "127.0.0.1:8080".to_string(),
+                ..RemotingConfig::default()
             },
             ..ProxyConfig::default()
         };

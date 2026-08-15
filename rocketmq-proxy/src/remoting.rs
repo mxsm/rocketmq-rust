@@ -535,6 +535,7 @@ where
     if let Some(ready) = ready {
         ready()?;
     }
+    let proxy_protocol = config.remoting.proxy_protocol.clone();
     let request_processor = ProxyRequestProcessor::new_with_drain_controller_and_remoting_command_factory(
         config,
         processor,
@@ -544,7 +545,9 @@ where
         drain,
         command_factory,
     );
-    let mut server = TransportServer::new(Arc::new(ServerConfig::default()), service_context).with_telemetry(telemetry);
+    let mut server = TransportServer::new(Arc::new(ServerConfig::default()), service_context)
+        .with_telemetry(telemetry)
+        .try_with_proxy_protocol(proxy_protocol)?;
     let report = server
         .serve_bound_listener_until(listener, request_processor, None, None, shutdown)
         .await;

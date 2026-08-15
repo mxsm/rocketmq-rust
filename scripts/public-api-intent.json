@@ -6978,6 +6978,42 @@
         },
         {
           "category": "stable",
+          "declaration": "pub use crate::proxy_protocol::ProxyProtocolConfig",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::proxy_protocol::ProxyProtocolConfig",
+          "owner": "transport",
+          "path": "rocketmq-transport/src/public_api.rs",
+          "rationale": "trusted ingress configuration for PROXY v1/v2 source identity",
+          "removal_condition": "retain while trusted PROXY ingress remains supported"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use crate::proxy_protocol::ProxyProtocolMetadata",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::proxy_protocol::ProxyProtocolMetadata",
+          "owner": "transport",
+          "path": "rocketmq-transport/src/public_api.rs",
+          "rationale": "typed trusted source and TLV metadata shared with ingress consumers",
+          "removal_condition": "retain while trusted PROXY ingress remains supported"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use crate::proxy_protocol::UnknownTlvPolicy",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::proxy_protocol::UnknownTlvPolicy",
+          "owner": "transport",
+          "path": "rocketmq-transport/src/public_api.rs",
+          "rationale": "explicit fail-open or fail-closed policy for unrecognized ingress TLVs",
+          "removal_condition": "retain while trusted PROXY ingress remains supported"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use crate::proxy_protocol::read_proxy_protocol",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::proxy_protocol::read_proxy_protocol",
+          "owner": "transport",
+          "path": "rocketmq-transport/src/public_api.rs",
+          "rationale": "bounded pre-TLS parser reused by transport-aware ingress adapters",
+          "removal_condition": "retain while trusted PROXY ingress remains supported"
+        },
+        {
+          "category": "stable",
           "declaration": "pub use crate::telemetry::TransportTelemetry",
           "identity": "rocketmq-transport/src/public_api.rs:pub use crate::telemetry::TransportTelemetry",
           "owner": "transport",
@@ -7031,7 +7067,7 @@
           "removal_condition": "retain while HTTP/2 and other ALPN-aware ingress reuse transport TLS"
         }
       ],
-      "maximum_exports": 155
+      "maximum_exports": 159
     }
   },
   "policy": "Every deliberate export is classified; additions and count growth fail closed.",
