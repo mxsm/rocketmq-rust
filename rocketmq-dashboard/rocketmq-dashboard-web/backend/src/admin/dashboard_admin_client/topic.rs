@@ -17,6 +17,7 @@ use rocketmq_admin_core::core::dashboard::DashboardAdmin;
 use rocketmq_admin_core::core::stable_error_message;
 use rocketmq_admin_core::core::topic;
 use rocketmq_admin_core::core::topic::GetTopicConfigRequest;
+use rocketmq_admin_core::core::topic::OrderTopicConfigRequest;
 use rocketmq_admin_core::core::topic::TopicAdmin;
 use rocketmq_admin_core::core::topic::TopicCatalogRequest;
 
@@ -132,6 +133,8 @@ impl DashboardAdminClient {
 
 trait TopicUpsertExecutor {
     async fn upsert(&mut self, request: &topic::UpsertTopicRequest) -> Result<String, AdminError>;
+
+    async fn reconcile_order_config(&mut self, request: &OrderTopicConfigRequest) -> Result<String, AdminError>;
 }
 
 struct TopicAdminUpsertExecutor<'a, T> {
@@ -143,7 +146,17 @@ where
     T: TopicAdmin,
 {
     async fn upsert(&mut self, request: &topic::UpsertTopicRequest) -> Result<String, AdminError> {
-        self.admin.upsert_topic(request).await.map(|result| result.message)
+        self.admin
+            .upsert_topic_without_order_reconcile(request)
+            .await
+            .map(|result| result.message)
+    }
+
+    async fn reconcile_order_config(&mut self, request: &OrderTopicConfigRequest) -> Result<String, AdminError> {
+        self.admin
+            .reconcile_order_topic_config(request)
+            .await
+            .map(|_| "Order topic configuration reconciled".to_string())
     }
 }
 
@@ -177,6 +190,27 @@ where
         match executor.upsert(&upsert_request).await {
             Ok(message) => targets.push(TopicTargetResult::success(broker_name, message)),
             Err(error) => targets.push(TopicTargetResult::failure(broker_name, stable_error_message(&error))),
+        }
+    }
+    let successful_brokers = targets
+        .iter()
+        .filter(|target| target.success)
+        .map(|target| target.target.clone())
+        .collect::<Vec<_>>();
+    if !successful_brokers.is_empty() {
+        let order_request = OrderTopicConfigRequest::try_new(
+            request.topic.clone(),
+            successful_brokers,
+            request.write_queue_count,
+            request.order.unwrap_or(false),
+        )
+        .map_err(DashboardError::from)?;
+        match executor.reconcile_order_config(&order_request).await {
+            Ok(_) => {}
+            Err(error) => targets.push(TopicTargetResult::failure(
+                "ORDER_TOPIC_CONFIG",
+                stable_error_message(&error),
+            )),
         }
     }
     Ok(build_operation_result(operation, request.topic, targets))
@@ -267,20 +301,31 @@ fn map_topic_catalog(catalog: topic::TopicCatalog) -> TopicListView {
             }
         })
         .collect::<Vec<_>>();
-    let mut targets = catalog
-        .targets
+    let mut target_brokers_by_cluster = std::collections::BTreeMap::<String, std::collections::BTreeSet<String>>::new();
+    for target in catalog.targets {
+        let cluster_name = target.cluster_name.trim();
+        if cluster_name.is_empty() {
+            continue;
+        }
+        target_brokers_by_cluster
+            .entry(cluster_name.to_string())
+            .or_default()
+            .extend(
+                target
+                    .broker_names
+                    .into_iter()
+                    .map(|broker_name| broker_name.trim().to_string())
+                    .filter(|broker_name| !broker_name.is_empty()),
+            );
+    }
+    let targets = target_brokers_by_cluster
         .into_iter()
-        .map(|target| {
-            let mut broker_names = target.broker_names;
-            broker_names.sort_unstable();
-            TopicTargetOptionView {
-                cluster_name: target.cluster_name,
-                broker_names,
-            }
+        .map(|(cluster_name, broker_names)| TopicTargetOptionView {
+            cluster_name,
+            broker_names: broker_names.into_iter().collect(),
         })
         .collect::<Vec<_>>();
     items.sort_unstable_by(|left, right| left.topic.cmp(&right.topic));
-    targets.sort_unstable_by(|left, right| left.cluster_name.cmp(&right.cluster_name));
     TopicListView {
         total: items.len(),
         items,
@@ -383,6 +428,7 @@ fn map_topic_consumers(consumers: topic::TopicConsumers) -> TopicConsumersView {
 
 #[cfg(test)]
 mod tests {
+    use super::OrderTopicConfigRequest;
     use super::TopicMutationKind;
     use super::TopicUpsertExecutor;
     use super::map_topic_catalog;
@@ -390,6 +436,7 @@ mod tests {
     use super::resolve_topic_targets;
     use super::run_topic_upserts;
     use super::topic_info_from_catalog;
+    use crate::model::TopicListView;
     use crate::model::TopicMutationRequest;
     use crate::model::TopicTargetOptionView;
     use rocketmq_admin_core::core::AdminError;
@@ -462,6 +509,31 @@ mod tests {
         assert_eq!(
             resolve_topic_targets(&targets, &["DefaultCluster".into()], &[]).unwrap(),
             vec!["broker-a", "broker-b"]
+        );
+    }
+
+    #[test]
+    fn catalog_mapping_merges_equivalent_cluster_target_entries() {
+        let catalog = map_topic_catalog(core_topic::TopicCatalog {
+            items: Vec::new(),
+            targets: vec![
+                core_topic::TopicTargetOption {
+                    cluster_name: " DefaultCluster ".into(),
+                    broker_names: vec![" broker-b ".into(), "broker-a".into()],
+                },
+                core_topic::TopicTargetOption {
+                    cluster_name: "DefaultCluster".into(),
+                    broker_names: vec!["broker-b".into()],
+                },
+            ],
+        });
+
+        assert_eq!(
+            catalog.targets,
+            vec![TopicTargetOptionView {
+                cluster_name: "DefaultCluster".into(),
+                broker_names: vec!["broker-a".into(), "broker-b".into()],
+            }]
         );
     }
 
@@ -574,6 +646,72 @@ mod tests {
         assert!(executor.calls.is_empty());
     }
 
+    #[tokio::test]
+    async fn ordered_topic_reconciles_all_successful_brokers_once() {
+        let catalog = catalog_with_targets(&["broker-b", "broker-a"]);
+        let mut request = mutation_request(vec!["broker-a".into(), "broker-b".into()]);
+        request.order = Some(true);
+        let mut executor = RecordingExecutor::default();
+
+        let result = run_topic_upserts(catalog, request, TopicMutationKind::Update, "UPDATE", &mut executor)
+            .await
+            .expect("ordered topic mutation");
+
+        assert!(result.success);
+        assert_eq!(executor.order_reconciliations.len(), 1);
+        assert_eq!(
+            executor.order_reconciliations[0].broker_names,
+            vec!["broker-a", "broker-b"]
+        );
+        assert!(executor.order_reconciliations[0].order);
+    }
+
+    #[tokio::test]
+    async fn unordered_topic_removes_the_global_order_configuration() {
+        let catalog = catalog_with_targets(&["broker-a"]);
+        let mut executor = RecordingExecutor::default();
+
+        let result = run_topic_upserts(
+            catalog,
+            mutation_request(vec!["broker-a".into()]),
+            TopicMutationKind::Update,
+            "UPDATE",
+            &mut executor,
+        )
+        .await
+        .expect("unordered topic mutation");
+
+        assert!(result.success);
+        assert_eq!(executor.order_reconciliations.len(), 1);
+        assert!(!executor.order_reconciliations[0].order);
+    }
+
+    #[tokio::test]
+    async fn order_reconciliation_failure_is_a_structured_global_failure() {
+        let catalog = catalog_with_targets(&["broker-a"]);
+        let mut executor = RecordingExecutor {
+            reconcile_error: Some(AdminError::backend("order_reconcile", "unavailable")),
+            ..RecordingExecutor::default()
+        };
+
+        let result = run_topic_upserts(
+            catalog,
+            mutation_request(vec!["broker-a".into()]),
+            TopicMutationKind::Update,
+            "UPDATE",
+            &mut executor,
+        )
+        .await
+        .expect("broker mutation remains structured");
+
+        assert!(!result.success);
+        assert!(
+            result.targets.iter().any(|target| {
+                target.target == "ORDER_TOPIC_CONFIG" && !target.success && !target.message.is_empty()
+            })
+        );
+    }
+
     fn mutation_request(broker_name_list: Vec<String>) -> TopicMutationRequest {
         TopicMutationRequest {
             topic: "orders".into(),
@@ -587,10 +725,33 @@ mod tests {
         }
     }
 
+    fn catalog_with_targets(broker_names: &[&str]) -> TopicListView {
+        map_topic_catalog(core_topic::TopicCatalog {
+            items: vec![core_topic::TopicCatalogItem {
+                topic: "orders".into(),
+                category: "NORMAL".into(),
+                message_type: "NORMAL".into(),
+                clusters: vec!["DefaultCluster".into()],
+                brokers: broker_names.iter().map(|broker| (*broker).to_string()).collect(),
+                read_queue_count: 8,
+                write_queue_count: 8,
+                perm: 6,
+                order: false,
+                system_topic: false,
+            }],
+            targets: vec![core_topic::TopicTargetOption {
+                cluster_name: "DefaultCluster".into(),
+                broker_names: broker_names.iter().map(|broker| (*broker).to_string()).collect(),
+            }],
+        })
+    }
+
     #[derive(Default)]
     struct RecordingExecutor {
         calls: Vec<String>,
         failing_target: Option<String>,
+        order_reconciliations: Vec<OrderTopicConfigRequest>,
+        reconcile_error: Option<AdminError>,
     }
 
     impl TopicUpsertExecutor for RecordingExecutor {
@@ -601,6 +762,14 @@ mod tests {
                 Err(AdminError::backend("upsert_topic", "unavailable"))
             } else {
                 Ok("saved".to_string())
+            }
+        }
+
+        async fn reconcile_order_config(&mut self, request: &OrderTopicConfigRequest) -> Result<String, AdminError> {
+            self.order_reconciliations.push(request.clone());
+            match self.reconcile_error.take() {
+                Some(error) => Err(error),
+                None => Ok("reconciled".to_string()),
             }
         }
     }

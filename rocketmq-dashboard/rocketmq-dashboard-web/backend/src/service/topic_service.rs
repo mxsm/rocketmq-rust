@@ -69,9 +69,7 @@ pub async fn create_topic(
 }
 
 pub(crate) fn validate_topic_mutation(request: &TopicMutationRequest) -> Result<(), DashboardError> {
-    if request.topic.is_empty() {
-        return Err(DashboardError::Validation("Topic must not be empty".to_string()));
-    }
+    validate_rocketmq_topic_name(&request.topic)?;
     if !(1..=128).contains(&request.read_queue_count) || !(1..=128).contains(&request.write_queue_count) {
         return Err(DashboardError::Validation(
             "Read and write queue counts must be between 1 and 128".to_string(),
@@ -102,6 +100,26 @@ pub(crate) fn validate_topic_mutation(request: &TopicMutationRequest) -> Result<
     {
         return Err(DashboardError::Validation(
             "Message type must be NORMAL, FIFO, DELAY, or TRANSACTION".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_rocketmq_topic_name(topic: &str) -> Result<(), DashboardError> {
+    if topic.is_empty() {
+        return Err(DashboardError::Validation("Topic must not be empty".to_string()));
+    }
+    if topic.len() > 127 {
+        return Err(DashboardError::Validation(
+            "Topic must not exceed 127 bytes".to_string(),
+        ));
+    }
+    if topic
+        .bytes()
+        .any(|byte| !matches!(byte, b'%' | b'|' | b'-' | b'_') && !byte.is_ascii_alphanumeric())
+    {
+        return Err(DashboardError::Validation(
+            "Topic contains illegal characters; allowed characters are ^[%|a-zA-Z0-9_-]+$".to_string(),
         ));
     }
     Ok(())
@@ -149,5 +167,24 @@ mod tests {
         .expect_err("invalid queue count");
 
         assert!(matches!(error, DashboardError::Validation(message) if message.contains("1 and 128")));
+    }
+
+    #[test]
+    fn rejects_topic_names_outside_the_rocketmq_validator_contract() {
+        for topic in ["orders topic", "orders@v1", &"a".repeat(128)] {
+            let error = validate_topic_mutation(&crate::model::TopicMutationRequest {
+                topic: topic.to_string(),
+                read_queue_count: 8,
+                write_queue_count: 8,
+                perm: 6,
+                broker_name_list: vec!["broker-a".into()],
+                cluster_name_list: vec![],
+                order: Some(false),
+                message_type: Some("NORMAL".into()),
+            })
+            .expect_err("invalid RocketMQ topic name");
+
+            assert!(matches!(error, DashboardError::Validation(message) if message.contains("Topic")));
+        }
     }
 }

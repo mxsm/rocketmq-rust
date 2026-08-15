@@ -38,6 +38,7 @@ use crate::core::topic::GetTopicConfigRequest;
 use crate::core::topic::GetTopicRouteRequest;
 use crate::core::topic::ListTopicsRequest;
 use crate::core::topic::ListTopicsResult;
+use crate::core::topic::OrderTopicConfigRequest;
 use crate::core::topic::ResetTopicConsumerOffsetRequest;
 use crate::core::topic::TopicAdmin;
 use crate::core::topic::TopicBroker;
@@ -63,6 +64,7 @@ use crate::core::topic::TopicTargetOption;
 use crate::core::topic::UpsertTopicRequest;
 use crate::core::AdminError;
 use crate::core::AdminFuture;
+use crate::core::AdminResult;
 
 const TOPIC_PUT_NUMS: &str = "TOPIC_PUT_NUMS";
 const GROUP_GET_NUMS: &str = "GROUP_GET_NUMS";
@@ -364,82 +366,18 @@ impl TopicAdmin for AdminSession {
     }
 
     fn upsert_topic<'a>(&'a mut self, request: &'a UpsertTopicRequest) -> AdminFuture<'a, TopicMutationOutcome> {
-        Box::pin(async move {
-            self.ensure_open()?;
-            let topic = request.topic.trim();
-            if topic.is_empty() {
-                return Err(AdminError::invalid_argument("topic", "must not be empty"));
-            }
-            if request.cluster_names.is_empty() && request.broker_names.is_empty() {
-                return Err(AdminError::invalid_argument(
-                    "targets",
-                    "select at least one cluster or broker",
-                ));
-            }
+        Box::pin(async move { self.upsert_topic_config(request, true).await })
+    }
 
-            let cluster_info = self
-                .inner
-                .examine_broker_cluster_info()
-                .await
-                .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
-            let mut target_addrs = HashSet::new();
-            let mut target_broker_names = HashSet::new();
-            for cluster_name in &request.cluster_names {
-                for (broker_name, broker_addr) in master_targets_by_cluster_name(&cluster_info, cluster_name)? {
-                    target_broker_names.insert(broker_name);
-                    target_addrs.insert(broker_addr);
-                }
-            }
-            for broker_name in &request.broker_names {
-                let address = find_master_addr_by_broker_name(&cluster_info, broker_name).ok_or_else(|| {
-                    AdminError::invalid_argument(
-                        "brokerName",
-                        format!("broker `{broker_name}` was not found in the current cluster view"),
-                    )
-                })?;
-                target_broker_names.insert(broker_name.clone());
-                target_addrs.insert(address);
-            }
-            if target_addrs.is_empty() {
-                return Err(AdminError::invalid_argument(
-                    "targets",
-                    "no writable broker target could be resolved",
-                ));
-            }
+    fn upsert_topic_without_order_reconcile<'a>(
+        &'a mut self,
+        request: &'a UpsertTopicRequest,
+    ) -> AdminFuture<'a, TopicMutationOutcome> {
+        Box::pin(async move { self.upsert_topic_config(request, false).await })
+    }
 
-            let mut attributes = HashMap::new();
-            attributes.insert(
-                CheetahString::from(format!("+{MESSAGE_TYPE_ATTRIBUTE}")),
-                CheetahString::from(normalize_message_type(request.message_type.as_deref())),
-            );
-            let topic_config = TopicConfig {
-                topic_name: Some(CheetahString::from(topic)),
-                read_queue_nums: request.read_queue_nums.max(1),
-                write_queue_nums: request.write_queue_nums.max(1),
-                perm: request.perm,
-                order: request.order,
-                attributes,
-                ..TopicConfig::default()
-            };
-            for broker_addr in &target_addrs {
-                self.inner
-                    .create_and_update_topic_config(broker_addr.clone(), topic_config.clone())
-                    .await
-                    .map_err(|error| backend_error("create_and_update_topic_config", error))?;
-            }
-            if request.order {
-                let order_conf = build_order_conf(&target_broker_names, topic_config.write_queue_nums);
-                self.inner
-                    .create_or_update_order_conf(CheetahString::from(topic), CheetahString::from(order_conf), true)
-                    .await
-                    .map_err(|error| backend_error("create_or_update_order_conf", error))?;
-            }
-
-            Ok(TopicMutationOutcome {
-                message: format!("Topic `{topic}` was saved successfully."),
-                target_count: target_addrs.len(),
-            })
-        })
+    fn reconcile_order_topic_config<'a>(&'a mut self, request: &'a OrderTopicConfigRequest) -> AdminFuture<'a, ()> {
+        Box::pin(async move { self.reconcile_order_topic_config_internal(request).await })
     }
 
     fn delete_topic<'a>(&'a mut self, request: &'a DeleteTopicAdminRequest) -> AdminFuture<'a, TopicMutationOutcome> {
@@ -656,6 +594,113 @@ impl TopicAdmin for AdminSession {
                 send_normal_message(self.client_runtime(), client_config, producer_group, request).await
             }
         })
+    }
+}
+
+impl AdminSession {
+    async fn upsert_topic_config(
+        &mut self,
+        request: &UpsertTopicRequest,
+        reconcile_order_config: bool,
+    ) -> AdminResult<TopicMutationOutcome> {
+        self.ensure_open()?;
+        let topic = request.topic.trim();
+        if topic.is_empty() {
+            return Err(AdminError::invalid_argument("topic", "must not be empty"));
+        }
+        if request.cluster_names.is_empty() && request.broker_names.is_empty() {
+            return Err(AdminError::invalid_argument(
+                "targets",
+                "select at least one cluster or broker",
+            ));
+        }
+
+        let cluster_info = self
+            .inner
+            .examine_broker_cluster_info()
+            .await
+            .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+        let mut target_addrs = HashSet::new();
+        let mut target_broker_names = HashSet::new();
+        for cluster_name in &request.cluster_names {
+            for (broker_name, broker_addr) in master_targets_by_cluster_name(&cluster_info, cluster_name)? {
+                target_broker_names.insert(broker_name);
+                target_addrs.insert(broker_addr);
+            }
+        }
+        for broker_name in &request.broker_names {
+            let address = find_master_addr_by_broker_name(&cluster_info, broker_name).ok_or_else(|| {
+                AdminError::invalid_argument(
+                    "brokerName",
+                    format!("broker `{broker_name}` was not found in the current cluster view"),
+                )
+            })?;
+            target_broker_names.insert(broker_name.clone());
+            target_addrs.insert(address);
+        }
+        if target_addrs.is_empty() {
+            return Err(AdminError::invalid_argument(
+                "targets",
+                "no writable broker target could be resolved",
+            ));
+        }
+
+        let mut attributes = HashMap::new();
+        attributes.insert(
+            CheetahString::from(format!("+{MESSAGE_TYPE_ATTRIBUTE}")),
+            CheetahString::from(normalize_message_type(request.message_type.as_deref())),
+        );
+        let topic_config = TopicConfig {
+            topic_name: Some(CheetahString::from(topic)),
+            read_queue_nums: request.read_queue_nums.max(1),
+            write_queue_nums: request.write_queue_nums.max(1),
+            perm: request.perm,
+            order: request.order,
+            attributes,
+            ..TopicConfig::default()
+        };
+        for broker_addr in &target_addrs {
+            self.inner
+                .create_and_update_topic_config(broker_addr.clone(), topic_config.clone())
+                .await
+                .map_err(|error| backend_error("create_and_update_topic_config", error))?;
+        }
+        if reconcile_order_config && request.order {
+            let order_conf = build_order_conf(&target_broker_names, topic_config.write_queue_nums);
+            self.inner
+                .create_or_update_order_conf(CheetahString::from(topic), CheetahString::from(order_conf), true)
+                .await
+                .map_err(|error| backend_error("create_or_update_order_conf", error))?;
+        }
+
+        Ok(TopicMutationOutcome {
+            message: format!("Topic `{topic}` was saved successfully."),
+            target_count: target_addrs.len(),
+        })
+    }
+
+    async fn reconcile_order_topic_config_internal(&mut self, request: &OrderTopicConfigRequest) -> AdminResult<()> {
+        self.ensure_open()?;
+        if request.order {
+            let broker_names = request.broker_names.iter().cloned().collect::<HashSet<_>>();
+            let order_conf = build_order_conf(&broker_names, request.write_queue_nums);
+            self.inner
+                .create_or_update_order_conf(
+                    CheetahString::from(request.topic.as_str()),
+                    CheetahString::from(order_conf),
+                    true,
+                )
+                .await
+                .map_err(|error| backend_error("create_or_update_order_conf", error))
+        } else {
+            self.inner
+                .delete_kv_config(
+                    CheetahString::from_static_str("ORDER_TOPIC_CONFIG"),
+                    CheetahString::from(request.topic.as_str()),
+                )
+                .await
+                .map_err(|error| backend_error("delete_order_topic_config", error))
+        }
     }
 }
 

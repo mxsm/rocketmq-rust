@@ -185,7 +185,7 @@ pub(crate) fn build_operation_result(
     TopicOperationResult {
         operation: operation.into(),
         topic: topic.into(),
-        success: failed_count == 0,
+        success: target_count > 0 && failed_count == 0,
         target_count,
         message: format!("{target_count} targets: {succeeded_count} succeeded, {failed_count} failed"),
         targets,
@@ -238,5 +238,13 @@ mod tests {
 
         assert!(!result.success);
         assert_eq!(result.target_count, 2);
+    }
+
+    #[test]
+    fn empty_target_result_is_not_global_success() {
+        let result = build_operation_result("UPDATE", "orders", Vec::new());
+
+        assert!(!result.success);
+        assert_eq!(result.target_count, 0);
     }
 }

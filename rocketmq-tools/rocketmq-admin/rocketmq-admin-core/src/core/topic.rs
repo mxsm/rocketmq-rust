@@ -15,6 +15,7 @@
 //! Topic capability contracts.
 
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 use serde::Deserialize;
 use serde::Serialize;
@@ -206,6 +207,61 @@ pub struct UpsertTopicRequest {
     pub message_type: Option<String>,
 }
 
+/// Reconciles the NameServer-wide `ORDER_TOPIC_CONFIG` entry after broker-local topic updates.
+///
+/// Enabling order writes one complete, canonical broker set. Disabling order removes the entry;
+/// callers must therefore invoke this only after the broker-local mutation sequence has reached
+/// the intended state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OrderTopicConfigRequest {
+    pub topic: String,
+    pub broker_names: Vec<String>,
+    pub write_queue_nums: u32,
+    pub order: bool,
+}
+
+impl OrderTopicConfigRequest {
+    /// Creates a request with a trimmed, deduplicated, sorted broker set.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the topic is blank, the queue count is outside `1..=128`, or an
+    /// ordered configuration has no broker targets.
+    pub fn try_new(
+        topic: impl Into<String>,
+        broker_names: Vec<String>,
+        write_queue_nums: u32,
+        order: bool,
+    ) -> AdminResult<Self> {
+        let topic = required("topic", topic)?;
+        if !(1..=128).contains(&write_queue_nums) {
+            return Err(crate::core::AdminError::invalid_argument(
+                "writeQueueNums",
+                "must be between 1 and 128",
+            ));
+        }
+        let broker_names = broker_names
+            .into_iter()
+            .map(|broker_name| broker_name.trim().to_string())
+            .filter(|broker_name| !broker_name.is_empty())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        if order && broker_names.is_empty() {
+            return Err(crate::core::AdminError::invalid_argument(
+                "brokerNames",
+                "must not be empty when enabling ordered topic configuration",
+            ));
+        }
+        Ok(Self {
+            topic,
+            broker_names,
+            write_queue_nums,
+            order,
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeleteTopicAdminRequest {
     pub topic: String,
@@ -386,6 +442,31 @@ pub trait TopicAdmin: Send {
 
     fn upsert_topic<'a>(&'a mut self, request: &'a UpsertTopicRequest) -> AdminFuture<'a, TopicMutationOutcome>;
 
+    /// Applies one or more broker-local Topic configs without changing the global
+    /// `ORDER_TOPIC_CONFIG` entry.
+    ///
+    /// Callers that change ordered-topic state must subsequently invoke
+    /// [`Self::reconcile_order_topic_config`] once with the complete successful broker set.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the session is unavailable, the request cannot resolve a broker, or
+    /// a broker-local Topic configuration update fails.
+    fn upsert_topic_without_order_reconcile<'a>(
+        &'a mut self,
+        request: &'a UpsertTopicRequest,
+    ) -> AdminFuture<'a, TopicMutationOutcome>;
+
+    /// Reconciles the global `ORDER_TOPIC_CONFIG` entry after broker-local Topic updates.
+    ///
+    /// An ordered request writes one complete broker set. An unordered request deletes the topic's
+    /// `ORDER_TOPIC_CONFIG` entry.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the NameServer configuration cannot be updated or deleted.
+    fn reconcile_order_topic_config<'a>(&'a mut self, request: &'a OrderTopicConfigRequest) -> AdminFuture<'a, ()>;
+
     fn delete_topic<'a>(&'a mut self, request: &'a DeleteTopicAdminRequest) -> AdminFuture<'a, TopicMutationOutcome>;
 
     fn delete_topics_in_broker<'a>(
@@ -508,6 +589,7 @@ impl<T: TopicAdmin + ?Sized> TopicMutationAdmin for T {
 
 #[cfg(test)]
 mod tests {
+    use super::OrderTopicConfigRequest;
     use super::PatchTopicConfigRequest;
     use super::TopicConfigCasPatch;
 
@@ -539,5 +621,20 @@ mod tests {
             },
         )
         .is_err());
+    }
+
+    #[test]
+    fn order_topic_config_request_requires_targets_when_enabling_order() {
+        let request = OrderTopicConfigRequest::try_new(
+            "orders",
+            vec!["broker-b".into(), "broker-a".into(), "broker-a".into()],
+            8,
+            true,
+        )
+        .expect("complete ordered broker set");
+
+        assert_eq!(request.broker_names, ["broker-a", "broker-b"]);
+        assert!(OrderTopicConfigRequest::try_new("orders", Vec::new(), 8, true).is_err());
+        assert!(OrderTopicConfigRequest::try_new("orders", Vec::new(), 8, false).is_ok());
     }
 }
