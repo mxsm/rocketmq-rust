@@ -60,4 +60,66 @@ pub enum Commands {
         )]
         to: Option<u32>,
     },
+    #[command(
+        name = "consolidate-multipath",
+        arg_required_else_help = true,
+        about = "offline consolidation of CommitLog segments into a new single root"
+    )]
+    ConsolidateMultipath {
+        #[arg(long = "source-root", required = true)]
+        source_roots: Vec<PathBuf>,
+        #[arg(long)]
+        target: PathBuf,
+        #[arg(long)]
+        mapped_file_size: u64,
+        #[arg(long)]
+        store_root: PathBuf,
+    },
+    #[command(
+        name = "downgrade-preflight",
+        arg_required_else_help = true,
+        about = "fail-closed offline compatibility check before starting an older Broker"
+    )]
+    DowngradePreflight {
+        #[arg(long)]
+        target_version: String,
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_offline_upgrade_commands() {
+        let cli = RootCli::try_parse_from([
+            "rocketmq-cli-rust",
+            "downgrade-preflight",
+            "--target-version",
+            "0.9.0",
+            "--config",
+            "broker.toml",
+        ])
+        .expect("parse preflight");
+        assert!(matches!(cli.command, Commands::DowngradePreflight { .. }));
+
+        let cli = RootCli::try_parse_from([
+            "rocketmq-cli-rust",
+            "consolidate-multipath",
+            "--source-root",
+            "a",
+            "--target",
+            "target",
+            "--mapped-file-size",
+            "1024",
+            "--store-root",
+            "store",
+        ])
+        .expect("parse consolidation");
+        assert!(matches!(cli.command, Commands::ConsolidateMultipath { .. }));
+    }
 }

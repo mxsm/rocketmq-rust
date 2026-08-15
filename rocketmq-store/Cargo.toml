@@ -268,3 +268,14 @@ required-features = ["extended_timeline"]
 [[test]]
 name              = "timer_java_compat_to_extended_cutover_tests"
 required-features = ["extended_timeline"]
+
+[[test]]
+name = "store_upgrade_rollback"
+
+[[test]]
+name              = "store_upgrade_extended"
+required-features = ["extended_timeline", "rocksdb_store", "test-support"]
+
+[[test]]
+name              = "store_upgrade_tiered"
+required-features = ["tieredstore", "test-support"]

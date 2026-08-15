@@ -4784,9 +4784,16 @@ dependencies = [
  "bytes",
  "cheetah-string",
  "clap",
+ "config",
+ "fs2",
  "rocketmq-error",
+ "rocketmq-model",
  "rocketmq-store",
+ "rocketmq-store-rocksdb",
+ "serde",
+ "serde_json",
  "tabled",
+ "tempfile",
 ]
 
 [[package]]

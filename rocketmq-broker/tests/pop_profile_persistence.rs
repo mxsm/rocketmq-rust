@@ -24,6 +24,16 @@ fn profile_survives_restart_and_isolated_from_inflight_state() {
         .expect("persist profile");
     assert_eq!(profile.generation, 1);
     assert_eq!(store.inflight_record_count().expect("scan inflight"), 0);
+    let inventory: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.path().join("config/storage-format-inventory.json")).expect("storage format inventory"),
+    )
+    .expect("decode storage format inventory");
+    assert_eq!(
+        inventory
+            .pointer("/popConsumerProfile/declared")
+            .and_then(serde_json::Value::as_bool),
+        Some(true)
+    );
     drop(store);
 
     let reopened = PopProfileStoreProbe::open(root.path(), 16).expect("reopen profile store");

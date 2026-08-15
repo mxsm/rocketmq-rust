@@ -202,3 +202,7 @@ required-features = ["rocksdb_store", "test-support"]
 [[test]]
 name = "pop_retry_version_migration"
 required-features = ["rocksdb_store", "test-support"]
+
+[[test]]
+name              = "upgrade_rollback_matrix"
+required-features = ["rocksdb_store"]

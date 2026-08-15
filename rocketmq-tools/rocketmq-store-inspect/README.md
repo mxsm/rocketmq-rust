@@ -4,6 +4,9 @@
 
 Provide some command-line tools to read data from RocketMQ files.
 
+The CLI also contains offline safety commands for Rust Broker upgrades. Stop the
+Broker before running either command; both commands require the Store lock.
+
 ## Getting Started
 
 ### Requirements
@@ -93,3 +96,34 @@ file size: 1073741824B
 +----------------------------------+
 ```
 
+### downgrade-preflight Command
+
+Inspect Rust-owned Store formats before starting an older Rust Broker binary:
+
+```shell
+rocketmq-cli-rust downgrade-preflight \
+  --target-version 0.9.0 \
+  --config /etc/rocketmq-rust/broker.toml \
+  --output downgrade-report.json
+```
+
+The command exits with code `2` when the downgrade is unsafe. A denied result is
+a startup fence, not a warning. Keep the 1.0 tool available until the rollback
+window has closed.
+
+### consolidate-multipath Command
+
+Consolidate a stopped Broker's multipath CommitLog into a new single root:
+
+```shell
+rocketmq-cli-rust consolidate-multipath \
+  --source-root /data-a/commitlog \
+  --source-root /data-b/commitlog \
+  --target /data-consolidated/commitlog \
+  --mapped-file-size 1073741824 \
+  --store-root /var/lib/rocketmq-rust/store
+```
+
+The destination must not exist. The tool validates segment ownership,
+continuity, frame structure, byte equality, and available space before it
+atomically publishes the destination. Source files are never modified.

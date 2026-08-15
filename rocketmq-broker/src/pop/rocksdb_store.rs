@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::fs;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -32,6 +35,7 @@ use serde::Serialize;
 
 const POP_RECORD_KEY_SEPARATOR: u8 = b'@';
 pub(crate) const POP_ROCKSDB_DIRECTORY: &str = "kvStore";
+const STORAGE_FORMAT_INVENTORY: &str = "config/storage-format-inventory.json";
 
 pub(crate) fn pop_rocksdb_path(store_path_root_dir: impl AsRef<Path>) -> PathBuf {
     store_path_root_dir.as_ref().join(POP_ROCKSDB_DIRECTORY)
@@ -198,7 +202,8 @@ impl PopConsumerRocksDbStore {
         let mut batch = RocksDbWriteBatch::with_capacity(2);
         batch.put_cf(cf, POP_CONSUMER_PROFILE_MARKER_KEY.to_vec(), marker);
         batch.put_cf(cf, key, value);
-        self.store.write_batch(&batch)
+        self.store.write_batch(&batch)?;
+        self.persist_profile_format_inventory()
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -212,6 +217,72 @@ impl PopConsumerRocksDbStore {
 
     pub(crate) fn close(&self) {
         self.store.close();
+    }
+
+    fn persist_profile_format_inventory(&self) -> Result<(), RocketMQError> {
+        let store_root = self.config.path.parent().ok_or_else(|| {
+            codec_error(format!(
+                "POP RocksDB path has no Store root: {}",
+                self.config.path.display()
+            ))
+        })?;
+        let inventory = store_root.join(STORAGE_FORMAT_INVENTORY);
+        match fs::read(&inventory) {
+            Ok(bytes) => {
+                let value: serde_json::Value = serde_json::from_slice(&bytes)
+                    .map_err(|error| codec_error(format!("storage format inventory is invalid: {error}")))?;
+                if value
+                    .pointer("/popConsumerProfile/declared")
+                    .and_then(serde_json::Value::as_bool)
+                    == Some(true)
+                {
+                    return Ok(());
+                }
+                return Err(codec_error(
+                    "storage format inventory exists without a declared POP consumer profile",
+                ));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(codec_error(format!(
+                    "read storage format inventory {}: {error}",
+                    inventory.display()
+                )));
+            }
+        }
+
+        let parent = inventory
+            .parent()
+            .ok_or_else(|| codec_error("storage format inventory has no parent"))?;
+        fs::create_dir_all(parent).map_err(|error| {
+            codec_error(format!(
+                "create storage format inventory directory {}: {error}",
+                parent.display()
+            ))
+        })?;
+        let temporary = parent.join(format!(".storage-format-inventory.{}.tmp", std::process::id()));
+        let body = b"{\n  \"popConsumerProfile\": {\n    \"declared\": true\n  }\n}\n";
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .map_err(|error| codec_error(format!("create {}: {error}", temporary.display())))?;
+        let write_result = (|| -> std::io::Result<()> {
+            file.write_all(body)?;
+            file.sync_all()?;
+            fs::rename(&temporary, &inventory)
+        })();
+        if let Err(error) = write_result {
+            let _ = fs::remove_file(&temporary);
+            if inventory.is_file() {
+                return self.persist_profile_format_inventory();
+            }
+            return Err(codec_error(format!(
+                "publish storage format inventory {}: {error}",
+                inventory.display()
+            )));
+        }
+        Ok(())
     }
 }
 
