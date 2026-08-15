@@ -5,6 +5,7 @@ import { producerApi } from '../api/producer_api';
 import { topicApi } from '../api/topic_api';
 import { renderAtRoute } from '../test/render';
 import type { ProducerConnectionView, ProducerInfo } from '../types/producer';
+import type { TopicInfo, TopicListView } from '../types/topic';
 import ProducerListPage from './ProducerListPage';
 
 vi.mock('../api/producer_api', () => ({
@@ -26,12 +27,18 @@ const producers: ProducerInfo[] = [
   { topic: '', producerGroup: 'audit-producer', connectionCount: 0 }
 ];
 
-const topics = [
-  { topic: 'orders', brokerName: 'broker-a', readQueueCount: 8, writeQueueCount: 8, perm: 6, category: 'NORMAL' },
-  { topic: 'payment-events', brokerName: 'broker-a', readQueueCount: 8, writeQueueCount: 8, perm: 6, category: 'NORMAL' },
-  { topic: 'refund-events', brokerName: 'broker-b', readQueueCount: 4, writeQueueCount: 4, perm: 6, category: 'NORMAL' },
-  { topic: 'audit-log', brokerName: 'broker-b', readQueueCount: 4, writeQueueCount: 4, perm: 6, category: 'NORMAL' }
+const topics: TopicInfo[] = [
+  { topic: 'orders', brokerName: 'broker-a', brokers: ['broker-a'], clusters: ['DefaultCluster'], readQueueCount: 8, writeQueueCount: 8, perm: 6, category: 'NORMAL', messageType: 'NORMAL', order: false, systemTopic: false },
+  { topic: 'payment-events', brokerName: 'broker-a', brokers: ['broker-a'], clusters: ['DefaultCluster'], readQueueCount: 8, writeQueueCount: 8, perm: 6, category: 'NORMAL', messageType: 'NORMAL', order: false, systemTopic: false },
+  { topic: 'refund-events', brokerName: 'broker-b', brokers: ['broker-b'], clusters: ['DefaultCluster'], readQueueCount: 4, writeQueueCount: 4, perm: 6, category: 'NORMAL', messageType: 'NORMAL', order: false, systemTopic: false },
+  { topic: 'audit-log', brokerName: 'broker-b', brokers: ['broker-b'], clusters: ['DefaultCluster'], readQueueCount: 4, writeQueueCount: 4, perm: 6, category: 'NORMAL', messageType: 'NORMAL', order: false, systemTopic: false }
 ];
+
+const topicList: TopicListView = {
+  items: topics,
+  total: topics.length,
+  targets: [{ clusterName: 'DefaultCluster', brokerNames: ['broker-a', 'broker-b'] }]
+};
 
 const connectionView: ProducerConnectionView = {
   topic: 'payment-events',
@@ -46,7 +53,7 @@ describe('ProducerListPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(producerApi.list).mockResolvedValue(producers);
-    vi.mocked(topicApi.list).mockResolvedValue({ items: topics, total: topics.length });
+    vi.mocked(topicApi.list).mockResolvedValue(topicList);
     vi.mocked(producerApi.connections).mockResolvedValue(connectionView);
   });
 
@@ -140,8 +147,8 @@ describe('ProducerListPage', () => {
   it('explains an empty topic inventory and offers a reload action', async () => {
     const user = userEvent.setup();
     vi.mocked(topicApi.list)
-      .mockResolvedValueOnce({ items: [], total: 0 })
-      .mockResolvedValueOnce({ items: topics, total: topics.length });
+      .mockResolvedValueOnce({ items: [], total: 0, targets: [] })
+      .mockResolvedValueOnce(topicList);
     renderAtRoute(<ProducerListPage />, '/producers');
     await screen.findByRole('heading', { name: 'Producers' });
 

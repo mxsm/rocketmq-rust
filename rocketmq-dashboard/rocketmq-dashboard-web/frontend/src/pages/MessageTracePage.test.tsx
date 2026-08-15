@@ -6,6 +6,7 @@ import { topicApi } from '../api/topic_api';
 import { renderAtRoute } from '../test/render';
 import type { MessageView } from '../types/message';
 import type { MessageTraceView } from '../types/message';
+import type { TopicInfo, TopicListView } from '../types/topic';
 import MessageTracePage from './MessageTracePage';
 
 vi.mock('../api/message_api', () => ({ messageApi: { byKey: vi.fn(), byId: vi.fn(), trace: vi.fn() } }));
@@ -18,10 +19,21 @@ const message: MessageView = {
   properties: { STORE_MESSAGE_ID: 'STORE-001' }
 };
 
+const topic: TopicInfo = {
+  topic: 'orders', brokerName: 'broker-a', brokers: ['broker-a'], clusters: ['DefaultCluster'],
+  readQueueCount: 8, writeQueueCount: 8, perm: 6, category: 'NORMAL', messageType: 'NORMAL',
+  order: false, systemTopic: false
+};
+const topicList: TopicListView = {
+  items: [topic],
+  total: 1,
+  targets: [{ clusterName: 'DefaultCluster', brokerNames: ['broker-a'] }]
+};
+
 describe('MessageTracePage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(topicApi.list).mockResolvedValue({ items: [{ topic: 'orders', brokerName: 'broker-a', readQueueCount: 8, writeQueueCount: 8, perm: 6, category: 'NORMAL' }], total: 1 });
+    vi.mocked(topicApi.list).mockResolvedValue(topicList);
     vi.mocked(messageApi.byId).mockResolvedValue({ items: [message], total: 1 });
     vi.mocked(messageApi.byKey).mockResolvedValue({ items: [message], total: 1 });
     vi.mocked(messageApi.trace).mockResolvedValue({
@@ -133,7 +145,7 @@ describe('MessageTracePage', () => {
     const user = userEvent.setup();
     vi.mocked(topicApi.list)
       .mockRejectedValueOnce(new Error('nameserver unavailable'))
-      .mockResolvedValueOnce({ items: [{ topic: 'orders', brokerName: 'broker-a', readQueueCount: 8, writeQueueCount: 8, perm: 6, category: 'NORMAL' }], total: 1 });
+      .mockResolvedValueOnce(topicList);
 
     renderAtRoute(<MessageTracePage />, '/message-trace');
     expect(await screen.findByText('Topic discovery failed: nameserver unavailable')).toBeInTheDocument();

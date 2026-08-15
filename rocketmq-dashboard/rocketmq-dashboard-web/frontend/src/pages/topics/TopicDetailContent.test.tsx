@@ -17,10 +17,15 @@ vi.mock('../../api/topic_api', () => ({
 const topic: TopicInfo = {
   topic: 'orders',
   brokerName: 'broker-a',
+  brokers: ['broker-a'],
+  clusters: ['DefaultCluster'],
   readQueueCount: 8,
   writeQueueCount: 8,
   perm: 6,
-  category: 'NORMAL'
+  category: 'NORMAL',
+  messageType: 'NORMAL',
+  order: false,
+  systemTopic: false
 };
 
 describe('TopicDetailContent', () => {
@@ -29,8 +34,10 @@ describe('TopicDetailContent', () => {
     vi.mocked(topicApi.stats).mockResolvedValue({
       topic: 'orders',
       queueCount: 2,
+      totalMessageCount: 8_280,
       totalMinOffset: 120,
-      totalMaxOffset: 8_400
+      totalMaxOffset: 8_400,
+      offsets: []
     });
     vi.mocked(topicApi.route).mockResolvedValue({
       topic: 'orders',

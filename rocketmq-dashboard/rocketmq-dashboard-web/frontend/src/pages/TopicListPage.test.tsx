@@ -4,7 +4,7 @@ import { vi } from 'vitest';
 import { consumerApi } from '../api/consumer_api';
 import { topicApi } from '../api/topic_api';
 import { renderAtRoute } from '../test/render';
-import type { TopicInfo, TopicListView } from '../types/topic';
+import type { TopicInfo, TopicListView, TopicOperationResult } from '../types/topic';
 import TopicListPage from './TopicListPage';
 
 vi.mock('../api/topic_api', () => ({
@@ -28,23 +28,39 @@ vi.mock('../api/consumer_api', () => ({
 }));
 
 const topics: TopicInfo[] = [
-  { topic: 'orders', brokerName: 'broker-a', readQueueCount: 8, writeQueueCount: 8, perm: 6, category: 'NORMAL' },
-  { topic: 'payments', brokerName: 'broker-b', readQueueCount: 4, writeQueueCount: 4, perm: 4, category: 'FIFO' },
-  { topic: '%RETRY%order-service', brokerName: 'broker-a', readQueueCount: 1, writeQueueCount: 1, perm: 2, category: 'RETRY' },
-  { topic: '%DLQ%payment-service', brokerName: 'broker-b', readQueueCount: 1, writeQueueCount: 1, perm: 0, category: 'DLQ' },
-  { topic: 'RMQ_SYS_TRACE_TOPIC', brokerName: null, readQueueCount: 1, writeQueueCount: 1, perm: 7, category: 'SYSTEM' }
+  { topic: 'orders', brokerName: 'broker-a', brokers: ['broker-a'], clusters: ['DefaultCluster'], readQueueCount: 8, writeQueueCount: 8, perm: 6, category: 'NORMAL', messageType: 'NORMAL', order: false, systemTopic: false },
+  { topic: 'payments', brokerName: 'broker-b', brokers: ['broker-b'], clusters: ['DefaultCluster'], readQueueCount: 4, writeQueueCount: 4, perm: 4, category: 'NORMAL', messageType: 'FIFO', order: true, systemTopic: false },
+  { topic: '%RETRY%order-service', brokerName: 'broker-a', brokers: ['broker-a'], clusters: ['DefaultCluster'], readQueueCount: 1, writeQueueCount: 1, perm: 2, category: 'RETRY', messageType: 'RETRY', order: false, systemTopic: false },
+  { topic: '%DLQ%payment-service', brokerName: 'broker-b', brokers: ['broker-b'], clusters: ['DefaultCluster'], readQueueCount: 1, writeQueueCount: 1, perm: 0, category: 'DLQ', messageType: 'DLQ', order: false, systemTopic: false },
+  { topic: 'RMQ_SYS_TRACE_TOPIC', brokerName: null, brokers: [], clusters: ['DefaultCluster'], readQueueCount: 1, writeQueueCount: 1, perm: 7, category: 'SYSTEM', messageType: 'SYSTEM', order: false, systemTopic: true }
 ];
 
-const listView: TopicListView = { items: topics, total: topics.length };
+const listView: TopicListView = {
+  items: topics,
+  total: topics.length,
+  targets: [{ clusterName: 'DefaultCluster', brokerNames: ['broker-a', 'broker-b'] }]
+};
+
+const operationResult = (operation: string, topic: string, message: string): TopicOperationResult => ({
+  operation,
+  topic,
+  success: true,
+  targetCount: 1,
+  message,
+  targets: [{ target: 'broker-a', success: true, message }]
+});
 
 describe('TopicListPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(topicApi.list).mockResolvedValue(listView);
-    vi.mocked(topicApi.create).mockResolvedValue({ message: 'created' });
-    vi.mocked(topicApi.update).mockResolvedValue({ message: 'updated' });
-    vi.mocked(topicApi.delete).mockResolvedValue({ message: 'deleted' });
-    vi.mocked(topicApi.stats).mockResolvedValue({ topic: 'orders', queueCount: 2, totalMinOffset: 120, totalMaxOffset: 8_400 });
+    vi.mocked(topicApi.create).mockResolvedValue(operationResult('CREATE', 'inventory-events', 'created'));
+    vi.mocked(topicApi.update).mockResolvedValue(operationResult('UPDATE', 'orders', 'updated'));
+    vi.mocked(topicApi.delete).mockResolvedValue(operationResult('DELETE_TOPIC', 'orders', 'deleted'));
+    vi.mocked(topicApi.stats).mockResolvedValue({
+      topic: 'orders', queueCount: 2, totalMessageCount: 8_280,
+      totalMinOffset: 120, totalMaxOffset: 8_400, offsets: []
+    });
     vi.mocked(topicApi.route).mockResolvedValue({ topic: 'orders', brokers: [], queues: [] });
     vi.mocked(consumerApi.list).mockResolvedValue({ items: [], total: 0 });
   });
