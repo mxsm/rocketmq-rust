@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rocketmq-rust.local/schemas/release-series.schema.json",
+  "title": "RocketMQ Rust append-only release series",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "release_line",
+    "series_id",
+    "generation",
+    "next_ordinal",
+    "next_rc_suffix",
+    "head",
+    "consecutive_successful_rcs",
+    "entries",
+    "pending_operation"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "release_line": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$" },
+    "series_id": { "type": "string", "minLength": 1 },
+    "generation": { "type": "integer", "minimum": 0 },
+    "next_ordinal": { "type": "integer", "minimum": 1 },
+    "next_rc_suffix": { "type": "integer", "minimum": 1 },
+    "head": { "type": ["object", "null"] },
+    "consecutive_successful_rcs": { "type": "integer", "minimum": 0 },
+    "entries": { "type": "array", "items": { "type": "object" } },
+    "pending_operation": { "type": ["object", "null"] },
+    "created_at": { "type": "string" },
+    "updated_at": { "type": "string" }
+  }
+}

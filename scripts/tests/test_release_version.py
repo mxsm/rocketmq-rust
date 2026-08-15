@@ -140,6 +140,16 @@ class ReleaseVersionTests(unittest.TestCase):
                 self.setter.apply_version(root, "1.0.0-rc.2")
             self.assertEqual(before, (root / "Cargo.toml").read_bytes())
 
+    def test_rejected_final_can_return_the_workspace_to_a_later_rc(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            create_fixture(root)
+            for version in ("1.0.0-rc.1", "1.0.0-rc.2", "1.0.0", "1.0.0-rc.3"):
+                self.setter.apply_version(root, version)
+
+            self.assertEqual("1.0.0-rc.3", self.setter.workspace_version(root))
+            self.assertEqual([], self.checker.check_version(root, "1.0.0-rc.3"))
+
     def test_malformed_lock_aborts_the_entire_transaction(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -151,12 +161,31 @@ class ReleaseVersionTests(unittest.TestCase):
                 self.setter.apply_version(root, "1.0.0-rc.1")
             self.assertEqual(before, {path: path.read_bytes() for path in root.rglob("Cargo.toml")})
 
+    def test_post_write_validation_failure_rolls_back_every_surface(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            create_fixture(root)
+            before = {path: path.read_bytes() for path in root.rglob("Cargo.toml")}
+            before.update({path: path.read_bytes() for path in root.rglob("Cargo.lock")})
+
+            def reject() -> None:
+                raise self.setter.VersionError("fixture locked validation failed")
+
+            with self.assertRaises(self.setter.VersionError):
+                self.setter.apply_version(root, "1.0.0-rc.1", validator=reject)
+            self.assertEqual(before, {path: path.read_bytes() for path in before})
+
     def test_checker_reports_manifest_and_lock_drift(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             create_fixture(root)
             self.setter.apply_version(root, "1.0.0-rc.1")
-            write(root / "admin-cli/Cargo.toml", (root / "admin-cli/Cargo.toml").read_text().replace("1.0.0-rc.1", "1.0.0"))
+            write(
+                root / "admin-cli/Cargo.toml",
+                (root / "admin-cli/Cargo.toml")
+                .read_text()
+                .replace("1.0.0-rc.1", "1.0.0"),
+            )
 
             findings = self.checker.check_version(root, "1.0.0-rc.1")
             self.assertTrue(any(finding.code == "manifest-version-drift" for finding in findings), findings)
@@ -174,10 +203,90 @@ class ReleaseVersionTests(unittest.TestCase):
             self.assertIn("chart-version-drift", codes)
             self.assertIn("oci-version-drift", codes)
 
+    def test_version_transaction_updates_chart_values_and_core_container_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            create_fixture(root)
+            write(
+                root / "distribution/helm/rocketmq-rust-core/Chart.yaml",
+                'version: 1.0.0-dev\nappVersion: "1.0.0-dev"\n',
+            )
+            write(
+                root / "distribution/helm/rocketmq-rust-core/values.yaml",
+                'global:\n  candidateVersion: "1.0.0-dev"\n',
+            )
+            write(root / "docker/core-container-policy.json", '{"release_version":"1.0.0-dev"}\n')
+
+            self.setter.apply_version(root, "1.0.0-rc.1")
+            self.assertEqual([], self.checker.check_version(root, "1.0.0-rc.1"))
+            self.assertIn("1.0.0-rc.1", (root / "distribution/helm/rocketmq-rust-core/Chart.yaml").read_text())
+            self.assertIn("1.0.0-rc.1", (root / "docker/core-container-policy.json").read_text())
+
     def test_fixture_validation_does_not_modify_the_repository(self) -> None:
         before = (ROOT / "Cargo.toml").read_bytes()
         self.assertEqual(0, self.checker.run_fixture_validation())
+        self.assertEqual(0, self.checker.run_fixture_validation("1.0.0-rc.3"))
+        self.assertEqual(0, self.checker.run_fixture_validation("1.0.0"))
+        self.assertEqual(1, self.checker.run_fixture_validation("v1.0.0"))
         self.assertEqual(before, (ROOT / "Cargo.toml").read_bytes())
+
+    def test_real_candidate_mode_uses_the_manifest_as_the_only_version_selector(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            create_fixture(root)
+            self.setter.apply_version(root, "1.0.0-rc.1")
+            manifest = root / "target/v1-release/1.0.0-rc.1/run/attempt-1/CANDIDATE_RUN.json"
+            write(
+                manifest,
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "candidate_id": "1.0.0-rc.1-runrun-attempt1-ordinal1",
+                        "candidate_kind": "rc",
+                        "version": "1.0.0-rc.1",
+                        "run_id": "run",
+                        "attempt": 1,
+                        "ordinal": 1,
+                        "candidate_root": str(manifest.parent.resolve()),
+                        "series_manifest": str((root / "RELEASE_SERIES.json").resolve()),
+                        "series_id": "fixture-series",
+                        "series_generation": 1,
+                        "parent_manifest": None,
+                        "state": "development",
+                        "sealed": False,
+                        "outcome": None,
+                        "rejection_reason": None,
+                        "known_issues": [],
+                        "generation": 0,
+                        "build_source_bundle": None,
+                        "source_snapshot": None,
+                        "artifact_index": None,
+                        "evidence_index": None,
+                        "event_index": None,
+                        "execution_context_index": None,
+                        "creation_operation_id": "fixture-operation",
+                        "created_at": "2026-08-16T00:00:00Z",
+                        "updated_at": "2026-08-16T00:00:00Z",
+                    }
+                ),
+            )
+
+            version, candidate_root = self.checker.candidate_selector(manifest)
+            self.assertEqual(version, "1.0.0-rc.1")
+            self.assertEqual(candidate_root, manifest.parent.resolve())
+            self.assertEqual([], self.checker.check_version(root, version))
+
+            value = json.loads(manifest.read_text(encoding="utf-8"))
+            value["candidate_root"] = str((root / "another-run").resolve())
+            write(manifest, json.dumps(value))
+            with self.assertRaises(self.checker.CandidateVersionError):
+                self.checker.candidate_selector(manifest)
+
+            value["candidate_root"] = str(manifest.parent.resolve())
+            value["candidate_kind"] = "final"
+            write(manifest, json.dumps(value))
+            with self.assertRaises(self.checker.CandidateVersionError):
+                self.checker.candidate_selector(manifest)
 
 
 if __name__ == "__main__":

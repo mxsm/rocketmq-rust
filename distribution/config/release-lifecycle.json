@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "scope": "core-release",
+  "remote_publication_states": [
+    "publishing",
+    "released"
+  ],
+  "candidate_kinds": {
+    "rc": {
+      "transitions": {
+        "development": [
+          "staged-rc",
+          "rejected"
+        ],
+        "staged-rc": [
+          "rc-candidate-ready",
+          "rejected"
+        ],
+        "rc-candidate-ready": []
+      },
+      "sealed_states": [
+        "rc-candidate-ready",
+        "rejected"
+      ]
+    },
+    "final": {
+      "transitions": {
+        "development": [
+          "ga-candidate-ready",
+          "rejected"
+        ],
+        "ga-candidate-ready": [
+          "publication-ready",
+          "rejected"
+        ],
+        "publication-ready": []
+      },
+      "sealed_states": [
+        "publication-ready",
+        "rejected"
+      ]
+    }
+  },
+  "minimum_consecutive_successful_rcs": 2,
+  "required_capabilities": [
+    "F-01",
+    "F-02",
+    "F-03",
+    "F-04",
+    "F-05",
+    "F-06",
+    "F-07",
+    "F-08",
+    "F-09",
+    "F-10",
+    "F-11",
+    "F-12",
+    "F-13",
+    "F-14",
+    "F-15",
+    "F-16",
+    "F-17",
+    "F-18",
+    "G-01",
+    "G-02",
+    "G-03",
+    "G-04",
+    "G-05"
+  ],
+  "phase5_required_result_ids": [
+    "R01-RELEASE-VERSION",
+    "R01-CANDIDATE-LIFECYCLE",
+    "R01-CORE-IMAGE-WORKFLOW"
+  ],
+  "release_line": "1.0",
+  "remote_publication": "not-executed"
+}

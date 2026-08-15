@@ -1,0 +1,63 @@
+# Copyright 2026 The RocketMQ Rust Authors
+# Licensed under the Apache License, Version 2.0.
+
+name: Core service image candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Local candidate semantic version
+        required: true
+        type: string
+      publish:
+        description: Reserved for a separately approved remote publication task
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  validate-candidate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate candidate version syntax and propagation fixture
+        run: python scripts/check_release_version.py --version "${{ inputs.version }}" --fixture
+      - name: Verify the core-only manual route
+        run: python scripts/verify_core_service_image_publication.py
+
+  build-candidate:
+    needs: validate-candidate
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - rocketmq-namesrv
+          - rocketmq-broker
+          - rocketmq-controller
+          - rocketmq-proxy
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare local image layout only
+        env:
+          CANDIDATE_VERSION: ${{ inputs.version }}
+          CORE_SERVICE: ${{ matrix.service }}
+        run: echo "Local candidate only; remote push is not executed"
+
+  publish-candidate:
+    if: github.event_name == 'workflow_dispatch' && inputs.publish == true
+    needs: build-candidate
+    runs-on: ubuntu-latest
+    environment: core-release-publication
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Require the separate publication task
+        run: |
+          echo "Remote publication is intentionally disabled in the preparation workflow."
+          exit 1
