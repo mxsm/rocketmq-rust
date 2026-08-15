@@ -50,6 +50,7 @@ use crate::base::connection_net_event::ConnectionNetEvent;
 use crate::base::tokio_event::TokioEvent;
 use crate::net::channel::Channel;
 use crate::net::channel::ChannelInner;
+use crate::proxy_protocol::ProxyProtocolConfig;
 use crate::runtime::connection_handler_context::ConnectionHandlerContext;
 use crate::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
 use crate::runtime::processor::RequestProcessor;
@@ -349,6 +350,7 @@ struct ConnectionListener<RP> {
     file_region_blocking: BlockingExecutor,
     file_transfer_mode: FileTransferMode,
     frame_limits: FrameLimits,
+    proxy_protocol: ProxyProtocolConfig,
 
     transport_principal: Option<Principal>,
     command_interceptor: Arc<dyn SessionCommandInterceptor>,
@@ -432,6 +434,7 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
         .with_authorized_dispatch(self.dispatcher.boundary(), self.transport_principal.clone())
         .with_file_region_io(self.file_region_blocking.clone(), self.file_transfer_mode)
         .try_with_frame_limits(self.frame_limits)?
+        .try_with_proxy_protocol(self.proxy_protocol.clone())?
         .with_telemetry(self.telemetry.clone());
         transport
             .run(Arc::new(InterceptingConnectionHandler {
@@ -506,7 +509,13 @@ impl<RP: RequestProcessor + Sync + Clone + 'static> ConnectionHandler<RP> {
         let Ok(channel_inner) = channel_inner else {
             return;
         };
-        let mut channel = Channel::new(Arc::new(channel_inner), session.local_addr(), session.remote_addr());
+        let mut channel = Channel::new_with_proxy_protocol(
+            Arc::new(channel_inner),
+            session.local_addr(),
+            session.remote_addr(),
+            session.transport_peer_addr(),
+            session.proxy_protocol().cloned(),
+        );
         channel.set_channel_id(channel_id);
         let remoting_session = RemotingSession {
             context: Arc::new(ConnectionHandlerContextWrapper::new(channel)),
@@ -651,6 +660,7 @@ pub struct TransportServer<RP> {
     telemetry: TransportTelemetry,
     lifecycle_event_config: LifecycleEventConfig,
     frame_limits: FrameLimits,
+    proxy_protocol: ProxyProtocolConfig,
     #[cfg(all(test, not(doctest)))]
     test_request_hook: Option<TestRequestHook>,
     _phantom_data: std::marker::PhantomData<RP>,
@@ -669,6 +679,7 @@ impl<RP> TransportServer<RP> {
             telemetry: TransportTelemetry::noop(),
             lifecycle_event_config: LifecycleEventConfig::default(),
             frame_limits: FrameLimits::java_compatibility(),
+            proxy_protocol: ProxyProtocolConfig::default(),
             #[cfg(all(test, not(doctest)))]
             test_request_hook: None,
             _phantom_data: std::marker::PhantomData,
@@ -702,6 +713,13 @@ impl<RP> TransportServer<RP> {
     pub fn try_with_frame_limits(mut self, frame_limits: FrameLimits) -> RocketMQResult<Self> {
         frame_limits.validate()?;
         self.frame_limits = frame_limits;
+        Ok(self)
+    }
+
+    /// Enables trusted PROXY v1/v2 negotiation before TLS and Remoting decoding.
+    pub fn try_with_proxy_protocol(mut self, config: ProxyProtocolConfig) -> RocketMQResult<Self> {
+        config.validate()?;
+        self.proxy_protocol = config;
         Ok(self)
     }
 
@@ -822,6 +840,7 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> TransportServer<RP> {
                 command_interceptor,
                 telemetry: self.telemetry.clone(),
                 lifecycle_event_config,
+                proxy_protocol: self.proxy_protocol.clone(),
             },
         )
         .await
@@ -956,6 +975,7 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> TransportServer<RP> {
                 command_interceptor,
                 telemetry: self.telemetry.clone(),
                 lifecycle_event_config,
+                proxy_protocol: self.proxy_protocol.clone(),
             },
         )
         .await
@@ -1063,6 +1083,7 @@ async fn run_with_report_with_service_context_and_telemetry<RP: RequestProcessor
             command_interceptor: Arc::new(()),
             telemetry,
             lifecycle_event_config: LifecycleEventConfig::default(),
+            proxy_protocol: ProxyProtocolConfig::default(),
         },
     )
     .await
@@ -1081,6 +1102,7 @@ struct RemotingServerRunCapabilities {
     command_interceptor: Arc<dyn SessionCommandInterceptor>,
     telemetry: TransportTelemetry,
     lifecycle_event_config: LifecycleEventConfig,
+    proxy_protocol: ProxyProtocolConfig,
 }
 
 async fn run_with_tls_config_report<RP: RequestProcessor + Sync + 'static + Clone>(
@@ -1106,6 +1128,7 @@ async fn run_with_tls_config_report<RP: RequestProcessor + Sync + 'static + Clon
         command_interceptor,
         telemetry,
         lifecycle_event_config,
+        proxy_protocol,
     } = capabilities;
     let (shutdown_complete_tx, mut shutdown_complete_rx) = mpsc::channel(1);
     let lifecycle_shutdown = CancellationToken::new();
@@ -1163,6 +1186,7 @@ async fn run_with_tls_config_report<RP: RequestProcessor + Sync + 'static + Clon
         file_region_blocking,
         file_transfer_mode,
         frame_limits,
+        proxy_protocol,
         transport_principal,
         command_interceptor,
         telemetry,
@@ -2270,6 +2294,7 @@ mod tests {
                 command_interceptor: Arc::new(()),
                 telemetry: TransportTelemetry::noop(),
                 lifecycle_event_config: LifecycleEventConfig::default(),
+                proxy_protocol: ProxyProtocolConfig::default(),
             },
         );
         let server_task = tokio::spawn(report);
