@@ -130,6 +130,10 @@ impl RawBrokerConfig {
         Ok(raw)
     }
 
+    pub(crate) fn from_serde_value(value: serde_json::Value) -> Result<Self, serde_json::Error> {
+        serde_json::from_value(value)
+    }
+
     #[must_use]
     pub fn from_parts(broker: BrokerConfig, store: MessageStoreConfig) -> Self {
         Self {

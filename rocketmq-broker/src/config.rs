@@ -15,6 +15,7 @@
 pub mod broker_config;
 pub mod config_manager;
 pub mod error;
+pub mod java_properties;
 pub mod raw;
 pub mod sections;
 pub mod transaction;
