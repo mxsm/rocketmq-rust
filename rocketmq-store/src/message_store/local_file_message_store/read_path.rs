@@ -257,9 +257,17 @@ impl LocalFileMessageStore {
                                 next_phy_file_start_offset = self.commit_log.roll_next_file(offset_py);
                                 continue;
                             };
+                            let in_cache = select_result.is_in_cache();
+                            self.commit_log.get_cold_data_check_service().observe_message_residency(
+                                group,
+                                topic,
+                                queue_id,
+                                cq_unit.queue_offset,
+                                in_cache,
+                            );
                             if self.message_store_config.cold_data_flow_control_enable
                                 && !is_sys_consumer_group_for_no_cold_read_limit(group)
-                                && !select_result.is_in_cache()
+                                && !in_cache
                             {
                                 get_result_ref.set_cold_data_sum(get_result_ref.cold_data_sum() + size_py as i64);
                             }

@@ -192,6 +192,7 @@ impl LocalFileMessageStore {
         }
 
         let mut queue_keys = Vec::new();
+        let mut unique_queue_keys = HashSet::new();
         let mut saw_queue = false;
         let mut is_all_lmq_dispatch = true;
         for queue_name in multi_dispatch_queue.split(MULTI_DISPATCH_QUEUE_SPLITTER) {
@@ -201,7 +202,10 @@ impl LocalFileMessageStore {
             }
             saw_queue = true;
             if is_lmq(Some(queue_name)) {
-                queue_keys.push(format!("{queue_name}-{LMQ_QUEUE_ID}"));
+                let queue_key = format!("{queue_name}-{LMQ_QUEUE_ID}");
+                if unique_queue_keys.insert(queue_key.clone()) {
+                    queue_keys.push(queue_key);
+                }
             } else {
                 is_all_lmq_dispatch = false;
             }
@@ -214,6 +218,28 @@ impl LocalFileMessageStore {
             self.consume_queue_store
                 .increase_lmq_offset(queue_key.as_str(), message_num);
         }
+    }
+
+    pub(super) fn reserve_lmq_quota(&self, queue_keys: &[String]) -> Option<Option<LmqQuotaReservation>> {
+        if !self.message_store_config.enable_lmq_quota
+            || !self.message_store_config.enable_lmq
+            || !self.message_store_config.enable_multi_dispatch
+            || queue_keys.is_empty()
+        {
+            return Some(None);
+        }
+        let existing_queue_keys = self
+            .consume_queue_store
+            .get_lmq_topic_names()
+            .into_iter()
+            .map(|topic| format!("{topic}-{LMQ_QUEUE_ID}"));
+        self.lmq_quota_controller
+            .reserve(
+                queue_keys,
+                existing_queue_keys,
+                self.message_store_config.max_lmq_consume_queue_num,
+            )
+            .map(Some)
     }
 
     pub(super) fn get_lmq_dispatch_message_num(&self, msg: &MessageExtBrokerInner) -> i16 {

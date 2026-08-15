@@ -441,6 +441,11 @@ impl BrokerRuntime {
         );
 
         let protect_broker_shutdown = Arc::clone(&self.composition.state.shutdown);
+        let protect_broker_stats = self.composition.state.broker_stats_manager.clone();
+        let protect_subscription_groups = self.composition.state.subscription_group_manager().clone();
+        let protect_broker_config = self.composition.state.broker_config();
+        let protect_slow_consumers = protect_broker_config.disable_consume_if_consumer_read_slowly;
+        let consumer_fallbehind_threshold = protect_broker_config.consumer_fallbehind_threshold;
         Self::log_scheduled_task_start(
             "protect_broker",
             self.lifecycle.scheduled_task_manager.add_fixed_rate_task_async(
@@ -448,9 +453,39 @@ impl BrokerRuntime {
                 Duration::from_mins(3),
                 move |ctx| {
                     let protect_broker_shutdown = Arc::clone(&protect_broker_shutdown);
+                    let protect_broker_stats = protect_broker_stats.clone();
+                    let protect_subscription_groups = protect_subscription_groups.clone();
                     async move {
                         if ctx.is_cancelled() || protect_broker_shutdown.load(Ordering::Acquire) {
                             return Ok(());
+                        }
+                        if protect_slow_consumers {
+                            if let Some(fall_size_set) = protect_broker_stats
+                                .as_ref()
+                                .and_then(|stats| stats.get_moment_stats_item_set_fall_size())
+                            {
+                                let mut slow_groups = std::collections::HashMap::new();
+                                for entry in fall_size_set.get_stats_item_table().iter() {
+                                    let lag = entry.value().get_value().load(Ordering::Relaxed);
+                                    if lag <= consumer_fallbehind_threshold {
+                                        continue;
+                                    }
+                                    let Some(group) = entry.key().split('@').nth(2) else {
+                                        continue;
+                                    };
+                                    slow_groups
+                                        .entry(CheetahString::from(group))
+                                        .and_modify(|current: &mut i64| *current = (*current).max(lag))
+                                        .or_insert(lag);
+                                }
+                                for (group, lag) in slow_groups {
+                                    protect_subscription_groups.disable_consume_for_lag(
+                                        &group,
+                                        lag,
+                                        consumer_fallbehind_threshold,
+                                    );
+                                }
+                            }
                         }
                         Ok(())
                     }

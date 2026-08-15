@@ -602,8 +602,8 @@ fn build_put_message_response(
             response.set_remark_mut("Put to remote broker failed");
         }
         PutMessageStatus::LmqConsumeQueueNumExceeded => {
-            response.set_code_mut(ResponseCode::SystemError);
-            response.set_remark_mut("UNKNOWN_ERROR DEFAULT");
+            response.set_code_mut(ResponseCode::LmqQuotaExceeded);
+            response.set_remark_mut("LMQ consume queue number exceeded");
         }
         PutMessageStatus::WheelTimerFlowControl => {
             response.set_code_mut(ResponseCode::SystemError);
@@ -863,6 +863,15 @@ mod tests {
         );
         assert_eq!(ResponseCode::from(timer_disabled.code()), ResponseCode::SystemError);
         assert!(timer_disabled.remark().is_some_and(|remark| remark.contains("false")));
+
+        let lmq_quota = build_put_message_response(
+            &application_remoting_command_factory(),
+            &policy,
+            &broker_stats_manager,
+            &topic,
+            PutMessageResult::new_default(PutMessageStatus::LmqConsumeQueueNumExceeded),
+        );
+        assert_eq!(ResponseCode::from(lmq_quota.code()), ResponseCode::LmqQuotaExceeded);
     }
 
     #[test]

@@ -159,6 +159,10 @@ mod defaults {
         7
     }
 
+    pub fn max_lmq_consume_queue_num() -> usize {
+        20_000
+    }
+
     pub fn pop_rocksdb_block_cache_size() -> usize {
         256 * 1024 * 1024
     }
@@ -1158,7 +1162,10 @@ pub struct MessageStoreConfig {
     #[serde(default)]
     pub enable_multi_dispatch: bool,
 
-    #[serde(default)]
+    #[serde(default, alias = "enable_lmq_quota")]
+    pub enable_lmq_quota: bool,
+
+    #[serde(default = "defaults::max_lmq_consume_queue_num", alias = "max_lmq_consume_queue_num")]
     pub max_lmq_consume_queue_num: usize,
 
     #[serde(default)]
@@ -1592,7 +1599,8 @@ impl Default for MessageStoreConfig {
             enable_schedule_message_stats: false,
             enable_lmq: false,
             enable_multi_dispatch: false,
-            max_lmq_consume_queue_num: 0,
+            enable_lmq_quota: false,
+            max_lmq_consume_queue_num: defaults::max_lmq_consume_queue_num(),
             enable_schedule_async_deliver: false,
             schedule_async_deliver_max_pending_limit: 0,
             schedule_async_deliver_max_resend_num2_blocked: 0,
@@ -2345,6 +2353,7 @@ impl MessageStoreConfig {
             "enableMultiDispatch".to_string(),
             self.enable_multi_dispatch.to_string(),
         );
+        properties.insert("enableLmqQuota".to_string(), self.enable_lmq_quota.to_string());
         properties.insert(
             "maxLmqConsumeQueueNum".to_string(),
             self.max_lmq_consume_queue_num.to_string(),
@@ -3034,6 +3043,20 @@ mod tests {
         assert_eq!(config.pop_rocksdb_block_cache_size, 256 * 1024 * 1024);
         assert_eq!(config.pop_rocksdb_write_buffer_size, 32 * 1024 * 1024);
         assert!(config.use_separate_store_path_for_rocksdb_cq);
+        Ok(())
+    }
+
+    #[test]
+    fn lmq_quota_defaults_and_java_alias_preserve_explicit_zero() -> Result<(), serde_json::Error> {
+        let defaults: MessageStoreConfig = serde_json::from_str("{}")?;
+        assert!(!defaults.enable_lmq_quota);
+        assert_eq!(defaults.max_lmq_consume_queue_num, 20_000);
+
+        let enabled: MessageStoreConfig = serde_json::from_str(r#"{"enableLmqQuota":true,"maxLmqConsumeQueueNum":0}"#)?;
+        assert!(enabled.enable_lmq_quota);
+        assert_eq!(enabled.max_lmq_consume_queue_num, 0);
+        assert_eq!(enabled.get_properties()["enableLmqQuota"], "true");
+        assert_eq!(enabled.get_properties()["maxLmqConsumeQueueNum"], "0");
         Ok(())
     }
 

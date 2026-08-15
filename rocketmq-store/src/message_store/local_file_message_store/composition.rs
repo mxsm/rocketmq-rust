@@ -298,6 +298,7 @@ impl LocalFileMessageStore {
             index_service: index_service.clone(),
             allocate_mapped_file_service,
             consume_queue_store: consume_queue_store.clone(),
+            lmq_quota_controller: Arc::new(LmqQuotaController::default()),
             dispatcher,
             #[cfg(feature = "tieredstore")]
             tiered_store,
@@ -508,6 +509,7 @@ impl LocalFileMessageStore {
             consume_queue_store: self.consume_queue_store.clone(),
             store_stats_service: Arc::clone(&self.store_stats_service),
             reput_notify: self.reput_message_service.notify_handle(),
+            lmq_quota_controller: Arc::clone(&self.lmq_quota_controller),
         }
     }
 

@@ -212,14 +212,19 @@ mod tests {
         assert!(is_sys_consumer_group_for_no_cold_read_limit("TOOLS_CONSUMER"));
         assert!(is_sys_consumer_group_for_no_cold_read_limit("SCHEDULE_CONSUMER"));
         assert!(is_sys_consumer_group_for_no_cold_read_limit("FILTERSRV_CONSUMER"));
-        assert!(!is_sys_consumer_group_for_no_cold_read_limit("MONITOR_CONSUMER"));
-        assert!(!is_sys_consumer_group_for_no_cold_read_limit("SELF_TEST_CONSUMER"));
-        assert!(!is_sys_consumer_group_for_no_cold_read_limit("ONS_HTTP_PROXY_GROUP"));
+        assert!(is_sys_consumer_group_for_no_cold_read_limit(MONITOR_CONSUMER_GROUP));
+        assert!(is_sys_consumer_group_for_no_cold_read_limit(SELF_TEST_CONSUMER_GROUP));
+        assert!(is_sys_consumer_group_for_no_cold_read_limit(ONS_HTTP_PROXY_GROUP));
         assert!(is_sys_consumer_group_for_no_cold_read_limit("CID_ONSAPI_PERMISSION"));
         assert!(is_sys_consumer_group_for_no_cold_read_limit("CID_ONSAPI_OWNER"));
         assert!(is_sys_consumer_group_for_no_cold_read_limit("CID_ONSAPI_PULL"));
         assert!(is_sys_consumer_group_for_no_cold_read_limit("CID_RMQ_SYS_TRANS"));
         assert!(is_sys_consumer_group_for_no_cold_read_limit("CID_RMQ_SYS_SOME_GROUP"));
+        assert!(!is_sys_consumer_group_for_no_cold_read_limit("MONITOR_CONSUMER"));
+        assert!(!is_sys_consumer_group_for_no_cold_read_limit("SELF_TEST_CONSUMER"));
+        assert!(!is_sys_consumer_group_for_no_cold_read_limit("ONS_HTTP_PROXY_GROUP"));
+        assert!(!is_sys_consumer_group_for_no_cold_read_limit("%RETRY%ORDINARY_GROUP"));
+        assert!(!is_sys_consumer_group_for_no_cold_read_limit("%TRANS%ORDINARY_GROUP"));
         assert!(!is_sys_consumer_group_for_no_cold_read_limit("NON_SYS_GROUP"));
     }
 
