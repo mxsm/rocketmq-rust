@@ -3588,6 +3588,15 @@
         },
         {
           "category": "stable",
+          "declaration": "pub use crate::base::query_message_request::QueryMessageRequest",
+          "identity": "rocketmq-store/src/public_api.rs:pub use crate::base::query_message_request::QueryMessageRequest",
+          "owner": "store",
+          "path": "rocketmq-store/src/public_api.rs",
+          "rationale": "preserves the Java query-message index type and continuation cursor across the Broker/Store boundary",
+          "removal_condition": "retain while QUERY_MESSAGE pagination remains supported"
+        },
+        {
+          "category": "stable",
           "declaration": "pub use crate::base::query_message_result::QueryMessageResult",
           "identity": "rocketmq-store/src/public_api.rs:pub use crate::base::query_message_result::QueryMessageResult",
           "owner": "store",

@@ -141,21 +141,37 @@ impl MessageRocksDbStorage {
         begin_time: i64,
         end_time: i64,
         max_num: usize,
+        last_key: Option<&str>,
     ) -> Result<Vec<i64>, RocketMQError> {
         if max_num == 0 {
             return Ok(Vec::new());
         }
         let hours = index_hours(begin_time, end_time)?;
         let mut offsets = Vec::with_capacity(max_num);
-        let mut seen_offsets = HashSet::with_capacity(max_num);
+        let last_index_hour = last_key.map(IndexRocksDbKey::java_cursor_hour).transpose()?;
         for hour in hours {
+            if last_index_hour.is_some_and(|last_hour| hour < last_hour) {
+                continue;
+            }
             let prefix = IndexRocksDbKey::query_prefix(topic, index_type, key, hour)?;
-            let items = self.store.prefix_scan(&RocksDbScanOptions {
+            let options = RocksDbScanOptions {
                 cf: RocksDbColumnFamily::Default.name().to_string(),
                 prefix,
                 limit: 0,
-            })?;
+            };
+            let cursor = if last_index_hour == Some(hour) {
+                last_key.map(IndexRocksDbKey::from_java_cursor).transpose()?
+            } else {
+                None
+            };
+            let items = match cursor.as_deref() {
+                Some(cursor) => self.store.prefix_scan_from(&options, cursor)?,
+                None => self.store.prefix_scan(&options)?,
+            };
             for item in items {
+                if cursor.as_deref().is_some_and(|cursor| item.key.as_ref() == cursor) {
+                    continue;
+                }
                 let value = IndexRocksDbValue::decode(item.value.as_ref())?;
                 if value.store_time < begin_time || value.store_time > end_time {
                     continue;
@@ -164,9 +180,6 @@ impl MessageRocksDbStorage {
                     return Err(codec_error("index key is too short to contain physical offset"));
                 }
                 let offset = decode_i64(&item.key[item.key.len() - 8..])?;
-                if !seen_offsets.insert(offset) {
-                    continue;
-                }
                 offsets.push(offset);
                 if offsets.len() >= max_num {
                     return Ok(offsets);

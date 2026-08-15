@@ -125,6 +125,7 @@ use crate::base::message_result::AppendMessageResult;
 use crate::base::message_result::PutMessageResult;
 use crate::base::message_status_enum::GetMessageStatus;
 use crate::base::message_status_enum::PutMessageStatus;
+use crate::base::query_message_request::QueryMessageRequest;
 use crate::base::query_message_result::QueryMessageResult;
 use crate::base::select_result::SelectMappedBufferResult;
 use crate::base::store_checkpoint::StoreCheckpoint;
@@ -1859,6 +1860,12 @@ impl BackendOps for LocalFileMessageStore {
         end_timestamp: i64,
     ) -> Option<QueryMessageResult> {
         self.query_messages(topic, key, max_num, begin_timestamp, end_timestamp)
+            .await
+    }
+
+    async fn query_message_with_options(&self, request: &QueryMessageRequest) -> Option<QueryMessageResult> {
+        let key = request.legacy_backend_key();
+        self.query_messages(&request.topic, &key, request.max_num, request.begin, request.end)
             .await
     }
 

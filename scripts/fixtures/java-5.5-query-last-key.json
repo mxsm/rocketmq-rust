@@ -1,0 +1,12 @@
+{
+  "source": "Apache RocketMQ 5.5 MessageRocksDBStorage.queryOffsetForIndex",
+  "separator": "@",
+  "cursorFields": ["storeTimeHour", "topic", "indexType", "queryKey", "uniqueKey", "physicalOffset"],
+  "acceptedIndexTypes": ["K", "T"],
+  "uniqueIndexPersistedFieldCount": 5,
+  "matchingHourUniqueCursorResult": "QUERY_NOT_FOUND",
+  "earlierThanBegin": "ignored",
+  "laterThanEnd": "empty",
+  "exactCursor": "skip-and-resume-at-successor",
+  "deletedCursor": "seek-successor"
+}

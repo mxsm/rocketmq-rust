@@ -300,6 +300,7 @@ async fn rocksdb_query_message_after_dispatch() {
             append_result.store_timestamp,
             append_result.store_timestamp,
             10,
+            None,
         )
         .expect("query RocksDB index directly after reput");
     assert_eq!(indexed_offsets.len(), 1, "reput must flush the RocksDB index batch");

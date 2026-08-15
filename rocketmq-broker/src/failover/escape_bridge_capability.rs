@@ -40,6 +40,7 @@ use rocketmq_store::HAService;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::MessageStoreHealthCapability;
 use rocketmq_store::PutMessageResult;
+use rocketmq_store::QueryMessageRequest;
 use rocketmq_store::QueryMessageResult;
 use rocketmq_store::SelectMappedBufferResult;
 use rocketmq_store::StoreAppendReceipt;
@@ -423,16 +424,10 @@ impl<MS: BrokerReadStore> EscapeBridgeStoreCapability<MS> {
 
     pub(crate) async fn query_message(
         &self,
-        topic: &CheetahString,
-        key: &CheetahString,
-        max_num: i32,
-        begin_timestamp: i64,
-        end_timestamp: i64,
+        request: &QueryMessageRequest,
     ) -> Result<Option<QueryMessageResult>, MessageStoreUnavailable> {
         let store = self.store()?;
-        Ok(store
-            .query_message(topic, key, max_num, begin_timestamp, end_timestamp)
-            .await)
+        Ok(store.query_message_with_options(request).await)
     }
 
     pub(crate) fn select_message(

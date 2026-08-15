@@ -56,6 +56,7 @@ use crate::base::get_message_result::GetMessageResult;
 use crate::base::message_result::AppendMessageResult;
 use crate::base::message_result::PutMessageResult;
 use crate::base::message_status_enum::GetMessageStatus;
+use crate::base::query_message_request::QueryMessageRequest;
 use crate::base::query_message_result::QueryMessageResult;
 use crate::base::select_result::SelectMappedBufferResult;
 use crate::base::store_checkpoint::StoreCheckpoint;
@@ -454,9 +455,11 @@ impl RocksDBMessageStore {
         &self,
         topic: &CheetahString,
         key: &CheetahString,
+        index_type: Option<&str>,
         max_num: i32,
         begin: i64,
         end: i64,
+        last_key: Option<&str>,
     ) -> Result<QueryMessageResult, StoreError> {
         let max_num = max_num
             .max(0)
@@ -471,9 +474,11 @@ impl RocksDBMessageStore {
                 &local_wal,
                 topic.as_str(),
                 key.as_str(),
+                index_type,
                 max_num as usize,
                 begin,
                 end,
+                last_key,
                 self.get_message_store_config().max_rocksdb_index_query_days,
             )
             .map_err(message_store_adapter_error)?;
@@ -838,7 +843,7 @@ impl BackendOps for RocksDBMessageStore {
         begin: i64,
         end: i64,
     ) -> Option<QueryMessageResult> {
-        match self.query_message_by_rocksdb_index(topic, key, max_num, begin, end) {
+        match self.query_message_by_rocksdb_index(topic, key, None, max_num, begin, end, None) {
             Ok(result) if result.buffer_total_size > 0 => Some(result),
             Ok(_) => {
                 self.local_file_store
@@ -849,6 +854,38 @@ impl BackendOps for RocksDBMessageStore {
                 warn!(topic = %topic, key = %key, error = %error, "failed to query message by RocksDB index");
                 self.local_file_store
                     .query_message(topic, key, max_num, begin, end)
+                    .await
+            }
+        }
+    }
+
+    async fn query_message_with_options(&self, request: &QueryMessageRequest) -> Option<QueryMessageResult> {
+        match self.query_message_by_rocksdb_index(
+            &request.topic,
+            &request.key,
+            request.index_type.as_deref(),
+            request.max_num,
+            request.begin,
+            request.end,
+            request.last_key.as_deref(),
+        ) {
+            Ok(result) if result.buffer_total_size > 0 => Some(result),
+            Ok(result) if request.last_key.is_some() => Some(result),
+            Ok(_) => {
+                let key = request.legacy_backend_key();
+                self.local_file_store
+                    .query_message(&request.topic, &key, request.max_num, request.begin, request.end)
+                    .await
+            }
+            Err(error) if request.last_key.is_some() => {
+                warn!(topic = %request.topic, key = %request.key, error = %error, "rejected invalid RocksDB index cursor");
+                Some(QueryMessageResult::default())
+            }
+            Err(error) => {
+                warn!(topic = %request.topic, key = %request.key, error = %error, "failed to query message by RocksDB index");
+                let key = request.legacy_backend_key();
+                self.local_file_store
+                    .query_message(&request.topic, &key, request.max_num, request.begin, request.end)
                     .await
             }
         }

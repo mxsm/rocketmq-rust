@@ -442,16 +442,24 @@ impl RocksDbDerivedStore {
         &self,
         topic: &str,
         key: &str,
+        index_type: Option<&str>,
         max_num: usize,
         begin: i64,
         end: i64,
+        last_key: Option<&str>,
         max_query_days: usize,
     ) -> Result<(Vec<i64>, i64, i64), RocksDbMessageStoreError> {
         let (begin, end) = normalize_index_query_time_range(begin, end, max_query_days);
-        let mut offsets =
-            self.message_rocksdb_storage
-                .query_offsets_for_index(topic, INDEX_KEY_TYPE, key, begin, end, max_num)?;
-        if offsets.is_empty() {
+        let mut offsets = self.message_rocksdb_storage.query_offsets_for_index(
+            topic,
+            index_type.unwrap_or(INDEX_KEY_TYPE),
+            key,
+            begin,
+            end,
+            max_num,
+            last_key,
+        )?;
+        if index_type.is_none() && offsets.is_empty() {
             offsets = self.message_rocksdb_storage.query_offsets_for_index(
                 topic,
                 INDEX_UNIQUE_TYPE,
@@ -459,6 +467,7 @@ impl RocksDbDerivedStore {
                 begin,
                 end,
                 max_num,
+                last_key,
             )?;
         }
         offsets.sort_unstable();
@@ -602,9 +611,11 @@ impl RocksDbMessageStoreRoot {
         local: &L,
         topic: &str,
         key: &str,
+        index_type: Option<&str>,
         max_num: usize,
         begin: i64,
         end: i64,
+        last_key: Option<&str>,
         max_query_days: usize,
     ) -> Result<RocksDbIndexLookup<L::Selection>, RocksDbMessageStoreError>
     where
@@ -612,7 +623,7 @@ impl RocksDbMessageStoreRoot {
     {
         let (offsets, last_update_timestamp, last_update_physical_offset) =
             self.derived
-                .index_offsets(topic, key, max_num, begin, end, max_query_days)?;
+                .index_offsets(topic, key, index_type, max_num, begin, end, last_key, max_query_days)?;
         let mut records = Vec::with_capacity(offsets.len());
         for offset in offsets {
             if let Some(selection) = local.read_from(offset)? {

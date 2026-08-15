@@ -251,6 +251,37 @@ impl RocksDbStore {
         result
     }
 
+    /// Scans a prefix beginning at an arbitrary seek key.
+    pub fn prefix_scan_from(
+        &self,
+        options: &RocksDbScanOptions,
+        start: &[u8],
+    ) -> Result<Vec<RocksDbScanItem>, RocketMQError> {
+        self.ensure_open()?;
+        let handle = self.cf_handle(&options.cf)?;
+        let iter = self.db.iterator_cf(
+            &handle,
+            ::rocksdb::IteratorMode::From(start, ::rocksdb::Direction::Forward),
+        );
+        let mut items = Vec::new();
+        for item in iter {
+            let (key, value) = item.map_err(|error| self.map_native_error(error, RocksDbErrorKind::Iterator))?;
+            if !key.starts_with(&options.prefix) {
+                break;
+            }
+            items.push(RocksDbScanItem {
+                key: Bytes::copy_from_slice(&key),
+                value: Bytes::copy_from_slice(&value),
+            });
+            if options.limit > 0 && items.len() >= options.limit {
+                break;
+            }
+        }
+        let result = Ok(items);
+        self.record_result(&result, RocksDbMetricsCollector::record_scan);
+        result
+    }
+
     pub async fn prefix_scan_blocking(
         &self,
         runtime_scope: &RocksDbRuntimeScope,

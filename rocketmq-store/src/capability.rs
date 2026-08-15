@@ -63,6 +63,7 @@ use crate::base::get_message_result::GetMessageResult;
 use crate::base::message_result::PutMessageResult;
 use crate::base::message_status_enum::GetMessageStatus;
 use crate::base::message_status_enum::PutMessageStatus;
+use crate::base::query_message_request::QueryMessageRequest;
 use crate::base::query_message_result::QueryMessageResult;
 use crate::base::select_result::SelectMappedBufferCacheState;
 use crate::base::select_result::SelectMappedBufferResult;
@@ -246,6 +247,13 @@ pub trait BrokerReadStore: BackendAccess {
         end: i64,
     ) -> impl Future<Output = Option<QueryMessageResult>> + Send {
         BackendOps::query_message(self.backend(), topic, key, max_num, begin, end)
+    }
+
+    fn query_message_with_options(
+        &self,
+        request: &QueryMessageRequest,
+    ) -> impl Future<Output = Option<QueryMessageResult>> + Send {
+        BackendOps::query_message_with_options(self.backend(), request)
     }
 
     fn get_max_offset_in_queue(&self, topic: &CheetahString, queue_id: i32) -> i64 {

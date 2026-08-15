@@ -249,6 +249,49 @@ impl IndexRocksDbKey {
         Ok(prefix)
     }
 
+    /// Converts Java's textual six-field index cursor into the persisted RocksDB key.
+    pub fn from_java_cursor(cursor: &str) -> Result<Vec<u8>, RocketMQError> {
+        let fields: Vec<&str> = cursor.split(INDEX_KEY_SPLIT).collect();
+        if fields.len() != 6 {
+            return Err(codec_error(format!(
+                "index cursor must contain six @-separated fields, got {}",
+                fields.len()
+            )));
+        }
+        let store_time_hour = fields[0]
+            .parse::<i64>()
+            .map_err(|error| codec_error(format!("invalid index cursor hour: {error}")))?;
+        if store_time_hour <= 0 || store_time_hour % MILLIS_FOR_HOUR != 0 {
+            return Err(codec_error("index cursor hour must be a positive whole-hour timestamp"));
+        }
+        let offset_py = fields[5]
+            .parse::<i64>()
+            .map_err(|error| codec_error(format!("invalid index cursor offset: {error}")))?;
+        if offset_py < 0 {
+            return Err(codec_error("index cursor offset must be non-negative"));
+        }
+
+        let middle = format!("@{}@{}@{}@{}@", fields[1], fields[2], fields[3], fields[4]);
+        let mut encoded = Vec::with_capacity(16 + middle.len());
+        encoded.extend_from_slice(&store_time_hour.to_be_bytes());
+        encoded.extend_from_slice(middle.as_bytes());
+        encoded.extend_from_slice(&offset_py.to_be_bytes());
+        Ok(encoded)
+    }
+
+    pub fn java_cursor_hour(cursor: &str) -> Result<i64, RocketMQError> {
+        let hour = cursor
+            .split(INDEX_KEY_SPLIT)
+            .next()
+            .ok_or_else(|| codec_error("index cursor is empty"))?
+            .parse::<i64>()
+            .map_err(|error| codec_error(format!("invalid index cursor hour: {error}")))?;
+        if hour <= 0 || hour % MILLIS_FOR_HOUR != 0 {
+            return Err(codec_error("index cursor hour must be a positive whole-hour timestamp"));
+        }
+        Ok(hour)
+    }
+
     fn new(
         topic: impl Into<String>,
         index_type: impl Into<String>,

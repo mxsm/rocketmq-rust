@@ -841,21 +841,59 @@ fn message_rocksdb_storage_queries_index_offsets_by_java_hour_prefix() {
 
     assert_eq!(
         storage
-            .query_offsets_for_index("TopicA", MessageConst::INDEX_KEY_TYPE, "KeyA", begin, second, 10)
+            .query_offsets_for_index("TopicA", MessageConst::INDEX_KEY_TYPE, "KeyA", begin, second, 10, None)
             .expect("index query should scan"),
-        vec![100, 200]
+        vec![100, 200, 200]
     );
     assert_eq!(
         storage
-            .query_offsets_for_index("TopicA", MessageConst::INDEX_UNIQUE_TYPE, "UniqB", begin, filtered, 10)
+            .query_offsets_for_index(
+                "TopicA",
+                MessageConst::INDEX_UNIQUE_TYPE,
+                "UniqB",
+                begin,
+                filtered,
+                10,
+                None,
+            )
             .expect("unique index query should scan"),
         vec![200]
     );
     assert_eq!(
         storage
-            .query_offsets_for_index("TopicA", MessageConst::INDEX_KEY_TYPE, "KeyA", begin, filtered, 1)
+            .query_offsets_for_index("TopicA", MessageConst::INDEX_KEY_TYPE, "KeyA", begin, filtered, 1, None)
             .expect("limited index query should scan"),
         vec![100]
+    );
+    let cursor = format!("{base_hour}@TopicA@K@KeyA@UniqA@100");
+    assert_eq!(
+        storage
+            .query_offsets_for_index(
+                "TopicA",
+                MessageConst::INDEX_KEY_TYPE,
+                "KeyA",
+                begin,
+                filtered,
+                10,
+                Some(&cursor),
+            )
+            .expect("cursor query should resume after the exact index key"),
+        vec![200, 200, 300]
+    );
+    let unique_cursor = format!("{base_hour}@TopicA@U@UniqB@200");
+    assert!(
+        storage
+            .query_offsets_for_index(
+                "TopicA",
+                MessageConst::INDEX_UNIQUE_TYPE,
+                "UniqB",
+                begin,
+                filtered,
+                10,
+                Some(&unique_cursor),
+            )
+            .is_err(),
+        "Java's five-field U index key is not a valid six-field continuation cursor"
     );
 }
 
@@ -3054,7 +3092,8 @@ fn rocksdb_message_store_dispatcher_dual_writes_commitlog_dispatch_to_rocksdb_cq
                 "KeyA",
                 1_700_000_000_000,
                 1_700_000_000_000,
-                10
+                10,
+                None,
             )
             .expect("rocksdb index query should scan"),
         vec![1024]
@@ -3068,7 +3107,8 @@ fn rocksdb_message_store_dispatcher_dual_writes_commitlog_dispatch_to_rocksdb_cq
                 "TagA",
                 1_700_000_000_000,
                 1_700_000_000_000,
-                10
+                10,
+                None,
             )
             .expect("rocksdb tag index query should scan"),
         vec![1024]

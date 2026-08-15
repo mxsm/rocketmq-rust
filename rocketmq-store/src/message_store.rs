@@ -53,6 +53,7 @@ use crate::base::get_message_result::GetMessageResult;
 use crate::base::message_arriving_listener::MessageArrivingListener;
 use crate::base::message_result::AppendMessageResult;
 use crate::base::message_result::PutMessageResult;
+use crate::base::query_message_request::QueryMessageRequest;
 use crate::base::query_message_result::QueryMessageResult;
 use crate::base::select_result::SelectMappedBufferResult;
 use crate::base::store_checkpoint::StoreCheckpoint;
@@ -402,6 +403,10 @@ macro_rules! message_store_methods {
         end: i64,
     ) -> Option<QueryMessageResult> {
         delegate_store_async!(self, query_message(topic, key, max_num, begin, end))
+    }
+
+    async fn query_message_with_options(&self, request: &QueryMessageRequest) -> Option<QueryMessageResult> {
+        delegate_store_async!(self, query_message_with_options(request))
     }
 
     async fn update_ha_master_address(&self, new_addr: &str) {
