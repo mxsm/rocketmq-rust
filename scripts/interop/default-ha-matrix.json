@@ -1,0 +1,108 @@
+{
+  "schemaVersion": 1,
+  "haMode": "DefaultHA",
+  "controllerMode": false,
+  "dledgerCommitLog": false,
+  "wireContract": {
+    "transferHeaderBytes": 12,
+    "slaveReportBytes": 8,
+    "byteOrder": "big-endian"
+  },
+  "excludedModes": [
+    "Java AutoSwitchHA",
+    "Java Controller",
+    "DLedger CommitLog"
+  ],
+  "scenarios": [
+    {
+      "id": "J2R-ASYNC-BASELINE",
+      "direction": "java-master-rust-slave",
+      "flushMode": "ASYNC_FLUSH",
+      "fault": "none",
+      "timeoutSeconds": 120,
+      "requiredAssertions": ["messageId", "queueOffset", "bodyAndProperties", "confirmOffset", "processExit"],
+      "requiredEvidence": ["masterLog", "slaveLog", "probeResult", "offsetSnapshot"]
+    },
+    {
+      "id": "J2R-SYNC-BASELINE",
+      "direction": "java-master-rust-slave",
+      "flushMode": "SYNC_FLUSH",
+      "fault": "none",
+      "timeoutSeconds": 120,
+      "requiredAssertions": ["messageId", "queueOffset", "bodyAndProperties", "confirmOffset", "processExit"],
+      "requiredEvidence": ["masterLog", "slaveLog", "probeResult", "offsetSnapshot"]
+    },
+    {
+      "id": "J2R-RECONNECT",
+      "direction": "java-master-rust-slave",
+      "flushMode": "ASYNC_FLUSH",
+      "fault": "reconnect-resume",
+      "timeoutSeconds": 120,
+      "requiredAssertions": ["messageId", "queueOffset", "bodyAndProperties", "confirmOffset", "processExit"],
+      "requiredEvidence": ["masterLog", "slaveLog", "probeResult", "offsetSnapshot"]
+    },
+    {
+      "id": "J2R-TAIL-TRUNCATE",
+      "direction": "java-master-rust-slave",
+      "flushMode": "SYNC_FLUSH",
+      "fault": "tail-truncate",
+      "timeoutSeconds": 120,
+      "requiredAssertions": ["messageId", "queueOffset", "bodyAndProperties", "confirmOffset", "processExit"],
+      "requiredEvidence": ["masterLog", "slaveLog", "probeResult", "offsetSnapshot"]
+    },
+    {
+      "id": "J2R-SLOW-REPLICA",
+      "direction": "java-master-rust-slave",
+      "flushMode": "SYNC_FLUSH",
+      "fault": "slow-replica",
+      "timeoutSeconds": 120,
+      "requiredAssertions": ["messageId", "queueOffset", "bodyAndProperties", "confirmOffset", "processExit"],
+      "requiredEvidence": ["masterLog", "slaveLog", "probeResult", "offsetSnapshot"]
+    },
+    {
+      "id": "R2J-ASYNC-BASELINE",
+      "direction": "rust-master-java-slave",
+      "flushMode": "ASYNC_FLUSH",
+      "fault": "none",
+      "timeoutSeconds": 120,
+      "requiredAssertions": ["messageId", "queueOffset", "bodyAndProperties", "confirmOffset", "processExit"],
+      "requiredEvidence": ["masterLog", "slaveLog", "probeResult", "offsetSnapshot"]
+    },
+    {
+      "id": "R2J-SYNC-BASELINE",
+      "direction": "rust-master-java-slave",
+      "flushMode": "SYNC_FLUSH",
+      "fault": "none",
+      "timeoutSeconds": 120,
+      "requiredAssertions": ["messageId", "queueOffset", "bodyAndProperties", "confirmOffset", "processExit"],
+      "requiredEvidence": ["masterLog", "slaveLog", "probeResult", "offsetSnapshot"]
+    },
+    {
+      "id": "R2J-RECONNECT",
+      "direction": "rust-master-java-slave",
+      "flushMode": "ASYNC_FLUSH",
+      "fault": "reconnect-resume",
+      "timeoutSeconds": 120,
+      "requiredAssertions": ["messageId", "queueOffset", "bodyAndProperties", "confirmOffset", "processExit"],
+      "requiredEvidence": ["masterLog", "slaveLog", "probeResult", "offsetSnapshot"]
+    },
+    {
+      "id": "R2J-TAIL-TRUNCATE",
+      "direction": "rust-master-java-slave",
+      "flushMode": "SYNC_FLUSH",
+      "fault": "tail-truncate",
+      "timeoutSeconds": 120,
+      "requiredAssertions": ["messageId", "queueOffset", "bodyAndProperties", "confirmOffset", "processExit"],
+      "requiredEvidence": ["masterLog", "slaveLog", "probeResult", "offsetSnapshot"]
+    },
+    {
+      "id": "R2J-SLOW-REPLICA",
+      "direction": "rust-master-java-slave",
+      "flushMode": "SYNC_FLUSH",
+      "fault": "slow-replica",
+      "timeoutSeconds": 120,
+      "requiredAssertions": ["messageId", "queueOffset", "bodyAndProperties", "confirmOffset", "processExit"],
+      "requiredEvidence": ["masterLog", "slaveLog", "probeResult", "offsetSnapshot"]
+    }
+  ]
+}
