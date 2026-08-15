@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use rocketmq_admin_core::core::AdminError;
 use rocketmq_admin_core::core::dashboard::DashboardAdmin;
+use rocketmq_admin_core::core::stable_error_message;
 use rocketmq_admin_core::core::topic;
 use rocketmq_admin_core::core::topic::GetTopicConfigRequest;
 use rocketmq_admin_core::core::topic::TopicAdmin;
@@ -22,8 +24,11 @@ use super::*;
 use crate::model::TopicConfigView;
 use crate::model::TopicConsumerView;
 use crate::model::TopicConsumersView;
+use crate::model::TopicOperationResult;
 use crate::model::TopicQueueOffsetView;
 use crate::model::TopicTargetOptionView;
+use crate::model::TopicTargetResult;
+use crate::model::build_operation_result;
 
 impl DashboardAdminClient {
     pub async fn list_topics(&self) -> Result<TopicListView, DashboardError> {
@@ -77,27 +82,12 @@ impl DashboardAdminClient {
     pub async fn create_or_update_topic(
         &self,
         request: TopicMutationRequest,
-    ) -> Result<MutationResult, DashboardError> {
-        validate_name(&request.topic, "Topic")?;
-        if request.cluster_name_list.is_empty() && request.broker_name_list.is_empty() {
-            return Err(DashboardError::Validation(
-                "Select at least one cluster or broker before saving the topic".to_string(),
-            ));
-        }
-        let request = core::DashboardTopicMutationRequest {
-            topic: request.topic,
-            read_queue_count: request.read_queue_count,
-            write_queue_count: request.write_queue_count,
-            perm: request.perm,
-            broker_name_list: request.broker_name_list,
-            cluster_name_list: request.cluster_name_list,
-            order: request.order.unwrap_or(false),
-            message_type: request.message_type,
-        };
-        let result = run_admin_rpc!(self, |admin| admin.dashboard_upsert_topic(&request))?;
-        Ok(MutationResult {
-            message: result.message,
-        })
+    ) -> Result<TopicOperationResult, DashboardError> {
+        self.upsert_topic(request, TopicMutationKind::Update).await
+    }
+
+    pub async fn create_topic(&self, request: TopicMutationRequest) -> Result<TopicOperationResult, DashboardError> {
+        self.upsert_topic(request, TopicMutationKind::Create).await
     }
 
     pub async fn delete_topic(&self, topic: &str) -> Result<MutationResult, DashboardError> {
@@ -107,6 +97,150 @@ impl DashboardAdminClient {
             message: result.message,
         })
     }
+}
+
+#[derive(Clone, Copy)]
+enum TopicMutationKind {
+    Create,
+    Update,
+}
+
+impl DashboardAdminClient {
+    async fn upsert_topic(
+        &self,
+        request: TopicMutationRequest,
+        kind: TopicMutationKind,
+    ) -> Result<TopicOperationResult, DashboardError> {
+        let operation = match kind {
+            TopicMutationKind::Create => "CREATE",
+            TopicMutationKind::Update => "UPDATE",
+        };
+        run_topic_admin_rpc!(self, |admin| async {
+            let catalog = map_topic_catalog(
+                admin
+                    .get_topic_catalog(&TopicCatalogRequest {
+                        skip_system_topics: false,
+                        skip_retry_and_dlq_topics: false,
+                    })
+                    .await?,
+            );
+            let mut executor = TopicAdminUpsertExecutor { admin };
+            run_topic_upserts(catalog, request, kind, operation, &mut executor).await
+        })
+    }
+}
+
+trait TopicUpsertExecutor {
+    async fn upsert(&mut self, request: &topic::UpsertTopicRequest) -> Result<String, AdminError>;
+}
+
+struct TopicAdminUpsertExecutor<'a, T> {
+    admin: &'a mut T,
+}
+
+impl<T> TopicUpsertExecutor for TopicAdminUpsertExecutor<'_, T>
+where
+    T: TopicAdmin,
+{
+    async fn upsert(&mut self, request: &topic::UpsertTopicRequest) -> Result<String, AdminError> {
+        self.admin.upsert_topic(request).await.map(|result| result.message)
+    }
+}
+
+async fn run_topic_upserts<E>(
+    catalog: TopicListView,
+    request: TopicMutationRequest,
+    kind: TopicMutationKind,
+    operation: &str,
+    executor: &mut E,
+) -> Result<TopicOperationResult, DashboardError>
+where
+    E: TopicUpsertExecutor,
+{
+    match kind {
+        TopicMutationKind::Create => ensure_topic_does_not_exist(&catalog, &request.topic)?,
+        TopicMutationKind::Update => require_mutable_topic(&catalog, &request.topic)?,
+    }
+    let broker_names = resolve_topic_targets(&catalog.targets, &request.cluster_name_list, &request.broker_name_list)?;
+    let mut targets = Vec::with_capacity(broker_names.len());
+    for broker_name in broker_names {
+        let upsert_request = topic::UpsertTopicRequest {
+            cluster_names: Vec::new(),
+            broker_names: vec![broker_name.clone()],
+            topic: request.topic.clone(),
+            write_queue_nums: request.write_queue_count,
+            read_queue_nums: request.read_queue_count,
+            perm: request.perm,
+            order: request.order.unwrap_or(false),
+            message_type: request.message_type.clone(),
+        };
+        match executor.upsert(&upsert_request).await {
+            Ok(message) => targets.push(TopicTargetResult::success(broker_name, message)),
+            Err(error) => targets.push(TopicTargetResult::failure(broker_name, stable_error_message(&error))),
+        }
+    }
+    Ok(build_operation_result(operation, request.topic, targets))
+}
+
+pub(crate) fn resolve_topic_targets(
+    targets: &[TopicTargetOptionView],
+    cluster_names: &[String],
+    broker_names: &[String],
+) -> Result<Vec<String>, DashboardError> {
+    let mut resolved = std::collections::BTreeSet::new();
+    for cluster_name in cluster_names {
+        let cluster_name = cluster_name.trim();
+        let target = targets
+            .iter()
+            .find(|target| target.cluster_name == cluster_name)
+            .ok_or_else(|| DashboardError::Validation(format!("Unknown cluster target `{cluster_name}`")))?;
+        resolved.extend(
+            target
+                .broker_names
+                .iter()
+                .map(|broker_name| broker_name.trim())
+                .filter(|broker_name| !broker_name.is_empty())
+                .map(str::to_string),
+        );
+    }
+    for broker_name in broker_names {
+        let broker_name = broker_name.trim();
+        let canonical_broker_name = targets
+            .iter()
+            .flat_map(|target| target.broker_names.iter())
+            .map(|candidate| candidate.trim())
+            .find(|candidate| *candidate == broker_name && !candidate.is_empty())
+            .ok_or_else(|| DashboardError::Validation(format!("Unknown broker target `{broker_name}`")))?;
+        resolved.insert(canonical_broker_name.to_string());
+    }
+    if resolved.is_empty() {
+        return Err(DashboardError::Validation(
+            "Select at least one cluster or broker before saving the topic".to_string(),
+        ));
+    }
+    Ok(resolved.into_iter().collect())
+}
+
+fn ensure_topic_does_not_exist(catalog: &TopicListView, topic: &str) -> Result<(), DashboardError> {
+    if catalog.items.iter().any(|item| item.topic == topic) {
+        return Err(DashboardError::Validation(format!("Topic `{topic}` already exists")));
+    }
+    Ok(())
+}
+
+fn require_mutable_topic(catalog: &TopicListView, topic: &str) -> Result<(), DashboardError> {
+    let item = catalog.items.iter().find(|item| item.topic == topic).ok_or_else(|| {
+        DashboardError::NotFound(format!(
+            "Topic `{topic}` was not found in the authoritative topic catalog"
+        ))
+    })?;
+    if item.system_topic {
+        return Err(DashboardError::Validation(format!(
+            "System topic `{}` cannot be modified",
+            item.topic
+        )));
+    }
+    Ok(())
 }
 
 fn map_topic_catalog(catalog: topic::TopicCatalog) -> TopicListView {
@@ -249,11 +383,17 @@ fn map_topic_consumers(consumers: topic::TopicConsumers) -> TopicConsumersView {
 
 #[cfg(test)]
 mod tests {
-    use rocketmq_admin_core::core::topic as core_topic;
-
+    use super::TopicMutationKind;
+    use super::TopicUpsertExecutor;
     use super::map_topic_catalog;
     use super::map_topic_stats;
+    use super::resolve_topic_targets;
+    use super::run_topic_upserts;
     use super::topic_info_from_catalog;
+    use crate::model::TopicMutationRequest;
+    use crate::model::TopicTargetOptionView;
+    use rocketmq_admin_core::core::AdminError;
+    use rocketmq_admin_core::core::topic as core_topic;
 
     #[test]
     fn maps_core_stats_without_losing_queue_identity() {
@@ -297,5 +437,171 @@ mod tests {
         assert_eq!(detail.message_type, "MIXED");
         assert!(detail.order);
         assert_eq!(detail.category, "NORMAL");
+    }
+
+    #[test]
+    fn resolves_clusters_and_brokers_to_unique_canonical_brokers() {
+        let targets = vec![TopicTargetOptionView {
+            cluster_name: "DefaultCluster".into(),
+            broker_names: vec!["broker-a".into(), "broker-b".into()],
+        }];
+
+        assert_eq!(
+            resolve_topic_targets(&targets, &[" DefaultCluster ".into()], &["broker-a".into()]).unwrap(),
+            vec!["broker-a", "broker-b"]
+        );
+    }
+
+    #[test]
+    fn canonicalizes_catalog_broker_names_when_resolving_targets() {
+        let targets = vec![TopicTargetOptionView {
+            cluster_name: "DefaultCluster".into(),
+            broker_names: vec![" broker-a ".into(), "broker-a".into(), " broker-b".into()],
+        }];
+
+        assert_eq!(
+            resolve_topic_targets(&targets, &["DefaultCluster".into()], &[]).unwrap(),
+            vec!["broker-a", "broker-b"]
+        );
+    }
+
+    #[tokio::test]
+    async fn create_catalog_collision_runs_no_target_upserts() {
+        let catalog = map_topic_catalog(core_topic::TopicCatalog {
+            items: vec![core_topic::TopicCatalogItem {
+                topic: "orders".into(),
+                category: "NORMAL".into(),
+                message_type: "NORMAL".into(),
+                clusters: vec!["DefaultCluster".into()],
+                brokers: vec!["broker-a".into()],
+                read_queue_count: 8,
+                write_queue_count: 8,
+                perm: 6,
+                order: false,
+                system_topic: false,
+            }],
+            targets: vec![core_topic::TopicTargetOption {
+                cluster_name: "DefaultCluster".into(),
+                broker_names: vec!["broker-a".into()],
+            }],
+        });
+        let mut executor = RecordingExecutor::default();
+
+        let result = run_topic_upserts(
+            catalog,
+            mutation_request(vec!["broker-a".into()]),
+            TopicMutationKind::Create,
+            "CREATE",
+            &mut executor,
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert!(executor.calls.is_empty());
+    }
+
+    #[tokio::test]
+    async fn target_upserts_continue_after_a_failure_in_canonical_order() {
+        let catalog = map_topic_catalog(core_topic::TopicCatalog {
+            items: vec![core_topic::TopicCatalogItem {
+                topic: "orders".into(),
+                category: "NORMAL".into(),
+                message_type: "NORMAL".into(),
+                clusters: vec!["DefaultCluster".into()],
+                brokers: vec!["broker-a".into(), "broker-b".into()],
+                read_queue_count: 8,
+                write_queue_count: 8,
+                perm: 6,
+                order: false,
+                system_topic: false,
+            }],
+            targets: vec![core_topic::TopicTargetOption {
+                cluster_name: "DefaultCluster".into(),
+                broker_names: vec!["broker-b".into(), "broker-a".into()],
+            }],
+        });
+        let mut executor = RecordingExecutor {
+            failing_target: Some("broker-a".into()),
+            ..RecordingExecutor::default()
+        };
+
+        let result = run_topic_upserts(
+            catalog,
+            mutation_request(vec!["broker-b".into(), "broker-a".into(), "broker-a".into()]),
+            TopicMutationKind::Update,
+            "UPDATE",
+            &mut executor,
+        )
+        .await
+        .expect("per-target failures return a structured result");
+
+        assert_eq!(executor.calls, vec!["broker-a", "broker-b"]);
+        assert!(!result.success);
+        assert_eq!(result.target_count, 2);
+        assert_eq!(result.targets[0].target, "broker-a");
+        assert!(!result.targets[0].success);
+        assert_eq!(result.targets[1].target, "broker-b");
+        assert!(result.targets[1].success);
+    }
+
+    #[tokio::test]
+    async fn system_topic_update_runs_no_target_upserts() {
+        let catalog = map_topic_catalog(core_topic::TopicCatalog {
+            items: vec![core_topic::TopicCatalogItem {
+                topic: "TBW102".into(),
+                category: "SYSTEM".into(),
+                message_type: "NORMAL".into(),
+                clusters: vec!["DefaultCluster".into()],
+                brokers: vec!["broker-a".into()],
+                read_queue_count: 8,
+                write_queue_count: 8,
+                perm: 6,
+                order: false,
+                system_topic: true,
+            }],
+            targets: vec![core_topic::TopicTargetOption {
+                cluster_name: "DefaultCluster".into(),
+                broker_names: vec!["broker-a".into()],
+            }],
+        });
+        let mut request = mutation_request(vec!["broker-a".into()]);
+        request.topic = "TBW102".into();
+        let mut executor = RecordingExecutor::default();
+
+        let result = run_topic_upserts(catalog, request, TopicMutationKind::Update, "UPDATE", &mut executor).await;
+
+        assert!(result.is_err());
+        assert!(executor.calls.is_empty());
+    }
+
+    fn mutation_request(broker_name_list: Vec<String>) -> TopicMutationRequest {
+        TopicMutationRequest {
+            topic: "orders".into(),
+            read_queue_count: 8,
+            write_queue_count: 8,
+            perm: 6,
+            broker_name_list,
+            cluster_name_list: Vec::new(),
+            order: Some(false),
+            message_type: Some("NORMAL".into()),
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingExecutor {
+        calls: Vec<String>,
+        failing_target: Option<String>,
+    }
+
+    impl TopicUpsertExecutor for RecordingExecutor {
+        async fn upsert(&mut self, request: &core_topic::UpsertTopicRequest) -> Result<String, AdminError> {
+            let broker_name = request.broker_names.first().cloned().expect("one broker target");
+            self.calls.push(broker_name.clone());
+            if self.failing_target.as_deref() == Some(broker_name.as_str()) {
+                Err(AdminError::backend("upsert_topic", "unavailable"))
+            } else {
+                Ok("saved".to_string())
+            }
+        }
     }
 }

@@ -19,6 +19,7 @@ use crate::model::TopicConsumersView;
 use crate::model::TopicInfo;
 use crate::model::TopicListView;
 use crate::model::TopicMutationRequest;
+use crate::model::TopicOperationResult;
 use crate::model::TopicRouteInfo;
 use crate::model::TopicStatsInfo;
 use crate::service;
@@ -49,7 +50,7 @@ pub async fn get_topic(
 pub async fn create_topic(
     State(state): State<AppState>,
     Json(request): Json<TopicMutationRequest>,
-) -> Result<Json<ApiResponse<MutationResult>>, DashboardError> {
+) -> Result<Json<ApiResponse<TopicOperationResult>>, DashboardError> {
     Ok(Json(ApiResponse::success(
         service::create_topic(&state, request).await?,
     )))
@@ -59,7 +60,7 @@ pub async fn update_topic(
     State(state): State<AppState>,
     Path(topic): Path<String>,
     Json(mut request): Json<TopicMutationRequest>,
-) -> Result<Json<ApiResponse<MutationResult>>, DashboardError> {
+) -> Result<Json<ApiResponse<TopicOperationResult>>, DashboardError> {
     request.topic = topic;
     Ok(Json(ApiResponse::success(
         service::create_or_update_topic(&state, request).await?,

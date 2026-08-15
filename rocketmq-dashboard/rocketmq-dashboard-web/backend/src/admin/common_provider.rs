@@ -86,7 +86,13 @@ impl DashboardAdminProvider for DashboardAdminClient {
         &self,
         request: Self::TopicMutationRequest,
     ) -> AdminFuture<'_, Self::TopicMutationResult, Self::Error> {
-        Box::pin(DashboardAdminClient::create_or_update_topic(self, request))
+        Box::pin(async move {
+            DashboardAdminClient::create_or_update_topic(self, request)
+                .await
+                .map(|result| MutationResult {
+                    message: result.message,
+                })
+        })
     }
 
     fn delete_topic<'a>(&'a self, topic: &'a str) -> AdminFuture<'a, Self::TopicMutationResult, Self::Error> {

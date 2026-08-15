@@ -139,6 +139,61 @@ pub struct TopicMutationRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct TopicTargetResult {
+    pub target: String,
+    pub success: bool,
+    pub message: String,
+}
+
+impl TopicTargetResult {
+    pub(crate) fn success(target: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            target: target.into(),
+            success: true,
+            message: message.into(),
+        }
+    }
+
+    pub(crate) fn failure(target: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            target: target.into(),
+            success: false,
+            message: message.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TopicOperationResult {
+    pub operation: String,
+    pub topic: String,
+    pub success: bool,
+    pub target_count: usize,
+    pub message: String,
+    pub targets: Vec<TopicTargetResult>,
+}
+
+pub(crate) fn build_operation_result(
+    operation: impl Into<String>,
+    topic: impl Into<String>,
+    targets: Vec<TopicTargetResult>,
+) -> TopicOperationResult {
+    let target_count = targets.len();
+    let succeeded_count = targets.iter().filter(|target| target.success).count();
+    let failed_count = target_count.saturating_sub(succeeded_count);
+    TopicOperationResult {
+        operation: operation.into(),
+        topic: topic.into(),
+        success: failed_count == 0,
+        target_count,
+        message: format!("{target_count} targets: {succeeded_count} succeeded, {failed_count} failed"),
+        targets,
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct MutationResult {
     pub message: String,
 }
@@ -146,6 +201,8 @@ pub struct MutationResult {
 #[cfg(test)]
 mod tests {
     use super::TopicInfo;
+    use super::TopicTargetResult;
+    use super::build_operation_result;
 
     #[test]
     fn topic_catalog_dto_serializes_authoritative_metadata() {
@@ -166,5 +223,20 @@ mod tests {
         assert_eq!(json["messageType"], "NORMAL");
         assert_eq!(json["brokers"][0], "broker-a");
         assert_eq!(json["systemTopic"], false);
+    }
+
+    #[test]
+    fn partial_target_failure_is_not_global_success() {
+        let result = build_operation_result(
+            "UPDATE",
+            "orders",
+            vec![
+                TopicTargetResult::success("broker-a", "saved"),
+                TopicTargetResult::failure("broker-b", "unavailable"),
+            ],
+        );
+
+        assert!(!result.success);
+        assert_eq!(result.target_count, 2);
     }
 }
