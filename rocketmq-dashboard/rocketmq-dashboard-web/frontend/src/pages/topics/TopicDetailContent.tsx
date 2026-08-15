@@ -253,7 +253,7 @@ export default function TopicDetailContent({
   const loadConfig = useCallback(async (brokerName?: string) => {
     const requestTopic = topicName;
     const requestKey = `${requestTopic}:${brokerName ?? ''}`;
-    if (configPendingRef.current.has(requestKey)) return;
+    if (configPendingRef.current.get(requestKey) === configRequestRef.current) return;
     const requestId = ++configRequestRef.current;
     configPendingRef.current.set(requestKey, requestId);
     if (brokerName) setSelectedBrokerState({ topicName: requestTopic, brokerName });
@@ -397,7 +397,7 @@ export default function TopicDetailContent({
       >
         <TabsList aria-label="Topic detail sections">
           <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="routes" aria-label="Routes">Routes and status</TabsTrigger>
+          <TabsTrigger value="routes">Routes and status</TabsTrigger>
           <TabsTrigger value="consumers">Consumers</TabsTrigger>
           <TabsTrigger value="configuration">Configuration</TabsTrigger>
         </TabsList>

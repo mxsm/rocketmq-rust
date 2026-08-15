@@ -46,7 +46,7 @@ describe('TopicDetailPage', () => {
     expect(await screen.findByRole('group', { name: 'Queue entries: 2' })).toBeInTheDocument();
     expect(topicApi.route).not.toHaveBeenCalled();
 
-    await user.click(screen.getByRole('tab', { name: 'Routes' }));
+    await user.click(screen.getByRole('tab', { name: 'Routes and status' }));
     expect(await screen.findByRole('row', { name: /broker-a.*8.*8.*RW/ })).toBeInTheDocument();
   });
 });

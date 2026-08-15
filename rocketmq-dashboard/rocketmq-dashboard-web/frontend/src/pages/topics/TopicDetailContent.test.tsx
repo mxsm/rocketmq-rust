@@ -88,13 +88,13 @@ describe('TopicDetailContent', () => {
     expect(await screen.findByRole('group', { name: 'Queue entries: 2' })).toBeInTheDocument();
     expect(topicApi.route).not.toHaveBeenCalled();
 
-    await user.click(screen.getByRole('tab', { name: 'Routes' }));
+    await user.click(screen.getByRole('tab', { name: 'Routes and status' }));
     expect(await screen.findByRole('row', { name: /broker-a.*8.*8.*RW/ })).toBeInTheDocument();
     expect(screen.getByRole('row', { name: /broker-a.*0.*120.*4200.*4080/ })).toBeInTheDocument();
     expect(screen.getByRole('row', { name: /broker-b.*0.*200.*4400.*4200/ })).toBeInTheDocument();
 
     await user.click(screen.getByRole('tab', { name: 'Overview' }));
-    await user.click(screen.getByRole('tab', { name: 'Routes' }));
+    await user.click(screen.getByRole('tab', { name: 'Routes and status' }));
 
     expect(topicApi.stats).toHaveBeenCalledTimes(1);
     expect(topicApi.route).toHaveBeenCalledTimes(1);
@@ -156,13 +156,13 @@ describe('TopicDetailContent', () => {
       .mockResolvedValueOnce(configFixture);
     renderAtRoute(<TopicDetailContent topicName="orders" topic={topicFixture} />, '/topics');
 
-    await user.click(screen.getByRole('tab', { name: 'Routes' }));
+    await user.click(screen.getByRole('tab', { name: 'Routes and status' }));
     expect(await screen.findByRole('region', { name: 'Topic routes' })).toBeInTheDocument();
     await user.click(screen.getByRole('tab', { name: 'Configuration' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('config unavailable');
     await user.click(screen.getByRole('button', { name: 'Retry configuration' }));
     expect(await screen.findByRole('combobox', { name: 'Configuration broker' })).toHaveTextContent('broker-a');
-    await user.click(screen.getByRole('tab', { name: 'Routes' }));
+    await user.click(screen.getByRole('tab', { name: 'Routes and status' }));
 
     expect(topicApi.route).toHaveBeenCalledTimes(1);
     expect(topicApi.config).toHaveBeenCalledTimes(2);
@@ -187,39 +187,65 @@ describe('TopicDetailContent', () => {
     expect(onEdit).toHaveBeenCalledWith(configFixture);
   });
 
-  it('ignores an older broker configuration response after the selection changes again', async () => {
-    const user = userEvent.setup();
-    const brokerBRequest = deferred<TopicConfigView>();
-    const brokerARequest = deferred<TopicConfigView>();
-    vi.mocked(topicApi.config)
-      .mockResolvedValueOnce(configFixture)
-      .mockImplementationOnce(() => brokerBRequest.promise)
-      .mockImplementationOnce(() => brokerARequest.promise);
-    renderAtRoute(<TopicDetailContent topicName="orders" topic={topicFixture} />, '/topics');
+  it.each(['resolve', 'reject'] as const)(
+    'keeps the latest broker configuration request after an older request settles with %s',
+    async (oldRequestOutcome) => {
+      const user = userEvent.setup();
+      const olderBrokerBRequest = deferred<TopicConfigView>();
+      const brokerARequest = deferred<TopicConfigView>();
+      const latestBrokerBRequest = deferred<TopicConfigView>();
+      vi.mocked(topicApi.config)
+        .mockResolvedValueOnce(configFixture)
+        .mockImplementationOnce(() => olderBrokerBRequest.promise)
+        .mockImplementationOnce(() => brokerARequest.promise)
+        .mockImplementationOnce(() => latestBrokerBRequest.promise);
+      renderAtRoute(<TopicDetailContent topicName="orders" topic={topicFixture} />, '/topics');
 
-    await user.click(screen.getByRole('tab', { name: 'Configuration' }));
-    const brokerSelect = await screen.findByRole('combobox', { name: 'Configuration broker' });
-    brokerSelect.focus();
-    await user.keyboard('{Enter}');
-    await user.click(screen.getByRole('option', { name: 'broker-b' }));
-    expect(screen.getByRole('status', { name: 'Loading topic configuration' })).toBeInTheDocument();
+      await user.click(screen.getByRole('tab', { name: 'Configuration' }));
+      const brokerSelect = await screen.findByRole('combobox', { name: 'Configuration broker' });
+      brokerSelect.focus();
+      await user.keyboard('{Enter}');
+      await user.click(screen.getByRole('option', { name: 'broker-b' }));
+      expect(screen.getByRole('status', { name: 'Loading topic configuration' })).toBeInTheDocument();
 
-    brokerSelect.focus();
-    await user.keyboard('{Enter}');
-    await user.click(screen.getByRole('option', { name: 'broker-a' }));
-    await act(async () => brokerARequest.resolve({ ...configFixture, readQueueNums: 12 }));
-    expect(await screen.findByText('12')).toBeInTheDocument();
+      brokerSelect.focus();
+      await user.keyboard('{Enter}');
+      await user.click(screen.getByRole('option', { name: 'broker-a' }));
 
-    await act(async () => brokerBRequest.resolve({
-      ...configFixture,
-      brokerName: 'broker-b',
-      readQueueNums: 64
-    }));
-    expect(screen.getByRole('combobox', { name: 'Configuration broker' })).toHaveTextContent('broker-a');
-    expect(screen.queryByText('64')).not.toBeInTheDocument();
-    expect(topicApi.config).toHaveBeenNthCalledWith(2, 'orders', 'broker-b');
-    expect(topicApi.config).toHaveBeenNthCalledWith(3, 'orders', 'broker-a');
-  });
+      brokerSelect.focus();
+      await user.keyboard('{Enter}');
+      await user.click(screen.getByRole('option', { name: 'broker-b' }));
+
+      expect(topicApi.config).toHaveBeenCalledTimes(4);
+      expect(topicApi.config).toHaveBeenNthCalledWith(4, 'orders', 'broker-b');
+
+      await act(async () => {
+        if (oldRequestOutcome === 'resolve') {
+          olderBrokerBRequest.resolve({ ...configFixture, brokerName: 'broker-b', readQueueNums: 64 });
+        } else {
+          olderBrokerBRequest.reject(new Error('stale broker-b failed'));
+        }
+      });
+      expect(screen.getByRole('status', { name: 'Loading topic configuration' })).toBeInTheDocument();
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      expect(screen.queryByText('64')).not.toBeInTheDocument();
+
+      await act(async () => brokerARequest.resolve({ ...configFixture, readQueueNums: 12 }));
+      expect(screen.getByRole('status', { name: 'Loading topic configuration' })).toBeInTheDocument();
+      expect(screen.queryByText('12')).not.toBeInTheDocument();
+
+      await act(async () => latestBrokerBRequest.resolve({
+        ...configFixture,
+        brokerName: 'broker-b',
+        readQueueNums: 32
+      }));
+      expect(await screen.findByText('32')).toBeInTheDocument();
+      expect(screen.getByRole('combobox', { name: 'Configuration broker' })).toHaveTextContent('broker-b');
+      expect(screen.queryByText('stale broker-b failed')).not.toBeInTheDocument();
+      expect(topicApi.config).toHaveBeenNthCalledWith(2, 'orders', 'broker-b');
+      expect(topicApi.config).toHaveBeenNthCalledWith(3, 'orders', 'broker-a');
+    }
+  );
 
   it('invalidates in-flight consumer results when the topic identity changes', async () => {
     const user = userEvent.setup();
@@ -269,7 +295,7 @@ describe('TopicDetailContent', () => {
     await user.click(screen.getByRole('tab', { name: 'Configuration' }));
     expect(await screen.findByRole('combobox', { name: 'Configuration broker' })).toBeInTheDocument();
     expect(topicApi.config).toHaveBeenCalledTimes(1);
-    await user.click(screen.getByRole('tab', { name: 'Routes' }));
+    await user.click(screen.getByRole('tab', { name: 'Routes and status' }));
     expect(await screen.findByRole('region', { name: 'Topic routes' })).toBeInTheDocument();
     expect(topicApi.route).toHaveBeenCalledTimes(1);
     expect(topicApi.stats).toHaveBeenCalledTimes(1);
