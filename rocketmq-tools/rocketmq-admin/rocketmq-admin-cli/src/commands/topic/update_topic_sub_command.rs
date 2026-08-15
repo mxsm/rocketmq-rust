@@ -97,6 +97,14 @@ pub struct UpdateTopicSubCommand {
         help = "has unit sub (true|false)"
     )]
     has_unit_sub: Option<bool>,
+
+    #[arg(
+        short = 'a',
+        long = "attributes",
+        required = false,
+        help = "attribute modifications, for example +message.type=FIFO,-obsolete"
+    )]
+    attributes: Option<String>,
 }
 
 impl UpdateTopicSubCommand {
@@ -116,7 +124,7 @@ impl UpdateTopicSubCommand {
             .as_ref()
             .map(|perm| perm.parse::<u32>().expect("clap validated perm to be 2, 4, or 6"));
 
-        Ok(UpdateTopicRequest::try_new(
+        UpdateTopicRequest::try_new(
             self.topic.clone(),
             target,
             self.read_queue_nums,
@@ -126,7 +134,8 @@ impl UpdateTopicSubCommand {
             self.unit,
             self.has_unit_sub,
         )?
-        .with_optional_namesrv_addr(self.common_args.namesrv_addr.clone()))
+        .with_attribute_modification(self.attributes.clone())
+        .map(|request| request.with_optional_namesrv_addr(self.common_args.namesrv_addr.clone()))
     }
 
     fn print_result(result: UpdateTopicResult) {
@@ -134,11 +143,8 @@ impl UpdateTopicSubCommand {
             TopicTarget::Broker(broker_addr) => println!("create topic to {} success.", broker_addr),
             TopicTarget::Cluster(cluster_name) => println!("create topic to cluster {} success.", cluster_name),
         }
-        if result.order_warning {
-            println!(
-                "Warning: Order message topic created, but order configuration (queue allocation) is not yet \
-                 implemented."
-            );
+        if result.order_conf_updated {
+            println!("order topic queue allocation configuration updated.");
         }
         println!("{:?}", result.config);
     }
@@ -226,5 +232,26 @@ mod tests {
 
         let cmd = UpdateTopicSubCommand::try_parse_from(args);
         assert!(cmd.is_err());
+    }
+
+    #[test]
+    fn update_topic_attributes_are_forwarded_to_the_typed_request() {
+        let command = UpdateTopicSubCommand::try_parse_from([
+            "updateTopic",
+            "-t",
+            "TestTopic",
+            "-c",
+            "DefaultCluster",
+            "-a",
+            "+message.type=FIFO,-obsolete",
+        ])
+        .unwrap();
+
+        let request = command.request().unwrap();
+        assert_eq!(
+            request.config().attributes.get("+message.type"),
+            Some(&"FIFO".to_string())
+        );
+        assert_eq!(request.config().attributes.get("-obsolete"), Some(&String::new()));
     }
 }

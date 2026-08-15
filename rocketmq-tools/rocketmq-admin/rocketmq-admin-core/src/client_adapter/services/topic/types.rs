@@ -14,9 +14,11 @@
 
 //! Topic-related types and data structures
 
+use std::collections::HashMap;
 use std::collections::HashSet;
 
 use cheetah_string::CheetahString;
+use rocketmq_model::common::attribute::attribute_parser::AttributeParser;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -49,6 +51,7 @@ pub struct TopicConfig {
     pub topic_filter_type: Option<String>,
     pub topic_sys_flag: Option<i32>,
     pub order: bool,
+    pub attributes: HashMap<String, String>,
 }
 
 /// Topic route information
@@ -335,6 +338,26 @@ impl DeleteTopicRequest {
 pub struct DeleteTopicResult {
     pub topic: CheetahString,
     pub cluster_name: CheetahString,
+    pub broker_addrs: Vec<CheetahString>,
+    pub failures: Vec<TopicOperationFailure>,
+    pub name_server_deleted: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TopicOperationFailure {
+    pub broker_addr: CheetahString,
+    pub error_code: String,
+    pub error: String,
+}
+
+impl DeleteTopicResult {
+    pub fn is_complete_success(&self) -> bool {
+        self.failures.is_empty() && self.name_server_deleted
+    }
+
+    pub fn is_partial_failure(&self) -> bool {
+        !self.broker_addrs.is_empty() && (!self.failures.is_empty() || !self.name_server_deleted)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -595,6 +618,7 @@ impl UpdateTopicRequest {
                 topic_filter_type: None,
                 topic_sys_flag: Some(topic_sys_flag as i32),
                 order: order.unwrap_or(false),
+                attributes: HashMap::new(),
             },
             target,
             namesrv_addr: None,
@@ -604,6 +628,13 @@ impl UpdateTopicRequest {
     pub fn with_optional_namesrv_addr(mut self, namesrv_addr: Option<String>) -> Self {
         self.namesrv_addr = trim_optional_string(namesrv_addr);
         self
+    }
+
+    pub fn with_attribute_modification(mut self, attributes: Option<String>) -> RocketMQResult<Self> {
+        let attributes = trim_optional_string(attributes).unwrap_or_default();
+        self.config.attributes = AttributeParser::parse_to_map(attributes.as_str())
+            .map_err(|error| ToolsError::validation_error("attributes", error))?;
+        Ok(self)
     }
 
     pub fn config(&self) -> &TopicConfig {
@@ -631,7 +662,7 @@ impl UpdateTopicRequest {
 pub struct UpdateTopicResult {
     pub config: TopicConfig,
     pub target: TopicTarget,
-    pub order_warning: bool,
+    pub order_conf_updated: bool,
 }
 
 /// Request model for updating topic permissions.
@@ -823,6 +854,48 @@ mod tests {
         assert_eq!(request.config().write_queue_nums, 5);
         assert_eq!(request.config().perm, 6);
         assert!(request.config().order);
+    }
+
+    #[test]
+    fn update_topic_request_preserves_attribute_modifications() {
+        let request = UpdateTopicRequest::try_new(
+            "TestTopic",
+            TopicTarget::Cluster("DefaultCluster".into()),
+            4,
+            4,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap()
+        .with_attribute_modification(Some("+message.type=FIFO,-obsolete".to_string()))
+        .unwrap();
+
+        assert_eq!(
+            request.config().attributes.get("+message.type"),
+            Some(&"FIFO".to_string())
+        );
+        assert_eq!(request.config().attributes.get("-obsolete"), Some(&String::new()));
+    }
+
+    #[test]
+    fn delete_topic_result_distinguishes_partial_failure_from_name_server_mutation() {
+        let result = DeleteTopicResult {
+            topic: "TestTopic".into(),
+            cluster_name: "DefaultCluster".into(),
+            broker_addrs: vec!["broker-a:10911".into()],
+            failures: vec![TopicOperationFailure {
+                broker_addr: "broker-b:10911".into(),
+                error_code: "BROKER_UNAVAILABLE".to_string(),
+                error: "broker unavailable".to_string(),
+            }],
+            name_server_deleted: false,
+        };
+
+        assert!(result.is_partial_failure());
+        assert!(!result.is_complete_success());
+        assert!(!result.name_server_deleted);
     }
 
     #[test]

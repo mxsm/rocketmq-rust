@@ -47,19 +47,49 @@ impl DeleteTopicSubCommand {
         )
     }
 
-    fn print_result(result: DeleteTopicResult) {
-        println!(
-            "delete topic {} from cluster {} success",
-            result.topic, result.cluster_name
-        );
-        println!("delete topic {} from NameServer success", result.topic);
+    fn print_result(result: DeleteTopicResult) -> RocketMQResult<()> {
+        for broker_addr in &result.broker_addrs {
+            println!("delete topic {} from broker {} success", result.topic, broker_addr);
+        }
+        for failure in &result.failures {
+            eprintln!(
+                "delete topic {} from broker {} failed [{}]: {}",
+                result.topic, failure.broker_addr, failure.error_code, failure.error
+            );
+        }
+        if result.name_server_deleted {
+            println!("delete topic {} from NameServer success", result.topic);
+        } else if !result.failures.is_empty() {
+            eprintln!("NameServer deletion skipped because one or more broker mutations failed");
+        }
+
+        if let Some(failure) = result.failures.first() {
+            if failure.error_code == "BROKER_PERMISSION_DENIED" {
+                return Err(RocketMQError::BrokerPermissionDenied {
+                    operation: format!("delete topic {}: {}", result.topic, failure.error),
+                });
+            }
+            return Err(RocketMQError::broker_operation_failed(
+                "DELETE_TOPIC_IN_BROKER_LIST",
+                -1,
+                format!(
+                    "failed to delete topic {} from {} broker(s); first failure at {}: {}",
+                    result.topic,
+                    result.failures.len(),
+                    failure.broker_addr,
+                    failure.error
+                ),
+            ));
+        }
+
+        Ok(())
     }
 }
 impl CommandExecute for DeleteTopicSubCommand {
     async fn execute(
         &self,
-        _credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
-        _client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> rocketmq_error::RocketMQResult<()> {
         if self.cluster_name.is_none() {
             return Err(RocketMQError::IllegalArgument(
@@ -73,9 +103,10 @@ impl CommandExecute for DeleteTopicSubCommand {
                 validation_result.remark().as_str()
             )));
         }
-        let result = TopicService::delete_topic_by_request(self.request()?).await?;
-        Self::print_result(result);
-        Ok(())
+        let result =
+            TopicService::delete_topic_by_request_with_credentials(self.request()?, credentials, client_runtime)
+                .await?;
+        Self::print_result(result)
     }
 }
 
@@ -99,5 +130,25 @@ mod tests {
         assert_eq!(cmd.topic, "TestTopic");
         assert_eq!(cmd.cluster_name, Some("DefaultCluster".to_string()));
         assert_eq!(cmd.common_args.namesrv_addr, Some("127.0.0.1:9876".to_string()));
+    }
+
+    #[test]
+    fn delete_topic_partial_permission_failure_returns_permission_error() {
+        let result = DeleteTopicResult {
+            topic: "TestTopic".into(),
+            cluster_name: "DefaultCluster".into(),
+            broker_addrs: vec!["broker-a:10911".into()],
+            failures: vec![
+                rocketmq_admin_core::client_adapter::services::topic::TopicOperationFailure {
+                    broker_addr: "broker-b:10911".into(),
+                    error_code: "BROKER_PERMISSION_DENIED".to_string(),
+                    error: "permission denied".to_string(),
+                },
+            ],
+            name_server_deleted: false,
+        };
+
+        let error = DeleteTopicSubCommand::print_result(result).unwrap_err();
+        assert_eq!(error.spec().code.as_str(), "BROKER_PERMISSION_DENIED");
     }
 }

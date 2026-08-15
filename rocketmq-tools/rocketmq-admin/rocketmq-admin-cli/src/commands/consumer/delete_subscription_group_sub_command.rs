@@ -99,8 +99,22 @@ impl DeleteSubscriptionGroupSubCommand {
         if result.failures.is_empty() {
             Ok(())
         } else {
+            if let Some(failure) = result
+                .failures
+                .iter()
+                .find(|failure| failure.error_code == "BROKER_PERMISSION_DENIED")
+            {
+                return Err(RocketMQError::BrokerPermissionDenied {
+                    operation: format!(
+                        "delete subscription group {} from {}: {}",
+                        request.group_name(),
+                        failure.broker_addr,
+                        failure.error
+                    ),
+                });
+            }
             Err(RocketMQError::broker_operation_failed(
-                "DELETE_SUBSCRIPTION_GROUP",
+                "DELETE_SUBSCRIPTION_GROUP_LIST",
                 -1,
                 format!(
                     "DeleteSubscriptionGroupSubCommand: Failed to delete from brokers {}",
@@ -156,5 +170,25 @@ mod tests {
 
         assert_eq!(request.group_name().as_str(), "GroupA");
         assert!(request.remove_offset());
+    }
+
+    #[test]
+    fn partial_permission_failure_returns_permission_error() {
+        let request =
+            DeleteSubscriptionGroupRequest::try_new(None, Some("DefaultCluster".to_string()), "GroupA", false).unwrap();
+        let result = ConsumerOperationResult {
+            broker_addrs: vec!["broker-a:10911".into()],
+            failures: vec![
+                rocketmq_admin_core::client_adapter::services::consumer::ConsumerOperationFailure {
+                    broker_addr: "broker-b:10911".into(),
+                    error_code: "BROKER_PERMISSION_DENIED".to_string(),
+                    error: "permission denied".to_string(),
+                },
+            ],
+            warnings: Vec::new(),
+        };
+
+        let error = DeleteSubscriptionGroupSubCommand::print_result(&request, result).unwrap_err();
+        assert_eq!(error.spec().code.as_str(), "BROKER_PERMISSION_DENIED");
     }
 }
