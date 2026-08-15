@@ -185,3 +185,7 @@ required-features = ["test-support"]
 [[test]]
 name = "lite_ordered_suspend"
 required-features = ["test-support"]
+
+[[test]]
+name = "transaction_metrics_persistence"
+required-features = ["test-support"]

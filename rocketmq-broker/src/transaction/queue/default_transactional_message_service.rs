@@ -37,12 +37,16 @@ use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
 use rocketmq_protocol::protocol::header::end_transaction_request_header::EndTransactionRequestHeader;
 use rocketmq_runtime::common::time_utils::current_millis;
+use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::BudgetLimit;
+use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::FullPolicy;
 use rocketmq_runtime::ProcessMemoryLimit;
 use rocketmq_runtime::RateLimit;
 use rocketmq_runtime::ResourceBudget;
 use rocketmq_runtime::ResourceBudgetTree;
+use rocketmq_runtime::ScheduledTaskConfig;
+use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_store::BrokerMasterAddressStore;
 use rocketmq_store::BrokerWriteStore;
 use rocketmq_store::PutMessageResult;
@@ -56,6 +60,7 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
+use crate::broker_path_config_helper::get_transaction_metrics_path;
 use crate::transaction::operation_result::OperationResult;
 use crate::transaction::queue::get_result::GetResult;
 use crate::transaction::queue::message_queue_op_context::MessageQueueOpContext;
@@ -102,6 +107,8 @@ pub struct DefaultTransactionalMessageService<MS: BrokerWriteStore + BrokerMaste
     transactional_op_batch_service: OnceLock<TransactionalOpBatchService<MS>>,
     op_queue_map: Arc<RwLock<HashMap<MessageQueue, MessageQueue>>>,
     transaction_metrics: TransactionMetrics,
+    transaction_metrics_flush_tasks: OnceLock<ScheduledTaskGroup>,
+    transaction_metrics_blocking: OnceLock<BlockingExecutor>,
     operation_queue_budget: ResourceBudget,
 }
 
@@ -172,6 +179,24 @@ where
         file_reserved_time_hours: i64,
         parent_budget: &ResourceBudget,
     ) -> RocketMQResult<Self> {
+        let transaction_metrics =
+            TransactionMetrics::open(get_transaction_metrics_path(broker_config.store_path_root_dir.as_str()))?;
+        Self::try_new_with_resource_budget_and_metrics(
+            transactional_message_bridge,
+            broker_config,
+            file_reserved_time_hours,
+            parent_budget,
+            transaction_metrics,
+        )
+    }
+
+    pub(crate) fn try_new_with_resource_budget_and_metrics(
+        transactional_message_bridge: TransactionalMessageBridge<MS>,
+        broker_config: Arc<BrokerConfig>,
+        file_reserved_time_hours: i64,
+        parent_budget: &ResourceBudget,
+        transaction_metrics: TransactionMetrics,
+    ) -> RocketMQResult<Self> {
         let queue_count = 20_000.min(parent_budget.limit().capacity.count);
         let queue_bytes = (parent_budget.limit().capacity.bytes / 16).max(1);
         let queue_rate = u64::try_from(queue_count).unwrap_or(u64::MAX).max(1);
@@ -194,9 +219,47 @@ where
             delete_context: Arc::new(Mutex::new(HashMap::new())),
             transactional_op_batch_service: OnceLock::new(),
             op_queue_map: Arc::new(Default::default()),
-            transaction_metrics: TransactionMetrics,
+            transaction_metrics,
+            transaction_metrics_flush_tasks: OnceLock::new(),
+            transaction_metrics_blocking: OnceLock::new(),
             operation_queue_budget,
         })
+    }
+
+    pub(crate) fn start_transaction_metrics_flush(&self, service_context: ChildServiceContext) -> RocketMQResult<()> {
+        const FLUSH_INTERVAL: Duration = Duration::from_secs(10);
+
+        let blocking = service_context.metadata_io().clone();
+        let _ = self.transaction_metrics_blocking.set(blocking.clone());
+        let scheduled_tasks = service_context.scheduled_tasks("transaction-metrics-flush");
+        let metrics = self.transaction_metrics.clone();
+        scheduled_tasks
+            .schedule_fixed_rate_no_overlap(
+                ScheduledTaskConfig::fixed_rate_no_overlap("broker.transaction-metrics.flush", FLUSH_INTERVAL),
+                move || {
+                    let blocking = blocking.clone();
+                    let metrics = metrics.clone();
+                    async move {
+                        match blocking
+                            .spawn_io("broker.transaction-metrics.persist", move || metrics.persist_if_dirty())
+                            .await
+                        {
+                            Ok(Ok(_)) => {}
+                            Ok(Err(error)) => error!(%error, "Failed to persist transaction metrics"),
+                            Err(error) => error!(%error, "Failed to schedule transaction metrics persistence"),
+                        }
+                    }
+                },
+            )
+            .map_err(|error| RocketMQError::IO(std::io::Error::other(error)))?;
+        self.transaction_metrics_flush_tasks
+            .set(scheduled_tasks)
+            .map_err(|_| RocketMQError::ConfigInvalidValue {
+                key: "transactionMetrics.flushService",
+                value: "duplicate".into(),
+                reason: "transaction metrics flush service already started".into(),
+            })?;
+        Ok(())
     }
 
     pub async fn set_transactional_op_batch_service_start(
@@ -357,6 +420,11 @@ where
         };
 
         if put_message_result.put_message_status() == PutMessageStatus::PutOk {
+            if let Some(real_topic) =
+                msg_ext.user_property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))
+            {
+                self.transaction_metrics.add_and_get(real_topic.as_str(), -1);
+            }
             info!(
                 "Put checked-too-many-time half message to TRANS_CHECK_MAXTIME_TOPIC OK. Restored in queueOffset={}, \
                  commitLogOffset={}, real topic={:?}",
@@ -1114,11 +1182,20 @@ where
     MS: BrokerWriteStore + BrokerMasterAddressStore + Send + Sync + 'static,
 {
     async fn prepare_message(&self, message_inner: MessageExtBrokerInner) -> PutMessageResult {
-        self.transactional_message_bridge.put_half_message(message_inner).await
+        let real_topic = message_inner
+            .property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))
+            .unwrap_or_else(|| message_inner.topic().clone());
+        let result = self.transactional_message_bridge.put_half_message(message_inner).await;
+        if result.put_message_status() == PutMessageStatus::PutOk
+            && result.append_message_result().is_some_and(|append| append.is_ok())
+        {
+            self.transaction_metrics.add_and_get(real_topic.as_str(), 1);
+        }
+        result
     }
 
     async fn async_prepare_message(&self, message_inner: MessageExtBrokerInner) -> PutMessageResult {
-        self.transactional_message_bridge.put_half_message(message_inner).await
+        self.prepare_message(message_inner).await
     }
 
     async fn delete_prepare_message(&self, message_ext: &MessageExt) -> bool {
@@ -1218,6 +1295,27 @@ where
     async fn close(&self) {
         if let Some(batch_service) = self.transactional_op_batch_service.get() {
             batch_service.shutdown().await
+        }
+        if let Some(flush_tasks) = self.transaction_metrics_flush_tasks.get() {
+            let report = flush_tasks.shutdown(Duration::from_secs(5)).await;
+            if !report.is_healthy() {
+                warn!(report = %report.to_json(), "Transaction metrics flush shutdown was unhealthy");
+            }
+        }
+        let metrics = self.transaction_metrics.clone();
+        let persist_result = if let Some(blocking) = self.transaction_metrics_blocking.get() {
+            blocking
+                .spawn_io("broker.transaction-metrics.shutdown-persist", move || {
+                    metrics.persist_if_dirty()
+                })
+                .await
+                .map_err(|error| RocketMQError::IO(std::io::Error::other(error)))
+                .and_then(|result| result)
+        } else {
+            metrics.persist_if_dirty()
+        };
+        if let Err(error) = persist_result {
+            error!(%error, "Failed to persist transaction metrics during shutdown");
         }
     }
 

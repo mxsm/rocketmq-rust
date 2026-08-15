@@ -44,6 +44,8 @@ pub mod runtime;
 pub mod store;
 pub mod tiered_store;
 pub mod timer;
+#[cfg(feature = "otel-metrics")]
+pub(crate) mod transaction;
 
 #[cfg(all(test, feature = "otel-metrics"))]
 #[path = "metrics/tests/component_metric_isolation.rs"]
