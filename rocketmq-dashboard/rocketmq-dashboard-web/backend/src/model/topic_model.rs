@@ -11,6 +11,8 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+use std::collections::BTreeMap;
+
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -19,10 +21,22 @@ use serde::Serialize;
 pub struct TopicInfo {
     pub topic: String,
     pub broker_name: Option<String>,
+    pub brokers: Vec<String>,
+    pub clusters: Vec<String>,
     pub read_queue_count: u32,
     pub write_queue_count: u32,
     pub perm: u32,
     pub category: String,
+    pub message_type: String,
+    pub order: bool,
+    pub system_topic: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TopicTargetOptionView {
+    pub cluster_name: String,
+    pub broker_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -30,6 +44,39 @@ pub struct TopicInfo {
 pub struct TopicListView {
     pub items: Vec<TopicInfo>,
     pub total: usize,
+    pub targets: Vec<TopicTargetOptionView>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TopicConfigView {
+    pub topic_name: String,
+    pub broker_name: String,
+    pub cluster_name: Option<String>,
+    pub broker_name_list: Vec<String>,
+    pub cluster_name_list: Vec<String>,
+    pub read_queue_nums: i32,
+    pub write_queue_nums: i32,
+    pub perm: i32,
+    pub order: bool,
+    pub message_type: String,
+    pub attributes: BTreeMap<String, String>,
+    pub inconsistent_fields: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TopicConsumerView {
+    pub consumer_group: String,
+    pub total_diff: i64,
+    pub inflight_diff: i64,
+    pub consume_tps: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TopicConsumersView {
+    pub items: Vec<TopicConsumerView>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -61,8 +108,20 @@ pub struct TopicRouteQueue {
 pub struct TopicStatsInfo {
     pub topic: String,
     pub queue_count: usize,
+    pub total_message_count: i64,
     pub total_min_offset: i64,
     pub total_max_offset: i64,
+    pub offsets: Vec<TopicQueueOffsetView>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TopicQueueOffsetView {
+    pub broker_name: String,
+    pub queue_id: i32,
+    pub min_offset: i64,
+    pub max_offset: i64,
+    pub last_update_timestamp: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -82,4 +141,30 @@ pub struct TopicMutationRequest {
 #[serde(rename_all = "camelCase")]
 pub struct MutationResult {
     pub message: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TopicInfo;
+
+    #[test]
+    fn topic_catalog_dto_serializes_authoritative_metadata() {
+        let topic = TopicInfo {
+            topic: "orders".into(),
+            broker_name: Some("broker-a".into()),
+            brokers: vec!["broker-a".into()],
+            clusters: vec!["DefaultCluster".into()],
+            read_queue_count: 8,
+            write_queue_count: 8,
+            perm: 6,
+            category: "NORMAL".into(),
+            message_type: "NORMAL".into(),
+            order: false,
+            system_topic: false,
+        };
+        let json = serde_json::to_value(topic).expect("topic serializes");
+        assert_eq!(json["messageType"], "NORMAL");
+        assert_eq!(json["brokers"][0], "broker-a");
+        assert_eq!(json["systemTopic"], false);
+    }
 }

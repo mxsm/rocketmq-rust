@@ -48,6 +48,8 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/api/topics/{topic}/route", get(topic_api::topic_route))
         .route("/api/topics/{topic}/stats", get(topic_api::topic_stats))
+        .route("/api/topics/{topic}/config", get(topic_api::topic_config))
+        .route("/api/topics/{topic}/consumers", get(topic_api::topic_consumers))
         .route("/api/consumers", get(consumer_api::list_consumers))
         .route("/api/consumers/{group}", get(consumer_api::consumer_progress))
         .route("/api/consumers/{group}/progress", get(consumer_api::consumer_progress))

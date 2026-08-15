@@ -14,53 +14,6 @@
 
 use super::*;
 
-pub(super) fn map_topic_info(item: core::DashboardTopicInfo) -> TopicInfo {
-    let category = classify_topic(&item.topic).to_string();
-    TopicInfo {
-        topic: item.topic,
-        broker_name: item.broker_name,
-        read_queue_count: item.read_queue_count,
-        write_queue_count: item.write_queue_count,
-        perm: item.perm,
-        category,
-    }
-}
-
-pub(super) fn map_topic_route(route: core::DashboardTopicRoute) -> TopicRouteInfo {
-    TopicRouteInfo {
-        topic: route.topic,
-        brokers: route
-            .brokers
-            .into_iter()
-            .map(|broker| TopicRouteBroker {
-                broker_name: broker.broker_name,
-                broker_addrs: broker.broker_addrs,
-            })
-            .collect(),
-        queues: route
-            .queues
-            .into_iter()
-            .map(|queue| TopicRouteQueue {
-                broker_name: queue.broker_name,
-                read_queue_nums: queue.read_queue_nums,
-                write_queue_nums: queue.write_queue_nums,
-                perm: queue.perm,
-            })
-            .collect(),
-    }
-}
-
-pub(super) fn topic_info_from_route(topic: &str, route: &TopicRouteInfo) -> TopicInfo {
-    TopicInfo {
-        topic: topic.to_string(),
-        broker_name: route.brokers.first().map(|broker| broker.broker_name.clone()),
-        read_queue_count: route.queues.iter().map(|queue| queue.read_queue_nums).sum(),
-        write_queue_count: route.queues.iter().map(|queue| queue.write_queue_nums).sum(),
-        perm: route.queues.iter().map(|queue| queue.perm).max().unwrap_or_default(),
-        category: classify_topic(topic).to_string(),
-    }
-}
-
 pub(super) fn map_consumer_progress(progress: core::DashboardConsumerProgress) -> ConsumerProgress {
     ConsumerProgress {
         group: progress.group,

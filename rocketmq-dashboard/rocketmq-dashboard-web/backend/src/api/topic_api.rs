@@ -14,6 +14,8 @@
 use crate::error::DashboardError;
 use crate::model::ApiResponse;
 use crate::model::MutationResult;
+use crate::model::TopicConfigView;
+use crate::model::TopicConsumersView;
 use crate::model::TopicInfo;
 use crate::model::TopicListView;
 use crate::model::TopicMutationRequest;
@@ -23,7 +25,15 @@ use crate::service;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::Path;
+use axum::extract::Query;
 use axum::extract::State;
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TopicConfigQuery {
+    broker_name: Option<String>,
+}
 
 pub async fn list_topics(State(state): State<AppState>) -> Result<Json<ApiResponse<TopicListView>>, DashboardError> {
     Ok(Json(ApiResponse::success(service::list_topics(&state).await?)))
@@ -75,4 +85,23 @@ pub async fn topic_stats(
     Path(topic): Path<String>,
 ) -> Result<Json<ApiResponse<TopicStatsInfo>>, DashboardError> {
     Ok(Json(ApiResponse::success(service::topic_stats(&state, &topic).await?)))
+}
+
+pub async fn topic_config(
+    State(state): State<AppState>,
+    Path(topic): Path<String>,
+    Query(query): Query<TopicConfigQuery>,
+) -> Result<Json<ApiResponse<TopicConfigView>>, DashboardError> {
+    Ok(Json(ApiResponse::success(
+        service::topic_config(&state, &topic, query.broker_name.as_deref()).await?,
+    )))
+}
+
+pub async fn topic_consumers(
+    State(state): State<AppState>,
+    Path(topic): Path<String>,
+) -> Result<Json<ApiResponse<TopicConsumersView>>, DashboardError> {
+    Ok(Json(ApiResponse::success(
+        service::topic_consumers(&state, &topic).await?,
+    )))
 }

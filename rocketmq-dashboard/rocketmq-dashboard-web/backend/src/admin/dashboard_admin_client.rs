@@ -130,6 +130,41 @@ macro_rules! run_admin_rpc {
     }};
 }
 
+// TopicAdmin methods require exclusive mutable access to an AdminSession. Keep that access in a
+// short-lived session so shared DashboardAdmin RPC leases remain concurrently usable.
+macro_rules! run_topic_admin_rpc {
+    ($client:expr, |$admin:ident| $operation:expr) => {{
+        let snapshot = $client.admin_config_snapshot().await?;
+        let builder = AdminBuilder::new(Arc::clone(&$client.client_runtime))
+            .namesrv_addr(snapshot.namesrv_addr.clone())
+            .admin_group(unique_admin_group())
+            .timeout_millis(5_000)
+            .vip_channel_enabled(snapshot.use_vip_channel)
+            .use_tls(snapshot.use_tls);
+        let builder = match $client.admin_credentials.clone() {
+            Some(credentials) => builder.credentials(credentials),
+            None => builder,
+        };
+        let mut guard = builder.build_with_guard().await?;
+        if $client.admin_config_snapshot().await? != snapshot {
+            guard.shutdown().await;
+            Err(DashboardError::Config(
+                "Dashboard admin configuration changed while opening a topic admin session; retry the request"
+                    .to_string(),
+            ))
+        } else {
+            let result = {
+                let $admin = guard.inner_mut();
+                Box::pin($operation).await
+            };
+            guard.shutdown().await;
+            result.map_err(DashboardError::from)
+        }
+    }};
+}
+
+mod topic;
+
 impl ManagedAdminSession {
     async fn lease(&self) -> Result<AdminSessionLease, DashboardError> {
         let owner = self.owner.lock().await;
@@ -297,72 +332,6 @@ impl DashboardAdminClient {
         Ok(DashboardTopicCurrent {
             total_topics: topics.total,
             top_topics,
-        })
-    }
-
-    pub async fn list_topics(&self) -> Result<TopicListView, DashboardError> {
-        let list = run_admin_rpc!(self, |admin| admin.dashboard_list_topics())?;
-        let items = list.items.into_iter().map(map_topic_info).collect::<Vec<_>>();
-        Ok(TopicListView {
-            total: items.len(),
-            items,
-        })
-    }
-
-    pub async fn get_topic(&self, topic: &str) -> Result<TopicInfo, DashboardError> {
-        validate_name(topic, "Topic")?;
-        let route = self.topic_route(topic).await?;
-        Ok(topic_info_from_route(topic, &route))
-    }
-
-    pub async fn topic_route(&self, topic: &str) -> Result<TopicRouteInfo, DashboardError> {
-        validate_name(topic, "Topic")?;
-        let route = run_admin_rpc!(self, |admin| admin.dashboard_topic_route(topic))?;
-        Ok(map_topic_route(route))
-    }
-
-    pub async fn topic_stats(&self, topic: &str) -> Result<TopicStatsInfo, DashboardError> {
-        validate_name(topic, "Topic")?;
-        let stats = run_admin_rpc!(self, |admin| admin.dashboard_topic_stats(topic))?;
-        Ok(TopicStatsInfo {
-            topic: stats.topic,
-            queue_count: stats.queue_count,
-            total_min_offset: stats.total_min_offset,
-            total_max_offset: stats.total_max_offset,
-        })
-    }
-
-    pub async fn create_or_update_topic(
-        &self,
-        request: TopicMutationRequest,
-    ) -> Result<MutationResult, DashboardError> {
-        validate_name(&request.topic, "Topic")?;
-        if request.cluster_name_list.is_empty() && request.broker_name_list.is_empty() {
-            return Err(DashboardError::Validation(
-                "Select at least one cluster or broker before saving the topic".to_string(),
-            ));
-        }
-        let request = core::DashboardTopicMutationRequest {
-            topic: request.topic,
-            read_queue_count: request.read_queue_count,
-            write_queue_count: request.write_queue_count,
-            perm: request.perm,
-            broker_name_list: request.broker_name_list,
-            cluster_name_list: request.cluster_name_list,
-            order: request.order.unwrap_or(false),
-            message_type: request.message_type,
-        };
-        let result = run_admin_rpc!(self, |admin| admin.dashboard_upsert_topic(&request))?;
-        Ok(MutationResult {
-            message: result.message,
-        })
-    }
-
-    pub async fn delete_topic(&self, topic: &str) -> Result<MutationResult, DashboardError> {
-        validate_name(topic, "Topic")?;
-        let result = run_admin_rpc!(self, |admin| admin.dashboard_delete_topic(topic))?;
-        Ok(MutationResult {
-            message: result.message,
         })
     }
 

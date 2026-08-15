@@ -13,6 +13,8 @@
 // limitations under the License.
 use crate::error::DashboardError;
 use crate::model::MutationResult;
+use crate::model::TopicConfigView;
+use crate::model::TopicConsumersView;
 use crate::model::TopicInfo;
 use crate::model::TopicListView;
 use crate::model::TopicMutationRequest;
@@ -21,19 +23,31 @@ use crate::model::TopicStatsInfo;
 use crate::state::AppState;
 
 pub async fn list_topics(state: &AppState) -> Result<TopicListView, DashboardError> {
-    state.admin_facade().list_topics().await
+    state.admin_client.list_topics().await
 }
 
 pub async fn get_topic(state: &AppState, topic: &str) -> Result<TopicInfo, DashboardError> {
-    state.admin_facade().get_topic(topic).await
+    state.admin_client.get_topic(topic).await
 }
 
 pub async fn topic_route(state: &AppState, topic: &str) -> Result<TopicRouteInfo, DashboardError> {
-    state.admin_facade().topic_route(topic).await
+    state.admin_client.topic_route(topic).await
 }
 
 pub async fn topic_stats(state: &AppState, topic: &str) -> Result<TopicStatsInfo, DashboardError> {
-    state.admin_facade().topic_stats(topic).await
+    state.admin_client.topic_stats(topic).await
+}
+
+pub async fn topic_config(
+    state: &AppState,
+    topic: &str,
+    broker_name: Option<&str>,
+) -> Result<TopicConfigView, DashboardError> {
+    state.admin_client.topic_config(topic, broker_name).await
+}
+
+pub async fn topic_consumers(state: &AppState, topic: &str) -> Result<TopicConsumersView, DashboardError> {
+    state.admin_client.topic_consumers(topic).await
 }
 
 pub async fn create_or_update_topic(
@@ -46,7 +60,7 @@ pub async fn create_or_update_topic(
 
 pub async fn create_topic(state: &AppState, request: TopicMutationRequest) -> Result<MutationResult, DashboardError> {
     let _mutation_guard = state.topic_mutation_lock.lock().await;
-    let topics = state.admin_facade().list_topics().await?;
+    let topics = state.admin_client.list_topics().await?;
     ensure_topic_does_not_exist(&topics, &request.topic)?;
     state.admin_facade().create_or_update_topic(request).await
 }
@@ -74,10 +88,15 @@ mod tests {
         TopicInfo {
             topic: name.to_string(),
             broker_name: Some("broker-a".to_string()),
+            brokers: vec!["broker-a".to_string()],
+            clusters: vec!["DefaultCluster".to_string()],
             read_queue_count: 8,
             write_queue_count: 8,
             perm: 6,
             category: "NORMAL".to_string(),
+            message_type: "NORMAL".to_string(),
+            order: false,
+            system_topic: false,
         }
     }
 
@@ -86,6 +105,7 @@ mod tests {
         let topics = TopicListView {
             items: vec![topic("orders")],
             total: 1,
+            targets: Vec::new(),
         };
 
         let error = ensure_topic_does_not_exist(&topics, "orders").expect_err("existing topic must be rejected");
@@ -101,6 +121,7 @@ mod tests {
         let topics = TopicListView {
             items: vec![topic("orders")],
             total: 1,
+            targets: Vec::new(),
         };
 
         ensure_topic_does_not_exist(&topics, "Orders").expect("RocketMQ topic names are case-sensitive");
