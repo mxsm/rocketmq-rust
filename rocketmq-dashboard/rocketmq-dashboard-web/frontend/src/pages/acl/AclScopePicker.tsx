@@ -1,5 +1,6 @@
 import { CheckCircle2, ShieldCheck } from 'lucide-react';
 import SelectMenu from '../../components/SelectMenu';
+import { Button } from '../../components/ui/Button';
 import type { BrokerInfo } from '../../types/broker';
 import { createAclScopeQuery, deriveAclScopeOptions, type AclScope } from './acl-model';
 
@@ -49,14 +50,14 @@ export default function AclScopePicker({
             className="acl-select-menu"
           />
         </label>
-        <button
+        <Button
           type="button"
-          className="button acl-confirm-button"
+          className="acl-confirm-button"
           disabled={disabled || !canConfirm}
           onClick={() => onConfirm(draftScope)}
         >
           <CheckCircle2 size={15} aria-hidden="true" /> Confirm
-        </button>
+        </Button>
       </div>
       <div className="acl-scope-card">
         <ShieldCheck size={18} aria-hidden="true" />

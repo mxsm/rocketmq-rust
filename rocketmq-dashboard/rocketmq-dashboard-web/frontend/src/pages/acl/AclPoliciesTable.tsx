@@ -3,6 +3,7 @@ import { useMemo } from 'react';
 import AppDataTable, { type AppDataTableColumn } from '../../components/AppDataTable';
 import ConfirmDialog from '../../components/ConfirmDialog';
 import StatusBadge from '../../components/StatusBadge';
+import { Button } from '../../components/ui/Button';
 import type { AclPolicyRow } from './acl-model';
 
 export interface AclPoliciesTableProps {
@@ -30,13 +31,13 @@ export default function AclPoliciesTable({ rows, total, page, pageSize, loading,
     { id: 'actions-menu', header: 'Operation', cell: (row) => {
       const target = `${row.subject} on ${row.resource}`;
       return <div className="acl-operation-row">
-        <button type="button" className="button button-secondary acl-action-button" aria-label={`Modify ACL policy ${target}`} disabled={disabled} onClick={() => onEdit(row)}><Edit3 size={14} aria-hidden="true" /> Modify</button>
+        <Button type="button" variant="secondary" className="acl-action-button" aria-label={`Modify ACL policy ${target}`} disabled={disabled} onClick={() => onEdit(row)}><Edit3 size={14} aria-hidden="true" /> Modify</Button>
         {row.policyType === 'Custom' ? (
           <ConfirmDialog title="Delete ACL permission" description={`Delete ACL permission for ${row.subject} on resource ${row.resource}?`} confirmLabel="Delete" onConfirm={() => onDelete(row)}>
-            <button type="button" className="button button-danger acl-action-button" aria-label={`Delete ACL policy ${target}`} disabled={disabled}><Trash2 size={14} aria-hidden="true" /> Delete</button>
+            <Button type="button" variant="destructive" className="acl-action-button" aria-label={`Delete ACL policy ${target}`} disabled={disabled}><Trash2 size={14} aria-hidden="true" /> Delete</Button>
           </ConfirmDialog>
         ) : (
-          <button type="button" className="button button-danger acl-action-button" aria-label={`Delete ACL policy ${target} unavailable: only Custom policies can be deleted`} title="Only Custom ACL policies can be deleted." disabled><Trash2 size={14} aria-hidden="true" /> Delete</button>
+          <Button type="button" variant="destructive" className="acl-action-button" aria-label={`Delete ACL policy ${target} unavailable: only Custom policies can be deleted`} title="Only Custom ACL policies can be deleted." disabled><Trash2 size={14} aria-hidden="true" /> Delete</Button>
         )}
       </div>;
     } }

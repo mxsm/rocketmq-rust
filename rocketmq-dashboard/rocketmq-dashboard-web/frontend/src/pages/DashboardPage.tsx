@@ -231,7 +231,6 @@ export default function DashboardPage() {
             <RankingTable
               rows={topicRankingRows}
               valueLabel="Messages"
-              accent="var(--primary)"
               emptyTitle="No topic ranking"
               emptyDetail="Topic metrics are not available for the current cluster."
               formatValue={formatDashboardMetric}

@@ -312,7 +312,6 @@ export default function TopicListPage() {
       <TopicMaintenanceDialog
         open={maintenanceTopic !== null}
         topic={maintenanceTopic}
-        mode="reset"
         consumerGroups={consumerGroups}
         onOpenChange={(open) => { if (!open) setMaintenanceTopic(null); }}
         onMutationFinished={() => void load()}

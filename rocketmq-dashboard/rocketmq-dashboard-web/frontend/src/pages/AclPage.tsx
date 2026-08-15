@@ -5,6 +5,7 @@ import { brokerApi } from '../api/broker_api';
 import ErrorState from '../components/ErrorState';
 import LoadingState from '../components/LoadingState';
 import PageHeader from '../components/PageHeader';
+import { Button } from '../components/ui/Button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/Tabs';
 import type { AclPolicyRequest, AclPolicyView, AclUserUpsertRequest, AclUserView } from '../types/acl';
 import type { BrokerInfo } from '../types/broker';
@@ -295,8 +296,8 @@ export default function AclPage() {
 
   return (
     <>
-      <PageHeader title="ACL Management" description="Java-compatible ACL users and permissions scoped by cluster and broker." actions={
-        <button type="button" className="button button-secondary" onClick={refresh} disabled={!scopeReady || loadingRecords || mutating}><RefreshCw size={15} aria-hidden="true" /> Refresh</button>
+      <PageHeader title="ACL Management" description="Manage ACL users and permissions for the selected cluster and broker." actions={
+        <Button type="button" variant="secondary" onClick={refresh} disabled={!scopeReady || loadingRecords || mutating}><RefreshCw size={15} aria-hidden="true" /> Refresh</Button>
       } />
       {notice ? <div className={`notice notice-${notice.tone}`}>{notice.message}</div> : null}
       <AclScopePicker brokers={brokers} draftScope={draftScope} confirmedScope={confirmedScope} disabled={loadingRecords} onDraftScopeChange={changeDraftScope} onConfirm={confirmScope} />
@@ -313,15 +314,15 @@ export default function AclPage() {
           <TabsTrigger value="policies"><FileKey2 size={15} aria-hidden="true" /> ACL Policies</TabsTrigger>
         </TabsList>
         <TabsContent value="users" className="acl-table-panel">
-          <AclTableHeader title="ACL Users" description="Username, masked password, user type, status, and Java-style update/delete operations." search={usersSearch} onSearchChange={setUsersSearch} searchLabel="Search ACL users" placeholder="Search users" actions={<>
-            {hasRevealablePasswords ? <button type="button" className="button button-secondary" aria-label={showPasswords ? 'Hide passwords' : 'Reveal passwords'} aria-pressed={showPasswords} onClick={() => setShowPasswords((value) => !value)} disabled={!scopeReady}>{showPasswords ? <EyeOff size={15} aria-hidden="true" /> : <Eye size={15} aria-hidden="true" />}{showPasswords ? 'Hide' : 'Reveal'}</button> : null}
-            <button type="button" className="button" disabled={!scopeReady || mutating} onClick={() => openUserDialog(null)}><Plus size={15} aria-hidden="true" /> Add User</button>
+          <AclTableHeader title="ACL Users" description="Manage credentials, account status, and access changes for the selected broker." search={usersSearch} onSearchChange={setUsersSearch} searchLabel="Search ACL users" placeholder="Search users" actions={<>
+            {hasRevealablePasswords ? <Button type="button" variant="secondary" aria-label={showPasswords ? 'Hide passwords' : 'Reveal passwords'} aria-pressed={showPasswords} onClick={() => setShowPasswords((value) => !value)} disabled={!scopeReady}>{showPasswords ? <EyeOff size={15} aria-hidden="true" /> : <Eye size={15} aria-hidden="true" />}{showPasswords ? 'Hide' : 'Reveal'}</Button> : null}
+            <Button type="button" disabled={!scopeReady || mutating} onClick={() => openUserDialog(null)}><Plus size={15} aria-hidden="true" /> Add User</Button>
           </>} />
           {userDeleteError ? <div className="acl-action-error" role="alert">{userDeleteError}</div> : null}
           {scopeReady ? <AclUsersTable rows={pagedUsers} total={visibleUsers.length} page={usersPage} pageSize={pageSize} loading={loadingRecords} error={recordsError} onRetry={refresh} showPasswords={showPasswords} disabled={mutating} onPageChange={setUsersPage} onEdit={openUserDialog} onDelete={(username) => void deleteUser(username)} /> : <AclScopeEmptyState />}
         </TabsContent>
         <TabsContent value="policies" className="acl-table-panel">
-          <AclTableHeader title="ACL Policies" description="Subject policy entries flattened to resource rows, matching the Java ACL table." search={policiesSearch} onSearchChange={setPoliciesSearch} searchLabel="Search ACL policies" placeholder="Search subject, resource, action, source IP" actions={<button type="button" className="button" disabled={!scopeReady || mutating} onClick={() => openPolicyDialog(null)}><Plus size={15} aria-hidden="true" /> Add ACL Policy</button>} />
+          <AclTableHeader title="ACL Policies" description="Review and manage subject permissions for resources in the selected broker." search={policiesSearch} onSearchChange={setPoliciesSearch} searchLabel="Search ACL policies" placeholder="Search subject, resource, action, source IP" actions={<Button type="button" disabled={!scopeReady || mutating} onClick={() => openPolicyDialog(null)}><Plus size={15} aria-hidden="true" /> Add ACL Policy</Button>} />
           {policyDeleteError ? <div className="acl-action-error" role="alert">{policyDeleteError}</div> : null}
           {scopeReady ? <AclPoliciesTable rows={pagedPolicies} total={visiblePolicies.length} page={policiesPage} pageSize={pageSize} loading={loadingRecords} error={recordsError} onRetry={refresh} disabled={mutating} onPageChange={setPoliciesPage} onEdit={openPolicyDialog} onDelete={(policy) => void deletePolicy(policy)} /> : <AclScopeEmptyState />}
         </TabsContent>
