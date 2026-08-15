@@ -32,6 +32,7 @@ pub mod mq_push_consumer;
 pub mod notify_result;
 pub mod pop_callback;
 pub mod pop_result;
+pub mod pop_retry_policy;
 pub mod pop_status;
 pub(crate) mod pull_callback;
 pub mod pull_result;

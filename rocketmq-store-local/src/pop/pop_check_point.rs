@@ -45,6 +45,10 @@ pub struct PopCheckPoint {
     pub broker_name: Option<CheetahString>,
     #[serde(rename = "rp")]
     pub re_put_times: Option<CheetahString>,
+    #[serde(rename = "rtv", default, skip_serializing_if = "Option::is_none")]
+    pub retry_topic_version: Option<i32>,
+    #[serde(rename = "rg", default, skip_serializing_if = "Option::is_none")]
+    pub retry_policy_generation: Option<u64>,
 }
 
 impl PopCheckPoint {
@@ -217,7 +221,8 @@ impl Display for PopCheckPoint {
         write!(
             f,
             "PopCheckPoint [start_offset={}, pop_time={}, invisible_time={}, bit_map={}, num={}, queue_id={}, \
-             topic={}, cid={}, revive_offset={}, queue_offset_diff={:?}, broker_name={}, re_put_times={}]",
+             topic={}, cid={}, revive_offset={}, queue_offset_diff={:?}, broker_name={}, re_put_times={}, \
+             retry_topic_version={:?}, retry_policy_generation={:?}]",
             self.start_offset,
             self.pop_time,
             self.invisible_time,
@@ -229,7 +234,9 @@ impl Display for PopCheckPoint {
             self.revive_offset,
             self.queue_offset_diff,
             self.broker_name.as_deref().unwrap_or("None"),
-            self.re_put_times.as_deref().unwrap_or("None")
+            self.re_put_times.as_deref().unwrap_or("None"),
+            self.retry_topic_version,
+            self.retry_policy_generation
         )
     }
 }
@@ -255,6 +262,8 @@ mod tests {
             queue_offset_diff: vec![],
             broker_name: None,
             re_put_times: None,
+            retry_topic_version: None,
+            retry_policy_generation: None,
         };
         checkpoint.add_diff(5);
         assert_eq!(checkpoint.queue_offset_diff, vec![5]);
@@ -275,6 +284,8 @@ mod tests {
             queue_offset_diff: vec![0, 1, 2, 3, 4],
             broker_name: None,
             re_put_times: None,
+            retry_topic_version: None,
+            retry_policy_generation: None,
         };
         assert_eq!(checkpoint.index_of_ack(12), 2);
     }
@@ -294,6 +305,8 @@ mod tests {
             queue_offset_diff: vec![0, 1, 2, 3, 4],
             broker_name: None,
             re_put_times: None,
+            retry_topic_version: None,
+            retry_policy_generation: None,
         };
         assert_eq!(checkpoint.index_of_ack(5), -1);
     }
@@ -313,6 +326,8 @@ mod tests {
             queue_offset_diff: vec![0, 1, 2, 3, 4],
             broker_name: None,
             re_put_times: None,
+            retry_topic_version: None,
+            retry_policy_generation: None,
         };
         assert_eq!(checkpoint.ack_offset_by_index(2), 12);
     }
@@ -332,6 +347,8 @@ mod tests {
             queue_offset_diff: vec![],
             broker_name: None,
             re_put_times: Some(CheetahString::from("5")),
+            retry_topic_version: None,
+            retry_policy_generation: None,
         };
         assert_eq!(checkpoint.parse_re_put_times(), 5);
     }
@@ -351,6 +368,8 @@ mod tests {
             queue_offset_diff: vec![],
             broker_name: None,
             re_put_times: Some(CheetahString::from("invalid")),
+            retry_topic_version: None,
+            retry_policy_generation: None,
         };
         assert_eq!(checkpoint.parse_re_put_times(), i32::MAX);
     }
@@ -370,6 +389,8 @@ mod tests {
             queue_offset_diff: vec![],
             broker_name: None,
             re_put_times: None,
+            retry_topic_version: None,
+            retry_policy_generation: None,
         };
         assert_eq!(checkpoint.parse_re_put_times(), 0);
     }
@@ -389,6 +410,8 @@ mod tests {
             queue_offset_diff: vec![],
             broker_name: None,
             re_put_times: None,
+            retry_topic_version: None,
+            retry_policy_generation: None,
         };
         let p2 = PopCheckPoint {
             start_offset: 20,
@@ -412,6 +435,8 @@ mod tests {
             queue_offset_diff: vec![],
             broker_name: None,
             re_put_times: None,
+            retry_topic_version: None,
+            retry_policy_generation: None,
         };
         let p2 = PopCheckPoint {
             start_offset: 20,
@@ -435,6 +460,8 @@ mod tests {
             queue_offset_diff: vec![],
             broker_name: None,
             re_put_times: None,
+            retry_topic_version: None,
+            retry_policy_generation: None,
         };
         let p2 = PopCheckPoint {
             start_offset: 10,
@@ -458,6 +485,8 @@ mod tests {
             queue_offset_diff: vec![1, 2, 3],
             broker_name: Some(CheetahString::from("test_broker")),
             re_put_times: Some(CheetahString::from("test_reput")),
+            retry_topic_version: None,
+            retry_policy_generation: None,
         };
         let serialized = serde_json::to_string(&p).unwrap();
         let deserialized: PopCheckPoint = serde_json::from_str(&serialized).unwrap();
@@ -498,11 +527,14 @@ mod tests {
             queue_offset_diff: vec![1, 2, 3],
             broker_name: Some(CheetahString::from("test_broker")),
             re_put_times: Some(CheetahString::from("test_reput")),
+            retry_topic_version: None,
+            retry_policy_generation: None,
         };
         let display = format!("{}", p);
         let expected = "PopCheckPoint [start_offset=10, pop_time=20, invisible_time=30, bit_map=40, num=50, \
                         queue_id=60, topic=test_topic, cid=test_cid, revive_offset=70, queue_offset_diff=[1, 2, 3], \
-                        broker_name=test_broker, re_put_times=test_reput]";
+                        broker_name=test_broker, re_put_times=test_reput, retry_topic_version=None, \
+                        retry_policy_generation=None]";
         assert_eq!(display, expected);
     }
 }

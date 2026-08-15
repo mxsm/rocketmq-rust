@@ -24,7 +24,6 @@ use rocketmq_model::common::constant::PermName;
 use rocketmq_model::common::filter::expression_type::ExpressionType;
 #[cfg(any(test, feature = "test-support"))]
 use rocketmq_model::common::hasher::string_hasher::JavaStringHasher;
-use rocketmq_model::common::key_builder::KeyBuilder;
 use rocketmq_model::common::FAQUrl;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::filter::filter_api::FilterAPI;
@@ -55,6 +54,7 @@ use crate::long_polling::polling_header::PollingHeader;
 use crate::long_polling::polling_result::PollingResult;
 use crate::offset::manager::consumer_offset_manager::ConsumerOffsetQueryCapability;
 use crate::offset::manager::consumer_order_info_manager::ConsumerOrderInfoManager;
+use crate::processor::pop_message_processor::capability::PopPolicyState;
 use crate::processor::processor_service::pop_buffer_merge_service::PopBufferMergeService;
 use crate::subscription::manager::subscription_group_manager::SubscriptionGroupConfigLookup;
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
@@ -63,8 +63,6 @@ use crate::topic::manager::topic_config_manager::TopicConfigManager;
 pub(crate) struct NotificationPolicy {
     broker_permission: u32,
     broker_ip1: CheetahString,
-    enable_retry_topic_v2: bool,
-    retrieve_message_from_pop_retry_topic_v1: bool,
     use_message_filter_for_notification: bool,
     max_message_filter_num_for_notification: i32,
 }
@@ -74,8 +72,6 @@ impl NotificationPolicy {
         Self {
             broker_permission: broker_config.broker_permission,
             broker_ip1: broker_config.broker_ip1().clone(),
-            enable_retry_topic_v2: broker_config.enable_retry_topic_v2,
-            retrieve_message_from_pop_retry_topic_v1: broker_config.retrieve_message_from_pop_retry_topic_v1,
             use_message_filter_for_notification: broker_config.use_message_filter_for_notification,
             max_message_filter_num_for_notification: broker_config.max_message_filter_num_for_notification,
         }
@@ -300,6 +296,7 @@ impl<MS: BrokerReadWriteStore> NotificationPopOffsetCapability<MS> {
 pub(crate) struct NotificationProcessorContext<MS: BrokerReadWriteStore> {
     command_factory: RemotingCommandFactory,
     policy: NotificationPolicy,
+    retry_policies: PopPolicyState,
     topic_config_manager: Arc<TopicConfigManager>,
     subscription_group_lookup: SubscriptionGroupConfigLookup,
     consumer_filter_manager: Arc<ConsumerFilterManager>,
@@ -317,6 +314,7 @@ impl<MS: BrokerReadWriteStore> NotificationProcessorContext<MS> {
     )]
     pub(crate) fn new(
         policy: NotificationPolicy,
+        retry_policies: PopPolicyState,
         topic_config_manager: Arc<TopicConfigManager>,
         subscription_group_lookup: SubscriptionGroupConfigLookup,
         consumer_filter_manager: Arc<ConsumerFilterManager>,
@@ -329,6 +327,7 @@ impl<MS: BrokerReadWriteStore> NotificationProcessorContext<MS> {
         Self {
             command_factory: application_remoting_command_factory(),
             policy,
+            retry_policies,
             topic_config_manager,
             subscription_group_lookup,
             consumer_filter_manager,
@@ -637,29 +636,19 @@ where
         let random_q: i32 = rand::rng().random_range(0..100);
         let mut has_msg = false;
         let need_retry = random_q % 5 == 0;
+        let retry_policy = self.context.retry_policies.retry_policy(&request_header.consumer_group);
 
         if need_retry {
-            let retry_topic = KeyBuilder::build_pop_retry_topic(
-                request_header.topic.as_str(),
-                request_header.consumer_group.as_str(),
-                self.context.policy.enable_retry_topic_v2,
-            )
-            .into();
-            has_msg = self
-                .has_msg_from_topic_name(&retry_topic, random_q, &request_header, None)
-                .await;
-            if !has_msg
-                && self.context.policy.enable_retry_topic_v2
-                && self.context.policy.retrieve_message_from_pop_retry_topic_v1
+            for retry_topic in
+                retry_policy.read_topics(request_header.topic.as_str(), request_header.consumer_group.as_str())
             {
-                let retry_topic_v1 = KeyBuilder::build_pop_retry_topic_v1(
-                    request_header.topic.as_str(),
-                    request_header.consumer_group.as_str(),
-                )
-                .into();
+                let retry_topic = retry_topic.into();
                 has_msg = self
-                    .has_msg_from_topic_name(&retry_topic_v1, random_q, &request_header, None)
+                    .has_msg_from_topic_name(&retry_topic, random_q, &request_header, None)
                     .await;
+                if has_msg {
+                    break;
+                }
             }
         }
         if !has_msg {
@@ -675,27 +664,16 @@ where
             }
             // if it doesn't have message, fetch retry again
             if !need_retry && !has_msg {
-                let retry_topic = KeyBuilder::build_pop_retry_topic(
-                    request_header.topic.as_str(),
-                    request_header.consumer_group.as_str(),
-                    self.context.policy.enable_retry_topic_v2,
-                )
-                .into();
-                has_msg = self
-                    .has_msg_from_topic_name(&retry_topic, random_q, &request_header, None)
-                    .await;
-                if !has_msg
-                    && self.context.policy.enable_retry_topic_v2
-                    && self.context.policy.retrieve_message_from_pop_retry_topic_v1
+                for retry_topic in
+                    retry_policy.read_topics(request_header.topic.as_str(), request_header.consumer_group.as_str())
                 {
-                    let retry_topic_v1 = KeyBuilder::build_pop_retry_topic_v1(
-                        request_header.topic.as_str(),
-                        request_header.consumer_group.as_str(),
-                    )
-                    .into();
+                    let retry_topic = retry_topic.into();
                     has_msg = self
-                        .has_msg_from_topic_name(&retry_topic_v1, random_q, &request_header, None)
+                        .has_msg_from_topic_name(&retry_topic, random_q, &request_header, None)
                         .await;
+                    if has_msg {
+                        break;
+                    }
                 }
             }
         }
@@ -782,6 +760,7 @@ mod tests {
         );
         NotificationProcessor::new(NotificationProcessorContext::new(
             policy,
+            inner.pop_policy_state(),
             topic_config_manager,
             subscription_group_lookup,
             consumer_filter_manager,
@@ -847,8 +826,6 @@ mod tests {
         let broker_config = BrokerConfig {
             broker_permission: 3,
             broker_ip1: CheetahString::from_static_str("192.0.2.11"),
-            enable_retry_topic_v2: true,
-            retrieve_message_from_pop_retry_topic_v1: true,
             use_message_filter_for_notification: false,
             max_message_filter_num_for_notification: 17,
             ..Default::default()
@@ -858,8 +835,6 @@ mod tests {
 
         assert_eq!(policy.broker_permission, 3);
         assert_eq!(policy.broker_ip1, "192.0.2.11");
-        assert!(policy.enable_retry_topic_v2);
-        assert!(policy.retrieve_message_from_pop_retry_topic_v1);
         assert!(!policy.use_message_filter_for_notification);
         assert_eq!(policy.max_message_filter_num_for_notification, 17);
     }

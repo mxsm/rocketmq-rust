@@ -21,6 +21,7 @@ use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::key_builder;
 use rocketmq_model::common::key_builder::KeyBuilder;
+use rocketmq_model::common::pop_retry_policy::PopRetryPolicy;
 
 pub struct ExtraInfoUtil;
 
@@ -34,6 +35,7 @@ pub struct AckExtraInfo<'a> {
     pub broker_name: &'a str,
     pub queue_id: i32,
     pub queue_offset: i64,
+    pub retry_generation: Option<u64>,
 }
 
 const NORMAL_TOPIC: &str = "0";
@@ -76,6 +78,14 @@ impl ExtraInfoUtil {
         let queue_offset = next("queue offset")?
             .parse::<i64>()
             .map_err(|_| illegal_argument("parse queue_offset error"))?;
+        let retry_generation = parts
+            .next()
+            .map(|value| {
+                value
+                    .parse::<u64>()
+                    .map_err(|_| illegal_argument("parse retry generation error"))
+            })
+            .transpose()?;
 
         if broker_name.trim().is_empty() {
             return Err(illegal_argument("parse POP receipt handle: broker name is blank"));
@@ -93,6 +103,7 @@ impl ExtraInfoUtil {
             broker_name,
             queue_id,
             queue_offset,
+            retry_generation,
         })
     }
 
@@ -280,6 +291,39 @@ impl ExtraInfoUtil {
             msg_queue_offset,
             sep = KEY_SEPARATOR
         )
+    }
+
+    /// Builds a receipt handle that carries the persisted POP retry policy generation.
+    ///
+    /// Existing eight-field handles remain valid. The optional ninth field is emitted only
+    /// for retry topics, while the existing retry marker continues to identify v1 or v2.
+    #[allow(clippy::too_many_arguments, reason = "preserves the established POP receipt fields")]
+    pub fn build_extra_info_with_offset_and_retry_policy(
+        ck_queue_offset: i64,
+        pop_time: i64,
+        invisible_time: i64,
+        revive_qid: i32,
+        topic: &str,
+        broker_name: &str,
+        queue_id: i32,
+        msg_queue_offset: i64,
+        retry_policy: &PopRetryPolicy,
+    ) -> String {
+        let base = Self::build_extra_info_with_offset(
+            ck_queue_offset,
+            pop_time,
+            invisible_time,
+            revive_qid,
+            topic,
+            broker_name,
+            queue_id,
+            msg_queue_offset,
+        );
+        if KeyBuilder::classify_pop_retry_topic(topic).is_some() {
+            format!("{base}{KEY_SEPARATOR}{}", retry_policy.generation)
+        } else {
+            base
+        }
     }
 
     /// Build start offset info
@@ -798,6 +842,32 @@ mod tests {
     fn build_extra_info_with_msg_queue_offset_creates_correct_string() {
         let result = ExtraInfoUtil::build_extra_info_with_offset(123, 456, 789, 10, "topic", "broker", 7, 100);
         assert_eq!(result, "123 456 789 10 0 broker 7 100");
+    }
+
+    #[test]
+    fn retry_receipt_round_trips_actual_version_and_policy_generation() {
+        let policy = PopRetryPolicy::dual_read_v2_write(17);
+        let retry_topic = policy.write_topic("topic", "consumer-a");
+        let handle = ExtraInfoUtil::build_extra_info_with_offset_and_retry_policy(
+            123,
+            456,
+            789,
+            10,
+            &retry_topic,
+            "broker",
+            7,
+            100,
+            &policy,
+        );
+
+        let parsed = ExtraInfoUtil::parse_ack_extra_info(&handle).expect("generated receipt should parse");
+        assert_eq!(parsed.retry, RETRY_TOPIC_V2);
+        assert_eq!(parsed.retry_generation, Some(17));
+        assert_eq!(
+            ExtraInfoUtil::get_real_topic_with_retry("topic", "consumer-a", parsed.retry)
+                .expect("retry marker should resolve"),
+            retry_topic
+        );
     }
 
     #[test]

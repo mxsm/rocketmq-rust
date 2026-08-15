@@ -21,7 +21,6 @@ use std::sync::Weak;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
-use rocketmq_model::common::key_builder::KeyBuilder;
 use rocketmq_model::common::message::message_enum::MessageRequestMode;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_model::common::message::message_queue_assignment::MessageQueueAssignment;
@@ -44,6 +43,7 @@ use crate::consumer::consumer_impl::pop_request::PopRequest;
 use crate::consumer::consumer_impl::process_queue::ProcessQueue;
 use crate::consumer::consumer_impl::pull_request::PullRequest;
 use crate::consumer::consumer_impl::re_balance::Rebalance;
+use crate::consumer::pop_retry_policy::pop_retry_subscription_topics;
 use crate::factory::mq_client_instance::MQClientInstance;
 use crate::types::ConsumerGroupName;
 use crate::types::TopicName;
@@ -567,20 +567,20 @@ where
         if !topic.starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
             if mq2pop_assignment.is_empty() && !mq2push_assignment.is_empty() {
                 // Assignment switched from pop-mode to push-mode; subscribe to the pop retry topic.
-                let retry_topic =
-                    CheetahString::from(KeyBuilder::build_pop_retry_topic(topic, consumer_group.as_ref(), false));
-                let subscription_data = FilterAPI::build_subscription_data(
-                    &retry_topic,
-                    &CheetahString::from_static_str(SubscriptionData::SUB_ALL),
-                );
-                if let Ok(subscription_data) = subscription_data {
-                    self.put_subscription_data(&retry_topic, subscription_data);
+                for retry_topic in pop_retry_subscription_topics(topic, consumer_group.as_ref()) {
+                    let subscription_data = FilterAPI::build_subscription_data(
+                        &retry_topic,
+                        &CheetahString::from_static_str(SubscriptionData::SUB_ALL),
+                    );
+                    if let Ok(subscription_data) = subscription_data {
+                        self.put_subscription_data(&retry_topic, subscription_data);
+                    }
                 }
             } else if !mq2pop_assignment.is_empty() && mq2push_assignment.is_empty() {
-                // Assignment switched from push-mode to pop-mode; unsubscribe from the pop retry topic.
-                let retry_topic =
-                    CheetahString::from(KeyBuilder::build_pop_retry_topic(topic, consumer_group.as_ref(), false));
-                self.remove_subscription_data(&retry_topic);
+                // Assignment switched from push-mode to pop-mode; unsubscribe from both retry versions.
+                for retry_topic in pop_retry_subscription_topics(topic, consumer_group.as_ref()) {
+                    self.remove_subscription_data(&retry_topic);
+                }
             }
         }
         let mut remove_queue_map = HashMap::with_capacity(64);

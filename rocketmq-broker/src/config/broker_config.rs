@@ -29,6 +29,7 @@ use rocketmq_model::common::constant::PermName;
 use rocketmq_model::common::message::message_enum::MessageRequestMode;
 use rocketmq_model::common::mix_all;
 use rocketmq_model::common::mix_all::NAMESRV_ADDR_PROPERTY;
+use rocketmq_model::common::pop_retry_policy::PopRetryMigrationState;
 use rocketmq_model::common::topic::TopicValidator;
 use rocketmq_observability::LogExporterType;
 use rocketmq_observability::MetricsExporterType;
@@ -1177,6 +1178,11 @@ pub struct BrokerConfig {
     #[serde(default = "defaults::retrieve_message_from_pop_retry_topic_v1")]
     pub retrieve_message_from_pop_retry_topic_v1: bool,
 
+    /// Explicit per-group POP retry migration target. When omitted, an existing
+    /// persisted group policy remains authoritative across restarts.
+    #[serde(default)]
+    pub pop_retry_migration_state: Option<PopRetryMigrationState>,
+
     #[serde(default = "defaults::pop_from_retry_probability")]
     pub pop_from_retry_probability: i32,
 
@@ -1592,6 +1598,7 @@ impl Default for BrokerConfig {
             enable_pop_log: false,
             enable_retry_topic_v2: false,
             retrieve_message_from_pop_retry_topic_v1: true,
+            pop_retry_migration_state: None,
             pop_from_retry_probability: 20,
             pop_from_retry_probability_for_priority: 0,
             priority_order_asc: true,

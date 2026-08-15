@@ -14,6 +14,8 @@
 
 use crate::topic::RETRY_GROUP_TOPIC_PREFIX;
 
+use super::pop_retry_policy::PopRetryTopicVersion;
+
 pub const POP_ORDER_REVIVE_QUEUE: i32 = 999;
 pub const POP_RETRY_SEPARATOR_V1: char = '_';
 pub const POP_RETRY_SEPARATOR_V2: char = '+';
@@ -23,10 +25,19 @@ pub struct KeyBuilder;
 
 impl KeyBuilder {
     pub fn build_pop_retry_topic(topic: &str, cid: &str, enable_retry_v2: bool) -> String {
-        if enable_retry_v2 {
-            return KeyBuilder::build_pop_retry_topic_v2(topic, cid);
+        let version = if enable_retry_v2 {
+            PopRetryTopicVersion::V2
+        } else {
+            PopRetryTopicVersion::V1
+        };
+        Self::build_pop_retry_topic_for_version(topic, cid, version)
+    }
+
+    pub fn build_pop_retry_topic_for_version(topic: &str, cid: &str, version: PopRetryTopicVersion) -> String {
+        match version {
+            PopRetryTopicVersion::V1 => Self::build_pop_retry_topic_v1(topic, cid),
+            PopRetryTopicVersion::V2 => Self::build_pop_retry_topic_v2(topic, cid),
         }
-        KeyBuilder::build_pop_retry_topic_v1(topic, cid)
     }
 
     pub fn build_pop_retry_topic_default(topic: &str, cid: &str) -> String {
@@ -77,5 +88,29 @@ impl KeyBuilder {
 
     pub fn is_pop_retry_topic_v2(retry_topic: &str) -> bool {
         retry_topic.starts_with(RETRY_GROUP_TOPIC_PREFIX) && retry_topic.contains(POP_RETRY_SEPARATOR_V2)
+    }
+
+    pub fn classify_pop_retry_topic(retry_topic: &str) -> Option<PopRetryTopicVersion> {
+        if Self::is_pop_retry_topic_v2(retry_topic) {
+            Some(PopRetryTopicVersion::V2)
+        } else if retry_topic.starts_with(RETRY_GROUP_TOPIC_PREFIX)
+            && retry_topic[RETRY_GROUP_TOPIC_PREFIX.len()..].contains(POP_RETRY_SEPARATOR_V1)
+        {
+            Some(PopRetryTopicVersion::V1)
+        } else {
+            None
+        }
+    }
+
+    pub fn parse_pop_retry_topic<'a>(retry_topic: &'a str, cid: &str) -> Option<(PopRetryTopicVersion, &'a str)> {
+        let prefix = format!("{RETRY_GROUP_TOPIC_PREFIX}{cid}");
+        let suffix = retry_topic.strip_prefix(&prefix)?;
+        if let Some(topic) = suffix.strip_prefix(POP_RETRY_SEPARATOR_V2) {
+            (!topic.is_empty()).then_some((PopRetryTopicVersion::V2, topic))
+        } else if let Some(topic) = suffix.strip_prefix(POP_RETRY_SEPARATOR_V1) {
+            (!topic.is_empty()).then_some((PopRetryTopicVersion::V1, topic))
+        } else {
+            None
+        }
     }
 }

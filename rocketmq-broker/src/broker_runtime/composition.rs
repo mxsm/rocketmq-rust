@@ -175,6 +175,10 @@ impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
 }
 
 impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
+    pub(crate) fn pop_policy_state(&self) -> PopPolicyState {
+        self.pop_policy_state.clone()
+    }
+
     pub(super) fn build_pull_message_context(&self) -> Arc<PullMessageProcessorContext<MS>> {
         let escape_bridge = self.escape_bridge();
         Arc::new(
