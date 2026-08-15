@@ -752,6 +752,10 @@ mod defaults {
     pub const fn broker_election_priority() -> i32 {
         i32::MAX
     }
+
+    pub const fn consumer_fallbehind_threshold() -> i64 {
+        16 * 1024 * 1024 * 1024
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -1082,6 +1086,12 @@ pub struct BrokerConfig {
 
     #[serde(default)]
     pub slave_read_enable: bool,
+
+    #[serde(default)]
+    pub disable_consume_if_consumer_read_slowly: bool,
+
+    #[serde(default = "defaults::consumer_fallbehind_threshold")]
+    pub consumer_fallbehind_threshold: i64,
 
     #[serde(default = "defaults::commercial_base_count")]
     pub commercial_base_count: i32,
@@ -1554,6 +1564,8 @@ impl Default for BrokerConfig {
             max_message_filter_num_for_notification: defaults::max_message_filter_num_for_notification(),
             use_server_side_reset_offset: true,
             slave_read_enable: false,
+            disable_consume_if_consumer_read_slowly: false,
+            consumer_fallbehind_threshold: defaults::consumer_fallbehind_threshold(),
             commercial_base_count: 1,
             reject_pull_consumer_enable: false,
             consumer_offset_update_version_step: 500,
@@ -2105,6 +2117,14 @@ impl BrokerConfig {
         );
         properties.insert("slaveReadEnable".into(), self.slave_read_enable.to_string().into());
         properties.insert(
+            "disableConsumeIfConsumerReadSlowly".into(),
+            self.disable_consume_if_consumer_read_slowly.to_string().into(),
+        );
+        properties.insert(
+            "consumerFallbehindThreshold".into(),
+            self.consumer_fallbehind_threshold.to_string().into(),
+        );
+        properties.insert(
             "commercialBaseCount".into(),
             self.commercial_base_count.to_string().into(),
         );
@@ -2339,6 +2359,28 @@ mod tests {
         assert!(!config.lite_lag_latency_metrics_enable);
         assert!(!config.lite_lag_count_metrics_enable);
         assert_eq!(config.lite_lag_latency_top_k, 50);
+    }
+
+    #[test]
+    fn default_broker_config_uses_java_slow_consumer_protection_defaults() {
+        let config = BrokerConfig::default();
+
+        assert!(!config.disable_consume_if_consumer_read_slowly);
+        assert_eq!(config.consumer_fallbehind_threshold, 16 * 1024 * 1024 * 1024);
+        assert_eq!(
+            config
+                .get_properties()
+                .get("disableConsumeIfConsumerReadSlowly")
+                .map(CheetahString::as_str),
+            Some("false")
+        );
+        assert_eq!(
+            config
+                .get_properties()
+                .get("consumerFallbehindThreshold")
+                .map(CheetahString::as_str),
+            Some("17179869184")
+        );
     }
 
     #[test]

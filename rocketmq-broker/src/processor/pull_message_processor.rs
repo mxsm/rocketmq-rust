@@ -975,11 +975,19 @@ where
                                         ));
                                     }
                                     ConsumeType::ConsumeActively => {
-                                        return Ok(Some(
-                                            response
-                                                .set_code(ResponseCode::SystemBusy)
-                                                .set_remark("Cold-data pull suspension is not supported"),
-                                        ));
+                                        if broker_allow_suspend
+                                            && cold_data_cg_ctr_service
+                                                .short_suspend_active_read()
+                                                .await
+                                                == crate::coldctr::cold_data_cg_ctr_service::ColdDataShortSuspendOutcome::QueueFull
+                                        {
+                                            return Ok(Some(
+                                                response
+                                                    .set_code(ResponseCode::SystemBusy)
+                                                    .set_remark("Cold-data pull suspension queue is full"),
+                                            ));
+                                        }
+                                        request_header.max_msg_nums = 1;
                                     }
                                     _ => {}
                                 }

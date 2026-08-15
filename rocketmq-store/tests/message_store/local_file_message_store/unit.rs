@@ -4684,6 +4684,79 @@ async fn put_message_with_multi_dispatch_properties_dispatches_lmq_queues_after_
 }
 
 #[tokio::test]
+async fn lmq_quota_counts_unique_names_and_leaves_no_rejected_offset() {
+    let temp_dir = tempdir().unwrap();
+    let mut store = new_configured_test_store(
+        &temp_dir,
+        MessageStoreConfig {
+            enable_multi_dispatch: true,
+            enable_lmq: true,
+            enable_lmq_quota: true,
+            max_lmq_consume_queue_num: 1,
+            flush_disk_type: FlushDiskType::AsyncFlush,
+            ..MessageStoreConfig::default()
+        },
+    );
+
+    let mut first = MessageExtBrokerInner::default();
+    first.set_topic(CheetahString::from_static_str("lmq-quota-source"));
+    first.set_body(Bytes::from_static(b"first"));
+    first.put_property(
+        CheetahString::from_static_str(MessageConst::PROPERTY_INNER_MULTI_DISPATCH),
+        CheetahString::from_static_str("%LMQ%alpha,%LMQ%alpha"),
+    );
+    assert_eq!(
+        store.put_message(first).await.put_message_status(),
+        PutMessageStatus::PutOk
+    );
+    assert_eq!(store.consume_queue_store.get_lmq_num(), 1);
+    assert_eq!(store.consume_queue_store.get_lmq_queue_offset("%LMQ%alpha-0"), 1);
+
+    let mut rejected = MessageExtBrokerInner::default();
+    rejected.set_topic(CheetahString::from_static_str("lmq-quota-source"));
+    rejected.set_body(Bytes::from_static(b"rejected"));
+    rejected.put_property(
+        CheetahString::from_static_str(MessageConst::PROPERTY_INNER_MULTI_DISPATCH),
+        CheetahString::from_static_str("%LMQ%beta"),
+    );
+    assert_eq!(
+        store.put_message(rejected).await.put_message_status(),
+        PutMessageStatus::LmqConsumeQueueNumExceeded
+    );
+    assert_eq!(store.consume_queue_store.get_lmq_num(), 1);
+    assert!(!store.consume_queue_store.is_lmq_exist("%LMQ%beta"));
+    assert_eq!(store.consume_queue_store.get_lmq_queue_offset("%LMQ%beta-0"), 0);
+}
+
+#[tokio::test]
+async fn disabled_lmq_quota_does_not_treat_zero_as_a_limit() {
+    let temp_dir = tempdir().unwrap();
+    let mut store = new_configured_test_store(
+        &temp_dir,
+        MessageStoreConfig {
+            enable_multi_dispatch: true,
+            enable_lmq: true,
+            enable_lmq_quota: false,
+            max_lmq_consume_queue_num: 0,
+            flush_disk_type: FlushDiskType::AsyncFlush,
+            ..MessageStoreConfig::default()
+        },
+    );
+    let mut message = MessageExtBrokerInner::default();
+    message.set_topic(CheetahString::from_static_str("lmq-quota-disabled"));
+    message.set_body(Bytes::from_static(b"allowed"));
+    message.put_property(
+        CheetahString::from_static_str(MessageConst::PROPERTY_INNER_MULTI_DISPATCH),
+        CheetahString::from_static_str("%LMQ%allowed"),
+    );
+
+    assert_eq!(
+        store.put_message(message).await.put_message_status(),
+        PutMessageStatus::PutOk
+    );
+}
+
+#[tokio::test]
 async fn put_message_with_existing_multi_queue_offsets_still_updates_lmq_offsets() {
     let temp_dir = tempdir().unwrap();
     let mut store = new_configured_test_store(

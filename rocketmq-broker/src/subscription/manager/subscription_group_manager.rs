@@ -56,6 +56,15 @@ pub(crate) struct SubscriptionGroupConfigUpdate {
     pub(crate) data_version: DataVersion,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SlowConsumerDisableMarker {
+    pub(crate) observed_lag_bytes: i64,
+    pub(crate) threshold_bytes: i64,
+    pub(crate) reason: CheetahString,
+    pub(crate) generation: u64,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SubscriptionGroupConfigCasError {
     GroupNotFound,
@@ -95,6 +104,8 @@ pub(crate) struct SubscriptionGroupManager {
 
     /// Forbidden table (group -> topic -> forbidden_bitmap)
     forbidden_table: Arc<DashMap<CheetahString, DashMap<CheetahString, i32>>>,
+
+    slow_consumer_markers: Arc<DashMap<CheetahString, SlowConsumerDisableMarker>>,
 
     /// Data version for tracking configuration changes
     data_version: Arc<parking_lot::RwLock<DataVersion>>,
@@ -145,6 +156,7 @@ impl SubscriptionGroupManager {
         let mut manager = Self {
             subscription_group_table: Arc::new(DashMap::new()),
             forbidden_table: Arc::new(DashMap::new()),
+            slow_consumer_markers: Arc::new(DashMap::new()),
             data_version: Arc::new(parking_lot::RwLock::new(
                 rocketmq_protocol::protocol::data_version_facade::new_data_version(),
             )),
@@ -387,6 +399,9 @@ impl SubscriptionGroupManager {
         let old = self
             .subscription_group_table
             .insert(config.group_name().clone(), Arc::new(config.clone()));
+        if config.consume_enable() {
+            self.slow_consumer_markers.remove(config.group_name());
+        }
 
         match old {
             Some(old_config) => {
@@ -694,6 +709,11 @@ impl ConfigManager for SubscriptionGroupManager {
                     (entry.key().clone(), inner)
                 })
                 .collect(),
+            slow_consumer_markers: self
+                .slow_consumer_markers
+                .iter()
+                .map(|entry| (entry.key().clone(), entry.value().clone()))
+                .collect(),
             data_version: self.data_version.read().clone(),
         };
 
@@ -724,6 +744,10 @@ impl ConfigManager for SubscriptionGroupManager {
                 topic_map.insert(topic, value);
             }
             self.forbidden_table.insert(group, topic_map);
+        }
+
+        for (group, marker) in wrapper.slow_consumer_markers {
+            self.slow_consumer_markers.insert(group, marker);
         }
 
         // Update data version
@@ -912,12 +936,53 @@ impl SubscriptionGroupManager {
         };
 
         if result.is_some() {
+            self.persist_after_mutation("disable-consume");
             info!("Disabled consume for group: {}", group_name);
         } else {
             warn!("Cannot disable consume, group not found: {}", group_name);
         }
 
         result
+    }
+
+    pub(crate) fn disable_consume_for_lag(
+        &self,
+        group_name: &CheetahString,
+        observed_lag_bytes: i64,
+        threshold_bytes: i64,
+    ) -> Option<SlowConsumerDisableMarker> {
+        let marker = {
+            let _transition = self.metadata_transition.lock();
+            let mut entry = self.subscription_group_table.get_mut(group_name)?;
+            let mut new_config = (**entry.value()).clone();
+            new_config.set_consume_enable(false);
+            *entry.value_mut() = Arc::new(new_config);
+
+            let mut data_version = self.data_version.write();
+            data_version.next_version_with(self.state_machine_version.get());
+            let generation = u64::try_from(data_version.counter()).ok()?;
+            let marker = SlowConsumerDisableMarker {
+                observed_lag_bytes,
+                threshold_bytes,
+                reason: CheetahString::from_static_str("consumer_fallbehind_threshold"),
+                generation,
+            };
+            self.slow_consumer_markers.insert(group_name.clone(), marker.clone());
+            marker
+        };
+        self.persist_after_mutation("slow-consumer-disable");
+        info!(
+            group = %group_name,
+            observed_lag_bytes,
+            threshold_bytes,
+            generation = marker.generation,
+            "Disabled slow consumer group"
+        );
+        Some(marker)
+    }
+
+    pub(crate) fn slow_consumer_marker(&self, group_name: &CheetahString) -> Option<SlowConsumerDisableMarker> {
+        self.slow_consumer_markers.get(group_name).map(|marker| marker.clone())
     }
 
     /// Enable consume capability for a specific consumer group
@@ -938,6 +1003,7 @@ impl SubscriptionGroupManager {
                 arc_config
             });
             if result.is_some() {
+                self.slow_consumer_markers.remove(group_name);
                 self.data_version
                     .write()
                     .next_version_with(self.state_machine_version.get());
@@ -946,7 +1012,7 @@ impl SubscriptionGroupManager {
         };
 
         if result.is_some() {
-            // Note: Java version does NOT persist here, only updates data version
+            self.persist_after_mutation("enable-consume");
             info!("Enabled consume for group: {}", group_name);
         } else {
             warn!("Cannot enable consume, group not found: {}", group_name);
@@ -1434,6 +1500,8 @@ pub(crate) struct SubscriptionGroupWrapperInner {
     //todo dashmap to concurrent safe
     subscription_group_table: HashMap<CheetahString, SubscriptionGroupConfig>,
     forbidden_table: HashMap<CheetahString, HashMap<CheetahString, i32>>,
+    #[serde(default)]
+    slow_consumer_markers: HashMap<CheetahString, SlowConsumerDisableMarker>,
     data_version: DataVersion,
 }
 
@@ -1585,6 +1653,48 @@ mod tests {
         assert!(config.consume_from_min_enable());
         assert_eq!(config.retry_max_times(), 16);
         assert_eq!(config.retry_queue_nums(), 1);
+    }
+
+    #[test]
+    fn slow_consumer_disable_marker_survives_serialization_and_explicit_enable_clears_it() {
+        use crate::config::broker_config::BrokerConfig;
+        use rocketmq_store::MessageStoreConfig;
+
+        let temp_dir = tempfile::TempDir::new().expect("temp dir should be created");
+        let root = CheetahString::from_string(temp_dir.path().to_string_lossy().to_string());
+        let broker_config = BrokerConfig {
+            store_path_root_dir: root.clone(),
+            ..BrokerConfig::default()
+        };
+        let message_store_config = MessageStoreConfig {
+            store_path_root_dir: root,
+            ..MessageStoreConfig::default()
+        };
+        let manager_config = SubscriptionGroupManagerConfig::from_configs(&broker_config, &message_store_config);
+        let manager = SubscriptionGroupManager::new(manager_config.clone(), StateMachineVersionView::default(), None);
+        let group = CheetahString::from_static_str("SLOW_GROUP");
+        let mut config = SubscriptionGroupConfig::new(group.clone());
+        manager.update_subscription_group_config(&mut config);
+
+        manager
+            .disable_consume_for_lag(&group, 512, 256)
+            .expect("known group must be disabled");
+        let marker = manager.slow_consumer_marker(&group).expect("slow marker");
+        assert_eq!(marker.observed_lag_bytes, 512);
+        assert_eq!(marker.threshold_bytes, 256);
+        assert_eq!(marker.reason, "consumer_fallbehind_threshold");
+        assert!(!manager.is_consume_enable(group.as_str()));
+
+        let encoded = manager.encode_pretty(false);
+        let restored = SubscriptionGroupManager::new(manager_config, StateMachineVersionView::default(), None);
+        restored.decode(&encoded);
+        assert_eq!(restored.slow_consumer_marker(&group), Some(marker));
+
+        let mut enabled = restored.get_group_config(group.as_str()).unwrap().as_ref().clone();
+        enabled.set_consume_enable(true);
+        restored.update_subscription_group_config(&mut enabled);
+        assert!(restored.is_consume_enable(group.as_str()));
+        assert!(restored.slow_consumer_marker(&group).is_none());
     }
 
     #[test]

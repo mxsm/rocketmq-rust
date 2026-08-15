@@ -170,6 +170,10 @@ impl LocalFileMessageStore {
             }
         }
         let lmq_dispatch_queue_keys = self.prepare_lmq_dispatch(&mut msg);
+        let lmq_quota_reservation = match self.reserve_lmq_quota(&lmq_dispatch_queue_keys) {
+            Some(reservation) => reservation,
+            None => return PutMessageResult::new_default(PutMessageStatus::LmqConsumeQueueNumExceeded),
+        };
         let lmq_dispatch_message_num = self.get_lmq_dispatch_message_num(&msg);
 
         if msg
@@ -213,6 +217,9 @@ impl LocalFileMessageStore {
             if !lmq_dispatch_queue_keys.is_empty() {
                 self.update_lmq_offsets(&lmq_dispatch_queue_keys, lmq_dispatch_message_num);
             }
+            if let Some(reservation) = lmq_quota_reservation {
+                reservation.commit();
+            }
             self.reput_message_service.notify_new_message();
         }
 
@@ -231,6 +238,10 @@ impl LocalFileMessageStore {
             }
         }
         let lmq_dispatch_queue_keys = self.prepare_lmq_dispatch(&mut message_ext_batch.message_ext_broker_inner);
+        let lmq_quota_reservation = match self.reserve_lmq_quota(&lmq_dispatch_queue_keys) {
+            Some(reservation) => reservation,
+            None => return PutMessageResult::new_default(PutMessageStatus::LmqConsumeQueueNumExceeded),
+        };
         let lmq_dispatch_message_num = self.get_lmq_dispatch_message_num(&message_ext_batch.message_ext_broker_inner);
 
         let begin_time = Instant::now();
@@ -250,6 +261,9 @@ impl LocalFileMessageStore {
         if result.is_ok() {
             if !lmq_dispatch_queue_keys.is_empty() {
                 self.update_lmq_offsets(&lmq_dispatch_queue_keys, lmq_dispatch_message_num);
+            }
+            if let Some(reservation) = lmq_quota_reservation {
+                reservation.commit();
             }
             self.reput_message_service.notify_new_message();
         }

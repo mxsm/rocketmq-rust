@@ -796,7 +796,7 @@ fn map_put_status_to_response(status: PutMessageStatus, response: &mut RemotingC
         }
         PutMessageStatus::LmqConsumeQueueNumExceeded => {
             response
-                .set_code_mut(RemotingSysResponseCode::SystemError)
+                .set_code_mut(ResponseCode::LmqQuotaExceeded)
                 .set_remark_mut(error_messages::LMQ_QUEUE_NUM_EXCEEDED);
             false
         }
@@ -2533,7 +2533,7 @@ mod tests {
             ),
             (
                 PutMessageStatus::LmqConsumeQueueNumExceeded,
-                RemotingSysResponseCode::SystemError as i32,
+                ResponseCode::LmqQuotaExceeded as i32,
                 Some(error_messages::LMQ_QUEUE_NUM_EXCEEDED),
             ),
             (

@@ -16,6 +16,7 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 use std::time::SystemTime;
 
 use parking_lot::RwLock;
@@ -25,6 +26,14 @@ use tracing::error;
 
 const DEFAULT_CG_COLD_READ_THRESHOLD: i64 = 3 * 1024 * 1024;
 const DEFAULT_GLOBAL_COLD_READ_THRESHOLD: i64 = 100 * 1024 * 1024;
+const DEFAULT_SHORT_SUSPEND_CAPACITY: usize = 1_024;
+const DEFAULT_SHORT_SUSPEND_DURATION: Duration = Duration::from_secs(1);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ColdDataShortSuspendOutcome {
+    Suspended,
+    QueueFull,
+}
 
 struct ColdDataAccumulator {
     cold_acc: AtomicI64,
@@ -83,16 +92,40 @@ pub struct ColdDataCgCtrService {
     /// Accumulated cold data bytes per consumer group
     cg_cold_acc: RwLock<HashMap<String, ColdDataAccumulator>>,
     global_acc: AtomicI64,
+    short_suspend_slots: tokio::sync::Semaphore,
+    short_suspend_duration: Duration,
 }
 
 impl ColdDataCgCtrService {
     pub fn new(cold_data_flow_control_enable: bool) -> Self {
+        Self::with_short_suspend_limits(
+            cold_data_flow_control_enable,
+            DEFAULT_SHORT_SUSPEND_CAPACITY,
+            DEFAULT_SHORT_SUSPEND_DURATION,
+        )
+    }
+
+    pub(crate) fn with_short_suspend_limits(
+        cold_data_flow_control_enable: bool,
+        short_suspend_capacity: usize,
+        short_suspend_duration: Duration,
+    ) -> Self {
         Self {
             cold_data_flow_control_enable,
             cg_cold_read_threshold: RwLock::new(HashMap::new()),
             cg_cold_acc: RwLock::new(HashMap::new()),
             global_acc: AtomicI64::new(0),
+            short_suspend_slots: tokio::sync::Semaphore::new(short_suspend_capacity),
+            short_suspend_duration,
         }
+    }
+
+    pub(crate) async fn short_suspend_active_read(&self) -> ColdDataShortSuspendOutcome {
+        let Ok(_permit) = self.short_suspend_slots.try_acquire() else {
+            return ColdDataShortSuspendOutcome::QueueFull;
+        };
+        let _ = tokio::time::timeout(self.short_suspend_duration, std::future::pending::<()>()).await;
+        ColdDataShortSuspendOutcome::Suspended
     }
 
     /// Check if a consumer group needs cold data flow control
@@ -214,7 +247,25 @@ impl Default for ColdDataCgCtrService {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::ColdDataCgCtrService;
+    use super::ColdDataShortSuspendOutcome;
+
+    #[tokio::test]
+    async fn active_cold_read_short_suspend_is_bounded_and_queue_full_fails_fast() {
+        let service = ColdDataCgCtrService::with_short_suspend_limits(true, 1, Duration::ZERO);
+        assert_eq!(
+            service.short_suspend_active_read().await,
+            ColdDataShortSuspendOutcome::Suspended
+        );
+
+        let full = ColdDataCgCtrService::with_short_suspend_limits(true, 0, Duration::from_secs(1));
+        assert_eq!(
+            full.short_suspend_active_read().await,
+            ColdDataShortSuspendOutcome::QueueFull
+        );
+    }
 
     #[test]
     fn system_consumer_group_never_needs_cold_data_flow_control() {

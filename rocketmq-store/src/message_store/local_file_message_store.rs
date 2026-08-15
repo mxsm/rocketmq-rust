@@ -226,6 +226,7 @@ mod composition;
 mod dispatch;
 mod health;
 mod lifecycle;
+mod lmq_quota;
 mod managed_recovery;
 mod mapped_file_retirement_service;
 mod read_path;
@@ -233,6 +234,9 @@ mod recovery;
 mod reput_pipeline;
 mod root_lock;
 mod write_path;
+
+use lmq_quota::LmqQuotaController;
+use lmq_quota::LmqQuotaReservation;
 
 pub use composition::parse_delay_level;
 pub use dispatch::CommitLogDispatcherDefault;
@@ -416,6 +420,7 @@ pub(crate) struct TimerMessageWriteHandle {
     consume_queue_store: ConsumeQueueStore,
     store_stats_service: Arc<StoreStatsService>,
     reput_notify: ReputNotifyHandle,
+    lmq_quota_controller: Arc<LmqQuotaController>,
 }
 
 impl TimerMessageWriteHandle {
@@ -435,6 +440,10 @@ impl TimerMessageWriteHandle {
             }
         }
         let lmq_dispatch_queue_keys = self.prepare_lmq_dispatch(&mut msg);
+        let lmq_quota_reservation = match self.reserve_lmq_quota(&lmq_dispatch_queue_keys) {
+            Some(reservation) => reservation,
+            None => return PutMessageResult::new_default(PutMessageStatus::LmqConsumeQueueNumExceeded),
+        };
         let lmq_dispatch_message_num = Self::lmq_dispatch_message_num(&msg);
 
         if msg
@@ -474,6 +483,9 @@ impl TimerMessageWriteHandle {
                 self.consume_queue_store
                     .increase_lmq_offset(queue_key.as_str(), lmq_dispatch_message_num);
             }
+            if let Some(reservation) = lmq_quota_reservation {
+                reservation.commit();
+            }
             self.reput_notify.notify_new_message();
         }
         result
@@ -491,6 +503,7 @@ impl TimerMessageWriteHandle {
         }
 
         let mut queue_keys = Vec::new();
+        let mut unique_queue_keys = HashSet::new();
         let mut saw_queue = false;
         let mut is_all_lmq_dispatch = true;
         for queue_name in multi_dispatch_queue.split_str(MULTI_DISPATCH_QUEUE_SPLITTER) {
@@ -500,7 +513,10 @@ impl TimerMessageWriteHandle {
             }
             saw_queue = true;
             if self.message_store_config.enable_lmq && is_lmq(Some(queue_name)) {
-                queue_keys.push(format!("{queue_name}-{LMQ_QUEUE_ID}"));
+                let queue_key = format!("{queue_name}-{LMQ_QUEUE_ID}");
+                if unique_queue_keys.insert(queue_key.clone()) {
+                    queue_keys.push(queue_key);
+                }
             } else {
                 is_all_lmq_dispatch = false;
             }
@@ -533,6 +549,28 @@ impl TimerMessageWriteHandle {
         queue_keys
     }
 
+    fn reserve_lmq_quota(&self, queue_keys: &[String]) -> Option<Option<LmqQuotaReservation>> {
+        if !self.message_store_config.enable_lmq_quota
+            || !self.message_store_config.enable_lmq
+            || !self.message_store_config.enable_multi_dispatch
+            || queue_keys.is_empty()
+        {
+            return Some(None);
+        }
+        let existing_queue_keys = self
+            .consume_queue_store
+            .get_lmq_topic_names()
+            .into_iter()
+            .map(|topic| format!("{topic}-{LMQ_QUEUE_ID}"));
+        self.lmq_quota_controller
+            .reserve(
+                queue_keys,
+                existing_queue_keys,
+                self.message_store_config.max_lmq_consume_queue_num,
+            )
+            .map(Some)
+    }
+
     fn lmq_dispatch_message_num(msg: &MessageExtBrokerInner) -> i16 {
         msg.property(MessageConst::PROPERTY_INNER_NUM)
             .and_then(|message_num| message_num.parse::<i16>().ok())
@@ -558,6 +596,7 @@ pub struct LocalFileMessageStore {
     index_service: IndexService,
     allocate_mapped_file_service: Arc<AllocateMappedFileService>,
     consume_queue_store: ConsumeQueueStore,
+    lmq_quota_controller: Arc<LmqQuotaController>,
     dispatcher: CommitLogDispatcherDefault,
     #[cfg(feature = "tieredstore")]
     tiered_store: Option<Arc<TieredStoreDecorator>>,

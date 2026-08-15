@@ -91,7 +91,9 @@ impl QueueOffsetOperator {
 
     #[inline]
     pub fn get_lmq_offset(&self, topic_queue_key: &CheetahString) -> i64 {
-        *self.lmq_topic_queue_table.entry(topic_queue_key.clone()).or_insert(0)
+        self.lmq_topic_queue_table
+            .get(topic_queue_key)
+            .map_or(0, |offset| *offset)
     }
 
     #[inline]
