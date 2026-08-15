@@ -1,35 +1,25 @@
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, vi } from 'vitest';
 import { consumerApi } from '../api/consumer_api';
 import { topicApi } from '../api/topic_api';
 import { deferred } from '../test/deferred';
 import { renderAtRoute } from '../test/render';
-import type { TopicInfo, TopicListView, TopicOperationResult } from '../types/topic';
+import type { TopicConfigView, TopicInfo, TopicListView, TopicOperationResult } from '../types/topic';
 import TopicListPage from './TopicListPage';
 
 vi.mock('../api/topic_api', () => ({
   topicApi: {
-    list: vi.fn(),
-    get: vi.fn(),
-    create: vi.fn(),
-    update: vi.fn(),
-    delete: vi.fn(),
-    route: vi.fn(),
-    stats: vi.fn()
+    list: vi.fn(), get: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn(),
+    deleteFromBroker: vi.fn(), route: vi.fn(), stats: vi.fn(), config: vi.fn(),
+    consumers: vi.fn(), sendTestMessage: vi.fn(), resetOffset: vi.fn(), skipBacklog: vi.fn()
   }
 }));
 
-vi.mock('../api/consumer_api', () => ({
-  consumerApi: {
-    list: vi.fn(),
-    progress: vi.fn(),
-    resetOffset: vi.fn()
-  }
-}));
+vi.mock('../api/consumer_api', () => ({ consumerApi: { list: vi.fn() } }));
 
 const topics: TopicInfo[] = [
-  { topic: 'orders', brokerName: 'broker-a', brokers: ['broker-a'], clusters: ['DefaultCluster'], readQueueCount: 8, writeQueueCount: 8, perm: 6, category: 'NORMAL', messageType: 'NORMAL', order: false, systemTopic: false },
+  { topic: 'orders', brokerName: 'broker-a', brokers: ['broker-a', 'broker-b'], clusters: ['DefaultCluster'], readQueueCount: 8, writeQueueCount: 8, perm: 6, category: 'NORMAL', messageType: 'NORMAL', order: false, systemTopic: false },
   { topic: 'payments', brokerName: 'broker-b', brokers: ['broker-b'], clusters: ['DefaultCluster'], readQueueCount: 4, writeQueueCount: 4, perm: 4, category: 'NORMAL', messageType: 'FIFO', order: true, systemTopic: false },
   { topic: '%RETRY%order-service', brokerName: 'broker-a', brokers: ['broker-a'], clusters: ['DefaultCluster'], readQueueCount: 1, writeQueueCount: 1, perm: 2, category: 'RETRY', messageType: 'RETRY', order: false, systemTopic: false },
   { topic: '%DLQ%payment-service', brokerName: 'broker-b', brokers: ['broker-b'], clusters: ['DefaultCluster'], readQueueCount: 1, writeQueueCount: 1, perm: 0, category: 'DLQ', messageType: 'DLQ', order: false, systemTopic: false },
@@ -39,8 +29,26 @@ const topics: TopicInfo[] = [
 const listView: TopicListView = {
   items: topics,
   total: topics.length,
-  targets: [{ clusterName: 'DefaultCluster', brokerNames: ['broker-a', 'broker-b'] }]
+  targets: [
+    { clusterName: 'DefaultCluster', brokerNames: ['broker-a', 'broker-b'] },
+    { clusterName: 'ArchiveCluster', brokerNames: ['broker-c'] }
+  ]
 };
+
+const config = (topicName: string, brokerName = 'broker-a'): TopicConfigView => ({
+  topicName,
+  brokerName,
+  clusterName: 'DefaultCluster',
+  brokerNameList: [brokerName],
+  clusterNameList: ['DefaultCluster'],
+  readQueueNums: topicName === 'payments' ? 4 : 8,
+  writeQueueNums: topicName === 'payments' ? 4 : 8,
+  perm: topicName === 'payments' ? 4 : 6,
+  order: topicName === 'payments',
+  messageType: topicName === 'payments' ? 'FIFO' : 'NORMAL',
+  attributes: {},
+  inconsistentFields: []
+});
 
 const operationResult = (operation: string, topic: string, message: string): TopicOperationResult => ({
   operation,
@@ -51,113 +59,303 @@ const operationResult = (operation: string, topic: string, message: string): Top
   targets: [{ target: 'broker-a', success: true, message }]
 });
 
+async function openActions(user: ReturnType<typeof userEvent.setup>, topic: string) {
+  await user.click(screen.getByRole('button', { name: `Actions for ${topic}` }));
+}
+
+async function chooseRowAction(user: ReturnType<typeof userEvent.setup>, topic: string, action: string) {
+  await openActions(user, topic);
+  await user.click(screen.getByRole('menuitem', { name: action }));
+}
+
 async function submitCreate(user: ReturnType<typeof userEvent.setup>, topic: string) {
   await user.click(screen.getByRole('button', { name: 'Create topic' }));
-  const createDialog = screen.getByRole('dialog', { name: 'Create topic' });
-  await user.type(within(createDialog).getByRole('textbox', { name: 'Topic name' }), topic);
-  await user.click(within(createDialog).getByRole('checkbox', { name: 'DefaultCluster' }));
-  await user.click(within(createDialog).getByRole('button', { name: 'Save topic' }));
+  const dialog = screen.getByRole('dialog', { name: 'Create topic' });
+  await user.type(within(dialog).getByRole('textbox', { name: 'Topic name' }), topic);
+  await user.click(within(dialog).getByRole('checkbox', { name: 'DefaultCluster' }));
+  await user.click(within(dialog).getByRole('button', { name: 'Save topic' }));
   await user.click(within(screen.getByRole('alertdialog', { name: 'Create topic?' })).getByRole('button', { name: 'Create topic' }));
-  return createDialog;
+  return dialog;
 }
 
 describe('TopicListPage', () => {
+  beforeAll(() => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+  });
+
+  afterAll(() => {
+    Reflect.deleteProperty(Element.prototype, 'scrollIntoView');
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(topicApi.list).mockResolvedValue(listView);
-    vi.mocked(topicApi.create).mockResolvedValue(operationResult('CREATE', 'inventory-events', 'created'));
-    vi.mocked(topicApi.update).mockResolvedValue(operationResult('UPDATE', 'orders', 'updated'));
-    vi.mocked(topicApi.delete).mockResolvedValue(operationResult('DELETE_TOPIC', 'orders', 'deleted'));
-    vi.mocked(topicApi.stats).mockResolvedValue({
-      topic: 'orders', queueCount: 2, totalMessageCount: 8_280,
-      totalMinOffset: 120, totalMaxOffset: 8_400, offsets: []
+    vi.mocked(topicApi.get).mockImplementation(async (topicName) => topics.find((item) => item.topic === topicName)!);
+    vi.mocked(topicApi.create).mockImplementation(async (request) => operationResult('CREATE', request.topic, 'created'));
+    vi.mocked(topicApi.update).mockImplementation(async (topicName) => operationResult('UPDATE', topicName, 'updated'));
+    vi.mocked(topicApi.delete).mockImplementation(async (topicName) => operationResult('DELETE_TOPIC', topicName, 'deleted'));
+    vi.mocked(topicApi.deleteFromBroker).mockImplementation(async (topicName) => operationResult('DELETE_BROKER', topicName, 'deleted'));
+    vi.mocked(topicApi.config).mockImplementation(async (topicName) => config(topicName, topicName === 'payments' ? 'broker-b' : 'broker-a'));
+    vi.mocked(topicApi.consumers).mockResolvedValue({
+      items: [
+        { consumerGroup: 'order-service', totalDiff: 120, inflightDiff: 4, consumeTps: 8.5 },
+        { consumerGroup: 'audit-service', totalDiff: 5, inflightDiff: 0, consumeTps: 1.25 }
+      ]
     });
-    vi.mocked(topicApi.route).mockResolvedValue({ topic: 'orders', brokers: [], queues: [] });
-    vi.mocked(consumerApi.list).mockResolvedValue({ items: [], total: 0 });
+    vi.mocked(topicApi.stats).mockImplementation(async (topicName) => ({
+      topic: topicName, queueCount: 2, totalMessageCount: 8_280,
+      totalMinOffset: 120, totalMaxOffset: 8_400, offsets: []
+    }));
+    vi.mocked(topicApi.route).mockImplementation(async (topicName) => ({ topic: topicName, brokers: [], queues: [] }));
+    vi.mocked(topicApi.sendTestMessage).mockResolvedValue({
+      topic: 'orders', success: true, sendStatus: 'SEND_OK', messageId: 'msg-1', brokerName: 'broker-a',
+      queueId: 0, queueOffset: 1, transactionId: null, regionId: null, localTransactionState: null
+    });
+    vi.mocked(topicApi.resetOffset).mockResolvedValue({
+      operation: 'RESET_OFFSET', topic: 'orders', consumerGroup: 'order-service', success: true,
+      affectedQueueCount: 8, appliedTimestamp: 1_786_762_800_000, message: 'reset'
+    });
+    vi.mocked(topicApi.skipBacklog).mockResolvedValue({
+      operation: 'SKIP_BACKLOG', topic: 'orders', consumerGroup: 'order-service', success: true,
+      affectedQueueCount: 8, appliedTimestamp: 1_786_762_800_000, message: 'skipped'
+    });
+    vi.mocked(consumerApi.list).mockRejectedValue(new Error('global consumer discovery must not run'));
   });
 
-  it('renders inventory metrics and combines topic filters', async () => {
+  it('uses enriched catalog filters, target options, and operational columns', async () => {
     const user = userEvent.setup();
-    let resolveList: (value: TopicListView) => void = () => undefined;
-    vi.mocked(topicApi.list).mockReturnValueOnce(new Promise((resolve) => { resolveList = resolve; }));
     renderAtRoute(<TopicListPage />, '/topics');
-
-    expect(screen.getByRole('status', { name: 'Loading topics' })).toBeInTheDocument();
-    resolveList(listView);
 
     expect(await screen.findByRole('heading', { name: 'Topics' })).toBeInTheDocument();
     expect(screen.getByRole('group', { name: 'Total topics: 5' })).toBeInTheDocument();
-    expect(screen.getByRole('group', { name: 'Application: 2' })).toBeInTheDocument();
+    for (const header of ['Message type', 'Targets', 'Ordered', 'Permission']) {
+      expect(screen.getByRole('columnheader', { name: header })).toBeInTheDocument();
+    }
+    expect(screen.getByRole('row', { name: /^orders Full page/ })).toHaveTextContent('NORMAL');
+    expect(screen.getByRole('row', { name: /^orders Full page/ })).toHaveTextContent('DefaultCluster');
+    expect(screen.getByRole('row', { name: /^payments Full page/ })).toHaveTextContent('Yes');
 
-    await user.selectOptions(screen.getByRole('combobox', { name: 'Category filter' }), 'retry');
-    expect(screen.getByRole('row', { name: /%RETRY%order-service/ })).toBeInTheDocument();
+    const clusterFilter = screen.getByRole('combobox', { name: 'Cluster filter' });
+    clusterFilter.focus();
+    await user.keyboard('{Enter}');
+    expect(screen.getByRole('option', { name: 'ArchiveCluster' })).toBeInTheDocument();
+    await user.keyboard('{Escape}');
+    const brokerFilter = screen.getByRole('combobox', { name: 'Broker filter' });
+    brokerFilter.focus();
+    await user.keyboard('{Enter}');
+    expect(screen.getByRole('option', { name: 'broker-c' })).toBeInTheDocument();
+    await user.keyboard('{Escape}');
+
+    await user.click(screen.getByRole('button', { name: 'Message types: All types' }));
+    await user.click(screen.getByRole('menuitemcheckbox', { name: 'FIFO' }));
+    expect(screen.getByRole('row', { name: /^payments Full page/ })).toBeInTheDocument();
     expect(screen.queryByRole('row', { name: /^orders Full page/ })).not.toBeInTheDocument();
-
-    await user.selectOptions(screen.getByRole('combobox', { name: 'Broker filter' }), 'broker-a');
-    await user.type(screen.getByRole('searchbox', { name: 'Filter topics' }), 'order');
-    await waitFor(() => expect(screen.getByRole('row', { name: /%RETRY%order-service/ })).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: 'Categories: All categories' }));
+    await user.click(screen.getByRole('menuitemcheckbox', { name: 'Retry' }));
+    expect(screen.getByRole('row', { name: /%RETRY%order-service/ })).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Reset filters' }));
-    expect(screen.getByRole('row', { name: /^orders Full page.*NORMAL/ })).toBeInTheDocument();
+    expect(screen.getByRole('row', { name: /^orders Full page/ })).toBeInTheDocument();
+    expect(screen.getAllByRole('link', { name: 'Full page' })[0]).toHaveAttribute('href', '/topics/orders');
+    expect(consumerApi.list).not.toHaveBeenCalled();
   });
 
-  it('opens reusable topic details from a table row and restores focus on close', async () => {
+  it('exposes all seven actions for eligible, retry, and dlq topics while system is view-only', async () => {
     const user = userEvent.setup();
     renderAtRoute(<TopicListPage />, '/topics');
     await screen.findByRole('heading', { name: 'Topics' });
 
-    const row = screen.getByRole('row', { name: /^orders Full page/ });
+    await openActions(user, 'orders');
+    for (const action of [
+      'View details', 'Edit configuration', 'Send test message', 'Reset consumer offset',
+      'Skip accumulated messages', 'Delete from broker', 'Delete topic'
+    ]) expect(screen.getByRole('menuitem', { name: action })).toBeInTheDocument();
+    await user.keyboard('{Escape}');
+
+    for (const name of ['%RETRY%order-service', '%DLQ%payment-service']) {
+      await openActions(user, name);
+      expect(screen.getByRole('menuitem', { name: 'Send test message' })).toBeInTheDocument();
+      expect(screen.getByRole('menuitem', { name: 'Delete topic' })).toBeInTheDocument();
+      await user.keyboard('{Escape}');
+    }
+
+    await openActions(user, 'RMQ_SYS_TRACE_TOPIC');
+    expect(screen.getAllByRole('menuitem')).toHaveLength(1);
+    expect(screen.getByRole('menuitem', { name: 'View details' })).toBeInTheDocument();
+  });
+
+  it('loads independent broker config before Edit can save and retries only config discovery', async () => {
+    const user = userEvent.setup();
+    const pending = deferred<TopicConfigView>();
+    vi.mocked(topicApi.config).mockReturnValueOnce(pending.promise);
+    renderAtRoute(<TopicListPage />, '/topics');
+    await screen.findByRole('heading', { name: 'Topics' });
+
+    await chooseRowAction(user, 'orders', 'Edit configuration');
+    expect(topicApi.config).toHaveBeenCalledWith('orders');
+    const dialog = screen.getByRole('dialog', { name: 'Edit topic' });
+    expect(within(dialog).getByRole('status', { name: 'Loading topic configuration' })).toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: 'Save topic' })).not.toBeInTheDocument();
+
+    await act(async () => pending.reject(new Error('orders config unavailable')));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('orders config unavailable');
+    vi.mocked(topicApi.config).mockResolvedValueOnce(config('orders'));
+    await user.click(within(dialog).getByRole('button', { name: 'Retry configuration' }));
+    expect(await within(dialog).findByRole('textbox', { name: 'Topic name' })).toHaveValue('orders');
+    expect(within(dialog).getByRole('button', { name: 'Save topic' })).toBeEnabled();
+    expect(topicApi.config).toHaveBeenCalledTimes(2);
+  });
+
+  it('drops stale Edit config errors after closing and selecting another topic', async () => {
+    const user = userEvent.setup();
+    const ordersConfig = deferred<TopicConfigView>();
+    vi.mocked(topicApi.config).mockReturnValueOnce(ordersConfig.promise).mockResolvedValueOnce(config('payments', 'broker-b'));
+    renderAtRoute(<TopicListPage />, '/topics');
+    await screen.findByRole('heading', { name: 'Topics' });
+
+    await chooseRowAction(user, 'orders', 'Edit configuration');
+    await user.click(within(screen.getByRole('dialog', { name: 'Edit topic' })).getByRole('button', { name: 'Cancel' }));
+    await chooseRowAction(user, 'payments', 'Edit configuration');
+    expect(await screen.findByRole('textbox', { name: 'Topic name' })).toHaveValue('payments');
+    await act(async () => ordersConfig.reject(new Error('stale orders config failed')));
+    expect(screen.queryByText('stale orders config failed')).not.toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Topic name' })).toHaveValue('payments');
+  });
+
+  it.each([
+    ['Reset consumer offset', 'Reset consumer offset', 'Continue to reset'],
+    ['Skip accumulated messages', 'Skip accumulated messages', 'Continue to skip']
+  ])('discovers a per-topic group without choosing an arbitrary default for %s', async (menuAction, dialogName, continueLabel) => {
+    const user = userEvent.setup();
+    renderAtRoute(<TopicListPage />, '/topics');
+    await screen.findByRole('heading', { name: 'Topics' });
+
+    await chooseRowAction(user, 'orders', menuAction);
+    const chooserName = `Choose consumer group for ${menuAction.toLowerCase()}`;
+    const chooser = await screen.findByRole('dialog', { name: chooserName });
+    expect(topicApi.consumers).toHaveBeenCalledWith('orders');
+    const continueButton = within(chooser).getByRole('button', { name: continueLabel });
+    expect(continueButton).toBeDisabled();
+    expect(screen.queryByRole('dialog', { name: dialogName })).not.toBeInTheDocument();
+    await user.selectOptions(within(chooser).getByRole('combobox', { name: 'Consumer group' }), 'audit-service');
+    await user.click(continueButton);
+
+    const operationDialog = await screen.findByRole('dialog', { name: dialogName });
+    expect(within(operationDialog).getByRole('textbox', { name: 'Topic' })).toHaveValue('orders');
+    expect(within(operationDialog).getByRole('textbox', { name: 'Consumer group' })).toHaveValue('audit-service');
+    expect(consumerApi.list).not.toHaveBeenCalled();
+  });
+
+  it('keeps consumer discovery failure and empty feedback scoped to the chooser with correct retries', async () => {
+    const user = userEvent.setup();
+    vi.mocked(topicApi.consumers)
+      .mockRejectedValueOnce(new Error('orders consumers unavailable'))
+      .mockResolvedValueOnce({ items: [] })
+      .mockResolvedValueOnce({ items: [{ consumerGroup: 'order-service', totalDiff: 0, inflightDiff: 0, consumeTps: 1 }] });
+    renderAtRoute(<TopicListPage />, '/topics');
+    await screen.findByRole('heading', { name: 'Topics' });
+
+    await chooseRowAction(user, 'orders', 'Reset consumer offset');
+    const chooser = await screen.findByRole('dialog', { name: 'Choose consumer group for reset consumer offset' });
+    expect(await within(chooser).findByRole('alert')).toHaveTextContent('orders consumers unavailable');
+    expect(screen.getByRole('row', { name: /^orders Full page/, hidden: true })).toBeInTheDocument();
+    await user.click(within(chooser).getByRole('button', { name: 'Retry consumers' }));
+    expect(await within(chooser).findByText('No consumers subscribe to this topic.')).toBeInTheDocument();
+    await user.click(within(chooser).getByRole('button', { name: 'Reload consumers' }));
+    expect(await within(chooser).findByRole('option', { name: 'order-service' })).toBeInTheDocument();
+    expect(topicApi.consumers).toHaveBeenCalledTimes(3);
+  });
+
+  it('drops stale consumer discovery errors after another topic is selected', async () => {
+    const user = userEvent.setup();
+    const ordersConsumers = deferred<{ items: [] }>();
+    vi.mocked(topicApi.consumers)
+      .mockReturnValueOnce(ordersConsumers.promise)
+      .mockResolvedValueOnce({ items: [{ consumerGroup: 'payment-service', totalDiff: 3, inflightDiff: 1, consumeTps: 2 }] });
+    renderAtRoute(<TopicListPage />, '/topics');
+    await screen.findByRole('heading', { name: 'Topics' });
+
+    await chooseRowAction(user, 'orders', 'Skip accumulated messages');
+    await user.click(within(screen.getByRole('dialog', { name: 'Choose consumer group for skip accumulated messages' })).getByRole('button', { name: 'Cancel' }));
+    await chooseRowAction(user, 'payments', 'Skip accumulated messages');
+    const chooser = await screen.findByRole('dialog', { name: 'Choose consumer group for skip accumulated messages' });
+    expect(await within(chooser).findByRole('option', { name: 'payment-service' })).toBeInTheDocument();
+    await act(async () => ordersConsumers.reject(new Error('stale orders consumers failed')));
+    expect(screen.queryByText('stale orders consumers failed')).not.toBeInTheDocument();
+    expect(within(chooser).getByRole('option', { name: 'payment-service' })).toBeInTheDocument();
+  });
+
+  it('preserves exact config and consumer identities from the detail callbacks', async () => {
+    const user = userEvent.setup();
+    renderAtRoute(<TopicListPage />, '/topics');
+    await screen.findByRole('heading', { name: 'Topics' });
+
     await user.click(screen.getByText('orders'));
+    const detail = await screen.findByRole('dialog', { name: 'orders' });
+    await user.click(within(detail).getByRole('tab', { name: 'Configuration' }));
+    await user.click(await within(detail).findByRole('button', { name: 'Edit topic' }));
+    expect(await screen.findByRole('textbox', { name: 'Topic name' })).toHaveValue('orders');
+    expect(topicApi.config).toHaveBeenCalledTimes(1);
+    await user.click(within(screen.getByRole('dialog', { name: 'Edit topic' })).getByRole('button', { name: 'Cancel' }));
 
+    await user.click(within(detail).getByRole('tab', { name: 'Consumers' }));
+    await user.click(await within(detail).findByRole('button', { name: 'Reset order-service' }));
+    const resetDialog = await screen.findByRole('dialog', { name: 'Reset consumer offset' });
+    expect(within(resetDialog).getByRole('textbox', { name: 'Consumer group' })).toHaveValue('order-service');
+    expect(topicApi.consumers).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes the matching detail sheet and removes the row after a successful delete refresh', async () => {
+    const user = userEvent.setup();
+    vi.mocked(topicApi.list)
+      .mockResolvedValueOnce(listView)
+      .mockResolvedValueOnce({ ...listView, items: topics.filter((topic) => topic.topic !== 'orders'), total: topics.length - 1 });
+    renderAtRoute(<TopicListPage />, '/topics');
+    await screen.findByRole('heading', { name: 'Topics' });
+    await user.click(screen.getByText('orders'));
     expect(await screen.findByRole('dialog', { name: 'orders' })).toBeInTheDocument();
-    expect(await screen.findByRole('group', { name: 'Queue entries: 2' })).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Close details' }));
-    await waitFor(() => expect(row).toHaveFocus());
+
+    await user.click(within(screen.getByRole('dialog', { name: 'orders' })).getByRole('button', { name: 'Delete topic' }));
+    const deleteDialog = await screen.findByRole('alertdialog', { name: 'Delete topic' });
+    await user.type(within(deleteDialog).getByRole('textbox', { name: 'Confirm topic name' }), 'orders');
+    await user.click(within(deleteDialog).getByRole('button', { name: 'Delete topic' }));
+
+    await waitFor(() => expect(topicApi.list).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'orders' })).not.toBeInTheDocument());
+    expect(screen.queryByRole('row', { name: /^orders Full page/ })).not.toBeInTheDocument();
+    expect(screen.getByText('deleted')).toBeInTheDocument();
   });
 
-  it('creates topics and does not expose unsafe partial edit actions', async () => {
+  it('keeps a page-integrated delete locked across close and selection and drops the stale result', async () => {
     const user = userEvent.setup();
+    const ordersDelete = deferred<TopicOperationResult>();
+    vi.mocked(topicApi.delete)
+      .mockReturnValueOnce(ordersDelete.promise)
+      .mockResolvedValueOnce(operationResult('DELETE_TOPIC', 'payments', 'payments deleted'));
     renderAtRoute(<TopicListPage />, '/topics');
     await screen.findByRole('heading', { name: 'Topics' });
 
-    await user.click(screen.getByRole('button', { name: 'Create topic' }));
-    const createDialog = screen.getByRole('dialog', { name: 'Create topic' });
-    await user.type(within(createDialog).getByRole('textbox', { name: 'Topic name' }), 'inventory-events');
-    await user.click(within(createDialog).getByRole('checkbox', { name: 'DefaultCluster' }));
-    await user.click(within(createDialog).getByRole('button', { name: 'Save topic' }));
-    const createConfirmation = screen.getByRole('alertdialog', { name: 'Create topic?' });
-    await user.click(within(createConfirmation).getByRole('button', { name: 'Create topic' }));
+    await chooseRowAction(user, 'orders', 'Delete topic');
+    let dialog = screen.getByRole('alertdialog', { name: 'Delete topic' });
+    await user.type(within(dialog).getByRole('textbox', { name: 'Confirm topic name' }), 'orders');
+    await user.click(within(dialog).getByRole('button', { name: 'Delete topic' }));
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await chooseRowAction(user, 'payments', 'Delete topic');
+    dialog = screen.getByRole('alertdialog', { name: 'Delete topic' });
+    expect(within(dialog).getByRole('button', { name: 'Deleting' })).toBeDisabled();
 
-    await waitFor(() => expect(topicApi.create).toHaveBeenCalledWith(expect.objectContaining({ topic: 'inventory-events' })));
-    expect(topicApi.update).not.toHaveBeenCalled();
-
-    await user.click(screen.getByRole('button', { name: 'Actions for orders' }));
-    expect(screen.queryByRole('menuitem', { name: 'Edit topic' })).not.toBeInTheDocument();
+    await act(async () => ordersDelete.resolve(operationResult('DELETE_TOPIC', 'orders', 'stale orders deleted')));
+    expect(screen.queryByText('stale orders deleted')).not.toBeInTheDocument();
+    expect(topicApi.list).toHaveBeenCalledTimes(1);
+    await user.type(within(dialog).getByRole('textbox', { name: 'Confirm topic name' }), 'payments');
+    await user.click(within(dialog).getByRole('button', { name: 'Delete topic' }));
+    expect(topicApi.delete).toHaveBeenLastCalledWith('payments');
   });
 
-  it('blocks a duplicate topic name before calling the create endpoint', async () => {
-    const user = userEvent.setup();
-    renderAtRoute(<TopicListPage />, '/topics');
-    await screen.findByRole('heading', { name: 'Topics' });
-
-    await user.click(screen.getByRole('button', { name: 'Create topic' }));
-    const createDialog = screen.getByRole('dialog', { name: 'Create topic' });
-    await user.type(within(createDialog).getByRole('textbox', { name: 'Topic name' }), 'orders');
-    await user.click(within(createDialog).getByRole('checkbox', { name: 'DefaultCluster' }));
-    await user.click(within(createDialog).getByRole('button', { name: 'Save topic' }));
-    await user.click(within(screen.getByRole('alertdialog', { name: 'Create topic?' })).getByRole('button', { name: 'Create topic' }));
-
-    expect(await within(createDialog).findByText('Topic `orders` already exists. Choose a new name.')).toBeInTheDocument();
-    expect(topicApi.create).not.toHaveBeenCalled();
-  });
-
-  it('keeps a partial Create result in the dialog without a global success notice', async () => {
+  it('keeps partial Create outcomes in the operation dialog without replacing the catalog', async () => {
     const user = userEvent.setup();
     vi.mocked(topicApi.create).mockResolvedValue({
-      operation: 'CREATE',
-      topic: 'partial-topic',
-      success: false,
-      targetCount: 2,
+      operation: 'CREATE', topic: 'partial-topic', success: false, targetCount: 2,
       message: '1 of 2 targets failed',
       targets: [
         { target: 'broker-a', success: true, message: 'created on broker-a' },
@@ -167,198 +365,19 @@ describe('TopicListPage', () => {
     renderAtRoute(<TopicListPage />, '/topics');
     await screen.findByRole('heading', { name: 'Topics' });
 
-    await user.click(screen.getByRole('button', { name: 'Create topic' }));
-    const createDialog = screen.getByRole('dialog', { name: 'Create topic' });
-    await user.type(within(createDialog).getByRole('textbox', { name: 'Topic name' }), 'partial-topic');
-    await user.click(within(createDialog).getByRole('checkbox', { name: 'DefaultCluster' }));
-    await user.click(within(createDialog).getByRole('button', { name: 'Save topic' }));
-    await user.click(within(screen.getByRole('alertdialog', { name: 'Create topic?' })).getByRole('button', { name: 'Create topic' }));
-
-    expect(await within(createDialog).findByRole('alert')).toHaveTextContent('1 of 2 targets failed');
-    expect(within(createDialog).getByText('created on broker-a')).toBeInTheDocument();
-    expect(within(createDialog).getByText('broker-b unavailable')).toBeInTheDocument();
-    expect(screen.getByRole('dialog', { name: 'Create topic' })).toBeInTheDocument();
-    expect(screen.queryByText('Topic partial-topic created.')).not.toBeInTheDocument();
-  });
-
-  it('presents a partial Create result without waiting for the catalog refresh', async () => {
-    const user = userEvent.setup();
-    const refresh = deferred<TopicListView>();
-    vi.mocked(topicApi.list)
-      .mockResolvedValueOnce(listView)
-      .mockReturnValueOnce(refresh.promise);
-    vi.mocked(topicApi.create).mockResolvedValue({
-      operation: 'CREATE',
-      topic: 'immediate-partial',
-      success: false,
-      targetCount: 2,
-      message: '1 of 2 targets failed immediately',
-      targets: [
-        { target: 'broker-a', success: true, message: 'created immediately' },
-        { target: 'broker-b', success: false, message: 'broker-b still unavailable' }
-      ]
-    });
-    renderAtRoute(<TopicListPage />, '/topics');
-    await screen.findByRole('heading', { name: 'Topics' });
-
-    const createDialog = await submitCreate(user, 'immediate-partial');
-
-    await waitFor(() => expect(topicApi.list).toHaveBeenCalledTimes(2));
-    expect(await within(createDialog).findByRole('alert')).toHaveTextContent('1 of 2 targets failed immediately');
-    expect(within(createDialog).getByText('created immediately')).toBeInTheDocument();
-    expect(within(createDialog).getByRole('button', { name: 'Save topic' })).toBeEnabled();
-  });
-
-  it('keeps the valid catalog and partial result when its background refresh fails', async () => {
-    const user = userEvent.setup();
-    vi.mocked(topicApi.list)
-      .mockResolvedValueOnce(listView)
-      .mockRejectedValueOnce(new Error('topic catalog refresh unavailable'));
-    vi.mocked(topicApi.create).mockResolvedValue({
-      operation: 'CREATE',
-      topic: 'refresh-failure-partial',
-      success: false,
-      targetCount: 2,
-      message: 'partial result survives refresh failure',
-      targets: [
-        { target: 'broker-a', success: true, message: 'created on broker-a' },
-        { target: 'broker-b', success: false, message: 'broker-b unavailable' }
-      ]
-    });
-    renderAtRoute(<TopicListPage />, '/topics');
-    await screen.findByRole('heading', { name: 'Topics' });
-
-    const createDialog = await submitCreate(user, 'refresh-failure-partial');
-
-    expect(await within(createDialog).findByRole('alert')).toHaveTextContent('partial result survives refresh failure');
-    expect(await screen.findByText('topic catalog refresh unavailable')).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Topics', hidden: true })).toBeInTheDocument();
+    const dialog = await submitCreate(user, 'partial-topic');
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('1 of 2 targets failed');
     expect(screen.getByRole('row', { name: /^orders Full page/, hidden: true })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Retry topic catalog', hidden: true })).toBeInTheDocument();
-    await user.click(within(createDialog).getByRole('button', { name: 'Cancel' }));
-    await user.click(screen.getByRole('button', { name: 'Retry topic catalog' }));
-    await waitFor(() => expect(topicApi.list).toHaveBeenCalledTimes(3));
-    expect(screen.queryByText('topic catalog refresh unavailable')).not.toBeInTheDocument();
-    expect(screen.getByRole('row', { name: /^orders Full page/ })).toBeInTheDocument();
+    expect(screen.queryByText('Topic partial-topic created.')).not.toBeInTheDocument();
+    expect(topicApi.list).toHaveBeenCalledTimes(2);
   });
 
-  it('ignores an older catalog response after a newer refresh finishes', async () => {
-    const user = userEvent.setup();
-    const olderRefresh = deferred<TopicListView>();
-    const newerRefresh = deferred<TopicListView>();
-    const staleView: TopicListView = {
-      items: [{ ...topics[0], topic: 'stale-catalog-topic' }],
-      total: 1,
-      targets: listView.targets
-    };
-    const currentView: TopicListView = {
-      items: [{ ...topics[0], topic: 'current-catalog-topic' }],
-      total: 1,
-      targets: listView.targets
-    };
-    vi.mocked(topicApi.list)
-      .mockResolvedValueOnce(listView)
-      .mockReturnValueOnce(olderRefresh.promise)
-      .mockReturnValueOnce(newerRefresh.promise);
-    renderAtRoute(<TopicListPage />, '/topics');
-    await screen.findByRole('heading', { name: 'Topics' });
-
-    await user.click(screen.getByRole('button', { name: 'Refresh' }));
-    await waitFor(() => expect(topicApi.list).toHaveBeenCalledTimes(2));
-    await user.click(screen.getByRole('button', { name: 'Actions for orders' }));
-    await user.click(screen.getByRole('menuitem', { name: 'Delete topic' }));
-    await user.click(within(screen.getByRole('alertdialog', { name: 'Delete topic?' })).getByRole('button', { name: 'Delete topic' }));
-    await waitFor(() => expect(topicApi.list).toHaveBeenCalledTimes(3));
-
-    await act(async () => newerRefresh.resolve(currentView));
-    expect(await screen.findByRole('row', { name: /^current-catalog-topic Full page/ })).toBeInTheDocument();
-    await act(async () => olderRefresh.resolve(staleView));
-    expect(screen.getByRole('row', { name: /^current-catalog-topic Full page/ })).toBeInTheDocument();
-    expect(screen.queryByRole('row', { name: /^stale-catalog-topic Full page/ })).not.toBeInTheDocument();
-  });
-
-  it('closes a successful Create once and preserves its notice when the catalog refresh fails', async () => {
-    const user = userEvent.setup();
-    const refresh = deferred<TopicListView>();
-    vi.mocked(topicApi.list)
-      .mockResolvedValueOnce(listView)
-      .mockReturnValueOnce(refresh.promise);
-    vi.mocked(topicApi.create).mockResolvedValue(operationResult('CREATE', 'successful-topic', 'created'));
-    renderAtRoute(<TopicListPage />, '/topics');
-    await screen.findByRole('heading', { name: 'Topics' });
-
-    await submitCreate(user, 'successful-topic');
-
-    expect(await screen.findByText('Topic successful-topic created.')).toBeInTheDocument();
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Create topic' })).not.toBeInTheDocument());
-    expect(screen.getAllByText('Topic successful-topic created.')).toHaveLength(1);
-    await act(async () => refresh.reject(new Error('post-create catalog refresh failed')));
-    expect(await screen.findByText('post-create catalog refresh failed')).toBeInTheDocument();
-    expect(screen.getAllByText('Topic successful-topic created.')).toHaveLength(1);
-    expect(screen.queryByRole('dialog', { name: 'Create topic' })).not.toBeInTheDocument();
-  });
-
-  it('requires explicit confirmation before deleting a topic', async () => {
+  it('blocks duplicate Create names before the endpoint', async () => {
     const user = userEvent.setup();
     renderAtRoute(<TopicListPage />, '/topics');
     await screen.findByRole('heading', { name: 'Topics' });
-
-    await user.click(screen.getByRole('button', { name: 'Actions for orders' }));
-    await user.click(screen.getByRole('menuitem', { name: 'Delete topic' }));
-    let confirmation = screen.getByRole('alertdialog', { name: 'Delete topic?' });
-    await user.click(within(confirmation).getByRole('button', { name: 'Cancel' }));
-    expect(topicApi.delete).not.toHaveBeenCalled();
-
-    await user.click(screen.getByRole('button', { name: 'Actions for orders' }));
-    await user.click(screen.getByRole('menuitem', { name: 'Delete topic' }));
-    confirmation = screen.getByRole('alertdialog', { name: 'Delete topic?' });
-    await user.click(within(confirmation).getByRole('button', { name: 'Delete topic' }));
-
-    await waitFor(() => expect(topicApi.delete).toHaveBeenCalledWith('orders'));
-    expect(await screen.findByText('Topic orders deleted.')).toBeInTheDocument();
-  });
-
-  it('surfaces consumer target load errors and disables offset reset until retry succeeds', async () => {
-    const user = userEvent.setup();
-    vi.mocked(consumerApi.list)
-      .mockRejectedValueOnce(new Error('consumer targets unavailable'))
-      .mockResolvedValueOnce({
-        items: [{ group: 'order-service', consumeType: 'CONSUME_PASSIVELY', messageModel: 'MESSAGE_MODEL_CLUSTERING', clientCount: 1, diffTotal: 0 }],
-        total: 1
-      });
-    renderAtRoute(<TopicListPage />, '/topics');
-
-    expect(await screen.findByRole('heading', { name: 'Topics' })).toBeInTheDocument();
-    expect(await screen.findByText('consumer targets unavailable')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Actions for orders' }));
-    expect(screen.getByRole('menuitem', { name: 'Reset offsets' })).toHaveAttribute('aria-disabled', 'true');
-    await user.keyboard('{Escape}');
-
-    await user.click(screen.getByRole('button', { name: 'Retry consumer groups' }));
-    await waitFor(() => expect(consumerApi.list).toHaveBeenCalledTimes(2));
-    expect(screen.queryByText('consumer targets unavailable')).not.toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Actions for orders' }));
-    expect(screen.getByRole('menuitem', { name: 'Reset offsets' })).not.toHaveAttribute('aria-disabled');
-  });
-
-  it('keeps offset reset disabled when the consumer target inventory is empty', async () => {
-    const user = userEvent.setup();
-    renderAtRoute(<TopicListPage />, '/topics');
-
-    expect(await screen.findByText('No consumer groups are available for offset reset.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Reload consumer groups' })).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Actions for orders' }));
-    expect(screen.getByRole('menuitem', { name: 'Reset offsets' })).toHaveAttribute('aria-disabled', 'true');
-  });
-
-  it('marks the page refresh busy while consumer targets are still loading', async () => {
-    let resolveConsumers: (value: { items: []; total: number }) => void = () => undefined;
-    vi.mocked(consumerApi.list).mockReturnValueOnce(new Promise((resolve) => { resolveConsumers = resolve; }));
-    renderAtRoute(<TopicListPage />, '/topics');
-
-    await screen.findByRole('heading', { name: 'Topics' });
-    expect(screen.getByRole('button', { name: 'Refreshing' })).toBeDisabled();
-    resolveConsumers({ items: [], total: 0 });
-    expect(await screen.findByRole('button', { name: 'Refresh' })).toBeEnabled();
+    const dialog = await submitCreate(user, 'orders');
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('already exists');
+    expect(topicApi.create).not.toHaveBeenCalled();
   });
 });
