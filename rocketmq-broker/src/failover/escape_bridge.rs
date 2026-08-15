@@ -22,10 +22,8 @@ use rocketmq_model::common::hasher::string_hasher::JavaStringHasher;
 use rocketmq_model::common::message::message_batch::MessageExtBatch;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_model::common::message::MessageConst;
 use rocketmq_model::common::message::MessageTrait;
-use rocketmq_model::common::mix_all;
 use rocketmq_model::result::PullStatus;
 use rocketmq_model::result::SendResult;
 use rocketmq_model::result::SendStatus;
@@ -54,7 +52,11 @@ use tracing::warn;
 
 use crate::failover::escape_bridge_capability::EscapeBridgePolicyState;
 use crate::failover::escape_bridge_capability::EscapeBridgeStoreCapability;
+use crate::failover::escape_bridge_capability::EscapeRemoteAuthority;
 use crate::failover::escape_bridge_capability::EscapeStoreReadLease;
+use crate::failover::escape_target_resolver::EscapeTargetError;
+use crate::failover::escape_target_resolver::EscapeTargetPreference;
+use crate::failover::escape_target_resolver::EscapeTargetResolver;
 use crate::out_api::broker_outer_api::BrokerOuterAPI;
 use crate::topic::manager::topic_route_info_manager::TopicRouteInfoManager;
 use crate::transaction::queue::transactional_message_util::TransactionalMessageUtil;
@@ -64,6 +66,20 @@ const DEFAULT_PULL_TIMEOUT_MILLIS: u64 = 10_000;
 
 #[derive(Debug)]
 pub(crate) struct MessageStoreUnavailable;
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum EscapeDispatchError {
+    #[error(transparent)]
+    Target(#[from] EscapeTargetError),
+    #[error("the selected escape broker has no publish address")]
+    BrokerAddressUnavailable,
+    #[error("remote escape is not authorized for the current broker role")]
+    RemoteEscapeUnauthorized,
+    #[error("the controller role epoch changed before remote dispatch")]
+    StaleRoleEpoch,
+    #[error(transparent)]
+    Send(#[from] rocketmq_error::RocketMQError),
+}
 
 ///### RocketMQ's EscapeBridge for Dead Letter Queue (DLQ) Mechanism
 ///
@@ -111,6 +127,7 @@ pub(crate) struct EscapeBridge<MS> {
     message_store: EscapeBridgeStoreCapability<MS>,
     topic_route_info_manager: TopicRouteInfoManager,
     broker_outer_api: BrokerOuterAPI,
+    target_resolver: EscapeTargetResolver,
 }
 
 impl<MS: BrokerReadStore> EscapeBridge<MS> {
@@ -136,6 +153,7 @@ impl<MS: BrokerReadStore> EscapeBridge<MS> {
             message_store: EscapeBridgeStoreCapability::default(),
             topic_route_info_manager,
             broker_outer_api,
+            target_resolver: EscapeTargetResolver::default(),
         }
     }
 
@@ -424,109 +442,46 @@ where
 {
     pub async fn put_message(&self, mut message_ext: MessageExtBrokerInner) -> PutMessageResult {
         let policy = self.policy_state.snapshot();
-        if policy.broker_id == mix_all::MASTER_ID {
-            self.message_store
+        if policy.broker_role != rocketmq_model::common::broker::broker_role::BrokerRole::Slave
+            && self.message_store.is_local_writeable()
+        {
+            return self
+                .message_store
                 .put_message(message_ext)
                 .await
-                .expect("message store must be bound before broker services start")
-        } else if policy.enable_slave_acting_master && policy.enable_remote_escape {
-            message_ext.set_wait_store_msg_ok(false);
-            match self.put_message_to_remote_broker(message_ext, None).await {
-                Ok(send_result) => transform_send_result2put_result(send_result),
-                Err(e) => {
-                    error!("sendMessageInFailover to remote failed, {}", e);
-                    PutMessageResult::new(PutMessageStatus::PutToRemoteBrokerFail, None, true)
-                }
+                .unwrap_or_else(|_| PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable));
+        }
+
+        let Some(authority) = policy.remote_escape_authority() else {
+            warn!("Put message failed closed: local Store is not writable and remote escape is not authorized");
+            return PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable);
+        };
+        message_ext.set_wait_store_msg_ok(false);
+        match self
+            .dispatch_remote_message(message_ext, EscapeTargetPreference::Any, authority)
+            .await
+        {
+            Ok(send_result) => transform_send_result2put_result(Some(send_result)),
+            Err(error) => {
+                error!(%error, "send message in failover to remote failed");
+                PutMessageResult::new(PutMessageStatus::PutToRemoteBrokerFail, None, true)
             }
-        } else {
-            warn!(
-                "Put message failed, enableSlaveActingMaster={}, enableRemoteEscape={}.",
-                policy.enable_slave_acting_master, policy.enable_remote_escape
-            );
-            PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable)
         }
     }
 
-    pub async fn put_message_to_remote_broker(
+    pub(crate) async fn put_message_to_remote_broker(
         &self,
         message_ext: MessageExtBrokerInner,
-        mut broker_name_to_send: Option<CheetahString>,
-    ) -> rocketmq_error::RocketMQResult<Option<SendResult>> {
+        broker_name_to_send: Option<CheetahString>,
+    ) -> Result<SendResult, EscapeDispatchError> {
         let policy = self.policy_state.snapshot();
-        let broker_name = policy.broker_name.as_str();
-        if broker_name.is_empty() || broker_name == broker_name_to_send.as_ref().map_or("", |value| value.as_str()) {
-            // not remote broker
-            return Ok(None);
-        }
-        let is_trans_half_message = TransactionalMessageUtil::build_half_topic() == message_ext.get_topic();
-        let mut message_to_put = if is_trans_half_message {
-            TransactionalMessageUtil::build_transactional_message_from_half_message(&message_ext.message_ext_inner)
-        } else {
-            message_ext
-        };
-        let topic_publish_info = self
-            .topic_route_info_manager
-            .try_to_find_topic_publish_info(message_to_put.get_topic())
-            .await;
-        if !topic_publish_info.as_ref().is_some_and(|value| value.is_usable()) {
-            warn!(
-                "putMessageToRemoteBroker: no route info of topic {} when escaping message, msgId={}",
-                message_to_put.get_topic(),
-                message_to_put.message_ext_inner.msg_id
-            );
-            return Ok(None);
-        }
-        let topic_publish_info = topic_publish_info.unwrap();
-        let _mq_selected = if broker_name_to_send.as_ref().is_none_or(|value| !value.is_empty()) {
-            let mq = topic_publish_info
-                .select_one_queue_avoiding(broker_name_to_send.as_ref())
-                .unwrap();
-            message_to_put.message_ext_inner.queue_id = mq.queue_id();
-            broker_name_to_send = Some(mq.broker_name().clone());
-            if broker_name == mq.broker_name().as_str() {
-                warn!(
-                    "putMessageToRemoteBroker failed, remote broker not found. Topic: {}, MsgId: {}, Broker: {}",
-                    message_to_put.get_topic(),
-                    message_to_put.message_ext_inner.msg_id,
-                    mq.broker_name()
-                );
-                return Ok(None);
-            }
-            mq
-        } else {
-            MessageQueue::from_parts(
-                message_to_put.get_topic(),
-                broker_name_to_send.clone().unwrap(),
-                message_to_put.queue_id(),
-            )
-        };
-        let broker_addr_to_send = self
-            .topic_route_info_manager
-            .find_broker_address_in_publish(broker_name_to_send.as_ref());
-        if broker_addr_to_send.is_none() {
-            warn!(
-                "putMessageToRemoteBroker failed, remote broker not found. Topic: {}, MsgId:  {}, Broker: {}",
-                message_to_put.get_topic(),
-                message_to_put.message_ext_inner.msg_id,
-                broker_name_to_send.as_ref().unwrap()
-            );
-            return Ok(None);
-        }
-        let producer_group = self.get_producer_group(&message_to_put);
-        let result = self
-            .broker_outer_api
-            .send_message_to_specific_broker(
-                broker_addr_to_send.as_ref().unwrap(),
-                broker_name_to_send.as_ref().unwrap(),
-                message_to_put.message_ext_inner,
-                producer_group,
-                SEND_TIMEOUT,
-            )
-            .await?;
-        if result.send_status == SendStatus::SendOk {
-            return Ok(Some(result));
-        }
-        Ok(None)
+        let authority = policy
+            .remote_escape_authority()
+            .ok_or(EscapeDispatchError::RemoteEscapeUnauthorized)?;
+        let preference = broker_name_to_send
+            .as_ref()
+            .map_or(EscapeTargetPreference::Any, EscapeTargetPreference::Broker);
+        self.dispatch_remote_message(message_ext, preference, authority).await
     }
 
     fn get_producer_group(&self, message_ext: &MessageExtBrokerInner) -> CheetahString {
@@ -540,108 +495,123 @@ where
 
     pub async fn async_put_message(&self, mut message_ext: MessageExtBrokerInner) -> PutMessageResult {
         let policy = self.policy_state.snapshot();
-        if policy.broker_id == mix_all::MASTER_ID {
-            self.message_store
+        if policy.broker_role != rocketmq_model::common::broker::broker_role::BrokerRole::Slave
+            && self.message_store.is_local_writeable()
+        {
+            return self
+                .message_store
                 .put_message(message_ext)
                 .await
-                .expect("message store must be bound before broker services start")
-        } else if policy.enable_slave_acting_master && policy.enable_remote_escape {
-            message_ext.set_wait_store_msg_ok(false);
-            let topic_publish_info = self
-                .topic_route_info_manager
-                .try_to_find_topic_publish_info(message_ext.get_topic())
-                .await;
-            if topic_publish_info.is_none() {
-                return PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable);
+                .unwrap_or_else(|_| PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable));
+        }
+        let Some(authority) = policy.remote_escape_authority() else {
+            return PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable);
+        };
+        message_ext.set_wait_store_msg_ok(false);
+        match self
+            .dispatch_remote_message(message_ext, EscapeTargetPreference::Any, authority)
+            .await
+        {
+            Ok(result) => transform_send_result2put_result(Some(result)),
+            Err(error) => {
+                warn!(%error, "asynchronous remote escape failed closed");
+                PutMessageResult::new(PutMessageStatus::PutToRemoteBrokerFail, None, true)
             }
-            let topic_publish_info = topic_publish_info.unwrap();
-            let mq_selected = topic_publish_info.select_one_queue();
-            if mq_selected.is_none() {
-                return PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable);
-            }
-            let message_queue = mq_selected.unwrap();
-            message_ext.message_ext_inner.queue_id = message_queue.queue_id();
-            let broker_name_to_send = message_queue.broker_name();
-            let broker_addr_to_send = self
-                .topic_route_info_manager
-                .find_broker_address_in_publish(Some(broker_name_to_send));
-            let producer_group = self.get_producer_group(&message_ext);
-            let result = self
-                .broker_outer_api
-                .send_message_to_specific_broker(
-                    broker_addr_to_send.as_ref().unwrap(),
-                    broker_name_to_send,
-                    message_ext.message_ext_inner,
-                    producer_group,
-                    SEND_TIMEOUT,
-                )
-                .await;
-            transform_send_result2put_result(result.ok())
-        } else {
-            PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable)
         }
     }
 
     pub async fn put_message_to_specific_queue(&self, mut message_ext: MessageExtBrokerInner) -> PutMessageResult {
         let policy = self.policy_state.snapshot();
-        if policy.broker_id == mix_all::MASTER_ID {
-            self.message_store
+        if policy.broker_role != rocketmq_model::common::broker::broker_role::BrokerRole::Slave
+            && self.message_store.is_local_writeable()
+        {
+            return self
+                .message_store
                 .put_message(message_ext)
                 .await
-                .expect("message store must be bound before broker services start")
-        } else if policy.enable_slave_acting_master && policy.enable_remote_escape {
-            message_ext.set_wait_store_msg_ok(false);
-            let topic_publish_info = self
-                .topic_route_info_manager
-                .try_to_find_topic_publish_info(message_ext.get_topic())
-                .await;
-            if topic_publish_info.is_none() {
-                return PutMessageResult::new(PutMessageStatus::PutToRemoteBrokerFail, None, true);
-            }
-            let topic_publish_info = topic_publish_info.unwrap();
-
-            if topic_publish_info.message_queues().is_empty() {
-                return PutMessageResult::new(PutMessageStatus::PutToRemoteBrokerFail, None, true);
-            }
-            //let message_queue = mq_selected.unwrap();
-            let id = format!(
-                "{}{}",
-                message_ext.get_topic(),
-                message_ext.message_ext_inner.store_host
-            );
-            let code = JavaStringHasher::hash_str(id.as_str());
-            let index = code as usize % topic_publish_info.message_queues().len();
-            let message_queue = topic_publish_info.message_queues()[index].clone();
-            message_ext.message_ext_inner.queue_id = message_queue.queue_id();
-            let broker_name_to_send = message_queue.broker_name();
-            let broker_addr_to_send = self
-                .topic_route_info_manager
-                .find_broker_address_in_publish(Some(broker_name_to_send));
-            let producer_group = self.get_producer_group(&message_ext);
-            match self
-                .broker_outer_api
-                .send_message_to_specific_broker(
-                    broker_addr_to_send.as_ref().unwrap(),
-                    broker_name_to_send,
-                    message_ext.message_ext_inner,
-                    producer_group,
-                    SEND_TIMEOUT,
-                )
-                .await
-            {
-                Ok(result) => transform_send_result2put_result(Some(result)),
-                Err(e) => {
-                    error!("sendMessageInFailover to remote failed, {}", e);
-                    PutMessageResult::new(PutMessageStatus::PutToRemoteBrokerFail, None, true)
-                }
-            }
-        } else {
-            warn!(
-                "Put message failed, enableSlaveActingMaster={}, enableRemoteEscape={}.",
-                policy.enable_slave_acting_master, policy.enable_remote_escape
-            );
-            PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable)
+                .unwrap_or_else(|_| PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable));
         }
+        let Some(authority) = policy.remote_escape_authority() else {
+            return PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable);
+        };
+        message_ext.set_wait_store_msg_ok(false);
+        let stable_key = JavaStringHasher::hash_str(&format!(
+            "{}{}",
+            message_ext.get_topic(),
+            message_ext.message_ext_inner.store_host
+        ))
+        .unsigned_abs() as u64;
+        match self
+            .dispatch_remote_message(message_ext, EscapeTargetPreference::Stable(stable_key), authority)
+            .await
+        {
+            Ok(result) => transform_send_result2put_result(Some(result)),
+            Err(error) => {
+                error!(%error, "specific-queue remote escape failed closed");
+                PutMessageResult::new(PutMessageStatus::PutToRemoteBrokerFail, None, true)
+            }
+        }
+    }
+
+    pub async fn put_messages(&self, batch: MessageExtBatch) -> PutMessageResult {
+        let policy = self.policy_state.snapshot();
+        if policy.broker_role != rocketmq_model::common::broker::broker_role::BrokerRole::Slave
+            && self.message_store.is_local_writeable()
+        {
+            return self
+                .message_store
+                .put_messages(batch)
+                .await
+                .unwrap_or_else(|_| PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable));
+        }
+        if policy.remote_escape_authority().is_some() {
+            return PutMessageResult::new(PutMessageStatus::PutToRemoteBrokerFail, None, true);
+        }
+        PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable)
+    }
+
+    async fn dispatch_remote_message(
+        &self,
+        message_ext: MessageExtBrokerInner,
+        preference: EscapeTargetPreference<'_>,
+        authority: EscapeRemoteAuthority,
+    ) -> Result<SendResult, EscapeDispatchError> {
+        let is_trans_half_message = TransactionalMessageUtil::build_half_topic() == message_ext.get_topic();
+        let mut message_to_put = if is_trans_half_message {
+            TransactionalMessageUtil::build_transactional_message_from_half_message(&message_ext.message_ext_inner)
+        } else {
+            message_ext
+        };
+        let topic_publish_info = self
+            .topic_route_info_manager
+            .try_to_find_topic_publish_info(message_to_put.get_topic())
+            .await
+            .filter(|route| route.is_usable())
+            .ok_or(EscapeTargetError::RouteUnavailable)?;
+        let local_broker = self.policy_state.snapshot().broker_name.clone();
+        let target = self
+            .target_resolver
+            .resolve(topic_publish_info.message_queues(), &local_broker, preference)?;
+        let broker_address = self
+            .topic_route_info_manager
+            .find_broker_address_in_publish(Some(target.broker_name()))
+            .ok_or(EscapeDispatchError::BrokerAddressUnavailable)?;
+        let producer_group = self.get_producer_group(&message_to_put);
+        message_to_put.message_ext_inner.queue_id = target.queue_id();
+
+        if !self.policy_state.is_remote_escape_authority_current(authority) {
+            return Err(EscapeDispatchError::StaleRoleEpoch);
+        }
+        self.broker_outer_api
+            .send_message_to_specific_broker(
+                &broker_address,
+                target.broker_name(),
+                message_to_put.message_ext_inner,
+                producer_group,
+                SEND_TIMEOUT,
+            )
+            .await
+            .map_err(Into::into)
     }
 
     pub fn get_message_async(
@@ -667,18 +637,17 @@ where
                     .await
                     .ok()
                     .flatten();
-                if result.is_none() {
+                let Some(result) = result else {
                     warn!(
                         "getMessageResult is null, innerConsumerGroupName {}, topic {}, offset {}, queueId {}",
                         inner_consumer_group_name, topic, offset, queue_id
                     );
                     return (None, "getMessageResult is null".to_string(), false);
-                }
-                let result1 = result.unwrap();
-                let status = result1.status();
-                let mut list = decode_msg_list(result1, de_compress_body);
+                };
+                let status = result.status();
+                let mut list = decode_msg_list(result, de_compress_body);
                 if list.is_empty() {
-                    let need_retry = status.unwrap() == GetMessageStatus::OffsetFoundNull;
+                    let need_retry = status == Some(GetMessageStatus::OffsetFoundNull);
                     warn!(
                         "Can not get msg, topic {}, offset {}, queueId {}, needRetry {},",
                         topic, offset, queue_id, need_retry,
@@ -722,7 +691,9 @@ where
                 }
             }
 
-            let broker_addr = broker_addr.unwrap();
+            let Some(broker_addr) = broker_addr else {
+                return (None, "brokerAddress not found".to_string(), true);
+            };
             match broker_outer_api
                 .pull_message_from_specific_broker_async(
                     &broker_name,
@@ -738,10 +709,10 @@ where
             {
                 Ok(pull_result) => {
                     if let Some(result) = pull_result.0 {
-                        if result.pull_status() == PullStatus::Found
-                            && result.messages().is_some_and(|value| !value.is_empty())
-                        {
-                            return (Some(result.messages().unwrap()[0].clone()), "".to_string(), false);
+                        if result.pull_status() == PullStatus::Found {
+                            if let Some(message) = result.messages().and_then(|messages| messages.first()).cloned() {
+                                return (Some(message), "".to_string(), false);
+                            }
                         }
                     }
                 }
@@ -886,6 +857,8 @@ mod tests {
         };
         let result = transform_send_result2put_result(Some(send_result));
         assert_eq!(result.put_message_status(), PutMessageStatus::PutOk);
+        assert!(result.remote_put());
+        assert!(result.is_ok());
     }
 
     #[test]

@@ -204,24 +204,26 @@ impl TopicRouteInfoManager {
                 .broker_outer_api
                 .get_topic_route_info_from_name_server(topic, GET_TOPIC_ROUTE_TIMEOUT, true)
                 .await;
-            if let Err(e) = topic_route_data {
-                if !NamespaceUtil::is_retry_topic(topic) {
-                    if let rocketmq_error::RocketMQError::BrokerOperationFailed { code, .. } = e {
-                        if code == ResponseCode::TopicNotExist as i32 {
-                            self.clean_none_route_topic(topic);
-                            return;
+            let mut topic_route_data = match topic_route_data {
+                Ok(route) => route,
+                Err(e) => {
+                    if !NamespaceUtil::is_retry_topic(topic) {
+                        if let rocketmq_error::RocketMQError::BrokerOperationFailed { code, .. } = e {
+                            if code == ResponseCode::TopicNotExist as i32 {
+                                self.clean_none_route_topic(topic);
+                                return;
+                            }
                         }
                     }
-                }
 
-                warn!(
-                    "TopicRouteInfoManager: updateTopicRouteInfoFromNameServer, getTopicRouteInfoFromNameServer \
+                    warn!(
+                        "TopicRouteInfoManager: updateTopicRouteInfoFromNameServer, getTopicRouteInfoFromNameServer \
                      return null, Topic: {}.",
-                    topic
-                );
-                return;
-            }
-            let mut topic_route_data = topic_route_data.unwrap();
+                        topic
+                    );
+                    return;
+                }
+            };
             if is_need_update_subscribe_info {
                 self.update_subscribe_info_table(topic.clone(), &topic_route_data);
             }
@@ -308,7 +310,7 @@ impl TopicRouteInfoManager {
             .topic_publish_info_table
             .get(topic)
             .map(|entry| entry.value().clone());
-        if topic_publish_info.is_none() || !topic_publish_info.as_ref().unwrap().is_usable() {
+        if !topic_publish_info.as_ref().is_some_and(BrokerPublishRoute::is_usable) {
             self.update_topic_route_info_from_name_server_ext(topic, true, false)
                 .await;
             topic_publish_info = self

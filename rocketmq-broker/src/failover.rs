@@ -14,3 +14,4 @@
 
 pub mod escape_bridge;
 pub(crate) mod escape_bridge_capability;
+pub(crate) mod escape_target_resolver;
