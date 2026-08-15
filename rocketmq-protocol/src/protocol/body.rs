@@ -14,6 +14,7 @@
 
 pub mod broker_body;
 pub mod consumer_running_info;
+pub mod controller_write_lease;
 pub mod create_topic_list_request_body;
 pub mod delete_subscription_group_list_request_body;
 pub mod delete_topic_list_request_body;

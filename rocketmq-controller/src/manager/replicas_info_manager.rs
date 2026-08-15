@@ -47,6 +47,7 @@ use rocketmq_protocol::protocol::body::broker_body::broker_member_group::BrokerM
 use rocketmq_protocol::protocol::body::broker_replicas_info::BrokerReplicasInfo;
 use rocketmq_protocol::protocol::body::broker_replicas_info::ReplicaIdentity;
 use rocketmq_protocol::protocol::body::broker_replicas_info::ReplicasInfo;
+use rocketmq_protocol::protocol::body::controller_write_lease::ControllerWriteLeaseGrant;
 use rocketmq_protocol::protocol::body::elect_master_response_body::ElectMasterResponseBody;
 use rocketmq_protocol::protocol::body::sync_state_set_body::SyncStateSet;
 use rocketmq_protocol::protocol::header::controller::alter_sync_state_set_response_header::AlterSyncStateSetResponseHeader;
@@ -92,6 +93,15 @@ struct SerializedState {
     sync_state_set_info_table: HashMap<String, SyncStateInfo>,
     #[serde(default)]
     broker_live_table: Vec<(BrokerIdentityInfoSnapshot, BrokerLiveInfoSnapshot)>,
+    #[serde(default)]
+    write_lease_table: HashMap<String, PersistedWriteLease>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+struct PersistedWriteLease {
+    broker_id: u64,
+    master_epoch: i32,
+    generation: u64,
 }
 
 /// The manager that manages the replicas info for all brokers.
@@ -117,6 +127,9 @@ pub struct ReplicasInfoManager {
     /// Replicated broker liveness table, equivalent to Java RaftReplicasInfoManager
     /// brokerLiveTable.
     broker_live_table: Arc<DashMap<BrokerIdentityInfoSnapshot, BrokerLiveInfoSnapshot>>,
+
+    /// Quorum-replicated generation and handover quarantine for each broker set.
+    write_lease_table: Arc<DashMap<String, PersistedWriteLease>>,
 }
 
 impl ReplicasInfoManager {
@@ -127,7 +140,81 @@ impl ReplicasInfoManager {
             replica_info_table: Arc::new(DashMap::new()),
             sync_state_set_info_table: Arc::new(DashMap::new()),
             broker_live_table: Arc::new(DashMap::new()),
+            write_lease_table: Arc::new(DashMap::new()),
         }
+    }
+
+    fn write_lease_key(cluster_name: &str, broker_name: &str) -> String {
+        format!("{cluster_name}\0{broker_name}")
+    }
+
+    pub(crate) fn current_write_authority(&self, cluster_name: &str, broker_name: &str) -> Option<(u64, i32)> {
+        let state = self.sync_state_set_info_table.get(broker_name)?;
+        if state.cluster_name() != cluster_name {
+            return None;
+        }
+        Some((state.master_broker_id()?, state.master_epoch()))
+    }
+
+    /// Grants a write lease only to the currently committed master authority.
+    ///
+    /// The method executes inside the replicated state-machine apply path. A
+    /// rejected request never advances the generation. Handover to a different
+    /// authority waits longer than the old Broker's maximum local lease lifetime,
+    /// preventing overlap without comparing Controller and Broker clocks.
+    pub fn grant_write_lease(
+        &self,
+        broker_identity: &BrokerIdentityInfoSnapshot,
+        broker_live_info: &BrokerLiveInfoSnapshot,
+        lease_grant_allowed: bool,
+    ) -> Option<ControllerWriteLeaseGrant> {
+        if !lease_grant_allowed {
+            return None;
+        }
+        let broker_id = broker_identity.broker_id?;
+        if broker_id != broker_live_info.broker_id || broker_live_info.epoch <= 0 {
+            return None;
+        }
+
+        let replica_info = self.replica_info_table.get(broker_identity.broker_name.as_str())?;
+        if replica_info.cluster_name() != broker_identity.cluster_name || !replica_info.is_broker_exist(broker_id) {
+            return None;
+        }
+        drop(replica_info);
+
+        let sync_state = self
+            .sync_state_set_info_table
+            .get(broker_identity.broker_name.as_str())?;
+        if sync_state.cluster_name() != broker_identity.cluster_name
+            || sync_state.master_broker_id() != Some(broker_id)
+            || sync_state.master_epoch() != broker_live_info.epoch
+        {
+            return None;
+        }
+        drop(sync_state);
+
+        let key = Self::write_lease_key(&broker_identity.cluster_name, &broker_identity.broker_name);
+        let mut next_generation = 1;
+        if let Some(current) = self.write_lease_table.get(&key) {
+            next_generation = current.generation.saturating_add(1);
+        }
+
+        let grant = ControllerWriteLeaseGrant {
+            broker_id: broker_id as i64,
+            master_epoch: broker_live_info.epoch,
+            generation: next_generation,
+            lease_duration_millis: ControllerWriteLeaseGrant::DEFAULT_LEASE_DURATION_MILLIS,
+            safety_margin_millis: ControllerWriteLeaseGrant::DEFAULT_SAFETY_MARGIN_MILLIS,
+        };
+        self.write_lease_table.insert(
+            key,
+            PersistedWriteLease {
+                broker_id,
+                master_epoch: broker_live_info.epoch,
+                generation: next_generation,
+            },
+        );
+        Some(grant)
     }
 
     /// Alter the sync state set for a broker
@@ -1056,6 +1143,11 @@ impl ReplicasInfoManager {
                 .iter()
                 .map(|entry| (entry.key().clone(), entry.value().clone()))
                 .collect(),
+            write_lease_table: self
+                .write_lease_table
+                .iter()
+                .map(|entry| (entry.key().clone(), entry.value().clone()))
+                .collect(),
         };
 
         serde_json::to_vec(&state).map_err(|e| ControllerError::serialization_source("serialize sync state data", e))
@@ -1069,6 +1161,7 @@ impl ReplicasInfoManager {
         self.replica_info_table.clear();
         self.sync_state_set_info_table.clear();
         self.broker_live_table.clear();
+        self.write_lease_table.clear();
 
         for (key, value) in state.replica_info_table {
             self.replica_info_table.insert(CheetahString::from_string(key), value);
@@ -1081,6 +1174,10 @@ impl ReplicasInfoManager {
 
         for (key, value) in state.broker_live_table {
             self.broker_live_table.insert(key, value);
+        }
+
+        for (key, value) in state.write_lease_table {
+            self.write_lease_table.insert(key, value);
         }
 
         Ok(())
@@ -1381,5 +1478,93 @@ mod tests {
         }
 
         assert_eq!(manager.heartbeat_age_samples_at(1_000), vec![0, 100, 250]);
+    }
+
+    #[test]
+    fn write_lease_requires_committed_master_and_quarantines_handover() {
+        let config = ControllerConfigReader::new(ControllerConfig::new_node(1, "127.0.0.1:9876".parse().unwrap()));
+        let manager = ReplicasInfoManager::new(config);
+        for broker_id in [0, 1] {
+            manager
+                .try_apply_event(&ApplyBrokerIdEvent::new(
+                    "cluster-a",
+                    "broker-a",
+                    format!("127.0.0.1:{}", 10_911 + broker_id).as_str(),
+                    broker_id,
+                    format!("code-{broker_id}").as_str(),
+                ))
+                .unwrap();
+        }
+        manager
+            .try_apply_event(&ElectMasterEvent::with_new_master("broker-a", 0))
+            .unwrap();
+
+        let heartbeat = |broker_id, epoch, timestamp| BrokerLiveInfoSnapshot {
+            cluster_name: "cluster-a".to_owned(),
+            broker_name: "broker-a".to_owned(),
+            broker_addr: format!("127.0.0.1:{}", 10_911 + broker_id),
+            broker_id,
+            last_update_timestamp: timestamp,
+            heartbeat_timeout_millis: 30_000,
+            epoch,
+            max_offset: 100,
+            confirm_offset: 90,
+            election_priority: None,
+        };
+
+        let first = heartbeat(0, 1, 100);
+        assert_eq!(
+            manager
+                .grant_write_lease(&first.identity(), &first, true)
+                .expect("current committed master should receive a lease")
+                .generation,
+            1
+        );
+        let slave = heartbeat(1, 1, 200);
+        assert!(manager.grant_write_lease(&slave.identity(), &slave, true).is_none());
+
+        manager
+            .try_apply_event(&ElectMasterEvent::with_new_master("broker-a", 1))
+            .unwrap();
+        let early_new_master = heartbeat(1, 2, 12_099);
+        assert!(manager
+            .grant_write_lease(&early_new_master.identity(), &early_new_master, false)
+            .is_none());
+        let safe_new_master = heartbeat(1, 2, 12_100);
+        assert_eq!(
+            manager
+                .grant_write_lease(&safe_new_master.identity(), &safe_new_master, true)
+                .expect("handover quarantine has elapsed")
+                .generation,
+            2
+        );
+
+        let stale_old_master = heartbeat(0, 1, 20_000);
+        assert!(manager
+            .grant_write_lease(&stale_old_master.identity(), &stale_old_master, true)
+            .is_none());
+        let renewal = heartbeat(1, 2, 20_001);
+        assert_eq!(
+            manager
+                .grant_write_lease(&renewal.identity(), &renewal, true)
+                .unwrap()
+                .generation,
+            3
+        );
+
+        let snapshot = manager.serialize().unwrap();
+        let restored = ReplicasInfoManager::new(ControllerConfigReader::new(ControllerConfig::new_node(
+            1,
+            "127.0.0.1:9876".parse().unwrap(),
+        )));
+        restored.deserialize_from(&snapshot).unwrap();
+        let post_restore = heartbeat(1, 2, 20_002);
+        assert_eq!(
+            restored
+                .grant_write_lease(&post_restore.identity(), &post_restore, true)
+                .unwrap()
+                .generation,
+            4
+        );
     }
 }

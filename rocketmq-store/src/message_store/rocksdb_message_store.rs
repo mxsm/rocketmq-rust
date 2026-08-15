@@ -19,6 +19,7 @@ use std::fmt;
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::config::store_runtime_config::StoreRuntimeConfig;
 use bytes::Bytes;
@@ -36,6 +37,7 @@ use rocketmq_runtime::common::system_clock::SystemClock;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_store_api::GetStatus as ApiGetStatus;
 use rocketmq_store_api::WalPort;
+use rocketmq_store_api::WriteLeaseToken;
 use rocketmq_store_rocksdb::message_store::RocksDbDerivedStore;
 use rocketmq_store_rocksdb::message_store::RocksDbMessageStoreError;
 use rocketmq_store_rocksdb::message_store::RocksDbMessageStoreOptions;
@@ -1203,6 +1205,14 @@ impl BackendOps for RocksDBMessageStore {
 
     fn sync_broker_role(&self, broker_role: BrokerRole) {
         self.local_file_store.sync_broker_role(broker_role);
+    }
+
+    fn install_controller_write_lease(&self, token: WriteLeaseToken, valid_for: Duration) -> bool {
+        self.local_file_store.install_controller_write_lease(token, valid_for)
+    }
+
+    fn fence_controller_writes(&self) {
+        self.local_file_store.fence_controller_writes();
     }
 
     fn calc_delta_checksum(&self, from: i64, to: i64) -> Vec<u8> {

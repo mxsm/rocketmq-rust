@@ -18,6 +18,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use std::time::Instant;
 
 use cheetah_string::CheetahString;
 use rocketmq_error::RocketMQError;
@@ -35,8 +36,26 @@ use crate::controller::replicas_manager::ControllerRegisterFollowup;
 use crate::controller::replicas_manager::ControllerReplicaInfoFollowup;
 use crate::controller::replicas_manager::ControllerReplicaSyncFollowup;
 use crate::controller::replicas_manager::ReplicasManager;
+use crate::controller::write_lease::validate_grant;
 
 impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
+    async fn install_controller_write_lease(
+        &self,
+        grant: rocketmq_protocol::protocol::body::controller_write_lease::ControllerWriteLeaseGrant,
+        sent_at: Instant,
+    ) -> bool {
+        let _operation_guard = self.controller.lock_operation().await;
+        let Some(expected_authority) = self.replicas_snapshot().and_then(|manager| manager.write_authority()) else {
+            return false;
+        };
+        let Some((token, valid_for)) = validate_grant(grant, expected_authority, sent_at.elapsed()) else {
+            return false;
+        };
+        self.store
+            .install_controller_write_lease(token, valid_for)
+            .unwrap_or(false)
+    }
+
     pub(crate) async fn run_heartbeat_cycle(&self) {
         if self.shutdown.load(Ordering::Acquire) {
             return;
@@ -658,6 +677,7 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
                     return None;
                 }
                 let target = controller_address.clone();
+                let sent_at = Instant::now();
                 let result = self
                     .broker_outer_api
                     .send_heartbeat_to_controller(
@@ -674,18 +694,26 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
                         Some(broker_election_priority),
                     )
                     .await;
-                Some((target, result))
+                Some((target, sent_at, result))
             }
         });
+        let mut installed_lease = false;
         for outcome in futures::future::join_all(futures).await.into_iter().flatten() {
-            let (target, result) = outcome;
-            if let Err(error) = result {
-                warn!(
-                    remote_addr = %target,
-                    error_kind = ?error.kind(),
-                    "controller heartbeat failed"
-                );
+            let (target, sent_at, result) = outcome;
+            match result {
+                Ok(Some(grant)) => installed_lease |= self.install_controller_write_lease(grant, sent_at).await,
+                Ok(None) => {}
+                Err(error) => {
+                    warn!(
+                        remote_addr = %target,
+                        error_kind = ?error.kind(),
+                        "controller heartbeat failed"
+                    );
+                }
             }
+        }
+        if !installed_lease {
+            let _ = self.store.fence_controller_writes();
         }
     }
 
@@ -704,7 +732,9 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
         let broker_config = self.config.broker_snapshot();
         let (max_offset, confirm_offset) = self.store.controller_heartbeat_offsets();
 
-        self.broker_outer_api
+        let sent_at = Instant::now();
+        let grant = self
+            .broker_outer_api
             .send_heartbeat_to_controller_sync(
                 controller_leader,
                 broker_config.broker_identity.broker_cluster_name.clone(),
@@ -718,7 +748,23 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
                 Some(broker_config.controller_heartbeat_timeout_mills),
                 Some(broker_config.broker_election_priority),
             )
-            .await
+            .await?;
+        let lease_required = self
+            .replicas_snapshot()
+            .and_then(|manager| manager.write_authority())
+            .is_some();
+        let installed = match grant {
+            Some(grant) => self.install_controller_write_lease(grant, sent_at).await,
+            None => false,
+        };
+        if installed || !lease_required {
+            Ok(())
+        } else {
+            let _ = self.store.fence_controller_writes();
+            Err(RocketMQError::illegal_argument(
+                "controller heartbeat completed without a valid committed write lease",
+            ))
+        }
     }
 }
 

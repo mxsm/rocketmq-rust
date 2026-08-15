@@ -221,6 +221,10 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
         sync_state_set: std::collections::HashSet<i64>,
     ) -> rocketmq_error::RocketMQResult<()> {
         let _operation_guard = self.controller.lock_operation().await;
+        // Revoke the old authority before publishing any new role metadata.
+        // Store remains fail-closed until a quorum-committed heartbeat installs
+        // a lease for the newly published authority.
+        let _ = self.store.fence_controller_writes();
         let outcome = self
             .controller
             .with_replicas_mut(|replicas_manager| {

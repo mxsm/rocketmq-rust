@@ -32,6 +32,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
 
 use crate::config::ControllerConfigReader;
 use crate::controller::broker_heartbeat_manager::DEFAULT_BROKER_CHANNEL_EXPIRED_TIME;
@@ -47,6 +48,7 @@ use crate::error::Result;
 use crate::event::controller_result::ControllerResult as EventControllerResult;
 use crate::heartbeat::default_broker_heartbeat_manager::DefaultBrokerHeartbeatManager;
 use crate::helper::broker_lifecycle_listener::BrokerLifecycleListener;
+use crate::manager::write_lease_manager::WriteLeaseGrantGate;
 use crate::metrics::controller_metrics_manager::ControllerMetricsManager;
 use crate::openraft::GrpcRaftService;
 use crate::openraft::RaftNodeManager;
@@ -154,6 +156,7 @@ pub struct OpenRaftController {
     first_received_heartbeat_time: Arc<AtomicU64>,
     service_context: ChildServiceContext,
     metrics_manager: Arc<ControllerMetricsManager>,
+    write_lease_grant_gate: Mutex<WriteLeaseGrantGate>,
 }
 
 impl OpenRaftController {
@@ -247,6 +250,7 @@ impl OpenRaftController {
             first_received_heartbeat_time: Arc::new(AtomicU64::new(0)),
             service_context,
             metrics_manager,
+            write_lease_grant_gate: Mutex::new(WriteLeaseGrantGate::default()),
         }
     }
 
@@ -363,6 +367,22 @@ impl OpenRaftController {
         use openraft::async_runtime::WatchReceiver;
         let metrics = node.raft().metrics().borrow_watched().clone();
         metrics.current_leader == Some(self.config.snapshot().node_id)
+    }
+
+    fn current_leader_term(&self) -> Option<u64> {
+        let Some(node) = self.node() else {
+            self.write_lease_grant_gate.lock().observe_not_leader();
+            return None;
+        };
+
+        use openraft::async_runtime::WatchReceiver;
+        let metrics = node.raft().metrics().borrow_watched().clone();
+        if metrics.current_leader == Some(self.config.snapshot().node_id) {
+            Some(metrics.current_term)
+        } else {
+            self.write_lease_grant_gate.lock().observe_not_leader();
+            None
+        }
     }
 
     pub(crate) fn has_recovered_cluster_state(&self) -> bool {
@@ -532,11 +552,23 @@ impl OpenRaftController {
             confirm_offset: request.confirm_offset.unwrap_or(-1),
             election_priority: request.election_priority.or(Some(i32::MAX)),
         };
+        let lease_grant_allowed = self.current_leader_term().is_some_and(|leader_term| {
+            let authority = self.node().and_then(|node| {
+                node.store()
+                    .state_machine
+                    .replicas_info_manager()
+                    .current_write_authority(&request.cluster_name, &request.broker_name)
+            });
+            self.write_lease_grant_gate
+                .lock()
+                .allow(leader_term, authority, Instant::now())
+        });
 
         match self
             .write_internal_request(ControllerRequest::BrokerHeartbeat {
                 broker_identity,
                 broker_live_info,
+                lease_grant_allowed,
             })
             .await?
         {

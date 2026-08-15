@@ -84,6 +84,7 @@ fn broker_heartbeat_request(
             confirm_offset: 80,
             election_priority: Some(1),
         },
+        lease_grant_allowed: false,
     }
 }
 

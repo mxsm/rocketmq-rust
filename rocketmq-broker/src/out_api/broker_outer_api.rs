@@ -42,6 +42,7 @@ use rocketmq_protocol::protocol::body::broker_body::broker_member_group::BrokerM
 use rocketmq_protocol::protocol::body::broker_body::broker_member_group::GetBrokerMemberGroupResponseBody;
 use rocketmq_protocol::protocol::body::broker_body::register_broker_body::RegisterBrokerBody;
 use rocketmq_protocol::protocol::body::consumer_offset_serialize_wrapper::ConsumerOffsetSerializeWrapper;
+use rocketmq_protocol::protocol::body::controller_write_lease::ControllerWriteLeaseGrant;
 use rocketmq_protocol::protocol::body::elect_master_response_body::ElectMasterResponseBody;
 use rocketmq_protocol::protocol::body::kv_table::KVTable;
 use rocketmq_protocol::protocol::body::message_request_mode_serialize_wrapper::MessageRequestModeSerializeWrapper;
@@ -1302,9 +1303,9 @@ impl BrokerOuterAPI {
         confirm_offset: Option<i64>,
         heartbeat_timeout_millis: Option<i64>,
         election_priority: Option<i32>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> rocketmq_error::RocketMQResult<Option<ControllerWriteLeaseGrant>> {
         if controller_address.is_empty() {
-            return Ok(());
+            return Ok(None);
         }
         let request_header = BrokerHeartbeatRequestHeader {
             cluster_name,
@@ -1320,9 +1321,23 @@ impl BrokerOuterAPI {
         let request = self
             .command_factory
             .create_request_command(RequestCode::BrokerHeartbeat, request_header);
-        self.remoting_client
-            .invoke_request_oneway(&controller_address, request, timeout_millis)
-            .await
+        let response = self
+            .remoting_client
+            .invoke_request(Some(&controller_address), request, timeout_millis)
+            .await?;
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => response
+                .body()
+                .map(|body| serde_json::from_slice(body.as_ref()))
+                .transpose()
+                .map_err(Into::into),
+            _ => Err(RocketMQError::BrokerOperationFailed {
+                operation: "send_heartbeat_to_controller",
+                code: response.code(),
+                message: response.remark().map_or_else(String::new, ToString::to_string),
+                broker_addr: Some(controller_address.to_string()),
+            }),
+        }
     }
 
     pub async fn send_heartbeat_to_controller_sync(
@@ -1338,7 +1353,7 @@ impl BrokerOuterAPI {
         confirm_offset: Option<i64>,
         heartbeat_timeout_millis: Option<i64>,
         election_priority: Option<i32>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> rocketmq_error::RocketMQResult<Option<ControllerWriteLeaseGrant>> {
         let request_header = BrokerHeartbeatRequestHeader {
             cluster_name,
             broker_addr,
@@ -1359,7 +1374,11 @@ impl BrokerOuterAPI {
             .await?;
 
         match ResponseCode::from(response.code()) {
-            ResponseCode::Success => Ok(()),
+            ResponseCode::Success => response
+                .body()
+                .map(|body| serde_json::from_slice(body.as_ref()))
+                .transpose()
+                .map_err(Into::into),
             _ => Err(RocketMQError::BrokerOperationFailed {
                 operation: "send_heartbeat_to_controller_sync",
                 code: response.code(),

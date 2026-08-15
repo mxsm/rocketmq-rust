@@ -38,6 +38,7 @@ use rocketmq_runtime::common::system_clock::SystemClock;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store_api::TimerRecallRequest;
 use rocketmq_store_api::TimerRecallStatus;
+use rocketmq_store_api::WriteLeaseToken;
 use rocketmq_store_local::mapped_file::ManagedRetirementStage;
 
 use crate::base::allocate_mapped_file_service::AllocateMappedFileService;
@@ -58,6 +59,7 @@ use crate::consume_queue::mapped_file_queue::FlushProgress;
 use crate::filter::ArcMessageFilter;
 use crate::filter::MessageFilter;
 use crate::ha::general_ha_service::GeneralHAService;
+use crate::ha::write_lease::ControllerWriteLeaseState;
 use crate::hook::put_message_hook::BoxedPutMessageHook;
 use crate::hook::put_message_hook::PutMessageHook;
 use crate::hook::send_message_back_hook::SendMessageBackHook;
@@ -106,6 +108,7 @@ pub struct PutMessagePreflight {
     shutdown: Arc<AtomicBool>,
     running_flags: Arc<RunningFlags>,
     begin_time_in_lock: Arc<AtomicU64>,
+    controller_write_lease: ControllerWriteLeaseState,
 }
 
 impl PutMessagePreflight {
@@ -113,11 +116,13 @@ impl PutMessagePreflight {
         shutdown: Arc<AtomicBool>,
         running_flags: Arc<RunningFlags>,
         begin_time_in_lock: Arc<AtomicU64>,
+        controller_write_lease: ControllerWriteLeaseState,
     ) -> Self {
         Self {
             shutdown,
             running_flags,
             begin_time_in_lock,
+            controller_write_lease,
         }
     }
 
@@ -126,6 +131,7 @@ impl PutMessagePreflight {
             Arc::new(AtomicBool::new(true)),
             Arc::new(RunningFlags::new()),
             Arc::new(AtomicU64::new(0)),
+            ControllerWriteLeaseState::new(false),
         )
     }
 
@@ -136,7 +142,7 @@ impl PutMessagePreflight {
 
     /// Returns whether the store running flags permit writes.
     pub fn is_writeable(&self) -> bool {
-        self.running_flags.is_writeable()
+        self.running_flags.is_writeable() && self.controller_write_lease.is_write_permitted()
     }
 
     /// Returns the raw running-state flags for diagnostic logging.
@@ -802,6 +808,14 @@ pub trait BackendOps: Send + Sync + 'static {
         Ok(())
     }
 
+    /// Installs a Controller lease using a Broker-computed monotonic lifetime.
+    fn install_controller_write_lease(&self, _token: WriteLeaseToken, _valid_for: Duration) -> bool {
+        false
+    }
+
+    /// Immediately invalidates Controller-mode local write authority.
+    fn fence_controller_writes(&self) {}
+
     /// Calculate the checksum of a certain range of data.
     fn calc_delta_checksum(&self, from: i64, to: i64) -> Vec<u8>;
 
@@ -917,11 +931,16 @@ mod tests {
     use std::sync::atomic::AtomicU64;
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
+    use std::time::Duration;
 
     use rocketmq_runtime::common::time_utils::current_millis;
+    use rocketmq_store_api::MasterEpoch;
+    use rocketmq_store_api::WriteAuthority;
+    use rocketmq_store_api::WriteLeaseToken;
 
     use super::PutMessagePreflight;
     use super::StateMachineVersionView;
+    use crate::ha::write_lease::ControllerWriteLeaseState;
     use crate::store::running_flags::RunningFlags;
 
     #[test]
@@ -929,7 +948,12 @@ mod tests {
         let shutdown = Arc::new(AtomicBool::new(false));
         let running_flags = Arc::new(RunningFlags::new());
         let begin_time_in_lock = Arc::new(AtomicU64::new(0));
-        let preflight = PutMessagePreflight::new(shutdown.clone(), running_flags.clone(), begin_time_in_lock.clone());
+        let preflight = PutMessagePreflight::new(
+            shutdown.clone(),
+            running_flags.clone(),
+            begin_time_in_lock.clone(),
+            ControllerWriteLeaseState::new(false),
+        );
 
         assert!(!preflight.is_shutdown());
         assert!(preflight.is_writeable());
@@ -955,6 +979,25 @@ mod tests {
         assert!(preflight.is_writeable());
         assert_eq!(preflight.flag_bits(), 0);
         assert!(!preflight.is_os_page_cache_busy(10));
+    }
+
+    #[test]
+    fn controller_preflight_requires_a_live_write_lease() {
+        let lease = ControllerWriteLeaseState::new(true);
+        let preflight = PutMessagePreflight::new(
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(RunningFlags::new()),
+            Arc::new(AtomicU64::new(0)),
+            lease.clone(),
+        );
+        assert!(!preflight.is_writeable());
+
+        let authority = WriteAuthority::try_new(0, MasterEpoch::try_from(2).unwrap()).unwrap();
+        let token = WriteLeaseToken::try_new(authority, 1).unwrap();
+        assert!(lease.install(token, Duration::from_secs(1)));
+        assert!(preflight.is_writeable());
+        lease.fence();
+        assert!(!preflight.is_writeable());
     }
 
     #[test]

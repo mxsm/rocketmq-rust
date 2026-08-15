@@ -67,6 +67,7 @@ pub use ha_contract::ReplicationObservation;
 pub use ha_contract::SyncStateSet;
 pub use ha_contract::SyncStateSetEpoch;
 pub use ha_contract::WriteAuthority;
+pub use ha_contract::WriteLeaseToken;
 pub use progress::CursorAdvance;
 pub use progress::CursorAdvanceDisposition;
 pub use progress::CursorAdvanceError;

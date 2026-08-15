@@ -13,3 +13,4 @@
 // limitations under the License.
 
 pub(crate) mod replicas_manager;
+pub(crate) mod write_lease;

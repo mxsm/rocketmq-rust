@@ -23,6 +23,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::future::Future;
 use std::sync::Arc;
+use std::time::Duration;
 
 use bytes::Bytes;
 use bytes::BytesMut;
@@ -52,6 +53,7 @@ use rocketmq_store_api::StoreHealth;
 use rocketmq_store_api::StoreHealthSnapshot as ApiStoreHealthSnapshot;
 use rocketmq_store_api::TimerRecallRequest;
 use rocketmq_store_api::TimerRecallStatus;
+use rocketmq_store_api::WriteLeaseToken;
 
 use crate::base::backend_ops::BackendOps;
 use crate::base::backend_ops::MessageStoreShutdownReport;
@@ -673,6 +675,14 @@ pub trait BrokerReplicationStore: BrokerReadWriteStore + BrokerMasterAddressStor
         external_term: u64,
     ) -> Result<(), crate::store_error::StoreError> {
         BackendOps::sync_broker_role_with_term(self.backend(), broker_role, external_term)
+    }
+
+    fn install_controller_write_lease(&self, token: WriteLeaseToken, valid_for: Duration) -> bool {
+        BackendOps::install_controller_write_lease(self.backend(), token, valid_for)
+    }
+
+    fn fence_controller_writes(&self) {
+        BackendOps::fence_controller_writes(self.backend());
     }
 
     fn get_ha_service(&self) -> Option<&GeneralHAService> {

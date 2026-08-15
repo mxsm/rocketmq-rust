@@ -26,6 +26,7 @@ use rocketmq_model::utils::crc32_utils::crc32;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::controller::get_next_broker_id_response_header::GetNextBrokerIdResponseHeader;
 use rocketmq_protocol::protocol::header::controller::get_replica_info_response_header::GetReplicaInfoResponseHeader;
+use rocketmq_protocol::protocol::RemotingSerializable;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 
@@ -396,13 +397,21 @@ impl StateMachine {
             ControllerRequest::BrokerHeartbeat {
                 broker_identity,
                 broker_live_info,
+                lease_grant_allowed,
             } => {
                 replicas_info_manager.on_broker_heartbeat(broker_identity.clone(), broker_live_info.clone());
+                let lease_body = replicas_info_manager
+                    .grant_write_lease(broker_identity, broker_live_info, *lease_grant_allowed)
+                    .and_then(|grant| grant.encode().ok());
                 ControllerResponse::new(
                     rocketmq_protocol::code::response_code::ResponseCode::Success.into(),
-                    Some("Heart beat success".to_string()),
+                    Some(if lease_body.is_some() {
+                        "Heartbeat committed; write lease granted".to_string()
+                    } else {
+                        "Heartbeat committed; no write lease for this authority".to_string()
+                    }),
                     None,
-                    None,
+                    lease_body,
                 )
             }
             ControllerRequest::BrokerChannelClose { broker_identity } => {
@@ -718,6 +727,7 @@ mod tests {
                 confirm_offset: 80,
                 election_priority: Some(1),
             },
+            lease_grant_allowed: false,
         }
     }
 

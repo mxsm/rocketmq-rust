@@ -31,6 +31,7 @@ pub mod ha_service;
 pub mod transfer_engine;
 pub mod transfer_metrics;
 pub(crate) mod wait_notify_object;
+pub(crate) mod write_lease;
 
 pub use rocketmq_store_local::ha::error::HAConnectionError;
 

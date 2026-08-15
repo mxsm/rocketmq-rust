@@ -128,6 +128,41 @@ pub struct WriteAuthority {
     master_epoch: MasterEpoch,
 }
 
+/// A generation-scoped Controller write lease token.
+///
+/// The token deliberately excludes an expiry timestamp. A Broker converts the
+/// Controller-provided duration into a process-local monotonic deadline before
+/// installing it in Store.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct WriteLeaseToken {
+    authority: WriteAuthority,
+    generation: u64,
+}
+
+impl WriteLeaseToken {
+    /// Creates a token for a non-zero Controller lease generation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HaContractError::InvalidLeaseGeneration`] when `generation` is zero.
+    pub fn try_new(authority: WriteAuthority, generation: u64) -> Result<Self, HaContractError> {
+        if generation == 0 {
+            return Err(HaContractError::InvalidLeaseGeneration(generation));
+        }
+        Ok(Self { authority, generation })
+    }
+
+    /// Returns the Controller authority carried by this lease.
+    pub const fn authority(self) -> WriteAuthority {
+        self.authority
+    }
+
+    /// Returns the monotonically increasing lease generation.
+    pub const fn generation(self) -> u64 {
+        self.generation
+    }
+}
+
 impl WriteAuthority {
     /// Creates an authority for a non-negative broker identifier and positive epoch.
     ///
@@ -421,6 +456,8 @@ pub enum HaContractError {
     InvalidAckPolicy(i32),
     /// A physical offset was negative.
     InvalidOffset(i64),
+    /// A Controller write-lease generation was zero.
+    InvalidLeaseGeneration(u64),
     /// The sync-state set was empty.
     EmptySyncStateSet,
     /// The current leader was absent from the sync-state set.
@@ -446,6 +483,9 @@ impl fmt::Display for HaContractError {
             }
             Self::InvalidAckPolicy(value) => write!(formatter, "unsupported legacy ACK policy value {value}"),
             Self::InvalidOffset(value) => write!(formatter, "HA offset must be non-negative, got {value}"),
+            Self::InvalidLeaseGeneration(value) => {
+                write!(formatter, "write-lease generation must be positive, got {value}")
+            }
             Self::EmptySyncStateSet => formatter.write_str("sync-state set must not be empty"),
             Self::LeaderMissingFromSyncStateSet(value) => {
                 write!(formatter, "leader broker {value} is absent from the sync-state set")
