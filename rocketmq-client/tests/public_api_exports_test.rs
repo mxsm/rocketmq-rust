@@ -281,51 +281,49 @@ fn crate_root_exports_modern_java_strategy_and_selector_api() {
     );
 }
 
-#[test]
+#[tokio::test]
 #[allow(deprecated)]
-fn crate_root_legacy_java_apis_return_typed_unsupported_errors() {
+async fn crate_root_classic_pull_exports_are_functional_or_fail_closed() {
     let consumer = rocketmq_client_rust::DefaultMQPullConsumer::with_consumer_group("legacy-group");
     assert_eq!(
         consumer.consumer_group().map(|group| group.as_str()),
         Some("legacy-group")
     );
-    assert_unsupported_error(
-        consumer
-            .start()
-            .expect_err("deprecated pull consumer should reject start"),
-        "DefaultMQPullConsumer",
-        "DefaultLitePullConsumer",
-    );
-    assert_unsupported_error(
-        consumer
-            .default_mq_pull_consumer_impl()
-            .expect_err("deprecated pull consumer impl should be unavailable"),
-        "DefaultMQPullConsumerImpl",
-        "DefaultLitePullConsumer",
-    );
-    assert_unsupported_error(
-        rocketmq_client_rust::DefaultMQPullConsumerImpl::new()
-            .expect_err("deprecated pull consumer impl constructor should be unavailable"),
-        "DefaultMQPullConsumerImpl",
-        "DefaultLitePullConsumer",
-    );
+    let start_error = consumer
+        .start()
+        .await
+        .expect_err("detached pull consumer must require a runtime builder");
+    assert!(start_error.to_string().contains("builder"));
+    assert!(!start_error.to_string().contains("not supported"));
+    let implementation_error = match consumer.default_mq_pull_consumer_impl() {
+        Ok(_) => panic!("detached pull consumer must not expose a live implementation"),
+        Err(error) => error,
+    };
+    assert!(implementation_error.to_string().contains("builder"));
+    assert!(!implementation_error.to_string().contains("not supported"));
+    let detached_implementation = rocketmq_client_rust::DefaultMQPullConsumerImpl::new()
+        .expect("compatibility constructor should remain available");
+    let rebalance_error = match detached_implementation.rebalance_impl() {
+        Ok(_) => panic!("detached implementation must not expose a live rebalance handle"),
+        Err(error) => error,
+    };
+    assert!(rebalance_error.to_string().contains("builder"));
+    assert!(!rebalance_error.to_string().contains("not supported"));
 
     let schedule_service = rocketmq_client_rust::MQPullConsumerScheduleService::new("legacy-group");
     assert_eq!(schedule_service.consumer_group().as_str(), "legacy-group");
-    assert_unsupported_error(
-        schedule_service
-            .start()
-            .expect_err("deprecated pull schedule service should reject start"),
-        "MQPullConsumerScheduleService",
-        "DefaultLitePullConsumer",
-    );
+    let schedule_error = schedule_service
+        .start()
+        .await
+        .expect_err("detached pull schedule service must require a runtime");
+    assert!(schedule_error.to_string().contains("with_client_runtime"));
+    assert!(!schedule_error.to_string().contains("not supported"));
 
-    assert_unsupported_error(
+    let helper_error =
         rocketmq_client_rust::MQHelper::reset_offset_by_timestamp("CLUSTERING", "legacy-group", "TopicA", 0)
-            .expect_err("deprecated MQHelper should be unavailable"),
-        "MQHelper",
-        "DefaultLitePullConsumer",
-    );
+            .expect_err("detached MQHelper must require an application-owned runtime");
+    assert!(helper_error.to_string().contains("ClientRuntime"));
+    assert!(!helper_error.to_string().contains("not supported"));
 
     let send_hook = rocketmq_client_rust::SendMessageOpenTracingHookImpl::new(());
     assert_eq!(send_hook.hook_name(), "SendMessageOpenTracingHook");

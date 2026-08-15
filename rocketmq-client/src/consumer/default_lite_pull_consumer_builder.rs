@@ -67,6 +67,7 @@ pub struct DefaultLitePullConsumerBuilder {
     consume_timestamp: Option<CheetahString>,
     allocate_message_queue_strategy: Arc<dyn AllocateMessageQueueStrategy + Send + Sync>,
     unit_mode: bool,
+    classic_pull_manual_mode: bool,
 
     // Pull configuration
     pull_batch_size: i32,
@@ -124,6 +125,7 @@ impl DefaultLitePullConsumerBuilder {
             consume_timestamp: Some(default_lite_pull_consume_timestamp()),
             allocate_message_queue_strategy: Arc::new(AllocateMessageQueueAveragely),
             unit_mode: false,
+            classic_pull_manual_mode: false,
             pull_batch_size: 10,
             pull_thread_nums: 20,
             connect_broker_by_user: false,
@@ -386,6 +388,11 @@ impl DefaultLitePullConsumerBuilder {
         self
     }
 
+    pub(crate) fn classic_pull_manual_mode(mut self) -> Self {
+        self.classic_pull_manual_mode = true;
+        self
+    }
+
     /// Builds the [`DefaultLitePullConsumer`].
     pub fn build(self) -> RocketMQResult<DefaultLitePullConsumer> {
         let Some(consumer_group) = self.consumer_group else {
@@ -396,7 +403,7 @@ impl DefaultLitePullConsumerBuilder {
         let options = self.client_options.unwrap_or_default();
         let mut client_config = options.client_config().clone();
         let nameserver_discovery = options.nameserver_discovery().cloned();
-        client_config.set_enable_stream_request_type(true);
+        client_config.set_enable_stream_request_type(!self.classic_pull_manual_mode);
         if let Some(name_server_addr) = self.name_server_addr {
             client_config.set_namesrv_addr(name_server_addr);
         }
@@ -421,6 +428,7 @@ impl DefaultLitePullConsumerBuilder {
             consume_timestamp: self.consume_timestamp,
             allocate_message_queue_strategy: self.allocate_message_queue_strategy,
             unit_mode: self.unit_mode,
+            classic_pull_manual_mode: self.classic_pull_manual_mode,
             pull_batch_size: self.pull_batch_size,
             pull_thread_nums: self.pull_thread_nums,
             connect_broker_by_user: self.connect_broker_by_user,

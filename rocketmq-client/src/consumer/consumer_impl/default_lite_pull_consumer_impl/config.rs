@@ -42,6 +42,11 @@ pub struct LitePullConsumerConfig {
     pub allocate_message_queue_strategy: Arc<dyn AllocateMessageQueueStrategy + Send + Sync>,
     /// Whether the subscription group runs in unit mode.
     pub unit_mode: bool,
+    /// Whether this instance provides only the manual Classic Pull compatibility surface.
+    ///
+    /// Manual mode participates in consumer registration and queue allocation but never starts
+    /// LitePull background pull tasks.
+    pub classic_pull_manual_mode: bool,
     /// Number of messages to pull in a single request.
     pub pull_batch_size: i32,
     /// Number of concurrent pull threads.
@@ -110,6 +115,7 @@ impl Default for LitePullConsumerConfig {
                 crate::consumer::rebalance_strategy::allocate_message_queue_averagely::AllocateMessageQueueAveragely,
             ),
             unit_mode: false,
+            classic_pull_manual_mode: false,
             pull_batch_size: 10,
             pull_thread_nums: 20,
             connect_broker_by_user: false,

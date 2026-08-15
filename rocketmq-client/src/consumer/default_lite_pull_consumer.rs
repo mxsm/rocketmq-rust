@@ -978,6 +978,21 @@ impl DefaultLitePullConsumer {
         }
     }
 
+    pub(crate) fn classic_topic_with_namespace(&self, topic: &str) -> CheetahString {
+        self.with_namespace(topic)
+    }
+
+    pub(crate) fn set_classic_pull_message_queue_listener(
+        &self,
+        listener: Option<ArcMessageQueueListener>,
+    ) -> RocketMQResult<()> {
+        self.set_message_queue_listener_local(listener.clone());
+        if let Some(implementation) = self.default_lite_pull_consumer_impl.get() {
+            implementation.set_message_queue_listener(listener);
+        }
+        Ok(())
+    }
+
     /// Removes namespace from a topic name (if configured).
     fn without_namespace(&self, resource: &str) -> CheetahString {
         match self.client_config.load().resolved_namespace() {
@@ -1001,7 +1016,7 @@ impl DefaultLitePullConsumer {
     }
 
     /// Wraps a message queue with namespace.
-    fn queue_with_namespace(&self, mq: &MessageQueue) -> MessageQueue {
+    pub(crate) fn queue_with_namespace(&self, mq: &MessageQueue) -> MessageQueue {
         self.client_config.load().queue_with_resolved_namespace(mq.clone())
     }
 
@@ -1081,7 +1096,7 @@ impl DefaultLitePullConsumer {
     }
 
     /// Returns a reference to the internal implementation after it has been initialized.
-    fn try_impl_(&self) -> RocketMQResult<&Arc<DefaultLitePullConsumerImpl>> {
+    pub(crate) fn try_impl_(&self) -> RocketMQResult<&Arc<DefaultLitePullConsumerImpl>> {
         self.default_lite_pull_consumer_impl
             .get()
             .ok_or_else(|| RocketMQError::not_initialized("DefaultLitePullConsumer not started. Call start() first."))
@@ -1145,6 +1160,13 @@ impl DefaultLitePullConsumer {
             Ok(mut current) => *current = offset_store,
             Err(error) => tracing::warn!("LitePull offset store lock poisoned: {}", error),
         }
+    }
+
+    pub(crate) async fn register_classic_pull_subscription(&self, topic: &CheetahString) -> RocketMQResult<()> {
+        self.get_or_init_impl()
+            .await?
+            .register_classic_pull_subscription(topic)
+            .await
     }
 }
 

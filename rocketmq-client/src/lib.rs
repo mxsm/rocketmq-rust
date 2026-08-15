@@ -866,6 +866,7 @@ pub use crate::consumer::AllocateMessageQueueByMachineRoomNearby;
 pub use crate::consumer::AllocateMessageQueueConsistentHash;
 pub use crate::consumer::AllocateMessageQueueStrategy;
 pub use crate::consumer::ArcMessageQueueListener;
+pub use crate::consumer::ClassicPullCallback;
 pub use crate::consumer::ConsumeConcurrentlyContext;
 pub use crate::consumer::ConsumeConcurrentlyStatus;
 pub use crate::consumer::ConsumeOrderlyContext;
@@ -873,11 +874,16 @@ pub use crate::consumer::ConsumeOrderlyStatus;
 pub use crate::consumer::ConsumerTuningProfile;
 pub use crate::consumer::ControllableOffset;
 pub use crate::consumer::DefaultLitePullConsumerBuilder;
+#[allow(deprecated)]
+pub use crate::consumer::DefaultMQPullConsumer;
+pub use crate::consumer::DefaultMQPullConsumerBuilder;
 pub use crate::consumer::DefaultMQPushConsumerBuilder;
 pub use crate::consumer::HashFunction;
 pub use crate::consumer::LocalFileOffsetStore;
 pub use crate::consumer::MQConsumer;
 pub use crate::consumer::MQConsumerInner;
+#[allow(deprecated)]
+pub use crate::consumer::MQPullConsumer;
 pub use crate::consumer::MQPushConsumer;
 pub use crate::consumer::MachineRoomResolver;
 pub use crate::consumer::MessageListener;
@@ -894,6 +900,7 @@ pub use crate::consumer::PopResult;
 pub use crate::consumer::PopStatus;
 pub use crate::consumer::PullCallback;
 pub use crate::consumer::PullCallbackFn;
+pub use crate::consumer::PullOptions;
 pub use crate::consumer::PullResult;
 pub use crate::consumer::PullStatus;
 pub use crate::consumer::ReadOffsetType;
@@ -924,16 +931,12 @@ pub use crate::latency::ServiceDetector;
 pub use crate::legacy::ConsumeMessageOpenTracingHookImpl;
 pub use crate::legacy::ConsumeRequest;
 #[allow(deprecated)]
-pub use crate::legacy::DefaultMQPullConsumer;
-#[allow(deprecated)]
 pub use crate::legacy::DefaultMQPullConsumerImpl;
 pub use crate::legacy::DoNothingClientRemotingProcessor;
 #[allow(deprecated)]
 pub use crate::legacy::EndTransactionOpenTracingHookImpl;
 #[allow(deprecated)]
 pub use crate::legacy::MQHelper;
-#[allow(deprecated)]
-pub use crate::legacy::MQPullConsumer;
 #[allow(deprecated)]
 pub use crate::legacy::MQPullConsumerScheduleService;
 #[allow(deprecated)]
