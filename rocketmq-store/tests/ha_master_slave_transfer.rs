@@ -60,6 +60,32 @@ async fn single_master_slave_transfer_round_trips_with_bytes_and_vectored_engine
     assert_eq!(vectored_result.writer.vectored_calls, 1);
 }
 
+#[test]
+fn default_ha_wire_bytes_match_java_transfer_and_report_frames() {
+    let transfer = transfer_header(4_096, 26);
+    assert_eq!(
+        transfer.as_ref(),
+        &[0, 0, 0, 0, 0, 0, 16, 0, 0, 0, 0, 26],
+        "Java DefaultHA uses an 8-byte offset followed by a 4-byte body length"
+    );
+    assert_eq!(
+        slave_report(4_122).as_ref(),
+        &[0, 0, 0, 0, 0, 0, 16, 26],
+        "Java DefaultHA slave reports contain exactly one big-endian offset"
+    );
+}
+
+#[test]
+fn default_ha_heartbeat_and_reconnect_offsets_are_unambiguous() {
+    let heartbeat = transfer_header(4_122, 0);
+    let decoded = SlaveFrame::decode(&heartbeat);
+    assert!(decoded.body.is_empty());
+    assert_eq!(decoded.ack_offset, 4_122);
+
+    let report = slave_report(decoded.ack_offset);
+    assert_eq!(i64::from_be_bytes(report), 4_122);
+}
+
 fn master_plans_single_slave_batch() -> TransferBatch {
     let input = TransferPlanInput {
         requested_offset: 4096,
@@ -132,6 +158,10 @@ fn transfer_header(offset: i64, body_size: usize) -> Bytes {
     header.put_i64(offset);
     header.put_i32(i32::try_from(body_size).expect("body size fits i32"));
     header.freeze()
+}
+
+fn slave_report(offset: i64) -> [u8; 8] {
+    offset.to_be_bytes()
 }
 
 struct TransferResultSnapshot {
