@@ -30,9 +30,17 @@ interface TopicDetailContentProps {
   topicName: string;
   topic?: TopicInfo;
   initialTab?: TopicDetailTab;
+  resourceRevisions?: TopicDetailResourceRevisions;
   onEdit?: (config: TopicConfigView) => void;
   onReset?: (consumerGroup: string) => void;
   onSkip?: (consumerGroup: string) => void;
+}
+
+export interface TopicDetailResourceRevisions {
+  stats?: number;
+  route?: number;
+  consumers?: number;
+  config?: number;
 }
 
 interface ResourceState<T> {
@@ -55,11 +63,13 @@ const emptyResource = <T,>(topicName: string, data: T | null = null): ResourceSt
 });
 
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
+const EMPTY_REVISIONS: TopicDetailResourceRevisions = {};
 
 export default function TopicDetailContent({
   topicName,
   topic,
   initialTab = 'overview',
+  resourceRevisions = EMPTY_REVISIONS,
   onEdit,
   onReset,
   onSkip
@@ -98,6 +108,7 @@ export default function TopicDetailContent({
   const routePendingRef = useRef(new Map<string, number>());
   const consumersPendingRef = useRef(new Map<string, number>());
   const configPendingRef = useRef(new Map<string, number>());
+  const resourceRevisionsRef = useRef({ topicName, revisions: resourceRevisions });
   topicNameRef.current = topicName;
 
   const activeTab = tabState.topicName === topicName ? tabState.tab : initialTab;
@@ -163,10 +174,10 @@ export default function TopicDetailContent({
     }
   }, [topicName]);
 
-  const loadStats = useCallback(async () => {
+  const loadStats = useCallback(async (force = false) => {
     const requestTopic = topicName;
     const requestKey = requestTopic;
-    if (statsPendingRef.current.has(requestKey)) return;
+    if (!force && statsPendingRef.current.has(requestKey)) return;
     const requestId = ++statsRequestRef.current;
     statsPendingRef.current.set(requestKey, requestId);
     setStatsState((current) => ({
@@ -192,10 +203,10 @@ export default function TopicDetailContent({
     }
   }, [topicName]);
 
-  const loadRoute = useCallback(async () => {
+  const loadRoute = useCallback(async (force = false) => {
     const requestTopic = topicName;
     const requestKey = requestTopic;
-    if (routePendingRef.current.has(requestKey)) return;
+    if (!force && routePendingRef.current.has(requestKey)) return;
     const requestId = ++routeRequestRef.current;
     routePendingRef.current.set(requestKey, requestId);
     setRouteState((current) => ({
@@ -221,10 +232,10 @@ export default function TopicDetailContent({
     }
   }, [topicName]);
 
-  const loadConsumers = useCallback(async () => {
+  const loadConsumers = useCallback(async (force = false) => {
     const requestTopic = topicName;
     const requestKey = requestTopic;
-    if (consumersPendingRef.current.has(requestKey)) return;
+    if (!force && consumersPendingRef.current.has(requestKey)) return;
     const requestId = ++consumersRequestRef.current;
     consumersPendingRef.current.set(requestKey, requestId);
     setConsumersState((current) => ({
@@ -250,10 +261,10 @@ export default function TopicDetailContent({
     }
   }, [topicName]);
 
-  const loadConfig = useCallback(async (brokerName?: string) => {
+  const loadConfig = useCallback(async (brokerName?: string, force = false) => {
     const requestTopic = topicName;
     const requestKey = `${requestTopic}:${brokerName ?? ''}`;
-    if (configPendingRef.current.get(requestKey) === configRequestRef.current) return;
+    if (!force && configPendingRef.current.get(requestKey) === configRequestRef.current) return;
     const requestId = ++configRequestRef.current;
     configPendingRef.current.set(requestKey, requestId);
     if (brokerName) setSelectedBrokerState({ topicName: requestTopic, brokerName });
@@ -282,6 +293,17 @@ export default function TopicDetailContent({
       if (configPendingRef.current.get(requestKey) === requestId) configPendingRef.current.delete(requestKey);
     }
   }, [topicName]);
+
+  useEffect(() => {
+    const previous = resourceRevisionsRef.current;
+    resourceRevisionsRef.current = { topicName, revisions: resourceRevisions };
+    if (previous.topicName !== topicName) return;
+
+    if (previous.revisions.stats !== resourceRevisions.stats) void loadStats(true);
+    if (previous.revisions.route !== resourceRevisions.route) void loadRoute(true);
+    if (previous.revisions.consumers !== resourceRevisions.consumers) void loadConsumers(true);
+    if (previous.revisions.config !== resourceRevisions.config) void loadConfig(selectedBroker, true);
+  }, [loadConfig, loadConsumers, loadRoute, loadStats, resourceRevisions, selectedBroker, topicName]);
 
   useEffect(() => {
     if (!providedTopic && !identity.data && !identity.loading && !identity.error) void loadIdentity();

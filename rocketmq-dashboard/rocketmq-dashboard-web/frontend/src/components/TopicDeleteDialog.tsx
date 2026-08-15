@@ -20,6 +20,7 @@ export interface TopicDeleteDialogProps {
   mode: 'broker' | 'topic';
   brokerName?: string;
   onOpenChange: (open: boolean) => void;
+  onResult?: (result: TopicOperationResult) => void;
   onSucceeded: (result: TopicOperationResult) => void;
 }
 
@@ -36,6 +37,7 @@ export default function TopicDeleteDialog({
   mode,
   brokerName,
   onOpenChange,
+  onResult,
   onSucceeded
 }: TopicDeleteDialogProps) {
   const topicName = topic?.topic ?? '';
@@ -54,6 +56,7 @@ export default function TopicDeleteDialog({
   const selectedBrokerRef = useRef(selectedBroker);
   const inputId = useId();
   const brokerId = useId();
+  const authoritativeClusters = topic?.clusters.filter((cluster) => cluster.trim().length > 0) ?? [];
 
   openRef.current = open;
   topicNameRef.current = topicName;
@@ -86,7 +89,7 @@ export default function TopicDeleteDialog({
     topic
     && !topic.systemTopic
     && confirmationText === topicName
-    && (mode === 'topic' || topic.brokers.includes(selectedBroker))
+    && (mode === 'topic' ? authoritativeClusters.length > 0 : topic.brokers.includes(selectedBroker))
   );
 
   const isCurrentPresentation = (snapshot: DeleteSnapshot) => (
@@ -123,6 +126,7 @@ export default function TopicDeleteDialog({
         : await topicApi.delete(snapshot.topicName);
       if (!isCurrentPresentation(snapshot)) return;
 
+      onResult?.(nextResult);
       if (nextResult.success) {
         onSucceeded(nextResult);
         onOpenChange(false);
@@ -148,6 +152,8 @@ export default function TopicDeleteDialog({
       ? 'System topics cannot be deleted.'
       : mode === 'broker' && topic.brokers.length === 0
         ? 'No broker targets are available for this topic.'
+        : mode === 'topic' && authoritativeClusters.length === 0
+          ? 'No authoritative cluster targets are available for this topic.'
         : null;
 
   return (
@@ -181,7 +187,7 @@ export default function TopicDeleteDialog({
             </div>
           ) : topic ? (
             <dl className="detail-list">
-              <div><dt>Clusters</dt><dd>{topic.clusters.join(', ') || 'None reported'}</dd></div>
+              <div><dt>Clusters</dt><dd>{authoritativeClusters.join(', ') || 'None reported'}</dd></div>
               <div><dt>Brokers</dt><dd>{topic.brokers.join(', ') || 'None reported'}</dd></div>
             </dl>
           ) : null}

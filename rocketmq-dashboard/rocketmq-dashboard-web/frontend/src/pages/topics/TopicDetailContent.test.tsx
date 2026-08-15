@@ -1,4 +1,4 @@
-import { act, render, screen, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { StrictMode } from 'react';
 import { MemoryRouter } from 'react-router-dom';
@@ -127,6 +127,104 @@ describe('TopicDetailContent', () => {
     expect(onReset).toHaveBeenCalledWith('order-service');
     expect(onSkip).toHaveBeenCalledWith('order-service');
     expect(topicApi.config).not.toHaveBeenCalled();
+  });
+
+  it('refreshes only stats and consumers without leaving the Consumers tab', async () => {
+    const { rerender } = render(
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <TopicDetailContent
+          topicName="orders"
+          topic={topicFixture}
+          initialTab="consumers"
+          resourceRevisions={{ stats: 0, consumers: 0 }}
+        />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByRole('row', { name: /order-service.*120.*4.*8.5/ })).toBeInTheDocument();
+    expect(topicApi.consumers).toHaveBeenCalledTimes(1);
+    expect(topicApi.stats).not.toHaveBeenCalled();
+
+    rerender(
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <TopicDetailContent
+          topicName="orders"
+          topic={topicFixture}
+          initialTab="consumers"
+          resourceRevisions={{ stats: 1, consumers: 1 }}
+        />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => expect(topicApi.consumers).toHaveBeenCalledTimes(2));
+    expect(topicApi.stats).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('tab', { name: 'Consumers' })).toHaveAttribute('aria-selected', 'true');
+    expect(topicApi.route).not.toHaveBeenCalled();
+    expect(topicApi.config).not.toHaveBeenCalled();
+  });
+
+  it('refreshes only configuration after an Edit revision and keeps the Configuration tab', async () => {
+    const { rerender } = render(
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <TopicDetailContent
+          topicName="orders"
+          topic={topicFixture}
+          initialTab="configuration"
+          resourceRevisions={{ config: 0 }}
+        />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByRole('combobox', { name: 'Configuration broker' })).toBeInTheDocument();
+    expect(topicApi.config).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <TopicDetailContent
+          topicName="orders"
+          topic={topicFixture}
+          initialTab="configuration"
+          resourceRevisions={{ config: 1 }}
+        />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => expect(topicApi.config).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole('tab', { name: 'Configuration' })).toHaveAttribute('aria-selected', 'true');
+    expect(topicApi.stats).not.toHaveBeenCalled();
+    expect(topicApi.route).not.toHaveBeenCalled();
+    expect(topicApi.consumers).not.toHaveBeenCalled();
+  });
+
+  it('refreshes route, status, and configuration after a broker revision without leaving Overview', async () => {
+    const { rerender } = render(
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <TopicDetailContent
+          topicName="orders"
+          topic={topicFixture}
+          resourceRevisions={{ route: 0, stats: 0, config: 0 }}
+        />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByRole('group', { name: 'Queue entries: 2' })).toBeInTheDocument();
+    expect(topicApi.stats).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <TopicDetailContent
+          topicName="orders"
+          topic={topicFixture}
+          resourceRevisions={{ route: 1, stats: 1, config: 1 }}
+        />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => expect(topicApi.stats).toHaveBeenCalledTimes(2));
+    expect(topicApi.route).toHaveBeenCalledTimes(1);
+    expect(topicApi.config).toHaveBeenCalledTimes(1);
+    expect(topicApi.consumers).not.toHaveBeenCalled();
+    expect(screen.getByRole('tab', { name: 'Overview' })).toHaveAttribute('aria-selected', 'true');
   });
 
   it('keeps consumer loading, error, retry, and empty states within the consumers tab', async () => {

@@ -21,6 +21,7 @@ import LoadingState from '../components/LoadingState';
 import MetricCard from '../components/MetricCard';
 import PageHeader from '../components/PageHeader';
 import RefreshButton from '../components/RefreshButton';
+import StatusBadge from '../components/StatusBadge';
 import TopicDeleteDialog from '../components/TopicDeleteDialog';
 import TopicMutationDialog from '../components/TopicMutationDialog';
 import TopicResetOffsetDialog from '../components/TopicResetOffsetDialog';
@@ -45,12 +46,15 @@ import type {
 import TopicConsumerActionDialog, { type TopicConsumerActionKind } from './topics/TopicConsumerActionDialog';
 import TopicDetailContent from './topics/TopicDetailContent';
 import TopicFilterToolbar from './topics/TopicFilterToolbar';
+import TopicTargetSummary from './topics/TopicTargetSummary';
 import {
   filterTopics,
   getTopicActionAvailability,
+  getTopicCategory,
   getTopicMetrics,
   getTopicPermissionLabel,
-  type TopicFilters
+  type TopicFilters,
+  type TopicOperationalCategory
 } from './topics/topic-model';
 
 const PAGE_SIZE = 10;
@@ -109,7 +113,7 @@ export default function TopicListPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [selectedTopic, setSelectedTopic] = useState<TopicInfo | null>(null);
-  const [detailRefreshVersion, setDetailRefreshVersion] = useState(0);
+  const [detailRevisions, setDetailRevisions] = useState({ stats: 0, route: 0, consumers: 0, config: 0 });
   const [action, setAction] = useState<TopicAction | null>(null);
   const [editConfig, setEditConfig] = useState<ConfigDiscovery>(() => emptyConfig());
   const [consumerDiscovery, setConsumerDiscovery] = useState<ConsumerDiscovery>(() => emptyConsumers());
@@ -140,6 +144,12 @@ export default function TopicListPage() {
       if (mountedRef.current && topicListRequestRef.current === requestId) {
         dataRef.current = nextData;
         setData(nextData);
+        const openTopic = selectedTopicRef.current;
+        if (openTopic) {
+          const refreshedTopic = nextData.items.find((topic) => topic.topic === openTopic.topic) ?? null;
+          selectedTopicRef.current = refreshedTopic;
+          setSelectedTopic(refreshedTopic);
+        }
       }
     } catch (requestError) {
       if (mountedRef.current && topicListRequestRef.current === requestId) {
@@ -182,6 +192,10 @@ export default function TopicListPage() {
   const currentPage = Math.min(page, pageCount);
   const visibleTopics = filteredTopics.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
 
+  useEffect(() => {
+    if (page !== currentPage) setPage(currentPage);
+  }, [currentPage, page]);
+
   const activateAction = (nextAction: TopicAction) => {
     const generation = actionGenerationRef.current + 1;
     actionGenerationRef.current = generation;
@@ -194,6 +208,14 @@ export default function TopicListPage() {
     actionGenerationRef.current += 1;
     actionRef.current = null;
     setAction(null);
+  };
+
+  const refreshDetailResources = (...resources: Array<keyof typeof detailRevisions>) => {
+    setDetailRevisions((current) => {
+      const next = { ...current };
+      for (const resource of resources) next[resource] += 1;
+      return next;
+    });
   };
 
   const openDetails = (topic: TopicInfo, origin?: HTMLElement) => {
@@ -275,8 +297,8 @@ export default function TopicListPage() {
     }
   };
 
-  const handleMenuAction = (menuAction: MenuAction, topic: TopicInfo) => {
-    if (menuAction === 'view') openDetails(topic);
+  const handleMenuAction = (menuAction: MenuAction, topic: TopicInfo, origin?: HTMLElement) => {
+    if (menuAction === 'view') openDetails(topic, origin);
     else if (menuAction === 'edit') openEdit(topic);
     else if (menuAction === 'send') activateAction({ kind: 'send', topic });
     else if (menuAction === 'reset' || menuAction === 'skip') openConsumerAction(menuAction, topic);
@@ -328,7 +350,7 @@ export default function TopicListPage() {
     if (isCurrentAction(actionRef.current, generation, 'edit', topicName, actionGenerationRef.current) && result.success) {
       setNotice(result.message || `Topic ${topicName} updated.`);
     }
-    if (result.success && selectedTopicRef.current?.topic === topicName) setDetailRefreshVersion((version) => version + 1);
+    if (result.success && selectedTopicRef.current?.topic === topicName) refreshDetailResources('config');
     void load();
     return result;
   };
@@ -340,16 +362,20 @@ export default function TopicListPage() {
     if (currentAction.kind === 'delete-topic' && selectedTopicRef.current?.topic === deletedTopic) {
       selectedTopicRef.current = null;
       setSelectedTopic(null);
-    } else if (selectedTopicRef.current?.topic === deletedTopic) {
-      setDetailRefreshVersion((version) => version + 1);
     }
     setNotice(result.message || `Topic ${deletedTopic} deleted.`);
     closeAction();
+  };
+
+  const handleDeleteResult = (result: TopicOperationResult) => {
+    const currentAction = actionRef.current;
+    if (!currentAction || (currentAction.kind !== 'delete-topic' && currentAction.kind !== 'delete-broker')) return;
+    if (selectedTopicRef.current?.topic === result.topic) refreshDetailResources('route', 'stats', 'config');
     void load();
   };
 
-  const refreshSelectedDetail = (topicName: string) => {
-    if (selectedTopicRef.current?.topic === topicName) setDetailRefreshVersion((version) => version + 1);
+  const refreshOffsetResources = (topicName: string) => {
+    if (selectedTopicRef.current?.topic === topicName) refreshDetailResources('stats', 'consumers');
   };
 
   const columns: AppDataTableColumn<TopicInfo>[] = [
@@ -364,17 +390,20 @@ export default function TopicListPage() {
         </div>
       )
     },
+    {
+      id: 'category',
+      header: 'Category',
+      width: '120px',
+      cell: (topic) => (
+        <StatusBadge status={topic.category || 'UNKNOWN'} tone={categoryTone(getTopicCategory(topic))} />
+      )
+    },
     { id: 'messageType', header: 'Message type', width: '120px', cell: (topic) => topic.messageType || 'UNSPECIFIED' },
     {
       id: 'targets',
       header: 'Targets',
       width: '190px',
-      cell: (topic) => (
-        <div className="entity-name-cell">
-          <span>{topic.clusters.join(', ') || 'No clusters'}</span>
-          <small>{topic.brokers.join(', ') || 'No brokers'}</small>
-        </div>
-      )
+      cell: (topic) => <TopicTargetSummary clusters={topic.clusters} brokers={topic.brokers} />
     },
     { id: 'queues', header: 'Queues R / W', width: '120px', cell: (topic) => `${topic.readQueueCount} / ${topic.writeQueueCount}` },
     { id: 'ordered', header: 'Ordered', width: '88px', cell: (topic) => topic.order ? 'Yes' : 'No' },
@@ -486,6 +515,14 @@ export default function TopicListPage() {
               <div className="entity-row-actions">
                 <Button
                   type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleMenuAction('delete-broker', selectedTopic)}
+                >
+                  <Trash2 size={15} aria-hidden="true" /> Delete from broker
+                </Button>
+                <Button
+                  type="button"
                   variant="destructive"
                   size="sm"
                   onClick={() => handleMenuAction('delete-topic', selectedTopic)}
@@ -495,9 +532,9 @@ export default function TopicListPage() {
               </div>
             ) : null}
             <TopicDetailContent
-              key={`${selectedTopic.topic}:${detailRefreshVersion}`}
               topicName={selectedTopic.topic}
               topic={selectedTopic}
+              resourceRevisions={detailRevisions}
               onEdit={getTopicActionAvailability(selectedTopic).edit ? (config) => openEdit(selectedTopic, config) : undefined}
               onReset={getTopicActionAvailability(selectedTopic).reset ? (group) => openConsumerAction('reset', selectedTopic, group) : undefined}
               onSkip={getTopicActionAvailability(selectedTopic).skip ? (group) => openConsumerAction('skip', selectedTopic, group) : undefined}
@@ -520,21 +557,21 @@ export default function TopicListPage() {
         open={Boolean(sendAction)}
         topic={sendAction?.topic.topic ?? ''}
         onOpenChange={(open) => { if (!open) closeAction(); }}
-        onSucceeded={(result) => refreshSelectedDetail(result.topic)}
+        onSucceeded={() => undefined}
       />
       <TopicResetOffsetDialog
         open={Boolean(consumerAction?.kind === 'reset' && consumerAction.consumerGroup)}
         topic={consumerAction?.topic.topic ?? ''}
         consumerGroup={consumerAction?.consumerGroup ?? ''}
         onOpenChange={(open) => { if (!open) closeAction(); }}
-        onSucceeded={(result) => refreshSelectedDetail(result.topic)}
+        onSucceeded={(result) => refreshOffsetResources(result.topic)}
       />
       <TopicSkipBacklogDialog
         open={Boolean(consumerAction?.kind === 'skip' && consumerAction.consumerGroup)}
         topic={consumerAction?.topic.topic ?? ''}
         consumerGroup={consumerAction?.consumerGroup ?? ''}
         onOpenChange={(open) => { if (!open) closeAction(); }}
-        onSucceeded={(result) => refreshSelectedDetail(result.topic)}
+        onSucceeded={(result) => refreshOffsetResources(result.topic)}
       />
       <TopicDeleteDialog
         open={Boolean(deleteAction)}
@@ -542,6 +579,7 @@ export default function TopicListPage() {
         mode={deleteAction?.kind === 'delete-broker' ? 'broker' : 'topic'}
         brokerName={deleteAction?.kind === 'delete-broker' ? deleteAction.brokerName : undefined}
         onOpenChange={(open) => { if (!open) closeAction(); }}
+        onResult={handleDeleteResult}
         onSucceeded={handleDeleteSucceeded}
       />
     </div>
@@ -550,20 +588,21 @@ export default function TopicListPage() {
 
 interface TopicActionMenuProps {
   topic: TopicInfo;
-  onAction: (action: MenuAction, topic: TopicInfo) => void;
+  onAction: (action: MenuAction, topic: TopicInfo, origin?: HTMLElement) => void;
 }
 
 function TopicActionMenu({ topic, onAction }: TopicActionMenuProps) {
   const availability = getTopicActionAvailability(topic);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   return (
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
-        <Button type="button" variant="ghost" size="icon" aria-label={`Actions for ${topic.topic}`}>
+        <Button ref={triggerRef} type="button" variant="ghost" size="icon" aria-label={`Actions for ${topic.topic}`}>
           <MoreHorizontal size={16} aria-hidden="true" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
-        <DropdownMenuItem onSelect={() => onAction('view', topic)}><Eye size={15} aria-hidden="true" /> View details</DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => onAction('view', topic, triggerRef.current ?? undefined)}><Eye size={15} aria-hidden="true" /> View details</DropdownMenuItem>
         {availability.edit ? <DropdownMenuItem onSelect={() => onAction('edit', topic)}><Pencil size={15} aria-hidden="true" /> Edit configuration</DropdownMenuItem> : null}
         {availability.send ? <DropdownMenuItem onSelect={() => onAction('send', topic)}><Send size={15} aria-hidden="true" /> Send test message</DropdownMenuItem> : null}
         {availability.reset ? <DropdownMenuItem onSelect={() => onAction('reset', topic)}><RotateCcw size={15} aria-hidden="true" /> Reset consumer offset</DropdownMenuItem> : null}
@@ -584,4 +623,11 @@ function isCurrentAction(
   currentGeneration: number
 ) {
   return currentGeneration === expectedGeneration && action?.kind === kind && action.topic.topic === topicName;
+}
+
+function categoryTone(category: TopicOperationalCategory) {
+  if (category === 'retry') return 'warning' as const;
+  if (category === 'dlq') return 'danger' as const;
+  if (category === 'system') return 'neutral' as const;
+  return 'info' as const;
 }

@@ -1,4 +1,4 @@
-import { act, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterAll, beforeAll, beforeEach, vi } from 'vitest';
 import { consumerApi } from '../api/consumer_api';
@@ -124,15 +124,34 @@ describe('TopicListPage', () => {
 
   it('uses enriched catalog filters, target options, and operational columns', async () => {
     const user = userEvent.setup();
+    const longTargetOrders = {
+      ...topics[0],
+      clusters: ['DefaultCluster', 'ArchiveCluster', 'LongTermCluster'],
+      brokers: ['broker-a', 'broker-b', 'broker-c', 'broker-d']
+    };
+    vi.mocked(topicApi.list).mockResolvedValueOnce({
+      ...listView,
+      items: [longTargetOrders, ...topics.slice(1)]
+    });
     renderAtRoute(<TopicListPage />, '/topics');
 
     expect(await screen.findByRole('heading', { name: 'Topics' })).toBeInTheDocument();
     expect(screen.getByRole('group', { name: 'Total topics: 5' })).toBeInTheDocument();
-    for (const header of ['Message type', 'Targets', 'Ordered', 'Permission']) {
+    for (const header of ['Category', 'Message type', 'Targets', 'Ordered', 'Permission']) {
       expect(screen.getByRole('columnheader', { name: header })).toBeInTheDocument();
     }
-    expect(screen.getByRole('row', { name: /^orders Full page/ })).toHaveTextContent('NORMAL');
-    expect(screen.getByRole('row', { name: /^orders Full page/ })).toHaveTextContent('DefaultCluster');
+    const ordersRow = screen.getByRole('row', { name: /^orders Full page/ });
+    expect(within(ordersRow).getByRole('status', { name: 'NORMAL' })).toBeInTheDocument();
+    const targets = within(ordersRow).getByLabelText(
+      'Clusters: DefaultCluster, ArchiveCluster, LongTermCluster; Brokers: broker-a, broker-b, broker-c, broker-d'
+    );
+    expect(targets).toHaveTextContent('DefaultCluster +2');
+    expect(targets).toHaveTextContent('broker-a +3');
+    fireEvent.focus(targets);
+    const tooltip = await screen.findByRole('tooltip');
+    expect(tooltip).toHaveTextContent('DefaultCluster, ArchiveCluster, LongTermCluster');
+    expect(tooltip).toHaveTextContent('broker-a, broker-b, broker-c, broker-d');
+    fireEvent.blur(targets);
     expect(screen.getByRole('row', { name: /^payments Full page/ })).toHaveTextContent('Yes');
 
     const clusterFilter = screen.getByRole('combobox', { name: 'Cluster filter' });
@@ -160,6 +179,64 @@ describe('TopicListPage', () => {
     expect(consumerApi.list).not.toHaveBeenCalled();
   });
 
+  it('synchronizes an open detail with the authoritative catalog after refresh', async () => {
+    const user = userEvent.setup();
+    const refreshedOrders = {
+      ...topics[0],
+      brokerName: 'broker-b',
+      readQueueCount: 16,
+      writeQueueCount: 12,
+      perm: 4,
+      category: 'UPDATED',
+      messageType: 'FIFO',
+      order: true
+    };
+    vi.mocked(topicApi.list)
+      .mockResolvedValueOnce(listView)
+      .mockResolvedValueOnce({ ...listView, items: [refreshedOrders, ...topics.slice(1)] });
+    renderAtRoute(<TopicListPage />, '/topics');
+    await screen.findByRole('heading', { name: 'Topics' });
+
+    await user.click(screen.getByText('orders'));
+    const detail = await screen.findByRole('dialog', { name: 'orders' });
+    expect(detail).toHaveAccessibleDescription('NORMAL · broker-a');
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh', hidden: true }));
+
+    await waitFor(() => expect(topicApi.list).toHaveBeenCalledTimes(2));
+    expect(detail).toHaveAccessibleDescription('UPDATED · broker-b');
+    expect(await within(detail).findByText('UPDATED')).toBeInTheDocument();
+    expect(within(detail).getByText('FIFO')).toBeInTheDocument();
+    expect(within(detail).getByText('R')).toBeInTheDocument();
+    expect(within(detail).getByText('Yes')).toBeInTheDocument();
+  });
+
+  it('clamps page state when the catalog shrinks so later growth stays on the valid page', async () => {
+    const user = userEvent.setup();
+    const largeItems = Array.from({ length: 12 }, (_, index) => ({
+      ...topics[0],
+      topic: `catalog-topic-${String(index).padStart(2, '0')}`
+    }));
+    const largeView = { ...listView, items: largeItems, total: largeItems.length };
+    const smallView = { ...listView, items: largeItems.slice(0, 5), total: 5 };
+    vi.mocked(topicApi.list)
+      .mockResolvedValueOnce(largeView)
+      .mockResolvedValueOnce(smallView)
+      .mockResolvedValueOnce(largeView);
+    renderAtRoute(<TopicListPage />, '/topics');
+    await screen.findByRole('heading', { name: 'Topics' });
+
+    await user.click(screen.getByRole('button', { name: 'Next page' }));
+    expect(screen.getByLabelText('Page 2 of 2')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+    expect(await screen.findByLabelText('Page 1 of 1')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+
+    await waitFor(() => expect(topicApi.list).toHaveBeenCalledTimes(3));
+    expect(await screen.findByLabelText('Page 1 of 2')).toBeInTheDocument();
+    expect(screen.getByRole('row', { name: /^catalog-topic-00 Full page/ })).toBeInTheDocument();
+    expect(screen.queryByRole('row', { name: /^catalog-topic-10 Full page/ })).not.toBeInTheDocument();
+  });
+
   it('exposes all seven actions for eligible, retry, and dlq topics while system is view-only', async () => {
     const user = userEvent.setup();
     renderAtRoute(<TopicListPage />, '/topics');
@@ -182,6 +259,20 @@ describe('TopicListPage', () => {
     await openActions(user, 'RMQ_SYS_TRACE_TOPIC');
     expect(screen.getAllByRole('menuitem')).toHaveLength(1);
     expect(screen.getByRole('menuitem', { name: 'View details' })).toBeInTheDocument();
+  });
+
+  it('restores focus to the action trigger after View details closes', async () => {
+    const user = userEvent.setup();
+    renderAtRoute(<TopicListPage />, '/topics');
+    await screen.findByRole('heading', { name: 'Topics' });
+
+    const trigger = screen.getByRole('button', { name: 'Actions for orders' });
+    await user.click(trigger);
+    await user.click(screen.getByRole('menuitem', { name: 'View details' }));
+    const detail = await screen.findByRole('dialog', { name: 'orders' });
+    await user.click(within(detail).getByRole('button', { name: 'Close details' }));
+
+    await waitFor(() => expect(trigger).toHaveFocus());
   });
 
   it('loads independent broker config before Edit can save and retries only config discovery', async () => {
@@ -237,7 +328,9 @@ describe('TopicListPage', () => {
     const continueButton = within(chooser).getByRole('button', { name: continueLabel });
     expect(continueButton).toBeDisabled();
     expect(screen.queryByRole('dialog', { name: dialogName })).not.toBeInTheDocument();
-    await user.selectOptions(within(chooser).getByRole('combobox', { name: 'Consumer group' }), 'audit-service');
+    const consumerSelect = within(chooser).getByRole('combobox', { name: 'Consumer group' });
+    expect(consumerSelect.tagName).toBe('BUTTON');
+    fireEvent.change(chooser.querySelector('select')!, { target: { value: 'audit-service' } });
     await user.click(continueButton);
 
     const operationDialog = await screen.findByRole('dialog', { name: dialogName });
@@ -262,7 +355,8 @@ describe('TopicListPage', () => {
     await user.click(within(chooser).getByRole('button', { name: 'Retry consumers' }));
     expect(await within(chooser).findByText('No consumers subscribe to this topic.')).toBeInTheDocument();
     await user.click(within(chooser).getByRole('button', { name: 'Reload consumers' }));
-    expect(await within(chooser).findByRole('option', { name: 'order-service' })).toBeInTheDocument();
+    await waitFor(() => expect(Array.from(chooser.querySelector('select')?.options ?? []).map((option) => option.value))
+      .toContain('order-service'));
     expect(topicApi.consumers).toHaveBeenCalledTimes(3);
   });
 
@@ -279,10 +373,12 @@ describe('TopicListPage', () => {
     await user.click(within(screen.getByRole('dialog', { name: 'Choose consumer group for skip accumulated messages' })).getByRole('button', { name: 'Cancel' }));
     await chooseRowAction(user, 'payments', 'Skip accumulated messages');
     const chooser = await screen.findByRole('dialog', { name: 'Choose consumer group for skip accumulated messages' });
-    expect(await within(chooser).findByRole('option', { name: 'payment-service' })).toBeInTheDocument();
+    await waitFor(() => expect(Array.from(chooser.querySelector('select')?.options ?? []).map((option) => option.value))
+      .toContain('payment-service'));
     await act(async () => ordersConsumers.reject(new Error('stale orders consumers failed')));
     expect(screen.queryByText('stale orders consumers failed')).not.toBeInTheDocument();
-    expect(within(chooser).getByRole('option', { name: 'payment-service' })).toBeInTheDocument();
+    expect(Array.from(chooser.querySelector('select')?.options ?? []).map((option) => option.value))
+      .toContain('payment-service');
   });
 
   it('preserves exact config and consumer identities from the detail callbacks', async () => {
@@ -305,6 +401,65 @@ describe('TopicListPage', () => {
     expect(topicApi.consumers).toHaveBeenCalledTimes(1);
   });
 
+  it('refreshes only config and the catalog after Edit while preserving the detail tab', async () => {
+    const user = userEvent.setup();
+    const refreshedOrders = { ...topics[0], category: 'EDITED', messageType: 'FIFO' };
+    vi.mocked(topicApi.list)
+      .mockResolvedValueOnce(listView)
+      .mockResolvedValueOnce({ ...listView, items: [refreshedOrders, ...topics.slice(1)] });
+    vi.mocked(topicApi.config)
+      .mockResolvedValueOnce(config('orders'))
+      .mockResolvedValueOnce({ ...config('orders'), messageType: 'FIFO' });
+    renderAtRoute(<TopicListPage />, '/topics');
+    await screen.findByRole('heading', { name: 'Topics' });
+
+    await user.click(screen.getByText('orders'));
+    const detail = await screen.findByRole('dialog', { name: 'orders' });
+    await user.click(within(detail).getByRole('tab', { name: 'Configuration' }));
+    await user.click(await within(detail).findByRole('button', { name: 'Edit topic' }));
+    const editDialog = await screen.findByRole('dialog', { name: 'Edit topic' });
+    await user.click(within(editDialog).getByRole('button', { name: 'Save topic' }));
+    await user.click(within(screen.getByRole('alertdialog', { name: 'Save topic changes?' })).getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(topicApi.list).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(topicApi.config).toHaveBeenCalledTimes(2));
+    expect(within(detail).getByRole('tab', { name: 'Configuration', hidden: true })).toHaveAttribute('aria-selected', 'true');
+    expect(topicApi.stats).toHaveBeenCalledTimes(1);
+    expect(topicApi.route).not.toHaveBeenCalled();
+    expect(topicApi.consumers).not.toHaveBeenCalled();
+    await user.click(within(detail).getByRole('tab', { name: 'Overview', hidden: true }));
+    expect(detail).toHaveAccessibleDescription('EDITED · broker-a');
+    expect(within(detail).getByText('EDITED')).toBeInTheDocument();
+  });
+
+  it('refreshes broker-sensitive detail resources and the catalog after broker delete', async () => {
+    const user = userEvent.setup();
+    const refreshedOrders = { ...topics[0], category: 'BROKER_UPDATED', brokerName: 'broker-b', brokers: ['broker-b'] };
+    vi.mocked(topicApi.list)
+      .mockResolvedValueOnce(listView)
+      .mockResolvedValueOnce({ ...listView, items: [refreshedOrders, ...topics.slice(1)] });
+    vi.mocked(topicApi.config).mockResolvedValueOnce(config('orders', 'broker-b'));
+    renderAtRoute(<TopicListPage />, '/topics');
+    await screen.findByRole('heading', { name: 'Topics' });
+
+    await user.click(screen.getByText('orders'));
+    const detail = await screen.findByRole('dialog', { name: 'orders' });
+    await user.click(within(detail).getByRole('button', { name: 'Delete from broker' }));
+    const deleteDialog = await screen.findByRole('alertdialog', { name: 'Delete topic from broker' });
+    fireEvent.change(deleteDialog.querySelector('select')!, { target: { value: 'broker-b' } });
+    await user.type(within(deleteDialog).getByRole('textbox', { name: 'Confirm topic name' }), 'orders');
+    await user.click(within(deleteDialog).getByRole('button', { name: 'Delete from broker' }));
+
+    await waitFor(() => expect(topicApi.list).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(topicApi.stats).toHaveBeenCalledTimes(2));
+    expect(topicApi.route).toHaveBeenCalledTimes(1);
+    expect(topicApi.config).toHaveBeenCalledTimes(1);
+    expect(topicApi.consumers).not.toHaveBeenCalled();
+    expect(within(detail).getByRole('tab', { name: 'Overview', hidden: true })).toHaveAttribute('aria-selected', 'true');
+    expect(detail).toHaveAccessibleDescription('BROKER_UPDATED · broker-b');
+    expect(within(detail).getByText('BROKER_UPDATED')).toBeInTheDocument();
+  });
+
   it('closes the matching detail sheet and removes the row after a successful delete refresh', async () => {
     const user = userEvent.setup();
     vi.mocked(topicApi.list)
@@ -324,6 +479,48 @@ describe('TopicListPage', () => {
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'orders' })).not.toBeInTheDocument());
     expect(screen.queryByRole('row', { name: /^orders Full page/ })).not.toBeInTheDocument();
     expect(screen.getByText('deleted')).toBeInTheDocument();
+  });
+
+  it('keeps a partial delete in its dialog while refreshing catalog and matching detail resources once', async () => {
+    const user = userEvent.setup();
+    const refreshedOrders = { ...topics[0], category: 'PARTIAL_UPDATED', brokers: ['broker-b'] };
+    vi.mocked(topicApi.list)
+      .mockResolvedValueOnce(listView)
+      .mockResolvedValueOnce({ ...listView, items: [refreshedOrders, ...topics.slice(1)] });
+    vi.mocked(topicApi.delete).mockResolvedValueOnce({
+      operation: 'DELETE_TOPIC',
+      topic: 'orders',
+      success: false,
+      targetCount: 2,
+      message: '1 of 2 targets failed',
+      targets: [
+        { target: 'broker-a', success: true, message: 'deleted from broker-a' },
+        { target: 'broker-b', success: false, message: 'broker-b unavailable' }
+      ]
+    });
+    renderAtRoute(<TopicListPage />, '/topics');
+    await screen.findByRole('heading', { name: 'Topics' });
+
+    await user.click(screen.getByText('orders'));
+    const detail = await screen.findByRole('dialog', { name: 'orders' });
+    expect(await within(detail).findByRole('group', { name: 'Queue entries: 2' })).toBeInTheDocument();
+    await user.click(within(detail).getByRole('button', { name: 'Delete topic' }));
+    const deleteDialog = screen.getByRole('alertdialog', { name: 'Delete topic' });
+    await user.type(within(deleteDialog).getByRole('textbox', { name: 'Confirm topic name' }), 'orders');
+    await user.click(within(deleteDialog).getByRole('button', { name: 'Delete topic' }));
+
+    expect(await within(deleteDialog).findByRole('alert')).toHaveTextContent('1 of 2 targets failed');
+    expect(within(deleteDialog).getByText('deleted from broker-a')).toBeInTheDocument();
+    expect(within(deleteDialog).getByText('broker-b unavailable')).toBeInTheDocument();
+    expect(screen.getByRole('alertdialog', { name: 'Delete topic' })).toBeInTheDocument();
+    expect(screen.getAllByText('1 of 2 targets failed')).toHaveLength(1);
+    await waitFor(() => expect(topicApi.list).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(topicApi.stats).toHaveBeenCalledTimes(2));
+    expect(topicApi.route).toHaveBeenCalledTimes(1);
+    expect(topicApi.config).toHaveBeenCalledTimes(1);
+    expect(topicApi.consumers).not.toHaveBeenCalled();
+    expect(within(detail).getByRole('tab', { name: 'Overview', hidden: true })).toHaveAttribute('aria-selected', 'true');
+    expect(detail).toHaveAccessibleDescription('PARTIAL_UPDATED · broker-a');
   });
 
   it('keeps a page-integrated delete locked across close and selection and drops the stale result', async () => {

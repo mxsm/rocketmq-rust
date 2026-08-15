@@ -123,10 +123,25 @@ describe('TopicDeleteDialog', () => {
     expect(topicApi.deleteFromBroker).not.toHaveBeenCalled();
   });
 
+  it('fails closed when a whole-topic delete has no authoritative cluster targets', async () => {
+    const user = userEvent.setup();
+    const missingClusters = { ...topic('orders'), clusters: [' ', '\t'] };
+    render(<TopicDeleteDialog {...defaultProps} topic={missingClusters} mode="topic" />);
+
+    const dialog = screen.getByRole('alertdialog', { name: 'Delete topic' });
+    expect(within(dialog).getByRole('alert')).toHaveTextContent('No authoritative cluster targets are available');
+    await user.type(within(dialog).getByRole('textbox', { name: 'Confirm topic name' }), 'orders');
+    expect(within(dialog).getByRole('button', { name: 'Delete topic' })).toBeDisabled();
+    fireEvent.submit(dialog.querySelector('form')!);
+    expect(topicApi.delete).not.toHaveBeenCalled();
+    expect(topicApi.deleteFromBroker).not.toHaveBeenCalled();
+  });
+
   it('renders every partial target outcome and keeps the dialog open', async () => {
     const user = userEvent.setup();
     const onOpenChange = vi.fn();
     const onSucceeded = vi.fn();
+    const onResult = vi.fn();
     vi.mocked(topicApi.delete).mockResolvedValue({
       operation: 'DELETE_TOPIC',
       topic: 'orders',
@@ -138,7 +153,14 @@ describe('TopicDeleteDialog', () => {
         { target: 'broker-b', success: false, message: 'broker-b unavailable' }
       ]
     });
-    render(<TopicDeleteDialog {...defaultProps} onOpenChange={onOpenChange} onSucceeded={onSucceeded} />);
+    render(
+      <TopicDeleteDialog
+        {...defaultProps}
+        onOpenChange={onOpenChange}
+        onResult={onResult}
+        onSucceeded={onSucceeded}
+      />
+    );
 
     const dialog = screen.getByRole('alertdialog', { name: 'Delete topic' });
     await user.type(within(dialog).getByRole('textbox', { name: 'Confirm topic name' }), 'orders');
@@ -149,6 +171,17 @@ describe('TopicDeleteDialog', () => {
     expect(within(dialog).getByText('broker-b unavailable')).toBeInTheDocument();
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
     expect(onSucceeded).not.toHaveBeenCalled();
+    expect(onResult).toHaveBeenCalledWith({
+      operation: 'DELETE_TOPIC',
+      topic: 'orders',
+      success: false,
+      targetCount: 2,
+      message: '1 of 2 targets failed',
+      targets: [
+        { target: 'broker-a', success: true, message: 'deleted from broker-a' },
+        { target: 'broker-b', success: false, message: 'broker-b unavailable' }
+      ]
+    });
   });
 
   it('keeps the real delete locked across close and topic changes and drops stale outcomes', async () => {
@@ -156,21 +189,23 @@ describe('TopicDeleteDialog', () => {
     const pending = deferred<TopicOperationResult>();
     const onOpenChange = vi.fn();
     const onSucceeded = vi.fn();
+    const onResult = vi.fn();
     vi.mocked(topicApi.delete).mockReturnValueOnce(pending.promise)
       .mockResolvedValueOnce(successResult('payments'));
     const { rerender } = render(
-      <TopicDeleteDialog {...defaultProps} onOpenChange={onOpenChange} onSucceeded={onSucceeded} />
+      <TopicDeleteDialog {...defaultProps} onOpenChange={onOpenChange} onResult={onResult} onSucceeded={onSucceeded} />
     );
 
     let dialog = screen.getByRole('alertdialog', { name: 'Delete topic' });
     await user.type(within(dialog).getByRole('textbox', { name: 'Confirm topic name' }), 'orders');
     await user.click(within(dialog).getByRole('button', { name: 'Delete topic' }));
-    rerender(<TopicDeleteDialog {...defaultProps} open={false} onOpenChange={onOpenChange} onSucceeded={onSucceeded} />);
+    rerender(<TopicDeleteDialog {...defaultProps} open={false} onOpenChange={onOpenChange} onResult={onResult} onSucceeded={onSucceeded} />);
     rerender(
       <TopicDeleteDialog
         {...defaultProps}
         topic={topic('payments')}
         onOpenChange={onOpenChange}
+        onResult={onResult}
         onSucceeded={onSucceeded}
       />
     );
@@ -181,11 +216,14 @@ describe('TopicDeleteDialog', () => {
 
     await act(async () => pending.reject(new Error('stale orders delete failed')));
     expect(screen.queryByText('stale orders delete failed')).not.toBeInTheDocument();
+    expect(onResult).not.toHaveBeenCalled();
     await user.type(within(dialog).getByRole('textbox', { name: 'Confirm topic name' }), 'payments');
     await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Delete topic' })).toBeEnabled());
     await user.click(within(dialog).getByRole('button', { name: 'Delete topic' }));
     expect(topicApi.delete).toHaveBeenLastCalledWith('payments');
     expect(screen.queryByText('payments deleted')).not.toBeInTheDocument();
+    expect(onResult).toHaveBeenCalledTimes(1);
+    expect(onResult).toHaveBeenCalledWith(successResult('payments'));
     expect(onSucceeded).toHaveBeenCalledWith(successResult('payments'));
   });
 

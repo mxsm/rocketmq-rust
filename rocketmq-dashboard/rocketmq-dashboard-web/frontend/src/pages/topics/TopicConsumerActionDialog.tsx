@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import EmptyState from '../../components/EmptyState';
 import ErrorState from '../../components/ErrorState';
 import LoadingState from '../../components/LoadingState';
@@ -11,6 +11,8 @@ import {
   DialogHeader,
   DialogTitle
 } from '../../components/ui/Dialog';
+import { Label } from '../../components/ui/Label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/Select';
 import type { TopicConsumerView } from '../../types/topic';
 
 export type TopicConsumerActionKind = 'reset' | 'skip';
@@ -39,6 +41,7 @@ export default function TopicConsumerActionDialog({
   onOpenChange
 }: TopicConsumerActionDialogProps) {
   const [consumerGroup, setConsumerGroup] = useState('');
+  const consumerId = useId();
   const actionLabel = kind === 'reset' ? 'reset consumer offset' : 'skip accumulated messages';
 
   useEffect(() => {
@@ -55,45 +58,40 @@ export default function TopicConsumerActionDialog({
           </DialogDescription>
         </DialogHeader>
 
-        {loading ? <LoadingState label="Loading topic consumers" /> : null}
-        {!loading && error ? (
-          <ErrorState message={error} onRetry={onRetry} retryLabel="Retry consumers" />
-        ) : null}
-        {!loading && !error && consumers.length === 0 ? (
-          <div>
-            <EmptyState title="No consumers" detail="No consumers subscribe to this topic." />
-            <Button type="button" variant="outline" onClick={onRetry}>Reload consumers</Button>
-          </div>
-        ) : null}
-        {!loading && !error && consumers.length > 0 ? (
-          <label className="native-filter-field">
-            <span>Consumer group</span>
-            <select
-              className="ui-select-native"
-              aria-label="Consumer group"
-              value={consumerGroup}
-              onChange={(event) => setConsumerGroup(event.target.value)}
-            >
-              <option value="">Choose a consumer group</option>
-              {consumers.map((consumer) => (
-                <option key={consumer.consumerGroup} value={consumer.consumerGroup}>
-                  {consumer.consumerGroup}
-                </option>
-              ))}
-            </select>
-          </label>
-        ) : null}
+        <form onSubmit={(event) => { event.preventDefault(); if (consumerGroup) onSelect(consumerGroup); }}>
+          {loading ? <LoadingState label="Loading topic consumers" /> : null}
+          {!loading && error ? (
+            <ErrorState message={error} onRetry={onRetry} retryLabel="Retry consumers" />
+          ) : null}
+          {!loading && !error && consumers.length === 0 ? (
+            <div>
+              <EmptyState title="No consumers" detail="No consumers subscribe to this topic." />
+              <Button type="button" variant="outline" onClick={onRetry}>Reload consumers</Button>
+            </div>
+          ) : null}
+          {!loading && !error && consumers.length > 0 ? (
+            <div className="field">
+              <Label htmlFor={consumerId}>Consumer group</Label>
+              <Select value={consumerGroup} onValueChange={setConsumerGroup}>
+                <SelectTrigger id={consumerId} aria-label="Consumer group">
+                  <SelectValue placeholder="Choose a consumer group" />
+                </SelectTrigger>
+                <SelectContent>
+                  {consumers.map((consumer) => (
+                    <SelectItem key={consumer.consumerGroup} value={consumer.consumerGroup}>
+                      {consumer.consumerGroup}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          ) : null}
 
-        <DialogFooter>
-          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button
-            type="button"
-            disabled={!consumerGroup}
-            onClick={() => onSelect(consumerGroup)}
-          >
-            Continue to {kind}
-          </Button>
-        </DialogFooter>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+            <Button type="submit" disabled={!consumerGroup}>Continue to {kind}</Button>
+          </DialogFooter>
+        </form>
       </DialogContent>
     </Dialog>
   );
