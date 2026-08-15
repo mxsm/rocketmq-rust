@@ -17,12 +17,16 @@ use std::path::PathBuf;
 
 use rocketmq_error::RocketMQError;
 use rocketmq_store::codec_error;
+use rocketmq_store::KeyValueStore;
 use rocketmq_store::RocksDbColumnFamily;
 use rocketmq_store::RocksDbColumnFamilyConfig;
 use rocketmq_store::RocksDbConfig;
 use rocketmq_store::RocksDbRangeScanOptions;
+use rocketmq_store::RocksDbScanOptions;
 use rocketmq_store::RocksDbStore;
 use rocketmq_store::RocksDbWriteBatch;
+use rocketmq_store_rocksdb::profile_marker::pop_consumer_profile_prefix;
+use rocketmq_store_rocksdb::profile_marker::POP_CONSUMER_PROFILE_MARKER_KEY;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -104,6 +108,11 @@ pub(crate) struct PopConsumerRocksDbStore {
     store: RocksDbStore,
 }
 
+pub(crate) struct PopConsumerProfileState {
+    pub(crate) marker: Option<Vec<u8>>,
+    pub(crate) records: Vec<(Vec<u8>, Vec<u8>)>,
+}
+
 impl PopConsumerRocksDbStore {
     pub(crate) fn open(
         path: PathBuf,
@@ -164,6 +173,43 @@ impl PopConsumerRocksDbStore {
             .collect()
     }
 
+    pub(crate) fn load_profile_state(&self) -> Result<PopConsumerProfileState, RocketMQError> {
+        let cf = RocksDbColumnFamily::PopConsumerProfile.name();
+        let marker = self
+            .store
+            .get_cf(cf, POP_CONSUMER_PROFILE_MARKER_KEY)?
+            .map(|value| value.to_vec());
+        let records = self
+            .store
+            .prefix_scan(&RocksDbScanOptions::prefix(cf, pop_consumer_profile_prefix(), 0))?
+            .into_iter()
+            .map(|item| (item.key.to_vec(), item.value.to_vec()))
+            .collect();
+        Ok(PopConsumerProfileState { marker, records })
+    }
+
+    pub(crate) fn write_profile_record(
+        &self,
+        marker: Vec<u8>,
+        key: Vec<u8>,
+        value: Vec<u8>,
+    ) -> Result<(), RocketMQError> {
+        let cf = RocksDbColumnFamily::PopConsumerProfile.name();
+        let mut batch = RocksDbWriteBatch::with_capacity(2);
+        batch.put_cf(cf, POP_CONSUMER_PROFILE_MARKER_KEY.to_vec(), marker);
+        batch.put_cf(cf, key, value);
+        self.store.write_batch(&batch)
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn write_profile_marker_fixture(&self, marker: Vec<u8>) -> Result<(), RocketMQError> {
+        self.store.put_cf(
+            RocksDbColumnFamily::PopConsumerProfile.name(),
+            POP_CONSUMER_PROFILE_MARKER_KEY,
+            &marker,
+        )
+    }
+
     pub(crate) fn close(&self) {
         self.store.close();
     }
@@ -179,6 +225,11 @@ fn pop_rocksdb_config(path: PathBuf, block_cache_size: usize, write_buffer_size:
             pop_column_family_config(RocksDbColumnFamily::Default.name(), block_cache_size, write_buffer_size),
             pop_column_family_config(
                 RocksDbColumnFamily::PopState.name(),
+                block_cache_size,
+                write_buffer_size,
+            ),
+            pop_column_family_config(
+                RocksDbColumnFamily::PopConsumerProfile.name(),
                 block_cache_size,
                 write_buffer_size,
             ),

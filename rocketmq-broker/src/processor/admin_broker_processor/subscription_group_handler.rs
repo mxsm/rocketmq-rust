@@ -361,6 +361,18 @@ impl SubscriptionGroupHandler {
             .subscription_group_manager()
             .delete_subscription_group_config(request_header.group_name.as_str());
 
+        if let Some(processor) = broker_runtime_inner.pop_message_processor() {
+            if let Err(error) = processor
+                .remove_consumer_profile(request_header.group_name.clone())
+                .await
+            {
+                return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                    ResponseCode::ServiceNotAvailable,
+                    format!("failed to remove POP consumer profile: {error}"),
+                )));
+            }
+        }
+
         if should_clean_offset {
             broker_runtime_inner
                 .consumer_offset_manager()
@@ -440,6 +452,16 @@ impl SubscriptionGroupHandler {
         broker_runtime_inner
             .subscription_group_manager()
             .delete_subscription_group_config_list(&groups);
+        if let Some(processor) = broker_runtime_inner.pop_message_processor() {
+            for group in &groups {
+                if let Err(error) = processor.remove_consumer_profile(group.clone()).await {
+                    return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                        ResponseCode::ServiceNotAvailable,
+                        format!("failed to remove POP consumer profile for {group}: {error}"),
+                    )));
+                }
+            }
+        }
         for group in clean_offsets {
             broker_runtime_inner
                 .consumer_offset_manager()

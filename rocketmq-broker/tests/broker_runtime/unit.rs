@@ -168,7 +168,10 @@ impl BrokerRuntime {
     }
 
     pub(crate) fn pop_message_processor_for_test(&self) -> Arc<PopMessageProcessor<BrokerMessageStore>> {
-        self.composition.state.build_pop_message_processor()
+        self.composition
+            .state
+            .build_pop_message_processor()
+            .expect("test POP processor should initialize")
     }
 
     pub(crate) fn seed_pop_topic_and_group_for_test(&mut self, topic: &str, group: &str) {

@@ -489,6 +489,18 @@ impl ConsumerManager {
         consumer_group_info.set_message_model(message_model);
     }
 
+    /// Restores durable POP classification and subscriptions without creating a network channel.
+    pub(crate) fn restore_pop_consumer_profile(&self, group: &CheetahString, subscriptions: &[SubscriptionData]) {
+        self.compensate_basic_consumer_info(group, ConsumeType::ConsumePop, MessageModel::Clustering);
+        for subscription in subscriptions {
+            self.compensate_subscribe_data(group, &subscription.topic, subscription);
+        }
+    }
+
+    pub(crate) fn remove_compensated_consumer_profile(&self, group: &CheetahString) {
+        self.consumer_compensation_table.remove(group);
+    }
+
     /// Registers a consumer in a consumer group.
     ///
     /// # Arguments

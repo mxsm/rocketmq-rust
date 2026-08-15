@@ -38,6 +38,8 @@ pub mod send_message_constants;
 pub mod test_support {
     use std::collections::HashSet;
     use std::path::Path;
+    #[cfg(feature = "rocksdb_store")]
+    use std::sync::Arc;
 
     use cheetah_string::CheetahString;
     use rocketmq_model::common::lite::to_lmq_name;
@@ -48,6 +50,13 @@ pub mod test_support {
     use crate::subscription::lite_subscription_registry::LiteSubscriptionRegistry;
     use crate::transaction::transaction_metrics::TransactionMetrics;
 
+    #[cfg(feature = "rocksdb_store")]
+    use crate::pop::profile_store::PopConsumerProfileStore;
+    #[cfg(feature = "rocksdb_store")]
+    use crate::pop::rocksdb_store::pop_rocksdb_path;
+    #[cfg(feature = "rocksdb_store")]
+    use crate::pop::rocksdb_store::PopConsumerRocksDbStore;
+
     pub use crate::processor::notification_processor::{
         run_notification_filter_probe, NotificationFilterProbe, NotificationFilterProbeMessage,
     };
@@ -55,6 +64,132 @@ pub mod test_support {
     #[derive(Debug)]
     pub struct TransactionMetricsProbe {
         metrics: TransactionMetrics,
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct PopProfileSnapshotProbe {
+        pub group: String,
+        pub topics: Vec<String>,
+        pub retry_version: i32,
+        pub generation: u64,
+        pub last_seen: i64,
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    pub struct PopProfileStoreProbe {
+        store: Arc<PopConsumerProfileStore>,
+        rocksdb: Arc<PopConsumerRocksDbStore>,
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    impl std::fmt::Debug for PopProfileStoreProbe {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter
+                .debug_struct("PopProfileStoreProbe")
+                .field("generation", &self.store.generation())
+                .finish_non_exhaustive()
+        }
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    impl PopProfileStoreProbe {
+        pub fn open(root: &Path, capacity: usize) -> Result<Self, String> {
+            let rocksdb = Arc::new(
+                PopConsumerRocksDbStore::open(pop_rocksdb_path(root), 16 * 1024 * 1024, 4 * 1024 * 1024)
+                    .map_err(|error| error.to_string())?,
+            );
+            let store = Arc::new(
+                PopConsumerProfileStore::load(Arc::clone(&rocksdb), capacity).map_err(|error| error.to_string())?,
+            );
+            Ok(Self { store, rocksdb })
+        }
+
+        pub fn upsert(
+            &self,
+            group: &str,
+            topics: &[&str],
+            retry_version: i32,
+            last_seen: i64,
+        ) -> Result<PopProfileSnapshotProbe, String> {
+            let subscriptions = topics
+                .iter()
+                .map(
+                    |topic| rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData {
+                        topic: CheetahString::from_slice(topic),
+                        sub_string: CheetahString::from_static_str("*"),
+                        ..Default::default()
+                    },
+                )
+                .collect();
+            self.store
+                .upsert(
+                    CheetahString::from_slice(group),
+                    subscriptions,
+                    retry_version,
+                    last_seen,
+                )
+                .map(profile_probe)
+                .map_err(|error| error.to_string())
+        }
+
+        pub fn remove(&self, group: &str, last_seen: i64) -> Result<bool, String> {
+            self.store
+                .remove(&CheetahString::from_slice(group), last_seen)
+                .map_err(|error| error.to_string())
+        }
+
+        pub fn snapshot(&self) -> Vec<PopProfileSnapshotProbe> {
+            self.store.snapshot().into_iter().map(profile_probe).collect()
+        }
+
+        pub fn generation(&self) -> u64 {
+            self.store.generation()
+        }
+
+        pub fn inflight_record_count(&self) -> Result<usize, String> {
+            self.rocksdb
+                .scan_expired_records(i64::MIN, i64::MAX, usize::MAX)
+                .map(|records| records.len())
+                .map_err(|error| error.to_string())
+        }
+
+        pub fn restore_compensation(&self) -> Vec<(String, Vec<String>)> {
+            self.snapshot()
+                .into_iter()
+                .map(|profile| (profile.group, profile.topics))
+                .collect()
+        }
+
+        pub fn write_unknown_marker(root: &Path, version: u32) -> Result<(), String> {
+            let store = PopConsumerRocksDbStore::open(pop_rocksdb_path(root), 16 * 1024 * 1024, 4 * 1024 * 1024)
+                .map_err(|error| error.to_string())?;
+            let marker = serde_json::to_vec(&serde_json::json!({
+                "formatVersion": version,
+                "generation": 0,
+            }))
+            .map_err(|error| error.to_string())?;
+            store
+                .write_profile_marker_fixture(marker)
+                .map_err(|error| error.to_string())?;
+            store.close();
+            Ok(())
+        }
+    }
+
+    #[cfg(feature = "rocksdb_store")]
+    fn profile_probe(profile: crate::pop::profile_store::PopConsumerProfile) -> PopProfileSnapshotProbe {
+        PopProfileSnapshotProbe {
+            group: profile.group.to_string(),
+            topics: profile
+                .subscriptions
+                .into_iter()
+                .map(|subscription| subscription.topic.to_string())
+                .collect(),
+            retry_version: profile.retry_version,
+            generation: profile.generation,
+            last_seen: profile.last_seen,
+        }
     }
 
     impl TransactionMetricsProbe {

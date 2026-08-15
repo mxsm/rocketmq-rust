@@ -13,6 +13,8 @@
 // limitations under the License.
 
 #[cfg(feature = "rocksdb_store")]
+pub(crate) mod profile_store;
+#[cfg(feature = "rocksdb_store")]
 pub(crate) mod rocksdb_store;
 
 #[cfg(all(test, feature = "rocksdb_store"))]
@@ -65,7 +67,7 @@ mod tests {
     }
 
     #[test]
-    fn pop_rocksdb_store_config_uses_java_pop_state_cf_and_sync_wal() {
+    fn pop_rocksdb_store_config_separates_inflight_and_profile_state_with_sync_wal() {
         let path = unique_temp_path("pop-config");
         let store = PopConsumerRocksDbStore::open(path.clone(), 256 * 1024 * 1024, 32 * 1024 * 1024)
             .expect("pop rocksdb store should open");
@@ -79,7 +81,11 @@ mod tests {
                 .iter()
                 .map(|cf| cf.name.as_str())
                 .collect::<Vec<_>>(),
-            vec!["default", RocksDbColumnFamily::PopState.name()]
+            vec![
+                "default",
+                RocksDbColumnFamily::PopState.name(),
+                RocksDbColumnFamily::PopConsumerProfile.name(),
+            ]
         );
 
         store.close();

@@ -27,6 +27,7 @@ use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
+use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_store::ArcMessageFilter;
@@ -229,6 +230,14 @@ impl PopConsumerCapability {
             .compensate_basic_consumer_info(group, consume_type, message_model);
     }
 
+    pub(crate) fn restore_pop_consumer_profile(&self, group: &CheetahString, subscriptions: &[SubscriptionData]) {
+        self.manager.restore_pop_consumer_profile(group, subscriptions);
+    }
+
+    pub(crate) fn remove_compensated_consumer_profile(&self, group: &CheetahString) {
+        self.manager.remove_compensated_consumer_profile(group);
+    }
+
     pub(crate) fn compensate_subscribe_data(
         &self,
         group: &CheetahString,
@@ -410,6 +419,7 @@ pub(crate) struct PopMessageProcessorContext<MS: BrokerReadWriteStore> {
     pub(crate) store: PopStoreCapability<MS>,
     pub(crate) stats: Arc<BrokerStatsManager>,
     pub(crate) inflight: PopInflightMessageCounter,
+    pub(crate) metadata_io: BlockingExecutor,
 }
 
 #[allow(
@@ -428,6 +438,7 @@ impl<MS: BrokerReadWriteStore> PopMessageProcessorContext<MS> {
         store: PopStoreCapability<MS>,
         stats: Arc<BrokerStatsManager>,
         inflight: PopInflightMessageCounter,
+        metadata_io: BlockingExecutor,
     ) -> Self {
         Self {
             command_factory: application_remoting_command_factory(),
@@ -441,6 +452,7 @@ impl<MS: BrokerReadWriteStore> PopMessageProcessorContext<MS> {
             store,
             stats,
             inflight,
+            metadata_io,
         }
     }
 

@@ -19,6 +19,7 @@ pub enum RocksDbColumnFamily {
     Timer,
     Transaction,
     PopState,
+    PopConsumerProfile,
     Config(String),
 }
 
@@ -30,6 +31,7 @@ impl RocksDbColumnFamily {
             Self::Timer => "timer",
             Self::Transaction => "trans",
             Self::PopState => "popState",
+            Self::PopConsumerProfile => "popConsumerProfile",
             Self::Config(name) => name.as_str(),
         }
     }

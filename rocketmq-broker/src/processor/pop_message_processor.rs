@@ -51,8 +51,6 @@ use rocketmq_protocol::protocol::filter::filter_api::FilterAPI;
 use rocketmq_protocol::protocol::header::extra_info_util::ExtraInfoUtil;
 use rocketmq_protocol::protocol::header::pop_message_request_header::PopMessageRequestHeader;
 use rocketmq_protocol::protocol::header::pop_message_response_header::PopMessageResponseHeader;
-use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
-use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingSerializable;
@@ -88,6 +86,8 @@ use crate::long_polling::polling_header::PollingHeader;
 use crate::long_polling::polling_result::PollingResult;
 use crate::offset::manager::consumer_offset_manager::ConsumerLagAdjustment;
 #[cfg(feature = "rocksdb_store")]
+use crate::pop::profile_store::PopConsumerProfileStore;
+#[cfg(feature = "rocksdb_store")]
 use crate::pop::rocksdb_store::pop_rocksdb_path;
 #[cfg(feature = "rocksdb_store")]
 use crate::pop::rocksdb_store::PopConsumerRocksDbStore;
@@ -97,6 +97,8 @@ use crate::processor::processor_service::pop_buffer_merge_service::PopBufferMerg
 
 const BORN_TIME: &str = "bornTime";
 const QUEUE_LOCK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+#[cfg(feature = "rocksdb_store")]
+const POP_CONSUMER_PROFILE_CAPACITY: usize = 100_000;
 
 pub struct PopMessageProcessor<MS: BrokerReadWriteStore> {
     ck_message_number: AtomicI64,
@@ -105,6 +107,8 @@ pub struct PopMessageProcessor<MS: BrokerReadWriteStore> {
     queue_lock_manager: QueueLockManager,
     revive_topic: CheetahString,
     context: Arc<PopMessageProcessorContext<MS>>,
+    #[cfg(feature = "rocksdb_store")]
+    profile_store: Option<Arc<PopConsumerProfileStore>>,
     lifecycle: AsyncMutex<()>,
 }
 
@@ -114,18 +118,44 @@ impl<MS: BrokerReadWriteStore> PopMessageProcessor<MS> {
         buffer_context: Arc<PopBufferMergeContext<MS>>,
         long_polling_context: PopLongPollingServiceContext,
         queue_lock_manager: QueueLockManager,
-    ) -> Arc<Self> {
+    ) -> rocketmq_error::RocketMQResult<Arc<Self>> {
         let policy = context.policy.snapshot();
         let revive_topic = CheetahString::from_string(PopAckConstants::build_cluster_revive_topic(
             policy.broker_cluster_name.as_str(),
         ));
+        #[cfg(feature = "rocksdb_store")]
+        let pop_consumer_store = Self::open_pop_consumer_rocksdb_store(policy.as_ref())?;
+        #[cfg(feature = "rocksdb_store")]
+        let profile_store = pop_consumer_store
+            .as_ref()
+            .map(|store| PopConsumerProfileStore::load(Arc::clone(store), POP_CONSUMER_PROFILE_CAPACITY))
+            .transpose()?
+            .map(Arc::new);
+        #[cfg(feature = "rocksdb_store")]
+        if let Some(store) = &profile_store {
+            for profile in store.snapshot() {
+                context
+                    .consumers
+                    .restore_pop_consumer_profile(&profile.group, &profile.subscriptions);
+            }
+        }
+        #[cfg(not(feature = "rocksdb_store"))]
+        if policy.pop_consumer_kv_service_init || policy.pop_consumer_kv_service_enable {
+            return Err(rocketmq_error::RocketMQError::ConfigInvalidValue {
+                key: "popConsumerKVServiceEnable",
+                value: "true".to_owned(),
+                reason: "persistent POP consumer profiles require the rocksdb_store feature".to_owned(),
+            });
+        }
         let pop_buffer_merge_service = Self::new_pop_buffer_merge_service(
             revive_topic.clone(),
             queue_lock_manager.clone(),
             buffer_context,
             policy.as_ref(),
+            #[cfg(feature = "rocksdb_store")]
+            pop_consumer_store,
         );
-        Arc::new_cyclic(|processor| PopMessageProcessor {
+        Ok(Arc::new_cyclic(|processor| PopMessageProcessor {
             ck_message_number: Default::default(),
             pop_long_polling_service: Arc::new(PopLongPollingService::new(
                 long_polling_context,
@@ -136,8 +166,10 @@ impl<MS: BrokerReadWriteStore> PopMessageProcessor<MS> {
             queue_lock_manager,
             revive_topic,
             context,
+            #[cfg(feature = "rocksdb_store")]
+            profile_store,
             lifecycle: AsyncMutex::new(()),
-        })
+        }))
     }
 
     pub async fn start(&self) {
@@ -147,15 +179,35 @@ impl<MS: BrokerReadWriteStore> PopMessageProcessor<MS> {
         self.queue_lock_manager.start();
     }
 
+    pub(crate) async fn remove_consumer_profile(&self, group: CheetahString) -> rocketmq_error::RocketMQResult<bool> {
+        #[cfg(feature = "rocksdb_store")]
+        if let Some(profile_store) = &self.profile_store {
+            let profile_store = Arc::clone(profile_store);
+            let persisted_group = group.clone();
+            let removed = self
+                .context
+                .metadata_io
+                .spawn_io("broker.pop-consumer-profile.remove", move || {
+                    profile_store.remove(&persisted_group, current_millis() as i64)
+                })
+                .await
+                .map_err(crate::runtime_to_rocketmq_error)??;
+            self.context.consumers.remove_compensated_consumer_profile(&group);
+            return Ok(removed);
+        }
+        self.context.consumers.remove_compensated_consumer_profile(&group);
+        Ok(false)
+    }
+
     fn new_pop_buffer_merge_service(
         revive_topic: CheetahString,
         queue_lock_manager: QueueLockManager,
         context: Arc<PopBufferMergeContext<MS>>,
         policy: &capability::PopPolicy,
+        #[cfg(feature = "rocksdb_store")] pop_consumer_store: Option<Arc<PopConsumerRocksDbStore>>,
     ) -> Arc<PopBufferMergeService<MS>> {
         #[cfg(feature = "rocksdb_store")]
         {
-            let pop_consumer_store = Self::open_pop_consumer_rocksdb_store(policy);
             Arc::new(PopBufferMergeService::new(
                 revive_topic,
                 queue_lock_manager,
@@ -171,9 +223,11 @@ impl<MS: BrokerReadWriteStore> PopMessageProcessor<MS> {
     }
 
     #[cfg(feature = "rocksdb_store")]
-    fn open_pop_consumer_rocksdb_store(policy: &capability::PopPolicy) -> Option<Arc<PopConsumerRocksDbStore>> {
+    fn open_pop_consumer_rocksdb_store(
+        policy: &capability::PopPolicy,
+    ) -> rocketmq_error::RocketMQResult<Option<Arc<PopConsumerRocksDbStore>>> {
         if !policy.pop_consumer_kv_service_init && !policy.pop_consumer_kv_service_enable {
-            return None;
+            return Ok(None);
         }
 
         let path = pop_rocksdb_path(policy.store_path_root_dir.as_str());
@@ -184,16 +238,16 @@ impl<MS: BrokerReadWriteStore> PopMessageProcessor<MS> {
         ) {
             Ok(store) => {
                 info!("Pop consumer RocksDB KV store opened at {}", path.display());
-                Some(Arc::new(store))
+                Ok(Some(Arc::new(store)))
             }
-            Err(error) => {
-                warn!(
-                    "Open Pop consumer RocksDB KV store failed at {}: {}",
-                    path.display(),
-                    error
-                );
-                None
-            }
+            Err(error) => Err(rocketmq_error::RocketMQError::ConfigInvalidValue {
+                key: "popConsumerKVServiceEnable",
+                value: "true".to_owned(),
+                reason: format!(
+                    "failed to open POP consumer RocksDB store at {}: {error}",
+                    path.display()
+                ),
+            }),
         }
     }
 }
@@ -260,12 +314,6 @@ where
         let opaque = request.opaque();
         let request_header = request.decode_command_custom_header::<PopMessageRequestHeader>()?;
         let policy = self.context.policy.snapshot();
-
-        self.context.consumers.compensate_basic_consumer_info(
-            &request_header.consumer_group,
-            ConsumeType::ConsumePop,
-            MessageModel::Clustering,
-        );
 
         if request_header.is_timeout_too_much_at(rocketmq_runtime::common::time_utils::current_millis() as i64) {
             return Ok(Some(
@@ -372,7 +420,8 @@ where
 
         let exp = request_header.exp.as_ref();
 
-        let (subscription_data, message_filter) = if exp.is_some() && !exp.unwrap().is_empty() {
+        let (subscription_data, retry_subscription_data, message_filter) = if exp.is_some() && !exp.unwrap().is_empty()
+        {
             let subscription_data = match FilterAPI::build(
                 &request_header.topic,
                 &request_header.exp.clone().unwrap_or_default(),
@@ -392,11 +441,6 @@ where
                     ));
                 }
             };
-            self.context.consumers.compensate_subscribe_data(
-                &request_header.consumer_group,
-                &request_header.topic,
-                &subscription_data,
-            );
             let retry_topic = CheetahString::from_string(KeyBuilder::build_pop_retry_topic(
                 &request_header.topic,
                 &request_header.consumer_group,
@@ -421,11 +465,6 @@ where
                     ));
                 }
             };
-            self.context.consumers.compensate_subscribe_data(
-                &request_header.consumer_group,
-                &retry_topic,
-                &retry_subscription_data,
-            );
             let message_filter = if !ExpressionType::is_tag_type(Some(subscription_data.expression_type.as_str())) {
                 let consumer_filter_data = self.context.filters.resolve(
                     request_header.topic.clone(),
@@ -456,7 +495,7 @@ where
             } else {
                 None
             };
-            (subscription_data, message_filter)
+            (subscription_data, retry_subscription_data, message_filter)
         } else {
             let subscription_data = match FilterAPI::build(
                 &request_header.topic,
@@ -473,11 +512,6 @@ where
                     ));
                 }
             };
-            self.context.consumers.compensate_subscribe_data(
-                &request_header.consumer_group,
-                &request_header.topic,
-                &subscription_data,
-            );
             let retry_topic = CheetahString::from_string(KeyBuilder::build_pop_retry_topic(
                 &request_header.topic,
                 &request_header.consumer_group,
@@ -498,13 +532,41 @@ where
                     ));
                 }
             };
-            self.context.consumers.compensate_subscribe_data(
-                &request_header.consumer_group,
-                &retry_topic,
-                &retry_subscription_data,
-            );
-            (subscription_data, None)
+            (subscription_data, retry_subscription_data, None)
         };
+
+        let durable_subscriptions = vec![subscription_data.clone(), retry_subscription_data];
+        #[cfg(feature = "rocksdb_store")]
+        if let Some(profile_store) = &self.profile_store {
+            let profile_store = Arc::clone(profile_store);
+            let group = request_header.consumer_group.clone();
+            let subscriptions = durable_subscriptions.clone();
+            let retry_version = if policy.enable_retry_topic_v2 { 2 } else { 1 };
+            let persist_result = self
+                .context
+                .metadata_io
+                .spawn_io("broker.pop-consumer-profile.upsert", move || {
+                    profile_store.upsert(group, subscriptions, retry_version, current_millis() as i64)
+                })
+                .await;
+            let persist_error = match persist_result {
+                Ok(Ok(_)) => None,
+                Ok(Err(error)) => Some(error.to_string()),
+                Err(error) => Some(error.to_string()),
+            };
+            if let Some(error) = persist_error {
+                error!(%error, group = %request_header.consumer_group, "Failed to persist POP consumer profile");
+                return Ok(Some(
+                    self.context.command_factory.create_response_command_with_code_remark(
+                        ResponseCode::ServiceNotAvailable,
+                        "POP consumer profile persistence is unavailable",
+                    ),
+                ));
+            }
+        }
+        self.context
+            .consumers
+            .restore_pop_consumer_profile(&request_header.consumer_group, &durable_subscriptions);
 
         let revive_qid = if request_header.order.unwrap_or(false) {
             POP_ORDER_REVIVE_QUEUE

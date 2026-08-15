@@ -197,7 +197,9 @@ impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
         )
     }
 
-    pub(super) fn build_pop_message_processor(&self) -> Arc<PopMessageProcessor<MS>> {
+    pub(super) fn build_pop_message_processor(
+        &self,
+    ) -> Result<Arc<PopMessageProcessor<MS>>, rocketmq_error::RocketMQError> {
         let topics = self.topic_config_manager_handle();
         let subscriptions = self.subscription_group_manager().config_lookup();
         let offsets = self.consumer_offset_manager_handle().request_capability();
@@ -220,6 +222,11 @@ impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
                 PopStoreCapability::new(&escape_bridge),
                 self.broker_stats_manager_handle(),
                 self.pop_inflight_message_counter().clone(),
+                service_context
+                    .as_ref()
+                    .expect("BrokerRuntime always has an injected ChildServiceContext")
+                    .metadata_io()
+                    .clone(),
             )
             .with_command_factory(self.command_factory),
         );

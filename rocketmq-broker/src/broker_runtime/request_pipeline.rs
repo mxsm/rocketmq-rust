@@ -147,7 +147,12 @@ impl BrokerRuntime {
         }
         self.composition.state.pull_request_hold_service = Some(Arc::clone(&pull_request_hold_service));
 
-        let pop_message_processor = self.composition.state.build_pop_message_processor();
+        let pop_message_processor = self.composition.state.build_pop_message_processor().map_err(|error| {
+            BrokerStartupError::Initialization {
+                component: "pop_consumer_profile",
+                detail: error.to_string(),
+            }
+        })?;
         let polling_count_provider = pop_message_processor.polling_count_provider();
         self.composition.state.pop_message_processor = Some(pop_message_processor.clone());
         let pop_lite_topic_config_manager = self.composition.state.topic_config_manager_handle();
