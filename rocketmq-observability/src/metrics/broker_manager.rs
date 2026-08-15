@@ -51,6 +51,7 @@ use crate::metrics::owner_instruments::Counter;
 use crate::metrics::owner_instruments::Histogram;
 use crate::metrics::owner_instruments::KeyValue;
 use crate::metrics::owner_instruments::Meter;
+use crate::metrics::transaction::TransactionPendingSample;
 use crate::MetricLabelPolicy;
 use crate::MetricsExporter;
 use crate::SamplingGate;
@@ -770,6 +771,43 @@ impl BrokerMetricsManager {
             .build();
     }
 
+    /// Registers the Java-compatible per-topic pending transaction gauge.
+    pub fn register_transaction_pending_observable<F>(&self, pending_snapshot_fn: F)
+    where
+        F: Fn() -> Vec<(String, i64)> + Send + Sync + 'static,
+    {
+        if !self.is_recording_active() {
+            return;
+        }
+
+        let telemetry = self.telemetry.clone();
+        let attributes_supplier = self.attributes_supplier.clone();
+        #[cfg(feature = "otel-metrics")]
+        let label_policy = self.label_policy.clone();
+        let _pending_transactions = self
+            .meter
+            .i64_observable_gauge(BrokerMetricsConstant::GAUGE_HALF_MESSAGES)
+            .with_description("Pending transaction messages per topic")
+            .with_callback(move |observer| {
+                if !telemetry_allows_recording(telemetry.as_ref()) {
+                    return;
+                }
+                for (topic, count) in pending_snapshot_fn() {
+                    let sample = TransactionPendingSample::new(topic, count);
+                    let mut attrs = attributes_supplier.get();
+                    #[cfg(feature = "otel-metrics")]
+                    let topic_label =
+                        guarded_bounded_label(&label_policy, BrokerMetricsConstant::LABEL_TOPIC, &sample.topic)
+                            .key_value;
+                    #[cfg(not(feature = "otel-metrics"))]
+                    let topic_label = KeyValue::new(BrokerMetricsConstant::LABEL_TOPIC, sample.topic);
+                    attrs.push(topic_label);
+                    observer.observe(sample.count, &attrs);
+                }
+            })
+            .build();
+    }
+
     #[cfg(feature = "otel-metrics")]
     pub fn register_consumer_lag_observable_gauge<F>(&self, consumer_lag_snapshot_fn: F)
     where
@@ -1411,6 +1449,18 @@ mod tests {
                 ..AuthMetricsSnapshot::default()
             })
         });
+    }
+
+    #[test]
+    #[cfg(feature = "otel-metrics")]
+    fn transaction_pending_observable_accepts_topic_snapshots() {
+        let meter_provider = SdkMeterProvider::builder().build();
+        let manager = BrokerMetricsManager::new(
+            meter_provider.meter("transaction-pending-observable"),
+            Arc::new(NoopAttributesSupplier),
+        );
+
+        manager.register_transaction_pending_observable(|| vec![("orders".to_owned(), 3)]);
     }
 
     #[test]

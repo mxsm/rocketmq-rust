@@ -37,6 +37,7 @@ pub mod send_message_constants;
 #[doc(hidden)]
 pub mod test_support {
     use std::collections::HashSet;
+    use std::path::Path;
 
     use cheetah_string::CheetahString;
     use rocketmq_model::common::lite::to_lmq_name;
@@ -45,10 +46,44 @@ pub mod test_support {
     use crate::lite::memory_consumer_order_info_manager::LiteOrderVisibilityUpdate;
     use crate::lite::memory_consumer_order_info_manager::MemoryConsumerOrderInfoManager;
     use crate::subscription::lite_subscription_registry::LiteSubscriptionRegistry;
+    use crate::transaction::transaction_metrics::TransactionMetrics;
 
     pub use crate::processor::notification_processor::{
         run_notification_filter_probe, NotificationFilterProbe, NotificationFilterProbeMessage,
     };
+
+    #[derive(Debug)]
+    pub struct TransactionMetricsProbe {
+        metrics: TransactionMetrics,
+    }
+
+    impl TransactionMetricsProbe {
+        pub fn open(path: &Path) -> Result<Self, String> {
+            TransactionMetrics::open(path)
+                .map(|metrics| Self { metrics })
+                .map_err(|error| error.to_string())
+        }
+
+        pub fn add_and_get(&self, topic: &str, delta: i64) -> i64 {
+            self.metrics.add_and_get(topic, delta)
+        }
+
+        pub fn count(&self, topic: &str) -> i64 {
+            self.metrics.count(topic)
+        }
+
+        pub fn snapshot(&self) -> Vec<(String, i64)> {
+            self.metrics.snapshot()
+        }
+
+        pub fn persist(&self) -> Result<(), String> {
+            self.metrics.persist().map_err(|error| error.to_string())
+        }
+
+        pub fn recovered_from_backup(&self) -> bool {
+            self.metrics.recovered_from_backup()
+        }
+    }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct LiteWildcardProbe {

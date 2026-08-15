@@ -13,6 +13,12 @@
 // limitations under the License.
 
 use super::*;
+#[cfg(feature = "local_file_store")]
+use crate::broker_path_config_helper::get_transaction_metrics_path;
+#[cfg(feature = "local_file_store")]
+use crate::transaction::transaction_metrics::TransactionMetrics;
+#[cfg(feature = "otel-metrics")]
+use crate::transaction::transactional_message_service::TransactionalMessageService;
 use rocketmq_store::BrokerReadStore;
 use rocketmq_store::BrokerStorePort;
 pub(super) struct BrokerDataPlane {
@@ -251,11 +257,34 @@ impl BrokerRuntime {
                     topic_registration,
                     escape_bridge: Arc::downgrade(&self.composition.data_plane.escape_bridge_owner),
                 });
-                let service = match DefaultTransactionalMessageService::try_new_with_resource_budget(
+                let Some(service_context) = self.composition.state.broker_service_context() else {
+                    error!("Transaction metrics require an injected broker service context");
+                    return false;
+                };
+                let metrics_path = get_transaction_metrics_path(
+                    self.composition.state.message_store_config().store_path_root_dir.as_str(),
+                );
+                let transaction_metrics = match service_context
+                    .metadata_io()
+                    .spawn_io("broker.transaction-metrics.recover", move || TransactionMetrics::open(metrics_path))
+                    .await
+                {
+                    Ok(Ok(metrics)) => metrics,
+                    Ok(Err(error)) => {
+                        error!(%error, "Failed to recover transaction metrics");
+                        return false;
+                    }
+                    Err(error) => {
+                        error!(%error, "Failed to schedule transaction metrics recovery");
+                        return false;
+                    }
+                };
+                let service = match DefaultTransactionalMessageService::try_new_with_resource_budget_and_metrics(
                     bridge,
                     self.composition.state.broker_config_arc(),
                     self.composition.state.message_store_config().file_reserved_time as i64,
                     self.composition.state.resource_budget(),
+                    transaction_metrics,
                 ) {
                     Ok(service) => Arc::new(service),
                     Err(error) => {
@@ -266,6 +295,21 @@ impl BrokerRuntime {
                 let weak_service = Arc::downgrade(&service);
                 if let Err(error) = service.set_transactional_op_batch_service_start(weak_service).await {
                     error!("Failed to start transactional op batch service: {error}");
+                }
+                if let Err(error) = service.start_transaction_metrics_flush(
+                    service_context.component("broker.transaction-metrics"),
+                ) {
+                    error!("Failed to start transaction metrics flush service: {error}");
+                    return false;
+                }
+                #[cfg(feature = "otel-metrics")]
+                if let Some(metrics_manager) = self.composition.state.broker_metrics_manager.clone() {
+                    let transaction_service = Arc::clone(&service);
+                    metrics_manager.register_transaction_pending_observable(move || {
+                        transaction_service
+                            .get_transaction_metrics()
+                            .snapshot()
+                    });
                 }
                 self.composition.state.transactional_message_service = Some(service);
             }

@@ -372,11 +372,9 @@ where
                             metrics.record_transaction_finish_latency(&topic, commit_latency_secs);
                         }
 
-                        // TODO: Update transaction metrics (half messages count -1) when
-                        // TransactionMetrics is fully implemented
-                        // self.transactional_message_service
-                        //     .get_transaction_metrics()
-                        //     .add_and_get(&topic, -1);
+                        self.transactional_message_service
+                            .get_transaction_metrics()
+                            .add_and_get(topic.as_str(), -1);
                     }
                     return Ok(Some(send_result));
                 }
@@ -424,11 +422,9 @@ where
                             metrics.inc_rollback_messages(&real_topic, 1);
                         }
 
-                        // TODO: Update transaction metrics (half messages count -1) when
-                        // TransactionMetrics is fully implemented
-                        // self.transactional_message_service
-                        //     .get_transaction_metrics()
-                        //     .add_and_get(&real_topic, -1);
+                        self.transactional_message_service
+                            .get_transaction_metrics()
+                            .add_and_get(real_topic.as_str(), -1);
                     }
                 }
                 return Ok(Some(res));
