@@ -15,7 +15,9 @@
 use rocketmq_admin_core::core::AdminError;
 use rocketmq_admin_core::core::dashboard::DashboardAdmin;
 use rocketmq_admin_core::core::topic;
+use rocketmq_admin_core::core::topic::DeleteTopicAdminRequest;
 use rocketmq_admin_core::core::topic::GetTopicConfigRequest;
+use rocketmq_admin_core::core::topic::ResetTopicConsumerOffsetRequest;
 use rocketmq_admin_core::core::topic::TopicAdmin;
 use rocketmq_admin_core::core::topic::TopicBatchMutationAdmin;
 use rocketmq_admin_core::core::topic::TopicBatchUpsertRequest;
@@ -25,10 +27,15 @@ use super::*;
 use crate::model::TopicConfigView;
 use crate::model::TopicConsumerView;
 use crate::model::TopicConsumersView;
+use crate::model::TopicOffsetResult;
 use crate::model::TopicOperationResult;
 use crate::model::TopicQueueOffsetView;
+use crate::model::TopicResetOffsetRequest;
+use crate::model::TopicSendResultView;
+use crate::model::TopicSkipOffsetRequest;
 use crate::model::TopicTargetOptionView;
 use crate::model::TopicTargetResult;
+use crate::model::TopicTestMessageRequest;
 use crate::model::build_operation_result;
 
 impl DashboardAdminClient {
@@ -91,11 +98,93 @@ impl DashboardAdminClient {
         self.upsert_topic(request, TopicMutationKind::Create).await
     }
 
-    pub async fn delete_topic(&self, topic: &str) -> Result<MutationResult, DashboardError> {
-        validate_name(topic, "Topic")?;
-        let result = run_admin_rpc!(self, |admin| admin.dashboard_delete_topic(topic))?;
-        Ok(MutationResult {
-            message: result.message,
+    pub async fn send_topic_test_message(
+        &self,
+        topic: &str,
+        request: TopicTestMessageRequest,
+    ) -> Result<TopicSendResultView, DashboardError> {
+        let topic = topic.trim().to_string();
+        validate_name(&topic, "Topic")?;
+        let request = normalize_test_message_request(request)?;
+        run_topic_admin_rpc!(self, |admin| async {
+            let catalog = authoritative_topic_catalog(admin).await?;
+            let mut executor = TopicAdminSendExecutor { admin };
+            run_topic_send(catalog, topic, request, &mut executor).await
+        })
+    }
+
+    pub async fn reset_topic_consumer_offset(
+        &self,
+        topic: &str,
+        request: TopicResetOffsetRequest,
+    ) -> Result<TopicOffsetResult, DashboardError> {
+        let topic = topic.trim().to_string();
+        validate_name(&topic, "Topic")?;
+        let request = normalize_reset_offset_request(request)?;
+        run_topic_admin_rpc!(self, |admin| async {
+            let catalog = authoritative_topic_catalog(admin).await?;
+            let mut executor = TopicAdminOffsetExecutor { admin };
+            run_topic_offset(
+                catalog,
+                "RESET_OFFSET",
+                topic,
+                request.consumer_group,
+                request.reset_timestamp,
+                request.force,
+                &mut executor,
+            )
+            .await
+        })
+    }
+
+    pub async fn skip_topic_consumer_offset(
+        &self,
+        topic: &str,
+        request: TopicSkipOffsetRequest,
+    ) -> Result<TopicOffsetResult, DashboardError> {
+        let topic = topic.trim().to_string();
+        validate_name(&topic, "Topic")?;
+        let consumer_group = normalize_consumer_group(request.consumer_group)?;
+        let applied_timestamp = epoch_millis(std::time::SystemTime::now())?;
+        run_topic_admin_rpc!(self, |admin| async {
+            let catalog = authoritative_topic_catalog(admin).await?;
+            let mut executor = TopicAdminOffsetExecutor { admin };
+            run_topic_offset(
+                catalog,
+                "SKIP_BACKLOG",
+                topic,
+                consumer_group,
+                applied_timestamp,
+                true,
+                &mut executor,
+            )
+            .await
+        })
+    }
+
+    pub async fn delete_topic_from_broker(
+        &self,
+        topic: &str,
+        broker_name: &str,
+    ) -> Result<TopicOperationResult, DashboardError> {
+        let topic = topic.trim().to_string();
+        let broker_name = broker_name.trim().to_string();
+        validate_name(&topic, "Topic")?;
+        validate_name(&broker_name, "Broker")?;
+        run_topic_admin_rpc!(self, |admin| async {
+            let catalog = authoritative_topic_catalog(admin).await?;
+            let mut executor = TopicAdminDeleteExecutor { admin };
+            run_topic_delete(catalog, topic, Some(broker_name), &mut executor).await
+        })
+    }
+
+    pub async fn delete_topic(&self, topic: &str) -> Result<TopicOperationResult, DashboardError> {
+        let topic = topic.trim().to_string();
+        validate_name(&topic, "Topic")?;
+        run_topic_admin_rpc!(self, |admin| async {
+            let catalog = authoritative_topic_catalog(admin).await?;
+            let mut executor = TopicAdminDeleteExecutor { admin };
+            run_topic_delete(catalog, topic, None, &mut executor).await
         })
     }
 }
@@ -140,6 +229,193 @@ trait TopicUpsertExecutor {
 
 struct TopicAdminUpsertExecutor<'a, T> {
     admin: &'a mut T,
+}
+
+trait TopicSendExecutor {
+    async fn send(&mut self, request: &topic::TopicSendRequest) -> Result<topic::TopicSendResult, AdminError>;
+}
+
+struct TopicAdminSendExecutor<'a, T> {
+    admin: &'a mut T,
+}
+
+impl<T> TopicSendExecutor for TopicAdminSendExecutor<'_, T>
+where
+    T: TopicAdmin,
+{
+    async fn send(&mut self, request: &topic::TopicSendRequest) -> Result<topic::TopicSendResult, AdminError> {
+        self.admin.send_topic_test_message(request).await
+    }
+}
+
+trait TopicDeleteExecutor {
+    async fn delete(&mut self, request: &DeleteTopicAdminRequest) -> Result<topic::TopicMutationOutcome, AdminError>;
+}
+
+struct TopicAdminDeleteExecutor<'a, T> {
+    admin: &'a mut T,
+}
+
+impl<T> TopicDeleteExecutor for TopicAdminDeleteExecutor<'_, T>
+where
+    T: TopicAdmin,
+{
+    async fn delete(&mut self, request: &DeleteTopicAdminRequest) -> Result<topic::TopicMutationOutcome, AdminError> {
+        self.admin.delete_topic(request).await
+    }
+}
+
+trait TopicOffsetExecutor {
+    async fn consumer_groups(&mut self, topic: &str) -> Result<topic::TopicConsumerGroups, AdminError>;
+
+    async fn reset_offset(
+        &mut self,
+        request: &ResetTopicConsumerOffsetRequest,
+    ) -> Result<topic::TopicMutationOutcome, AdminError>;
+}
+
+struct TopicAdminOffsetExecutor<'a, T> {
+    admin: &'a mut T,
+}
+
+impl<T> TopicOffsetExecutor for TopicAdminOffsetExecutor<'_, T>
+where
+    T: TopicAdmin,
+{
+    async fn consumer_groups(&mut self, topic: &str) -> Result<topic::TopicConsumerGroups, AdminError> {
+        self.admin.get_topic_consumer_groups(topic).await
+    }
+
+    async fn reset_offset(
+        &mut self,
+        request: &ResetTopicConsumerOffsetRequest,
+    ) -> Result<topic::TopicMutationOutcome, AdminError> {
+        self.admin.reset_topic_consumer_offset(request).await
+    }
+}
+
+async fn run_topic_send<E>(
+    catalog: TopicListView,
+    topic: String,
+    request: TopicTestMessageRequest,
+    executor: &mut E,
+) -> Result<TopicSendResultView, DashboardError>
+where
+    E: TopicSendExecutor,
+{
+    ensure_topic_operation_allowed(authoritative_topic(&catalog, &topic)?, "SEND")?;
+    let result = executor
+        .send(&topic::TopicSendRequest {
+            topic,
+            key: request.key,
+            tag: request.tag,
+            message_body: request.message_body,
+            trace_enabled: request.trace_enabled,
+        })
+        .await?;
+    Ok(map_topic_send_result(result))
+}
+
+async fn run_topic_delete<E>(
+    catalog: TopicListView,
+    topic: String,
+    broker_name: Option<String>,
+    executor: &mut E,
+) -> Result<TopicOperationResult, DashboardError>
+where
+    E: TopicDeleteExecutor,
+{
+    let item = authoritative_topic(&catalog, &topic)?;
+    let operation = if broker_name.is_some() {
+        "DELETE_BROKER"
+    } else {
+        "DELETE_TOPIC"
+    };
+    ensure_topic_operation_allowed(item, operation)?;
+    if let Some(broker_name) = broker_name {
+        if !item.brokers.iter().any(|broker| broker.trim() == broker_name) {
+            return Err(DashboardError::Validation(format!(
+                "Broker `{broker_name}` is not an authoritative target for topic `{topic}`"
+            )));
+        }
+        let outcome = executor
+            .delete(&DeleteTopicAdminRequest {
+                topic: topic.clone(),
+                cluster_name: None,
+                broker_name: Some(broker_name.clone()),
+            })
+            .await?;
+        return Ok(build_operation_result(
+            operation,
+            topic,
+            vec![TopicTargetResult::success(broker_name, outcome.message)],
+        ));
+    }
+    let clusters = item
+        .clusters
+        .iter()
+        .map(|cluster| cluster.trim())
+        .filter(|cluster| !cluster.is_empty())
+        .map(str::to_string)
+        .collect::<std::collections::BTreeSet<_>>();
+    if clusters.is_empty() {
+        return Err(DashboardError::Validation(format!(
+            "Topic `{topic}` has no authoritative clusters to delete"
+        )));
+    }
+    let mut targets = Vec::with_capacity(clusters.len());
+    for cluster_name in clusters {
+        match executor
+            .delete(&DeleteTopicAdminRequest {
+                topic: topic.clone(),
+                cluster_name: Some(cluster_name.clone()),
+                broker_name: None,
+            })
+            .await
+        {
+            Ok(outcome) => targets.push(TopicTargetResult::success(cluster_name, outcome.message)),
+            Err(_) => targets.push(TopicTargetResult::failure(cluster_name, "Cluster deletion failed")),
+        }
+    }
+    Ok(build_operation_result(operation, topic, targets))
+}
+
+async fn run_topic_offset<E>(
+    catalog: TopicListView,
+    operation: &str,
+    topic: String,
+    consumer_group: String,
+    applied_timestamp: u64,
+    force: bool,
+    executor: &mut E,
+) -> Result<TopicOffsetResult, DashboardError>
+where
+    E: TopicOffsetExecutor,
+{
+    ensure_topic_operation_allowed(authoritative_topic(&catalog, &topic)?, operation)?;
+    let groups = executor.consumer_groups(&topic).await?;
+    if !groups.groups.iter().any(|group| group.trim() == consumer_group) {
+        return Err(DashboardError::Validation(format!(
+            "Consumer group `{consumer_group}` does not consume topic `{topic}`"
+        )));
+    }
+    let outcome = executor
+        .reset_offset(&ResetTopicConsumerOffsetRequest {
+            consumer_group: consumer_group.clone(),
+            topic: topic.clone(),
+            reset_timestamp: applied_timestamp,
+            force,
+        })
+        .await?;
+    Ok(TopicOffsetResult {
+        operation: operation.into(),
+        topic,
+        consumer_group,
+        success: true,
+        affected_queue_count: outcome.target_count,
+        applied_timestamp,
+        message: outcome.message,
+    })
 }
 
 impl<T> TopicUpsertExecutor for TopicAdminUpsertExecutor<'_, T>
@@ -243,18 +519,110 @@ fn ensure_topic_does_not_exist(catalog: &TopicListView, topic: &str) -> Result<(
 }
 
 fn require_mutable_topic(catalog: &TopicListView, topic: &str) -> Result<(), DashboardError> {
-    let item = catalog.items.iter().find(|item| item.topic == topic).ok_or_else(|| {
+    ensure_topic_operation_allowed(authoritative_topic(catalog, topic)?, "EDIT")?;
+    Ok(())
+}
+
+async fn authoritative_topic_catalog<T>(admin: &mut T) -> Result<TopicListView, DashboardError>
+where
+    T: TopicAdmin,
+{
+    Ok(map_topic_catalog(
+        admin
+            .get_topic_catalog(&TopicCatalogRequest {
+                skip_system_topics: false,
+                skip_retry_and_dlq_topics: false,
+            })
+            .await?,
+    ))
+}
+
+fn authoritative_topic<'a>(catalog: &'a TopicListView, topic: &str) -> Result<&'a TopicInfo, DashboardError> {
+    catalog.items.iter().find(|item| item.topic == topic).ok_or_else(|| {
         DashboardError::NotFound(format!(
             "Topic `{topic}` was not found in the authoritative topic catalog"
         ))
-    })?;
-    if item.system_topic {
+    })
+}
+
+pub(crate) fn ensure_topic_operation_allowed(topic: &TopicInfo, operation: &str) -> Result<(), DashboardError> {
+    if topic.system_topic {
         return Err(DashboardError::Validation(format!(
-            "System topic `{}` cannot be modified",
-            item.topic
+            "System topic `{}` cannot perform {operation}",
+            topic.topic
         )));
     }
     Ok(())
+}
+
+fn normalize_test_message_request(
+    mut request: TopicTestMessageRequest,
+) -> Result<TopicTestMessageRequest, DashboardError> {
+    request.key = request.key.trim().to_string();
+    request.tag = request.tag.trim().to_string();
+    if request.message_body.trim().is_empty() {
+        return Err(DashboardError::Validation("Message body cannot be blank".to_string()));
+    }
+    Ok(request)
+}
+
+fn normalize_reset_offset_request(
+    mut request: TopicResetOffsetRequest,
+) -> Result<TopicResetOffsetRequest, DashboardError> {
+    request.consumer_group = normalize_consumer_group(request.consumer_group)?;
+    Ok(request)
+}
+
+fn normalize_consumer_group(consumer_group: String) -> Result<String, DashboardError> {
+    let consumer_group = consumer_group.trim().to_string();
+    validate_name(&consumer_group, "Consumer group")?;
+    Ok(consumer_group)
+}
+
+pub(crate) fn epoch_millis(timestamp: std::time::SystemTime) -> Result<u64, DashboardError> {
+    let millis = timestamp
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| DashboardError::Validation("Timestamp must not be before the Unix epoch".to_string()))?
+        .as_millis();
+    u64::try_from(millis)
+        .map_err(|_| DashboardError::Validation("Timestamp exceeds supported epoch milliseconds".to_string()))
+}
+
+pub(crate) fn canonical_send_status(status: &str) -> String {
+    let status = status.trim();
+    let split = status.find(char::is_whitespace).unwrap_or(status.len());
+    let (prefix, suffix) = status.split_at(split);
+    let canonical = match prefix.rsplit("::").next().unwrap_or(prefix) {
+        "SendOk" | "SEND_OK" => "SEND_OK",
+        "FlushDiskTimeout" | "FLUSH_DISK_TIMEOUT" => "FLUSH_DISK_TIMEOUT",
+        "FlushSlaveTimeout" | "FLUSH_SLAVE_TIMEOUT" => "FLUSH_SLAVE_TIMEOUT",
+        "SlaveNotAvailable" | "SLAVE_NOT_AVAILABLE" => "SLAVE_NOT_AVAILABLE",
+        _ => prefix,
+    };
+    format!("{canonical}{suffix}")
+}
+
+pub(crate) fn is_successful_send_status(status: &str) -> bool {
+    status == "SEND_OK"
+        || status
+            .strip_prefix("SEND_OK ")
+            .is_some_and(|suffix| suffix.starts_with('('))
+}
+
+fn map_topic_send_result(result: topic::TopicSendResult) -> TopicSendResultView {
+    let send_status = canonical_send_status(&result.send_status);
+    TopicSendResultView {
+        topic: result.topic,
+        success: is_successful_send_status(&send_status),
+        send_status,
+        message_id: result.message_id,
+        broker_name: result.broker_name,
+        queue_id: result.queue_id,
+        queue_offset: result.queue_offset,
+        transaction_id: result.transaction_id,
+        region_id: result.region_id,
+        local_transaction_state: result.local_transaction_state,
+    }
 }
 
 fn map_topic_catalog(catalog: topic::TopicCatalog) -> TopicListView {
@@ -408,19 +776,324 @@ fn map_topic_consumers(consumers: topic::TopicConsumers) -> TopicConsumersView {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+    use std::time::Duration;
+    use std::time::UNIX_EPOCH;
+
     use super::TopicBatchUpsertRequest;
+    use super::TopicDeleteExecutor;
     use super::TopicMutationKind;
+    use super::TopicOffsetExecutor;
+    use super::TopicSendExecutor;
     use super::TopicUpsertExecutor;
+    use super::canonical_send_status;
+    use super::ensure_topic_operation_allowed;
+    use super::epoch_millis;
+    use super::is_successful_send_status;
     use super::map_topic_catalog;
     use super::map_topic_stats;
     use super::resolve_topic_targets;
+    use super::run_topic_delete;
+    use super::run_topic_offset;
+    use super::run_topic_send;
     use super::run_topic_upserts;
     use super::topic_info_from_catalog;
+    use crate::model::TopicInfo;
     use crate::model::TopicListView;
     use crate::model::TopicMutationRequest;
     use crate::model::TopicTargetOptionView;
+    use crate::model::TopicTestMessageRequest;
     use rocketmq_admin_core::core::AdminError;
     use rocketmq_admin_core::core::topic as core_topic;
+
+    #[test]
+    fn send_ok_is_the_only_successful_send_status() {
+        assert_eq!(canonical_send_status("SendOk"), "SEND_OK");
+        assert_eq!(canonical_send_status("FlushDiskTimeout"), "FLUSH_DISK_TIMEOUT");
+        assert!(is_successful_send_status("SEND_OK"));
+        assert!(is_successful_send_status("SEND_OK (COMMIT_MESSAGE)"));
+        assert!(!is_successful_send_status("FLUSH_DISK_TIMEOUT"));
+    }
+
+    #[test]
+    fn system_topic_rejects_every_mutating_operation() {
+        let topic = TopicInfo {
+            topic: "RMQ_SYS_TRACE_TOPIC".into(),
+            broker_name: Some("broker-a".into()),
+            brokers: vec!["broker-a".into()],
+            clusters: vec!["DefaultCluster".into()],
+            read_queue_count: 1,
+            write_queue_count: 1,
+            perm: 6,
+            category: "SYSTEM".into(),
+            message_type: "SYSTEM".into(),
+            order: false,
+            system_topic: true,
+        };
+        for operation in [
+            "EDIT",
+            "SEND",
+            "RESET_OFFSET",
+            "SKIP_BACKLOG",
+            "DELETE_BROKER",
+            "DELETE_TOPIC",
+        ] {
+            assert!(ensure_topic_operation_allowed(&topic, operation).is_err());
+        }
+    }
+
+    #[test]
+    fn skip_timestamp_uses_current_epoch_millis() {
+        let now = UNIX_EPOCH + Duration::from_millis(1_700_000_000_123);
+        assert_eq!(
+            epoch_millis(now).expect("timestamp is after the epoch"),
+            1_700_000_000_123
+        );
+    }
+
+    #[tokio::test]
+    async fn send_non_send_ok_returns_an_unsuccessful_view() {
+        let mut executor = FakeTopicOperations::with_send_status("FlushDiskTimeout");
+
+        let result = run_topic_send(
+            mutable_catalog("orders"),
+            "orders".into(),
+            TopicTestMessageRequest {
+                key: "key".into(),
+                tag: "tag".into(),
+                message_body: "body".into(),
+                trace_enabled: false,
+            },
+            &mut executor,
+        )
+        .await
+        .expect("send returns a broker result");
+
+        assert!(!result.success);
+        assert_eq!(result.send_status, "FLUSH_DISK_TIMEOUT");
+        assert_eq!(executor.sent_request_count, 1);
+    }
+
+    #[tokio::test]
+    async fn system_topic_delete_makes_no_executor_calls() {
+        let mut executor = FakeTopicOperations::default();
+
+        let error = run_topic_delete(system_catalog(), "RMQ_SYS_TRACE_TOPIC".into(), None, &mut executor)
+            .await
+            .expect_err("system topic is protected");
+
+        assert!(matches!(error, crate::error::DashboardError::Validation(_)));
+        assert!(executor.delete_targets.is_empty());
+    }
+
+    #[tokio::test]
+    async fn system_topic_send_and_offset_make_no_executor_calls() {
+        let mut executor = FakeTopicOperations::with_send_status("SendOk");
+        let request = TopicTestMessageRequest {
+            key: String::new(),
+            tag: String::new(),
+            message_body: "body".into(),
+            trace_enabled: false,
+        };
+
+        run_topic_send(system_catalog(), "RMQ_SYS_TRACE_TOPIC".into(), request, &mut executor)
+            .await
+            .expect_err("system topic is protected from sends");
+        run_topic_offset(
+            system_catalog(),
+            "SKIP_BACKLOG",
+            "RMQ_SYS_TRACE_TOPIC".into(),
+            "known-group".into(),
+            1_700_000_000_123,
+            true,
+            &mut executor,
+        )
+        .await
+        .expect_err("system topic is protected from offset changes");
+
+        assert_eq!(executor.sent_request_count, 0);
+        assert_eq!(executor.offset_reset_count, 0);
+    }
+
+    #[tokio::test]
+    async fn unknown_broker_delete_makes_no_executor_calls() {
+        let mut executor = FakeTopicOperations::default();
+
+        let error = run_topic_delete(
+            mutable_catalog("orders"),
+            "orders".into(),
+            Some("broker-z".into()),
+            &mut executor,
+        )
+        .await
+        .expect_err("unknown broker is rejected before deletion");
+
+        assert!(matches!(error, crate::error::DashboardError::Validation(_)));
+        assert!(executor.delete_targets.is_empty());
+    }
+
+    #[tokio::test]
+    async fn cluster_delete_continues_after_a_failure() {
+        let mut executor = FakeTopicOperations {
+            delete_failures: BTreeMap::from([("cluster-a".into(), true)]),
+            ..Default::default()
+        };
+        let catalog = TopicListView {
+            items: vec![topic_info(
+                "orders",
+                false,
+                vec!["broker-a"],
+                vec!["cluster-b", "cluster-a"],
+            )],
+            total: 1,
+            targets: vec![],
+        };
+
+        let result = run_topic_delete(catalog, "orders".into(), None, &mut executor)
+            .await
+            .expect("partial delete is a structured result");
+
+        assert!(!result.success);
+        assert_eq!(executor.delete_targets, vec!["cluster-a", "cluster-b"]);
+        assert_eq!(result.targets.len(), 2);
+        assert!(!result.targets[0].success);
+        assert!(result.targets[1].success);
+    }
+
+    #[tokio::test]
+    async fn unknown_consumer_group_makes_no_offset_reset_call() {
+        let mut executor = FakeTopicOperations::default();
+
+        let error = run_topic_offset(
+            mutable_catalog("orders"),
+            "RESET_OFFSET",
+            "orders".into(),
+            "missing-group".into(),
+            1_700_000_000_123,
+            true,
+            &mut executor,
+        )
+        .await
+        .expect_err("unknown group is rejected before reset");
+
+        assert!(matches!(error, crate::error::DashboardError::Validation(_)));
+        assert_eq!(executor.offset_reset_count, 0);
+    }
+
+    fn mutable_catalog(topic: &str) -> TopicListView {
+        TopicListView {
+            items: vec![topic_info(topic, false, vec!["broker-a"], vec!["cluster-a"])],
+            total: 1,
+            targets: vec![],
+        }
+    }
+
+    fn system_catalog() -> TopicListView {
+        TopicListView {
+            items: vec![topic_info(
+                "RMQ_SYS_TRACE_TOPIC",
+                true,
+                vec!["broker-a"],
+                vec!["cluster-a"],
+            )],
+            total: 1,
+            targets: vec![],
+        }
+    }
+
+    fn topic_info(topic: &str, system_topic: bool, brokers: Vec<&str>, clusters: Vec<&str>) -> TopicInfo {
+        TopicInfo {
+            topic: topic.into(),
+            broker_name: brokers.first().map(|broker| (*broker).to_string()),
+            brokers: brokers.into_iter().map(str::to_string).collect(),
+            clusters: clusters.into_iter().map(str::to_string).collect(),
+            read_queue_count: 1,
+            write_queue_count: 1,
+            perm: 6,
+            category: if system_topic { "SYSTEM" } else { "NORMAL" }.into(),
+            message_type: "NORMAL".into(),
+            order: false,
+            system_topic,
+        }
+    }
+
+    #[derive(Default)]
+    struct FakeTopicOperations {
+        send_status: String,
+        sent_request_count: usize,
+        delete_targets: Vec<String>,
+        delete_failures: BTreeMap<String, bool>,
+        offset_reset_count: usize,
+    }
+
+    impl FakeTopicOperations {
+        fn with_send_status(send_status: &str) -> Self {
+            Self {
+                send_status: send_status.into(),
+                ..Self::default()
+            }
+        }
+    }
+
+    impl TopicSendExecutor for FakeTopicOperations {
+        async fn send(
+            &mut self,
+            request: &core_topic::TopicSendRequest,
+        ) -> Result<core_topic::TopicSendResult, AdminError> {
+            self.sent_request_count += 1;
+            Ok(core_topic::TopicSendResult {
+                topic: request.topic.clone(),
+                send_status: self.send_status.clone(),
+                message_id: Some("message-1".into()),
+                broker_name: Some("broker-a".into()),
+                queue_id: Some(0),
+                queue_offset: 1,
+                transaction_id: None,
+                region_id: None,
+                local_transaction_state: None,
+            })
+        }
+    }
+
+    impl TopicDeleteExecutor for FakeTopicOperations {
+        async fn delete(
+            &mut self,
+            request: &core_topic::DeleteTopicAdminRequest,
+        ) -> Result<core_topic::TopicMutationOutcome, AdminError> {
+            let target = request
+                .broker_name
+                .clone()
+                .or_else(|| request.cluster_name.clone())
+                .expect("test request has one target");
+            self.delete_targets.push(target.clone());
+            if self.delete_failures.get(&target).copied().unwrap_or(false) {
+                return Err(AdminError::backend("delete", "planned failure"));
+            }
+            Ok(core_topic::TopicMutationOutcome {
+                message: format!("deleted {target}"),
+                target_count: 1,
+            })
+        }
+    }
+
+    impl TopicOffsetExecutor for FakeTopicOperations {
+        async fn consumer_groups(&mut self, _: &str) -> Result<core_topic::TopicConsumerGroups, AdminError> {
+            Ok(core_topic::TopicConsumerGroups {
+                groups: vec!["known-group".into()],
+            })
+        }
+
+        async fn reset_offset(
+            &mut self,
+            _: &core_topic::ResetTopicConsumerOffsetRequest,
+        ) -> Result<core_topic::TopicMutationOutcome, AdminError> {
+            self.offset_reset_count += 1;
+            Ok(core_topic::TopicMutationOutcome {
+                message: "reset".into(),
+                target_count: 1,
+            })
+        }
+    }
 
     #[test]
     fn maps_core_stats_without_losing_queue_identity() {

@@ -17,9 +17,14 @@ use crate::model::TopicConsumersView;
 use crate::model::TopicInfo;
 use crate::model::TopicListView;
 use crate::model::TopicMutationRequest;
+use crate::model::TopicOffsetResult;
 use crate::model::TopicOperationResult;
+use crate::model::TopicResetOffsetRequest;
 use crate::model::TopicRouteInfo;
+use crate::model::TopicSendResultView;
+use crate::model::TopicSkipOffsetRequest;
 use crate::model::TopicStatsInfo;
+use crate::model::TopicTestMessageRequest;
 use crate::state::AppState;
 
 pub async fn list_topics(state: &AppState) -> Result<TopicListView, DashboardError> {
@@ -54,8 +59,8 @@ pub async fn create_or_update_topic(
     state: &AppState,
     request: TopicMutationRequest,
 ) -> Result<TopicOperationResult, DashboardError> {
-    let request = normalize_topic_mutation(request)?;
     let _mutation_guard = state.topic_mutation_lock.lock().await;
+    let request = normalize_topic_mutation(request)?;
     state.admin_client.create_or_update_topic(request).await
 }
 
@@ -63,8 +68,8 @@ pub async fn create_topic(
     state: &AppState,
     request: TopicMutationRequest,
 ) -> Result<TopicOperationResult, DashboardError> {
-    let request = normalize_topic_mutation(request)?;
     let _mutation_guard = state.topic_mutation_lock.lock().await;
+    let request = normalize_topic_mutation(request)?;
     state.admin_client.create_topic(request).await
 }
 
@@ -142,9 +147,45 @@ fn normalize_topic_mutation(mut request: TopicMutationRequest) -> Result<TopicMu
     Ok(request)
 }
 
-pub async fn delete_topic(state: &AppState, topic: &str) -> Result<crate::model::MutationResult, DashboardError> {
+pub async fn send_topic_test_message(
+    state: &AppState,
+    topic: &str,
+    request: TopicTestMessageRequest,
+) -> Result<TopicSendResultView, DashboardError> {
     let _mutation_guard = state.topic_mutation_lock.lock().await;
-    state.admin_facade().delete_topic(topic).await
+    state.admin_client.send_topic_test_message(topic, request).await
+}
+
+pub async fn reset_topic_consumer_offset(
+    state: &AppState,
+    topic: &str,
+    request: TopicResetOffsetRequest,
+) -> Result<TopicOffsetResult, DashboardError> {
+    let _mutation_guard = state.topic_mutation_lock.lock().await;
+    state.admin_client.reset_topic_consumer_offset(topic, request).await
+}
+
+pub async fn skip_topic_consumer_offset(
+    state: &AppState,
+    topic: &str,
+    request: TopicSkipOffsetRequest,
+) -> Result<TopicOffsetResult, DashboardError> {
+    let _mutation_guard = state.topic_mutation_lock.lock().await;
+    state.admin_client.skip_topic_consumer_offset(topic, request).await
+}
+
+pub async fn delete_topic_from_broker(
+    state: &AppState,
+    topic: &str,
+    broker_name: &str,
+) -> Result<TopicOperationResult, DashboardError> {
+    let _mutation_guard = state.topic_mutation_lock.lock().await;
+    state.admin_client.delete_topic_from_broker(topic, broker_name).await
+}
+
+pub async fn delete_topic(state: &AppState, topic: &str) -> Result<TopicOperationResult, DashboardError> {
+    let _mutation_guard = state.topic_mutation_lock.lock().await;
+    state.admin_client.delete_topic(topic).await
 }
 
 #[cfg(test)]

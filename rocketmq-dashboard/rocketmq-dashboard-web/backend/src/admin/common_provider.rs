@@ -94,7 +94,11 @@ impl DashboardAdminProvider for DashboardAdminClient {
     }
 
     fn delete_topic<'a>(&'a self, topic: &'a str) -> AdminFuture<'a, Self::TopicMutationResult, Self::Error> {
-        Box::pin(DashboardAdminClient::delete_topic(self, topic))
+        Box::pin(async move {
+            DashboardAdminClient::delete_topic(self, topic)
+                .await
+                .and_then(legacy_topic_mutation_result)
+        })
     }
 
     fn list_consumer_groups(&self) -> AdminFuture<'_, Self::ConsumerList, Self::Error> {

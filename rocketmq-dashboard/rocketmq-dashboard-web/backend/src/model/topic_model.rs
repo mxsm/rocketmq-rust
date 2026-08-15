@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use std::collections::BTreeMap;
+use std::fmt;
 
 use serde::Deserialize;
 use serde::Serialize;
@@ -137,6 +138,68 @@ pub struct TopicMutationRequest {
     pub message_type: Option<String>,
 }
 
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TopicTestMessageRequest {
+    pub key: String,
+    pub tag: String,
+    pub message_body: String,
+    pub trace_enabled: bool,
+}
+
+impl fmt::Debug for TopicTestMessageRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("TopicTestMessageRequest")
+            .field("key", &self.key)
+            .field("tag", &self.tag)
+            .field("message_body", &"[REDACTED]")
+            .field("trace_enabled", &self.trace_enabled)
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TopicSendResultView {
+    pub topic: String,
+    pub success: bool,
+    pub send_status: String,
+    pub message_id: Option<String>,
+    pub broker_name: Option<String>,
+    pub queue_id: Option<i32>,
+    pub queue_offset: u64,
+    pub transaction_id: Option<String>,
+    pub region_id: Option<String>,
+    pub local_transaction_state: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TopicResetOffsetRequest {
+    pub consumer_group: String,
+    pub reset_timestamp: u64,
+    pub force: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TopicSkipOffsetRequest {
+    pub consumer_group: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TopicOffsetResult {
+    pub operation: String,
+    pub topic: String,
+    pub consumer_group: String,
+    pub success: bool,
+    pub affected_queue_count: usize,
+    pub applied_timestamp: u64,
+    pub message: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct TopicTargetResult {
@@ -202,6 +265,7 @@ pub struct MutationResult {
 mod tests {
     use super::TopicInfo;
     use super::TopicTargetResult;
+    use super::TopicTestMessageRequest;
     use super::build_operation_result;
 
     #[test]
@@ -246,5 +310,37 @@ mod tests {
 
         assert!(!result.success);
         assert_eq!(result.target_count, 0);
+    }
+
+    #[test]
+    fn test_message_request_debug_redacts_the_message_body() {
+        let request = TopicTestMessageRequest {
+            key: "order-42".into(),
+            tag: "created".into(),
+            message_body: "top-secret-body".into(),
+            trace_enabled: true,
+        };
+
+        let debug = format!("{request:?}");
+
+        assert!(debug.contains("[REDACTED]"));
+        assert!(!debug.contains("top-secret-body"));
+    }
+
+    #[test]
+    fn topic_operation_requests_serialize_with_the_http_camel_case_contract() {
+        let request = TopicTestMessageRequest {
+            key: "order-42".into(),
+            tag: "created".into(),
+            message_body: "payload".into(),
+            trace_enabled: true,
+        };
+
+        let json = serde_json::to_value(request).expect("request serializes");
+
+        assert_eq!(json["messageBody"], "payload");
+        assert_eq!(json["traceEnabled"], true);
+        assert!(json.get("message_body").is_none());
+        assert!(json.get("topic").is_none());
     }
 }
