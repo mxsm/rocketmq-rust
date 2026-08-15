@@ -2746,6 +2746,7 @@ pub fn check_message_and_return_size(
         queue_id: record.queue_id,
         commit_log_offset: record.physical_offset,
         msg_size: total_size,
+        body_size: body_len,
         tags_code,
         store_timestamp: record.store_timestamp,
         consume_queue_offset: record.queue_offset,

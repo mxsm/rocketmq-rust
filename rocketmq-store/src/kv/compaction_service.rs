@@ -15,6 +15,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use cheetah_string::CheetahString;
+use dashmap::DashMap;
+use rocketmq_model::common::config::TopicConfig;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
@@ -34,6 +37,7 @@ pub struct CompactionService {
     worker_group: Option<rocketmq_runtime::TaskGroup>,
     scheduled_tasks: Option<ScheduledTaskGroup>,
     loaded: bool,
+    topic_config_table: Option<Arc<DashMap<CheetahString, Arc<TopicConfig>>>>,
 }
 
 impl CompactionService {
@@ -50,7 +54,16 @@ impl CompactionService {
             worker_group: None,
             scheduled_tasks: None,
             loaded: false,
+            topic_config_table: None,
         }
+    }
+
+    pub(crate) fn with_topic_config_table(
+        mut self,
+        topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
+    ) -> Self {
+        self.topic_config_table = Some(topic_config_table);
+        self
     }
 
     pub async fn load(&mut self, exit_ok: bool, required_wal_position: i64) -> bool {
@@ -74,6 +87,7 @@ impl CompactionService {
 
         self.shutdown_token = CancellationToken::new();
         let compaction_store = self.compaction_store.clone();
+        let topic_config_table = self.topic_config_table.clone();
         let schedule_interval = self.schedule_interval;
         let worker_group = crate::runtime::task_group(&self.runtime_scope, "rocketmq-store.kv.compaction");
         let scheduled_tasks = ScheduledTaskGroup::new(worker_group.clone());
@@ -82,7 +96,11 @@ impl CompactionService {
 
         if let Err(error) = scheduled_tasks.schedule_fixed_rate_no_overlap(config, move || {
             let compaction_store = compaction_store.clone();
+            let topic_config_table = topic_config_table.clone();
             async move {
+                if let Some(topic_config_table) = topic_config_table {
+                    compaction_store.reconcile_topic_policies(&topic_config_table);
+                }
                 match compaction_store.compact_once().await {
                     Ok(removed) if removed > 0 => {
                         info!("compaction service removed {} obsolete messages", removed);

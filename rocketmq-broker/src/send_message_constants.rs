@@ -33,6 +33,21 @@
 //! }
 //! ```
 
+use std::collections::HashMap;
+
+use cheetah_string::CheetahString;
+use rocketmq_model::common::message::MessageConst;
+
+/// Returns whether a compaction message has the Java-compatible raw `KEYS` identity.
+///
+/// Accepted keys are preserved byte-for-byte by the Store. This validation only rejects a
+/// missing, empty, or whitespace-only value; it deliberately does not trim or split the key.
+pub fn has_valid_compaction_key(properties: &HashMap<CheetahString, CheetahString>) -> bool {
+    properties
+        .get(MessageConst::PROPERTY_KEYS)
+        .is_some_and(|value| !value.is_empty() && !value.chars().all(char::is_whitespace))
+}
+
 /// Message-related limit constants
 ///
 /// These constants define the maximum sizes for various message components.

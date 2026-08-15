@@ -279,6 +279,7 @@ impl LocalFileMessageStore {
                 compaction_store.clone(),
                 message_store_config.compaction_schedule_internal,
             )
+            .with_topic_config_table(topic_config_table.clone())
         });
         Ok(Self {
             runtime_scope: runtime_scope.clone(),

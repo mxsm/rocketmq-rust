@@ -774,6 +774,7 @@ mod tests {
             queue_id: 0,
             commit_log_offset: 1000,
             msg_size: 100,
+            body_size: 0,
             tags_code: 0,
             store_timestamp: 1000000000000,
             consume_queue_offset: 0,
