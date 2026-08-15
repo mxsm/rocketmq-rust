@@ -412,7 +412,10 @@ def generate_admin_operation_matrix(
                     "usage_or_unknown_command": "Clap usage exit 2",
                 },
                 "test_id": f"G05-{symbol}",
-                "test_command": "cargo test -p rocketmq-admin-cli --test java_parity_inventory",
+                "test_command": [
+                    "cargo test -p rocketmq-admin-core --test java_operation_golden",
+                    "cargo test -p rocketmq-admin-cli --test operation_exit_codes",
+                ],
                 "status": "alternative-equivalent",
                 "status_reason": "Typed Rust Admin Core and CLI route provide the Java user capability with Rust-native structure.",
             }
