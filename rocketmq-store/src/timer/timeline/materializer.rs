@@ -256,16 +256,31 @@ impl ShadowTimelineMaterializer {
 
     /// Materializes one bounded, physically ordered Timer CQ batch.
     pub(crate) fn run_once(&self) -> Result<usize, TimelineMaterializerError> {
+        self.run_once_with_budget(
+            self.config.materialize_batch_messages,
+            self.config.materialize_batch_bytes,
+        )
+    }
+
+    /// Materializes one batch bounded by both the engine and storage limits.
+    pub(crate) fn run_once_with_budget(
+        &self,
+        max_messages: usize,
+        max_bytes: usize,
+    ) -> Result<usize, TimelineMaterializerError> {
         let _run_guard = self.run_lock.lock();
         let _snapshot_guard = self.snapshot_barrier.read();
-        let result = self.run_once_inner();
+        let result = self.run_once_inner(
+            max_messages.min(self.config.materialize_batch_messages),
+            max_bytes.min(self.config.materialize_batch_bytes),
+        );
         if result.is_err() {
             self.materialization_failures.fetch_add(1, Ordering::Relaxed);
         }
         result
     }
 
-    fn run_once_inner(&self) -> Result<usize, TimelineMaterializerError> {
+    fn run_once_inner(&self, max_messages: usize, max_bytes: usize) -> Result<usize, TimelineMaterializerError> {
         let checkpoint = self.source_checkpoint()?;
         let due_checkpoint_lane = match self.mode {
             TimelineMaterializationMode::Shadow => SHADOW_DUE_CHECKPOINT_LANE,
@@ -285,10 +300,9 @@ impl ShadowTimelineMaterializer {
         };
         let sources = {
             let queue = queue.read();
-            let Some(iter) = queue.iterate_from_with_count(
-                start_offset,
-                i32::try_from(self.config.materialize_batch_messages).unwrap_or(i32::MAX),
-            ) else {
+            let Some(iter) =
+                queue.iterate_from_with_count(start_offset, i32::try_from(max_messages).unwrap_or(i32::MAX))
+            else {
                 self.publish_cleanup_fence(None);
                 return Ok(0);
             };
@@ -308,7 +322,10 @@ impl ShadowTimelineMaterializer {
         let mut retained_bytes = 0usize;
         for source in sources {
             let size = usize::try_from(source.size).map_err(|_| TimelineMaterializerError::InvalidSourceSize)?;
-            if !prepared.is_empty() && retained_bytes.saturating_add(size) > self.config.materialize_batch_bytes {
+            if prepared.is_empty() && size > max_bytes {
+                return Ok(0);
+            }
+            if !prepared.is_empty() && retained_bytes.saturating_add(size) > max_bytes {
                 break;
             }
             let raw_frame = self.read_frame(source)?;

@@ -40,22 +40,27 @@ impl LocalFileMessageStore {
         let scheduled_tasks = ScheduledTaskGroup::new(task_group.clone());
 
         #[cfg(feature = "extended_timeline")]
-        if let Some(materializer) = self.extended_timeline_materializer.as_ref() {
-            let materializer = Arc::clone(materializer);
-            let runtime_scope = self.runtime_scope.clone();
+        if let Some(engine) = self.extended_timeline_engine.as_ref() {
+            let engine = engine.clone();
             let interval_ms = self.message_store_config.timer_store_config.scheduler_interval_ms;
+            let max_messages = self.message_store_config.timer_store_config.materialize_batch_messages;
+            let max_bytes = self.message_store_config.timer_store_config.materialize_batch_bytes;
             if let Err(error) = scheduled_tasks.schedule_fixed_delay(
                 ScheduledTaskConfig::fixed_delay("timer-extended-materializer", Duration::from_millis(interval_ms)),
                 move || {
-                    let materializer = Arc::clone(&materializer);
-                    let runtime_scope = runtime_scope.clone();
+                    let engine = engine.clone();
                     async move {
-                        let _ = run_blocking_scheduled_task(&runtime_scope, "timer extended materializer", move || {
-                            if let Err(error) = materializer.run_once() {
-                                warn!("Extended Timeline materialization paused at its cleanup fence: {error}");
-                            }
-                        })
-                        .await;
+                        let budget = WorkBudget::try_new(
+                            max_messages,
+                            max_bytes,
+                            Instant::now() + Duration::from_millis(interval_ms.max(100).saturating_mul(4)),
+                        );
+                        if let Err(error) = match budget {
+                            Ok(budget) => engine.enqueue_source(budget).await.map(|_| ()),
+                            Err(error) => Err(error),
+                        } {
+                            warn!("Extended Timeline materialization paused at its cleanup fence: {error}");
+                        }
                     }
                 },
             ) {
@@ -67,29 +72,33 @@ impl LocalFileMessageStore {
         }
 
         #[cfg(feature = "extended_timeline")]
-        if let Some(scanner) = self.extended_timeline_due_scanner.as_ref() {
-            let scanner = Arc::clone(scanner);
-            let runtime_scope = self.runtime_scope.clone();
+        if let Some(engine) = self.extended_timeline_engine.as_ref() {
+            let engine = engine.clone();
+            let role = Arc::clone(&self.extended_timeline_role);
             let interval_ms = self.message_store_config.timer_store_config.scheduler_interval_ms;
             let formal = self.message_store_config.timer_store_mode == TimerStoreMode::ExtendedTimeline;
+            let max_messages = self.message_store_config.timer_store_config.due_scan_messages;
+            let max_bytes = self.message_store_config.timer_store_config.due_scan_bytes;
             if let Err(error) = scheduled_tasks.schedule_fixed_delay(
                 ScheduledTaskConfig::fixed_delay("timer-extended-due-scanner", Duration::from_millis(interval_ms)),
                 move || {
-                    let scanner = Arc::clone(&scanner);
-                    let runtime_scope = runtime_scope.clone();
+                    let engine = engine.clone();
+                    let role = Arc::clone(&role);
                     async move {
-                        let _ = run_blocking_scheduled_task(&runtime_scope, "timer extended due scanner", move || {
-                            let now_ms = rocketmq_runtime::common::time_utils::current_millis() as i64;
-                            let scan = if formal {
-                                scanner.scan_formal_until(now_ms)
-                            } else {
-                                scanner.scan_shadow_until(now_ms)
-                            };
-                            if let Err(error) = scan {
-                                warn!("Extended Timeline due scan will retry: {error}");
-                            }
-                        })
-                        .await;
+                        let Some(epoch) = (!formal).then_some(0).or_else(|| role.capture_delivery_epoch()) else {
+                            return;
+                        };
+                        let budget = WorkBudget::try_new(
+                            max_messages,
+                            max_bytes,
+                            Instant::now() + Duration::from_millis(interval_ms.max(100).saturating_mul(4)),
+                        );
+                        if let Err(error) = match budget {
+                            Ok(budget) => engine.roll_due(TimerEngineEpoch::new(epoch), budget).await.map(|_| ()),
+                            Err(error) => Err(error),
+                        } {
+                            warn!("Extended Timeline due scan will retry: {error}");
+                        }
                     }
                 },
             ) {
@@ -342,6 +351,12 @@ impl LocalFileMessageStore {
             if let Err(error) = crate::runtime::shutdown_report_result("LocalFileMessageStore scheduled tasks", report)
             {
                 error!("scheduled store task failed during shutdown: {error}");
+            }
+        }
+        #[cfg(feature = "extended_timeline")]
+        if let Some(engine) = self.extended_timeline_engine.as_ref() {
+            if let Err(error) = engine.shutdown().await {
+                error!("Extended Timeline engine shutdown failed: {error}");
             }
         }
     }

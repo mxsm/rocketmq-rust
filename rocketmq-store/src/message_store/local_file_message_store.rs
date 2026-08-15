@@ -193,7 +193,13 @@ use crate::timer::clock::TimerClockSafety;
 #[cfg(feature = "extended_timeline")]
 use crate::timer::delivery::TimelineDeliveryCoordinator;
 #[cfg(feature = "extended_timeline")]
+use crate::timer::engine::TimerEngine;
+#[cfg(feature = "extended_timeline")]
+use crate::timer::engine::WorkBudget;
+#[cfg(feature = "extended_timeline")]
 use crate::timer::role::TimerRoleState;
+#[cfg(feature = "extended_timeline")]
+use crate::timer::timeline::ExtendedTimelineEngine;
 #[cfg(feature = "extended_timeline")]
 use crate::timer::timeline::ShadowTimelineMaterializer;
 #[cfg(feature = "extended_timeline")]
@@ -625,6 +631,8 @@ pub struct LocalFileMessageStore {
     extended_timeline_cleanup_pin: Arc<AtomicI64>,
     #[cfg(feature = "extended_timeline")]
     extended_timeline_materializer: Option<Arc<ShadowTimelineMaterializer>>,
+    #[cfg(feature = "extended_timeline")]
+    extended_timeline_engine: Option<ExtendedTimelineEngine>,
     #[cfg(feature = "extended_timeline")]
     extended_timeline_due_scanner: Option<Arc<TimelineDueScanner>>,
     #[cfg(feature = "extended_timeline")]

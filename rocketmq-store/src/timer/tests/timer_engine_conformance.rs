@@ -17,6 +17,8 @@ use std::time::Duration;
 use std::time::Instant;
 
 use cheetah_string::CheetahString;
+#[cfg(feature = "extended_timeline")]
+use dashmap::DashMap;
 use rocketmq_store_api::TimerEngineId;
 use rocketmq_store_api::TimerStoreMode;
 
@@ -25,7 +27,28 @@ use crate::timer::engine::TimerEngine;
 use crate::timer::engine::WorkBudget;
 use crate::timer::java_compat::JavaCompatEngine;
 use crate::timer::timer_message_store::TimerMessageStore;
+#[cfg(feature = "extended_timeline")]
+use crate::LocalFileMessageStore;
 use crate::MessageStoreConfig;
+#[cfg(feature = "extended_timeline")]
+use crate::StoreRuntimeConfig;
+
+async fn assert_engine_conformance<E>(engine: E, expected: TimerEngineId)
+where
+    E: TimerEngine,
+{
+    assert_eq!(engine.engine_id(), expected);
+    engine.load().await.expect("load contract");
+    let progress = engine
+        .enqueue_source(WorkBudget::try_new(1, 1_024, Instant::now() + Duration::from_secs(1)).expect("budget"))
+        .await
+        .expect("bounded source pump");
+    assert!(progress.messages <= 1);
+    assert!(progress.bytes <= 1_024);
+    assert!(progress.durable);
+    engine.checkpoint().await.expect("checkpoint contract");
+    engine.shutdown().await.expect("shutdown contract");
+}
 
 #[test]
 fn routing_defaults_to_java_compat_inside_its_horizon() {
@@ -73,13 +96,33 @@ async fn java_compat_engine_conformance_obeys_bounded_pump_and_checkpoint_contra
     ));
     assert!(store.load());
     let engine = JavaCompatEngine::new(store);
-    assert_eq!(engine.engine_id(), TimerEngineId::JavaCompat);
-    engine.load().await.expect("load contract");
-    let progress = engine
-        .enqueue_source(WorkBudget::try_new(1, 1_024, Instant::now() + Duration::from_secs(1)).expect("budget"))
-        .await
-        .expect("bounded source pump");
-    assert_eq!(progress.messages, 0);
-    engine.checkpoint().await.expect("checkpoint contract");
-    engine.shutdown().await.expect("shutdown contract");
+    assert_engine_conformance(engine, TimerEngineId::JavaCompat).await;
+}
+
+#[cfg(feature = "extended_timeline")]
+#[tokio::test]
+async fn extended_timeline_engine_uses_the_same_bounded_conformance_contract() {
+    let directory = tempfile::tempdir().expect("timer root");
+    let config = Arc::new(MessageStoreConfig {
+        store_path_root_dir: CheetahString::from_string(directory.path().to_string_lossy().into_owned()),
+        timer_wheel_enable: false,
+        timer_extended_shadow_enable: true,
+        read_uncommitted: true,
+        duplication_enable: true,
+        ..MessageStoreConfig::default()
+    });
+    let mut store = LocalFileMessageStore::new(
+        config,
+        Arc::new(StoreRuntimeConfig::default()),
+        Arc::new(DashMap::new()),
+        None,
+        false,
+        crate::runtime::test_service_context("extended-timer-engine-conformance"),
+    );
+    store.wire_owned_root_dependencies().expect("wire Extended Timeline");
+    let engine = store
+        .extended_timeline_engine_for_test()
+        .expect("Extended Timeline engine");
+
+    assert_engine_conformance(engine, TimerEngineId::ExtendedTimeline).await;
 }

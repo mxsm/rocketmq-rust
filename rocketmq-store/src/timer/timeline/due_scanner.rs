@@ -53,6 +53,7 @@ enum FormalDueContinuation {
 struct FormalDuePage {
     entries: Vec<TimelineIndexEntry>,
     continuation: Option<FormalDueContinuation>,
+    retained_bytes: usize,
 }
 
 /// Synchronous, bounded read contract used by the blocking Due Scanner. Mutable state, ready,
@@ -96,6 +97,7 @@ impl TimelineDueIndex for RocksTimelineDueIndex {
         Ok(FormalDuePage {
             entries: page.entries,
             continuation: page.continuation.map(FormalDueContinuation::Rocks),
+            retained_bytes: page.retained_bytes,
         })
     }
 }
@@ -130,9 +132,11 @@ impl TimelineDueIndex for SegmentedTimelineDueIndex {
             max_bytes.max(max_messages.saturating_mul(TimelineSegmentRecord::encoded_size())),
             continuation,
         )?;
+        let retained_bytes = page.records.len().saturating_mul(TimelineSegmentRecord::encoded_size());
         Ok(FormalDuePage {
             entries: page.records.into_iter().map(native_entry).collect(),
             continuation: page.continuation.map(FormalDueContinuation::Segmented),
+            retained_bytes,
         })
     }
 }
@@ -214,6 +218,15 @@ impl TimelineDueScanner {
 
     /// Records due observations for Java-compatible shadow entries without creating ready work.
     pub(crate) fn scan_shadow_until(&self, now_ms: i64) -> Result<DueScanResult, TimelineDueScannerError> {
+        self.scan_shadow_until_with_budget(now_ms, self.config.due_scan_messages, self.config.due_scan_bytes)
+    }
+
+    pub(crate) fn scan_shadow_until_with_budget(
+        &self,
+        now_ms: i64,
+        max_messages: usize,
+        max_bytes: usize,
+    ) -> Result<DueScanResult, TimelineDueScannerError> {
         let checkpoint = self.checkpoint(SHADOW_DUE_CHECKPOINT_LANE)?;
         let start_ms = checkpoint
             .due_cursor
@@ -222,12 +235,17 @@ impl TimelineDueScanner {
         let mut continuation = None;
         let mut result = DueScanResult::default();
         loop {
+            let remaining_messages = max_messages.saturating_sub(result.observed);
+            let remaining_bytes = max_bytes.saturating_sub(result.bytes);
+            if remaining_messages == 0 || remaining_bytes == 0 {
+                break;
+            }
             let page = self.timeline.range_scan_shadow(
                 start_ms,
                 now_ms.saturating_add(1),
                 continuation,
-                self.config.due_scan_messages,
-                self.config.due_scan_bytes,
+                remaining_messages,
+                remaining_bytes,
             )?;
             if page.entries.is_empty() {
                 break;
@@ -276,6 +294,7 @@ impl TimelineDueScanner {
                 }
             }
             result.observed = result.observed.saturating_add(page.entries.len());
+            result.bytes = result.bytes.saturating_add(page.retained_bytes);
             result.pages = result.pages.saturating_add(1);
             continuation = page.continuation;
             if continuation.is_none() {
@@ -287,6 +306,15 @@ impl TimelineDueScanner {
 
     /// Promotes formal, Extended-owned PENDING records to a durable ready outbox.
     pub(crate) fn scan_formal_until(&self, now_ms: i64) -> Result<DueScanResult, TimelineDueScannerError> {
+        self.scan_formal_until_with_budget(now_ms, self.config.due_scan_messages, self.config.due_scan_bytes)
+    }
+
+    pub(crate) fn scan_formal_until_with_budget(
+        &self,
+        now_ms: i64,
+        max_messages: usize,
+        max_bytes: usize,
+    ) -> Result<DueScanResult, TimelineDueScannerError> {
         let now_ms = if let Some(clock) = self.clock.as_ref() {
             let observation = clock.observe();
             if observation.state == TimerClockState::Unsafe {
@@ -296,7 +324,7 @@ impl TimelineDueScanner {
         } else {
             now_ms
         };
-        let mut result = self.drain_late_ready()?;
+        let mut result = self.drain_late_ready(max_messages, max_bytes)?;
         let checkpoint = self.checkpoint(FORMAL_DUE_CHECKPOINT_LANE)?;
         let start_ms = checkpoint
             .due_cursor
@@ -304,12 +332,17 @@ impl TimelineDueScanner {
             .saturating_sub(self.config.safety_overlap_ms);
         let mut continuation = None;
         loop {
+            let remaining_messages = max_messages.saturating_sub(result.observed);
+            let remaining_bytes = max_bytes.saturating_sub(result.bytes);
+            if remaining_messages == 0 || remaining_bytes == 0 {
+                break;
+            }
             let page = self.formal_index.range_scan(
                 start_ms,
                 now_ms.saturating_add(1),
                 continuation,
-                self.config.due_scan_messages,
-                self.config.due_scan_bytes,
+                remaining_messages,
+                remaining_bytes,
             )?;
             if page.entries.is_empty() {
                 break;
@@ -365,6 +398,7 @@ impl TimelineDueScanner {
                 )),
             )?;
             result.observed = result.observed.saturating_add(page.entries.len());
+            result.bytes = result.bytes.saturating_add(page.retained_bytes);
             result.pages = result.pages.saturating_add(1);
             continuation = page.continuation;
             if continuation.is_none() {
@@ -374,12 +408,25 @@ impl TimelineDueScanner {
         Ok(result)
     }
 
-    fn drain_late_ready(&self) -> Result<DueScanResult, TimelineDueScannerError> {
+    fn drain_late_ready(
+        &self,
+        max_messages: usize,
+        max_bytes: usize,
+    ) -> Result<DueScanResult, TimelineDueScannerError> {
         let outbox = TimelineReadyOutbox::new(Arc::clone(&self.timeline));
         let mut result = DueScanResult::default();
         for lane in 0..self.config.lane_count {
             let lane = u16::try_from(lane).map_err(|_| TimelineDueScannerError::LaneOverflow)?;
-            for key in outbox.scan_late_ready(lane, self.config.due_scan_messages)? {
+            let remaining = max_messages.saturating_sub(result.observed);
+            let remaining_bytes = max_bytes.saturating_sub(result.bytes);
+            let key_bytes = TimelineKeyV1::encoded_size();
+            if remaining == 0 || remaining_bytes < key_bytes {
+                break;
+            }
+            let byte_limited = remaining_bytes / key_bytes;
+            for key in outbox.scan_late_ready(lane, remaining.min(byte_limited))? {
+                result.observed = result.observed.saturating_add(1);
+                result.bytes = result.bytes.saturating_add(key_bytes);
                 let Some(current) = self.state.get(key.timer_id, key.generation)? else {
                     return Err(TimelineDueScannerError::MissingFormalState);
                 };
@@ -451,6 +498,7 @@ pub(crate) struct DueScanResult {
     pub(crate) pages: usize,
     pub(crate) observed: usize,
     pub(crate) ready: usize,
+    pub(crate) bytes: usize,
 }
 
 #[derive(Debug, Error)]

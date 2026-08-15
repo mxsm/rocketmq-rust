@@ -14,6 +14,7 @@
 
 mod admission;
 mod due_scanner;
+mod engine;
 mod gc;
 mod ha;
 pub(crate) mod index_migration;
@@ -31,6 +32,7 @@ pub(crate) use admission::usage_summary_keys;
 pub(crate) use admission::TimelineAdmissionController;
 pub(crate) use admission::TimelineAdmissionError;
 pub(crate) use due_scanner::TimelineDueScanner;
+pub(crate) use engine::ExtendedTimelineEngine;
 pub(crate) use gc::TimelineGcService;
 pub(crate) use ha::TimelinePromotionGate;
 pub(crate) use ha::TimelinePromotionObservation;
