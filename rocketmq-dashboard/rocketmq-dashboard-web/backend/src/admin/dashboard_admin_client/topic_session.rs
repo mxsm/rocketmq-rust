@@ -17,6 +17,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::MutexGuard;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use rocketmq_admin_core::client_adapter::AdminGuard;
@@ -45,6 +47,11 @@ pub(super) trait TopicAdminSessionGuard: Send {
 pub(super) struct TopicAdminSessionRegistry<G> {
     state: Mutex<TopicAdminSessionState<G>>,
     builders_drained: Notify,
+    operations_drained: Arc<Notify>,
+    #[cfg(test)]
+    lifecycle_changed: Notify,
+    #[cfg(test)]
+    before_guard_phase: Mutex<Option<Arc<TopicAdminOperationPhase>>>,
 }
 
 struct TopicAdminSessionState<G> {
@@ -64,11 +71,23 @@ enum TopicAdminSessionLifecycle {
 pub(super) struct ManagedTopicAdminSession<G> {
     guard: AsyncMutex<Option<G>>,
     snapshot: AdminConfigSnapshot,
+    active_operations: AtomicUsize,
+}
+
+pub(super) struct TopicAdminOperationLease<G> {
+    session: Arc<ManagedTopicAdminSession<G>>,
+    operations_drained: Arc<Notify>,
 }
 
 struct TopicAdminBuildPermit<'a, G> {
     registry: &'a TopicAdminSessionRegistry<G>,
     active: bool,
+}
+
+#[cfg(test)]
+pub(super) struct TopicAdminOperationPhase {
+    paused: Notify,
+    resume: Notify,
 }
 
 impl<G> Default for TopicAdminSessionRegistry<G> {
@@ -81,6 +100,11 @@ impl<G> Default for TopicAdminSessionRegistry<G> {
                 retired: Vec::new(),
             }),
             builders_drained: Notify::new(),
+            operations_drained: Arc::new(Notify::new()),
+            #[cfg(test)]
+            lifecycle_changed: Notify::new(),
+            #[cfg(test)]
+            before_guard_phase: Mutex::new(None),
         }
     }
 }
@@ -94,13 +118,61 @@ impl<G> TopicAdminSessionRegistry<G> {
         let mut state = self.state();
         state.builders = state.builders.saturating_sub(1);
         if state.builders == 0 {
-            self.builders_drained.notify_waiters();
+            self.builders_drained.notify_one();
         }
     }
 
     #[cfg(test)]
     pub(super) fn has_current(&self) -> bool {
         self.state().current.is_some()
+    }
+
+    #[cfg(test)]
+    pub(super) async fn wait_until_closing(&self) {
+        loop {
+            let notified = self.lifecycle_changed.notified();
+            if self.state().lifecycle != TopicAdminSessionLifecycle::Open {
+                return;
+            }
+            notified.await;
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn pause_next_operation_before_guard(&self) -> Arc<TopicAdminOperationPhase> {
+        let phase = Arc::new(TopicAdminOperationPhase {
+            paused: Notify::new(),
+            resume: Notify::new(),
+        });
+        *self
+            .before_guard_phase
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(Arc::clone(&phase));
+        phase
+    }
+
+    #[cfg(test)]
+    async fn pause_before_guard_if_requested(&self) {
+        let phase = self
+            .before_guard_phase
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        if let Some(phase) = phase {
+            phase.paused.notify_one();
+            phase.resume.notified().await;
+        }
+    }
+}
+
+#[cfg(test)]
+impl TopicAdminOperationPhase {
+    pub(super) async fn wait_until_paused(&self) {
+        self.paused.notified().await;
+    }
+
+    pub(super) fn resume(&self) {
+        self.resume.notify_one();
     }
 }
 
@@ -112,7 +184,7 @@ where
         &self,
         snapshot: AdminConfigSnapshot,
         build: F,
-    ) -> Result<Arc<ManagedTopicAdminSession<G>>, DashboardError>
+    ) -> Result<TopicAdminOperationLease<G>, DashboardError>
     where
         F: FnOnce() -> BuildFuture,
         BuildFuture: Future<Output = Result<G, DashboardError>>,
@@ -133,6 +205,8 @@ where
         let mut state = self.state();
         if state.lifecycle == TopicAdminSessionLifecycle::Open {
             state.lifecycle = TopicAdminSessionLifecycle::Closing;
+            #[cfg(test)]
+            self.lifecycle_changed.notify_one();
         }
     }
 
@@ -147,6 +221,8 @@ where
     }
 
     pub(super) async fn shutdown(&self) {
+        self.close_admission();
+        self.wait_for_operations().await;
         let sessions = {
             let state = self.state();
             let mut all = state.retired.clone();
@@ -163,7 +239,13 @@ where
     }
 
     pub(super) async fn reap_retired(&self) {
-        let retired = self.state().retired.clone();
+        let retired = self
+            .state()
+            .retired
+            .iter()
+            .filter(|session| session.active_operations.load(Ordering::Acquire) == 0)
+            .cloned()
+            .collect::<Vec<_>>();
         for session in &retired {
             session.shutdown().await;
         }
@@ -176,19 +258,23 @@ where
             .retain(|candidate| !retired.iter().any(|retired| Arc::ptr_eq(candidate, retired)));
     }
 
-    fn current(
-        &self,
-        snapshot: &AdminConfigSnapshot,
-    ) -> Result<Option<Arc<ManagedTopicAdminSession<G>>>, DashboardError> {
+    fn current(&self, snapshot: &AdminConfigSnapshot) -> Result<Option<TopicAdminOperationLease<G>>, DashboardError> {
         let state = self.state();
         if state.lifecycle != TopicAdminSessionLifecycle::Open {
             return Err(closing_error());
         }
-        Ok(state
+        let session = state
             .current
             .as_ref()
             .filter(|session| session.snapshot == *snapshot)
-            .cloned())
+            .cloned();
+        if let Some(session) = &session {
+            session.active_operations.fetch_add(1, Ordering::AcqRel);
+        }
+        Ok(session.map(|session| TopicAdminOperationLease {
+            session,
+            operations_drained: Arc::clone(&self.operations_drained),
+        }))
     }
 
     fn begin_build(&self) -> Result<TopicAdminBuildPermit<'_, G>, DashboardError> {
@@ -207,10 +293,11 @@ where
         &self,
         snapshot: AdminConfigSnapshot,
         guard: G,
-    ) -> Result<Arc<ManagedTopicAdminSession<G>>, DashboardError> {
+    ) -> Result<TopicAdminOperationLease<G>, DashboardError> {
         let candidate = Arc::new(ManagedTopicAdminSession {
             guard: AsyncMutex::new(Some(guard)),
             snapshot: snapshot.clone(),
+            active_operations: AtomicUsize::new(0),
         });
         let mut state = self.state();
         let selected = if state.lifecycle == TopicAdminSessionLifecycle::Open {
@@ -232,11 +319,17 @@ where
             state.retired.push(candidate);
             Err(closing_error())
         };
+        if let Ok(session) = &selected {
+            session.active_operations.fetch_add(1, Ordering::AcqRel);
+        }
         state.builders = state.builders.saturating_sub(1);
         if state.builders == 0 {
-            self.builders_drained.notify_waiters();
+            self.builders_drained.notify_one();
         }
-        selected
+        selected.map(|session| TopicAdminOperationLease {
+            session,
+            operations_drained: Arc::clone(&self.operations_drained),
+        })
     }
 
     pub(super) fn retire(&self, session: &Arc<ManagedTopicAdminSession<G>>) {
@@ -250,6 +343,24 @@ where
         }
         if !state.retired.iter().any(|retired| Arc::ptr_eq(retired, session)) {
             state.retired.push(Arc::clone(session));
+        }
+    }
+
+    async fn wait_for_operations(&self) {
+        loop {
+            let notified = self.operations_drained.notified();
+            let drained = {
+                let state = self.state();
+                state
+                    .retired
+                    .iter()
+                    .chain(state.current.iter())
+                    .all(|session| session.active_operations.load(Ordering::Acquire) == 0)
+            };
+            if drained {
+                return;
+            }
+            notified.await;
         }
     }
 }
@@ -267,6 +378,22 @@ where
     }
 }
 
+impl<G> TopicAdminOperationLease<G> {
+    fn session(&self) -> &Arc<ManagedTopicAdminSession<G>> {
+        &self.session
+    }
+}
+
+impl<G> Drop for TopicAdminOperationLease<G> {
+    fn drop(&mut self) {
+        let previous = self.session.active_operations.fetch_sub(1, Ordering::AcqRel);
+        debug_assert!(previous > 0, "Topic admin operation lease count underflow");
+        if previous == 1 {
+            self.operations_drained.notify_one();
+        }
+    }
+}
+
 impl<G> TopicAdminBuildPermit<'_, G>
 where
     G: TopicAdminSessionGuard,
@@ -275,7 +402,7 @@ where
         mut self,
         snapshot: AdminConfigSnapshot,
         guard: G,
-    ) -> Result<Arc<ManagedTopicAdminSession<G>>, DashboardError> {
+    ) -> Result<TopicAdminOperationLease<G>, DashboardError> {
         self.active = false;
         self.registry.complete_build(snapshot, guard)
     }
@@ -334,28 +461,31 @@ where
     Operation:
         for<'guard> FnOnce(&'guard mut G) -> Pin<Box<dyn Future<Output = Result<T, DashboardError>> + Send + 'guard>>,
 {
-    let session = sessions.acquire(snapshot, build).await?;
+    let lease = sessions.acquire(snapshot, build).await?;
+    #[cfg(test)]
+    sessions.pause_before_guard_if_requested().await;
+    let session_snapshot = lease.session().snapshot.clone();
     let operation_result: Result<Option<Result<T, DashboardError>>, DashboardError> = {
         let mut guard = tokio::select! {
             biased;
             _ = guard_cancellation => return Err(cancellation_error()),
-            guard = session.guard.lock() => guard,
+            guard = lease.session().guard.lock() => guard,
         };
-        let guard = guard
-            .as_mut()
-            .ok_or_else(|| DashboardError::Internal("Topic admin session was already retired".to_string()))?;
-        match tokio::select! {
-            biased;
-            _ = config_cancellation => Err(cancellation_error()),
-            current = admin_config_snapshot(config) => current,
-        } {
-            Ok(current) if current == session.snapshot => Ok(Some(tokio::select! {
+        match guard.as_mut() {
+            Some(guard) => match tokio::select! {
                 biased;
-                _ = operation_cancellation => Err(cancellation_error()),
-                result = operation(guard) => result,
-            })),
-            Ok(_) => Ok(None),
-            Err(error) => Err(error),
+                _ = config_cancellation => Err(cancellation_error()),
+                current = admin_config_snapshot(config) => current,
+            } {
+                Ok(current) if current == session_snapshot => Ok(Some(tokio::select! {
+                    biased;
+                    _ = operation_cancellation => Err(cancellation_error()),
+                    result = operation(guard) => result,
+                })),
+                Ok(_) => Ok(None),
+                Err(error) => Err(error),
+            },
+            None => Err(stale_topic_session_error()),
         }
     };
     let result = match operation_result {
@@ -363,7 +493,7 @@ where
         Ok(None) => {
             return retire_and_return(
                 sessions,
-                &session,
+                lease,
                 DashboardError::Config(
                     "Dashboard admin configuration changed while opening a topic admin session; retry the request"
                         .to_string(),
@@ -371,15 +501,15 @@ where
             )
             .await;
         }
-        Err(error) => return retire_and_return(sessions, &session, error).await,
+        Err(error) => return retire_and_return(sessions, lease, error).await,
     };
 
     match admin_config_snapshot(config).await {
-        Ok(current) if current == session.snapshot => {}
+        Ok(current) if current == session_snapshot => {}
         Ok(_) => {
             return retire_and_return(
                 sessions,
-                &session,
+                lease,
                 DashboardError::Config(
                     "Dashboard admin configuration changed while executing a topic admin session; retry the request"
                         .to_string(),
@@ -387,21 +517,23 @@ where
             )
             .await;
         }
-        Err(error) => return retire_and_return(sessions, &session, error).await,
+        Err(error) => return retire_and_return(sessions, lease, error).await,
     }
+    drop(lease);
     sessions.reap_retired().await;
     result
 }
 
 async fn retire_and_return<G, T>(
     sessions: &TopicAdminSessionRegistry<G>,
-    session: &Arc<ManagedTopicAdminSession<G>>,
+    lease: TopicAdminOperationLease<G>,
     error: DashboardError,
 ) -> Result<T, DashboardError>
 where
     G: TopicAdminSessionGuard,
 {
-    sessions.retire(session);
+    sessions.retire(lease.session());
+    drop(lease);
     sessions.reap_retired().await;
     Err(error)
 }
@@ -412,4 +544,8 @@ fn closing_error() -> DashboardError {
 
 fn cancellation_error() -> DashboardError {
     DashboardError::Config("Topic admin operation was cancelled during shutdown".to_string())
+}
+
+fn stale_topic_session_error() -> DashboardError {
+    DashboardError::Config("Topic admin session is no longer available; retry the request".to_string())
 }

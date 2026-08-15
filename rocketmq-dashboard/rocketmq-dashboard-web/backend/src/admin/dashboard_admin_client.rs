@@ -1331,7 +1331,7 @@ mod tests {
             let shutdown = tokio::spawn(async move {
                 shutdown_topic_admin_services(&shutdown_sessions, &shutdown_group, Duration::from_millis(100)).await
             });
-            tokio::task::yield_now().await;
+            sessions.wait_until_closing().await;
             allow_build.notify_one();
             let report = shutdown.await.expect("topic shutdown task");
 
@@ -1368,17 +1368,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn topic_operation_rejects_a_session_staled_while_waiting_for_its_guard() {
+    async fn topic_operation_lease_keeps_a_retired_guard_alive_until_the_stale_request_releases_it() {
         let config = Arc::new(RwLock::new(DashboardConfigView::default()));
         let snapshot = admin_config_snapshot(&config).await.expect("configured snapshot");
         let sessions = Arc::new(TopicAdminSessionRegistry::default());
         let shutdowns = Arc::new(AtomicUsize::new(0));
-        let first_started = Arc::new(Notify::new());
-        let (cancel_first_tx, cancel_first_rx) = oneshot::channel();
+        let first_operation = Arc::new(AtomicUsize::new(0));
+        let phase = sessions.pause_next_operation_before_guard();
         let first_sessions = Arc::clone(&sessions);
         let first_config = Arc::clone(&config);
         let first_shutdowns = Arc::clone(&shutdowns);
-        let first_started_for_task = Arc::clone(&first_started);
+        let first_operations = Arc::clone(&first_operation);
         let first_snapshot = snapshot.clone();
 
         let first = tokio::spawn(async move {
@@ -1388,56 +1388,61 @@ mod tests {
                 first_snapshot,
                 std::future::pending(),
                 std::future::pending(),
-                async move {
-                    let _ = cancel_first_rx.await;
-                },
+                std::future::pending(),
                 move || async move {
                     Ok(TestTopicGuard {
                         shutdowns: first_shutdowns,
                     })
                 },
                 move |_| {
-                    let started = Arc::clone(&first_started_for_task);
+                    let operations = Arc::clone(&first_operations);
                     Box::pin(async move {
-                        started.notify_one();
-                        std::future::pending::<Result<(), DashboardError>>().await
+                        operations.fetch_add(1, Ordering::AcqRel);
+                        Ok("stale result")
                     })
                 },
             )
             .await
         });
 
-        first_started.notified().await;
+        phase.wait_until_paused().await;
         config.write().await.current_namesrv = Some("127.0.0.2:9876".to_string());
-        let operations = Arc::new(AtomicUsize::new(0));
-        let second_operations = Arc::clone(&operations);
+        let replacement_snapshot = admin_config_snapshot(&config).await.expect("replacement snapshot");
+        let replacement_builds = Arc::new(AtomicUsize::new(0));
+        let second_builds = Arc::clone(&replacement_builds);
+        let second_shutdowns = Arc::clone(&shutdowns);
         let second_sessions = Arc::clone(&sessions);
         let second_config = Arc::clone(&config);
         let second = tokio::spawn(async move {
             run_tracked_topic_admin_service(
                 &second_sessions,
                 &second_config,
-                snapshot,
+                replacement_snapshot,
                 std::future::pending(),
                 std::future::pending(),
                 std::future::pending(),
-                || async move { unreachable!("the queued operation must reuse the existing session") },
-                move |_| {
-                    let operations = Arc::clone(&second_operations);
-                    Box::pin(async move {
-                        operations.fetch_add(1, Ordering::AcqRel);
-                        Ok(())
-                    })
+                move || {
+                    let shutdowns = Arc::clone(&second_shutdowns);
+                    async move {
+                        second_builds.fetch_add(1, Ordering::AcqRel);
+                        Ok(TestTopicGuard { shutdowns })
+                    }
                 },
+                |_| Box::pin(async move { Ok("replacement result") }),
             )
             .await
         });
-        tokio::task::yield_now().await;
-        let _ = cancel_first_tx.send(());
+        assert!(matches!(second.await, Ok(Ok("replacement result"))));
+        assert_eq!(replacement_builds.load(Ordering::Acquire), 1);
+        assert_eq!(shutdowns.load(Ordering::Acquire), 0);
+
+        phase.resume();
         assert!(matches!(first.await, Ok(Err(DashboardError::Config(_)))));
-        assert!(matches!(second.await, Ok(Err(DashboardError::Config(_)))));
-        assert_eq!(operations.load(Ordering::Acquire), 0);
+        assert_eq!(first_operation.load(Ordering::Acquire), 0);
         assert_eq!(shutdowns.load(Ordering::Acquire), 1);
+
+        sessions.shutdown().await;
+        assert_eq!(shutdowns.load(Ordering::Acquire), 2);
     }
 
     #[tokio::test]
