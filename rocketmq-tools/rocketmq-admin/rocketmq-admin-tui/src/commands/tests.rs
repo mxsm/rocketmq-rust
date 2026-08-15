@@ -70,8 +70,6 @@ fn command_catalog_covers_facade_backed_admin_panel() {
         "controller.config.query",
         "controller.metadata.query",
         "controller.elect_master",
-        "container.add_broker",
-        "container.remove_broker",
         "broker.epoch",
         "broker.cold_data_flow_ctr_info",
         "lite.broker_info",
@@ -122,7 +120,7 @@ fn phase_six_command_catalog_category_snapshot() {
         assert!(!command.description.trim().is_empty());
     }
 
-    assert_eq!(catalog.len(), 102);
+    assert_eq!(catalog.len(), 100);
     assert_eq!(
         counts,
         BTreeMap::from([
@@ -131,7 +129,6 @@ fn phase_six_command_catalog_category_snapshot() {
             (CommandCategory::Cluster, 3),
             (CommandCategory::Connection, 2),
             (CommandCategory::Consumer, 8),
-            (CommandCategory::Container, 2),
             (CommandCategory::Controller, 5),
             (CommandCategory::Export, 6),
             (CommandCategory::Ha, 2),
@@ -238,16 +235,6 @@ fn phase_three_dangerous_commands_require_target_confirmation() {
     let command = catalog
         .iter()
         .find(|command| command.id == "controller.elect_master")
-        .unwrap();
-    assert_eq!(command.risk_level, RiskLevel::Dangerous);
-
-    let mut form = CommandFormState::for_command(command);
-    form.set_value("broker_name", "broker-a".to_string());
-    assert_eq!(command.expected_confirmation(&form), Some("broker-a".to_string()));
-
-    let command = catalog
-        .iter()
-        .find(|command| command.id == "container.remove_broker")
         .unwrap();
     assert_eq!(command.risk_level, RiskLevel::Dangerous);
 
@@ -443,24 +430,12 @@ fn phase_five_catalog_exposes_controller_elect_master() {
 }
 
 #[test]
-fn phase_five_catalog_exposes_container_broker_commands() {
+fn core_catalog_excludes_broker_container_commands() {
     let catalog = command_catalog();
     let ids = catalog.iter().map(|command| command.id).collect::<HashSet<_>>();
 
-    assert!(ids.contains("container.add_broker"));
-    assert!(ids.contains("container.remove_broker"));
-
-    let command = catalog
-        .iter()
-        .find(|command| command.id == "container.add_broker")
-        .expect("container add broker command");
-    assert_eq!(command.category, CommandCategory::Container);
-    assert_eq!(command.risk_level, RiskLevel::Dangerous);
-    assert_eq!(command.confirmation_field, Some("broker_container_addr"));
-    assert!(command
-        .args
-        .iter()
-        .any(|arg| arg.name == "broker_config_path" && arg.required));
+    assert!(!ids.contains("container.add_broker"));
+    assert!(!ids.contains("container.remove_broker"));
 }
 
 #[test]

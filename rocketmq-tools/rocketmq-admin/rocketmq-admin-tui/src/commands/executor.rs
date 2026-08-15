@@ -637,46 +637,6 @@ where
             };
             Ok(result)
         }),
-        "container.add_broker" => Box::pin(async move {
-            let result = {
-                let result = facade
-                    .add_broker_to_container(
-                        form.required_string("broker_container_addr")?,
-                        form.required_string("broker_config_path")?,
-                    )
-                    .await?;
-                CommandResultViewModel::operation_success(
-                    spec.title,
-                    vec![format!(
-                        "{} config {}",
-                        result.broker_container_addr.as_str(),
-                        result.target.as_str()
-                    )],
-                )
-            };
-            Ok(result)
-        }),
-        "container.remove_broker" => Box::pin(async move {
-            let result = {
-                let result = facade
-                    .remove_broker_from_container(
-                        form.required_string("broker_container_addr")?,
-                        form.required_string("cluster_name")?,
-                        form.required_string("broker_name")?,
-                        form.number_i64("broker_id")?,
-                    )
-                    .await?;
-                CommandResultViewModel::operation_success(
-                    spec.title,
-                    vec![format!(
-                        "{} broker {}",
-                        result.broker_container_addr.as_str(),
-                        result.target.as_str()
-                    )],
-                )
-            };
-            Ok(result)
-        }),
         "connection.consumer" => Box::pin(async move {
             let result = {
                 let result = facade

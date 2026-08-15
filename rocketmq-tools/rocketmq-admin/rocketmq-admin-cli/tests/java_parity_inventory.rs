@@ -5,7 +5,7 @@ use clap::CommandFactory;
 use rocketmq_admin_cli::rocketmq_cli::RocketMQCli;
 
 #[test]
-fn java_registered_commands_are_reachable_under_expected_rust_domains() {
+fn java_core_commands_exclude_broker_container_and_keep_active_operations_reachable() {
     let command = RocketMQCli::command();
     let domains = command
         .get_subcommands()
@@ -20,7 +20,7 @@ fn java_registered_commands_are_reachable_under_expected_rust_domains() {
         })
         .collect::<HashMap<_, _>>();
 
-    let java_registered_commands = [
+    let java_raw_operations = [
         ("container", "addBroker"),
         ("nameserver", "addWritePerm"),
         ("topic", "allocateMQ"),
@@ -119,9 +119,22 @@ fn java_registered_commands_are_reachable_under_expected_rust_domains() {
         ("nameserver", "wipeWritePerm"),
     ];
 
-    assert_eq!(java_registered_commands.len(), 96);
+    let excluded_operations = HashSet::from([("container", "addBroker"), ("container", "removeBroker")]);
+    assert_eq!(java_raw_operations.len(), 96);
+    assert_eq!(excluded_operations.len(), 2);
 
-    for (domain, command_name) in java_registered_commands {
+    let mut active_count = 0;
+    for (domain, command_name) in java_raw_operations {
+        if excluded_operations.contains(&(domain, command_name)) {
+            assert!(
+                domains
+                    .get(domain)
+                    .is_none_or(|commands| !commands.contains(command_name)),
+                "excluded BrokerContainer command {domain}.{command_name} must not be reachable"
+            );
+            continue;
+        }
+        active_count += 1;
         let commands = domains
             .get(domain)
             .unwrap_or_else(|| panic!("expected Rust CLI domain {domain} to exist"));
@@ -130,4 +143,6 @@ fn java_registered_commands_are_reachable_under_expected_rust_domains() {
             "expected Java command {command_name} to be reachable under Rust domain {domain}"
         );
     }
+    assert_eq!(active_count, 94);
+    assert!(!domains.contains_key("container"));
 }

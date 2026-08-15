@@ -30,7 +30,6 @@ pub mod cluster;
 pub mod concurrent;
 pub mod connection;
 pub mod consumer;
-pub mod container;
 pub mod controller;
 pub mod error_view;
 pub(crate) mod errors;
