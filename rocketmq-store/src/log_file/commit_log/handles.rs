@@ -25,6 +25,7 @@ use tracing::Instrument;
 
 use crate::base::message_encoder_pool;
 use crate::base::message_result::PutMessageResult;
+use crate::base::message_status_enum::PutMessageStatus;
 use crate::base::select_result::SelectMappedBufferResult;
 use crate::base::store_checkpoint::StoreCheckpoint;
 use crate::config::flush_disk_type::FlushDiskType;
@@ -158,6 +159,7 @@ impl CommitLogReadHandle {
         if self.broker_config.enable_controller_mode {
             if self.store_runtime_state.broker_role() != BrokerRole::Slave
                 && !self.store_context.running_flags.is_fenced()
+                && self.store_context.controller_write_lease.is_write_permitted()
             {
                 let max_phy_offset = self.get_max_offset();
                 if let Some(ha_service) = self.store_context.ha_service() {
@@ -217,11 +219,16 @@ pub(crate) struct CommitLogInternalMessageWriteHandle {
     pub(super) enabled_append_prop_crc: bool,
     pub(super) append_port: CommitLogAppendPort,
     pub(super) telemetry_handle: rocketmq_observability::TelemetryHandle,
+    pub(super) store_context: CommitLogStoreContext,
 }
 
 impl CommitLogInternalMessageWriteHandle {
     pub(crate) async fn put_message(&self, mut msg: MessageExtBrokerInner) -> PutMessageResult {
         let append_span = rocketmq_observability::trace::store::append_span(&self.telemetry_handle);
+        let requested_lease = match self.store_context.controller_write_lease.capture() {
+            Ok(lease) => lease,
+            Err(()) => return PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable),
+        };
         msg.set_wait_store_msg_ok(false);
         #[cfg(any(feature = "observability", feature = "observability-traces"))]
         rocketmq_observability::trace::record_message_properties_with_handle(
@@ -252,11 +259,16 @@ impl CommitLogInternalMessageWriteHandle {
             Ok(prepared) => prepared,
             Err(result) => return result,
         };
-        self.append_port
+        let mut result = self
+            .append_port
             .append_message(msg, prepared, need_assign_offset)
             .instrument(append_span)
             .await
-            .result
+            .result;
+        if !self.store_context.controller_write_lease.validate(requested_lease) {
+            result.set_put_message_status(PutMessageStatus::ServiceNotAvailable);
+        }
+        result
     }
 }
 
@@ -353,7 +365,10 @@ pub(super) fn resolve_commit_log_confirm_offset(
     flushed_where: i64,
 ) -> i64 {
     if broker_config.enable_controller_mode {
-        if broker_role == BrokerRole::Slave || store_context.running_flags.is_fenced() {
+        if broker_role == BrokerRole::Slave
+            || store_context.running_flags.is_fenced()
+            || !store_context.controller_write_lease.is_write_permitted()
+        {
             return stored_confirm_offset;
         }
 

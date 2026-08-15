@@ -56,6 +56,9 @@ use rocketmq_model::common::running::running_stats::RunningStats;
 use rocketmq_model::common::topic::TopicValidator;
 use rocketmq_model::utils::crc32_utils::crc32;
 use rocketmq_runtime::ShutdownDeadline;
+use rocketmq_store_api::MasterEpoch;
+use rocketmq_store_api::WriteAuthority;
+use rocketmq_store_api::WriteLeaseToken;
 #[cfg(feature = "tieredstore")]
 use rocketmq_tieredstore::fetcher::TieredGetMessageStatus;
 #[cfg(feature = "tieredstore")]
@@ -3484,6 +3487,11 @@ async fn sync_broker_role_in_controller_mode_refreshes_confirm_offset_for_master
     assert_eq!(store.get_commit_log().get_confirm_offset_directly(), 0);
 
     store.sync_broker_role(BrokerRole::SyncMaster);
+    let authority = WriteAuthority::try_new(7, MasterEpoch::try_from(1).unwrap()).unwrap();
+    let token = WriteLeaseToken::try_new(authority, 1).unwrap();
+    assert!(store
+        .get_commit_log()
+        .install_controller_write_lease(token, Duration::from_secs(1)));
 
     assert_eq!(store.get_commit_log().get_confirm_offset_directly(), 4);
     assert_eq!(store.get_confirm_offset(), 4);

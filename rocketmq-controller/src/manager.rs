@@ -15,6 +15,7 @@
 pub(crate) mod broker_replica_info;
 pub(crate) mod replicas_info_manager;
 pub(crate) mod sync_state_info;
+pub(crate) mod write_lease_manager;
 
 // Re-export ControllerManager from controller module for backward compatibility
 pub use crate::controller::controller_manager::ControllerManager;

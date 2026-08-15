@@ -85,6 +85,7 @@ use rocketmq_store_api::checkpoint::CheckpointOffsets as ReleaseCheckpointOffset
 use rocketmq_store_api::TimerRecallRequest;
 use rocketmq_store_api::TimerRecallStatus;
 use rocketmq_store_api::TimerStoreMode;
+use rocketmq_store_api::WriteLeaseToken;
 #[cfg(feature = "extended_timeline")]
 use rocketmq_store_rocksdb::store::KeyValueStore;
 #[cfg(feature = "extended_timeline")]
@@ -2075,6 +2076,7 @@ impl BackendOps for LocalFileMessageStore {
             self.shutdown.clone(),
             self.running_flags.clone(),
             self.commit_log.begin_time_in_lock().clone(),
+            self.commit_log.controller_write_lease_state(),
         )
     }
 
@@ -2348,6 +2350,14 @@ impl BackendOps for LocalFileMessageStore {
         #[cfg(feature = "extended_timeline")]
         self.sync_extended_timeline_controller_role(previous_role, broker_role, external_term)?;
         Ok(())
+    }
+
+    fn install_controller_write_lease(&self, token: WriteLeaseToken, valid_for: Duration) -> bool {
+        self.commit_log.install_controller_write_lease(token, valid_for)
+    }
+
+    fn fence_controller_writes(&self) {
+        self.commit_log.fence_controller_writes();
     }
 
     fn calc_delta_checksum(&self, from: i64, to: i64) -> Vec<u8> {

@@ -16,6 +16,7 @@ use std::collections::HashSet;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::sync::Weak;
+use std::time::Duration;
 
 use crate::config::broker_config::BrokerConfig;
 use arc_swap::ArcSwap;
@@ -51,6 +52,7 @@ use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreErrorKind;
 use rocketmq_store_api::StoreHealth;
 use rocketmq_store_api::StoreOperation;
+use rocketmq_store_api::WriteLeaseToken;
 
 use crate::controller::replicas_manager::BrokerReplicaRole;
 use crate::failover::escape_bridge::MessageStoreUnavailable;
@@ -362,6 +364,7 @@ impl<MS: BrokerReadStore> EscapeBridgeStoreCapability<MS> {
             Ok(store) => store,
             Err(_) => return Ok(()),
         };
+        store.fence_controller_writes();
         let Some(ha_service) = store.get_ha_service().cloned() else {
             return Ok(());
         };
@@ -400,6 +403,24 @@ impl<MS: BrokerReadStore> EscapeBridgeStoreCapability<MS> {
             )
             .map_err(|error| HAError::invalid_state(format!("timer role fencing failed: {error}")))?;
         Ok(())
+    }
+
+    pub(crate) fn install_controller_write_lease(
+        &self,
+        token: WriteLeaseToken,
+        valid_for: Duration,
+    ) -> Result<bool, MessageStoreUnavailable>
+    where
+        MS: BrokerReplicationStore,
+    {
+        self.with_store(|store| store.install_controller_write_lease(token, valid_for))
+    }
+
+    pub(crate) fn fence_controller_writes(&self) -> Result<(), MessageStoreUnavailable>
+    where
+        MS: BrokerReplicationStore,
+    {
+        self.with_store(BrokerReplicationStore::fence_controller_writes)
     }
 
     pub(crate) fn master_flushed_offset(&self) -> Result<i64, MessageStoreUnavailable> {

@@ -158,6 +158,8 @@ pub enum ControllerRequest {
     BrokerHeartbeat {
         broker_identity: BrokerIdentityInfoSnapshot,
         broker_live_info: BrokerLiveInfoSnapshot,
+        #[serde(default)]
+        lease_grant_allowed: bool,
     },
     BrokerChannelClose {
         broker_identity: BrokerIdentityInfoSnapshot,

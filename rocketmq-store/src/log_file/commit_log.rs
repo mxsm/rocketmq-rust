@@ -30,6 +30,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::Duration;
 use std::time::Instant;
 
 use crate::config::store_runtime_config::StoreRuntimeConfig;
@@ -59,6 +60,7 @@ use rocketmq_protocol::common::message::message_decoder::cheetah_from_utf8_lossy
 use rocketmq_protocol::common::message::message_decoder::string_to_message_properties;
 use rocketmq_runtime::common::system_clock::SystemClock;
 use rocketmq_runtime::resource_budget::QueueSnapshot;
+use rocketmq_store_api::WriteLeaseToken;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -91,6 +93,7 @@ use crate::consume_queue::mapped_file_queue::MappedFileQueueAppendHandle;
 use crate::consume_queue::mapped_file_queue::MappedFileWarmupStats;
 use crate::ha::general_ha_service::GeneralHAService;
 use crate::ha::ha_service::HAService;
+use crate::ha::write_lease::ControllerWriteLeaseState;
 use crate::log_file::cold_data_check_service::ColdDataCheckService;
 use crate::log_file::commit_log_path_set::CommitLogPathSet;
 use rocketmq_store_local::mapped_file::ManagedLifecycleRuntime;
@@ -586,7 +589,20 @@ impl CommitLog {
             enabled_append_prop_crc: self.enabled_append_prop_crc,
             append_port: self.append_runtime.port(),
             telemetry_handle: self.telemetry_handle.clone(),
+            store_context: self.store_context.clone(),
         }
+    }
+
+    pub(crate) fn install_controller_write_lease(&self, token: WriteLeaseToken, valid_for: Duration) -> bool {
+        self.store_context.controller_write_lease.install(token, valid_for)
+    }
+
+    pub(crate) fn fence_controller_writes(&self) {
+        self.store_context.controller_write_lease.fence();
+    }
+
+    pub(crate) fn controller_write_lease_state(&self) -> ControllerWriteLeaseState {
+        self.store_context.controller_write_lease.clone()
     }
 
     #[inline]
@@ -1115,6 +1131,10 @@ impl CommitLog {
 
     pub async fn put_messages(&self, mut msg_batch: MessageExtBatch) -> PutMessageResult {
         let append_span = rocketmq_observability::trace::store::append_span(&self.telemetry_handle);
+        let requested_lease = match self.store_context.controller_write_lease.capture() {
+            Ok(lease) => lease,
+            Err(()) => return PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable),
+        };
         #[cfg(any(feature = "observability", feature = "observability-traces"))]
         rocketmq_observability::trace::record_message_properties_with_handle(
             &self.telemetry_handle,
@@ -1181,12 +1201,17 @@ impl CommitLog {
             sequenced.batch.message_ext_broker_inner,
             need_ack_nums,
             need_handle_ha,
+            requested_lease,
         )
         .await
     }
 
     pub async fn put_message(&self, mut msg: MessageExtBrokerInner) -> PutMessageResult {
         let append_span = rocketmq_observability::trace::store::append_span(&self.telemetry_handle);
+        let requested_lease = match self.store_context.controller_write_lease.capture() {
+            Ok(lease) => lease,
+            Err(()) => return PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable),
+        };
         #[cfg(any(feature = "observability", feature = "observability-traces"))]
         rocketmq_observability::trace::record_message_properties_with_handle(
             &self.telemetry_handle,
@@ -1245,8 +1270,14 @@ impl CommitLog {
         if sequenced.result.put_message_status() != PutMessageStatus::PutOk {
             return sequenced.result;
         }
-        self.handle_disk_flush_and_ha(sequenced.result, sequenced.message, need_ack_nums, need_handle_ha)
-            .await
+        self.handle_disk_flush_and_ha(
+            sequenced.result,
+            sequenced.message,
+            need_ack_nums,
+            need_handle_ha,
+            requested_lease,
+        )
+        .await
     }
 
     #[inline]
@@ -1282,6 +1313,7 @@ impl CommitLog {
         msg: MessageExtBrokerInner,
         need_ack_nums: i32,
         need_handle_ha: bool,
+        requested_lease: Option<WriteLeaseToken>,
     ) -> PutMessageResult {
         let append_message_result = put_message_result.append_message_result().unwrap();
 
@@ -1315,6 +1347,10 @@ impl CommitLog {
                 }
             }
             (FlushDiskType::AsyncFlush, false) => {}
+        }
+
+        if !self.store_context.controller_write_lease.validate(requested_lease) {
+            put_message_result.set_put_message_status(PutMessageStatus::ServiceNotAvailable);
         }
 
         put_message_result
@@ -1782,6 +1818,7 @@ impl CommitLog {
         if self.broker_config.enable_controller_mode {
             if self.store_runtime_state.broker_role() != BrokerRole::Slave
                 && !self.store_context.running_flags.is_fenced()
+                && self.store_context.controller_write_lease.is_write_permitted()
             {
                 let max_phy_offset = self.get_max_offset();
                 if let Some(ha_service) = self.store_context.ha_service() {
@@ -2858,6 +2895,8 @@ mod tests {
     use rocketmq_model::utils::crc32_utils::crc32;
     use rocketmq_protocol::common::message::message_decoder::create_crc32;
     use rocketmq_runtime::common::time_utils::current_millis;
+    use rocketmq_store_api::MasterEpoch;
+    use rocketmq_store_api::WriteAuthority;
 
     #[test]
     fn put_message_lock_stats_records_totals_and_maxes() {
@@ -3003,9 +3042,40 @@ mod tests {
             .await
             .expect("append data");
         store.set_confirm_offset(1);
+        let authority = WriteAuthority::try_new(0, MasterEpoch::try_from(1).unwrap()).unwrap();
+        let token = WriteLeaseToken::try_new(authority, 1).unwrap();
+        assert!(store
+            .get_commit_log()
+            .install_controller_write_lease(token, Duration::from_secs(1)));
 
         assert_eq!(store.get_confirm_offset(), 4);
         assert_eq!(read_handle.get_confirm_offset(), 4);
+
+        let _ = std::fs::remove_dir_all(temp_root);
+    }
+
+    #[tokio::test]
+    async fn controller_mode_local_ack_path_requires_a_live_lease() {
+        let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-commitlog-write-lease-{}", current_millis()));
+        let mut store = new_test_message_store(&temp_root, BrokerRole::SyncMaster, false);
+        store.init().await.expect("init message store");
+
+        let denied = store
+            .get_commit_log()
+            .put_message(append_test_message("lease-topic", b"denied"))
+            .await;
+        assert_eq!(denied.put_message_status(), PutMessageStatus::ServiceNotAvailable);
+
+        let authority = WriteAuthority::try_new(0, MasterEpoch::try_from(1).unwrap()).unwrap();
+        let token = WriteLeaseToken::try_new(authority, 1).unwrap();
+        assert!(store
+            .get_commit_log()
+            .install_controller_write_lease(token, Duration::from_secs(1)));
+        let accepted = store
+            .get_commit_log()
+            .put_message(append_test_message("lease-topic", b"accepted"))
+            .await;
+        assert_eq!(accepted.put_message_status(), PutMessageStatus::PutOk);
 
         let _ = std::fs::remove_dir_all(temp_root);
     }

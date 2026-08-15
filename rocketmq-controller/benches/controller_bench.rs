@@ -60,6 +60,7 @@ fn controller_bench(criterion: &mut Criterion) {
     let request = ControllerRequest::BrokerHeartbeat {
         broker_identity: identity,
         broker_live_info: heartbeat,
+        lease_grant_allowed: false,
     };
     criterion.bench_function("controller/raft_request_json_encode", |bencher| {
         bencher.iter(|| black_box(serde_json::to_vec(black_box(&request)).expect("serialize benchmark request")));

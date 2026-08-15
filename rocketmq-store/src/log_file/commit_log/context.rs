@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use crate::base::store_stats_service::StoreStatsService;
 use crate::ha::general_ha_service::GeneralHAService;
+use crate::ha::write_lease::ControllerWriteLeaseState;
 use crate::store::running_flags::RunningFlags;
 use arc_swap::ArcSwapOption;
 
@@ -34,6 +35,7 @@ pub(crate) struct CommitLogStoreContext {
     pub(super) ha_service: Arc<ArcSwapOption<GeneralHAService>>,
     pub(super) max_delay_level: i32,
     pub(super) delay_level_table: Arc<BTreeMap<i32, i64>>,
+    pub(super) controller_write_lease: ControllerWriteLeaseState,
 }
 
 impl CommitLogStoreContext {
@@ -43,6 +45,7 @@ impl CommitLogStoreContext {
         store_stats_service: Arc<StoreStatsService>,
         max_delay_level: i32,
         delay_level_table: Arc<BTreeMap<i32, i64>>,
+        controller_mode: bool,
     ) -> Self {
         Self {
             running_flags,
@@ -51,6 +54,7 @@ impl CommitLogStoreContext {
             ha_service: Arc::new(ArcSwapOption::empty()),
             max_delay_level,
             delay_level_table,
+            controller_write_lease: ControllerWriteLeaseState::new(controller_mode),
         }
     }
 

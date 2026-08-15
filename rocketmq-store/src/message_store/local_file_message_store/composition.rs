@@ -274,6 +274,7 @@ impl LocalFileMessageStore {
             store_stats_service.clone(),
             max_delay_level,
             delay_level_table.clone(),
+            broker_config.enable_controller_mode,
         );
         let store_runtime_state = Arc::new(StoreRuntimeState::new(message_store_config.as_ref()));
         let mut commit_log = CommitLog::try_new(

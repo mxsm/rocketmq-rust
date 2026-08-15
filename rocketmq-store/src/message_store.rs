@@ -27,6 +27,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::Duration;
 
 use bytes::Bytes;
 use bytes::BytesMut;
@@ -40,6 +41,7 @@ use rocketmq_protocol::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_runtime::common::system_clock::SystemClock;
 use rocketmq_store_api::TimerRecallRequest;
 use rocketmq_store_api::TimerRecallStatus;
+use rocketmq_store_api::WriteLeaseToken;
 
 use crate::base::allocate_mapped_file_service::AllocateMappedFileService;
 use crate::base::backend_ops::BackendOps;
@@ -699,6 +701,14 @@ macro_rules! message_store_methods {
 
     fn sync_broker_role_with_term(&self, broker_role: BrokerRole, external_term: u64) -> Result<(), StoreError> {
         delegate_store!(self, sync_broker_role_with_term(broker_role, external_term))
+    }
+
+    fn install_controller_write_lease(&self, token: WriteLeaseToken, valid_for: Duration) -> bool {
+        delegate_store!(self, install_controller_write_lease(token, valid_for))
+    }
+
+    fn fence_controller_writes(&self) {
+        delegate_store!(self, fence_controller_writes());
     }
 
     fn calc_delta_checksum(&self, from: i64, to: i64) -> Vec<u8> {
