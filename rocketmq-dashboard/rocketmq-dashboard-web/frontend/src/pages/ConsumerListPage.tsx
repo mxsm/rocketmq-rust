@@ -1,7 +1,9 @@
-import { Activity, ListRestart, MoreHorizontal, RotateCcw, Users } from 'lucide-react';
+import { Activity, ListRestart, MoreHorizontal, Pencil, Plus, RotateCcw, Trash2, Users } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { consumerApi } from '../api/consumer_api';
+import ConsumerDeleteDialog from '../components/ConsumerDeleteDialog';
+import ConsumerMutationDialog from '../components/ConsumerMutationDialog';
 import AppDataTable, { type AppDataTableColumn } from '../components/AppDataTable';
 import ErrorState from '../components/ErrorState';
 import LoadingState from '../components/LoadingState';
@@ -18,6 +20,7 @@ import {
   DropdownMenuTrigger
 } from '../components/ui/DropdownMenu';
 import type { ConsumerGroupListItem, ConsumerGroupListView } from '../types/consumer';
+import type { ConsumerOperationResult } from '../types/consumer';
 import { useConsumerQueryScope } from './consumers/ConsumerQueryScopeProvider';
 import {
   clampConsumerPage,
@@ -57,6 +60,9 @@ export default function ConsumerListPage() {
   const [filters, setFilters] = useState<ConsumerFilters>(DEFAULT_CONSUMER_FILTERS);
   const [sort, setSort] = useState<ConsumerSort>(DEFAULT_CONSUMER_SORT);
   const [page, setPage] = useState(1);
+  const [mutationMode, setMutationMode] = useState<'create' | 'edit' | null>(null);
+  const [mutationConsumer, setMutationConsumer] = useState<ConsumerGroupListItem | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<ConsumerGroupListItem | null>(null);
   const requestToken = useRef(0);
 
   const load = async (isRefresh: boolean) => {
@@ -212,6 +218,12 @@ export default function ConsumerListPage() {
             <DropdownMenuItem asChild>
               <Link to={`/consumers/${encodeURIComponent(consumer.rawGroupName)}?tab=config`}>View configuration</Link>
             </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => { setMutationMode('edit'); setMutationConsumer(consumer); }}>
+              <Pencil size={15} aria-hidden="true" /> Edit configuration
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => setDeleteTarget(consumer)}>
+              <Trash2 size={15} aria-hidden="true" /> Delete group
+            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       )
@@ -226,7 +238,12 @@ export default function ConsumerListPage() {
       <PageHeader
         title="Consumer groups"
         description="Monitor group identity, connected clients, queue lag, and protected offset maintenance."
-        actions={<RefreshButton refreshing={refreshing} onRefresh={() => void load(true)} />}
+        actions={<>
+          <Button type="button" variant="outline" onClick={() => { setMutationMode('create'); setMutationConsumer(null); }}>
+            <Plus size={15} aria-hidden="true" /> Create group
+          </Button>
+          <RefreshButton refreshing={refreshing} onRefresh={() => void load(true)} />
+        </>}
       />
 
       <div className="metric-grid entity-metrics">
@@ -346,6 +363,21 @@ export default function ConsumerListPage() {
           emptyDetail="Adjust the group, category, type, model, broker, or lag filters."
         />
       </section>
+
+      <ConsumerMutationDialog
+        open={mutationMode !== null}
+        mode={mutationMode ?? 'create'}
+        consumer={mutationConsumer}
+        onOpenChange={(open) => { if (!open) { setMutationMode(null); setMutationConsumer(null); } }}
+        onSucceeded={() => void load(false)}
+      />
+
+      <ConsumerDeleteDialog
+        open={deleteTarget !== null}
+        consumer={deleteTarget}
+        onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}
+        onSucceeded={() => void load(false)}
+      />
     </div>
   );
 }
