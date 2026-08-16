@@ -1,4 +1,4 @@
-import { ListChecks, RadioTower, RotateCcw, Users } from 'lucide-react';
+import { ListChecks, Network, RadioTower, RotateCcw, Settings2, Users } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { consumerApi } from '../../api/consumer_api';
 import AppDataTable, { type AppDataTableColumn } from '../../components/AppDataTable';
@@ -19,8 +19,12 @@ import { Input } from '../../components/ui/Input';
 import { Label } from '../../components/ui/Label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/Tabs';
 import type {
+  ConsumerConfigView,
+  ConsumerConnectionItem,
+  ConsumerConnectionView,
   ConsumerProgressQueue,
   ConsumerProgressView,
+  ConsumerSubscriptionItem,
   ConsumerSummaryView
 } from '../../types/consumer';
 import { useConsumerQueryScope } from './ConsumerQueryScopeProvider';
@@ -28,8 +32,23 @@ import { normalizeConsumerValue } from './consumer-model';
 
 interface ConsumerDetailContentProps {
   group: string;
-  initialTab?: 'overview' | 'progress' | 'reset';
+  initialTab?: 'overview' | 'clients' | 'progress' | 'config' | 'reset';
 }
+
+const connectionColumns: AppDataTableColumn<ConsumerConnectionItem>[] = [
+  { id: 'clientId', header: 'Client ID', cell: (row) => row.clientId },
+  { id: 'clientAddr', header: 'Address', cell: (row) => row.clientAddr },
+  { id: 'language', header: 'Language', cell: (row) => row.language },
+  { id: 'version', header: 'Version', cell: (row) => row.versionDesc || String(row.version) }
+];
+
+const subscriptionColumns: AppDataTableColumn<ConsumerSubscriptionItem>[] = [
+  { id: 'topic', header: 'Topic', cell: (row) => row.topic },
+  { id: 'expression', header: 'Expression', cell: (row) => row.subString },
+  { id: 'type', header: 'Type', cell: (row) => row.expressionType },
+  { id: 'tags', header: 'Tags', cell: (row) => row.tagsSet.join(', ') },
+  { id: 'version', header: 'Version', cell: (row) => row.subVersion }
+];
 
 const queueColumns: AppDataTableColumn<ConsumerProgressQueue>[] = [
   { id: 'broker', header: 'Broker', width: '150px', cell: (row) => row.brokerName },
@@ -51,6 +70,12 @@ export default function ConsumerDetailContent({ group, initialTab = 'overview' }
   const [activeTab, setActiveTab] = useState(initialTab);
   const [summary, setSummary] = useState<ConsumerSummaryView | null>(null);
   const [progress, setProgress] = useState<ConsumerProgressView | null>(null);
+  const [connections, setConnections] = useState<ConsumerConnectionView | null>(null);
+  const [config, setConfig] = useState<ConsumerConfigView | null>(null);
+  const [clientsLoading, setClientsLoading] = useState(false);
+  const [configLoading, setConfigLoading] = useState(false);
+  const [clientsError, setClientsError] = useState<string | null>(null);
+  const [configError, setConfigError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -86,12 +111,40 @@ export default function ConsumerDetailContent({ group, initialTab = 'overview' }
     }
   };
 
+  const loadClients = async () => {
+    setClientsLoading(true);
+    setClientsError(null);
+    try {
+      setConnections(await consumerApi.connections(group, scope));
+    } catch (requestError) {
+      setClientsError(requestError instanceof Error ? requestError.message : String(requestError));
+    } finally {
+      setClientsLoading(false);
+    }
+  };
+
+  const loadConfig = async () => {
+    setConfigLoading(true);
+    setConfigError(null);
+    try {
+      setConfig(await consumerApi.config(group, scope));
+    } catch (requestError) {
+      setConfigError(requestError instanceof Error ? requestError.message : String(requestError));
+    } finally {
+      setConfigLoading(false);
+    }
+  };
+
   useEffect(() => {
     currentGroupRef.current = group;
     resetOperationToken.current += 1;
     setActiveTab(initialTab);
     setSummary(null);
     setProgress(null);
+    setConnections(null);
+    setConfig(null);
+    setClientsError(null);
+    setConfigError(null);
     setResetTopic('');
     setValidationError(null);
     setNotice(null);
@@ -103,6 +156,11 @@ export default function ConsumerDetailContent({ group, initialTab = 'overview' }
       resetOperationToken.current += 1;
     };
   }, [group, initialTab, scope.mode, scope.proxyAddress, revision]);
+
+  useEffect(() => {
+    if (activeTab === 'clients' && !connections) void loadClients();
+    if (activeTab === 'config' && !config) void loadConfig();
+  }, [activeTab, connections, config, group, scope.mode, scope.proxyAddress]);
 
   const topics = progress?.topics ?? [];
   const topicOptions = useMemo(() => topics.map((topic) => topic.topic), [topics]);
@@ -165,7 +223,9 @@ export default function ConsumerDetailContent({ group, initialTab = 'overview' }
       <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as typeof activeTab)}>
         <TabsList aria-label="Consumer detail sections">
           <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="clients">Clients</TabsTrigger>
           <TabsTrigger value="progress">Progress</TabsTrigger>
+          <TabsTrigger value="config">Configuration</TabsTrigger>
           <TabsTrigger value="reset">Reset offset</TabsTrigger>
         </TabsList>
 
@@ -184,6 +244,50 @@ export default function ConsumerDetailContent({ group, initialTab = 'overview' }
             <div><dt>Version</dt><dd>{summary?.versionDesc ?? '-'}</dd></div>
             <div><dt>Brokers</dt><dd className="mono">{summary?.brokerNames.join(', ') ?? '-'}</dd></div>
           </dl>
+        </TabsContent>
+
+        <TabsContent value="clients">
+          {clientsLoading ? <LoadingState label="Loading clients" /> : null}
+          {clientsError ? <ErrorState message={clientsError} onRetry={() => void loadClients()} /> : null}
+          {connections ? (
+            <>
+              <dl className="entity-description-grid">
+                <div><dt>Consume type</dt><dd>{normalizeConsumerValue(connections.consumeType)}</dd></div>
+                <div><dt>Message model</dt><dd>{normalizeConsumerValue(connections.messageModel)}</dd></div>
+                <div><dt>Consume from</dt><dd>{connections.consumeFromWhere}</dd></div>
+              </dl>
+              <section className="consumer-resource-section">
+                <h3>Client connections</h3>
+                <AppDataTable
+                  ariaLabel="Consumer connections"
+                  rows={connections.connections}
+                  columns={connectionColumns}
+                  getRowId={(row) => row.clientId}
+                  page={1}
+                  pageSize={Math.max(connections.connections.length, 1)}
+                  total={connections.connections.length}
+                  onPageChange={() => undefined}
+                  emptyTitle="No client connections"
+                  emptyDetail="This group has no connected clients in the current response."
+                />
+              </section>
+              <section className="consumer-resource-section">
+                <h3>Subscriptions</h3>
+                <AppDataTable
+                  ariaLabel="Consumer subscriptions"
+                  rows={connections.subscriptions}
+                  columns={subscriptionColumns}
+                  getRowId={(row) => row.topic}
+                  page={1}
+                  pageSize={Math.max(connections.subscriptions.length, 1)}
+                  total={connections.subscriptions.length}
+                  onPageChange={() => undefined}
+                  emptyTitle="No subscriptions"
+                  emptyDetail="This group has no subscription entries in the current response."
+                />
+              </section>
+            </>
+          ) : null}
         </TabsContent>
 
         <TabsContent value="progress">
@@ -210,6 +314,36 @@ export default function ConsumerDetailContent({ group, initialTab = 'overview' }
               />
             </section>
           ))}
+        </TabsContent>
+
+        <TabsContent value="config">
+          {configLoading ? <LoadingState label="Loading configuration" /> : null}
+          {configError ? <ErrorState message={configError} onRetry={() => void loadConfig()} /> : null}
+          {config ? (
+            <>
+              {config.inconsistentFields.length > 0 ? (
+                <div className="notice notice-warning" role="alert">
+                  {config.inconsistentFields.length} fields differ across brokers.
+                </div>
+              ) : null}
+              <dl className="entity-description-grid">
+                <div><dt>Effective retry queues</dt><dd>{config.effective?.retryQueueNums ?? '-'}</dd></div>
+                <div><dt>Effective max retries</dt><dd>{config.effective?.retryMaxTimes ?? '-'}</dd></div>
+                <div><dt>Consume timeout</dt><dd>{config.effective?.consumeTimeoutMinute ?? '-'}</dd></div>
+                <div><dt>Consume enabled</dt><dd>{config.effective?.consumeEnable ?? false ? 'Yes' : 'No'}</dd></div>
+              </dl>
+              {config.targets.map((target) => (
+                <section key={target.brokerName} className="consumer-resource-section">
+                  <h3>{target.brokerName}</h3>
+                  {target.error ? <div className="notice notice-danger" role="alert">{target.error}</div> : null}
+                  {target.config ? <pre className="consumer-config-json">{JSON.stringify(target.config, null, 2)}</pre> : null}
+                  {target.subscriptionTopics.length > 0 ? (
+                    <p>Subscriptions: {target.subscriptionTopics.join(', ')}</p>
+                  ) : null}
+                </section>
+              ))}
+            </>
+          ) : null}
         </TabsContent>
 
         <TabsContent value="reset">
