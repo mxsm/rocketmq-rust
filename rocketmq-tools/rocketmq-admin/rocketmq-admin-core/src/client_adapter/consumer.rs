@@ -35,9 +35,11 @@ use rocketmq_protocol::protocol::subscription::subscription_group_config::Subscr
 use serde_json::json;
 
 use crate::client_adapter::lifecycle::AdminSession;
+use crate::client_adapter::services::consumer::ConsumerService;
 use crate::core::consumer;
 use crate::core::consumer::ConsumerAdmin;
 use crate::core::consumer::ConsumerBatchMutationOutcome;
+use crate::core::consumer::ConsumerDiagnosticAdmin;
 use crate::core::consumer::DeleteSubscriptionGroupsRequest;
 use crate::core::AdminError;
 use crate::core::AdminFuture;
@@ -56,7 +58,10 @@ use self::query::collect_queue_client_mapping;
 use self::query::map_consumer_config;
 use self::query::map_consumer_connection;
 use self::query::map_consumer_progress;
+use self::query::map_consumer_running_info;
 use self::query::message_queue_allocation;
+use self::query::query_consumer_connection_at;
+use self::query::query_consumer_progress_at;
 use self::query::ConsumerGroupMeta;
 
 const CID_RMQ_SYS_PREFIX: &str = "CID_RMQ_SYS_";
@@ -217,12 +222,10 @@ impl ConsumerAdmin for AdminSession {
         Box::pin(async move {
             self.ensure_open()?;
             let group = normalize_consumer_group(&request.consumer_group)?;
-            let connection = self
-                .inner
-                .examine_consumer_connection_info(
-                    CheetahString::from(group.as_str()),
-                    first_address(request.address.as_deref()),
-                )
+            let connection =
+                query_consumer_connection_at(&group, first_address(request.address.as_deref()), |group, address| {
+                    self.inner.examine_consumer_connection_info(group, address)
+                })
                 .await
                 .map_err(|error| backend_error("examine_consumer_connection_info", error))?;
             Ok(map_consumer_connection(&group, connection))
@@ -238,24 +241,22 @@ impl ConsumerAdmin for AdminSession {
             let group = normalize_consumer_group(&request.consumer_group)?;
             let broker_addresses = parse_addresses(request.address.as_deref());
             let stats = if broker_addresses.is_empty() {
-                self.inner
-                    .examine_consume_stats(CheetahString::from(group.as_str()), None, None, None, None)
-                    .await
-                    .map_err(|error| backend_error("examine_consume_stats", error))?
+                query_consumer_progress_at(&group, None, None, |group, address, timeout| {
+                    self.inner.examine_consume_stats(group, None, None, address, timeout)
+                })
+                .await
+                .map_err(|error| backend_error("examine_consume_stats", error))?
             } else {
                 let mut merged_stats = ConsumeStats::new();
                 for broker_addr in broker_addresses {
-                    let stats = self
-                        .inner
-                        .examine_consume_stats(
-                            CheetahString::from(group.as_str()),
-                            None,
-                            None,
-                            Some(broker_addr),
-                            Some(3_000),
-                        )
-                        .await
-                        .map_err(|error| backend_error("examine_consume_stats", error))?;
+                    let stats = query_consumer_progress_at(
+                        &group,
+                        Some(broker_addr),
+                        Some(3_000),
+                        |group, address, timeout| self.inner.examine_consume_stats(group, None, None, address, timeout),
+                    )
+                    .await
+                    .map_err(|error| backend_error("examine_consume_stats", error))?;
                     merged_stats.consume_tps += stats.get_consume_tps();
                     merged_stats
                         .get_offset_table_mut()
@@ -527,6 +528,27 @@ impl ConsumerAdmin for AdminSession {
     }
 }
 
+impl ConsumerDiagnosticAdmin for AdminSession {
+    fn query_dashboard_consumer_running_info<'a>(
+        &'a mut self,
+        request: &'a consumer::DashboardConsumerRunningInfoRequest,
+    ) -> AdminFuture<'a, consumer::DashboardConsumerRunningInfo> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            let running_info = ConsumerService::query_dashboard_consumer_running_info_with_admin(&self.inner, request)
+                .await
+                .map_err(|error| backend_error("get_consumer_running_info", error))?;
+            Ok(map_consumer_running_info(
+                request.consumer_group(),
+                request.client_id(),
+                request.include_jstack(),
+                request.max_output_bytes(),
+                running_info,
+            ))
+        })
+    }
+}
+
 fn normalize_consumer_group(value: &str) -> AdminResult<String> {
     let value = value.strip_prefix("%SYS%").unwrap_or(value).trim();
     validate_subscription_group_name(value)
@@ -662,6 +684,13 @@ fn backend_error(operation: &'static str, error: RocketMQError) -> AdminError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn admin_session_exposes_independent_consumer_diagnostics() {
+        fn assert_diagnostic_admin<T: consumer::ConsumerDiagnosticAdmin>() {}
+
+        assert_diagnostic_admin::<AdminSession>();
+    }
 
     #[test]
     fn classify_consumer_group_preserves_dashboard_categories() {

@@ -192,6 +192,91 @@ pub struct DashboardConsumerConfigAttribute {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DashboardConsumerRunningInfoRequest {
+    consumer_group: String,
+    client_id: String,
+    include_jstack: bool,
+    max_output_bytes: usize,
+}
+
+impl DashboardConsumerRunningInfoRequest {
+    const MAX_OUTPUT_BYTES: usize = 1024 * 1024;
+
+    /// Creates a bounded consumer diagnostic request.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the consumer group or client ID is blank, or
+    /// when `max_output_bytes` is outside the inclusive range 1 byte to 1 MiB.
+    pub fn try_new(
+        consumer_group: impl Into<String>,
+        client_id: impl Into<String>,
+        include_jstack: bool,
+        max_output_bytes: usize,
+    ) -> AdminResult<Self> {
+        if !(1..=Self::MAX_OUTPUT_BYTES).contains(&max_output_bytes) {
+            return Err(crate::core::AdminError::invalid_argument(
+                "maxOutputBytes",
+                "must be between 1 and 1048576 bytes",
+            ));
+        }
+        Ok(Self {
+            consumer_group: required("consumerGroup", consumer_group)?,
+            client_id: required("clientId", client_id)?,
+            include_jstack,
+            max_output_bytes,
+        })
+    }
+
+    #[must_use]
+    pub fn consumer_group(&self) -> &str {
+        &self.consumer_group
+    }
+
+    #[must_use]
+    pub fn client_id(&self) -> &str {
+        &self.client_id
+    }
+
+    #[must_use]
+    pub const fn include_jstack(&self) -> bool {
+        self.include_jstack
+    }
+
+    #[must_use]
+    /// Returns the aggregate byte budget for sorted property keys/values,
+    /// followed by JStack when requested.
+    pub const fn max_output_bytes(&self) -> usize {
+        self.max_output_bytes
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DashboardConsumerProcessQueue {
+    pub topic: String,
+    pub broker_name: String,
+    pub queue_id: i32,
+    pub cached_message_count: i64,
+    pub cached_message_size_in_mib: i64,
+    pub commit_offset: i64,
+    pub dropped: bool,
+    pub last_consume_timestamp: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DashboardConsumerRunningInfo {
+    pub consumer_group: String,
+    pub client_id: String,
+    pub properties: Vec<DashboardConsumerConfigAttribute>,
+    pub subscriptions: Vec<DashboardConsumerSubscriptionItem>,
+    pub process_queues: Vec<DashboardConsumerProcessQueue>,
+    pub jstack: Option<String>,
+    /// True when requested property or JStack text exceeded the aggregate
+    /// output budget and was shortened at a UTF-8 character boundary.
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DashboardConsumerConfig {
     pub consumer_group: String,
     pub broker_name: String,
@@ -513,6 +598,15 @@ pub trait ConsumerQueryAdmin: Send {
     ) -> AdminFuture<'a, DashboardConsumerConfig>;
 }
 
+/// Bounded diagnostic queries exposed independently from existing consumer
+/// query and mutation capabilities.
+pub trait ConsumerDiagnosticAdmin: Send {
+    fn query_dashboard_consumer_running_info<'a>(
+        &'a mut self,
+        request: &'a DashboardConsumerRunningInfoRequest,
+    ) -> AdminFuture<'a, DashboardConsumerRunningInfo>;
+}
+
 /// Consumer mutations require the explicit mutation adapter feature.
 pub trait ConsumerMutationAdmin: Send {
     fn patch_config_if_version<'a>(
@@ -613,8 +707,65 @@ impl<T: ConsumerAdmin + ?Sized> ConsumerMutationAdmin for T {
 
 #[cfg(test)]
 mod tests {
-    use super::PatchSubscriptionGroupConfigRequest;
-    use super::SubscriptionGroupConfigCasPatch;
+    use super::*;
+    use crate::core::AdminFuture;
+
+    struct ExistingConsumerAdmin;
+
+    macro_rules! existing_consumer_admin {
+        ($($name:ident: $request:ty => $result:ty;)*) => {
+            impl ConsumerAdmin for ExistingConsumerAdmin {
+                $(
+                    fn $name<'a>(&'a mut self, _request: &'a $request) -> AdminFuture<'a, $result> {
+                        unused_admin_future()
+                    }
+                )*
+            }
+        };
+    }
+
+    existing_consumer_admin! {
+        list_consumer_groups: ListConsumerGroupsRequest => ListConsumerGroupsResult;
+        query_consumer_lag: QueryConsumerLagRequest => QueryConsumerLagResult;
+        query_dashboard_consumer_groups: DashboardConsumerGroupListRequest => DashboardConsumerGroupListResult;
+        query_dashboard_consumer_connection: DashboardConsumerConnectionRequest => DashboardConsumerConnection;
+        query_dashboard_consumer_progress: DashboardConsumerProgressRequest => DashboardConsumerProgress;
+        query_dashboard_consumer_config: DashboardConsumerConfigRequest => DashboardConsumerConfig;
+        upsert_dashboard_consumer_group: DashboardConsumerUpsertRequest => DashboardConsumerMutationResult;
+        delete_dashboard_consumer_group: DashboardConsumerDeleteRequest => DashboardConsumerMutationResult;
+        delete_subscription_groups: DeleteSubscriptionGroupsRequest => ConsumerBatchMutationOutcome;
+        set_consumer_request_mode: SetConsumerRequestModeRequest => SetConsumerRequestModeResult;
+    }
+
+    fn unused_admin_future<'a, T>() -> AdminFuture<'a, T> {
+        Box::pin(async {
+            Err(crate::core::AdminError::backend(
+                "compile_only_consumer_admin",
+                "compile-only consumer admin fake must not be called",
+            ))
+        })
+    }
+
+    #[test]
+    fn running_info_request_requires_canonical_group_and_client_and_bounds_output() {
+        let request =
+            DashboardConsumerRunningInfoRequest::try_new(" orders-consumer ", " 10.0.0.8@client-a ", true, 256 * 1024)
+                .expect("valid request");
+        assert_eq!(request.consumer_group(), "orders-consumer");
+        assert_eq!(request.client_id(), "10.0.0.8@client-a");
+        assert!(request.include_jstack());
+        assert_eq!(request.max_output_bytes(), 256 * 1024);
+        assert!(DashboardConsumerRunningInfoRequest::try_new(" ", "client-a", false, 1024).is_err());
+        assert!(DashboardConsumerRunningInfoRequest::try_new("orders", " ", false, 1024).is_err());
+        assert!(DashboardConsumerRunningInfoRequest::try_new("orders", "client-a", false, 0).is_err());
+        assert!(DashboardConsumerRunningInfoRequest::try_new("orders", "client-a", false, 1_048_577).is_err());
+    }
+
+    #[test]
+    fn existing_consumer_admin_implementation_does_not_require_diagnostics() {
+        let mut admin = ExistingConsumerAdmin;
+        let _: &mut dyn ConsumerAdmin = &mut admin;
+    }
 
     #[test]
     fn subscription_group_cas_request_accepts_only_a_non_empty_bounded_patch() {

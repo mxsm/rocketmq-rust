@@ -48,6 +48,7 @@ use crate::client_adapter::services::stable_error_message;
 use crate::client_adapter::services::RocketMQError;
 use crate::client_adapter::services::RocketMQResult;
 use crate::client_adapter::services::ToolsError;
+use crate::core::consumer::DashboardConsumerRunningInfoRequest;
 use rocketmq_client_rust::DefaultMQAdminExt;
 
 fn trim_optional_string(value: Option<String>) -> Option<String> {
@@ -864,6 +865,20 @@ impl ConsumerService {
         let result = Self::query_consumer_running_info_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
+    }
+
+    pub(crate) async fn query_dashboard_consumer_running_info_with_admin(
+        admin: &DefaultMQAdminExt,
+        request: &DashboardConsumerRunningInfoRequest,
+    ) -> RocketMQResult<ConsumerRunningInfo> {
+        admin
+            .get_consumer_running_info(
+                CheetahString::from(request.consumer_group()),
+                CheetahString::from(request.client_id()),
+                request.include_jstack(),
+                None,
+            )
+            .await
     }
 
     pub(crate) async fn query_consumer_running_info_with_admin(

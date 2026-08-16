@@ -14,6 +14,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::future::Future;
 
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::ConsumerAdmin as _;
@@ -23,6 +24,7 @@ use rocketmq_protocol::protocol::admin::consume_stats::ConsumeStats;
 use rocketmq_protocol::protocol::admin::offset_wrapper::OffsetWrapper;
 use rocketmq_protocol::protocol::body::broker_body::cluster_info::ClusterInfo;
 use rocketmq_protocol::protocol::body::consumer_connection::ConsumerConnection;
+use rocketmq_protocol::protocol::body::consumer_running_info::ConsumerRunningInfo;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 
 use super::backend_error;
@@ -40,6 +42,31 @@ pub(super) struct ConsumerGroupMeta {
     pub(super) broker_names: HashSet<String>,
     pub(super) broker_addresses: HashSet<String>,
     pub(super) orderly_flags: Vec<bool>,
+}
+
+pub(super) async fn query_consumer_connection_at<Query, QueryFuture>(
+    group: &str,
+    address: Option<CheetahString>,
+    query: Query,
+) -> rocketmq_error::RocketMQResult<ConsumerConnection>
+where
+    Query: FnOnce(CheetahString, Option<CheetahString>) -> QueryFuture,
+    QueryFuture: Future<Output = rocketmq_error::RocketMQResult<ConsumerConnection>>,
+{
+    query(CheetahString::from(group), address).await
+}
+
+pub(super) async fn query_consumer_progress_at<Query, QueryFuture>(
+    group: &str,
+    address: Option<CheetahString>,
+    timeout_millis: Option<u64>,
+    query: Query,
+) -> rocketmq_error::RocketMQResult<ConsumeStats>
+where
+    Query: FnOnce(CheetahString, Option<CheetahString>, Option<u64>) -> QueryFuture,
+    QueryFuture: Future<Output = rocketmq_error::RocketMQResult<ConsumeStats>>,
+{
+    query(CheetahString::from(group), address, timeout_millis).await
 }
 
 pub(super) async fn collect_consumer_group_meta(
@@ -104,9 +131,10 @@ pub(super) async fn build_consumer_group_item(
     };
     let mut consume_tps = 0_i64;
     let mut diff_total = 0_i64;
-    if let Ok(stats) = admin
-        .examine_consume_stats(CheetahString::from(group), None, None, None, None)
-        .await
+    if let Ok(stats) = query_consumer_progress_at(group, address.clone(), None, |group, address, timeout| {
+        admin.examine_consume_stats(group, None, None, address, timeout)
+    })
+    .await
     {
         consume_tps = stats.get_consume_tps().round() as i64;
         diff_total = stats.compute_total_diff();
@@ -117,9 +145,10 @@ pub(super) async fn build_consumer_group_item(
     let mut consume_type = "UNKNOWN".to_string();
     let mut version = None;
     let mut version_desc = "OFFLINE".to_string();
-    if let Ok(connection) = admin
-        .examine_consumer_connection_info(CheetahString::from(group), address)
-        .await
+    if let Ok(connection) = query_consumer_connection_at(group, address, |group, address| {
+        admin.examine_consumer_connection_info(group, address)
+    })
+    .await
     {
         connection_count = connection.get_connection_set().len();
         if let Some(model) = connection.get_message_model() {
@@ -297,6 +326,112 @@ pub(super) fn map_consumer_config(
     }
 }
 
+pub(super) fn map_consumer_running_info(
+    group: &str,
+    client_id: &str,
+    include_jstack: bool,
+    max_output_bytes: usize,
+    running_info: ConsumerRunningInfo,
+) -> consumer::DashboardConsumerRunningInfo {
+    let mut budget = Utf8Budget::new(max_output_bytes);
+    let properties = running_info
+        .properties
+        .into_iter()
+        .map(|(key, value)| consumer::DashboardConsumerConfigAttribute {
+            key: budget.take(&key),
+            value: budget.take(&value),
+        })
+        .collect();
+
+    let mut subscriptions = running_info
+        .subscription_set
+        .into_iter()
+        .map(|item| consumer::DashboardConsumerSubscriptionItem {
+            topic: item.topic.to_string(),
+            sub_string: item.sub_string.to_string(),
+            expression_type: item.expression_type.to_string(),
+            tags_set: item.tags_set.into_iter().map(|tag| tag.to_string()).collect(),
+            code_set: item.code_set.into_iter().collect(),
+            sub_version: item.sub_version,
+        })
+        .collect::<Vec<_>>();
+    subscriptions.sort_by(|left, right| {
+        left.topic
+            .cmp(&right.topic)
+            .then(left.expression_type.cmp(&right.expression_type))
+            .then(left.sub_string.cmp(&right.sub_string))
+            .then(left.tags_set.cmp(&right.tags_set))
+            .then(left.code_set.cmp(&right.code_set))
+            .then(left.sub_version.cmp(&right.sub_version))
+    });
+
+    let mut process_queues = running_info
+        .mq_table
+        .into_iter()
+        .map(|(queue, info)| consumer::DashboardConsumerProcessQueue {
+            topic: queue.topic().to_string(),
+            broker_name: queue.broker_name().to_string(),
+            queue_id: queue.queue_id(),
+            cached_message_count: i64::from(info.cached_msg_count),
+            cached_message_size_in_mib: i64::from(info.cached_msg_size_in_mib),
+            commit_offset: info.commit_offset,
+            dropped: info.droped,
+            last_consume_timestamp: i64::try_from(info.last_consume_timestamp).unwrap_or(i64::MAX),
+        })
+        .collect::<Vec<_>>();
+    process_queues.sort_by(|left, right| {
+        left.topic
+            .cmp(&right.topic)
+            .then(left.broker_name.cmp(&right.broker_name))
+            .then(left.queue_id.cmp(&right.queue_id))
+    });
+
+    let jstack = if include_jstack {
+        running_info.jstack.map(|jstack| budget.take(&jstack))
+    } else {
+        None
+    };
+
+    consumer::DashboardConsumerRunningInfo {
+        consumer_group: group.to_string(),
+        client_id: client_id.to_string(),
+        properties,
+        subscriptions,
+        process_queues,
+        jstack,
+        truncated: budget.truncated,
+    }
+}
+
+struct Utf8Budget {
+    remaining: usize,
+    truncated: bool,
+}
+
+impl Utf8Budget {
+    const fn new(max_output_bytes: usize) -> Self {
+        Self {
+            remaining: max_output_bytes,
+            truncated: false,
+        }
+    }
+
+    fn take(&mut self, value: &str) -> String {
+        if value.len() <= self.remaining {
+            self.remaining -= value.len();
+            return value.to_string();
+        }
+
+        self.truncated = true;
+        let mut end = self.remaining.min(value.len());
+        while !value.is_char_boundary(end) {
+            end -= 1;
+        }
+        self.remaining -= end;
+        value[..end].to_string()
+    }
+}
+
 pub(super) async fn collect_queue_client_mapping(
     admin: &mut rocketmq_client_rust::DefaultMQAdminExt,
     group: &str,
@@ -361,4 +496,237 @@ pub(super) async fn message_queue_allocation(
         }
     }
     allocation
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use cheetah_string::CheetahString;
+    use rocketmq_model::version::RocketMqVersion;
+    use rocketmq_protocol::protocol::admin::consume_stats::ConsumeStats;
+    use rocketmq_protocol::protocol::admin::offset_wrapper::OffsetWrapper;
+    use rocketmq_protocol::protocol::body::connection::Connection;
+    use rocketmq_protocol::protocol::body::consumer_connection::ConsumerConnection;
+    use rocketmq_protocol::protocol::body::consumer_running_info::ConsumerRunningInfo;
+    use rocketmq_protocol::protocol::body::process_queue_info::ProcessQueueInfo;
+    use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
+
+    use super::*;
+
+    #[derive(Default)]
+    struct CapturingQueryClient {
+        connection_addresses: Vec<Option<String>>,
+        progress_addresses: Vec<Option<String>>,
+    }
+
+    impl CapturingQueryClient {
+        fn query_connection(&mut self, address: Option<CheetahString>) {
+            self.connection_addresses.push(address.map(|value| value.to_string()));
+        }
+
+        fn query_progress(&mut self, address: Option<CheetahString>) {
+            self.progress_addresses.push(address.map(|value| value.to_string()));
+        }
+    }
+
+    fn connection_fixture() -> ConsumerConnection {
+        let mut client = Connection::new();
+        client.set_client_id(CheetahString::from_static_str("client-a"));
+        client.set_client_addr(CheetahString::from_static_str("10.0.0.8:12000"));
+        client.set_version(RocketMqVersion::V5_3_0 as i32);
+
+        let mut subscription = SubscriptionData {
+            topic: CheetahString::from_static_str("orders"),
+            sub_string: CheetahString::from_static_str("created || paid"),
+            ..SubscriptionData::default()
+        };
+        subscription.tags_set.extend([
+            CheetahString::from_static_str("created"),
+            CheetahString::from_static_str("paid"),
+        ]);
+
+        let mut connection = ConsumerConnection::new();
+        connection.insert_connection(client);
+        connection
+            .get_subscription_table_mut()
+            .insert(CheetahString::from_static_str("orders"), subscription);
+        connection
+    }
+
+    fn consume_stats_fixture() -> ConsumeStats {
+        let mut stats = ConsumeStats::new();
+        for (topic, broker_name, queue_id, broker_offset, consumer_offset) in [
+            ("payments", "broker-b", 1, 24, 20),
+            ("orders", "broker-b", 1, 115, 100),
+            ("orders", "broker-a", 0, 123, 100),
+        ] {
+            let mut offset = OffsetWrapper::new();
+            offset.set_broker_offset(broker_offset);
+            offset.set_consumer_offset(consumer_offset);
+            stats
+                .get_offset_table_mut()
+                .insert(MessageQueue::from_parts(topic, broker_name, queue_id), offset);
+        }
+        stats
+    }
+
+    fn client_map_fixture() -> HashMap<MessageQueue, String> {
+        HashMap::from([
+            (
+                MessageQueue::from_parts("orders", "broker-a", 0),
+                "10.0.0.8@client-a".to_string(),
+            ),
+            (
+                MessageQueue::from_parts("orders", "broker-b", 1),
+                "10.0.0.9@client-b".to_string(),
+            ),
+        ])
+    }
+
+    fn running_info_fixture() -> ConsumerRunningInfo {
+        let mut running_info = ConsumerRunningInfo::new();
+        running_info.properties.insert("z-key".to_string(), "last".to_string());
+        running_info.properties.insert("a".to_string(), "éé".to_string());
+        running_info.subscription_set.extend([
+            SubscriptionData {
+                topic: CheetahString::from_static_str("payments"),
+                sub_string: CheetahString::from_static_str("*"),
+                ..SubscriptionData::default()
+            },
+            SubscriptionData {
+                topic: CheetahString::from_static_str("orders"),
+                sub_string: CheetahString::from_static_str("created"),
+                ..SubscriptionData::default()
+            },
+        ]);
+        running_info.mq_table.insert(
+            MessageQueue::from_parts("payments", "broker-b", 1),
+            ProcessQueueInfo {
+                commit_offset: 17,
+                cached_msg_count: 4,
+                cached_msg_size_in_mib: 2,
+                droped: true,
+                last_consume_timestamp: 23,
+                ..ProcessQueueInfo::default()
+            },
+        );
+        running_info.mq_table.insert(
+            MessageQueue::from_parts("orders", "broker-a", 0),
+            ProcessQueueInfo {
+                commit_offset: 11,
+                cached_msg_count: 3,
+                cached_msg_size_in_mib: 1,
+                last_consume_timestamp: 19,
+                ..ProcessQueueInfo::default()
+            },
+        );
+        running_info.jstack = Some("栈栈".to_string());
+        running_info
+    }
+
+    #[test]
+    fn connection_mapping_preserves_client_and_subscription_identity() {
+        let mapped = map_consumer_connection("orders-consumer", connection_fixture());
+        assert_eq!(mapped.consumer_group, "orders-consumer");
+        assert_eq!(mapped.connections[0].client_id, "client-a");
+        assert_eq!(mapped.connections[0].client_addr, "10.0.0.8:12000");
+        assert_eq!(mapped.connections[0].version_desc, "V5_3_0");
+        assert_eq!(mapped.subscriptions[0].topic, "orders");
+        assert_eq!(mapped.subscriptions[0].expression_type, "TAG");
+        assert_eq!(mapped.subscriptions[0].tags_set, vec!["created", "paid"]);
+    }
+
+    #[tokio::test]
+    async fn query_address_forwarding_preserves_explicit_proxy_and_discovery() {
+        let mut fake = CapturingQueryClient::default();
+        let proxy = Some(CheetahString::from_static_str("proxy-a:8081"));
+
+        query_consumer_connection_at("orders-consumer", proxy.clone(), |_, address| {
+            fake.query_connection(address);
+            std::future::ready(Ok(connection_fixture()))
+        })
+        .await
+        .expect("explicit connection query");
+        query_consumer_progress_at("orders-consumer", proxy, Some(3_000), |_, address, _| {
+            fake.query_progress(address);
+            std::future::ready(Ok(consume_stats_fixture()))
+        })
+        .await
+        .expect("explicit progress query");
+        query_consumer_connection_at("orders-consumer", None, |_, address| {
+            fake.query_connection(address);
+            std::future::ready(Ok(connection_fixture()))
+        })
+        .await
+        .expect("discovered connection query");
+        query_consumer_progress_at("orders-consumer", None, None, |_, address, _| {
+            fake.query_progress(address);
+            std::future::ready(Ok(consume_stats_fixture()))
+        })
+        .await
+        .expect("discovered progress query");
+
+        assert_eq!(fake.connection_addresses, vec![Some("proxy-a:8081".to_string()), None]);
+        assert_eq!(fake.progress_addresses, vec![Some("proxy-a:8081".to_string()), None]);
+    }
+
+    #[test]
+    fn progress_mapping_groups_and_sorts_queues_by_topic_broker_and_queue() {
+        let mapped = map_consumer_progress("orders-consumer", consume_stats_fixture(), &client_map_fixture());
+        assert_eq!(
+            mapped.topics.iter().map(|item| item.topic.as_str()).collect::<Vec<_>>(),
+            vec!["orders", "payments"]
+        );
+        assert_eq!(mapped.topics[0].queues[0].broker_name, "broker-a");
+        assert_eq!(mapped.topics[0].queues[0].queue_id, 0);
+        assert_eq!(mapped.topics[0].queues[0].client_info, "10.0.0.8@client-a");
+        assert_eq!(mapped.total_diff, 42);
+    }
+
+    #[test]
+    fn running_info_mapping_sorts_sections_and_bounds_multibyte_text_and_jstack() {
+        let mapped = map_consumer_running_info("orders-consumer", "10.0.0.8@client-a", true, 4, running_info_fixture());
+
+        assert_eq!(
+            mapped
+                .properties
+                .iter()
+                .map(|item| (item.key.as_str(), item.value.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("a", "é"), ("z", "")]
+        );
+        assert_eq!(
+            mapped
+                .subscriptions
+                .iter()
+                .map(|item| item.topic.as_str())
+                .collect::<Vec<_>>(),
+            vec!["orders", "payments"]
+        );
+        assert_eq!(
+            mapped
+                .process_queues
+                .iter()
+                .map(|item| (item.topic.as_str(), item.broker_name.as_str(), item.queue_id))
+                .collect::<Vec<_>>(),
+            vec![("orders", "broker-a", 0), ("payments", "broker-b", 1)]
+        );
+        assert_eq!(mapped.jstack.as_deref(), Some(""));
+        assert!(mapped.truncated);
+    }
+
+    #[test]
+    fn running_info_mapping_omits_jstack_when_it_was_not_requested() {
+        let mapped = map_consumer_running_info(
+            "orders-consumer",
+            "10.0.0.8@client-a",
+            false,
+            1_048_576,
+            running_info_fixture(),
+        );
+
+        assert_eq!(mapped.jstack, None);
+        assert!(!mapped.truncated);
+    }
 }
