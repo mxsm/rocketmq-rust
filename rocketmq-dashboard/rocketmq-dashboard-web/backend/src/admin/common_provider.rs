@@ -86,11 +86,19 @@ impl DashboardAdminProvider for DashboardAdminClient {
         &self,
         request: Self::TopicMutationRequest,
     ) -> AdminFuture<'_, Self::TopicMutationResult, Self::Error> {
-        Box::pin(DashboardAdminClient::create_or_update_topic(self, request))
+        Box::pin(async move {
+            DashboardAdminClient::create_or_update_topic(self, request)
+                .await
+                .and_then(legacy_topic_mutation_result)
+        })
     }
 
     fn delete_topic<'a>(&'a self, topic: &'a str) -> AdminFuture<'a, Self::TopicMutationResult, Self::Error> {
-        Box::pin(DashboardAdminClient::delete_topic(self, topic))
+        Box::pin(async move {
+            DashboardAdminClient::delete_topic(self, topic)
+                .await
+                .and_then(legacy_topic_mutation_result)
+        })
     }
 
     fn list_consumer_groups(&self) -> AdminFuture<'_, Self::ConsumerList, Self::Error> {
@@ -177,5 +185,62 @@ impl DashboardAdminProvider for DashboardAdminClient {
         request: Self::MessageResendRequest,
     ) -> AdminFuture<'_, Self::MessageResendResult, Self::Error> {
         Box::pin(async move { DashboardAdminClient::resend_message(self, &message_id, request).await })
+    }
+}
+
+fn legacy_topic_mutation_result(result: crate::model::TopicOperationResult) -> Result<MutationResult, DashboardError> {
+    if result.success {
+        return Ok(MutationResult {
+            message: result.message,
+        });
+    }
+    Err(DashboardError::Admin(rocketmq_admin_core::core::AdminError::backend(
+        "topic_mutation_partial",
+        result.message,
+    )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::legacy_topic_mutation_result;
+    use crate::error::DashboardError;
+    use crate::model::TopicOperationResult;
+    use crate::model::TopicTargetResult;
+    use crate::model::build_operation_result;
+
+    #[test]
+    fn legacy_facade_rejects_a_partial_topic_mutation() {
+        let result = build_operation_result(
+            "UPDATE",
+            "orders",
+            vec![
+                TopicTargetResult::success("broker-a", "saved"),
+                TopicTargetResult::failure("broker-b", "unavailable"),
+            ],
+        );
+
+        let error = legacy_topic_mutation_result(result).expect_err("partial mutation must not look successful");
+
+        assert!(matches!(
+            error,
+            DashboardError::Admin(rocketmq_admin_core::core::AdminError::Backend { reason, .. })
+                if reason == "2 targets: 1 succeeded, 1 failed"
+        ));
+    }
+
+    #[test]
+    fn legacy_facade_keeps_full_success_message_compatible() {
+        let result = TopicOperationResult {
+            operation: "UPDATE".into(),
+            topic: "orders".into(),
+            success: true,
+            target_count: 1,
+            message: "1 targets: 1 succeeded, 0 failed".into(),
+            targets: vec![TopicTargetResult::success("broker-a", "saved")],
+        };
+
+        let legacy = legacy_topic_mutation_result(result).expect("full mutation remains compatible");
+
+        assert_eq!(legacy.message, "1 targets: 1 succeeded, 0 failed");
     }
 }

@@ -13,17 +13,32 @@
 // limitations under the License.
 use crate::error::DashboardError;
 use crate::model::ApiResponse;
-use crate::model::MutationResult;
+use crate::model::TopicConfigView;
+use crate::model::TopicConsumersView;
 use crate::model::TopicInfo;
 use crate::model::TopicListView;
 use crate::model::TopicMutationRequest;
+use crate::model::TopicOffsetResult;
+use crate::model::TopicOperationResult;
+use crate::model::TopicResetOffsetRequest;
 use crate::model::TopicRouteInfo;
+use crate::model::TopicSendResultView;
+use crate::model::TopicSkipOffsetRequest;
 use crate::model::TopicStatsInfo;
+use crate::model::TopicTestMessageRequest;
 use crate::service;
 use crate::state::AppState;
 use axum::Json;
 use axum::extract::Path;
+use axum::extract::Query;
 use axum::extract::State;
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TopicConfigQuery {
+    broker_name: Option<String>,
+}
 
 pub async fn list_topics(State(state): State<AppState>) -> Result<Json<ApiResponse<TopicListView>>, DashboardError> {
     Ok(Json(ApiResponse::success(service::list_topics(&state).await?)))
@@ -39,7 +54,7 @@ pub async fn get_topic(
 pub async fn create_topic(
     State(state): State<AppState>,
     Json(request): Json<TopicMutationRequest>,
-) -> Result<Json<ApiResponse<MutationResult>>, DashboardError> {
+) -> Result<Json<ApiResponse<TopicOperationResult>>, DashboardError> {
     Ok(Json(ApiResponse::success(
         service::create_topic(&state, request).await?,
     )))
@@ -49,7 +64,7 @@ pub async fn update_topic(
     State(state): State<AppState>,
     Path(topic): Path<String>,
     Json(mut request): Json<TopicMutationRequest>,
-) -> Result<Json<ApiResponse<MutationResult>>, DashboardError> {
+) -> Result<Json<ApiResponse<TopicOperationResult>>, DashboardError> {
     request.topic = topic;
     Ok(Json(ApiResponse::success(
         service::create_or_update_topic(&state, request).await?,
@@ -59,8 +74,47 @@ pub async fn update_topic(
 pub async fn delete_topic(
     State(state): State<AppState>,
     Path(topic): Path<String>,
-) -> Result<Json<ApiResponse<MutationResult>>, DashboardError> {
+) -> Result<Json<ApiResponse<TopicOperationResult>>, DashboardError> {
     Ok(Json(ApiResponse::success(service::delete_topic(&state, &topic).await?)))
+}
+
+pub async fn send_topic_test_message(
+    State(state): State<AppState>,
+    Path(topic): Path<String>,
+    Json(request): Json<TopicTestMessageRequest>,
+) -> Result<Json<ApiResponse<TopicSendResultView>>, DashboardError> {
+    Ok(Json(ApiResponse::success(
+        service::send_topic_test_message(&state, &topic, request).await?,
+    )))
+}
+
+pub async fn reset_topic_consumer_offset(
+    State(state): State<AppState>,
+    Path(topic): Path<String>,
+    Json(request): Json<TopicResetOffsetRequest>,
+) -> Result<Json<ApiResponse<TopicOffsetResult>>, DashboardError> {
+    Ok(Json(ApiResponse::success(
+        service::reset_topic_consumer_offset(&state, &topic, request).await?,
+    )))
+}
+
+pub async fn skip_topic_consumer_offset(
+    State(state): State<AppState>,
+    Path(topic): Path<String>,
+    Json(request): Json<TopicSkipOffsetRequest>,
+) -> Result<Json<ApiResponse<TopicOffsetResult>>, DashboardError> {
+    Ok(Json(ApiResponse::success(
+        service::skip_topic_consumer_offset(&state, &topic, request).await?,
+    )))
+}
+
+pub async fn delete_topic_from_broker(
+    State(state): State<AppState>,
+    Path((topic, broker_name)): Path<(String, String)>,
+) -> Result<Json<ApiResponse<TopicOperationResult>>, DashboardError> {
+    Ok(Json(ApiResponse::success(
+        service::delete_topic_from_broker(&state, &topic, &broker_name).await?,
+    )))
 }
 
 pub async fn topic_route(
@@ -75,4 +129,23 @@ pub async fn topic_stats(
     Path(topic): Path<String>,
 ) -> Result<Json<ApiResponse<TopicStatsInfo>>, DashboardError> {
     Ok(Json(ApiResponse::success(service::topic_stats(&state, &topic).await?)))
+}
+
+pub async fn topic_config(
+    State(state): State<AppState>,
+    Path(topic): Path<String>,
+    Query(query): Query<TopicConfigQuery>,
+) -> Result<Json<ApiResponse<TopicConfigView>>, DashboardError> {
+    Ok(Json(ApiResponse::success(
+        service::topic_config(&state, &topic, query.broker_name.as_deref()).await?,
+    )))
+}
+
+pub async fn topic_consumers(
+    State(state): State<AppState>,
+    Path(topic): Path<String>,
+) -> Result<Json<ApiResponse<TopicConsumersView>>, DashboardError> {
+    Ok(Json(ApiResponse::success(
+        service::topic_consumers(&state, &topic).await?,
+    )))
 }

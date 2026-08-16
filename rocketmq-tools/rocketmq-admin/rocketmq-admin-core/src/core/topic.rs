@@ -15,7 +15,9 @@
 //! Topic capability contracts.
 
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
+use rocketmq_model::common::topic::TopicValidator;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -204,6 +206,296 @@ pub struct UpsertTopicRequest {
     pub perm: u32,
     pub order: bool,
     pub message_type: Option<String>,
+}
+
+/// An atomic admin-owned Topic update sequence for canonical broker targets.
+///
+/// The batch owns the complete broker-local update and global `ORDER_TOPIC_CONFIG`
+/// reconciliation sequence. Its fields are deliberately private so that callers cannot skip
+/// validation or create a partial operation through deserialization.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TopicBatchUpsertRequest {
+    topic: String,
+    broker_names: Vec<String>,
+    write_queue_nums: u32,
+    read_queue_nums: u32,
+    perm: u32,
+    order: bool,
+    message_type: Option<String>,
+}
+
+impl TopicBatchUpsertRequest {
+    /// Creates a fully validated batch with a trimmed, deduplicated, sorted broker set.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the Topic violates RocketMQ's topic-name rule, a queue count is
+    /// outside `1..=128`, permissions are invalid, no broker is supplied, a broker name could
+    /// corrupt an order configuration, or the message type is unsupported.
+    pub fn try_new(
+        topic: impl Into<String>,
+        broker_names: Vec<String>,
+        write_queue_nums: u32,
+        read_queue_nums: u32,
+        perm: u32,
+        order: bool,
+        message_type: Option<String>,
+    ) -> AdminResult<Self> {
+        let canonical = CanonicalTopicBatchUpsertRequest::try_new(
+            topic,
+            broker_names,
+            write_queue_nums,
+            read_queue_nums,
+            perm,
+            order,
+            message_type,
+        )?;
+        Ok(Self {
+            topic: canonical.topic,
+            broker_names: canonical.broker_names,
+            write_queue_nums: canonical.write_queue_nums,
+            read_queue_nums: canonical.read_queue_nums,
+            perm: canonical.perm,
+            order: canonical.order,
+            message_type: canonical.message_type,
+        })
+    }
+
+    pub fn topic(&self) -> &str {
+        &self.topic
+    }
+
+    pub fn broker_names(&self) -> &[String] {
+        &self.broker_names
+    }
+
+    pub const fn write_queue_nums(&self) -> u32 {
+        self.write_queue_nums
+    }
+
+    pub const fn read_queue_nums(&self) -> u32 {
+        self.read_queue_nums
+    }
+
+    pub const fn perm(&self) -> u32 {
+        self.perm
+    }
+
+    pub const fn order(&self) -> bool {
+        self.order
+    }
+
+    pub fn message_type(&self) -> Option<&str> {
+        self.message_type.as_deref()
+    }
+
+    pub(crate) fn canonical_for_execution(&self) -> AdminResult<CanonicalTopicBatchUpsertRequest> {
+        CanonicalTopicBatchUpsertRequest::try_new(
+            self.topic.clone(),
+            self.broker_names.clone(),
+            self.write_queue_nums,
+            self.read_queue_nums,
+            self.perm,
+            self.order,
+            self.message_type.clone(),
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn unchecked_for_execution_test(
+        topic: String,
+        broker_names: Vec<String>,
+        write_queue_nums: u32,
+        read_queue_nums: u32,
+        perm: u32,
+        order: bool,
+        message_type: Option<String>,
+    ) -> Self {
+        Self {
+            topic,
+            broker_names,
+            write_queue_nums,
+            read_queue_nums,
+            perm,
+            order,
+            message_type,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CanonicalTopicBatchUpsertRequest {
+    pub(crate) topic: String,
+    pub(crate) broker_names: Vec<String>,
+    pub(crate) write_queue_nums: u32,
+    pub(crate) read_queue_nums: u32,
+    pub(crate) perm: u32,
+    pub(crate) order: bool,
+    pub(crate) message_type: Option<String>,
+}
+
+impl CanonicalTopicBatchUpsertRequest {
+    fn try_new(
+        topic: impl Into<String>,
+        broker_names: Vec<String>,
+        write_queue_nums: u32,
+        read_queue_nums: u32,
+        perm: u32,
+        order: bool,
+        message_type: Option<String>,
+    ) -> AdminResult<Self> {
+        let topic = required("topic", topic)?;
+        let topic_validation = TopicValidator::validate_topic(&topic);
+        if !topic_validation.valid() {
+            return Err(crate::core::AdminError::invalid_argument(
+                "topic",
+                topic_validation.remark().to_string(),
+            ));
+        }
+        for (field, value) in [("writeQueueNums", write_queue_nums), ("readQueueNums", read_queue_nums)] {
+            if !(1..=128).contains(&value) {
+                return Err(crate::core::AdminError::invalid_argument(
+                    field,
+                    "must be between 1 and 128",
+                ));
+            }
+        }
+        if !(1..=7).contains(&perm) || perm & 0b110 == 0 {
+            return Err(crate::core::AdminError::invalid_argument(
+                "perm",
+                "must be between 1 and 7 and include read or write access",
+            ));
+        }
+        let broker_names = broker_names
+            .into_iter()
+            .map(|broker_name| broker_name.trim().to_string())
+            .map(|broker_name| {
+                if broker_name.is_empty()
+                    || broker_name.contains([':', ';'])
+                    || broker_name.chars().any(char::is_whitespace)
+                {
+                    Err(crate::core::AdminError::invalid_argument(
+                        "brokerNames",
+                        "must not contain whitespace, ':' or ';'",
+                    ))
+                } else {
+                    Ok(broker_name)
+                }
+            })
+            .collect::<AdminResult<BTreeSet<_>>>()?
+            .into_iter()
+            .collect::<Vec<_>>();
+        if broker_names.is_empty() {
+            return Err(crate::core::AdminError::invalid_argument(
+                "brokerNames",
+                "must not be empty",
+            ));
+        }
+        let message_type = message_type
+            .map(|message_type| message_type.trim().to_string())
+            .filter(|message_type| !message_type.is_empty());
+        if let Some(message_type) = message_type.as_deref() {
+            if !matches!(message_type, "NORMAL" | "FIFO" | "DELAY" | "TRANSACTION") {
+                return Err(crate::core::AdminError::invalid_argument(
+                    "messageType",
+                    "must be NORMAL, FIFO, DELAY, or TRANSACTION",
+                ));
+            }
+        }
+        Ok(Self {
+            topic,
+            broker_names,
+            write_queue_nums,
+            read_queue_nums,
+            perm,
+            order,
+            message_type,
+        })
+    }
+}
+
+/// One broker-local result from a batch Topic mutation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TopicBatchTargetOutcome {
+    pub broker_name: String,
+    pub success: bool,
+    pub message: String,
+}
+
+/// The global order-configuration result from a batch Topic mutation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TopicBatchOrderConfigOutcome {
+    pub success: bool,
+    pub message: String,
+}
+
+/// Results for the complete batch-owned Topic mutation sequence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TopicBatchMutationOutcome {
+    pub targets: Vec<TopicBatchTargetOutcome>,
+    pub order_config: Option<TopicBatchOrderConfigOutcome>,
+}
+
+/// A closed, validated complete deletion batch for one Topic across authoritative clusters.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TopicBatchDeleteRequest {
+    topic: String,
+    cluster_names: Vec<String>,
+}
+
+impl TopicBatchDeleteRequest {
+    pub fn try_new(topic: impl Into<String>, cluster_names: Vec<String>) -> AdminResult<Self> {
+        let topic = required("topic", topic)?;
+        let validation = TopicValidator::validate_topic(&topic);
+        if !validation.valid() {
+            return Err(crate::core::AdminError::invalid_argument(
+                "topic",
+                validation.remark().to_string(),
+            ));
+        }
+        let cluster_names = cluster_names
+            .into_iter()
+            .map(|cluster| cluster.trim().to_string())
+            .map(|cluster| {
+                if cluster.is_empty() {
+                    Err(crate::core::AdminError::invalid_argument(
+                        "clusterNames",
+                        "must not be empty",
+                    ))
+                } else {
+                    Ok(cluster)
+                }
+            })
+            .collect::<AdminResult<BTreeSet<_>>>()?
+            .into_iter()
+            .collect::<Vec<_>>();
+        if cluster_names.is_empty() {
+            return Err(crate::core::AdminError::invalid_argument(
+                "clusterNames",
+                "must not be empty",
+            ));
+        }
+        Ok(Self { topic, cluster_names })
+    }
+
+    pub fn topic(&self) -> &str {
+        &self.topic
+    }
+
+    pub fn cluster_names(&self) -> &[String] {
+        &self.cluster_names
+    }
+
+    pub(crate) fn canonical_for_execution(&self) -> AdminResult<Self> {
+        Self::try_new(self.topic.clone(), self.cluster_names.clone())
+    }
+}
+
+/// Outcome of a complete batch-owned Topic deletion.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TopicBatchDeleteOutcome {
+    pub targets: Vec<TopicBatchTargetOutcome>,
+    pub order_config: Option<TopicBatchOrderConfigOutcome>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -455,6 +747,35 @@ pub trait TopicMutationAdmin: Send {
     fn send_topic_test_message<'a>(&'a mut self, request: &'a TopicSendRequest) -> AdminFuture<'a, TopicSendResult>;
 }
 
+/// Admin-owned complete multi-broker Topic mutation workflow.
+///
+/// Implementations apply each canonical broker-local update, continue after individual failures,
+/// and reconcile the NameServer-wide `ORDER_TOPIC_CONFIG` exactly once for successful brokers.
+/// The workflow deletes that entry for unordered Topics and never exposes a safe half-operation.
+pub trait TopicBatchMutationAdmin: Send {
+    /// Executes the complete broker-local and global-order Topic mutation sequence.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error before side effects when the request is invalid or the admin session is
+    /// unavailable. Individual broker and order-configuration failures are represented in the
+    /// returned batch outcome.
+    fn upsert_topic_batch<'a>(
+        &'a mut self,
+        request: &'a TopicBatchUpsertRequest,
+    ) -> AdminFuture<'a, TopicBatchMutationOutcome>;
+}
+
+/// Admin-owned complete multi-cluster Topic deletion workflow.
+pub trait TopicBatchDeleteAdmin: Send {
+    /// Deletes every canonical cluster and removes `ORDER_TOPIC_CONFIG` exactly once only when
+    /// every cluster deletion succeeded. Individual cluster failures are represented in the result.
+    fn delete_topic_batch<'a>(
+        &'a mut self,
+        request: &'a TopicBatchDeleteRequest,
+    ) -> AdminFuture<'a, TopicBatchDeleteOutcome>;
+}
+
 impl<T: TopicAdmin + ?Sized> TopicQueryAdmin for T {
     fn list_topics<'a>(&'a mut self, request: &'a ListTopicsRequest) -> AdminFuture<'a, ListTopicsResult> {
         TopicAdmin::list_topics(self, request)
@@ -508,8 +829,33 @@ impl<T: TopicAdmin + ?Sized> TopicMutationAdmin for T {
 
 #[cfg(test)]
 mod tests {
+    use super::DeleteTopicAdminRequest;
+    use super::DeleteTopicsInBrokerRequest;
+    use super::GetTopicConfigRequest;
+    use super::GetTopicRouteRequest;
+    use super::ListTopicsRequest;
+    use super::ListTopicsResult;
     use super::PatchTopicConfigRequest;
+    use super::ResetTopicConsumerOffsetRequest;
+    use super::TopicAdmin;
+    use super::TopicBatchMutationAdmin;
+    use super::TopicBatchMutationOutcome;
+    use super::TopicBatchUpsertRequest;
+    use super::TopicCatalog;
+    use super::TopicCatalogRequest;
     use super::TopicConfigCasPatch;
+    use super::TopicConfigDetail;
+    use super::TopicConsumerGroups;
+    use super::TopicConsumers;
+    use super::TopicCurrentStats;
+    use super::TopicMutationOutcome;
+    use super::TopicRoute;
+    use super::TopicSendRequest;
+    use super::TopicSendResult;
+    use super::TopicStats;
+    use super::UpsertTopicRequest;
+    use crate::core::AdminError;
+    use crate::core::AdminFuture;
 
     #[test]
     fn topic_config_cas_request_accepts_only_a_non_empty_bounded_patch() {
@@ -539,5 +885,112 @@ mod tests {
             },
         )
         .is_err());
+    }
+
+    #[test]
+    fn batch_request_canonicalizes_brokers_and_rejects_order_conf_delimiters() {
+        let request = TopicBatchUpsertRequest::try_new(
+            " orders ",
+            vec![" broker-b ".into(), "broker-a".into(), "broker-a".into()],
+            8,
+            8,
+            6,
+            true,
+            Some(" NORMAL ".into()),
+        )
+        .expect("canonical batch request");
+
+        assert_eq!(request.topic(), "orders");
+        assert_eq!(request.broker_names(), ["broker-a", "broker-b"]);
+        assert_eq!(request.message_type(), Some("NORMAL"));
+        for invalid in ["orders topic", &"a".repeat(128)] {
+            assert!(TopicBatchUpsertRequest::try_new(invalid, vec!["broker-a".into()], 8, 8, 6, true, None,).is_err());
+        }
+        for invalid in ["broker:a", "broker;a", "broker a"] {
+            assert!(TopicBatchUpsertRequest::try_new("orders", vec![invalid.into()], 8, 8, 6, true, None,).is_err());
+        }
+        assert!(TopicBatchUpsertRequest::try_new("orders", vec!["broker-a".into()], 0, 8, 6, true, None,).is_err());
+    }
+
+    #[test]
+    fn topic_admin_implementors_do_not_need_the_batch_extension() {
+        fn uses_topic_admin<T: TopicAdmin>() {}
+        fn uses_batch_extension<T: TopicBatchMutationAdmin>() {}
+
+        uses_topic_admin::<ExistingTopicAdminFake>();
+        let _ = uses_batch_extension::<BatchOnlyFake>;
+    }
+
+    struct ExistingTopicAdminFake;
+
+    impl TopicAdmin for ExistingTopicAdminFake {
+        fn list_topics<'a>(&'a mut self, _: &'a ListTopicsRequest) -> AdminFuture<'a, ListTopicsResult> {
+            Box::pin(async { Err(AdminError::SessionClosed) })
+        }
+
+        fn get_topic_route<'a>(&'a mut self, _: &'a GetTopicRouteRequest) -> AdminFuture<'a, Option<TopicRoute>> {
+            Box::pin(async { Err(AdminError::SessionClosed) })
+        }
+
+        fn get_topic_catalog<'a>(&'a mut self, _: &'a TopicCatalogRequest) -> AdminFuture<'a, TopicCatalog> {
+            Box::pin(async { Err(AdminError::SessionClosed) })
+        }
+
+        fn get_topic_current_stats(&mut self) -> AdminFuture<'_, TopicCurrentStats> {
+            Box::pin(async { Err(AdminError::SessionClosed) })
+        }
+
+        fn get_topic_stats<'a>(&'a mut self, _: &'a str) -> AdminFuture<'a, TopicStats> {
+            Box::pin(async { Err(AdminError::SessionClosed) })
+        }
+
+        fn get_topic_config<'a>(&'a mut self, _: &'a GetTopicConfigRequest) -> AdminFuture<'a, TopicConfigDetail> {
+            Box::pin(async { Err(AdminError::SessionClosed) })
+        }
+
+        fn upsert_topic<'a>(&'a mut self, _: &'a UpsertTopicRequest) -> AdminFuture<'a, TopicMutationOutcome> {
+            Box::pin(async { Err(AdminError::SessionClosed) })
+        }
+
+        fn delete_topic<'a>(&'a mut self, _: &'a DeleteTopicAdminRequest) -> AdminFuture<'a, TopicMutationOutcome> {
+            Box::pin(async { Err(AdminError::SessionClosed) })
+        }
+
+        fn delete_topics_in_broker<'a>(
+            &'a mut self,
+            _: &'a DeleteTopicsInBrokerRequest,
+        ) -> AdminFuture<'a, TopicMutationOutcome> {
+            Box::pin(async { Err(AdminError::SessionClosed) })
+        }
+
+        fn get_topic_consumer_groups<'a>(&'a mut self, _: &'a str) -> AdminFuture<'a, TopicConsumerGroups> {
+            Box::pin(async { Err(AdminError::SessionClosed) })
+        }
+
+        fn get_topic_consumers<'a>(&'a mut self, _: &'a str) -> AdminFuture<'a, TopicConsumers> {
+            Box::pin(async { Err(AdminError::SessionClosed) })
+        }
+
+        fn reset_topic_consumer_offset<'a>(
+            &'a mut self,
+            _: &'a ResetTopicConsumerOffsetRequest,
+        ) -> AdminFuture<'a, TopicMutationOutcome> {
+            Box::pin(async { Err(AdminError::SessionClosed) })
+        }
+
+        fn send_topic_test_message<'a>(&'a mut self, _: &'a TopicSendRequest) -> AdminFuture<'a, TopicSendResult> {
+            Box::pin(async { Err(AdminError::SessionClosed) })
+        }
+    }
+
+    struct BatchOnlyFake;
+
+    impl TopicBatchMutationAdmin for BatchOnlyFake {
+        fn upsert_topic_batch<'a>(
+            &'a mut self,
+            _: &'a TopicBatchUpsertRequest,
+        ) -> AdminFuture<'a, TopicBatchMutationOutcome> {
+            Box::pin(async { Err(AdminError::SessionClosed) })
+        }
     }
 }

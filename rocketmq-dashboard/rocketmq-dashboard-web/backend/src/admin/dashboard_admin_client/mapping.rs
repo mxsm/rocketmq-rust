@@ -12,54 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
+
 use super::*;
 
-pub(super) fn map_topic_info(item: core::DashboardTopicInfo) -> TopicInfo {
-    let category = classify_topic(&item.topic).to_string();
-    TopicInfo {
-        topic: item.topic,
-        broker_name: item.broker_name,
-        read_queue_count: item.read_queue_count,
-        write_queue_count: item.write_queue_count,
-        perm: item.perm,
-        category,
-    }
-}
-
-pub(super) fn map_topic_route(route: core::DashboardTopicRoute) -> TopicRouteInfo {
-    TopicRouteInfo {
-        topic: route.topic,
-        brokers: route
-            .brokers
-            .into_iter()
-            .map(|broker| TopicRouteBroker {
-                broker_name: broker.broker_name,
-                broker_addrs: broker.broker_addrs,
-            })
-            .collect(),
-        queues: route
-            .queues
-            .into_iter()
-            .map(|queue| TopicRouteQueue {
-                broker_name: queue.broker_name,
-                read_queue_nums: queue.read_queue_nums,
-                write_queue_nums: queue.write_queue_nums,
-                perm: queue.perm,
-            })
-            .collect(),
-    }
-}
-
-pub(super) fn topic_info_from_route(topic: &str, route: &TopicRouteInfo) -> TopicInfo {
-    TopicInfo {
-        topic: topic.to_string(),
-        broker_name: route.brokers.first().map(|broker| broker.broker_name.clone()),
-        read_queue_count: route.queues.iter().map(|queue| queue.read_queue_nums).sum(),
-        write_queue_count: route.queues.iter().map(|queue| queue.write_queue_nums).sum(),
-        perm: route.queues.iter().map(|queue| queue.perm).max().unwrap_or_default(),
-        category: classify_topic(topic).to_string(),
-    }
-}
+static NEXT_ADMIN_GROUP_ID: AtomicU64 = AtomicU64::new(1);
 
 pub(super) fn map_consumer_progress(progress: core::DashboardConsumerProgress) -> ConsumerProgress {
     ConsumerProgress {
@@ -325,29 +283,9 @@ pub(super) fn csv_escape(value: &str) -> String {
     }
 }
 
-pub(super) fn classify_topic(topic: &str) -> &'static str {
-    if topic.starts_with("%RETRY%") {
-        "retry"
-    } else if topic.starts_with("%DLQ%") {
-        "dlq"
-    } else if topic.starts_with("RMQ_SYS_")
-        || topic.starts_with("SCHEDULE_TOPIC_")
-        || topic == "TBW102"
-        || topic == "OFFSET_MOVED_EVENT"
-        || topic == "BenchmarkTest"
-    {
-        "system"
-    } else {
-        "normal"
-    }
-}
-
 pub(super) fn unique_admin_group() -> String {
-    let millis = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis())
-        .unwrap_or_default();
-    format!("dashboard-web-admin-{}-{millis}", std::process::id())
+    let id = NEXT_ADMIN_GROUP_ID.fetch_add(1, Ordering::Relaxed);
+    format!("dashboard-web-admin-{}-{id}", std::process::id())
 }
 
 pub(super) fn validate_name(value: &str, label: &str) -> Result<(), DashboardError> {
@@ -367,19 +305,39 @@ pub(super) fn required_request_field<'a>(value: Option<&'a str>, label: &str) ->
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::collections::HashSet;
+    use std::sync::Arc;
+    use std::sync::Barrier;
+    use std::sync::Mutex;
+    use std::thread;
 
     use rocketmq_admin_core::core::dashboard::DashboardMessage;
 
-    use super::classify_topic;
     use super::csv_escape;
     use super::map_message;
+    use super::unique_admin_group;
 
     #[test]
-    fn classifies_dashboard_topics() {
-        assert_eq!(classify_topic("Orders"), "normal");
-        assert_eq!(classify_topic("%RETRY%group"), "retry");
-        assert_eq!(classify_topic("%DLQ%group"), "dlq");
-        assert_eq!(classify_topic("RMQ_SYS_TRACE_TOPIC"), "system");
+    fn concurrent_admin_groups_are_unique() {
+        const CALLERS: usize = 32;
+
+        let barrier = Arc::new(Barrier::new(CALLERS));
+        let groups = Arc::new(Mutex::new(HashSet::new()));
+        thread::scope(|scope| {
+            for _ in 0..CALLERS {
+                let barrier = Arc::clone(&barrier);
+                let groups = Arc::clone(&groups);
+                scope.spawn(move || {
+                    barrier.wait();
+                    groups
+                        .lock()
+                        .expect("group collection lock")
+                        .insert(unique_admin_group());
+                });
+            }
+        });
+
+        assert_eq!(groups.lock().expect("group collection lock").len(), CALLERS);
     }
 
     #[test]
