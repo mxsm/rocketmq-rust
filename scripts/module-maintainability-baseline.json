@@ -5,7 +5,7 @@
       "reexports": 3
     },
     "rocketmq-admin-core": {
-      "public_items": 1405,
+      "public_items": 1424,
       "reexports": 115
     },
     "rocketmq-admin-tui": {
@@ -10581,7 +10581,12 @@
       "reexports": 0
     },
     "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/client_adapter/topic.rs": {
-      "production_lines": 620,
+      "production_lines": 629,
+      "public_items": 0,
+      "reexports": 0
+    },
+    "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/client_adapter/topic/batch.rs": {
+      "production_lines": 220,
       "public_items": 0,
       "reexports": 0
     },
@@ -10681,8 +10686,8 @@
       "reexports": 0
     },
     "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/core/topic.rs": {
-      "production_lines": 427,
-      "public_items": 43,
+      "production_lines": 692,
+      "public_items": 62,
       "reexports": 0
     },
     "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/lib.rs": {
