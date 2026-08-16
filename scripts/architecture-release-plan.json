@@ -9,36 +9,13 @@
     "release_decision_scope": "core-release"
   },
   "release_topology": {
-    "publish_order": [
-      "rocketmq-error",
-      "rocketmq-macros",
-      "rocketmq-runtime",
-      "rocketmq-model",
-      "rocketmq-observability",
-      "rocketmq-protocol",
-      "rocketmq-security-api",
-      "rocketmq-filter",
-      "rocketmq-transport",
-      "rocketmq-auth",
-      "rocketmq-proxy-core",
-      "rocketmq-client-rust",
-      "rocketmq-store-api",
-      "rocketmq-controller",
-      "rocketmq-admin-core",
-      "rocketmq-namesrv",
-      "rocketmq-proxy-cluster",
-      "rocketmq-store-local",
-      "rocketmq-tieredstore",
-      "rocketmq-admin-cli",
-      "rocketmq-admin-tui",
-      "rocketmq-store-rocksdb",
-      "rocketmq-store",
-      "rocketmq-broker",
-      "rocketmq-store-inspect",
-      "rocketmq-proxy-local",
-      "rocketmq-proxy"
-    ],
-    "rule": "Publish each package only after every current transition dependency is available at the same release version."
+    "planner": "distribution/package_publish_workspace.py",
+    "package_policy": "distribution/release-package-policy.json",
+    "metadata_command": "cargo metadata --locked --format-version 1 --no-deps",
+    "scope_source": "scripts/core-release-scope.json",
+    "registry_publish_classification": "registry-publish",
+    "binary_only_classification": "binary-only",
+    "rule": "Generate the stable dependency order from locked Cargo metadata and package each selected crate only after its selected workspace dependencies."
   },
   "semantic_release_routes": [
     {

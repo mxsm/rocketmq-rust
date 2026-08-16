@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "scope_source": "scripts/core-release-scope.json",
+  "inventory_source": "cargo metadata --locked --format-version 1 --no-deps",
+  "registry_publish_classification": "registry-publish",
+  "binary_only_classification": "binary-only",
+  "expected_registry_publish_count": 24,
+  "expected_binary_only_count": 3,
+  "planner": "distribution/package_publish_workspace.py",
+  "stager": "distribution/stage_publishable_crate.py",
+  "legal_policy": "distribution/legal-policy.json",
+  "supported_modes": [
+    "plan-only",
+    "package-only"
+  ],
+  "staging_registry": "local-temp",
+  "preferred_verification_packages": [
+    "rocketmq-admin-core",
+    "rocketmq-client-rust",
+    "rocketmq-error"
+  ],
+  "remote_publication": "not-executed"
+}

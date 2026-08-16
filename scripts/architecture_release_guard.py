@@ -31,6 +31,12 @@ import core_release_scope
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT / "distribution") not in sys.path:
+    sys.path.insert(0, str(ROOT / "distribution"))
+
+import package_publish_workspace
+
+
 PLAN_PATH = ROOT / "scripts" / "architecture-release-plan.json"
 POLICY_PATH = ROOT / "scripts" / "architecture-dependency-policy.json"
 BASELINE_PATH = ROOT / "scripts" / "architecture-dependency-baseline.json"
@@ -278,6 +284,7 @@ def validate_release_topology(
     plan: dict[str, Any],
     policy: dict[str, Any],
     inventory: ReleaseInventory,
+    scope: dict[str, Any],
     core_packages: set[str],
     root: Path,
     findings: list[Finding],
@@ -286,29 +293,60 @@ def validate_release_topology(
     if not isinstance(topology, dict):
         findings.append(Finding("plan-section-missing", "release-plan", "release_topology"))
         return
-    order = topology.get("publish_order")
-    if not isinstance(order, list) or any(not isinstance(item, str) for item in order):
-        findings.append(Finding("publish-order-invalid", "release-plan", "publish_order must be a string list"))
-        return
-    if len(order) != len(set(order)):
-        findings.append(Finding("publish-order-duplicate", "release-plan", "duplicate package"))
+    expected_contract = {
+        "planner": "distribution/package_publish_workspace.py",
+        "package_policy": "distribution/release-package-policy.json",
+        "metadata_command": "cargo metadata --locked --format-version 1 --no-deps",
+        "scope_source": "scripts/core-release-scope.json",
+        "registry_publish_classification": "registry-publish",
+        "binary_only_classification": "binary-only",
+    }
+    for field, expected in expected_contract.items():
+        if topology.get(field) != expected:
+            findings.append(
+                Finding(
+                    "package-planner-contract-invalid",
+                    "release-plan",
+                    f"{field}={topology.get(field)!r} expected={expected!r}",
+                )
+            )
+    for field in ("planner", "package_policy"):
+        value = topology.get(field)
+        if isinstance(value, str) and not (root / value).is_file():
+            findings.append(Finding("package-planner-resource-missing", value, field))
 
-    target_dag = policy.get("target_dag")
-    if not isinstance(target_dag, dict):
-        findings.append(Finding("policy-section-missing", "dependency-policy", "target_dag"))
-        return
-    expected = core_packages
-    actual = set(order)
-    if actual != expected:
+    try:
+        metadata = package_publish_workspace.collect_metadata(root)
+        package_plan = package_publish_workspace.build_plan(metadata, scope, selector=None)
+    except package_publish_workspace.PlannerError as error:
+        findings.append(Finding("package-planner-invalid", "release-plan", str(error)))
+        package_plan = {"packages": [], "skipped_packages": []}
+    publishable = {
+        entry["name"]
+        for entry in core_release_scope.core_packages(scope)
+        if entry["classification"] == topology.get("registry_publish_classification")
+    }
+    binary_only = {
+        entry["name"]
+        for entry in core_release_scope.core_packages(scope)
+        if entry["classification"] == topology.get("binary_only_classification")
+    }
+    planned = {entry["name"] for entry in package_plan["packages"]}
+    skipped_binary = {
+        entry["name"]
+        for entry in package_plan["skipped_packages"]
+        if entry.get("classification") == "binary-only"
+    }
+    if planned != publishable or skipped_binary != binary_only:
         findings.append(
             Finding(
-                "publish-package-mismatch",
+                "package-planner-scope-mismatch",
                 "release-plan",
-                f"missing={sorted(expected - actual)} extra={sorted(actual - expected)}",
+                f"publishable={sorted(planned)} binary_only={sorted(skipped_binary)}",
             )
         )
     available = set(inventory.governance_targets)
-    missing = expected - available
+    missing = core_packages - available
     if missing:
         findings.append(
             Finding(
@@ -318,25 +356,32 @@ def validate_release_topology(
             )
         )
 
-    dependencies: dict[str, set[str]] = {}
+    target_dag = policy.get("target_dag")
+    if not isinstance(target_dag, dict):
+        findings.append(Finding("policy-section-missing", "dependency-policy", "target_dag"))
+        return
     for caller, values in target_dag.items():
         if caller not in core_packages:
             continue
         if not isinstance(values, list) or any(not isinstance(item, str) for item in values):
             findings.append(Finding("target-dag-invalid", "dependency-policy", f"caller={caller}"))
-            continue
-        dependencies[caller] = {item for item in values if item in core_packages}
     target_debt = policy.get("target_debt", {}).get("entries", [])
     if not isinstance(target_debt, list):
-        findings.append(Finding("policy-section-missing", "dependency-policy", "target_debt.entries"))
-        target_debt = []
+        findings.append(
+            Finding("policy-section-missing", "dependency-policy", "target_debt.entries")
+        )
+        return
     for edge in target_debt:
         if not isinstance(edge, dict):
-            findings.append(Finding("edge-schema-invalid", "dependency-policy", f"edge={edge!r}"))
+            findings.append(
+                Finding("edge-schema-invalid", "dependency-policy", f"edge={edge!r}")
+            )
             continue
         identity = edge_identity(edge)
         if identity is None:
-            findings.append(Finding("edge-schema-invalid", "dependency-policy", f"edge={edge!r}"))
+            findings.append(
+                Finding("edge-schema-invalid", "dependency-policy", f"edge={edge!r}")
+            )
             continue
         caller, target, _kind, _path, _alias = identity
         if caller not in core_packages or target not in core_packages:
@@ -350,22 +395,7 @@ def validate_release_topology(
             findings.append(
                 Finding("target-debt-expired", edge["path"], f"caller={caller} target={target}")
             )
-        dependencies.setdefault(caller, set()).add(target)
         manifest_has_edge(edge, root, findings)
-
-    position = {package: index for index, package in enumerate(order)}
-    for caller, targets in dependencies.items():
-        for target in targets:
-            if caller not in position or target not in position:
-                continue
-            if position[target] >= position[caller]:
-                findings.append(
-                    Finding(
-                        "publish-order-violation",
-                        "release-plan",
-                        f"dependency={target} caller={caller}",
-                    )
-                )
 
 
 def validate_compatibility_windows(
@@ -500,7 +530,7 @@ def validate(
     except core_release_scope.ScopeInputError as error:
         findings.append(Finding("core-scope-invalid", "scripts/core-release-scope.json", str(error)))
         packages = set()
-    validate_release_topology(plan, policy, inventory, packages, root, findings)
+    validate_release_topology(plan, policy, inventory, scope, packages, root, findings)
     validate_compatibility_windows(plan, baseline, root, findings)
     validate_semantic_routes(plan, findings)
     validate_scope_reporting(plan, findings)

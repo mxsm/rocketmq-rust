@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "license_source": "LICENSE-APACHE",
+  "notice_source": "NOTICE",
+  "license_archive_name": "LICENSE-APACHE",
+  "notice_archive_name": "NOTICE",
+  "allowed_licenses": [
+    "Apache-2.0"
+  ],
+  "required_metadata_fields": [
+    "description",
+    "homepage",
+    "repository"
+  ]
+}

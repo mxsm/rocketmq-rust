@@ -83,13 +83,22 @@ class ArchitectureReleaseGuardTests(unittest.TestCase):
             self.assertNotIn(legacy, source)
         self.assertIn("rocketmq-doc/en/", self.plan["design_source"])
 
-    def test_plan_publish_order_exactly_matches_core_release_scope(self) -> None:
+    def test_plan_delegates_publish_order_to_locked_metadata_planner(self) -> None:
         scope = json.loads((SCRIPTS / "core-release-scope.json").read_text(encoding="utf-8"))
-        expected = {entry["name"] for entry in scope["core_packages"]}
+        metadata = guard.package_publish_workspace.collect_metadata(ROOT)
+        package_plan = guard.package_publish_workspace.build_plan(metadata, scope, selector=None)
 
-        self.assertEqual(expected, set(self.plan["release_topology"]["publish_order"]))
-        self.assertNotIn("rocketmq-dashboard-common", expected)
-        self.assertNotIn("rocketmq-mcp", expected)
+        topology = self.plan["release_topology"]
+        self.assertNotIn("publish_order", topology)
+        self.assertEqual(
+            "cargo metadata --locked --format-version 1 --no-deps",
+            topology["metadata_command"],
+        )
+        self.assertEqual(24, len(package_plan["packages"]))
+        self.assertEqual(3, len(package_plan["skipped_packages"]))
+        package_names = {entry["name"] for entry in package_plan["packages"]}
+        self.assertNotIn("rocketmq-dashboard-common", package_names)
+        self.assertNotIn("rocketmq-mcp", package_names)
 
     def test_plan_requires_semantic_core_routes_instead_of_legacy_modes(self) -> None:
         commands = {entry["id"]: entry["command"] for entry in self.plan["semantic_release_routes"]}
@@ -149,19 +158,16 @@ jobs:
         )
         self.assertTrue(any(item.code == "design-source-missing" for item in findings))
 
-    def test_publish_order_violation_is_a_structured_finding(self) -> None:
+    def test_package_planner_resource_violation_is_a_structured_finding(self) -> None:
         invalid = copy.deepcopy(self.plan)
-        order = invalid["release_topology"]["publish_order"]
-        caller = order.index("rocketmq-model")
-        dependency = order.index("rocketmq-error")
-        order[caller], order[dependency] = order[dependency], order[caller]
+        invalid["release_topology"]["planner"] = "distribution/deleted-planner.py"
         findings = guard.validate(
             invalid,
             self.policy,
             self.baseline,
             check_ci=False,
         )
-        self.assertTrue(any(item.code == "publish-order-violation" for item in findings))
+        self.assertTrue(any(item.code == "package-planner-resource-missing" for item in findings))
 
     def test_missing_manifest_and_section_do_not_raise(self) -> None:
         edge = {
@@ -184,16 +190,17 @@ jobs:
             guard.manifest_has_edge(edge, root, findings)
             self.assertTrue(any(item.code == "manifest-section-missing" for item in findings))
 
-    def test_unknown_dependency_package_is_a_finding(self) -> None:
+    def test_unknown_package_classification_is_a_finding(self) -> None:
         invalid = copy.deepcopy(self.plan)
-        invalid["release_topology"]["publish_order"][-1] = "rocketmq-deleted"
+        invalid["release_topology"]["registry_publish_classification"] = "deleted"
         findings = guard.validate(
             invalid,
             self.policy,
             self.baseline,
             check_ci=False,
         )
-        self.assertTrue(any(item.code == "publish-package-mismatch" for item in findings))
+        self.assertTrue(any(item.code == "package-planner-contract-invalid" for item in findings))
+        self.assertTrue(any(item.code == "package-planner-scope-mismatch" for item in findings))
 
     def test_malformed_json_is_a_structured_input_finding(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
