@@ -23,3 +23,4 @@ jobs:
         run: |
           python -m unittest scripts.tests.test_core_container_image_guard scripts.tests.test_package_core_helm
           python scripts/core_container_image_guard.py --policy docker/core-container-policy.json --chart distribution/helm/rocketmq-rust-core
+          python scripts/no_remote_publication_guard.py --phase 5 --static-only

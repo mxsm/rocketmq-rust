@@ -198,6 +198,9 @@ def _completion_event(
     completed = {
         "schema_version": 1,
         "candidate_id": candidate["candidate_id"],
+        "version": candidate["version"],
+        "run_id": candidate["run_id"],
+        "attempt": candidate["attempt"],
         "route_id": current_route_id,
         "worker_id": started.get("worker_id"),
         "context_path": started.get("context_path"),
