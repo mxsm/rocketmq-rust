@@ -66,9 +66,31 @@ pub fn build_router(state: AppState) -> Router {
             "/api/topics/{topic}/brokers/{broker}",
             delete(topic_api::delete_topic_from_broker),
         )
-        .route("/api/consumers", get(consumer_api::list_consumers))
-        .route("/api/consumers/{group}", get(consumer_api::consumer_progress))
+        .route(
+            "/api/consumers",
+            get(consumer_api::list_consumers).post(consumer_api::create_consumer),
+        )
+        .route(
+            "/api/consumers/{group}",
+            get(consumer_api::consumer_summary)
+                .put(consumer_api::update_consumer)
+                .delete(consumer_api::delete_consumer),
+        )
+        .route(
+            "/api/consumers/{group}/connections",
+            get(consumer_api::consumer_connections),
+        )
         .route("/api/consumers/{group}/progress", get(consumer_api::consumer_progress))
+        .route("/api/consumers/{group}/config", get(consumer_api::consumer_config))
+        .route(
+            "/api/consumers/{group}/clients/{clientId}/running-info",
+            get(consumer_api::consumer_running_info),
+        )
+        .route(
+            "/api/consumers/{group}/clients/{clientId}/jstack",
+            get(consumer_api::consumer_jstack),
+        )
+        .route("/api/consumers/{group}/brokers", get(consumer_api::consumer_brokers))
         .route("/api/consumers/{group}/reset-offset", post(consumer_api::reset_offset))
         .route("/api/producers", get(producer_api::list_producers))
         .route("/api/producers/connections", get(producer_api::producer_connections))

@@ -11,6 +11,22 @@ import DlqMessagePage from './DlqMessagePage';
 vi.mock('../api/consumer_api', () => ({ consumerApi: { list: vi.fn() } }));
 vi.mock('../api/dlq_api', () => ({ dlqApi: { list: vi.fn(), resend: vi.fn(), export: vi.fn() } }));
 
+const consumerGroup = (group: string, diffTotal = 1) => ({
+  displayGroupName: group,
+  rawGroupName: group,
+  category: 'NORMAL',
+  connectionCount: 1,
+  consumeTps: 0,
+  diffTotal,
+  messageModel: 'MESSAGE_MODEL_CLUSTERING',
+  consumeType: 'CONSUME_PASSIVELY',
+  version: null,
+  versionDesc: '',
+  brokerNames: [],
+  brokerAddresses: [],
+  updateTimestamp: 0
+});
+
 const dlqMessage: MessageView = {
   topic: '%DLQ%order-service', messageId: 'DLQ-001', keys: 'order:1', tags: 'TagA', bornTimestamp: 1_723_651_200_000,
   storeTimestamp: 1_723_651_201_000, bornHost: '10.0.0.1:10911', storeHost: '10.0.0.2:10911', queueId: 1,
@@ -28,7 +44,7 @@ describe('DlqMessagePage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(consumerApi.list).mockResolvedValue({
-      items: [{ group: 'order-service', consumeType: 'CONSUME_PASSIVELY', messageModel: 'MESSAGE_MODEL_CLUSTERING', clientCount: 1, diffTotal: 1 }], total: 1
+      items: [consumerGroup('order-service')], total: 1, queryScope: { mode: 'nameServer' }, capabilities: { connections: true, progress: true, configuration: true, runningInfo: true, jstack: true }
     });
     vi.mocked(dlqApi.list)
       .mockResolvedValueOnce({ items: firstDlqPage, total: 20 })
@@ -81,9 +97,9 @@ describe('DlqMessagePage', () => {
     const user = userEvent.setup();
     vi.mocked(consumerApi.list).mockResolvedValue({
       items: [
-        { group: 'order-service', consumeType: 'CONSUME_PASSIVELY', messageModel: 'MESSAGE_MODEL_CLUSTERING', clientCount: 1, diffTotal: 1 },
-        { group: 'payment-consumer', consumeType: 'CONSUME_PASSIVELY', messageModel: 'MESSAGE_MODEL_CLUSTERING', clientCount: 1, diffTotal: 0 }
-      ], total: 2
+        consumerGroup('order-service'),
+        consumerGroup('payment-consumer', 0)
+      ], total: 2, queryScope: { mode: 'nameServer' }, capabilities: { connections: true, progress: true, configuration: true, runningInfo: true, jstack: true }
     });
     renderAtRoute(<DlqMessagePage />, '/messages/dlq');
     await screen.findByRole('heading', { name: 'Dead-letter messages' });
@@ -157,9 +173,9 @@ describe('DlqMessagePage', () => {
     let resolveList!: (value: { items: MessageView[]; total: number }) => void;
     vi.mocked(consumerApi.list).mockResolvedValue({
       items: [
-        { group: 'order-service', consumeType: 'CONSUME_PASSIVELY', messageModel: 'MESSAGE_MODEL_CLUSTERING', clientCount: 1, diffTotal: 1 },
-        { group: 'payment-consumer', consumeType: 'CONSUME_PASSIVELY', messageModel: 'MESSAGE_MODEL_CLUSTERING', clientCount: 1, diffTotal: 0 }
-      ], total: 2
+        consumerGroup('order-service'),
+        consumerGroup('payment-consumer', 0)
+      ], total: 2, queryScope: { mode: 'nameServer' }, capabilities: { connections: true, progress: true, configuration: true, runningInfo: true, jstack: true }
     });
     vi.mocked(dlqApi.list).mockReset().mockReturnValue(new Promise((resolve) => { resolveList = resolve; }));
 
@@ -211,9 +227,9 @@ describe('DlqMessagePage', () => {
     let resolveResend!: (value: Array<{ msgId: string; success: boolean; consumeResult: string; remark?: string }>) => void;
     vi.mocked(consumerApi.list).mockResolvedValue({
       items: [
-        { group: 'order-service', consumeType: 'CONSUME_PASSIVELY', messageModel: 'MESSAGE_MODEL_CLUSTERING', clientCount: 1, diffTotal: 1 },
-        { group: 'payment-consumer', consumeType: 'CONSUME_PASSIVELY', messageModel: 'MESSAGE_MODEL_CLUSTERING', clientCount: 1, diffTotal: 0 }
-      ], total: 2
+        consumerGroup('order-service'),
+        consumerGroup('payment-consumer', 0)
+      ], total: 2, queryScope: { mode: 'nameServer' }, capabilities: { connections: true, progress: true, configuration: true, runningInfo: true, jstack: true }
     });
     vi.mocked(dlqApi.resend).mockReturnValueOnce(new Promise((resolve) => { resolveResend = resolve; }));
 
@@ -318,7 +334,7 @@ describe('DlqMessagePage', () => {
     vi.mocked(consumerApi.list)
       .mockRejectedValueOnce(new Error('nameserver unavailable'))
       .mockResolvedValueOnce({
-        items: [{ group: 'order-service', consumeType: 'CONSUME_PASSIVELY', messageModel: 'MESSAGE_MODEL_CLUSTERING', clientCount: 1, diffTotal: 1 }], total: 1
+        items: [consumerGroup('order-service')], total: 1, queryScope: { mode: 'nameServer' }, capabilities: { connections: true, progress: true, configuration: true, runningInfo: true, jstack: true }
       });
 
     renderAtRoute(<DlqMessagePage />, '/messages/dlq');
@@ -336,9 +352,9 @@ describe('DlqMessagePage', () => {
     const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
     vi.mocked(consumerApi.list).mockResolvedValue({
       items: [
-        { group: 'order-service', consumeType: 'CONSUME_PASSIVELY', messageModel: 'MESSAGE_MODEL_CLUSTERING', clientCount: 1, diffTotal: 1 },
-        { group: 'payment-consumer', consumeType: 'CONSUME_PASSIVELY', messageModel: 'MESSAGE_MODEL_CLUSTERING', clientCount: 1, diffTotal: 0 }
-      ], total: 2
+        consumerGroup('order-service'),
+        consumerGroup('payment-consumer', 0)
+      ], total: 2, queryScope: { mode: 'nameServer' }, capabilities: { connections: true, progress: true, configuration: true, runningInfo: true, jstack: true }
     });
     vi.mocked(dlqApi.export).mockReturnValueOnce(new Promise((resolve) => { resolveExport = resolve; }));
 

@@ -1,9 +1,10 @@
-import { Activity, ListRestart, MoreHorizontal, RotateCcw, Users } from 'lucide-react';
+import { Activity, ListRestart, MoreHorizontal, Pencil, Plus, RotateCcw, Trash2, Users } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { consumerApi } from '../api/consumer_api';
+import ConsumerDeleteDialog from '../components/ConsumerDeleteDialog';
+import ConsumerMutationDialog from '../components/ConsumerMutationDialog';
 import AppDataTable, { type AppDataTableColumn } from '../components/AppDataTable';
-import EntitySheet from '../components/EntitySheet';
 import ErrorState from '../components/ErrorState';
 import LoadingState from '../components/LoadingState';
 import MetricCard from '../components/MetricCard';
@@ -18,49 +19,86 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger
 } from '../components/ui/DropdownMenu';
-import type { ConsumerGroupInfo, ConsumerListView } from '../types/consumer';
-import ConsumerDetailContent from './consumers/ConsumerDetailContent';
+import type { ConsumerGroupListItem, ConsumerGroupListView } from '../types/consumer';
+import type { ConsumerOperationResult } from '../types/consumer';
+import { useConsumerQueryScope } from './consumers/ConsumerQueryScopeProvider';
 import {
-  filterConsumers,
+  clampConsumerPage,
+  consumerCategoryOf,
+  DEFAULT_CONSUMER_FILTERS,
+  DEFAULT_CONSUMER_SORT,
   getConsumerMetrics,
+  isSystemConsumerGroup,
   normalizeConsumerValue,
-  type ConsumerLagFilter
+  selectConsumerRows,
+  summarizeConsumerTargets,
+  type ConsumerCategory,
+  type ConsumerFilters,
+  type ConsumerLagFilter,
+  type ConsumerSort,
+  type ConsumerSortKey
 } from './consumers/consumer-model';
 
 const PAGE_SIZE = 10;
 
+const SORT_OPTIONS: Array<{ key: ConsumerSortKey; label: string }> = [
+  { key: 'rawGroupName', label: 'Group' },
+  { key: 'connectionCount', label: 'Connections' },
+  { key: 'consumeTps', label: 'TPS' },
+  { key: 'diffTotal', label: 'Total lag' },
+  { key: 'version', label: 'Version' },
+  { key: 'updateTimestamp', label: 'Updated' }
+];
+
 export default function ConsumerListPage() {
-  const [data, setData] = useState<ConsumerListView | null>(null);
+  const { scope, revision } = useConsumerQueryScope();
+  const [data, setData] = useState<ConsumerGroupListView | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [query, setQuery] = useState('');
-  const [consumeType, setConsumeType] = useState('all');
-  const [messageModel, setMessageModel] = useState('all');
-  const [lag, setLag] = useState<ConsumerLagFilter>('all');
+  const [initialError, setInitialError] = useState<string | null>(null);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [filters, setFilters] = useState<ConsumerFilters>(DEFAULT_CONSUMER_FILTERS);
+  const [sort, setSort] = useState<ConsumerSort>(DEFAULT_CONSUMER_SORT);
   const [page, setPage] = useState(1);
-  const [selectedConsumer, setSelectedConsumer] = useState<ConsumerGroupInfo | null>(null);
-  const [detailTab, setDetailTab] = useState<'overview' | 'progress' | 'reset'>('overview');
-  const detailTriggerRef = useRef<HTMLElement | null>(null);
-  const actionTriggerRefs = useRef(new Map<string, HTMLButtonElement>());
+  const [mutationMode, setMutationMode] = useState<'create' | 'edit' | null>(null);
+  const [mutationConsumer, setMutationConsumer] = useState<ConsumerGroupListItem | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<ConsumerGroupListItem | null>(null);
+  const requestToken = useRef(0);
 
-  const load = async () => {
-    if (data) setRefreshing(true);
-    else setLoading(true);
-    setError(null);
+  const load = async (isRefresh: boolean) => {
+    const token = ++requestToken.current;
+    if (isRefresh) {
+      setRefreshing(true);
+      setRefreshError(null);
+    } else {
+      setLoading(true);
+      setInitialError(null);
+    }
     try {
-      setData(await consumerApi.list());
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : String(requestError));
+      const next = await consumerApi.list(scope);
+      if (token !== requestToken.current) return;
+      setData(next);
+    } catch (error) {
+      if (token !== requestToken.current) return;
+      const message = error instanceof Error ? error.message : String(error);
+      if (isRefresh) setRefreshError(message);
+      else setInitialError(message);
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (token === requestToken.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   };
 
   useEffect(() => {
-    void load();
-  }, []);
+    requestToken.current += 1;
+    setPage(1);
+    void load(false);
+    return () => {
+      requestToken.current += 1;
+    };
+  }, [scope.mode, scope.proxyAddress, revision]);
 
   const consumers = data?.items ?? [];
   const metrics = useMemo(() => getConsumerMetrics(consumers), [consumers]);
@@ -72,59 +110,88 @@ export default function ConsumerListPage() {
     () => Array.from(new Set(consumers.map((consumer) => normalizeConsumerValue(consumer.messageModel)))).sort(),
     [consumers]
   );
-  const filteredConsumers = useMemo(
-    () => filterConsumers(consumers, { query, consumeType, messageModel, lag }),
-    [consumeType, consumers, lag, messageModel, query]
+  const brokers = useMemo(
+    () => Array.from(new Set(consumers.flatMap((consumer) => consumer.brokerNames))).sort(),
+    [consumers]
   );
-  const pageCount = Math.max(1, Math.ceil(filteredConsumers.length / PAGE_SIZE));
-  const currentPage = Math.min(page, pageCount);
-  const visibleConsumers = filteredConsumers.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+  const versions = useMemo(
+    () => Array.from(new Set(consumers.map((consumer) => consumer.versionDesc).filter(Boolean))).sort(),
+    [consumers]
+  );
 
-  const updateFilter = <T,>(setter: (value: T) => void) => (value: T) => {
-    setter(value);
+  const sorted = useMemo(
+    () => selectConsumerRows(consumers, filters, sort),
+    [consumers, filters, sort]
+  );
+  const currentPage = clampConsumerPage(page, PAGE_SIZE, sorted.length);
+  const visible = sorted.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+
+  const resetFilters = () => {
+    setFilters(DEFAULT_CONSUMER_FILTERS);
+    setSort(DEFAULT_CONSUMER_SORT);
     setPage(1);
   };
 
-  const openDetails = (
-    consumer: ConsumerGroupInfo,
-    origin?: HTMLElement,
-    tab: 'overview' | 'progress' | 'reset' = 'overview'
-  ) => {
-    if (origin) detailTriggerRef.current = origin;
-    setDetailTab(tab);
-    setSelectedConsumer(consumer);
-  };
-
-  const columns: AppDataTableColumn<ConsumerGroupInfo>[] = [
+  const columns: AppDataTableColumn<ConsumerGroupListItem>[] = [
     {
       id: 'group',
       header: 'Consumer group',
-      width: '280px',
+      width: '260px',
       cell: (consumer) => (
         <div className="entity-name-cell">
-          <strong>{consumer.group}</strong>
-          <Link to={`/consumers/${encodeURIComponent(consumer.group)}`}>Full page</Link>
+          <strong>{consumer.displayGroupName}</strong>
+          {consumer.rawGroupName !== consumer.displayGroupName ? (
+            <span className="mono entity-raw-name">{consumer.rawGroupName}</span>
+          ) : null}
+          <Link to={`/consumers/${encodeURIComponent(consumer.rawGroupName)}`}>Open workspace</Link>
         </div>
       )
     },
     {
+      id: 'category',
+      header: 'Category',
+      width: '110px',
+      cell: (consumer) => (
+        <StatusBadge status={consumerCategoryOf(consumer)} tone={isSystemConsumerGroup(consumer) ? 'neutral' : 'info'} />
+      )
+    },
+    { id: 'connections', header: 'Connections', width: '110px', cell: (consumer) => consumer.connectionCount },
+    {
+      id: 'version',
+      header: 'Version',
+      width: '110px',
+      cell: (consumer) => consumer.versionDesc || '-'
+    },
+    {
       id: 'consumeType',
       header: 'Consume type',
-      width: '150px',
+      width: '140px',
       cell: (consumer) => <StatusBadge status={normalizeConsumerValue(consumer.consumeType)} tone="info" />
     },
     {
       id: 'messageModel',
       header: 'Message model',
-      width: '160px',
+      width: '150px',
       cell: (consumer) => <StatusBadge status={normalizeConsumerValue(consumer.messageModel)} tone="success" />
     },
-    { id: 'clients', header: 'Clients', width: '90px', cell: (consumer) => consumer.clientCount },
+    { id: 'tps', header: 'TPS', width: '90px', align: 'right', cell: (consumer) => consumer.consumeTps },
     {
       id: 'lag',
       header: 'Total lag',
       width: '120px',
       cell: (consumer) => <StatusBadge status={String(consumer.diffTotal)} tone={consumer.diffTotal > 0 ? 'warning' : 'success'} />
+    },
+    {
+      id: 'targets',
+      header: 'Targets',
+      width: '150px',
+      cell: (consumer) => <span title={consumer.brokerNames.join(', ')}>{summarizeConsumerTargets(consumer)}</span>
+    },
+    {
+      id: 'updated',
+      header: 'Updated',
+      width: '160px',
+      cell: (consumer) => formatTimestamp(consumer.updateTimestamp)
     },
     {
       id: 'actions',
@@ -134,28 +201,28 @@ export default function ConsumerListPage() {
       cell: (consumer) => (
         <DropdownMenu modal={false}>
           <DropdownMenuTrigger asChild>
-            <Button
-              ref={(node) => {
-                if (node) actionTriggerRefs.current.set(consumer.group, node);
-                else actionTriggerRefs.current.delete(consumer.group);
-              }}
-              type="button"
-              variant="ghost"
-              size="icon"
-              aria-label={`Actions for ${consumer.group}`}
-            >
+            <Button type="button" variant="ghost" size="icon" aria-label={`Actions for ${consumer.rawGroupName}`}>
               <MoreHorizontal size={16} aria-hidden="true" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            <DropdownMenuItem onSelect={() => openDetails(consumer, actionTriggerRefs.current.get(consumer.group), 'overview')}>
-              <Activity size={15} aria-hidden="true" /> Inspect group
+            <DropdownMenuItem asChild>
+              <Link to={`/consumers/${encodeURIComponent(consumer.rawGroupName)}`}>Open workspace</Link>
             </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => openDetails(consumer, actionTriggerRefs.current.get(consumer.group), 'progress')}>
-              <ListRestart size={15} aria-hidden="true" /> View progress
+            <DropdownMenuItem asChild>
+              <Link to={`/consumers/${encodeURIComponent(consumer.rawGroupName)}?tab=clients`}>View clients</Link>
             </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => openDetails(consumer, actionTriggerRefs.current.get(consumer.group), 'reset')}>
-              <RotateCcw size={15} aria-hidden="true" /> Reset offset
+            <DropdownMenuItem asChild>
+              <Link to={`/consumers/${encodeURIComponent(consumer.rawGroupName)}?tab=progress`}>View progress</Link>
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild>
+              <Link to={`/consumers/${encodeURIComponent(consumer.rawGroupName)}?tab=config`}>View configuration</Link>
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => { setMutationMode('edit'); setMutationConsumer(consumer); }}>
+              <Pencil size={15} aria-hidden="true" /> Edit configuration
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => setDeleteTarget(consumer)}>
+              <Trash2 size={15} aria-hidden="true" /> Delete group
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -164,14 +231,19 @@ export default function ConsumerListPage() {
   ];
 
   if (loading) return <LoadingState label="Loading consumers" />;
-  if (error) return <ErrorState message={error} onRetry={() => void load()} />;
+  if (initialError) return <ErrorState message={initialError} onRetry={() => void load(false)} />;
 
   return (
     <div className="entity-workspace consumer-workspace">
       <PageHeader
         title="Consumer groups"
-        description="Monitor group identity, connected clients, queue lag, and protected offset maintenance from current API data."
-        actions={<RefreshButton refreshing={refreshing} onRefresh={() => void load()} />}
+        description="Monitor group identity, connected clients, queue lag, and protected offset maintenance."
+        actions={<>
+          <Button type="button" variant="outline" onClick={() => { setMutationMode('create'); setMutationConsumer(null); }}>
+            <Plus size={15} aria-hidden="true" /> Create group
+          </Button>
+          <RefreshButton refreshing={refreshing} onRefresh={() => void load(true)} />
+        </>}
       />
 
       <div className="metric-grid entity-metrics">
@@ -182,70 +254,135 @@ export default function ConsumerListPage() {
       </div>
 
       <section className="entity-table-card">
+        {refreshError ? (
+          <div className="notice notice-danger" role="alert">
+            <span>{refreshError}</span>
+            <Button type="button" variant="outline" size="sm" onClick={() => void load(true)}>Retry refresh</Button>
+          </div>
+        ) : null}
+
         <QueryToolbar
-          searchValue={query}
+          searchValue={filters.query}
           searchPlaceholder="Filter consumer groups"
-          onSearchChange={updateFilter(setQuery)}
-          onReset={() => {
-            setQuery('');
-            setConsumeType('all');
-            setMessageModel('all');
-            setLag('all');
-            setPage(1);
-          }}
+          onSearchChange={(value) => { setFilters((current) => ({ ...current, query: value })); setPage(1); }}
+          onReset={resetFilters}
         >
           <label className="native-filter-field">
+            <span>Category</span>
+            <select aria-label="Category filter" value={filters.categories[0] ?? 'all'} onChange={(event) => {
+              const value = event.target.value;
+              setFilters((current) => ({ ...current, categories: value === 'all' ? [] : [value as ConsumerCategory] }));
+              setPage(1);
+            }}>
+              <option value="all">All categories</option>
+              <option value="NORMAL">Normal</option>
+              <option value="FIFO">FIFO</option>
+              <option value="SYSTEM">System</option>
+            </select>
+          </label>
+          <label className="native-filter-field">
             <span>Consume type</span>
-            <select aria-label="Consume type filter" value={consumeType} onChange={(event) => updateFilter(setConsumeType)(event.target.value)}>
+            <select aria-label="Consume type filter" value={filters.consumeTypes[0] ?? 'all'} onChange={(event) => {
+              const value = event.target.value;
+              setFilters((current) => ({ ...current, consumeTypes: value === 'all' ? [] : [value] }));
+              setPage(1);
+            }}>
               <option value="all">All consume types</option>
               {consumeTypes.map((value) => <option key={value} value={value}>{value}</option>)}
             </select>
           </label>
           <label className="native-filter-field">
             <span>Message model</span>
-            <select aria-label="Message model filter" value={messageModel} onChange={(event) => updateFilter(setMessageModel)(event.target.value)}>
+            <select aria-label="Message model filter" value={filters.messageModels[0] ?? 'all'} onChange={(event) => {
+              const value = event.target.value;
+              setFilters((current) => ({ ...current, messageModels: value === 'all' ? [] : [value] }));
+              setPage(1);
+            }}>
               <option value="all">All message models</option>
               {messageModels.map((value) => <option key={value} value={value}>{value}</option>)}
             </select>
           </label>
           <label className="native-filter-field">
             <span>Lag</span>
-            <select aria-label="Lag filter" value={lag} onChange={(event) => updateFilter(setLag)(event.target.value as ConsumerLagFilter)}>
+            <select aria-label="Lag filter" value={filters.lag} onChange={(event) => {
+              setFilters((current) => ({ ...current, lag: event.target.value as ConsumerLagFilter }));
+              setPage(1);
+            }}>
               <option value="all">Any lag</option>
               <option value="lagging">Lagging</option>
               <option value="clear">No lag</option>
+            </select>
+          </label>
+          <label className="native-filter-field">
+            <span>Broker</span>
+            <select aria-label="Broker filter" value={filters.brokers[0] ?? 'all'} onChange={(event) => {
+              const value = event.target.value;
+              setFilters((current) => ({ ...current, brokers: value === 'all' ? [] : [value] }));
+              setPage(1);
+            }}>
+              <option value="all">All brokers</option>
+              {brokers.map((value) => <option key={value} value={value}>{value}</option>)}
+            </select>
+          </label>
+          <label className="native-filter-field">
+            <span>Version</span>
+            <select aria-label="Version filter" value={filters.versions[0] ?? 'all'} onChange={(event) => {
+              const value = event.target.value;
+              setFilters((current) => ({ ...current, versions: value === 'all' ? [] : [value] }));
+              setPage(1);
+            }}>
+              <option value="all">All versions</option>
+              {versions.map((value) => <option key={value} value={value}>{value}</option>)}
+            </select>
+          </label>
+          <label className="native-filter-field">
+            <span>Sort</span>
+            <select aria-label="Sort by" value={`${sort.key}:${sort.direction}`} onChange={(event) => {
+              const [key, direction] = event.target.value.split(':') as [ConsumerSortKey, ConsumerSort['direction']];
+              setSort({ key, direction });
+              setPage(1);
+            }}>
+              {SORT_OPTIONS.flatMap((option) => [
+                <option key={`${option.key}:asc`} value={`${option.key}:asc`}>{option.label} (asc)</option>,
+                <option key={`${option.key}:desc`} value={`${option.key}:desc`}>{option.label} (desc)</option>
+              ])}
             </select>
           </label>
         </QueryToolbar>
 
         <AppDataTable
           ariaLabel="Consumer group inventory"
-          rows={visibleConsumers}
+          rows={visible}
           columns={columns}
-          getRowId={(consumer) => consumer.group}
+          getRowId={(consumer) => consumer.rawGroupName}
           page={currentPage}
           pageSize={PAGE_SIZE}
-          total={filteredConsumers.length}
+          total={sorted.length}
           onPageChange={setPage}
-          onRowActivate={openDetails}
           emptyTitle="No consumer groups match"
-          emptyDetail="Adjust the group, type, model, or lag filters."
+          emptyDetail="Adjust the group, category, type, model, broker, or lag filters."
         />
       </section>
 
-      <EntitySheet
-        open={selectedConsumer !== null}
-        title={selectedConsumer?.group ?? 'Consumer details'}
-        description={selectedConsumer
-          ? `${normalizeConsumerValue(selectedConsumer.consumeType)} · ${normalizeConsumerValue(selectedConsumer.messageModel)}`
-          : undefined}
-        restoreFocusRef={detailTriggerRef}
-        onOpenChange={(open) => { if (!open) setSelectedConsumer(null); }}
-      >
-        {selectedConsumer ? (
-          <ConsumerDetailContent group={selectedConsumer.group} consumer={selectedConsumer} initialTab={detailTab} />
-        ) : null}
-      </EntitySheet>
+      <ConsumerMutationDialog
+        open={mutationMode !== null}
+        mode={mutationMode ?? 'create'}
+        consumer={mutationConsumer}
+        onOpenChange={(open) => { if (!open) { setMutationMode(null); setMutationConsumer(null); } }}
+        onSucceeded={() => void load(false)}
+      />
+
+      <ConsumerDeleteDialog
+        open={deleteTarget !== null}
+        consumer={deleteTarget}
+        onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}
+        onSucceeded={() => void load(false)}
+      />
     </div>
   );
+}
+
+function formatTimestamp(value: number): string {
+  if (!value) return '-';
+  return new Date(value).toLocaleString();
 }

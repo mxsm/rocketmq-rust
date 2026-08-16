@@ -14,6 +14,7 @@
 
 //! Consumer capability contracts.
 
+use rocketmq_protocol::protocol::subscription::subscription_group_config::validate_subscription_group_name;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -191,6 +192,115 @@ pub struct DashboardConsumerConfigAttribute {
     pub value: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DashboardConsumerRunningInfoRequest {
+    consumer_group: String,
+    client_id: String,
+    include_jstack: bool,
+    max_output_bytes: usize,
+}
+
+impl<'de> Deserialize<'de> for DashboardConsumerRunningInfoRequest {
+    fn deserialize<Deserializer>(deserializer: Deserializer) -> Result<Self, Deserializer::Error>
+    where
+        Deserializer: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct SerializedRequest {
+            consumer_group: String,
+            client_id: String,
+            include_jstack: bool,
+            max_output_bytes: usize,
+        }
+
+        let request = SerializedRequest::deserialize(deserializer)?;
+        Self::try_new(
+            request.consumer_group,
+            request.client_id,
+            request.include_jstack,
+            request.max_output_bytes,
+        )
+        .map_err(serde::de::Error::custom)
+    }
+}
+
+impl DashboardConsumerRunningInfoRequest {
+    const MAX_OUTPUT_BYTES: usize = 1024 * 1024;
+
+    /// Creates a bounded consumer diagnostic request.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the consumer group or client ID is blank, or
+    /// when `max_output_bytes` is outside the inclusive range 1 byte to 1 MiB.
+    pub fn try_new(
+        consumer_group: impl Into<String>,
+        client_id: impl Into<String>,
+        include_jstack: bool,
+        max_output_bytes: usize,
+    ) -> AdminResult<Self> {
+        if !(1..=Self::MAX_OUTPUT_BYTES).contains(&max_output_bytes) {
+            return Err(crate::core::AdminError::invalid_argument(
+                "maxOutputBytes",
+                "must be between 1 and 1048576 bytes",
+            ));
+        }
+        Ok(Self {
+            consumer_group: required("consumerGroup", consumer_group)?,
+            client_id: required("clientId", client_id)?,
+            include_jstack,
+            max_output_bytes,
+        })
+    }
+
+    #[must_use]
+    pub fn consumer_group(&self) -> &str {
+        &self.consumer_group
+    }
+
+    #[must_use]
+    pub fn client_id(&self) -> &str {
+        &self.client_id
+    }
+
+    #[must_use]
+    pub const fn include_jstack(&self) -> bool {
+        self.include_jstack
+    }
+
+    #[must_use]
+    /// Returns the aggregate byte budget for sorted property keys/values,
+    /// followed by JStack when requested.
+    pub const fn max_output_bytes(&self) -> usize {
+        self.max_output_bytes
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DashboardConsumerProcessQueue {
+    pub topic: String,
+    pub broker_name: String,
+    pub queue_id: i32,
+    pub cached_message_count: i64,
+    pub cached_message_size_in_mib: i64,
+    pub commit_offset: i64,
+    pub dropped: bool,
+    pub last_consume_timestamp: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DashboardConsumerRunningInfo {
+    pub consumer_group: String,
+    pub client_id: String,
+    pub properties: Vec<DashboardConsumerConfigAttribute>,
+    pub subscriptions: Vec<DashboardConsumerSubscriptionItem>,
+    pub process_queues: Vec<DashboardConsumerProcessQueue>,
+    pub jstack: Option<String>,
+    /// True when requested property or JStack text was shortened at a UTF-8
+    /// character boundary, omitted by the budget, or unavailable.
+    pub truncated: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DashboardConsumerConfig {
     pub consumer_group: String,
@@ -228,6 +338,194 @@ pub struct DashboardConsumerUpsertRequest {
     pub notify_consumer_ids_changed_enable: bool,
     pub group_sys_flag: i32,
     pub consume_timeout_minute: i32,
+}
+
+const CID_RMQ_SYS_PREFIX: &str = "CID_RMQ_SYS_";
+const SYSTEM_CONSUMER_GROUPS: &[&str] = &[
+    "TOOLS_CONSUMER",
+    "FILTERSRV_CONSUMER",
+    "SELF_TEST_C_GROUP",
+    "CID_ONS-HTTP-PROXY",
+    "CID_ONSAPI_PULL",
+    "CID_ONSAPI_PERMISSION",
+    "CID_ONSAPI_OWNER",
+    "CID_RMQ_SYS_TRANS",
+    "CID_DefaultHeartBeatSyncerTopic",
+];
+
+/// Validated create-or-update request for a complete multi-broker workflow.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConsumerBatchUpsertRequest {
+    inner: DashboardConsumerUpsertRequest,
+}
+
+impl ConsumerBatchUpsertRequest {
+    /// Normalizes target names and rejects invalid or protected groups.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument error when the group, target selection, or
+    /// retry limits are invalid.
+    pub fn try_new(mut inner: DashboardConsumerUpsertRequest) -> AdminResult<Self> {
+        inner.consumer_group = validate_batch_consumer_group(inner.consumer_group)?;
+        inner.cluster_name_list = canonical_names(inner.cluster_name_list);
+        inner.broker_name_list = canonical_names(inner.broker_name_list);
+        if inner.cluster_name_list.is_empty() && inner.broker_name_list.is_empty() {
+            return Err(crate::core::AdminError::invalid_argument(
+                "brokerNameList",
+                "Select at least one cluster or broker before saving the consumer group.",
+            ));
+        }
+        validate_batch_consumer_limits(&inner)?;
+        Ok(Self { inner })
+    }
+
+    pub(crate) fn inner(&self) -> &DashboardConsumerUpsertRequest {
+        &self.inner
+    }
+}
+
+/// Validated delete request carrying both selected and authoritative brokers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConsumerBatchDeleteRequest {
+    consumer_group: String,
+    selected_broker_names: Vec<String>,
+    all_broker_names: Vec<String>,
+}
+
+impl ConsumerBatchDeleteRequest {
+    /// Normalizes both broker sets and verifies that selection is a subset.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument error when the group is protected, either
+    /// broker set is empty, or a selected broker is outside the authoritative
+    /// set.
+    pub fn try_new<Selected, SelectedName, All, AllName>(
+        consumer_group: impl Into<String>,
+        selected_broker_names: Selected,
+        all_broker_names: All,
+    ) -> AdminResult<Self>
+    where
+        Selected: IntoIterator<Item = SelectedName>,
+        SelectedName: Into<String>,
+        All: IntoIterator<Item = AllName>,
+        AllName: Into<String>,
+    {
+        let consumer_group = validate_batch_consumer_group(consumer_group)?;
+        let selected_broker_names = canonical_names(selected_broker_names);
+        if selected_broker_names.is_empty() {
+            return Err(crate::core::AdminError::invalid_argument(
+                "selectedBrokerNames",
+                "Select at least one broker before deleting the consumer group.",
+            ));
+        }
+        let all_broker_names = canonical_names(all_broker_names);
+        if all_broker_names.is_empty() {
+            return Err(crate::core::AdminError::invalid_argument(
+                "allBrokerNames",
+                "The authoritative broker set must not be empty.",
+            ));
+        }
+        if let Some(broker_name) = selected_broker_names
+            .iter()
+            .find(|broker_name| all_broker_names.binary_search(broker_name).is_err())
+        {
+            return Err(crate::core::AdminError::invalid_argument(
+                "selectedBrokerNames",
+                format!("Broker `{broker_name}` is outside the authoritative broker set."),
+            ));
+        }
+        Ok(Self {
+            consumer_group,
+            selected_broker_names,
+            all_broker_names,
+        })
+    }
+
+    pub(crate) fn consumer_group(&self) -> &str {
+        &self.consumer_group
+    }
+
+    pub(crate) fn selected_broker_names(&self) -> &[String] {
+        &self.selected_broker_names
+    }
+
+    pub(crate) fn all_broker_names(&self) -> &[String] {
+        &self.all_broker_names
+    }
+}
+
+/// Outcome of one broker mutation or one internal-topic cleanup target.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DashboardConsumerTargetOutcome {
+    pub target: String,
+    pub kind: String,
+    pub success: bool,
+    pub message: String,
+}
+
+/// Stable ordered outcomes for a closed consumer batch workflow.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DashboardConsumerBatchResult {
+    pub consumer_group: String,
+    pub success: bool,
+    pub targets: Vec<DashboardConsumerTargetOutcome>,
+}
+
+fn canonical_names<Names, Name>(names: Names) -> Vec<String>
+where
+    Names: IntoIterator<Item = Name>,
+    Name: Into<String>,
+{
+    let mut names = names
+        .into_iter()
+        .map(Into::into)
+        .map(|name: String| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+        .collect::<Vec<_>>();
+    names.sort();
+    names.dedup();
+    names
+}
+
+fn validate_batch_consumer_group(value: impl Into<String>) -> AdminResult<String> {
+    let value = required("consumerGroup", value)?;
+    if value.starts_with("%SYS%") || is_system_consumer_group(&value) {
+        return Err(crate::core::AdminError::invalid_argument(
+            "consumerGroup",
+            "System consumer groups cannot be mutated.",
+        ));
+    }
+    validate_subscription_group_name(&value)
+        .map_err(|error| crate::core::AdminError::invalid_argument("consumerGroup", error.to_string()))?;
+    Ok(value)
+}
+
+fn validate_batch_consumer_limits(request: &DashboardConsumerUpsertRequest) -> AdminResult<()> {
+    if request.retry_queue_nums < 0 {
+        return Err(crate::core::AdminError::invalid_argument(
+            "retryQueueNums",
+            "Retry queues must be zero or greater.",
+        ));
+    }
+    if request.retry_max_times < -1 {
+        return Err(crate::core::AdminError::invalid_argument(
+            "retryMaxTimes",
+            "Max retries must be -1 or greater.",
+        ));
+    }
+    if request.consume_timeout_minute <= 0 {
+        return Err(crate::core::AdminError::invalid_argument(
+            "consumeTimeoutMinute",
+            "Consume timeout must be greater than zero.",
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn is_system_consumer_group(group: &str) -> bool {
+    group.starts_with(CID_RMQ_SYS_PREFIX) || SYSTEM_CONSUMER_GROUPS.contains(&group)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -513,6 +811,28 @@ pub trait ConsumerQueryAdmin: Send {
     ) -> AdminFuture<'a, DashboardConsumerConfig>;
 }
 
+/// Bounded diagnostic queries exposed independently from existing consumer
+/// query and mutation capabilities.
+pub trait ConsumerDiagnosticAdmin: Send {
+    fn query_dashboard_consumer_running_info<'a>(
+        &'a mut self,
+        request: &'a DashboardConsumerRunningInfoRequest,
+    ) -> AdminFuture<'a, DashboardConsumerRunningInfo>;
+}
+
+/// Complete consumer batch mutations owned by one leased admin session.
+pub trait ConsumerBatchMutationAdmin: Send {
+    fn upsert_consumer_group_batch<'a>(
+        &'a mut self,
+        request: &'a ConsumerBatchUpsertRequest,
+    ) -> AdminFuture<'a, DashboardConsumerBatchResult>;
+
+    fn delete_consumer_group_batch<'a>(
+        &'a mut self,
+        request: &'a ConsumerBatchDeleteRequest,
+    ) -> AdminFuture<'a, DashboardConsumerBatchResult>;
+}
+
 /// Consumer mutations require the explicit mutation adapter feature.
 pub trait ConsumerMutationAdmin: Send {
     fn patch_config_if_version<'a>(
@@ -612,9 +932,105 @@ impl<T: ConsumerAdmin + ?Sized> ConsumerMutationAdmin for T {
 }
 
 #[cfg(test)]
+pub(crate) mod batch_test_support {
+    use super::*;
+
+    pub(crate) fn unchecked_upsert_request(inner: DashboardConsumerUpsertRequest) -> ConsumerBatchUpsertRequest {
+        ConsumerBatchUpsertRequest { inner }
+    }
+
+    pub(crate) fn unchecked_delete_request(
+        consumer_group: impl Into<String>,
+        selected_broker_names: Vec<String>,
+        all_broker_names: Vec<String>,
+    ) -> ConsumerBatchDeleteRequest {
+        ConsumerBatchDeleteRequest {
+            consumer_group: consumer_group.into(),
+            selected_broker_names,
+            all_broker_names,
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
-    use super::PatchSubscriptionGroupConfigRequest;
-    use super::SubscriptionGroupConfigCasPatch;
+    use super::*;
+    use crate::core::AdminFuture;
+
+    struct ExistingConsumerAdmin;
+
+    macro_rules! existing_consumer_admin {
+        ($($name:ident: $request:ty => $result:ty;)*) => {
+            impl ConsumerAdmin for ExistingConsumerAdmin {
+                $(
+                    fn $name<'a>(&'a mut self, _request: &'a $request) -> AdminFuture<'a, $result> {
+                        unused_admin_future()
+                    }
+                )*
+            }
+        };
+    }
+
+    existing_consumer_admin! {
+        list_consumer_groups: ListConsumerGroupsRequest => ListConsumerGroupsResult;
+        query_consumer_lag: QueryConsumerLagRequest => QueryConsumerLagResult;
+        query_dashboard_consumer_groups: DashboardConsumerGroupListRequest => DashboardConsumerGroupListResult;
+        query_dashboard_consumer_connection: DashboardConsumerConnectionRequest => DashboardConsumerConnection;
+        query_dashboard_consumer_progress: DashboardConsumerProgressRequest => DashboardConsumerProgress;
+        query_dashboard_consumer_config: DashboardConsumerConfigRequest => DashboardConsumerConfig;
+        upsert_dashboard_consumer_group: DashboardConsumerUpsertRequest => DashboardConsumerMutationResult;
+        delete_dashboard_consumer_group: DashboardConsumerDeleteRequest => DashboardConsumerMutationResult;
+        delete_subscription_groups: DeleteSubscriptionGroupsRequest => ConsumerBatchMutationOutcome;
+        set_consumer_request_mode: SetConsumerRequestModeRequest => SetConsumerRequestModeResult;
+    }
+
+    fn unused_admin_future<'a, T>() -> AdminFuture<'a, T> {
+        Box::pin(async {
+            Err(crate::core::AdminError::backend(
+                "compile_only_consumer_admin",
+                "compile-only consumer admin fake must not be called",
+            ))
+        })
+    }
+
+    #[test]
+    fn running_info_request_requires_canonical_group_and_client_and_bounds_output() {
+        let request =
+            DashboardConsumerRunningInfoRequest::try_new(" orders-consumer ", " 10.0.0.8@client-a ", true, 256 * 1024)
+                .expect("valid request");
+        assert_eq!(request.consumer_group(), "orders-consumer");
+        assert_eq!(request.client_id(), "10.0.0.8@client-a");
+        assert!(request.include_jstack());
+        assert_eq!(request.max_output_bytes(), 256 * 1024);
+        assert!(DashboardConsumerRunningInfoRequest::try_new(" ", "client-a", false, 1024).is_err());
+        assert!(DashboardConsumerRunningInfoRequest::try_new("orders", " ", false, 1024).is_err());
+        assert!(DashboardConsumerRunningInfoRequest::try_new("orders", "client-a", false, 0).is_err());
+        assert!(DashboardConsumerRunningInfoRequest::try_new("orders", "client-a", false, 1_048_577).is_err());
+    }
+
+    #[test]
+    fn running_info_request_deserialization_cannot_bypass_validation() {
+        let valid = serde_json::from_str::<DashboardConsumerRunningInfoRequest>(
+            r#"{"consumer_group":" orders-consumer ","client_id":" client-a ","include_jstack":true,"max_output_bytes":1024}"#,
+        )
+        .expect("valid serialized request");
+        assert_eq!(valid.consumer_group(), "orders-consumer");
+        assert_eq!(valid.client_id(), "client-a");
+
+        for invalid in [
+            r#"{"consumer_group":" ","client_id":"client-a","include_jstack":false,"max_output_bytes":1024}"#,
+            r#"{"consumer_group":"orders","client_id":"client-a","include_jstack":false,"max_output_bytes":0}"#,
+            r#"{"consumer_group":"orders","client_id":"client-a","include_jstack":false,"max_output_bytes":1048577}"#,
+        ] {
+            assert!(serde_json::from_str::<DashboardConsumerRunningInfoRequest>(invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn existing_consumer_admin_implementation_does_not_require_diagnostics() {
+        let mut admin = ExistingConsumerAdmin;
+        let _: &mut dyn ConsumerAdmin = &mut admin;
+    }
 
     #[test]
     fn subscription_group_cas_request_accepts_only_a_non_empty_bounded_patch() {

@@ -35,9 +35,11 @@ use rocketmq_protocol::protocol::subscription::subscription_group_config::Subscr
 use serde_json::json;
 
 use crate::client_adapter::lifecycle::AdminSession;
+use crate::client_adapter::services::consumer::ConsumerService;
 use crate::core::consumer;
 use crate::core::consumer::ConsumerAdmin;
 use crate::core::consumer::ConsumerBatchMutationOutcome;
+use crate::core::consumer::ConsumerDiagnosticAdmin;
 use crate::core::consumer::DeleteSubscriptionGroupsRequest;
 use crate::core::AdminError;
 use crate::core::AdminFuture;
@@ -49,28 +51,24 @@ mod query;
 use self::mutation::consumer_internal_topics;
 use self::mutation::resolve_consumer_target_broker_names;
 use self::mutation::resolve_master_broker_addr;
+#[cfg(test)]
+use self::mutation::run_consumer_delete_batch;
+#[cfg(test)]
+use self::mutation::run_consumer_upsert_batch;
 use self::mutation::validate_consumer_limits;
+#[cfg(test)]
+use self::mutation::ConsumerBatchExecutor;
 use self::query::build_consumer_group_item;
 use self::query::collect_consumer_group_meta;
 use self::query::collect_queue_client_mapping;
 use self::query::map_consumer_config;
 use self::query::map_consumer_connection;
 use self::query::map_consumer_progress;
+use self::query::map_consumer_running_info;
 use self::query::message_queue_allocation;
+use self::query::query_consumer_connection_at;
+use self::query::query_consumer_progress_at;
 use self::query::ConsumerGroupMeta;
-
-const CID_RMQ_SYS_PREFIX: &str = "CID_RMQ_SYS_";
-const SYSTEM_CONSUMER_GROUPS: &[&str] = &[
-    "TOOLS_CONSUMER",
-    "FILTERSRV_CONSUMER",
-    "SELF_TEST_C_GROUP",
-    "CID_ONS-HTTP-PROXY",
-    "CID_ONSAPI_PULL",
-    "CID_ONSAPI_PERMISSION",
-    "CID_ONSAPI_OWNER",
-    "CID_RMQ_SYS_TRANS",
-    "CID_DefaultHeartBeatSyncerTopic",
-];
 
 impl ConsumerAdmin for AdminSession {
     fn list_consumer_groups<'a>(
@@ -217,12 +215,10 @@ impl ConsumerAdmin for AdminSession {
         Box::pin(async move {
             self.ensure_open()?;
             let group = normalize_consumer_group(&request.consumer_group)?;
-            let connection = self
-                .inner
-                .examine_consumer_connection_info(
-                    CheetahString::from(group.as_str()),
-                    first_address(request.address.as_deref()),
-                )
+            let connection =
+                query_consumer_connection_at(&group, first_address(request.address.as_deref()), |group, address| {
+                    self.inner.examine_consumer_connection_info(group, address)
+                })
                 .await
                 .map_err(|error| backend_error("examine_consumer_connection_info", error))?;
             Ok(map_consumer_connection(&group, connection))
@@ -238,24 +234,22 @@ impl ConsumerAdmin for AdminSession {
             let group = normalize_consumer_group(&request.consumer_group)?;
             let broker_addresses = parse_addresses(request.address.as_deref());
             let stats = if broker_addresses.is_empty() {
-                self.inner
-                    .examine_consume_stats(CheetahString::from(group.as_str()), None, None, None, None)
-                    .await
-                    .map_err(|error| backend_error("examine_consume_stats", error))?
+                query_consumer_progress_at(&group, None, None, |group, address, timeout| {
+                    self.inner.examine_consume_stats(group, None, None, address, timeout)
+                })
+                .await
+                .map_err(|error| backend_error("examine_consume_stats", error))?
             } else {
                 let mut merged_stats = ConsumeStats::new();
                 for broker_addr in broker_addresses {
-                    let stats = self
-                        .inner
-                        .examine_consume_stats(
-                            CheetahString::from(group.as_str()),
-                            None,
-                            None,
-                            Some(broker_addr),
-                            Some(3_000),
-                        )
-                        .await
-                        .map_err(|error| backend_error("examine_consume_stats", error))?;
+                    let stats = query_consumer_progress_at(
+                        &group,
+                        Some(broker_addr),
+                        Some(3_000),
+                        |group, address, timeout| self.inner.examine_consume_stats(group, None, None, address, timeout),
+                    )
+                    .await
+                    .map_err(|error| backend_error("examine_consume_stats", error))?;
                     merged_stats.consume_tps += stats.get_consume_tps();
                     merged_stats
                         .get_offset_table_mut()
@@ -527,6 +521,27 @@ impl ConsumerAdmin for AdminSession {
     }
 }
 
+impl ConsumerDiagnosticAdmin for AdminSession {
+    fn query_dashboard_consumer_running_info<'a>(
+        &'a mut self,
+        request: &'a consumer::DashboardConsumerRunningInfoRequest,
+    ) -> AdminFuture<'a, consumer::DashboardConsumerRunningInfo> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            let running_info = ConsumerService::query_dashboard_consumer_running_info_with_admin(&self.inner, request)
+                .await
+                .map_err(|error| backend_error("get_consumer_running_info", error))?;
+            Ok(map_consumer_running_info(
+                request.consumer_group(),
+                request.client_id(),
+                request.include_jstack(),
+                request.max_output_bytes(),
+                running_info,
+            ))
+        })
+    }
+}
+
 fn normalize_consumer_group(value: &str) -> AdminResult<String> {
     let value = value.strip_prefix("%SYS%").unwrap_or(value).trim();
     validate_subscription_group_name(value)
@@ -566,7 +581,7 @@ fn classify_consumer_group(group: &str, meta: &ConsumerGroupMeta) -> String {
 }
 
 fn is_system_consumer_group(group: &str) -> bool {
-    group.starts_with(CID_RMQ_SYS_PREFIX) || SYSTEM_CONSUMER_GROUPS.contains(&group)
+    consumer::is_system_consumer_group(group)
 }
 
 fn collect_master_broker_targets(cluster_info: &ClusterInfo) -> Vec<(String, CheetahString)> {
@@ -664,6 +679,13 @@ mod tests {
     use super::*;
 
     #[test]
+    fn admin_session_exposes_independent_consumer_diagnostics() {
+        fn assert_diagnostic_admin<T: consumer::ConsumerDiagnosticAdmin>() {}
+
+        assert_diagnostic_admin::<AdminSession>();
+    }
+
+    #[test]
     fn classify_consumer_group_preserves_dashboard_categories() {
         assert_eq!(
             classify_consumer_group("CID_RMQ_SYS_TRANS", &ConsumerGroupMeta::default()),
@@ -701,5 +723,338 @@ mod tests {
             resolve_first_consumer_broker_address(&meta).as_deref(),
             Some("172.19.80.1:10911")
         );
+    }
+
+    mod batch_consumer_tests {
+        use super::*;
+
+        #[derive(Default)]
+        struct FakeBatchExecutor {
+            upsert_calls: Vec<String>,
+            delete_calls: Vec<String>,
+            cleanup_calls: Vec<String>,
+            failing_upsert: Option<String>,
+            failing_delete: Option<String>,
+            failing_cleanup: Option<String>,
+        }
+
+        impl FakeBatchExecutor {
+            fn failing_upsert(target: &str) -> Self {
+                Self {
+                    failing_upsert: Some(target.to_string()),
+                    ..Self::default()
+                }
+            }
+
+            fn failing_delete(target: &str) -> Self {
+                Self {
+                    failing_delete: Some(target.to_string()),
+                    ..Self::default()
+                }
+            }
+
+            fn failing_cleanup(target: &str) -> Self {
+                Self {
+                    failing_cleanup: Some(target.to_string()),
+                    ..Self::default()
+                }
+            }
+
+            fn assert_no_mutations(&self) {
+                assert!(self.upsert_calls.is_empty());
+                assert!(self.delete_calls.is_empty());
+                assert!(self.cleanup_calls.is_empty());
+            }
+        }
+
+        impl ConsumerBatchExecutor for FakeBatchExecutor {
+            fn resolve_upsert_targets<'a>(
+                &'a mut self,
+                request: &'a consumer::DashboardConsumerUpsertRequest,
+            ) -> AdminFuture<'a, Vec<String>> {
+                Box::pin(async move {
+                    let mut targets = request.broker_name_list.clone();
+                    targets.sort();
+                    targets.dedup();
+                    if let Some(unknown) = targets
+                        .iter()
+                        .find(|target| !matches!(target.as_str(), "broker-a" | "broker-b"))
+                    {
+                        return Err(AdminError::invalid_argument(
+                            "brokerNameList",
+                            format!("Broker `{unknown}` was not found in the current cluster view."),
+                        ));
+                    }
+                    Ok(targets)
+                })
+            }
+
+            fn validate_delete_targets<'a>(&'a mut self, targets: &'a [String]) -> AdminFuture<'a, ()> {
+                Box::pin(async move {
+                    if let Some(unknown) = targets
+                        .iter()
+                        .find(|target| !matches!(target.as_str(), "broker-a" | "broker-b"))
+                    {
+                        return Err(AdminError::invalid_argument(
+                            "allBrokerNames",
+                            format!("Broker `{unknown}` was not found in the current cluster view."),
+                        ));
+                    }
+                    Ok(())
+                })
+            }
+
+            fn upsert_target<'a>(
+                &'a mut self,
+                target: &'a str,
+                _request: &'a consumer::DashboardConsumerUpsertRequest,
+            ) -> AdminFuture<'a, ()> {
+                Box::pin(async move {
+                    self.upsert_calls.push(target.to_string());
+                    if self.failing_upsert.as_deref() == Some(target) {
+                        return Err(AdminError::backend("upsert_target", "injected failure"));
+                    }
+                    Ok(())
+                })
+            }
+
+            fn delete_target<'a>(&'a mut self, target: &'a str, _group: &'a str) -> AdminFuture<'a, ()> {
+                Box::pin(async move {
+                    self.delete_calls.push(target.to_string());
+                    if self.failing_delete.as_deref() == Some(target) {
+                        return Err(AdminError::backend("delete_target", "injected failure"));
+                    }
+                    Ok(())
+                })
+            }
+
+            fn cleanup_internal_topic<'a>(
+                &'a mut self,
+                target: &'a str,
+                _broker_names: &'a [String],
+            ) -> AdminFuture<'a, ()> {
+                Box::pin(async move {
+                    self.cleanup_calls.push(target.to_string());
+                    if self.failing_cleanup.as_deref() == Some(target) {
+                        return Err(AdminError::backend("cleanup_internal_topic", "injected failure"));
+                    }
+                    Ok(())
+                })
+            }
+        }
+
+        fn upsert_fixture() -> consumer::DashboardConsumerUpsertRequest {
+            consumer::DashboardConsumerUpsertRequest {
+                cluster_name_list: Vec::new(),
+                broker_name_list: vec![" broker-b ".to_string(), "broker-a".to_string(), "broker-b".to_string()],
+                consumer_group: " orders-consumer ".to_string(),
+                consume_enable: true,
+                consume_from_min_enable: false,
+                consume_broadcast_enable: false,
+                consume_message_orderly: false,
+                retry_queue_nums: 1,
+                retry_max_times: 16,
+                broker_id: 0,
+                which_broker_when_consume_slowly: 1,
+                notify_consumer_ids_changed_enable: true,
+                group_sys_flag: 0,
+                consume_timeout_minute: 15,
+            }
+        }
+
+        fn delete_all_fixture() -> consumer::ConsumerBatchDeleteRequest {
+            consumer::ConsumerBatchDeleteRequest::try_new(
+                "orders-consumer",
+                ["broker-b", "broker-a"],
+                ["broker-a", "broker-b"],
+            )
+            .expect("valid delete request")
+        }
+
+        #[tokio::test]
+        async fn batch_upsert_sorts_deduplicates_and_continues_after_failure() {
+            let mut fake = FakeBatchExecutor::failing_upsert("broker-a");
+            let result = run_consumer_upsert_batch(
+                consumer::ConsumerBatchUpsertRequest::try_new(upsert_fixture()).unwrap(),
+                &mut fake,
+            )
+            .await
+            .unwrap();
+            assert_eq!(fake.upsert_calls, vec!["broker-a", "broker-b"]);
+            assert_eq!(
+                result
+                    .targets
+                    .iter()
+                    .map(|item| (&item.target, item.success))
+                    .collect::<Vec<_>>(),
+                vec![(&"broker-a".to_string(), false), (&"broker-b".to_string(), true),]
+            );
+            assert!(!result.success);
+        }
+
+        #[tokio::test]
+        async fn deleting_all_real_targets_cleans_retry_and_dlq_after_brokers_succeed() {
+            let mut fake = FakeBatchExecutor::default();
+            let result = run_consumer_delete_batch(
+                consumer::ConsumerBatchDeleteRequest::try_new(
+                    "orders-consumer",
+                    ["broker-b", "broker-a"],
+                    ["broker-a", "broker-b"],
+                )
+                .unwrap(),
+                &mut fake,
+            )
+            .await
+            .unwrap();
+            assert_eq!(fake.delete_calls, vec!["broker-a", "broker-b"]);
+            assert_eq!(
+                fake.cleanup_calls,
+                vec!["%RETRY%orders-consumer", "%DLQ%orders-consumer"]
+            );
+            assert!(result.success);
+        }
+
+        #[tokio::test]
+        async fn partial_delete_does_not_clean_internal_topics_and_reports_every_target() {
+            let mut fake = FakeBatchExecutor::failing_delete("broker-a");
+            let result = run_consumer_delete_batch(
+                consumer::ConsumerBatchDeleteRequest::try_new(
+                    "orders-consumer",
+                    ["broker-a", "broker-b"],
+                    ["broker-a", "broker-b"],
+                )
+                .unwrap(),
+                &mut fake,
+            )
+            .await
+            .unwrap();
+            assert!(fake.cleanup_calls.is_empty());
+            assert_eq!(result.targets.len(), 2);
+            assert!(!result.success);
+        }
+
+        #[tokio::test]
+        async fn batch_consumer_successful_subset_delete_does_not_clean_internal_topics() {
+            let mut fake = FakeBatchExecutor::default();
+            let result = run_consumer_delete_batch(
+                consumer::ConsumerBatchDeleteRequest::try_new(
+                    "orders-consumer",
+                    ["broker-a"],
+                    ["broker-a", "broker-b"],
+                )
+                .unwrap(),
+                &mut fake,
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(fake.delete_calls, vec!["broker-a"]);
+            assert!(fake.cleanup_calls.is_empty());
+            assert_eq!(result.targets.len(), 1);
+            assert!(result.success);
+        }
+
+        #[tokio::test]
+        async fn cleanup_failure_is_a_structured_failed_target() {
+            let mut fake = FakeBatchExecutor::failing_cleanup("%DLQ%orders-consumer");
+            let result = run_consumer_delete_batch(delete_all_fixture(), &mut fake)
+                .await
+                .unwrap();
+            assert_eq!(result.targets.last().unwrap().target, "%DLQ%orders-consumer");
+            assert_eq!(result.targets.last().unwrap().kind, "INTERNAL_TOPIC_CLEANUP");
+            assert!(!result.targets.last().unwrap().success);
+            assert!(!result.success);
+        }
+
+        #[tokio::test]
+        async fn batch_consumer_upsert_revalidates_before_any_mutation() {
+            let mut invalid_requests = Vec::new();
+
+            let mut blank_group = upsert_fixture();
+            blank_group.consumer_group = " ".to_string();
+            invalid_requests.push(blank_group);
+
+            let mut no_target = upsert_fixture();
+            no_target.broker_name_list.clear();
+            invalid_requests.push(no_target);
+
+            let mut invalid_retry_queues = upsert_fixture();
+            invalid_retry_queues.retry_queue_nums = -1;
+            invalid_requests.push(invalid_retry_queues);
+
+            let mut invalid_retry_max = upsert_fixture();
+            invalid_retry_max.retry_max_times = -2;
+            invalid_requests.push(invalid_retry_max);
+
+            let mut system_group = upsert_fixture();
+            system_group.consumer_group = "TOOLS_CONSUMER".to_string();
+            invalid_requests.push(system_group);
+
+            for request in invalid_requests {
+                assert!(consumer::ConsumerBatchUpsertRequest::try_new(request.clone()).is_err());
+                let mut fake = FakeBatchExecutor::default();
+                let result = run_consumer_upsert_batch(
+                    consumer::batch_test_support::unchecked_upsert_request(request),
+                    &mut fake,
+                )
+                .await;
+                assert!(result.is_err());
+                fake.assert_no_mutations();
+            }
+        }
+
+        #[tokio::test]
+        async fn batch_consumer_unknown_broker_does_not_mutate_any_target() {
+            let mut request = upsert_fixture();
+            request.broker_name_list = vec!["broker-unknown".to_string()];
+            let request = consumer::ConsumerBatchUpsertRequest::try_new(request).unwrap();
+            let mut fake = FakeBatchExecutor::default();
+
+            assert!(run_consumer_upsert_batch(request, &mut fake).await.is_err());
+            fake.assert_no_mutations();
+        }
+
+        #[tokio::test]
+        async fn batch_consumer_delete_revalidates_selected_subset_before_any_mutation() {
+            assert!(consumer::ConsumerBatchDeleteRequest::try_new(
+                "orders-consumer",
+                ["broker-c"],
+                ["broker-a", "broker-b"]
+            )
+            .is_err());
+            let request = consumer::batch_test_support::unchecked_delete_request(
+                "orders-consumer",
+                vec!["broker-c".to_string()],
+                vec!["broker-a".to_string(), "broker-b".to_string()],
+            );
+            let mut fake = FakeBatchExecutor::default();
+
+            assert!(run_consumer_delete_batch(request, &mut fake).await.is_err());
+            fake.assert_no_mutations();
+        }
+
+        #[tokio::test]
+        async fn batch_consumer_delete_rejects_unknown_and_system_groups_without_mutation() {
+            let unknown = consumer::ConsumerBatchDeleteRequest::try_new(
+                "orders-consumer",
+                ["broker-unknown"],
+                ["broker-unknown"],
+            )
+            .unwrap();
+            let mut fake = FakeBatchExecutor::default();
+            assert!(run_consumer_delete_batch(unknown, &mut fake).await.is_err());
+            fake.assert_no_mutations();
+
+            assert!(
+                consumer::ConsumerBatchDeleteRequest::try_new("CID_RMQ_SYS_TRANS", ["broker-a"], ["broker-a"]).is_err()
+            );
+        }
+
+        #[test]
+        fn admin_session_exposes_independent_consumer_batch_mutations() {
+            fn assert_batch_admin<T: consumer::ConsumerBatchMutationAdmin>() {}
+
+            assert_batch_admin::<AdminSession>();
+        }
     }
 }
