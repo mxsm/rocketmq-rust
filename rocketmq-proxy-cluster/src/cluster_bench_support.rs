@@ -394,6 +394,7 @@ fn send_message_command(producer_key: &str, messages_per_command: usize, message
         request: SendMessageRequest {
             messages,
             timeout: Some(Duration::from_secs(30)),
+            validate_message_type: true,
         },
         client_id: Some(producer_key.to_owned()),
         request_id: format!("benchmark-{producer_key}"),

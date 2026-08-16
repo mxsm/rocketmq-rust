@@ -142,6 +142,7 @@ pub fn build_send_message_request_with_config(
     Ok(SendMessageRequest {
         messages,
         timeout: context.deadline(),
+        validate_message_type: true,
     })
 }
 

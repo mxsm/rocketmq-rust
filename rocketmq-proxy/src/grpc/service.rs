@@ -1298,7 +1298,7 @@ where
                 Ok(request) => request,
                 Err(error) => return adapter::error_send_message_response(ProxyStatusMapper::from_error(&error)),
             };
-            let input = match adapter::build_send_message_request_with_config(
+            let mut input = match adapter::build_send_message_request_with_config(
                 &self.config.grpc,
                 &context.without_principal(),
                 &request,
@@ -1306,6 +1306,7 @@ where
                 Ok(input) => input,
                 Err(error) => return adapter::error_send_message_response(ProxyStatusMapper::from_error(&error)),
             };
+            input.validate_message_type = self.config.settings.validate_message_type;
             if let Err(error) = self
                 .authorize_contexts(&context, principal.as_ref(), &auth::send_message_contexts(&input))
                 .await

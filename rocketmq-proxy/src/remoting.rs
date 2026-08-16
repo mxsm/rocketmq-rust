@@ -566,6 +566,7 @@ where
 
 pub struct ProxyRemotingDispatcher<P> {
     processor: Arc<P>,
+    validate_message_type: bool,
     sessions: ClientSessionRegistry,
     remoting_backend: Option<Arc<dyn ProxyRemotingBackend>>,
     drain: ProxyDrainController,
@@ -577,13 +578,13 @@ where
     P: MessagingProcessor + 'static,
 {
     pub fn new(
-        _config: Arc<ProxyConfig>,
+        config: Arc<ProxyConfig>,
         processor: Arc<P>,
         sessions: ClientSessionRegistry,
         remoting_backend: Option<Arc<dyn ProxyRemotingBackend>>,
     ) -> Self {
         Self::new_with_remoting_command_factory(
-            _config,
+            config,
             processor,
             sessions,
             remoting_backend,
@@ -592,14 +593,14 @@ where
     }
 
     pub fn new_with_remoting_command_factory(
-        _config: Arc<ProxyConfig>,
+        config: Arc<ProxyConfig>,
         processor: Arc<P>,
         sessions: ClientSessionRegistry,
         remoting_backend: Option<Arc<dyn ProxyRemotingBackend>>,
         command_factory: RemotingCommandFactory,
     ) -> Self {
         Self::new_with_drain_controller_and_remoting_command_factory(
-            _config,
+            config,
             processor,
             sessions,
             remoting_backend,
@@ -609,14 +610,14 @@ where
     }
 
     pub fn new_with_drain_controller(
-        _config: Arc<ProxyConfig>,
+        config: Arc<ProxyConfig>,
         processor: Arc<P>,
         sessions: ClientSessionRegistry,
         remoting_backend: Option<Arc<dyn ProxyRemotingBackend>>,
         drain: ProxyDrainController,
     ) -> Self {
         Self::new_with_drain_controller_and_remoting_command_factory(
-            _config,
+            config,
             processor,
             sessions,
             remoting_backend,
@@ -626,7 +627,7 @@ where
     }
 
     pub fn new_with_drain_controller_and_remoting_command_factory(
-        _config: Arc<ProxyConfig>,
+        config: Arc<ProxyConfig>,
         processor: Arc<P>,
         sessions: ClientSessionRegistry,
         remoting_backend: Option<Arc<dyn ProxyRemotingBackend>>,
@@ -635,6 +636,7 @@ where
     ) -> Self {
         Self {
             processor,
+            validate_message_type: config.settings.validate_message_type,
             sessions,
             remoting_backend,
             drain,
@@ -1182,10 +1184,11 @@ where
             }
         };
 
-        let send_request = match build_send_message_request(request, &header) {
+        let mut send_request = match build_send_message_request(request, &header) {
             Ok(send_request) => send_request,
             Err(error) => return proxy_error_response(&self.command_factory, request.opaque(), error),
         };
+        send_request.validate_message_type = self.validate_message_type;
         let fallback_queue_id = send_request
             .messages
             .first()
@@ -1936,6 +1939,7 @@ fn build_send_message_request(
         return Ok(SendMessageRequest {
             messages: entries,
             timeout: None,
+            validate_message_type: true,
         });
     }
 
@@ -1964,6 +1968,7 @@ fn build_send_message_request(
             queue_id,
         }],
         timeout: None,
+        validate_message_type: true,
     })
 }
 

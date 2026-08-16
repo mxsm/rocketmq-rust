@@ -22,6 +22,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use bytes::Bytes;
+use cheetah_string::CheetahString;
 use futures::StreamExt;
 use hmac::digest::KeyInit;
 use hmac::Hmac;
@@ -43,6 +44,7 @@ use rcgen::KeyPair;
 #[cfg(feature = "tls")]
 use rcgen::KeyUsagePurpose;
 use rocketmq_model::result::SendStatus;
+use rocketmq_protocol::protocol::route::route_data_view::{BrokerData, QueueData};
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_proxy::v2;
 use rocketmq_proxy::v2::messaging_service_client::MessagingServiceClient;
@@ -94,6 +96,7 @@ use rocketmq_proxy_core::ProxyMessage;
 use rocketmq_proxy_core::ProxyMessageExt;
 use rocketmq_proxy_core::ProxyServiceFuture;
 use rocketmq_runtime::RuntimeContext;
+use serde::Deserialize;
 use sha1::Sha1;
 use tokio::sync::oneshot;
 use tonic::metadata::MetadataValue;
@@ -109,6 +112,19 @@ use tonic::Request;
 
 type HmacSha1 = Hmac<Sha1>;
 const AUTH_TEST_DATETIME: &str = "20231227T194619Z";
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MessageTypeCorpus {
+    topic_types: Vec<TopicTypeCase>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TopicTypeCase {
+    name: String,
+    route_accept: Vec<String>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ObservedRouteContext {
@@ -474,6 +490,60 @@ async fn query_route_integration_keeps_topic_not_found_as_payload_status() {
 }
 
 #[tokio::test]
+async fn message_type_route_mapping_matches_the_java_55_corpus() {
+    let corpus: MessageTypeCorpus =
+        serde_json::from_str(include_str!("../../scripts/fixtures/v1-message-type-corpus.json"))
+            .expect("valid v1 message type corpus");
+    let route_service = StaticRouteService::default();
+    let metadata_service = StaticMetadataService::default();
+    for case in &corpus.topic_types {
+        let topic = ResourceIdentity::new("", format!("Route{}", case.name));
+        route_service.insert(topic.clone(), sample_route());
+        metadata_service.set_topic_message_type(topic, proxy_topic_message_type(&case.name));
+    }
+    let (listen_addr, shutdown_tx, server_task) = spawn_runtime(Arc::new(ClusterServiceManager::with_services(
+        Arc::new(route_service),
+        Arc::new(metadata_service),
+        Arc::new(DefaultAssignmentService),
+        Arc::new(DefaultMessageService),
+        Arc::new(DefaultConsumerService),
+        Arc::new(DefaultTransactionService),
+    )))
+    .await;
+    let mut client = connect_with_retry(listen_addr).await;
+
+    for case in corpus.topic_types {
+        let response = client
+            .query_route(route_request(&format!("Route{}", case.name)))
+            .await
+            .expect("queryRoute should succeed")
+            .into_inner();
+        assert_eq!(
+            response.status.as_ref().map(|status| status.code),
+            Some(v2::Code::Ok as i32),
+            "{}",
+            case.name
+        );
+        let actual = response
+            .message_queues
+            .first()
+            .expect("route should expose one queue")
+            .accept_message_types
+            .iter()
+            .map(|value| message_type_name(*value))
+            .collect::<Vec<_>>();
+        assert_eq!(actual, case.route_accept, "{}", case.name);
+    }
+
+    let _ = shutdown_tx.send(());
+    let serve_result = server_task.await.expect("server task should join");
+    assert!(
+        serve_result.is_ok(),
+        "server should shut down cleanly: {serve_result:?}"
+    );
+}
+
+#[tokio::test]
 async fn send_message_integration_returns_payload_entries() {
     let (listen_addr, shutdown_tx, server_task) = spawn_runtime(Arc::new(ClusterServiceManager::with_services(
         Arc::new(StaticRouteService::default()),
@@ -501,6 +571,91 @@ async fn send_message_integration_returns_payload_entries() {
         response.entries[0].status.as_ref().map(|status| status.code),
         Some(v2::Code::Ok as i32)
     );
+
+    let _ = shutdown_tx.send(());
+    let serve_result = server_task.await.expect("server task should join");
+    assert!(
+        serve_result.is_ok(),
+        "server should shut down cleanly: {serve_result:?}"
+    );
+}
+
+#[tokio::test]
+async fn send_message_integration_rejects_message_type_mismatched_with_topic() {
+    let (listen_addr, shutdown_tx, server_task) = spawn_runtime(Arc::new(ClusterServiceManager::with_services(
+        Arc::new(StaticRouteService::default()),
+        Arc::new(NormalMetadataService),
+        Arc::new(DefaultAssignmentService),
+        Arc::new(StaticMessageService::with_send_status(SendStatus::SendOk)),
+        Arc::new(DefaultConsumerService),
+        Arc::new(DefaultTransactionService),
+    )))
+    .await;
+    let mut client = connect_with_retry(listen_addr).await;
+    let mut request = send_message_request("TopicA", "fifo-on-normal-topic");
+    let system = request.get_mut().messages[0]
+        .system_properties
+        .as_mut()
+        .expect("system properties");
+    system.message_type = v2::MessageType::Fifo as i32;
+    system.message_group = Some("order-1".to_owned());
+
+    let response = client
+        .send_message(request)
+        .await
+        .expect("message type conflict should stay in payload status")
+        .into_inner();
+
+    assert_eq!(
+        response.status.as_ref().map(|status| status.code),
+        Some(v2::Code::MessagePropertyConflictWithType as i32)
+    );
+    assert!(
+        response.entries.is_empty(),
+        "conflicting messages must not be forwarded"
+    );
+
+    let _ = shutdown_tx.send(());
+    let serve_result = server_task.await.expect("server task should join");
+    assert!(
+        serve_result.is_ok(),
+        "server should shut down cleanly: {serve_result:?}"
+    );
+}
+
+#[tokio::test]
+async fn send_message_integration_honors_disabled_message_type_validation() {
+    let service_manager = Arc::new(ClusterServiceManager::with_services(
+        Arc::new(StaticRouteService::default()),
+        Arc::new(NormalMetadataService),
+        Arc::new(DefaultAssignmentService),
+        Arc::new(StaticMessageService::with_send_status(SendStatus::SendOk)),
+        Arc::new(DefaultConsumerService),
+        Arc::new(DefaultTransactionService),
+    ));
+    let mut config = ProxyConfig::default();
+    config.settings.validate_message_type = false;
+    let (listen_addr, shutdown_tx, server_task) = spawn_runtime_with_config(service_manager, config).await;
+    let mut client = connect_with_retry(listen_addr).await;
+    let mut request = send_message_request("TopicA", "fifo-validation-disabled");
+    let system = request.get_mut().messages[0]
+        .system_properties
+        .as_mut()
+        .expect("system properties");
+    system.message_type = v2::MessageType::Fifo as i32;
+    system.message_group = Some("order-1".to_owned());
+
+    let response = client
+        .send_message(request)
+        .await
+        .expect("disabled validation should allow forwarding")
+        .into_inner();
+
+    assert_eq!(
+        response.status.as_ref().map(|status| status.code),
+        Some(v2::Code::Ok as i32)
+    );
+    assert_eq!(response.entries.len(), 1);
 
     let _ = shutdown_tx.send(());
     let serve_result = server_task.await.expect("server task should join");
@@ -957,6 +1112,39 @@ async fn spawn_runtime(
     spawn_runtime_with_candidates(service_manager, (0..16).map(|_| reserve_loopback_addr())).await
 }
 
+async fn spawn_runtime_with_config(
+    service_manager: Arc<dyn rocketmq_proxy::ServiceManager>,
+    mut config: ProxyConfig,
+) -> (
+    SocketAddr,
+    oneshot::Sender<()>,
+    tokio::task::JoinHandle<rocketmq_proxy::ProxyResult<()>>,
+) {
+    let listen_addr = reserve_loopback_addr();
+    config.grpc.listen_addr = listen_addr.to_string();
+    let runtime_context = RuntimeContext::from_current("proxy-grpc-config-test");
+    let runtime = ProxyRuntime::builder(
+        config,
+        runtime_context.service_context("proxy-grpc-config"),
+        rocketmq_observability::TelemetryHandle::noop(),
+    )
+    .with_service_manager(service_manager)
+    .build()
+    .expect("proxy runtime should build with explicit config");
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let mut server_task = tokio::spawn(async move {
+        runtime
+            .serve_with_shutdown(async move {
+                let _ = shutdown_rx.await;
+            })
+            .await
+    });
+    wait_for_server_ready(listen_addr, &mut server_task)
+        .await
+        .expect("proxy runtime should become ready");
+    (listen_addr, shutdown_tx, server_task)
+}
+
 async fn spawn_runtime_with_candidates<I>(
     service_manager: Arc<dyn rocketmq_proxy::ServiceManager>,
     listen_addrs: I,
@@ -1191,6 +1379,47 @@ fn reserve_loopback_addr() -> SocketAddr {
     let listen_addr = port_probe.local_addr().expect("discover local addr");
     drop(port_probe);
     listen_addr
+}
+
+fn sample_route() -> TopicRouteData {
+    let broker_addrs = HashMap::from([(0_u64, CheetahString::from_static_str("127.0.0.1:10911"))]);
+    TopicRouteData {
+        queue_datas: vec![QueueData::new(CheetahString::from_static_str("broker-a"), 1, 1, 6, 0)],
+        broker_datas: vec![BrokerData::new(
+            CheetahString::from_static_str("cluster-a"),
+            CheetahString::from_static_str("broker-a"),
+            broker_addrs,
+            None,
+        )],
+        ..Default::default()
+    }
+}
+
+fn proxy_topic_message_type(value: &str) -> ProxyTopicMessageType {
+    match value {
+        "UNSPECIFIED" => ProxyTopicMessageType::Unspecified,
+        "NORMAL" => ProxyTopicMessageType::Normal,
+        "FIFO" => ProxyTopicMessageType::Fifo,
+        "DELAY" => ProxyTopicMessageType::Delay,
+        "TRANSACTION" => ProxyTopicMessageType::Transaction,
+        "PRIORITY" => ProxyTopicMessageType::Priority,
+        "LITE" => ProxyTopicMessageType::Lite,
+        "MIXED" => ProxyTopicMessageType::Mixed,
+        other => panic!("unknown topic message type {other}"),
+    }
+}
+
+fn message_type_name(value: i32) -> String {
+    match v2::MessageType::try_from(value).expect("known gRPC message type") {
+        v2::MessageType::Unspecified => "UNSPECIFIED",
+        v2::MessageType::Normal => "NORMAL",
+        v2::MessageType::Fifo => "FIFO",
+        v2::MessageType::Delay => "DELAY",
+        v2::MessageType::Transaction => "TRANSACTION",
+        v2::MessageType::Priority => "PRIORITY",
+        v2::MessageType::Lite => "LITE",
+    }
+    .to_owned()
 }
 
 fn is_address_in_use_startup_error(startup_error: &str) -> bool {
