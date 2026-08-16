@@ -187,7 +187,15 @@ class AdminOperationGuardTest(unittest.TestCase):
         self.assertIn("scripts/admin-operation-matrix.json", capability["rust_surfaces"])
         self.assertIn("scripts/fixtures/admin-java-55/operation-goldens.json", capability["rust_surfaces"])
         self.assertIn("rocketmq-doc/en/admin/java-55-operation-map.md", capability["rust_surfaces"])
-        self.assertEqual(capability["artifacts"], [])
+        self.assertEqual(
+            capability["artifacts"],
+            [
+                {
+                    "path": "scripts/v1-capability-freeze.json",
+                    "run_id": "phase6-freeze-2026-08-16",
+                }
+            ],
+        )
 
         routes = json.loads(FUNCTIONAL_MATRIX.read_text(encoding="utf-8"))
         g05_routes = [item for item in routes["capability_routes"] if item["capability_id"] == "G-05"]

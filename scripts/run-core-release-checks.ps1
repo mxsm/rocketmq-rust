@@ -26,8 +26,16 @@ if ($List) { $arguments += "--list" }
 python @arguments
 $coreExit = $LASTEXITCODE
 if ($coreExit -ne 0 -or -not $CandidateManifest) { exit $coreExit }
-if ($Phase -lt 5 -or -not $GateStage -or -not $ResultRoot -or -not $RequiredResultIds -or -not $EvidenceOutput) {
-    Write-Error "Phase 5/6 candidate evidence requires CandidateManifest, GateStage, ResultRoot, RequiredResultIds, and EvidenceOutput"
+if ($Phase -lt 5) {
+    Write-Error "CandidateManifest is only supported by Phase 5/6 checks"
+    exit 2
+}
+python distribution/candidate_run.py validate --candidate-manifest $CandidateManifest
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$evidenceSelectors = @($GateStage, $ResultRoot, $RequiredResultIds, $EvidenceOutput) | Where-Object { $_ }
+if ($evidenceSelectors.Count -eq 0) { exit 0 }
+if ($evidenceSelectors.Count -ne 4) {
+    Write-Error "Evidence validation requires GateStage, ResultRoot, RequiredResultIds, and EvidenceOutput together"
     exit 2
 }
 python scripts/release_evidence_guard.py --candidate-manifest $CandidateManifest --result-root $ResultRoot --phase $Phase --gate-stage $GateStage --require-result-ids $RequiredResultIds --output $EvidenceOutput

@@ -13,7 +13,8 @@
     {"id":"DIFF-CHECK","category":"diff","phase":0,"scope":"core","status":"active","owner":"release-engineering","kind":"command","argv":["git","diff","--check"],"blocking":true},
     {"id":"REPO-FORMAT","category":"integration","phase":0,"scope":"repo-global","status":"active","owner":"repository-maintainers","kind":"command","argv":["cargo","fmt","--all","--","--check"],"blocking":false},
     {"id":"REPO-CLIPPY","category":"integration","phase":0,"scope":"repo-global","status":"active","owner":"repository-maintainers","kind":"command","argv":["cargo","clippy","--workspace","--no-deps","--all-targets","--all-features","--","-D","warnings"],"blocking":false},
-    {"id":"RELEASE-STATIC","category":"release","phase":5,"scope":"core","status":"active","owner":"release-engineering","kind":"command","argv":["python","scripts/core_release_static_guard.py"],"blocking":true}
+    {"id":"RELEASE-STATIC","category":"release","phase":5,"scope":"core","status":"active","owner":"release-engineering","kind":"command","argv":["python","scripts/core_release_static_guard.py"],"blocking":true},
+    {"id":"CAPABILITY-FREEZE","category":"capability","phase":6,"scope":"core","status":"active","owner":"release-engineering","kind":"command","argv":["python","scripts/v1_capability_freeze.py","--check"],"blocking":true}
   ],
   "capability_routes": [
     {"capability_id":"F-01","test_id":"F01-BATCH-ADMIN-DELETE-PROTOCOL","phase":1,"argv":["cargo","test","-p","rocketmq-protocol","--test","batch_admin_delete"]},

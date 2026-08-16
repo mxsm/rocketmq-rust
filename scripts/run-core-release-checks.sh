@@ -42,8 +42,20 @@ if (( core_exit != 0 )); then
   exit "$core_exit"
 fi
 if [[ -n "$candidate_manifest" ]]; then
-  if (( phase < 5 )) || [[ -z "$gate_stage" || -z "$result_root" || -z "$required_result_ids" || -z "$evidence_output" ]]; then
-    echo "Phase 5/6 candidate evidence requires all evidence selector arguments" >&2
+  if (( phase < 5 )); then
+    echo "--candidate-manifest is only supported by Phase 5/6 checks" >&2
+    exit 2
+  fi
+  "$python_command" distribution/candidate_run.py validate --candidate-manifest "$candidate_manifest"
+  selector_count=0
+  for selector in "$gate_stage" "$result_root" "$required_result_ids" "$evidence_output"; do
+    [[ -z "$selector" ]] || selector_count=$((selector_count + 1))
+  done
+  if (( selector_count == 0 )); then
+    exit 0
+  fi
+  if (( selector_count != 4 )); then
+    echo "Evidence validation requires --gate-stage, --result-root, --require-result-ids, and --evidence-output together" >&2
     exit 2
   fi
   "$python_command" scripts/release_evidence_guard.py \
