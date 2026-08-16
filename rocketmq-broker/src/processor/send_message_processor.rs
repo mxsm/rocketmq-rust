@@ -18,6 +18,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::config::broker_config::BrokerConfig;
+use crate::send_message_constants::apply_topic_delivery_properties;
 use crate::send_message_constants::has_valid_compaction_key;
 use cheetah_string::CheetahString;
 use rand::RngExt;
@@ -45,7 +46,6 @@ use rocketmq_model::common::FAQUrl;
 use rocketmq_model::common::TopicFilterType;
 use rocketmq_model::common::TopicSysFlag;
 use rocketmq_model::common::TopicSysFlag::build_sys_flag;
-use rocketmq_model::lite::to_lmq_name;
 use rocketmq_model::utils::cleanup_policy_utils;
 use rocketmq_model::utils::queue_type_utils::QueueTypeUtils;
 use rocketmq_protocol::code::request_code::RequestCode;
@@ -1978,49 +1978,6 @@ fn broker_send_permission_denied(broker_permission: u32) -> bool {
     !PermName::is_writeable(broker_permission)
 }
 
-fn apply_topic_delivery_properties(
-    topic_config: &rocketmq_model::common::config::TopicConfig,
-    parent_topic: &CheetahString,
-    properties: &mut HashMap<CheetahString, CheetahString>,
-    queue_id: &mut i32,
-) {
-    let configured_type = topic_config.get_topic_message_type();
-    if matches!(configured_type, TopicMessageType::Priority | TopicMessageType::Mixed)
-        && properties.contains_key(MessageConst::PROPERTY_PRIORITY)
-    {
-        if let Some(priority) = properties
-            .get(MessageConst::PROPERTY_PRIORITY)
-            .and_then(|value| value.parse::<i64>().ok())
-            .filter(|priority| *priority >= 0)
-        {
-            if topic_config.write_queue_nums > 0 {
-                *queue_id = priority.min(i64::from(topic_config.write_queue_nums - 1)) as i32;
-            }
-        } else {
-            properties.remove(MessageConst::PROPERTY_PRIORITY);
-        }
-    } else {
-        properties.remove(MessageConst::PROPERTY_PRIORITY);
-    }
-
-    if matches!(configured_type, TopicMessageType::Lite | TopicMessageType::Mixed)
-        && properties.contains_key(MessageConst::PROPERTY_LITE_TOPIC)
-    {
-        if let Some(lite_topic) = properties
-            .get(MessageConst::PROPERTY_LITE_TOPIC)
-            .map(CheetahString::as_str)
-            .filter(|value| !value.trim().is_empty())
-        {
-            if let Some(lmq_name) = to_lmq_name(parent_topic, lite_topic) {
-                properties.insert(
-                    CheetahString::from_static_str(MessageConst::PROPERTY_INNER_MULTI_DISPATCH),
-                    CheetahString::from_string(lmq_name),
-                );
-            }
-        }
-    }
-}
-
 fn message_store_not_initialized() -> RocketMQError {
     RocketMQError::not_initialized("message_store")
 }
@@ -2060,7 +2017,6 @@ mod tests {
 
     use super::add_send_response_metadata;
     use super::append_message_with_store;
-    use super::apply_topic_delivery_properties;
     use super::broker_send_permission_denied;
     use super::has_registered_send_message_hooks;
     use super::has_valid_compaction_key;
@@ -2072,6 +2028,7 @@ mod tests {
     use super::store_health_reject_remark;
     use super::store_health_reject_remark_from;
     use super::sync_flush_backlog_reject_remark;
+    use crate::send_message_constants::apply_topic_delivery_properties;
 
     #[test]
     fn zero_retry_queue_reply_is_a_response_on_both_wire_formats() {
@@ -2236,7 +2193,7 @@ mod tests {
     }
 
     #[test]
-    fn non_priority_topic_drops_reserved_priority_property() {
+    fn priority_property_is_applied_without_topic_metadata_gating() {
         let topic = rocketmq_model::common::config::TopicConfig::with_queues("normal-topic", 8, 8);
         let mut properties = HashMap::from([(
             CheetahString::from_static_str(MessageConst::PROPERTY_PRIORITY),
@@ -2246,14 +2203,18 @@ mod tests {
 
         apply_topic_delivery_properties(&topic, &"normal-topic".into(), &mut properties, &mut queue_id);
 
-        assert_eq!(queue_id, 2);
-        assert!(!properties.contains_key(MessageConst::PROPERTY_PRIORITY));
+        assert_eq!(queue_id, 3);
+        assert_eq!(
+            properties
+                .get(MessageConst::PROPERTY_PRIORITY)
+                .map(CheetahString::as_str),
+            Some("3")
+        );
     }
 
     #[test]
     fn lite_message_adds_internal_multi_dispatch_queue() {
-        let mut topic = rocketmq_model::common::config::TopicConfig::with_queues("parent", 8, 8);
-        topic.attributes.insert("message.type".into(), "LITE".into());
+        let topic = rocketmq_model::common::config::TopicConfig::with_queues("parent", 8, 8);
         let mut properties = HashMap::from([(
             CheetahString::from_static_str(MessageConst::PROPERTY_LITE_TOPIC),
             CheetahString::from_static_str("child"),

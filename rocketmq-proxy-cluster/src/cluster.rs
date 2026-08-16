@@ -3437,6 +3437,7 @@ mod tests {
                             queue_id: None,
                         }],
                         timeout: None,
+                        validate_message_type: true,
                     },
                     client_id: Some("client-a".to_owned()),
                     request_id: "request-a".to_owned(),

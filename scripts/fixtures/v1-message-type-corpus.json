@@ -1,0 +1,140 @@
+{
+  "schemaVersion": 1,
+  "resultId": "M01",
+  "topicTypes": [
+    { "name": "UNSPECIFIED", "routeAccept": ["UNSPECIFIED"], "sendable": false },
+    { "name": "NORMAL", "routeAccept": ["NORMAL"], "sendable": true },
+    { "name": "FIFO", "routeAccept": ["FIFO"], "sendable": true },
+    { "name": "DELAY", "routeAccept": ["DELAY"], "sendable": true },
+    { "name": "TRANSACTION", "routeAccept": ["TRANSACTION"], "sendable": true },
+    { "name": "PRIORITY", "routeAccept": ["PRIORITY"], "sendable": true },
+    { "name": "LITE", "routeAccept": ["LITE"], "sendable": true },
+    {
+      "name": "MIXED",
+      "routeAccept": ["NORMAL", "FIFO", "DELAY", "TRANSACTION"],
+      "sendable": false
+    }
+  ],
+  "inferenceCases": [
+    { "name": "normal", "properties": {}, "expected": "NORMAL" },
+    { "name": "fifo", "properties": { "__SHARDINGKEY": "order-a" }, "expected": "FIFO" },
+    { "name": "delay", "properties": { "TIMER_DELIVER_MS": "1710000000000" }, "expected": "DELAY" },
+    { "name": "transaction", "properties": { "TRAN_MSG": "true" }, "expected": "TRANSACTION" },
+    { "name": "priority", "properties": { "_SYS_MSG_PRIORITY_": "3" }, "expected": "PRIORITY" },
+    { "name": "lite", "properties": { "__LITE_TOPIC": "child" }, "expected": "LITE" },
+    {
+      "name": "transaction-precedes-all",
+      "properties": {
+        "TRAN_MSG": "true",
+        "TIMER_DELIVER_MS": "1710000000000",
+        "__SHARDINGKEY": "order-a",
+        "_SYS_MSG_PRIORITY_": "3",
+        "__LITE_TOPIC": "child"
+      },
+      "expected": "TRANSACTION"
+    },
+    {
+      "name": "priority-precedes-lite",
+      "properties": { "_SYS_MSG_PRIORITY_": "3", "__LITE_TOPIC": "child" },
+      "expected": "PRIORITY"
+    }
+  ],
+  "validationCases": [
+    { "expected": "NORMAL", "actual": "NORMAL", "accepted": true },
+    { "expected": "FIFO", "actual": "FIFO", "accepted": true },
+    { "expected": "DELAY", "actual": "DELAY", "accepted": true },
+    { "expected": "TRANSACTION", "actual": "TRANSACTION", "accepted": true },
+    { "expected": "PRIORITY", "actual": "PRIORITY", "accepted": true },
+    { "expected": "LITE", "actual": "LITE", "accepted": true },
+    { "expected": "NORMAL", "actual": "FIFO", "accepted": false },
+    { "expected": "MIXED", "actual": "NORMAL", "accepted": true },
+    { "expected": "MIXED", "actual": "FIFO", "accepted": true },
+    { "expected": "MIXED", "actual": "DELAY", "accepted": true },
+    { "expected": "MIXED", "actual": "TRANSACTION", "accepted": true },
+    { "expected": "MIXED", "actual": "PRIORITY", "accepted": true },
+    { "expected": "MIXED", "actual": "LITE", "accepted": true },
+    { "expected": "MIXED", "actual": "UNSPECIFIED", "accepted": false }
+  ],
+  "brokerDeliveryCases": [
+    {
+      "name": "priority-on-normal-topic",
+      "properties": { "_SYS_MSG_PRIORITY_": "3" },
+      "initialQueueId": 2,
+      "expectedQueueId": 3,
+      "priorityRetained": true,
+      "expectedInnerDispatch": null
+    },
+    {
+      "name": "priority-is-bounded",
+      "properties": { "_SYS_MSG_PRIORITY_": "99" },
+      "initialQueueId": 0,
+      "expectedQueueId": 7,
+      "priorityRetained": true,
+      "expectedInnerDispatch": null
+    },
+    {
+      "name": "transaction-precedes-priority",
+      "properties": { "TRAN_MSG": "true", "_SYS_MSG_PRIORITY_": "3" },
+      "initialQueueId": 2,
+      "expectedQueueId": 2,
+      "priorityRetained": false,
+      "expectedInnerDispatch": null
+    },
+    {
+      "name": "delay-precedes-priority",
+      "properties": { "TIMER_DELIVER_MS": "1710000000000", "_SYS_MSG_PRIORITY_": "3" },
+      "initialQueueId": 2,
+      "expectedQueueId": 2,
+      "priorityRetained": false,
+      "expectedInnerDispatch": null
+    },
+    {
+      "name": "fifo-precedes-priority",
+      "properties": { "__SHARDINGKEY": "order-a", "_SYS_MSG_PRIORITY_": "3" },
+      "initialQueueId": 2,
+      "expectedQueueId": 2,
+      "priorityRetained": false,
+      "expectedInnerDispatch": null
+    },
+    {
+      "name": "lite-dispatch-does-not-require-topic-metadata",
+      "properties": { "__LITE_TOPIC": "child" },
+      "initialQueueId": 0,
+      "expectedQueueId": 0,
+      "priorityRetained": false,
+      "expectedInnerDispatch": "%LMQ%$parent$child"
+    }
+  ],
+  "mainRequestSurfaces": [
+    "send",
+    "batch-send",
+    "request-reply",
+    "sync-pull",
+    "async-pull",
+    "classic-pull",
+    "lite-pull",
+    "pop",
+    "peek",
+    "notification",
+    "ack",
+    "batch-ack",
+    "change-invisible",
+    "transaction-prepare",
+    "transaction-commit",
+    "transaction-rollback",
+    "transaction-check",
+    "transaction-discard",
+    "delay",
+    "timer",
+    "recall",
+    "query-by-id",
+    "query-by-key",
+    "query-by-cursor",
+    "offset",
+    "lock",
+    "rebalance",
+    "topic-admin",
+    "group-admin",
+    "config-admin"
+  ]
+}

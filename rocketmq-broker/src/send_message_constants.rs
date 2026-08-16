@@ -36,7 +36,9 @@
 use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
+use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::message::MessageConst;
+use rocketmq_model::lite::to_lmq_name;
 
 /// Returns whether a compaction message has the Java-compatible raw `KEYS` identity.
 ///
@@ -46,6 +48,59 @@ pub fn has_valid_compaction_key(properties: &HashMap<CheetahString, CheetahStrin
     properties
         .get(MessageConst::PROPERTY_KEYS)
         .is_some_and(|value| !value.is_empty() && !value.chars().all(char::is_whitespace))
+}
+
+/// Applies Java-compatible priority queue selection and Lite multi-dispatch projection.
+///
+/// Message properties determine the delivery behavior independently of topic metadata. The
+/// Proxy owns topic/message-type admission; a Broker receiving a direct request preserves the
+/// Java behavior and does not introduce a second metadata gate.
+pub fn apply_topic_delivery_properties(
+    topic_config: &TopicConfig,
+    parent_topic: &CheetahString,
+    properties: &mut HashMap<CheetahString, CheetahString>,
+    queue_id: &mut i32,
+) {
+    let transaction = properties
+        .get(MessageConst::PROPERTY_TRANSACTION_PREPARED)
+        .is_some_and(|value| value.eq_ignore_ascii_case("true"));
+    let delayed = [
+        MessageConst::PROPERTY_DELAY_TIME_LEVEL,
+        MessageConst::PROPERTY_TIMER_DELIVER_MS,
+        MessageConst::PROPERTY_TIMER_DELAY_SEC,
+        MessageConst::PROPERTY_TIMER_DELAY_MS,
+    ]
+    .iter()
+    .any(|key| properties.contains_key(*key));
+    let fifo = properties.contains_key(MessageConst::PROPERTY_SHARDING_KEY);
+    if !transaction && !delayed && !fifo && properties.contains_key(MessageConst::PROPERTY_PRIORITY) {
+        if let Some(priority) = properties
+            .get(MessageConst::PROPERTY_PRIORITY)
+            .and_then(|value| value.parse::<i64>().ok())
+            .filter(|priority| *priority >= 0)
+        {
+            if topic_config.write_queue_nums > 0 {
+                *queue_id = priority.min(i64::from(topic_config.write_queue_nums - 1)) as i32;
+            }
+        } else {
+            properties.remove(MessageConst::PROPERTY_PRIORITY);
+        }
+    } else {
+        properties.remove(MessageConst::PROPERTY_PRIORITY);
+    }
+
+    if let Some(lite_topic) = properties
+        .get(MessageConst::PROPERTY_LITE_TOPIC)
+        .map(CheetahString::as_str)
+        .filter(|value| !value.trim().is_empty())
+    {
+        if let Some(lmq_name) = to_lmq_name(parent_topic, lite_topic) {
+            properties.insert(
+                CheetahString::from_static_str(MessageConst::PROPERTY_INNER_MULTI_DISPATCH),
+                CheetahString::from_string(lmq_name),
+            );
+        }
+    }
 }
 
 /// Message-related limit constants

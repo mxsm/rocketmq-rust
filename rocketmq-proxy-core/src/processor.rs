@@ -17,7 +17,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rocketmq_model::common::message::message_queue_assignment::MessageQueueAssignment;
+use rocketmq_model::common::message::MessageConst;
 use rocketmq_model::result::SendResult;
+use rocketmq_model::topic::TopicMessageType;
+use rocketmq_model::topic::DLQ_GROUP_TOPIC_PREFIX;
+use rocketmq_model::topic::RETRY_GROUP_TOPIC_PREFIX;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 
 use crate::context::ProxyContext;
@@ -26,6 +30,7 @@ use crate::contracts::ProxyServiceFuture;
 use crate::contracts::ProxyTopicMessageType;
 use crate::contracts::ServiceManager;
 use crate::contracts::SubscriptionGroupMetadata;
+use crate::error::ProxyError;
 use crate::error::ProxyResult;
 use crate::message::ProxyMessage;
 use crate::message::ProxyMessageExt;
@@ -63,6 +68,7 @@ pub struct QueryAssignmentPlan {
 pub struct SendMessageRequest {
     pub messages: Vec<SendMessageEntry>,
     pub timeout: Option<Duration>,
+    pub validate_message_type: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -708,6 +714,17 @@ impl MessagingProcessor for DefaultMessagingProcessor {
     }
 
     async fn send_message(&self, context: &ProxyContext, request: SendMessageRequest) -> ProxyResult<SendMessagePlan> {
+        if request.validate_message_type {
+            let metadata_service = self.service_manager.metadata_service();
+            for entry in &request.messages {
+                if should_validate_message_type(entry) {
+                    let expected = metadata_service.topic_message_type(context, &entry.topic).await?;
+                    let actual = proxy_message_type(&entry.message);
+                    validate_message_type(expected, actual)?;
+                }
+            }
+        }
+
         let message_service = self.service_manager.message_service();
         let entries = message_service.send_message(context, &request).await?;
 
@@ -792,14 +809,121 @@ impl MessagingProcessor for DefaultMessagingProcessor {
     }
 }
 
+fn should_validate_message_type(entry: &SendMessageEntry) -> bool {
+    let topic = entry.topic.name();
+    !topic.starts_with(RETRY_GROUP_TOPIC_PREFIX)
+        && !topic.starts_with(DLQ_GROUP_TOPIC_PREFIX)
+        && entry.message.property(MessageConst::PROPERTY_TRANSFER_FLAG).is_none()
+}
+
+fn proxy_message_type(message: &ProxyMessage) -> ProxyTopicMessageType {
+    match TopicMessageType::parse_from_message_property(message.properties()) {
+        TopicMessageType::Unspecified => ProxyTopicMessageType::Unspecified,
+        TopicMessageType::Normal => ProxyTopicMessageType::Normal,
+        TopicMessageType::Fifo => ProxyTopicMessageType::Fifo,
+        TopicMessageType::Delay => ProxyTopicMessageType::Delay,
+        TopicMessageType::Transaction => ProxyTopicMessageType::Transaction,
+        TopicMessageType::Priority => ProxyTopicMessageType::Priority,
+        TopicMessageType::Lite => ProxyTopicMessageType::Lite,
+        TopicMessageType::Mixed => ProxyTopicMessageType::Mixed,
+    }
+}
+
+fn validate_message_type(expected: ProxyTopicMessageType, actual: ProxyTopicMessageType) -> ProxyResult<()> {
+    if actual == ProxyTopicMessageType::Unspecified || (expected != ProxyTopicMessageType::Mixed && actual != expected)
+    {
+        return Err(ProxyError::message_property_conflict(format!(
+            "TopicMessageType validate failed, the expected type is {expected:?}, but actual type is {actual:?}"
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
+    use serde::Deserialize;
+
+    use super::should_validate_message_type;
+    use super::validate_message_type;
     use super::MessagingProcessorPlugin;
+    use super::ProxyMessage;
+    use super::ProxyTopicMessageType;
+    use super::ResourceIdentity;
+    use super::SendMessageEntry;
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ValidationCorpus {
+        validation_cases: Vec<ValidationCase>,
+    }
+
+    #[derive(Deserialize)]
+    struct ValidationCase {
+        expected: String,
+        actual: String,
+        accepted: bool,
+    }
 
     #[test]
     fn dynamic_processor_plugin_boundary_remains_object_safe() {
         fn accepts_plugin(_: Option<&dyn MessagingProcessorPlugin>) {}
 
         accepts_plugin(None);
+    }
+
+    #[test]
+    fn message_type_validation_matches_the_java_55_corpus() {
+        let corpus: ValidationCorpus =
+            serde_json::from_str(include_str!("../../scripts/fixtures/v1-message-type-corpus.json"))
+                .expect("valid v1 message type corpus");
+
+        for case in corpus.validation_cases {
+            assert_eq!(
+                validate_message_type(message_type(&case.expected), message_type(&case.actual)).is_ok(),
+                case.accepted,
+                "expected {}, actual {}",
+                case.expected,
+                case.actual
+            );
+        }
+    }
+
+    #[test]
+    fn retry_dlq_and_transfer_messages_bypass_topic_type_validation() {
+        for (topic, transfer, expected) in [
+            ("TopicA", false, true),
+            ("%RETRY%GroupA", false, false),
+            ("%DLQ%GroupA", false, false),
+            ("TopicA", true, false),
+        ] {
+            let mut message = ProxyMessage::new(topic, b"body".as_slice());
+            if transfer {
+                message.put_property(
+                    rocketmq_model::common::message::MessageConst::PROPERTY_TRANSFER_FLAG,
+                    "true",
+                );
+            }
+            let entry = SendMessageEntry {
+                topic: ResourceIdentity::new("", topic),
+                client_message_id: "message-id".to_owned(),
+                message,
+                queue_id: None,
+            };
+            assert_eq!(should_validate_message_type(&entry), expected, "{topic}");
+        }
+    }
+
+    fn message_type(value: &str) -> ProxyTopicMessageType {
+        match value {
+            "UNSPECIFIED" => ProxyTopicMessageType::Unspecified,
+            "NORMAL" => ProxyTopicMessageType::Normal,
+            "FIFO" => ProxyTopicMessageType::Fifo,
+            "DELAY" => ProxyTopicMessageType::Delay,
+            "TRANSACTION" => ProxyTopicMessageType::Transaction,
+            "PRIORITY" => ProxyTopicMessageType::Priority,
+            "LITE" => ProxyTopicMessageType::Lite,
+            "MIXED" => ProxyTopicMessageType::Mixed,
+            other => panic!("unknown message type {other}"),
+        }
     }
 }

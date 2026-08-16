@@ -42,6 +42,8 @@ use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+use cheetah_string::CheetahString;
+use serde::Deserialize;
 use tokio::sync::mpsc;
 use tokio::sync::Notify;
 
@@ -68,6 +70,7 @@ use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_model::common::message::message_single::Message;
+use rocketmq_model::common::message::MessageConst;
 use rocketmq_model::common::message::MessageTrait;
 use rocketmq_model::common::topic::TopicValidator;
 use rocketmq_transport::api::v1::RPCHook;
@@ -76,6 +79,21 @@ mod support;
 
 static GROUP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 const REQUIRE_BROKER_BACKED_SMOKE: &str = "ROCKETMQ_REQUIRE_BROKER_BACKED_SMOKE";
+const RUN_M01_MESSAGE_TYPE_SMOKE: &str = "ROCKETMQ_RUN_M01_MESSAGE_TYPES";
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MessageTypeCorpus {
+    result_id: String,
+    inference_cases: Vec<MessageTypeInferenceCase>,
+}
+
+#[derive(Deserialize)]
+struct MessageTypeInferenceCase {
+    name: String,
+    properties: HashMap<String, String>,
+    expected: String,
+}
 
 struct BrokerEnv {
     namesrv_addr: String,
@@ -289,6 +307,71 @@ macro_rules! maybe_with_acl_push_rpc_hook {
             builder
         }
     }};
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn broker_backed_message_type_m01_send_smoke() -> RocketMQResult<()> {
+    if !env_flag_enabled(RUN_M01_MESSAGE_TYPE_SMOKE) {
+        return Ok(());
+    }
+    let Some(env) = broker_env()? else {
+        return Err(RocketMQError::illegal_argument(format!(
+            "{RUN_M01_MESSAGE_TYPE_SMOKE}=true requires ROCKETMQ_NAMESRV_ADDR"
+        )));
+    };
+    let corpus: MessageTypeCorpus =
+        serde_json::from_str(include_str!("../../scripts/fixtures/v1-message-type-corpus.json"))
+            .map_err(|error| RocketMQError::illegal_argument(format!("invalid M01 message type corpus: {error}")))?;
+    if corpus.result_id != "M01" {
+        return Err(RocketMQError::illegal_argument(
+            "message type corpus resultId must be M01",
+        ));
+    }
+
+    let mut producer = maybe_with_acl_rpc_hook!(DefaultMQProducer::builder(support::client_runtime(
+        "broker-backed-message-type-m01"
+    )))
+    .producer_group(unique_group("message-type-m01"))
+    .name_server_addr(env.namesrv_addr)
+    .send_msg_timeout(5_000)
+    .build();
+    producer.start().await?;
+
+    for case in corpus
+        .inference_cases
+        .into_iter()
+        .filter(|case| {
+            matches!(
+                case.expected.as_str(),
+                "NORMAL" | "FIFO" | "DELAY" | "TRANSACTION" | "PRIORITY" | "LITE"
+            )
+        })
+        .take(6)
+    {
+        let mut message = message(
+            &env.topic,
+            &format!("M01-{}", case.expected),
+            &format!("m01-message-type-{}", case.name),
+        );
+        for (key, mut value) in case.properties {
+            if key == MessageConst::PROPERTY_TIMER_DELIVER_MS {
+                value = (current_epoch_millis().saturating_add(5_000)).to_string();
+            }
+            message.put_property(CheetahString::from_string(key), CheetahString::from_string(value));
+        }
+        let result = producer.send_with_timeout(message, 5_000).await?;
+        assert!(result.is_some(), "M01 {} send must return a result", case.expected);
+    }
+
+    producer.shutdown().await;
+    Ok(())
+}
+
+fn current_epoch_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default()
 }
 
 async fn ensure_topic_route(namesrv_addr: &str, topic: &str) -> RocketMQResult<()> {
