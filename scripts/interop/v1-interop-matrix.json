@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "javaVersion": "5.5.0",
+  "resultIds": ["I01", "I02", "I03", "I04", "I05"],
+  "excludedModes": ["Java Controller", "Java AutoSwitchHA", "DLedger CommitLog"],
+  "remotePublication": "not-executed",
+  "scenarios": [
+    {
+      "id": "I01",
+      "client": "java-client",
+      "server": "rust-namesrv-broker",
+      "capabilities": ["send", "pull", "pop", "transaction", "timer", "query"],
+      "negativeCases": ["unknown-code", "invalid-expression", "permission-denied", "timeout"],
+      "requiredAssertions": ["response-code", "header-body", "message-id", "queue-offset", "physical-offset", "properties", "consume-state", "side-effects"],
+      "requiredEvidence": ["driver-log", "comparison"]
+    },
+    {
+      "id": "I02",
+      "client": "rust-client",
+      "server": "java-namesrv-broker",
+      "capabilities": ["send", "pull", "pop", "transaction", "timer", "query", "error-code"],
+      "negativeCases": ["unknown-code", "invalid-expression", "permission-denied", "timeout"],
+      "requiredAssertions": ["response-code", "header-body", "message-id", "queue-offset", "physical-offset", "properties", "consume-state", "side-effects"],
+      "requiredEvidence": ["driver-log", "comparison"]
+    },
+    {
+      "id": "I03",
+      "client": "java-client",
+      "server": "rust-remoting-proxy",
+      "capabilities": ["active-route", "auth", "opaque", "response"],
+      "negativeCases": ["unknown-code", "permission-denied", "timeout"],
+      "requiredAssertions": ["response-code", "header-body", "opaque", "auth", "side-effects"],
+      "requiredEvidence": ["driver-log", "comparison"]
+    },
+    {
+      "id": "I04",
+      "client": "java-grpc-client",
+      "server": "rust-grpc-proxy",
+      "capabilities": ["settings", "fifo", "lite", "retry", "renewal"],
+      "negativeCases": ["invalid-expression", "permission-denied", "timeout"],
+      "requiredAssertions": ["grpc-code", "settings", "properties", "consume-state", "side-effects"],
+      "requiredEvidence": ["driver-log", "comparison"]
+    },
+    {
+      "id": "I05",
+      "client": "java-default-ha-peer",
+      "server": "rust-default-ha-peer",
+      "capabilities": ["java-master-rust-slave", "rust-master-java-slave", "replication", "reconnect", "tail-truncate"],
+      "negativeCases": ["timeout", "malformed-frame"],
+      "requiredAssertions": ["message-id", "queue-offset", "physical-offset", "properties", "confirm-offset", "tail-truncate", "side-effects"],
+      "requiredEvidence": ["driver-log", "comparison"]
+    }
+  ]
+}

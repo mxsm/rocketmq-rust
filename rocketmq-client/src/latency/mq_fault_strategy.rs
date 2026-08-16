@@ -22,6 +22,8 @@ use rocketmq_runtime::ChildServiceContext;
 
 use crate::base::client_config::ClientConfig;
 use crate::latency::latency_fault_tolerance::LatencyFaultTolerance;
+#[cfg(any(test, feature = "test-support"))]
+use crate::latency::latency_fault_tolerance_impl::FaultClock;
 use crate::latency::latency_fault_tolerance_impl::LatencyFaultToleranceImpl;
 use crate::producer::producer_impl::default_mq_producer_impl::DefaultResolver;
 use crate::producer::producer_impl::default_mq_producer_impl::DefaultServiceDetector;
@@ -45,6 +47,23 @@ impl MQFaultStrategy {
 
     pub fn new(service_context: ChildServiceContext, client_config: &ClientConfig) -> Self {
         let tolerance_impl = LatencyFaultToleranceImpl::new(service_context);
+        Self::from_tolerance_impl(tolerance_impl, client_config)
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn new_with_fault_clock(
+        service_context: ChildServiceContext,
+        client_config: &ClientConfig,
+        clock: Arc<dyn FaultClock>,
+    ) -> Self {
+        let tolerance_impl = LatencyFaultToleranceImpl::new_with_clock(service_context, clock);
+        Self::from_tolerance_impl(tolerance_impl, client_config)
+    }
+
+    fn from_tolerance_impl(
+        tolerance_impl: LatencyFaultToleranceImpl<DefaultResolver, DefaultServiceDetector>,
+        client_config: &ClientConfig,
+    ) -> Self {
         tolerance_impl.set_detect_interval(client_config.detect_interval);
         tolerance_impl.set_detect_timeout(client_config.detect_timeout);
         tolerance_impl.set_start_detector_enable(client_config.start_detector_enable);
@@ -181,6 +200,20 @@ impl MQFaultStrategy {
             }
         }
         0
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn not_available_duration_for_test(&self, current_latency: u64, isolation: bool) -> u64 {
+        self.compute_not_available_duration(if isolation {
+            Self::ISOLATION_LATENCY_MS
+        } else {
+            current_latency
+        })
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn fault_item_state_for_test(&self, broker_name: &CheetahString) -> Option<(bool, bool, u64, u64)> {
+        self.latency_fault_tolerance.fault_item_state_for_test(broker_name)
     }
 
     #[inline]

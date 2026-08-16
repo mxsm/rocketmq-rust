@@ -211,6 +211,10 @@ name = "client_lifecycle_probes_test"
 required-features = ["test-support"]
 
 [[test]]
+name = "latency_fault_java_compat"
+required-features = ["test-support"]
+
+[[test]]
 name = "integration_tests"
 required-features = ["test-support"]
 
